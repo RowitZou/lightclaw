@@ -1,25 +1,53 @@
 # LightClaw
 
-A self-hosted AI Agent Harness, inspired by [Claude Code](https://github.com/anthropics/claude-code).
+LightClaw is a self-hosted AI agent harness inspired by [Claude Code](https://github.com/anthropics/claude-code).
 
 ## Status
 
-🚧 Under Development — Full rewrite in progress.
+Phase 1 is a minimal terminal agent:
 
-## Architecture Goals
+- Readline-based interactive REPL
+- Anthropic-compatible streaming chat
+- Basic tool loop for shell and filesystem tasks
+- In-memory session state and token accounting
 
-- **Terminal-native** React/Ink agent harness
-- **Modular tool system** with streaming execution
-- **Multi-mode operation**: Interactive REPL, CLI commands, server/bridge
-- **Channel integration**: Feishu, WeChat, etc.
-- **Plugin & Skill system** for extensibility
-- **Session memory** for cross-conversation persistence
+## Requirements
 
-## Tech Stack
+- Node.js 22+
+- pnpm 10+
 
-- TypeScript / Node.js (ESM)
-- React + Ink (terminal rendering)
-- Anthropic SDK (LLM provider)
+## Setup
+
+```bash
+pnpm install
+```
+
+Configure credentials with environment variables or `~/.lightclaw/config.json`:
+
+```json
+{
+	"apiKey": "sk-...",
+	"baseUrl": "http://host:port",
+	"model": "claude-sonnet-4-20250514"
+}
+```
+
+Environment variables take precedence:
+
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_BASE_URL`
+- `LIGHTCLAW_MODEL`
+
+## Usage
+
+```bash
+pnpm dev
+pnpm dev -- --prompt "Summarize this repository"
+pnpm build
+pnpm start -- --model claude-sonnet-4-20250514
+```
+
+Inside the REPL, use `/exit` to quit.
 
 ## License
 
