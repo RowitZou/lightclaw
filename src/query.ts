@@ -27,7 +27,7 @@ export async function query(params: QueryParams): Promise<{
   stopReason: string | null
 }> {
   const config = params.config ?? getConfig()
-  const maxTurns = params.maxTurns ?? 8
+  const maxTurns = params.maxTurns ?? 20
   const messages = [...params.messages]
   let lastAssistantText = ''
   let stopReason: string | null = null
