@@ -1,11 +1,14 @@
 import { initializeApp } from './init.js'
 import { startRepl } from './repl.js'
+import { getLatestSessionId } from './session/listing.js'
+import { loadMeta } from './session/storage.js'
 import { allTools } from './tools.js'
 
 type CliArgs = {
   help: boolean
   model?: string
   prompt?: string
+  resume?: string | true
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -33,6 +36,17 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
+    if (arg === '--resume') {
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith('-')) {
+        args.resume = nextArg
+        index += 1
+      } else {
+        args.resume = true
+      }
+      continue
+    }
+
     positionals.push(arg)
   }
 
@@ -50,11 +64,14 @@ Usage:
   lightclaw
   lightclaw --prompt "Explain this project"
   lightclaw --model claude-sonnet-4-20250514
+  lightclaw --resume
+  lightclaw --resume <session-id>
 
 Options:
   -h, --help       Show help
   -p, --prompt     Run a single prompt and exit
       --model      Override configured model
+      --resume     Resume the latest or a specific saved session
 `)
 }
 
@@ -65,13 +82,33 @@ async function main(): Promise<void> {
     return
   }
 
+  let resumeSessionId: string | undefined
+  let resumeMeta = null
+  if (args.resume) {
+    resumeSessionId =
+      args.resume === true ? await getLatestSessionId() ?? undefined : args.resume
+
+    if (!resumeSessionId) {
+      console.error('No previous session found.')
+      process.exitCode = 1
+      return
+    }
+
+    resumeMeta = await loadMeta(resumeSessionId)
+  }
+
   const config = initializeApp({
-    model: args.model,
+    cwd: resumeMeta?.cwd,
+    model: args.model ?? resumeMeta?.model,
+    sessionId: resumeSessionId,
+    resumedFrom: resumeSessionId ?? null,
+    compactionCount: resumeMeta?.compactionCount,
   })
   await startRepl({
     config,
     tools: allTools,
     initialPrompt: args.prompt,
+    resumeSessionId,
   })
 }
 

@@ -31,6 +31,8 @@ export type UserToolResultBlock = {
 export type UserMessage = {
   type: 'user'
   uuid: string
+  parentUuid: string | null
+  timestamp: number
   message: {
     role: 'user'
     content: string | UserToolResultBlock[]
@@ -40,6 +42,8 @@ export type UserMessage = {
 export type AssistantMessage = {
   type: 'assistant'
   uuid: string
+  parentUuid: string | null
+  timestamp: number
   message: {
     role: 'assistant'
     content: AssistantContentBlock[]
@@ -48,7 +52,28 @@ export type AssistantMessage = {
   }
 }
 
-export type Message = UserMessage | AssistantMessage
+export type SystemCompactMessage = {
+  type: 'system'
+  uuid: string
+  parentUuid: string | null
+  timestamp: number
+  message: {
+    content: 'compact_boundary'
+    summary: string
+  }
+}
+
+export type Message = UserMessage | AssistantMessage | SystemCompactMessage
+
+export type SessionMeta = {
+  sessionId: string
+  model: string
+  cwd: string
+  createdAt: number
+  lastActiveAt: number
+  messageCount: number
+  compactionCount: number
+}
 
 export type StreamTextEvent = {
   type: 'text'

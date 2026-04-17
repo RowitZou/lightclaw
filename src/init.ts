@@ -8,6 +8,9 @@ let signalHandlersInstalled = false
 export function initializeApp(input?: {
   cwd?: string
   model?: string
+  sessionId?: string
+  resumedFrom?: string | null
+  compactionCount?: number
 }): LightClawConfig {
   const config = getConfig()
   const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
@@ -16,6 +19,10 @@ export function initializeApp(input?: {
   initializeState({
     cwd: resolvedCwd,
     model: resolvedModel,
+    sessionsDir: config.sessionsDir,
+    sessionId: input?.sessionId,
+    resumedFrom: input?.resumedFrom,
+    compactionCount: input?.compactionCount,
   })
   installSignalHandlers()
 

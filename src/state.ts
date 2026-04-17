@@ -6,6 +6,9 @@ type SessionState = {
   sessionId: string
   cwd: string
   model: string
+  sessionsDir: string
+  resumedFrom: string | null
+  compactionCount: number
   totalInputTokens: number
   totalOutputTokens: number
   abortController: AbortController
@@ -13,11 +16,21 @@ type SessionState = {
 
 let state: SessionState | null = null
 
-export function initializeState(input: { cwd: string; model: string }): void {
+export function initializeState(input: {
+  cwd: string
+  model: string
+  sessionsDir: string
+  sessionId?: string
+  resumedFrom?: string | null
+  compactionCount?: number
+}): void {
   state = {
-    sessionId: randomUUID(),
+    sessionId: input.sessionId ?? randomUUID(),
     cwd: input.cwd,
     model: input.model,
+    sessionsDir: input.sessionsDir,
+    resumedFrom: input.resumedFrom ?? null,
+    compactionCount: input.compactionCount ?? 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     abortController: new AbortController(),
@@ -50,6 +63,24 @@ export function getModel(): string {
 
 export function setModel(model: string): void {
   requireState().model = model
+}
+
+export function getSessionsDir(): string {
+  return requireState().sessionsDir
+}
+
+export function getResumedFrom(): string | null {
+  return requireState().resumedFrom
+}
+
+export function incrementCompactionCount(): number {
+  const current = requireState()
+  current.compactionCount += 1
+  return current.compactionCount
+}
+
+export function getCompactionCount(): number {
+  return requireState().compactionCount
 }
 
 export function getAbortController(): AbortController {

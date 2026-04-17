@@ -4,11 +4,19 @@ import {
   collectAssistantText,
   createAssistantMessage,
   createUserMessage,
+  getLastUuid,
   toApiMessages,
 } from './messages.js'
 import { buildSystemPrompt } from './prompt.js'
-import { addUsage, getAbortController, getCwd } from './state.js'
+import {
+  addUsage,
+  getAbortController,
+  getCwd,
+  incrementCompactionCount,
+} from './state.js'
+import { compactConversation } from './session/compact.js'
 import { findToolByName, toolToAPISchema, type Tool } from './tool.js'
+import { estimateMessagesTokens } from './token-estimate.js'
 import type { Message, ToolExecutionEvent, UserToolResultBlock } from './types.js'
 
 type QueryParams = {
@@ -19,18 +27,60 @@ type QueryParams = {
   onTextDelta?(text: string): void
   onToolUse?(event: { name: string; input: Record<string, unknown> }): void
   onToolResult?(event: ToolExecutionEvent): void
+  onCompactStart?(): void
+  onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
+  onCompactError?(message: string): void
 }
 
 export async function query(params: QueryParams): Promise<{
   messages: Message[]
   lastAssistantText: string
   stopReason: string | null
+  didCompact: boolean
 }> {
   const config = params.config ?? getConfig()
   const maxTurns = params.maxTurns ?? 20
   const messages = [...params.messages]
   let lastAssistantText = ''
   let stopReason: string | null = null
+  let didCompact = false
+
+  const maybeAutoCompact = async () => {
+    if (!config.autoCompact) {
+      return
+    }
+
+    const totalTokens = estimateMessagesTokens(messages)
+    const threshold = config.contextWindow * config.compactThresholdRatio
+    if (totalTokens <= threshold) {
+      return
+    }
+
+    params.onCompactStart?.()
+    try {
+      const result = await compactConversation({
+        messages,
+        keepRecent: config.compactKeepRecent,
+        config,
+      })
+
+      if (result.removedCount === 0) {
+        return
+      }
+
+      messages.splice(0, messages.length, ...result.messages)
+      addUsage(result.usage)
+      incrementCompactionCount()
+      didCompact = true
+      params.onCompactEnd?.({
+        removedCount: result.removedCount,
+        summaryTokens: result.summaryTokens,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      params.onCompactError?.(message)
+    }
+  }
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let stopEvent:
@@ -70,6 +120,7 @@ export async function query(params: QueryParams): Promise<{
         content: stopEvent.content,
         stopReason: stopEvent.stopReason,
         usage: stopEvent.usage,
+        parentUuid: getLastUuid(messages),
       }),
     )
 
@@ -79,10 +130,12 @@ export async function query(params: QueryParams): Promise<{
     )
 
     if (toolUses.length === 0) {
+      await maybeAutoCompact()
       return {
         messages,
         lastAssistantText,
         stopReason,
+        didCompact,
       }
     }
 
@@ -154,7 +207,8 @@ export async function query(params: QueryParams): Promise<{
       }
     }
 
-    messages.push(createUserMessage(toolResults))
+    messages.push(createUserMessage(toolResults, getLastUuid(messages)))
+    await maybeAutoCompact()
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
