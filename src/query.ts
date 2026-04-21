@@ -117,6 +117,10 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
+  const systemPrompt = await buildSystemPrompt(params.tools, getCwd(), {
+    autoMemory: config.autoMemory,
+  })
+
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let stopEvent:
       | Extract<Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never, { type: 'stop' }>
@@ -126,9 +130,7 @@ export async function query(params: QueryParams): Promise<{
       config,
       model: config.model,
       messages: toApiMessages(messages),
-      system: await buildSystemPrompt(params.tools, getCwd(), {
-        autoMemory: config.autoMemory,
-      }),
+      system: systemPrompt,
       tools: params.tools.map(toolToAPISchema),
       signal: getAbortController().signal,
     })) {
