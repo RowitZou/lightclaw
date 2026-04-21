@@ -2,10 +2,32 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
+import type { ProviderName } from './provider/types.js'
+
+export type RoutingConfig = {
+  main: string
+  compact?: string
+  extract?: string
+  subagent?: string
+  webSearch?: string
+}
+
 export type LightClawConfig = {
   apiKey: string
   baseUrl?: string
   model: string
+  provider: ProviderName
+  providerOptions: {
+    anthropic?: {
+      apiKey: string
+      baseUrl?: string
+    }
+    openai?: {
+      apiKey: string
+      baseUrl?: string
+    }
+  }
+  routing: RoutingConfig
   sessionsDir: string
   autoCompact: boolean
   autoMemory: boolean
@@ -19,6 +41,18 @@ type ConfigFileShape = {
   apiKey?: string
   baseUrl?: string
   model?: string
+  provider?: ProviderName
+  providerOptions?: {
+    anthropic?: {
+      apiKey?: string
+      baseUrl?: string
+    }
+    openai?: {
+      apiKey?: string
+      baseUrl?: string
+    }
+  }
+  routing?: Partial<RoutingConfig>
   sessionsDir?: string
   autoCompact?: boolean
   autoMemory?: boolean
@@ -75,6 +109,14 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
 
+function parseProvider(value: string | undefined): ProviderName | undefined {
+  if (value === 'anthropic' || value === 'openai') {
+    return value
+  }
+
+  return undefined
+}
+
 function loadConfigFile(): ConfigFileShape {
   const configPath = path.join(homedir(), '.lightclaw', 'config.json')
   if (!existsSync(configPath)) {
@@ -98,9 +140,39 @@ export function resolveSessionsDir(): string {
 
 export function getConfig(): LightClawConfig {
   const fileConfig = loadConfigFile()
-  const apiKey = process.env.ANTHROPIC_API_KEY ?? fileConfig.apiKey
-  const baseUrl = process.env.ANTHROPIC_BASE_URL ?? fileConfig.baseUrl
+  const provider =
+    parseProvider(process.env.LIGHTCLAW_PROVIDER) ??
+    fileConfig.provider ??
+    'anthropic'
+  const anthropicApiKey =
+    process.env.ANTHROPIC_API_KEY ??
+    fileConfig.providerOptions?.anthropic?.apiKey ??
+    fileConfig.apiKey
+  const anthropicBaseUrl =
+    process.env.ANTHROPIC_BASE_URL ??
+    fileConfig.providerOptions?.anthropic?.baseUrl ??
+    fileConfig.baseUrl
+  const openaiApiKey =
+    process.env.OPENAI_API_KEY ?? fileConfig.providerOptions?.openai?.apiKey
+  const openaiBaseUrl =
+    process.env.OPENAI_BASE_URL ?? fileConfig.providerOptions?.openai?.baseUrl
+  const apiKey = anthropicApiKey
+  const baseUrl = anthropicBaseUrl
   const model = process.env.LIGHTCLAW_MODEL ?? fileConfig.model ?? DEFAULT_MODEL
+  const routing: RoutingConfig = {
+    main:
+      process.env.LIGHTCLAW_ROUTING_MAIN ??
+      fileConfig.routing?.main ??
+      model,
+    compact:
+      process.env.LIGHTCLAW_ROUTING_COMPACT ?? fileConfig.routing?.compact,
+    extract:
+      process.env.LIGHTCLAW_ROUTING_EXTRACT ?? fileConfig.routing?.extract,
+    subagent:
+      process.env.LIGHTCLAW_ROUTING_SUBAGENT ?? fileConfig.routing?.subagent,
+    webSearch:
+      process.env.LIGHTCLAW_ROUTING_WEBSEARCH ?? fileConfig.routing?.webSearch,
+  }
   const autoCompact =
     parseBoolean(process.env.LIGHTCLAW_AUTO_COMPACT) ??
     fileConfig.autoCompact ??
@@ -140,16 +212,42 @@ export function getConfig(): LightClawConfig {
     ),
   )
 
-  if (!apiKey) {
+  if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
       'Missing Anthropic API key. Set ANTHROPIC_API_KEY or ~/.lightclaw/config.json.',
     )
   }
 
+  if (provider === 'openai' && !openaiApiKey) {
+    throw new Error(
+      'Missing OpenAI API key. Set OPENAI_API_KEY or ~/.lightclaw/config.json.',
+    )
+  }
+
   return {
-    apiKey,
+    apiKey: apiKey ?? '',
     baseUrl,
     model,
+    provider,
+    providerOptions: {
+      ...(anthropicApiKey
+        ? {
+            anthropic: {
+              apiKey: anthropicApiKey,
+              ...(anthropicBaseUrl ? { baseUrl: anthropicBaseUrl } : {}),
+            },
+          }
+        : {}),
+      ...(openaiApiKey
+        ? {
+            openai: {
+              apiKey: openaiApiKey,
+              ...(openaiBaseUrl ? { baseUrl: openaiBaseUrl } : {}),
+            },
+          }
+        : {}),
+    },
+    routing,
     sessionsDir: resolveSessionsDir(),
     autoCompact,
     autoMemory,

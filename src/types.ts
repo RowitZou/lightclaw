@@ -74,6 +74,7 @@ export type SessionMeta = {
   messageCount: number
   compactionCount: number
   lastExtractedAt?: number
+  todos?: TodoItem[]
 }
 
 export type StreamTextEvent = {
@@ -107,5 +108,14 @@ export type ToolExecutionEvent = {
   content: string
 }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export type TodoItem = {
+  content: string
+  activeForm: string
+  status: TodoStatus
+}
+
 export type { MemoryEntry, MemoryFrontmatter, MemoryType } from './memory/types.js'
+export type { Provider, ProviderCapabilities, ProviderName } from './provider/types.js'
 export type { LoadedSkill, SkillMeta, SkillSource } from './skill/types.js'

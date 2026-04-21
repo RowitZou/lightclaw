@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { toJSONSchema } from 'zod/v4'
 
+import type { Provider } from './provider/types.js'
 import type { UserToolResultBlock } from './types.js'
 
 export type ToolCallContext = {
@@ -17,6 +18,7 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   name: string
   description: string
   inputSchema: z.ZodType<TInput>
+  isEnabled?(provider: Provider): boolean
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult(
     output: TOutput,
@@ -29,6 +31,7 @@ export function buildTool<TInput, TOutput>(input: {
   name: string
   description: string
   inputSchema: z.ZodType<TInput>
+  isEnabled?(provider: Provider): boolean
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult?: (
     output: TOutput,

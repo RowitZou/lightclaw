@@ -1,12 +1,15 @@
 import { initializeApp } from './init.js'
+import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
-import { allTools } from './tools.js'
+import { allTools, getEnabledTools } from './tools.js'
+import type { ProviderName } from './types.js'
 
 type CliArgs = {
   help: boolean
   model?: string
+  provider?: ProviderName
   prompt?: string
   resume?: string | true
   noMemory: boolean
@@ -28,6 +31,15 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--model') {
       args.model = argv[index + 1]
+      index += 1
+      continue
+    }
+
+    if (arg === '--provider') {
+      const provider = argv[index + 1]
+      if (provider === 'anthropic' || provider === 'openai') {
+        args.provider = provider
+      }
       index += 1
       continue
     }
@@ -71,6 +83,7 @@ Usage:
   lightclaw
   lightclaw --prompt "Explain this project"
   lightclaw --model claude-sonnet-4-20250514
+  lightclaw --provider anthropic
   lightclaw --resume
   lightclaw --resume <session-id>
   lightclaw --no-memory
@@ -79,6 +92,7 @@ Options:
   -h, --help       Show help
   -p, --prompt     Run a single prompt and exit
       --model      Override configured model
+      --provider   Override provider: anthropic or openai
       --resume     Resume the latest or a specific saved session
       --no-memory  Disable auto-memory extraction and memory index injection
 `)
@@ -89,6 +103,9 @@ async function main(): Promise<void> {
   if (args.help) {
     printHelp()
     return
+  }
+  if (args.provider) {
+    process.env.LIGHTCLAW_PROVIDER = args.provider
   }
 
   let resumeSessionId: string | undefined
@@ -113,13 +130,15 @@ async function main(): Promise<void> {
     resumedFrom: resumeSessionId ?? null,
     compactionCount: resumeMeta?.compactionCount,
     lastExtractedAt: resumeMeta?.lastExtractedAt,
+    todos: resumeMeta?.todos,
   })
   if (args.noMemory) {
     config.autoMemory = false
   }
+  const provider = getProvider(config)
   await startRepl({
     config,
-    tools: allTools,
+    tools: getEnabledTools(provider, allTools),
     initialPrompt: args.prompt,
     resumeSessionId,
   })

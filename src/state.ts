@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { UsageStats } from './types.js'
+import type { TodoItem, UsageStats } from './types.js'
 
 type SessionState = {
   sessionId: string
@@ -13,6 +13,7 @@ type SessionState = {
   lastExtractedAt: number
   totalInputTokens: number
   totalOutputTokens: number
+  todos: TodoItem[]
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
 }
@@ -28,6 +29,7 @@ export function initializeState(input: {
   resumedFrom?: string | null
   compactionCount?: number
   lastExtractedAt?: number
+  todos?: TodoItem[]
 }): void {
   state = {
     sessionId: input.sessionId ?? randomUUID(),
@@ -40,6 +42,7 @@ export function initializeState(input: {
     lastExtractedAt: input.lastExtractedAt ?? 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
+    todos: input.todos ?? [],
     abortController: new AbortController(),
     backgroundTasks: new Set(),
   }
@@ -101,6 +104,14 @@ export function getLastExtractedAt(): number {
 
 export function setLastExtractedAt(timestamp: number): void {
   requireState().lastExtractedAt = timestamp
+}
+
+export function getTodos(): TodoItem[] {
+  return [...requireState().todos]
+}
+
+export function setTodos(todos: TodoItem[]): void {
+  requireState().todos = [...todos]
 }
 
 export function getAbortController(): AbortController {

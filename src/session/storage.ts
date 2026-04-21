@@ -14,6 +14,7 @@ import {
   getModel,
 } from '../state.js'
 import type { Message, SessionMeta } from '../types.js'
+import type { TodoItem } from '../types.js'
 
 function getTranscriptPath(sessionId: string): string {
   return path.join(getSessionDir(sessionId), 'transcript.jsonl')
@@ -123,6 +124,7 @@ export async function touchMeta(
     messageCount,
     compactionCount: getCompactionCount(),
     lastExtractedAt: current?.lastExtractedAt,
+    todos: current?.todos,
   })
 }
 
@@ -142,5 +144,26 @@ export async function updateMetaLastExtractedAt(
     messageCount: current?.messageCount ?? 0,
     compactionCount: current?.compactionCount ?? getCompactionCount(),
     lastExtractedAt,
+    todos: current?.todos,
+  })
+}
+
+export async function updateMetaTodos(
+  sessionId: string,
+  todos: TodoItem[],
+): Promise<void> {
+  const current = await loadMeta(sessionId)
+  const now = Date.now()
+
+  await saveMeta(sessionId, {
+    sessionId,
+    model: current?.model ?? getModel(),
+    cwd: current?.cwd ?? getCwd(),
+    createdAt: current?.createdAt ?? now,
+    lastActiveAt: now,
+    messageCount: current?.messageCount ?? 0,
+    compactionCount: current?.compactionCount ?? getCompactionCount(),
+    lastExtractedAt: current?.lastExtractedAt,
+    todos,
   })
 }

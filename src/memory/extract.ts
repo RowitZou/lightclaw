@@ -1,6 +1,7 @@
 import { streamChat } from '../api.js'
 import type { LightClawConfig } from '../config.js'
 import { collectAssistantText } from '../messages.js'
+import { modelFor } from '../provider/index.js'
 import type { Message } from '../types.js'
 import {
   ensureMemoryDir,
@@ -125,7 +126,7 @@ export async function requestExtraction(
 
   for await (const event of streamChat({
     config,
-    model: config.model,
+    model: modelFor('extract', config),
     messages: [
       {
         role: 'user',

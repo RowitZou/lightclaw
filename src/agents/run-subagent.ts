@@ -1,0 +1,60 @@
+import { getConfig } from '../config.js'
+import { createUserMessage } from '../messages.js'
+import { buildSubagentPrompt } from '../prompt.js'
+import { getProvider, modelFor } from '../provider/index.js'
+import { query } from '../query.js'
+import { getCwd } from '../state.js'
+import type { Tool } from '../tool.js'
+import { allTools, getEnabledTools } from '../tools.js'
+import type { AgentType } from './types.js'
+import { getAgent } from './registry.js'
+
+function filterTools(definitionTools: string[] | ['*'], enabledTools: Tool[]): Tool[] {
+  const names = definitionTools.includes('*') ? null : new Set(definitionTools)
+  return enabledTools.filter(tool => {
+    if (tool.name === 'AgentTool') {
+      return false
+    }
+
+    return !names || names.has(tool.name)
+  })
+}
+
+export async function runSubagent(params: {
+  agentType: AgentType
+  prompt: string
+  signal?: AbortSignal
+}): Promise<{ finalText: string; stopReason: string | null }> {
+  const agent = getAgent(params.agentType)
+  if (!agent) {
+    throw new Error(`Unknown agent: ${params.agentType}`)
+  }
+
+  const config = getConfig()
+  const provider = getProvider(config)
+  const tools = filterTools(agent.tools, getEnabledTools(provider, allTools))
+  const subagentConfig = {
+    ...config,
+    autoCompact: false,
+    autoMemory: false,
+    model: modelFor('subagent', config),
+    routing: {
+      ...config.routing,
+      main: modelFor('subagent', config),
+    },
+  }
+
+  const result = await query({
+    messages: [createUserMessage(params.prompt)],
+    tools,
+    config: subagentConfig,
+    maxTurns: agent.maxTurns,
+    systemPrompt: buildSubagentPrompt(tools, getCwd(), agent),
+    isSubagent: true,
+  })
+
+  return {
+    finalText: result.lastAssistantText,
+    stopReason: result.stopReason,
+  }
+}

@@ -9,6 +9,7 @@ import {
   toApiMessages,
 } from './messages.js'
 import { buildSystemPrompt } from './prompt.js'
+import { modelFor } from './provider/index.js'
 import {
   addUsage,
   getAbortController,
@@ -37,6 +38,8 @@ type QueryParams = {
   onCompactStart?(): void
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
+  isSubagent?: boolean
+  systemPrompt?: string
 }
 
 export async function query(params: QueryParams): Promise<{
@@ -53,7 +56,7 @@ export async function query(params: QueryParams): Promise<{
   let didCompact = false
 
   const scheduleMemoryExtraction = (snapshot: Message[]) => {
-    if (!config.autoMemory || stopReason !== 'end_turn') {
+    if (params.isSubagent || !config.autoMemory || stopReason !== 'end_turn') {
       return
     }
 
@@ -81,7 +84,7 @@ export async function query(params: QueryParams): Promise<{
   }
 
   const maybeAutoCompact = async () => {
-    if (!config.autoCompact) {
+    if (params.isSubagent || !config.autoCompact) {
       return
     }
 
@@ -117,18 +120,20 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
-  const systemPrompt = await buildSystemPrompt(params.tools, getCwd(), {
-    autoMemory: config.autoMemory,
-  })
-
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    const systemPrompt =
+      params.systemPrompt ??
+      await buildSystemPrompt(params.tools, getCwd(), {
+        autoMemory: config.autoMemory,
+        config,
+      })
     let stopEvent:
       | Extract<Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never, { type: 'stop' }>
       | undefined
 
     for await (const event of streamChat({
       config,
-      model: config.model,
+      model: modelFor('main', config),
       messages: toApiMessages(messages),
       system: systemPrompt,
       tools: params.tools.map(toolToAPISchema),

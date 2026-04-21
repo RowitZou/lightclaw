@@ -35,9 +35,11 @@ import {
   getModel,
   getResumedFrom,
   getSessionId,
+  getTodos,
   getUsageTotals,
   incrementCompactionCount,
 } from './state.js'
+import { formatTodosForPrompt } from './todos/store.js'
 import { estimateMessagesTokens } from './token-estimate.js'
 import type { Message, SessionMeta } from './types.js'
 import type { Tool } from './tool.js'
@@ -165,6 +167,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   output.write(chalk.cyan(`LightClaw session ${getSessionId()}\n`))
   output.write(chalk.gray(`cwd: ${getCwd()}\n`))
   output.write(chalk.gray(`model: ${params.config.model}\n`))
+  output.write(chalk.gray(`provider: ${params.config.provider}\n`))
   if (params.resumeSessionId) {
     output.write(
       chalk.gray(
@@ -174,7 +177,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
   output.write(
     chalk.gray(
-      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory\n\n',
+      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos\n\n',
     ),
   )
 
@@ -219,6 +222,8 @@ export async function startRepl(params: ReplParams): Promise<void> {
       output.write(chalk.gray(`session: ${sessionId}\n`))
       output.write(chalk.gray(`cwd: ${getCwd()}\n`))
       output.write(chalk.gray(`model: ${getModel()}\n`))
+      output.write(chalk.gray(`provider: ${params.config.provider}\n`))
+      output.write(chalk.gray(`routing: ${formatRouting(params.config)}\n`))
       output.write(chalk.gray(`memory dir: ${getMemoryDir()}\n`))
       output.write(chalk.gray(`messages: ${messages.length}\n`))
       output.write(
@@ -238,6 +243,17 @@ export async function startRepl(params: ReplParams): Promise<void> {
         )
       }
       output.write(chalk.gray(`skills: ${listRegisteredSkills().length}\n`))
+      output.write(chalk.gray(`todos: ${getTodos().length}\n`))
+      continue
+    }
+
+    if (command === '/todos') {
+      const todos = getTodos()
+      output.write(
+        chalk.gray(
+          todos.length > 0 ? `${formatTodosForPrompt(todos)}\n` : 'No todos.\n',
+        ),
+      )
       continue
     }
 
@@ -331,9 +347,20 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     messageCount,
     compactionCount: getCompactionCount(),
     lastExtractedAt: getLastExtractedAt(),
+    todos: getTodos(),
   }
 
   await saveMeta(sessionId, meta)
+}
+
+function formatRouting(config: LightClawConfig): string {
+  return [
+    `main=${config.routing.main}`,
+    `compact=${config.routing.compact ?? config.routing.main}`,
+    `extract=${config.routing.extract ?? config.routing.main}`,
+    `subagent=${config.routing.subagent ?? config.routing.main}`,
+    `webSearch=${config.routing.webSearch ?? config.routing.main}`,
+  ].join(', ')
 }
 
 function formatSkillList(): string {

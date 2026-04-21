@@ -1,8 +1,10 @@
 import path from 'node:path'
 
 import { getConfig, type LightClawConfig } from './config.js'
+import { initializeAgents } from './agents/registry.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { getAbortController, initializeState, resetAbortController } from './state.js'
+import type { TodoItem } from './types.js'
 
 let signalHandlersInstalled = false
 
@@ -13,27 +15,35 @@ export function initializeApp(input?: {
   resumedFrom?: string | null
   compactionCount?: number
   lastExtractedAt?: number
+  todos?: TodoItem[]
 }): LightClawConfig {
   const config = getConfig()
   const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
   const resolvedModel = input?.model ?? config.model
+  const resolvedConfig: LightClawConfig = {
+    ...config,
+    model: resolvedModel,
+    routing: {
+      ...config.routing,
+      main: input?.model ?? config.routing.main,
+    },
+  }
 
   initializeState({
     cwd: resolvedCwd,
     model: resolvedModel,
-    sessionsDir: config.sessionsDir,
-    memoryDir: getMemoryDir(resolvedCwd, config),
+    sessionsDir: resolvedConfig.sessionsDir,
+    memoryDir: getMemoryDir(resolvedCwd, resolvedConfig),
     sessionId: input?.sessionId,
     resumedFrom: input?.resumedFrom,
     compactionCount: input?.compactionCount,
     lastExtractedAt: input?.lastExtractedAt,
+    todos: input?.todos,
   })
+  initializeAgents()
   installSignalHandlers()
 
-  return {
-    ...config,
-    model: resolvedModel,
-  }
+  return resolvedConfig
 }
 
 export function beginQuery(): AbortSignal {

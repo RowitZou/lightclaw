@@ -4,6 +4,7 @@ import {
   createSystemCompactMessage,
   getLastUuid,
 } from '../messages.js'
+import { modelFor } from '../provider/index.js'
 import { estimateTokens } from '../token-estimate.js'
 import type { Message, UsageStats } from '../types.js'
 
@@ -82,7 +83,7 @@ async function requestSummary(
 
   for await (const event of streamChat({
     config,
-    model: config.model,
+    model: modelFor('compact', config),
     maxTokens: 4096,
     system:
       'Respond with TEXT ONLY. Do NOT call any tools. Return a concise markdown summary.',
