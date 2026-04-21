@@ -27,11 +27,25 @@ export type StreamChatParams = {
   tools: ToolSchema[]
   maxTokens?: number
   signal?: AbortSignal
-  extraTools?: unknown[]
+}
+
+export type WebSearchParams = {
+  query: string
+  model: string
+  allowedDomains?: string[]
+  blockedDomains?: string[]
+  maxUses?: number
+  maxTokens?: number
+  signal?: AbortSignal
+}
+
+export type WebSearchResult = {
+  text: string
 }
 
 export type Provider = {
   name: ProviderName
   capabilities: ProviderCapabilities
   streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent>
+  webSearch?(params: WebSearchParams): Promise<WebSearchResult>
 }

@@ -8,7 +8,7 @@ import {
   getLastUuid,
   toApiMessages,
 } from './messages.js'
-import { buildSystemPrompt } from './prompt.js'
+import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { modelFor } from './provider/index.js'
 import {
   addUsage,
@@ -17,6 +17,7 @@ import {
   getLastExtractedAt,
   getMemoryDir,
   getSessionId,
+  getTodos,
   incrementCompactionCount,
   registerBackgroundTask,
   setLastExtractedAt,
@@ -120,13 +121,17 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
-  for (let turn = 0; turn < maxTurns; turn += 1) {
-    const systemPrompt =
-      params.systemPrompt ??
-      await buildSystemPrompt(params.tools, getCwd(), {
+  const systemPromptTemplate = params.systemPrompt
+    ? null
+    : await buildSystemPromptTemplate(params.tools, getCwd(), {
         autoMemory: config.autoMemory,
         config,
       })
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    const systemPrompt =
+      params.systemPrompt ??
+      renderSystemPrompt(systemPromptTemplate!, getTodos())
     let stopEvent:
       | Extract<Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never, { type: 'stop' }>
       | undefined

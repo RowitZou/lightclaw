@@ -5,7 +5,7 @@ import type { LightClawConfig } from './config.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
 import { modelFor } from './provider/index.js'
-import { getMemoryDir, getTodos } from './state.js'
+import { getMemoryDir } from './state.js'
 import {
   listRegisteredSkills,
   refreshSkillRegistry,
@@ -13,10 +13,16 @@ import {
 import type { Tool } from './tool.js'
 import { toolToAPISchema } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
+import type { TodoItem } from './types.js'
 
 type PromptOptions = {
   autoMemory: boolean
   config: LightClawConfig
+}
+
+export type SystemPromptTemplate = {
+  preTodos: string
+  postTodos: string
 }
 
 function formatSkillsSection(): string {
@@ -33,11 +39,23 @@ function formatSkillsSection(): string {
     .join('\n')
 }
 
-export async function buildSystemPrompt(
+function formatTodoSection(todos: TodoItem[]): string {
+  if (todos.length === 0) {
+    return ''
+  }
+
+  return [
+    '## Current Todo List',
+    formatTodosForPrompt(todos),
+    'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
+  ].join('\n')
+}
+
+export async function buildSystemPromptTemplate(
   tools: Tool[],
   cwd: string,
   options: PromptOptions,
-): Promise<string> {
+): Promise<SystemPromptTemplate> {
   await refreshSkillRegistry(cwd)
   const [projectMemory, autoMemoryIndex] = await Promise.all([
     loadProjectMemory(cwd),
@@ -55,7 +73,7 @@ export async function buildSystemPrompt(
     })
     .join('\n\n')
 
-  const sections = [
+  const preTodoSections: string[] = [
     'You are LightClaw, an interactive AI agent running in the user\'s terminal.',
     'You help users with coding tasks by reading, writing, and editing files, running shell commands, and searching codebases.',
     '',
@@ -67,14 +85,14 @@ export async function buildSystemPrompt(
   ]
 
   if (projectMemory.trim().length > 0) {
-    sections.push('', '## Project Memory', projectMemory)
+    preTodoSections.push('', '## Project Memory', projectMemory)
   }
 
   if (options.autoMemory && autoMemoryIndex.trim().length > 0) {
-    sections.push('', '## Auto Memory Index', autoMemoryIndex)
+    preTodoSections.push('', '## Auto Memory Index', autoMemoryIndex)
   }
 
-  sections.push(
+  preTodoSections.push(
     '',
     '## Available Skills',
     formatSkillsSection(),
@@ -82,18 +100,7 @@ export async function buildSystemPrompt(
     'To save durable notes for later sessions, use the MemoryWrite tool.',
   )
 
-  const todos = getTodos()
-  if (todos.length > 0) {
-    sections.push(
-      '',
-      '## Current Todo List',
-      formatTodosForPrompt(todos),
-      'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
-    )
-  }
-
-  sections.push(
-    '',
+  const postTodoSections: string[] = [
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',
     '- Use tools when the answer depends on filesystem or shell state.',
@@ -103,9 +110,21 @@ export async function buildSystemPrompt(
     '',
     'Available tools:',
     toolDescriptions,
-  )
+  ]
 
-  return sections.join('\n')
+  return {
+    preTodos: preTodoSections.join('\n'),
+    postTodos: postTodoSections.join('\n'),
+  }
+}
+
+export function renderSystemPrompt(
+  template: SystemPromptTemplate,
+  todos: TodoItem[],
+): string {
+  const todoSection = formatTodoSection(todos)
+  const middle = todoSection ? `\n\n${todoSection}` : ''
+  return `${template.preTodos}${middle}\n\n${template.postTodos}`
 }
 
 export function buildSubagentPrompt(

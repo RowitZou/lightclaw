@@ -19,12 +19,14 @@ export const webFetchTool = buildTool({
   inputSchema: z.object({
     url: z.string().url(),
     maxBytes: z.number().int().min(1024).max(500_000).optional(),
+    timeoutMs: z.number().int().min(1000).max(120_000).optional(),
   }),
   async call(input, context) {
     const maxBytes = input.maxBytes ?? 200_000
     const result = await fetchContent({
       url: input.url,
       maxBytes,
+      timeoutMs: input.timeoutMs,
       signal: context.abortSignal,
     })
     const contentType = result.contentType.toLowerCase()

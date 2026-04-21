@@ -9,10 +9,16 @@ import { allTools, getEnabledTools } from '../tools.js'
 import type { AgentType } from './types.js'
 import { getAgent } from './registry.js'
 
+const BLOCKED_SUBAGENT_TOOLS = new Set([
+  'AgentTool',
+  'TodoWrite',
+  'MemoryWrite',
+])
+
 function filterTools(definitionTools: string[] | ['*'], enabledTools: Tool[]): Tool[] {
   const names = definitionTools.includes('*') ? null : new Set(definitionTools)
   return enabledTools.filter(tool => {
-    if (tool.name === 'AgentTool') {
+    if (BLOCKED_SUBAGENT_TOOLS.has(tool.name)) {
       return false
     }
 

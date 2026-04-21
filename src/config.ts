@@ -13,8 +13,6 @@ export type RoutingConfig = {
 }
 
 export type LightClawConfig = {
-  apiKey: string
-  baseUrl?: string
   model: string
   provider: ProviderName
   providerOptions: {
@@ -156,8 +154,6 @@ export function getConfig(): LightClawConfig {
     process.env.OPENAI_API_KEY ?? fileConfig.providerOptions?.openai?.apiKey
   const openaiBaseUrl =
     process.env.OPENAI_BASE_URL ?? fileConfig.providerOptions?.openai?.baseUrl
-  const apiKey = anthropicApiKey
-  const baseUrl = anthropicBaseUrl
   const model = process.env.LIGHTCLAW_MODEL ?? fileConfig.model ?? DEFAULT_MODEL
   const routing: RoutingConfig = {
     main:
@@ -225,8 +221,6 @@ export function getConfig(): LightClawConfig {
   }
 
   return {
-    apiKey: apiKey ?? '',
-    baseUrl,
     model,
     provider,
     providerOptions: {

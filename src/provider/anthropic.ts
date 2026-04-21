@@ -7,7 +7,12 @@ import type {
   StreamStopEvent,
   UsageStats,
 } from '../types.js'
-import type { Provider, StreamChatParams } from './types.js'
+import type {
+  Provider,
+  StreamChatParams,
+  WebSearchParams,
+  WebSearchResult,
+} from './types.js'
 
 type PendingToolUseBlock = {
   type: 'tool_use'
@@ -83,33 +88,68 @@ function finalizeContentBlocks(
     })
 }
 
+function formatWebSearchBlocks(blocks: unknown[]): string {
+  const lines: string[] = []
+
+  for (const block of blocks) {
+    if (!isRecord(block)) {
+      continue
+    }
+
+    if (block.type === 'text' && typeof block.text === 'string') {
+      lines.push(block.text)
+      continue
+    }
+
+    if (block.type !== 'server_tool_use' && block.type !== 'web_search_tool_result') {
+      continue
+    }
+
+    const content = block.content
+    if (!Array.isArray(content)) {
+      continue
+    }
+
+    for (const item of content) {
+      if (!isRecord(item)) {
+        continue
+      }
+
+      const title = typeof item.title === 'string' ? item.title : 'Untitled'
+      const url = typeof item.url === 'string' ? item.url : ''
+      const suffix =
+        typeof item.page_age === 'string' ? ` (${item.page_age})` : ''
+      lines.push(url ? `- ${title}: ${url}${suffix}` : `- ${title}${suffix}`)
+    }
+  }
+
+  return lines.join('\n').trim()
+}
+
 export function createAnthropicProvider(config: LightClawConfig): Provider {
   const anthropicConfig = config.providerOptions.anthropic
-  const baseURL = anthropicConfig?.baseUrl ?? config.baseUrl
+  const baseURL = anthropicConfig?.baseUrl
   const client = new Anthropic({
-    apiKey: anthropicConfig?.apiKey ?? config.apiKey,
+    apiKey: anthropicConfig?.apiKey ?? '',
     ...(baseURL ? { baseURL } : {}),
   })
+  const webSearchSupported = !baseURL
 
   return {
     name: 'anthropic',
     capabilities: {
       serverTools: {
-        webSearch: !baseURL,
+        webSearch: webSearchSupported,
       },
       promptCaching: true,
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      const tools = [
-        ...params.tools,
-        ...(params.extraTools ?? []),
-      ]
       const stream = await client.messages.create({
         model: params.model,
         max_tokens: params.maxTokens ?? 8192,
         system: params.system,
         messages: params.messages as never,
-        tools: tools as never,
+        tools: params.tools as never,
         stream: true,
       }, {
         signal: params.signal,
@@ -254,5 +294,47 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
       }
       yield stopEvent
     },
+    ...(webSearchSupported
+      ? {
+          async webSearch(
+            webSearchParams: WebSearchParams,
+          ): Promise<WebSearchResult> {
+            const response = await client.messages.create(
+              {
+                model: webSearchParams.model,
+                max_tokens: webSearchParams.maxTokens ?? 4096,
+                system:
+                  'You are a web search assistant. Use web_search to answer the query and include useful source URLs.',
+                messages: [
+                  {
+                    role: 'user',
+                    content: `Perform a web search for: ${webSearchParams.query}`,
+                  },
+                ],
+                tools: [
+                  {
+                    type: 'web_search_20250305',
+                    name: 'web_search',
+                    max_uses: webSearchParams.maxUses ?? 5,
+                    ...(webSearchParams.allowedDomains
+                      ? { allowed_domains: webSearchParams.allowedDomains }
+                      : {}),
+                    ...(webSearchParams.blockedDomains
+                      ? { blocked_domains: webSearchParams.blockedDomains }
+                      : {}),
+                  },
+                ] as never,
+              },
+              {
+                signal: webSearchParams.signal,
+              },
+            )
+
+            return {
+              text: formatWebSearchBlocks(response.content as unknown[]),
+            }
+          },
+        }
+      : {}),
   }
 }

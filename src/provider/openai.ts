@@ -168,10 +168,6 @@ export function createOpenAIProvider(config: LightClawConfig): Provider {
       promptCaching: false,
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      if (params.extraTools && params.extraTools.length > 0) {
-        console.warn('[provider:openai] extraTools are not supported and were ignored.')
-      }
-
       const pendingTools = new Map<number, PendingToolCall>()
       let text = ''
       let usage: UsageStats = {}

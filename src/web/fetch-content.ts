@@ -1,5 +1,7 @@
 import { fetch, ProxyAgent } from 'undici'
 
+export const DEFAULT_WEB_FETCH_TIMEOUT_MS = 15_000
+
 export type FetchResult = {
   url: string
   status: number
@@ -23,16 +25,13 @@ function combineSignals(left: AbortSignal, right?: AbortSignal): AbortSignal {
     return left
   }
 
-  const controller = new AbortController()
-  const abort = () => controller.abort()
-  left.addEventListener('abort', abort, { once: true })
-  right.addEventListener('abort', abort, { once: true })
-  return controller.signal
+  return AbortSignal.any([left, right])
 }
 
 export async function fetchContent(params: {
   url: string
   maxBytes: number
+  timeoutMs?: number
   signal?: AbortSignal
 }): Promise<FetchResult> {
   const url = new URL(params.url)
@@ -40,8 +39,9 @@ export async function fetchContent(params: {
     throw new Error('Only http and https URLs are supported.')
   }
 
+  const timeoutMs = params.timeoutMs ?? DEFAULT_WEB_FETCH_TIMEOUT_MS
   const timeoutController = new AbortController()
-  const timeout = setTimeout(() => timeoutController.abort(), 15_000)
+  const timeout = setTimeout(() => timeoutController.abort(), timeoutMs)
 
   const proxyUrl = getProxyUrl()
   try {
