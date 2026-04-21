@@ -1,5 +1,6 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
+import { extractMemories } from './memory/extract.js'
 import {
   collectAssistantText,
   createAssistantMessage,
@@ -12,9 +13,15 @@ import {
   addUsage,
   getAbortController,
   getCwd,
+  getLastExtractedAt,
+  getMemoryDir,
+  getSessionId,
   incrementCompactionCount,
+  registerBackgroundTask,
+  setLastExtractedAt,
 } from './state.js'
 import { compactConversation } from './session/compact.js'
+import { updateMetaLastExtractedAt } from './session/storage.js'
 import { findToolByName, toolToAPISchema, type Tool } from './tool.js'
 import { estimateMessagesTokens } from './token-estimate.js'
 import type { Message, ToolExecutionEvent, UserToolResultBlock } from './types.js'
@@ -44,6 +51,34 @@ export async function query(params: QueryParams): Promise<{
   let lastAssistantText = ''
   let stopReason: string | null = null
   let didCompact = false
+
+  const scheduleMemoryExtraction = (snapshot: Message[]) => {
+    if (!config.autoMemory || stopReason !== 'end_turn') {
+      return
+    }
+
+    const lastExtractedAt = getLastExtractedAt()
+    const task = extractMemories({
+      messages: snapshot,
+      lastExtractedAt,
+      memoryDir: getMemoryDir(),
+      config,
+    })
+      .then(async result => {
+        if (result.lastExtractedAt <= lastExtractedAt) {
+          return
+        }
+
+        setLastExtractedAt(result.lastExtractedAt)
+        await updateMetaLastExtractedAt(getSessionId(), result.lastExtractedAt)
+      })
+      .catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error(`[memory] ${message}`)
+      })
+
+    registerBackgroundTask(task)
+  }
 
   const maybeAutoCompact = async () => {
     if (!config.autoCompact) {
@@ -91,7 +126,9 @@ export async function query(params: QueryParams): Promise<{
       config,
       model: config.model,
       messages: toApiMessages(messages),
-      system: buildSystemPrompt(params.tools, getCwd()),
+      system: await buildSystemPrompt(params.tools, getCwd(), {
+        autoMemory: config.autoMemory,
+      }),
       tools: params.tools.map(toolToAPISchema),
       signal: getAbortController().signal,
     })) {
@@ -130,7 +167,9 @@ export async function query(params: QueryParams): Promise<{
     )
 
     if (toolUses.length === 0) {
+      const extractionSnapshot = [...messages]
       await maybeAutoCompact()
+      scheduleMemoryExtraction(extractionSnapshot)
       return {
         messages,
         lastAssistantText,

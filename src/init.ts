@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { getConfig, type LightClawConfig } from './config.js'
+import { getMemoryDir } from './memory/auto-memory.js'
 import { getAbortController, initializeState, resetAbortController } from './state.js'
 
 let signalHandlersInstalled = false
@@ -11,6 +12,7 @@ export function initializeApp(input?: {
   sessionId?: string
   resumedFrom?: string | null
   compactionCount?: number
+  lastExtractedAt?: number
 }): LightClawConfig {
   const config = getConfig()
   const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
@@ -20,9 +22,11 @@ export function initializeApp(input?: {
     cwd: resolvedCwd,
     model: resolvedModel,
     sessionsDir: config.sessionsDir,
+    memoryDir: getMemoryDir(resolvedCwd, config),
     sessionId: input?.sessionId,
     resumedFrom: input?.resumedFrom,
     compactionCount: input?.compactionCount,
+    lastExtractedAt: input?.lastExtractedAt,
   })
   installSignalHandlers()
 

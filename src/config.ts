@@ -8,6 +8,8 @@ export type LightClawConfig = {
   model: string
   sessionsDir: string
   autoCompact: boolean
+  autoMemory: boolean
+  memoryDir: string
   contextWindow: number
   compactThresholdRatio: number
   compactKeepRecent: number
@@ -19,6 +21,8 @@ type ConfigFileShape = {
   model?: string
   sessionsDir?: string
   autoCompact?: boolean
+  autoMemory?: boolean
+  memoryDir?: string
   contextWindow?: number
   compactThresholdRatio?: number
   compactKeepRecent?: number
@@ -124,6 +128,17 @@ export function getConfig(): LightClawConfig {
         DEFAULT_COMPACT_KEEP_RECENT,
     ),
   )
+  const autoMemory =
+    parseBoolean(process.env.LIGHTCLAW_AUTO_MEMORY) ??
+    fileConfig.autoMemory ??
+    true
+  const memoryDir = path.resolve(
+    expandHomePath(
+      process.env.LIGHTCLAW_MEMORY_DIR ??
+        fileConfig.memoryDir ??
+        path.join(homedir(), '.lightclaw', 'memory'),
+    ),
+  )
 
   if (!apiKey) {
     throw new Error(
@@ -137,6 +152,8 @@ export function getConfig(): LightClawConfig {
     model,
     sessionsDir: resolveSessionsDir(),
     autoCompact,
+    autoMemory,
+    memoryDir,
     contextWindow,
     compactThresholdRatio,
     compactKeepRecent,

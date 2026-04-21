@@ -9,11 +9,13 @@ type CliArgs = {
   model?: string
   prompt?: string
   resume?: string | true
+  noMemory: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     help: false,
+    noMemory: false,
   }
   const positionals: string[] = []
 
@@ -47,6 +49,11 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
+    if (arg === '--no-memory') {
+      args.noMemory = true
+      continue
+    }
+
     positionals.push(arg)
   }
 
@@ -66,12 +73,14 @@ Usage:
   lightclaw --model claude-sonnet-4-20250514
   lightclaw --resume
   lightclaw --resume <session-id>
+  lightclaw --no-memory
 
 Options:
   -h, --help       Show help
   -p, --prompt     Run a single prompt and exit
       --model      Override configured model
       --resume     Resume the latest or a specific saved session
+      --no-memory  Disable auto-memory extraction and memory index injection
 `)
 }
 
@@ -103,7 +112,11 @@ async function main(): Promise<void> {
     sessionId: resumeSessionId,
     resumedFrom: resumeSessionId ?? null,
     compactionCount: resumeMeta?.compactionCount,
+    lastExtractedAt: resumeMeta?.lastExtractedAt,
   })
+  if (args.noMemory) {
+    config.autoMemory = false
+  }
   await startRepl({
     config,
     tools: allTools,

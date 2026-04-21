@@ -7,11 +7,14 @@ type SessionState = {
   cwd: string
   model: string
   sessionsDir: string
+  memoryDir: string
   resumedFrom: string | null
   compactionCount: number
+  lastExtractedAt: number
   totalInputTokens: number
   totalOutputTokens: number
   abortController: AbortController
+  backgroundTasks: Set<Promise<unknown>>
 }
 
 let state: SessionState | null = null
@@ -20,20 +23,25 @@ export function initializeState(input: {
   cwd: string
   model: string
   sessionsDir: string
+  memoryDir: string
   sessionId?: string
   resumedFrom?: string | null
   compactionCount?: number
+  lastExtractedAt?: number
 }): void {
   state = {
     sessionId: input.sessionId ?? randomUUID(),
     cwd: input.cwd,
     model: input.model,
     sessionsDir: input.sessionsDir,
+    memoryDir: input.memoryDir,
     resumedFrom: input.resumedFrom ?? null,
     compactionCount: input.compactionCount ?? 0,
+    lastExtractedAt: input.lastExtractedAt ?? 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     abortController: new AbortController(),
+    backgroundTasks: new Set(),
   }
 }
 
@@ -69,6 +77,10 @@ export function getSessionsDir(): string {
   return requireState().sessionsDir
 }
 
+export function getMemoryDir(): string {
+  return requireState().memoryDir
+}
+
 export function getResumedFrom(): string | null {
   return requireState().resumedFrom
 }
@@ -81,6 +93,14 @@ export function incrementCompactionCount(): number {
 
 export function getCompactionCount(): number {
   return requireState().compactionCount
+}
+
+export function getLastExtractedAt(): number {
+  return requireState().lastExtractedAt
+}
+
+export function setLastExtractedAt(timestamp: number): void {
+  requireState().lastExtractedAt = timestamp
 }
 
 export function getAbortController(): AbortController {
@@ -108,4 +128,21 @@ export function getUsageTotals(): {
     inputTokens: current.totalInputTokens,
     outputTokens: current.totalOutputTokens,
   }
+}
+
+export function registerBackgroundTask(task: Promise<unknown>): void {
+  const current = requireState()
+  current.backgroundTasks.add(task)
+  void task.finally(() => {
+    current.backgroundTasks.delete(task)
+  })
+}
+
+export async function awaitBackgroundTasks(): Promise<void> {
+  const current = requireState()
+  if (current.backgroundTasks.size === 0) {
+    return
+  }
+
+  await Promise.allSettled([...current.backgroundTasks])
 }

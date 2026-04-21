@@ -73,6 +73,7 @@ export type SessionMeta = {
   lastActiveAt: number
   messageCount: number
   compactionCount: number
+  lastExtractedAt?: number
 }
 
 export type StreamTextEvent = {
@@ -105,3 +106,6 @@ export type ToolExecutionEvent = {
   isError: boolean
   content: string
 }
+
+export type { MemoryEntry, MemoryFrontmatter, MemoryType } from './memory/types.js'
+export type { LoadedSkill, SkillMeta, SkillSource } from './skill/types.js'

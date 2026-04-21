@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from 'node:process'
 
 import chalk from 'chalk'
 
+import { scanMemoryFiles } from './memory/auto-memory.js'
 import type { LightClawConfig } from './config.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
@@ -21,8 +22,16 @@ import {
   touchMeta,
 } from './session/storage.js'
 import {
+  buildRegisteredSkillInvocation,
+  listRegisteredSkills,
+  refreshSkillRegistry,
+} from './skill/registry.js'
+import {
+  awaitBackgroundTasks,
   getCompactionCount,
   getCwd,
+  getLastExtractedAt,
+  getMemoryDir,
   getModel,
   getResumedFrom,
   getSessionId,
@@ -52,6 +61,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
 
   const existingMeta = await loadMeta(sessionId)
   createdAt = existingMeta?.createdAt ?? createdAt
+  await refreshSkillRegistry(getCwd())
   await persistMeta(createdAt, messages.length)
 
   const rl = createInterface({
@@ -162,10 +172,15 @@ export async function startRepl(params: ReplParams): Promise<void> {
       ),
     )
   }
-  output.write(chalk.gray('Type /exit to quit. Commands: /sessions /status /compact\n\n'))
+  output.write(
+    chalk.gray(
+      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory\n\n',
+    ),
+  )
 
   if (params.initialPrompt) {
     await runPrompt(params.initialPrompt)
+    await awaitBackgroundTasks()
     rl.close()
     await persistMeta(createdAt, messages.length)
     printUsageSummary()
@@ -204,6 +219,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
       output.write(chalk.gray(`session: ${sessionId}\n`))
       output.write(chalk.gray(`cwd: ${getCwd()}\n`))
       output.write(chalk.gray(`model: ${getModel()}\n`))
+      output.write(chalk.gray(`memory dir: ${getMemoryDir()}\n`))
       output.write(chalk.gray(`messages: ${messages.length}\n`))
       output.write(
         chalk.gray(`estimated tokens: ${estimateMessagesTokens(messages)}\n`),
@@ -214,6 +230,48 @@ export async function startRepl(params: ReplParams): Promise<void> {
       if (getResumedFrom()) {
         output.write(chalk.gray(`resumed from: ${getResumedFrom()}\n`))
       }
+      if (getLastExtractedAt() > 0) {
+        output.write(
+          chalk.gray(
+            `last memory extract: ${new Date(getLastExtractedAt()).toISOString()}\n`,
+          ),
+        )
+      }
+      output.write(chalk.gray(`skills: ${listRegisteredSkills().length}\n`))
+      continue
+    }
+
+    if (command === '/skills') {
+      await refreshSkillRegistry(getCwd())
+      output.write(chalk.gray(formatSkillList()))
+      continue
+    }
+
+    if (command === '/memory') {
+      output.write(chalk.gray(await formatMemoryList()))
+      continue
+    }
+
+    if (command === '/skill' || command.startsWith('/skill ')) {
+      const rawArgs = command.slice('/skill'.length).trim()
+      if (rawArgs.length === 0) {
+        output.write(chalk.red('error> Usage: /skill <name> [args]\n'))
+        continue
+      }
+
+      const [name, ...rest] = rawArgs.split(/\s+/)
+      await refreshSkillRegistry(getCwd())
+      const skillPrompt = await buildRegisteredSkillInvocation(
+        name,
+        rest.join(' '),
+      )
+      if (!skillPrompt) {
+        output.write(chalk.red(`error> Unknown skill: ${name}\n`))
+        continue
+      }
+
+      output.write(chalk.cyan(`[skill] ${name}\n`))
+      await runPrompt(skillPrompt)
       continue
     }
 
@@ -221,6 +279,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
 
   rl.close()
+  await awaitBackgroundTasks()
   await persistMeta(createdAt, messages.length)
   printUsageSummary()
 }
@@ -271,9 +330,36 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     lastActiveAt: Date.now(),
     messageCount,
     compactionCount: getCompactionCount(),
+    lastExtractedAt: getLastExtractedAt(),
   }
 
   await saveMeta(sessionId, meta)
+}
+
+function formatSkillList(): string {
+  const skills = listRegisteredSkills()
+  if (skills.length === 0) {
+    return 'No skills found.\n'
+  }
+
+  return `${skills
+    .map(skill => {
+      const source = skill.source.padEnd(7, ' ')
+      const whenToUse = skill.whenToUse ?? 'n/a'
+      return `${skill.name}  [${source}]  ${skill.description}  (${whenToUse})`
+    })
+    .join('\n')}\n`
+}
+
+async function formatMemoryList(): Promise<string> {
+  const entries = await scanMemoryFiles(getMemoryDir())
+  if (entries.length === 0) {
+    return 'No memory files found.\n'
+  }
+
+  return `${entries
+    .map(entry => `[${entry.type}] ${entry.filename}: ${entry.description}`)
+    .join('\n')}\n`
 }
 
 function printUsageSummary(): void {

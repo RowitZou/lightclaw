@@ -122,5 +122,25 @@ export async function touchMeta(
     lastActiveAt: now,
     messageCount,
     compactionCount: getCompactionCount(),
+    lastExtractedAt: current?.lastExtractedAt,
+  })
+}
+
+export async function updateMetaLastExtractedAt(
+  sessionId: string,
+  lastExtractedAt: number,
+): Promise<void> {
+  const current = await loadMeta(sessionId)
+  const now = Date.now()
+
+  await saveMeta(sessionId, {
+    sessionId,
+    model: current?.model ?? getModel(),
+    cwd: current?.cwd ?? getCwd(),
+    createdAt: current?.createdAt ?? now,
+    lastActiveAt: current?.lastActiveAt ?? now,
+    messageCount: current?.messageCount ?? 0,
+    compactionCount: current?.compactionCount ?? getCompactionCount(),
+    lastExtractedAt,
   })
 }
