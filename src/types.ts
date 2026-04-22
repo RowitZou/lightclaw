@@ -75,6 +75,7 @@ export type SessionMeta = {
   compactionCount: number
   lastExtractedAt?: number
   todos?: TodoItem[]
+  permissionMode?: import('./permission/types.js').PermissionMode
 }
 
 export type StreamTextEvent = {

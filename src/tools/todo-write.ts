@@ -18,6 +18,7 @@ export const todoWriteTool = buildTool({
     'Keep exactly one item in_progress while actively working. Mark completed work as completed.',
     'Do not use this for trivial single-step questions.',
   ].join('\n'),
+  riskLevel: 'safe',
   inputSchema: z.object({
     todos: z.array(todoItemSchema),
   }),

@@ -12,6 +12,7 @@ import {
   getCompactionCount,
   getCwd,
   getModel,
+  getPermissionMode,
 } from '../state.js'
 import type { Message, SessionMeta } from '../types.js'
 import type { TodoItem } from '../types.js'
@@ -125,6 +126,7 @@ export async function touchMeta(
     compactionCount: getCompactionCount(),
     lastExtractedAt: current?.lastExtractedAt,
     todos: current?.todos,
+    permissionMode: getPermissionMode(),
   })
 }
 
@@ -145,6 +147,7 @@ export async function updateMetaLastExtractedAt(
     compactionCount: current?.compactionCount ?? getCompactionCount(),
     lastExtractedAt,
     todos: current?.todos,
+    permissionMode: current?.permissionMode ?? getPermissionMode(),
   })
 }
 
@@ -165,5 +168,6 @@ export async function updateMetaTodos(
     compactionCount: current?.compactionCount ?? getCompactionCount(),
     lastExtractedAt: current?.lastExtractedAt,
     todos,
+    permissionMode: current?.permissionMode ?? getPermissionMode(),
   })
 }

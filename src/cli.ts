@@ -1,8 +1,14 @@
+import chalk from 'chalk'
+
 import { initializeApp } from './init.js'
+import { parsePermissionMode } from './config.js'
+import { parseRule } from './permission/rules.js'
+import type { PermissionMode, PermissionRule } from './permission/types.js'
 import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
+import { setCliArgRules, setPermissionMode } from './state.js'
 import { allTools, getEnabledTools } from './tools.js'
 import type { ProviderName } from './types.js'
 
@@ -13,12 +19,19 @@ type CliArgs = {
   prompt?: string
   resume?: string | true
   noMemory: boolean
+  permissionMode?: PermissionMode
+  allow: string[]
+  deny: string[]
+  dangerouslyBypass: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     help: false,
     noMemory: false,
+    allow: [],
+    deny: [],
+    dangerouslyBypass: false,
   }
   const positionals: string[] = []
 
@@ -66,6 +79,39 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
+    if (arg === '--permission-mode') {
+      const mode = parsePermissionMode(argv[index + 1])
+      if (mode) {
+        args.permissionMode = mode
+      }
+      index += 1
+      continue
+    }
+
+    if (arg === '--allow') {
+      const rule = argv[index + 1]
+      if (rule) {
+        args.allow.push(rule)
+      }
+      index += 1
+      continue
+    }
+
+    if (arg === '--deny') {
+      const rule = argv[index + 1]
+      if (rule) {
+        args.deny.push(rule)
+      }
+      index += 1
+      continue
+    }
+
+    if (arg === '--dangerously-bypass') {
+      args.dangerouslyBypass = true
+      args.permissionMode = 'bypassPermissions'
+      continue
+    }
+
     positionals.push(arg)
   }
 
@@ -87,15 +133,34 @@ Usage:
   lightclaw --resume
   lightclaw --resume <session-id>
   lightclaw --no-memory
+  lightclaw --permission-mode plan
+  lightclaw --allow "Bash(git status:*)" --deny "Bash(rm:*)"
 
 Options:
-  -h, --help       Show help
-  -p, --prompt     Run a single prompt and exit
-      --model      Override configured model
-      --provider   Override provider: anthropic or openai
-      --resume     Resume the latest or a specific saved session
-      --no-memory  Disable auto-memory extraction and memory index injection
+  -h, --help             Show help
+  -p, --prompt           Run a single prompt and exit
+      --model            Override configured model
+      --provider         Override provider: anthropic or openai
+      --resume           Resume the latest or a specific saved session
+      --no-memory        Disable auto-memory extraction and memory index injection
+      --permission-mode  Set mode: default, acceptEdits, bypassPermissions, plan
+      --allow            Add a CLI allow rule (repeatable)
+      --deny             Add a CLI deny rule (repeatable)
+      --dangerously-bypass
+                         Allow all tool calls unless denied by rule
 `)
+}
+
+function parseCliRules(args: CliArgs): PermissionRule[] {
+  const rules: PermissionRule[] = []
+  for (const text of args.allow) {
+    rules.push({ source: 'cliArg', behavior: 'allow', value: parseRule(text) })
+  }
+  for (const text of args.deny) {
+    rules.push({ source: 'cliArg', behavior: 'deny', value: parseRule(text) })
+  }
+
+  return rules
 }
 
 async function main(): Promise<void> {
@@ -131,7 +196,15 @@ async function main(): Promise<void> {
     compactionCount: resumeMeta?.compactionCount,
     lastExtractedAt: resumeMeta?.lastExtractedAt,
     todos: resumeMeta?.todos,
+    permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
   })
+  if (args.permissionMode) {
+    setPermissionMode(args.permissionMode)
+  }
+  setCliArgRules(parseCliRules(args))
+  if (args.dangerouslyBypass) {
+    console.error(chalk.red('--dangerously-bypass: all tool calls will be allowed unless an explicit deny rule matches.'))
+  }
   if (args.noMemory) {
     config.autoMemory = false
   }

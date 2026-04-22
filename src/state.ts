@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import type { PermissionMode, PermissionRule } from './permission/types.js'
 import type { TodoItem, UsageStats } from './types.js'
 
 type SessionState = {
@@ -14,6 +15,10 @@ type SessionState = {
   totalInputTokens: number
   totalOutputTokens: number
   todos: TodoItem[]
+  permissionMode: PermissionMode
+  cliArgRules: PermissionRule[]
+  sessionRules: PermissionRule[]
+  fileRules: PermissionRule[]
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
 }
@@ -30,6 +35,9 @@ export function initializeState(input: {
   compactionCount?: number
   lastExtractedAt?: number
   todos?: TodoItem[]
+  permissionMode?: PermissionMode
+  cliArgRules?: PermissionRule[]
+  fileRules?: PermissionRule[]
 }): void {
   state = {
     sessionId: input.sessionId ?? randomUUID(),
@@ -43,6 +51,10 @@ export function initializeState(input: {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     todos: input.todos ?? [],
+    permissionMode: input.permissionMode ?? 'default',
+    cliArgRules: input.cliArgRules ?? [],
+    sessionRules: [],
+    fileRules: input.fileRules ?? [],
     abortController: new AbortController(),
     backgroundTasks: new Set(),
   }
@@ -112,6 +124,51 @@ export function getTodos(): TodoItem[] {
 
 export function setTodos(todos: TodoItem[]): void {
   requireState().todos = [...todos]
+}
+
+export function getPermissionMode(): PermissionMode {
+  return requireState().permissionMode
+}
+
+export function setPermissionMode(mode: PermissionMode): void {
+  requireState().permissionMode = mode
+}
+
+export function getSessionRules(): PermissionRule[] {
+  return [...requireState().sessionRules]
+}
+
+export function addSessionRule(rule: PermissionRule): void {
+  requireState().sessionRules.push(rule)
+}
+
+export function clearSessionRules(): void {
+  requireState().sessionRules = []
+}
+
+export function getCliArgRules(): PermissionRule[] {
+  return [...requireState().cliArgRules]
+}
+
+export function setCliArgRules(rules: PermissionRule[]): void {
+  requireState().cliArgRules = [...rules]
+}
+
+export function getFileRules(): PermissionRule[] {
+  return [...requireState().fileRules]
+}
+
+export function setFileRules(rules: PermissionRule[]): void {
+  requireState().fileRules = [...rules]
+}
+
+export function getAllPermissionRules(): PermissionRule[] {
+  const current = requireState()
+  return [
+    ...current.cliArgRules,
+    ...current.sessionRules,
+    ...current.fileRules,
+  ]
 }
 
 export function getAbortController(): AbortController {
