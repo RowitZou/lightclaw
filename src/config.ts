@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ProviderName } from './provider/types.js'
 
 export type RoutingConfig = {
@@ -33,6 +34,13 @@ export type LightClawConfig = {
   contextWindow: number
   compactThresholdRatio: number
   compactKeepRecent: number
+  permissionMode: PermissionMode
+  permissionRuleFiles: {
+    user?: string
+    project?: string
+    local?: string
+  }
+  permissionAuditLog?: string
 }
 
 type ConfigFileShape = {
@@ -58,6 +66,13 @@ type ConfigFileShape = {
   contextWindow?: number
   compactThresholdRatio?: number
   compactKeepRecent?: number
+  permissionMode?: string
+  permissionRuleFiles?: {
+    user?: string
+    project?: string
+    local?: string
+  }
+  permissionAuditLog?: string
 }
 
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
@@ -113,6 +128,16 @@ function parseProvider(value: string | undefined): ProviderName | undefined {
   }
 
   return undefined
+}
+
+export function parsePermissionMode(value: string | undefined): PermissionMode | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  return PERMISSION_MODES.includes(value as PermissionMode)
+    ? value as PermissionMode
+    : undefined
 }
 
 function loadConfigFile(): ConfigFileShape {
@@ -207,6 +232,13 @@ export function getConfig(): LightClawConfig {
         path.join(homedir(), '.lightclaw', 'memory'),
     ),
   )
+  const permissionMode =
+    parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_MODE) ??
+    parsePermissionMode(fileConfig.permissionMode) ??
+    'default'
+  const permissionAuditLog =
+    process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
+    fileConfig.permissionAuditLog
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -249,5 +281,8 @@ export function getConfig(): LightClawConfig {
     contextWindow,
     compactThresholdRatio,
     compactKeepRecent,
+    permissionMode,
+    permissionRuleFiles: fileConfig.permissionRuleFiles ?? {},
+    ...(permissionAuditLog ? { permissionAuditLog } : {}),
   }
 }

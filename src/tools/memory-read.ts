@@ -8,6 +8,7 @@ export const memoryReadTool = buildTool({
   name: 'MemoryRead',
   description:
     'Read auto-memory files. Use action "list" to list files or "read" to inspect a specific memory file.',
+  riskLevel: 'safe',
   inputSchema: z.object({
     action: z.enum(['list', 'read']),
     filename: z.string().min(1).optional(),

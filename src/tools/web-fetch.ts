@@ -16,6 +16,7 @@ export const webFetchTool = buildTool({
   name: 'WebFetch',
   description:
     'Fetch content from a URL and return it as Markdown. Supports HTML, plain text, Markdown, and JSON. Binary content is rejected.',
+  riskLevel: 'execute',
   inputSchema: z.object({
     url: z.string().url(),
     maxBytes: z.number().int().min(1024).max(500_000).optional(),

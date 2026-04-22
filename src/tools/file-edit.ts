@@ -25,6 +25,7 @@ function countOccurrences(content: string, needle: string): number {
 export const fileEditTool = buildTool({
   name: 'Edit',
   description: 'Replace a unique string in a file with a new string.',
+  riskLevel: 'write',
   inputSchema: z.object({
     file_path: z.string().min(1),
     old_string: z.string().min(1),

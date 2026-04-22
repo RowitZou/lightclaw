@@ -6,7 +6,7 @@ LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, 
 
 ## Status
 
-Phases 1 – 4 are complete. The current build ships as a ~91 KB single-file ESM bundle and exposes:
+Phases 1 – 5 are complete. The current build ships as a ~108 KB single-file ESM bundle and exposes:
 
 - **Terminal REPL** (readline + chalk) with streaming output and Ctrl+C interruption
 - **Agent loop** with up to 20 turns, tool-use ↔ tool-result routing, and auto-compact
@@ -19,8 +19,9 @@ Phases 1 – 4 are complete. The current build ships as a ~91 KB single-file ESM
 - **Provider abstraction**: Anthropic and OpenAI-compatible streaming, per-purpose model routing (`main` / `compact` / `extract` / `subagent` / `webSearch`)
 - **Web tools**: proxy-aware `WebFetch` (undici + turndown) and Anthropic native server-side `WebSearch` (enabled only when talking to the official Anthropic endpoint)
 - **Todo list**: `TodoWrite` tool + `/todos` command + session-scoped persistence
+- **Permission system**: four modes (`default`, `acceptEdits`, `bypassPermissions`, `plan`), layered allow/deny rules, REPL approval prompts, and audit JSONL
 
-Deliberately **not** implemented yet: React/Ink UI, permission system, hooks, MCP, messaging channels (Feishu/WeChat/IDE bridge), `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement.
+Deliberately **not** implemented yet: React/Ink UI, hooks, MCP, messaging channels (Feishu/WeChat/IDE bridge), `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
 
 ## Requirements
 
@@ -73,7 +74,14 @@ Example `~/.lightclaw/config.json`:
   "autoMemory": true,
   "contextWindow": 200000,
   "compactThresholdRatio": 0.75,
-  "compactKeepRecent": 6
+  "compactKeepRecent": 6,
+  "permissionMode": "default",
+  "permissionRuleFiles": {
+    "user": "~/.lightclaw/permissions.json",
+    "project": ".lightclaw/permissions.json",
+    "local": ".lightclaw/permissions.local.json"
+  },
+  "permissionAuditLog": "~/.lightclaw/permissions.audit.jsonl"
 }
 ```
 
@@ -92,6 +100,8 @@ Supported environment variables:
 | `LIGHTCLAW_CONTEXT_WINDOW` | Model context window in tokens (compact threshold math) |
 | `LIGHTCLAW_COMPACT_THRESHOLD_RATIO` | Trigger compact when estimated usage crosses this ratio (0.1 – 0.95) |
 | `LIGHTCLAW_COMPACT_KEEP_RECENT` | Number of most recent messages to preserve during compact |
+| `LIGHTCLAW_PERMISSION_MODE` | `default`, `acceptEdits`, `bypassPermissions`, or `plan` |
+| `LIGHTCLAW_PERMISSION_AUDIT_LOG` | Optional JSONL path for permission decisions |
 
 ## Usage
 
@@ -113,7 +123,34 @@ pnpm dev -- --provider openai
 
 # Disable auto-memory extraction and memory index injection
 pnpm dev -- --no-memory
+
+# Permission modes and CLI rules
+pnpm dev -- --permission-mode plan
+pnpm dev -- --allow "Bash(git status:*)" --deny "Bash(rm:*)"
+pnpm dev -- --dangerously-bypass
 ```
+
+### Permissions
+
+Modes:
+
+| Mode | Behavior |
+|---|---|
+| `default` | Read/search tools run freely; write and execute tools ask in REPL and deny in non-interactive mode |
+| `acceptEdits` | Read/search/write/edit tools run freely; execute/network/subagent tools still ask |
+| `bypassPermissions` | All tools run unless an explicit deny rule matches |
+| `plan` | Read/search tools run; write and execute tools are denied unless explicitly allowed |
+
+Rule files use:
+
+```json
+{
+  "allow": ["Read", "Bash(git status:*)", "WebFetch(github.com)"],
+  "deny": ["Bash(rm:*)", "Bash(sudo:*)"]
+}
+```
+
+Rule sources are checked as `cliArg` → `session` → `local` → `project` → `user`; any matching deny wins over allow. Session rules come from `/allow` and `/deny` and are not persisted. The current permission mode is saved in session `meta.json` and restored by `--resume`.
 
 ### REPL commands
 
@@ -127,6 +164,10 @@ pnpm dev -- --no-memory
 | `/memory` | Show project memory files and auto-memory index |
 | `/skills` | List available skills |
 | `/skill <name> [args]` | Invoke a skill by name |
+| `/permissions` | Show current mode and permission rules by source |
+| `/permissions clear` | Clear session-level permission rules |
+| `/mode <mode>` | Switch the current session permission mode |
+| `/allow <rule>` / `/deny <rule>` | Add a session-level allow or deny rule |
 
 ## Project layout
 
@@ -146,6 +187,7 @@ src/
 ├── tool.ts             # Tool<I,O> interface, Zod → JSON Schema
 ├── tools.ts            # tool registry + capability gate
 ├── tools/              # 13 built-in tools
+├── permission/         # modes, rule parsing, matching, policy, prompts, audit
 ├── provider/           # Anthropic / OpenAI-compatible providers + modelFor()
 ├── session/            # storage (JSONL + meta.json), listing, compact
 ├── memory/             # LIGHTCLAW.md discovery, auto-memory, extraction
@@ -162,6 +204,7 @@ cli.ts ──► init.ts ──► repl.ts ──► query.ts ──► provider
             (state)     (UI)        (agent loop)
                                     │
                                     ├─► tools/ (Bash, Read, Write, Edit, Grep, Glob, ...)
+                                    ├─► permission/ (mode + rule checks)
                                     ├─► prompt.ts (system prompt template)
                                     ├─► session/ (transcript + compact)
                                     ├─► memory/  (discovery + auto-memory + extract)
@@ -175,7 +218,8 @@ Key invariants:
 - **Tools are schema-first.** `Tool<TInput, TOutput>` uses Zod input schemas converted to JSON Schema via `zod/v4`'s `toJSONSchema()`. New tools register in `allTools` inside `src/tools.ts`.
 - **Auto-compact** is threshold-driven. After every assistant turn, `maybeAutoCompact()` compares the local token estimate against `contextWindow * compactThresholdRatio` and rewrites the transcript in place — no append — if triggered.
 - **Session storage is append-only JSONL + sibling `meta.json`.** Compaction is the only operation that rewrites the transcript.
-- **Sub-agents run synchronously** with an isolated message list, a filtered tool allowlist (no `AgentTool` / `TodoWrite` / `MemoryWrite` to protect the parent), and usage folded back into the parent session.
+- **Tool dispatch is permission-gated.** Each tool declares `riskLevel`, `query.ts` checks mode + rules before `tool.call()`, and denied calls are returned to the model as tool errors.
+- **Sub-agents run synchronously** with an isolated message list, a filtered tool allowlist (no `AgentTool` / `TodoWrite` / `MemoryWrite` to protect the parent), non-interactive permission checks, and usage folded back into the parent session.
 
 ## License
 

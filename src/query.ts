@@ -1,3 +1,5 @@
+import type { Interface } from 'node:readline/promises'
+
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
 import { extractMemories } from './memory/extract.js'
@@ -10,6 +12,7 @@ import {
 } from './messages.js'
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { modelFor } from './provider/index.js'
+import { requestPermission } from './permission/index.js'
 import {
   addUsage,
   getAbortController,
@@ -40,6 +43,8 @@ type QueryParams = {
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
   isSubagent?: boolean
+  isInteractive?: boolean
+  rl?: Interface
   systemPrompt?: string
 }
 
@@ -227,6 +232,32 @@ export async function query(params: QueryParams): Promise<{
       }
 
       try {
+        const decision = await requestPermission({
+          tool,
+          toolInput: parsedInput.data,
+          ctx: {
+            isInteractive: Boolean(params.isInteractive && params.rl && !params.isSubagent),
+            isSubagent: Boolean(params.isSubagent),
+            signal: getAbortController().signal,
+          },
+          rl: params.rl,
+        })
+
+        if (decision.behavior === 'deny') {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: decision.reason,
+            is_error: true,
+          })
+          params.onToolResult?.({
+            toolName: toolUse.name,
+            isError: true,
+            content: decision.reason,
+          })
+          continue
+        }
+
         const result = await tool.call(parsedInput.data, {
           cwd: getCwd(),
           abortSignal: getAbortController().signal,

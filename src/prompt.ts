@@ -5,7 +5,11 @@ import type { LightClawConfig } from './config.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
 import { modelFor } from './provider/index.js'
-import { getMemoryDir } from './state.js'
+import {
+  getAllPermissionRules,
+  getMemoryDir,
+  getPermissionMode,
+} from './state.js'
 import {
   listRegisteredSkills,
   refreshSkillRegistry,
@@ -14,6 +18,7 @@ import type { Tool } from './tool.js'
 import { toolToAPISchema } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
+import type { PermissionMode } from './permission/types.js'
 
 type PromptOptions = {
   autoMemory: boolean
@@ -49,6 +54,38 @@ function formatTodoSection(todos: TodoItem[]): string {
     formatTodosForPrompt(todos),
     'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
   ].join('\n')
+}
+
+const MODE_BLURBS: Record<PermissionMode, string> = {
+  default:
+    'Read/search tools run freely. Write, edit, execute, network fetch, and subagent tools require confirmation; in non-interactive mode they are denied.',
+  acceptEdits:
+    'Read, search, write, and edit tools run freely. Execute, network fetch, and subagent tools still require confirmation.',
+  bypassPermissions: '',
+  plan:
+    'Read/search tools only. Write, edit, execute, network fetch, and subagent tools are denied unless an explicit allow rule matches.',
+}
+
+function formatPermissionSection(isSubagent = false): string {
+  const mode = getPermissionMode()
+  if (mode === 'bypassPermissions') {
+    return ''
+  }
+
+  const rules = getAllPermissionRules()
+  const allowCount = rules.filter(rule => rule.behavior === 'allow').length
+  const denyCount = rules.filter(rule => rule.behavior === 'deny').length
+  const lines = [
+    '## Permission Mode',
+    `Current mode: ${mode}`,
+    isSubagent
+      ? 'Subagent permission checks are non-interactive; confirmation requests are denied automatically.'
+      : `Rule summary: ${allowCount} allow, ${denyCount} deny across all sources.`,
+    `In this mode: ${MODE_BLURBS[mode]}`,
+    'If a tool returns "Permission denied:", do not retry the same call. Choose a read-only alternative, explain the limitation, or ask the user to add an explicit allow rule/switch mode.',
+  ]
+
+  return lines.join('\n')
 }
 
 export async function buildSystemPromptTemplate(
@@ -100,6 +137,11 @@ export async function buildSystemPromptTemplate(
     'To save durable notes for later sessions, use the MemoryWrite tool.',
   )
 
+  const permissionSection = formatPermissionSection()
+  if (permissionSection) {
+    preTodoSections.push('', permissionSection)
+  }
+
   const postTodoSections: string[] = [
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',
@@ -150,6 +192,8 @@ export function buildSubagentPrompt(
     `Platform: ${platform}`,
     '',
     agent.systemPrompt,
+    '',
+    formatPermissionSection(true),
     '',
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',

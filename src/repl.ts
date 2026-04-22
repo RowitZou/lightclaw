@@ -4,9 +4,10 @@ import { stdin as input, stdout as output } from 'node:process'
 import chalk from 'chalk'
 
 import { scanMemoryFiles } from './memory/auto-memory.js'
-import type { LightClawConfig } from './config.js'
+import { parsePermissionMode, type LightClawConfig } from './config.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
+import { formatRule, parseRule } from './permission/rules.js'
 import { query } from './query.js'
 import { compactConversation } from './session/compact.js'
 import {
@@ -33,11 +34,16 @@ import {
   getLastExtractedAt,
   getMemoryDir,
   getModel,
+  getPermissionMode,
   getResumedFrom,
   getSessionId,
+  getAllPermissionRules,
   getTodos,
   getUsageTotals,
   incrementCompactionCount,
+  addSessionRule,
+  clearSessionRules,
+  setPermissionMode,
 } from './state.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import { estimateMessagesTokens } from './token-estimate.js'
@@ -73,7 +79,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     historySize: 200,
   })
 
-  const runPrompt = async (prompt: string) => {
+  const runPrompt = async (prompt: string, permissionInteractive = true) => {
     const trimmedPrompt = prompt.trim()
     if (trimmedPrompt.length === 0) {
       return
@@ -99,6 +105,8 @@ export async function startRepl(params: ReplParams): Promise<void> {
         config: params.config,
         messages,
         tools: params.tools,
+        rl: permissionInteractive ? rl : undefined,
+        isInteractive: permissionInteractive,
         onTextDelta(text) {
           openAssistantLine()
           output.write(text)
@@ -177,12 +185,12 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
   output.write(
     chalk.gray(
-      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos\n\n',
+      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
     ),
   )
 
   if (params.initialPrompt) {
-    await runPrompt(params.initialPrompt)
+    await runPrompt(params.initialPrompt, false)
     await awaitBackgroundTasks()
     rl.close()
     await persistMeta(createdAt, messages.length)
@@ -224,6 +232,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
       output.write(chalk.gray(`model: ${getModel()}\n`))
       output.write(chalk.gray(`provider: ${params.config.provider}\n`))
       output.write(chalk.gray(`routing: ${formatRouting(params.config)}\n`))
+      output.write(chalk.gray(`permission mode: ${getPermissionMode()}\n`))
       output.write(chalk.gray(`memory dir: ${getMemoryDir()}\n`))
       output.write(chalk.gray(`messages: ${messages.length}\n`))
       output.write(
@@ -244,6 +253,50 @@ export async function startRepl(params: ReplParams): Promise<void> {
       }
       output.write(chalk.gray(`skills: ${listRegisteredSkills().length}\n`))
       output.write(chalk.gray(`todos: ${getTodos().length}\n`))
+      continue
+    }
+
+    if (command === '/permissions clear') {
+      clearSessionRules()
+      output.write(chalk.gray('Session permission rules cleared.\n'))
+      await persistMeta(createdAt, messages.length)
+      continue
+    }
+
+    if (command === '/permissions') {
+      output.write(chalk.gray(formatPermissions()))
+      continue
+    }
+
+    if (command === '/mode' || command.startsWith('/mode ')) {
+      const rawMode = command.slice('/mode'.length).trim()
+      const mode = parsePermissionMode(rawMode)
+      if (!mode) {
+        output.write(
+          chalk.red('error> Usage: /mode default|acceptEdits|bypassPermissions|plan\n'),
+        )
+        continue
+      }
+
+      setPermissionMode(mode)
+      output.write(chalk.green(`Permission mode: ${mode}\n`))
+      await persistMeta(createdAt, messages.length)
+      continue
+    }
+
+    if (command === '/allow' || command.startsWith('/allow ')) {
+      const rawRule = command.slice('/allow'.length).trim()
+      if (!addReplRule('allow', rawRule)) {
+        output.write(chalk.red('error> Usage: /allow ToolName(optional:*)\n'))
+      }
+      continue
+    }
+
+    if (command === '/deny' || command.startsWith('/deny ')) {
+      const rawRule = command.slice('/deny'.length).trim()
+      if (!addReplRule('deny', rawRule)) {
+        output.write(chalk.red('error> Usage: /deny ToolName(optional:*)\n'))
+      }
       continue
     }
 
@@ -348,9 +401,61 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     compactionCount: getCompactionCount(),
     lastExtractedAt: getLastExtractedAt(),
     todos: getTodos(),
+    permissionMode: getPermissionMode(),
   }
 
   await saveMeta(sessionId, meta)
+}
+
+function addReplRule(behavior: 'allow' | 'deny', rawRule: string): boolean {
+  try {
+    addSessionRule({
+      source: 'session',
+      behavior,
+      value: parseRule(rawRule),
+    })
+    output.write(
+      behavior === 'allow'
+        ? chalk.green(`+ allow ${rawRule}\n`)
+        : chalk.red(`+ deny ${rawRule}\n`),
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+function formatPermissions(): string {
+  const lines = [
+    `Permission mode: ${getPermissionMode()}`,
+    `Rules: ${getAllPermissionRules().length}`,
+  ]
+
+  const allRules = getAllPermissionRules()
+  const groups = ['cliArg', 'session', 'local', 'project', 'user'] as const
+
+  for (const source of groups) {
+    const rules = allRules.filter(rule => rule.source === source)
+    lines.push('', `[${source}]`)
+    if (rules.length === 0) {
+      lines.push('  (none)')
+      continue
+    }
+
+    const sortedRules = [...rules].sort((a, b) => {
+      if (a.behavior !== b.behavior) {
+        return a.behavior === 'deny' ? -1 : 1
+      }
+
+      return a.source.localeCompare(b.source)
+    })
+
+    for (const rule of sortedRules) {
+      lines.push(`  ${rule.behavior.padEnd(5, ' ')} ${rule.source.padEnd(7, ' ')} ${formatRule(rule.value)}`)
+    }
+  }
+
+  return `${lines.join('\n')}\n`
 }
 
 function formatRouting(config: LightClawConfig): string {

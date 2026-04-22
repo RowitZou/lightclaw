@@ -27,6 +27,7 @@ function formatLines(content: string, offset: number, limit?: number): string {
 export const fileReadTool = buildTool({
   name: 'Read',
   description: 'Read a text file, optionally with line offset and limit.',
+  riskLevel: 'safe',
   inputSchema: z.object({
     file_path: z.string().min(1),
     offset: z.number().int().min(1).optional(),

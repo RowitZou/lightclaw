@@ -57,6 +57,8 @@ export async function runSubagent(params: {
     maxTurns: agent.maxTurns,
     systemPrompt: buildSubagentPrompt(tools, getCwd(), agent),
     isSubagent: true,
+    isInteractive: false,
+    rl: undefined,
   })
 
   return {
