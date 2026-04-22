@@ -8,7 +8,7 @@ import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
-import { setCliArgRules, setPermissionMode } from './state.js'
+import { setCliArgRules } from './state.js'
 import { allTools, getEnabledTools } from './tools.js'
 import type { ProviderName } from './types.js'
 
@@ -198,9 +198,6 @@ async function main(): Promise<void> {
     todos: resumeMeta?.todos,
     permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
   })
-  if (args.permissionMode) {
-    setPermissionMode(args.permissionMode)
-  }
   setCliArgRules(parseCliRules(args))
   if (args.dangerouslyBypass) {
     console.error(chalk.red('--dangerously-bypass: all tool calls will be allowed unless an explicit deny rule matches.'))

@@ -18,10 +18,6 @@ export async function requestPermission(input: {
   rl?: Interface
 }): Promise<PermissionDecision> {
   const { tool, toolInput, ctx, rl } = input
-  if (ctx.bypass) {
-    return { behavior: 'allow' }
-  }
-
   const config = getConfig()
   const mode = getPermissionMode()
   const verdict = evaluatePermission({

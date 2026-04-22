@@ -152,6 +152,12 @@ Rule files use:
 
 Rule sources are checked as `cliArg` → `session` → `local` → `project` → `user`; any matching deny wins over allow. Session rules come from `/allow` and `/deny` and are not persisted. The current permission mode is saved in session `meta.json` and restored by `--resume`.
 
+Pattern semantics:
+- `Bash(cmd:*)` matches on a token boundary — `Bash(rm:*)` covers `rm` and `rm -rf foo` but does **not** match `rmdir`.
+- `WebFetch(example.com)` matches the exact hostname; `WebFetch(*.example.com)` matches any subdomain.
+- `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` use path prefix matching.
+- Per-input rule content is honored for `Bash`, `WebFetch`, `Read` / `Write` / `Edit`, and `AgentTool`; other tools only support whole-tool allow/deny.
+
 ### REPL commands
 
 | Command | Description |

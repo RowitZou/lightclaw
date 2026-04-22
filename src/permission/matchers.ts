@@ -3,7 +3,7 @@ import { URL } from 'node:url'
 export function matchString(pattern: string, value: string): boolean {
   if (pattern.endsWith(':*')) {
     const prefix = pattern.slice(0, -2)
-    return value === prefix || value.startsWith(`${prefix} `) || value.startsWith(prefix)
+    return value === prefix || value.startsWith(`${prefix} `)
   }
 
   return pattern === value
@@ -40,8 +40,7 @@ export function matchHostname(pattern: string, url: string): boolean {
   }
 
   if (pattern.startsWith('*.')) {
-    const suffix = pattern.slice(1)
-    return hostname.endsWith(suffix) && hostname !== suffix.slice(1)
+    return hostname.endsWith(pattern.slice(1))
   }
 
   return false
