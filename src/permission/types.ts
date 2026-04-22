@@ -37,6 +37,5 @@ export type PermissionAskDecision = {
 export type PermissionContext = {
   isInteractive: boolean
   isSubagent: boolean
-  bypass?: boolean
   signal?: AbortSignal
 }

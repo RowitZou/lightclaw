@@ -185,15 +185,21 @@ export function buildSubagentPrompt(
     })
     .join('\n\n')
 
-  return [
+  const permissionSection = formatPermissionSection(true)
+  const sections: string[] = [
     'You are LightClaw running as an isolated subagent.',
     `Working directory: ${cwd}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
     '',
     agent.systemPrompt,
-    '',
-    formatPermissionSection(true),
+  ]
+
+  if (permissionSection) {
+    sections.push('', permissionSection)
+  }
+
+  sections.push(
     '',
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',
@@ -202,5 +208,7 @@ export function buildSubagentPrompt(
     '',
     'Available tools:',
     toolDescriptions,
-  ].join('\n')
+  )
+
+  return sections.join('\n')
 }
