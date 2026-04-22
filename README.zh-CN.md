@@ -150,6 +150,12 @@ pnpm dev -- --dangerously-bypass
 
 规则来源按 `cliArg` → `session` → `local` → `project` → `user` 合并；任意来源的 deny 都优先于 allow。`/allow` 与 `/deny` 添加的是 session 规则，不持久化；当前 permission mode 会写入 session `meta.json` 并在 `--resume` 时恢复。
 
+模式匹配语义：
+- `Bash(cmd:*)` 按 token 边界匹配 —— `Bash(rm:*)` 命中 `rm` 与 `rm -rf foo`，**不**命中 `rmdir`。
+- `WebFetch(example.com)` 精确匹配 hostname；`WebFetch(*.example.com)` 匹配任意子域。
+- `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` 为路径前缀匹配。
+- 带 content 的规则目前只对 `Bash`、`WebFetch`、`Read` / `Write` / `Edit`、`AgentTool` 生效；其他工具只支持整工具级 allow/deny。
+
 ### REPL 命令
 
 | 命令 | 说明 |
