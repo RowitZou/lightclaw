@@ -91,3 +91,38 @@ export function matchToolContent(
         : false
   }
 }
+
+export function matchMcpToolContent(
+  ruleContent: string | undefined,
+  server: string | undefined,
+  toolName: string | undefined,
+): boolean {
+  if (!server || !toolName) {
+    return false
+  }
+
+  if (ruleContent === undefined) {
+    return true
+  }
+
+  const separator = ruleContent.indexOf(':')
+  if (separator < 0) {
+    return false
+  }
+
+  const ruleServer = ruleContent.slice(0, separator)
+  const ruleTool = ruleContent.slice(separator + 1)
+  if (ruleServer !== server) {
+    return false
+  }
+
+  if (ruleTool === '*') {
+    return true
+  }
+
+  if (ruleTool.endsWith('*')) {
+    return toolName.startsWith(ruleTool.slice(0, -1))
+  }
+
+  return matchString(ruleTool, toolName)
+}

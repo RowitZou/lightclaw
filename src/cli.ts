@@ -2,6 +2,7 @@ import chalk from 'chalk'
 
 import { initializeApp } from './init.js'
 import { parsePermissionMode } from './config.js'
+import { initializeMcp } from './mcp/index.js'
 import { parseRule } from './permission/rules.js'
 import type { PermissionMode, PermissionRule } from './permission/types.js'
 import { getProvider } from './provider/index.js'
@@ -9,7 +10,7 @@ import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
 import { setCliArgRules } from './state.js'
-import { allTools, getEnabledTools } from './tools.js'
+import { getAllTools, getEnabledTools } from './tools.js'
 import type { ProviderName } from './types.js'
 
 type CliArgs = {
@@ -23,6 +24,7 @@ type CliArgs = {
   allow: string[]
   deny: string[]
   dangerouslyBypass: boolean
+  noMcp: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -32,6 +34,7 @@ function parseArgs(argv: string[]): CliArgs {
     allow: [],
     deny: [],
     dangerouslyBypass: false,
+    noMcp: false,
   }
   const positionals: string[] = []
 
@@ -76,6 +79,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--no-memory') {
       args.noMemory = true
+      continue
+    }
+
+    if (arg === '--no-mcp') {
+      args.noMcp = true
       continue
     }
 
@@ -133,6 +141,7 @@ Usage:
   lightclaw --resume
   lightclaw --resume <session-id>
   lightclaw --no-memory
+  lightclaw --no-mcp
   lightclaw --permission-mode plan
   lightclaw --allow "Bash(git status:*)" --deny "Bash(rm:*)"
 
@@ -143,6 +152,7 @@ Options:
       --provider         Override provider: anthropic or openai
       --resume           Resume the latest or a specific saved session
       --no-memory        Disable auto-memory extraction and memory index injection
+      --no-mcp           Disable MCP client startup and MCP tool injection
       --permission-mode  Set mode: default, acceptEdits, bypassPermissions, plan
       --allow            Add a CLI allow rule (repeatable)
       --deny             Add a CLI deny rule (repeatable)
@@ -197,6 +207,7 @@ async function main(): Promise<void> {
     lastExtractedAt: resumeMeta?.lastExtractedAt,
     todos: resumeMeta?.todos,
     permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
+    mcpEnabled: !args.noMcp,
   })
   setCliArgRules(parseCliRules(args))
   if (args.dangerouslyBypass) {
@@ -205,10 +216,11 @@ async function main(): Promise<void> {
   if (args.noMemory) {
     config.autoMemory = false
   }
+  await initializeMcp(config)
   const provider = getProvider(config)
   await startRepl({
     config,
-    tools: getEnabledTools(provider, allTools),
+    tools: getEnabledTools(provider, getAllTools()),
     initialPrompt: args.prompt,
     resumeSessionId,
   })

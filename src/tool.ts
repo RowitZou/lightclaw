@@ -18,7 +18,11 @@ export type ToolCallResult<TOutput> = {
 export type Tool<TInput = unknown, TOutput = unknown> = {
   name: string
   description: string
-  inputSchema: z.ZodType<TInput>
+  source: 'builtin' | 'mcp'
+  mcpServer?: string
+  mcpToolName?: string
+  inputSchema?: z.ZodType<TInput>
+  inputJSONSchema?: Record<string, unknown>
   riskLevel: RiskLevel
   isEnabled?(provider: Provider): boolean
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
@@ -43,6 +47,7 @@ export function buildTool<TInput, TOutput>(input: {
   ) => UserToolResultBlock
 }): Tool<TInput, TOutput> {
   return {
+    source: 'builtin',
     ...input,
     formatResult:
       input.formatResult ??
@@ -63,10 +68,15 @@ export function toolToAPISchema(tool: Tool): {
   description: string
   input_schema: Record<string, unknown>
 } {
+  const inputSchema = tool.inputJSONSchema ??
+    (tool.inputSchema
+      ? toJSONSchema(tool.inputSchema) as Record<string, unknown>
+      : { type: 'object', properties: {} })
+
   return {
     name: tool.name,
     description: tool.description,
-    input_schema: toJSONSchema(tool.inputSchema) as Record<string, unknown>,
+    input_schema: inputSchema,
   }
 }
 

@@ -7,7 +7,9 @@ import { scanMemoryFiles } from './memory/auto-memory.js'
 import { parsePermissionMode, type LightClawConfig } from './config.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
+import { getMcpRegistrySnapshot, reloadMcp } from './mcp/index.js'
 import { formatRule, parseRule } from './permission/rules.js'
+import { getProvider } from './provider/index.js'
 import { query } from './query.js'
 import { compactConversation } from './session/compact.js'
 import {
@@ -47,6 +49,7 @@ import {
 } from './state.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import { estimateMessagesTokens } from './token-estimate.js'
+import { getAllTools, getEnabledTools } from './tools.js'
 import type { Message, SessionMeta } from './types.js'
 import type { Tool } from './tool.js'
 
@@ -61,6 +64,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   const messages: Message[] = []
   const sessionId = getSessionId()
   let createdAt = Date.now()
+  let activeTools = params.tools
 
   if (params.resumeSessionId) {
     const loadedMessages = await loadTranscript(params.resumeSessionId)
@@ -104,7 +108,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
       const result = await query({
         config: params.config,
         messages,
-        tools: params.tools,
+        tools: activeTools,
         rl: permissionInteractive ? rl : undefined,
         isInteractive: permissionInteractive,
         onTextDelta(text) {
@@ -186,6 +190,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   output.write(
     chalk.gray(
       'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
+      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /mcp /mcp reload /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
     ),
   )
 
@@ -253,6 +258,20 @@ export async function startRepl(params: ReplParams): Promise<void> {
       }
       output.write(chalk.gray(`skills: ${listRegisteredSkills().length}\n`))
       output.write(chalk.gray(`todos: ${getTodos().length}\n`))
+      output.write(chalk.gray(`MCP: ${formatMcpSummary()}\n`))
+      continue
+    }
+
+    if (command === '/mcp') {
+      output.write(chalk.gray(formatMcpStatus()))
+      continue
+    }
+
+    if (command === '/mcp reload') {
+      output.write(chalk.yellow('[mcp] Reloading servers...\n'))
+      await reloadMcp()
+      activeTools = getEnabledTools(getProvider(params.config), getAllTools())
+      output.write(chalk.green(`[mcp] ${formatMcpSummary()}\n`))
       continue
     }
 
@@ -466,6 +485,55 @@ function formatRouting(config: LightClawConfig): string {
     `subagent=${config.routing.subagent ?? config.routing.main}`,
     `webSearch=${config.routing.webSearch ?? config.routing.main}`,
   ].join(', ')
+}
+
+function formatMcpSummary(): string {
+  const snapshot = getMcpRegistrySnapshot()
+  if (!snapshot.enabled) {
+    return 'disabled'
+  }
+
+  return `${snapshot.connectedCount}/${snapshot.totalCount} servers, ${snapshot.totalToolCount} tools`
+}
+
+function formatMcpStatus(): string {
+  const snapshot = getMcpRegistrySnapshot()
+  if (!snapshot.enabled) {
+    return 'MCP disabled.\n'
+  }
+
+  if (snapshot.connections.length === 0) {
+    return 'No MCP servers configured.\n'
+  }
+
+  const lines = [
+    `MCP: ${formatMcpSummary()}${snapshot.reloading ? ' (reloading)' : ''}`,
+  ]
+
+  for (const connection of snapshot.connections) {
+    const name = connection.config.normalizedName.padEnd(18, ' ')
+    const transport = (connection.config.type ?? 'stdio').padEnd(6, ' ')
+    if (connection.type === 'connected') {
+      const toolNames = connection.tools.slice(0, 8).map(tool => tool.name)
+      const suffix =
+        connection.tools.length > toolNames.length
+          ? `, ... (${connection.tools.length} total)`
+          : ''
+      lines.push(
+        `${name} connected  ${transport} tools=${connection.tools.length} ${toolNames.join(', ')}${suffix}`,
+      )
+      continue
+    }
+
+    if (connection.type === 'disabled') {
+      lines.push(`${name} disabled   ${transport}`)
+      continue
+    }
+
+    lines.push(`${name} failed     ${transport} ${connection.error}`)
+  }
+
+  return `${lines.join('\n')}\n`
 }
 
 function formatSkillList(): string {

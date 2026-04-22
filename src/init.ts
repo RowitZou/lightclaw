@@ -24,12 +24,14 @@ export function initializeApp(input?: {
   lastExtractedAt?: number
   todos?: TodoItem[]
   permissionMode?: PermissionMode
+  mcpEnabled?: boolean
 }): LightClawConfig {
   const config = getConfig()
   const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
   const resolvedModel = input?.model ?? config.model
   const resolvedConfig: LightClawConfig = {
     ...config,
+    ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
     model: resolvedModel,
     routing: {
       ...config.routing,

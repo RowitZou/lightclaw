@@ -5,7 +5,7 @@ import { getProvider, modelFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getCwd } from '../state.js'
 import type { Tool } from '../tool.js'
-import { allTools, getEnabledTools } from '../tools.js'
+import { getAllTools, getEnabledTools } from '../tools.js'
 import type { AgentType } from './types.js'
 import { getAgent } from './registry.js'
 
@@ -38,7 +38,7 @@ export async function runSubagent(params: {
 
   const config = getConfig()
   const provider = getProvider(config)
-  const tools = filterTools(agent.tools, getEnabledTools(provider, allTools))
+  const tools = filterTools(agent.tools, getEnabledTools(provider, getAllTools()))
   const subagentConfig = {
     ...config,
     autoCompact: false,

@@ -214,9 +214,9 @@ export async function query(params: QueryParams): Promise<{
         continue
       }
 
-      const parsedInput = tool.inputSchema.safeParse(toolUse.input)
-      if (!parsedInput.success) {
-        const content = `Invalid input for ${toolUse.name}: ${parsedInput.error.message}`
+      const parsedInput = parseToolInput(tool, toolUse.input)
+      if (!parsedInput.ok) {
+        const content = `Invalid input for ${toolUse.name}: ${parsedInput.error}`
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
@@ -294,4 +294,24 @@ export async function query(params: QueryParams): Promise<{
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
+}
+
+function parseToolInput(
+  tool: Tool,
+  rawInput: Record<string, unknown>,
+): { ok: true; data: unknown } | { ok: false; error: string } {
+  if (tool.source === 'mcp') {
+    return { ok: true, data: rawInput }
+  }
+
+  if (!tool.inputSchema) {
+    return { ok: false, error: 'Tool has no input schema.' }
+  }
+
+  const parsed = tool.inputSchema.safeParse(rawInput)
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.message }
+  }
+
+  return { ok: true, data: parsed.data }
 }
