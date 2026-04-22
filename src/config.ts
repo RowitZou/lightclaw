@@ -75,7 +75,7 @@ type ConfigFileShape = {
   permissionAuditLog?: string
 }
 
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+const DEFAULT_MODEL = 'claude-sonnet-4-6'
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
