@@ -22,6 +22,9 @@ export async function requestPermission(input: {
   const mode = getPermissionMode()
   const verdict = evaluatePermission({
     toolName: tool.name,
+    toolSource: tool.source,
+    mcpServer: tool.mcpServer,
+    mcpToolName: tool.mcpToolName,
     input: toolInput,
     riskLevel: tool.riskLevel,
     mode,
@@ -54,6 +57,7 @@ export async function requestPermission(input: {
   recordAudit({
     path: config.permissionAuditLog,
     toolName: tool.name,
+    mcpServer: tool.mcpServer,
     decision,
     mode,
     isSubagent: ctx.isSubagent,
@@ -81,6 +85,10 @@ function previewInput(toolName: string, input: unknown): string {
 
   if (toolName === 'AgentTool' && typeof record.subagent_type === 'string') {
     return `Subagent: ${record.subagent_type}`
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    return `MCP input: ${truncate(JSON.stringify(record), 200)}`
   }
 
   try {

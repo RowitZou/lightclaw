@@ -11,10 +11,11 @@ import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
 import { webFetchTool } from './tools/web-fetch.js'
 import { webSearchTool } from './tools/web-search.js'
+import { getMcpTools } from './mcp/index.js'
 import type { Provider } from './provider/types.js'
 import type { Tool } from './tool.js'
 
-export const allTools = [
+export const builtinTools = [
   bashTool,
   fileReadTool,
   fileWriteTool,
@@ -30,9 +31,15 @@ export const allTools = [
   agentTool,
 ]
 
+export const allTools = builtinTools
+
+export function getAllTools(): Tool[] {
+  return [...builtinTools, ...getMcpTools()]
+}
+
 export function getEnabledTools(
   provider: Provider,
-  tools: Tool[] = allTools,
+  tools: Tool[] = getAllTools(),
 ): Tool[] {
   return tools.filter(tool => tool.isEnabled?.(provider) ?? true)
 }

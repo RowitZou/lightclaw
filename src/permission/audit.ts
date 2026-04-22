@@ -10,6 +10,7 @@ function formatMatchedRule(rule: PermissionRule): string {
 export function recordAudit(input: {
   path?: string
   toolName: string
+  mcpServer?: string
   decision: PermissionDecision
   mode: PermissionMode
   isSubagent: boolean
@@ -21,6 +22,7 @@ export function recordAudit(input: {
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     tool: input.toolName,
+    ...(input.mcpServer ? { mcpServer: input.mcpServer } : {}),
     decision: input.decision.behavior,
     mode: input.mode,
     matchedRule: input.decision.matchedRule

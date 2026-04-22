@@ -41,6 +41,15 @@ export type LightClawConfig = {
     local?: string
   }
   permissionAuditLog?: string
+  mcpEnabled: boolean
+  mcpConnectTimeout: number
+  mcpConnectConcurrency: number
+  mcpConfigFiles: {
+    user?: string
+    project?: string
+    local?: string
+  }
+  mcpMaxToolOutputBytes: number
 }
 
 type ConfigFileShape = {
@@ -73,6 +82,15 @@ type ConfigFileShape = {
     local?: string
   }
   permissionAuditLog?: string
+  mcpEnabled?: boolean
+  mcpConnectTimeout?: number
+  mcpConnectConcurrency?: number
+  mcpConfigFiles?: {
+    user?: string
+    project?: string
+    local?: string
+  }
+  mcpMaxToolOutputBytes?: number
 }
 
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
@@ -128,6 +146,10 @@ function parseProvider(value: string | undefined): ProviderName | undefined {
   }
 
   return undefined
+}
+
+function expandOptionalPath(value: string | undefined): string | undefined {
+  return value ? path.resolve(expandHomePath(value)) : undefined
 }
 
 export function parsePermissionMode(value: string | undefined): PermissionMode | undefined {
@@ -239,6 +261,34 @@ export function getConfig(): LightClawConfig {
   const permissionAuditLog =
     process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
     fileConfig.permissionAuditLog
+  const mcpEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MCP_ENABLED) ??
+    fileConfig.mcpEnabled ??
+    true
+  const mcpConnectTimeout = Math.max(
+    1000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MCP_CONNECT_TIMEOUT) ??
+        fileConfig.mcpConnectTimeout ??
+        10_000,
+    ),
+  )
+  const mcpConnectConcurrency = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MCP_CONNECT_CONCURRENCY) ??
+        fileConfig.mcpConnectConcurrency ??
+        4,
+    ),
+  )
+  const mcpMaxToolOutputBytes = Math.max(
+    1024,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MCP_MAX_TOOL_OUTPUT_BYTES) ??
+        fileConfig.mcpMaxToolOutputBytes ??
+        20_480,
+    ),
+  )
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -284,5 +334,14 @@ export function getConfig(): LightClawConfig {
     permissionMode,
     permissionRuleFiles: fileConfig.permissionRuleFiles ?? {},
     ...(permissionAuditLog ? { permissionAuditLog } : {}),
+    mcpEnabled,
+    mcpConnectTimeout,
+    mcpConnectConcurrency,
+    mcpConfigFiles: {
+      user: expandOptionalPath(fileConfig.mcpConfigFiles?.user),
+      project: expandOptionalPath(fileConfig.mcpConfigFiles?.project),
+      local: expandOptionalPath(fileConfig.mcpConfigFiles?.local),
+    },
+    mcpMaxToolOutputBytes,
   }
 }

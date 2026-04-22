@@ -2,11 +2,11 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, and web tools.
+LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, web tools, and MCP tools.
 
 ## Status
 
-Phases 1 – 5 are complete. The current build ships as a ~108 KB single-file ESM bundle and exposes:
+Phases 1 – 6 are complete. The current build ships as a ~126 KB single-file ESM bundle and exposes:
 
 - **Terminal REPL** (readline + chalk) with streaming output and Ctrl+C interruption
 - **Agent loop** with up to 20 turns, tool-use ↔ tool-result routing, and auto-compact
@@ -20,8 +20,9 @@ Phases 1 – 5 are complete. The current build ships as a ~108 KB single-file ES
 - **Web tools**: proxy-aware `WebFetch` (undici + turndown) and Anthropic native server-side `WebSearch` (enabled only when talking to the official Anthropic endpoint)
 - **Todo list**: `TodoWrite` tool + `/todos` command + session-scoped persistence
 - **Permission system**: four modes (`default`, `acceptEdits`, `bypassPermissions`, `plan`), layered allow/deny rules, REPL approval prompts, and audit JSONL
+- **MCP client**: stdio / Streamable HTTP / SSE server connections, `mcp__<server>__<tool>` tool injection, `/mcp` status, `/mcp reload`, and `MCP(<server>:*)` permission rules
 
-Deliberately **not** implemented yet: React/Ink UI, hooks, MCP, messaging channels (Feishu/WeChat/IDE bridge), `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
+Deliberately **not** implemented yet: React/Ink UI, hooks, MCP server mode, MCP resources/prompts/OAuth/sampling, messaging channels (Feishu/WeChat/IDE bridge), `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
 
 ## Requirements
 
@@ -81,7 +82,11 @@ Example `~/.lightclaw/config.json`:
     "project": ".lightclaw/permissions.json",
     "local": ".lightclaw/permissions.local.json"
   },
-  "permissionAuditLog": "~/.lightclaw/permissions.audit.jsonl"
+  "permissionAuditLog": "~/.lightclaw/permissions.audit.jsonl",
+  "mcpEnabled": true,
+  "mcpConnectTimeout": 10000,
+  "mcpConnectConcurrency": 4,
+  "mcpMaxToolOutputBytes": 20480
 }
 ```
 
@@ -102,6 +107,10 @@ Supported environment variables:
 | `LIGHTCLAW_COMPACT_KEEP_RECENT` | Number of most recent messages to preserve during compact |
 | `LIGHTCLAW_PERMISSION_MODE` | `default`, `acceptEdits`, `bypassPermissions`, or `plan` |
 | `LIGHTCLAW_PERMISSION_AUDIT_LOG` | Optional JSONL path for permission decisions |
+| `LIGHTCLAW_MCP_ENABLED` | Enable or disable MCP startup (`true` / `false`) |
+| `LIGHTCLAW_MCP_CONNECT_TIMEOUT` | Per-server MCP connection timeout in milliseconds |
+| `LIGHTCLAW_MCP_CONNECT_CONCURRENCY` | MCP connection concurrency |
+| `LIGHTCLAW_MCP_MAX_TOOL_OUTPUT_BYTES` | Maximum MCP tool result size before truncation |
 
 ## Usage
 
@@ -123,6 +132,9 @@ pnpm dev -- --provider openai
 
 # Disable auto-memory extraction and memory index injection
 pnpm dev -- --no-memory
+
+# Disable MCP startup and MCP tool injection
+pnpm dev -- --no-mcp
 
 # Permission modes and CLI rules
 pnpm dev -- --permission-mode plan
@@ -156,7 +168,39 @@ Pattern semantics:
 - `Bash(cmd:*)` matches on a token boundary — `Bash(rm:*)` covers `rm` and `rm -rf foo` but does **not** match `rmdir`.
 - `WebFetch(example.com)` matches the exact hostname; `WebFetch(*.example.com)` matches any subdomain.
 - `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` use path prefix matching.
+- `MCP(github:*)` allows all MCP tools from the `github` server; `MCP(github:list_issues)` allows only that tool; `MCP(github:list_*)` matches by tool-name prefix.
 - Per-input rule content is honored for `Bash`, `WebFetch`, `Read` / `Write` / `Edit`, and `AgentTool`; other tools only support whole-tool allow/deny.
+
+### MCP
+
+LightClaw reads MCP server definitions from:
+
+1. `~/.lightclaw/mcp.json`
+2. `<cwd>/.lightclaw/mcp.json`
+3. `<cwd>/.lightclaw/mcp.local.json`
+
+Later files override earlier files by server name. The format is compatible with the common `{ "mcpServers": ... }` shape:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "docs": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Supported transports are `stdio`, `http` (Streamable HTTP), and `sse`. `env` and `headers` values support `${VAR}` expansion. Remote tools are exposed as `mcp__<normalized-server>__<tool>` and default to `write` risk, so `default` mode asks before running them unless an allow rule matches.
 
 ### REPL commands
 
@@ -174,6 +218,8 @@ Pattern semantics:
 | `/permissions clear` | Clear session-level permission rules |
 | `/mode <mode>` | Switch the current session permission mode |
 | `/allow <rule>` / `/deny <rule>` | Add a session-level allow or deny rule |
+| `/mcp` | Show MCP server status and tool counts |
+| `/mcp reload` | Reconnect all configured MCP servers |
 
 ## Project layout
 
@@ -194,6 +240,7 @@ src/
 ├── tools.ts            # tool registry + capability gate
 ├── tools/              # 13 built-in tools
 ├── permission/         # modes, rule parsing, matching, policy, prompts, audit
+├── mcp/                # MCP config, transports, registry, tool adapter
 ├── provider/           # Anthropic / OpenAI-compatible providers + modelFor()
 ├── session/            # storage (JSONL + meta.json), listing, compact
 ├── memory/             # LIGHTCLAW.md discovery, auto-memory, extraction
@@ -210,6 +257,7 @@ cli.ts ──► init.ts ──► repl.ts ──► query.ts ──► provider
             (state)     (UI)        (agent loop)
                                     │
                                     ├─► tools/ (Bash, Read, Write, Edit, Grep, Glob, ...)
+                                    ├─► mcp/   (external MCP tool adapters)
                                     ├─► permission/ (mode + rule checks)
                                     ├─► prompt.ts (system prompt template)
                                     ├─► session/ (transcript + compact)
@@ -221,10 +269,11 @@ cli.ts ──► init.ts ──► repl.ts ──► query.ts ──► provider
 Key invariants:
 
 - **`state.ts` is the only process-level singleton.** `initializeApp()` is the single writer; everything else reads through getters. `beginQuery()` resets the per-turn `AbortController`.
-- **Tools are schema-first.** `Tool<TInput, TOutput>` uses Zod input schemas converted to JSON Schema via `zod/v4`'s `toJSONSchema()`. New tools register in `allTools` inside `src/tools.ts`.
+- **Tools are schema-first.** Built-in tools use Zod input schemas converted to JSON Schema via `zod/v4`'s `toJSONSchema()`. MCP tools carry raw JSON Schema from the server and skip local Zod validation. New built-ins register in `builtinTools` inside `src/tools.ts`.
 - **Auto-compact** is threshold-driven. After every assistant turn, `maybeAutoCompact()` compares the local token estimate against `contextWindow * compactThresholdRatio` and rewrites the transcript in place — no append — if triggered.
 - **Session storage is append-only JSONL + sibling `meta.json`.** Compaction is the only operation that rewrites the transcript.
 - **Tool dispatch is permission-gated.** Each tool declares `riskLevel`, `query.ts` checks mode + rules before `tool.call()`, and denied calls are returned to the model as tool errors.
+- **MCP is client-only.** Startup connects configured servers once, failed servers do not block the REPL, and `/mcp reload` performs a full reconnect.
 - **Sub-agents run synchronously** with an isolated message list, a filtered tool allowlist (no `AgentTool` / `TodoWrite` / `MemoryWrite` to protect the parent), non-interactive permission checks, and usage folded back into the parent session.
 
 ## License

@@ -5,25 +5,37 @@ import type {
   PermissionRule,
   RiskLevel,
 } from './types.js'
-import { matchToolContent } from './matchers.js'
+import { matchMcpToolContent, matchToolContent } from './matchers.js'
 import { formatRule } from './rules.js'
 
 export function evaluatePermission(args: {
   toolName: string
+  toolSource?: 'builtin' | 'mcp'
+  mcpServer?: string
+  mcpToolName?: string
   input: unknown
   riskLevel: RiskLevel
   mode: PermissionMode
   rules: PermissionRule[]
 }): PermissionDecision | PermissionAskDecision {
-  const { toolName, input, riskLevel, mode, rules } = args
+  const { toolName, toolSource, mcpServer, mcpToolName, input, riskLevel, mode, rules } = args
   let firstAllow: PermissionRule | undefined
 
   for (const rule of rules) {
-    if (rule.value.toolName !== toolName) {
+    const matchesTool =
+      rule.value.toolName === toolName ||
+      (rule.value.toolName === 'MCP' &&
+        toolSource === 'mcp' &&
+        matchMcpToolContent(rule.value.ruleContent, mcpServer, mcpToolName))
+
+    if (!matchesTool) {
       continue
     }
 
-    if (!matchToolContent(toolName, rule.value.ruleContent, input)) {
+    if (
+      rule.value.toolName !== 'MCP' &&
+      !matchToolContent(toolName, rule.value.ruleContent, input)
+    ) {
       continue
     }
 

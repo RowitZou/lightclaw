@@ -4,6 +4,7 @@ import type { AgentDefinition } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
+import { getMcpRegistrySnapshot } from './mcp/index.js'
 import { modelFor } from './provider/index.js'
 import {
   getAllPermissionRules,
@@ -88,6 +89,47 @@ function formatPermissionSection(isSubagent = false): string {
   return lines.join('\n')
 }
 
+function formatMcpSection(): string {
+  const snapshot = getMcpRegistrySnapshot()
+  if (!snapshot.enabled || snapshot.connections.length === 0) {
+    return ''
+  }
+
+  const lines = ['## MCP Servers']
+  const listedConnections = snapshot.connections.slice(0, 5)
+  for (const connection of listedConnections) {
+    const name = connection.config.normalizedName
+    if (connection.type === 'connected') {
+      const toolNames = connection.tools.slice(0, 8).map(tool => tool.name)
+      const suffix =
+        connection.tools.length > toolNames.length
+          ? `, ... (${connection.tools.length} tools total)`
+          : ''
+      lines.push(
+        `- ${name} (connected, ${connection.tools.length} tools): ${toolNames.join(', ')}${suffix}`,
+      )
+      continue
+    }
+
+    if (connection.type === 'disabled') {
+      lines.push(`- ${name} (disabled)`)
+      continue
+    }
+
+    lines.push(`- ${name} (failed: ${connection.error})`)
+  }
+
+  if (snapshot.connections.length > listedConnections.length) {
+    lines.push(`- ${snapshot.connections.length - listedConnections.length} more server(s) not shown.`)
+  }
+
+  lines.push(
+    'MCP tool names are namespaced as mcp__<server>__<tool>. Treat them like any other tool; permission rules with MCP(<server>:*) apply.',
+  )
+
+  return lines.join('\n')
+}
+
 export async function buildSystemPromptTemplate(
   tools: Tool[],
   cwd: string,
@@ -140,6 +182,11 @@ export async function buildSystemPromptTemplate(
   const permissionSection = formatPermissionSection()
   if (permissionSection) {
     preTodoSections.push('', permissionSection)
+  }
+
+  const mcpSection = formatMcpSection()
+  if (mcpSection) {
+    preTodoSections.push('', mcpSection)
   }
 
   const postTodoSections: string[] = [
