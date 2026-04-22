@@ -128,7 +128,7 @@ function printHelp(): void {
 Usage:
   lightclaw
   lightclaw --prompt "Explain this project"
-  lightclaw --model claude-sonnet-4-20250514
+  lightclaw --model claude-sonnet-4-6
   lightclaw --provider anthropic
   lightclaw --resume
   lightclaw --resume <session-id>
