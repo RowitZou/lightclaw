@@ -33,9 +33,12 @@ export async function initializeMcp(
     return
   }
 
+  const overrides = Object.fromEntries(
+    Object.entries(config.mcpConfigFiles).filter(([, value]) => Boolean(value)),
+  )
   const paths = {
     ...defaultMcpConfigPaths(),
-    ...config.mcpConfigFiles,
+    ...overrides,
   }
   const configs = await loadMcpConfig(paths)
   await connectMcpServers({
