@@ -7,7 +7,7 @@ import { scanMemoryFiles } from './memory/auto-memory.js'
 import { parsePermissionMode, type LightClawConfig } from './config.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
-import { getMcpRegistrySnapshot, reloadMcp } from './mcp/index.js'
+import { cleanupMcp, getMcpRegistrySnapshot, reloadMcp } from './mcp/index.js'
 import { formatRule, parseRule } from './permission/rules.js'
 import { getProvider } from './provider/index.js'
 import { query } from './query.js'
@@ -189,7 +189,6 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
   output.write(
     chalk.gray(
-      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
       'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /mcp /mcp reload /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
     ),
   )
@@ -199,6 +198,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     await awaitBackgroundTasks()
     rl.close()
     await persistMeta(createdAt, messages.length)
+    await cleanupMcp()
     printUsageSummary()
     return
   }
@@ -272,6 +272,11 @@ export async function startRepl(params: ReplParams): Promise<void> {
       await reloadMcp()
       activeTools = getEnabledTools(getProvider(params.config), getAllTools())
       output.write(chalk.green(`[mcp] ${formatMcpSummary()}\n`))
+      continue
+    }
+
+    if (command.startsWith('/mcp ')) {
+      output.write(chalk.red('error> Usage: /mcp [reload]\n'))
       continue
     }
 
@@ -369,6 +374,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   rl.close()
   await awaitBackgroundTasks()
   await persistMeta(createdAt, messages.length)
+  await cleanupMcp()
   printUsageSummary()
 }
 

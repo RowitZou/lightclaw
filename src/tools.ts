@@ -31,8 +31,6 @@ export const builtinTools = [
   agentTool,
 ]
 
-export const allTools = builtinTools
-
 export function getAllTools(): Tool[] {
   return [...builtinTools, ...getMcpTools()]
 }
