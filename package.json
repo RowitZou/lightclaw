@@ -17,9 +17,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.63.0",
+    "@larksuiteoapi/node-sdk": "^1.61.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.15.2",
     "chalk": "^5.4.1",
     "fast-glob": "^3.3.3",
+    "https-proxy-agent": "^9.0.0",
     "openai": "^6.34.0",
     "turndown": "^7.2.4",
     "undici": "^8.1.0",

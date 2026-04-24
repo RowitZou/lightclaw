@@ -2,6 +2,8 @@ import chalk from 'chalk'
 
 import { initializeApp } from './init.js'
 import { parsePermissionMode } from './config.js'
+import { runChannelCli } from './cli-channel.js'
+import { initializeHooks } from './hooks/index.js'
 import { initializeMcp } from './mcp/index.js'
 import { parseRule } from './permission/rules.js'
 import type { PermissionMode, PermissionRule } from './permission/types.js'
@@ -25,6 +27,7 @@ type CliArgs = {
   deny: string[]
   dangerouslyBypass: boolean
   noMcp: boolean
+  noHooks: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -35,6 +38,7 @@ function parseArgs(argv: string[]): CliArgs {
     deny: [],
     dangerouslyBypass: false,
     noMcp: false,
+    noHooks: false,
   }
   const positionals: string[] = []
 
@@ -84,6 +88,11 @@ function parseArgs(argv: string[]): CliArgs {
 
     if (arg === '--no-mcp') {
       args.noMcp = true
+      continue
+    }
+
+    if (arg === '--no-hooks') {
+      args.noHooks = true
       continue
     }
 
@@ -142,8 +151,11 @@ Usage:
   lightclaw --resume <session-id>
   lightclaw --no-memory
   lightclaw --no-mcp
+  lightclaw --no-hooks
   lightclaw --permission-mode plan
   lightclaw --allow "Bash(git status:*)" --deny "Bash(rm:*)"
+  lightclaw channel list
+  lightclaw channel feishu start
 
 Options:
   -h, --help             Show help
@@ -153,6 +165,7 @@ Options:
       --resume           Resume the latest or a specific saved session
       --no-memory        Disable auto-memory extraction and memory index injection
       --no-mcp           Disable MCP client startup and MCP tool injection
+      --no-hooks         Disable hook loading
       --permission-mode  Set mode: default, acceptEdits, bypassPermissions, plan
       --allow            Add a CLI allow rule (repeatable)
       --deny             Add a CLI deny rule (repeatable)
@@ -174,7 +187,13 @@ function parseCliRules(args: CliArgs): PermissionRule[] {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2))
+  const rawArgs = process.argv.slice(2)
+  if (rawArgs[0] === 'channel') {
+    await runChannelCli(rawArgs.slice(1))
+    return
+  }
+
+  const args = parseArgs(rawArgs)
   if (args.help) {
     printHelp()
     return
@@ -208,6 +227,7 @@ async function main(): Promise<void> {
     todos: resumeMeta?.todos,
     permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
     mcpEnabled: !args.noMcp,
+    hooksEnabled: !args.noHooks,
   })
   setCliArgRules(parseCliRules(args))
   if (args.dangerouslyBypass) {
@@ -216,6 +236,7 @@ async function main(): Promise<void> {
   if (args.noMemory) {
     config.autoMemory = false
   }
+  await initializeHooks(config)
   await initializeMcp(config)
   const provider = getProvider(config)
   await startRepl({

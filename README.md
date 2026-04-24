@@ -2,11 +2,11 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, web tools, and MCP tools.
+LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, web tools, MCP tools, lifecycle hooks, and a Feishu webhook channel.
 
 ## Status
 
-Phases 1 – 6 are complete. The current build ships as a ~126 KB single-file ESM bundle and exposes:
+Phases 1 – 7 are complete. The current build ships as a ~159 KB single-file ESM bundle and exposes:
 
 - **Terminal REPL** (readline + chalk) with streaming output and Ctrl+C interruption
 - **Agent loop** with up to 20 turns, tool-use ↔ tool-result routing, and auto-compact
@@ -21,8 +21,10 @@ Phases 1 – 6 are complete. The current build ships as a ~126 KB single-file ES
 - **Todo list**: `TodoWrite` tool + `/todos` command + session-scoped persistence
 - **Permission system**: four modes (`default`, `acceptEdits`, `bypassPermissions`, `plan`), layered allow/deny rules, REPL approval prompts, and audit JSONL
 - **MCP client**: stdio / Streamable HTTP / SSE server connections, `mcp__<server>__<tool>` tool injection, `/mcp` status, `/mcp reload`, and `MCP(<server>:*)` permission rules
+- **Hooks**: `.mjs` lifecycle hooks from user/project directories, `/hooks`, `/hooks reload`, and `--no-hooks`
+- **Feishu channel**: webhook-only daemon (`lightclaw channel feishu start`) with text inbound/outbound, dedup, allowlists, session routing, proxy-aware SDK client, and non-interactive permissions
 
-Deliberately **not** implemented yet: React/Ink UI, hooks, MCP server mode, MCP resources/prompts/OAuth/sampling, messaging channels (Feishu/WeChat/IDE bridge), `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
+Deliberately **not** implemented yet: React/Ink UI, MCP server mode, MCP resources/prompts/OAuth/sampling, WeChat/IDE bridge channels, Feishu WebSocket/streaming cards/media, `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
 
 ## Requirements
 
@@ -86,7 +88,10 @@ Example `~/.lightclaw/config.json`:
   "mcpEnabled": true,
   "mcpConnectTimeout": 10000,
   "mcpConnectConcurrency": 4,
-  "mcpMaxToolOutputBytes": 20480
+  "mcpMaxToolOutputBytes": 20480,
+  "hooksEnabled": true,
+  "hookTimeoutBlocking": 5000,
+  "hookTimeoutNonBlocking": 10000
 }
 ```
 
@@ -111,6 +116,12 @@ Supported environment variables:
 | `LIGHTCLAW_MCP_CONNECT_TIMEOUT` | Per-server MCP connection timeout in milliseconds |
 | `LIGHTCLAW_MCP_CONNECT_CONCURRENCY` | MCP connection concurrency |
 | `LIGHTCLAW_MCP_MAX_TOOL_OUTPUT_BYTES` | Maximum MCP tool result size before truncation |
+| `LIGHTCLAW_HOOKS_ENABLED` | Enable or disable hook loading (`true` / `false`) |
+| `LIGHTCLAW_HOOK_TIMEOUT_BLOCKING` | Timeout for blocking hooks in milliseconds |
+| `LIGHTCLAW_HOOK_TIMEOUT_NON_BLOCKING` | Timeout for non-blocking hooks in milliseconds |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Feishu channel credentials |
+| `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | Feishu webhook verification settings |
+| `FEISHU_PROXY` | Feishu SDK HTTP proxy URL |
 
 ## Usage
 
@@ -136,10 +147,17 @@ pnpm dev -- --no-memory
 # Disable MCP startup and MCP tool injection
 pnpm dev -- --no-mcp
 
+# Disable hook loading
+pnpm dev -- --no-hooks
+
 # Permission modes and CLI rules
 pnpm dev -- --permission-mode plan
 pnpm dev -- --allow "Bash(git status:*)" --deny "Bash(rm:*)"
 pnpm dev -- --dangerously-bypass
+
+# Feishu webhook channel
+pnpm dev -- channel list
+pnpm dev -- channel feishu start
 ```
 
 ### Permissions
@@ -202,6 +220,45 @@ Later files override earlier files by server name. The format is compatible with
 
 Supported transports are `stdio`, `http` (Streamable HTTP), and `sse`. `env` and `headers` values support `${VAR}` expansion. Remote tools are exposed as `mcp__<normalized-server>__<tool>` and default to `write` risk, so `default` mode asks before running them unless an allow rule matches.
 
+### Hooks
+
+LightClaw loads `.mjs` files from `~/.lightclaw/hooks/` and `<cwd>/.lightclaw/hooks/`. A hook file exports an object with any of these functions: `onSessionStart`, `beforeQuery`, `beforeToolCall`, `afterToolCall`, `afterQuery`, `onSessionEnd`.
+
+```js
+export default {
+  beforeToolCall({ toolName, input }) {
+    if (toolName === 'Bash' && input?.command?.includes('rm -rf /')) {
+      return { decision: 'deny', reason: 'blocked by project hook' }
+    }
+  },
+}
+```
+
+### Feishu Channel
+
+The Feishu channel reads `~/.lightclaw/channels.json` and starts a webhook server. Source code contains no environment-specific credentials.
+
+```jsonc
+{
+  "feishu": {
+    "enabled": true,
+    "appId": "<app_id>",
+    "appSecret": "<app_secret>",
+    "encryptKey": "<encrypt_key>",
+    "verificationToken": "<verification_token>",
+    "proxy": "http://127.0.0.1:1080",
+    "permissionMode": "default",
+    "allowUsers": ["*"],
+    "allowChats": ["*"],
+    "webhook": {
+      "host": "0.0.0.0",
+      "port": 18850,
+      "path": "/feishu/events"
+    }
+  }
+}
+```
+
 ### REPL commands
 
 | Command | Description |
@@ -220,6 +277,8 @@ Supported transports are `stdio`, `http` (Streamable HTTP), and `sse`. `env` and
 | `/allow <rule>` / `/deny <rule>` | Add a session-level allow or deny rule |
 | `/mcp` | Show MCP server status and tool counts |
 | `/mcp reload` | Reconnect all configured MCP servers |
+| `/hooks` | Show loaded lifecycle hooks |
+| `/hooks reload` | Reload hook files |
 
 ## Project layout
 
