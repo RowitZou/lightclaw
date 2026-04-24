@@ -30,7 +30,12 @@ import { compactConversation } from './session/compact.js'
 import { updateMetaLastExtractedAt } from './session/storage.js'
 import { findToolByName, toolToAPISchema, type Tool } from './tool.js'
 import { estimateMessagesTokens } from './token-estimate.js'
-import type { Message, ToolExecutionEvent, UserToolResultBlock } from './types.js'
+import type {
+  AssistantContentBlock,
+  Message,
+  ToolExecutionEvent,
+  UserToolResultBlock,
+} from './types.js'
 
 type QueryParams = {
   messages: Message[]
@@ -47,6 +52,16 @@ type QueryParams = {
   isInteractive?: boolean
   rl?: Interface
   systemPrompt?: string
+}
+
+type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
+
+type DispatchContext = {
+  tools: Tool[]
+  isSubagent: boolean
+  isInteractive: boolean
+  rl?: Interface
+  onToolResult?(event: ToolExecutionEvent): void
 }
 
 export async function query(params: QueryParams): Promise<{
@@ -157,6 +172,14 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
+  const dispatchCtx: DispatchContext = {
+    tools: params.tools,
+    isSubagent: Boolean(params.isSubagent),
+    isInteractive: Boolean(params.isInteractive),
+    rl: params.rl,
+    onToolResult: params.onToolResult,
+  }
+
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const systemPrompt =
       params.systemPrompt ??
@@ -203,8 +226,7 @@ export async function query(params: QueryParams): Promise<{
     )
 
     const toolUses = stopEvent.content.filter(
-      (block): block is Extract<typeof block, { type: 'tool_use' }> =>
-        block.type === 'tool_use',
+      (block): block is ToolUseBlock => block.type === 'tool_use',
     )
 
     if (toolUses.length === 0) {
@@ -230,168 +252,8 @@ export async function query(params: QueryParams): Promise<{
 
     const toolResults: UserToolResultBlock[] = []
     for (const toolUse of toolUses) {
-      const tool = findToolByName(params.tools, toolUse.name)
-      if (!tool) {
-        const content = `Unknown tool: ${toolUse.name}`
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content,
-          is_error: true,
-        })
-        params.onToolResult?.({
-          toolName: toolUse.name,
-          isError: true,
-          content,
-        })
-        continue
-      }
-
-      const parsedInput = parseToolInput(tool, toolUse.input)
-      if (!parsedInput.ok) {
-        const content = `Invalid input for ${toolUse.name}: ${parsedInput.error}`
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content,
-          is_error: true,
-        })
-        params.onToolResult?.({
-          toolName: toolUse.name,
-          isError: true,
-          content,
-        })
-        continue
-      }
-
-      const callId = toolUse.id
-      let effectiveInput = parsedInput.data
-      try {
-        const hookDecision = await runHook('beforeToolCall', {
-          sessionId: getSessionId(),
-          callId,
-          toolName: tool.name,
-          source: tool.source,
-          mcpServer: tool.mcpServer,
-          input: effectiveInput,
-        })
-
-        if (hookDecision?.replacementInput !== undefined) {
-          effectiveInput = hookDecision.replacementInput
-        }
-
-        if (hookDecision?.replacementResult !== undefined) {
-          const formatted = {
-            type: 'tool_result' as const,
-            tool_use_id: toolUse.id,
-            content: hookDecision.replacementResult,
-          }
-          toolResults.push(formatted)
-          params.onToolResult?.({
-            toolName: toolUse.name,
-            isError: false,
-            content: formatted.content,
-          })
-          continue
-        }
-
-        if (hookDecision?.decision === 'deny') {
-          const content = hookDecision.reason ?? `Tool denied by hook: ${tool.name}`
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content,
-            is_error: true,
-          })
-          params.onToolResult?.({
-            toolName: toolUse.name,
-            isError: true,
-            content,
-          })
-          continue
-        }
-
-        const decision = await requestPermission({
-          tool,
-          toolInput: effectiveInput,
-          ctx: {
-            isInteractive: Boolean(params.isInteractive && params.rl && !params.isSubagent),
-            isSubagent: Boolean(params.isSubagent),
-            signal: getAbortController().signal,
-          },
-          rl: params.rl,
-        })
-
-        if (decision.behavior === 'deny') {
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: decision.reason,
-            is_error: true,
-          })
-          params.onToolResult?.({
-            toolName: toolUse.name,
-            isError: true,
-            content: decision.reason,
-          })
-          continue
-        }
-
-        const start = Date.now()
-        const result = await tool.call(effectiveInput, {
-          cwd: getCwd(),
-          abortSignal: getAbortController().signal,
-        })
-        const formatted = tool.formatResult(
-          result.output,
-          toolUse.id,
-          result.isError,
-        )
-        const afterTool = await runHook('afterToolCall', {
-          sessionId: getSessionId(),
-          callId,
-          toolName: tool.name,
-          source: tool.source,
-          mcpServer: tool.mcpServer,
-          input: effectiveInput,
-          result: formatted.content,
-          durationMs: Date.now() - start,
-          ...(formatted.is_error ? { error: formatted.content } : {}),
-        })
-        if (afterTool?.replacementResult !== undefined) {
-          formatted.content = afterTool.replacementResult
-        }
-        toolResults.push(formatted)
-        params.onToolResult?.({
-          toolName: toolUse.name,
-          isError: Boolean(formatted.is_error),
-          content: formatted.content,
-        })
-      } catch (error) {
-        const content = error instanceof Error ? error.message : String(error)
-        await runHook('afterToolCall', {
-          sessionId: getSessionId(),
-          callId,
-          toolName: tool.name,
-          source: tool.source,
-          mcpServer: tool.mcpServer,
-          input: effectiveInput,
-          result: content,
-          durationMs: 0,
-          error: content,
-        })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content,
-          is_error: true,
-        })
-        params.onToolResult?.({
-          toolName: toolUse.name,
-          isError: true,
-          content,
-        })
-      }
+      const result = await dispatchToolCall(toolUse, dispatchCtx)
+      toolResults.push(result)
     }
 
     messages.push(createUserMessage(toolResults, getLastUuid(messages)))
@@ -399,6 +261,133 @@ export async function query(params: QueryParams): Promise<{
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
+}
+
+async function dispatchToolCall(
+  toolUse: ToolUseBlock,
+  ctx: DispatchContext,
+): Promise<UserToolResultBlock> {
+  const tool = findToolByName(ctx.tools, toolUse.name)
+  if (!tool) {
+    return reportToolResult(ctx, toolUse, `Unknown tool: ${toolUse.name}`, true)
+  }
+
+  const parsedInput = parseToolInput(tool, toolUse.input)
+  if (!parsedInput.ok) {
+    return reportToolResult(
+      ctx,
+      toolUse,
+      `Invalid input for ${toolUse.name}: ${parsedInput.error}`,
+      true,
+    )
+  }
+
+  let effectiveInput = parsedInput.data
+  const callId = toolUse.id
+
+  try {
+    const hookDecision = await runHook('beforeToolCall', {
+      sessionId: getSessionId(),
+      callId,
+      toolName: tool.name,
+      source: tool.source,
+      mcpServer: tool.mcpServer,
+      input: effectiveInput,
+    })
+
+    if (hookDecision?.replacementInput !== undefined) {
+      effectiveInput = hookDecision.replacementInput
+    }
+
+    // decision: 'deny' takes precedence over replacementResult.
+    // A deny + replacementResult combination is treated as deny (is_error: true)
+    // so a hook cannot silently convert a deny into a non-error result.
+    if (hookDecision?.decision === 'deny') {
+      const content = hookDecision.reason ?? `Tool denied by hook: ${tool.name}`
+      return reportToolResult(ctx, toolUse, content, true)
+    }
+
+    if (hookDecision?.replacementResult !== undefined) {
+      return reportToolResult(ctx, toolUse, hookDecision.replacementResult, false)
+    }
+
+    const decision = await requestPermission({
+      tool,
+      toolInput: effectiveInput,
+      ctx: {
+        isInteractive: Boolean(ctx.isInteractive && ctx.rl && !ctx.isSubagent),
+        isSubagent: ctx.isSubagent,
+        signal: getAbortController().signal,
+      },
+      rl: ctx.rl,
+    })
+
+    if (decision.behavior === 'deny') {
+      return reportToolResult(ctx, toolUse, decision.reason, true)
+    }
+
+    const start = Date.now()
+    const result = await tool.call(effectiveInput, {
+      cwd: getCwd(),
+      abortSignal: getAbortController().signal,
+    })
+    const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
+
+    const afterTool = await runHook('afterToolCall', {
+      sessionId: getSessionId(),
+      callId,
+      toolName: tool.name,
+      source: tool.source,
+      mcpServer: tool.mcpServer,
+      input: effectiveInput,
+      result: formatted.content,
+      durationMs: Date.now() - start,
+      ...(formatted.is_error ? { error: formatted.content } : {}),
+    })
+    if (afterTool?.replacementResult !== undefined) {
+      formatted.content = afterTool.replacementResult
+    }
+
+    ctx.onToolResult?.({
+      toolName: toolUse.name,
+      isError: Boolean(formatted.is_error),
+      content: formatted.content,
+    })
+    return formatted
+  } catch (error) {
+    const content = error instanceof Error ? error.message : String(error)
+    await runHook('afterToolCall', {
+      sessionId: getSessionId(),
+      callId,
+      toolName: tool.name,
+      source: tool.source,
+      mcpServer: tool.mcpServer,
+      input: effectiveInput,
+      result: content,
+      durationMs: 0,
+      error: content,
+    })
+    return reportToolResult(ctx, toolUse, content, true)
+  }
+}
+
+function reportToolResult(
+  ctx: DispatchContext,
+  toolUse: ToolUseBlock,
+  content: string,
+  isError: boolean,
+): UserToolResultBlock {
+  ctx.onToolResult?.({
+    toolName: toolUse.name,
+    isError,
+    content,
+  })
+  return {
+    type: 'tool_result',
+    tool_use_id: toolUse.id,
+    content,
+    ...(isError ? { is_error: true } : {}),
+  }
 }
 
 function getLastUserText(messages: Message[]): string {
