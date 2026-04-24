@@ -50,6 +50,13 @@ export type LightClawConfig = {
     local?: string
   }
   mcpMaxToolOutputBytes: number
+  hooksEnabled: boolean
+  hookTimeoutBlocking: number
+  hookTimeoutNonBlocking: number
+  hookDirs: {
+    user?: string
+    project?: string
+  }
 }
 
 type ConfigFileShape = {
@@ -91,6 +98,13 @@ type ConfigFileShape = {
     local?: string
   }
   mcpMaxToolOutputBytes?: number
+  hooksEnabled?: boolean
+  hookTimeoutBlocking?: number
+  hookTimeoutNonBlocking?: number
+  hookDirs?: {
+    user?: string
+    project?: string
+  }
 }
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6'
@@ -289,6 +303,26 @@ export function getConfig(): LightClawConfig {
         20_480,
     ),
   )
+  const hooksEnabled =
+    parseBoolean(process.env.LIGHTCLAW_HOOKS_ENABLED) ??
+    fileConfig.hooksEnabled ??
+    true
+  const hookTimeoutBlocking = Math.max(
+    100,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_HOOK_TIMEOUT_BLOCKING) ??
+        fileConfig.hookTimeoutBlocking ??
+        5000,
+    ),
+  )
+  const hookTimeoutNonBlocking = Math.max(
+    100,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_HOOK_TIMEOUT_NON_BLOCKING) ??
+        fileConfig.hookTimeoutNonBlocking ??
+        10_000,
+    ),
+  )
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -343,5 +377,12 @@ export function getConfig(): LightClawConfig {
       local: expandOptionalPath(fileConfig.mcpConfigFiles?.local),
     },
     mcpMaxToolOutputBytes,
+    hooksEnabled,
+    hookTimeoutBlocking,
+    hookTimeoutNonBlocking,
+    hookDirs: {
+      user: expandOptionalPath(fileConfig.hookDirs?.user),
+      project: expandOptionalPath(fileConfig.hookDirs?.project),
+    },
   }
 }

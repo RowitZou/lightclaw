@@ -25,6 +25,7 @@ export function initializeApp(input?: {
   todos?: TodoItem[]
   permissionMode?: PermissionMode
   mcpEnabled?: boolean
+  hooksEnabled?: boolean
 }): LightClawConfig {
   const config = getConfig()
   const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
@@ -32,6 +33,7 @@ export function initializeApp(input?: {
   const resolvedConfig: LightClawConfig = {
     ...config,
     ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
+    ...(input?.hooksEnabled === false ? { hooksEnabled: false } : {}),
     model: resolvedModel,
     routing: {
       ...config.routing,

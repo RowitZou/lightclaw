@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from 'node:process'
 
 import chalk from 'chalk'
 
+import { getHookSummary, reloadHooks, runHook } from './hooks/index.js'
 import { scanMemoryFiles } from './memory/auto-memory.js'
 import { parsePermissionMode, type LightClawConfig } from './config.js'
 import { beginQuery } from './init.js'
@@ -75,6 +76,15 @@ export async function startRepl(params: ReplParams): Promise<void> {
   createdAt = existingMeta?.createdAt ?? createdAt
   await refreshSkillRegistry(getCwd())
   await persistMeta(createdAt, messages.length)
+  await runHook('onSessionStart', {
+    sessionId,
+    cwd: getCwd(),
+    trigger: params.resumeSessionId
+      ? 'resume'
+      : params.initialPrompt
+        ? 'single'
+        : 'repl',
+  })
 
   const rl = createInterface({
     input,
@@ -152,9 +162,13 @@ export async function startRepl(params: ReplParams): Promise<void> {
         },
       })
 
+      const previousTail = messages[messageCountBeforeQuery - 1]
+      const nextTail = result.messages[messageCountBeforeQuery - 1]
+      const didMutateExistingHistory =
+        JSON.stringify(previousTail) !== JSON.stringify(nextTail)
       const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
       messages.splice(0, messages.length, ...result.messages)
-      if (result.didCompact) {
+      if (result.didCompact || didMutateExistingHistory) {
         await rewriteTranscript(sessionId, messages)
       } else {
         for (const message of newlyAddedMessages) {
@@ -189,7 +203,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
   output.write(
     chalk.gray(
-      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /mcp /mcp reload /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
+      'Type /exit to quit. Commands: /sessions /status /compact /skills /skill <name> [args] /memory /todos /mcp /mcp reload /hooks /hooks reload /permissions /mode <mode> /allow <rule> /deny <rule>\n\n',
     ),
   )
 
@@ -198,6 +212,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     await awaitBackgroundTasks()
     rl.close()
     await persistMeta(createdAt, messages.length)
+    await runHook('onSessionEnd', { sessionId, reason: 'exit' })
     await cleanupMcp()
     printUsageSummary()
     return
@@ -259,6 +274,24 @@ export async function startRepl(params: ReplParams): Promise<void> {
       output.write(chalk.gray(`skills: ${listRegisteredSkills().length}\n`))
       output.write(chalk.gray(`todos: ${getTodos().length}\n`))
       output.write(chalk.gray(`MCP: ${formatMcpSummary()}\n`))
+      output.write(chalk.gray(`hooks: ${getHookSummary().length}\n`))
+      continue
+    }
+
+    if (command === '/hooks') {
+      output.write(chalk.gray(formatHooks()))
+      continue
+    }
+
+    if (command === '/hooks reload') {
+      output.write(chalk.yellow('[hooks] Reloading hooks...\n'))
+      await reloadHooks(params.config)
+      output.write(chalk.green(`[hooks] ${getHookSummary().length} loaded\n`))
+      continue
+    }
+
+    if (command.startsWith('/hooks ')) {
+      output.write(chalk.red('error> Usage: /hooks [reload]\n'))
       continue
     }
 
@@ -374,6 +407,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   rl.close()
   await awaitBackgroundTasks()
   await persistMeta(createdAt, messages.length)
+  await runHook('onSessionEnd', { sessionId, reason: 'exit' })
   await cleanupMcp()
   printUsageSummary()
 }
@@ -539,6 +573,19 @@ function formatMcpStatus(): string {
     lines.push(`${name} failed     ${transport} ${connection.error}`)
   }
 
+  return `${lines.join('\n')}\n`
+}
+
+function formatHooks(): string {
+  const hooks = getHookSummary()
+  if (hooks.length === 0) {
+    return 'No hooks loaded.\n'
+  }
+
+  const lines = ['Hooks:']
+  for (const hook of hooks) {
+    lines.push(`${hook.name.padEnd(16, ' ')} ${hook.source.padEnd(7, ' ')} ${hook.file}`)
+  }
   return `${lines.join('\n')}\n`
 }
 

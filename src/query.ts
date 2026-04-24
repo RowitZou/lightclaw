@@ -2,6 +2,7 @@ import type { Interface } from 'node:readline/promises'
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
+import { runHook } from './hooks/index.js'
 import { extractMemories } from './memory/extract.js'
 import {
   collectAssistantText,
@@ -133,6 +134,29 @@ export async function query(params: QueryParams): Promise<{
         config,
       })
 
+  const beforeQueryResult = await runHook('beforeQuery', {
+    sessionId: getSessionId(),
+    input: getLastUserText(messages),
+    messageCount: messages.length,
+  })
+  if (beforeQueryResult?.replacementInput !== undefined) {
+    replaceLastUserText(messages, beforeQueryResult.replacementInput)
+  }
+  if (beforeQueryResult?.abort) {
+    await runHook('afterQuery', {
+      sessionId: getSessionId(),
+      usage: { input: 0, output: 0 },
+      abortReason: beforeQueryResult.abort.reason,
+      messageCount: messages.length,
+    })
+    return {
+      messages,
+      lastAssistantText: '',
+      stopReason: 'hook_abort',
+      didCompact,
+    }
+  }
+
   for (let turn = 0; turn < maxTurns; turn += 1) {
     const systemPrompt =
       params.systemPrompt ??
@@ -187,6 +211,15 @@ export async function query(params: QueryParams): Promise<{
       const extractionSnapshot = [...messages]
       await maybeAutoCompact()
       scheduleMemoryExtraction(extractionSnapshot)
+      await runHook('afterQuery', {
+        sessionId: getSessionId(),
+        finalText: lastAssistantText,
+        usage: {
+          input: stopEvent.usage.input_tokens ?? 0,
+          output: stopEvent.usage.output_tokens ?? 0,
+        },
+        messageCount: messages.length,
+      })
       return {
         messages,
         lastAssistantText,
@@ -231,10 +264,56 @@ export async function query(params: QueryParams): Promise<{
         continue
       }
 
+      const callId = toolUse.id
+      let effectiveInput = parsedInput.data
       try {
+        const hookDecision = await runHook('beforeToolCall', {
+          sessionId: getSessionId(),
+          callId,
+          toolName: tool.name,
+          source: tool.source,
+          mcpServer: tool.mcpServer,
+          input: effectiveInput,
+        })
+
+        if (hookDecision?.replacementInput !== undefined) {
+          effectiveInput = hookDecision.replacementInput
+        }
+
+        if (hookDecision?.replacementResult !== undefined) {
+          const formatted = {
+            type: 'tool_result' as const,
+            tool_use_id: toolUse.id,
+            content: hookDecision.replacementResult,
+          }
+          toolResults.push(formatted)
+          params.onToolResult?.({
+            toolName: toolUse.name,
+            isError: false,
+            content: formatted.content,
+          })
+          continue
+        }
+
+        if (hookDecision?.decision === 'deny') {
+          const content = hookDecision.reason ?? `Tool denied by hook: ${tool.name}`
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content,
+            is_error: true,
+          })
+          params.onToolResult?.({
+            toolName: toolUse.name,
+            isError: true,
+            content,
+          })
+          continue
+        }
+
         const decision = await requestPermission({
           tool,
-          toolInput: parsedInput.data,
+          toolInput: effectiveInput,
           ctx: {
             isInteractive: Boolean(params.isInteractive && params.rl && !params.isSubagent),
             isSubagent: Boolean(params.isSubagent),
@@ -258,7 +337,8 @@ export async function query(params: QueryParams): Promise<{
           continue
         }
 
-        const result = await tool.call(parsedInput.data, {
+        const start = Date.now()
+        const result = await tool.call(effectiveInput, {
           cwd: getCwd(),
           abortSignal: getAbortController().signal,
         })
@@ -267,6 +347,20 @@ export async function query(params: QueryParams): Promise<{
           toolUse.id,
           result.isError,
         )
+        const afterTool = await runHook('afterToolCall', {
+          sessionId: getSessionId(),
+          callId,
+          toolName: tool.name,
+          source: tool.source,
+          mcpServer: tool.mcpServer,
+          input: effectiveInput,
+          result: formatted.content,
+          durationMs: Date.now() - start,
+          ...(formatted.is_error ? { error: formatted.content } : {}),
+        })
+        if (afterTool?.replacementResult !== undefined) {
+          formatted.content = afterTool.replacementResult
+        }
         toolResults.push(formatted)
         params.onToolResult?.({
           toolName: toolUse.name,
@@ -275,6 +369,17 @@ export async function query(params: QueryParams): Promise<{
         })
       } catch (error) {
         const content = error instanceof Error ? error.message : String(error)
+        await runHook('afterToolCall', {
+          sessionId: getSessionId(),
+          callId,
+          toolName: tool.name,
+          source: tool.source,
+          mcpServer: tool.mcpServer,
+          input: effectiveInput,
+          result: content,
+          durationMs: 0,
+          error: content,
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
@@ -294,6 +399,27 @@ export async function query(params: QueryParams): Promise<{
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
+}
+
+function getLastUserText(messages: Message[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.type === 'user' && typeof message.message.content === 'string') {
+      return message.message.content
+    }
+  }
+
+  return ''
+}
+
+function replaceLastUserText(messages: Message[], next: string): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.type === 'user' && typeof message.message.content === 'string') {
+      message.message.content = next
+      return
+    }
+  }
 }
 
 function parseToolInput(
