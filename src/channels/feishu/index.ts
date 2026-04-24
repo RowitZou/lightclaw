@@ -15,6 +15,18 @@ export async function startFeishuChannel(): Promise<void> {
   if (!config.enabled) {
     throw new Error('Feishu channel is disabled in ~/.lightclaw/channels.json.')
   }
+  if (!config.encryptKey) {
+    throw new Error(
+      'Feishu channel requires feishu.encryptKey in ~/.lightclaw/channels.json. '
+      + 'Without it the webhook cannot verify request signatures.',
+    )
+  }
+  if (config.allowUsers.length === 0 && config.allowChats.length === 0) {
+    process.stderr.write(
+      'feishu: warning — allowUsers and allowChats are both empty; every incoming message will be dropped. '
+      + 'Populate one of the lists (or "*") or set feishu.enabled=false.\n',
+    )
+  }
 
   const client = createFeishuClient(config)
   const sender = new FeishuSender(client, config)
