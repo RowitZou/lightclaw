@@ -179,6 +179,12 @@ export async function loadMcpConfig(
   const merged = new Map<string, ScopedMcpServerConfig>()
 
   for (const config of [...user, ...project, ...local]) {
+    const existing = merged.get(config.normalizedName)
+    if (existing && existing.name !== config.name) {
+      throw new Error(
+        `mcp: server name collision: "${existing.name}" (${existing.scope}) and "${config.name}" (${config.scope}) both normalize to "${config.normalizedName}". Rename one of them.`,
+      )
+    }
     merged.set(config.normalizedName, config)
   }
 

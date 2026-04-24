@@ -83,13 +83,18 @@ export function stringifyCallToolResult(
   })
 
   const text = blocks.join('\n\n---\n\n')
-  if (text.length <= maxOutputBytes) {
+  const byteLength = Buffer.byteLength(text, 'utf8')
+  if (byteLength <= maxOutputBytes) {
     return text
   }
 
-  return `${text.slice(0, maxOutputBytes)}\n\n[output truncated: ${text.length} chars total]`
+  const truncated = Buffer.from(text, 'utf8')
+    .subarray(0, maxOutputBytes)
+    .toString('utf8')
+  return `${truncated}\n\n[output truncated: ${byteLength} bytes total]`
 }
 
 function base64Bytes(data: string): number {
-  return Math.ceil((data.length * 3) / 4)
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
+  return Math.floor((data.length * 3) / 4) - padding
 }

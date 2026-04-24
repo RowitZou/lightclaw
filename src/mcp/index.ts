@@ -68,12 +68,13 @@ function installCleanupHandlers(): void {
     return
   }
 
-  const cleanup = () => {
-    void cleanupMcp()
-  }
-  process.on('beforeExit', cleanup)
-  process.on('exit', cleanup)
-  process.on('SIGINT', cleanup)
-  process.on('SIGTERM', cleanup)
+  // beforeExit is the only safety net that can await async work. The 'exit'
+  // event is synchronous; async cleanup scheduled there is discarded. Signal
+  // handlers are owned by init.ts (abort controller); after the abort unwinds
+  // the REPL, the event loop drains and beforeExit closes any clients that
+  // the explicit cleanupMcp() calls in the exit paths did not reach.
+  process.on('beforeExit', () => {
+    cleanupMcp().catch(() => {})
+  })
   cleanupHandlersInstalled = true
 }
