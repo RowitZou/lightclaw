@@ -1,19 +1,21 @@
 import path from 'node:path'
 
-import { initializeApp, beginQuery, resetSessionContext } from '../../init.js'
-import { initializeHooks, runHook } from '../../hooks/index.js'
-import { initializeMcp } from '../../mcp/index.js'
-import { createUserMessage, getLastUuid } from '../../messages.js'
-import { getProvider } from '../../provider/index.js'
-import { query } from '../../query.js'
+import { runHook } from '../hooks/index.js'
+import { initializeHooks } from '../hooks/index.js'
+import { initializeMcp } from '../mcp/index.js'
+import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
+import { createUserMessage, getLastUuid } from '../messages.js'
+import type { PermissionMode } from '../permission/types.js'
+import { getProvider } from '../provider/index.js'
+import { query } from '../query.js'
 import {
   appendMessage,
   loadMeta,
   loadTranscript,
   rewriteTranscript,
   saveMeta,
-} from '../../session/storage.js'
-import { refreshSkillRegistry } from '../../skill/registry.js'
+} from '../session/storage.js'
+import { refreshSkillRegistry } from '../skill/registry.js'
 import {
   awaitBackgroundTasks,
   getCompactionCount,
@@ -23,32 +25,58 @@ import {
   getPermissionMode,
   getSessionId,
   getTodos,
-} from '../../state.js'
-import { getAllTools, getEnabledTools } from '../../tools.js'
-import type { SessionMeta } from '../../types.js'
-import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
-import { buildFeishuChannelPrompt } from './channel-prompt.js'
-import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
-import { FeishuSender } from './sender.js'
-import { SessionLock } from './session-lock.js'
+} from '../state.js'
+import { getAllTools, getEnabledTools } from '../tools.js'
+import type { SessionMeta } from '../types.js'
 
-export class FeishuRunner {
+import { SessionLock } from './session-lock.js'
+import type { ChannelId, NormalizedChannelMessage } from './types.js'
+
+/**
+ * Per-channel strategy: everything that varies between feishu / wechat /
+ * ide-bridge. The shared orchestration (session lock, transcript load /
+ * append / compact, hook lifecycle, runQuery with mode='channel') lives in
+ * ChannelRunner and never needs channel-specific branching.
+ */
+export type ChannelRunnerStrategy = {
+  channelId: ChannelId
+  cwd: string
+  permissionMode: PermissionMode
+  isMessageAllowed(message: NormalizedChannelMessage): boolean
+  resolveSessionId(message: NormalizedChannelMessage): string
+  buildChannelPrompt(message: NormalizedChannelMessage): string
+  sendReply(
+    message: NormalizedChannelMessage,
+    text: string,
+  ): Promise<void>
+}
+
+/**
+ * Generic, channel-agnostic message runner. Holds the per-session serial
+ * lock, wires a message through resetSessionContext() + query({ mode:
+ * 'channel' }), persists the transcript, and delegates the reply back to
+ * the strategy's sender.
+ */
+export class ChannelRunner {
   private locks = new SessionLock()
   private initialized = false
 
-  constructor(
-    private config: FeishuChannelConfig,
-    private sender: FeishuSender,
-  ) {}
+  constructor(private readonly strategy: ChannelRunnerStrategy) {}
 
+  /**
+   * One-shot bootstrap of app-level singletons (agents registry, signal
+   * handlers, hook loader, MCP connections, skill registry). Per-message
+   * state (sessionId, cwd, permissionMode) is refreshed on each message
+   * via resetSessionContext() inside handleMessage().
+   */
   async initialize(): Promise<void> {
     if (this.initialized) {
       return
     }
 
     const appConfig = initializeApp({
-      cwd: this.config.cwd ?? process.cwd(),
-      permissionMode: this.config.permissionMode,
+      cwd: this.strategy.cwd,
+      permissionMode: this.strategy.permissionMode,
     })
     await initializeHooks(appConfig)
     await initializeMcp(appConfig)
@@ -57,33 +85,31 @@ export class FeishuRunner {
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
-    if (!isFeishuMessageAllowed(message, this.config)) {
+    if (!this.strategy.isMessageAllowed(message)) {
       return
     }
 
-    const sessionId = resolveFeishuSessionId(message, this.config)
+    const sessionId = this.strategy.resolveSessionId(message)
     await this.locks.runExclusive(sessionId, async () => {
       const meta = await loadMeta(sessionId)
       const messages = await loadTranscript(sessionId)
-      // Per-message reset: swap in this session's id / cwd / permissionMode
-      // without re-registering signal handlers, hooks, MCP clients, or agents
-      // (those were wired once in initialize()).
       const appConfig = resetSessionContext({
-        cwd: meta?.cwd ?? this.config.cwd ?? process.cwd(),
+        cwd: meta?.cwd ?? this.strategy.cwd,
         model: meta?.model,
         sessionId,
         resumedFrom: meta ? sessionId : null,
         compactionCount: meta?.compactionCount,
         lastExtractedAt: meta?.lastExtractedAt,
         todos: meta?.todos,
-        permissionMode: this.config.permissionMode,
+        permissionMode: this.strategy.permissionMode,
       })
       await refreshSkillRegistry(getCwd())
       if (!meta) {
         await runHook('onSessionStart', {
           sessionId,
           cwd: getCwd(),
-          trigger: 'feishu',
+          trigger: 'channel',
+          channelId: this.strategy.channelId,
         })
       }
 
@@ -93,15 +119,16 @@ export class FeishuRunner {
       await appendMessage(sessionId, userMessage)
       const messageCountBeforeQuery = messages.length
       const provider = getProvider(appConfig)
+      const channelId = this.strategy.channelId
 
       const result = await query({
         config: appConfig,
         messages,
         tools: getEnabledTools(provider, getAllTools()),
         mode: 'channel',
-        channelContext: buildFeishuChannelPrompt(message),
+        channelContext: this.strategy.buildChannelPrompt(message),
         onToolUse(event) {
-          process.stderr.write(`feishu: tool ${event.name}\n`)
+          process.stderr.write(`${channelId}: tool ${event.name}\n`)
         },
       })
 
@@ -120,7 +147,7 @@ export class FeishuRunner {
 
       await persistMeta(Date.now(), result.messages.length)
       await awaitBackgroundTasks()
-      await this.sender.sendText(message, result.lastAssistantText || '(no response)')
+      await this.strategy.sendReply(message, result.lastAssistantText || '(no response)')
     })
   }
 }

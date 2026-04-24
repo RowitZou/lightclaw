@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { parsePermissionMode } from '../config.js'
-import type { ChannelConfig, FeishuChannelConfig } from './types.js'
+import type { ChannelsConfig, FeishuChannelConfig } from './types.js'
 
 type ChannelsFileShape = {
   feishu?: Partial<FeishuChannelConfig> & {
@@ -11,7 +11,7 @@ type ChannelsFileShape = {
   }
 }
 
-export function loadChannelConfig(): ChannelConfig {
+export function loadChannelConfig(): ChannelsConfig {
   const fileConfig = loadChannelsFile()
   return {
     feishu: mergeFeishuConfig(fileConfig.feishu ?? {}),

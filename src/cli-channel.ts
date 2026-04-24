@@ -1,32 +1,78 @@
 import { spawn } from 'node:child_process'
 
-import { startFeishuChannel } from './channels/feishu/index.js'
 import { loadChannelConfig } from './channels/config.js'
+import {
+  getChannel,
+  knownChannelIds,
+  listChannels,
+} from './channels/registry.js'
+import { cleanupMcp } from './mcp/index.js'
 
 export async function runChannelCli(argv: string[]): Promise<void> {
-  const [channel, action, ...rest] = argv
+  const [channelArg, action, ...rest] = argv
 
-  if (channel === 'list') {
+  if (!channelArg) {
+    printUsage()
+    return
+  }
+
+  if (channelArg === 'list') {
     const config = loadChannelConfig()
-    const feishu = config.feishu
-    console.log(`feishu ${feishu.enabled ? 'enabled' : 'disabled'} ${feishu.webhook.host}:${feishu.webhook.port}${feishu.webhook.path}`)
-    return
-  }
-
-  if (channel === 'feishu' && action === 'start') {
-    if (rest.includes('--daemon')) {
-      startDaemon()
-      return
+    for (const channel of listChannels(config)) {
+      console.log(channel.statusLine())
     }
-
-    await startFeishuChannel()
     return
   }
 
+  if (!action) {
+    printUsage()
+    return
+  }
+
+  const config = loadChannelConfig()
+  const channel = getChannel(config, channelArg)
+  if (!channel) {
+    console.error(
+      `unknown channel: ${channelArg}. known: ${knownChannelIds().join(', ')}`,
+    )
+    process.exitCode = 1
+    return
+  }
+
+  if (action !== 'start') {
+    printUsage()
+    return
+  }
+
+  if (rest.includes('--daemon')) {
+    startDaemon()
+    return
+  }
+
+  const handle = await channel.start()
+  await waitForShutdownSignal()
+  await handle.stop()
+  await cleanupMcp()
+}
+
+function printUsage(): void {
+  const ids = knownChannelIds().join('|')
   console.log(`Usage:
   lightclaw channel list
-  lightclaw channel feishu start [--daemon]
+  lightclaw channel <${ids}> start [--daemon]
 `)
+}
+
+function waitForShutdownSignal(): Promise<void> {
+  return new Promise<void>(resolve => {
+    const done = () => {
+      process.off('SIGINT', done)
+      process.off('SIGTERM', done)
+      resolve()
+    }
+    process.once('SIGINT', done)
+    process.once('SIGTERM', done)
+  })
 }
 
 function startDaemon(): void {

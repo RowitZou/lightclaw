@@ -7,13 +7,15 @@ export type HookName =
   | 'onSessionEnd'
 
 export type HookSource = 'user' | 'project'
-export type HookSessionTrigger = 'repl' | 'single' | 'feishu' | 'resume'
+export type HookSessionTrigger = 'repl' | 'single' | 'channel' | 'resume'
 export type HookToolSource = 'builtin' | 'mcp'
 
 export type OnSessionStartPayload = {
   sessionId: string
   cwd: string
   trigger: HookSessionTrigger
+  /** Present when trigger === 'channel'; e.g. 'feishu', 'wechat'. */
+  channelId?: string
 }
 
 export type BeforeQueryPayload = {
