@@ -15,7 +15,7 @@ import type { TodoItem } from './types.js'
 
 let signalHandlersInstalled = false
 
-export function initializeApp(input?: {
+type CommonStateInput = {
   cwd?: string
   model?: string
   sessionId?: string
@@ -24,13 +24,51 @@ export function initializeApp(input?: {
   lastExtractedAt?: number
   todos?: TodoItem[]
   permissionMode?: PermissionMode
+}
+
+type InitializeAppInput = CommonStateInput & {
   mcpEnabled?: boolean
   hooksEnabled?: boolean
-}): LightClawConfig {
+}
+
+/**
+ * One-time application bootstrap. Idempotent at the signal-handler / agents
+ * level, but callers should not use this for per-session state resets — use
+ * resetSessionContext() instead, which skips the one-shot wiring.
+ */
+export function initializeApp(input?: InitializeAppInput): LightClawConfig {
   const config = getConfig()
-  const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
+  const resolvedConfig = resolveConfig(config, input)
+  writeSessionState(resolvedConfig, input)
+  initializeAgents()
+  installSignalHandlers()
+  return resolvedConfig
+}
+
+/**
+ * Replace the session-scoped state singleton (sessionId, cwd, permissionMode,
+ * …) and reload file-based permission rules for the new cwd. Intended for
+ * daemon-style dispatchers (channels) that want to reuse the same app-level
+ * bootstrap across many incoming messages without re-registering agents or
+ * signal handlers.
+ */
+export function resetSessionContext(input: CommonStateInput): LightClawConfig {
+  const config = getConfig()
+  const resolvedConfig = resolveConfig(config, input)
+  writeSessionState(resolvedConfig, input)
+  return resolvedConfig
+}
+
+export function beginQuery(): AbortSignal {
+  return resetAbortController().signal
+}
+
+function resolveConfig(
+  config: LightClawConfig,
+  input: InitializeAppInput | undefined,
+): LightClawConfig {
   const resolvedModel = input?.model ?? config.model
-  const resolvedConfig: LightClawConfig = {
+  return {
     ...config,
     ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
     ...(input?.hooksEnabled === false ? { hooksEnabled: false } : {}),
@@ -40,10 +78,16 @@ export function initializeApp(input?: {
       main: input?.model ?? config.routing.main,
     },
   }
+}
 
+function writeSessionState(
+  resolvedConfig: LightClawConfig,
+  input: InitializeAppInput | undefined,
+): void {
+  const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
   initializeState({
     cwd: resolvedCwd,
-    model: resolvedModel,
+    model: resolvedConfig.model,
     sessionsDir: resolvedConfig.sessionsDir,
     memoryDir: getMemoryDir(resolvedCwd, resolvedConfig),
     sessionId: input?.sessionId,
@@ -59,14 +103,6 @@ export function initializeApp(input?: {
     projectPath: resolvedConfig.permissionRuleFiles.project,
     localPath: resolvedConfig.permissionRuleFiles.local,
   }))
-  initializeAgents()
-  installSignalHandlers()
-
-  return resolvedConfig
-}
-
-export function beginQuery(): AbortSignal {
-  return resetAbortController().signal
 }
 
 function installSignalHandlers(): void {

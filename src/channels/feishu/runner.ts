@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { initializeApp, beginQuery } from '../../init.js'
+import { initializeApp, beginQuery, resetSessionContext } from '../../init.js'
 import { initializeHooks, runHook } from '../../hooks/index.js'
 import { initializeMcp } from '../../mcp/index.js'
 import { createUserMessage, getLastUuid } from '../../messages.js'
@@ -25,8 +25,9 @@ import {
   getTodos,
 } from '../../state.js'
 import { getAllTools, getEnabledTools } from '../../tools.js'
-import type { Message, SessionMeta } from '../../types.js'
+import type { SessionMeta } from '../../types.js'
 import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
+import { buildFeishuChannelPrompt } from './channel-prompt.js'
 import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
 import { FeishuSender } from './sender.js'
 import { SessionLock } from './session-lock.js'
@@ -64,7 +65,10 @@ export class FeishuRunner {
     await this.locks.runExclusive(sessionId, async () => {
       const meta = await loadMeta(sessionId)
       const messages = await loadTranscript(sessionId)
-      const appConfig = initializeApp({
+      // Per-message reset: swap in this session's id / cwd / permissionMode
+      // without re-registering signal handlers, hooks, MCP clients, or agents
+      // (those were wired once in initialize()).
+      const appConfig = resetSessionContext({
         cwd: meta?.cwd ?? this.config.cwd ?? process.cwd(),
         model: meta?.model,
         sessionId,
@@ -84,7 +88,7 @@ export class FeishuRunner {
       }
 
       beginQuery()
-      const userMessage = createUserMessage(formatPrompt(message), getLastUuid(messages))
+      const userMessage = createUserMessage(message.text, getLastUuid(messages))
       messages.push(userMessage)
       await appendMessage(sessionId, userMessage)
       const messageCountBeforeQuery = messages.length
@@ -94,7 +98,8 @@ export class FeishuRunner {
         config: appConfig,
         messages,
         tools: getEnabledTools(provider, getAllTools()),
-        isInteractive: false,
+        mode: 'channel',
+        channelContext: buildFeishuChannelPrompt(message),
         onToolUse(event) {
           process.stderr.write(`feishu: tool ${event.name}\n`)
         },
@@ -118,16 +123,6 @@ export class FeishuRunner {
       await this.sender.sendText(message, result.lastAssistantText || '(no response)')
     })
   }
-}
-
-function formatPrompt(message: NormalizedChannelMessage): string {
-  return [
-    '[Feishu message]',
-    `chat_id: ${message.chatId}`,
-    `sender_open_id: ${message.senderOpenId}`,
-    '',
-    message.text,
-  ].join('\n')
 }
 
 async function persistMeta(createdAt: number, messageCount: number): Promise<void> {

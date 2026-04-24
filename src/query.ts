@@ -37,6 +37,20 @@ import type {
   UserToolResultBlock,
 } from './types.js'
 
+/**
+ * QueryMode selects orchestration behavior that differs between the REPL
+ * (interactive), AgentTool subagents (subagent), and channel daemons like
+ * feishu (channel). It drives whether auto-compact / auto-memory run and
+ * whether the permission layer may invoke an interactive REPL prompt.
+ *
+ * | mode        | autoCompact | autoMemory | REPL prompt |
+ * |-------------|:-----------:|:----------:|:-----------:|
+ * | interactive |      ✓      |     ✓      |  ✓ (if rl)  |
+ * | subagent    |      ✗      |     ✗      |      ✗      |
+ * | channel     |      ✓      |     ✓      |      ✗      |
+ */
+export type QueryMode = 'interactive' | 'subagent' | 'channel'
+
 type QueryParams = {
   messages: Message[]
   tools: Tool[]
@@ -48,18 +62,20 @@ type QueryParams = {
   onCompactStart?(): void
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
-  isSubagent?: boolean
-  isInteractive?: boolean
+  /** Defaults to 'interactive'. */
+  mode?: QueryMode
   rl?: Interface
+  /** Replaces the default system prompt entirely (used by subagents). */
   systemPrompt?: string
+  /** Prepended to the default system prompt when provided (used by channels). */
+  channelContext?: string
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
 
 type DispatchContext = {
   tools: Tool[]
-  isSubagent: boolean
-  isInteractive: boolean
+  mode: QueryMode
   rl?: Interface
   onToolResult?(event: ToolExecutionEvent): void
 }
@@ -72,13 +88,14 @@ export async function query(params: QueryParams): Promise<{
 }> {
   const config = params.config ?? getConfig()
   const maxTurns = params.maxTurns ?? 20
+  const mode: QueryMode = params.mode ?? 'interactive'
   const messages = [...params.messages]
   let lastAssistantText = ''
   let stopReason: string | null = null
   let didCompact = false
 
   const scheduleMemoryExtraction = (snapshot: Message[]) => {
-    if (params.isSubagent || !config.autoMemory || stopReason !== 'end_turn') {
+    if (mode === 'subagent' || !config.autoMemory || stopReason !== 'end_turn') {
       return
     }
 
@@ -106,7 +123,7 @@ export async function query(params: QueryParams): Promise<{
   }
 
   const maybeAutoCompact = async () => {
-    if (params.isSubagent || !config.autoCompact) {
+    if (mode === 'subagent' || !config.autoCompact) {
       return
     }
 
@@ -149,6 +166,16 @@ export async function query(params: QueryParams): Promise<{
         config,
       })
 
+  const renderEffectiveSystemPrompt = (): string => {
+    if (params.systemPrompt) {
+      return params.systemPrompt
+    }
+    const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos())
+    return params.channelContext
+      ? `${params.channelContext}\n\n${rendered}`
+      : rendered
+  }
+
   const beforeQueryResult = await runHook('beforeQuery', {
     sessionId: getSessionId(),
     input: getLastUserText(messages),
@@ -174,16 +201,13 @@ export async function query(params: QueryParams): Promise<{
 
   const dispatchCtx: DispatchContext = {
     tools: params.tools,
-    isSubagent: Boolean(params.isSubagent),
-    isInteractive: Boolean(params.isInteractive),
+    mode,
     rl: params.rl,
     onToolResult: params.onToolResult,
   }
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const systemPrompt =
-      params.systemPrompt ??
-      renderSystemPrompt(systemPromptTemplate!, getTodos())
+    const systemPrompt = renderEffectiveSystemPrompt()
     let stopEvent:
       | Extract<Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never, { type: 'stop' }>
       | undefined
@@ -315,8 +339,8 @@ async function dispatchToolCall(
       tool,
       toolInput: effectiveInput,
       ctx: {
-        isInteractive: Boolean(ctx.isInteractive && ctx.rl && !ctx.isSubagent),
-        isSubagent: ctx.isSubagent,
+        isInteractive: ctx.mode === 'interactive' && ctx.rl !== undefined,
+        isSubagent: ctx.mode === 'subagent',
         signal: getAbortController().signal,
       },
       rl: ctx.rl,

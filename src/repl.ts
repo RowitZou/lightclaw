@@ -99,8 +99,8 @@ export async function startRepl(params: ReplParams): Promise<void> {
         config: params.config,
         messages,
         tools: activeTools,
+        mode: 'interactive',
         rl: permissionInteractive ? rl : undefined,
-        isInteractive: permissionInteractive,
         onTextDelta(text) {
           openAssistantLine()
           output.write(text)

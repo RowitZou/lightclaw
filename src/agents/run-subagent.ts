@@ -39,10 +39,10 @@ export async function runSubagent(params: {
   const config = getConfig()
   const provider = getProvider(config)
   const tools = filterTools(agent.tools, getEnabledTools(provider, getAllTools()))
+  // Model routing for subagents is still overridden here; auto-compact /
+  // auto-memory gating is now driven by `mode: 'subagent'` in query.ts.
   const subagentConfig = {
     ...config,
-    autoCompact: false,
-    autoMemory: false,
     model: modelFor('subagent', config),
     routing: {
       ...config.routing,
@@ -56,9 +56,7 @@ export async function runSubagent(params: {
     config: subagentConfig,
     maxTurns: agent.maxTurns,
     systemPrompt: buildSubagentPrompt(tools, getCwd(), agent),
-    isSubagent: true,
-    isInteractive: false,
-    rl: undefined,
+    mode: 'subagent',
   })
 
   return {
