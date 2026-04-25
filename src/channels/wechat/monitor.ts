@@ -32,6 +32,7 @@ export async function monitorWechat(input: {
         token: input.token,
         get_updates_buf: getUpdatesBuf,
         timeoutMs,
+        signal: input.abortSignal,
       })
       if (resp.longpolling_timeout_ms && resp.longpolling_timeout_ms > 0) {
         timeoutMs = resp.longpolling_timeout_ms
@@ -57,10 +58,6 @@ export async function monitorWechat(input: {
         continue
       }
       failures = 0
-      if (resp.get_updates_buf) {
-        getUpdatesBuf = resp.get_updates_buf
-        await saveGetUpdatesBuf(input.accountId, getUpdatesBuf)
-      }
       for (const msg of resp.msgs ?? []) {
         if (msg.context_token && msg.from_user_id) {
           await setContextToken(input.accountId, msg.from_user_id, msg.context_token)
@@ -73,6 +70,13 @@ export async function monitorWechat(input: {
           mediaEnabled: input.mediaEnabled,
         })
         await input.onMessage(inbound)
+      }
+      // Persist cursor only after the batch is fully handled. A crash mid-batch
+      // leaves the unprocessed tail to be redelivered on restart (at-least-once)
+      // instead of silently advancing past it.
+      if (resp.get_updates_buf && resp.get_updates_buf !== getUpdatesBuf) {
+        getUpdatesBuf = resp.get_updates_buf
+        await saveGetUpdatesBuf(input.accountId, getUpdatesBuf)
       }
     } catch (error) {
       if (input.abortSignal.aborted) {

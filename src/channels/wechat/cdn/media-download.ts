@@ -1,3 +1,6 @@
+import { fetch as undiciFetch } from 'undici'
+
+import { getWechatDispatcher } from '../api/api.js'
 import { aesEcbDecrypt } from './aes-ecb.js'
 
 export async function fetchAndDecryptMedia(input: {
@@ -12,7 +15,10 @@ export async function fetchAndDecryptMedia(input: {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? 30_000)
   try {
-    const res = await fetch(url, { signal: ctrl.signal })
+    const res = await undiciFetch(url, {
+      signal: ctrl.signal,
+      dispatcher: getWechatDispatcher(),
+    })
     if (!res.ok) {
       throw new Error(`CDN fetch ${res.status}: ${url}`)
     }

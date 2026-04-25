@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 
+import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici'
+
 import type {
   BaseInfo,
   GetConfigResp,
@@ -15,6 +17,23 @@ export type WechatApiOptions = {
   baseUrl: string
   token?: string
   timeoutMs?: number
+}
+
+let cachedDispatcher: Dispatcher | null | undefined
+
+// Node native fetch ignores http_proxy/https_proxy. The workspace's outbound
+// path to ilinkai.weixin.qq.com and the WeChat CDN goes through 1091, so we
+// must inject an undici ProxyAgent explicitly. Lazily resolved once per process.
+export function getWechatDispatcher(): Dispatcher | undefined {
+  if (cachedDispatcher === undefined) {
+    const proxyUrl =
+      process.env.HTTPS_PROXY ??
+      process.env.https_proxy ??
+      process.env.HTTP_PROXY ??
+      process.env.http_proxy
+    cachedDispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : null
+  }
+  return cachedDispatcher ?? undefined
 }
 
 const CHANNEL_VERSION = '0.1.0'
@@ -66,15 +85,17 @@ export async function apiGetFetch(input: {
   endpoint: string
   timeoutMs?: number
   label: string
+  signal?: AbortSignal
 }): Promise<string> {
   const url = new URL(input.endpoint, ensureTrailingSlash(input.baseUrl))
   const ctrl = input.timeoutMs && input.timeoutMs > 0 ? new AbortController() : null
   const timer = ctrl ? setTimeout(() => ctrl.abort(), input.timeoutMs) : null
   try {
-    const res = await fetch(url, {
+    const res = await undiciFetch(url, {
       method: 'GET',
       headers: buildCommonHeaders(),
-      ...(ctrl ? { signal: ctrl.signal } : {}),
+      signal: combineSignals(ctrl?.signal, input.signal),
+      dispatcher: getWechatDispatcher(),
     })
     const raw = await res.text()
     if (!res.ok) {
@@ -95,16 +116,18 @@ export async function apiPostFetch(input: {
   token?: string
   timeoutMs: number
   label: string
+  signal?: AbortSignal
 }): Promise<string> {
   const url = new URL(input.endpoint, ensureTrailingSlash(input.baseUrl))
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), input.timeoutMs)
   try {
-    const res = await fetch(url, {
+    const res = await undiciFetch(url, {
       method: 'POST',
       headers: buildHeaders({ token: input.token, body: input.body }),
       body: input.body,
-      signal: ctrl.signal,
+      signal: combineSignals(ctrl.signal, input.signal),
+      dispatcher: getWechatDispatcher(),
     })
     const raw = await res.text()
     if (!res.ok) {
@@ -116,8 +139,17 @@ export async function apiPostFetch(input: {
   }
 }
 
+function combineSignals(
+  a: AbortSignal | undefined,
+  b: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!a) return b
+  if (!b) return a
+  return AbortSignal.any([a, b])
+}
+
 export async function getUpdates(
-  input: GetUpdatesReq & WechatApiOptions,
+  input: GetUpdatesReq & WechatApiOptions & { signal?: AbortSignal },
 ): Promise<GetUpdatesResp> {
   const timeout = input.timeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS
   try {
@@ -131,6 +163,7 @@ export async function getUpdates(
       token: input.token,
       timeoutMs: timeout,
       label: 'getUpdates',
+      signal: input.signal,
     })
     return JSON.parse(raw) as GetUpdatesResp
   } catch (error) {
