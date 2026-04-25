@@ -2,11 +2,11 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, web tools, MCP tools, lifecycle hooks, and a Feishu webhook channel.
+LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, with [Claude Code](https://github.com/anthropics/claude-code) as its architectural blueprint. It runs as a lightweight, terminal-native REPL backed by a streaming tool-using agent loop, persistent sessions, automatic context compaction, a memory + skill system, sub-agents, web tools, MCP tools, lifecycle hooks, and Feishu / WeChat channels.
 
 ## Status
 
-Phases 1 – 7 are complete. The current build ships as a ~159 KB single-file ESM bundle and exposes:
+Phases 1 – 8 Step 13 are complete. The current build ships as a ~200 KB single-file ESM bundle and exposes:
 
 - **Terminal REPL** (readline + chalk) with streaming output and Ctrl+C interruption
 - **Agent loop** with up to 20 turns, tool-use ↔ tool-result routing, and auto-compact
@@ -22,9 +22,10 @@ Phases 1 – 7 are complete. The current build ships as a ~159 KB single-file ES
 - **Permission system**: four modes (`default`, `acceptEdits`, `bypassPermissions`, `plan`), layered allow/deny rules, REPL approval prompts, and audit JSONL
 - **MCP client**: stdio / Streamable HTTP / SSE server connections, `mcp__<server>__<tool>` tool injection, `/mcp` status, `/mcp reload`, and `MCP(<server>:*)` permission rules
 - **Hooks**: `.mjs` lifecycle hooks from user/project directories, `/hooks`, `/hooks reload`, and `--no-hooks`
-- **Feishu channel**: webhook-only daemon (`lightclaw channel feishu start`) with text inbound/outbound, dedup, allowlists, session routing, proxy-aware SDK client, and non-interactive permissions
+- **Feishu channel**: webhook-only daemon (`lightclaw channel feishu start`) with text inbound/outbound, media receive, dedup, allowlists, session routing, proxy-aware SDK client, and non-interactive permissions
+- **WeChat channel**: QR login (`lightclaw channel wechat login`) plus long-poll daemon (`lightclaw channel wechat start`) with text reply, inbound media download, context-token persistence, allowlists, and non-interactive permissions
 
-Deliberately **not** implemented yet: React/Ink UI, MCP server mode, MCP resources/prompts/OAuth/sampling, WeChat/IDE bridge channels, Feishu WebSocket/streaming cards/media, `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
+Deliberately **not** implemented yet: Phase 8 real Feishu / WeChat / dual-channel integration tests, React/Ink UI, MCP server mode, MCP resources/prompts/OAuth/sampling, IDE bridge channel, Feishu WebSocket/streaming cards/outbound media, WeChat outbound media/multi-account/typing indicator, `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
 
 ## Requirements
 
@@ -122,6 +123,7 @@ Supported environment variables:
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Feishu channel credentials |
 | `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | Feishu webhook verification settings |
 | `FEISHU_PROXY` | Feishu SDK HTTP proxy URL |
+| `LIGHTCLAW_WECHAT_PERMISSION_MODE` | WeChat channel permission mode override |
 
 ## Usage
 
@@ -155,9 +157,11 @@ pnpm dev -- --permission-mode plan
 pnpm dev -- --allow "Bash(git status:*)" --deny "Bash(rm:*)"
 pnpm dev -- --dangerously-bypass
 
-# Feishu webhook channel
+# Channels
 pnpm dev -- channel list
 pnpm dev -- channel feishu start
+pnpm dev -- channel wechat login
+pnpm dev -- channel wechat start
 ```
 
 ### Permissions
@@ -234,9 +238,9 @@ export default {
 }
 ```
 
-### Feishu Channel
+### Channels
 
-The Feishu channel reads `~/.lightclaw/channels.json` and starts a webhook server. Source code contains no environment-specific credentials.
+Channels read `~/.lightclaw/channels.json`. Source code contains no environment-specific credentials.
 
 ```jsonc
 {
@@ -250,14 +254,27 @@ The Feishu channel reads `~/.lightclaw/channels.json` and starts a webhook serve
     "permissionMode": "default",
     "allowUsers": ["*"],
     "allowChats": ["*"],
+    "mediaEnabled": true,
+    "mediaDir": "~/.lightclaw/state/feishu/media",
     "webhook": {
       "host": "0.0.0.0",
       "port": 18850,
       "path": "/feishu/events"
     }
+  },
+  "wechat": {
+    "enabled": true,
+    "permissionMode": "default",
+    "allowSenders": ["*"],
+    "textChunkSize": 4000,
+    "longPollTimeoutMs": 35000,
+    "mediaEnabled": true,
+    "mediaDir": "~/.lightclaw/state/wechat/media"
   }
 }
 ```
+
+WeChat stores QR login credentials under `~/.lightclaw/state/wechat/accounts/default.json`, the long-poll cursor under `state/wechat/sync/`, context tokens under `state/wechat/context-tokens/`, and inbound media under `state/wechat/media/`.
 
 ### REPL commands
 

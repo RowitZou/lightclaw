@@ -3,18 +3,21 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { parsePermissionMode } from '../config.js'
-import type { ChannelsConfig, FeishuChannelConfig } from './types.js'
+import type { ChannelsConfig, FeishuChannelConfig, WechatChannelConfig } from './types.js'
 
 type ChannelsFileShape = {
   feishu?: Partial<FeishuChannelConfig> & {
     webhook?: Partial<FeishuChannelConfig['webhook']>
   }
+  wechat?: Partial<WechatChannelConfig>
 }
 
 export function loadChannelConfig(): ChannelsConfig {
   const fileConfig = loadChannelsFile()
+  const wechat = mergeWechatConfig(fileConfig.wechat)
   return {
     feishu: mergeFeishuConfig(fileConfig.feishu ?? {}),
+    ...(wechat ? { wechat } : {}),
   }
 }
 
@@ -50,12 +53,39 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     textChunkSize: input?.textChunkSize ?? 4000,
     httpTimeoutMs: input?.httpTimeoutMs ?? 30_000,
     maxBodyBytes: input?.maxBodyBytes ?? 1024 * 1024,
+    mediaEnabled: input?.mediaEnabled ?? true,
+    mediaDir: input?.mediaDir
+      ? path.resolve(expandHomePath(input.mediaDir))
+      : path.join(homedir(), '.lightclaw', 'state', 'feishu', 'media'),
     webhook: {
       host: webhook.host ?? '0.0.0.0',
       port: webhook.port ?? 18_850,
       path: webhook.path ?? '/feishu/events',
       ...(webhook.publicUrl ? { publicUrl: webhook.publicUrl } : {}),
     },
+  }
+}
+
+function mergeWechatConfig(input: ChannelsFileShape['wechat']): WechatChannelConfig | undefined {
+  if (!input) {
+    return undefined
+  }
+  const permissionMode =
+    parsePermissionMode(process.env.LIGHTCLAW_WECHAT_PERMISSION_MODE) ??
+    parsePermissionMode(input.permissionMode) ??
+    'default'
+
+  return {
+    enabled: input.enabled ?? true,
+    cwd: input.cwd ? path.resolve(expandHomePath(input.cwd)) : undefined,
+    permissionMode,
+    allowSenders: input.allowSenders ?? [],
+    textChunkSize: input.textChunkSize ?? 4000,
+    longPollTimeoutMs: input.longPollTimeoutMs ?? 35_000,
+    mediaEnabled: input.mediaEnabled ?? true,
+    mediaDir: input.mediaDir
+      ? path.resolve(expandHomePath(input.mediaDir))
+      : path.join(homedir(), '.lightclaw', 'state', 'wechat', 'media'),
   }
 }
 

@@ -114,7 +114,8 @@ export class ChannelRunner {
       }
 
       beginQuery()
-      const userMessage = createUserMessage(message.text, getLastUuid(messages))
+      const userText = formatChannelUserText(message)
+      const userMessage = createUserMessage(userText, getLastUuid(messages))
       messages.push(userMessage)
       await appendMessage(sessionId, userMessage)
       const messageCountBeforeQuery = messages.length
@@ -150,6 +151,19 @@ export class ChannelRunner {
       await this.strategy.sendReply(message, result.lastAssistantText || '(no response)')
     })
   }
+}
+
+function formatChannelUserText(message: NormalizedChannelMessage): string {
+  if (!message.mediaPath) {
+    return message.text
+  }
+  return [
+    message.text || '(no text)',
+    '',
+    '[媒体附件]',
+    `- type: ${message.mediaType ?? 'unknown'}`,
+    `- path: ${message.mediaPath}`,
+  ].join('\n')
 }
 
 async function persistMeta(createdAt: number, messageCount: number): Promise<void> {

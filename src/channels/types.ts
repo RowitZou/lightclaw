@@ -43,11 +43,13 @@ export type NormalizedChannelMessage = {
   messageId: string
   parentId?: string
   text: string
+  mediaPath?: string
+  mediaType?: string
 }
 
 export type ChannelsConfig = {
   feishu: FeishuChannelConfig
-  // future: wechat?: WeChatChannelConfig
+  wechat?: WechatChannelConfig
 }
 
 export type FeishuDomain = 'feishu' | 'lark' | string
@@ -68,10 +70,23 @@ export type FeishuChannelConfig = {
   textChunkSize: number
   httpTimeoutMs: number
   maxBodyBytes: number
+  mediaEnabled: boolean
+  mediaDir: string
   webhook: {
     host: string
     port: number
     path: string
     publicUrl?: string
   }
+}
+
+export type WechatChannelConfig = {
+  enabled: boolean
+  cwd?: string
+  permissionMode: PermissionMode
+  allowSenders: string[]
+  textChunkSize: number
+  longPollTimeoutMs: number
+  mediaEnabled: boolean
+  mediaDir: string
 }

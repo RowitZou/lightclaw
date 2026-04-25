@@ -3,26 +3,37 @@ export type FeishuMention = {
   name?: string
 }
 
+export type ParsedMediaKey = {
+  kind: 'image' | 'audio' | 'file' | 'media' | 'sticker'
+  key: string
+  fileName?: string
+  duration?: number
+}
+
+export type ParsedFeishuMessage = {
+  text: string
+  mediaKeys?: ParsedMediaKey[]
+}
+
 export function parseMessageContent(input: {
   content?: string
   messageType?: string
   mentions?: FeishuMention[]
-}): string {
+}): ParsedFeishuMessage {
   const content = input.content ?? ''
   const messageType = input.messageType ?? 'text'
-  let text = ''
 
   if (messageType === 'text') {
-    text = parseTextContent(content)
-  } else if (messageType === 'post') {
-    text = parsePostContent(content)
+    const text = stripMentions(parseTextContent(content), input.mentions ?? []).trim()
+    return { text }
   }
 
-  if (!text) {
-    return ''
+  if (messageType === 'post') {
+    const text = stripMentions(parsePostContent(content), input.mentions ?? []).trim()
+    return { text }
   }
 
-  return stripMentions(text, input.mentions ?? []).trim()
+  return parseMediaContent(content, messageType)
 }
 
 function parseTextContent(content: string): string {
@@ -49,6 +60,50 @@ function parsePostContent(content: string): string {
   }
 }
 
+function parseMediaContent(content: string, messageType: string): ParsedFeishuMessage {
+  const parsed = parseJsonObject(content)
+  if (!parsed) {
+    return { text: '' }
+  }
+
+  if (messageType === 'image') {
+    const key = stringValue(parsed.image_key)
+    return key ? { text: '', mediaKeys: [{ kind: 'image', key }] } : { text: '' }
+  }
+  if (messageType === 'audio') {
+    const key = stringValue(parsed.file_key)
+    return key
+      ? { text: '', mediaKeys: [{ kind: 'audio', key, duration: numberValue(parsed.duration) }] }
+      : { text: '' }
+  }
+  if (messageType === 'file') {
+    const key = stringValue(parsed.file_key)
+    return key
+      ? { text: '', mediaKeys: [{ kind: 'file', key, fileName: stringValue(parsed.file_name) }] }
+      : { text: '' }
+  }
+  if (messageType === 'media') {
+    const key = stringValue(parsed.file_key)
+    return key
+      ? {
+          text: '',
+          mediaKeys: [{
+            kind: 'media',
+            key,
+            fileName: stringValue(parsed.file_name),
+            duration: numberValue(parsed.duration),
+          }],
+        }
+      : { text: '' }
+  }
+  if (messageType === 'sticker') {
+    const key = stringValue(parsed.file_key)
+    return key ? { text: '', mediaKeys: [{ kind: 'sticker', key }] } : { text: '' }
+  }
+
+  return { text: '' }
+}
+
 function stripMentions(text: string, mentions: FeishuMention[]): string {
   let next = text
   for (const mention of mentions) {
@@ -57,4 +112,21 @@ function stripMentions(text: string, mentions: FeishuMention[]): string {
     }
   }
   return next
+}
+
+function parseJsonObject(content: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(content)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }

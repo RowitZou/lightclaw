@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 
 import { loadChannelConfig } from './channels/config.js'
+import { runWechatLoginCli } from './channels/wechat/auth/login-qr.js'
 import {
   getChannel,
   knownChannelIds,
@@ -39,6 +40,16 @@ export async function runChannelCli(argv: string[]): Promise<void> {
     return
   }
 
+  if (action === 'login') {
+    if (channelArg !== 'wechat') {
+      console.error(`channel ${channelArg} does not support login (use webhook config instead)`)
+      process.exitCode = 1
+      return
+    }
+    await runWechatLoginCli()
+    return
+  }
+
   if (action !== 'start') {
     printUsage()
     return
@@ -60,6 +71,7 @@ function printUsage(): void {
   console.log(`Usage:
   lightclaw channel list
   lightclaw channel <${ids}> start [--daemon]
+  lightclaw channel wechat login
 `)
 }
 

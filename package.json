@@ -6,6 +6,7 @@
   "bin": {
     "lightclaw": "dist/cli.js"
   },
+  "ilink_appid": "bot",
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsdown src/cli.ts --format esm --out-dir dist --clean",
@@ -24,12 +25,14 @@
     "fast-glob": "^3.3.3",
     "https-proxy-agent": "^9.0.0",
     "openai": "^6.34.0",
+    "qrcode-terminal": "^0.12.0",
     "turndown": "^7.2.4",
     "undici": "^8.1.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/qrcode-terminal": "^0.12.2",
     "@types/turndown": "^5.0.6",
     "tsdown": "^0.12.9",
     "tsx": "^4.20.6",

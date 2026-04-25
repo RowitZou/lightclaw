@@ -2,18 +2,29 @@ import crypto from 'node:crypto'
 import http from 'node:http'
 import { URL } from 'node:url'
 
-import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
-import { parseMessageContent } from './bot-content.js'
+import type { FeishuChannelConfig } from '../types.js'
+import { parseMessageContent, type ParsedMediaKey } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
 
 export type WebhookServer = {
   close(): Promise<void>
 }
 
+export type FeishuRawMessage = {
+  eventId: string
+  chatId: string
+  chatType?: string
+  senderOpenId: string
+  messageId: string
+  parentId?: string
+  text: string
+  mediaKeys?: ParsedMediaKey[]
+}
+
 export async function startFeishuWebhookServer(input: {
   config: FeishuChannelConfig
   dedup: FeishuDedup
-  onMessage(message: NormalizedChannelMessage): void | Promise<void>
+  onMessage(message: FeishuRawMessage): void | Promise<void>
 }): Promise<WebhookServer> {
   const server = http.createServer((req, res) => {
     void handleRequest(req, res, input)
@@ -38,7 +49,7 @@ async function handleRequest(
   input: {
     config: FeishuChannelConfig
     dedup: FeishuDedup
-    onMessage(message: NormalizedChannelMessage): void | Promise<void>
+    onMessage(message: FeishuRawMessage): void | Promise<void>
   },
 ): Promise<void> {
   if (req.method !== 'POST' || !matchesPath(req.url ?? '/', input.config.webhook.path)) {
@@ -182,7 +193,7 @@ function decryptLarkPayload(encrypted: string, encryptKey: string): string {
   ]).toString('utf8')
 }
 
-function normalizeEvent(body: Record<string, unknown>): NormalizedChannelMessage | null {
+function normalizeEvent(body: Record<string, unknown>): FeishuRawMessage | null {
   const headerValue = asRecord(body.header)
   if (headerValue?.event_type !== 'im.message.receive_v1') {
     return null
@@ -197,25 +208,31 @@ function normalizeEvent(body: Record<string, unknown>): NormalizedChannelMessage
   const chatId = stringValue(message?.chat_id)
   const senderOpenId = stringValue(senderId?.open_id)
   const messageType = stringValue(message?.message_type)
-  const text = parseMessageContent({
+  const parsed = parseMessageContent({
     content: stringValue(message?.content),
     messageType,
     mentions: Array.isArray(message?.mentions) ? message.mentions : [],
   })
 
-  if (!eventId || !messageId || !chatId || !senderOpenId || !text) {
+  if (
+    !eventId ||
+    !messageId ||
+    !chatId ||
+    !senderOpenId ||
+    (!parsed.text && !parsed.mediaKeys?.length)
+  ) {
     return null
   }
 
   return {
-    channel: 'feishu',
     eventId,
     chatId,
     senderOpenId,
     chatType: stringValue(message?.chat_type),
     messageId,
     parentId: stringValue(message?.parent_id) ?? stringValue(message?.root_id),
-    text,
+    text: parsed.text,
+    mediaKeys: parsed.mediaKeys,
   }
 }
 

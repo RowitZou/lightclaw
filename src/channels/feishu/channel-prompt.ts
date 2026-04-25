@@ -4,7 +4,7 @@ export function buildFeishuChannelPrompt(
   message: NormalizedChannelMessage,
 ): string {
   const chatType = message.chatType ?? 'unknown'
-  return [
+  const lines = [
     '## Channel: Feishu',
     '',
     'You are responding in a Feishu (Lark) conversation, not an interactive terminal.',
@@ -16,5 +16,11 @@ export function buildFeishuChannelPrompt(
     `- Chat type: ${chatType}`,
     `- Chat ID: ${message.chatId}`,
     `- Sender open_id: ${message.senderOpenId}`,
-  ].join('\n')
+  ]
+  if (message.mediaPath) {
+    lines.push(
+      `- Media received: type=${message.mediaType ?? 'unknown'} path=${message.mediaPath} (use Read or appropriate tools).`,
+    )
+  }
+  return lines.join('\n')
 }
