@@ -23,10 +23,17 @@ export function createFeishuClient(config: FeishuChannelConfig): FeishuClient {
 
 function createHttpInstance(config: FeishuChannelConfig): Lark.HttpInstance {
   const agent = config.proxy ? new HttpsProxyAgent(config.proxy) : undefined
-  return axios.create({
+  const instance = axios.create({
     timeout: config.httpTimeoutMs,
     ...(agent ? { httpAgent: agent, httpsAgent: agent, proxy: false } : {}),
-  }) as unknown as Lark.HttpInstance
+  })
+  // The Lark SDK destructures `{ code, data, msg }` directly from the request
+  // result, so the httpInstance must yield the unwrapped response body — not
+  // the standard axios envelope. Without this interceptor every API call
+  // (token fetch, message send, messageResource.get, ...) fails with
+  // "failed to obtain token" + downstream HTTP 400.
+  instance.interceptors.response.use(response => response.data)
+  return instance as unknown as Lark.HttpInstance
 }
 
 function resolveDomain(domain: string): Lark.Domain | string {

@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as Lark from '@larksuiteoapi/node-sdk'
 
@@ -75,12 +76,25 @@ export async function startFeishuWsClient(input: {
     },
   })
 
+  // WSClient uses two distinct network paths and both must honor the proxy:
+  //   - `httpInstance` runs the initial pullConnectConfig POST against
+  //     /callback/ws/endpoint. The default Lark axios doesn't honor
+  //     ambient http_proxy env vars, so behind a corporate gateway this
+  //     request is rejected at the edge with HTTP 400.
+  //   - `agent` is for the long-lived WebSocket upgrade itself.
+  // The SDK destructures `{ code, data, msg }` directly from the request
+  // result, so the httpInstance must respond with the unwrapped body — not
+  // the standard axios envelope. Lark.Client adds that interceptor for the
+  // REST client, but WSClient does not, so we register it here.
+  const proxyAgent = config.proxy ? new HttpsProxyAgent(config.proxy) : undefined
+  const wsHttpInstance = proxyAgent ? createWsHttpInstance(config, proxyAgent) : undefined
   const wsClient = new Lark.WSClient({
     appId: config.appId,
     appSecret: config.appSecret,
     domain: resolveDomain(config.domain),
     loggerLevel: Lark.LoggerLevel.warn,
-    ...(config.proxy ? { agent: new HttpsProxyAgent(config.proxy) } : {}),
+    ...(proxyAgent ? { agent: proxyAgent } : {}),
+    ...(wsHttpInstance ? { httpInstance: wsHttpInstance } : {}),
   })
 
   // wsClient.start() is intentionally not awaited: it resolves only when the
@@ -142,4 +156,18 @@ function resolveDomain(domain: string): Lark.Domain | string {
   if (domain === 'lark') return Lark.Domain.Lark
   if (domain === 'feishu') return Lark.Domain.Feishu
   return domain
+}
+
+function createWsHttpInstance(
+  config: FeishuChannelConfig,
+  proxyAgent: HttpsProxyAgent<string>,
+): Lark.HttpInstance {
+  const instance = axios.create({
+    timeout: config.httpTimeoutMs,
+    httpAgent: proxyAgent,
+    httpsAgent: proxyAgent,
+    proxy: false,
+  })
+  instance.interceptors.response.use(response => response.data)
+  return instance as unknown as Lark.HttpInstance
 }
