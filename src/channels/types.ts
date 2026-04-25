@@ -54,6 +54,8 @@ export type ChannelsConfig = {
 
 export type FeishuDomain = 'feishu' | 'lark' | string
 
+export type FeishuTransport = 'ws' | 'webhook'
+
 export type FeishuChannelConfig = {
   enabled: boolean
   appId?: string
@@ -63,6 +65,10 @@ export type FeishuChannelConfig = {
   domain: FeishuDomain
   proxy?: string
   cwd?: string
+  // 'ws' (default): outbound long-lived WebSocket via Lark.WSClient. No public
+  // ingress required, fits self-hosted / behind-NAT deployments. 'webhook':
+  // inbound HTTP server, needs a publicly reachable URL + webhook config.
+  transport: FeishuTransport
   permissionMode: PermissionMode
   sessionScope: 'chat' | 'chat_sender'
   allowUsers: string[]

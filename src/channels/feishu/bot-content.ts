@@ -15,6 +15,21 @@ export type ParsedFeishuMessage = {
   mediaKeys?: ParsedMediaKey[]
 }
 
+/**
+ * Transport-agnostic normalized inbound message. Both the webhook server and
+ * the WS client produce this shape so feishu-channel only sees one event type.
+ */
+export type FeishuRawMessage = {
+  eventId: string
+  chatId: string
+  chatType?: string
+  senderOpenId: string
+  messageId: string
+  parentId?: string
+  text: string
+  mediaKeys?: ParsedMediaKey[]
+}
+
 export function parseMessageContent(input: {
   content?: string
   messageType?: string

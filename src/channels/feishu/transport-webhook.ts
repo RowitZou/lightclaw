@@ -3,23 +3,14 @@ import http from 'node:http'
 import { URL } from 'node:url'
 
 import type { FeishuChannelConfig } from '../types.js'
-import { parseMessageContent, type ParsedMediaKey } from './bot-content.js'
+import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
 
 export type WebhookServer = {
   close(): Promise<void>
 }
 
-export type FeishuRawMessage = {
-  eventId: string
-  chatId: string
-  chatType?: string
-  senderOpenId: string
-  messageId: string
-  parentId?: string
-  text: string
-  mediaKeys?: ParsedMediaKey[]
-}
+export type { FeishuRawMessage }
 
 export async function startFeishuWebhookServer(input: {
   config: FeishuChannelConfig

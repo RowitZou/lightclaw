@@ -36,6 +36,10 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     parsePermissionMode(input?.permissionMode) ??
     'default'
   const webhook: Partial<FeishuChannelConfig['webhook']> = input?.webhook ?? {}
+  const transport =
+    parseTransport(process.env.LIGHTCLAW_FEISHU_TRANSPORT) ??
+    parseTransport(input?.transport) ??
+    'ws'
 
   return {
     enabled: input?.enabled ?? true,
@@ -46,6 +50,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     domain: input?.domain ?? 'feishu',
     proxy: process.env.FEISHU_PROXY ?? input?.proxy ?? process.env.https_proxy ?? process.env.http_proxy,
     cwd: input?.cwd ? path.resolve(expandHomePath(input.cwd)) : undefined,
+    transport,
     permissionMode,
     sessionScope: input?.sessionScope ?? 'chat',
     allowUsers: input?.allowUsers ?? [],
@@ -87,6 +92,13 @@ function mergeWechatConfig(input: ChannelsFileShape['wechat']): WechatChannelCon
       ? path.resolve(expandHomePath(input.mediaDir))
       : path.join(homedir(), '.lightclaw', 'state', 'wechat', 'media'),
   }
+}
+
+function parseTransport(value: unknown): 'ws' | 'webhook' | undefined {
+  if (value === 'ws' || value === 'webhook') {
+    return value
+  }
+  return undefined
 }
 
 function expandHomePath(input: string): string {
