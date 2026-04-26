@@ -2,13 +2,10 @@ import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 
 export function resolveFeishuSessionId(
   message: NormalizedChannelMessage,
-  config: FeishuChannelConfig,
+  _config: FeishuChannelConfig,
+  userId: string,
 ): string {
-  const chatPart = sanitizeId(message.chatId)
-  if (config.sessionScope === 'chat_sender') {
-    return `feishu-${chatPart}-${sanitizeId(message.senderOpenId)}`
-  }
-  return `feishu-${chatPart}`
+  return `feishu-${sanitizeId(userId)}`
 }
 
 export function isFeishuMessageAllowed(

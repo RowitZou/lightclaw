@@ -39,6 +39,8 @@ export type NormalizedChannelMessage = {
   eventId: string
   chatId: string
   senderOpenId: string
+  senderKey?: string
+  senderDisplayName?: string
   chatType?: string
   messageId: string
   parentId?: string

@@ -1,5 +1,8 @@
 import { agentTool } from './tools/agent.js'
 import { bashTool } from './tools/bash.js'
+import { conversationGrepTool } from './tools/conversation-grep.js'
+import { conversationListTool } from './tools/conversation-list.js'
+import { conversationReadTool } from './tools/conversation-read.js'
 import { fileEditTool } from './tools/file-edit.js'
 import { fileReadTool } from './tools/file-read.js'
 import { fileWriteTool } from './tools/file-write.js'
@@ -17,6 +20,9 @@ import type { Tool } from './tool.js'
 
 export const builtinTools = [
   bashTool,
+  conversationListTool,
+  conversationReadTool,
+  conversationGrepTool,
   fileReadTool,
   fileWriteTool,
   fileEditTool,

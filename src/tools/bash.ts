@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
 import { promisify } from 'node:util'
 
 import { z } from 'zod'
@@ -38,6 +39,12 @@ export const bashTool = buildTool({
     timeout: z.number().int().min(1).max(MAX_TIMEOUT_SECONDS).optional(),
   }),
   async call(input, context) {
+    if (touchesLightClawState(input.command)) {
+      return {
+        output: 'Permission denied: Bash command references ~/.lightclaw state.',
+        isError: true,
+      }
+    }
     const timeoutMs = Math.min(input.timeout ?? 30, MAX_TIMEOUT_SECONDS) * 1000
 
     try {
@@ -70,3 +77,12 @@ export const bashTool = buildTool({
     }
   },
 })
+
+function touchesLightClawState(command: string): boolean {
+  const homeState = `${homedir().replace(/\\/g, '/')}/.lightclaw`
+  const normalized = command.replace(/\\/g, '/')
+  return normalized.includes('~/.lightclaw') ||
+    normalized.includes('$HOME/.lightclaw') ||
+    normalized.includes('${HOME}/.lightclaw') ||
+    normalized.includes(homeState)
+}

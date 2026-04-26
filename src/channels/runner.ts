@@ -4,6 +4,9 @@ import { runHook } from '../hooks/index.js'
 import { initializeHooks } from '../hooks/index.js'
 import { initializeMcp } from '../mcp/index.js'
 import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
+import { generateOrReusePending } from '../identity/pairing.js'
+import { lookupBySender, rebuildReverseIndex } from '../identity/store.js'
+import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createUserMessage, getLastUuid } from '../messages.js'
 import type { PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
@@ -19,6 +22,7 @@ import { refreshSkillRegistry } from '../skill/registry.js'
 import {
   awaitBackgroundTasks,
   getCompactionCount,
+  getCurrentUserId,
   getCwd,
   getLastExtractedAt,
   getModel,
@@ -43,7 +47,7 @@ export type ChannelRunnerStrategy = {
   cwd: string
   permissionMode: PermissionMode
   isMessageAllowed(message: NormalizedChannelMessage): boolean
-  resolveSessionId(message: NormalizedChannelMessage): string
+  resolveSessionId(message: NormalizedChannelMessage, userId: string): string
   buildChannelPrompt(message: NormalizedChannelMessage): string
   sendReply(
     message: NormalizedChannelMessage,
@@ -89,7 +93,11 @@ export class ChannelRunner {
       return
     }
 
-    const sessionId = this.strategy.resolveSessionId(message)
+    const userId = await this.resolveMessageUser(message)
+    if (!userId) {
+      return
+    }
+    const sessionId = this.strategy.resolveSessionId(message, userId)
     await this.locks.runExclusive(sessionId, async () => {
       const meta = await loadMeta(sessionId)
       const messages = await loadTranscript(sessionId)
@@ -102,6 +110,7 @@ export class ChannelRunner {
         lastExtractedAt: meta?.lastExtractedAt,
         todos: meta?.todos,
         permissionMode: this.strategy.permissionMode,
+        currentUserId: userId,
       })
       await refreshSkillRegistry(getCwd())
       if (!meta) {
@@ -151,6 +160,53 @@ export class ChannelRunner {
       await this.strategy.sendReply(message, result.lastAssistantText || '(no response)')
     })
   }
+
+  private async resolveMessageUser(message: NormalizedChannelMessage): Promise<string | null> {
+    const channel = this.strategy.channelId
+    if (!isPairableChannel(channel)) {
+      return null
+    }
+
+    await rebuildReverseIndex()
+    const senderKey = (message.senderKey ?? `${channel}:${message.senderOpenId}`) as SenderKey
+    const approvedUser = lookupBySender(senderKey)
+    if (approvedUser) {
+      return approvedUser
+    }
+
+    try {
+      const result = await generateOrReusePending(
+        channel,
+        message.senderOpenId,
+        message.senderDisplayName ?? '',
+      )
+      const freshness = result.created ? 'created' : 'reused'
+      await this.strategy.sendReply(
+        message,
+        [
+          'Welcome to LightClaw bot.',
+          `To use this bot, ask the LightClaw operator to approve this pairing code: ${result.code}`,
+          `Operator command: lightclaw identity approve ${result.code} --as <name>`,
+          `(${freshness} pairing request; code expires in 1 hour)`,
+        ].join('\n'),
+      )
+    } catch (error) {
+      if (error instanceof Error && error.message === 'rate-limited') {
+        await this.strategy.sendReply(
+          message,
+          'Pairing request is rate limited. Ask the LightClaw operator to check `lightclaw identity pending`.',
+        )
+        return null
+      }
+      throw error
+    }
+
+    return null
+  }
+}
+
+function isPairableChannel(channel: string): channel is ChannelKind {
+  return channel === 'feishu' || channel === 'wechat'
 }
 
 function formatChannelUserText(message: NormalizedChannelMessage): string {
@@ -180,6 +236,7 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     lastExtractedAt: getLastExtractedAt(),
     todos: getTodos(),
     permissionMode: getPermissionMode(),
+    userId: existingMeta?.userId ?? getCurrentUserId(),
   }
   await saveMeta(sessionId, meta)
 }

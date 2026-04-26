@@ -13,8 +13,8 @@ export function isWechatMessageAllowed(
   return config.allowSenders.includes(message.senderOpenId)
 }
 
-export function resolveWechatSessionId(message: NormalizedChannelMessage): string {
-  return `wechat-${sanitize(message.senderOpenId)}`
+export function resolveWechatSessionId(_message: NormalizedChannelMessage, userId: string): string {
+  return `wechat-${sanitize(userId)}`
 }
 
 function sanitize(input: string): string {

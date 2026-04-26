@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { parseRule } from './rules.js'
+import { getBuiltinDenyRules } from './builtin-rules.js'
 import type { PermissionRule, PermissionRuleSource } from './types.js'
 
 type PermissionFileShape = {
@@ -76,5 +77,6 @@ export function loadFileRules(input: {
     ...loadFile(localPath, 'local'),
     ...loadFile(projectPath, 'project'),
     ...loadFile(userPath, 'user'),
+    ...getBuiltinDenyRules(),
   ]
 }

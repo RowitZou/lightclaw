@@ -24,6 +24,7 @@ export async function wechatMessageToInbound(input: {
     eventId: `wechat-${messageId}`,
     chatId: senderId,
     senderOpenId: senderId,
+    senderKey: `wechat:${senderId}`,
     chatType: 'p2p',
     messageId,
     text: bodyFromItemList(input.msg.item_list),

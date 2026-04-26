@@ -10,6 +10,7 @@ import path from 'node:path'
 import { resolveSessionsDir } from '../config.js'
 import {
   getCompactionCount,
+  getCurrentUserId,
   getCwd,
   getModel,
   getPermissionMode,
@@ -127,6 +128,7 @@ export async function touchMeta(
     lastExtractedAt: current?.lastExtractedAt,
     todos: current?.todos,
     permissionMode: getPermissionMode(),
+    userId: current?.userId ?? getCurrentUserId(),
   })
 }
 
@@ -148,6 +150,7 @@ export async function updateMetaLastExtractedAt(
     lastExtractedAt,
     todos: current?.todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
+    userId: current?.userId ?? getCurrentUserId(),
   })
 }
 
@@ -169,5 +172,6 @@ export async function updateMetaTodos(
     lastExtractedAt: current?.lastExtractedAt,
     todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
+    userId: current?.userId ?? getCurrentUserId(),
   })
 }

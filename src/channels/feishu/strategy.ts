@@ -15,7 +15,7 @@ export function createFeishuStrategy(
     cwd: config.cwd ?? process.cwd(),
     permissionMode: config.permissionMode,
     isMessageAllowed: message => isFeishuMessageAllowed(message, config),
-    resolveSessionId: message => resolveFeishuSessionId(message, config),
+    resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendText(message, text),

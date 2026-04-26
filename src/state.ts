@@ -9,6 +9,7 @@ type SessionState = {
   model: string
   sessionsDir: string
   memoryDir: string
+  currentUserId?: string
   resumedFrom: string | null
   compactionCount: number
   lastExtractedAt: number
@@ -30,6 +31,7 @@ export function initializeState(input: {
   model: string
   sessionsDir: string
   memoryDir: string
+  currentUserId?: string
   sessionId?: string
   resumedFrom?: string | null
   compactionCount?: number
@@ -45,6 +47,7 @@ export function initializeState(input: {
     model: input.model,
     sessionsDir: input.sessionsDir,
     memoryDir: input.memoryDir,
+    currentUserId: input.currentUserId,
     resumedFrom: input.resumedFrom ?? null,
     compactionCount: input.compactionCount ?? 0,
     lastExtractedAt: input.lastExtractedAt ?? 0,
@@ -94,6 +97,22 @@ export function getSessionsDir(): string {
 
 export function getMemoryDir(): string {
   return requireState().memoryDir
+}
+
+export function getCurrentUserId(): string | undefined {
+  return requireState().currentUserId
+}
+
+export function requireCurrentUserId(): string {
+  const userId = requireState().currentUserId
+  if (!userId) {
+    throw new Error('No LightClaw identity is active for this session.')
+  }
+  return userId
+}
+
+export function setCurrentUserId(userId: string | undefined): void {
+  requireState().currentUserId = userId
 }
 
 export function getResumedFrom(): string | null {

@@ -3,7 +3,9 @@ import chalk from 'chalk'
 import { initializeApp } from './init.js'
 import { parsePermissionMode } from './config.js'
 import { runChannelCli } from './cli-channel.js'
+import { runIdentityCli } from './cli-identity.js'
 import { initializeHooks } from './hooks/index.js'
+import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
 import { parseRule } from './permission/rules.js'
 import type { PermissionMode, PermissionRule } from './permission/types.js'
@@ -154,6 +156,7 @@ Usage:
   lightclaw --no-hooks
   lightclaw --permission-mode plan
   lightclaw --allow "Bash(git status:*)" --deny "Bash(rm:*)"
+  lightclaw identity list
   lightclaw channel list
   lightclaw channel feishu start
 
@@ -192,6 +195,10 @@ async function main(): Promise<void> {
     await runChannelCli(rawArgs.slice(1))
     return
   }
+  if (rawArgs[0] === 'identity') {
+    await runIdentityCli(rawArgs[1] ?? '', rawArgs.slice(2))
+    return
+  }
 
   const args = parseArgs(rawArgs)
   if (args.help) {
@@ -201,6 +208,9 @@ async function main(): Promise<void> {
   if (args.provider) {
     process.env.LIGHTCLAW_PROVIDER = args.provider
   }
+
+  await ensureAdminInitialized({ interactive: !args.prompt })
+  const currentUserId = await resolveTerminalUserId()
 
   let resumeSessionId: string | undefined
   let resumeMeta = null
@@ -226,6 +236,7 @@ async function main(): Promise<void> {
     lastExtractedAt: resumeMeta?.lastExtractedAt,
     todos: resumeMeta?.todos,
     permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
+    currentUserId: resumeMeta?.userId ?? currentUserId,
     mcpEnabled: !args.noMcp,
     hooksEnabled: !args.noHooks,
   })

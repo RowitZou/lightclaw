@@ -1,4 +1,6 @@
 import { URL } from 'node:url'
+import { homedir } from 'node:os'
+import path from 'node:path'
 
 export function matchString(pattern: string, value: string): boolean {
   if (pattern.endsWith(':*')) {
@@ -47,15 +49,45 @@ export function matchHostname(pattern: string, url: string): boolean {
 }
 
 export function matchPath(pattern: string, filePath: string): boolean {
-  if (pattern.endsWith('/*')) {
-    return filePath.startsWith(pattern.slice(0, -1))
+  const normalizedPattern = normalizePatternPath(pattern)
+  const normalizedPath = normalizeInputPath(filePath)
+
+  if (normalizedPattern.endsWith('/**')) {
+    const prefix = normalizedPattern.slice(0, -3)
+    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`)
   }
 
-  if (pattern.endsWith('*')) {
-    return filePath.startsWith(pattern.slice(0, -1))
+  if (normalizedPattern.endsWith('/*')) {
+    const prefix = normalizedPattern.slice(0, -2)
+    if (!normalizedPath.startsWith(`${prefix}/`)) {
+      return false
+    }
+    return !normalizedPath.slice(prefix.length + 1).includes('/')
   }
 
-  return pattern === filePath
+  if (normalizedPattern.endsWith('*')) {
+    return normalizedPath.startsWith(normalizedPattern.slice(0, -1))
+  }
+
+  return normalizedPattern === normalizedPath
+}
+
+function normalizePatternPath(input: string): string {
+  const expanded = input === '~'
+    ? homedir()
+    : input.startsWith('~/')
+      ? path.join(homedir(), input.slice(2))
+      : input
+  return expanded.replace(/\\/g, '/').replace(/\/+$/g, '')
+}
+
+function normalizeInputPath(input: string): string {
+  const expanded = input === '~'
+    ? homedir()
+    : input.startsWith('~/')
+      ? path.join(homedir(), input.slice(2))
+      : input
+  return path.resolve(expanded).replace(/\\/g, '/').replace(/\/+$/g, '')
 }
 
 export function matchToolContent(

@@ -8,7 +8,7 @@ function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 16).replace('T', ' ')
 }
 
-export async function listSessions(): Promise<SessionMeta[]> {
+export async function listSessions(userId?: string): Promise<SessionMeta[]> {
   try {
     const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
     const sessions = await Promise.all(
@@ -19,6 +19,7 @@ export async function listSessions(): Promise<SessionMeta[]> {
 
     return sessions
       .filter((session): session is SessionMeta => session !== null)
+      .filter(session => !userId || session.userId === userId)
       .sort((left, right) => right.lastActiveAt - left.lastActiveAt)
       .slice(0, 20)
   } catch (error) {

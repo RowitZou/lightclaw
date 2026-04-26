@@ -76,6 +76,7 @@ export type SessionMeta = {
   lastExtractedAt?: number
   todos?: TodoItem[]
   permissionMode?: import('./permission/types.js').PermissionMode
+  userId?: string
 }
 
 export type StreamTextEvent = {

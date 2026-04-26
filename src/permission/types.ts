@@ -14,6 +14,7 @@ export type PermissionRuleSource =
   | 'local'
   | 'project'
   | 'user'
+  | 'builtin'
 
 export type PermissionRuleValue = {
   toolName: string

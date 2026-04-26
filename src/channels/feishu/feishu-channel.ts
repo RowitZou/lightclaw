@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { fetchBestEffortDisplayName } from '../../identity/name-fetcher.js'
 import { ChannelRunner } from '../runner.js'
 import type { Channel, ChannelHandle, FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
@@ -57,6 +58,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           eventId: raw.eventId,
           chatId: raw.chatId,
           senderOpenId: raw.senderOpenId,
+          senderKey: `feishu:${raw.senderOpenId}`,
+          senderDisplayName: await fetchBestEffortDisplayName({
+            channel: 'feishu',
+            peerId: raw.senderOpenId,
+            client,
+          }),
           chatType: raw.chatType,
           messageId: raw.messageId,
           parentId: raw.parentId,

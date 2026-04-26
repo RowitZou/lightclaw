@@ -22,6 +22,7 @@ import {
   clearSessionRules,
   getAllPermissionRules,
   getCompactionCount,
+  getCurrentUserId,
   getCwd,
   getLastExtractedAt,
   getMemoryDir,
@@ -59,6 +60,24 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
 
   {
+    name: '/whoami',
+    usage: '/whoami',
+    description: 'Show active LightClaw identity',
+    async handler(_args, ctx) {
+      ctx.output.write(chalk.gray(`user: ${getCurrentUserId() ?? '(none)'}\n`))
+    },
+  },
+
+  {
+    name: '/identity',
+    usage: '/identity',
+    description: 'Hint for identity CLI management',
+    async handler(_args, ctx) {
+      ctx.output.write(chalk.gray('Use `lightclaw identity list|pending|approve|reject|link|unlink|remove` in a terminal.\n'))
+    },
+  },
+
+  {
     name: '/status',
     usage: '/status',
     description: 'Show session / cwd / model / permissions / MCP / hooks summary',
@@ -70,9 +89,9 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   {
     name: '/sessions',
     usage: '/sessions',
-    description: 'List saved sessions',
+    description: 'List saved sessions for the active LightClaw user',
     async handler(_args, ctx) {
-      const sessions = await listSessions()
+      const sessions = await listSessions(getCurrentUserId())
       ctx.output.write(chalk.gray(formatSessionList(sessions)))
     },
   },
@@ -249,6 +268,7 @@ function formatStatus(ctx: ReplContext): string {
     `provider: ${ctx.config.provider}`,
     `routing: ${formatRouting(ctx.config)}`,
     `permission mode: ${getPermissionMode()}`,
+    `user: ${getCurrentUserId() ?? '(none)'}`,
     `memory dir: ${getMemoryDir()}`,
     `messages: ${ctx.messages.length}`,
     `estimated tokens: ${estimateMessagesTokens(ctx.messages)}`,
@@ -337,7 +357,7 @@ function formatPermissions(): string {
     `Rules: ${getAllPermissionRules().length}`,
   ]
   const allRules = getAllPermissionRules()
-  const groups = ['cliArg', 'session', 'local', 'project', 'user'] as const
+  const groups = ['cliArg', 'session', 'local', 'project', 'user', 'builtin'] as const
 
   for (const source of groups) {
     const rules = allRules.filter(rule => rule.source === source)

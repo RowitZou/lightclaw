@@ -23,6 +23,7 @@ import { refreshSkillRegistry } from './skill/registry.js'
 import {
   awaitBackgroundTasks,
   getCompactionCount,
+  getCurrentUserId,
   getCwd,
   getLastExtractedAt,
   getModel,
@@ -188,6 +189,9 @@ export async function startRepl(params: ReplParams): Promise<void> {
   output.write(chalk.gray(`cwd: ${getCwd()}\n`))
   output.write(chalk.gray(`model: ${params.config.model}\n`))
   output.write(chalk.gray(`provider: ${params.config.provider}\n`))
+  if (getCurrentUserId()) {
+    output.write(chalk.gray(`user: ${getCurrentUserId()}\n`))
+  }
   if (params.resumeSessionId) {
     output.write(
       chalk.gray(
@@ -260,6 +264,7 @@ async function persistMeta(
     lastExtractedAt: getLastExtractedAt(),
     todos: getTodos(),
     permissionMode: getPermissionMode(),
+    userId: existingMeta?.userId ?? getCurrentUserId(),
   }
   await saveMeta(sessionId, meta)
 }

@@ -6,14 +6,15 @@ LightClaw is a self-hosted AI agent harness written from scratch in TypeScript, 
 
 ## Status
 
-Phases 1 – 8 Step 13 are complete. The current build ships as a ~200 KB single-file ESM bundle and exposes:
+Phases 1 – 9 implementation are complete except live channel pairing integration. The current build ships as a ~230 KB single-file ESM bundle and exposes:
 
 - **Terminal REPL** (readline + chalk) with streaming output and Ctrl+C interruption
 - **Agent loop** with up to 20 turns, tool-use ↔ tool-result routing, and auto-compact
-- **13 built-in tools**: `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, `MemoryRead`, `MemoryWrite`, `UseSkill`, `TodoWrite`, `WebFetch`, `WebSearch`, `AgentTool`
+- **16 built-in tools**: `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, `ConversationList`, `ConversationRead`, `ConversationGrep`, `MemoryRead`, `MemoryWrite`, `UseSkill`, `TodoWrite`, `WebFetch`, `WebSearch`, `AgentTool`
 - **Session persistence**: JSONL transcript + `meta.json`, `--resume` to restore the latest or a specific session
 - **Auto-compact**: LLM-driven summarization once local token estimate crosses a threshold, keeping the most recent N messages
-- **Memory system**: `LIGHTCLAW.md` / `LIGHTCLAW.local.md` discovery across multiple scopes, an auto-memory directory with frontmatter entries and a `MEMORY.md` index, plus background extraction at the end of each query
+- **Identity + pairing**: terminal first-run admin identity, `lightclaw identity ...` management commands, channel pairing codes, and canonical users shared across Feishu / WeChat
+- **Memory system**: `LIGHTCLAW.md` / `LIGHTCLAW.local.md` discovery across multiple scopes, user-scoped auto-memory directories with frontmatter entries and a `MEMORY.md` index, plus background extraction at the end of each query
 - **Skill system**: three-layer discovery (builtin / user / project), `UseSkill` tool and `/skill` command, two bundled skills (`verify`, `remember`)
 - **Sub-agents**: built-in `general-purpose` and `explore` agents via the `AgentTool`, with isolated message context and a filtered tool allowlist
 - **Provider abstraction**: Anthropic and OpenAI-compatible streaming, per-purpose model routing (`main` / `compact` / `extract` / `subagent` / `webSearch`)
@@ -22,10 +23,10 @@ Phases 1 – 8 Step 13 are complete. The current build ships as a ~200 KB single
 - **Permission system**: four modes (`default`, `acceptEdits`, `bypassPermissions`, `plan`), layered allow/deny rules, REPL approval prompts, and audit JSONL
 - **MCP client**: stdio / Streamable HTTP / SSE server connections, `mcp__<server>__<tool>` tool injection, `/mcp` status, `/mcp reload`, and `MCP(<server>:*)` permission rules
 - **Hooks**: `.mjs` lifecycle hooks from user/project directories, `/hooks`, `/hooks reload`, and `--no-hooks`
-- **Feishu channel**: webhook-only daemon (`lightclaw channel feishu start`) with text inbound/outbound, media receive, dedup, allowlists, session routing, proxy-aware SDK client, and non-interactive permissions
+- **Feishu channel**: WS-by-default daemon (`lightclaw channel feishu start`) with webhook fallback, text inbound/outbound, media receive, dedup, allowlists, pairing, canonical session routing, proxy-aware SDK client, and non-interactive permissions
 - **WeChat channel**: QR login (`lightclaw channel wechat login`) plus long-poll daemon (`lightclaw channel wechat start`) with text reply, inbound media download, context-token persistence, allowlists, and non-interactive permissions
 
-Deliberately **not** implemented yet: Phase 8 real Feishu / WeChat / dual-channel integration tests, React/Ink UI, MCP server mode, MCP resources/prompts/OAuth/sampling, IDE bridge channel, Feishu WebSocket/streaming cards/outbound media, WeChat outbound media/multi-account/typing indicator, `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, process sandboxing.
+Deliberately **not** implemented yet: Phase 9 live pairing tests on real Feishu / WeChat, React/Ink UI, MCP server mode, MCP resources/prompts/OAuth/sampling, IDE bridge channel, Feishu streaming cards/outbound media, WeChat outbound media/multi-account/typing indicator, `@include` directives, fork-agent memory extraction, micro-compact, `allowed_tools` enforcement, and a true process sandbox.
 
 ## Requirements
 
@@ -157,6 +158,12 @@ pnpm dev -- --permission-mode plan
 pnpm dev -- --allow "Bash(git status:*)" --deny "Bash(rm:*)"
 pnpm dev -- --dangerously-bypass
 
+# Identity management
+pnpm dev -- identity list
+pnpm dev -- identity pending
+pnpm dev -- identity approve K7YQ3RPA --as alice
+pnpm dev -- identity link alice feishu:ou_xxx
+
 # Channels
 pnpm dev -- channel list
 pnpm dev -- channel feishu start
@@ -189,7 +196,7 @@ Rule sources are checked as `cliArg` → `session` → `local` → `project` →
 Pattern semantics:
 - `Bash(cmd:*)` matches on a token boundary — `Bash(rm:*)` covers `rm` and `rm -rf foo` but does **not** match `rmdir`.
 - `WebFetch(example.com)` matches the exact hostname; `WebFetch(*.example.com)` matches any subdomain.
-- `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` use path prefix matching.
+- `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` match one path level; `/**` matches recursively. Built-in deny rules block `Read` / `Write` / `Edit` under `~/.lightclaw/**`, and `Bash` rejects commands that directly reference that state path.
 - `MCP(github:*)` allows all MCP tools from the `github` server; `MCP(github:list_issues)` allows only that tool; `MCP(github:list_*)` matches by tool-name prefix.
 - Per-input rule content is honored for `Bash`, `WebFetch`, `Read` / `Write` / `Edit`, and `AgentTool`; other tools only support whole-tool allow/deny.
 
@@ -276,6 +283,17 @@ Channels read `~/.lightclaw/channels.json`. Source code contains no environment-
 
 WeChat stores QR login credentials under `~/.lightclaw/state/wechat/accounts/default.json`, the long-poll cursor under `state/wechat/sync/`, context tokens under `state/wechat/context-tokens/`, and inbound media under `state/wechat/media/`.
 
+### Identity
+
+The first interactive `lightclaw` run creates a single terminal admin under `~/.lightclaw/identity/`. Unknown channel senders do not reach the LLM; they receive a pairing code, and the operator approves it from the terminal:
+
+```bash
+lightclaw identity pending
+lightclaw identity approve K7YQ3RPA --as alice
+```
+
+The same canonical user can be linked to multiple channels. Sessions stay per-channel (`feishu-alice`, `wechat-alice`), while memory and `ConversationList` / `ConversationRead` / `ConversationGrep` are scoped to the canonical user.
+
 ### REPL commands
 
 | Command | Description |
@@ -283,6 +301,8 @@ WeChat stores QR login credentials under `~/.lightclaw/state/wechat/accounts/def
 | `/exit` | Leave the REPL |
 | `/status` | Show session id, message count, token estimate, compaction count, provider, routing |
 | `/sessions` | List recent sessions |
+| `/whoami` | Show the active LightClaw identity |
+| `/identity` | Show identity CLI help hint |
 | `/compact` | Manually summarize the current session |
 | `/todos` | Show the current todo list |
 | `/memory` | Show project memory files and auto-memory index |
@@ -314,7 +334,8 @@ src/
 ├── token-estimate.ts   # local char-based token estimator
 ├── tool.ts             # Tool<I,O> interface, Zod → JSON Schema
 ├── tools.ts            # tool registry + capability gate
-├── tools/              # 13 built-in tools
+├── tools/              # built-in tools, including Conversation* history tools
+├── identity/           # canonical users, terminal admin, pairing, secure JSON state
 ├── permission/         # modes, rule parsing, matching, policy, prompts, audit
 ├── mcp/                # MCP config, transports, registry, tool adapter
 ├── provider/           # Anthropic / OpenAI-compatible providers + modelFor()
@@ -349,6 +370,7 @@ Key invariants:
 - **Auto-compact** is threshold-driven. After every assistant turn, `maybeAutoCompact()` compares the local token estimate against `contextWindow * compactThresholdRatio` and rewrites the transcript in place — no append — if triggered.
 - **Session storage is append-only JSONL + sibling `meta.json`.** Compaction is the only operation that rewrites the transcript.
 - **Tool dispatch is permission-gated.** Each tool declares `riskLevel`, `query.ts` checks mode + rules before `tool.call()`, and denied calls are returned to the model as tool errors.
+- **Identity scopes history and memory.** Channel sender IDs map to a canonical user through `identity/`; session meta carries `userId`, memory directories use the canonical user, and Conversation tools refuse sessions owned by another user.
 - **MCP is client-only.** Startup connects configured servers once, failed servers do not block the REPL, and `/mcp reload` performs a full reconnect.
 - **Sub-agents run synchronously** with an isolated message list, a filtered tool allowlist (no `AgentTool` / `TodoWrite` / `MemoryWrite` to protect the parent), non-interactive permission checks, and usage folded back into the parent session.
 

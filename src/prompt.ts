@@ -8,6 +8,7 @@ import { getMcpRegistrySnapshot } from './mcp/index.js'
 import { modelFor } from './provider/index.js'
 import {
   getAllPermissionRules,
+  getCurrentUserId,
   getMemoryDir,
   getPermissionMode,
 } from './state.js'
@@ -157,6 +158,7 @@ export async function buildSystemPromptTemplate(
     'You help users with coding tasks by reading, writing, and editing files, running shell commands, and searching codebases.',
     '',
     `Working directory: ${cwd}`,
+    `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
     `Provider: ${options.config.provider}`,
@@ -177,6 +179,7 @@ export async function buildSystemPromptTemplate(
     formatSkillsSection(),
     'To use a skill, call the UseSkill tool with the skill name.',
     'To save durable notes for later sessions, use the MemoryWrite tool.',
+    'Memory and Conversation tools are scoped to the current LightClaw user. Do not try to read another user\'s sessions or ~/.lightclaw state directly.',
   )
 
   const permissionSection = formatPermissionSection()

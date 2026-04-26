@@ -24,6 +24,7 @@ type CommonStateInput = {
   lastExtractedAt?: number
   todos?: TodoItem[]
   permissionMode?: PermissionMode
+  currentUserId?: string
 }
 
 type InitializeAppInput = CommonStateInput & {
@@ -89,7 +90,8 @@ function writeSessionState(
     cwd: resolvedCwd,
     model: resolvedConfig.model,
     sessionsDir: resolvedConfig.sessionsDir,
-    memoryDir: getMemoryDir(resolvedCwd, resolvedConfig),
+    memoryDir: getMemoryDir(input?.currentUserId ?? resolvedCwd, resolvedConfig),
+    currentUserId: input?.currentUserId,
     sessionId: input?.sessionId,
     resumedFrom: input?.resumedFrom,
     compactionCount: input?.compactionCount,
