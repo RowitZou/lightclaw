@@ -1,9 +1,10 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { resolveSessionsDir } from '../config.js'
+import { getConfig, resolveSessionsDir } from '../config.js'
+import { getMemoryDir } from '../memory/auto-memory.js'
 import { getSessionDir, loadMeta } from '../session/storage.js'
-import { adminPath, identitiesPath, identityRoot } from './paths.js'
+import { adminPath, identitiesPath } from './paths.js'
 import type {
   AdminFile,
   ChannelKind,
@@ -17,13 +18,30 @@ const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{1,31}$/
 let cachedReverseIndex: Map<SenderKey, string> | null = null
 
 export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
+  let raw: string
   try {
-    return JSON.parse(await readFile(filePath, 'utf8')) as T
+    raw = await readFile(filePath, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return fallback
     }
-    return fallback
+    // Permission / IO errors are NOT silent — falling back here would let
+    // a transient EACCES look like an empty user database, then the next
+    // write would clobber the real file with empty contents.
+    throw error
+  }
+
+  try {
+    return JSON.parse(raw) as T
+  } catch (parseError) {
+    // Bad JSON in identity / pending / rate-limits files is a real
+    // corruption: silently overwriting with fallback would destroy user
+    // bindings on the next save. Fail loudly so the admin can recover
+    // from .git / backup / manual edit.
+    throw new Error(
+      `${filePath}: JSON parse failed (${(parseError as Error).message}). ` +
+      'Refusing to silently overwrite a corrupt identity file.',
+    )
   }
 }
 
@@ -188,12 +206,13 @@ async function writeIdentities(identities: IdentitiesFile): Promise<void> {
 }
 
 async function purgeUserData(name: string): Promise<void> {
-  await rm(path.join(identityRoot(), '..', 'memory', name), {
-    recursive: true,
-    force: true,
-  })
+  // Compute the user's memory dir via the same helper the runtime uses, so
+  // we never drift from getMemoryDir's keying. (Pre-fix code hardcoded
+  // ~/.lightclaw/memory/<name> and silently no-op'd because the actual dir
+  // had a path-resolved cwd suffix in front.)
+  await rm(getMemoryDir(name, getConfig()), { recursive: true, force: true })
+
   try {
-    const { readdir } = await import('node:fs/promises')
     const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -213,7 +232,6 @@ async function purgeUserData(name: string): Promise<void> {
 
 async function chmodBestEffort(filePath: string, mode: number): Promise<void> {
   try {
-    const { chmod } = await import('node:fs/promises')
     await chmod(filePath, mode)
   } catch {
     // Some filesystems ignore chmod; JSON content is still written.

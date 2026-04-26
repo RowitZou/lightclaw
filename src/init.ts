@@ -90,7 +90,7 @@ function writeSessionState(
     cwd: resolvedCwd,
     model: resolvedConfig.model,
     sessionsDir: resolvedConfig.sessionsDir,
-    memoryDir: getMemoryDir(input?.currentUserId ?? resolvedCwd, resolvedConfig),
+    memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,
     sessionId: input?.sessionId,
     resumedFrom: input?.resumedFrom,

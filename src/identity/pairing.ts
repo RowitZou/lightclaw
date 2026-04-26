@@ -99,6 +99,31 @@ export async function rejectCode(code: string): Promise<{ ok: boolean }> {
   return { ok: true }
 }
 
+/**
+ * Best-effort: update an existing pending entry's displayName without
+ * resetting its TTL. Called from a fire-and-forget Promise in the channel
+ * runner after generateOrReusePending creates a new code, so the inbound
+ * message itself is not blocked by the platform name-lookup API call.
+ * Silently no-ops if the code has been approved / rejected / expired.
+ */
+export async function updatePendingDisplayName(
+  code: string,
+  displayName: string,
+): Promise<void> {
+  const normalized = code.trim().toUpperCase()
+  const trimmed = displayName.trim()
+  if (!trimmed) {
+    return
+  }
+  const pending = await readJson<PendingFile>(pendingPath(), {})
+  const entry = pending[normalized]
+  if (!entry || entry.displayName === trimmed) {
+    return
+  }
+  entry.displayName = trimmed
+  await writeJsonSecure(pendingPath(), pending)
+}
+
 async function cleanExpiredPending(): Promise<PendingFile> {
   const now = Date.now()
   const pending = await readJson<PendingFile>(pendingPath(), {})

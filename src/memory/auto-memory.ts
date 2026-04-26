@@ -48,9 +48,23 @@ export function sanitizePath(inputPath: string): string {
   return sanitized.length > 0 ? sanitized : 'root'
 }
 
-export function getMemoryDir(cwd: string, config: LightClawConfig): string {
-  const baseDir = config.memoryDir || path.join(homedir(), '.lightclaw', 'memory')
-  return path.join(baseDir, sanitizePath(cwd))
+export function memoryRoot(config: LightClawConfig): string {
+  return config.memoryDir || path.join(homedir(), '.lightclaw', 'memory')
+}
+
+// Memory is keyed by canonical LightClaw user (Phase 9). The previous
+// cwd-keyed scheme has been retired — see info/dev-plan-overview §1.1.
+// Pass undefined only on the very first init bootstrap, before the
+// REPL/channel runner has resolved the active identity; the bootstrap
+// dir is `_unbound_` and any MemoryRead/Write call hits requireCurrentUserId()
+// first, so it never actually reaches this fallback path.
+export function getMemoryDir(userId: string | undefined, config: LightClawConfig): string {
+  return path.join(memoryRoot(config), sanitizeUserId(userId))
+}
+
+function sanitizeUserId(userId: string | undefined): string {
+  const trimmed = (userId ?? '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
+  return trimmed || '_unbound_'
 }
 
 export async function ensureMemoryDir(memoryDir: string): Promise<void> {

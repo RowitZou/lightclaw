@@ -4,7 +4,7 @@ import { runHook } from '../hooks/index.js'
 import { initializeHooks } from '../hooks/index.js'
 import { initializeMcp } from '../mcp/index.js'
 import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
-import { generateOrReusePending } from '../identity/pairing.js'
+import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
 import { lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createUserMessage, getLastUuid } from '../messages.js'
@@ -53,6 +53,14 @@ export type ChannelRunnerStrategy = {
     message: NormalizedChannelMessage,
     text: string,
   ): Promise<void>
+  /**
+   * Best-effort lookup of a human-readable display name for a sender (for
+   * the `lightclaw identity pending` table). Channel-specific because the
+   * underlying API differs (lark contact.user.get vs no-op for wechat).
+   * Called only when a NEW pairing code is generated, not on every message;
+   * fired and forgotten so the inbound message itself is never blocked.
+   */
+  fetchSenderName?(peerId: string): Promise<string | undefined>
 }
 
 /**
@@ -89,12 +97,16 @@ export class ChannelRunner {
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
-    if (!this.strategy.isMessageAllowed(message)) {
-      return
-    }
-
+    // User lookup runs FIRST (and pairing falls out of unknown sender).
+    // The Phase 8 allowlist gate runs after — otherwise a tight allowlist
+    // (e.g. allowUsers=["ou_alice"]) would silently drop unknown senders
+    // BEFORE they could even receive a pairing code, making the whole
+    // pairing flow unreachable unless the allowlist is wide-open ["*"].
     const userId = await this.resolveMessageUser(message)
     if (!userId) {
+      return
+    }
+    if (!this.strategy.isMessageAllowed(message)) {
       return
     }
     const sessionId = this.strategy.resolveSessionId(message, userId)
@@ -175,11 +187,25 @@ export class ChannelRunner {
     }
 
     try {
-      const result = await generateOrReusePending(
-        channel,
-        message.senderOpenId,
-        message.senderDisplayName ?? '',
-      )
+      const result = await generateOrReusePending(channel, message.senderOpenId)
+      // Display name is fetched async via the strategy's optional fetcher and
+      // patched into pending.json after the fact, so the inbound message is
+      // never blocked by a platform user.get round-trip. Only fired for new
+      // pending entries — reused codes already have whatever name we managed
+      // to capture before.
+      if (result.created && this.strategy.fetchSenderName) {
+        void this.strategy.fetchSenderName(message.senderOpenId).then(
+          async name => {
+            if (name) {
+              await updatePendingDisplayName(result.code, name)
+            }
+          },
+          error => {
+            const text = error instanceof Error ? error.message : String(error)
+            process.stderr.write(`${this.strategy.channelId}: name fetch failed: ${text}\n`)
+          },
+        )
+      }
       const freshness = result.created ? 'created' : 'reused'
       await this.strategy.sendReply(
         message,

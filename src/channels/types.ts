@@ -40,7 +40,6 @@ export type NormalizedChannelMessage = {
   chatId: string
   senderOpenId: string
   senderKey?: string
-  senderDisplayName?: string
   chatType?: string
   messageId: string
   parentId?: string
@@ -72,7 +71,6 @@ export type FeishuChannelConfig = {
   // inbound HTTP server, needs a publicly reachable URL + webhook config.
   transport: FeishuTransport
   permissionMode: PermissionMode
-  sessionScope: 'chat' | 'chat_sender'
   allowUsers: string[]
   allowChats: string[]
   textChunkSize: number

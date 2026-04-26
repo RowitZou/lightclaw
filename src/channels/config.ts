@@ -52,7 +52,6 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     cwd: input?.cwd ? path.resolve(expandHomePath(input.cwd)) : undefined,
     transport,
     permissionMode,
-    sessionScope: input?.sessionScope ?? 'chat',
     allowUsers: input?.allowUsers ?? [],
     allowChats: input?.allowChats ?? [],
     textChunkSize: input?.textChunkSize ?? 4000,
