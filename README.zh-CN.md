@@ -2,38 +2,36 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个用 TypeScript 从头编写的自托管 AI Agent Harness，以 [Claude Code](https://github.com/anthropics/claude-code) 为架构蓝本。核心是一个轻量、终端原生的 REPL，背后连接流式工具调用的 agent loop、持久化 session、自动上下文压缩、Memory + Skill 系统、子 Agent、Web 工具、MCP 工具、生命周期 Hooks，以及飞书 / 微信渠道。
+LightClaw 是一个可以住在终端里、（可选地）也住在你聊天软件里的自托管 AI Agent。你给它一个任务——读代码、跑命令、总结对话、抓网页——它会一边调工具一边把过程流式打给你看。
 
-## 当前状态
+它是用 TypeScript 从头写的，以 [Claude Code](https://github.com/anthropics/claude-code) 为架构蓝本。整个运行时打包出来是一个 ~230 KB 的单文件 ESM bundle。
 
-Phase 1 – 9 代码实现已完成，除真实飞书 / 微信 pairing 联调外。构建产物为 ~230 KB 的单文件 ESM bundle。已具备：
+这份 README 用第一次接触 LightClaw 的视角带你走一遍。
 
-- **终端 REPL**（readline + chalk），支持流式输出与 Ctrl+C 中断
-- **Agent loop**：最多 20 轮、`tool_use` ↔ `tool_result` 调度、auto-compact
-- **16 个内置工具**：`Bash`、`Read`、`Write`、`Edit`、`Grep`、`Glob`、`ConversationList`、`ConversationRead`、`ConversationGrep`、`MemoryRead`、`MemoryWrite`、`UseSkill`、`TodoWrite`、`WebFetch`、`WebSearch`、`AgentTool`
-- **Session 持久化**：JSONL transcript + `meta.json`，`--resume` 恢复最近或指定 session
-- **Auto-Compact**：本地 token 估算越过阈值后由 LLM 生成摘要，保留最近 N 条消息，**原地重写**不追加
-- **Identity + pairing**：首次 terminal 启动创建 admin identity，提供 `lightclaw identity ...` 管理命令、channel pairing code，以及飞书 / 微信共享 canonical user
-- **Memory 系统**：多层 `LIGHTCLAW.md` / `LIGHTCLAW.local.md` 发现、按 user 隔离的 auto-memory 目录 + frontmatter 条目 + `MEMORY.md` 索引、每轮 query 结束后的后台提取
-- **Skill 系统**：builtin / user / project 三层发现、`UseSkill` 工具与 `/skill` 命令、内置 `verify` 与 `remember` 两个 Skill
-- **子 Agent**：内置 `general-purpose` 与 `explore`，经 `AgentTool` 调用，拥有隔离的消息上下文和工具白名单
-- **Provider 抽象**：Anthropic / OpenAI-compatible 两种流式实现，按用途做 model routing（`main` / `compact` / `extract` / `subagent` / `webSearch`）
-- **Web 工具**：代理感知的 `WebFetch`（undici + turndown），以及仅在直连官方 Anthropic 端点时启用的 `WebSearch`（native server tool）
-- **Todo List**：`TodoWrite` 工具 + `/todos` 命令 + session 级持久化
-- **权限系统**：四种 mode（`default`、`acceptEdits`、`bypassPermissions`、`plan`）、分层 allow/deny 规则、REPL 确认提示与 audit JSONL
-- **MCP Client**：支持 stdio / Streamable HTTP / SSE 连接，将远端工具注入为 `mcp__<server>__<tool>`，提供 `/mcp`、`/mcp reload` 与 `MCP(<server>:*)` 权限规则
-- **Hooks**：从 user/project 目录加载 `.mjs` 生命周期钩子，支持 `/hooks`、`/hooks reload` 与 `--no-hooks`
-- **飞书渠道**：默认 WS daemon（`lightclaw channel feishu start`）+ webhook fallback，支持文本收发、媒体接收、去重、allowlist、pairing、canonical session 路由、代理感知 SDK client 与非交互权限
-- **微信渠道**：扫码登录（`lightclaw channel wechat login`）+ long-poll daemon（`lightclaw channel wechat start`），支持文本回复、入站媒体下载、context-token 持久化、allowlist 与非交互权限
+---
 
-刻意**未**实现：Phase 9 真实飞书 / 微信 pairing 联调、React/Ink 全屏 UI、MCP Server 模式、MCP resources/prompts/OAuth/sampling、IDE Bridge 渠道、飞书 streaming card/出站媒体、微信出站媒体/多账号/typing indicator、`@include` 指令、fork-agent memory 提取、micro-compact、`allowed_tools` 强制执行、真正的进程沙箱。
+## 它能干什么
 
-## 环境要求
+- 一个**终端 REPL**，你输入问题，看着 agent 流式回答，每一次工具调用（读文件、跑命令、抓网页……）都打在屏幕上。
+- 一份**持久 memory**，跨 session、跨机器，只要你用同一个身份登录就一直跟着你——不用每次都重新介绍你的项目。
+- 一个**身份层**，让你在终端、飞书、微信里对 bot 永远是同一个人，不用反复自报家门。
+- **配对（pairing）式准入**：陌生人在聊天软件里找不到你的 bot，新成员需要管理员从终端批一次才能用。
+- **飞书 / 微信 bot**：同事可以在手机上和同一个 agent 聊天。
+- **可扩展点**：MCP server、生命周期 hooks、自定义 skill、项目级权限、项目级 memory 文件。
+
+刻意做得很小：v1 没有 React/Ink 全屏 UI、没有 IDE bridge、没有多账号扇出、没有"团队模式"。终端只有**一个 admin**。
+
+---
+
+## 5 分钟上手
+
+### 1. 前置条件
 
 - Node.js 22+
 - pnpm 10+
+- 一个 Anthropic 兼容（或 OpenAI 兼容）API key
 
-## 安装
+### 2. 安装
 
 ```bash
 pnpm install
@@ -42,20 +40,243 @@ pnpm build
 
 开发迭代直接用 `pnpm dev`（等价于 `tsx src/cli.ts`），无需构建。
 
-## 配置
+### 3. 告诉 LightClaw 用哪个模型
 
-配置优先级（从高到低）：
-
-1. 环境变量
-2. `~/.lightclaw/config.json`
-3. 内置默认值
-
-`~/.lightclaw/config.json` 示例：
+最小配置就是 `~/.lightclaw/config.json` 一个文件：
 
 ```jsonc
 {
   "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
+  "providerOptions": {
+    "anthropic": {
+      "apiKey": "sk-..."           // 把你的 key 贴这里
+    }
+  }
+}
+```
+
+如果你走第三方 Anthropic 兼容代理，加一条 `"baseUrl": "https://你的代理/"`（**不要**带 `/v1`，LightClaw 自己会拼）。默认模型是 `claude-sonnet-4-6`，可以用 `LIGHTCLAW_MODEL=...` 或在配置里覆盖。
+
+### 4. 第一次启动 — 创建 admin 身份
+
+```bash
+node dist/cli.js
+# 或：pnpm start
+```
+
+由于是首次启动，LightClaw 会进入一道交互提问：
+
+```
+LightClaw is not initialized. Setting up first admin.
+
+Admin canonical name (default: 你的OS用户名):
+```
+
+回车接受 OS 用户名，或者输入个名字比如 `alice`。LightClaw 在 `~/.lightclaw/identity/` 下落几个文件，然后 banner 显示 `admin: alice` 进 REPL。从此以后 `lightclaw` 直接进 REPL，不再问。
+
+### 5. 打个招呼
+
+```
+you> 你好，你是谁？
+assistant> 我是 LightClaw，一个交互式 AI agent ……
+```
+
+退出：`/exit` 或 Ctrl-D。
+
+入门到此结束。剩下的都是进了 REPL 之后的玩法。
+
+---
+
+## 在终端里跟 LightClaw 对话
+
+REPL 里凡是不以 `/` 开头的内容都是发给模型的 prompt。模型可以调工具（Read、Write、Bash……），调用过程会流式打出来：
+
+```
+you> 这个项目是什么？
+[tool] Glob {"pattern":"**/*"}
+[tool-result] Glob
+[tool] Read {"file_path":"package.json"}
+[tool-result] Read
+assistant> 这是一个叫 lightclaw 的 TypeScript 项目……
+```
+
+工具如果要做有破坏性的事（写文件、跑 Bash、抓 URL），LightClaw 会停下来问你——见下面 [权限](#权限) 章节。
+
+### Slash 命令
+
+凡是 `/` 开头的输入都是 REPL 命令（本地处理，不发给模型）：
+
+#### 身份与会话
+
+| 命令 | 作用 |
+|---|---|
+| `/whoami` | 显示当前 LightClaw 用户（如 `user: alice`）。 |
+| `/identity` | 提示用 `lightclaw identity ...` 管理身份（详见 [身份与配对](#身份与配对)）。 |
+| `/sessions` | 列出当前用户的历史会话，最近的在前。 |
+| `/status` | 一行显示 session id、cwd、model、provider、permission mode、MCP/hook 数量。 |
+
+#### memory 与历史
+
+| 命令 | 作用 |
+|---|---|
+| `/memory` | 列出当前用户的长期 memory 文件。每轮对话结束自动后台抽取，加上 `MemoryWrite` 显式写入的。 |
+| `/compact` | 手动压缩当前 session（LLM 总结）。准备开长任务前先压一压能省上下文窗口。 |
+| `/todos` | 显示进行中的 todo 列表（agent 自己的便签——做多步任务时它会写）。 |
+
+#### Skill
+
+| 命令 | 作用 |
+|---|---|
+| `/skills` | 列出 agent 可用的所有 skill（内置 + `~/.lightclaw/skills/` + `<project>/.lightclaw/skills/`）。 |
+| `/skill <name> [args]` | 把 skill 当作 prompt 模板来跑。内置两个：`verify`（用工具调用验证近期断言）和 `remember`（保存到 memory）。 |
+
+#### 权限（详见 [权限](#权限)）
+
+| 命令 | 作用 |
+|---|---|
+| `/permissions` | 显示当前 mode 与所有按 source 分组的 allow/deny 规则。 |
+| `/permissions clear` | 清掉本 session 加的规则（`/allow`、`/deny` 那些）。 |
+| `/mode <mode>` | 切换 permission mode：`default` / `acceptEdits` / `bypassPermissions` / `plan`。 |
+| `/allow <rule>` | 添加 session 级 allow 规则，如 `/allow Bash(git status:*)`。 |
+| `/deny <rule>` | 添加 session 级 deny 规则，如 `/deny Bash(rm:*)`。 |
+
+#### 工具与集成
+
+| 命令 | 作用 |
+|---|---|
+| `/mcp` | 显示 MCP server 状态（connected / failed / disabled）和工具数。 |
+| `/mcp reload` | 重连所有 MCP server。 |
+| `/hooks` | 列出已加载的生命周期 hook。 |
+| `/hooks reload` | 重新扫描并加载 hook 脚本。 |
+
+#### 退出
+
+| 命令 | 作用 |
+|---|---|
+| `/exit` | 关闭 REPL（也支持 Ctrl-D）。 |
+
+---
+
+## Agent 能做什么
+
+开箱有 **16 个工具**。你不直接调它们——模型在干活时自己挑。简要分类：
+
+| 类别 | 工具 | 用途 |
+|---|---|---|
+| 文件系统 | `Read`、`Write`、`Edit`、`Glob`、`Grep` | 读写文件、按 glob/正则搜代码。 |
+| Shell | `Bash` | 跑 shell 命令（受权限系统拦）。 |
+| Web | `WebFetch`、`WebSearch` | 抓 URL 转 Markdown，做网络搜索（仅 Anthropic 直连可用）。 |
+| Memory | `MemoryRead`、`MemoryWrite` | 当前用户的持久 memory，跨 session 保留。 |
+| 历史会话 | `ConversationList`、`ConversationRead`、`ConversationGrep` | 浏览/读/搜你自己的历史 session。 |
+| 任务跟踪 | `TodoWrite` | 在对话内维护结构化 todo。 |
+| 子 Agent | `AgentTool` | 起隔离的子 agent（`general-purpose` 或 `explore`）做专项任务。 |
+| Skill | `UseSkill` | 把 skill 当 prompt 模板执行。 |
+
+---
+
+## 身份与配对
+
+终端用户是 **admin**。从聊天软件来的人是**普通 user**，要管理员先批一次才能用 bot。
+
+admin 用 `lightclaw identity` 子命令管理所有人：
+
+```bash
+lightclaw identity list                          # 列已注册用户 + 各自的 channel 绑定
+lightclaw identity pending                       # 列待批的 pairing 请求
+lightclaw identity approve K7YQ3RPA --as alice   # 批准并绑到 canonical user "alice"
+lightclaw identity approve M8XN2RPB --as alice   # 把第二个 channel 绑到同一个 alice
+lightclaw identity reject K7YQ3RPA               # 拒绝 / 丢弃一个 pending 请求
+lightclaw identity link alice feishu:ou_xxx      # admin 直接 link，跳过 pairing
+lightclaw identity unlink wechat:o9_yyy          # 解某条绑定
+lightclaw identity remove bob                    # 删用户（默认保留 sessions/memory；--purge 物理清）
+```
+
+一个 canonical user（alice）可以绑**多个** channel 身份（飞书 open_id、微信 user_id、终端 OS 用户）。所有这些绑定共享同一份 `~/.lightclaw/memory/alice/`、同一份对话历史（通过 `Conversation*` 工具）、对 alice 偏好的同一份长期记忆。**Session 仍按 channel 分**（`feishu-alice`、`wechat-alice`），免得上下文跨渠道串味。
+
+---
+
+## 接入飞书 / 微信
+
+可选。如果你只用终端，跳过这一节。
+
+### 一次性配置
+
+1. 把凭据放进 `~/.lightclaw/channels.json`（建议 mode 600）。见 [Channels 配置](#channels-配置)。
+2. 启动渠道 daemon：
+
+   ```bash
+   lightclaw channel feishu start    # 默认 WS 长连接，无需公网入口
+   lightclaw channel wechat login    # 扫码登录 bot 账号
+   lightclaw channel wechat start    # long-poll daemon
+   ```
+3. 在聊天 app 里向 bot 发消息。陌生 sender 会收到一条 pairing code：
+
+   ```
+   Welcome to LightClaw bot.
+   To use this bot, ask the LightClaw operator to approve this pairing code: K7YQ3RPA
+   Operator command: lightclaw identity approve K7YQ3RPA --as <name>
+   ```
+4. 终端里 admin 跑 `lightclaw identity pending` 看所有待批，再 `lightclaw identity approve K7YQ3RPA --as alice`。每个 channel 只配对一次。
+
+### 在聊天里能做什么
+
+- 文本进、文本出。
+- 入站媒体（图片、文件、语音→转文字）—— 落到本地，agent 拿到路径用 `Read` 工具看。
+- 跟终端一样的 memory 和 conversation 工具，按 canonical user 自动隔离。
+
+### 还做不了什么
+
+- 出站媒体、streaming card、多账号、聊天里的 `/slash` 命令、主动推送、IDE bridge。
+
+---
+
+## 权限
+
+LightClaw 的工具按**风险**分级：读 / 搜索类是 `safe`，写文件是 `write`，shell + web + 子 agent 是 `execute`。当前 **mode** 决定模型试图调非 `safe` 工具时会发生什么：
+
+| Mode | 行为 |
+|---|---|
+| `default` | `safe` 自动放行；`write`/`execute` 在 REPL 里弹确认，非交互场景默认 deny。 |
+| `acceptEdits` | `safe` + `write`/`edit` 自动放行；`execute` 仍要确认。 |
+| `bypassPermissions` | 全部放行（除非显式 deny）。 |
+| `plan` | 只读模式：`write` 和 `execute` 默认 deny，除非显式 allow。 |
+
+REPL 内 `/mode <mode>` 切换。持久规则按以下来源（**优先级从高到低**）：
+
+- **CLI 参数**（最高）：`--allow "Bash(git status:*)"`、`--deny "Bash(rm:*)"`、`--permission-mode plan`、`--dangerously-bypass`。
+- **Session 级**（REPL 内）：`/allow ...`、`/deny ...`，**不持久化**。
+- **Local 文件**（`<cwd>/.lightclaw/permissions.local.json`）：不入 git。
+- **Project 文件**（`<cwd>/.lightclaw/permissions.json`）：入 git。
+- **User 文件**（`~/.lightclaw/permissions.json`）：你机器上全局默认。
+
+规则格式：
+
+```json
+{
+  "allow": ["Read", "Bash(git status:*)", "WebFetch(github.com)"],
+  "deny":  ["Bash(rm:*)", "Bash(sudo:*)"]
+}
+```
+
+模式语义：
+
+- `Bash(rm:*)` 匹配 `rm` 与 `rm -rf foo`，**不**匹配 `rmdir`。
+- `WebFetch(example.com)` 精确匹配该 hostname；`WebFetch(*.example.com)` 匹配任意子域。
+- `Read(/etc/*)` 单层匹配；`Read(/etc/**)` 递归匹配。
+- `MCP(github:list_*)` 按 MCP 工具名前缀匹配。
+
+内置 deny 规则**禁止 Read/Write/Edit 访问 `~/.lightclaw/**`**（identity / memory / sessions / pairing 数据所在），同时 `Bash` 对明文引用该路径的命令做拦截。这是一个软沙箱——见 [安全说明](#安全说明已知边界)。
+
+---
+
+## 配置
+
+### `~/.lightclaw/config.json` 全字段示例
+
+```jsonc
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
   "providerOptions": {
     "anthropic": {
       "apiKey": "sk-...",
@@ -67,201 +288,77 @@ pnpm build
     }
   },
   "routing": {
-    "main": "claude-sonnet-4-20250514",
-    "compact": "claude-haiku-4-20250514",
-    "extract": "claude-haiku-4-20250514",
-    "subagent": "claude-sonnet-4-20250514",
-    "webSearch": "claude-sonnet-4-20250514"
+    "main":      "claude-sonnet-4-6",
+    "compact":   "claude-haiku-4-5-20251001",
+    "extract":   "claude-haiku-4-5-20251001",
+    "subagent":  "claude-sonnet-4-6",
+    "webSearch": "claude-sonnet-4-6"
   },
   "sessionsDir": "~/.lightclaw/sessions",
-  "memoryDir": "~/.lightclaw/memory",
+  "memoryDir":   "~/.lightclaw/memory",
   "autoCompact": true,
-  "autoMemory": true,
+  "autoMemory":  true,
   "contextWindow": 200000,
   "compactThresholdRatio": 0.75,
-  "compactKeepRecent": 6,
+  "compactKeepRecent":     6,
   "permissionMode": "default",
   "permissionRuleFiles": {
-    "user": "~/.lightclaw/permissions.json",
+    "user":    "~/.lightclaw/permissions.json",
     "project": ".lightclaw/permissions.json",
-    "local": ".lightclaw/permissions.local.json"
+    "local":   ".lightclaw/permissions.local.json"
   },
   "permissionAuditLog": "~/.lightclaw/permissions.audit.jsonl",
   "mcpEnabled": true,
-  "mcpConnectTimeout": 10000,
-  "mcpConnectConcurrency": 4,
-  "mcpMaxToolOutputBytes": 20480,
+  "mcpConnectTimeout":      10000,
+  "mcpConnectConcurrency":  4,
+  "mcpMaxToolOutputBytes":  20480,
   "hooksEnabled": true,
-  "hookTimeoutBlocking": 5000,
+  "hookTimeoutBlocking":     5000,
   "hookTimeoutNonBlocking": 10000
 }
 ```
 
-支持的环境变量：
+解析顺序：**环境变量 → `~/.lightclaw/config.json` → 内置默认**。文件可以为空，全靠环境变量也行。
 
-| 变量 | 用途 |
+### 常用环境变量
+
+| 变量 | 作用 |
 |---|---|
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic Provider 凭据 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI-compatible Provider 凭据 |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic 凭据 |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI 兼容凭据 |
 | `LIGHTCLAW_PROVIDER` | `anthropic` 或 `openai` |
-| `LIGHTCLAW_MODEL` | 主模型名 |
-| `LIGHTCLAW_ROUTING_MAIN` / `_COMPACT` / `_EXTRACT` / `_SUBAGENT` / `_WEBSEARCH` | 按用途覆盖模型 |
-| `LIGHTCLAW_SESSIONS_DIR` | 自定义 session 目录 |
-| `LIGHTCLAW_MEMORY_DIR` | 自定义 memory 目录 |
-| `LIGHTCLAW_AUTO_COMPACT` / `LIGHTCLAW_AUTO_MEMORY` | 功能开关（`true` / `false`） |
-| `LIGHTCLAW_CONTEXT_WINDOW` | 模型上下文窗口（用于 compact 阈值计算） |
-| `LIGHTCLAW_COMPACT_THRESHOLD_RATIO` | 估算用量越过该比例后触发 compact（0.1 – 0.95） |
+| `LIGHTCLAW_MODEL` | 主模型覆盖 |
+| `LIGHTCLAW_ROUTING_{MAIN,COMPACT,EXTRACT,SUBAGENT,WEBSEARCH}` | 按用途分别覆盖模型 |
+| `LIGHTCLAW_AUTO_COMPACT` / `LIGHTCLAW_AUTO_MEMORY` | 功能开关（`true`/`false`）|
+| `LIGHTCLAW_CONTEXT_WINDOW` | 用于 compact 阈值计算的 token 预算 |
+| `LIGHTCLAW_COMPACT_THRESHOLD_RATIO` | 估算 token 越过此比例触发 compact（0.1–0.95） |
 | `LIGHTCLAW_COMPACT_KEEP_RECENT` | compact 时保留的最近消息数 |
-| `LIGHTCLAW_PERMISSION_MODE` | `default`、`acceptEdits`、`bypassPermissions` 或 `plan` |
-| `LIGHTCLAW_PERMISSION_AUDIT_LOG` | 可选的权限决策 JSONL 路径 |
-| `LIGHTCLAW_MCP_ENABLED` | 是否启用 MCP 启动（`true` / `false`） |
-| `LIGHTCLAW_MCP_CONNECT_TIMEOUT` | 单个 MCP server 连接超时（毫秒） |
-| `LIGHTCLAW_MCP_CONNECT_CONCURRENCY` | MCP 并发连接数 |
-| `LIGHTCLAW_MCP_MAX_TOOL_OUTPUT_BYTES` | MCP tool result 截断阈值 |
-| `LIGHTCLAW_HOOKS_ENABLED` | 是否加载 Hooks（`true` / `false`） |
-| `LIGHTCLAW_HOOK_TIMEOUT_BLOCKING` | 阻塞型 hook 超时（毫秒） |
-| `LIGHTCLAW_HOOK_TIMEOUT_NON_BLOCKING` | 非阻塞型 hook 超时（毫秒） |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书渠道凭据 |
-| `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | 飞书 webhook 校验配置 |
-| `FEISHU_PROXY` | 飞书 SDK HTTP 代理 URL |
-| `LIGHTCLAW_WECHAT_PERMISSION_MODE` | 微信渠道 permission mode 覆盖 |
+| `LIGHTCLAW_PERMISSION_MODE` | `default` / `acceptEdits` / `bypassPermissions` / `plan` |
+| `LIGHTCLAW_PERMISSION_AUDIT_LOG` | 权限决策 JSONL 路径（可选） |
+| `LIGHTCLAW_MCP_ENABLED` / `LIGHTCLAW_HOOKS_ENABLED` | 启停开关 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` / `FEISHU_PROXY` | 飞书渠道覆盖 |
+| `LIGHTCLAW_WECHAT_PERMISSION_MODE` | 微信渠道权限 mode 覆盖 |
 
-## 使用
+### Channels 配置
 
-```bash
-# 交互式 REPL
-pnpm dev
-pnpm start
-
-# 单轮 prompt
-pnpm dev -- --prompt "总结一下这个仓库"
-
-# 恢复最近 / 指定 session
-pnpm dev -- --resume
-pnpm dev -- --resume <session-id>
-
-# 覆盖模型或 Provider
-pnpm dev -- --model claude-sonnet-4-20250514
-pnpm dev -- --provider openai
-
-# 关闭 auto-memory 提取与 memory 索引注入
-pnpm dev -- --no-memory
-
-# 关闭 MCP 启动与 MCP 工具注入
-pnpm dev -- --no-mcp
-
-# 关闭 Hooks 加载
-pnpm dev -- --no-hooks
-
-# 权限 mode 与 CLI 规则
-pnpm dev -- --permission-mode plan
-pnpm dev -- --allow "Bash(git status:*)" --deny "Bash(rm:*)"
-pnpm dev -- --dangerously-bypass
-
-# Identity 管理
-pnpm dev -- identity list
-pnpm dev -- identity pending
-pnpm dev -- identity approve K7YQ3RPA --as alice
-pnpm dev -- identity link alice feishu:ou_xxx
-
-# 渠道
-pnpm dev -- channel list
-pnpm dev -- channel feishu start
-pnpm dev -- channel wechat login
-pnpm dev -- channel wechat start
-```
-
-### 权限系统
-
-| Mode | 行为 |
-|---|---|
-| `default` | 读/搜索工具直接执行；写入与执行类工具在 REPL 询问，非交互模式自动拒绝 |
-| `acceptEdits` | 读/搜索/写入/编辑直接执行；执行、网络抓取、子 Agent 仍需确认 |
-| `bypassPermissions` | 除非命中显式 deny rule，否则所有工具直接执行 |
-| `plan` | 只允许读/搜索；写入与执行类工具拒绝，除非命中显式 allow rule |
-
-规则文件格式：
-
-```json
-{
-  "allow": ["Read", "Bash(git status:*)", "WebFetch(github.com)"],
-  "deny": ["Bash(rm:*)", "Bash(sudo:*)"]
-}
-```
-
-规则来源按 `cliArg` → `session` → `local` → `project` → `user` 合并；任意来源的 deny 都优先于 allow。`/allow` 与 `/deny` 添加的是 session 规则，不持久化；当前 permission mode 会写入 session `meta.json` 并在 `--resume` 时恢复。
-
-模式匹配语义：
-- `Bash(cmd:*)` 按 token 边界匹配 —— `Bash(rm:*)` 命中 `rm` 与 `rm -rf foo`，**不**命中 `rmdir`。
-- `WebFetch(example.com)` 精确匹配 hostname；`WebFetch(*.example.com)` 匹配任意子域。
-- `Read(/etc/*)` / `Write(/etc/*)` / `Edit(/etc/*)` 匹配单层路径；`/**` 递归匹配。内置 deny rule 会阻止 `Read` / `Write` / `Edit` 访问 `~/.lightclaw/**`，`Bash` 也会拒绝直接引用该 state 路径的命令。
-- `MCP(github:*)` 放行 `github` server 的所有 MCP 工具；`MCP(github:list_issues)` 只放行指定工具；`MCP(github:list_*)` 按工具名前缀匹配。
-- 带 content 的规则目前只对 `Bash`、`WebFetch`、`Read` / `Write` / `Edit`、`AgentTool` 生效；其他工具只支持整工具级 allow/deny。
-
-### MCP
-
-LightClaw 从以下路径读取 MCP server 配置：
-
-1. `~/.lightclaw/mcp.json`
-2. `<cwd>/.lightclaw/mcp.json`
-3. `<cwd>/.lightclaw/mcp.local.json`
-
-后面的配置按 server 名覆盖前面的配置。格式兼容常见的 `{ "mcpServers": ... }`：
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    },
-    "docs": {
-      "type": "http",
-      "url": "http://127.0.0.1:3000/mcp",
-      "headers": {
-        "Authorization": "Bearer ${DOCS_MCP_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-支持 `stdio`、`http`（Streamable HTTP）和 `sse` 三种 transport。`env` 与 `headers` 的值支持 `${VAR}` 环境变量展开。远端工具会暴露为 `mcp__<normalized-server>__<tool>`，默认风险等级为 `write`，所以 `default` mode 下首次调用会询问，除非命中 allow rule。
-
-### Hooks
-
-LightClaw 从 `~/.lightclaw/hooks/` 和 `<cwd>/.lightclaw/hooks/` 加载 `.mjs` 文件。每个文件默认导出一个对象，可包含 `onSessionStart`、`beforeQuery`、`beforeToolCall`、`afterToolCall`、`afterQuery`、`onSessionEnd`。
-
-```js
-export default {
-  beforeToolCall({ toolName, input }) {
-    if (toolName === 'Bash' && input?.command?.includes('rm -rf /')) {
-      return { decision: 'deny', reason: 'blocked by project hook' }
-    }
-  },
-}
-```
-
-### 渠道
-
-渠道读取 `~/.lightclaw/channels.json`。源码树不包含当前环境凭据。
+`~/.lightclaw/channels.json`（敏感值不入源码）：
 
 ```jsonc
 {
   "feishu": {
     "enabled": true,
-    "appId": "<app_id>",
+    "appId":    "<app_id>",
     "appSecret": "<app_secret>",
     "encryptKey": "<encrypt_key>",
     "verificationToken": "<verification_token>",
-    "proxy": "http://127.0.0.1:1080",
+    "transport": "ws",                    // 'ws'（默认，无需公网）或 'webhook'
+    "proxy": "http://127.0.0.1:1080",     // 可选；不填则 fallback https_proxy/http_proxy
     "permissionMode": "default",
     "allowUsers": ["*"],
     "allowChats": ["*"],
     "mediaEnabled": true,
     "mediaDir": "~/.lightclaw/state/feishu/media",
-    "webhook": {
+    "webhook": {                           // transport='ws' 时忽略
       "host": "0.0.0.0",
       "port": 18850,
       "path": "/feishu/events"
@@ -279,99 +376,187 @@ export default {
 }
 ```
 
-微信扫码登录凭据保存到 `~/.lightclaw/state/wechat/accounts/default.json`，long-poll cursor 保存到 `state/wechat/sync/`，context token 保存到 `state/wechat/context-tokens/`，入站媒体保存到 `state/wechat/media/`。
+微信 bot token 落在 `~/.lightclaw/state/wechat/accounts/default.json`（mode 600），long-poll cursor 在 `state/wechat/sync/`，context-token 在 `state/wechat/context-tokens/`，入站媒体在 `state/wechat/media/`。
 
-### Identity
+---
 
-第一次交互式运行 `lightclaw` 会在 `~/.lightclaw/identity/` 下创建单 admin。未知 channel sender 不会进入 LLM，而是收到 pairing code；operator 在 terminal 批准后才可使用：
+## 进阶能力
 
-```bash
-lightclaw identity pending
-lightclaw identity approve K7YQ3RPA --as alice
+### MCP servers
+
+把 MCP server 写在 `~/.lightclaw/mcp.json`（或项目级 `<cwd>/.lightclaw/mcp.json` / `mcp.local.json`）。后者按 server name 覆盖前者。格式是标准的 `{ "mcpServers": {...} }`：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "docs": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" }
+    }
+  }
+}
 ```
 
-同一个 canonical user 可以绑定多个 channel。Transcript 仍按 channel 分开（`feishu-alice`、`wechat-alice`），memory 与 `ConversationList` / `ConversationRead` / `ConversationGrep` 则按 canonical user 共享。
+Transport 支持：`stdio`、`http`（Streamable）、`sse`。`env` 和 `headers` 里 `${VAR}` 会做环境变量展开。远端工具暴露为 `mcp__<server>__<tool>`，默认风险 `write`，所以 `default` 模式下首次调用会确认（除非配了 `MCP(github:*)` 这种 allow 规则）。
 
-### REPL 命令
+### 生命周期 Hooks
 
-| 命令 | 说明 |
-|---|---|
-| `/exit` | 退出 REPL |
-| `/status` | 显示 session id、消息数、token 估算、压缩次数、provider、routing |
-| `/sessions` | 列出最近的 session |
-| `/whoami` | 显示当前 LightClaw identity |
-| `/identity` | 显示 identity CLI 使用提示 |
-| `/compact` | 手动压缩当前 session |
-| `/todos` | 查看当前 todo list |
-| `/memory` | 查看项目 memory 文件与 auto-memory 索引 |
-| `/skills` | 列出可用 Skill |
-| `/skill <name> [args]` | 按名称调用 Skill |
-| `/permissions` | 查看当前 mode 与各来源权限规则 |
-| `/permissions clear` | 清空 session 级权限规则 |
-| `/mode <mode>` | 切换当前 session 的 permission mode |
-| `/allow <rule>` / `/deny <rule>` | 添加 session 级 allow 或 deny 规则 |
-| `/mcp` | 查看 MCP server 状态与工具数量 |
-| `/mcp reload` | 全量重连已配置的 MCP server |
-| `/hooks` | 查看已加载的生命周期 hooks |
-| `/hooks reload` | 重新加载 hook 文件 |
+把 `.mjs` 文件丢到 `~/.lightclaw/hooks/` 或 `<cwd>/.lightclaw/hooks/`。文件 export 一个对象，可包含：`onSessionStart`、`beforeQuery`、`beforeToolCall`、`afterToolCall`、`afterQuery`、`onSessionEnd`。
 
-## 目录结构
+```js
+export default {
+  beforeToolCall({ toolName, input }) {
+    if (toolName === 'Bash' && input?.command?.includes('rm -rf /')) {
+      return { decision: 'deny', reason: 'blocked by project hook' }
+    }
+  },
+}
+```
+
+### 项目 Memory
+
+把 `LIGHTCLAW.md`（或 `LIGHTCLAW.local.md`，自动 ignore）丢在项目树任意位置。LightClaw 启动时会全部发现，注入 system prompt。适合写"项目约定 / 联系人 / 任何要告诉新同事的第一天信息"。
+
+### 子 Agent
+
+内置两个：`general-purpose`（通用任务）和 `explore`（只读探查代码库）。agent 在需要隔离上下文时通过 `AgentTool` 调用。子 agent 的工具白名单**不含** `AgentTool`/`TodoWrite`/`MemoryWrite`，权限非交互，最终回答带回父 agent。
+
+### Sessions 和 resume
+
+每次 REPL session 在 `~/.lightclaw/sessions/<id>/` 落 JSONL transcript + `meta.json`。恢复：
+
+```bash
+lightclaw --resume                    # 最近 session
+lightclaw --resume <session-id>       # 指定 session
+```
+
+`/sessions` 列你的；agent 自己也可以通过 `ConversationList` / `Read` / `Grep` 翻查。
+
+### Auto-Compact
+
+当本地 token 估算越过 `contextWindow * compactThresholdRatio`（默认 0.75 × 200k = 150k），LightClaw 触发一次 LLM 总结，把老消息替换成摘要，保留最近 `compactKeepRecent`（默认 6）条不动。transcript 文件**原地重写**，所以 `--resume` 拿到的是压缩后的版本。也可以 `/compact` 手动触发。
+
+---
+
+## 安全说明（已知边界）
+
+- `~/.lightclaw/**` 沙箱靠**`Read`/`Write`/`Edit` 工具的 deny 规则 + `Bash` 子串守卫**实现。它能拦住模型自然写出的 `cat ~/.lightclaw/users/bob.json`，**拦不住**坚决要绕的攻击者：`eval "$cmd"`、symlink、`c""at` 这种字面拼接。真正的进程沙箱（chroot/landlock）在路线图上。
+- 身份验证信任聊天平台：飞书 / 微信说消息来自 `ou_xxx`，LightClaw 就信。**pairing 那一步是你唯一的准入闸**。
+- v1 单 admin。多 admin / 角色权限在路线图上。
+
+---
+
+## CLI 速查
+
+```bash
+# 普通对话
+lightclaw                                       # REPL
+lightclaw --prompt "讲一下这个仓库"             # 单次
+
+# Sessions
+lightclaw --resume                              # 恢复最近
+lightclaw --resume <id>                         # 恢复指定
+
+# Provider / 模型覆盖
+lightclaw --provider anthropic
+lightclaw --model claude-sonnet-4-6
+
+# 功能开关
+lightclaw --no-memory                           # 不抽取 / 不注入 memory
+lightclaw --no-mcp                              # 不连 MCP
+lightclaw --no-hooks                            # 不加载 hook 脚本
+
+# 权限
+lightclaw --permission-mode plan
+lightclaw --allow "Bash(git status:*)"
+lightclaw --deny "Bash(rm:*)"
+lightclaw --dangerously-bypass
+
+# 身份（admin 命令）
+lightclaw identity list
+lightclaw identity pending
+lightclaw identity approve <code> --as <name>
+lightclaw identity reject <code>
+lightclaw identity link <name> <channel:id>
+lightclaw identity unlink <channel:id>
+lightclaw identity remove <name> [--purge]
+
+# Channels
+lightclaw channel list
+lightclaw channel feishu start
+lightclaw channel wechat login
+lightclaw channel wechat start
+```
+
+---
+
+## 给贡献者
+
+### 项目结构
 
 ```
 src/
-├── cli.ts              # 参数解析与入口
-├── init.ts             # 初始化：config + state + session 恢复
-├── config.ts           # 环境变量 + ~/.lightclaw/config.json 解析
-├── state.ts            # 进程级单例（cwd、model、sessionId、usage、...）
-├── prompt.ts           # system prompt 构造（身份 + 工具 + memory + todos）
-├── query.ts            # agent loop、工具派发、auto-compact、memory 提取
-├── repl.ts             # readline REPL 与 slash 命令
-├── messages.ts         # user/assistant/compact 消息构造
-├── types.ts            # message / session / meta 公共类型
-├── api.ts              # 对 provider.streamChat() 的薄兼容层
-├── token-estimate.ts   # 本地基于字符的 token 估算
-├── tool.ts             # Tool<I,O> 接口，Zod → JSON Schema
-├── tools.ts            # 工具注册表 + capability 过滤
-├── tools/              # 内置工具，包括 Conversation* 历史工具
-├── identity/           # canonical user、terminal admin、pairing、安全 JSON state
-├── permission/         # mode、规则解析、匹配、决策、确认提示、audit
-├── mcp/                # MCP 配置、transport、registry、tool adapter
-├── provider/           # Anthropic / OpenAI-compatible 实现 + modelFor()
-├── session/            # 存储（JSONL + meta.json）、列表、压缩
-├── memory/             # LIGHTCLAW.md 发现、auto-memory、后台提取
-├── skill/              # loader、registry、内置 skill（verify、remember）
-├── agents/             # 内置子 Agent（general-purpose、explore）
-├── todos/              # todo 校验与持久化
+├── cli.ts              # 参数解析 + 入口
+├── init.ts             # bootstrap：config + state + session resume
+├── init-wizard.ts      # 首次启动 admin 身份 wizard
+├── cli-identity.ts     # `lightclaw identity ...` 子命令
+├── cli-channel.ts      # `lightclaw channel ...` 子命令
+├── config.ts           # env + ~/.lightclaw/config.json 解析
+├── state.ts            # 进程级单例（cwd / model / sessionId / currentUserId / ...）
+├── prompt.ts           # system prompt 生成
+├── query.ts            # agent loop / tool 派发 / auto-compact / memory 抽取
+├── repl.ts             # readline REPL + slash 命令派发
+├── messages.ts         # user / assistant / compact 消息构造
+├── api.ts              # provider.streamChat() 兼容层
+├── token-estimate.ts   # 本地 char-based token 估算
+├── tool.ts             # Tool<I,O> 接口、Zod → JSON Schema
+├── tools.ts            # 工具注册表 + capability gate
+├── tools/              # 内置工具（Read/Write/Edit/Bash/Glob/Grep/Memory*/Conversation*/Web*/Todo/UseSkill/Agent）
+├── identity/           # canonical 用户、terminal admin、pairing、安全 JSON 状态
+├── permission/         # mode / 规则解析 / 匹配 / policy / prompt / audit
+├── mcp/                # MCP 配置 / transport / registry / 工具适配
+├── provider/           # Anthropic / OpenAI 兼容 provider + modelFor()
+├── session/            # storage (JSONL + meta.json)、listing、compact
+├── memory/             # LIGHTCLAW.md 发现 / auto-memory / 抽取
+├── skill/              # loader / registry / bundled skills（verify、remember）
+├── agents/             # 内置子 agent（general-purpose、explore）
+├── todos/              # todo 列表校验 + 持久化
+├── channels/           # Channel 抽象 + 飞书（ws/webhook）+ 微信（long-poll）
 └── web/                # 代理感知 HTTP fetch + HTML → Markdown
 ```
 
-## 架构简图
+### 架构简图
 
 ```
-cli.ts ──► init.ts ──► repl.ts ──► query.ts ──► provider.streamChat()
-            (state)     (UI)        (agent loop)
-                                    │
-                                    ├─► tools/ (Bash, Read, Write, Edit, Grep, Glob, ...)
-                                    ├─► mcp/   (外部 MCP tool adapter)
-                                    ├─► permission/ (mode + rule 检查)
-                                    ├─► prompt.ts (system prompt template)
-                                    ├─► session/ (transcript + compact)
-                                    ├─► memory/  (discovery + auto-memory + extract)
-                                    ├─► skill/   (loader + registry + UseSkill)
-                                    └─► agents/  (sub-agent runner)
+cli.ts ──► init-wizard? ──► init.ts ──► repl.ts ──► query.ts ──► provider.streamChat()
+                              (state)     (UI)        (agent loop)
+                                                      │
+                                                      ├─► tools/（filesystem / shell / web / conversation / memory / ...）
+                                                      ├─► mcp/（外部 MCP 工具适配）
+                                                      ├─► permission/（mode + 规则检查）
+                                                      ├─► prompt.ts（system prompt 模板）
+                                                      ├─► session/（transcript + compact）
+                                                      ├─► memory/（discovery + auto-memory + extract）
+                                                      ├─► skill/（loader + registry + UseSkill）
+                                                      └─► agents/（子 agent runner）
 ```
 
-关键不变量：
+### 核心不变量
 
-- **`state.ts` 是唯一的进程级单例。** 仅 `initializeApp()` 写入；其余位置通过 getter 读取。每轮 query 开始时，`beginQuery()` 重置 `AbortController`。
-- **工具采用 schema-first 设计。** 内置工具使用 Zod input schema，并通过 `zod/v4` 的 `toJSONSchema()` 转为 JSON Schema。MCP 工具直接携带 server 返回的 raw JSON Schema，并跳过本地 Zod 校验。新内置工具在 `src/tools.ts` 的 `builtinTools` 中注册。
-- **Auto-Compact 由阈值驱动。** 每轮 assistant 结束后，`maybeAutoCompact()` 将本地 token 估算与 `contextWindow * compactThresholdRatio` 做对比，命中后**原地重写** transcript，不再 append。
-- **Session 存储是 append-only 的 JSONL + 同名 `meta.json`。** 只有压缩会重写 transcript。
-- **工具派发经过权限门控。** 每个工具声明 `riskLevel`，`query.ts` 在 `tool.call()` 前检查 mode + rules，被拒绝的调用作为 tool error 返回给模型。
-- **Identity 决定 history 与 memory 作用域。** Channel sender ID 先映射到 canonical user；session meta 带 `userId`，memory 目录按 canonical user 命名，Conversation 工具会拒绝读取其他 user 的 session。
-- **MCP 只做 Client。** 启动时连接配置好的 server；失败 server 不阻塞 REPL；`/mcp reload` 执行全量重连。
-- **子 Agent 同步执行。** 拥有独立的消息列表、被裁剪的工具白名单（禁用 `AgentTool` / `TodoWrite` / `MemoryWrite` 以免污染父 session），权限检查强制非交互，其 usage 会计入父 session。
+- `state.ts` 是唯一进程级单例。`initializeApp()` 是唯一 writer，其他都通过 getter 读。`beginQuery()` 重置每轮的 `AbortController`。
+- 工具是 schema-first。内置工具用 Zod，运行时 `zod/v4` 的 `toJSONSchema()` 转 JSON Schema。MCP 工具直接拿 server 给的 raw JSON Schema，跳过本地 Zod 校验。
+- Auto-compact **原地重写** transcript，从不追加。
+- 身份是所有用户相关数据的 scope 维度：session meta 带 `userId`，memory 是 `~/.lightclaw/memory/<canonical>/`，`Conversation*` 工具拒读别人的 session。
+- 子 agent 继承父身份，但跑在隔离消息列表 + 工具白名单里。
 
-## 许可证
+---
+
+## 协议
 
 MIT
