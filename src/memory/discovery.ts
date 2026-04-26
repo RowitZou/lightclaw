@@ -1,6 +1,8 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
+
+import { workspaceFor } from '../identity/paths.js'
+import { getCurrentUserId } from '../state.js'
 
 function readSafeTextFile(filePath: string): string | null {
   if (!existsSync(filePath)) {
@@ -52,7 +54,8 @@ export function findGitRoot(startDir: string): string | null {
 export function findProjectMemoryFiles(cwd: string): string[] {
   const resolvedCwd = path.resolve(cwd)
   const gitRoot = findGitRoot(resolvedCwd)
-  const stopDir = gitRoot ?? path.parse(resolvedCwd).root
+  const workspaceRoot = getWorkspaceStopDir(resolvedCwd)
+  const stopDir = workspaceRoot ?? gitRoot ?? path.parse(resolvedCwd).root
   const directories: string[] = []
 
   let currentDir = resolvedCwd
@@ -77,11 +80,6 @@ export function findProjectMemoryFiles(cwd: string): string[] {
 
 export async function loadProjectMemory(cwd: string): Promise<string> {
   const sections: string[] = []
-  const userMemoryPath = path.join(homedir(), '.lightclaw', 'LIGHTCLAW.md')
-  const userMemory = readSafeTextFile(userMemoryPath)
-  if (userMemory) {
-    sections.push(`Source: ${userMemoryPath}\n${userMemory}`)
-  }
 
   for (const filePath of findProjectMemoryFiles(cwd)) {
     const content = readSafeTextFile(filePath)
@@ -97,4 +95,23 @@ export async function loadProjectMemory(cwd: string): Promise<string> {
   }
 
   return sections.join('\n\n---\n\n')
+}
+
+function getWorkspaceStopDir(cwd: string): string | null {
+  let userId: string | undefined
+  try {
+    userId = getCurrentUserId()
+  } catch {
+    userId = undefined
+  }
+  if (!userId) {
+    return null
+  }
+
+  const workspace = path.resolve(workspaceFor(userId))
+  const relative = path.relative(workspace, cwd)
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    return workspace
+  }
+  return null
 }

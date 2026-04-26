@@ -2,8 +2,12 @@ import type { LoadedSkill } from '../types.js'
 
 export const rememberSkill: LoadedSkill = {
   name: 'remember',
-  description: 'Review persistent memory, decide what should be kept, promoted, or removed, and present the result clearly.',
-  whenToUse: 'When the user asks to organize memory, preserve conventions, or review durable notes.',
+  description: [
+    'Persist or review durable facts the user wants remembered later.',
+    'TRIGGER when the user explicitly says remember / do not forget / save this preference, or asks to organize durable memory.',
+    'SKIP when the user is only narrating context without asking to preserve it, or when the fact is temporary.',
+  ].join('\n'),
+  whenToUse: 'The user clearly wants a durable memory saved or reviewed.',
   userInvocable: true,
   allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
   source: 'builtin',

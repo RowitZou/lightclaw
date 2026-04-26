@@ -7,6 +7,7 @@ import { createBuiltinReplRegistry } from './commands/builtin.js'
 import type { ReplContext } from './commands/registry.js'
 import { type LightClawConfig } from './config.js'
 import { runHook } from './hooks/index.js'
+import { isAdmin as checkIsAdmin } from './identity/store.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
 import { cleanupMcp } from './mcp/index.js'
@@ -124,23 +125,6 @@ export async function startRepl(params: ReplParams): Promise<void> {
             ),
           )
         },
-        onCompactStart() {
-          if (assistantLineOpen) {
-            output.write('\n')
-            assistantLineOpen = false
-          }
-          output.write(chalk.yellow('[compact] Compacting context...\n'))
-        },
-        onCompactEnd(result) {
-          output.write(
-            chalk.green(
-              `[compact] Removed ${result.removedCount} messages, summary ~${result.summaryTokens} tokens\n`,
-            ),
-          )
-        },
-        onCompactError(message) {
-          output.write(chalk.red(`[compact] ${message}\n`))
-        },
       })
 
       const previousTail = messages[messageCountBeforeQuery - 1]
@@ -172,6 +156,8 @@ export async function startRepl(params: ReplParams): Promise<void> {
   }
 
   const registry = createBuiltinReplRegistry()
+  const currentUserId = getCurrentUserId()
+  const currentUserIsAdmin = currentUserId ? await checkIsAdmin(currentUserId) : false
   const ctx: ReplContext = {
     config: params.config,
     sessionId,
@@ -179,27 +165,17 @@ export async function startRepl(params: ReplParams): Promise<void> {
     messages,
     rl,
     output,
+    userId: currentUserId,
+    isAdmin: currentUserIsAdmin,
+    isChannel: false,
     getActiveTools: () => activeTools,
     setActiveTools: tools => { activeTools = tools },
     runPrompt,
     persistMeta: count => persistMeta(sessionId, createdAt, count),
   }
 
-  output.write(chalk.cyan(`LightClaw session ${getSessionId()}\n`))
-  output.write(chalk.gray(`cwd: ${getCwd()}\n`))
-  output.write(chalk.gray(`model: ${params.config.model}\n`))
-  output.write(chalk.gray(`provider: ${params.config.provider}\n`))
-  if (getCurrentUserId()) {
-    output.write(chalk.gray(`user: ${getCurrentUserId()}\n`))
-  }
-  if (params.resumeSessionId) {
-    output.write(
-      chalk.gray(
-        `resumed: ${params.resumeSessionId} (${messages.length} messages loaded)\n`,
-      ),
-    )
-  }
-  output.write(chalk.gray(`Type /exit to quit. Commands: ${registry.bannerLine()}\n\n`))
+  output.write(chalk.cyan(`${currentUserId ? `Hi ${currentUserId}. I'm here.` : 'LightClaw is ready.'}\n`))
+  output.write(chalk.gray(`Commands: ${registry.bannerLine(currentUserIsAdmin)}\n\n`))
 
   if (params.initialPrompt) {
     await runPrompt(params.initialPrompt, false)
@@ -229,9 +205,6 @@ export async function startRepl(params: ReplParams): Promise<void> {
     }
 
     const dispatched = await registry.dispatch(command, ctx)
-    if (dispatched === 'exit') {
-      break
-    }
     if (dispatched === 'continue') {
       continue
     }

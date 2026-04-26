@@ -1,11 +1,13 @@
 import path from 'node:path'
 
+import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { runHook } from '../hooks/index.js'
 import { initializeHooks } from '../hooks/index.js'
+import { workspaceFor } from '../identity/paths.js'
 import { initializeMcp } from '../mcp/index.js'
 import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
 import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
-import { lookupBySender, rebuildReverseIndex } from '../identity/store.js'
+import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createUserMessage, getLastUuid } from '../messages.js'
 import type { PermissionMode } from '../permission/types.js'
@@ -113,8 +115,9 @@ export class ChannelRunner {
     await this.locks.runExclusive(sessionId, async () => {
       const meta = await loadMeta(sessionId)
       const messages = await loadTranscript(sessionId)
+      const workspace = workspaceFor(userId)
       const appConfig = resetSessionContext({
-        cwd: meta?.cwd ?? this.strategy.cwd,
+        cwd: workspace,
         model: meta?.model,
         sessionId,
         resumedFrom: meta ? sessionId : null,
@@ -136,6 +139,23 @@ export class ChannelRunner {
 
       beginQuery()
       const userText = formatChannelUserText(message)
+      const slash = await dispatchChannelSlash(userText, {
+        config: appConfig,
+        sessionId,
+        createdAt: meta?.createdAt ?? Date.now(),
+        messages,
+        userId,
+        isAdmin: await isAdmin(userId),
+        getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools()),
+        setActiveTools() {},
+        persistMeta: count => persistMeta(Date.now(), count),
+      })
+      if (slash.handled) {
+        await persistMeta(Date.now(), messages.length)
+        await this.strategy.sendReply(message, slash.output.trim() || 'ok')
+        return
+      }
+
       const userMessage = createUserMessage(userText, getLastUuid(messages))
       messages.push(userMessage)
       await appendMessage(sessionId, userMessage)
@@ -212,7 +232,7 @@ export class ChannelRunner {
         [
           'Welcome to LightClaw bot.',
           `To use this bot, ask the LightClaw operator to approve this pairing code: ${result.code}`,
-          `Operator command: lightclaw identity approve ${result.code} --as <name>`,
+          `Operator command: /identity approve ${result.code} --as <name>`,
           `(${freshness} pairing request; code expires in 1 hour)`,
         ].join('\n'),
       )
@@ -220,7 +240,7 @@ export class ChannelRunner {
       if (error instanceof Error && error.message === 'rate-limited') {
         await this.strategy.sendReply(
           message,
-          'Pairing request is rate limited. Ask the LightClaw operator to check `lightclaw identity pending`.',
+          'Pairing request is rate limited. Ask the LightClaw operator to check `/identity pending`.',
         )
         return null
       }

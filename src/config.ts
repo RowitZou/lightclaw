@@ -15,6 +15,7 @@ export type RoutingConfig = {
 
 export type LightClawConfig = {
   model: string
+  allowedModels: string[]
   provider: ProviderName
   providerOptions: {
     anthropic?: {
@@ -63,6 +64,7 @@ type ConfigFileShape = {
   apiKey?: string
   baseUrl?: string
   model?: string
+  allowedModels?: string[]
   provider?: ProviderName
   providerOptions?: {
     anthropic?: {
@@ -108,6 +110,11 @@ type ConfigFileShape = {
 }
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6'
+const DEFAULT_ALLOWED_MODELS = [
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+]
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
@@ -160,6 +167,15 @@ function parseProvider(value: string | undefined): ProviderName | undefined {
   }
 
   return undefined
+}
+
+function parseStringList(value: string | undefined): string[] | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const items = value.split(',').map(item => item.trim()).filter(Boolean)
+  return items.length > 0 ? items : undefined
 }
 
 function expandOptionalPath(value: string | undefined): string | undefined {
@@ -216,6 +232,10 @@ export function getConfig(): LightClawConfig {
   const openaiBaseUrl =
     process.env.OPENAI_BASE_URL ?? fileConfig.providerOptions?.openai?.baseUrl
   const model = process.env.LIGHTCLAW_MODEL ?? fileConfig.model ?? DEFAULT_MODEL
+  const allowedModels =
+    parseStringList(process.env.LIGHTCLAW_ALLOWED_MODELS) ??
+    fileConfig.allowedModels ??
+    DEFAULT_ALLOWED_MODELS
   const routing: RoutingConfig = {
     main:
       process.env.LIGHTCLAW_ROUTING_MAIN ??
@@ -257,10 +277,11 @@ export function getConfig(): LightClawConfig {
         DEFAULT_COMPACT_KEEP_RECENT,
     ),
   )
-  const autoMemory =
-    parseBoolean(process.env.LIGHTCLAW_AUTO_MEMORY) ??
-    fileConfig.autoMemory ??
-    true
+  const autoMemory = parseBoolean(process.env.LIGHTCLAW_NO_MEMORY) === true
+    ? false
+    : parseBoolean(process.env.LIGHTCLAW_AUTO_MEMORY) ??
+      fileConfig.autoMemory ??
+      true
   const memoryDir = path.resolve(
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
@@ -275,10 +296,11 @@ export function getConfig(): LightClawConfig {
   const permissionAuditLog =
     process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
     fileConfig.permissionAuditLog
-  const mcpEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MCP_ENABLED) ??
-    fileConfig.mcpEnabled ??
-    true
+  const mcpEnabled = parseBoolean(process.env.LIGHTCLAW_NO_MCP) === true
+    ? false
+    : parseBoolean(process.env.LIGHTCLAW_MCP_ENABLED) ??
+      fileConfig.mcpEnabled ??
+      true
   const mcpConnectTimeout = Math.max(
     1000,
     Math.floor(
@@ -303,10 +325,11 @@ export function getConfig(): LightClawConfig {
         20_480,
     ),
   )
-  const hooksEnabled =
-    parseBoolean(process.env.LIGHTCLAW_HOOKS_ENABLED) ??
-    fileConfig.hooksEnabled ??
-    true
+  const hooksEnabled = parseBoolean(process.env.LIGHTCLAW_NO_HOOKS) === true
+    ? false
+    : parseBoolean(process.env.LIGHTCLAW_HOOKS_ENABLED) ??
+      fileConfig.hooksEnabled ??
+      true
   const hookTimeoutBlocking = Math.max(
     100,
     Math.floor(
@@ -338,6 +361,7 @@ export function getConfig(): LightClawConfig {
 
   return {
     model,
+    allowedModels,
     provider,
     providerOptions: {
       ...(anthropicApiKey

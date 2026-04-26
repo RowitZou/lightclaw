@@ -1,48 +1,25 @@
-import chalk from 'chalk'
-
+import { loadChannelConfig } from './channels/config.js'
+import { listChannels } from './channels/registry.js'
+import type { ChannelHandle } from './channels/types.js'
 import { initializeApp } from './init.js'
-import { parsePermissionMode } from './config.js'
-import { runChannelCli } from './cli-channel.js'
-import { runIdentityCli } from './cli-identity.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
-import { parseRule } from './permission/rules.js'
-import type { PermissionMode, PermissionRule } from './permission/types.js'
 import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
-import { setCliArgRules } from './state.js'
 import { getAllTools, getEnabledTools } from './tools.js'
-import type { ProviderName } from './types.js'
 
 type CliArgs = {
   help: boolean
-  model?: string
-  provider?: ProviderName
   prompt?: string
   resume?: string | true
-  noMemory: boolean
-  permissionMode?: PermissionMode
-  allow: string[]
-  deny: string[]
-  dangerouslyBypass: boolean
-  noMcp: boolean
-  noHooks: boolean
+  error?: string
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = {
-    help: false,
-    noMemory: false,
-    allow: [],
-    deny: [],
-    dangerouslyBypass: false,
-    noMcp: false,
-    noHooks: false,
-  }
-  const positionals: string[] = []
+  const args: CliArgs = { help: false }
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -51,23 +28,12 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
-    if (arg === '--model') {
-      args.model = argv[index + 1]
-      index += 1
-      continue
-    }
-
-    if (arg === '--provider') {
-      const provider = argv[index + 1]
-      if (provider === 'anthropic' || provider === 'openai') {
-        args.provider = provider
-      }
-      index += 1
-      continue
-    }
-
     if (arg === '--prompt' || arg === '-p') {
-      args.prompt = argv[index + 1]
+      const value = argv[index + 1]
+      if (!value) {
+        return { ...args, error: '--prompt requires a value' }
+      }
+      args.prompt = value
       index += 1
       continue
     }
@@ -83,59 +49,10 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
-    if (arg === '--no-memory') {
-      args.noMemory = true
-      continue
+    return {
+      ...args,
+      error: arg.startsWith('-') ? `unknown flag: ${arg}` : `unknown argument: ${arg}`,
     }
-
-    if (arg === '--no-mcp') {
-      args.noMcp = true
-      continue
-    }
-
-    if (arg === '--no-hooks') {
-      args.noHooks = true
-      continue
-    }
-
-    if (arg === '--permission-mode') {
-      const mode = parsePermissionMode(argv[index + 1])
-      if (mode) {
-        args.permissionMode = mode
-      }
-      index += 1
-      continue
-    }
-
-    if (arg === '--allow') {
-      const rule = argv[index + 1]
-      if (rule) {
-        args.allow.push(rule)
-      }
-      index += 1
-      continue
-    }
-
-    if (arg === '--deny') {
-      const rule = argv[index + 1]
-      if (rule) {
-        args.deny.push(rule)
-      }
-      index += 1
-      continue
-    }
-
-    if (arg === '--dangerously-bypass') {
-      args.dangerouslyBypass = true
-      args.permissionMode = 'bypassPermissions'
-      continue
-    }
-
-    positionals.push(arg)
-  }
-
-  if (!args.prompt && positionals.length > 0) {
-    args.prompt = positionals.join(' ')
   }
 
   return args
@@ -146,67 +63,33 @@ function printHelp(): void {
 
 Usage:
   lightclaw
-  lightclaw --prompt "Explain this project"
-  lightclaw --model claude-sonnet-4-6
-  lightclaw --provider anthropic
+  lightclaw --prompt "Help me plan today"
   lightclaw --resume
   lightclaw --resume <session-id>
-  lightclaw --no-memory
-  lightclaw --no-mcp
-  lightclaw --no-hooks
-  lightclaw --permission-mode plan
-  lightclaw --allow "Bash(git status:*)" --deny "Bash(rm:*)"
-  lightclaw identity list
-  lightclaw channel list
-  lightclaw channel feishu start
 
 Options:
-  -h, --help             Show help
-  -p, --prompt           Run a single prompt and exit
-      --model            Override configured model
-      --provider         Override provider: anthropic or openai
-      --resume           Resume the latest or a specific saved session
-      --no-memory        Disable auto-memory extraction and memory index injection
-      --no-mcp           Disable MCP client startup and MCP tool injection
-      --no-hooks         Disable hook loading
-      --permission-mode  Set mode: default, acceptEdits, bypassPermissions, plan
-      --allow            Add a CLI allow rule (repeatable)
-      --deny             Add a CLI deny rule (repeatable)
-      --dangerously-bypass
-                         Allow all tool calls unless denied by rule
+  -h, --help      Show help
+  -p, --prompt    Run a single prompt and exit
+      --resume    Resume the latest or a specific saved session
+
+Environment:
+  LIGHTCLAW_NO_MEMORY=1  Disable auto-memory extraction and memory index injection
+  LIGHTCLAW_NO_MCP=1     Disable MCP client startup and MCP tool injection
+  LIGHTCLAW_NO_HOOKS=1   Disable hook loading
 `)
 }
 
-function parseCliRules(args: CliArgs): PermissionRule[] {
-  const rules: PermissionRule[] = []
-  for (const text of args.allow) {
-    rules.push({ source: 'cliArg', behavior: 'allow', value: parseRule(text) })
-  }
-  for (const text of args.deny) {
-    rules.push({ source: 'cliArg', behavior: 'deny', value: parseRule(text) })
-  }
-
-  return rules
-}
-
 async function main(): Promise<void> {
-  const rawArgs = process.argv.slice(2)
-  if (rawArgs[0] === 'channel') {
-    await runChannelCli(rawArgs.slice(1))
-    return
-  }
-  if (rawArgs[0] === 'identity') {
-    await runIdentityCli(rawArgs[1] ?? '', rawArgs.slice(2))
-    return
-  }
-
-  const args = parseArgs(rawArgs)
+  const args = parseArgs(process.argv.slice(2))
   if (args.help) {
     printHelp()
     return
   }
-  if (args.provider) {
-    process.env.LIGHTCLAW_PROVIDER = args.provider
+  if (args.error) {
+    console.error(args.error)
+    console.error('Run `lightclaw --help` for usage.')
+    process.exitCode = 1
+    return
   }
 
   await ensureAdminInitialized({ interactive: !args.prompt })
@@ -216,46 +99,66 @@ async function main(): Promise<void> {
   let resumeMeta = null
   if (args.resume) {
     resumeSessionId =
-      args.resume === true ? await getLatestSessionId() ?? undefined : args.resume
-
+      args.resume === true ? await getLatestSessionId(currentUserId) ?? undefined : args.resume
     if (!resumeSessionId) {
       console.error('No previous session found.')
       process.exitCode = 1
       return
     }
-
     resumeMeta = await loadMeta(resumeSessionId)
+  } else if (!args.prompt) {
+    resumeSessionId = await getLatestSessionId(currentUserId) ?? undefined
+    resumeMeta = resumeSessionId ? await loadMeta(resumeSessionId) : null
   }
 
-  const config = initializeApp({
-    cwd: resumeMeta?.cwd,
-    model: args.model ?? resumeMeta?.model,
-    sessionId: resumeSessionId,
-    resumedFrom: resumeSessionId ?? null,
-    compactionCount: resumeMeta?.compactionCount,
-    lastExtractedAt: resumeMeta?.lastExtractedAt,
-    todos: resumeMeta?.todos,
-    permissionMode: args.permissionMode ?? resumeMeta?.permissionMode,
-    currentUserId: resumeMeta?.userId ?? currentUserId,
-    mcpEnabled: !args.noMcp,
-    hooksEnabled: !args.noHooks,
-  })
-  setCliArgRules(parseCliRules(args))
-  if (args.dangerouslyBypass) {
-    console.error(chalk.red('--dangerously-bypass: all tool calls will be allowed unless an explicit deny rule matches.'))
+  const channelHandles = args.prompt ? [] : await startEnabledChannels()
+  try {
+    const config = initializeApp({
+      model: resumeMeta?.model,
+      sessionId: resumeSessionId,
+      resumedFrom: resumeSessionId ?? null,
+      compactionCount: resumeMeta?.compactionCount,
+      lastExtractedAt: resumeMeta?.lastExtractedAt,
+      todos: resumeMeta?.todos,
+      permissionMode: resumeMeta?.permissionMode,
+      currentUserId: resumeMeta?.userId ?? currentUserId,
+    })
+    await initializeHooks(config)
+    await initializeMcp(config)
+    const provider = getProvider(config)
+    await startRepl({
+      config,
+      tools: getEnabledTools(provider, getAllTools()),
+      initialPrompt: args.prompt,
+      resumeSessionId,
+    })
+  } finally {
+    for (const handle of channelHandles.reverse()) {
+      await handle.stop().catch(error => {
+        process.stderr.write(`channel stop failed: ${String(error)}\n`)
+      })
+    }
   }
-  if (args.noMemory) {
-    config.autoMemory = false
-  }
-  await initializeHooks(config)
-  await initializeMcp(config)
-  const provider = getProvider(config)
-  await startRepl({
-    config,
-    tools: getEnabledTools(provider, getAllTools()),
-    initialPrompt: args.prompt,
-    resumeSessionId,
+}
+
+async function startEnabledChannels(): Promise<ChannelHandle[]> {
+  const config = loadChannelConfig()
+  const channels = listChannels(config).filter(channel => {
+    if (channel.id === 'feishu') {
+      return config.feishu.enabled
+    }
+    if (channel.id === 'wechat') {
+      return Boolean(config.wechat?.enabled)
+    }
+    return true
   })
+
+  const handles: ChannelHandle[] = []
+  for (const channel of channels) {
+    process.stderr.write(`channel ${channel.id}: starting\n`)
+    handles.push(await channel.start())
+  }
+  return handles
 }
 
 main().catch(error => {

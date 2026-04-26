@@ -5,13 +5,18 @@ import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 
+export type CommandVisibility = 'all' | 'admin'
+
 export type ReplContext = {
   config: LightClawConfig
   sessionId: string
   createdAt: number
   messages: Message[]
-  rl: Interface
+  rl?: Interface
   output: Writable
+  userId?: string
+  isAdmin?: boolean
+  isChannel?: boolean
   getActiveTools(): Tool[]
   setActiveTools(tools: Tool[]): void
   runPrompt(prompt: string, permissionInteractive?: boolean): Promise<void>
@@ -21,9 +26,10 @@ export type ReplContext = {
 export type ReplCommandResult = 'continue' | 'exit'
 
 export type ReplCommand = {
-  name: string                 // e.g. "/exit", "/mcp"
-  usage: string                // e.g. "/mode <default|acceptEdits|bypassPermissions|plan>"
+  name: string                 // e.g. "/help", "/identity"
+  usage: string                // e.g. "/mode <default|plan|acceptEdits|bypassPermissions>"
   description: string
+  visibleTo?: CommandVisibility
   handler(args: string, ctx: ReplContext): Promise<ReplCommandResult | void>
 }
 
@@ -37,12 +43,18 @@ export class ReplCommandRegistry {
     this.commands.set(command.name, command)
   }
 
-  list(): ReplCommand[] {
-    return [...this.commands.values()].sort((a, b) => a.name.localeCompare(b.name))
+  list(isAdmin = true): ReplCommand[] {
+    return [...this.commands.values()]
+      .filter(command => isAdmin || (command.visibleTo ?? 'all') === 'all')
+      .sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  bannerLine(): string {
-    return this.list().map(command => command.name).join(' ')
+  find(name: string): ReplCommand | undefined {
+    return this.commands.get(name)
+  }
+
+  bannerLine(isAdmin = true): string {
+    return this.list(isAdmin).map(command => command.name).join(' ')
   }
 
   async dispatch(line: string, ctx: ReplContext): Promise<ReplCommandResult | undefined> {
@@ -57,6 +69,10 @@ export class ReplCommandRegistry {
     const command = this.commands.get(name)
     if (!command) {
       ctx.output.write(`error> unknown command: ${name}\n`)
+      return 'continue'
+    }
+    if ((command.visibleTo ?? 'all') === 'admin' && !ctx.isAdmin) {
+      ctx.output.write('error> admin only.\n')
       return 'continue'
     }
 

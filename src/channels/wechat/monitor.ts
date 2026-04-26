@@ -44,7 +44,7 @@ export async function monitorWechat(input: {
         const expired = resp.ret === SESSION_EXPIRED || resp.errcode === SESSION_EXPIRED
         if (expired) {
           process.stderr.write(
-            'wechat: session expired, pausing 15 min; run `lightclaw channel wechat login` to re-auth.\n',
+            'wechat: session expired, pausing 15 min; restart `lightclaw` to re-auth with QR.\n',
           )
           failures = 0
           await sleep(SESSION_EXPIRED_PAUSE_MS, input.abortSignal)

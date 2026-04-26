@@ -2,8 +2,10 @@ import { z } from 'zod'
 
 import {
   buildRegisteredSkillInvocation,
+  getRegisteredSkill,
   refreshSkillRegistry,
 } from '../skill/registry.js'
+import { setActiveSkillAllowedTools } from '../state.js'
 import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
@@ -25,6 +27,8 @@ export const useSkillTool = buildTool({
           isError: true,
         }
       }
+      const skill = getRegisteredSkill(input.name)
+      setActiveSkillAllowedTools(skill?.allowedTools)
 
       return {
         output: content,

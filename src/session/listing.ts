@@ -31,8 +31,8 @@ export async function listSessions(userId?: string): Promise<SessionMeta[]> {
   }
 }
 
-export async function getLatestSessionId(): Promise<string | null> {
-  const sessions = await listSessions()
+export async function getLatestSessionId(userId?: string): Promise<string | null> {
+  const sessions = await listSessions(userId)
   return sessions[0]?.sessionId ?? null
 }
 

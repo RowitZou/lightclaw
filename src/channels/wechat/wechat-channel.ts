@@ -1,6 +1,7 @@
 import { ChannelRunner } from '../runner.js'
 import type { Channel, ChannelHandle, WechatChannelConfig } from '../types.js'
 import { notifyStart, notifyStop } from './api/api.js'
+import { runWechatLoginCli } from './auth/login-qr.js'
 import { monitorWechat } from './monitor.js'
 import { WechatSender } from './sender.js'
 import { loadWechatAccount } from './storage/accounts.js'
@@ -23,10 +24,15 @@ export function createWechatChannel(config: WechatChannelConfig): Channel {
       if (!config.enabled) {
         throw new Error('WeChat channel is disabled in ~/.lightclaw/channels.json.')
       }
-      const account = await loadWechatAccount(ACCOUNT_ID)
+      let account = await loadWechatAccount(ACCOUNT_ID)
+      if (!account) {
+        process.stderr.write('wechat: no saved account; starting QR login flow.\n')
+        await runWechatLoginCli()
+        account = await loadWechatAccount(ACCOUNT_ID)
+      }
       if (!account) {
         throw new Error(
-          'WeChat channel requires login. Run `lightclaw channel wechat login` first.',
+          'WeChat channel requires login, but QR login did not produce an account token.',
         )
       }
       if (!config.allowSenders.length) {

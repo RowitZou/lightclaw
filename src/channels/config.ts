@@ -16,7 +16,7 @@ export function loadChannelConfig(): ChannelsConfig {
   const fileConfig = loadChannelsFile()
   const wechat = mergeWechatConfig(fileConfig.wechat)
   return {
-    feishu: mergeFeishuConfig(fileConfig.feishu ?? {}),
+    feishu: mergeFeishuConfig(fileConfig.feishu),
     ...(wechat ? { wechat } : {}),
   }
 }
@@ -42,7 +42,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     'ws'
 
   return {
-    enabled: input?.enabled ?? true,
+    enabled: input?.enabled ?? false,
     appId: process.env.FEISHU_APP_ID ?? input?.appId,
     appSecret: process.env.FEISHU_APP_SECRET ?? input?.appSecret,
     encryptKey: process.env.FEISHU_ENCRYPT_KEY ?? input?.encryptKey,

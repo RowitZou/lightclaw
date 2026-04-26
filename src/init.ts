@@ -1,7 +1,9 @@
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { initializeAgents } from './agents/registry.js'
+import { workspaceFor } from './identity/paths.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
@@ -9,6 +11,7 @@ import {
   getAbortController,
   initializeState,
   resetAbortController,
+  clearActiveSkillAllowedTools,
   setFileRules,
 } from './state.js'
 import type { TodoItem } from './types.js'
@@ -61,6 +64,7 @@ export function resetSessionContext(input: CommonStateInput): LightClawConfig {
 }
 
 export function beginQuery(): AbortSignal {
+  clearActiveSkillAllowedTools()
   return resetAbortController().signal
 }
 
@@ -85,7 +89,10 @@ function writeSessionState(
   resolvedConfig: LightClawConfig,
   input: InitializeAppInput | undefined,
 ): void {
-  const resolvedCwd = path.resolve(input?.cwd ?? process.cwd())
+  const resolvedCwd = input?.currentUserId
+    ? path.resolve(workspaceFor(input.currentUserId))
+    : path.resolve(input?.cwd ?? process.cwd())
+  mkdirSync(resolvedCwd, { recursive: true, mode: 0o700 })
   initializeState({
     cwd: resolvedCwd,
     model: resolvedConfig.model,

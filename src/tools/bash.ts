@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { homedir } from 'node:os'
+import path from 'node:path'
 import { promisify } from 'node:util'
 
 import { z } from 'zod'
@@ -39,9 +39,10 @@ export const bashTool = buildTool({
     timeout: z.number().int().min(1).max(MAX_TIMEOUT_SECONDS).optional(),
   }),
   async call(input, context) {
-    if (touchesLightClawState(input.command)) {
+    const boundary = violatesWorkspaceBoundary(input.command, context.cwd)
+    if (!boundary.ok) {
       return {
-        output: 'Permission denied: Bash command references ~/.lightclaw state.',
+        output: `Permission denied: ${boundary.reason}`,
         isError: true,
       }
     }
@@ -78,11 +79,43 @@ export const bashTool = buildTool({
   },
 })
 
-function touchesLightClawState(command: string): boolean {
-  const homeState = `${homedir().replace(/\\/g, '/')}/.lightclaw`
+function violatesWorkspaceBoundary(
+  command: string,
+  cwd: string,
+): { ok: true } | { ok: false; reason: string } {
   const normalized = command.replace(/\\/g, '/')
-  return normalized.includes('~/.lightclaw') ||
-    normalized.includes('$HOME/.lightclaw') ||
-    normalized.includes('${HOME}/.lightclaw') ||
-    normalized.includes(homeState)
+  if (/\$HOME|\$\{HOME\}|(^|[\s"'=])~(\/|$)/.test(normalized)) {
+    return { ok: false, reason: 'Bash command references $HOME/~ outside the workspace.' }
+  }
+
+  if (/(^|[\s/'"`=])\.\.(\/|$|[\s'"`;|&])/.test(normalized)) {
+    return { ok: false, reason: 'Bash command uses .., which can escape the workspace.' }
+  }
+
+  if (/\b(cd|pushd)\s*($|[;&|])/.test(normalized)) {
+    return { ok: false, reason: 'Bash command changes directory without an explicit workspace path.' }
+  }
+
+  const root = path.resolve(cwd)
+  const absolutePathPattern = /(^|[\s"'`=])\/[^\s"'`;&|)]*/g
+  for (const match of normalized.matchAll(absolutePathPattern)) {
+    const token = match[0].trim().replace(/^["'`=]+|["'`]+$/g, '')
+    if (!token.startsWith('/')) {
+      continue
+    }
+    const resolved = path.resolve(token)
+    if (!isWithin(resolved, root)) {
+      return {
+        ok: false,
+        reason: `Bash command references absolute path outside the workspace: ${token}`,
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+function isWithin(target: string, root: string): boolean {
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }

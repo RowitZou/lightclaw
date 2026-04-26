@@ -2,8 +2,12 @@ import type { LoadedSkill } from '../types.js'
 
 export const verifySkill: LoadedSkill = {
   name: 'verify',
-  description: 'Run relevant validation commands and confirm whether the change actually works.',
-  whenToUse: 'After code changes, before reporting completion, or when the user asks for validation.',
+  description: [
+    'Run relevant validation commands and confirm whether the change actually works.',
+    'TRIGGER when code or state changed, before reporting a complex task complete, or when the user asks to verify / double-check / sanity check.',
+    'SKIP when the task is read-only, no meaningful validation exists, or validation already ran in this turn.',
+  ].join('\n'),
+  whenToUse: 'Code or state changed and validation would increase confidence.',
   userInvocable: true,
   allowedTools: ['Bash', 'Read', 'Grep', 'Glob'],
   source: 'builtin',

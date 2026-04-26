@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { getConfig, resolveSessionsDir } from '../config.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
+import type { PermissionMode } from '../permission/types.js'
 import { getSessionDir, loadMeta } from '../session/storage.js'
 import { adminPath, identitiesPath } from './paths.js'
 import type {
@@ -83,6 +84,7 @@ export async function createUser(
   identities[name] = {
     createdAt: now,
     updatedAt: now,
+    permissionCeiling: 'default',
     channels: {
       feishu: [],
       wechat: [],
@@ -91,6 +93,24 @@ export async function createUser(
   }
   await writeIdentities(identities)
   return { ok: true }
+}
+
+export async function getUserPermissionCeiling(name: string): Promise<PermissionMode> {
+  const identity = await getIdentity(name)
+  return identity?.permissionCeiling ?? 'default'
+}
+
+export async function setAllPermissionCeilings(mode: PermissionMode): Promise<number> {
+  const identities = await listIdentities()
+  const now = new Date().toISOString()
+  let count = 0
+  for (const record of Object.values(identities)) {
+    record.permissionCeiling = mode
+    record.updatedAt = now
+    count += 1
+  }
+  await writeIdentities(identities)
+  return count
 }
 
 export async function addLink(
@@ -241,4 +261,3 @@ async function chmodBestEffort(filePath: string, mode: number): Promise<void> {
 function isChannelKind(input: string): input is ChannelKind {
   return input === 'feishu' || input === 'wechat' || input === 'terminal'
 }
-

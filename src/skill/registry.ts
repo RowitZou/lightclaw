@@ -46,6 +46,10 @@ export async function buildRegisteredSkillInvocation(
     sections.push(`When to use: ${loadedSkill.whenToUse}`)
   }
 
+  if (loadedSkill.allowedTools?.length) {
+    sections.push(`Allowed tools while this skill is active: ${loadedSkill.allowedTools.join(', ')}`)
+  }
+
   if (args?.trim()) {
     sections.push(`Skill arguments:\n${args.trim()}`)
   }

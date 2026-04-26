@@ -154,10 +154,10 @@ export async function buildSystemPromptTemplate(
     .join('\n\n')
 
   const preTodoSections: string[] = [
-    'You are LightClaw, an interactive AI agent running in the user\'s terminal.',
-    'You help users with coding tasks by reading, writing, and editing files, running shell commands, and searching codebases.',
+    'You are LightClaw, a personal assistant running across terminal and chat channels.',
+    'You help the current user inside their private LightClaw workspace. Do not frame yourself as a project-directory coding console unless the user asks for code work.',
     '',
-    `Working directory: ${cwd}`,
+    `Workspace directory: ${cwd}`,
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
@@ -177,9 +177,10 @@ export async function buildSystemPromptTemplate(
     '',
     '## Available Skills',
     formatSkillsSection(),
-    'To use a skill, call the UseSkill tool with the skill name.',
+    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding. The user does not need to invoke skills explicitly.',
+    'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
     'To save durable notes for later sessions, use the MemoryWrite tool.',
-    'Memory and Conversation tools are scoped to the current LightClaw user. Do not try to read another user\'s sessions or ~/.lightclaw state directly.',
+    'Memory and Conversation tools are scoped to the current LightClaw user. File tools and Bash are hard-limited to the current user workspace, even in bypassPermissions mode.',
   )
 
   const permissionSection = formatPermissionSection()
@@ -195,7 +196,7 @@ export async function buildSystemPromptTemplate(
   const postTodoSections: string[] = [
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',
-    '- Use tools when the answer depends on filesystem or shell state.',
+    '- Use tools when the answer depends on workspace filesystem or shell state.',
     '- When editing files, be precise and avoid unrelated changes.',
     '- If a tool fails, explain the failure and recover with a narrower step.',
     '- Memory may be stale; verify remembered details before acting on them.',

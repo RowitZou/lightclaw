@@ -1,18 +1,8 @@
-import { parseRule } from './rules.js'
 import type { PermissionRule } from './types.js'
 
-// matchPath expands `~` and `~/...` for both pattern and input
-// (see permission/matchers.ts:normalizePatternPath), so the literal-tilde
-// form alone covers any actual file path that resolves under $HOME/.lightclaw.
-// Pre-fix code emitted both forms; the absolute-path duplicate was redundant.
 export function getBuiltinDenyRules(): PermissionRule[] {
-  return [
-    'Read(~/.lightclaw/**)',
-    'Write(~/.lightclaw/**)',
-    'Edit(~/.lightclaw/**)',
-  ].map(text => ({
-    source: 'builtin',
-    behavior: 'deny',
-    value: parseRule(text),
-  }))
+  // Phase 10 moved state protection into a hard workspace boundary in
+  // permission/policy.ts. Keeping path rules here would also deny the
+  // legitimate ~/.lightclaw/workspaces/<user> tree.
+  return []
 }

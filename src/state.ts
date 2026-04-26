@@ -20,6 +20,7 @@ type SessionState = {
   cliArgRules: PermissionRule[]
   sessionRules: PermissionRule[]
   fileRules: PermissionRule[]
+  activeSkillAllowedTools?: string[]
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
 }
@@ -58,6 +59,7 @@ export function initializeState(input: {
     cliArgRules: input.cliArgRules ?? [],
     sessionRules: [],
     fileRules: input.fileRules ?? [],
+    activeSkillAllowedTools: undefined,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
   }
@@ -188,6 +190,19 @@ export function getAllPermissionRules(): PermissionRule[] {
     ...current.sessionRules,
     ...current.fileRules,
   ]
+}
+
+export function getActiveSkillAllowedTools(): string[] | undefined {
+  const allowedTools = requireState().activeSkillAllowedTools
+  return allowedTools ? [...allowedTools] : undefined
+}
+
+export function setActiveSkillAllowedTools(allowedTools: string[] | undefined): void {
+  requireState().activeSkillAllowedTools = allowedTools ? [...allowedTools] : undefined
+}
+
+export function clearActiveSkillAllowedTools(): void {
+  requireState().activeSkillAllowedTools = undefined
 }
 
 export function getAbortController(): AbortController {
