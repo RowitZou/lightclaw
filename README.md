@@ -134,11 +134,35 @@ Phase 10 removes the old "project cwd" mental model. File tools and Bash run ins
 - `$HOME` / `${HOME}` references
 - `cd` / `pushd` without an explicit in-workspace path
 
-This is still not a real process sandbox. The following are accepted bypass classes that a real container or `firejail` will close in a later phase:
+This is still not a real process sandbox. The following are accepted bypass classes that a real container will close in a later phase:
 
 - `eval` and other indirect string evaluation (`bash -c "$var"`)
 - variable interpolation that hides absolute paths (`p=/etc; cat $p/passwd`)
 - symlinks placed inside the workspace pointing outward
+
+---
+
+## Execution Runtime
+
+Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active backend is selected at startup via `~/.lightclaw/config.json` or `LIGHTCLAW_RUNTIME_BACKEND`.
+
+| Backend | Status | What it does |
+|---|---|---|
+| `local` (default) | shipped (Phase 11 Iter 1) | Runs `Bash` / `Grep` via host `/bin/bash -c` and `Read` / `Write` / `Edit` via host `fs.*`. No isolation; equivalent to the prior behavior. |
+| `docker` | not yet implemented | Will run a long-lived host container with workspace bind-mounted, executing tools via `docker exec` with `--cap-drop ALL` plus minimal caps. |
+| `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
+
+Selecting a backend that is not yet implemented fails loudly at startup — the harness never silently falls back.
+
+The Runtime layer is a forward-compatible foundation: adding a backend means writing one file in `src/runtime/`; the tools never change. File operations go through the backend's `fs` interface but, by design, all current backends back `fs` with the host process reading the shared workspace mount, so file ops stay fast and the only thing that crosses the container boundary is `exec`.
+
+```jsonc
+{
+  "runtime": {
+    "backend": "local"
+  }
+}
+```
 
 ---
 
@@ -165,6 +189,7 @@ Selected environment variables:
 | `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems |
 | `LIGHTCLAW_PERMISSION_MODE` | Default permission mode |
+| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker` / `rjob` not yet implemented |
 
 ---
 
@@ -184,6 +209,7 @@ src/
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy plus hard workspace boundary
 ├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)
+├── runtime/            # Runtime abstraction; LocalRuntime today, Docker / Rjob to come
 ├── agents/             # general-purpose / explore subagents
 ├── skill/              # loader, registry, bundled skills (verify, remember)
 ├── memory/             # LIGHTCLAW.md discovery and user memory
