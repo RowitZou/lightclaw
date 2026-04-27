@@ -52,6 +52,7 @@ export type LightClawConfig = {
     local?: string
   }
   mcpMaxToolOutputBytes: number
+  maxToolOutputBytes: number
   hooksEnabled: boolean
   hookTimeoutBlocking: number
   hookTimeoutNonBlocking: number
@@ -104,6 +105,7 @@ type ConfigFileShape = {
     local?: string
   }
   mcpMaxToolOutputBytes?: number
+  maxToolOutputBytes?: number
   hooksEnabled?: boolean
   hookTimeoutBlocking?: number
   hookTimeoutNonBlocking?: number
@@ -344,6 +346,14 @@ export function getConfig(): LightClawConfig {
         20_480,
     ),
   )
+  const maxToolOutputBytes = Math.max(
+    1024,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MAX_TOOL_OUTPUT_BYTES) ??
+        fileConfig.maxToolOutputBytes ??
+        51_200,
+    ),
+  )
   const hooksEnabled = parseBoolean(process.env.LIGHTCLAW_NO_HOOKS) === true
     ? false
     : parseBoolean(process.env.LIGHTCLAW_HOOKS_ENABLED) ??
@@ -424,6 +434,7 @@ export function getConfig(): LightClawConfig {
       local: expandOptionalPath(fileConfig.mcpConfigFiles?.local),
     },
     mcpMaxToolOutputBytes,
+    maxToolOutputBytes,
     hooksEnabled,
     hookTimeoutBlocking,
     hookTimeoutNonBlocking,

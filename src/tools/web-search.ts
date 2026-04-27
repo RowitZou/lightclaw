@@ -12,6 +12,7 @@ export const webSearchTool = buildTool({
   description:
     'Search the web using Anthropic native web_search. Returns search findings and source URLs.',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     query: z.string().min(2),
     allowed_domains: z.array(z.string()).optional(),

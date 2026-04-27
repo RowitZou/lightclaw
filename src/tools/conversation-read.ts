@@ -9,6 +9,7 @@ export const conversationReadTool = buildTool({
   name: 'ConversationRead',
   description: 'Read a slice of a saved conversation that belongs to the current LightClaw user.',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     sessionId: z.string().min(1),
     offset: z.number().int().min(0).optional(),

@@ -56,6 +56,7 @@ export const grepTool = buildTool({
   name: 'Grep',
   description: 'Search file contents with ripgrep or grep.',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     pattern: z.string().min(1),
     path: z.string().optional(),

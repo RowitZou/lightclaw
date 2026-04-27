@@ -17,6 +17,7 @@ export const globTool = buildTool({
   name: 'Glob',
   description: 'Find files by glob pattern.',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     pattern: z.string().min(1),
     path: z.string().optional(),

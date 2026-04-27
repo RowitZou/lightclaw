@@ -26,6 +26,14 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   inputSchema?: z.ZodType<TInput>
   inputJSONSchema?: Record<string, unknown>
   riskLevel: RiskLevel
+  /**
+   * When true, contiguous tool_uses for this tool can be dispatched in parallel
+   * within a single agent turn. Defaults to false. Mark true only for tools
+   * whose effects are limited to host fs reads, outbound HTTP, or LightClaw
+   * state reads — never for writers, executors, or anything that mutates
+   * shared state (todos, skills, MCP servers, sub-agents).
+   */
+  concurrencySafe?: boolean
   isEnabled?(provider: Provider): boolean
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult(
@@ -40,6 +48,7 @@ export function buildTool<TInput, TOutput>(input: {
   description: string
   inputSchema: z.ZodType<TInput>
   riskLevel: RiskLevel
+  concurrencySafe?: boolean
   isEnabled?(provider: Provider): boolean
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult?: (

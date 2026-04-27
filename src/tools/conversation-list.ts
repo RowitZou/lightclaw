@@ -8,6 +8,7 @@ export const conversationListTool = buildTool({
   name: 'ConversationList',
   description: 'List saved conversations for the current LightClaw user across channels.',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     channel: z.string().optional(),
     daysBack: z.number().int().min(1).max(365).optional(),

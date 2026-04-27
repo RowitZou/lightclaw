@@ -79,6 +79,40 @@ type DispatchContext = {
   mode: QueryMode
   rl?: Interface
   onToolResult?(event: ToolExecutionEvent): void
+  maxToolOutputBytes: number
+}
+
+function snipContent(content: string, maxBytes: number): string {
+  const total = Buffer.byteLength(content, 'utf8')
+  if (total <= maxBytes) {
+    return content
+  }
+  const marker = `\n\n... [snipped ${total - maxBytes} bytes from middle of ${total} total] ...\n\n`
+  const markerBytes = Buffer.byteLength(marker, 'utf8')
+  const usable = Math.max(0, maxBytes - markerBytes)
+  if (usable === 0) {
+    return marker.trim()
+  }
+  const head = Math.floor(usable / 2)
+  const tail = usable - head
+  const buf = Buffer.from(content, 'utf8')
+  return `${buf.subarray(0, head).toString('utf8')}${marker}${buf.subarray(buf.length - tail).toString('utf8')}`
+}
+
+function isPromptTooLongError(err: unknown): boolean {
+  if (!err) {
+    return false
+  }
+  const message = err instanceof Error ? err.message : String(err)
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('prompt is too long')
+    || lower.includes('input is too long')
+    || lower.includes('input length')
+    || lower.includes('context length')
+    || lower.includes('exceeds maximum context')
+    || lower.includes('maximum context length')
+  )
 }
 
 export async function query(params: QueryParams): Promise<{
@@ -123,15 +157,24 @@ export async function query(params: QueryParams): Promise<{
     registerBackgroundTask(task)
   }
 
-  const maybeAutoCompact = async () => {
+  /**
+   * Run conversation compaction and splice the result into `messages` in
+   * place. When `force=false`, only runs if estimated tokens exceed the
+   * configured threshold. When `force=true`, runs unconditionally — used
+   * by the prompt-too-long reactive recovery path. Returns true iff
+   * messages were actually replaced.
+   */
+  const runCompaction = async (force: boolean): Promise<boolean> => {
     if (mode === 'subagent' || !config.autoCompact) {
-      return
+      return false
     }
 
-    const totalTokens = estimateMessagesTokens(messages)
-    const threshold = config.contextWindow * config.compactThresholdRatio
-    if (totalTokens <= threshold) {
-      return
+    if (!force) {
+      const totalTokens = estimateMessagesTokens(messages)
+      const threshold = config.contextWindow * config.compactThresholdRatio
+      if (totalTokens <= threshold) {
+        return false
+      }
     }
 
     params.onCompactStart?.()
@@ -143,7 +186,7 @@ export async function query(params: QueryParams): Promise<{
       })
 
       if (result.removedCount === 0) {
-        return
+        return false
       }
 
       messages.splice(0, messages.length, ...result.messages)
@@ -154,9 +197,11 @@ export async function query(params: QueryParams): Promise<{
         removedCount: result.removedCount,
         summaryTokens: result.summaryTokens,
       })
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       params.onCompactError?.(message)
+      return false
     }
   }
 
@@ -205,33 +250,56 @@ export async function query(params: QueryParams): Promise<{
     mode,
     rl: params.rl,
     onToolResult: params.onToolResult,
+    maxToolOutputBytes: config.maxToolOutputBytes,
   }
 
+  type StopEvent = Extract<
+    Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never,
+    { type: 'stop' }
+  >
+
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const systemPrompt = renderEffectiveSystemPrompt()
-    let stopEvent:
-      | Extract<Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never, { type: 'stop' }>
-      | undefined
+    let stopEvent: StopEvent | undefined
 
-    for await (const event of streamChat({
-      config,
-      model: modelFor('main', config),
-      messages: toApiMessages(messages),
-      system: systemPrompt,
-      tools: params.tools.map(toolToAPISchema),
-      signal: getAbortController().signal,
-    })) {
-      if (event.type === 'text') {
-        params.onTextDelta?.(event.text)
-        continue
+    // Stream the assistant turn. If the API rejects the request as
+    // prompt-too-long (typical 400 from Anthropic when input exceeds
+    // context), force a compact and retry once. Streaming text deltas are
+    // not yielded until the request is accepted, so a retry does not
+    // double-print to the user.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      stopEvent = undefined
+      try {
+        const systemPrompt = renderEffectiveSystemPrompt()
+        for await (const event of streamChat({
+          config,
+          model: modelFor('main', config),
+          messages: toApiMessages(messages),
+          system: systemPrompt,
+          tools: params.tools.map(toolToAPISchema),
+          signal: getAbortController().signal,
+        })) {
+          if (event.type === 'text') {
+            params.onTextDelta?.(event.text)
+            continue
+          }
+
+          if (event.type === 'tool_use') {
+            params.onToolUse?.({ name: event.name, input: event.input })
+            continue
+          }
+
+          stopEvent = event
+        }
+        break
+      } catch (error) {
+        if (attempt === 0 && isPromptTooLongError(error)) {
+          const compacted = await runCompaction(true)
+          if (compacted) {
+            continue
+          }
+        }
+        throw error
       }
-
-      if (event.type === 'tool_use') {
-        params.onToolUse?.({ name: event.name, input: event.input })
-        continue
-      }
-
-      stopEvent = event
     }
 
     if (!stopEvent) {
@@ -256,7 +324,7 @@ export async function query(params: QueryParams): Promise<{
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]
-      await maybeAutoCompact()
+      await runCompaction(false)
       scheduleMemoryExtraction(extractionSnapshot)
       await runHook('afterQuery', {
         sessionId: getSessionId(),
@@ -275,14 +343,60 @@ export async function query(params: QueryParams): Promise<{
       }
     }
 
+    // Dispatch tool_uses. Contiguous concurrencySafe tools run in a single
+    // Promise.all batch; everything else runs serially. The try/finally
+    // guarantees that for every tool_use block in the assistant message,
+    // *some* tool_result is appended to the next user message — even if
+    // dispatch is interrupted by an unhandled error or the abort signal.
+    // Without this the message sequence becomes invalid (Anthropic 400) and
+    // session resume breaks.
     const toolResults: UserToolResultBlock[] = []
-    for (const toolUse of toolUses) {
-      const result = await dispatchToolCall(toolUse, dispatchCtx)
-      toolResults.push(result)
+    const completed = new Set<string>()
+    try {
+      let i = 0
+      while (i < toolUses.length) {
+        const head = toolUses[i]
+        const headTool = findToolByName(params.tools, head.name)
+        if (headTool?.concurrencySafe) {
+          const batch: ToolUseBlock[] = []
+          while (i < toolUses.length) {
+            const tu = toolUses[i]
+            const candidateTool = findToolByName(params.tools, tu.name)
+            if (!candidateTool?.concurrencySafe) {
+              break
+            }
+            batch.push(tu)
+            i += 1
+          }
+          const results = await Promise.all(
+            batch.map(tu => dispatchToolCall(tu, dispatchCtx)),
+          )
+          for (let k = 0; k < batch.length; k += 1) {
+            completed.add(batch[k].id)
+            toolResults.push(results[k])
+          }
+        } else {
+          const result = await dispatchToolCall(head, dispatchCtx)
+          completed.add(head.id)
+          toolResults.push(result)
+          i += 1
+        }
+      }
+    } finally {
+      for (const tu of toolUses) {
+        if (!completed.has(tu.id)) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: 'Tool execution was aborted before completion.',
+            is_error: true,
+          })
+        }
+      }
+      messages.push(createUserMessage(toolResults, getLastUuid(messages)))
     }
 
-    messages.push(createUserMessage(toolResults, getLastUuid(messages)))
-    await maybeAutoCompact()
+    await runCompaction(false)
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
@@ -374,6 +488,8 @@ async function dispatchToolCall(
       formatted.content = afterTool.replacementResult
     }
 
+    formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
+
     ctx.onToolResult?.({
       toolName: toolUse.name,
       isError: Boolean(formatted.is_error),
@@ -403,15 +519,16 @@ function reportToolResult(
   content: string,
   isError: boolean,
 ): UserToolResultBlock {
+  const snipped = snipContent(content, ctx.maxToolOutputBytes)
   ctx.onToolResult?.({
     toolName: toolUse.name,
     isError,
-    content,
+    content: snipped,
   })
   return {
     type: 'tool_result',
     tool_use_id: toolUse.id,
-    content,
+    content: snipped,
     ...(isError ? { is_error: true } : {}),
   }
 }
