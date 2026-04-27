@@ -113,7 +113,7 @@ async function main(): Promise<void> {
 
   const channelHandles = args.prompt ? [] : await startEnabledChannels()
   try {
-    const config = initializeApp({
+    const config = await initializeApp({
       model: resumeMeta?.model,
       sessionId: resumeSessionId,
       resumedFrom: resumeSessionId ?? null,

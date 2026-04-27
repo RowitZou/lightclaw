@@ -3,11 +3,13 @@ import { toJSONSchema } from 'zod/v4'
 
 import type { Provider } from './provider/types.js'
 import type { RiskLevel } from './permission/types.js'
+import type { Runtime } from './runtime/index.js'
 import type { UserToolResultBlock } from './types.js'
 
 export type ToolCallContext = {
   cwd: string
   abortSignal: AbortSignal
+  runtime: Runtime
 }
 
 export type ToolCallResult<TOutput> = {

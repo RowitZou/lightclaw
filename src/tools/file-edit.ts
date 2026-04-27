@@ -1,4 +1,3 @@
-import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -34,7 +33,7 @@ export const fileEditTool = buildTool({
   async call(input, context) {
     try {
       const targetPath = resolveInputPath(context.cwd, input.file_path)
-      const original = await readFile(targetPath, 'utf8')
+      const original = (await context.runtime.fs.readFile(targetPath)).toString('utf8')
       const occurrences = countOccurrences(original, input.old_string)
 
       if (occurrences === 0) {
@@ -54,7 +53,7 @@ export const fileEditTool = buildTool({
       const matchIndex = original.indexOf(input.old_string)
       const lineNumber = original.slice(0, matchIndex).split(/\r?\n/).length
       const nextContent = original.replace(input.old_string, input.new_string)
-      await writeFile(targetPath, nextContent, 'utf8')
+      await context.runtime.fs.writeFile(targetPath, nextContent)
 
       return {
         output: `Applied edit to ${targetPath} at line ${lineNumber}`,

@@ -1,12 +1,9 @@
-import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { promisify } from 'node:util'
 
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
 
-const execFileAsync = promisify(execFile)
 const MAX_OUTPUT_CHARS = 30000
 const MAX_TIMEOUT_SECONDS = 300
 
@@ -48,33 +45,24 @@ export const bashTool = buildTool({
     }
     const timeoutMs = Math.min(input.timeout ?? 30, MAX_TIMEOUT_SECONDS) * 1000
 
-    try {
-      const result = await execFileAsync('/bin/bash', ['-c', input.command], {
-        cwd: context.cwd,
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024,
-        signal: context.abortSignal,
-      })
+    const result = await context.runtime.exec({
+      command: input.command,
+      cwd: context.cwd,
+      timeoutMs,
+      maxBufferBytes: 1024 * 1024,
+      abortSignal: context.abortSignal,
+    })
 
+    if (result.exitCode === 0) {
       return {
         output: formatCommandOutput(result.stdout, result.stderr),
       }
-    } catch (error) {
-      const execError = error as {
-        stdout?: string
-        stderr?: string
-        message?: string
-        code?: string | number
-      }
-      const detail = formatCommandOutput(
-        execError.stdout ?? '',
-        execError.stderr ?? execError.message ?? '',
-      )
-      const suffix = execError.code !== undefined ? `\n\nexit_code: ${execError.code}` : ''
-      return {
-        output: `${detail}${suffix}`,
-        isError: true,
-      }
+    }
+
+    const detail = formatCommandOutput(result.stdout, result.stderr)
+    return {
+      output: `${detail}\n\nexit_code: ${result.exitCode}`,
+      isError: true,
     }
   },
 })

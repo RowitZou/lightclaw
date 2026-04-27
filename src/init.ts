@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig, type LightClawConfig } from './config.js'
@@ -7,12 +7,16 @@ import { workspaceFor } from './identity/paths.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
+import { createRuntime } from './runtime/index.js'
 import {
   getAbortController,
+  getRuntime,
+  getRuntimeIfInitialized,
   initializeState,
   resetAbortController,
   clearActiveSkillAllowedTools,
   setFileRules,
+  setRuntime,
 } from './state.js'
 import type { TodoItem } from './types.js'
 
@@ -40,10 +44,10 @@ type InitializeAppInput = CommonStateInput & {
  * level, but callers should not use this for per-session state resets — use
  * resetSessionContext() instead, which skips the one-shot wiring.
  */
-export function initializeApp(input?: InitializeAppInput): LightClawConfig {
+export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
   const config = getConfig()
   const resolvedConfig = resolveConfig(config, input)
-  writeSessionState(resolvedConfig, input)
+  await writeSessionState(resolvedConfig, input)
   initializeAgents()
   installSignalHandlers()
   return resolvedConfig
@@ -56,10 +60,10 @@ export function initializeApp(input?: InitializeAppInput): LightClawConfig {
  * bootstrap across many incoming messages without re-registering agents or
  * signal handlers.
  */
-export function resetSessionContext(input: CommonStateInput): LightClawConfig {
+export async function resetSessionContext(input: CommonStateInput): Promise<LightClawConfig> {
   const config = getConfig()
   const resolvedConfig = resolveConfig(config, input)
-  writeSessionState(resolvedConfig, input)
+  await writeSessionState(resolvedConfig, input)
   return resolvedConfig
 }
 
@@ -85,14 +89,20 @@ function resolveConfig(
   }
 }
 
-function writeSessionState(
+async function writeSessionState(
   resolvedConfig: LightClawConfig,
   input: InitializeAppInput | undefined,
-): void {
+): Promise<void> {
   const resolvedCwd = input?.currentUserId
     ? path.resolve(workspaceFor(input.currentUserId))
     : path.resolve(input?.cwd ?? process.cwd())
-  mkdirSync(resolvedCwd, { recursive: true, mode: 0o700 })
+  await mkdir(resolvedCwd, { recursive: true, mode: 0o700 })
+  const existingRuntime = getRuntimeIfInitialized()
+  const reusableRuntime =
+    existingRuntime?.workspaceHostPath === resolvedCwd &&
+    existingRuntime.kind === resolvedConfig.runtime.backend
+      ? existingRuntime
+      : undefined
   initializeState({
     cwd: resolvedCwd,
     model: resolvedConfig.model,
@@ -105,6 +115,7 @@ function writeSessionState(
     lastExtractedAt: input?.lastExtractedAt,
     todos: input?.todos,
     permissionMode: input?.permissionMode ?? resolvedConfig.permissionMode,
+    runtime: reusableRuntime,
   })
   setFileRules(loadFileRules({
     cwd: resolvedCwd,
@@ -112,6 +123,14 @@ function writeSessionState(
     projectPath: resolvedConfig.permissionRuleFiles.project,
     localPath: resolvedConfig.permissionRuleFiles.local,
   }))
+  if (reusableRuntime) {
+    setRuntime(reusableRuntime)
+    return
+  }
+
+  const runtime = createRuntime(resolvedConfig.runtime.backend, { workspace: resolvedCwd })
+  await runtime.start()
+  setRuntime(runtime)
 }
 
 function installSignalHandlers(): void {
@@ -122,6 +141,11 @@ function installSignalHandlers(): void {
   const handleInterrupt = () => {
     if (!getAbortController().signal.aborted) {
       getAbortController().abort()
+    }
+    try {
+      void getRuntime().stop()
+    } catch {
+      // Runtime may not exist if a signal arrives during early bootstrap.
     }
   }
 

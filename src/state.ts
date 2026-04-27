@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { PermissionMode, PermissionRule } from './permission/types.js'
+import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
 
 type SessionState = {
@@ -23,6 +24,7 @@ type SessionState = {
   activeSkillAllowedTools?: string[]
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
+  runtime?: Runtime
 }
 
 let state: SessionState | null = null
@@ -41,6 +43,7 @@ export function initializeState(input: {
   permissionMode?: PermissionMode
   cliArgRules?: PermissionRule[]
   fileRules?: PermissionRule[]
+  runtime?: Runtime
 }): void {
   state = {
     sessionId: input.sessionId ?? randomUUID(),
@@ -62,6 +65,7 @@ export function initializeState(input: {
     activeSkillAllowedTools: undefined,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
+    runtime: input.runtime,
   }
 }
 
@@ -181,6 +185,23 @@ export function getFileRules(): PermissionRule[] {
 
 export function setFileRules(rules: PermissionRule[]): void {
   requireState().fileRules = [...rules]
+}
+
+export function getRuntime(): Runtime {
+  const runtime = requireState().runtime
+  if (!runtime) {
+    throw new Error('Runtime has not been initialized. Did initializeApp() complete?')
+  }
+
+  return runtime
+}
+
+export function getRuntimeIfInitialized(): Runtime | undefined {
+  return state?.runtime
+}
+
+export function setRuntime(runtime: Runtime): void {
+  requireState().runtime = runtime
 }
 
 export function getAllPermissionRules(): PermissionRule[] {

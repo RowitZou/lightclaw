@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -36,7 +35,7 @@ export const fileReadTool = buildTool({
   async call(input, context) {
     try {
       const targetPath = resolveInputPath(context.cwd, input.file_path)
-      const content = await readFile(targetPath, 'utf8')
+      const content = (await context.runtime.fs.readFile(targetPath)).toString('utf8')
       return {
         output: formatLines(content, input.offset ?? 1, input.limit),
       }

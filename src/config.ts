@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ProviderName } from './provider/types.js'
+import type { RuntimeKind } from './runtime/index.js'
 
 export type RoutingConfig = {
   main: string
@@ -58,6 +59,9 @@ export type LightClawConfig = {
     user?: string
     project?: string
   }
+  runtime: {
+    backend: RuntimeKind
+  }
 }
 
 type ConfigFileShape = {
@@ -106,6 +110,9 @@ type ConfigFileShape = {
   hookDirs?: {
     user?: string
     project?: string
+  }
+  runtime?: {
+    backend?: string
   }
 }
 
@@ -167,6 +174,18 @@ function parseProvider(value: string | undefined): ProviderName | undefined {
   }
 
   return undefined
+}
+
+function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  if (value === 'local' || value === 'docker' || value === 'rjob') {
+    return value
+  }
+
+  throw new Error(`Unknown runtime backend: ${value}`)
 }
 
 function parseStringList(value: string | undefined): string[] | undefined {
@@ -346,6 +365,10 @@ export function getConfig(): LightClawConfig {
         10_000,
     ),
   )
+  const runtimeBackend =
+    parseRuntimeBackend(process.env.LIGHTCLAW_RUNTIME_BACKEND) ??
+    parseRuntimeBackend(fileConfig.runtime?.backend) ??
+    'local'
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -407,6 +430,9 @@ export function getConfig(): LightClawConfig {
     hookDirs: {
       user: expandOptionalPath(fileConfig.hookDirs?.user),
       project: expandOptionalPath(fileConfig.hookDirs?.project),
+    },
+    runtime: {
+      backend: runtimeBackend,
     },
   }
 }

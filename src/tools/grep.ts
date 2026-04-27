@@ -1,12 +1,10 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import path from 'node:path'
 
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
+import type { Runtime } from '../runtime/index.js'
 
-const execFileAsync = promisify(execFile)
 const MAX_OUTPUT_CHARS = 30000
 
 function resolveInputPath(cwd: string, inputPath?: string): string {
@@ -29,14 +27,29 @@ async function runSearch(
   binary: 'rg' | 'grep',
   args: string[],
   cwd: string,
+  runtime: Runtime,
   signal: AbortSignal,
-): Promise<string> {
-  const result = await execFileAsync(binary, args, {
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const command = [binary, ...args.map(shellQuote)].join(' ')
+  const result = await runtime.exec({
+    command,
     cwd,
-    signal,
-    maxBuffer: 1024 * 1024,
+    abortSignal: signal,
+    maxBufferBytes: 1024 * 1024,
   })
-  return result.stdout.trimEnd()
+  return {
+    stdout: result.stdout.trimEnd(),
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function isCommandNotFound(result: { stderr: string; exitCode: number }): boolean {
+  return result.exitCode === 127 && result.stderr.includes('command not found')
 }
 
 export const grepTool = buildTool({
@@ -57,33 +70,51 @@ export const grepTool = buildTool({
         rgArgs.push('-g', input.include)
       }
       rgArgs.push(input.pattern, searchPath)
-      const output = await runSearch('rg', rgArgs, context.cwd, context.abortSignal)
-      return {
-        output: truncateOutput(output || '[no matches found]'),
+      const result = await runSearch(
+        'rg',
+        rgArgs,
+        context.cwd,
+        context.runtime,
+        context.abortSignal,
+      )
+
+      if (result.exitCode === 0) {
+        return {
+          output: truncateOutput(result.stdout || '[no matches found]'),
+        }
       }
-    } catch (error) {
-      const execError = error as { code?: string | number; stdout?: string }
-      if (execError.code === 'ENOENT') {
+
+      if (result.exitCode === 1) {
+        return { output: '[no matches found]' }
+      }
+
+      if (isCommandNotFound(result)) {
         try {
           const grepArgs = ['-rn']
           if (input.include) {
             grepArgs.push(`--include=${input.include}`)
           }
           grepArgs.push(input.pattern, searchPath)
-          const output = await runSearch(
+          const fallback = await runSearch(
             'grep',
             grepArgs,
             context.cwd,
+            context.runtime,
             context.abortSignal,
           )
-          return {
-            output: truncateOutput(output || '[no matches found]'),
+          if (fallback.exitCode === 0) {
+            return {
+              output: truncateOutput(fallback.stdout || '[no matches found]'),
+            }
           }
-        } catch (fallbackError) {
-          const fallbackExecError = fallbackError as { code?: number; message?: string }
-          if (fallbackExecError.code === 1) {
+          if (fallback.exitCode === 1) {
             return { output: '[no matches found]' }
           }
+          return {
+            output: fallback.stderr.trim() || `grep exited with code ${fallback.exitCode}`,
+            isError: true,
+          }
+        } catch (fallbackError) {
           return {
             output:
               fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
@@ -92,10 +123,11 @@ export const grepTool = buildTool({
         }
       }
 
-      if (execError.code === 1) {
-        return { output: '[no matches found]' }
+      return {
+        output: result.stderr.trim() || `rg exited with code ${result.exitCode}`,
+        isError: true,
       }
-
+    } catch (error) {
       return {
         output: error instanceof Error ? error.message : String(error),
         isError: true,

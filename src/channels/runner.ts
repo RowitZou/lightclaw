@@ -88,7 +88,7 @@ export class ChannelRunner {
       return
     }
 
-    const appConfig = initializeApp({
+    const appConfig = await initializeApp({
       cwd: this.strategy.cwd,
       permissionMode: this.strategy.permissionMode,
     })
@@ -116,7 +116,7 @@ export class ChannelRunner {
       const meta = await loadMeta(sessionId)
       const messages = await loadTranscript(sessionId)
       const workspace = workspaceFor(userId)
-      const appConfig = resetSessionContext({
+      const appConfig = await resetSessionContext({
         cwd: workspace,
         model: meta?.model,
         sessionId,

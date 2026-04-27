@@ -1,4 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -20,8 +19,7 @@ export const fileWriteTool = buildTool({
   async call(input, context) {
     try {
       const targetPath = resolveInputPath(context.cwd, input.file_path)
-      await mkdir(path.dirname(targetPath), { recursive: true })
-      await writeFile(targetPath, input.content, 'utf8')
+      await context.runtime.fs.writeFile(targetPath, input.content)
       return {
         output: `Wrote ${Buffer.byteLength(input.content, 'utf8')} bytes to ${targetPath}`,
       }

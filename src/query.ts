@@ -20,6 +20,7 @@ import {
   getCwd,
   getLastExtractedAt,
   getMemoryDir,
+  getRuntime,
   getSessionId,
   getTodos,
   incrementCompactionCount,
@@ -354,6 +355,7 @@ async function dispatchToolCall(
     const result = await tool.call(effectiveInput, {
       cwd: getCwd(),
       abortSignal: getAbortController().signal,
+      runtime: getRuntime(),
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 
