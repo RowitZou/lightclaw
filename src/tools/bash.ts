@@ -84,7 +84,10 @@ function violatesWorkspaceBoundary(
   cwd: string,
 ): { ok: true } | { ok: false; reason: string } {
   const normalized = command.replace(/\\/g, '/')
-  if (/\$HOME|\$\{HOME\}|(^|[\s"'=])~(\/|$)/.test(normalized)) {
+  // Tilde rule must catch ~user (e.g. `ls ~root/`) and bare `~` followed by
+  // whitespace, not just `~/...`. Bash performs tilde expansion at the start
+  // of any word, so any `~` after a separator should be denied.
+  if (/\$HOME|\$\{HOME\}|(^|[\s"'`=])~([\w/]|\s|$)/.test(normalized)) {
     return { ok: false, reason: 'Bash command references $HOME/~ outside the workspace.' }
   }
 
@@ -97,10 +100,14 @@ function violatesWorkspaceBoundary(
   }
 
   const root = path.resolve(cwd)
-  const absolutePathPattern = /(^|[\s"'`=])\/[^\s"'`;&|)]*/g
+  // The leading character class must include redirection / pipe / subshell /
+  // separator characters so paths like `cat </etc/x`, `>/etc/x`, `cmd|/etc/x`,
+  // `(/etc/x)`, `cmd;/etc/x`, `cmd&/etc/x` are all flagged. Without `<` and
+  // `>` here, IO redirection bypasses the boundary entirely.
+  const absolutePathPattern = /(?:^|[\s"'`=<>|;&(])(\/[^\s"'`;&|)<>]*)/g
   for (const match of normalized.matchAll(absolutePathPattern)) {
-    const token = match[0].trim().replace(/^["'`=]+|["'`]+$/g, '')
-    if (!token.startsWith('/')) {
+    const token = match[1]
+    if (!token || !token.startsWith('/')) {
       continue
     }
     const resolved = path.resolve(token)

@@ -322,10 +322,17 @@ function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMode): boo
 }
 
 function modeRank(mode: PermissionMode): number {
+  // Rank reflects actual looseness from permission/policy.ts:
+  //   plan              — only safe (read-only) tools allowed   → strictest
+  //   default           — safe runs free, write/execute ASK
+  //   acceptEdits       — safe + write run free, execute ASK
+  //   bypassPermissions — everything runs                       → loosest
+  // Ceiling=default therefore allows {plan, default} so a user who wants
+  // read-only mode can opt into plan without an admin bumping the ceiling.
   switch (mode) {
-    case 'default':
-      return 0
     case 'plan':
+      return 0
+    case 'default':
       return 1
     case 'acceptEdits':
       return 2
