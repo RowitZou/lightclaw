@@ -47,10 +47,12 @@ export class FeishuSender {
           assertOk(response, 'Feishu reply failed')
           return response
         }
+        process.stderr.write('feishu send: reply unavailable, fallback to create message\n')
       } catch (error) {
         if (!isWithdrawnReplyError(error)) {
           throw error
         }
+        process.stderr.write('feishu send: reply target unavailable, fallback to create message\n')
       }
     }
 

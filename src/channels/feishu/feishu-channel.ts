@@ -41,6 +41,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           + 'Populate one of the lists (or "*") or set feishu.enabled=false.\n',
         )
       }
+      process.stderr.write(
+        `feishu: starting transport=${config.transport} allowUsers=${summarizeAllowList(config.allowUsers)} allowChats=${summarizeAllowList(config.allowChats)} permissionMode=${config.permissionMode}\n`,
+      )
 
       const client = createFeishuClient(config)
       const sender = new FeishuSender(client, config)
@@ -52,6 +55,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       )
 
       const onMessage = async (raw: FeishuRawMessage): Promise<void> => {
+        process.stderr.write(
+          `feishu: inbound event=${raw.eventId} message=${raw.messageId}\n`,
+        )
         // sender displayName is intentionally not pre-fetched here. The
         // pairing path in the runner does a fire-and-forget lookup via
         // strategy.fetchSenderName so paired-user messages are not blocked
@@ -78,6 +84,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           if (downloaded) {
             message.mediaPath = downloaded.path
             message.mediaType = downloaded.mimeType
+            process.stderr.write(
+              `feishu: media saved message=${raw.messageId} path=${downloaded.path}\n`,
+            )
           } else {
             message.text = appendLine(message.text, '[媒体下载失败]')
           }
@@ -89,7 +98,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       if (config.transport === 'ws') {
         const handle = await startFeishuWsClient({ config, dedup, onMessage })
-        console.log('feishu ws client started (long-lived subscription, no public ingress)')
+        process.stderr.write('feishu: ws client started (long-lived subscription, no public ingress)\n')
         return { stop: () => handle.close() }
       }
 
@@ -99,10 +108,20 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         onMessage,
       })
       const { host, port, path: webhookPath } = config.webhook
-      console.log(`feishu webhook listening on ${host}:${port}${webhookPath}`)
+      process.stderr.write(`feishu: webhook listening on ${host}:${port}${webhookPath}\n`)
       return { stop: () => server.close() }
     },
   }
+}
+
+function summarizeAllowList(list: string[]): string {
+  if (list.length === 0) {
+    return 'empty'
+  }
+  if (list.includes('*')) {
+    return '*'
+  }
+  return `${list.length} entries`
 }
 
 function appendLine(text: string, line: string): string {

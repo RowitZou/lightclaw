@@ -12,11 +12,17 @@ export function isFeishuMessageAllowed(
   message: NormalizedChannelMessage,
   config: FeishuChannelConfig,
 ): boolean {
-  return matchesAllowList(config.allowChats, message.chatId) &&
-    matchesAllowList(config.allowUsers, message.senderOpenId)
+  if (config.allowChats.length === 0 && config.allowUsers.length === 0) {
+    return false
+  }
+  return matchesConfiguredAllowList(config.allowChats, message.chatId) &&
+    matchesConfiguredAllowList(config.allowUsers, message.senderOpenId)
 }
 
-function matchesAllowList(list: string[], value: string): boolean {
+function matchesConfiguredAllowList(list: string[], value: string): boolean {
+  if (list.length === 0) {
+    return true
+  }
   if (list.includes('*')) {
     return true
   }

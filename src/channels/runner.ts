@@ -109,6 +109,9 @@ export class ChannelRunner {
       return
     }
     if (!this.strategy.isMessageAllowed(message)) {
+      process.stderr.write(
+        `${this.strategy.channelId}: dropped disallowed message ${message.messageId}\n`,
+      )
       return
     }
     const sessionId = this.strategy.resolveSessionId(message, userId)
@@ -124,7 +127,7 @@ export class ChannelRunner {
         compactionCount: meta?.compactionCount,
         lastExtractedAt: meta?.lastExtractedAt,
         todos: meta?.todos,
-        permissionMode: this.strategy.permissionMode,
+        permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
         currentUserId: userId,
       })
       await refreshSkillRegistry(getCwd())
@@ -152,7 +155,10 @@ export class ChannelRunner {
       })
       if (slash.handled) {
         await persistMeta(Date.now(), messages.length)
-        await this.strategy.sendReply(message, slash.output.trim() || 'ok')
+        process.stderr.write(
+          `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
+        )
+        await this.sendReply(message, slash.output.trim() || 'ok')
         return
       }
 
@@ -162,6 +168,7 @@ export class ChannelRunner {
       const messageCountBeforeQuery = messages.length
       const provider = getProvider(appConfig)
       const channelId = this.strategy.channelId
+      process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
       const result = await query({
         config: appConfig,
@@ -189,8 +196,20 @@ export class ChannelRunner {
 
       await persistMeta(Date.now(), result.messages.length)
       await awaitBackgroundTasks()
-      await this.strategy.sendReply(message, result.lastAssistantText || '(no response)')
+      process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
+      await this.sendReply(message, result.lastAssistantText || '(no response)')
     })
+  }
+
+  private async sendReply(message: NormalizedChannelMessage, text: string): Promise<void> {
+    try {
+      await this.strategy.sendReply(message, text)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: send reply failed for message ${message.messageId}: ${detail}\n`,
+      )
+    }
   }
 
   private async resolveMessageUser(message: NormalizedChannelMessage): Promise<string | null> {
@@ -227,7 +246,7 @@ export class ChannelRunner {
         )
       }
       const freshness = result.created ? 'created' : 'reused'
-      await this.strategy.sendReply(
+      await this.sendReply(
         message,
         [
           'Welcome to LightClaw bot.',
@@ -238,7 +257,7 @@ export class ChannelRunner {
       )
     } catch (error) {
       if (error instanceof Error && error.message === 'rate-limited') {
-        await this.strategy.sendReply(
+        await this.sendReply(
           message,
           'Pairing request is rate limited. Ask the LightClaw operator to check `/identity pending`.',
         )

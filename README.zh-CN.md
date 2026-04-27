@@ -114,6 +114,10 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 渠道配置在 `~/.lightclaw/channels.json`。需要自动启动的渠道设置 `enabled: true`。
 
+飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
+
+Channel session 是非交互环境。`default` 模式下，终端里本应询问确认的写入 / 执行类工具会被拒绝。作为可信个人 bot 使用时，建议把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling 和 workspace boundary 作为安全护栏。
+
 ---
 
 ## Workspace 边界

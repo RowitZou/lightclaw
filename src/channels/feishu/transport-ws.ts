@@ -62,9 +62,11 @@ export async function startFeishuWsClient(input: {
     'im.message.receive_v1': async (data: ReceiveV1Data) => {
       const message = normalizeReceiveV1(data)
       if (!message) {
+        process.stderr.write('feishu ws: dropped empty or unsupported receive_v1 event\n')
         return
       }
       if (!await input.dedup.claim(message.eventId)) {
+        process.stderr.write(`feishu ws: dedup dropped event ${message.eventId}\n`)
         return
       }
       try {
@@ -104,6 +106,9 @@ export async function startFeishuWsClient(input: {
     const text = error instanceof Error ? error.message : String(error)
     process.stderr.write(`feishu ws: client error: ${text}\n`)
   })
+  process.stderr.write(
+    `feishu ws: start requested domain=${config.domain} proxy=${config.proxy ? 'on' : 'off'}\n`,
+  )
 
   return {
     async close() {
