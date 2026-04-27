@@ -12,9 +12,12 @@ The default experience is simple: start `lightclaw`, chat naturally, and let the
 
 ```bash
 pnpm install
-pnpm build
-node dist/cli.js
+pnpm dev                 # tsx src/cli.ts — fastest iteration, no build needed
+# or
+pnpm build && pnpm start # build to dist/cli.js then run with node
 ```
+
+Requires Node 22+ and pnpm 10+.
 
 Put credentials in `~/.lightclaw/config.json` or environment variables:
 
@@ -72,6 +75,26 @@ Admin-only commands:
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu / WeChat account.
 
+### Permission Modes And Ceiling
+
+Four permission modes from strictest to loosest:
+
+| Mode | What runs without asking |
+|---|---|
+| `plan` | Read and search tools. Write, edit, execute, network fetch, and subagent tools are denied. |
+| `default` | Read and search tools. Write, edit, execute, network fetch, and subagent tools ask for confirmation (interactive) or are denied (non-interactive). |
+| `acceptEdits` | Read, search, write, and edit tools. Execute, network fetch, and subagent tools still ask. |
+| `bypassPermissions` | Everything runs without prompting. |
+
+`/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `default`, which lets users opt into the safer `plan` or stay on `default`. To allow looser modes, the admin must bump the ceiling first:
+
+```text
+/ceiling bypassPermissions   # admin: raise ceiling for everyone (admin included)
+/mode bypassPermissions      # then any user can switch
+```
+
+This two-step flow applies to the admin too — there is no environment variable shortcut.
+
 ---
 
 ## Identity And Channels
@@ -101,9 +124,21 @@ Phase 10 removes the old "project cwd" mental model. File tools and Bash run ins
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` are denied outside that workspace before normal permission rules run. `Bash` rejects obvious workspace escapes such as absolute paths outside the workspace, `..`, `$HOME`, and `~`.
+`Read` / `Write` / `Edit` / `Glob` / `Grep` resolve their target path against the workspace before normal permission rules run; anything outside is denied. The boundary fires **before** the rule chain, so `bypassPermissions` mode does not lift it.
 
-This boundary still is not a real process sandbox; symlinks, `eval`, and indirect shell tricks are future hardening work.
+`Bash` runs with `cwd` set to the workspace and rejects, before exec:
+
+- absolute paths outside the workspace, including those introduced by IO redirection (`cat </etc/x`, `echo >/tmp/y`), pipes (`cmd|/etc/x`), separators (`cmd;/etc/x`, `cmd&/etc/x`), and subshell parentheses (`(/etc/x)`)
+- relative escapes via `..`
+- tilde expansion in any form: `~/foo`, `~user/...`, bare `~` followed by whitespace or end-of-command
+- `$HOME` / `${HOME}` references
+- `cd` / `pushd` without an explicit in-workspace path
+
+This is still not a real process sandbox. The following are accepted bypass classes that a real container or `firejail` will close in a later phase:
+
+- `eval` and other indirect string evaluation (`bash -c "$var"`)
+- variable interpolation that hides absolute paths (`p=/etc; cat $p/passwd`)
+- symlinks placed inside the workspace pointing outward
 
 ---
 
@@ -139,16 +174,24 @@ Selected environment variables:
 src/
 ├── cli.ts              # tiny CLI surface, auto-resume, channel auto-start
 ├── init.ts             # config + workspace-scoped state initialization
+├── init-wizard.ts      # first-run admin setup, terminal user resolution
 ├── repl.ts             # readline REPL + slash dispatch
-├── commands/           # /help, /model, /mode, /identity, /ceiling
-├── channels/           # Feishu / WeChat runners and channel slash dispatch
+├── query.ts            # main agent loop (tool dispatch, auto-compact)
+├── prompt.ts           # system prompt builder
+├── state.ts            # process-level session state singleton
+├── commands/           # /help, /model, /mode, /identity, /ceiling, channel dispatch
+├── channels/           # Feishu / WeChat runners, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy plus hard workspace boundary
-├── tools/              # built-in tools
-├── skill/              # loader, registry, bundled skills
+├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)
+├── agents/             # general-purpose / explore subagents
+├── skill/              # loader, registry, bundled skills (verify, remember)
 ├── memory/             # LIGHTCLAW.md discovery and user memory
+├── session/            # transcript JSONL + meta + auto-compact
 ├── mcp/                # MCP client
 ├── hooks/              # lifecycle hook loader
+├── web/                # WebFetch / WebSearch helpers
+├── todos/              # TodoWrite store
 └── provider/           # Anthropic / OpenAI-compatible providers
 ```
 

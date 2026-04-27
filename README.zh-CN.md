@@ -12,9 +12,12 @@ LightClaw 是一个自托管个人 AI 助手，可以住在终端里，也可以
 
 ```bash
 pnpm install
-pnpm build
-node dist/cli.js
+pnpm dev                 # tsx src/cli.ts —— 免构建，迭代最快
+# 或者
+pnpm build && pnpm start # 先 build 到 dist/cli.js 再 node 跑
 ```
+
+需要 Node 22+ 和 pnpm 10+。
 
 凭据可以放在 `~/.lightclaw/config.json`，也可以走环境变量：
 
@@ -72,6 +75,26 @@ Admin 专属：
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书 / 微信里审批 pairing code。
 
+### 权限模式与 ceiling
+
+四个 permission mode，从严到宽：
+
+| Mode | 不询问就能跑的工具 |
+|---|---|
+| `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
+| `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
+| `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
+| `bypassPermissions` | 全部自动放行。 |
+
+`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `default`，用户可以主动切到更安全的 `plan` 或留在 `default`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
+
+```text
+/ceiling bypassPermissions   # admin: 抬升所有人（含 admin 自己）的上限
+/mode bypassPermissions      # 然后任何 user 才能切过去
+```
+
+这套两步显式流程对 admin 自己同样生效——没有环境变量短路通道。
+
 ---
 
 ## 身份与渠道
@@ -95,15 +118,27 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 ## Workspace 边界
 
-Phase 10 移除了旧的“项目 cwd”心智模型。文件工具和 Bash 都锁在当前用户的私有 workspace：
+Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁在当前用户的私有 workspace：
 
 ```text
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` 在普通权限规则之前先做 workspace 边界检查，越界直接 deny。`Bash` 会拒绝明显逃逸形式，比如 workspace 外绝对路径、`..`、`$HOME`、`~`。
+`Read` / `Write` / `Edit` / `Glob` / `Grep` 在普通权限规则**之前**就把目标路径解析到 workspace 上做边界检查，越界直接 deny。该检查前置在 rule chain 之前，**`bypassPermissions` 模式无法绕过**。
 
-这还不是真正的进程沙箱；symlink、`eval`、间接 shell 拼接仍属于后续安全加固范围。
+`Bash` 的 `cwd` 锁到 workspace，并在 exec 之前拒绝以下形式：
+
+- workspace 外的绝对路径，包括 IO 重定向（`cat </etc/x`、`echo >/tmp/y`）、管道（`cmd|/etc/x`）、命令分隔符（`cmd;/etc/x`、`cmd&/etc/x`）和子 shell 括号（`(/etc/x)`）引入的绝对路径
+- `..` 相对路径逃逸
+- 各种 tilde 展开形式：`~/foo`、`~user/...`、`~` 单独后跟空白或行尾
+- `$HOME` / `${HOME}` 变量引用
+- 没有显式 workspace 内路径的 `cd` / `pushd`
+
+这仍然不是真正的进程沙箱。下面这些已知绕过类要等后续 phase 用容器 / `firejail` 等真正进程隔离来覆盖：
+
+- `eval` 等间接字符串求值（`bash -c "$var"`）
+- 通过变量插值隐藏绝对路径（`p=/etc; cat $p/passwd`）
+- workspace 内放 symlink 指向外面
 
 ---
 
@@ -139,16 +174,24 @@ MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/`
 src/
 ├── cli.ts              # 极简 CLI、auto-resume、channel auto-start
 ├── init.ts             # config + workspace-scoped state 初始化
+├── init-wizard.ts      # 首次启动 admin 创建、终端 user 解析
 ├── repl.ts             # readline REPL + slash dispatch
-├── commands/           # /help、/model、/mode、/identity、/ceiling
-├── channels/           # 飞书 / 微信 runner 与 channel slash dispatch
+├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
+├── prompt.ts           # system prompt 构造
+├── state.ts            # 进程级 session state 单例
+├── commands/           # /help、/model、/mode、/identity、/ceiling、channel dispatch
+├── channels/           # 飞书 / 微信 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy + workspace hard boundary
-├── tools/              # 内置工具
-├── skill/              # loader、registry、内置 skill
+├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
+├── agents/             # general-purpose / explore 子 Agent
+├── skill/              # loader、registry、内置 skill（verify、remember）
 ├── memory/             # LIGHTCLAW.md 发现与 user memory
+├── session/            # 会话 JSONL transcript + meta + auto-compact
 ├── mcp/                # MCP Client
 ├── hooks/              # 生命周期 hook loader
+├── web/                # WebFetch / WebSearch 辅助
+├── todos/              # TodoWrite 存储
 └── provider/           # Anthropic / OpenAI-compatible provider
 ```
 
