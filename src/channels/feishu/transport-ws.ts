@@ -45,17 +45,11 @@ export async function startFeishuWsClient(input: {
   if (!config.appId || !config.appSecret) {
     throw new Error('Feishu WS transport requires feishu.appId and feishu.appSecret.')
   }
-  if (!config.encryptKey) {
-    throw new Error(
-      'Feishu WS transport requires feishu.encryptKey in ~/.lightclaw/channels.json. '
-      + 'Without it the Lark SDK cannot decrypt incoming events.',
-    )
-  }
 
   const eventDispatcher = new Lark.EventDispatcher({
-    encryptKey: config.encryptKey,
-    verificationToken: config.verificationToken,
     loggerLevel: Lark.LoggerLevel.warn,
+    ...(config.encryptKey ? { encryptKey: config.encryptKey } : {}),
+    ...(config.verificationToken ? { verificationToken: config.verificationToken } : {}),
   })
 
   eventDispatcher.register({

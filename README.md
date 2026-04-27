@@ -114,7 +114,7 @@ Each canonical user gets:
 
 Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for the channels you want the main `lightclaw` process to start.
 
-For Feishu, `transport: "ws"` is the default and does not require a public webhook endpoint. `allowUsers` and `allowChats` are checked only when the corresponding list is non-empty; if both lists are empty, every incoming message is dropped. Use `["*"]` to allow a dimension intentionally.
+For Feishu, `transport: "ws"` is the default and does not require a public webhook endpoint. If the Feishu app's long-connection events are not encrypted, `encryptKey` and `verificationToken` can be omitted for WS mode; when encryption is enabled, set `encryptKey` so incoming events can be decrypted. `allowUsers` and `allowChats` are checked only when the corresponding list is non-empty; if both lists are empty, every incoming message is dropped. Use `["*"]` to allow a dimension intentionally.
 
 Channel sessions are non-interactive. In `default` mode, write/execute tool calls that would normally ask in the terminal are denied. For a trusted personal bot, configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, and the workspace boundary as the safety rails.
 

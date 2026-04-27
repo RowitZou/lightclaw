@@ -29,10 +29,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       if (!config.enabled) {
         throw new Error('Feishu channel is disabled in ~/.lightclaw/channels.json.')
       }
-      if (!config.encryptKey) {
+      if (config.transport === 'webhook' && !config.encryptKey) {
         throw new Error(
-          'Feishu channel requires feishu.encryptKey in ~/.lightclaw/channels.json. '
-          + 'Both transports use it (ws decrypts events, webhook verifies signatures).',
+          'Feishu webhook transport requires feishu.encryptKey in ~/.lightclaw/channels.json '
+          + 'to verify signatures and decrypt encrypted events.',
         )
       }
       if (config.allowUsers.length === 0 && config.allowChats.length === 0) {
@@ -42,7 +42,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         )
       }
       process.stderr.write(
-        `feishu: starting transport=${config.transport} allowUsers=${summarizeAllowList(config.allowUsers)} allowChats=${summarizeAllowList(config.allowChats)} permissionMode=${config.permissionMode}\n`,
+        `feishu: starting transport=${config.transport} encryption=${config.encryptKey ? 'on' : 'off'} allowUsers=${summarizeAllowList(config.allowUsers)} allowChats=${summarizeAllowList(config.allowChats)} permissionMode=${config.permissionMode}\n`,
       )
 
       const client = createFeishuClient(config)
