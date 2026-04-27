@@ -124,7 +124,12 @@ export class ChannelRunner {
         compactionCount: meta?.compactionCount,
         lastExtractedAt: meta?.lastExtractedAt,
         todos: meta?.todos,
-        permissionMode: this.strategy.permissionMode,
+        // Prefer the persisted session mode so an in-channel `/mode <m>`
+        // survives across messages. The channels.json default only applies
+        // for the first message of a session (when meta does not exist
+        // yet); after that the user-driven mode change is the source of
+        // truth, mirroring how the REPL resumes mode from meta.
+        permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
         currentUserId: userId,
       })
       await refreshSkillRegistry(getCwd())
