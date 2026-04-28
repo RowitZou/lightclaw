@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 
-import { parsePermissionMode } from '../config.js'
+import { getConfig, parsePermissionMode } from '../config.js'
 import {
   addLink,
   createUser,
@@ -205,19 +205,58 @@ async function runIdentityCommand(rawArgs: string): Promise<string> {
       return identityUnlink(args)
     case 'remove':
       return identityRemove(args)
-    default:
+    default: {
+      const adminId = await getAdmin()
+      const isLocal = getConfig().runtime.backend === 'local'
+      const header = isLocal && adminId
+        ? `Usage (LocalRuntime is single-user; bind only as admin "${adminId}"):`
+        : 'Usage:'
+      const approveLine = isLocal && adminId
+        ? `  /identity approve <code> --as ${adminId}`
+        : '  /identity approve <code> --as <name>'
+      const linkLine = isLocal && adminId
+        ? `  /identity link ${adminId} <channel:id>`
+        : '  /identity link <name> <channel:id>'
       return [
-        'Usage:',
+        header,
         '  /identity list',
         '  /identity pending',
-        '  /identity approve <code> --as <name>',
+        approveLine,
         '  /identity reject <code>',
-        '  /identity link <name> <channel:id>',
+        linkLine,
         '  /identity unlink <channel:id>',
         '  /identity remove <name> [--purge]',
         '',
       ].join('\n')
+    }
   }
+}
+
+/**
+ * In LocalRuntime, only the admin canonical user can be bound to a channel
+ * sender — any other identity would be rejected at runtime acquire time
+ * (see init.ts:LocalRuntimeAdminOnlyError). Reject upfront at approve / link
+ * time so the operator gets immediate, actionable feedback instead of
+ * approving + linking + then watching the user receive a single-user-mode
+ * rejection in Feishu / WeChat. Admin not yet wizarded → no constraint
+ * (wizard path runs before any pairing can happen).
+ */
+async function rejectNonAdminInLocal(name: string): Promise<string | null> {
+  if (getConfig().runtime.backend !== 'local') {
+    return null
+  }
+  const adminId = await getAdmin()
+  if (!adminId || name === adminId) {
+    return null
+  }
+  return [
+    `LocalRuntime is single-user; cannot bind sender as "${name}".`,
+    `Only the admin user "${adminId}" can be bound on this LightClaw instance.`,
+    `Either re-run with --as ${adminId} (this aliases the sender to admin),`,
+    `or switch runtime.backend to "docker" in ~/.lightclaw/config.json to enable`,
+    `multi-user mode.`,
+    '',
+  ].join('\n')
 }
 
 async function identityList(): Promise<string> {
@@ -265,6 +304,12 @@ async function identityApprove(args: string[]): Promise<string> {
   if (!code || !name) {
     return 'Usage: /identity approve <code> --as <name>\n'
   }
+  // Gate before approveCode consumes the pending entry, so a rejected
+  // approval leaves the pending intact for retry with the correct name.
+  const reject = await rejectNonAdminInLocal(name)
+  if (reject) {
+    return reject
+  }
   const entry = await approveCode(code)
   if (!entry) {
     return `No pending pairing code: ${code}\n`
@@ -300,6 +345,10 @@ async function identityLink(args: string[]): Promise<string> {
   const [name, rawLink] = args
   if (!name || !rawLink) {
     return 'Usage: /identity link <name> <channel:id>\n'
+  }
+  const reject = await rejectNonAdminInLocal(name)
+  if (reject) {
+    return reject
   }
   try {
     parseSenderKey(rawLink)
