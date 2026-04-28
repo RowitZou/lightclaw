@@ -147,19 +147,51 @@ function installSignalHandlers(): void {
     return
   }
 
-  const handleInterrupt = () => {
+  let interruptHandled = false
+  const handleInterrupt = (exitCode: number) => {
+    if (interruptHandled) {
+      // Second signal — user is impatient; exit immediately.
+      process.stderr.write('LightClaw: second interrupt received, exiting now\n')
+      process.exit(exitCode)
+    }
+    interruptHandled = true
+
     if (!getAbortController().signal.aborted) {
       getAbortController().abort()
     }
-    try {
-      void getRuntime().stop()
-      void getRuntimePool().releaseAll()
-    } catch {
-      // Runtime may not exist if a signal arrives during early bootstrap.
-    }
+
+    // Best-effort async cleanup, then exit. Without explicit process.exit
+    // the channel runners' ws connections / reaper interval / readline
+    // would keep the event loop alive indefinitely.
+    void Promise.allSettled([
+      runtimeStopSafely(),
+      runtimePoolReleaseSafely(),
+    ]).finally(() => process.exit(exitCode))
+
+    // Hard cap if cleanup hangs (e.g. docker daemon unresponsive).
+    setTimeout(() => {
+      process.stderr.write('LightClaw: cleanup timeout (5s), force exit\n')
+      process.exit(exitCode)
+    }, 5_000)
   }
 
-  process.on('SIGINT', handleInterrupt)
-  process.on('SIGTERM', handleInterrupt)
+  process.on('SIGINT', () => handleInterrupt(130))
+  process.on('SIGTERM', () => handleInterrupt(143))
   signalHandlersInstalled = true
+}
+
+async function runtimeStopSafely(): Promise<void> {
+  try {
+    await getRuntime().stop()
+  } catch {
+    // Runtime may not exist if a signal arrives during early bootstrap.
+  }
+}
+
+async function runtimePoolReleaseSafely(): Promise<void> {
+  try {
+    await getRuntimePool().releaseAll()
+  } catch {
+    // Pool may not exist if a signal arrives during early bootstrap.
+  }
 }
