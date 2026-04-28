@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { PermissionMode, PermissionRule } from './permission/types.js'
+import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
 
@@ -28,6 +29,7 @@ type SessionState = {
 }
 
 let state: SessionState | null = null
+let runtimePool: RuntimePool | null = null
 
 export function initializeState(input: {
   cwd: string
@@ -202,6 +204,11 @@ export function getRuntimeIfInitialized(): Runtime | undefined {
 
 export function setRuntime(runtime: Runtime): void {
   requireState().runtime = runtime
+}
+
+export function getRuntimePool(): RuntimePool {
+  runtimePool ??= new RuntimePool()
+  return runtimePool
 }
 
 export function getAllPermissionRules(): PermissionRule[] {

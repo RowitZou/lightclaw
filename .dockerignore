@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+*.md
+*.test.ts
+src
+package*.json
+pnpm-lock.yaml
+tsconfig*.json
+README*

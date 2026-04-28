@@ -1,5 +1,6 @@
+import { DockerRuntime, type DockerRuntimeConfig } from './docker.js'
 import { LocalRuntime } from './local.js'
-import type { Runtime, RuntimeKind } from './types.js'
+import type { Runtime } from './types.js'
 
 export type {
   ExecInput,
@@ -10,16 +11,19 @@ export type {
   RuntimeKind,
   RuntimeStat,
 } from './types.js'
+export { DockerRuntime, type DockerRuntimeConfig } from './docker.js'
 
-export function createRuntime(
-  kind: RuntimeKind,
-  options: { workspaceRoot: string },
-): Runtime {
-  switch (kind) {
+export type CreateRuntimeOptions =
+  | { kind: 'local'; workspaceRoot: string }
+  | { kind: 'docker'; config: DockerRuntimeConfig }
+  | { kind: 'rjob' }
+
+export function createRuntime(options: CreateRuntimeOptions): Runtime {
+  switch (options.kind) {
     case 'local':
       return new LocalRuntime(options.workspaceRoot)
     case 'docker':
-      throw new Error('Runtime backend "docker" is not yet implemented (Phase 11.2).')
+      return new DockerRuntime(options.config)
     case 'rjob':
       throw new Error('Runtime backend "rjob" is not yet implemented (Phase 11.3).')
   }

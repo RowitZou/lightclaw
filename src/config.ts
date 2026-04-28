@@ -6,6 +6,25 @@ import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ProviderName } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 
+export type DockerMountConfig = {
+  host: string
+  container: string
+  mode: 'rw' | 'ro'
+}
+
+export type DockerRuntimeSettings = {
+  image?: string
+  imageOverride?: string
+  idleTimeoutMs: number
+  memoryLimit: string
+  cpuLimit: number
+  network: string
+  mounts: DockerMountConfig[]
+  tmpfs: string[]
+  env: Record<string, string>
+  autoPull: boolean
+}
+
 export type RoutingConfig = {
   main: string
   compact?: string
@@ -62,6 +81,7 @@ export type LightClawConfig = {
   }
   runtime: {
     backend: RuntimeKind
+    docker: DockerRuntimeSettings
   }
 }
 
@@ -115,8 +135,28 @@ type ConfigFileShape = {
   }
   runtime?: {
     backend?: string
+    docker?: {
+      image?: string
+      imageOverride?: string
+      idleTimeoutMs?: number
+      memoryLimit?: string
+      cpuLimit?: number
+      network?: string
+      mounts?: Array<{
+        host?: string
+        container?: string
+        mode?: string
+      }>
+      tmpfs?: string[]
+      env?: Record<string, string>
+      autoPull?: boolean
+    }
   }
 }
+
+type ConfigFileDockerMount = NonNullable<
+  NonNullable<ConfigFileShape['runtime']>['docker']
+>['mounts'] extends Array<infer T> | undefined ? T : never
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6'
 const DEFAULT_ALLOWED_MODELS = [
@@ -138,6 +178,8 @@ function expandHomePath(input: string): string {
   }
 
   return input
+    .replace(/\$\{HOME\}/g, homedir())
+    .replace(/\$\{USER\}/g, process.env.USER ?? '')
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
@@ -197,6 +239,38 @@ function parseStringList(value: string | undefined): string[] | undefined {
 
   const items = value.split(',').map(item => item.trim()).filter(Boolean)
   return items.length > 0 ? items : undefined
+}
+
+function validateDockerMounts(
+  mounts: ConfigFileDockerMount[] | undefined,
+): DockerMountConfig[] {
+  if (!mounts) {
+    return []
+  }
+
+  if (!Array.isArray(mounts)) {
+    throw new Error('runtime.docker.mounts must be an array.')
+  }
+
+  return mounts.map((mount, index) => {
+    if (!mount || typeof mount !== 'object') {
+      throw new Error(`runtime.docker.mounts[${index}] must be an object.`)
+    }
+    if (!mount.host || !mount.container) {
+      throw new Error(`runtime.docker.mounts[${index}] requires host and container.`)
+    }
+    if (!mount.container.startsWith('/')) {
+      throw new Error(`runtime.docker.mounts[${index}].container must be absolute.`)
+    }
+    if (mount.mode !== 'rw' && mount.mode !== 'ro') {
+      throw new Error(`runtime.docker.mounts[${index}].mode must be "rw" or "ro".`)
+    }
+    return {
+      host: path.resolve(expandHomePath(mount.host)),
+      container: path.posix.normalize(mount.container),
+      mode: mount.mode,
+    }
+  })
 }
 
 function expandOptionalPath(value: string | undefined): string | undefined {
@@ -379,6 +453,19 @@ export function getConfig(): LightClawConfig {
     parseRuntimeBackend(process.env.LIGHTCLAW_RUNTIME_BACKEND) ??
     parseRuntimeBackend(fileConfig.runtime?.backend) ??
     'local'
+  const dockerConfig = fileConfig.runtime?.docker ?? {}
+  const dockerIdleTimeoutMs = Math.max(
+    60_000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS) ??
+        dockerConfig.idleTimeoutMs ??
+        1_800_000,
+    ),
+  )
+  const dockerCpuLimit = Math.max(0.1, Number(dockerConfig.cpuLimit ?? 4))
+  const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
+    ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
+    : ['/tmp']
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -444,6 +531,20 @@ export function getConfig(): LightClawConfig {
     },
     runtime: {
       backend: runtimeBackend,
+      docker: {
+        ...(dockerConfig.image ? { image: dockerConfig.image } : {}),
+        ...(process.env.LIGHTCLAW_DOCKER_IMAGE || dockerConfig.imageOverride
+          ? { imageOverride: process.env.LIGHTCLAW_DOCKER_IMAGE ?? dockerConfig.imageOverride }
+          : {}),
+        idleTimeoutMs: dockerIdleTimeoutMs,
+        memoryLimit: dockerConfig.memoryLimit ?? '4g',
+        cpuLimit: dockerCpuLimit,
+        network: dockerConfig.network ?? 'bridge',
+        mounts: validateDockerMounts(dockerConfig.mounts),
+        tmpfs: dockerTmpfs,
+        env: dockerConfig.env ?? {},
+        autoPull: dockerConfig.autoPull ?? true,
+      },
     },
   }
 }

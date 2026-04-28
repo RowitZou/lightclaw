@@ -7,11 +7,10 @@ import { workspaceFor } from './identity/paths.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
-import { createRuntime } from './runtime/index.js'
 import {
   getAbortController,
   getRuntime,
-  getRuntimeIfInitialized,
+  getRuntimePool,
   initializeState,
   resetAbortController,
   clearActiveSkillAllowedTools,
@@ -50,6 +49,8 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   await writeSessionState(resolvedConfig, input)
   initializeAgents()
   installSignalHandlers()
+  getRuntimePool().startReaper()
+  await getRuntimePool().sweepOrphans(resolvedConfig)
   return resolvedConfig
 }
 
@@ -97,12 +98,8 @@ async function writeSessionState(
     ? path.resolve(workspaceFor(input.currentUserId))
     : path.resolve(input?.cwd ?? process.cwd())
   await mkdir(resolvedCwd, { recursive: true, mode: 0o700 })
-  const existingRuntime = getRuntimeIfInitialized()
-  const reusableRuntime =
-    existingRuntime?.workspaceRoot === resolvedCwd &&
-    existingRuntime.kind === resolvedConfig.runtime.backend
-      ? existingRuntime
-      : undefined
+  const runtimeUserId = input?.currentUserId ?? '__terminal__'
+  const runtime = getRuntimePool().acquire(runtimeUserId, resolvedConfig, resolvedCwd)
   initializeState({
     cwd: resolvedCwd,
     model: resolvedConfig.model,
@@ -115,7 +112,7 @@ async function writeSessionState(
     lastExtractedAt: input?.lastExtractedAt,
     todos: input?.todos,
     permissionMode: input?.permissionMode ?? resolvedConfig.permissionMode,
-    runtime: reusableRuntime,
+    runtime,
   })
   setFileRules(loadFileRules({
     cwd: resolvedCwd,
@@ -123,13 +120,6 @@ async function writeSessionState(
     projectPath: resolvedConfig.permissionRuleFiles.project,
     localPath: resolvedConfig.permissionRuleFiles.local,
   }))
-  if (reusableRuntime) {
-    setRuntime(reusableRuntime)
-    return
-  }
-
-  const runtime = createRuntime(resolvedConfig.runtime.backend, { workspaceRoot: resolvedCwd })
-  await runtime.start()
   setRuntime(runtime)
 }
 
@@ -144,6 +134,7 @@ function installSignalHandlers(): void {
     }
     try {
       void getRuntime().stop()
+      void getRuntimePool().releaseAll()
     } catch {
       // Runtime may not exist if a signal arrives during early bootstrap.
     }

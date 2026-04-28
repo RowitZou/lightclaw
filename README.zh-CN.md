@@ -69,6 +69,7 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/help` | 显示当前 model/mode、可用 model/mode、skill 目录和命令。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 在当前 ceiling 内切换 permission mode。 |
+| `/sandbox reset` | 重置自己的 Docker sandbox：保留 workspace 文件，丢弃容器 writable layer。 |
 
 Admin 专属：
 
@@ -153,7 +154,7 @@ Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁�
 | Backend | 状态 | 行为 |
 |---|---|---|
 | `local`（默认）| 已交付（Phase 11 Iter 1-Redesign）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，信任边界仍等同 Phase 10。 |
-| `docker` | 未实现 | 后续会启动一个长跑 host 容器，把 workspace 绑定挂载，工具通过 `docker exec` 跑，`--cap-drop ALL` + 最小 cap 兜底。 |
+| `docker` | 已交付（Phase 11 Iter 2）| environment-domain 工具在 per-user 长跑 Docker 容器内执行。用户 workspace bind mount 到 `/workspace`；helper 脚本在 `/opt/lightclaw/sandbox-helpers`；idle 容器会 stop，之后再 start，保留 writable layer。 |
 | `rjob` | 未实现 | 后续会通过 `rjob`（kubebrain）提交集群任务，复用 gpfs 作为共享 workspace 挂载。 |
 
 选了未实现的 backend 启动会显式报错——harness 永远不静默 fallback。
@@ -163,10 +164,34 @@ Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/`
 ```jsonc
 {
   "runtime": {
-    "backend": "local"
+    "backend": "docker",
+    "docker": {
+      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
+      "idleTimeoutMs": 1800000,
+      "memoryLimit": "4g",
+      "cpuLimit": 4,
+      "network": "bridge",
+      "tmpfs": ["/tmp"],
+      "mounts": [
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" }
+      ],
+      "env": {
+        "http_proxy": "http://127.0.0.1:1080",
+        "https_proxy": "http://127.0.0.1:1080"
+      },
+      "autoPull": true
+    }
   }
 }
 ```
+
+Docker backend 说明：
+
+- 需要 Docker 20.10+，且当前用户必须有访问 Docker daemon 的权限。
+- 默认镜像是 `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>`；也可用 `runtime.docker.image`、`runtime.docker.imageOverride` 或 `LIGHTCLAW_DOCKER_IMAGE` 覆盖。
+- 一个 canonical user 对应一个容器，命名为 `lightclaw-sandbox-<user>-<deploymentHash>`，terminal / 飞书 / 微信共享同一 user 容器。
+- idle 回收走 `docker stop`，不是 `docker rm`：workspace 文件和容器 writable layer 会保留。`/sandbox reset` 才会删除容器，并在下次 environment tool call 时重建。
+- Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、Bash/coreutils、ripgrep、git、curl、Python 3、build-essential 和 sandbox helpers。
 
 ---
 
@@ -195,7 +220,9 @@ MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/`
 | `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 关闭子系统 |
 | `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | 执行 runtime backend：`local`（默认），`docker` / `rjob` 未实现 |
+| `LIGHTCLAW_RUNTIME_BACKEND` | 执行 runtime backend：`local`（默认）、`docker` 或未来的 `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` | 覆盖 DockerRuntime 镜像 |
+| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖 DockerRuntime idle stop 时间 |
 
 ---
 
@@ -210,12 +237,12 @@ src/
 ├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例
-├── commands/           # /help、/model、/mode、/identity、/ceiling、channel dispatch
+├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
 ├── channels/           # 飞书 / 微信 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy + workspace hard boundary
 ├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
-├── runtime/            # Runtime 抽象层；当前是 LocalRuntime，Docker / Rjob 待加
+├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、未来 Rjob
 ├── agents/             # general-purpose / explore 子 Agent
 ├── skill/              # loader、registry、内置 skill（verify、remember）
 ├── memory/             # LIGHTCLAW.md 发现与 user memory
@@ -225,7 +252,7 @@ src/
 ├── todos/              # TodoWrite 存储
 └── provider/           # Anthropic / OpenAI-compatible provider
 scripts/
-└── sandbox-helpers/    # 通过 Runtime 执行的 Python helper（WebFetch / WebSearch）
+└── sandbox-helpers/    # 通过 Runtime 执行的 Python helper（WebFetch / WebSearch / Glob）
 ```
 
 ## License

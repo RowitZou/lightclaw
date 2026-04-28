@@ -70,6 +70,7 @@ User-visible commands:
 | `/help` | Show current model/mode, available models/modes, skills, and commands. |
 | `/model <name>` | Switch the current session model. |
 | `/mode <mode>` | Switch permission mode within the current ceiling. |
+| `/sandbox reset` | Reset your Docker sandbox, preserving workspace files but discarding the container writable layer. |
 
 Admin-only commands:
 
@@ -154,7 +155,7 @@ Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active
 | Backend | Status | What it does |
 |---|---|---|
 | `local` (default) | shipped (Phase 11 Iter 1-Redesign) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; equivalent trust boundary to Phase 10. |
-| `docker` | not yet implemented | Will run a long-lived host container with workspace bind-mounted, executing tools via `docker exec` with `--cap-drop ALL` plus minimal caps. |
+| `docker` | shipped (Phase 11 Iter 2) | Runs environment-domain tools inside a per-user long-lived Docker container. The user workspace is bind-mounted at `/workspace`; helper scripts live at `/opt/lightclaw/sandbox-helpers`; idle containers are stopped and later restarted with their writable layer preserved. |
 | `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
 
 Selecting a backend that is not yet implemented fails loudly at startup — the harness never silently falls back.
@@ -164,10 +165,34 @@ The Runtime layer is a forward-compatible foundation: adding a backend means wri
 ```jsonc
 {
   "runtime": {
-    "backend": "local"
+    "backend": "docker",
+    "docker": {
+      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
+      "idleTimeoutMs": 1800000,
+      "memoryLimit": "4g",
+      "cpuLimit": 4,
+      "network": "bridge",
+      "tmpfs": ["/tmp"],
+      "mounts": [
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" }
+      ],
+      "env": {
+        "http_proxy": "http://127.0.0.1:1080",
+        "https_proxy": "http://127.0.0.1:1080"
+      },
+      "autoPull": true
+    }
   }
 }
 ```
+
+Docker backend notes:
+
+- Requires Docker 20.10+ and permission to access the Docker daemon.
+- The default image is `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>` unless `runtime.docker.image`, `runtime.docker.imageOverride`, or `LIGHTCLAW_DOCKER_IMAGE` is set.
+- One canonical user maps to one container named `lightclaw-sandbox-<user>-<deploymentHash>`, shared by terminal, Feishu, and WeChat sessions.
+- Idle stop uses `docker stop`, not `docker rm`: workspace files and the container writable layer survive. `/sandbox reset` removes the container and recreates it on the next environment tool call.
+- Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, Bash/coreutils, ripgrep, git, curl, Python 3, build-essential, and the sandbox helpers.
 
 ---
 
@@ -196,7 +221,9 @@ Selected environment variables:
 | `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems |
 | `LIGHTCLAW_PERMISSION_MODE` | Default permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker` / `rjob` not yet implemented |
+| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker`, or future `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` | Override DockerRuntime image |
+| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | Override DockerRuntime idle stop timeout |
 
 ---
 
@@ -211,12 +238,12 @@ src/
 ├── query.ts            # main agent loop (tool dispatch, auto-compact)
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
-├── commands/           # /help, /model, /mode, /identity, /ceiling, channel dispatch
+├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
 ├── channels/           # Feishu / WeChat runners, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy plus hard workspace boundary
 ├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)
-├── runtime/            # Runtime abstraction; LocalRuntime today, Docker / Rjob to come
+├── runtime/            # Runtime abstraction; LocalRuntime, DockerRuntime, future Rjob
 ├── agents/             # general-purpose / explore subagents
 ├── skill/              # loader, registry, bundled skills (verify, remember)
 ├── memory/             # LIGHTCLAW.md discovery and user memory
@@ -226,7 +253,7 @@ src/
 ├── todos/              # TodoWrite store
 └── provider/           # Anthropic / OpenAI-compatible providers
 scripts/
-└── sandbox-helpers/    # Python helpers executed through Runtime (WebFetch / WebSearch)
+└── sandbox-helpers/    # Python helpers executed through Runtime (WebFetch / WebSearch / Glob)
 ```
 
 ## License
