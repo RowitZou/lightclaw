@@ -121,7 +121,7 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 ---
 
-## Workspace 边界
+## Runtime 边界
 
 Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁在当前用户的私有 workspace：
 
@@ -129,21 +129,11 @@ Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁�
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` 在普通权限规则**之前**就把目标路径解析到 workspace 上做边界检查，越界直接 deny。该检查前置在 rule chain 之前，**`bypassPermissions` 模式无法绕过**。
+Phase 11 Iter 3 删除旧的路径字符串守卫层。安全边界按 runtime 拆分：
 
-`Bash` 的 `cwd` 锁到 workspace，并在 exec 之前拒绝以下形式：
-
-- workspace 外的绝对路径，包括 IO 重定向（`cat </etc/x`、`echo >/tmp/y`）、管道（`cmd|/etc/x`）、命令分隔符（`cmd;/etc/x`、`cmd&/etc/x`）和子 shell 括号（`(/etc/x)`）引入的绝对路径
-- `..` 相对路径逃逸
-- 各种 tilde 展开形式：`~/foo`、`~user/...`、`~` 单独后跟空白或行尾
-- `$HOME` / `${HOME}` 变量引用
-- 没有显式 workspace 内路径的 `cd` / `pushd`
-
-这仍然不是真正的进程沙箱。下面这些已知绕过类要等后续 phase 用真正容器隔离覆盖：
-
-- `eval` 等间接字符串求值（`bash -c "$var"`）
-- 通过变量插值隐藏绝对路径（`p=/etc; cat $p/passwd`）
-- workspace 内放 symlink 指向外面
+- `local` 是单用户、admin-only。已 pairing 的非 admin channel user 会在 runtime acquire 前被拒绝。
+- `docker` 给每个 canonical user 一个隔离的长跑容器。workspace 挂到 `/workspace`，额外挂载可选 `rw` 或 `ro`。
+- Permission mode 和规则仍然控制 tool 风险等级（`safe` / `write` / `execute`），但不再拿来模拟文件系统沙箱。
 
 ---
 
@@ -153,7 +143,7 @@ Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁�
 
 | Backend | 状态 | 行为 |
 |---|---|---|
-| `local`（默认）| 已交付（Phase 11 Iter 1-Redesign）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，信任边界仍等同 Phase 10。 |
+| `local`（默认）| 已交付（Phase 11 Iter 1-Redesign + Iter 3 闸门）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，仅 admin 可用。 |
 | `docker` | 已交付（Phase 11 Iter 2）| environment-domain 工具在 per-user 长跑 Docker 容器内执行。用户 workspace bind mount 到 `/workspace`；helper 脚本在 `/opt/lightclaw/sandbox-helpers`；idle 容器会 stop，之后再 start，保留 writable layer。 |
 | `rjob` | 未实现 | 后续会通过 `rjob`（kubebrain）提交集群任务，复用 gpfs 作为共享 workspace 挂载。 |
 
@@ -173,7 +163,8 @@ Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/`
       "network": "bridge",
       "tmpfs": ["/tmp"],
       "mounts": [
-        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" }
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
+        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
       ],
       "env": {
         "http_proxy": "http://127.0.0.1:1080",
@@ -190,6 +181,7 @@ Docker backend 说明：
 - 需要 Docker 20.10+，且当前用户必须有访问 Docker daemon 的权限。
 - 默认镜像是 `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>`；也可用 `runtime.docker.image`、`runtime.docker.imageOverride` 或 `LIGHTCLAW_DOCKER_IMAGE` 覆盖。
 - 一个 canonical user 对应一个容器，命名为 `lightclaw-sandbox-<user>-<deploymentHash>`，terminal / 飞书 / 微信共享同一 user 容器。
+- 只读挂载使用 Docker 的 `:ro` bind 选项。内核会用 `EROFS` 拒绝该挂载内的写入、元数据修改、truncate 和删除，推荐给数据集 / 模型 checkpoint 使用。
 - idle 回收走 `docker stop`，不是 `docker rm`：workspace 文件和容器 writable layer 会保留。`/sandbox reset` 才会删除容器，并在下次 environment tool call 时重建。
 - Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、Bash/coreutils、ripgrep、git、curl、Python 3、build-essential 和 sandbox helpers。
 
@@ -240,7 +232,7 @@ src/
 ├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
 ├── channels/           # 飞书 / 微信 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
-├── permission/         # mode/rule policy + workspace hard boundary
+├── permission/         # mode/rule policy 和 skill tool 边界
 ├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
 ├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、未来 Rjob
 ├── agents/             # general-purpose / explore 子 Agent

@@ -122,7 +122,7 @@ Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for
 
 ---
 
-## Workspace Boundary
+## Runtime Boundary
 
 Phase 10 removes the old "project cwd" mental model. File tools and Bash run inside the current user's private workspace:
 
@@ -130,21 +130,11 @@ Phase 10 removes the old "project cwd" mental model. File tools and Bash run ins
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` resolve their target path against the workspace before normal permission rules run; anything outside is denied. The boundary fires **before** the rule chain, so `bypassPermissions` mode does not lift it.
+Phase 11 Iter 3 removes the old path-string guard layer. Safety is now split by runtime:
 
-`Bash` runs with `cwd` set to the workspace and rejects, before exec:
-
-- absolute paths outside the workspace, including those introduced by IO redirection (`cat </etc/x`, `echo >/tmp/y`), pipes (`cmd|/etc/x`), separators (`cmd;/etc/x`, `cmd&/etc/x`), and subshell parentheses (`(/etc/x)`)
-- relative escapes via `..`
-- tilde expansion in any form: `~/foo`, `~user/...`, bare `~` followed by whitespace or end-of-command
-- `$HOME` / `${HOME}` references
-- `cd` / `pushd` without an explicit in-workspace path
-
-This is still not a real process sandbox. The following are accepted bypass classes that a real container will close in a later phase:
-
-- `eval` and other indirect string evaluation (`bash -c "$var"`)
-- variable interpolation that hides absolute paths (`p=/etc; cat $p/passwd`)
-- symlinks placed inside the workspace pointing outward
+- `local` is single-user and admin-only. A paired non-admin channel user is rejected before runtime acquisition.
+- `docker` gives every canonical user an isolated long-lived container. The workspace is mounted at `/workspace`, and additional mounts can be `rw` or `ro`.
+- Permission modes and rules still apply to tool risk (`safe` / `write` / `execute`), but they are no longer used as a fake filesystem sandbox.
 
 ---
 
@@ -154,7 +144,7 @@ Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active
 
 | Backend | Status | What it does |
 |---|---|---|
-| `local` (default) | shipped (Phase 11 Iter 1-Redesign) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; equivalent trust boundary to Phase 10. |
+| `local` (default) | shipped (Phase 11 Iter 1-Redesign + Iter 3 gate) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; admin-only. |
 | `docker` | shipped (Phase 11 Iter 2) | Runs environment-domain tools inside a per-user long-lived Docker container. The user workspace is bind-mounted at `/workspace`; helper scripts live at `/opt/lightclaw/sandbox-helpers`; idle containers are stopped and later restarted with their writable layer preserved. |
 | `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
 
@@ -174,7 +164,8 @@ The Runtime layer is a forward-compatible foundation: adding a backend means wri
       "network": "bridge",
       "tmpfs": ["/tmp"],
       "mounts": [
-        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" }
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
+        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
       ],
       "env": {
         "http_proxy": "http://127.0.0.1:1080",
@@ -191,6 +182,7 @@ Docker backend notes:
 - Requires Docker 20.10+ and permission to access the Docker daemon.
 - The default image is `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>` unless `runtime.docker.image`, `runtime.docker.imageOverride`, or `LIGHTCLAW_DOCKER_IMAGE` is set.
 - One canonical user maps to one container named `lightclaw-sandbox-<user>-<deploymentHash>`, shared by terminal, Feishu, and WeChat sessions.
+- Read-only mounts use Docker's `:ro` bind option. The kernel rejects writes, metadata changes, truncates, and deletes inside that mount with `EROFS`, which is the recommended mode for datasets and model checkpoints.
 - Idle stop uses `docker stop`, not `docker rm`: workspace files and the container writable layer survive. `/sandbox reset` removes the container and recreates it on the next environment tool call.
 - Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, Bash/coreutils, ripgrep, git, curl, Python 3, build-essential, and the sandbox helpers.
 
@@ -241,7 +233,7 @@ src/
 ├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
 ├── channels/           # Feishu / WeChat runners, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
-├── permission/         # mode/rule policy plus hard workspace boundary
+├── permission/         # mode/rule policy and skill tool boundaries
 ├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)
 ├── runtime/            # Runtime abstraction; LocalRuntime, DockerRuntime, future Rjob
 ├── agents/             # general-purpose / explore subagents

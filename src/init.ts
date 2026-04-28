@@ -4,6 +4,7 @@ import path from 'node:path'
 import { getConfig, type LightClawConfig } from './config.js'
 import { initializeAgents } from './agents/registry.js'
 import { workspaceFor } from './identity/paths.js'
+import { getAdmin } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
@@ -36,6 +37,16 @@ type CommonStateInput = {
 type InitializeAppInput = CommonStateInput & {
   mcpEnabled?: boolean
   hooksEnabled?: boolean
+}
+
+export class LocalRuntimeAdminOnlyError extends Error {
+  constructor(public readonly userId: string) {
+    super(
+      `LocalRuntime is admin-only; user "${userId}" cannot use this LightClaw instance. ` +
+      'Ask the administrator to switch runtime.backend to "docker".',
+    )
+    this.name = 'LocalRuntimeAdminOnlyError'
+  }
 }
 
 /**
@@ -98,6 +109,14 @@ async function writeSessionState(
     ? path.resolve(workspaceFor(input.currentUserId))
     : path.resolve(input?.cwd ?? process.cwd())
   await mkdir(resolvedCwd, { recursive: true, mode: 0o700 })
+
+  if (resolvedConfig.runtime.backend === 'local' && input?.currentUserId) {
+    const adminId = await getAdmin()
+    if (adminId && input.currentUserId !== adminId) {
+      throw new LocalRuntimeAdminOnlyError(input.currentUserId)
+    }
+  }
+
   const runtimeUserId = input?.currentUserId ?? '__terminal__'
   const runtime = getRuntimePool().acquire(runtimeUserId, resolvedConfig, resolvedCwd)
   initializeState({
