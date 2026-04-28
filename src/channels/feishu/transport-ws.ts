@@ -198,7 +198,10 @@ function parseActionValue(value: unknown): Record<string, unknown> | null {
 }
 
 function parsePermissionAction(value: unknown): FeishuPermissionActionKind | null {
-  return value === 'allow' || value === 'deny' ? value : null
+  if (value === 'allow' || value === 'deny' || value === 'allow_always') {
+    return value
+  }
+  return null
 }
 
 function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
