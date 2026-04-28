@@ -3,6 +3,18 @@ import type { FeishuClient } from './client.js'
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
+const SEND_RETRY_ATTEMPTS = 3
+const SEND_RETRY_BASE_DELAY_MS = 500
+// Transient network failures we've observed on flaky corporate proxies in
+// front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
+// resets, upstream TLS handshake aborts, intermittent DNS. These are worth
+// retrying; HTTP 4xx and Lark business errors (assertOk failures) are not.
+const TRANSIENT_ERROR_CODES = new Set([
+  'ECONNABORTED', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE',
+])
+const TRANSIENT_MESSAGE_PATTERN =
+  /(timeout|timed out|socket hang up|tls|secure|disconnect|EOF while reading)/i
+
 type SendResponse = {
   code?: number
   msg?: string
@@ -54,13 +66,16 @@ export class FeishuSender {
     const content = input.content ?? JSON.stringify({ text: input.text ?? '' })
     if (input.replyToMessageId) {
       try {
-        const response = await this.client.im.message.reply({
-          path: { message_id: input.replyToMessageId },
-          data: {
-            msg_type: msgType,
-            content,
-          },
-        })
+        const response = await retryOnTransient(
+          `reply ${msgType}`,
+          () => this.client.im.message.reply({
+            path: { message_id: input.replyToMessageId as string },
+            data: {
+              msg_type: msgType,
+              content,
+            },
+          }),
+        )
         if (!shouldFallbackFromReply(response)) {
           assertOk(response, 'Feishu reply failed')
           return response
@@ -74,17 +89,76 @@ export class FeishuSender {
       }
     }
 
-    const response = await this.client.im.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: input.chatId,
-        msg_type: msgType,
-        content,
-      },
-    })
+    const response = await retryOnTransient(
+      `create ${msgType}`,
+      () => this.client.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: input.chatId,
+          msg_type: msgType,
+          content,
+        },
+      }),
+    )
     assertOk(response, 'Feishu create message failed')
     return response
   }
+}
+
+function isTransientSendError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  const e = error as { code?: unknown; cause?: unknown; message?: unknown }
+  if (typeof e.code === 'string' && TRANSIENT_ERROR_CODES.has(e.code)) {
+    return true
+  }
+  if (typeof e.cause === 'object' && e.cause) {
+    const causeCode = (e.cause as { code?: unknown }).code
+    if (typeof causeCode === 'string' && TRANSIENT_ERROR_CODES.has(causeCode)) {
+      return true
+    }
+  }
+  if (typeof e.message === 'string' && TRANSIENT_MESSAGE_PATTERN.test(e.message)) {
+    return true
+  }
+  return false
+}
+
+async function retryOnTransient<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts: number = SEND_RETRY_ATTEMPTS,
+  baseDelayMs: number = SEND_RETRY_BASE_DELAY_MS,
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      const transient = isTransientSendError(error)
+      const detail = error instanceof Error ? error.message : String(error)
+      if (!transient || attempt === attempts) {
+        if (transient) {
+          process.stderr.write(
+            `feishu send: ${label} exhausted ${attempts} attempts (${detail})\n`,
+          )
+        }
+        throw error
+      }
+      const backoff = baseDelayMs * 2 ** (attempt - 1)
+      process.stderr.write(
+        `feishu send: ${label} attempt ${attempt} transient (${detail}); retry in ${backoff}ms\n`,
+      )
+      await delay(backoff)
+    }
+  }
+  throw lastError
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function chunkText(text: string, size: number): string[] {
