@@ -5,6 +5,10 @@ import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
+import {
+  acquireProcessLock,
+  LightClawAlreadyRunningError,
+} from './process-lock.js'
 import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
@@ -94,6 +98,12 @@ async function main(): Promise<void> {
     return
   }
 
+  // Mutual exclusion: refuse to start if another LightClaw is already
+  // running. Multiple instances would race the same dedup file, sessions
+  // dir, identity store, and (for channels) the same Feishu/WeChat ws
+  // subscription, all of which assume a single owner.
+  acquireProcessLock()
+
   await ensureAdminInitialized({ interactive: !args.prompt })
   const currentUserId = await resolveTerminalUserId()
 
@@ -164,6 +174,10 @@ async function startEnabledChannels(): Promise<ChannelHandle[]> {
 }
 
 main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error))
+  if (error instanceof LightClawAlreadyRunningError) {
+    console.error(error.message)
+  } else {
+    console.error(error instanceof Error ? error.message : String(error))
+  }
   process.exitCode = 1
 })
