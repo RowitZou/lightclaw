@@ -19,8 +19,7 @@ export async function askUserApproval(input: {
       chalk.yellow('Permission required'),
       `  Tool: ${chalk.cyan(toolName)}  Risk: ${chalk.magenta(riskLevel)}`,
       `  ${inputPreview}`,
-      `  [y] allow once   [n] deny once`,
-      `  [A] always allow ${toolName}   [D] always deny ${toolName}`,
+      `  [y] allow once   [a] always allow ${toolName} (this session)   [n] deny once`,
       '',
     ].join('\n'),
   )
@@ -30,6 +29,7 @@ export async function askUserApproval(input: {
     case 'y':
     case 'Y':
       return { behavior: 'allow' }
+    case 'a':
     case 'A': {
       const rule: PermissionRule = {
         source: 'session',
@@ -37,20 +37,10 @@ export async function askUserApproval(input: {
         value: parseRule(toolName),
       }
       addSessionRule(rule)
+      process.stdout.write(
+        chalk.gray(`  (run /permissions clear to revoke this session rule)\n`),
+      )
       return { behavior: 'allow', matchedRule: rule }
-    }
-    case 'D': {
-      const rule: PermissionRule = {
-        source: 'session',
-        behavior: 'deny',
-        value: parseRule(toolName),
-      }
-      addSessionRule(rule)
-      return {
-        behavior: 'deny',
-        reason: `Permission denied: user denied ${toolName} and added a session deny rule.`,
-        matchedRule: rule,
-      }
     }
     case 'n':
     case 'N':

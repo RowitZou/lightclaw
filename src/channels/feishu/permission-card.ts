@@ -2,11 +2,14 @@ import { randomUUID } from 'node:crypto'
 
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
+import { parseRule } from '../../permission/rules.js'
 import type {
   PermissionApprover,
   PermissionAskInput,
   PermissionDecision,
+  PermissionRule,
 } from '../../permission/types.js'
+import { addSessionRule } from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
 import type { FeishuSender } from './sender.js'
@@ -23,7 +26,14 @@ const CANCEL_TEXTS = new Set([
   '清除权限',
 ])
 
-export type FeishuPermissionActionKind = 'allow' | 'deny'
+// Aligned with terminal askUserApproval (src/permission/prompt.ts):
+// - allow        = allow once
+// - allow_always = allow this tool for the rest of the session (adds a
+//                  session-scoped allow rule via addSessionRule)
+// - deny         = deny once
+// We intentionally omit "always deny" — Claude Code does not offer it
+// either, and a one-click session-wide block is rarely the right call.
+export type FeishuPermissionActionKind = 'allow' | 'allow_always' | 'deny'
 
 export type FeishuCardAction = {
   requestId: string
@@ -110,7 +120,7 @@ export class FeishuPermissionCoordinator {
     if (!text) {
       await this.safeSend(
         pending.message,
-        '请先处理上一条权限请求：回复“是”或“否”，或回复“取消”丢弃这条请求。',
+        '请先处理上一条权限请求：回复"批准"、"批准所有"、"拒绝"或"取消"。',
       )
       return true
     }
@@ -122,7 +132,7 @@ export class FeishuPermissionCoordinator {
         [
           '请先处理上一条权限请求。',
           `工具: ${pending.ask.toolName}`,
-          '可以点击卡片按钮，或直接回复：是 / 否 / 取消。',
+          '可以点击卡片按钮，或直接回复：批准 / 批准所有 / 拒绝 / 取消。',
         ].join('\n'),
       )
       return true
@@ -215,6 +225,27 @@ export class FeishuPermissionCoordinator {
       case 'allow':
         this.resolvePending(pending, { behavior: 'allow' })
         return buildToast('success', `已允许 ${pending.ask.toolName}。`)
+      case 'allow_always': {
+        // Mirrors terminal `[a]`: install a session-scoped allow rule
+        // for this tool, then resolve as allow with the matched rule.
+        const rule: PermissionRule = {
+          source: 'session',
+          behavior: 'allow',
+          value: parseRule(pending.ask.toolName),
+        }
+        addSessionRule(rule)
+        this.resolvePending(pending, { behavior: 'allow', matchedRule: rule })
+        // Follow-up text gives the operator a real revoke path; the toast
+        // alone is too brief and disappears immediately.
+        void this.safeSend(
+          pending.message,
+          `已允许 ${pending.ask.toolName}，本会话同类调用自动放行。需要撤回时请发送 /permissions clear。`,
+        )
+        return buildToast(
+          'success',
+          `已允许 ${pending.ask.toolName}（同类放行 · /permissions clear 撤回）`,
+        )
+      }
       case 'deny':
         this.resolvePending(pending, {
           behavior: 'deny',
@@ -322,10 +353,19 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
       },
       {
         tag: 'action',
-        layout: 'bisected',
+        // 'flow' wraps to the next row when the always-allow button text
+        // is long (e.g. `批准所有的 ConversationGrep 命令`); 'trisection'
+        // truncates instead, so flow is the safer pick.
+        layout: 'flow',
         actions: [
-          buildButton('是', 'primary', pending.id, 'allow'),
-          buildButton('否', 'danger', pending.id, 'deny'),
+          buildButton('批准', 'primary', pending.id, 'allow'),
+          buildButton(
+            `批准所有的 ${pending.ask.toolName} 命令`,
+            'default',
+            pending.id,
+            'allow_always',
+          ),
+          buildButton('拒绝', 'danger', pending.id, 'deny'),
         ],
       },
     ],
@@ -373,7 +413,7 @@ function buildTextFallback(pending: PendingPermission): string {
     `会话: ${pending.sessionId}`,
     pending.ask.inputPreview,
     '',
-    '请回复：是 / 否 / 取消',
+    `请回复：批准 / 批准所有（本会话内 ${pending.ask.toolName} 自动放行）/ 拒绝 / 取消`,
   ].join('\n')
 }
 
@@ -387,7 +427,26 @@ function isCancelText(text: string): boolean {
 
 function parseTextAction(text: string): FeishuPermissionActionKind | null {
   const normalized = text.trim().toLowerCase()
-  if (['是', '允许', '同意', 'yes', 'y', 'ok'].includes(normalized)) {
+  // Match "always" intent BEFORE the plain allow synonyms — otherwise
+  // "批准所有" would short-circuit on "批准" and miss the "always" hint.
+  if (
+    [
+      '批准所有',
+      '都允许',
+      '都批准',
+      '总是允许',
+      '总是批准',
+      'always',
+      'allow all',
+      'always allow',
+      'a',
+    ].some(token => normalized === token) ||
+    normalized.startsWith('批准所有') ||
+    normalized.startsWith('always')
+  ) {
+    return 'allow_always'
+  }
+  if (['是', '批准', '允许', '同意', 'yes', 'y', 'ok'].includes(normalized)) {
     return 'allow'
   }
   if (['否', '不', '拒绝', 'no', 'n'].includes(normalized)) {

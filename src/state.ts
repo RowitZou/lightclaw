@@ -30,6 +30,18 @@ type SessionState = {
 
 let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
+// Session permission rules persist per canonical user across channel
+// resetSessionContext / initializeState calls — without this, the Feishu
+// "批准所有" button (and terminal `[a]`) would silently degrade to
+// "allow once" because writeSessionState reseeds state.sessionRules to []
+// on every inbound channel message. Module-level map (process lifetime,
+// LightClaw harness restart wipes it; same expiry as before, just no
+// longer wiped per message turn).
+const sessionRulesByUser = new Map<string, PermissionRule[]>()
+
+function userKeyForRules(currentUserId: string | undefined): string {
+  return currentUserId ?? '__terminal__'
+}
 
 export function initializeState(input: {
   cwd: string
@@ -62,7 +74,7 @@ export function initializeState(input: {
     todos: input.todos ?? [],
     permissionMode: input.permissionMode ?? 'default',
     cliArgRules: input.cliArgRules ?? [],
-    sessionRules: [],
+    sessionRules: sessionRulesByUser.get(userKeyForRules(input.currentUserId)) ?? [],
     fileRules: input.fileRules ?? [],
     activeSkillAllowedTools: undefined,
     abortController: new AbortController(),
@@ -166,11 +178,20 @@ export function getSessionRules(): PermissionRule[] {
 }
 
 export function addSessionRule(rule: PermissionRule): void {
-  requireState().sessionRules.push(rule)
+  // Mutate in place so the array shared with sessionRulesByUser stays in sync.
+  // (state.sessionRules and the map value point at the same Array.)
+  const current = requireState()
+  current.sessionRules.push(rule)
+  sessionRulesByUser.set(userKeyForRules(current.currentUserId), current.sessionRules)
 }
 
 export function clearSessionRules(): void {
-  requireState().sessionRules = []
+  const current = requireState()
+  // Clear in place to keep the map's reference aligned with state.sessionRules,
+  // then drop the map entry so a fresh `initializeState` for this user starts
+  // empty rather than reusing a now-stale array.
+  current.sessionRules.length = 0
+  sessionRulesByUser.delete(userKeyForRules(current.currentUserId))
 }
 
 export function getCliArgRules(): PermissionRule[] {

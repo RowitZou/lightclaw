@@ -17,17 +17,20 @@ import {
 } from '../identity/store.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import type { SenderKey } from '../identity/types.js'
+import { formatRule } from '../permission/rules.js'
 import { PERMISSION_MODES, type PermissionMode } from '../permission/types.js'
 import { DockerRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
+  clearSessionRules,
   getCurrentUserId,
   getCwd,
   getModel,
   getPermissionMode,
   getRuntime,
   getRuntimePool,
+  getSessionRules,
   setModel,
   setPermissionMode,
 } from '../state.js'
@@ -150,6 +153,39 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         `Next environment tool call will recreate the container from ${image}.`,
         '',
       ].join('\n'))
+    },
+  },
+  {
+    name: '/permissions',
+    usage: '/permissions [list|clear]',
+    description: 'List or clear session-scoped permission rules (e.g. those installed by clicking 批准所有)',
+    async handler(args, ctx) {
+      const sub = args.trim() || 'list'
+      if (sub === 'list') {
+        const rules = getSessionRules()
+        if (rules.length === 0) {
+          ctx.output.write('No session permission rules.\n')
+          return
+        }
+        const lines = ['Session permission rules:']
+        for (const rule of rules) {
+          lines.push(`  ${rule.behavior} ${formatRule(rule.value)} (source: ${rule.source})`)
+        }
+        lines.push('', 'Use /permissions clear to revoke them all.', '')
+        ctx.output.write(lines.join('\n'))
+        return
+      }
+      if (sub === 'clear') {
+        const cleared = getSessionRules().length
+        clearSessionRules()
+        ctx.output.write(
+          cleared === 0
+            ? 'No session rules to clear.\n'
+            : `Cleared ${cleared} session permission rule${cleared === 1 ? '' : 's'}.\n`,
+        )
+        return
+      }
+      ctx.output.write('error> Usage: /permissions [list|clear]\n')
     },
   },
 ]
