@@ -55,6 +55,7 @@ function isCommandNotFound(result: { stderr: string; exitCode: number }): boolea
 export const grepTool = buildTool({
   name: 'Grep',
   description: 'Search file contents with ripgrep or grep.',
+  domain: 'environment',
   riskLevel: 'safe',
   concurrencySafe: true,
   inputSchema: z.object({

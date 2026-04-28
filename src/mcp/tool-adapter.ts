@@ -22,6 +22,7 @@ export function mcpToolToLightClawTool(input: {
       descriptor.description ??
       `MCP tool ${descriptor.name} from server ${server}.`,
     source: 'mcp',
+    domain: 'host',
     mcpServer: server,
     mcpToolName: descriptor.name,
     inputJSONSchema: descriptor.inputSchema,

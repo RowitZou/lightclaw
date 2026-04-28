@@ -11,6 +11,7 @@ function resolveInputPath(cwd: string, inputPath: string): string {
 export const fileWriteTool = buildTool({
   name: 'Write',
   description: 'Create or overwrite a file with the provided content.',
+  domain: 'environment',
   riskLevel: 'write',
   inputSchema: z.object({
     file_path: z.string().min(1),

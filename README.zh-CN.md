@@ -17,7 +17,11 @@ pnpm dev                 # tsx src/cli.ts —— 免构建，迭代最快
 pnpm build && pnpm start # 先 build 到 dist/cli.js 再 node 跑
 ```
 
-需要 Node 22+ 和 pnpm 10+。
+需要 Node 22+、pnpm 10+ 和 Python 3。LocalRuntime 下 `WebFetch` 通过 environment helper 脚本执行，需要安装 `markdownify`：
+
+```bash
+python3 -m pip install --user markdownify
+```
 
 凭据可以放在 `~/.lightclaw/config.json`，也可以走环境变量：
 
@@ -148,13 +152,13 @@ Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁�
 
 | Backend | 状态 | 行为 |
 |---|---|---|
-| `local`（默认）| 已交付（Phase 11 Iter 1）| `Bash` / `Grep` 走 host `/bin/bash -c`，`Read` / `Write` / `Edit` 走 host `fs.*`。无隔离，行为等同 Phase 10。 |
+| `local`（默认）| 已交付（Phase 11 Iter 1-Redesign）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，信任边界仍等同 Phase 10。 |
 | `docker` | 未实现 | 后续会启动一个长跑 host 容器，把 workspace 绑定挂载，工具通过 `docker exec` 跑，`--cap-drop ALL` + 最小 cap 兜底。 |
 | `rjob` | 未实现 | 后续会通过 `rjob`（kubebrain）提交集群任务，复用 gpfs 作为共享 workspace 挂载。 |
 
 选了未实现的 backend 启动会显式报错——harness 永远不静默 fallback。
 
-Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/` 写一个文件，工具代码不动。文件操作经过 backend 的 `fs` 接口，但**所有当前 / 未来 backend 的 `fs` 都依赖共享挂载**让 host 进程直接读写 workspace inode，所以文件 ops 速度不变；真正进入容器边界的只有 `exec`。
+Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/` 写一个文件，工具代码不动。Environment 工具通过 `runtime.exec` 和 `runtime.fs` 看到同一套运行时视图（`Bash`、`Grep`、`Read`、`Write`、`Edit`、`Glob`、`WebFetch`、`WebSearch`）。Host-domain 工具继续使用 LightClaw 受信状态（`Memory*`、`Conversation*`、`TodoWrite`、`AgentTool`、`UseSkill`、MCP）。
 
 ```jsonc
 {
@@ -169,6 +173,8 @@ Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/`
 ## Tool、Skill、MCP、Hooks
 
 模型仍能使用 Phase 1-9 的 toolset：文件工具、Bash、Web、Memory、Conversation、TodoWrite、子 Agent、MCP tool 和 `UseSkill`。
+
+每个 tool 都显式标记为 `environment` 或 `host`。新增 environment 工具时，文件系统、进程、glob 和任意网络副作用都必须经过 `context.runtime`；不要在工具实现里直接 import host `fs`、`child_process`、HTTP client 或 glob 库。
 
 Skill 不再通过 `/skill` 手动调用。Skill description 使用 `TRIGGER` / `SKIP` 指引，模型会在任务匹配时自然调用 `UseSkill`。Skill 的 `allowed_tools` 现在会在 skill 激活后强制限制后续 tool 调用。
 
@@ -216,9 +222,10 @@ src/
 ├── session/            # 会话 JSONL transcript + meta + auto-compact
 ├── mcp/                # MCP Client
 ├── hooks/              # 生命周期 hook loader
-├── web/                # WebFetch / WebSearch 辅助
 ├── todos/              # TodoWrite 存储
 └── provider/           # Anthropic / OpenAI-compatible provider
+scripts/
+└── sandbox-helpers/    # 通过 Runtime 执行的 Python helper（WebFetch / WebSearch）
 ```
 
 ## License

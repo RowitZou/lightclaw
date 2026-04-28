@@ -17,7 +17,12 @@ pnpm dev                 # tsx src/cli.ts — fastest iteration, no build needed
 pnpm build && pnpm start # build to dist/cli.js then run with node
 ```
 
-Requires Node 22+ and pnpm 10+.
+Requires Node 22+, pnpm 10+, and Python 3. `WebFetch` in LocalRuntime uses the
+environment helper script and requires `markdownify`:
+
+```bash
+python3 -m pip install --user markdownify
+```
 
 Put credentials in `~/.lightclaw/config.json` or environment variables:
 
@@ -148,13 +153,13 @@ Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active
 
 | Backend | Status | What it does |
 |---|---|---|
-| `local` (default) | shipped (Phase 11 Iter 1) | Runs `Bash` / `Grep` via host `/bin/bash -c` and `Read` / `Write` / `Edit` via host `fs.*`. No isolation; equivalent to the prior behavior. |
+| `local` (default) | shipped (Phase 11 Iter 1-Redesign) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; equivalent trust boundary to Phase 10. |
 | `docker` | not yet implemented | Will run a long-lived host container with workspace bind-mounted, executing tools via `docker exec` with `--cap-drop ALL` plus minimal caps. |
 | `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
 
 Selecting a backend that is not yet implemented fails loudly at startup — the harness never silently falls back.
 
-The Runtime layer is a forward-compatible foundation: adding a backend means writing one file in `src/runtime/`; the tools never change. File operations go through the backend's `fs` interface but, by design, all current backends back `fs` with the host process reading the shared workspace mount, so file ops stay fast and the only thing that crosses the container boundary is `exec`.
+The Runtime layer is a forward-compatible foundation: adding a backend means writing one file in `src/runtime/`; the tools never change. Environment tools see one runtime view through `runtime.exec` and `runtime.fs` (`Bash`, `Grep`, `Read`, `Write`, `Edit`, `Glob`, `WebFetch`, `WebSearch`). Host-domain tools keep using trusted LightClaw state (`Memory*`, `Conversation*`, `TodoWrite`, `AgentTool`, `UseSkill`, MCP).
 
 ```jsonc
 {
@@ -169,6 +174,8 @@ The Runtime layer is a forward-compatible foundation: adding a backend means wri
 ## Tools, Skills, MCP, Hooks
 
 The model can still use the Phase 1-9 toolset: filesystem tools, Bash, web fetch/search, memory tools, conversation tools, TodoWrite, sub-agents, MCP tools, and `UseSkill`.
+
+Each tool is explicitly marked as either `environment` or `host`. New environment tools must route filesystem, process, glob, and arbitrary network effects through `context.runtime`; they should not directly import host `fs`, `child_process`, HTTP clients, or glob libraries.
 
 Skills are no longer invoked through `/skill`. Their descriptions use `TRIGGER` / `SKIP` guidance, and the model should call `UseSkill` naturally when a skill matches the task. `allowed_tools` is now enforced while a skill is active.
 
@@ -216,9 +223,10 @@ src/
 ├── session/            # transcript JSONL + meta + auto-compact
 ├── mcp/                # MCP client
 ├── hooks/              # lifecycle hook loader
-├── web/                # WebFetch / WebSearch helpers
 ├── todos/              # TodoWrite store
 └── provider/           # Anthropic / OpenAI-compatible providers
+scripts/
+└── sandbox-helpers/    # Python helpers executed through Runtime (WebFetch / WebSearch)
 ```
 
 ## License

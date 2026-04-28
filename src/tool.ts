@@ -17,10 +17,13 @@ export type ToolCallResult<TOutput> = {
   isError?: boolean
 }
 
+export type ToolDomain = 'host' | 'environment'
+
 export type Tool<TInput = unknown, TOutput = unknown> = {
   name: string
   description: string
   source: 'builtin' | 'mcp'
+  domain: ToolDomain
   mcpServer?: string
   mcpToolName?: string
   inputSchema?: z.ZodType<TInput>
@@ -28,10 +31,10 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   riskLevel: RiskLevel
   /**
    * When true, contiguous tool_uses for this tool can be dispatched in parallel
-   * within a single agent turn. Defaults to false. Mark true only for tools
-   * whose effects are limited to host fs reads, outbound HTTP, or LightClaw
-   * state reads — never for writers, executors, or anything that mutates
-   * shared state (todos, skills, MCP servers, sub-agents).
+   * within a single agent turn. Defaults to false. Mark true for tools whose
+   * effects are limited to host-domain reads (memory / session history) or
+   * side-effect-free environment reads (Read / Glob / WebFetch). Never mark
+   * writers, executors, or anything that mutates shared state.
    */
   concurrencySafe?: boolean
   isEnabled?(provider: Provider): boolean
@@ -46,6 +49,7 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
 export function buildTool<TInput, TOutput>(input: {
   name: string
   description: string
+  domain: ToolDomain
   inputSchema: z.ZodType<TInput>
   riskLevel: RiskLevel
   concurrencySafe?: boolean

@@ -99,7 +99,7 @@ async function writeSessionState(
   await mkdir(resolvedCwd, { recursive: true, mode: 0o700 })
   const existingRuntime = getRuntimeIfInitialized()
   const reusableRuntime =
-    existingRuntime?.workspaceHostPath === resolvedCwd &&
+    existingRuntime?.workspaceRoot === resolvedCwd &&
     existingRuntime.kind === resolvedConfig.runtime.backend
       ? existingRuntime
       : undefined
@@ -128,7 +128,7 @@ async function writeSessionState(
     return
   }
 
-  const runtime = createRuntime(resolvedConfig.runtime.backend, { workspace: resolvedCwd })
+  const runtime = createRuntime(resolvedConfig.runtime.backend, { workspaceRoot: resolvedCwd })
   await runtime.start()
   setRuntime(runtime)
 }

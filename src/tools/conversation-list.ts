@@ -7,6 +7,7 @@ import { channelFromSessionId, listOwnedSessions } from './_session-helpers.js'
 export const conversationListTool = buildTool({
   name: 'ConversationList',
   description: 'List saved conversations for the current LightClaw user across channels.',
+  domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,
   inputSchema: z.object({
@@ -34,4 +35,3 @@ export const conversationListTool = buildTool({
     }
   },
 })
-

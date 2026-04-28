@@ -12,6 +12,7 @@ export const useSkillTool = buildTool({
   name: 'UseSkill',
   description:
     'Load a named skill and return its full instructions so the agent can apply it in the current turn.',
+  domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({
     name: z.string().min(1),

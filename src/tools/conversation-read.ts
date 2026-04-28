@@ -8,6 +8,7 @@ import { simplifyMessage } from './_session-helpers.js'
 export const conversationReadTool = buildTool({
   name: 'ConversationRead',
   description: 'Read a slice of a saved conversation that belongs to the current LightClaw user.',
+  domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,
   inputSchema: z.object({
@@ -34,4 +35,3 @@ export const conversationReadTool = buildTool({
     }
   },
 })
-

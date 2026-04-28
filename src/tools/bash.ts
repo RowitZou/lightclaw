@@ -30,6 +30,7 @@ function formatCommandOutput(stdout: string, stderr: string): string {
 export const bashTool = buildTool({
   name: 'Bash',
   description: 'Execute a shell command in the current working directory.',
+  domain: 'environment',
   riskLevel: 'execute',
   inputSchema: z.object({
     command: z.string().min(1),

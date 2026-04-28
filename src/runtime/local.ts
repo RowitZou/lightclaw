@@ -1,24 +1,32 @@
-import { execFile } from 'node:child_process'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 
-import type { ExecInput, ExecResult, Runtime, RuntimeFs } from './types.js'
+import fastGlob from 'fast-glob'
 
-const execFileAsync = promisify(execFile)
+import type {
+  ExecInput,
+  ExecResult,
+  GlobOptions,
+  Runtime,
+  RuntimeFs,
+  RuntimeStat,
+} from './types.js'
+
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 
 export class LocalRuntime implements Runtime {
   readonly kind = 'local' as const
   readonly isolated = false
-  readonly workspaceHostPath: string
-  readonly workspaceContainerPath: string
+  readonly workspaceRoot: string
+  readonly helperRoot: string
 
-  constructor(workspace: string) {
-    const resolved = path.resolve(workspace)
-    this.workspaceHostPath = resolved
-    this.workspaceContainerPath = resolved
+  constructor(workspaceRoot: string) {
+    this.workspaceRoot = path.resolve(workspaceRoot)
+    this.helperRoot = resolveDefaultHelperRoot()
   }
 
   async start(): Promise<void> {
@@ -33,52 +41,111 @@ export class LocalRuntime implements Runtime {
     return true
   }
 
+  private absolutize(pathname: string | undefined, fallback?: string): string {
+    if (!pathname) {
+      return fallback ?? this.workspaceRoot
+    }
+
+    return path.isAbsolute(pathname)
+      ? path.resolve(pathname)
+      : path.resolve(this.workspaceRoot, pathname)
+  }
+
   async exec(input: ExecInput): Promise<ExecResult> {
-    try {
-      const result = await execFileAsync('/bin/bash', ['-c', input.command], {
-        cwd: input.cwd ?? this.workspaceHostPath,
+    return new Promise(resolve => {
+      let settled = false
+      let killed = false
+      let stdout = ''
+      let stderr = ''
+      let stdoutBytes = 0
+      let stderrBytes = 0
+      const maxBytes = input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES
+
+      const child = spawn('/bin/bash', ['-c', input.command], {
+        cwd: this.absolutize(input.cwd),
         env: input.env ? { ...process.env, ...input.env } : undefined,
-        timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        maxBuffer: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
         signal: input.abortSignal,
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
 
-      return {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: 0,
+      const finish = (result: ExecResult): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        clearTimeout(timeout)
+        resolve(result)
       }
-    } catch (error) {
-      const execError = error as {
-        stdout?: string
-        stderr?: string
-        message?: string
-        code?: string | number
-        killed?: boolean
-        signal?: string
-      }
-      const exitCode = typeof execError.code === 'number'
-        ? execError.code
-        : execError.killed || execError.signal
-          ? -1
-          : 1
 
-      return {
-        stdout: execError.stdout ?? '',
-        stderr: execError.stderr ?? execError.message ?? '',
-        exitCode,
+      const killForLimit = (streamName: 'stdout' | 'stderr'): void => {
+        if (killed) {
+          return
+        }
+        killed = true
+        stderr += `\n${streamName} exceeded maxBufferBytes (${maxBytes}); process terminated.`
+        child.kill('SIGTERM')
       }
-    }
+
+      const timeout = setTimeout(() => {
+        if (killed) {
+          return
+        }
+        killed = true
+        stderr += `\ncommand timed out after ${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`
+        child.kill('SIGTERM')
+      }, input.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutBytes += chunk.length
+        if (stdoutBytes <= maxBytes) {
+          stdout += chunk.toString('utf8')
+        } else {
+          killForLimit('stdout')
+        }
+      })
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrBytes += chunk.length
+        if (stderrBytes <= maxBytes) {
+          stderr += chunk.toString('utf8')
+        } else {
+          killForLimit('stderr')
+        }
+      })
+
+      child.on('error', error => {
+        finish({
+          stdout,
+          stderr: stderr || error.message,
+          exitCode: -1,
+        })
+      })
+
+      child.on('close', (code, signal) => {
+        finish({
+          stdout,
+          stderr,
+          exitCode: killed || signal ? -1 : code ?? 1,
+        })
+      })
+
+      if (input.stdin !== undefined) {
+        child.stdin.end(input.stdin)
+      } else {
+        child.stdin.end()
+      }
+    })
   }
 
   fs: RuntimeFs = {
-    readFile: async pathname => readFile(pathname),
+    readFile: async pathname => readFile(this.absolutize(pathname)),
     writeFile: async (pathname, content) => {
-      await mkdir(path.dirname(pathname), { recursive: true })
-      await writeFile(pathname, content)
+      const resolved = this.absolutize(pathname)
+      await mkdir(path.dirname(resolved), { recursive: true })
+      await writeFile(resolved, content)
     },
-    stat: async pathname => {
-      const result = await stat(pathname)
+    stat: async (pathname): Promise<RuntimeStat> => {
+      const result = await stat(this.absolutize(pathname))
       return {
         size: result.size,
         isFile: result.isFile(),
@@ -86,5 +153,25 @@ export class LocalRuntime implements Runtime {
         mtimeMs: result.mtimeMs,
       }
     },
+    glob: async (pattern, options: GlobOptions = {}) => {
+      const cwd = this.absolutize(options.cwd, this.workspaceRoot)
+      return fastGlob(pattern, {
+        cwd,
+        ignore: options.ignore,
+        onlyFiles: options.onlyFiles ?? true,
+        dot: options.dot ?? false,
+      })
+    },
+    readdir: async pathname => readdir(this.absolutize(pathname)),
   }
+}
+
+function resolveDefaultHelperRoot(): string {
+  const dirname = fileURLToPath(new URL('.', import.meta.url))
+  const candidates = [
+    path.resolve(dirname, '../../scripts/sandbox-helpers'),
+    path.resolve(dirname, '../scripts/sandbox-helpers'),
+    path.resolve(process.cwd(), 'scripts/sandbox-helpers'),
+  ]
+  return candidates.find(candidate => existsSync(candidate)) ?? candidates[0]
 }
