@@ -116,7 +116,7 @@ Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for
 
 For Feishu, `transport: "ws"` is the default and does not require a public webhook endpoint. If the Feishu app's long-connection events are not encrypted, `encryptKey` and `verificationToken` can be omitted for WS mode; when encryption is enabled, set `encryptKey` so incoming events can be decrypted. `allowUsers` and `allowChats` are checked only when the corresponding list is non-empty; if both lists are empty, every incoming message is dropped. Use `["*"]` to allow a dimension intentionally.
 
-Channel sessions are non-interactive. In `default` mode, write/execute tool calls that would normally ask in the terminal are denied. For a trusted personal bot, configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, and the workspace boundary as the safety rails.
+Feishu channel now supports interactive permission approval. In `default` / `acceptEdits` mode, write or execute tool calls that require confirmation send a Feishu approval card; the user can choose "yes", "no", or "no, tell the model what to do". If card buttons are unavailable, replying with "yes" / "no" works as a text fallback. Other non-interactive channels still deny ask-style tool calls. For a trusted personal bot, you can also configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, and the workspace boundary as the safety rails.
 
 ---
 

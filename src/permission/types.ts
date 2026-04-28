@@ -35,8 +35,22 @@ export type PermissionAskDecision = {
   behavior: 'ask'
 }
 
+export type PermissionAskInput = {
+  toolName: string
+  riskLevel: RiskLevel
+  input: unknown
+  inputPreview: string
+  mode: PermissionMode
+  signal?: AbortSignal
+}
+
+export type PermissionApprover = {
+  ask(input: PermissionAskInput): Promise<PermissionDecision>
+}
+
 export type PermissionContext = {
   isInteractive: boolean
   isSubagent: boolean
   signal?: AbortSignal
+  permissionApprover?: PermissionApprover
 }

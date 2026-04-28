@@ -9,6 +9,8 @@ type SendResponse = {
   data?: { message_id?: string }
 }
 
+type InteractiveCard = Record<string, unknown>
+
 export class FeishuSender {
   constructor(
     private client: FeishuClient,
@@ -29,18 +31,34 @@ export class FeishuSender {
     }
   }
 
+  async sendInteractiveCard(
+    message: NormalizedChannelMessage,
+    card: InteractiveCard,
+  ): Promise<void> {
+    await this.sendReplyOrCreate({
+      chatId: message.chatId,
+      replyToMessageId: message.messageId,
+      msgType: 'interactive',
+      content: JSON.stringify(card),
+    })
+  }
+
   private async sendReplyOrCreate(input: {
     chatId: string
     replyToMessageId?: string
-    text: string
+    text?: string
+    msgType?: 'text' | 'interactive'
+    content?: string
   }): Promise<SendResponse> {
+    const msgType = input.msgType ?? 'text'
+    const content = input.content ?? JSON.stringify({ text: input.text ?? '' })
     if (input.replyToMessageId) {
       try {
         const response = await this.client.im.message.reply({
           path: { message_id: input.replyToMessageId },
           data: {
-            msg_type: 'text',
-            content: JSON.stringify({ text: input.text }),
+            msg_type: msgType,
+            content,
           },
         })
         if (!shouldFallbackFromReply(response)) {
@@ -60,8 +78,8 @@ export class FeishuSender {
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: input.chatId,
-        msg_type: 'text',
-        content: JSON.stringify({ text: input.text }),
+        msg_type: msgType,
+        content,
       },
     })
     assertOk(response, 'Feishu create message failed')

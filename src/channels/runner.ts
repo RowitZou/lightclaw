@@ -10,7 +10,7 @@ import { generateOrReusePending, updatePendingDisplayName } from '../identity/pa
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createUserMessage, getLastUuid } from '../messages.js'
-import type { PermissionMode } from '../permission/types.js'
+import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
 import {
@@ -55,6 +55,11 @@ export type ChannelRunnerStrategy = {
     message: NormalizedChannelMessage,
     text: string,
   ): Promise<void>
+  createPermissionApprover?(
+    message: NormalizedChannelMessage,
+    sessionId: string,
+    userId: string,
+  ): PermissionApprover
   /**
    * Best-effort lookup of a human-readable display name for a sender (for
    * the `lightclaw identity pending` table). Channel-specific because the
@@ -176,6 +181,11 @@ export class ChannelRunner {
         tools: getEnabledTools(provider, getAllTools()),
         mode: 'channel',
         channelContext: this.strategy.buildChannelPrompt(message),
+        permissionApprover: this.strategy.createPermissionApprover?.(
+          message,
+          sessionId,
+          userId,
+        ),
         onToolUse(event) {
           process.stderr.write(`${channelId}: tool ${event.name}\n`)
         },

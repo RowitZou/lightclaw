@@ -5,6 +5,7 @@ import * as Lark from '@larksuiteoapi/node-sdk'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
+import type { FeishuCardAction, FeishuPermissionActionKind } from './permission-card.js'
 
 export type WsHandle = {
   close(): Promise<void>
@@ -40,6 +41,7 @@ export async function startFeishuWsClient(input: {
   config: FeishuChannelConfig
   dedup: FeishuDedup
   onMessage(message: FeishuRawMessage): void | Promise<void>
+  onCardAction?(action: FeishuCardAction): void | Promise<void>
 }): Promise<WsHandle> {
   const { config } = input
   if (!config.appId || !config.appSecret) {
@@ -51,6 +53,18 @@ export async function startFeishuWsClient(input: {
     ...(config.encryptKey ? { encryptKey: config.encryptKey } : {}),
     ...(config.verificationToken ? { verificationToken: config.verificationToken } : {}),
   })
+
+  const handleCardAction = async (data: unknown) => {
+    const action = normalizeCardAction(data)
+    if (!action) {
+      process.stderr.write('feishu ws: dropped unsupported card action callback\n')
+      return
+    }
+    process.stderr.write(
+      `feishu ws: card action request=${action.requestId} action=${action.action}\n`,
+    )
+    await input.onCardAction?.(action)
+  }
 
   eventDispatcher.register({
     'im.message.receive_v1': async (data: ReceiveV1Data) => {
@@ -70,6 +84,12 @@ export async function startFeishuWsClient(input: {
         process.stderr.write(`feishu ws: message handler failed: ${text}\n`)
       }
     },
+    // Feishu card callbacks have changed shape across SDK/API generations.
+    // Register the known aliases; the normalizer below keeps the action
+    // parser strict so unrelated callbacks are dropped without side effects.
+    'card.action.trigger': handleCardAction,
+    'card.action.trigger_v1': handleCardAction,
+    'interactive_card.action.trigger': handleCardAction,
   })
 
   // WSClient uses two distinct network paths and both must honor the proxy:
@@ -116,6 +136,49 @@ export async function startFeishuWsClient(input: {
   }
 }
 
+function normalizeCardAction(data: unknown): FeishuCardAction | null {
+  const record = asRecord(data)
+  if (!record) {
+    return null
+  }
+
+  const action = asRecord(record.action)
+  const value = asRecord(action?.value)
+  if (value?.kind !== 'lightclaw_permission') {
+    return null
+  }
+
+  const requestId = stringValue(value.requestId)
+  const actionKind = parsePermissionAction(value.action)
+  const operator = asRecord(record.operator)
+  const operatorId = asRecord(operator?.operator_id)
+  const user = asRecord(record.user)
+  const userId = asRecord(user?.user_id)
+  const operatorOpenId =
+    stringValue(record.open_id) ??
+    stringValue(operator?.open_id) ??
+    stringValue(operatorId?.open_id) ??
+    stringValue(user?.open_id) ??
+    stringValue(userId?.open_id)
+
+  if (!requestId || !actionKind || !operatorOpenId) {
+    return null
+  }
+
+  return {
+    requestId,
+    action: actionKind,
+    operatorOpenId,
+    ...(typeof record.open_message_id === 'string'
+      ? { openMessageId: record.open_message_id }
+      : {}),
+  }
+}
+
+function parsePermissionAction(value: unknown): FeishuPermissionActionKind | null {
+  return value === 'allow' || value === 'deny' || value === 'guidance' ? value : null
+}
+
 function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
   const message = data.message
   if (!message) {
@@ -149,6 +212,14 @@ function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
 }
 
 function resolveDomain(domain: string): Lark.Domain | string {

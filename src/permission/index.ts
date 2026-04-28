@@ -33,22 +33,41 @@ export async function requestPermission(input: {
 
   let decision: PermissionDecision
   if (verdict.behavior === 'ask') {
-    if (!ctx.isInteractive || ctx.isSubagent || !rl) {
+    const inputPreview = previewInput(tool.name, toolInput)
+    if (ctx.isSubagent) {
       decision = {
         behavior: 'deny',
         reason: [
           `Permission denied: ${tool.name} requires confirmation in ${mode} mode.`,
-          ctx.isSubagent ? 'Subagents are non-interactive.' : 'No interactive prompt is available.',
+          'Subagents are non-interactive.',
           'Add an explicit allow rule or switch permission mode before retrying.',
         ].join(' '),
       }
-    } else {
+    } else if (ctx.permissionApprover) {
+      decision = await ctx.permissionApprover.ask({
+        toolName: tool.name,
+        riskLevel: tool.riskLevel,
+        input: toolInput,
+        inputPreview,
+        mode,
+        signal: ctx.signal,
+      })
+    } else if (ctx.isInteractive && rl) {
       decision = await askUserApproval({
         rl,
         toolName: tool.name,
         riskLevel: tool.riskLevel,
-        inputPreview: previewInput(tool.name, toolInput),
+        inputPreview,
       })
+    } else {
+      decision = {
+        behavior: 'deny',
+        reason: [
+          `Permission denied: ${tool.name} requires confirmation in ${mode} mode.`,
+          'No interactive prompt is available.',
+          'Add an explicit allow rule or switch permission mode before retrying.',
+        ].join(' '),
+      }
     }
   } else {
     decision = verdict

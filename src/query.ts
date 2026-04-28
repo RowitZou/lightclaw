@@ -14,6 +14,7 @@ import {
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { modelFor } from './provider/index.js'
 import { requestPermission } from './permission/index.js'
+import type { PermissionApprover } from './permission/types.js'
 import {
   addUsage,
   getAbortController,
@@ -69,6 +70,8 @@ type QueryParams = {
   systemPrompt?: string
   /** Prepended to the default system prompt when provided (used by channels). */
   channelContext?: string
+  /** Async permission UI for non-REPL channels such as Feishu cards. */
+  permissionApprover?: PermissionApprover
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -77,6 +80,7 @@ type DispatchContext = {
   tools: Tool[]
   mode: QueryMode
   rl?: Interface
+  permissionApprover?: PermissionApprover
   onToolResult?(event: ToolExecutionEvent): void
 }
 
@@ -203,6 +207,7 @@ export async function query(params: QueryParams): Promise<{
     tools: params.tools,
     mode,
     rl: params.rl,
+    permissionApprover: params.permissionApprover,
     onToolResult: params.onToolResult,
   }
 
@@ -342,6 +347,7 @@ async function dispatchToolCall(
         isInteractive: ctx.mode === 'interactive' && ctx.rl !== undefined,
         isSubagent: ctx.mode === 'subagent',
         signal: getAbortController().signal,
+        permissionApprover: ctx.permissionApprover,
       },
       rl: ctx.rl,
     })

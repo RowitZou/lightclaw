@@ -7,6 +7,7 @@ import type { FeishuRawMessage } from './bot-content.js'
 import { createFeishuClient } from './client.js'
 import { FeishuDedup } from './dedup.js'
 import { downloadFeishuMedia } from './media.js'
+import { FeishuPermissionCoordinator } from './permission-card.js'
 import { FeishuSender } from './sender.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
@@ -47,7 +48,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       const client = createFeishuClient(config)
       const sender = new FeishuSender(client, config)
-      const runner = new ChannelRunner(createFeishuStrategy(config, sender, client))
+      const permissionCoordinator = new FeishuPermissionCoordinator(sender)
+      const runner = new ChannelRunner(
+        createFeishuStrategy(config, sender, client, permissionCoordinator),
+      )
       await runner.initialize()
 
       const dedup = new FeishuDedup(
@@ -58,6 +62,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         process.stderr.write(
           `feishu: inbound event=${raw.eventId} message=${raw.messageId}\n`,
         )
+        if (await permissionCoordinator.tryConsumePermissionMessage(raw)) {
+          process.stderr.write(`feishu: permission response consumed message=${raw.messageId}\n`)
+          return
+        }
         // sender displayName is intentionally not pre-fetched here. The
         // pairing path in the runner does a fire-and-forget lookup via
         // strategy.fetchSenderName so paired-user messages are not blocked
@@ -97,7 +105,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       }
 
       if (config.transport === 'ws') {
-        const handle = await startFeishuWsClient({ config, dedup, onMessage })
+        const handle = await startFeishuWsClient({
+          config,
+          dedup,
+          onMessage,
+          onCardAction: action => permissionCoordinator.handleCardAction(action),
+        })
         process.stderr.write('feishu: ws client started (long-lived subscription, no public ingress)\n')
         return { stop: () => handle.close() }
       }

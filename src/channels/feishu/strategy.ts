@@ -3,6 +3,7 @@ import type { ChannelRunnerStrategy } from '../runner.js'
 import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import { buildFeishuChannelPrompt } from './channel-prompt.js'
 import type { FeishuClient } from './client.js'
+import type { FeishuPermissionCoordinator } from './permission-card.js'
 import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
 
@@ -12,6 +13,7 @@ export function createFeishuStrategy(
   config: FeishuChannelConfig,
   sender: FeishuSender,
   client: FeishuClient,
+  permissions?: FeishuPermissionCoordinator,
 ): ChannelRunnerStrategy {
   return {
     channelId: FEISHU_CHANNEL_ID,
@@ -22,6 +24,15 @@ export function createFeishuStrategy(
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendText(message, text),
+    ...(permissions
+      ? {
+          createPermissionApprover: (
+            message: NormalizedChannelMessage,
+            sessionId: string,
+            userId: string,
+          ) => permissions.createApprover({ message, sessionId, userId }),
+        }
+      : {}),
     fetchSenderName: peerId => fetchBestEffortDisplayName({
       channel: 'feishu',
       peerId,
