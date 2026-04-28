@@ -10,7 +10,7 @@ export function buildFeishuChannelPrompt(
     'You are responding in a Feishu (Lark) conversation, not an interactive terminal.',
     '- Keep replies concise; Feishu messages render better when short.',
     '- When a tool requires permission confirmation, LightClaw may ask the user through a Feishu approval card and then continue this same turn.',
-    '- If the user denies a tool call and provides guidance, follow that guidance instead of retrying the same tool call.',
+    '- If the user denies a tool call, do not retry the same tool call unless they explicitly ask you to.',
     '',
     'Conversation context:',
     `- Chat type: ${chatType}`,

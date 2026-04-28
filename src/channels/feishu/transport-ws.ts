@@ -5,7 +5,11 @@ import * as Lark from '@larksuiteoapi/node-sdk'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
-import type { FeishuCardAction, FeishuPermissionActionKind } from './permission-card.js'
+import type {
+  FeishuCardAction,
+  FeishuCardActionResponse,
+  FeishuPermissionActionKind,
+} from './permission-card.js'
 
 export type WsHandle = {
   close(): Promise<void>
@@ -41,7 +45,9 @@ export async function startFeishuWsClient(input: {
   config: FeishuChannelConfig
   dedup: FeishuDedup
   onMessage(message: FeishuRawMessage): void | Promise<void>
-  onCardAction?(action: FeishuCardAction): void | Promise<void>
+  onCardAction?(
+    action: FeishuCardAction,
+  ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
   if (!config.appId || !config.appSecret) {
@@ -58,12 +64,12 @@ export async function startFeishuWsClient(input: {
     const action = normalizeCardAction(data)
     if (!action) {
       process.stderr.write('feishu ws: dropped unsupported card action callback\n')
-      return
+      return buildUnsupportedCardActionResponse()
     }
     process.stderr.write(
       `feishu ws: card action request=${action.requestId} action=${action.action}\n`,
     )
-    await input.onCardAction?.(action)
+    return await input.onCardAction?.(action)
   }
 
   eventDispatcher.register({
@@ -142,20 +148,22 @@ function normalizeCardAction(data: unknown): FeishuCardAction | null {
     return null
   }
 
-  const action = asRecord(record.action)
-  const value = asRecord(action?.value)
+  const event = asRecord(record.event)
+  const action = asRecord(record.action) ?? asRecord(event?.action)
+  const value = parseActionValue(action?.value)
   if (value?.kind !== 'lightclaw_permission') {
     return null
   }
 
   const requestId = stringValue(value.requestId)
   const actionKind = parsePermissionAction(value.action)
-  const operator = asRecord(record.operator)
+  const operator = asRecord(record.operator) ?? asRecord(event?.operator)
   const operatorId = asRecord(operator?.operator_id)
-  const user = asRecord(record.user)
+  const user = asRecord(record.user) ?? asRecord(event?.user)
   const userId = asRecord(user?.user_id)
   const operatorOpenId =
     stringValue(record.open_id) ??
+    stringValue(event?.open_id) ??
     stringValue(operator?.open_id) ??
     stringValue(operatorId?.open_id) ??
     stringValue(user?.open_id) ??
@@ -164,19 +172,33 @@ function normalizeCardAction(data: unknown): FeishuCardAction | null {
   if (!requestId || !actionKind || !operatorOpenId) {
     return null
   }
+  const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
 
   return {
     requestId,
     action: actionKind,
     operatorOpenId,
-    ...(typeof record.open_message_id === 'string'
-      ? { openMessageId: record.open_message_id }
-      : {}),
+    ...(openMessageId ? { openMessageId } : {}),
+  }
+}
+
+function parseActionValue(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value)
+  if (record) {
+    return record
+  }
+  if (typeof value !== 'string') {
+    return null
+  }
+  try {
+    return asRecord(JSON.parse(value))
+  } catch {
+    return null
   }
 }
 
 function parsePermissionAction(value: unknown): FeishuPermissionActionKind | null {
-  return value === 'allow' || value === 'deny' || value === 'guidance' ? value : null
+  return value === 'allow' || value === 'deny' ? value : null
 }
 
 function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
@@ -220,6 +242,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function buildUnsupportedCardActionResponse(): FeishuCardActionResponse {
+  return {
+    toast: {
+      type: 'error',
+      content: '卡片回调格式暂未识别。请直接回复“是”或“否”。',
+    },
+  }
 }
 
 function resolveDomain(domain: string): Lark.Domain | string {

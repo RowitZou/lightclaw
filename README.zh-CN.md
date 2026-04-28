@@ -116,7 +116,7 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
 
-Feishu channel 现在支持交互式权限审批。`default` / `acceptEdits` 模式下遇到需要确认的写入或执行类工具时，LightClaw 会发送飞书审批卡片；用户可以点“是”“否”或“否，告诉模型怎么做”。如果卡片按钮不可用，也可以直接回复“是”/“否”作为文本 fallback。其他非交互 channel 仍会在 ask 场景下拒绝工具调用；作为可信个人 bot 使用时，也可以把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling 和 workspace boundary 作为安全护栏。
+Feishu channel 现在支持交互式权限审批。`default` / `acceptEdits` 模式下遇到需要确认的写入或执行类工具时，LightClaw 会发送飞书审批卡片；用户可以点“是”或“否”。如果卡片按钮不可用，也可以直接回复“是”/“否”作为文本 fallback，回复“取消”可以清掉卡住的待审批请求。按钮生效需要在飞书开发者后台启用机器人互动卡片能力，并在回调订阅里添加 `card.action.trigger`。其他非交互 channel 仍会在 ask 场景下拒绝工具调用；作为可信个人 bot 使用时，也可以把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling 和 workspace boundary 作为安全护栏。
 
 ---
 

@@ -11,10 +11,19 @@ import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
 import type { FeishuSender } from './sender.js'
 
-const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000
+const PERMISSION_TIMEOUT_MS = 60 * 1000
 const MAX_PREVIEW_CHARS = 900
+const CANCEL_TEXTS = new Set([
+  '/cancel',
+  '/permission cancel',
+  'cancel',
+  '取消',
+  '取消权限',
+  '清除',
+  '清除权限',
+])
 
-export type FeishuPermissionActionKind = 'allow' | 'deny' | 'guidance'
+export type FeishuPermissionActionKind = 'allow' | 'deny'
 
 export type FeishuCardAction = {
   requestId: string
@@ -23,13 +32,19 @@ export type FeishuCardAction = {
   openMessageId?: string
 }
 
+export type FeishuCardActionResponse = {
+  toast: {
+    type: 'success' | 'info' | 'warning' | 'error'
+    content: string
+  }
+}
+
 type PendingPermission = {
   id: string
   sessionId: string
   userId: string
   message: NormalizedChannelMessage
   ask: PermissionAskInput
-  status: 'awaiting_decision' | 'awaiting_guidance'
   resolve(decision: PermissionDecision): void
   timeout: NodeJS.Timeout
   abortListener?: () => void
@@ -37,6 +52,7 @@ type PendingPermission = {
 
 export class FeishuPermissionCoordinator {
   private pendingById = new Map<string, PendingPermission>()
+  private pendingByOwner = new Map<string, string>()
 
   constructor(private readonly sender: FeishuSender) {}
 
@@ -53,13 +69,13 @@ export class FeishuPermissionCoordinator {
     }
   }
 
-  async handleCardAction(action: FeishuCardAction): Promise<void> {
+  async handleCardAction(action: FeishuCardAction): Promise<FeishuCardActionResponse> {
     const pending = this.pendingById.get(action.requestId)
     if (!pending) {
       process.stderr.write(
         `feishu permission: ignored stale action request=${action.requestId}\n`,
       )
-      return
+      return buildToast('info', '这条权限请求已经处理或超时，可以忽略。')
     }
 
     if (!await this.canOperate(pending, action.operatorOpenId)) {
@@ -70,10 +86,10 @@ export class FeishuPermissionCoordinator {
         pending.message,
         '这条权限请求只能由发起人或 LightClaw admin 处理。',
       )
-      return
+      return buildToast('error', '这条权限请求只能由发起人或 LightClaw admin 处理。')
     }
 
-    await this.applyAction(pending, action.action)
+    return await this.applyAction(pending, action.action)
   }
 
   async tryConsumePermissionMessage(raw: FeishuRawMessage): Promise<boolean> {
@@ -83,23 +99,19 @@ export class FeishuPermissionCoordinator {
     }
 
     const text = raw.text.trim()
-    if (!text) {
-      await this.safeSend(
-        pending.message,
-        '请先处理上一条权限请求：回复“是”“否”，或发送你希望模型遵循的指导。',
-      )
+    if (isCancelText(text)) {
+      this.resolvePending(pending, {
+        behavior: 'deny',
+        reason: `Permission denied: ${pending.ask.toolName} approval was cancelled in Feishu.`,
+      })
       return true
     }
 
-    if (pending.status === 'awaiting_guidance') {
-      this.resolvePending(
-        pending,
-        {
-          behavior: 'deny',
-          reason: `User denied ${pending.ask.toolName} and instructed the model: ${text}`,
-        },
+    if (!text) {
+      await this.safeSend(
+        pending.message,
+        '请先处理上一条权限请求：回复“是”或“否”，或回复“取消”丢弃这条请求。',
       )
-      await this.safeSend(pending.message, '收到，我会把这条指导交给模型继续处理。')
       return true
     }
 
@@ -110,7 +122,7 @@ export class FeishuPermissionCoordinator {
         [
           '请先处理上一条权限请求。',
           `工具: ${pending.ask.toolName}`,
-          '可以点击卡片按钮，或直接回复：是 / 否 / 否，告诉模型怎么做。',
+          '可以点击卡片按钮，或直接回复：是 / 否 / 取消。',
         ].join('\n'),
       )
       return true
@@ -146,11 +158,11 @@ export class FeishuPermissionCoordinator {
         userId: input.userId,
         message: input.message,
         ask: input.ask,
-        status: 'awaiting_decision',
         resolve,
         timeout,
       }
 
+      this.cancelExistingForOwner(pending, 'A newer Feishu permission request replaced this one.')
       if (input.ask.signal) {
         const abortListener = () => {
           this.resolvePending(pending, {
@@ -163,6 +175,7 @@ export class FeishuPermissionCoordinator {
       }
 
       this.pendingById.set(id, pending)
+      this.pendingByOwner.set(ownerKey(pending.message), id)
       void this.sendApprovalPrompt(pending)
     })
   }
@@ -176,39 +189,38 @@ export class FeishuPermissionCoordinator {
       process.stderr.write(
         `feishu permission: card send failed request=${pending.id}: ${detail}\n`,
       )
-      await this.safeSend(pending.message, buildTextFallback(pending))
+      try {
+        await this.sender.sendText(pending.message, buildTextFallback(pending))
+      } catch (fallbackError) {
+        const fallbackDetail = fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError)
+        process.stderr.write(
+          `feishu permission: fallback send failed request=${pending.id}: ${fallbackDetail}\n`,
+        )
+        this.resolvePending(pending, {
+          behavior: 'deny',
+          reason: `Permission denied: ${pending.ask.toolName} approval prompt could not be delivered in Feishu.`,
+        })
+      }
       return
     }
-
-    await this.safeSend(
-      pending.message,
-      `权限请求已发送。若卡片按钮不可用，可直接回复“是”“否”或“否，告诉模型怎么做”。请求 ID: ${pending.id.slice(0, 8)}`,
-    )
   }
 
   private async applyAction(
     pending: PendingPermission,
     action: FeishuPermissionActionKind,
-  ): Promise<void> {
+  ): Promise<FeishuCardActionResponse> {
     switch (action) {
       case 'allow':
         this.resolvePending(pending, { behavior: 'allow' })
-        await this.safeSend(pending.message, '已允许本次工具调用。')
-        return
+        return buildToast('success', `已允许 ${pending.ask.toolName}。`)
       case 'deny':
         this.resolvePending(pending, {
           behavior: 'deny',
           reason: `User denied ${pending.ask.toolName} from Feishu.`,
         })
-        await this.safeSend(pending.message, '已拒绝本次工具调用。')
-        return
-      case 'guidance':
-        pending.status = 'awaiting_guidance'
-        await this.safeSend(
-          pending.message,
-          '请发送一条指导，我会把它交给模型继续处理。例如：不要写文件，只告诉我需要改哪里。',
-        )
-        return
+        return buildToast('warning', `已拒绝 ${pending.ask.toolName}。`)
     }
   }
 
@@ -221,7 +233,27 @@ export class FeishuPermissionCoordinator {
       pending.ask.signal.removeEventListener('abort', pending.abortListener)
     }
     this.pendingById.delete(pending.id)
+    const key = ownerKey(pending.message)
+    if (this.pendingByOwner.get(key) === pending.id) {
+      this.pendingByOwner.delete(key)
+    }
     pending.resolve(decision)
+  }
+
+  private cancelExistingForOwner(next: PendingPermission, reason: string): void {
+    const existingId = this.pendingByOwner.get(ownerKey(next.message))
+    if (!existingId) {
+      return
+    }
+    const existing = this.pendingById.get(existingId)
+    if (!existing) {
+      this.pendingByOwner.delete(ownerKey(next.message))
+      return
+    }
+    this.resolvePending(existing, {
+      behavior: 'deny',
+      reason,
+    })
   }
 
   private findPendingForRawMessage(raw: FeishuRawMessage): PendingPermission | null {
@@ -290,14 +322,25 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
       },
       {
         tag: 'action',
-        layout: 'trisection',
+        layout: 'bisected',
         actions: [
           buildButton('是', 'primary', pending.id, 'allow'),
           buildButton('否', 'danger', pending.id, 'deny'),
-          buildButton('否，告诉模型怎么做', 'default', pending.id, 'guidance'),
         ],
       },
     ],
+  }
+}
+
+function buildToast(
+  type: 'success' | 'info' | 'warning' | 'error',
+  content: string,
+): FeishuCardActionResponse {
+  return {
+    toast: {
+      type,
+      content,
+    },
   }
 }
 
@@ -330,8 +373,16 @@ function buildTextFallback(pending: PendingPermission): string {
     `会话: ${pending.sessionId}`,
     pending.ask.inputPreview,
     '',
-    '请回复：是 / 否 / 否，告诉模型怎么做',
+    '请回复：是 / 否 / 取消',
   ].join('\n')
+}
+
+function ownerKey(message: NormalizedChannelMessage): string {
+  return `${message.chatId}:${message.senderOpenId}`
+}
+
+function isCancelText(text: string): boolean {
+  return CANCEL_TEXTS.has(text.trim().toLowerCase())
 }
 
 function parseTextAction(text: string): FeishuPermissionActionKind | null {
@@ -341,14 +392,6 @@ function parseTextAction(text: string): FeishuPermissionActionKind | null {
   }
   if (['否', '不', '拒绝', 'no', 'n'].includes(normalized)) {
     return 'deny'
-  }
-  if (
-    normalized === '否，告诉模型怎么做' ||
-    normalized === '否,告诉模型怎么做' ||
-    normalized === '告诉模型怎么做' ||
-    normalized === 'guidance'
-  ) {
-    return 'guidance'
   }
   return null
 }

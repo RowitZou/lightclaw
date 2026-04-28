@@ -9,7 +9,7 @@ import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
 import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
-import { createUserMessage, getLastUuid } from '../messages.js'
+import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
@@ -175,21 +175,39 @@ export class ChannelRunner {
       const channelId = this.strategy.channelId
       process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
-      const result = await query({
-        config: appConfig,
-        messages,
-        tools: getEnabledTools(provider, getAllTools()),
-        mode: 'channel',
-        channelContext: this.strategy.buildChannelPrompt(message),
-        permissionApprover: this.strategy.createPermissionApprover?.(
-          message,
-          sessionId,
-          userId,
-        ),
-        onToolUse(event) {
-          process.stderr.write(`${channelId}: tool ${event.name}\n`)
-        },
-      })
+      let result
+      try {
+        result = await query({
+          config: appConfig,
+          messages,
+          tools: getEnabledTools(provider, getAllTools()),
+          mode: 'channel',
+          channelContext: this.strategy.buildChannelPrompt(message),
+          permissionApprover: this.strategy.createPermissionApprover?.(
+            message,
+            sessionId,
+            userId,
+          ),
+          onToolUse(event) {
+            process.stderr.write(`${channelId}: tool ${event.name}\n`)
+          },
+        })
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
+        const failureText = `这轮处理失败了：${detail}`
+        const assistantMessage = createAssistantMessage({
+          content: [{ type: 'text', text: failureText }],
+          stopReason: 'error',
+          usage: {},
+          parentUuid: getLastUuid(messages),
+        })
+        messages.push(assistantMessage)
+        await appendMessage(sessionId, assistantMessage)
+        await persistMeta(Date.now(), messages.length)
+        await this.sendReply(message, failureText)
+        return
+      }
 
       const previousTail = messages[messageCountBeforeQuery - 1]
       const nextTail = result.messages[messageCountBeforeQuery - 1]
