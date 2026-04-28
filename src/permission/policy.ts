@@ -1,6 +1,4 @@
-import path from 'node:path'
-
-import { getCurrentUserId, getCwd, getActiveSkillAllowedTools } from '../state.js'
+import { getActiveSkillAllowedTools } from '../state.js'
 import type {
   PermissionAskDecision,
   PermissionDecision,
@@ -25,11 +23,6 @@ export function evaluatePermission(args: {
   const skillBoundary = evaluateSkillBoundary(toolName)
   if (skillBoundary) {
     return skillBoundary
-  }
-
-  const workspaceBoundary = evaluateWorkspaceBoundary(toolName, input)
-  if (workspaceBoundary) {
-    return workspaceBoundary
   }
 
   let firstAllow: PermissionRule | undefined
@@ -107,62 +100,6 @@ function evaluateSkillBoundary(toolName: string): PermissionDecision | null {
     behavior: 'deny',
     reason: `Permission denied: active skill allows only ${allowedTools.join(', ')}; ${toolName} is outside that boundary.`,
   }
-}
-
-function evaluateWorkspaceBoundary(
-  toolName: string,
-  input: unknown,
-): PermissionDecision | null {
-  const targetPath = extractTargetPath(toolName, input)
-  if (!targetPath) {
-    return null
-  }
-
-  const userId = getCurrentUserId()
-  if (!userId) {
-    return {
-      behavior: 'deny',
-      reason: `Permission denied: ${toolName} requires an active LightClaw user context.`,
-    }
-  }
-
-  const cwd = path.resolve(getCwd())
-  const resolvedTarget = path.isAbsolute(targetPath)
-    ? path.resolve(targetPath)
-    : path.resolve(cwd, targetPath)
-
-  if (!isWithin(resolvedTarget, cwd)) {
-    return {
-      behavior: 'deny',
-      reason: `Permission denied: workspace boundary forbids ${toolName} outside the current user workspace.`,
-    }
-  }
-
-  return null
-}
-
-function extractTargetPath(toolName: string, input: unknown): string | null {
-  const record = input as Record<string, unknown>
-  if (
-    (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') &&
-    typeof record.file_path === 'string'
-  ) {
-    return record.file_path
-  }
-
-  if (
-    (toolName === 'Glob' || toolName === 'Grep') &&
-    typeof record.path === 'string'
-  ) {
-    return record.path
-  }
-
-  return null
-}
-
-function isWithin(target: string, root: string): boolean {
-  const relative = path.relative(root, target)
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function matchesToolPattern(toolName: string, pattern: string): boolean {

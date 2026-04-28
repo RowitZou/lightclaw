@@ -1,31 +1,21 @@
-import path from 'node:path'
-
-import fg from 'fast-glob'
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
 
-function resolveInputPath(cwd: string, inputPath?: string): string {
-  if (!inputPath) {
-    return cwd
-  }
-
-  return path.isAbsolute(inputPath) ? inputPath : path.resolve(cwd, inputPath)
-}
-
 export const globTool = buildTool({
   name: 'Glob',
   description: 'Find files by glob pattern.',
+  domain: 'environment',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     pattern: z.string().min(1),
     path: z.string().optional(),
   }),
   async call(input, context) {
     try {
-      const cwd = resolveInputPath(context.cwd, input.path)
-      const matches = await fg(input.pattern, {
-        cwd,
+      const matches = await context.runtime.fs.glob(input.pattern, {
+        cwd: input.path ?? context.cwd,
         dot: true,
         onlyFiles: false,
       })

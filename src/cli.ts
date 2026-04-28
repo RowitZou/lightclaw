@@ -76,6 +76,8 @@ Environment:
   LIGHTCLAW_NO_MEMORY=1  Disable auto-memory extraction and memory index injection
   LIGHTCLAW_NO_MCP=1     Disable MCP client startup and MCP tool injection
   LIGHTCLAW_NO_HOOKS=1   Disable hook loading
+  LIGHTCLAW_RUNTIME_BACKEND=local|docker
+  LIGHTCLAW_DOCKER_IMAGE=<image>  Override DockerRuntime image
 `)
 }
 
@@ -113,7 +115,7 @@ async function main(): Promise<void> {
 
   const channelHandles = args.prompt ? [] : await startEnabledChannels()
   try {
-    const config = initializeApp({
+    const config = await initializeApp({
       model: resumeMeta?.model,
       sessionId: resumeSessionId,
       resumedFrom: resumeSessionId ?? null,

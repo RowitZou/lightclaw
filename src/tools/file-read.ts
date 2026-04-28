@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -27,7 +26,9 @@ function formatLines(content: string, offset: number, limit?: number): string {
 export const fileReadTool = buildTool({
   name: 'Read',
   description: 'Read a text file, optionally with line offset and limit.',
+  domain: 'environment',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     file_path: z.string().min(1),
     offset: z.number().int().min(1).optional(),
@@ -36,7 +37,7 @@ export const fileReadTool = buildTool({
   async call(input, context) {
     try {
       const targetPath = resolveInputPath(context.cwd, input.file_path)
-      const content = await readFile(targetPath, 'utf8')
+      const content = (await context.runtime.fs.readFile(targetPath)).toString('utf8')
       return {
         output: formatLines(content, input.offset ?? 1, input.limit),
       }

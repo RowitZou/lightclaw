@@ -29,6 +29,7 @@ import {
   getLastExtractedAt,
   getModel,
   getPermissionMode,
+  getRuntimePool,
   getSessionId,
   getTodos,
   getUsageTotals,
@@ -184,6 +185,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     await persistMeta(sessionId, createdAt, messages.length)
     await runHook('onSessionEnd', { sessionId, reason: 'exit' })
     await cleanupMcp()
+    await getRuntimePool().releaseAll()
     printUsageSummary()
     return
   }
@@ -217,6 +219,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   await persistMeta(sessionId, createdAt, messages.length)
   await runHook('onSessionEnd', { sessionId, reason: 'exit' })
   await cleanupMcp()
+  await getRuntimePool().releaseAll()
   printUsageSummary()
 }
 

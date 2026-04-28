@@ -5,7 +5,12 @@ import { runHook } from '../hooks/index.js'
 import { initializeHooks } from '../hooks/index.js'
 import { workspaceFor } from '../identity/paths.js'
 import { initializeMcp } from '../mcp/index.js'
-import { initializeApp, beginQuery, resetSessionContext } from '../init.js'
+import {
+  initializeApp,
+  beginQuery,
+  resetSessionContext,
+  LocalRuntimeAdminOnlyError,
+} from '../init.js'
 import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
@@ -93,7 +98,7 @@ export class ChannelRunner {
       return
     }
 
-    const appConfig = initializeApp({
+    const appConfig = await initializeApp({
       cwd: this.strategy.cwd,
       permissionMode: this.strategy.permissionMode,
     })
@@ -121,111 +126,127 @@ export class ChannelRunner {
     }
     const sessionId = this.strategy.resolveSessionId(message, userId)
     await this.locks.runExclusive(sessionId, async () => {
-      const meta = await loadMeta(sessionId)
-      const messages = await loadTranscript(sessionId)
-      const workspace = workspaceFor(userId)
-      const appConfig = resetSessionContext({
-        cwd: workspace,
-        model: meta?.model,
-        sessionId,
-        resumedFrom: meta ? sessionId : null,
-        compactionCount: meta?.compactionCount,
-        lastExtractedAt: meta?.lastExtractedAt,
-        todos: meta?.todos,
-        permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
-        currentUserId: userId,
-      })
-      await refreshSkillRegistry(getCwd())
-      if (!meta) {
-        await runHook('onSessionStart', {
-          sessionId,
-          cwd: getCwd(),
-          trigger: 'channel',
-          channelId: this.strategy.channelId,
-        })
-      }
-
-      beginQuery()
-      const userText = formatChannelUserText(message)
-      const slash = await dispatchChannelSlash(userText, {
-        config: appConfig,
-        sessionId,
-        createdAt: meta?.createdAt ?? Date.now(),
-        messages,
-        userId,
-        isAdmin: await isAdmin(userId),
-        getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools()),
-        setActiveTools() {},
-        persistMeta: count => persistMeta(Date.now(), count),
-      })
-      if (slash.handled) {
-        await persistMeta(Date.now(), messages.length)
-        process.stderr.write(
-          `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
-        )
-        await this.sendReply(message, slash.output.trim() || 'ok')
-        return
-      }
-
-      const userMessage = createUserMessage(userText, getLastUuid(messages))
-      messages.push(userMessage)
-      await appendMessage(sessionId, userMessage)
-      const messageCountBeforeQuery = messages.length
-      const provider = getProvider(appConfig)
-      const channelId = this.strategy.channelId
-      process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
-
-      let result
       try {
-        result = await query({
-          config: appConfig,
-          messages,
-          tools: getEnabledTools(provider, getAllTools()),
-          mode: 'channel',
-          channelContext: this.strategy.buildChannelPrompt(message),
-          permissionApprover: this.strategy.createPermissionApprover?.(
-            message,
+        const meta = await loadMeta(sessionId)
+        const messages = await loadTranscript(sessionId)
+        const workspace = workspaceFor(userId)
+        const appConfig = await resetSessionContext({
+          cwd: workspace,
+          model: meta?.model,
+          sessionId,
+          resumedFrom: meta ? sessionId : null,
+          compactionCount: meta?.compactionCount,
+          lastExtractedAt: meta?.lastExtractedAt,
+          todos: meta?.todos,
+          // Prefer the persisted session mode so an in-channel `/mode <m>`
+          // survives across messages. The channels.json default only applies
+          // for the first message of a session (when meta does not exist
+          // yet); after that the user-driven mode change is the source of
+          // truth, mirroring how the REPL resumes mode from meta.
+          permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
+          currentUserId: userId,
+        })
+        await refreshSkillRegistry(getCwd())
+        if (!meta) {
+          await runHook('onSessionStart', {
             sessionId,
-            userId,
-          ),
-          onToolUse(event) {
-            process.stderr.write(`${channelId}: tool ${event.name}\n`)
-          },
-        })
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
-        const failureText = `这轮处理失败了：${detail}`
-        const assistantMessage = createAssistantMessage({
-          content: [{ type: 'text', text: failureText }],
-          stopReason: 'error',
-          usage: {},
-          parentUuid: getLastUuid(messages),
-        })
-        messages.push(assistantMessage)
-        await appendMessage(sessionId, assistantMessage)
-        await persistMeta(Date.now(), messages.length)
-        await this.sendReply(message, failureText)
-        return
-      }
-
-      const previousTail = messages[messageCountBeforeQuery - 1]
-      const nextTail = result.messages[messageCountBeforeQuery - 1]
-      const didMutateExistingHistory =
-        JSON.stringify(previousTail) !== JSON.stringify(nextTail)
-      const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
-      if (result.didCompact || didMutateExistingHistory) {
-        await rewriteTranscript(sessionId, result.messages)
-      } else {
-        for (const item of newlyAddedMessages) {
-          await appendMessage(sessionId, item)
+            cwd: getCwd(),
+            trigger: 'channel',
+            channelId: this.strategy.channelId,
+          })
         }
-      }
 
-      await persistMeta(Date.now(), result.messages.length)
-      await awaitBackgroundTasks()
-      process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
-      await this.sendReply(message, result.lastAssistantText || '(no response)')
+        beginQuery()
+        const userText = formatChannelUserText(message)
+        const slash = await dispatchChannelSlash(userText, {
+          config: appConfig,
+          sessionId,
+          createdAt: meta?.createdAt ?? Date.now(),
+          messages,
+          userId,
+          isAdmin: await isAdmin(userId),
+          getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools()),
+          setActiveTools() {},
+          persistMeta: count => persistMeta(Date.now(), count),
+        })
+        if (slash.handled) {
+          await persistMeta(Date.now(), messages.length)
+          process.stderr.write(
+            `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
+          )
+          await this.sendReply(message, slash.output.trim() || 'ok')
+          return
+        }
+
+        const userMessage = createUserMessage(userText, getLastUuid(messages))
+        messages.push(userMessage)
+        await appendMessage(sessionId, userMessage)
+        const messageCountBeforeQuery = messages.length
+        const provider = getProvider(appConfig)
+        const channelId = this.strategy.channelId
+        process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
+
+        let result
+        try {
+          result = await query({
+            config: appConfig,
+            messages,
+            tools: getEnabledTools(provider, getAllTools()),
+            mode: 'channel',
+            channelContext: this.strategy.buildChannelPrompt(message),
+            permissionApprover: this.strategy.createPermissionApprover?.(
+              message,
+              sessionId,
+              userId,
+            ),
+            onToolUse(event) {
+              process.stderr.write(`${channelId}: tool ${event.name}\n`)
+            },
+          })
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
+          const failureText = `这轮处理失败了：${detail}`
+          const assistantMessage = createAssistantMessage({
+            content: [{ type: 'text', text: failureText }],
+            stopReason: 'error',
+            usage: {},
+            parentUuid: getLastUuid(messages),
+          })
+          messages.push(assistantMessage)
+          await appendMessage(sessionId, assistantMessage)
+          await persistMeta(Date.now(), messages.length)
+          await this.sendReply(message, failureText)
+          return
+        }
+
+        const previousTail = messages[messageCountBeforeQuery - 1]
+        const nextTail = result.messages[messageCountBeforeQuery - 1]
+        const didMutateExistingHistory =
+          JSON.stringify(previousTail) !== JSON.stringify(nextTail)
+        const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
+        if (result.didCompact || didMutateExistingHistory) {
+          await rewriteTranscript(sessionId, result.messages)
+        } else {
+          for (const item of newlyAddedMessages) {
+            await appendMessage(sessionId, item)
+          }
+        }
+
+        await persistMeta(Date.now(), result.messages.length)
+        await awaitBackgroundTasks()
+        process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
+        await this.sendReply(message, result.lastAssistantText || '(no response)')
+      } catch (error) {
+        if (error instanceof LocalRuntimeAdminOnlyError) {
+          await this.sendReply(
+            message,
+            'This bot is running in single-user mode. Only the administrator can use it right now. Please contact the bot operator if you need access.',
+          )
+          return
+        }
+        throw error
+      }
     })
   }
 

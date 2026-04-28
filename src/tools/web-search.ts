@@ -1,45 +1,57 @@
+import path from 'node:path'
+
 import { z } from 'zod'
 
-import { getConfig } from '../config.js'
-import { getProvider, modelFor } from '../provider/index.js'
-import type { Provider } from '../provider/types.js'
 import { buildTool } from '../tool.js'
 
 const REMINDER = 'REMINDER: Cite sources with Markdown links when answering.'
+const DEFAULT_TIMEOUT_MS = 35_000
 
 export const webSearchTool = buildTool({
   name: 'WebSearch',
-  description:
-    'Search the web using Anthropic native web_search. Returns search findings and source URLs.',
+  description: 'Search the web from the environment runtime. Returns search findings and source URLs.',
+  domain: 'environment',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     query: z.string().min(2),
     allowed_domains: z.array(z.string()).optional(),
     blocked_domains: z.array(z.string()).optional(),
+    max_results: z.number().int().min(1).max(20).optional(),
   }),
-  isEnabled(provider: Provider) {
-    return provider.capabilities.serverTools.webSearch
-  },
   async call(input, context) {
-    const config = getConfig()
-    const provider = getProvider(config)
-    if (!provider.webSearch) {
+    const helper = path.join(context.runtime.helperRoot, 'websearch.py')
+    const result = await context.runtime.exec({
+      command: `python3 ${shellQuote(helper)}`,
+      stdin: JSON.stringify({
+        query: input.query,
+        allowed_domains: input.allowed_domains ?? [],
+        blocked_domains: input.blocked_domains ?? [],
+        max_results: input.max_results ?? 10,
+      }),
+      env: {
+        LIGHTCLAW_SEARCH_API_KEY: process.env.LIGHTCLAW_SEARCH_API_KEY ?? '',
+        LIGHTCLAW_SEARCH_API_URL: process.env.LIGHTCLAW_SEARCH_API_URL ?? '',
+        BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY ?? '',
+      },
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      abortSignal: context.abortSignal,
+      maxBufferBytes: 512 * 1024,
+    })
+
+    if (result.exitCode !== 0) {
       return {
-        output: 'Tool not available: current provider does not support WebSearch.',
+        output: `WebSearch failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
         isError: true,
       }
     }
 
-    const result = await provider.webSearch({
-      query: input.query,
-      model: modelFor('webSearch', config),
-      allowedDomains: input.allowed_domains,
-      blockedDomains: input.blocked_domains,
-      signal: context.abortSignal,
-    })
-
     return {
-      output: [result.text, '', REMINDER].join('\n').trim(),
+      output: [result.stdout.trimEnd(), '', REMINDER].join('\n').trim(),
     }
   },
 })
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}

@@ -18,12 +18,16 @@ import {
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import type { SenderKey } from '../identity/types.js'
 import { PERMISSION_MODES, type PermissionMode } from '../permission/types.js'
+import { DockerRuntime } from '../runtime/index.js'
+import { resolveDockerImage } from '../runtime/pool.js'
 import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
   getCurrentUserId,
   getCwd,
   getModel,
   getPermissionMode,
+  getRuntime,
+  getRuntimePool,
   setModel,
   setPermissionMode,
 } from '../state.js'
@@ -114,6 +118,38 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
     visibleTo: 'admin',
     async handler(args, ctx) {
       ctx.output.write(await runIdentityCommand(args))
+    },
+  },
+  {
+    name: '/sandbox',
+    usage: '/sandbox reset',
+    description: 'Reset your Docker sandbox',
+    async handler(args, ctx) {
+      const action = args.trim()
+      if (action !== 'reset') {
+        ctx.output.write('error> Usage: /sandbox reset\n')
+        return
+      }
+      const userId = getCurrentUserId()
+      if (!userId) {
+        ctx.output.write('error> No active LightClaw identity.\n')
+        return
+      }
+      const runtime = getRuntime()
+      if (!(runtime instanceof DockerRuntime)) {
+        ctx.output.write('sandbox: local runtime is active; nothing to reset.\n')
+        return
+      }
+      const containerName = runtime.containerName
+      const image = runtime.image || resolveDockerImage(ctx.config)
+      await getRuntimePool().remove(userId)
+      ctx.output.write([
+        `Stopped and removed sandbox container ${containerName}.`,
+        'Tier 1 (/workspace bind mount) preserved.',
+        'Tier 2 (writable layer; pip packages, /etc edits) discarded.',
+        `Next environment tool call will recreate the container from ${image}.`,
+        '',
+      ].join('\n'))
     },
   },
 ]

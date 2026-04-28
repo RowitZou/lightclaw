@@ -17,7 +17,12 @@ pnpm dev                 # tsx src/cli.ts — fastest iteration, no build needed
 pnpm build && pnpm start # build to dist/cli.js then run with node
 ```
 
-Requires Node 22+ and pnpm 10+.
+Requires Node 22+, pnpm 10+, and Python 3. `WebFetch` in LocalRuntime uses the
+environment helper script and requires `markdownify`:
+
+```bash
+python3 -m pip install --user markdownify
+```
 
 Put credentials in `~/.lightclaw/config.json` or environment variables:
 
@@ -65,6 +70,7 @@ User-visible commands:
 | `/help` | Show current model/mode, available models/modes, skills, and commands. |
 | `/model <name>` | Switch the current session model. |
 | `/mode <mode>` | Switch permission mode within the current ceiling. |
+| `/sandbox reset` | Reset your Docker sandbox, preserving workspace files but discarding the container writable layer. |
 
 Admin-only commands:
 
@@ -120,7 +126,7 @@ Feishu channel now supports interactive permission approval. In `default` / `acc
 
 ---
 
-## Workspace Boundary
+## Runtime Boundary
 
 Phase 10 removes the old "project cwd" mental model. File tools and Bash run inside the current user's private workspace:
 
@@ -128,27 +134,69 @@ Phase 10 removes the old "project cwd" mental model. File tools and Bash run ins
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` resolve their target path against the workspace before normal permission rules run; anything outside is denied. The boundary fires **before** the rule chain, so `bypassPermissions` mode does not lift it.
+Phase 11 Iter 3 removes the old path-string guard layer. Safety is now split by runtime:
 
-`Bash` runs with `cwd` set to the workspace and rejects, before exec:
+- `local` is single-user and admin-only. A paired non-admin channel user is rejected before runtime acquisition.
+- `docker` gives every canonical user an isolated long-lived container. The workspace is mounted at `/workspace`, and additional mounts can be `rw` or `ro`.
+- Permission modes and rules still apply to tool risk (`safe` / `write` / `execute`), but they are no longer used as a fake filesystem sandbox.
 
-- absolute paths outside the workspace, including those introduced by IO redirection (`cat </etc/x`, `echo >/tmp/y`), pipes (`cmd|/etc/x`), separators (`cmd;/etc/x`, `cmd&/etc/x`), and subshell parentheses (`(/etc/x)`)
-- relative escapes via `..`
-- tilde expansion in any form: `~/foo`, `~user/...`, bare `~` followed by whitespace or end-of-command
-- `$HOME` / `${HOME}` references
-- `cd` / `pushd` without an explicit in-workspace path
+---
 
-This is still not a real process sandbox. The following are accepted bypass classes that a real container or `firejail` will close in a later phase:
+## Execution Runtime
 
-- `eval` and other indirect string evaluation (`bash -c "$var"`)
-- variable interpolation that hides absolute paths (`p=/etc; cat $p/passwd`)
-- symlinks placed inside the workspace pointing outward
+Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active backend is selected at startup via `~/.lightclaw/config.json` or `LIGHTCLAW_RUNTIME_BACKEND`.
+
+| Backend | Status | What it does |
+|---|---|---|
+| `local` (default) | shipped (Phase 11 Iter 1-Redesign + Iter 3 gate) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; admin-only. |
+| `docker` | shipped (Phase 11 Iter 2) | Runs environment-domain tools inside a per-user long-lived Docker container. The user workspace is bind-mounted at `/workspace`; helper scripts live at `/opt/lightclaw/sandbox-helpers`; idle containers are stopped and later restarted with their writable layer preserved. |
+| `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
+
+Selecting a backend that is not yet implemented fails loudly at startup — the harness never silently falls back.
+
+The Runtime layer is a forward-compatible foundation: adding a backend means writing one file in `src/runtime/`; the tools never change. Environment tools see one runtime view through `runtime.exec` and `runtime.fs` (`Bash`, `Grep`, `Read`, `Write`, `Edit`, `Glob`, `WebFetch`, `WebSearch`). Host-domain tools keep using trusted LightClaw state (`Memory*`, `Conversation*`, `TodoWrite`, `AgentTool`, `UseSkill`, MCP).
+
+```jsonc
+{
+  "runtime": {
+    "backend": "docker",
+    "docker": {
+      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
+      "idleTimeoutMs": 1800000,
+      "memoryLimit": "4g",
+      "cpuLimit": 4,
+      "network": "bridge",
+      "tmpfs": ["/tmp"],
+      "mounts": [
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
+        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
+      ],
+      "env": {
+        "http_proxy": "http://127.0.0.1:1080",
+        "https_proxy": "http://127.0.0.1:1080"
+      },
+      "autoPull": true
+    }
+  }
+}
+```
+
+Docker backend notes:
+
+- Requires Docker 20.10+ and permission to access the Docker daemon.
+- The default image is `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>` unless `runtime.docker.image`, `runtime.docker.imageOverride`, or `LIGHTCLAW_DOCKER_IMAGE` is set.
+- One canonical user maps to one container named `lightclaw-sandbox-<user>-<deploymentHash>`, shared by terminal, Feishu, and WeChat sessions.
+- Read-only mounts use Docker's `:ro` bind option. The kernel rejects writes, metadata changes, truncates, and deletes inside that mount with `EROFS`, which is the recommended mode for datasets and model checkpoints.
+- Idle stop uses `docker stop`, not `docker rm`: workspace files and the container writable layer survive. `/sandbox reset` removes the container and recreates it on the next environment tool call.
+- Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, Bash/coreutils, ripgrep, git, curl, Python 3, build-essential, and the sandbox helpers.
 
 ---
 
 ## Tools, Skills, MCP, Hooks
 
 The model can still use the Phase 1-9 toolset: filesystem tools, Bash, web fetch/search, memory tools, conversation tools, TodoWrite, sub-agents, MCP tools, and `UseSkill`.
+
+Each tool is explicitly marked as either `environment` or `host`. New environment tools must route filesystem, process, glob, and arbitrary network effects through `context.runtime`; they should not directly import host `fs`, `child_process`, HTTP clients, or glob libraries.
 
 Skills are no longer invoked through `/skill`. Their descriptions use `TRIGGER` / `SKIP` guidance, and the model should call `UseSkill` naturally when a skill matches the task. `allowed_tools` is now enforced while a skill is active.
 
@@ -169,6 +217,9 @@ Selected environment variables:
 | `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems |
 | `LIGHTCLAW_PERMISSION_MODE` | Default permission mode |
+| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker`, or future `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` | Override DockerRuntime image |
+| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | Override DockerRuntime idle stop timeout |
 
 ---
 
@@ -183,20 +234,22 @@ src/
 ├── query.ts            # main agent loop (tool dispatch, auto-compact)
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
-├── commands/           # /help, /model, /mode, /identity, /ceiling, channel dispatch
+├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
 ├── channels/           # Feishu / WeChat runners, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
-├── permission/         # mode/rule policy plus hard workspace boundary
+├── permission/         # mode/rule policy and skill tool boundaries
 ├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)
+├── runtime/            # Runtime abstraction; LocalRuntime, DockerRuntime, future Rjob
 ├── agents/             # general-purpose / explore subagents
 ├── skill/              # loader, registry, bundled skills (verify, remember)
 ├── memory/             # LIGHTCLAW.md discovery and user memory
 ├── session/            # transcript JSONL + meta + auto-compact
 ├── mcp/                # MCP client
 ├── hooks/              # lifecycle hook loader
-├── web/                # WebFetch / WebSearch helpers
 ├── todos/              # TodoWrite store
 └── provider/           # Anthropic / OpenAI-compatible providers
+scripts/
+└── sandbox-helpers/    # Python helpers executed through Runtime (WebFetch / WebSearch / Glob)
 ```
 
 ## License

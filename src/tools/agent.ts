@@ -26,6 +26,7 @@ function buildAgentToolDescription(): string {
 export const agentTool = buildTool({
   name: 'AgentTool',
   description: buildAgentToolDescription(),
+  domain: 'host',
   riskLevel: 'execute',
   inputSchema: z.object({
     subagent_type: z.enum(['general-purpose', 'explore']),

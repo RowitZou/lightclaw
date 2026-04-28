@@ -1,22 +1,19 @@
+import path from 'node:path'
+
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
-import { fetchContent } from '../web/fetch-content.js'
-import { htmlToMarkdown } from '../web/html-to-markdown.js'
 
-function formatJson(input: string): string {
-  try {
-    return `\`\`\`json\n${JSON.stringify(JSON.parse(input), null, 2)}\n\`\`\``
-  } catch {
-    return input
-  }
-}
+const DEFAULT_MAX_BYTES = 200_000
+const DEFAULT_TIMEOUT_MS = 35_000
 
 export const webFetchTool = buildTool({
   name: 'WebFetch',
   description:
     'Fetch content from a URL and return it as Markdown. Supports HTML, plain text, Markdown, and JSON. Binary content is rejected.',
+  domain: 'environment',
   riskLevel: 'execute',
+  concurrencySafe: true,
   inputSchema: z.object({
     url: z.string().url(),
     maxBytes: z.number().int().min(1024).max(500_000).optional(),
@@ -24,44 +21,33 @@ export const webFetchTool = buildTool({
   }),
   async call(input, context) {
     const maxBytes = input.maxBytes ?? 200_000
-    const result = await fetchContent({
-      url: input.url,
-      maxBytes,
-      timeoutMs: input.timeoutMs,
-      signal: context.abortSignal,
+    const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const helper = path.join(context.runtime.helperRoot, 'webfetch.py')
+    const result = await context.runtime.exec({
+      command: `python3 ${shellQuote(helper)}`,
+      stdin: JSON.stringify({
+        url: input.url,
+        max_bytes: maxBytes,
+        timeout_seconds: Math.ceil(timeoutMs / 1000),
+      }),
+      timeoutMs,
+      abortSignal: context.abortSignal,
+      maxBufferBytes: Math.max(maxBytes + 16 * 1024, DEFAULT_MAX_BYTES),
     })
-    const contentType = result.contentType.toLowerCase()
 
-    let body: string
-    if (contentType.includes('text/html') || contentType.includes('application/xhtml')) {
-      body = htmlToMarkdown(result.content)
-    } else if (
-      contentType.includes('text/markdown') ||
-      contentType.includes('text/plain')
-    ) {
-      body = result.content
-    } else if (contentType.includes('application/json')) {
-      body = formatJson(result.content)
-    } else {
+    if (result.exitCode !== 0) {
       return {
-        output: `Unsupported content type: ${result.contentType}`,
+        output: `WebFetch failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
         isError: true,
       }
     }
 
-    const suffix = result.truncated
-      ? `\n\n[truncated at ${maxBytes} bytes]`
-      : ''
-
     return {
-      output: [
-        `URL: ${result.url}`,
-        `Status: ${result.status}`,
-        `Content-Type: ${result.contentType}`,
-        `Bytes: ${result.bytes}`,
-        '',
-        `${body}${suffix}`,
-      ].join('\n'),
+      output: result.stdout.trimEnd(),
     }
   },
 })
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}

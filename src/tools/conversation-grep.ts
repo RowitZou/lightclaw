@@ -11,7 +11,9 @@ import {
 export const conversationGrepTool = buildTool({
   name: 'ConversationGrep',
   description: 'Search the current LightClaw user\'s saved conversations for plain text.',
+  domain: 'host',
   riskLevel: 'safe',
+  concurrencySafe: true,
   inputSchema: z.object({
     query: z.string().min(1),
     channel: z.string().optional(),
@@ -44,4 +46,3 @@ export const conversationGrepTool = buildTool({
     }
   },
 })
-

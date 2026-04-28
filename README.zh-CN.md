@@ -17,7 +17,11 @@ pnpm dev                 # tsx src/cli.ts —— 免构建，迭代最快
 pnpm build && pnpm start # 先 build 到 dist/cli.js 再 node 跑
 ```
 
-需要 Node 22+ 和 pnpm 10+。
+需要 Node 22+、pnpm 10+ 和 Python 3。LocalRuntime 下 `WebFetch` 通过 environment helper 脚本执行，需要安装 `markdownify`：
+
+```bash
+python3 -m pip install --user markdownify
+```
 
 凭据可以放在 `~/.lightclaw/config.json`，也可以走环境变量：
 
@@ -65,6 +69,7 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/help` | 显示当前 model/mode、可用 model/mode、skill 目录和命令。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 在当前 ceiling 内切换 permission mode。 |
+| `/sandbox reset` | 重置自己的 Docker sandbox：保留 workspace 文件，丢弃容器 writable layer。 |
 
 Admin 专属：
 
@@ -120,7 +125,7 @@ Feishu channel 现在支持交互式权限审批。`default` / `acceptEdits` 模
 
 ---
 
-## Workspace 边界
+## Runtime 边界
 
 Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁在当前用户的私有 workspace：
 
@@ -128,27 +133,69 @@ Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁�
 ~/.lightclaw/workspaces/<canonical_user>/
 ```
 
-`Read` / `Write` / `Edit` / `Glob` / `Grep` 在普通权限规则**之前**就把目标路径解析到 workspace 上做边界检查，越界直接 deny。该检查前置在 rule chain 之前，**`bypassPermissions` 模式无法绕过**。
+Phase 11 Iter 3 删除旧的路径字符串守卫层。安全边界按 runtime 拆分：
 
-`Bash` 的 `cwd` 锁到 workspace，并在 exec 之前拒绝以下形式：
+- `local` 是单用户、admin-only。已 pairing 的非 admin channel user 会在 runtime acquire 前被拒绝。
+- `docker` 给每个 canonical user 一个隔离的长跑容器。workspace 挂到 `/workspace`，额外挂载可选 `rw` 或 `ro`。
+- Permission mode 和规则仍然控制 tool 风险等级（`safe` / `write` / `execute`），但不再拿来模拟文件系统沙箱。
 
-- workspace 外的绝对路径，包括 IO 重定向（`cat </etc/x`、`echo >/tmp/y`）、管道（`cmd|/etc/x`）、命令分隔符（`cmd;/etc/x`、`cmd&/etc/x`）和子 shell 括号（`(/etc/x)`）引入的绝对路径
-- `..` 相对路径逃逸
-- 各种 tilde 展开形式：`~/foo`、`~user/...`、`~` 单独后跟空白或行尾
-- `$HOME` / `${HOME}` 变量引用
-- 没有显式 workspace 内路径的 `cd` / `pushd`
+---
 
-这仍然不是真正的进程沙箱。下面这些已知绕过类要等后续 phase 用容器 / `firejail` 等真正进程隔离来覆盖：
+## 执行运行时（Runtime）
 
-- `eval` 等间接字符串求值（`bash -c "$var"`）
-- 通过变量插值隐藏绝对路径（`p=/etc; cat $p/passwd`）
-- workspace 内放 symlink 指向外面
+工具执行经过 `Runtime` 抽象层（`src/runtime/`）。启动时根据 `~/.lightclaw/config.json` 或 `LIGHTCLAW_RUNTIME_BACKEND` 选择 backend。
+
+| Backend | 状态 | 行为 |
+|---|---|---|
+| `local`（默认）| 已交付（Phase 11 Iter 1-Redesign + Iter 3 闸门）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，仅 admin 可用。 |
+| `docker` | 已交付（Phase 11 Iter 2）| environment-domain 工具在 per-user 长跑 Docker 容器内执行。用户 workspace bind mount 到 `/workspace`；helper 脚本在 `/opt/lightclaw/sandbox-helpers`；idle 容器会 stop，之后再 start，保留 writable layer。 |
+| `rjob` | 未实现 | 后续会通过 `rjob`（kubebrain）提交集群任务，复用 gpfs 作为共享 workspace 挂载。 |
+
+选了未实现的 backend 启动会显式报错——harness 永远不静默 fallback。
+
+Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/` 写一个文件，工具代码不动。Environment 工具通过 `runtime.exec` 和 `runtime.fs` 看到同一套运行时视图（`Bash`、`Grep`、`Read`、`Write`、`Edit`、`Glob`、`WebFetch`、`WebSearch`）。Host-domain 工具继续使用 LightClaw 受信状态（`Memory*`、`Conversation*`、`TodoWrite`、`AgentTool`、`UseSkill`、MCP）。
+
+```jsonc
+{
+  "runtime": {
+    "backend": "docker",
+    "docker": {
+      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
+      "idleTimeoutMs": 1800000,
+      "memoryLimit": "4g",
+      "cpuLimit": 4,
+      "network": "bridge",
+      "tmpfs": ["/tmp"],
+      "mounts": [
+        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
+        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
+      ],
+      "env": {
+        "http_proxy": "http://127.0.0.1:1080",
+        "https_proxy": "http://127.0.0.1:1080"
+      },
+      "autoPull": true
+    }
+  }
+}
+```
+
+Docker backend 说明：
+
+- 需要 Docker 20.10+，且当前用户必须有访问 Docker daemon 的权限。
+- 默认镜像是 `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>`；也可用 `runtime.docker.image`、`runtime.docker.imageOverride` 或 `LIGHTCLAW_DOCKER_IMAGE` 覆盖。
+- 一个 canonical user 对应一个容器，命名为 `lightclaw-sandbox-<user>-<deploymentHash>`，terminal / 飞书 / 微信共享同一 user 容器。
+- 只读挂载使用 Docker 的 `:ro` bind 选项。内核会用 `EROFS` 拒绝该挂载内的写入、元数据修改、truncate 和删除，推荐给数据集 / 模型 checkpoint 使用。
+- idle 回收走 `docker stop`，不是 `docker rm`：workspace 文件和容器 writable layer 会保留。`/sandbox reset` 才会删除容器，并在下次 environment tool call 时重建。
+- Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、Bash/coreutils、ripgrep、git、curl、Python 3、build-essential 和 sandbox helpers。
 
 ---
 
 ## Tool、Skill、MCP、Hooks
 
 模型仍能使用 Phase 1-9 的 toolset：文件工具、Bash、Web、Memory、Conversation、TodoWrite、子 Agent、MCP tool 和 `UseSkill`。
+
+每个 tool 都显式标记为 `environment` 或 `host`。新增 environment 工具时，文件系统、进程、glob 和任意网络副作用都必须经过 `context.runtime`；不要在工具实现里直接 import host `fs`、`child_process`、HTTP client 或 glob 库。
 
 Skill 不再通过 `/skill` 手动调用。Skill description 使用 `TRIGGER` / `SKIP` 指引，模型会在任务匹配时自然调用 `UseSkill`。Skill 的 `allowed_tools` 现在会在 skill 激活后强制限制后续 tool 调用。
 
@@ -169,6 +216,9 @@ MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/`
 | `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 关闭子系统 |
 | `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
+| `LIGHTCLAW_RUNTIME_BACKEND` | 执行 runtime backend：`local`（默认）、`docker` 或未来的 `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` | 覆盖 DockerRuntime 镜像 |
+| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖 DockerRuntime idle stop 时间 |
 
 ---
 
@@ -183,20 +233,22 @@ src/
 ├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例
-├── commands/           # /help、/model、/mode、/identity、/ceiling、channel dispatch
+├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
 ├── channels/           # 飞书 / 微信 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
-├── permission/         # mode/rule policy + workspace hard boundary
+├── permission/         # mode/rule policy 和 skill tool 边界
 ├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
+├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、未来 Rjob
 ├── agents/             # general-purpose / explore 子 Agent
 ├── skill/              # loader、registry、内置 skill（verify、remember）
 ├── memory/             # LIGHTCLAW.md 发现与 user memory
 ├── session/            # 会话 JSONL transcript + meta + auto-compact
 ├── mcp/                # MCP Client
 ├── hooks/              # 生命周期 hook loader
-├── web/                # WebFetch / WebSearch 辅助
 ├── todos/              # TodoWrite 存储
 └── provider/           # Anthropic / OpenAI-compatible provider
+scripts/
+└── sandbox-helpers/    # 通过 Runtime 执行的 Python helper（WebFetch / WebSearch / Glob）
 ```
 
 ## License
