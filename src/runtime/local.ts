@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 
 import fastGlob from 'fast-glob'
@@ -60,6 +61,10 @@ export class LocalRuntime implements Runtime {
       let stdoutBytes = 0
       let stderrBytes = 0
       const maxBytes = input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES
+      // StringDecoder buffers partial UTF-8 sequences across chunk boundaries
+      // so multi-byte characters split mid-sequence are not corrupted.
+      const stdoutDecoder = new StringDecoder('utf8')
+      const stderrDecoder = new StringDecoder('utf8')
 
       const child = spawn('/bin/bash', ['-c', input.command], {
         cwd: this.absolutize(input.cwd),
@@ -74,7 +79,11 @@ export class LocalRuntime implements Runtime {
         }
         settled = true
         clearTimeout(timeout)
-        resolve(result)
+        resolve({
+          ...result,
+          stdout: result.stdout + stdoutDecoder.end(),
+          stderr: result.stderr + stderrDecoder.end(),
+        })
       }
 
       const killForLimit = (streamName: 'stdout' | 'stderr'): void => {
@@ -98,7 +107,7 @@ export class LocalRuntime implements Runtime {
       child.stdout.on('data', (chunk: Buffer) => {
         stdoutBytes += chunk.length
         if (stdoutBytes <= maxBytes) {
-          stdout += chunk.toString('utf8')
+          stdout += stdoutDecoder.write(chunk)
         } else {
           killForLimit('stdout')
         }
@@ -107,7 +116,7 @@ export class LocalRuntime implements Runtime {
       child.stderr.on('data', (chunk: Buffer) => {
         stderrBytes += chunk.length
         if (stderrBytes <= maxBytes) {
-          stderr += chunk.toString('utf8')
+          stderr += stderrDecoder.write(chunk)
         } else {
           killForLimit('stderr')
         }
@@ -128,6 +137,11 @@ export class LocalRuntime implements Runtime {
           exitCode: killed || signal ? -1 : code ?? 1,
         })
       })
+
+      // Swallow EPIPE / ERR_STREAM_DESTROYED if the child dies (or is killed by
+      // an aborted signal) before we finish writing stdin. Without this, the
+      // unhandled 'error' event would crash the host process.
+      child.stdin.on('error', () => { /* ignored */ })
 
       if (input.stdin !== undefined) {
         child.stdin.end(input.stdin)

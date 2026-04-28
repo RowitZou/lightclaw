@@ -99,8 +99,8 @@ def fetch_duckduckgo(query: str, max_results: int) -> list[dict[str, str]]:
     snippets = re.findall(r'<a class="result__snippet".*?>(.*?)</a>', text, re.S)
     for idx, (raw_url, raw_title) in enumerate(blocks[:max_results]):
         parsed = urllib.parse.urlparse(html.unescape(raw_url))
-        query = urllib.parse.parse_qs(parsed.query)
-        target = query.get("uddg", [html.unescape(raw_url)])[0]
+        params = urllib.parse.parse_qs(parsed.query)
+        target = params.get("uddg", [html.unescape(raw_url)])[0]
         title = re.sub(r"<.*?>", "", raw_title, flags=re.S)
         snippet = snippets[idx] if idx < len(snippets) else ""
         snippet = re.sub(r"<.*?>", "", snippet, flags=re.S)
