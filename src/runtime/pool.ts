@@ -33,15 +33,20 @@ export class RuntimePool {
     return runtime
   }
 
-  async release(userId: string): Promise<void> {
-    const runtime = this.runtimes.get(userId)
+  async release(userId: string, workspaceHostPath?: string): Promise<void> {
+    const key = runtimeKey(userId, workspaceHostPath)
+    const runtime = this.runtimes.get(key)
     if (runtime) {
       await runtime.stop()
     }
   }
 
-  async remove(userId: string): Promise<{ containerName?: string; image?: string }> {
-    const runtime = this.runtimes.get(userId)
+  async remove(
+    userId: string,
+    workspaceHostPath?: string,
+  ): Promise<{ containerName?: string; image?: string }> {
+    const key = runtimeKey(userId, workspaceHostPath)
+    const runtime = this.runtimes.get(key)
     if (!runtime) {
       return {}
     }
@@ -52,7 +57,7 @@ export class RuntimePool {
     if (runtime instanceof DockerRuntime) {
       await runtime.remove()
     }
-    this.runtimes.delete(userId)
+    this.runtimes.delete(key)
     return result
   }
 

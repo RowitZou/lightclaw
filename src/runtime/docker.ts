@@ -132,11 +132,15 @@ export class DockerRuntime implements Runtime {
   fs: RuntimeFs = {
     readFile: async pathname => {
       const containerPath = this.toContainerPath(pathname)
-      const result = await this.exec({ command: `cat ${shellQuote(containerPath)}` })
+      // base64 transit keeps binary content intact across the docker exec
+      // string pipe (StringDecoder is UTF-8 and would mangle non-text bytes).
+      const result = await this.exec({
+        command: `base64 -w 0 ${shellQuote(containerPath)}`,
+      })
       if (result.exitCode !== 0) {
         throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
       }
-      return Buffer.from(result.stdout, 'utf8')
+      return Buffer.from(result.stdout.trim(), 'base64')
     },
     writeFile: async (pathname, content) => {
       const containerPath = this.toContainerPath(pathname)
