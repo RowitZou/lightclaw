@@ -16,15 +16,6 @@ import type { FeishuSender } from './sender.js'
 
 const PERMISSION_TIMEOUT_MS = 60 * 1000
 const MAX_PREVIEW_CHARS = 900
-const CANCEL_TEXTS = new Set([
-  '/cancel',
-  '/permission cancel',
-  'cancel',
-  '取消',
-  '取消权限',
-  '清除',
-  '清除权限',
-])
 
 // Aligned with terminal askUserApproval (src/permission/prompt.ts):
 // - allow        = allow once
@@ -109,18 +100,10 @@ export class FeishuPermissionCoordinator {
     }
 
     const text = raw.text.trim()
-    if (isCancelText(text)) {
-      this.resolvePending(pending, {
-        behavior: 'deny',
-        reason: `Permission denied: ${pending.ask.toolName} approval was cancelled in Feishu.`,
-      })
-      return true
-    }
-
     if (!text) {
       await this.safeSend(
         pending.message,
-        '请先处理上一条权限请求：回复"批准"、"批准所有"、"拒绝"或"取消"。',
+        '请先处理当前的权限请求：回复"批准"、"批准所有"或"拒绝"。',
       )
       return true
     }
@@ -130,9 +113,9 @@ export class FeishuPermissionCoordinator {
       await this.safeSend(
         pending.message,
         [
-          '请先处理上一条权限请求。',
+          '请先处理当前的权限请求。',
           `工具: ${pending.ask.toolName}`,
-          '可以点击卡片按钮，或直接回复：批准 / 批准所有 / 拒绝 / 取消。',
+          '可以点击卡片按钮，或直接回复：批准 / 批准所有 / 拒绝。',
         ].join('\n'),
       )
       return true
@@ -413,16 +396,12 @@ function buildTextFallback(pending: PendingPermission): string {
     `会话: ${pending.sessionId}`,
     pending.ask.inputPreview,
     '',
-    `请回复：批准 / 批准所有（本会话内 ${pending.ask.toolName} 自动放行）/ 拒绝 / 取消`,
+    `请回复：批准 / 批准所有（本会话内 ${pending.ask.toolName} 自动放行）/ 拒绝`,
   ].join('\n')
 }
 
 function ownerKey(message: NormalizedChannelMessage): string {
   return `${message.chatId}:${message.senderOpenId}`
-}
-
-function isCancelText(text: string): boolean {
-  return CANCEL_TEXTS.has(text.trim().toLowerCase())
 }
 
 function parseTextAction(text: string): FeishuPermissionActionKind | null {
@@ -449,7 +428,14 @@ function parseTextAction(text: string): FeishuPermissionActionKind | null {
   if (['是', '批准', '允许', '同意', 'yes', 'y', 'ok'].includes(normalized)) {
     return 'allow'
   }
-  if (['否', '不', '拒绝', 'no', 'n'].includes(normalized)) {
+  // Cancel synonyms collapse into deny — functionally identical (both abort
+  // the tool call), and the card has no separate cancel button, so keeping
+  // them as deny aliases avoids surfacing a phantom 4th option to operators.
+  if ([
+    '否', '不', '拒绝', 'no', 'n',
+    '取消', '取消权限', '清除', '清除权限',
+    'cancel', '/cancel', '/permission cancel',
+  ].includes(normalized)) {
     return 'deny'
   }
   return null
