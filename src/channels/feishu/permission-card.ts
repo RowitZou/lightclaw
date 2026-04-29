@@ -19,7 +19,6 @@ import type { FeishuRawMessage } from './bot-content.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js'
 
-const PERMISSION_TIMEOUT_MS = 60 * 1000
 const MAX_PREVIEW_CHARS = 900
 
 // Aligned with terminal askUserApproval (src/permission/prompt.ts) and
@@ -63,7 +62,7 @@ type PendingPermission = {
   ask: PermissionAskInput
   suggestedRules: PermissionRuleValue[]
   resolve(decision: PermissionDecision): void
-  timeout: NodeJS.Timeout
+  rendered: boolean
   abortListener?: () => void
 }
 
@@ -75,7 +74,12 @@ type ParsedTextAction =
 
 export class FeishuPermissionCoordinator {
   private pendingById = new Map<string, PendingPermission>()
-  private pendingByOwner = new Map<string, string>()
+  // FIFO queue per owner (chatId:senderOpenId). Only the head is rendered;
+  // tail entries wait quietly. When an LLM turn dispatches multiple
+  // concurrent permission asks (e.g. parallel WebFetch / WebSearch through
+  // query.ts's Promise.all batch), they line up here instead of overwriting
+  // each other — every request gets its own card and own decision.
+  private queuesByOwner = new Map<string, string[]>()
 
   constructor(private readonly sender: FeishuSender) {}
 
@@ -123,7 +127,7 @@ export class FeishuPermissionCoordinator {
   }
 
   async tryConsumePermissionMessage(raw: FeishuRawMessage): Promise<boolean> {
-    const pending = this.findPendingForRawMessage(raw)
+    const pending = this.findActivePendingForRawMessage(raw)
     if (!pending) {
       return false
     }
@@ -175,22 +179,6 @@ export class FeishuPermissionCoordinator {
   }): Promise<PermissionDecision> {
     const id = randomUUID()
     return new Promise(resolve => {
-      const timeout = setTimeout(() => {
-        const pending = this.pendingById.get(id)
-        if (!pending) {
-          return
-        }
-        this.resolvePending(pending, {
-          behavior: 'deny',
-          reason: `Permission denied: ${pending.ask.toolName} approval timed out in Feishu.`,
-        })
-        void this.safeSendNotice(
-          pending.message,
-          'error',
-          '权限请求已超时，已拒绝本次工具调用。',
-        )
-      }, PERMISSION_TIMEOUT_MS)
-
       const pending: PendingPermission = {
         id,
         sessionId: input.sessionId,
@@ -199,10 +187,9 @@ export class FeishuPermissionCoordinator {
         ask: input.ask,
         suggestedRules: input.ask.suggestedRules ?? [],
         resolve,
-        timeout,
+        rendered: false,
       }
 
-      this.cancelExistingForOwner(pending, 'A newer Feishu permission request replaced this one.')
       if (input.ask.signal) {
         const abortListener = () => {
           this.resolvePending(pending, {
@@ -215,9 +202,23 @@ export class FeishuPermissionCoordinator {
       }
 
       this.pendingById.set(id, pending)
-      this.pendingByOwner.set(ownerKey(pending.message), id)
-      void this.sendApprovalPrompt(pending)
+      const key = ownerKey(pending.message)
+      const queue = this.queuesByOwner.get(key) ?? []
+      const isHead = queue.length === 0
+      queue.push(id)
+      this.queuesByOwner.set(key, queue)
+
+      // Only the head of the queue is rendered. Tail entries wait silently
+      // until the head resolves — see resolvePending() for the hand-off.
+      if (isHead) {
+        void this.renderPending(pending)
+      }
     })
+  }
+
+  private async renderPending(pending: PendingPermission): Promise<void> {
+    pending.rendered = true
+    await this.sendApprovalPrompt(pending)
   }
 
   private async sendApprovalPrompt(pending: PendingPermission): Promise<void> {
@@ -322,44 +323,47 @@ export class FeishuPermissionCoordinator {
     pending: PendingPermission,
     decision: PermissionDecision,
   ): void {
-    clearTimeout(pending.timeout)
     if (pending.abortListener && pending.ask.signal) {
       pending.ask.signal.removeEventListener('abort', pending.abortListener)
     }
     this.pendingById.delete(pending.id)
     const key = ownerKey(pending.message)
-    if (this.pendingByOwner.get(key) === pending.id) {
-      this.pendingByOwner.delete(key)
-    }
-    pending.resolve(decision)
-  }
-
-  private cancelExistingForOwner(next: PendingPermission, reason: string): void {
-    const existingId = this.pendingByOwner.get(ownerKey(next.message))
-    if (!existingId) {
-      return
-    }
-    const existing = this.pendingById.get(existingId)
-    if (!existing) {
-      this.pendingByOwner.delete(ownerKey(next.message))
-      return
-    }
-    this.resolvePending(existing, {
-      behavior: 'deny',
-      reason,
-    })
-  }
-
-  private findPendingForRawMessage(raw: FeishuRawMessage): PendingPermission | null {
-    for (const pending of this.pendingById.values()) {
-      if (
-        pending.message.chatId === raw.chatId &&
-        pending.message.senderOpenId === raw.senderOpenId
-      ) {
-        return pending
+    const queue = this.queuesByOwner.get(key)
+    let promotedHead: PendingPermission | null = null
+    if (queue) {
+      const idx = queue.indexOf(pending.id)
+      if (idx >= 0) {
+        const wasHead = idx === 0
+        queue.splice(idx, 1)
+        if (queue.length === 0) {
+          this.queuesByOwner.delete(key)
+        } else if (wasHead) {
+          // Removed the head — promote the next pending so its card goes out
+          // now that the previous decision has resolved.
+          const nextId = queue[0]
+          const next = this.pendingById.get(nextId)
+          if (next && !next.rendered) {
+            promotedHead = next
+          }
+        }
       }
     }
-    return null
+    pending.resolve(decision)
+    if (promotedHead) {
+      void this.renderPending(promotedHead)
+    }
+  }
+
+  private findActivePendingForRawMessage(raw: FeishuRawMessage): PendingPermission | null {
+    // Text replies act on the *visible* card — that's always the head of the
+    // owner's queue. Tail entries (queued behind the head) cannot be
+    // approved by text reply because the user hasn't seen them yet.
+    const key = `${raw.chatId}:${raw.senderOpenId}`
+    const queue = this.queuesByOwner.get(key)
+    if (!queue || queue.length === 0) {
+      return null
+    }
+    return this.pendingById.get(queue[0]) ?? null
   }
 
   private async canOperate(

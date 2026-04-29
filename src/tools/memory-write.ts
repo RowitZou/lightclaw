@@ -10,7 +10,7 @@ export const memoryWriteTool = buildTool({
   description:
     'Create or update a persistent auto-memory entry with validated metadata and content.',
   domain: 'host',
-  riskLevel: 'write',
+  riskLevel: 'safe',
   inputSchema: z.object({
     filename: z.string().min(1),
     type: z.enum(['user', 'feedback', 'project', 'reference']),
