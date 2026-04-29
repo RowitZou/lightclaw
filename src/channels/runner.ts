@@ -201,37 +201,67 @@ export class ChannelRunner {
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
-        let result
-        try {
-          result = await query({
-            config: appConfig,
-            messages,
-            tools: getEnabledTools(provider, getAllTools()),
-            mode: 'channel',
-            channelContext: this.strategy.buildChannelPrompt(message),
-            permissionApprover: this.strategy.createPermissionApprover?.(
-              message,
-              sessionId,
-              userId,
-            ),
-            onToolUse(event) {
-              process.stderr.write(`${channelId}: tool ${event.name}\n`)
-            },
-          })
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
-          const failureText = formatQueryFailure(detail)
-          const assistantMessage = createAssistantMessage({
-            content: [{ type: 'text', text: failureText }],
-            stopReason: 'error',
-            usage: {},
-            parentUuid: getLastUuid(messages),
-          })
-          messages.push(assistantMessage)
-          await appendMessage(sessionId, assistantMessage)
-          await persistMeta(Date.now(), messages.length)
-          await this.sendNotice(message, 'error', failureText)
+        let result: Awaited<ReturnType<typeof query>> | undefined
+        let lastError: unknown
+        for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
+          // Reset messages to the post-user-message snapshot before each
+          // attempt. The main `query` path doesn't mutate `messages` until
+          // after a successful stop event, but defensive against compaction-
+          // or hook-side transient errors that could leave a partial tail.
+          messages.length = messageCountBeforeQuery
+          try {
+            result = await query({
+              config: appConfig,
+              messages,
+              tools: getEnabledTools(provider, getAllTools()),
+              mode: 'channel',
+              channelContext: this.strategy.buildChannelPrompt(message),
+              permissionApprover: this.strategy.createPermissionApprover?.(
+                message,
+                sessionId,
+                userId,
+              ),
+              onToolUse(event) {
+                process.stderr.write(`${channelId}: tool ${event.name}\n`)
+              },
+            })
+            break
+          } catch (error) {
+            lastError = error
+            const detail = error instanceof Error ? error.message : String(error)
+            const isTransient = TRANSIENT_FAILURE_PATTERN.test(detail)
+            const willRetry = isTransient && attempt < MAX_QUERY_RETRIES
+            if (willRetry) {
+              const backoff = QUERY_RETRY_BASE_MS * 2 ** attempt
+              process.stderr.write(
+                `${channelId}: query attempt ${attempt + 1} transient (${detail}); retry in ${backoff}ms\n`,
+              )
+              await delay(backoff)
+              continue
+            }
+            // Either non-transient or attempts exhausted — surface to user.
+            process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
+            const failureText = formatQueryFailure(detail)
+            const assistantMessage = createAssistantMessage({
+              content: [{ type: 'text', text: failureText }],
+              stopReason: 'error',
+              usage: {},
+              parentUuid: getLastUuid(messages),
+            })
+            messages.push(assistantMessage)
+            await appendMessage(sessionId, assistantMessage)
+            await persistMeta(Date.now(), messages.length)
+            await this.sendNotice(message, 'error', failureText)
+            return
+          }
+        }
+        if (!result) {
+          // Defensive: loop should either set `result` or return early.
+          process.stderr.write(
+            `${channelId}: unexpected loop exit without result (last error: ${
+              lastError instanceof Error ? lastError.message : String(lastError)
+            })\n`,
+          )
           return
         }
 
@@ -356,17 +386,30 @@ function isPairableChannel(channel: string): channel is ChannelKind {
   return channel === 'feishu' || channel === 'wechat'
 }
 
-// Network errors that we expect to be transient. Anthropic SDK already
-// retries internally; if we still get one of these to runner.ts the request
-// genuinely couldn't complete, but the next user message will usually go
-// through, so the friendly text steers them to just resend.
+// Network errors that we expect to be transient. Anthropic SDK retries
+// internally for HTTP 5xx/429 only; client→proxy connect failures (typical
+// here since baseURL points at an internal proxy) bypass that retry, so the
+// channel layer takes its own pass over these patterns before surfacing the
+// failure to the user. Non-transient errors (auth, schema, prompt-too-long
+// post-compaction) skip the retry and go straight to the red notice.
 const TRANSIENT_FAILURE_PATTERN =
   /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure/i
+
+// Up to 3 attempts total per inbound message: the first attempt + 2 retries.
+// Exponential backoff (800ms → 1600ms) keeps the worst-case extra latency
+// around 2.4 s, which is below the user's typical "is it stuck?" threshold
+// while covering single-blip proxy hiccups that the Anthropic SDK ignores.
+const MAX_QUERY_RETRIES = 2
+const QUERY_RETRY_BASE_MS = 800
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
 
 function formatQueryFailure(detail: string): string {
   if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
     return [
-      '本轮因网络抖动中断，建议直接重发上一条消息再试一次。',
+      '本轮因网络抖动中断（已自动重试 2 次仍失败），可重发消息再试。',
       `（详细错误：${detail}）`,
     ].join('\n')
   }
