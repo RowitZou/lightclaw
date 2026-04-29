@@ -2,9 +2,13 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个自托管个人 AI 助手，可以住在终端里，也可以接入飞书 / 微信。它是用 TypeScript / Node.js 从头重写的 Agent Harness，架构参考 Claude Code，但 Phase 10 开始把大部分 harness 调试面从用户视角藏起来。
+LightClaw 是一个自托管个人 AI 助手，可以住在终端里，也可以接入飞书 / 微信。它是用 TypeScript / Node.js 从头重写的 Agent Harness，架构参考 Claude Code，但用户面刻意做减法——大部分 harness 调试细节都隐藏。
 
-默认体验很简单：启动 `lightclaw`，自然语言聊天，让助手在背后使用 tool、memory、skill 和 channel。
+默认体验很简单：启动 `lightclaw`，自然语言聊天，让助手在背后使用 tool、memory、skill 和 channel。近期工作围绕三个支柱：
+
+- **沙箱** —— `runtime.backend = "docker"` 启动时异步预拉取公开 GHCR 镜像（`ghcr.io/rowitzou/lightclaw-sandbox`），拉取期间 environment 工具优雅降级到 chat-only。镜像内置 AI 研究员 baseline（jq / yq / Python 数科栈 + Node 22 LTS）。
+- **权限** —— 终端与飞书统一的三选项范围化批准 UX（"批准本次 / 批准 `<merged label>` / 拒绝"），`ask` 规则可以在 `bypassPermissions` 模式下仍强制确认。
+- **Memory** —— 长任务三件套：query-time 相关记忆召回、session 工作记忆、compact 前 memory flush，让多轮长会话跨 `compact` 不丢硬事实。
 
 ---
 
@@ -69,7 +73,8 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/help` | 显示当前 model/mode、可用 model/mode、skill 目录和命令。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 在当前 ceiling 内切换 permission mode。 |
-| `/sandbox reset` | 重置自己的 Docker sandbox：保留 workspace 文件，丢弃容器 writable layer。 |
+| `/permissions [list\|clear\|ask <rule>]` | 查看 / 清空 session 权限规则；`ask <rule>` 注册一条 session 级规则，让该规则在 `bypassPermissions` 下仍强制确认。 |
+| `/sandbox [status\|prefetch\|reset]` | `status` 看 sandbox 镜像就绪态（state / image / 已等多久 / lastError）；`prefetch` 在 tracker 处于 failed / not-attempted 时强制重新拉取（修复代理 / 网络后用）；`reset` 删容器但保留 workspace 文件。 |
 
 Admin 专属：
 
@@ -121,7 +126,9 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
 
-Feishu channel 现在支持交互式权限审批。`default` / `acceptEdits` 模式下遇到需要确认的写入或执行类工具时，LightClaw 会发送飞书审批卡片；用户可以点“是”或“否”。如果卡片按钮不可用，也可以直接回复“是”/“否”作为文本 fallback，回复“取消”可以清掉卡住的待审批请求。按钮生效需要在飞书开发者后台启用机器人互动卡片能力，并在回调订阅里添加 `card.action.trigger`。其他非交互 channel 仍会在 ask 场景下拒绝工具调用；作为可信个人 bot 使用时，也可以把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling 和 workspace boundary 作为安全护栏。
+Feishu channel 支持交互式权限审批，统一三选项 UX（"批准本次 / 批准 `<merged label>` / 拒绝"）。中间一档**一次性安装一组按入参收紧的规则**——链式 Bash 命令按子命令拆出多条 `Bash(<head>:*)`（最多 5 条），路径类工具产 `Tool(<dir>/**)`，WebFetch 取 hostname，MCP 取 `<server>:<tool>`。merged label 超过 50 字符自动降级成 "N 类 …"，保证卡片可扫读。卡片按钮不可用时，回复 `1` / `2` / `3`（或"批准/批准所有/拒绝"）作为文本 fallback，回复"取消"可以清掉卡住的待审批请求。按钮生效需要在飞书开发者后台启用机器人互动卡片能力，并在回调订阅里添加 `card.action.trigger`。
+
+其他非交互 channel 仍会在 ask 场景下拒绝工具调用；作为可信个人 bot 使用时，也可以把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling、Runtime 边界（Docker 隔离 / ro mount）和 `permissions.json` 里的 `ask` 规则（如 `"ask": ["Bash(rm:*)"]`）作为安全护栏。
 
 ---
 
@@ -214,13 +221,25 @@ Docker backend 说明：
 
 ## Tool、Skill、MCP、Hooks
 
-模型仍能使用 Phase 1-9 的 toolset：文件工具、Bash、Web、Memory、Conversation、TodoWrite、子 Agent、MCP tool 和 `UseSkill`。
+内置 toolset：文件工具（`Read` / `Write` / `Edit` / `Glob` / `Grep`）、`Bash`、`WebFetch` / `WebSearch`、Memory 工具（`MemoryRead` / `MemoryWrite`）、Conversation 工具（`ConversationList` / `ConversationRead` / `ConversationGrep`）、`TodoWrite`、子 Agent（`AgentTool`）、MCP tool 和 `UseSkill`。
 
-每个 tool 都显式标记为 `environment` 或 `host`。新增 environment 工具时，文件系统、进程、glob 和任意网络副作用都必须经过 `context.runtime`；不要在工具实现里直接 import host `fs`、`child_process`、HTTP client 或 glob 库。
+每个 tool 显式标记为 `environment` 或 `host`。Environment 工具（文件 IO / Bash / Web）经 `context.runtime` 路由，绝不直接 import host `fs`、`child_process`、HTTP client 或 glob 库。Host 工具（Memory、Conversation、UseSkill）作用于受信的 LightClaw 内部状态。
 
-Skill 不再通过 `/skill` 手动调用。Skill description 使用 `TRIGGER` / `SKIP` 指引，模型会在任务匹配时自然调用 `UseSkill`。Skill 的 `allowed_tools` 现在会在 skill 激活后强制限制后续 tool 调用。
+Skill 不再通过 `/skill` 手动调用。Skill description 使用 `TRIGGER` / `SKIP` 指引，模型会在任务匹配时自然调用 `UseSkill`。Skill 的 `allowed_tools` 在激活后强制限制后续 tool 调用。
 
 MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/` 下；用户面的 `/mcp`、`/hooks` 等调试 slash 已删除。
+
+### Memory
+
+LightClaw 同时维护三类记忆：
+
+| 类别 | 存储 | 生命周期 |
+|---|---|---|
+| **项目记忆**（`LIGHTCLAW.md` / `LIGHTCLAW.local.md`） | 从 cwd 向上爬到 git root 或文件系统根 | 每次 session 全量注入 system prompt |
+| **用户记忆**（`~/.lightclaw/memory/<canonical_user>/*.md`） | typed（user / feedback / project / reference）Markdown + frontmatter，加 `MEMORY.md` 索引 | 每轮对话后台 extract；query 时按相关性选 top-N 注入 `## Relevant Memories` |
+| **Session 工作记忆**（`<sessionsDir>/<sessionId>/session-memory.md`） | 7 段固定模板（Current State / Task Specification / Files Touched / Key Findings / Decisions Made / Errors & Blockers / Next Step） | token AND tool_call 双阈值触发 LLM 重写；每轮注入 `## Session Working Memory`；`compact` 之前 flush，硬事实跨压缩边界保留 |
+
+`LIGHTCLAW_NO_MEMORY=1` 关掉所有三层。每层独立开关：`LIGHTCLAW_MEMORY_RECALL_ENABLED`、`LIGHTCLAW_SESSION_MEMORY_ENABLED`、`LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` —— 详见下面的配置提示段。
 
 ---
 
@@ -235,10 +254,13 @@ MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/`
 | `LIGHTCLAW_PROVIDER` | `anthropic` 或 `openai` |
 | `LIGHTCLAW_MODEL` | 默认模型 |
 | `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
-| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 关闭子系统 |
+| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 关闭子系统（memory 总闸 — 同时关掉下面三层） |
+| `LIGHTCLAW_MEMORY_RECALL_ENABLED` / `LIGHTCLAW_MEMORY_RECALL_TOP_N` | per-query 相关记忆召回（默认开，top 5） |
+| `LIGHTCLAW_SESSION_MEMORY_ENABLED` / `LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD` / `LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD` | session 工作记忆开关与更新双阈值（默认开，20K token AND 5 tool_call） |
+| `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` / `LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS` | compact 前 memory flush（默认开，超时 8 秒） |
 | `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
 | `LIGHTCLAW_RUNTIME_BACKEND` | 执行 runtime backend：`local`（默认）、`docker` 或未来的 `rjob` |
-| `LIGHTCLAW_DOCKER_IMAGE` | 覆盖 DockerRuntime 镜像 |
+| `LIGHTCLAW_DOCKER_IMAGE` | 覆盖 DockerRuntime 镜像（优先级最高，盖过 `runtime.docker.imageOverride` 和 `runtime.docker.image`） |
 | `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖 DockerRuntime idle stop 时间 |
 
 ---

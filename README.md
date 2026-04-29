@@ -2,9 +2,13 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted personal AI assistant that lives in your terminal and, optionally, in Feishu / WeChat. It is a from-scratch TypeScript / Node.js agent harness inspired by Claude Code, but Phase 10 intentionally hides most harness internals from the user surface.
+LightClaw is a self-hosted personal AI assistant that lives in your terminal and, optionally, in Feishu / WeChat. It is a from-scratch TypeScript / Node.js agent harness inspired by Claude Code, but the user surface is intentionally minimal — most harness internals stay hidden.
 
-The default experience is simple: start `lightclaw`, chat naturally, and let the assistant use tools, memory, skills, and channels behind the scenes.
+The default experience is simple: start `lightclaw`, chat naturally, and let the assistant use tools, memory, skills, and channels behind the scenes. Recent work focuses on three pillars:
+
+- **Sandbox** — `runtime.backend = "docker"` lazily prefetches a public GHCR image (`ghcr.io/rowitzou/lightclaw-sandbox`) and gracefully degrades to chat-only while the image is being pulled. The image bundles an AI-researcher baseline (jq / yq / Python data-science stack + Node 22 LTS).
+- **Permission** — three-option scoped approval UI (Allow once / Allow `<merged label>` / Deny) for both terminal and Feishu, with `ask` rules that force confirmation even under `bypassPermissions`.
+- **Memory** — long-task triplet: query-time relevant memory recall, session working memory, and pre-compact memory flush, so long multi-turn sessions don't lose hard facts across `compact`.
 
 ---
 
@@ -70,7 +74,8 @@ User-visible commands:
 | `/help` | Show current model/mode, available models/modes, skills, and commands. |
 | `/model <name>` | Switch the current session model. |
 | `/mode <mode>` | Switch permission mode within the current ceiling. |
-| `/sandbox reset` | Reset your Docker sandbox, preserving workspace files but discarding the container writable layer. |
+| `/permissions [list\|clear\|ask <rule>]` | Inspect or clear session permission rules; `ask <rule>` registers a session-scoped rule that forces confirmation even under `bypassPermissions`. |
+| `/sandbox [status\|prefetch\|reset]` | `status` shows readiness of the sandbox image (state / image / elapsed pull / lastError); `prefetch` re-triggers a pull when the tracker is in failed / not-attempted; `reset` removes the container while preserving workspace files. |
 
 Admin-only commands:
 
@@ -122,7 +127,9 @@ Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for
 
 For Feishu, `transport: "ws"` is the default and does not require a public webhook endpoint. If the Feishu app's long-connection events are not encrypted, `encryptKey` and `verificationToken` can be omitted for WS mode; when encryption is enabled, set `encryptKey` so incoming events can be decrypted. `allowUsers` and `allowChats` are checked only when the corresponding list is non-empty; if both lists are empty, every incoming message is dropped. Use `["*"]` to allow a dimension intentionally.
 
-Feishu channel now supports interactive permission approval. In `default` / `acceptEdits` mode, write or execute tool calls that require confirmation send a Feishu approval card; the user can choose "yes" or "no". If card buttons are unavailable, replying with "yes" / "no" works as a text fallback, and replying "cancel" clears a stuck pending approval. For card buttons to work, enable the bot's interactive card capability and subscribe the `card.action.trigger` callback in the Feishu developer console. Other non-interactive channels still deny ask-style tool calls. For a trusted personal bot, you can also configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, and the workspace boundary as the safety rails.
+Feishu channel supports interactive permission approval with a three-option UX (Allow once / Allow `<merged label>` / Deny). The middle option installs a *set* of scope-tightened rules at once — for a chained Bash command, one `Bash(<head>:*)` rule per subcommand (capped at 5); for path tools, a single `Tool(<dir>/**)` rule; for WebFetch, the hostname; for MCP, `<server>:<tool>`. The merged label degrades to `N 类 …` past 50 characters so the card stays scannable. If card buttons are unavailable, replying `1` / `2` / `3` (or `批准/批准所有/拒绝`) works as a text fallback, and replying `cancel` clears a stuck pending approval. For card buttons to work, enable the bot's interactive card capability and subscribe the `card.action.trigger` callback in the Feishu developer console.
+
+Other non-interactive channels still deny ask-style tool calls. For a trusted personal bot, you can also configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, the runtime boundary (Docker isolation / ro mounts), and `ask` rules in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`) as the safety rails.
 
 ---
 
@@ -215,13 +222,25 @@ When `runtime.backend = "docker"`, LightClaw prefetches the sandbox image at sta
 
 ## Tools, Skills, MCP, Hooks
 
-The model can still use the Phase 1-9 toolset: filesystem tools, Bash, web fetch/search, memory tools, conversation tools, TodoWrite, sub-agents, MCP tools, and `UseSkill`.
+Built-in toolset: filesystem tools (`Read` / `Write` / `Edit` / `Glob` / `Grep`), `Bash`, `WebFetch` / `WebSearch`, memory tools (`MemoryRead` / `MemoryWrite`), conversation tools (`ConversationList` / `ConversationRead` / `ConversationGrep`), `TodoWrite`, sub-agents (`AgentTool`), MCP tools, and `UseSkill`.
 
-Each tool is explicitly marked as either `environment` or `host`. New environment tools must route filesystem, process, glob, and arbitrary network effects through `context.runtime`; they should not directly import host `fs`, `child_process`, HTTP clients, or glob libraries.
+Each tool is explicitly marked as either `environment` or `host`. Environment tools (file IO / Bash / Web) route through `context.runtime`; they never import host `fs`, `child_process`, HTTP clients, or glob libraries directly. Host tools (Memory, Conversation, UseSkill) act on trusted LightClaw state.
 
-Skills are no longer invoked through `/skill`. Their descriptions use `TRIGGER` / `SKIP` guidance, and the model should call `UseSkill` naturally when a skill matches the task. `allowed_tools` is now enforced while a skill is active.
+Skills are no longer invoked through `/skill`. Their descriptions use `TRIGGER` / `SKIP` guidance, and the model calls `UseSkill` naturally when a skill matches the task. `allowed_tools` is enforced while a skill is active.
 
 MCP servers and hooks remain admin configuration files under `~/.lightclaw/`; user-facing MCP and hook slash commands were removed.
+
+### Memory
+
+LightClaw stores three kinds of memory:
+
+| Kind | Storage | Lifecycle |
+|---|---|---|
+| **Project memory** (`LIGHTCLAW.md` / `LIGHTCLAW.local.md`) | Discovered from cwd up to git root or filesystem root | Loaded fresh into the system prompt every session |
+| **User memory** (`~/.lightclaw/memory/<canonical_user>/*.md`) | Typed (user / feedback / project / reference) Markdown files with frontmatter, plus `MEMORY.md` index | Background extraction after each conversation; relevant entries selected at query time and injected as `## Relevant Memories` |
+| **Session working memory** (`<sessionsDir>/<sessionId>/session-memory.md`) | 7-section template (Current State / Task Specification / Files Touched / Key Findings / Decisions Made / Errors & Blockers / Next Step) | Rewritten when both token-spend and tool-call counters cross thresholds; injected as `## Session Working Memory`; flushed before `compact` so hard facts survive |
+
+`LIGHTCLAW_NO_MEMORY=1` disables all three. Per-pillar toggles: `LIGHTCLAW_MEMORY_RECALL_ENABLED`, `LIGHTCLAW_SESSION_MEMORY_ENABLED`, `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` — see Configuration Notes below.
 
 ---
 
@@ -236,10 +255,13 @@ Selected environment variables:
 | `LIGHTCLAW_PROVIDER` | `anthropic` or `openai` |
 | `LIGHTCLAW_MODEL` | Default model |
 | `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
-| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems |
+| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems (memory toggle is the master switch — turns off all three memory pillars below) |
+| `LIGHTCLAW_MEMORY_RECALL_ENABLED` / `LIGHTCLAW_MEMORY_RECALL_TOP_N` | Per-query relevant-memory recall (default on, top 5) |
+| `LIGHTCLAW_SESSION_MEMORY_ENABLED` / `LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD` / `LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD` | Session working memory toggle and update thresholds (default on, 20K tokens AND 5 tool calls) |
+| `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` / `LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS` | Pre-compact memory flush (default on, 8 s timeout) |
 | `LIGHTCLAW_PERMISSION_MODE` | Default permission mode |
 | `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker`, or future `rjob` |
-| `LIGHTCLAW_DOCKER_IMAGE` | Override DockerRuntime image |
+| `LIGHTCLAW_DOCKER_IMAGE` | Override DockerRuntime image (highest precedence, beats `runtime.docker.imageOverride` and `runtime.docker.image`) |
 | `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | Override DockerRuntime idle stop timeout |
 
 ---
