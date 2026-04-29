@@ -33,6 +33,22 @@ export type RoutingConfig = {
   webSearch?: string
 }
 
+export type MemoryRecallConfig = {
+  enabled: boolean
+  topN: number
+}
+
+export type SessionMemoryConfig = {
+  enabled: boolean
+  updateTokenThreshold: number
+  updateToolCallThreshold: number
+}
+
+export type PreCompactFlushConfig = {
+  enabled: boolean
+  timeoutMs: number
+}
+
 export type LightClawConfig = {
   model: string
   allowedModels: string[]
@@ -83,6 +99,9 @@ export type LightClawConfig = {
     backend: RuntimeKind
     docker: DockerRuntimeSettings
   }
+  memoryRecall: MemoryRecallConfig
+  sessionMemory: SessionMemoryConfig
+  preCompactFlush: PreCompactFlushConfig
 }
 
 type ConfigFileShape = {
@@ -132,6 +151,19 @@ type ConfigFileShape = {
   hookDirs?: {
     user?: string
     project?: string
+  }
+  memoryRecall?: {
+    enabled?: boolean
+    topN?: number
+  }
+  sessionMemory?: {
+    enabled?: boolean
+    updateTokenThreshold?: number
+    updateToolCallThreshold?: number
+  }
+  preCompactFlush?: {
+    enabled?: boolean
+    timeoutMs?: number
   }
   runtime?: {
     backend?: string
@@ -462,6 +494,50 @@ export function getConfig(): LightClawConfig {
         1_800_000,
     ),
   )
+  const memoryRecallEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MEMORY_RECALL_ENABLED) ??
+    fileConfig.memoryRecall?.enabled ??
+    true
+  const memoryRecallTopN = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MEMORY_RECALL_TOP_N) ??
+        fileConfig.memoryRecall?.topN ??
+        5,
+    ),
+  )
+  const sessionMemoryEnabled =
+    parseBoolean(process.env.LIGHTCLAW_SESSION_MEMORY_ENABLED) ??
+    fileConfig.sessionMemory?.enabled ??
+    true
+  const sessionMemoryUpdateTokenThreshold = Math.max(
+    1000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD) ??
+        fileConfig.sessionMemory?.updateTokenThreshold ??
+        20_000,
+    ),
+  )
+  const sessionMemoryUpdateToolCallThreshold = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD) ??
+        fileConfig.sessionMemory?.updateToolCallThreshold ??
+        5,
+    ),
+  )
+  const preCompactFlushEnabled =
+    parseBoolean(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED) ??
+    fileConfig.preCompactFlush?.enabled ??
+    true
+  const preCompactFlushTimeoutMs = Math.max(
+    1000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS) ??
+        fileConfig.preCompactFlush?.timeoutMs ??
+        8000,
+    ),
+  )
   const dockerCpuLimit = Math.max(0.1, Number(dockerConfig.cpuLimit ?? 4))
   const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
@@ -528,6 +604,19 @@ export function getConfig(): LightClawConfig {
     hookDirs: {
       user: expandOptionalPath(fileConfig.hookDirs?.user),
       project: expandOptionalPath(fileConfig.hookDirs?.project),
+    },
+    memoryRecall: {
+      enabled: memoryRecallEnabled,
+      topN: memoryRecallTopN,
+    },
+    sessionMemory: {
+      enabled: sessionMemoryEnabled,
+      updateTokenThreshold: sessionMemoryUpdateTokenThreshold,
+      updateToolCallThreshold: sessionMemoryUpdateToolCallThreshold,
+    },
+    preCompactFlush: {
+      enabled: preCompactFlushEnabled,
+      timeoutMs: preCompactFlushTimeoutMs,
     },
     runtime: {
       backend: runtimeBackend,

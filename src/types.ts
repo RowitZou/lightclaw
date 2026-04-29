@@ -94,6 +94,7 @@ export type SessionMeta = {
   messageCount: number
   compactionCount: number
   lastExtractedAt?: number
+  sessionMemoryUpdatedAt?: number
   todos?: TodoItem[]
   permissionMode?: import('./permission/types.js').PermissionMode
   userId?: string

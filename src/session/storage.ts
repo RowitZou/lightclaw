@@ -126,6 +126,7 @@ export async function touchMeta(
     messageCount,
     compactionCount: getCompactionCount(),
     lastExtractedAt: current?.lastExtractedAt,
+    sessionMemoryUpdatedAt: current?.sessionMemoryUpdatedAt,
     todos: current?.todos,
     permissionMode: getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
@@ -148,6 +149,30 @@ export async function updateMetaLastExtractedAt(
     messageCount: current?.messageCount ?? 0,
     compactionCount: current?.compactionCount ?? getCompactionCount(),
     lastExtractedAt,
+    sessionMemoryUpdatedAt: current?.sessionMemoryUpdatedAt,
+    todos: current?.todos,
+    permissionMode: current?.permissionMode ?? getPermissionMode(),
+    userId: current?.userId ?? getCurrentUserId(),
+  })
+}
+
+export async function updateMetaSessionMemoryAt(
+  sessionId: string,
+  sessionMemoryUpdatedAt: number,
+): Promise<void> {
+  const current = await loadMeta(sessionId)
+  const now = Date.now()
+
+  await saveMeta(sessionId, {
+    sessionId,
+    model: current?.model ?? getModel(),
+    cwd: current?.cwd ?? getCwd(),
+    createdAt: current?.createdAt ?? now,
+    lastActiveAt: current?.lastActiveAt ?? now,
+    messageCount: current?.messageCount ?? 0,
+    compactionCount: current?.compactionCount ?? getCompactionCount(),
+    lastExtractedAt: current?.lastExtractedAt,
+    sessionMemoryUpdatedAt,
     todos: current?.todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
@@ -170,6 +195,7 @@ export async function updateMetaTodos(
     messageCount: current?.messageCount ?? 0,
     compactionCount: current?.compactionCount ?? getCompactionCount(),
     lastExtractedAt: current?.lastExtractedAt,
+    sessionMemoryUpdatedAt: current?.sessionMemoryUpdatedAt,
     todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),

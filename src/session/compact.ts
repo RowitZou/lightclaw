@@ -1,5 +1,6 @@
 import type { LightClawConfig } from '../config.js'
 import { streamChat } from '../api.js'
+import { readSessionMemory } from '../memory/session-memory.js'
 import {
   createSystemCompactMessage,
   getLastUuid,
@@ -12,6 +13,9 @@ type CompactParams = {
   messages: Message[]
   keepRecent: number
   config: LightClawConfig
+  /** When set, current SessionMemory is read and prepended to the
+   *  compact boundary summary so it survives compaction. */
+  sessionId?: string
 }
 
 export type CompactResult = {
@@ -136,8 +140,21 @@ export async function compactConversation(
 
   const prompt = buildCompactPrompt(toCompress)
   const { summary, usage } = await requestSummary(prompt, params.config)
+
+  // P1: keep SessionMemory glued to the compact boundary so the next system
+  // prompt build still sees the freshly-frozen task skeleton even before the
+  // model has a chance to reference the session-memory.md file.
+  let composedSummary = summary
+  if (params.sessionId) {
+    const sm = await readSessionMemory(params.sessionId, params.config.sessionsDir)
+    const trimmedSm = sm.trim()
+    if (trimmedSm.length > 0) {
+      composedSummary = `## Session Working Memory (frozen at compact)\n${trimmedSm}\n\n---\n\n${summary}`
+    }
+  }
+
   const boundary = createSystemCompactMessage({
-    summary,
+    summary: composedSummary,
     parentUuid: getLastUuid(toCompress),
   })
 
@@ -150,7 +167,7 @@ export async function compactConversation(
 
   return {
     messages: nextMessages,
-    summaryTokens: estimateTokens(summary),
+    summaryTokens: estimateTokens(composedSummary),
     removedCount: toCompress.length,
     usage,
   }
