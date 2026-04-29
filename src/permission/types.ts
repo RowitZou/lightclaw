@@ -23,7 +23,7 @@ export type PermissionRuleValue = {
 
 export type PermissionRule = {
   source: PermissionRuleSource
-  behavior: 'allow' | 'deny'
+  behavior: PermissionBehavior
   value: PermissionRuleValue
 }
 
@@ -42,6 +42,7 @@ export type PermissionAskInput = {
   inputPreview: string
   mode: PermissionMode
   signal?: AbortSignal
+  suggestedRules: PermissionRuleValue[]
 }
 
 export type PermissionApprover = {

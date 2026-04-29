@@ -17,12 +17,17 @@ import {
 } from '../identity/store.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import type { SenderKey } from '../identity/types.js'
-import { formatRule } from '../permission/rules.js'
-import { PERMISSION_MODES, type PermissionMode } from '../permission/types.js'
+import { formatRule, parseRule } from '../permission/rules.js'
+import {
+  PERMISSION_MODES,
+  type PermissionMode,
+  type PermissionRule,
+} from '../permission/types.js'
 import { DockerRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
+  addSessionRule,
   clearSessionRules,
   getCurrentUserId,
   getCwd,
@@ -157,10 +162,13 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/permissions',
-    usage: '/permissions [list|clear]',
-    description: 'List or clear session-scoped permission rules (e.g. those installed by clicking 批准所有)',
+    usage: '/permissions [list|clear|ask <rule>]',
+    description:
+      'List or clear session-scoped permission rules; /permissions ask <rule> registers a session-scoped ASK rule that forces a confirmation even under bypassPermissions',
     async handler(args, ctx) {
-      const sub = args.trim() || 'list'
+      const trimmed = args.trim()
+      const [head, ...rest] = trimmed.split(/\s+/)
+      const sub = head || 'list'
       if (sub === 'list') {
         const rules = getSessionRules()
         if (rules.length === 0) {
@@ -169,7 +177,7 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         }
         const lines = ['Session permission rules:']
         for (const rule of rules) {
-          lines.push(`  ${rule.behavior} ${formatRule(rule.value)} (source: ${rule.source})`)
+          lines.push(`  [${rule.behavior}] ${formatRule(rule.value)} (source: ${rule.source})`)
         }
         lines.push('', 'Use /permissions clear to revoke them all.', '')
         ctx.output.write(lines.join('\n'))
@@ -185,7 +193,28 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         )
         return
       }
-      ctx.output.write('error> Usage: /permissions [list|clear]\n')
+      if (sub === 'ask') {
+        const ruleText = rest.join(' ').trim()
+        if (!ruleText) {
+          ctx.output.write('error> Usage: /permissions ask <rule>\n')
+          return
+        }
+        let value
+        try {
+          value = parseRule(ruleText)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          ctx.output.write(`error> ${detail}\n`)
+          return
+        }
+        const rule: PermissionRule = { source: 'session', behavior: 'ask', value }
+        addSessionRule(rule)
+        ctx.output.write(
+          `Registered session ASK rule: ${formatRule(value)} (overrides allow / bypassPermissions for matching calls)\n`,
+        )
+        return
+      }
+      ctx.output.write('error> Usage: /permissions [list|clear|ask <rule>]\n')
     },
   },
 ]

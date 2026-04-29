@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { toJSONSchema } from 'zod/v4'
 
 import type { Provider } from './provider/types.js'
-import type { RiskLevel } from './permission/types.js'
+import type { PermissionRuleValue, RiskLevel } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
 import type { UserToolResultBlock } from './types.js'
 
@@ -38,6 +38,13 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
    */
   concurrencySafe?: boolean
   isEnabled?(provider: Provider): boolean
+  /**
+   * Called when permission policy decides to ASK; the returned rules become
+   * the scoped-approval menu (terminal numbered list / Feishu N-button card).
+   * Order is precise → broad. Default fallback (when omitted) is a single
+   * tool-wide allow rule, equivalent to the legacy `[a]` / `批准所有` button.
+   */
+  suggestPermissionRules?(input: TInput): PermissionRuleValue[]
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult(
     output: TOutput,
@@ -54,6 +61,7 @@ export function buildTool<TInput, TOutput>(input: {
   riskLevel: RiskLevel
   concurrencySafe?: boolean
   isEnabled?(provider: Provider): boolean
+  suggestPermissionRules?(input: TInput): PermissionRuleValue[]
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>
   formatResult?: (
     output: TOutput,

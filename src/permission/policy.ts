@@ -26,6 +26,7 @@ export function evaluatePermission(args: {
   }
 
   let firstAllow: PermissionRule | undefined
+  let firstAsk: PermissionRule | undefined
 
   for (const rule of rules) {
     const matchesTool =
@@ -53,7 +54,18 @@ export function evaluatePermission(args: {
       }
     }
 
-    firstAllow ??= rule
+    if (rule.behavior === 'ask') {
+      firstAsk ??= rule
+    } else {
+      firstAllow ??= rule
+    }
+  }
+
+  // ask wins over allow and over the mode default — it is an explicit
+  // "always confirm this" override that must work even under
+  // bypassPermissions.
+  if (firstAsk) {
+    return { behavior: 'ask' }
   }
 
   if (firstAllow) {

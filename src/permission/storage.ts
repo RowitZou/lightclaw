@@ -9,6 +9,7 @@ import type { PermissionRule, PermissionRuleSource } from './types.js'
 type PermissionFileShape = {
   allow?: string[]
   deny?: string[]
+  ask?: string[]
 }
 
 function expandHomePath(input: string): string {
@@ -47,6 +48,14 @@ function loadFile(pathname: string, source: PermissionRuleSource): PermissionRul
   for (const text of parsed.deny ?? []) {
     try {
       rules.push({ source, behavior: 'deny', value: parseRule(text) })
+    } catch {
+      // Ignore invalid persisted rules so one typo does not break startup.
+    }
+  }
+
+  for (const text of parsed.ask ?? []) {
+    try {
+      rules.push({ source, behavior: 'ask', value: parseRule(text) })
     } catch {
       // Ignore invalid persisted rules so one typo does not break startup.
     }

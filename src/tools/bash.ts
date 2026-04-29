@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { suggestBashRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
 
 const MAX_OUTPUT_CHARS = 30000
@@ -34,6 +35,9 @@ export const bashTool = buildTool({
     command: z.string().min(1),
     timeout: z.number().int().min(1).max(MAX_TIMEOUT_SECONDS).optional(),
   }),
+  suggestPermissionRules(input) {
+    return suggestBashRules(input.command)
+  },
   async call(input, context) {
     const timeoutMs = Math.min(input.timeout ?? 30, MAX_TIMEOUT_SECONDS) * 1000
 

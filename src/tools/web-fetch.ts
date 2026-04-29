@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { suggestWebFetchRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
 
 const DEFAULT_MAX_BYTES = 200_000
@@ -19,6 +20,9 @@ export const webFetchTool = buildTool({
     maxBytes: z.number().int().min(1024).max(500_000).optional(),
     timeoutMs: z.number().int().min(1000).max(120_000).optional(),
   }),
+  suggestPermissionRules(input) {
+    return suggestWebFetchRules(input.url)
+  },
   async call(input, context) {
     const maxBytes = input.maxBytes ?? 200_000
     const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS

@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { suggestPathRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
 
 function resolveInputPath(cwd: string, inputPath: string): string {
@@ -31,6 +32,9 @@ export const fileEditTool = buildTool({
     old_string: z.string().min(1),
     new_string: z.string(),
   }),
+  suggestPermissionRules(input) {
+    return suggestPathRules('Edit', input.file_path)
+  },
   async call(input, context) {
     try {
       const targetPath = resolveInputPath(context.cwd, input.file_path)

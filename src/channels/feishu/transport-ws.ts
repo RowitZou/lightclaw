@@ -201,6 +201,9 @@ function parsePermissionAction(value: unknown): FeishuPermissionActionKind | nul
   if (value === 'allow' || value === 'deny' || value === 'allow_always') {
     return value
   }
+  if (typeof value === 'string' && /^allow_rule:\d+$/.test(value)) {
+    return value as FeishuPermissionActionKind
+  }
   return null
 }
 

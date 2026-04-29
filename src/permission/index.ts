@@ -9,7 +9,11 @@ import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
 import { evaluatePermission } from './policy.js'
 import { askUserApproval } from './prompt.js'
-import type { PermissionContext, PermissionDecision } from './types.js'
+import type {
+  PermissionContext,
+  PermissionDecision,
+  PermissionRuleValue,
+} from './types.js'
 
 export async function requestPermission(input: {
   tool: Tool
@@ -34,6 +38,7 @@ export async function requestPermission(input: {
   let decision: PermissionDecision
   if (verdict.behavior === 'ask') {
     const inputPreview = previewInput(tool.name, toolInput)
+    const suggestedRules = computeSuggestedRules(tool, toolInput)
     if (ctx.isSubagent) {
       decision = {
         behavior: 'deny',
@@ -51,6 +56,7 @@ export async function requestPermission(input: {
         inputPreview,
         mode,
         signal: ctx.signal,
+        suggestedRules,
       })
     } else if (ctx.isInteractive && rl) {
       decision = await askUserApproval({
@@ -58,6 +64,7 @@ export async function requestPermission(input: {
         toolName: tool.name,
         riskLevel: tool.riskLevel,
         inputPreview,
+        suggestedRules,
       })
     } else {
       decision = {
@@ -83,6 +90,24 @@ export async function requestPermission(input: {
   })
 
   return decision
+}
+
+function computeSuggestedRules(
+  tool: Tool,
+  toolInput: unknown,
+): PermissionRuleValue[] {
+  // Tool implementations are typed; the dispatcher hands us `unknown`. Cast
+  // is safe because Zod has already validated the input shape upstream.
+  const suggester = tool.suggestPermissionRules as
+    | ((input: unknown) => PermissionRuleValue[])
+    | undefined
+  const suggestions = suggester?.(toolInput)
+  if (suggestions && suggestions.length > 0) {
+    return suggestions
+  }
+  // Fallback: a single tool-wide allow option, equivalent to the legacy
+  // "always allow this tool" choice every approver used to render.
+  return [{ toolName: tool.name }]
 }
 
 function previewInput(toolName: string, input: unknown): string {

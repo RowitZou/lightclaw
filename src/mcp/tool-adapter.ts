@@ -1,5 +1,6 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
+import { suggestMcpRules } from '../permission/suggestions.js'
 import type { Tool } from '../tool.js'
 import type { UserToolResultBlock } from '../types.js'
 import { buildMcpToolName } from './normalization.js'
@@ -27,6 +28,7 @@ export function mcpToolToLightClawTool(input: {
     mcpToolName: descriptor.name,
     inputJSONSchema: descriptor.inputSchema,
     riskLevel: 'write',
+    suggestPermissionRules: () => suggestMcpRules(server, descriptor.name),
     async call(rawInput, context) {
       const result = await callMcpTool({
         client: connection.client,
