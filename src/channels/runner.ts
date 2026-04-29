@@ -31,9 +31,11 @@ import {
   getCompactionCount,
   getCurrentUserId,
   getCwd,
+  getImageReadiness,
   getLastExtractedAt,
   getModel,
   getPermissionMode,
+  getRuntime,
   getSessionId,
   getTodos,
 } from '../state.js'
@@ -169,6 +171,27 @@ export class ChannelRunner {
             trigger: 'channel',
             channelId: this.strategy.channelId,
           })
+        }
+
+        // Image readiness self-healing: if a previous failure left the tracker
+        // in 'failed' / 'not-attempted', kick a retry now so by the time the
+        // agent attempts an environment tool we may already be ready (or at
+        // least re-pulling). Admin (sender-side) gets a one-shot notice with
+        // the technical diagnosis; end users see the soft tool_result text
+        // when the agent eventually tries an environment tool.
+        if (appConfig.runtime.backend === 'docker') {
+          const tracker = getImageReadiness()
+          tracker.retryIfFailed()
+          if (
+            (tracker.state === 'failed' || tracker.state === 'pulling') &&
+            (await isAdmin(userId)) &&
+            tracker.markAdminNotified(this.strategy.channelId)
+          ) {
+            const availability = await getRuntime().isAvailable()
+            if (!availability.ok) {
+              await this.sendNotice(message, 'error', availability.adminMessage).catch(() => {})
+            }
+          }
         }
 
         beginQuery()

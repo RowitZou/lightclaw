@@ -188,7 +188,28 @@ Docker backend notes:
 - One canonical user maps to one container named `lightclaw-sandbox-<user>-<deploymentHash>`, shared by terminal, Feishu, and WeChat sessions.
 - Read-only mounts use Docker's `:ro` bind option. The kernel rejects writes, metadata changes, truncates, and deletes inside that mount with `EROFS`, which is the recommended mode for datasets and model checkpoints.
 - Idle stop uses `docker stop`, not `docker rm`: workspace files and the container writable layer survive. `/sandbox reset` removes the container and recreates it on the next environment tool call.
-- Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, Bash/coreutils, ripgrep, git, curl, Python 3, build-essential, and the sandbox helpers.
+- Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, common CLI (jq / yq / wget / unzip / vim-tiny / less / dnsutils / netcat / sqlite3), ripgrep, git, curl, Python 3 with the data-science baseline (numpy / pandas / scipy / matplotlib / requests / httpx / pyyaml / pyarrow / tqdm / markdownify), Node 22 LTS + pnpm, and the sandbox helpers.
+
+### Sandbox image: getting started
+
+When `runtime.backend = "docker"`, LightClaw prefetches the sandbox image at startup (background, non-blocking) and tools degrade to chat-only until the image is ready. No image-specific configuration is required for the common case.
+
+| Scenario | What you do | What LightClaw does |
+|---|---|---|
+| First-time docker user | Set `runtime.backend = "docker"` and start LightClaw | Background `docker pull ghcr.io/rowitzou/lightclaw-sandbox:<version>`; environment tools return a soft "image still preparing" notice until ready, then start working seamlessly |
+| Re-launch after restart | nothing | `docker image inspect` hits the local cache → tracker becomes ready immediately, no network |
+| Local dev with custom image | `docker build -t lightclaw-sandbox:dev .` then set `runtime.docker.imageOverride: "lightclaw-sandbox:dev"` | Use the local tag, no pull |
+| Internal mirror / air-gapped | Mirror `lightclaw-sandbox:<version>` to your registry, set `runtime.docker.imageOverride: "<mirror>/lightclaw-sandbox:<version>"` | Pull from your mirror |
+| One-off override (CI) | `LIGHTCLAW_DOCKER_IMAGE=...` env var | Highest precedence, doesn't persist |
+| Manage your own images | Set `runtime.docker.autoPull: false` | LightClaw only inspects locally; if absent, the agent reports "admin disabled auto-pull, please prepare the sandbox" until you `docker pull` it yourself |
+
+`/sandbox` slash commands:
+
+- `/sandbox status` — show readiness state, image, elapsed pull time, last error, and active container.
+- `/sandbox prefetch` — re-trigger image pull when state is failed / not-attempted (useful after fixing proxy or network).
+- `/sandbox reset` — stop and remove the container; the next environment tool call recreates it from the image.
+
+**Image visibility**: the upstream image at `ghcr.io/rowitzou/lightclaw-sandbox` is published as a public package. If you fork the repo and publish under your own org, set the GHCR package to public from the repo's Packages settings (GitHub doesn't expose this through the API). Changing `runtime.docker.image` or `imageOverride` requires restarting the LightClaw process — the readiness tracker is bound to the image at startup.
 
 ---
 
