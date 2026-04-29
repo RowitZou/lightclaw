@@ -155,6 +155,52 @@ export async function requestExtraction(
     .slice(0, 3)
 }
 
+/**
+ * P2: synchronously run extractMemories before compaction so hard facts
+ * (file paths, decisions, user preferences) are persisted to auto-memory
+ * before the LLM summarizer collapses the prefix into a 4096-token blob.
+ *
+ * Times out after `timeoutMs` and falls back to {saved: [], lastExtractedAt}
+ * unchanged — the caller continues to compact regardless. The underlying
+ * extractMemories promise is intentionally NOT aborted on timeout: if it
+ * eventually completes it still writes hard facts to disk, giving us an
+ * "extra insurance" path for the next query-time recall.
+ */
+export async function flushBeforeCompact(params: {
+  messages: Message[]
+  lastExtractedAt: number
+  memoryDir: string
+  config: LightClawConfig
+  timeoutMs: number
+}): Promise<{ saved: MemoryEntry[]; lastExtractedAt: number }> {
+  const TIMEOUT = Symbol('flush-timeout')
+  const result = await Promise.race([
+    extractMemories({
+      messages: params.messages,
+      lastExtractedAt: params.lastExtractedAt,
+      memoryDir: params.memoryDir,
+      config: params.config,
+    }).catch(err => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[memory] pre-compact flush failed: ${msg}`)
+      return {
+        saved: [] as MemoryEntry[],
+        lastExtractedAt: params.lastExtractedAt,
+      }
+    }),
+    new Promise<typeof TIMEOUT>(resolve =>
+      setTimeout(() => resolve(TIMEOUT), params.timeoutMs).unref(),
+    ),
+  ])
+
+  if (result === TIMEOUT) {
+    console.error('[memory] pre-compact flush timed out')
+    return { saved: [], lastExtractedAt: params.lastExtractedAt }
+  }
+
+  return result
+}
+
 export async function extractMemories(params: {
   messages: Message[]
   lastExtractedAt: number

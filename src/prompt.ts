@@ -4,6 +4,9 @@ import type { AgentDefinition } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
+import { selectRelevantMemories } from './memory/recall.js'
+import { readSessionMemory } from './memory/session-memory.js'
+import type { MemoryEntry } from './memory/types.js'
 import { getMcpRegistrySnapshot } from './mcp/index.js'
 import { modelFor } from './provider/index.js'
 import {
@@ -25,6 +28,10 @@ import type { PermissionMode } from './permission/types.js'
 type PromptOptions = {
   autoMemory: boolean
   config: LightClawConfig
+  /** Last user text used by P0 query-time recall. */
+  queryText?: string
+  /** Active session id, used by P1 SessionMemory injection. */
+  sessionId?: string
 }
 
 export type SystemPromptTemplate = {
@@ -138,9 +145,24 @@ export async function buildSystemPromptTemplate(
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
   await refreshSkillRegistry(cwd)
-  const [projectMemory, autoMemoryIndex] = await Promise.all([
+  const memoryDir = getMemoryDir()
+  const recallEnabled =
+    options.autoMemory
+    && options.config.memoryRecall.enabled
+    && Boolean(options.queryText && options.queryText.trim().length > 0)
+  const sessionMemoryEnabled =
+    options.config.sessionMemory.enabled && Boolean(options.sessionId)
+  const [projectMemory, autoMemoryIndex, recalledMemories, sessionMemory] = await Promise.all([
     loadProjectMemory(cwd),
-    options.autoMemory ? loadMemoryIndex(getMemoryDir()) : Promise.resolve(''),
+    options.autoMemory ? loadMemoryIndex(memoryDir) : Promise.resolve(''),
+    recallEnabled
+      ? selectRelevantMemories(options.queryText!, memoryDir, options.config, {
+          topN: options.config.memoryRecall.topN,
+        })
+      : Promise.resolve([] as MemoryEntry[]),
+    sessionMemoryEnabled
+      ? readSessionMemory(options.sessionId!, options.config.sessionsDir)
+      : Promise.resolve(''),
   ])
 
   const toolDescriptions = tools
@@ -172,6 +194,22 @@ export async function buildSystemPromptTemplate(
 
   if (options.autoMemory && autoMemoryIndex.trim().length > 0) {
     preTodoSections.push('', '## Auto Memory Index', autoMemoryIndex)
+  }
+
+  if (recalledMemories.length > 0) {
+    const trimmedQuery = (options.queryText ?? '').replace(/\s+/g, ' ').slice(0, 80)
+    preTodoSections.push(
+      '',
+      '## Relevant Memories',
+      `<!-- selected by recall on query "${trimmedQuery}" -->`,
+    )
+    for (const memory of recalledMemories) {
+      preTodoSections.push('', `### ${memory.filename}`, memory.content)
+    }
+  }
+
+  if (sessionMemory.trim().length > 0) {
+    preTodoSections.push('', '## Session Working Memory', sessionMemory.trim())
   }
 
   preTodoSections.push(

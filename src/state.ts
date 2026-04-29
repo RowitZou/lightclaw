@@ -30,6 +30,13 @@ type SessionState = {
 
 let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
+// Session-memory write throttle counters. Module-level rather than per-state
+// because they reset on every initializeState (a new session starts with
+// zero accumulated work). They drive the SessionMemory double-threshold:
+// SM is rewritten only when both token AND tool_call counters cross.
+let sessionMemoryTokensSinceUpdate = 0
+let sessionMemoryToolCallsSinceUpdate = 0
+let sessionMemoryUpdateCount = 0
 // Session permission rules persist per canonical user across channel
 // resetSessionContext / initializeState calls — without this, the Feishu
 // "批准所有" button (and terminal `[a]`) would silently degrade to
@@ -81,6 +88,10 @@ export function initializeState(input: {
     backgroundTasks: new Set(),
     runtime: input.runtime,
   }
+
+  sessionMemoryTokensSinceUpdate = 0
+  sessionMemoryToolCallsSinceUpdate = 0
+  sessionMemoryUpdateCount = 0
 }
 
 function requireState(): SessionState {
@@ -296,4 +307,36 @@ export async function awaitBackgroundTasks(): Promise<void> {
   }
 
   await Promise.allSettled([...current.backgroundTasks])
+}
+
+export function getSessionMemoryTokensSinceUpdate(): number {
+  return sessionMemoryTokensSinceUpdate
+}
+
+export function addSessionMemoryTokens(tokens: number): void {
+  if (tokens > 0) {
+    sessionMemoryTokensSinceUpdate += tokens
+  }
+}
+
+export function getSessionMemoryToolCallsSinceUpdate(): number {
+  return sessionMemoryToolCallsSinceUpdate
+}
+
+export function addSessionMemoryToolCall(): void {
+  sessionMemoryToolCallsSinceUpdate += 1
+}
+
+export function resetSessionMemoryCounters(): void {
+  sessionMemoryTokensSinceUpdate = 0
+  sessionMemoryToolCallsSinceUpdate = 0
+}
+
+export function getSessionMemoryUpdateCount(): number {
+  return sessionMemoryUpdateCount
+}
+
+export function incrementSessionMemoryUpdateCount(): number {
+  sessionMemoryUpdateCount += 1
+  return sessionMemoryUpdateCount
 }

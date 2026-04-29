@@ -3,7 +3,11 @@ import type { Interface } from 'node:readline/promises'
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
 import { runHook } from './hooks/index.js'
-import { extractMemories } from './memory/extract.js'
+import { extractMemories, flushBeforeCompact } from './memory/extract.js'
+import {
+  updateSessionMemory,
+  type SessionMemoryUpdateInput,
+} from './memory/session-memory.js'
 import {
   collectAssistantText,
   createAssistantMessage,
@@ -16,6 +20,8 @@ import { modelFor } from './provider/index.js'
 import { requestPermission } from './permission/index.js'
 import type { PermissionApprover } from './permission/types.js'
 import {
+  addSessionMemoryToolCall,
+  addSessionMemoryTokens,
   addUsage,
   getAbortController,
   getCwd,
@@ -23,13 +29,21 @@ import {
   getMemoryDir,
   getRuntime,
   getSessionId,
+  getSessionMemoryToolCallsSinceUpdate,
+  getSessionMemoryTokensSinceUpdate,
   getTodos,
   incrementCompactionCount,
+  incrementSessionMemoryUpdateCount,
   registerBackgroundTask,
+  resetSessionMemoryCounters,
   setLastExtractedAt,
 } from './state.js'
 import { compactConversation } from './session/compact.js'
-import { updateMetaLastExtractedAt } from './session/storage.js'
+import {
+  loadMeta,
+  updateMetaLastExtractedAt,
+  updateMetaSessionMemoryAt,
+} from './session/storage.js'
 import { findToolByName, toolToAPISchema, type Tool } from './tool.js'
 import { estimateMessagesTokens } from './token-estimate.js'
 import type {
@@ -133,6 +147,57 @@ export async function query(params: QueryParams): Promise<{
   let stopReason: string | null = null
   let didCompact = false
 
+  // P1: SessionMemory write triggered post-turn when both token and tool_call
+  // accumulators cross their thresholds. Synchronous so the next prompt build
+  // sees the freshly written file. Failures are logged, never raised.
+  const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
+    if (
+      mode === 'subagent'
+      || !config.autoMemory
+      || !config.sessionMemory.enabled
+    ) {
+      return
+    }
+    if (
+      getSessionMemoryTokensSinceUpdate() < config.sessionMemory.updateTokenThreshold
+      || getSessionMemoryToolCallsSinceUpdate() < config.sessionMemory.updateToolCallThreshold
+    ) {
+      return
+    }
+
+    const meta = await loadMeta(getSessionId())
+    const since = meta?.sessionMemoryUpdatedAt ?? 0
+    const newMessages = snapshot.filter(
+      message => message.type !== 'system' && message.timestamp > since,
+    )
+    if (newMessages.length === 0) {
+      // Nothing new to summarize but counters crossed — reset so we do not
+      // hammer the model on every subsequent turn.
+      resetSessionMemoryCounters()
+      return
+    }
+
+    try {
+      const update: SessionMemoryUpdateInput = {
+        sessionId: getSessionId(),
+        sessionsDir: config.sessionsDir,
+        newMessages,
+        config,
+      }
+      const result = await updateSessionMemory(update)
+      if (result.updated) {
+        const ts = Date.now()
+        await updateMetaSessionMemoryAt(getSessionId(), ts)
+        incrementSessionMemoryUpdateCount()
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[session-memory] ${message}`)
+    } finally {
+      resetSessionMemoryCounters()
+    }
+  }
+
   const scheduleMemoryExtraction = (snapshot: Message[]) => {
     if (mode === 'subagent' || !config.autoMemory || stopReason !== 'end_turn') {
       return
@@ -181,12 +246,30 @@ export async function query(params: QueryParams): Promise<{
       }
     }
 
+    // P2: pre-compact flush — persist hard facts to auto-memory before the
+    // summarizer collapses the prefix. Failures are logged inside
+    // flushBeforeCompact and never abort compaction.
+    if (config.autoMemory && config.preCompactFlush.enabled) {
+      const flushed = await flushBeforeCompact({
+        messages: [...messages],
+        lastExtractedAt: getLastExtractedAt(),
+        memoryDir: getMemoryDir(),
+        config,
+        timeoutMs: config.preCompactFlush.timeoutMs,
+      })
+      if (flushed.lastExtractedAt > getLastExtractedAt()) {
+        setLastExtractedAt(flushed.lastExtractedAt)
+        await updateMetaLastExtractedAt(getSessionId(), flushed.lastExtractedAt)
+      }
+    }
+
     params.onCompactStart?.()
     try {
       const result = await compactConversation({
         messages,
         keepRecent: config.compactKeepRecent,
         config,
+        sessionId: getSessionId(),
       })
 
       if (result.removedCount === 0) {
@@ -214,6 +297,8 @@ export async function query(params: QueryParams): Promise<{
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
         autoMemory: config.autoMemory,
         config,
+        queryText: getLastUserText(messages),
+        sessionId: getSessionId(),
       })
 
   const renderEffectiveSystemPrompt = (): string => {
@@ -312,6 +397,9 @@ export async function query(params: QueryParams): Promise<{
     }
 
     addUsage(stopEvent.usage)
+    addSessionMemoryTokens(
+      (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
+    )
     stopReason = stopEvent.stopReason
     lastAssistantText = collectAssistantText(stopEvent.content)
     messages.push(
@@ -329,6 +417,7 @@ export async function query(params: QueryParams): Promise<{
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]
+      await maybeUpdateSessionMemory(extractionSnapshot)
       await runCompaction(false)
       scheduleMemoryExtraction(extractionSnapshot)
       await runHook('afterQuery', {
@@ -379,11 +468,13 @@ export async function query(params: QueryParams): Promise<{
           for (let k = 0; k < batch.length; k += 1) {
             completed.add(batch[k].id)
             toolResults.push(results[k])
+            addSessionMemoryToolCall()
           }
         } else {
           const result = await dispatchToolCall(head, dispatchCtx)
           completed.add(head.id)
           toolResults.push(result)
+          addSessionMemoryToolCall()
           i += 1
         }
       }
@@ -401,6 +492,7 @@ export async function query(params: QueryParams): Promise<{
       messages.push(createUserMessage(toolResults, getLastUuid(messages)))
     }
 
+    await maybeUpdateSessionMemory([...messages])
     await runCompaction(false)
   }
 
