@@ -11,7 +11,12 @@ export const webSearchTool = buildTool({
   name: 'WebSearch',
   description: 'Search the web from the environment runtime. Returns search findings and source URLs.',
   domain: 'environment',
-  riskLevel: 'safe',
+  // Network egress: the query string leaves the host (potentially leaking
+  // sensitive keywords to the search vendor), so this is not "safe" in the
+  // same sense as Read/Grep. Aligned with WebFetch (also 'execute') so
+  // admins get a confirmation prompt for any outbound web access in
+  // default mode.
+  riskLevel: 'execute',
   concurrencySafe: true,
   inputSchema: z.object({
     query: z.string().min(2),

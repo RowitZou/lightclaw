@@ -116,8 +116,36 @@ function flushSegment(buf: string, out: string[]): void {
 }
 
 // Extract the "head" tokens of a single (already-split) segment for use as a
-// `Bash(<head>:*)` rule content. Returns up to two leading non-flag tokens —
-// matches matchBashCommand semantics on the matcher side.
+// `Bash(<head>:*)` rule content. Returns the first token, optionally with a
+// subcommand glued on (`git status`, `pip install`).
+//
+// Approach: rather than guessing whether head2 is a subcommand or just an
+// argument from its shape, whitelist the multi-subcommand tools we want to
+// disambiguate. Anything outside the whitelist (`rm foo`, `echo hello`,
+// `cat /etc/passwd`) collapses to head1, which is what users actually mean
+// when they say "approve all rm" — they don't want `Bash(rm foo:*)` to leak
+// past the specific file they had in mind.
+//
+// Tools added here pay off because their typical usage has the shape
+// `<tool> <verb>` and most operators want to grant access at the verb
+// level (`pip install:*` ≠ `pip uninstall:*`). Adding new tools is cheap
+// — a missing one just degrades to `Bash(<tool>:*)`, which is still
+// correct, just less precise.
+const MULTI_COMMAND_TOOLS = new Set([
+  'git', 'gh',
+  'npm', 'pnpm', 'yarn', 'bun',
+  'pip', 'pip3', 'pipx', 'poetry', 'uv', 'conda',
+  'docker', 'podman', 'kubectl', 'helm', 'minikube',
+  'apt', 'apt-get', 'dnf', 'yum', 'brew', 'pacman',
+  'go', 'cargo', 'rustup',
+  'mvn', 'gradle',
+  'make',
+  'aws', 'gcloud', 'az', 'terraform', 'ansible', 'pulumi',
+  'systemctl', 'service', 'journalctl',
+])
+
+const SUBCOMMAND_SHAPE = /^[A-Za-z][A-Za-z0-9_-]*$/
+
 export function extractSegmentHead(segment: string): string | null {
   const trimmed = segment.trim()
   if (!trimmed) return null
@@ -129,10 +157,11 @@ export function extractSegmentHead(segment: string): string | null {
 
   const head1 = tokens[0]!
   const head2 = tokens[1]
-  // Skip if head2 looks like a flag — `git -c k=v log` should still suggest
-  // `Bash(git:*)`, not `Bash(git -c:*)`. matchBashCommand can't validate
-  // against a flag-shaped second token anyway.
-  if (head2 && !head2.startsWith('-')) {
+  if (
+    head2 &&
+    MULTI_COMMAND_TOOLS.has(head1) &&
+    SUBCOMMAND_SHAPE.test(head2)
+  ) {
     return `${head1} ${head2}`
   }
   return head1
