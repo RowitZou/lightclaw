@@ -53,10 +53,13 @@ RUN ARCH="$(dpkg --print-architecture)" \
        esac \
     && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
          | tar -xJ -C /opt \
-    && ln -s "/opt/node-v${NODE_VERSION}-linux-${NODE_ARCH}/bin/node" /usr/local/bin/node \
-    && ln -s "/opt/node-v${NODE_VERSION}-linux-${NODE_ARCH}/bin/npm" /usr/local/bin/npm \
-    && ln -s "/opt/node-v${NODE_VERSION}-linux-${NODE_ARCH}/bin/npx" /usr/local/bin/npx \
+    && NODE_BIN="/opt/node-v${NODE_VERSION}-linux-${NODE_ARCH}/bin" \
+    && ln -s "${NODE_BIN}/node" /usr/local/bin/node \
+    && ln -s "${NODE_BIN}/npm" /usr/local/bin/npm \
+    && ln -s "${NODE_BIN}/npx" /usr/local/bin/npx \
     && npm install -g pnpm@10 \
+    && ln -s "${NODE_BIN}/pnpm" /usr/local/bin/pnpm \
+    && ln -s "${NODE_BIN}/pnpx" /usr/local/bin/pnpx \
     && npm cache clean --force
 
 COPY scripts/sandbox-helpers /opt/lightclaw/sandbox-helpers
