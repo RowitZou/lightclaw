@@ -95,6 +95,10 @@ export class FeishuPermissionCoordinator {
   async handleCardAction(action: FeishuCardAction): Promise<FeishuCardActionResponse> {
     const pending = this.pendingById.get(action.requestId)
     if (!pending) {
+      // Stale action — pending is gone (timed out or already handled). Don't
+      // attempt a card swap; the original card may have already been replaced
+      // by a previous handler. Returning an empty response leaves whatever the
+      // card looks like in place.
       process.stderr.write(
         `feishu permission: ignored stale action request=${action.requestId}\n`,
       )
@@ -102,6 +106,8 @@ export class FeishuPermissionCoordinator {
     }
 
     if (!await this.canOperate(pending, action.operatorOpenId)) {
+      // Don't replace the card here — the original requester may still be
+      // about to click. Just send a side-channel notice to whoever tried.
       process.stderr.write(
         `feishu permission: rejected operator ${action.operatorOpenId} for request=${action.requestId}\n`,
       )
@@ -252,7 +258,10 @@ export class FeishuPermissionCoordinator {
         'info',
         `已允许 ${pending.ask.toolName} 本次调用。`,
       )
-      return {}
+      return resolvedCardResponse(pending, {
+        outcome: 'allow_once',
+        label: '批准',
+      })
     }
     if (action === 'deny') {
       this.resolvePending(pending, {
@@ -264,7 +273,10 @@ export class FeishuPermissionCoordinator {
         'info',
         `已拒绝 ${pending.ask.toolName}。`,
       )
-      return {}
+      return resolvedCardResponse(pending, {
+        outcome: 'deny',
+        label: '拒绝',
+      })
     }
 
     // allow_rules / allow_always: install the entire suggestedRules set as
@@ -296,7 +308,14 @@ export class FeishuPermissionCoordinator {
         '需要撤回时请发送 /permissions clear。',
       ].join('\n'),
     )
-    return {}
+    const middleLabel = formatSuggestionLabel(
+      pending.suggestedRules,
+      pending.ask.toolName,
+    )
+    return resolvedCardResponse(pending, {
+      outcome: 'allow_rules',
+      label: middleLabel,
+    })
   }
 
   private resolvePending(
@@ -438,6 +457,71 @@ function buildButton(
       requestId,
       action,
     },
+  }
+}
+
+type ResolvedOutcome = 'allow_once' | 'allow_rules' | 'deny'
+
+// Wrap the resolved card in Lark's callback "card update" envelope. Returning
+// this from handleCardAction makes Feishu replace the original yellow
+// approval card with the resolved (button-less) card the moment the click
+// reaches us — the user gets instant visual feedback even before the
+// follow-up notice card arrives.
+function resolvedCardResponse(
+  pending: PendingPermission,
+  resolution: { outcome: ResolvedOutcome; label: string },
+): FeishuCardActionResponse {
+  return {
+    card: {
+      type: 'raw',
+      data: buildResolvedCard(pending, resolution),
+    },
+  }
+}
+
+function buildResolvedCard(
+  pending: PendingPermission,
+  resolution: { outcome: ResolvedOutcome; label: string },
+): Record<string, unknown> {
+  // wathet (淡青蓝) for accepted decisions, red for explicit deny — matches
+  // the system-notice palette so the resolved card visually matches the
+  // follow-up notice it pairs with.
+  const template = resolution.outcome === 'deny' ? 'red' : 'wathet'
+  const title = resolution.outcome === 'deny' ? '已拒绝' : '已批准'
+  const icon = resolution.outcome === 'deny' ? '❌' : '✅'
+
+  return {
+    config: {
+      enable_forward: false,
+      wide_screen_mode: true,
+    },
+    header: {
+      template,
+      title: {
+        tag: 'plain_text',
+        content: title,
+      },
+    },
+    elements: [
+      {
+        tag: 'div',
+        text: {
+          tag: 'lark_md',
+          content: [
+            `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
+            `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
+            `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+            `**会话**：${escapeLarkMd(pending.sessionId)}`,
+            '',
+            '```',
+            truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
+            '```',
+            '',
+            `${icon} 已选：${escapeLarkMd(resolution.label)}`,
+          ].join('\n'),
+        },
+      },
+    ],
   }
 }
 

@@ -221,7 +221,7 @@ export class ChannelRunner {
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
           process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
-          const failureText = `这轮处理失败了：${detail}`
+          const failureText = formatQueryFailure(detail)
           const assistantMessage = createAssistantMessage({
             content: [{ type: 'text', text: failureText }],
             stopReason: 'error',
@@ -354,6 +354,23 @@ export class ChannelRunner {
 
 function isPairableChannel(channel: string): channel is ChannelKind {
   return channel === 'feishu' || channel === 'wechat'
+}
+
+// Network errors that we expect to be transient. Anthropic SDK already
+// retries internally; if we still get one of these to runner.ts the request
+// genuinely couldn't complete, but the next user message will usually go
+// through, so the friendly text steers them to just resend.
+const TRANSIENT_FAILURE_PATTERN =
+  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure/i
+
+function formatQueryFailure(detail: string): string {
+  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
+    return [
+      '本轮因网络抖动中断，建议直接重发上一条消息再试一次。',
+      `（详细错误：${detail}）`,
+    ].join('\n')
+  }
+  return `这轮处理失败了：${detail}`
 }
 
 function formatChannelUserText(message: NormalizedChannelMessage): string {
