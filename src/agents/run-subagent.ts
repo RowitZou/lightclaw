@@ -3,7 +3,7 @@ import { createUserMessage } from '../messages.js'
 import { buildSubagentPrompt } from '../prompt.js'
 import { getProvider, modelFor } from '../provider/index.js'
 import { query } from '../query.js'
-import { getCwd } from '../state.js'
+import { getRuntime } from '../state.js'
 import type { Tool } from '../tool.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { AgentType } from './types.js'
@@ -55,7 +55,7 @@ export async function runSubagent(params: {
     tools,
     config: subagentConfig,
     maxTurns: agent.maxTurns,
-    systemPrompt: buildSubagentPrompt(tools, getCwd(), agent),
+    systemPrompt: buildSubagentPrompt(tools, getRuntime().workspaceRoot, agent),
     mode: 'subagent',
   })
 

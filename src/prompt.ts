@@ -134,6 +134,7 @@ function formatMcpSection(): string {
 export async function buildSystemPromptTemplate(
   tools: Tool[],
   cwd: string,
+  environmentRoot: string,
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
   await refreshSkillRegistry(cwd)
@@ -157,7 +158,7 @@ export async function buildSystemPromptTemplate(
     'You are LightClaw, a personal assistant running across terminal and chat channels.',
     'You help the current user inside their private LightClaw workspace. Do not frame yourself as a project-directory coding console unless the user asks for code work.',
     '',
-    `Workspace directory: ${cwd}`,
+    `Workspace directory: ${environmentRoot}`,
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
@@ -222,7 +223,7 @@ export function renderSystemPrompt(
 
 export function buildSubagentPrompt(
   tools: Tool[],
-  cwd: string,
+  environmentRoot: string,
   agent: AgentDefinition,
 ): string {
   const toolDescriptions = tools
@@ -239,7 +240,7 @@ export function buildSubagentPrompt(
   const permissionSection = formatPermissionSection(true)
   const sections: string[] = [
     'You are LightClaw running as an isolated subagent.',
-    `Working directory: ${cwd}`,
+    `Working directory: ${environmentRoot}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
     '',

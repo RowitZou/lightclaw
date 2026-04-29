@@ -211,7 +211,7 @@ export async function query(params: QueryParams): Promise<{
 
   const systemPromptTemplate = params.systemPrompt
     ? null
-    : await buildSystemPromptTemplate(params.tools, getCwd(), {
+    : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
         autoMemory: config.autoMemory,
         config,
       })

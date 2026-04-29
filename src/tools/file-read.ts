@@ -40,7 +40,7 @@ export const fileReadTool = buildTool({
   },
   async call(input, context) {
     try {
-      const targetPath = resolveInputPath(context.cwd, input.file_path)
+      const targetPath = resolveInputPath(context.runtime.workspaceRoot, input.file_path)
       const content = (await context.runtime.fs.readFile(targetPath)).toString('utf8')
       return {
         output: formatLines(content, input.offset ?? 1, input.limit),

@@ -15,7 +15,7 @@ export const globTool = buildTool({
   async call(input, context) {
     try {
       const matches = await context.runtime.fs.glob(input.pattern, {
-        cwd: input.path ?? context.cwd,
+        cwd: input.path ?? context.runtime.workspaceRoot,
         dot: true,
         onlyFiles: false,
       })
