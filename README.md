@@ -2,13 +2,17 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted personal AI assistant that lives in your terminal and, optionally, in Feishu / WeChat. It is a from-scratch TypeScript / Node.js agent harness inspired by Claude Code, but the user surface is intentionally minimal — most harness internals stay hidden.
+LightClaw is a self-hosted personal AI assistant. It runs in your terminal, talks to you on Feishu and WeChat, and remembers what you tell it across sessions. One install, your own machine, no SaaS account.
 
-The default experience is simple: start `lightclaw`, chat naturally, and let the assistant use tools, memory, skills, and channels behind the scenes. Recent work focuses on three pillars:
+### What you can do with it
 
-- **Sandbox** — `runtime.backend = "docker"` lazily prefetches a public GHCR image (`ghcr.io/rowitzou/lightclaw-sandbox`) and gracefully degrades to chat-only while the image is being pulled. The image bundles an AI-researcher baseline (jq / yq / Python data-science stack + Node 22 LTS).
-- **Permission** — three-option scoped approval UI (Allow once / Allow `<merged label>` / Deny) for both terminal and Feishu, with `ask` rules that force confirmation even under `bypassPermissions`.
-- **Memory** — long-task triplet: query-time relevant memory recall, session working memory, and pre-compact memory flush, so long multi-turn sessions don't lose hard facts across `compact`.
+- **One assistant, every channel.** Same conversation, same memory, whether you open the terminal or message it from Feishu / WeChat.
+- **Let it actually do things.** It writes and edits files, runs shell commands, fetches web pages, and calls your MCP servers — inside a sandbox so it can't touch the rest of your machine.
+- **Approve risky actions in plain language.** When the model wants to do something irreversible, you see a clear yes/no — or pick "approve everything like this" once and move on.
+- **Keep long work coherent.** It remembers project conventions, things you've corrected, ongoing tasks, and pulls the right notes back into context when they matter — even after the conversation has been auto-compacted.
+- **Bring your own model and tools.** Anthropic and OpenAI-compatible APIs, MCP servers, and your custom hooks all plug in.
+
+Architecture, design notes, and dev history live in the [project wiki repo](https://github.com/RowitZou/lightclaw_dev_log).
 
 ---
 
@@ -71,11 +75,11 @@ User-visible commands:
 
 | Command | Purpose |
 |---|---|
-| `/help` | Show current model/mode, available models/modes, skills, and commands. |
-| `/model <name>` | Switch the current session model. |
-| `/mode <mode>` | Switch permission mode within the current ceiling. |
-| `/permissions [list\|clear\|ask <rule>]` | Inspect or clear session permission rules; `ask <rule>` registers a session-scoped rule that forces confirmation even under `bypassPermissions`. |
-| `/sandbox [status\|prefetch\|reset]` | `status` shows readiness of the sandbox image (state / image / elapsed pull / lastError); `prefetch` re-triggers a pull when the tracker is in failed / not-attempted; `reset` removes the container while preserving workspace files. |
+| `/help` | Show what's available right now (model, mode, skills, commands). |
+| `/model <name>` | Switch the model the assistant is using. |
+| `/mode <mode>` | Switch how strict permission checks are. |
+| `/permissions` | View, clear, or add per-session permission rules. |
+| `/sandbox` | Inspect or reset the assistant's sandboxed work environment. |
 
 Admin-only commands:
 
@@ -125,122 +129,71 @@ Each canonical user gets:
 
 Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for the channels you want the main `lightclaw` process to start.
 
-For Feishu, `transport: "ws"` is the default and does not require a public webhook endpoint. If the Feishu app's long-connection events are not encrypted, `encryptKey` and `verificationToken` can be omitted for WS mode; when encryption is enabled, set `encryptKey` so incoming events can be decrypted. `allowUsers` and `allowChats` are checked only when the corresponding list is non-empty; if both lists are empty, every incoming message is dropped. Use `["*"]` to allow a dimension intentionally.
+Feishu defaults to a long-connection (WS) transport, so you don't need a public webhook endpoint. WeChat uses iLink's QR-login flow.
 
-Feishu channel supports interactive permission approval with a three-option UX (Allow once / Allow `<merged label>` / Deny). The middle option installs a *set* of scope-tightened rules at once — for a chained Bash command, one `Bash(<head>:*)` rule per subcommand (capped at 5); for path tools, a single `Tool(<dir>/**)` rule; for WebFetch, the hostname; for MCP, `<server>:<tool>`. The merged label degrades to `N 类 …` past 50 characters so the card stays scannable. If card buttons are unavailable, replying `1` / `2` / `3` (or `批准/批准所有/拒绝`) works as a text fallback, and replying `cancel` clears a stuck pending approval. For card buttons to work, enable the bot's interactive card capability and subscribe the `card.action.trigger` callback in the Feishu developer console.
+When the assistant wants to do something that needs confirmation, it sends an interactive card with three buttons:
 
-Other non-interactive channels still deny ask-style tool calls. For a trusted personal bot, you can also configure the channel baseline as `bypassPermissions` and rely on identity pairing, allowlists, permission ceiling, the runtime boundary (Docker isolation / ro mounts), and `ask` rules in `permissions.json` (e.g. `"ask": ["Bash(rm:*)"]`) as the safety rails.
+- **Approve once** — let it do this exact thing this time.
+- **Approve everything like this** — the card label shows what scope you're approving (e.g. "any `pip install`" rather than "all Bash"), so you can broaden safely without unlocking the whole tool.
+- **Deny** — say no, the assistant gets the message.
 
----
-
-## Runtime Boundary
-
-Phase 10 removes the old "project cwd" mental model. File tools and Bash run inside the current user's private workspace:
-
-```text
-~/.lightclaw/workspaces/<canonical_user>/
-```
-
-Phase 11 Iter 3 removes the old path-string guard layer. Safety is now split by runtime:
-
-- `local` is single-user and admin-only. A paired non-admin channel user is rejected before runtime acquisition.
-- `docker` gives every canonical user an isolated long-lived container. The workspace is mounted at `/workspace`, and additional mounts can be `rw` or `ro`.
-- Permission modes and rules still apply to tool risk (`safe` / `write` / `execute`), but they are no longer used as a fake filesystem sandbox.
+Reply `1` / `2` / `3` if the buttons aren't available. For trusted personal-bot setups, set the channel mode to `bypassPermissions` and use `permissions.json`'s `ask` list to keep the dangerous things confirmable (e.g. `"ask": ["Bash(rm:*)"]`).
 
 ---
 
-## Execution Runtime
+## Sandbox
 
-Tool execution goes through a `Runtime` abstraction (`src/runtime/`). The active backend is selected at startup via `~/.lightclaw/config.json` or `LIGHTCLAW_RUNTIME_BACKEND`.
+By default, the assistant's tools — Bash, file reads/writes, web fetches — run inside a Docker container, not on your host. So a misbehaving model can't `rm -rf` your home directory, and you can hand the bot to a friend on Feishu without giving them shell on your machine.
 
-| Backend | Status | What it does |
-|---|---|---|
-| `local` (default) | shipped (Phase 11 Iter 1-Redesign + Iter 3 gate) | Runs the environment view on the host: `Bash` / `Grep` via `/bin/bash -c`, file tools through `runtime.fs`, and Web tools through Python helper scripts. No isolation; admin-only. |
-| `docker` | shipped (Phase 11 Iter 2) | Runs environment-domain tools inside a per-user long-lived Docker container. The user workspace is bind-mounted at `/workspace`; helper scripts live at `/opt/lightclaw/sandbox-helpers`; idle containers are stopped and later restarted with their writable layer preserved. |
-| `rjob` | not yet implemented | Will submit cluster jobs via `rjob` (kubebrain), reusing gpfs as the shared workspace mount. |
+You don't need to set up the container yourself. At startup LightClaw pulls a public image (`ghcr.io/rowitzou/lightclaw-sandbox`) in the background, and tool calls degrade to chat-only until it's ready — so the first conversation never hangs. The image ships with the daily-driver toolkit (jq, sqlite, ripgrep, Python data-science stack, Node 22) so the assistant can do real work right away.
 
-Selecting a backend that is not yet implemented fails loudly at startup — the harness never silently falls back.
+Each user gets their own long-lived container. Workspace files survive container restarts; only the writable layer (e.g. `pip install`s) is reset by `/sandbox reset`.
 
-The Runtime layer is a forward-compatible foundation: adding a backend means writing one file in `src/runtime/`; the tools never change. Environment tools see one runtime view through `runtime.exec` and `runtime.fs` (`Bash`, `Grep`, `Read`, `Write`, `Edit`, `Glob`, `WebFetch`, `WebSearch`). Host-domain tools keep using trusted LightClaw state (`Memory*`, `Conversation*`, `TodoWrite`, `AgentTool`, `UseSkill`, MCP).
+**Single-user setup** — set `runtime.backend: "local"` for less overhead. Local mode is admin-only; channel users are refused.
+
+**Custom or air-gapped images** — set `runtime.docker.imageOverride` to your tag in `~/.lightclaw/config.json`, restart LightClaw.
 
 ```jsonc
 {
   "runtime": {
     "backend": "docker",
     "docker": {
-      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
-      "idleTimeoutMs": 1800000,
       "memoryLimit": "4g",
       "cpuLimit": 4,
-      "network": "bridge",
-      "tmpfs": ["/tmp"],
       "mounts": [
-        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
         { "host": "/data/datasets", "container": "/data", "mode": "ro" }
-      ],
-      "env": {
-        "http_proxy": "http://127.0.0.1:1080",
-        "https_proxy": "http://127.0.0.1:1080"
-      },
-      "autoPull": true
+      ]
     }
   }
 }
 ```
 
-Docker backend notes:
-
-- Requires Docker 20.10+ and permission to access the Docker daemon.
-- The default image is `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>` unless `runtime.docker.image`, `runtime.docker.imageOverride`, or `LIGHTCLAW_DOCKER_IMAGE` is set.
-- One canonical user maps to one container named `lightclaw-sandbox-<user>-<deploymentHash>`, shared by terminal, Feishu, and WeChat sessions.
-- Read-only mounts use Docker's `:ro` bind option. The kernel rejects writes, metadata changes, truncates, and deletes inside that mount with `EROFS`, which is the recommended mode for datasets and model checkpoints.
-- Idle stop uses `docker stop`, not `docker rm`: workspace files and the container writable layer survive. `/sandbox reset` removes the container and recreates it on the next environment tool call.
-- Docker image publishing is defined in `.github/workflows/sandbox-image.yml`; the image contains Debian 12 slim, common CLI (jq / yq / wget / unzip / vim-tiny / less / dnsutils / netcat / sqlite3), ripgrep, git, curl, Python 3 with the data-science baseline (numpy / pandas / scipy / matplotlib / requests / httpx / pyyaml / pyarrow / tqdm / markdownify), Node 22 LTS + pnpm, and the sandbox helpers.
-
-### Sandbox image: getting started
-
-When `runtime.backend = "docker"`, LightClaw prefetches the sandbox image at startup (background, non-blocking) and tools degrade to chat-only until the image is ready. No image-specific configuration is required for the common case.
-
-| Scenario | What you do | What LightClaw does |
-|---|---|---|
-| First-time docker user | Set `runtime.backend = "docker"` and start LightClaw | Background `docker pull ghcr.io/rowitzou/lightclaw-sandbox:<version>`; environment tools return a soft "image still preparing" notice until ready, then start working seamlessly |
-| Re-launch after restart | nothing | `docker image inspect` hits the local cache → tracker becomes ready immediately, no network |
-| Local dev with custom image | `docker build -t lightclaw-sandbox:dev .` then set `runtime.docker.imageOverride: "lightclaw-sandbox:dev"` | Use the local tag, no pull |
-| Internal mirror / air-gapped | Mirror `lightclaw-sandbox:<version>` to your registry, set `runtime.docker.imageOverride: "<mirror>/lightclaw-sandbox:<version>"` | Pull from your mirror |
-| One-off override (CI) | `LIGHTCLAW_DOCKER_IMAGE=...` env var | Highest precedence, doesn't persist |
-| Manage your own images | Set `runtime.docker.autoPull: false` | LightClaw only inspects locally; if absent, the agent reports "admin disabled auto-pull, please prepare the sandbox" until you `docker pull` it yourself |
-
-`/sandbox` slash commands:
-
-- `/sandbox status` — show readiness state, image, elapsed pull time, last error, and active container.
-- `/sandbox prefetch` — re-trigger image pull when state is failed / not-attempted (useful after fixing proxy or network).
-- `/sandbox reset` — stop and remove the container; the next environment tool call recreates it from the image.
-
-**Image visibility**: the upstream image at `ghcr.io/rowitzou/lightclaw-sandbox` is published as a public package. If you fork the repo and publish under your own org, set the GHCR package to public from the repo's Packages settings (GitHub doesn't expose this through the API). Changing `runtime.docker.image` or `imageOverride` requires restarting the LightClaw process — the readiness tracker is bound to the image at startup.
+For datasets / model checkpoints, mount them with `mode: "ro"` — the assistant can read but the kernel rejects writes. See [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md) for the full config reference.
 
 ---
 
-## Tools, Skills, MCP, Hooks
+## What the assistant can use
 
-Built-in toolset: filesystem tools (`Read` / `Write` / `Edit` / `Glob` / `Grep`), `Bash`, `WebFetch` / `WebSearch`, memory tools (`MemoryRead` / `MemoryWrite`), conversation tools (`ConversationList` / `ConversationRead` / `ConversationGrep`), `TodoWrite`, sub-agents (`AgentTool`), MCP tools, and `UseSkill`.
+- **Files & shell** — `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`
+- **Web** — `WebFetch` (URL → readable Markdown), `WebSearch`
+- **Task tracking** — `TodoWrite` for multi-step plans
+- **Sub-agents** — spin up parallel `general-purpose` or `explore` agents for fan-out work
+- **Skills** — small bundles of focused capability (`verify`, `remember`, …); the model picks them up automatically when relevant, no manual invocation
+- **MCP servers** — admin-configured external tools, available to the model as `mcp__<server>__<tool>`
 
-Each tool is explicitly marked as either `environment` or `host`. Environment tools (file IO / Bash / Web) route through `context.runtime`; they never import host `fs`, `child_process`, HTTP clients, or glob libraries directly. Host tools (Memory, Conversation, UseSkill) act on trusted LightClaw state.
+All of the above respect the same permission flow described above.
 
-Skills are no longer invoked through `/skill`. Their descriptions use `TRIGGER` / `SKIP` guidance, and the model calls `UseSkill` naturally when a skill matches the task. `allowed_tools` is enforced while a skill is active.
+---
 
-MCP servers and hooks remain admin configuration files under `~/.lightclaw/`; user-facing MCP and hook slash commands were removed.
+## Memory
 
-### Memory
+LightClaw remembers three things:
 
-LightClaw stores three kinds of memory:
+- **Your project.** Drop a `LIGHTCLAW.md` into your repo and the assistant reads it every session, the same way Claude Code does. Add `LIGHTCLAW.local.md` for things you don't want to commit.
+- **You.** It builds a profile of your role, preferences, and corrections you've made — across sessions and channels. When you start a new conversation, the most relevant pieces come back automatically; you don't re-explain who you are.
+- **The current task.** Inside a long session it keeps a working notebook (what you're doing, files touched, decisions made, what's next). When the conversation gets too long and auto-compacts, those hard facts survive — the thread doesn't reset.
 
-| Kind | Storage | Lifecycle |
-|---|---|---|
-| **Project memory** (`LIGHTCLAW.md` / `LIGHTCLAW.local.md`) | Discovered from cwd up to git root or filesystem root | Loaded fresh into the system prompt every session |
-| **User memory** (`~/.lightclaw/memory/<canonical_user>/*.md`) | Typed (user / feedback / project / reference) Markdown files with frontmatter, plus `MEMORY.md` index | Background extraction after each conversation; relevant entries selected at query time and injected as `## Relevant Memories` |
-| **Session working memory** (`<sessionsDir>/<sessionId>/session-memory.md`) | 7-section template (Current State / Task Specification / Files Touched / Key Findings / Decisions Made / Errors & Blockers / Next Step) | Rewritten when both token-spend and tool-call counters cross thresholds; injected as `## Session Working Memory`; flushed before `compact` so hard facts survive |
-
-`LIGHTCLAW_NO_MEMORY=1` disables all three. Per-pillar toggles: `LIGHTCLAW_MEMORY_RECALL_ENABLED`, `LIGHTCLAW_SESSION_MEMORY_ENABLED`, `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` — see Configuration Notes below.
+Disable everything with `LIGHTCLAW_NO_MEMORY=1`. Finer toggles are listed below.
 
 ---
 
@@ -255,14 +208,11 @@ Selected environment variables:
 | `LIGHTCLAW_PROVIDER` | `anthropic` or `openai` |
 | `LIGHTCLAW_MODEL` | Default model |
 | `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
-| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable subsystems (memory toggle is the master switch — turns off all three memory pillars below) |
-| `LIGHTCLAW_MEMORY_RECALL_ENABLED` / `LIGHTCLAW_MEMORY_RECALL_TOP_N` | Per-query relevant-memory recall (default on, top 5) |
-| `LIGHTCLAW_SESSION_MEMORY_ENABLED` / `LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD` / `LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD` | Session working memory toggle and update thresholds (default on, 20K tokens AND 5 tool calls) |
-| `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` / `LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS` | Pre-compact memory flush (default on, 8 s timeout) |
+| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable a subsystem entirely |
+| `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | Fine-grained memory toggles and thresholds (see [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)) |
 | `LIGHTCLAW_PERMISSION_MODE` | Default permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime backend: `local` (default), `docker`, or future `rjob` |
-| `LIGHTCLAW_DOCKER_IMAGE` | Override DockerRuntime image (highest precedence, beats `runtime.docker.imageOverride` and `runtime.docker.image`) |
-| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | Override DockerRuntime idle stop timeout |
+| `LIGHTCLAW_RUNTIME_BACKEND` | Execution runtime: `local`, `docker` (default for multi-user), or future `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` / `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | Override sandbox image / idle stop timeout |
 
 ---
 
