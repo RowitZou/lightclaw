@@ -17,8 +17,15 @@ function estimateAssistantBlockTokens(block: AssistantContentBlock): number {
   if (block.type === 'text') {
     return estimateTokens(block.text)
   }
-
-  return estimateTokens(`${block.name}\n${JSON.stringify(block.input)}`)
+  if (block.type === 'tool_use') {
+    return estimateTokens(`${block.name}\n${JSON.stringify(block.input)}`)
+  }
+  if (block.type === 'thinking') {
+    return estimateTokens(block.thinking)
+  }
+  // redacted_thinking: server-side opaque blob; estimate from data length so
+  // the compact threshold still accounts for its bytes on the wire.
+  return estimateTokens(block.data)
 }
 
 export function estimateMessageTokens(message: Message): number {

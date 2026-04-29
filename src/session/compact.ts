@@ -41,11 +41,17 @@ function serializeMessage(message: Message): string {
   }
 
   const assistantBlocks = message.message.content
-    .map(block =>
-      block.type === 'text'
-        ? block.text
-        : `[Tool Use: ${block.name}]\n${JSON.stringify(block.input, null, 2)}`,
-    )
+    .map(block => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'tool_use') {
+        return `[Tool Use: ${block.name}]\n${JSON.stringify(block.input, null, 2)}`
+      }
+      // Drop thinking / redacted_thinking from the compaction prompt — the
+      // summarizer doesn't need the chain-of-thought, and the redacted
+      // payload would only inflate the prompt with opaque bytes.
+      return ''
+    })
+    .filter(Boolean)
     .join('\n')
   return `[Assistant]\n${assistantBlocks}`
 }

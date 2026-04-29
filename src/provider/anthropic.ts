@@ -205,6 +205,34 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
                 input: '',
               })
             }
+
+            // Thinking blocks must be captured (and later round-tripped with
+            // their signature) or the next request errors as 400 "Improperly
+            // formed request" — see types.ts:AssistantThinkingBlock.
+            if (contentBlock.type === 'thinking') {
+              contentBlocks.set(index, {
+                type: 'thinking',
+                thinking: typeof contentBlock.thinking === 'string'
+                  ? contentBlock.thinking
+                  : '',
+                signature: typeof contentBlock.signature === 'string'
+                  ? contentBlock.signature
+                  : '',
+              })
+            }
+
+            // Redacted thinking carries an opaque payload we must echo back
+            // verbatim. Treat the initial value as authoritative; no deltas
+            // are streamed for redacted blocks.
+            if (
+              contentBlock.type === 'redacted_thinking' &&
+              typeof contentBlock.data === 'string'
+            ) {
+              contentBlocks.set(index, {
+                type: 'redacted_thinking',
+                data: contentBlock.data,
+              })
+            }
             break
           }
           case 'content_block_delta': {
@@ -240,6 +268,25 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
                   ? delta.partial_json
                   : ''
               contentBlock.input += partialJson
+            }
+
+            if (
+              delta.type === 'thinking_delta' &&
+              contentBlock.type === 'thinking'
+            ) {
+              const t = typeof delta.thinking === 'string' ? delta.thinking : ''
+              contentBlock.thinking += t
+            }
+
+            // Signature is delivered as a single delta near the end of a
+            // thinking block; replace rather than append (it's a complete
+            // base64 token, not a partial).
+            if (
+              delta.type === 'signature_delta' &&
+              contentBlock.type === 'thinking' &&
+              typeof delta.signature === 'string'
+            ) {
+              contentBlock.signature = delta.signature
             }
             break
           }

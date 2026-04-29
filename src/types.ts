@@ -17,9 +17,29 @@ export type AssistantToolUseBlock = {
   input: Record<string, unknown>
 }
 
+// Extended-thinking blocks emitted by Claude 4.x reasoning models. The full
+// block (including `signature`) MUST be echoed back in subsequent requests
+// when the same assistant turn also contains tool_use, otherwise the API
+// returns 400 "Improperly formed request" on the next call.
+// See https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+export type AssistantThinkingBlock = {
+  type: 'thinking'
+  thinking: string
+  signature: string
+}
+
+// Server-redacted thinking block. We never read the payload — round-trip it
+// verbatim to satisfy the same multi-turn signature requirement.
+export type AssistantRedactedThinkingBlock = {
+  type: 'redacted_thinking'
+  data: string
+}
+
 export type AssistantContentBlock =
   | AssistantTextBlock
   | AssistantToolUseBlock
+  | AssistantThinkingBlock
+  | AssistantRedactedThinkingBlock
 
 export type UserToolResultBlock = {
   type: 'tool_result'
