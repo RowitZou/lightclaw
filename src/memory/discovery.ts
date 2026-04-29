@@ -1,9 +1,6 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { workspaceFor } from '../identity/paths.js'
-import { getCurrentUserId } from '../state.js'
-
 function readSafeTextFile(filePath: string): string | null {
   if (!existsSync(filePath)) {
     return null
@@ -54,8 +51,12 @@ export function findGitRoot(startDir: string): string | null {
 export function findProjectMemoryFiles(cwd: string): string[] {
   const resolvedCwd = path.resolve(cwd)
   const gitRoot = findGitRoot(resolvedCwd)
-  const workspaceRoot = getWorkspaceStopDir(resolvedCwd)
-  const stopDir = workspaceRoot ?? gitRoot ?? path.parse(resolvedCwd).root
+  // Stop at git root if present, else filesystem root. We deliberately do not
+  // clamp the search to the user workspace: LIGHTCLAW.md represents project /
+  // host-level shared rules and should be readable wherever the host owner
+  // chooses to put it. Per-user preferences belong in auto-memory (typed
+  // `user` / `feedback`), which is already canonical-user-scoped.
+  const stopDir = gitRoot ?? path.parse(resolvedCwd).root
   const directories: string[] = []
 
   let currentDir = resolvedCwd
@@ -95,23 +96,4 @@ export async function loadProjectMemory(cwd: string): Promise<string> {
   }
 
   return sections.join('\n\n---\n\n')
-}
-
-function getWorkspaceStopDir(cwd: string): string | null {
-  let userId: string | undefined
-  try {
-    userId = getCurrentUserId()
-  } catch {
-    userId = undefined
-  }
-  if (!userId) {
-    return null
-  }
-
-  const workspace = path.resolve(workspaceFor(userId))
-  const relative = path.relative(workspace, cwd)
-  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
-    return workspace
-  }
-  return null
 }
