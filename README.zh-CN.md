@@ -2,13 +2,17 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个自托管个人 AI 助手，可以住在终端里，也可以接入飞书 / 微信。它是用 TypeScript / Node.js 从头重写的 Agent Harness，架构参考 Claude Code，但用户面刻意做减法——大部分 harness 调试细节都隐藏。
+LightClaw 是一个自托管的个人 AI 助手。它住在你的终端里，能在飞书 / 微信上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
 
-默认体验很简单：启动 `lightclaw`，自然语言聊天，让助手在背后使用 tool、memory、skill 和 channel。近期工作围绕三个支柱：
+### 它能为你做什么
 
-- **沙箱** —— `runtime.backend = "docker"` 启动时异步预拉取公开 GHCR 镜像（`ghcr.io/rowitzou/lightclaw-sandbox`），拉取期间 environment 工具优雅降级到 chat-only。镜像内置 AI 研究员 baseline（jq / yq / Python 数科栈 + Node 22 LTS）。
-- **权限** —— 终端与飞书统一的三选项范围化批准 UX（"批准本次 / 批准 `<merged label>` / 拒绝"），`ask` 规则可以在 `bypassPermissions` 模式下仍强制确认。
-- **Memory** —— 长任务三件套：query-time 相关记忆召回、session 工作记忆、compact 前 memory flush，让多轮长会话跨 `compact` 不丢硬事实。
+- **同一个助手，到处都能用。** 终端里和飞书 / 微信里是同一段对话、同一份记忆，不用切换工具。
+- **让它真正动手做事。** 它会读写文件、跑 shell、抓网页、调你配的 MCP 工具——全在沙箱里，碰不到主机的其他部分。
+- **危险操作用人话和你确认。** 模型想做不可逆的事时给你一个明确的"是 / 否"——也可以一次"批准这一类"，之后不用再问。
+- **长任务不会越聊越糊涂。** 它记得你的项目惯例、纠正过的事、正在跑的任务；该用到的笔记会自动塞回上下文里——哪怕对话已经被自动压缩过几次。
+- **模型与工具自带。** Anthropic 与 OpenAI 兼容的 API、MCP server、自定义 hook 都可以直接接。
+
+架构、设计动机、开发历史都在另一个公开仓库 [项目 wiki](https://github.com/RowitZou/lightclaw_dev_log)。
 
 ---
 
@@ -70,11 +74,11 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 显示当前 model/mode、可用 model/mode、skill 目录和命令。 |
+| `/help` | 看当前能用什么（模型、mode、skill、命令）。 |
 | `/model <name>` | 切换当前 session 的模型。 |
-| `/mode <mode>` | 在当前 ceiling 内切换 permission mode。 |
-| `/permissions [list\|clear\|ask <rule>]` | 查看 / 清空 session 权限规则；`ask <rule>` 注册一条 session 级规则，让该规则在 `bypassPermissions` 下仍强制确认。 |
-| `/sandbox [status\|prefetch\|reset]` | `status` 看 sandbox 镜像就绪态（state / image / 已等多久 / lastError）；`prefetch` 在 tracker 处于 failed / not-attempted 时强制重新拉取（修复代理 / 网络后用）；`reset` 删容器但保留 workspace 文件。 |
+| `/mode <mode>` | 切换权限严格度。 |
+| `/permissions` | 查看、清空、追加 session 级权限规则。 |
+| `/sandbox` | 查看或重置助手的沙箱工作环境。 |
 
 Admin 专属：
 
@@ -126,120 +130,71 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
 
-Feishu channel 支持交互式权限审批，统一三选项 UX（"批准本次 / 批准 `<merged label>` / 拒绝"）。中间一档**一次性安装一组按入参收紧的规则**——链式 Bash 命令按子命令拆出多条 `Bash(<head>:*)`（最多 5 条），路径类工具产 `Tool(<dir>/**)`，WebFetch 取 hostname，MCP 取 `<server>:<tool>`。merged label 超过 50 字符自动降级成 "N 类 …"，保证卡片可扫读。卡片按钮不可用时，回复 `1` / `2` / `3`（或"批准/批准所有/拒绝"）作为文本 fallback，回复"取消"可以清掉卡住的待审批请求。按钮生效需要在飞书开发者后台启用机器人互动卡片能力，并在回调订阅里添加 `card.action.trigger`。
+飞书默认走长连接（WS）transport，不需要公网 webhook。微信走 iLink 扫码登录。
 
-其他非交互 channel 仍会在 ask 场景下拒绝工具调用；作为可信个人 bot 使用时，也可以把 channel baseline 配成 `bypassPermissions`，再用 identity pairing、allowlist、permission ceiling、Runtime 边界（Docker 隔离 / ro mount）和 `permissions.json` 里的 `ask` 规则（如 `"ask": ["Bash(rm:*)"]`）作为安全护栏。
+助手想做需要确认的事时，会发一张三按钮卡片：
 
----
+- **批准本次** —— 仅放行这一次。
+- **批准这一类** —— 卡片标签会告诉你批准的范围（比如"任何 `pip install`"而不是"全部 Bash"），可以放心地放宽，但不会一次解锁整个工具。
+- **拒绝** —— 直接拒绝，助手收到。
 
-## Runtime 边界
-
-Phase 10 移除了旧的"项目 cwd"心智模型。文件工具和 Bash 都锁在当前用户的私有 workspace：
-
-```text
-~/.lightclaw/workspaces/<canonical_user>/
-```
-
-Phase 11 Iter 3 删除旧的路径字符串守卫层。安全边界按 runtime 拆分：
-
-- `local` 是单用户、admin-only。已 pairing 的非 admin channel user 会在 runtime acquire 前被拒绝。
-- `docker` 给每个 canonical user 一个隔离的长跑容器。workspace 挂到 `/workspace`，额外挂载可选 `rw` 或 `ro`。
-- Permission mode 和规则仍然控制 tool 风险等级（`safe` / `write` / `execute`），但不再拿来模拟文件系统沙箱。
+按钮不可用时，回复 `1` / `2` / `3` 也行。把 channel 设成 `bypassPermissions` 跑顺也没问题——再用 `permissions.json` 的 `ask` 列表把危险操作锁死即可（比如 `"ask": ["Bash(rm:*)"]`）。
 
 ---
 
-## 执行运行时（Runtime）
+## 沙箱
 
-工具执行经过 `Runtime` 抽象层（`src/runtime/`）。启动时根据 `~/.lightclaw/config.json` 或 `LIGHTCLAW_RUNTIME_BACKEND` 选择 backend。
+默认情况下，助手的工具——Bash、读写文件、抓网页——都跑在 Docker 容器里，不在你的主机上。模型乱来时也 `rm -rf` 不到你的 home，也可以放心把 bot 接给飞书上的朋友用，不等于给他们 shell。
 
-| Backend | 状态 | 行为 |
-|---|---|---|
-| `local`（默认）| 已交付（Phase 11 Iter 1-Redesign + Iter 3 闸门）| environment 视图退化在 host 上执行：`Bash` / `Grep` 走 `/bin/bash -c`，文件工具走 `runtime.fs`，Web 工具走 Python helper。没有真实隔离，仅 admin 可用。 |
-| `docker` | 已交付（Phase 11 Iter 2）| environment-domain 工具在 per-user 长跑 Docker 容器内执行。用户 workspace bind mount 到 `/workspace`；helper 脚本在 `/opt/lightclaw/sandbox-helpers`；idle 容器会 stop，之后再 start，保留 writable layer。 |
-| `rjob` | 未实现 | 后续会通过 `rjob`（kubebrain）提交集群任务，复用 gpfs 作为共享 workspace 挂载。 |
+容器你自己**不用管**：LightClaw 启动时会在后台拉公开镜像（`ghcr.io/rowitzou/lightclaw-sandbox`），还没拉完时工具调用会优雅降级到 chat-only——所以第一次对话不会卡死。镜像里自带日常工具（jq、sqlite、ripgrep、Python 数科栈、Node 22），开箱就能干活。
 
-选了未实现的 backend 启动会显式报错——harness 永远不静默 fallback。
+每个用户有自己的长跑容器。Workspace 文件跨容器重启保留；只有 writable layer（比如 `pip install` 的包）会被 `/sandbox reset` 清掉。
 
-Runtime 抽象是面向未来的地基：加新 backend 只需在 `src/runtime/` 写一个文件，工具代码不动。Environment 工具通过 `runtime.exec` 和 `runtime.fs` 看到同一套运行时视图（`Bash`、`Grep`、`Read`、`Write`、`Edit`、`Glob`、`WebFetch`、`WebSearch`）。Host-domain 工具继续使用 LightClaw 受信状态（`Memory*`、`Conversation*`、`TodoWrite`、`AgentTool`、`UseSkill`、MCP）。
+**单用户场景** —— 设 `runtime.backend: "local"` 减少开销。Local 模式只 admin 可用，channel 用户会被拒。
+
+**自定义镜像 / 离网内网部署** —— 在 `~/.lightclaw/config.json` 里设 `runtime.docker.imageOverride` 指向你的 tag，重启 LightClaw 即可。
 
 ```jsonc
 {
   "runtime": {
     "backend": "docker",
     "docker": {
-      "image": "ghcr.io/rowitzou/lightclaw-sandbox:0.1.0",
-      "idleTimeoutMs": 1800000,
       "memoryLimit": "4g",
       "cpuLimit": 4,
-      "network": "bridge",
-      "tmpfs": ["/tmp"],
       "mounts": [
-        { "host": "${HOME}/.cache/pip", "container": "/root/.cache/pip", "mode": "rw" },
         { "host": "/data/datasets", "container": "/data", "mode": "ro" }
-      ],
-      "env": {
-        "http_proxy": "http://127.0.0.1:1080",
-        "https_proxy": "http://127.0.0.1:1080"
-      },
-      "autoPull": true
+      ]
     }
   }
 }
 ```
 
-Docker backend 说明：
-
-- 需要 Docker 20.10+，且当前用户必须有访问 Docker daemon 的权限。
-- 默认镜像是 `ghcr.io/rowitzou/lightclaw-sandbox:<package.json version>`；也可用 `runtime.docker.image`、`runtime.docker.imageOverride` 或 `LIGHTCLAW_DOCKER_IMAGE` 覆盖。
-- 一个 canonical user 对应一个容器，命名为 `lightclaw-sandbox-<user>-<deploymentHash>`，terminal / 飞书 / 微信共享同一 user 容器。
-- 只读挂载使用 Docker 的 `:ro` bind 选项。内核会用 `EROFS` 拒绝该挂载内的写入、元数据修改、truncate 和删除，推荐给数据集 / 模型 checkpoint 使用。
-- idle 回收走 `docker stop`，不是 `docker rm`：workspace 文件和容器 writable layer 会保留。`/sandbox reset` 才会删除容器，并在下次 environment tool call 时重建。
-- Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、常用 CLI（jq / yq / wget / unzip / vim-tiny / less / dnsutils / netcat / sqlite3）、ripgrep、git、curl、Python 3 + 数据科学 baseline（numpy / pandas / scipy / matplotlib / requests / httpx / pyyaml / pyarrow / tqdm / markdownify）、Node 22 LTS + pnpm、以及 sandbox helpers。
-
-### Sandbox 镜像：开箱即用
-
-当 `runtime.backend = "docker"` 时，LightClaw 启动时会**异步预拉取**镜像（不阻塞主进程），在镜像 ready 之前 environment 类工具会降级到 chat-only。常规用户**不需要**任何镜像相关配置。
-
-| 场景 | 你做的事 | LightClaw 做的事 |
-|---|---|---|
-| 首次使用 docker | 设 `runtime.backend = "docker"` 后启动 | 后台 `docker pull ghcr.io/rowitzou/lightclaw-sandbox:<version>`；用户消息触发 environment 工具时返回"镜像准备中，可以聊天"的柔和提示，ready 后无缝接管 |
-| 重启 LightClaw | 无 | `docker image inspect` 命中本地缓存 → tracker 立即 ready，零网络请求 |
-| 本地 build 调试 | `docker build -t lightclaw-sandbox:dev .` 后设 `runtime.docker.imageOverride: "lightclaw-sandbox:dev"` | 用本地 tag，不发 pull |
-| 内网 mirror / 离网 | 把 `lightclaw-sandbox:<version>` mirror 到内网 registry，设 `runtime.docker.imageOverride: "<mirror>/lightclaw-sandbox:<version>"` | 从 mirror 拉 |
-| CI 临时覆盖 | `LIGHTCLAW_DOCKER_IMAGE=...` 环境变量 | 优先级最高，不写入 config |
-| 自管镜像 | 设 `runtime.docker.autoPull: false` | LightClaw 只 inspect 不拉；本地无镜像时 agent 提示"管理员已禁用自动拉取" |
-
-`/sandbox` 子命令：
-
-- `/sandbox status` —— 查看 readiness 状态、镜像名、已拉时长、上次错误、当前容器名
-- `/sandbox prefetch` —— state 为 failed / not-attempted 时强制重新拉取（修复代理 / 网络后用）
-- `/sandbox reset` —— 删容器；下次 environment tool call 重建
-
-**镜像 visibility**：上游 `ghcr.io/rowitzou/lightclaw-sandbox` 已发布为 public package。如果你 fork 仓库后用自己的 org 发布，需在仓库 Packages 设置里把 GHCR package visibility 改为 public（GitHub 没暴露 API）。改 `runtime.docker.image` 或 `imageOverride` 后**需要重启 LightClaw 进程**才生效——镜像就绪态在启动时绑定。
+数据集 / 模型 checkpoint 推荐用 `mode: "ro"` 挂载——助手能读，但内核拒绝任何写入。完整配置见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
 
 ---
 
-## Tool、Skill、MCP、Hooks
+## 助手能用的能力
 
-内置 toolset：文件工具（`Read` / `Write` / `Edit` / `Glob` / `Grep`）、`Bash`、`WebFetch` / `WebSearch`、Memory 工具（`MemoryRead` / `MemoryWrite`）、Conversation 工具（`ConversationList` / `ConversationRead` / `ConversationGrep`）、`TodoWrite`、子 Agent（`AgentTool`）、MCP tool 和 `UseSkill`。
+- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`
+- **Web** —— `WebFetch`（URL → 可读 Markdown）、`WebSearch`
+- **任务跟踪** —— `TodoWrite`，做多步规划
+- **子 Agent** —— 起并行的 `general-purpose` / `explore` 子助手做扇出工作
+- **Skill** —— 内置若干小能力（`verify`、`remember`…），任务匹配时模型自动用，不需要手动调
+- **MCP server** —— admin 配置的外部工具，模型以 `mcp__<server>__<tool>` 调用
 
-每个 tool 显式标记为 `environment` 或 `host`。Environment 工具（文件 IO / Bash / Web）经 `context.runtime` 路由，绝不直接 import host `fs`、`child_process`、HTTP client 或 glob 库。Host 工具（Memory、Conversation、UseSkill）作用于受信的 LightClaw 内部状态。
+以上所有调用都会走前面讲的同一套权限流。
 
-Skill 不再通过 `/skill` 手动调用。Skill description 使用 `TRIGGER` / `SKIP` 指引，模型会在任务匹配时自然调用 `UseSkill`。Skill 的 `allowed_tools` 在激活后强制限制后续 tool 调用。
+---
 
-MCP server 和 hooks 仍是 admin 的配置文件能力，放在 `~/.lightclaw/` 下；用户面的 `/mcp`、`/hooks` 等调试 slash 已删除。
+## 记忆
 
-### Memory
+LightClaw 帮你记三件事：
 
-LightClaw 同时维护三类记忆：
+- **你的项目。** 把 `LIGHTCLAW.md` 放到仓库根，助手每次 session 都会读。`LIGHTCLAW.local.md` 用来放你不想 commit 的内容。
+- **你这个人。** 它会逐渐攒起你的角色、偏好、纠正过的事——跨 session、跨渠道。下次开新对话时最相关的几条会自动回到上下文里，你不用反复自我介绍。
+- **当前任务。** 长 session 内部维护一份"工作笔记"（在做什么、改了哪些文件、做过哪些决定、下一步是什么）。对话变长被自动压缩时，这些硬事实会先落盘——thread 不会被一压就断。
 
-| 类别 | 存储 | 生命周期 |
-|---|---|---|
-| **项目记忆**（`LIGHTCLAW.md` / `LIGHTCLAW.local.md`） | 从 cwd 向上爬到 git root 或文件系统根 | 每次 session 全量注入 system prompt |
-| **用户记忆**（`~/.lightclaw/memory/<canonical_user>/*.md`） | typed（user / feedback / project / reference）Markdown + frontmatter，加 `MEMORY.md` 索引 | 每轮对话后台 extract；query 时按相关性选 top-N 注入 `## Relevant Memories` |
-| **Session 工作记忆**（`<sessionsDir>/<sessionId>/session-memory.md`） | 7 段固定模板（Current State / Task Specification / Files Touched / Key Findings / Decisions Made / Errors & Blockers / Next Step） | token AND tool_call 双阈值触发 LLM 重写；每轮注入 `## Session Working Memory`；`compact` 之前 flush，硬事实跨压缩边界保留 |
-
-`LIGHTCLAW_NO_MEMORY=1` 关掉所有三层。每层独立开关：`LIGHTCLAW_MEMORY_RECALL_ENABLED`、`LIGHTCLAW_SESSION_MEMORY_ENABLED`、`LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` —— 详见下面的配置提示段。
+`LIGHTCLAW_NO_MEMORY=1` 全关。更细粒度开关见下方。
 
 ---
 
@@ -254,14 +209,11 @@ LightClaw 同时维护三类记忆：
 | `LIGHTCLAW_PROVIDER` | `anthropic` 或 `openai` |
 | `LIGHTCLAW_MODEL` | 默认模型 |
 | `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
-| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 关闭子系统（memory 总闸 — 同时关掉下面三层） |
-| `LIGHTCLAW_MEMORY_RECALL_ENABLED` / `LIGHTCLAW_MEMORY_RECALL_TOP_N` | per-query 相关记忆召回（默认开，top 5） |
-| `LIGHTCLAW_SESSION_MEMORY_ENABLED` / `LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD` / `LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD` | session 工作记忆开关与更新双阈值（默认开，20K token AND 5 tool_call） |
-| `LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED` / `LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS` | compact 前 memory flush（默认开，超时 8 秒） |
+| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 整个子系统关掉 |
+| `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | 记忆相关的细粒度开关与阈值，详见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md) |
 | `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | 执行 runtime backend：`local`（默认）、`docker` 或未来的 `rjob` |
-| `LIGHTCLAW_DOCKER_IMAGE` | 覆盖 DockerRuntime 镜像（优先级最高，盖过 `runtime.docker.imageOverride` 和 `runtime.docker.image`） |
-| `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖 DockerRuntime idle stop 时间 |
+| `LIGHTCLAW_RUNTIME_BACKEND` | 执行环境：`local`、`docker`（多用户场景默认）、未来的 `rjob` |
+| `LIGHTCLAW_DOCKER_IMAGE` / `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖沙箱镜像 / idle stop 时间 |
 
 ---
 
