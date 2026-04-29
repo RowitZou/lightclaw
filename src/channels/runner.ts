@@ -239,7 +239,8 @@ export class ChannelRunner {
               await delay(backoff)
               continue
             }
-            // Either non-transient or attempts exhausted — surface to user.
+            // Always log to stderr + record an error marker in the
+            // transcript so subsequent turns have an honest history.
             process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
             const failureText = formatQueryFailure(detail)
             const assistantMessage = createAssistantMessage({
@@ -251,7 +252,16 @@ export class ChannelRunner {
             messages.push(assistantMessage)
             await appendMessage(sessionId, assistantMessage)
             await persistMeta(Date.now(), messages.length)
-            await this.sendNotice(message, 'error', failureText)
+            // Only the "transient retries exhausted" case surfaces a red
+            // notice — that's a genuine "your message was lost, please
+            // resend" signal. Every other failure (non-transient API errors,
+            // tool/runtime hiccups, parse errors) stays silent: the user
+            // sees no reply, naturally resends, and stderr has the audit
+            // trail. The LocalRuntimeAdminOnlyError business-deny case is
+            // surfaced separately in the outer catch below.
+            if (isTransient) {
+              await this.sendNotice(message, 'error', failureText)
+            }
             return
           }
         }
