@@ -37,7 +37,7 @@ export const fileEditTool = buildTool({
   },
   async call(input, context) {
     try {
-      const targetPath = resolveInputPath(context.cwd, input.file_path)
+      const targetPath = resolveInputPath(context.runtime.workspaceRoot, input.file_path)
       const original = (await context.runtime.fs.readFile(targetPath)).toString('utf8')
       const occurrences = countOccurrences(original, input.old_string)
 

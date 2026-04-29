@@ -23,7 +23,7 @@ export const fileWriteTool = buildTool({
   },
   async call(input, context) {
     try {
-      const targetPath = resolveInputPath(context.cwd, input.file_path)
+      const targetPath = resolveInputPath(context.runtime.workspaceRoot, input.file_path)
       await context.runtime.fs.writeFile(targetPath, input.content)
       return {
         output: `Wrote ${Buffer.byteLength(input.content, 'utf8')} bytes to ${targetPath}`,

@@ -64,7 +64,7 @@ export const grepTool = buildTool({
     include: z.string().optional(),
   }),
   async call(input, context) {
-    const searchPath = resolveInputPath(context.cwd, input.path)
+    const searchPath = resolveInputPath(context.runtime.workspaceRoot, input.path)
 
     try {
       const rgArgs = ['-n', '--no-heading', '--color', 'never']
@@ -75,7 +75,7 @@ export const grepTool = buildTool({
       const result = await runSearch(
         'rg',
         rgArgs,
-        context.cwd,
+        context.runtime.workspaceRoot,
         context.runtime,
         context.abortSignal,
       )
@@ -100,7 +100,7 @@ export const grepTool = buildTool({
           const fallback = await runSearch(
             'grep',
             grepArgs,
-            context.cwd,
+            context.runtime.workspaceRoot,
             context.runtime,
             context.abortSignal,
           )

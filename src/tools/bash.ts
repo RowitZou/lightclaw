@@ -43,7 +43,7 @@ export const bashTool = buildTool({
 
     const result = await context.runtime.exec({
       command: input.command,
-      cwd: context.cwd,
+      cwd: context.runtime.workspaceRoot,
       timeoutMs,
       maxBufferBytes: 1024 * 1024,
       abortSignal: context.abortSignal,
