@@ -198,11 +198,19 @@ function parseActionValue(value: unknown): Record<string, unknown> | null {
 }
 
 function parsePermissionAction(value: unknown): FeishuPermissionActionKind | null {
-  if (value === 'allow' || value === 'deny' || value === 'allow_always') {
+  if (
+    value === 'allow' ||
+    value === 'deny' ||
+    value === 'allow_rules' ||
+    value === 'allow_always'
+  ) {
     return value
   }
+  // Iter1 emitted `allow_rule:<idx>` for individual N-button picks; collapse
+  // any of those into the iter1.x unified `allow_rules` so in-flight cards
+  // sent from older builds still resolve to a meaningful approval.
   if (typeof value === 'string' && /^allow_rule:\d+$/.test(value)) {
-    return value as FeishuPermissionActionKind
+    return 'allow_rules'
   }
   return null
 }

@@ -105,8 +105,10 @@ function computeSuggestedRules(
   if (suggestions && suggestions.length > 0) {
     return suggestions
   }
-  // Fallback: a single tool-wide allow option, equivalent to the legacy
-  // "always allow this tool" choice every approver used to render.
+  // Fallback: a single tool-wide allow rule. Approvers render this set as a
+  // single "always allow X" button — when the suggester produces nothing
+  // precise (relative path / opaque MCP input / etc.) the broad fallback is
+  // the only meaningful "don't ask again" scope we can offer.
   return [{ toolName: tool.name }]
 }
 

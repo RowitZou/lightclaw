@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto'
 
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
-import { formatRule } from '../../permission/rules.js'
+import {
+  formatRuleListVerbose,
+  formatSuggestionLabel,
+} from '../../permission/suggestions.js'
 import type {
   PermissionApprover,
   PermissionAskInput,
@@ -17,24 +20,24 @@ import type { FeishuSender } from './sender.js'
 
 const PERMISSION_TIMEOUT_MS = 60 * 1000
 const MAX_PREVIEW_CHARS = 900
-// Cap rule-button count so the flow layout stays one row on common screens.
-// suggestedRules is precise→broad, so dropping the tail keeps the broadest
-// (tool-only) entry at index `MAX_RULE_BUTTONS - 1` only when room allows;
-// the legacy `allow_always` shortcut still maps to "broadest" via the last
-// available rule button.
-const MAX_RULE_BUTTONS = 4
 
-// Aligned with terminal askUserApproval (src/permission/prompt.ts):
-// - allow            = allow once
-// - allow_rule:<idx> = install a session-scoped allow rule for
-//                      suggestedRules[idx], then resolve allow with that rule
-// - allow_always     = legacy alias kept for in-flight cards from older
-//                      builds; treated as "the broadest available rule"
-//                      (= last allow_rule index)
-// - deny             = deny once
+// Aligned with terminal askUserApproval (src/permission/prompt.ts) and
+// faithful to Claude Code's bashToolUseOptions.tsx — three options total,
+// regardless of how many rules the suggester produced. The middle option
+// installs *all* of pending.suggestedRules in one go (mirrors Claude Code's
+// generateShellSuggestionsLabel + collected rules pattern).
+//
+//   allow         = allow once (no session rule)
+//   allow_rules   = install every rule in pending.suggestedRules; if the
+//                   suggester returned nothing precise, the fallback in
+//                   permission/index.ts is a single tool-wide rule, so this
+//                   button still has a meaningful "always allow" target
+//   deny          = deny once
+//   allow_always  = legacy alias from iter1 in-flight cards; treated as
+//                   allow_rules so older clients keep working
 export type FeishuPermissionActionKind =
   | 'allow'
-  | `allow_rule:${number}`
+  | 'allow_rules'
   | 'allow_always'
   | 'deny'
 
@@ -58,7 +61,7 @@ type PendingPermission = {
   userId: string
   message: NormalizedChannelMessage
   ask: PermissionAskInput
-  ruleButtons: PermissionRuleValue[]
+  suggestedRules: PermissionRuleValue[]
   resolve(decision: PermissionDecision): void
   timeout: NodeJS.Timeout
   abortListener?: () => void
@@ -66,7 +69,7 @@ type PendingPermission = {
 
 type ParsedTextAction =
   | { kind: 'allow' }
-  | { kind: 'allow_always' }
+  | { kind: 'allow_rules' }
   | { kind: 'deny' }
   | { kind: 'numeric'; index: number }
 
@@ -134,18 +137,18 @@ export class FeishuPermissionCoordinator {
         [
           '请先处理当前的权限请求。',
           `工具: ${pending.ask.toolName}`,
-          '可以点击卡片按钮，或回复 1 / 2 / ... 选择对应选项；',
+          '可以点击卡片按钮，或回复 1 / 2 / 3 选择对应选项；',
           '也可以回复：批准 / 批准所有 / 拒绝。',
         ].join('\n'),
       )
       return true
     }
 
-    const action = resolveTextAction(parsed, pending)
+    const action = resolveTextAction(parsed)
     if (!action) {
       await this.safeSend(
         pending.message,
-        `数字 ${parsed.kind === 'numeric' ? parsed.index : ''} 超出可选范围，请重新选择。`,
+        `数字 ${parsed.kind === 'numeric' ? parsed.index : ''} 超出可选范围（1-3），请重新选择。`,
       )
       return true
     }
@@ -174,15 +177,13 @@ export class FeishuPermissionCoordinator {
         void this.safeSend(pending.message, '权限请求已超时，已拒绝本次工具调用。')
       }, PERMISSION_TIMEOUT_MS)
 
-      const ruleButtons = (input.ask.suggestedRules ?? []).slice(0, MAX_RULE_BUTTONS)
-
       const pending: PendingPermission = {
         id,
         sessionId: input.sessionId,
         userId: input.userId,
         message: input.message,
         ask: input.ask,
-        ruleButtons,
+        suggestedRules: input.ask.suggestedRules ?? [],
         resolve,
         timeout,
       }
@@ -248,55 +249,34 @@ export class FeishuPermissionCoordinator {
       return buildToast('warning', `已拒绝 ${pending.ask.toolName}。`)
     }
 
-    // Translate `allow_always` (legacy) to the broadest current rule —
-    // typically the tool-only suggestion at the tail of suggestedRules.
-    let ruleIndex: number | null = null
-    if (action === 'allow_always') {
-      ruleIndex = pending.ruleButtons.length > 0
-        ? pending.ruleButtons.length - 1
-        : null
-    } else {
-      const parsedIndex = Number(action.slice('allow_rule:'.length))
-      if (Number.isInteger(parsedIndex) && parsedIndex >= 0) {
-        ruleIndex = parsedIndex
-      }
-    }
-
-    if (ruleIndex === null || ruleIndex < 0 || ruleIndex >= pending.ruleButtons.length) {
-      // Fall back to a tool-wide allow so older clients sending a stale
-      // index still get a meaningful approval rather than a hard failure.
-      const fallback: PermissionRule = {
+    // allow_rules / allow_always: install the entire suggestedRules set as
+    // session-scoped allow rules. Fall back to a tool-wide rule when the
+    // suggester contributed nothing precise, so the button always has
+    // *something* to install (matches the iter1 fallback behavior).
+    const ruleValues = pending.suggestedRules.length > 0
+      ? pending.suggestedRules
+      : [{ toolName: pending.ask.toolName }]
+    const installed: PermissionRule[] = []
+    for (const value of ruleValues) {
+      const rule: PermissionRule = {
         source: 'session',
         behavior: 'allow',
-        value: { toolName: pending.ask.toolName },
+        value,
       }
-      addSessionRule(fallback)
-      this.resolvePending(pending, { behavior: 'allow', matchedRule: fallback })
-      void this.safeSend(
-        pending.message,
-        `已允许 ${pending.ask.toolName}，本会话同类调用自动放行。需要撤回时请发送 /permissions clear。`,
-      )
-      return buildToast(
-        'success',
-        `已允许 ${pending.ask.toolName}（同类放行 · /permissions clear 撤回）`,
-      )
+      addSessionRule(rule)
+      installed.push(rule)
     }
-
-    const ruleValue = pending.ruleButtons[ruleIndex]!
-    const rule: PermissionRule = {
-      source: 'session',
+    this.resolvePending(pending, {
       behavior: 'allow',
-      value: ruleValue,
-    }
-    addSessionRule(rule)
-    this.resolvePending(pending, { behavior: 'allow', matchedRule: rule })
+      matchedRule: installed[0],
+    })
     void this.safeSend(
       pending.message,
-      `已允许 ${formatRule(ruleValue)}，本会话同类调用自动放行。需要撤回时请发送 /permissions clear。`,
+      `已允许 ${formatRuleListVerbose(ruleValues)}，本会话同类调用自动放行。需要撤回时请发送 /permissions clear。`,
     )
     return buildToast(
       'success',
-      `已允许 ${formatRule(ruleValue)}（/permissions clear 撤回）`,
+      `已允许（${installed.length} 条规则 · /permissions clear 撤回）`,
     )
   }
 
@@ -367,13 +347,9 @@ export class FeishuPermissionCoordinator {
 }
 
 function buildApprovalCard(pending: PendingPermission): Record<string, unknown> {
-  const ruleButtons = pending.ruleButtons.map((rule, idx) =>
-    buildButton(
-      `批准 ${formatRule(rule)}`,
-      'default',
-      pending.id,
-      `allow_rule:${idx}` as FeishuPermissionActionKind,
-    ),
+  const middleLabel = formatSuggestionLabel(
+    pending.suggestedRules,
+    pending.ask.toolName,
   )
 
   return {
@@ -407,12 +383,10 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
       },
       {
         tag: 'action',
-        // 'flow' wraps to the next row when rule labels run long; trisection
-        // would truncate, so flow is safer for variable-width suggestions.
         layout: 'flow',
         actions: [
           buildButton('批准本次', 'primary', pending.id, 'allow'),
-          ...ruleButtons,
+          buildButton(middleLabel, 'default', pending.id, 'allow_rules'),
           buildButton('拒绝', 'danger', pending.id, 'deny'),
         ],
       },
@@ -454,7 +428,11 @@ function buildButton(
 }
 
 function buildTextFallback(pending: PendingPermission): string {
-  const lines: string[] = [
+  const middleLabel = formatSuggestionLabel(
+    pending.suggestedRules,
+    pending.ask.toolName,
+  )
+  return [
     'LightClaw 请求执行工具，需要你确认：',
     `工具: ${pending.ask.toolName}`,
     `风险: ${pending.ask.riskLevel}`,
@@ -463,14 +441,11 @@ function buildTextFallback(pending: PendingPermission): string {
     '',
     '可回复：',
     '  1 = 批准本次',
-  ]
-  pending.ruleButtons.forEach((rule, index) => {
-    lines.push(`  ${index + 2} = 批准 ${formatRule(rule)}（本会话内自动放行）`)
-  })
-  lines.push(`  ${pending.ruleButtons.length + 2} = 拒绝`)
-  lines.push('')
-  lines.push('（旧别名 批准 / 批准所有 / 拒绝 仍然生效）')
-  return lines.join('\n')
+    `  2 = ${middleLabel}（本会话内自动放行）`,
+    '  3 = 拒绝',
+    '',
+    '（旧别名 批准 / 批准所有 / 拒绝 仍然生效）',
+  ].join('\n')
 }
 
 function ownerKey(message: NormalizedChannelMessage): string {
@@ -479,14 +454,9 @@ function ownerKey(message: NormalizedChannelMessage): string {
 
 function parseTextAction(text: string): ParsedTextAction | null {
   const normalized = text.trim().toLowerCase()
-  // Numeric reply maps onto the dynamic option layout: 1 = allow_once,
-  // last = deny, anything in between = allow_rule. Resolve in caller since
-  // the menu length is owned by PendingPermission.
   if (/^\d+$/.test(normalized)) {
     return { kind: 'numeric', index: Number(normalized) }
   }
-  // Match "always" intent BEFORE the plain allow synonyms — otherwise
-  // "批准所有" would short-circuit on "批准" and miss the "always" hint.
   if (
     [
       '批准所有',
@@ -502,14 +472,11 @@ function parseTextAction(text: string): ParsedTextAction | null {
     normalized.startsWith('批准所有') ||
     normalized.startsWith('always')
   ) {
-    return { kind: 'allow_always' }
+    return { kind: 'allow_rules' }
   }
   if (['是', '批准', '允许', '同意', 'yes', 'y', 'ok'].includes(normalized)) {
     return { kind: 'allow' }
   }
-  // Cancel synonyms collapse into deny — functionally identical (both abort
-  // the tool call), and the card has no separate cancel button, so keeping
-  // them as deny aliases avoids surfacing a phantom 4th option to operators.
   if ([
     '否', '不', '拒绝', 'no', 'n',
     '取消', '取消权限', '清除', '清除权限',
@@ -520,21 +487,16 @@ function parseTextAction(text: string): ParsedTextAction | null {
   return null
 }
 
-function resolveTextAction(
-  parsed: ParsedTextAction,
-  pending: PendingPermission,
-): FeishuPermissionActionKind | null {
+function resolveTextAction(parsed: ParsedTextAction): FeishuPermissionActionKind | null {
   if (parsed.kind === 'allow') return 'allow'
   if (parsed.kind === 'deny') return 'deny'
-  if (parsed.kind === 'allow_always') return 'allow_always'
+  if (parsed.kind === 'allow_rules') return 'allow_rules'
 
-  // Numeric: 1 = allow, total = deny, in-between = allow_rule:<idx-2>.
-  // total = ruleButtons.length + 2 (allow_once + N rule buttons + deny).
-  const total = pending.ruleButtons.length + 2
-  if (parsed.index < 1 || parsed.index > total) return null
+  // Numeric: 1 = allow, 2 = allow_rules, 3 = deny.
   if (parsed.index === 1) return 'allow'
-  if (parsed.index === total) return 'deny'
-  return `allow_rule:${parsed.index - 2}` as FeishuPermissionActionKind
+  if (parsed.index === 2) return 'allow_rules'
+  if (parsed.index === 3) return 'deny'
+  return null
 }
 
 function escapeLarkMd(value: string): string {

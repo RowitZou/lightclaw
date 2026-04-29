@@ -3,7 +3,10 @@ import type { Interface } from 'node:readline/promises'
 import chalk from 'chalk'
 
 import { addSessionRule } from '../state.js'
-import { formatRule } from './rules.js'
+import {
+  formatRuleListVerbose,
+  formatSuggestionLabel,
+} from './suggestions.js'
 import type {
   PermissionDecision,
   PermissionRule,
@@ -11,10 +14,7 @@ import type {
   RiskLevel,
 } from './types.js'
 
-type ApprovalOption =
-  | { kind: 'allow_once' }
-  | { kind: 'allow_rule'; rule: PermissionRuleValue }
-  | { kind: 'deny' }
+type ChoiceKind = 'allow_once' | 'allow_rules' | 'deny'
 
 export async function askUserApproval(input: {
   rl: Interface
@@ -24,111 +24,70 @@ export async function askUserApproval(input: {
   suggestedRules: PermissionRuleValue[]
 }): Promise<PermissionDecision> {
   const { rl, toolName, riskLevel, inputPreview, suggestedRules } = input
-  const options = buildOptions(suggestedRules)
-  process.stdout.write(formatPrompt(toolName, riskLevel, inputPreview, options))
+  const middleLabel = formatSuggestionLabel(suggestedRules, toolName)
+  process.stdout.write(formatPrompt(toolName, riskLevel, inputPreview, middleLabel))
 
-  const answer = (await rl.question('permission> ')).trim()
-  const choice = resolveChoice(answer, options)
-  return applyChoice(choice, toolName)
-}
-
-function buildOptions(suggested: PermissionRuleValue[]): ApprovalOption[] {
-  const out: ApprovalOption[] = [{ kind: 'allow_once' }]
-  for (const rule of suggested) {
-    out.push({ kind: 'allow_rule', rule })
-  }
-  out.push({ kind: 'deny' })
-  return out
+  const answer = (await rl.question('permission> ')).trim().toLowerCase()
+  const choice = resolveChoice(answer)
+  return applyChoice(choice, toolName, suggestedRules)
 }
 
 function formatPrompt(
   toolName: string,
   riskLevel: RiskLevel,
   inputPreview: string,
-  options: ApprovalOption[],
+  middleLabel: string,
 ): string {
-  const lines: string[] = [
+  return [
     '',
     chalk.yellow('Permission required'),
     `  Tool: ${chalk.cyan(toolName)}  Risk: ${chalk.magenta(riskLevel)}`,
     `  ${inputPreview}`,
     '',
-    '  How would you like to handle this and similar requests?',
-  ]
-  options.forEach((opt, index) => {
-    const idx = index + 1
-    lines.push(`  [${idx}] ${describeOption(opt, toolName)}`)
-  })
-  lines.push(
-    `  ${chalk.gray('(legacy keys: y=1, a=last allow option, n=deny)')}`,
+    `  [1] Allow once`,
+    `  [2] ${middleLabel}（本会话同类放行）`,
+    `  [3] Deny (do not run ${toolName} this time)`,
+    `  ${chalk.gray('(legacy keys: y=1, a=2, n=3)')}`,
     '',
-  )
-  return lines.join('\n')
+  ].join('\n')
 }
 
-function describeOption(opt: ApprovalOption, toolName: string): string {
-  switch (opt.kind) {
-    case 'allow_once':
-      return 'Allow once'
-    case 'allow_rule':
-      return `Allow ${formatRule(opt.rule)} for the rest of this session`
-    case 'deny':
-      return `Deny (do not run ${toolName} this time)`
-  }
-}
-
-function resolveChoice(
-  answer: string,
-  options: ApprovalOption[],
-): ApprovalOption {
-  const lower = answer.toLowerCase()
-  if (lower === '' || lower === 'y') {
-    return options[0]!
-  }
-  if (lower === 'n') {
-    return options[options.length - 1]!
-  }
-  if (lower === 'a') {
-    // Legacy `[a]` was tool-wide allow; the suggestion array is precise→broad,
-    // so the last allow_rule is the broadest (tool-only) entry — equivalent.
-    for (let i = options.length - 1; i >= 0; i--) {
-      const opt = options[i]
-      if (opt && opt.kind === 'allow_rule') {
-        return opt
-      }
-    }
-    return options[0]!
-  }
-
-  const numeric = Number(lower)
-  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= options.length) {
-    return options[numeric - 1]!
-  }
-
+function resolveChoice(answer: string): ChoiceKind {
+  if (answer === '' || answer === '1' || answer === 'y') return 'allow_once'
+  if (answer === '2' || answer === 'a') return 'allow_rules'
+  if (answer === '3' || answer === 'n') return 'deny'
   // Anything we don't understand defaults to deny — safer than guessing.
-  return options[options.length - 1]!
+  return 'deny'
 }
 
 function applyChoice(
-  choice: ApprovalOption,
+  choice: ChoiceKind,
   toolName: string,
+  suggestedRules: PermissionRuleValue[],
 ): PermissionDecision {
-  switch (choice.kind) {
+  switch (choice) {
     case 'allow_once':
       return { behavior: 'allow' }
-    case 'allow_rule': {
-      const rule: PermissionRule = {
-        source: 'session',
-        behavior: 'allow',
-        value: choice.rule,
+    case 'allow_rules': {
+      const installed: PermissionRule[] = []
+      for (const value of suggestedRules) {
+        const rule: PermissionRule = {
+          source: 'session',
+          behavior: 'allow',
+          value,
+        }
+        addSessionRule(rule)
+        installed.push(rule)
       }
-      addSessionRule(rule)
+      const verbose = formatRuleListVerbose(suggestedRules)
       process.stdout.write(
         chalk.gray(
-          `  (run /permissions clear to revoke ${formatRule(choice.rule)})\n`,
+          `  (run /permissions clear to revoke ${verbose})\n`,
         ),
       )
-      return { behavior: 'allow', matchedRule: rule }
+      // Surface the matched rule so audit log reflects which scope unblocked
+      // this call. Pick the first rule — they share semantics for this turn.
+      return { behavior: 'allow', matchedRule: installed[0] }
     }
     case 'deny':
       return {
