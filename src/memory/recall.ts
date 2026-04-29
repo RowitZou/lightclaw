@@ -9,7 +9,7 @@ export type RecallOptions = {
   signal?: AbortSignal
 }
 
-export function buildRecallPrompt(query: string, manifest: string): string {
+export function buildRecallPrompt(query: string, manifest: string, topN: number): string {
   return [
     '## User query',
     query,
@@ -21,7 +21,7 @@ export function buildRecallPrompt(query: string, manifest: string): string {
     '- Pick the memory files most likely to inform the query.',
     '- Return only filenames that appear verbatim in the manifest.',
     '- Output ONE JSON object: {"filenames": ["a.md", "b.md"]}.',
-    '- Maximum N filenames will be honored — fewer is fine if nothing fits.',
+    `- Return at most ${topN} filenames — fewer is fine if nothing fits.`,
     '- If nothing is relevant, return {"filenames": []}.',
   ].join('\n')
 }
@@ -91,41 +91,43 @@ export async function selectRelevantMemories(
     return []
   }
 
-  const manifest = await loadMemoryIndex(memoryDir)
-  if (manifest.trim().length === 0) {
-    return []
-  }
-
-  let names: string[]
+  // Recall is best-effort: any IO or LLM failure must degrade silently to "no
+  // recalled memories" so the system prompt build (Promise.all in prompt.ts)
+  // is not aborted by a transient permission error or model hiccup.
   try {
-    names = await requestRecall(
-      buildRecallPrompt(trimmed, manifest),
+    const manifest = await loadMemoryIndex(memoryDir)
+    if (manifest.trim().length === 0) {
+      return []
+    }
+
+    const names = await requestRecall(
+      buildRecallPrompt(trimmed, manifest, options.topN),
       config,
       options.signal,
     )
+
+    if (names.length === 0) {
+      return []
+    }
+
+    const entries = await scanMemoryFiles(memoryDir)
+    const byFilename = new Map(entries.map(entry => [entry.filename, entry]))
+    const seen = new Set<string>()
+    const result: MemoryEntry[] = []
+
+    for (const name of names) {
+      if (result.length >= options.topN) break
+      if (seen.has(name)) continue
+      const entry = byFilename.get(name)
+      if (!entry) continue
+      seen.add(name)
+      result.push(entry)
+    }
+
+    return result
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error(`[memory] recall failed: ${msg}`)
     return []
   }
-
-  if (names.length === 0) {
-    return []
-  }
-
-  const entries = await scanMemoryFiles(memoryDir)
-  const byFilename = new Map(entries.map(entry => [entry.filename, entry]))
-  const seen = new Set<string>()
-  const result: MemoryEntry[] = []
-
-  for (const name of names) {
-    if (result.length >= options.topN) break
-    if (seen.has(name)) continue
-    const entry = byFilename.get(name)
-    if (!entry) continue
-    seen.add(name)
-    result.push(entry)
-  }
-
-  return result
 }

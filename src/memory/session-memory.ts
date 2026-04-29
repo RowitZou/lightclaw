@@ -40,6 +40,12 @@ export async function readSessionMemory(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return ''
     }
+    // Non-ENOENT (permission, IO error, encoding) is loud rather than silent
+    // so a corrupt SM file or missing read perms doesn't masquerade as "no
+    // session memory yet". The next post-turn updateSessionMemory rewrites
+    // the file atomically, so failure here is recoverable.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[session-memory] read failed for ${sessionId}: ${msg}`)
     return ''
   }
 }
