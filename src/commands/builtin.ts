@@ -31,6 +31,7 @@ import {
   clearSessionRules,
   getCurrentUserId,
   getCwd,
+  getImageReadiness,
   getModel,
   getPermissionMode,
   getRuntime,
@@ -130,12 +131,63 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/sandbox',
-    usage: '/sandbox reset',
-    description: 'Reset your Docker sandbox',
+    usage: '/sandbox [status|prefetch|reset]',
+    description: 'Inspect / re-pull / reset the Docker sandbox image and container',
     async handler(args, ctx) {
-      const action = args.trim()
+      const action = args.trim() || 'status'
+      if (action === 'status') {
+        const tracker = getImageReadiness()
+        const snap = tracker.snapshot()
+        const lines = ['Sandbox image readiness:']
+        lines.push(`  state: ${snap.state}`)
+        if (snap.image) lines.push(`  image: ${snap.image}`)
+        if (snap.pullDurationMs !== undefined) {
+          lines.push(`  ${snap.state === 'ready' ? 'pulled in' : 'elapsed'}: ${Math.round(snap.pullDurationMs / 1000)}s`)
+        }
+        if (snap.lastError) lines.push(`  lastError: ${snap.lastError}`)
+        const runtime = getRuntime()
+        if (runtime instanceof DockerRuntime) {
+          lines.push(`  container: ${runtime.containerName}`)
+        } else {
+          lines.push('  (local runtime active; readiness tracker unused)')
+        }
+        lines.push('')
+        ctx.output.write(lines.join('\n'))
+        return
+      }
+      if (action === 'prefetch') {
+        const tracker = getImageReadiness()
+        if (ctx.config.runtime.backend !== 'docker') {
+          ctx.output.write('sandbox: prefetch requires runtime.backend = "docker".\n')
+          return
+        }
+        const image = resolveDockerImage(ctx.config)
+        // Force re-check: clear failed/not-attempted to retry; if pulling/ready
+        // call again is a no-op handled inside the tracker.
+        tracker.retryIfFailed()
+        if (tracker.state === 'ready') {
+          // Even when tracker thinks ready, re-inspect via startPrefetch on a
+          // fresh tracker is too aggressive; just report. Use /sandbox reset
+          // followed by next tool call to force container recreation if image
+          // was externally rmi'd.
+          ctx.output.write(`sandbox: image ${image} marked ready; nothing to do.\n`)
+          return
+        }
+        if (tracker.state === 'pulling') {
+          ctx.output.write(`sandbox: image ${image} pull already in progress.\n`)
+          return
+        }
+        // Force a fresh attempt by triggering retry (no-op above already moved
+        // failed→pulling); fall back to direct startPrefetch in case state is
+        // some other value.
+        tracker.startPrefetch(image, {
+          inspectOnly: !ctx.config.runtime.docker.autoPull,
+        })
+        ctx.output.write(`sandbox: prefetch started for ${image}.\n`)
+        return
+      }
       if (action !== 'reset') {
-        ctx.output.write('error> Usage: /sandbox reset\n')
+        ctx.output.write('error> Usage: /sandbox [status|prefetch|reset]\n')
         return
       }
       const userId = getCurrentUserId()

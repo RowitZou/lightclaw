@@ -42,6 +42,22 @@ export type RuntimeFs = {
   readdir(pathname: string): Promise<string[]>
 }
 
+export type RuntimeAvailability =
+  | { ok: true }
+  | {
+      ok: false
+      reason: 'image-pulling' | 'image-failed' | 'image-not-attempted' | 'autopull-disabled'
+      /**
+       * Channel-user-facing message: soft, no docker stderr leakage.
+       */
+      userMessage: string
+      /**
+       * Admin-facing message with formatPullError translation. Shown only via
+       * stderr / admin push, never to channel end users.
+       */
+      adminMessage: string
+    }
+
 export type Runtime = {
   readonly kind: RuntimeKind
   readonly isolated: boolean
@@ -55,6 +71,13 @@ export type Runtime = {
   start(): Promise<void>
   stop(): Promise<void>
   isRunning(): boolean
+  /**
+   * True iff the runtime can serve environment-domain tool calls *right now*.
+   * LocalRuntime always returns ok. DockerRuntime consults the
+   * ImageReadinessTracker — pulling/failed states return ok=false so the
+   * agent loop can synthesize a graceful tool_result instead of blocking.
+   */
+  isAvailable(): Promise<RuntimeAvailability>
 
   exec(input: ExecInput): Promise<ExecResult>
   fs: RuntimeFs

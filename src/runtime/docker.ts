@@ -7,9 +7,15 @@ import type {
   ExecResult,
   GlobOptions,
   Runtime,
+  RuntimeAvailability,
   RuntimeFs,
   RuntimeStat,
 } from './types.js'
+import {
+  ImageReadinessTracker,
+  isImageMissingError,
+  formatPullError,
+} from './image-readiness.js'
 
 export type DockerMount = {
   host: string
@@ -59,11 +65,12 @@ export class DockerRuntime implements Runtime {
 
   private readonly cfg: DockerRuntimeConfig
   private readonly mountTable: Array<[string, string]>
+  private readonly tracker: ImageReadinessTracker
   private lastKnownState: ContainerState = 'unknown'
-  private triedPull = false
 
-  constructor(config: DockerRuntimeConfig) {
+  constructor(config: DockerRuntimeConfig, tracker: ImageReadinessTracker) {
     this.cfg = config
+    this.tracker = tracker
     this.workspaceRoot = config.workspaceContainerPath
     this.helperRoot = config.helperContainerPath
     this.containerName = config.containerName
@@ -96,14 +103,61 @@ export class DockerRuntime implements Runtime {
       await this.dockerCmd(['rm', '-f', this.cfg.containerName]).catch(() => {})
     }
 
-    if (this.cfg.autoPull && !this.triedPull) {
-      this.triedPull = true
-      await this.ensureImagePulled()
-    }
-
+    // Image readiness is the tracker's responsibility. Container creation
+    // assumes ready; if the image is gone we surface the rollback path in
+    // createContainer's catch.
     await this.createContainer()
     await this.dockerCmd(['start', this.cfg.containerName])
     this.lastKnownState = 'running'
+  }
+
+  async isAvailable(): Promise<RuntimeAvailability> {
+    const snap = this.tracker.snapshot()
+    if (snap.state === 'ready') return { ok: true }
+    if (snap.state === 'pulling') {
+      const elapsed = snap.pullDurationMs ? Math.round(snap.pullDurationMs / 1000) : 0
+      return {
+        ok: false,
+        reason: 'image-pulling',
+        userMessage:
+          `Sandbox 镜像还在准备中（已 ${elapsed} 秒）。我现在不能执行命令、读写文件或抓取网页，` +
+          '但可以继续聊天讨论。要不你先告诉我你想做什么，我帮你想思路？',
+        adminMessage: `Sandbox 镜像 ${snap.image ?? this.cfg.image} 拉取中（已 ${elapsed} 秒）`,
+      }
+    }
+    if (snap.state === 'failed') {
+      // autoPull-disabled is encoded as failed with a marker error.
+      const isAutoPullOff = snap.lastError?.startsWith('AUTOPULL_DISABLED:')
+      if (isAutoPullOff) {
+        return {
+          ok: false,
+          reason: 'autopull-disabled',
+          userMessage:
+            '管理员已禁用自动镜像拉取，需要联系管理员准备 sandbox 后才能用工具。' +
+            '当前我可以处理聊天类话题。',
+          adminMessage:
+            `runtime.docker.autoPull = false 已禁用自动拉取，且本地无 ${this.cfg.image}；` +
+            `请手动 docker pull ${this.cfg.image} 或将 autoPull 设回 true。`,
+        }
+      }
+      return {
+        ok: false,
+        reason: 'image-failed',
+        userMessage:
+          'Sandbox 镜像未就绪。已通知管理员，目前我只能处理聊天类话题。',
+        adminMessage:
+          `Sandbox 镜像 ${snap.image ?? this.cfg.image} 拉取失败：\n${snap.lastError ?? '未知错误'}`,
+      }
+    }
+    return {
+      ok: false,
+      reason: 'image-not-attempted',
+      userMessage:
+        'Sandbox 镜像还未开始准备。我现在只能处理聊天类话题。',
+      adminMessage:
+        `ImageReadinessTracker 未触发 prefetch（image=${this.cfg.image}）；` +
+        '检查 init.ts 是否在 docker backend 下调用了 startPrefetch。',
+    }
   }
 
   async stop(): Promise<void> {
@@ -275,23 +329,17 @@ export class DockerRuntime implements Runtime {
       args.push('-e', `${key}=${value}`)
     }
     args.push(this.cfg.image, 'sleep', 'infinity')
-    await this.dockerCmd(args)
-  }
-
-  private async ensureImagePulled(): Promise<void> {
-    const exists = await this.dockerCmd(['image', 'inspect', this.cfg.image])
-      .then(() => true)
-      .catch(() => false)
-    if (exists) {
-      return
-    }
-    const result = await runProcess('docker', ['pull', this.cfg.image], {
-      timeoutMs: 5 * 60_000,
-      maxBufferBytes: 8 * 1024 * 1024,
-      limitMessage: 'docker pull terminated',
-    })
-    if (result.exitCode !== 0) {
-      throw new Error(`docker pull ${this.cfg.image} failed: ${result.stderr.trim() || result.stdout.trim()}`)
+    try {
+      await this.dockerCmd(args)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      // Image was inspect-ready earlier but createContainer can't find it now —
+      // most likely external `docker rmi` (D2) or layer corruption (D7). Roll
+      // tracker back to failed so the next inbound message retries the pull.
+      if (isImageMissingError(message)) {
+        this.tracker.markFailed(formatPullError(message))
+      }
+      throw err
     }
   }
 

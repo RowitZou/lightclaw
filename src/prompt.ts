@@ -240,6 +240,11 @@ export async function buildSystemPromptTemplate(
     '- If a tool fails, explain the failure and recover with a narrower step.',
     '- Memory may be stale; verify remembered details before acting on them.',
     '',
+    'Sandbox availability:',
+    '- If an environment-domain tool (Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch) returns an error mentioning "Sandbox 镜像" being not ready / pulling / failed / autoPull disabled, do not retry that tool.',
+    '- Acknowledge the situation to the user (sandbox is being prepared, or has failed and admin has been notified) and offer to continue with chat-only assistance — discussion, planning, explaining concepts.',
+    '- Do not attempt environment-domain tools again until the user explicitly asks you to retry.',
+    '',
     'Available tools:',
     toolDescriptions,
   ]

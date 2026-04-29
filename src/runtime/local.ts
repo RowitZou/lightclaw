@@ -12,6 +12,7 @@ import type {
   ExecResult,
   GlobOptions,
   Runtime,
+  RuntimeAvailability,
   RuntimeFs,
   RuntimeStat,
 } from './types.js'
@@ -40,6 +41,10 @@ export class LocalRuntime implements Runtime {
 
   isRunning(): boolean {
     return true
+  }
+
+  async isAvailable(): Promise<RuntimeAvailability> {
+    return { ok: true }
   }
 
   private absolutize(pathname: string | undefined, fallback?: string): string {

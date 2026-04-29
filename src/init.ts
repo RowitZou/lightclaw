@@ -8,8 +8,10 @@ import { getAdmin } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
+import { resolveDockerImage } from './runtime/pool.js'
 import {
   getAbortController,
+  getImageReadiness,
   getRuntime,
   getRuntimePool,
   initializeState,
@@ -57,12 +59,25 @@ export class LocalRuntimeAdminOnlyError extends Error {
 export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
   const config = getConfig()
   const resolvedConfig = resolveConfig(config, input)
+  // Kick off image prefetch BEFORE writeSessionState — DockerRuntime construction
+  // takes the tracker, and the tracker's first inspect/pull starts here.
+  // Local backend never instantiates the tracker (lazy via getImageReadiness),
+  // so this is a no-op for local.
+  startImagePrefetchIfNeeded(resolvedConfig)
   await writeSessionState(resolvedConfig, input)
   initializeAgents()
   installSignalHandlers()
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
   return resolvedConfig
+}
+
+function startImagePrefetchIfNeeded(config: LightClawConfig): void {
+  if (config.runtime.backend !== 'docker') return
+  const image = resolveDockerImage(config)
+  getImageReadiness().startPrefetch(image, {
+    inspectOnly: !config.runtime.docker.autoPull,
+  })
 }
 
 /**
@@ -118,7 +133,8 @@ async function writeSessionState(
   }
 
   const runtimeUserId = input?.currentUserId ?? '__terminal__'
-  const runtime = getRuntimePool().acquire(runtimeUserId, resolvedConfig, resolvedCwd)
+  const tracker = resolvedConfig.runtime.backend === 'docker' ? getImageReadiness() : undefined
+  const runtime = getRuntimePool().acquire(runtimeUserId, resolvedConfig, resolvedCwd, tracker)
   initializeState({
     cwd: resolvedCwd,
     model: resolvedConfig.model,

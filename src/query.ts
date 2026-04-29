@@ -563,6 +563,14 @@ async function dispatchToolCall(
       return reportToolResult(ctx, toolUse, decision.reason, true)
     }
 
+    if (tool.domain === 'environment') {
+      const runtime = getRuntime()
+      const availability = await runtime.isAvailable()
+      if (!availability.ok) {
+        return reportToolResult(ctx, toolUse, availability.userMessage, true)
+      }
+    }
+
     const start = Date.now()
     const result = await tool.call(effectiveInput, {
       cwd: getCwd(),

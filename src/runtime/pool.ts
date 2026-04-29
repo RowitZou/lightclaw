@@ -8,6 +8,7 @@ import { adminPath, sanitizePathSegment, workspaceFor } from '../identity/paths.
 
 import { createRuntime, DockerRuntime, type DockerRuntimeConfig } from './index.js'
 import { dockerCmdRaw } from './docker.js'
+import type { ImageReadinessTracker } from './image-readiness.js'
 import type { Runtime } from './types.js'
 
 const REAPER_INTERVAL_MS = 60_000
@@ -20,7 +21,12 @@ export class RuntimePool {
   private deploymentHash = computeDeploymentHash()
   private idleTimeoutMs = 1_800_000
 
-  acquire(userId: string, config: LightClawConfig, workspaceHostPath?: string): Runtime {
+  acquire(
+    userId: string,
+    config: LightClawConfig,
+    workspaceHostPath?: string,
+    tracker?: ImageReadinessTracker,
+  ): Runtime {
     this.idleTimeoutMs = config.runtime.docker.idleTimeoutMs
     const key = runtimeKey(userId, workspaceHostPath)
     const existing = this.runtimes.get(key)
@@ -28,7 +34,7 @@ export class RuntimePool {
       return existing
     }
 
-    const runtime = this.create(userId, config, workspaceHostPath)
+    const runtime = this.create(userId, config, workspaceHostPath, tracker)
     this.runtimes.set(key, runtime)
     return runtime
   }
@@ -133,15 +139,26 @@ export class RuntimePool {
     }
   }
 
-  private create(userId: string, config: LightClawConfig, workspaceRoot?: string): Runtime {
+  private create(
+    userId: string,
+    config: LightClawConfig,
+    workspaceRoot?: string,
+    tracker?: ImageReadinessTracker,
+  ): Runtime {
     const workspaceHostPath = path.resolve(workspaceRoot ?? workspaceFor(userId))
     if (config.runtime.backend === 'local') {
       return createRuntime({ kind: 'local', workspaceRoot: workspaceHostPath })
     }
     if (config.runtime.backend === 'docker') {
+      if (!tracker) {
+        throw new Error(
+          'DockerRuntime requires an ImageReadinessTracker; pass it via RuntimePool.acquire().',
+        )
+      }
       return createRuntime({
         kind: 'docker',
         config: buildDockerRuntimeConfig(userId, workspaceHostPath, config, this.deploymentHash),
+        tracker,
       })
     }
     return createRuntime({ kind: 'rjob' })

@@ -187,7 +187,28 @@ Docker backend 说明：
 - 一个 canonical user 对应一个容器，命名为 `lightclaw-sandbox-<user>-<deploymentHash>`，terminal / 飞书 / 微信共享同一 user 容器。
 - 只读挂载使用 Docker 的 `:ro` bind 选项。内核会用 `EROFS` 拒绝该挂载内的写入、元数据修改、truncate 和删除，推荐给数据集 / 模型 checkpoint 使用。
 - idle 回收走 `docker stop`，不是 `docker rm`：workspace 文件和容器 writable layer 会保留。`/sandbox reset` 才会删除容器，并在下次 environment tool call 时重建。
-- Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、Bash/coreutils、ripgrep、git、curl、Python 3、build-essential 和 sandbox helpers。
+- Docker image 发布流水线在 `.github/workflows/sandbox-image.yml`；镜像包含 Debian 12 slim、常用 CLI（jq / yq / wget / unzip / vim-tiny / less / dnsutils / netcat / sqlite3）、ripgrep、git、curl、Python 3 + 数据科学 baseline（numpy / pandas / scipy / matplotlib / requests / httpx / pyyaml / pyarrow / tqdm / markdownify）、Node 22 LTS + pnpm、以及 sandbox helpers。
+
+### Sandbox 镜像：开箱即用
+
+当 `runtime.backend = "docker"` 时，LightClaw 启动时会**异步预拉取**镜像（不阻塞主进程），在镜像 ready 之前 environment 类工具会降级到 chat-only。常规用户**不需要**任何镜像相关配置。
+
+| 场景 | 你做的事 | LightClaw 做的事 |
+|---|---|---|
+| 首次使用 docker | 设 `runtime.backend = "docker"` 后启动 | 后台 `docker pull ghcr.io/rowitzou/lightclaw-sandbox:<version>`；用户消息触发 environment 工具时返回"镜像准备中，可以聊天"的柔和提示，ready 后无缝接管 |
+| 重启 LightClaw | 无 | `docker image inspect` 命中本地缓存 → tracker 立即 ready，零网络请求 |
+| 本地 build 调试 | `docker build -t lightclaw-sandbox:dev .` 后设 `runtime.docker.imageOverride: "lightclaw-sandbox:dev"` | 用本地 tag，不发 pull |
+| 内网 mirror / 离网 | 把 `lightclaw-sandbox:<version>` mirror 到内网 registry，设 `runtime.docker.imageOverride: "<mirror>/lightclaw-sandbox:<version>"` | 从 mirror 拉 |
+| CI 临时覆盖 | `LIGHTCLAW_DOCKER_IMAGE=...` 环境变量 | 优先级最高，不写入 config |
+| 自管镜像 | 设 `runtime.docker.autoPull: false` | LightClaw 只 inspect 不拉；本地无镜像时 agent 提示"管理员已禁用自动拉取" |
+
+`/sandbox` 子命令：
+
+- `/sandbox status` —— 查看 readiness 状态、镜像名、已拉时长、上次错误、当前容器名
+- `/sandbox prefetch` —— state 为 failed / not-attempted 时强制重新拉取（修复代理 / 网络后用）
+- `/sandbox reset` —— 删容器；下次 environment tool call 重建
+
+**镜像 visibility**：上游 `ghcr.io/rowitzou/lightclaw-sandbox` 已发布为 public package。如果你 fork 仓库后用自己的 org 发布，需在仓库 Packages 设置里把 GHCR package visibility 改为 public（GitHub 没暴露 API）。改 `runtime.docker.image` 或 `imageOverride` 后**需要重启 LightClaw 进程**才生效——镜像就绪态在启动时绑定。
 
 ---
 

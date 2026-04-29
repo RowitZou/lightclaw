@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { PermissionMode, PermissionRule } from './permission/types.js'
+import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
@@ -30,6 +31,7 @@ type SessionState = {
 
 let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
+let imageReadiness: ImageReadinessTracker | null = null
 // Session-memory write throttle counters. Module-level rather than per-state
 // because they reset on every initializeState (a new session starts with
 // zero accumulated work). They drive the SessionMemory double-threshold:
@@ -241,6 +243,11 @@ export function setRuntime(runtime: Runtime): void {
 export function getRuntimePool(): RuntimePool {
   runtimePool ??= new RuntimePool()
   return runtimePool
+}
+
+export function getImageReadiness(): ImageReadinessTracker {
+  imageReadiness ??= new ImageReadinessTracker()
+  return imageReadiness
 }
 
 export function getAllPermissionRules(): PermissionRule[] {
