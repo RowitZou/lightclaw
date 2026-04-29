@@ -30,11 +30,19 @@ type ReceiveV1Data = {
     chat_type?: string
     message_type?: string
     content?: string
+    create_time?: string
     parent_id?: string
     root_id?: string
     mentions?: Array<{ key?: string; name?: string }>
   }
 }
+
+// Lark holds un-acked events on its WS server during disconnects and replays
+// them on reconnect — including messages the user sent while LightClaw was
+// offline. After every process restart we'd otherwise drain that backlog
+// one-reply-per-message. Drop anything dated before this process started; the
+// buffer absorbs a few seconds of clock skew between the bot host and Lark.
+const STALE_EVENT_BUFFER_MS = 5_000
 
 /**
  * Start a Lark.WSClient long-lived subscription. Lark pushes events to us
@@ -53,6 +61,11 @@ export async function startFeishuWsClient(input: {
   if (!config.appId || !config.appSecret) {
     throw new Error('Feishu WS transport requires feishu.appId and feishu.appSecret.')
   }
+
+  // Anchor "is this event from before we started?" to the moment this
+  // transport spins up. Captured in the closure so each handler sees a
+  // stable cutoff even if the WSClient reconnects later.
+  const startedAtMs = Date.now()
 
   const eventDispatcher = new Lark.EventDispatcher({
     loggerLevel: Lark.LoggerLevel.warn,
@@ -77,6 +90,13 @@ export async function startFeishuWsClient(input: {
       const message = normalizeReceiveV1(data)
       if (!message) {
         process.stderr.write('feishu ws: dropped empty or unsupported receive_v1 event\n')
+        return
+      }
+      const createdAtMs = parseCreateTime(data.message?.create_time)
+      if (createdAtMs !== undefined && createdAtMs < startedAtMs - STALE_EVENT_BUFFER_MS) {
+        process.stderr.write(
+          `feishu ws: dropped stale event ${message.eventId} create_time=${createdAtMs} started=${startedAtMs}\n`,
+        )
         return
       }
       if (!await input.dedup.claim(message.eventId)) {
@@ -248,6 +268,14 @@ function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }
+}
+
+function parseCreateTime(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined
+  }
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
