@@ -49,6 +49,8 @@ import type { ChannelId, NormalizedChannelMessage } from './types.js'
  * append / compact, hook lifecycle, runQuery with mode='channel') lives in
  * ChannelRunner and never needs channel-specific branching.
  */
+export type SystemNoticeKind = 'info' | 'error'
+
 export type ChannelRunnerStrategy = {
   channelId: ChannelId
   cwd: string
@@ -56,8 +58,21 @@ export type ChannelRunnerStrategy = {
   isMessageAllowed(message: NormalizedChannelMessage): boolean
   resolveSessionId(message: NormalizedChannelMessage, userId: string): string
   buildChannelPrompt(message: NormalizedChannelMessage): string
+  /** Reply with the LLM's natural-language output. Plain text. */
   sendReply(
     message: NormalizedChannelMessage,
+    text: string,
+  ): Promise<void>
+  /**
+   * Send a system feedback message (errors, slash output, pairing welcome,
+   * permission ack, etc.). Channels render this distinctly from sendReply —
+   * Feishu uses a colored info / error notice card, Wechat falls back to a
+   * prefixed plaintext line. Used so admins can tell apart "the model said X"
+   * from "LightClaw says X".
+   */
+  sendNotice(
+    message: NormalizedChannelMessage,
+    kind: SystemNoticeKind,
     text: string,
   ): Promise<void>
   createPermissionApprover?(
@@ -174,7 +189,7 @@ export class ChannelRunner {
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
-          await this.sendReply(message, slash.output.trim() || 'ok')
+          await this.sendNotice(message, 'info', slash.output.trim() || 'ok')
           return
         }
 
@@ -216,7 +231,7 @@ export class ChannelRunner {
           messages.push(assistantMessage)
           await appendMessage(sessionId, assistantMessage)
           await persistMeta(Date.now(), messages.length)
-          await this.sendReply(message, failureText)
+          await this.sendNotice(message, 'error', failureText)
           return
         }
 
@@ -239,9 +254,10 @@ export class ChannelRunner {
         await this.sendReply(message, result.lastAssistantText || '(no response)')
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
-          await this.sendReply(
+          await this.sendNotice(
             message,
-            'This bot is running in single-user mode. Only the administrator can use it right now. Please contact the bot operator if you need access.',
+            'error',
+            '当前 bot 运行在单用户模式下，只有管理员可以使用，请联系 bot 运营者获取访问权限。',
           )
           return
         }
@@ -257,6 +273,21 @@ export class ChannelRunner {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
         `${this.strategy.channelId}: send reply failed for message ${message.messageId}: ${detail}\n`,
+      )
+    }
+  }
+
+  private async sendNotice(
+    message: NormalizedChannelMessage,
+    kind: SystemNoticeKind,
+    text: string,
+  ): Promise<void> {
+    try {
+      await this.strategy.sendNotice(message, kind, text)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: send notice failed for message ${message.messageId}: ${detail}\n`,
       )
     }
   }
@@ -294,21 +325,23 @@ export class ChannelRunner {
           },
         )
       }
-      const freshness = result.created ? 'created' : 'reused'
-      await this.sendReply(
+      const freshnessLabel = result.created ? '新建' : '复用'
+      await this.sendNotice(
         message,
+        'info',
         [
-          'Welcome to LightClaw bot.',
-          `To use this bot, ask the LightClaw operator to approve this pairing code: ${result.code}`,
-          `Operator command: /identity approve ${result.code} --as <name>`,
-          `(${freshness} pairing request; code expires in 1 hour)`,
+          '欢迎使用 LightClaw bot。',
+          `请管理员审批以下配对码：**${result.code}**`,
+          `管理员命令：\`/identity approve ${result.code} --as <名称>\``,
+          `（${freshnessLabel}的配对请求；配对码 1 小时内有效）`,
         ].join('\n'),
       )
     } catch (error) {
       if (error instanceof Error && error.message === 'rate-limited') {
-        await this.sendReply(
+        await this.sendNotice(
           message,
-          'Pairing request is rate limited. Ask the LightClaw operator to check `/identity pending`.',
+          'error',
+          '配对请求被限流，请管理员检查 `/identity pending`。',
         )
         return null
       }

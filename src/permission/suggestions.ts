@@ -87,72 +87,64 @@ export function suggestMcpRules(
 
 // ---------------------------------------------------------------------------
 // Label formatter — used by approvers (terminal + Feishu) to render the
-// "always allow" button as a merged sentence rather than one button per rule.
-// Faithful port of generateShellSuggestionsLabel + commandListDisplayTruncated
-// from claude-code-main/src/components/permissions/shellPermissionHelpers.tsx.
+// "always allow" button. The suggester only ever returns rules from a single
+// tool (one ASK = one tool call), so we don't need a multi-tool merge path
+// like Claude Code's generateShellSuggestionsLabel.
 // ---------------------------------------------------------------------------
 
 const MAX_INLINE_LABEL_CHARS = 50
+const TRUNCATED_HEAD_KEEP = 3
 
 export function formatSuggestionLabel(
   rules: PermissionRuleValue[],
   toolName: string,
 ): string {
+  // Empty / tool-wide-only fallback: the only rule is `{toolName}` with no
+  // ruleContent, meaning the suggester couldn't derive a precise scope.
   if (rules.length === 0) {
-    return `批准 ${toolName}`
+    return `批准所有 ${toolName} 操作`
   }
   if (rules.length === 1 && rules[0]!.ruleContent === undefined) {
-    return `批准 ${toolName}`
+    return `批准所有 ${toolName} 操作`
   }
 
-  // Group by tool so a Bash compound that touches Read paths still reads as
-  // "rm, echo 命令 + Read /path/" rather than a flat list.
-  const byTool = new Map<string, PermissionRuleValue[]>()
-  for (const rule of rules) {
-    const list = byTool.get(rule.toolName) ?? []
-    list.push(rule)
-    byTool.set(rule.toolName, list)
-  }
-
-  const parts: string[] = []
-  for (const [tool, ruleList] of byTool) {
-    parts.push(formatToolGroup(tool, ruleList))
-  }
-  const joined = parts.join(' + ')
-  return `批准 ${joined}`
-}
-
-function formatToolGroup(toolName: string, rules: PermissionRuleValue[]): string {
+  // All rules are for `toolName` (suggester invariant).
   const contents = rules
     .map(rule => rule.ruleContent)
     .filter((c): c is string => typeof c === 'string')
-  if (contents.length === 0) {
-    return toolName
-  }
 
   if (toolName === 'Bash') {
-    const heads = contents.map(c => stripTailWildcard(c))
-    return shortListOrFallback(heads, '类 Bash 命令')
+    const heads = contents.map(stripTailWildcard)
+    return formatBashLabel(heads)
   }
   if (toolName === 'WebFetch') {
-    return shortListOrFallback(contents, '个域名')
+    // Suggester only ever produces a single hostname.
+    return `批准 ${contents[0]} 的所有访问`
   }
   if (toolName === 'MCP') {
-    return shortListOrFallback(contents, '个 MCP 工具')
+    // Suggester only ever produces a single `server:tool`.
+    return `批准 ${contents[0]} 的所有调用`
   }
-  // Path tools (Edit/Write/Read): show "Edit /abs/dir/**" or fold to count.
-  return shortListOrFallback(
-    contents.map(c => `${toolName} ${c}`),
-    `条 ${toolName} 路径`,
-  )
+  // Path tools (Edit/Write/Read): single `dir/**` rule. The card body already
+  // shows the absolute path, so the button keeps "此路径" as the deictic.
+  return `批准此路径下的所有 ${toolName} 操作`
 }
 
-function shortListOrFallback(items: string[], unit: string): string {
-  const inline = items.join('、')
+function formatBashLabel(heads: string[]): string {
+  if (heads.length === 0) {
+    return '批准所有 Bash 操作'
+  }
+  const inline = `批准所有 ${heads.join('/')} 命令`
   if (inline.length <= MAX_INLINE_LABEL_CHARS) {
     return inline
   }
-  return `${items.length} ${unit}`
+  // Long form: keep the first few head names so the operator can still see
+  // *which* commands they're approving, then summarize the rest as a count.
+  const keep = heads.slice(0, TRUNCATED_HEAD_KEEP)
+  const remaining = heads.length - keep.length
+  return remaining > 0
+    ? `批准所有 ${keep.join('/')} 等 ${heads.length} 个命令`
+    : `批准所有 ${keep.join('/')} 命令`
 }
 
 function stripTailWildcard(content: string): string {

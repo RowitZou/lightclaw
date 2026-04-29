@@ -40,14 +40,14 @@ function formatPrompt(
 ): string {
   return [
     '',
-    chalk.yellow('Permission required'),
-    `  Tool: ${chalk.cyan(toolName)}  Risk: ${chalk.magenta(riskLevel)}`,
+    chalk.yellow('权限请求'),
+    `  工具：${chalk.cyan(toolName)}   风险：${chalk.magenta(riskLevel)}`,
     `  ${inputPreview}`,
     '',
-    `  [1] Allow once`,
-    `  [2] ${middleLabel}（本会话同类放行）`,
-    `  [3] Deny (do not run ${toolName} this time)`,
-    `  ${chalk.gray('(legacy keys: y=1, a=2, n=3)')}`,
+    `  [1] 批准`,
+    `  [2] ${middleLabel}`,
+    `  [3] 拒绝`,
+    `  ${chalk.gray('(兼容快捷键：y=1，a=2，n=3)')}`,
     '',
   ].join('\n')
 }
@@ -82,7 +82,7 @@ function applyChoice(
       const verbose = formatRuleListVerbose(suggestedRules)
       process.stdout.write(
         chalk.gray(
-          `  (run /permissions clear to revoke ${verbose})\n`,
+          `  （已添加会话规则：${verbose}；发送 /permissions clear 撤回）\n`,
         ),
       )
       // Surface the matched rule so audit log reflects which scope unblocked

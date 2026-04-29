@@ -17,6 +17,7 @@ import { addSessionRule } from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
 import type { FeishuSender } from './sender.js'
+import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js'
 
 const PERMISSION_TIMEOUT_MS = 60 * 1000
 const MAX_PREVIEW_CHARS = 900
@@ -48,12 +49,11 @@ export type FeishuCardAction = {
   openMessageId?: string
 }
 
-export type FeishuCardActionResponse = {
-  toast: {
-    type: 'success' | 'info' | 'warning' | 'error'
-    content: string
-  }
-}
+// Feishu's interactive-card v2 callback contract treats `toast` as optional.
+// We omit it everywhere — the system-notice card sent as a follow-up message
+// is the user's only feedback channel, so the transient toast bubble would be
+// redundant and visually noisy.
+export type FeishuCardActionResponse = Record<string, unknown>
 
 type PendingPermission = {
   id: string
@@ -98,18 +98,19 @@ export class FeishuPermissionCoordinator {
       process.stderr.write(
         `feishu permission: ignored stale action request=${action.requestId}\n`,
       )
-      return buildToast('info', '这条权限请求已经处理或超时，可以忽略。')
+      return {}
     }
 
     if (!await this.canOperate(pending, action.operatorOpenId)) {
       process.stderr.write(
         `feishu permission: rejected operator ${action.operatorOpenId} for request=${action.requestId}\n`,
       )
-      await this.safeSend(
+      await this.safeSendNotice(
         pending.message,
+        'error',
         '这条权限请求只能由发起人或 LightClaw admin 处理。',
       )
-      return buildToast('error', '这条权限请求只能由发起人或 LightClaw admin 处理。')
+      return {}
     }
 
     return await this.applyAction(pending, action.action)
@@ -123,8 +124,9 @@ export class FeishuPermissionCoordinator {
 
     const text = raw.text.trim()
     if (!text) {
-      await this.safeSend(
+      await this.safeSendNotice(
         pending.message,
+        'info',
         '请先处理当前的权限请求：回复"批准"、"批准所有"或"拒绝"。',
       )
       return true
@@ -132,11 +134,12 @@ export class FeishuPermissionCoordinator {
 
     const parsed = parseTextAction(text)
     if (!parsed) {
-      await this.safeSend(
+      await this.safeSendNotice(
         pending.message,
+        'info',
         [
           '请先处理当前的权限请求。',
-          `工具: ${pending.ask.toolName}`,
+          `工具：${pending.ask.toolName}`,
           '可以点击卡片按钮，或回复 1 / 2 / 3 选择对应选项；',
           '也可以回复：批准 / 批准所有 / 拒绝。',
         ].join('\n'),
@@ -146,8 +149,9 @@ export class FeishuPermissionCoordinator {
 
     const action = resolveTextAction(parsed)
     if (!action) {
-      await this.safeSend(
+      await this.safeSendNotice(
         pending.message,
+        'error',
         `数字 ${parsed.kind === 'numeric' ? parsed.index : ''} 超出可选范围（1-3），请重新选择。`,
       )
       return true
@@ -174,7 +178,11 @@ export class FeishuPermissionCoordinator {
           behavior: 'deny',
           reason: `Permission denied: ${pending.ask.toolName} approval timed out in Feishu.`,
         })
-        void this.safeSend(pending.message, '权限请求已超时，已拒绝本次工具调用。')
+        void this.safeSendNotice(
+          pending.message,
+          'error',
+          '权限请求已超时，已拒绝本次工具调用。',
+        )
       }, PERMISSION_TIMEOUT_MS)
 
       const pending: PendingPermission = {
@@ -239,14 +247,24 @@ export class FeishuPermissionCoordinator {
   ): Promise<FeishuCardActionResponse> {
     if (action === 'allow') {
       this.resolvePending(pending, { behavior: 'allow' })
-      return buildToast('success', `已允许 ${pending.ask.toolName} 本次调用。`)
+      void this.safeSendNotice(
+        pending.message,
+        'info',
+        `已允许 ${pending.ask.toolName} 本次调用。`,
+      )
+      return {}
     }
     if (action === 'deny') {
       this.resolvePending(pending, {
         behavior: 'deny',
         reason: `User denied ${pending.ask.toolName} from Feishu.`,
       })
-      return buildToast('warning', `已拒绝 ${pending.ask.toolName}。`)
+      void this.safeSendNotice(
+        pending.message,
+        'info',
+        `已拒绝 ${pending.ask.toolName}。`,
+      )
+      return {}
     }
 
     // allow_rules / allow_always: install the entire suggestedRules set as
@@ -270,14 +288,15 @@ export class FeishuPermissionCoordinator {
       behavior: 'allow',
       matchedRule: installed[0],
     })
-    void this.safeSend(
+    void this.safeSendNotice(
       pending.message,
-      `已允许 ${formatRuleListVerbose(ruleValues)}，本会话同类调用自动放行。需要撤回时请发送 /permissions clear。`,
+      'info',
+      [
+        `已允许 ${formatRuleListVerbose(ruleValues)}，本会话同类调用将自动放行。`,
+        '需要撤回时请发送 /permissions clear。',
+      ].join('\n'),
     )
-    return buildToast(
-      'success',
-      `已允许（${installed.length} 条规则 · /permissions clear 撤回）`,
-    )
+    return {}
   }
 
   private resolvePending(
@@ -336,12 +355,19 @@ export class FeishuPermissionCoordinator {
     return userId ? isAdmin(userId) : false
   }
 
-  private async safeSend(message: NormalizedChannelMessage, text: string): Promise<void> {
+  private async safeSendNotice(
+    message: NormalizedChannelMessage,
+    kind: SystemNoticeKind,
+    content: string,
+  ): Promise<void> {
     try {
-      await this.sender.sendText(message, text)
+      await this.sender.sendInteractiveCard(
+        message,
+        buildSystemNoticeCard({ kind, content }),
+      )
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`feishu permission: send failed: ${detail}\n`)
+      process.stderr.write(`feishu permission: notice send failed: ${detail}\n`)
     }
   }
 }
@@ -385,24 +411,12 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
         tag: 'action',
         layout: 'flow',
         actions: [
-          buildButton('批准本次', 'primary', pending.id, 'allow'),
+          buildButton('批准', 'primary', pending.id, 'allow'),
           buildButton(middleLabel, 'default', pending.id, 'allow_rules'),
           buildButton('拒绝', 'danger', pending.id, 'deny'),
         ],
       },
     ],
-  }
-}
-
-function buildToast(
-  type: 'success' | 'info' | 'warning' | 'error',
-  content: string,
-): FeishuCardActionResponse {
-  return {
-    toast: {
-      type,
-      content,
-    },
   }
 }
 
