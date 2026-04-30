@@ -1,8 +1,10 @@
-import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { loadConfigFile } from '../config-file.js'
+import { expandHomePath, lightclawHome } from '../paths.js'
+
 export function identityRoot(): string {
-  return path.join(homedir(), '.lightclaw', 'identity')
+  return path.join(lightclawHome(), 'identity')
 }
 
 export function adminPath(): string {
@@ -22,7 +24,12 @@ export function rateLimitsPath(): string {
 }
 
 export function workspaceRoot(): string {
-  return path.join(homedir(), '.lightclaw', 'workspaces')
+  const fileConfig = loadConfigFile()
+  const configured =
+    process.env.LIGHTCLAW_WORKSPACE_ROOT ??
+    fileConfig.workspaceRoot ??
+    path.join(lightclawHome(), 'workspaces')
+  return path.resolve(expandHomePath(configured))
 }
 
 export function workspaceFor(canonicalUser: string): string {

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { expandHomePath, lightclawHome } from '../paths.js'
 import { parseRule } from './rules.js'
 import { getBuiltinDenyRules } from './builtin-rules.js'
 import type { PermissionRule, PermissionRuleSource } from './types.js'
@@ -10,18 +10,6 @@ type PermissionFileShape = {
   allow?: string[]
   deny?: string[]
   ask?: string[]
-}
-
-function expandHomePath(input: string): string {
-  if (input === '~') {
-    return homedir()
-  }
-
-  if (input.startsWith('~/')) {
-    return path.join(homedir(), input.slice(2))
-  }
-
-  return input
 }
 
 function loadFile(pathname: string, source: PermissionRuleSource): PermissionRule[] {
@@ -71,7 +59,7 @@ export function loadFileRules(input: {
   localPath?: string
 }): PermissionRule[] {
   const userPath = path.resolve(
-    expandHomePath(input.userPath ?? path.join(homedir(), '.lightclaw', 'permissions.json')),
+    expandHomePath(input.userPath ?? path.join(lightclawHome(), 'permissions.json')),
   )
   const projectPath = path.resolve(
     input.cwd,

@@ -1,8 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { parseFrontmatter } from '../memory/auto-memory.js'
+import { lightclawHome } from '../paths.js'
 import type { LoadedSkill, SkillMeta, SkillSource } from './types.js'
 import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 
@@ -105,7 +105,7 @@ export async function discoverSkills(cwd: string): Promise<SkillMeta[]> {
   }
 
   for (const skill of await loadSkillsFromDirectory(
-    path.join(homedir(), '.lightclaw', 'skills'),
+    path.join(lightclawHome(), 'skills'),
     'user',
   )) {
     skillMap.set(skill.name, skill)
