@@ -49,6 +49,20 @@ export type PreCompactFlushConfig = {
   timeoutMs: number
 }
 
+export type PerToolSummarizeConfig = {
+  enabled: boolean
+  tokenThreshold: number
+  summaryMaxTokens: number
+  archiveOriginals: boolean
+}
+
+export type MicroCompactConfig = {
+  /** Master switch — when false, perTool does not run regardless of its own
+   *  enabled flag. Idle config will land in Iter 3. */
+  enabled: boolean
+  perTool: PerToolSummarizeConfig
+}
+
 export type LightClawConfig = {
   model: string
   allowedModels: string[]
@@ -102,6 +116,7 @@ export type LightClawConfig = {
   memoryRecall: MemoryRecallConfig
   sessionMemory: SessionMemoryConfig
   preCompactFlush: PreCompactFlushConfig
+  microCompact: MicroCompactConfig
 }
 
 type ConfigFileShape = {
@@ -164,6 +179,15 @@ type ConfigFileShape = {
   preCompactFlush?: {
     enabled?: boolean
     timeoutMs?: number
+  }
+  microCompact?: {
+    enabled?: boolean
+    perTool?: {
+      enabled?: boolean
+      tokenThreshold?: number
+      summaryMaxTokens?: number
+      archiveOriginals?: boolean
+    }
   }
   runtime?: {
     backend?: string
@@ -538,6 +562,34 @@ export function getConfig(): LightClawConfig {
         8000,
     ),
   )
+  const microCompactEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MICRO_COMPACT_ENABLED) ??
+    fileConfig.microCompact?.enabled ??
+    true
+  const microCompactPerToolEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MC_PER_TOOL_ENABLED) ??
+    fileConfig.microCompact?.perTool?.enabled ??
+    true
+  const microCompactPerToolTokenThreshold = Math.max(
+    100,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MC_PER_TOOL_TOKEN_THRESHOLD) ??
+        fileConfig.microCompact?.perTool?.tokenThreshold ??
+        5000,
+    ),
+  )
+  const microCompactPerToolSummaryMaxTokens = Math.max(
+    64,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MC_PER_TOOL_SUMMARY_MAX_TOKENS) ??
+        fileConfig.microCompact?.perTool?.summaryMaxTokens ??
+        1024,
+    ),
+  )
+  const microCompactPerToolArchiveOriginals =
+    parseBoolean(process.env.LIGHTCLAW_MC_PER_TOOL_ARCHIVE_ORIGINALS) ??
+    fileConfig.microCompact?.perTool?.archiveOriginals ??
+    false
   const dockerCpuLimit = Math.max(0.1, Number(dockerConfig.cpuLimit ?? 4))
   const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
@@ -617,6 +669,15 @@ export function getConfig(): LightClawConfig {
     preCompactFlush: {
       enabled: preCompactFlushEnabled,
       timeoutMs: preCompactFlushTimeoutMs,
+    },
+    microCompact: {
+      enabled: microCompactEnabled,
+      perTool: {
+        enabled: microCompactPerToolEnabled,
+        tokenThreshold: microCompactPerToolTokenThreshold,
+        summaryMaxTokens: microCompactPerToolSummaryMaxTokens,
+        archiveOriginals: microCompactPerToolArchiveOriginals,
+      },
     },
     runtime: {
       backend: runtimeBackend,

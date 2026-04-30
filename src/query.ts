@@ -39,6 +39,7 @@ import {
   setLastExtractedAt,
 } from './state.js'
 import { compactConversation } from './session/compact.js'
+import { maybeSummarizeToolResult } from './session/tool-summarize.js'
 import {
   loadMeta,
   updateMetaLastExtractedAt,
@@ -98,6 +99,7 @@ type DispatchContext = {
   permissionApprover?: PermissionApprover
   onToolResult?(event: ToolExecutionEvent): void
   maxToolOutputBytes: number
+  config: LightClawConfig
 }
 
 function snipContent(content: string, maxBytes: number): string {
@@ -341,6 +343,7 @@ export async function query(params: QueryParams): Promise<{
     permissionApprover: params.permissionApprover,
     onToolResult: params.onToolResult,
     maxToolOutputBytes: config.maxToolOutputBytes,
+    config,
   }
 
   type StopEvent = Extract<
@@ -595,6 +598,26 @@ async function dispatchToolCall(
     }
 
     formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
+
+    // Iter 2: per-tool LLM summarize. Runs after snipContent so very large
+    // outputs are byte-capped first. Subagent gating is caller-driven via
+    // `enabled`. Failures fall back to the snipped content via passthrough.
+    const summarizeResult = await maybeSummarizeToolResult({
+      toolName: tool.name,
+      content: formatted.content,
+      callId,
+      isError: Boolean(formatted.is_error),
+      signal: getAbortController().signal,
+      config: ctx.config,
+      enabled: ctx.mode !== 'subagent',
+    })
+    formatted.content = summarizeResult.output
+    if (summarizeResult.summarized) {
+      console.log(
+        `[micro-compact:per-tool] ${tool.name} ${callId} `
+        + `${summarizeResult.origTokens}→${summarizeResult.newTokens} tokens`,
+      )
+    }
 
     ctx.onToolResult?.({
       toolName: toolUse.name,
