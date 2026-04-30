@@ -43,6 +43,7 @@ let sessionMemoryUpdateCount = 0
 // SessionMemory throttles above — they reset on every initializeState (a
 // fresh session starts with zero MC actions).
 let perToolSummaryCount = 0
+let idleMicroCompactCount = 0
 // Session permission rules persist per canonical user across channel
 // resetSessionContext / initializeState calls — without this, the Feishu
 // "批准所有" button (and terminal `[a]`) would silently degrade to
@@ -99,6 +100,7 @@ export function initializeState(input: {
   sessionMemoryToolCallsSinceUpdate = 0
   sessionMemoryUpdateCount = 0
   perToolSummaryCount = 0
+  idleMicroCompactCount = 0
 }
 
 function requireState(): SessionState {
@@ -360,4 +362,13 @@ export function getPerToolSummaryCount(): number {
 export function incrementPerToolSummaryCount(): number {
   perToolSummaryCount += 1
   return perToolSummaryCount
+}
+
+export function getIdleMicroCompactCount(): number {
+  return idleMicroCompactCount
+}
+
+export function incrementIdleMicroCompactCount(): number {
+  idleMicroCompactCount += 1
+  return idleMicroCompactCount
 }
