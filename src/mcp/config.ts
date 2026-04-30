@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { lightclawHome } from '../paths.js'
 import { getCwd } from '../state.js'
 import { isValidServerName, normalizeServerName } from './normalization.js'
 import type {
@@ -20,7 +20,7 @@ const ENV_VAR_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/gi
 
 export function defaultMcpConfigPaths(cwd = getCwd()): Required<McpConfigPaths> {
   return {
-    user: path.join(homedir(), '.lightclaw', 'mcp.json'),
+    user: path.join(lightclawHome(), 'mcp.json'),
     project: path.join(cwd, '.lightclaw', 'mcp.json'),
     local: path.join(cwd, '.lightclaw', 'mcp.local.json'),
   }

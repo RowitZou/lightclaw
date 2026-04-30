@@ -5,8 +5,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
+
+import { lightclawHome } from './paths.js'
 
 // `linkSync` is atomic — either creates the destination or fails with EEXIST,
 // no empty-file window. This is the standard non-flock pattern (see
@@ -16,7 +17,14 @@ import path from 'node:path'
 // reject startup if it's alive, or remove the stale lock and retry. SIGKILL
 // leaves a stale PID file, but the next startup detects "no such process" via
 // `process.kill(pid, 0)` and reclaims it without admin intervention.
-const LOCK_PATH = path.join(homedir(), '.lightclaw', 'lightclaw.pid')
+
+// Lazy: cli.ts may set the LIGHTCLAW_HOME override (--home flag) after this
+// module is imported but before acquireProcessLock() runs. A module-level
+// `const` would freeze to the default ~/.lightclaw and ignore the flag.
+function lockPath(): string {
+  return path.join(lightclawHome(), 'lightclaw.pid')
+}
+
 const MAX_ATTEMPTS = 3
 
 export class LightClawAlreadyRunningError extends Error {
@@ -40,15 +48,16 @@ export function acquireProcessLock(): void {
     return
   }
 
-  mkdirSync(path.dirname(LOCK_PATH), { recursive: true, mode: 0o700 })
+  const canonical = lockPath()
+  mkdirSync(path.dirname(canonical), { recursive: true, mode: 0o700 })
 
-  const tempPath = `${LOCK_PATH}.${process.pid}.tmp`
+  const tempPath = `${canonical}.${process.pid}.tmp`
   writeFileSync(tempPath, `${process.pid}\n`, { mode: 0o600 })
 
   try {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       try {
-        linkSync(tempPath, LOCK_PATH)
+        linkSync(tempPath, canonical)
         lockHeld = true
         installExitHandler()
         return
@@ -66,7 +75,7 @@ export function acquireProcessLock(): void {
         // or the file is unparseable. Remove and retry; the next iteration
         // either wins the linkSync or finds yet another live owner.
         try {
-          unlinkSync(LOCK_PATH)
+          unlinkSync(canonical)
         } catch {
           // Another process may have already cleaned it; that's fine — the
           // next linkSync will tell us the truth.
@@ -75,7 +84,7 @@ export function acquireProcessLock(): void {
     }
 
     throw new Error(
-      `Failed to acquire LightClaw process lock at ${LOCK_PATH} ` +
+      `Failed to acquire LightClaw process lock at ${canonical} ` +
       `after ${MAX_ATTEMPTS} attempts.`,
     )
   } finally {
@@ -93,7 +102,7 @@ export function releaseProcessLock(): void {
   }
   lockHeld = false
   try {
-    unlinkSync(LOCK_PATH)
+    unlinkSync(lockPath())
   } catch {
     // Already removed (e.g. by another process taking over after we crashed
     // and were detected as stale).
@@ -102,7 +111,7 @@ export function releaseProcessLock(): void {
 
 function readRecordedPid(): number | null {
   try {
-    const raw = readFileSync(LOCK_PATH, 'utf8').trim()
+    const raw = readFileSync(lockPath(), 'utf8').trim()
     const parsed = parseInt(raw, 10)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
   } catch {

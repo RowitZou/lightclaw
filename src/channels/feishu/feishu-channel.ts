@@ -1,6 +1,6 @@
-import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { lightclawHome } from '../../paths.js'
 import { ChannelRunner } from '../runner.js'
 import type { Channel, ChannelHandle, FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
@@ -55,7 +55,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       await runner.initialize()
 
       const dedup = new FeishuDedup(
-        path.join(homedir(), '.lightclaw', 'state', 'feishu-dedup.json'),
+        path.join(lightclawHome(), 'state', 'feishu-dedup.json'),
       )
 
       const onMessage = async (raw: FeishuRawMessage): Promise<void> => {

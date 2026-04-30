@@ -1,7 +1,7 @@
-import { homedir } from 'node:os'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
+import { lightclawHome } from '../paths.js'
 import { getCwd } from '../state.js'
 import { scanHookDir } from './loader.js'
 import { HookManager } from './manager.js'
@@ -34,7 +34,7 @@ export async function loadHooks(config: LightClawConfig): Promise<RegisteredHook
     return []
   }
 
-  const userDir = config.hookDirs.user ?? path.join(homedir(), '.lightclaw', 'hooks')
+  const userDir = config.hookDirs.user ?? path.join(lightclawHome(), 'hooks')
   const projectDir = config.hookDirs.project ?? path.join(getCwd(), '.lightclaw', 'hooks')
   const hooks = [
     ...await scanHookDir(userDir, 'user'),

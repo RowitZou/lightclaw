@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { loadConfigFile, type ConfigFileShape } from './config-file.js'
+import { workspaceRoot as resolveWorkspaceRoot } from './identity/paths.js'
+import { expandHomePath, lightclawHome } from './paths.js'
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ProviderName } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
@@ -89,6 +90,7 @@ export type LightClawConfig = {
   autoCompact: boolean
   autoMemory: boolean
   memoryDir: string
+  workspaceRoot: string
   contextWindow: number
   compactThresholdRatio: number
   compactKeepRecent: number
@@ -126,102 +128,6 @@ export type LightClawConfig = {
   microCompact: MicroCompactConfig
 }
 
-type ConfigFileShape = {
-  apiKey?: string
-  baseUrl?: string
-  model?: string
-  allowedModels?: string[]
-  provider?: ProviderName
-  providerOptions?: {
-    anthropic?: {
-      apiKey?: string
-      baseUrl?: string
-    }
-    openai?: {
-      apiKey?: string
-      baseUrl?: string
-    }
-  }
-  routing?: Partial<RoutingConfig>
-  sessionsDir?: string
-  autoCompact?: boolean
-  autoMemory?: boolean
-  memoryDir?: string
-  contextWindow?: number
-  compactThresholdRatio?: number
-  compactKeepRecent?: number
-  permissionMode?: string
-  permissionRuleFiles?: {
-    user?: string
-    project?: string
-    local?: string
-  }
-  permissionAuditLog?: string
-  mcpEnabled?: boolean
-  mcpConnectTimeout?: number
-  mcpConnectConcurrency?: number
-  mcpConfigFiles?: {
-    user?: string
-    project?: string
-    local?: string
-  }
-  mcpMaxToolOutputBytes?: number
-  maxToolOutputBytes?: number
-  hooksEnabled?: boolean
-  hookTimeoutBlocking?: number
-  hookTimeoutNonBlocking?: number
-  hookDirs?: {
-    user?: string
-    project?: string
-  }
-  memoryRecall?: {
-    enabled?: boolean
-    topN?: number
-  }
-  sessionMemory?: {
-    enabled?: boolean
-    updateTokenThreshold?: number
-    updateToolCallThreshold?: number
-  }
-  preCompactFlush?: {
-    enabled?: boolean
-    timeoutMs?: number
-  }
-  microCompact?: {
-    enabled?: boolean
-    perTool?: {
-      enabled?: boolean
-      tokenThreshold?: number
-      summaryMaxTokens?: number
-      archiveOriginals?: boolean
-    }
-    idle?: {
-      enabled?: boolean
-      gapThresholdMinutes?: number
-      keepRecent?: number
-    }
-  }
-  runtime?: {
-    backend?: string
-    docker?: {
-      image?: string
-      imageOverride?: string
-      idleTimeoutMs?: number
-      memoryLimit?: string
-      cpuLimit?: number
-      network?: string
-      mounts?: Array<{
-        host?: string
-        container?: string
-        mode?: string
-      }>
-      tmpfs?: string[]
-      env?: Record<string, string>
-      autoPull?: boolean
-    }
-  }
-}
-
 type ConfigFileDockerMount = NonNullable<
   NonNullable<ConfigFileShape['runtime']>['docker']
 >['mounts'] extends Array<infer T> | undefined ? T : never
@@ -235,20 +141,6 @@ const DEFAULT_ALLOWED_MODELS = [
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
-
-function expandHomePath(input: string): string {
-  if (input === '~') {
-    return homedir()
-  }
-
-  if (input.startsWith('~/')) {
-    return path.join(homedir(), input.slice(2))
-  }
-
-  return input
-    .replace(/\$\{HOME\}/g, homedir())
-    .replace(/\$\{USER\}/g, process.env.USER ?? '')
-}
 
 function parseBoolean(value: string | undefined): boolean | undefined {
   if (!value) {
@@ -355,32 +247,21 @@ export function parsePermissionMode(value: string | undefined): PermissionMode |
     : undefined
 }
 
-function loadConfigFile(): ConfigFileShape {
-  const configPath = path.join(homedir(), '.lightclaw', 'config.json')
-  if (!existsSync(configPath)) {
-    return {}
-  }
-
-  const raw = readFileSync(configPath, 'utf8')
-  const parsed = JSON.parse(raw) as ConfigFileShape
-  return parsed
-}
-
 export function resolveSessionsDir(): string {
   const fileConfig = loadConfigFile()
   const configuredPath =
     process.env.LIGHTCLAW_SESSIONS_DIR ??
     fileConfig.sessionsDir ??
-    path.join(homedir(), '.lightclaw', 'sessions')
+    path.join(lightclawHome(), 'sessions')
 
   return path.resolve(expandHomePath(configuredPath))
 }
 
 export function getConfig(): LightClawConfig {
   const fileConfig = loadConfigFile()
-  const provider =
+  const provider: ProviderName =
     parseProvider(process.env.LIGHTCLAW_PROVIDER) ??
-    fileConfig.provider ??
+    parseProvider(fileConfig.provider) ??
     'anthropic'
   const anthropicApiKey =
     process.env.ANTHROPIC_API_KEY ??
@@ -449,7 +330,7 @@ export function getConfig(): LightClawConfig {
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
         fileConfig.memoryDir ??
-        path.join(homedir(), '.lightclaw', 'memory'),
+        path.join(lightclawHome(), 'memory'),
     ),
   )
   const permissionMode =
@@ -629,13 +510,13 @@ export function getConfig(): LightClawConfig {
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
-      'Missing Anthropic API key. Set ANTHROPIC_API_KEY or ~/.lightclaw/config.json.',
+      `Missing Anthropic API key. Set ANTHROPIC_API_KEY or ${path.join(lightclawHome(), 'config.json')}.`,
     )
   }
 
   if (provider === 'openai' && !openaiApiKey) {
     throw new Error(
-      'Missing OpenAI API key. Set OPENAI_API_KEY or ~/.lightclaw/config.json.',
+      `Missing OpenAI API key. Set OPENAI_API_KEY or ${path.join(lightclawHome(), 'config.json')}.`,
     )
   }
 
@@ -666,6 +547,7 @@ export function getConfig(): LightClawConfig {
     autoCompact,
     autoMemory,
     memoryDir,
+    workspaceRoot: resolveWorkspaceRoot(),
     contextWindow,
     compactThresholdRatio,
     compactKeepRecent,

@@ -5,6 +5,7 @@ import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
+import { setLightclawHomeOverride } from './paths.js'
 import {
   acquireProcessLock,
   LightClawAlreadyRunningError,
@@ -19,6 +20,7 @@ type CliArgs = {
   help: boolean
   prompt?: string
   resume?: string | true
+  home?: string
   error?: string
 }
 
@@ -53,6 +55,16 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
+    if (arg === '--home') {
+      const value = argv[index + 1]
+      if (!value) {
+        return { ...args, error: '--home requires a value' }
+      }
+      args.home = value
+      index += 1
+      continue
+    }
+
     return {
       ...args,
       error: arg.startsWith('-') ? `unknown flag: ${arg}` : `unknown argument: ${arg}`,
@@ -75,11 +87,14 @@ Options:
   -h, --help      Show help
   -p, --prompt    Run a single prompt and exit
       --resume    Resume the latest or a specific saved session
+      --home      Override LightClaw home directory (default ~/.lightclaw)
 
 Environment:
-  LIGHTCLAW_NO_MEMORY=1  Disable auto-memory extraction and memory index injection
-  LIGHTCLAW_NO_MCP=1     Disable MCP client startup and MCP tool injection
-  LIGHTCLAW_NO_HOOKS=1   Disable hook loading
+  LIGHTCLAW_HOME             Coarse data root (sessions / memory / config / identity / workspaces / state)
+  LIGHTCLAW_WORKSPACE_ROOT   Per-user workspace root (overrides <home>/workspaces)
+  LIGHTCLAW_NO_MEMORY=1      Disable auto-memory extraction and memory index injection
+  LIGHTCLAW_NO_MCP=1         Disable MCP client startup and MCP tool injection
+  LIGHTCLAW_NO_HOOKS=1       Disable hook loading
   LIGHTCLAW_RUNTIME_BACKEND=local|docker
   LIGHTCLAW_DOCKER_IMAGE=<image>  Override DockerRuntime image
 `)
@@ -96,6 +111,13 @@ async function main(): Promise<void> {
     console.error('Run `lightclaw --help` for usage.')
     process.exitCode = 1
     return
+  }
+
+  // Apply --home before any code path resolves a LightClaw-rooted path
+  // (process lock, identity store, channels). lightclawHome() is lazy, so
+  // setting the override here is sufficient.
+  if (args.home) {
+    setLightclawHomeOverride(args.home)
   }
 
   // Mutual exclusion: refuse to start if another LightClaw is already

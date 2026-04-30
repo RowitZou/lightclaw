@@ -1,8 +1,8 @@
 import { readdir, readFile, rm, mkdir, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
+import { lightclawHome } from '../paths.js'
 import type { MemoryEntry } from './types.js'
 import { isMemoryType } from './types.js'
 
@@ -49,7 +49,7 @@ export function sanitizePath(inputPath: string): string {
 }
 
 export function memoryRoot(config: LightClawConfig): string {
-  return config.memoryDir || path.join(homedir(), '.lightclaw', 'memory')
+  return config.memoryDir || path.join(lightclawHome(), 'memory')
 }
 
 // Memory is keyed by canonical LightClaw user (Phase 9). The previous

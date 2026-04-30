@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
 import { parsePermissionMode } from '../config.js'
+import { expandHomePath, lightclawHome } from '../paths.js'
 import type { ChannelsConfig, FeishuChannelConfig, WechatChannelConfig } from './types.js'
 
 type ChannelsFileShape = {
@@ -22,7 +22,7 @@ export function loadChannelConfig(): ChannelsConfig {
 }
 
 function loadChannelsFile(): ChannelsFileShape {
-  const filePath = path.join(homedir(), '.lightclaw', 'channels.json')
+  const filePath = path.join(lightclawHome(), 'channels.json')
   if (!existsSync(filePath)) {
     return {}
   }
@@ -60,7 +60,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     mediaEnabled: input?.mediaEnabled ?? true,
     mediaDir: input?.mediaDir
       ? path.resolve(expandHomePath(input.mediaDir))
-      : path.join(homedir(), '.lightclaw', 'state', 'feishu', 'media'),
+      : path.join(lightclawHome(), 'state', 'feishu', 'media'),
     webhook: {
       host: webhook.host ?? '0.0.0.0',
       port: webhook.port ?? 18_850,
@@ -89,7 +89,7 @@ function mergeWechatConfig(input: ChannelsFileShape['wechat']): WechatChannelCon
     mediaEnabled: input.mediaEnabled ?? true,
     mediaDir: input.mediaDir
       ? path.resolve(expandHomePath(input.mediaDir))
-      : path.join(homedir(), '.lightclaw', 'state', 'wechat', 'media'),
+      : path.join(lightclawHome(), 'state', 'wechat', 'media'),
   }
 }
 
@@ -100,12 +100,3 @@ function parseTransport(value: unknown): 'ws' | 'webhook' | undefined {
   return undefined
 }
 
-function expandHomePath(input: string): string {
-  if (input === '~') {
-    return homedir()
-  }
-  if (input.startsWith('~/')) {
-    return path.join(homedir(), input.slice(2))
-  }
-  return input
-}

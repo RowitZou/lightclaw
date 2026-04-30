@@ -1,6 +1,7 @@
 import { URL } from 'node:url'
-import { homedir } from 'node:os'
 import path from 'node:path'
+
+import { expandHomePath } from '../paths.js'
 
 export function matchString(pattern: string, value: string): boolean {
   if (pattern.endsWith(':*')) {
@@ -73,21 +74,11 @@ export function matchPath(pattern: string, filePath: string): boolean {
 }
 
 function normalizePatternPath(input: string): string {
-  const expanded = input === '~'
-    ? homedir()
-    : input.startsWith('~/')
-      ? path.join(homedir(), input.slice(2))
-      : input
-  return expanded.replace(/\\/g, '/').replace(/\/+$/g, '')
+  return expandHomePath(input).replace(/\\/g, '/').replace(/\/+$/g, '')
 }
 
 function normalizeInputPath(input: string): string {
-  const expanded = input === '~'
-    ? homedir()
-    : input.startsWith('~/')
-      ? path.join(homedir(), input.slice(2))
-      : input
-  return path.resolve(expanded).replace(/\\/g, '/').replace(/\/+$/g, '')
+  return path.resolve(expandHomePath(input)).replace(/\\/g, '/').replace(/\/+$/g, '')
 }
 
 export function matchToolContent(
