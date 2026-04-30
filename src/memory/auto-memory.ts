@@ -10,7 +10,7 @@ const MEMORY_INDEX_FILE = 'MEMORY.md'
 const MAX_INDEX_LINES = 200
 const MAX_INDEX_BYTES = 25 * 1024
 
-function normalizeMemoryFilename(filename: string): string {
+export function normalizeMemoryFilename(filename: string): string {
   const trimmed = filename.trim()
   if (trimmed.length === 0) {
     throw new Error('Memory filename is required.')

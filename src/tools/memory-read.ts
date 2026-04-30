@@ -4,7 +4,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { memoryFreshnessText } from '../memory/aging.js'
-import { readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
+import { normalizeMemoryFilename, readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
 import { getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -49,7 +49,12 @@ export const memoryReadTool = buildTool({
       if (content) {
         let staleness = ''
         try {
-          const stats = await stat(path.join(memoryDir, input.filename))
+          // Use the same normalized filename as readMemoryFile — otherwise
+          // a caller passing "foo" (no .md) would load content via
+          // normalize-on-read but stat the wrong path, silently dropping
+          // the staleness reminder.
+          const normalized = normalizeMemoryFilename(input.filename)
+          const stats = await stat(path.join(memoryDir, normalized))
           staleness = memoryFreshnessText(stats.mtimeMs)
         } catch {
           // mtime unavailable — fall through to plain content
