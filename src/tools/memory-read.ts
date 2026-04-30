@@ -1,5 +1,9 @@
+import { stat } from 'node:fs/promises'
+import path from 'node:path'
+
 import { z } from 'zod'
 
+import { memoryFreshnessText } from '../memory/aging.js'
 import { readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
 import { getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -42,9 +46,22 @@ export const memoryReadTool = buildTool({
       }
 
       const content = await readMemoryFile(memoryDir, input.filename)
+      if (content) {
+        let staleness = ''
+        try {
+          const stats = await stat(path.join(memoryDir, input.filename))
+          staleness = memoryFreshnessText(stats.mtimeMs)
+        } catch {
+          // mtime unavailable — fall through to plain content
+        }
+        const output = staleness
+          ? `${content}\n\n<system-reminder>${staleness}</system-reminder>`
+          : content
+        return { output }
+      }
       return {
-        output: content ?? `Memory file not found: ${input.filename}`,
-        ...(content ? {} : { isError: true }),
+        output: `Memory file not found: ${input.filename}`,
+        isError: true,
       }
     } catch (error) {
       return {

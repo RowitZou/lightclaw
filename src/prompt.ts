@@ -2,6 +2,7 @@ import { platform } from 'node:process'
 
 import type { AgentDefinition } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
+import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
 import { selectRelevantMemories } from './memory/recall.js'
@@ -204,7 +205,16 @@ export async function buildSystemPromptTemplate(
       `<!-- selected by recall on query "${trimmedQuery}" -->`,
     )
     for (const memory of recalledMemories) {
-      preTodoSections.push('', `### ${memory.filename}`, memory.content)
+      const age = memoryAge(memory.mtimeMs)
+      const heading =
+        age === 'today'
+          ? `### ${memory.filename}`
+          : `### ${memory.filename} (saved ${age})`
+      preTodoSections.push('', heading, memory.content)
+      const staleness = memoryFreshnessText(memory.mtimeMs)
+      if (staleness) {
+        preTodoSections.push('', `<system-reminder>${staleness}</system-reminder>`)
+      }
     }
   }
 

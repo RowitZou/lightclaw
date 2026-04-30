@@ -32,6 +32,7 @@ export const memoryWriteTool = buildTool({
         type: input.type,
         description: input.description.trim(),
         content: input.content.trim(),
+        mtimeMs: Date.now(),
       })
 
       return {
