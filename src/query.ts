@@ -39,6 +39,8 @@ import {
   setLastExtractedAt,
 } from './state.js'
 import { compactConversation } from './session/compact.js'
+import { maybeIdleMicroCompact } from './session/idle-mc.js'
+import { maybeSummarizeToolResult } from './session/tool-summarize.js'
 import {
   loadMeta,
   updateMetaLastExtractedAt,
@@ -98,6 +100,7 @@ type DispatchContext = {
   permissionApprover?: PermissionApprover
   onToolResult?(event: ToolExecutionEvent): void
   maxToolOutputBytes: number
+  config: LightClawConfig
 }
 
 function snipContent(content: string, maxBytes: number): string {
@@ -341,6 +344,7 @@ export async function query(params: QueryParams): Promise<{
     permissionApprover: params.permissionApprover,
     onToolResult: params.onToolResult,
     maxToolOutputBytes: config.maxToolOutputBytes,
+    config,
   }
 
   type StopEvent = Extract<
@@ -349,6 +353,28 @@ export async function query(params: QueryParams): Promise<{
   >
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    // Iter 3: idle MC. Clear stale tool_results before sending this turn's
+    // request, so the shrunk prompt is what actually goes out. Idempotent on
+    // re-run. Subagent mode is excluded — short lifetimes never reach the
+    // gap threshold and there is no point spending a transcript rewrite on
+    // them.
+    if (mode !== 'subagent') {
+      try {
+        const mc = await maybeIdleMicroCompact(messages, config)
+        if (mc.cleared > 0) {
+          console.log(
+            `[micro-compact:idle] cleared ${mc.cleared} tool_result(s), `
+            + `~${mc.tokensSaved} tokens saved `
+            + `(gap > ${config.microCompact.idle.gapThresholdMinutes}min, `
+            + `kept last ${config.microCompact.idle.keepRecent})`,
+          )
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[micro-compact:idle] failed: ${msg}`)
+      }
+    }
+
     let stopEvent: StopEvent | undefined
 
     // Stream the assistant turn. If the API rejects the request as
@@ -595,6 +621,26 @@ async function dispatchToolCall(
     }
 
     formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
+
+    // Iter 2: per-tool LLM summarize. Runs after snipContent so very large
+    // outputs are byte-capped first. Subagent gating is caller-driven via
+    // `enabled`. Failures fall back to the snipped content via passthrough.
+    const summarizeResult = await maybeSummarizeToolResult({
+      toolName: tool.name,
+      content: formatted.content,
+      callId,
+      isError: Boolean(formatted.is_error),
+      signal: getAbortController().signal,
+      config: ctx.config,
+      enabled: ctx.mode !== 'subagent',
+    })
+    formatted.content = summarizeResult.output
+    if (summarizeResult.summarized) {
+      console.log(
+        `[micro-compact:per-tool] ${tool.name} ${callId} `
+        + `${summarizeResult.origTokens}→${summarizeResult.newTokens} tokens`,
+      )
+    }
 
     ctx.onToolResult?.({
       toolName: toolUse.name,

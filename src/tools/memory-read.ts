@@ -1,6 +1,10 @@
+import { stat } from 'node:fs/promises'
+import path from 'node:path'
+
 import { z } from 'zod'
 
-import { readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
+import { memoryFreshnessText } from '../memory/aging.js'
+import { normalizeMemoryFilename, readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
 import { getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -42,9 +46,27 @@ export const memoryReadTool = buildTool({
       }
 
       const content = await readMemoryFile(memoryDir, input.filename)
+      if (content) {
+        let staleness = ''
+        try {
+          // Use the same normalized filename as readMemoryFile — otherwise
+          // a caller passing "foo" (no .md) would load content via
+          // normalize-on-read but stat the wrong path, silently dropping
+          // the staleness reminder.
+          const normalized = normalizeMemoryFilename(input.filename)
+          const stats = await stat(path.join(memoryDir, normalized))
+          staleness = memoryFreshnessText(stats.mtimeMs)
+        } catch {
+          // mtime unavailable — fall through to plain content
+        }
+        const output = staleness
+          ? `${content}\n\n<system-reminder>${staleness}</system-reminder>`
+          : content
+        return { output }
+      }
       return {
-        output: content ?? `Memory file not found: ${input.filename}`,
-        ...(content ? {} : { isError: true }),
+        output: `Memory file not found: ${input.filename}`,
+        isError: true,
       }
     } catch (error) {
       return {

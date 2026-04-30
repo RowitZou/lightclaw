@@ -12,6 +12,11 @@ export type MemoryEntry = {
   type: MemoryType
   description: string
   content: string
+  /** mtime in ms since epoch — populated by scanMemoryFiles via fs.stat,
+   *  or Date.now() for in-memory entries built by extract before write.
+   *  Used by aging helpers to render "(saved N days ago)" prefix and
+   *  staleness reminder for memories older than one day. */
+  mtimeMs: number
 }
 
 export type MemoryFrontmatter = {

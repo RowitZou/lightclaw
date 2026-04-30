@@ -75,6 +75,7 @@ function normalizeExtractedEntry(entry: unknown): MemoryEntry | null {
     type,
     description,
     content,
+    mtimeMs: Date.now(),
   }
 }
 

@@ -39,6 +39,11 @@ let imageReadiness: ImageReadinessTracker | null = null
 let sessionMemoryTokensSinceUpdate = 0
 let sessionMemoryToolCallsSinceUpdate = 0
 let sessionMemoryUpdateCount = 0
+// Phase 14 micro-compact counters. Module-level for the same reason as the
+// SessionMemory throttles above — they reset on every initializeState (a
+// fresh session starts with zero MC actions).
+let perToolSummaryCount = 0
+let idleMicroCompactCount = 0
 // Session permission rules persist per canonical user across channel
 // resetSessionContext / initializeState calls — without this, the Feishu
 // "批准所有" button (and terminal `[a]`) would silently degrade to
@@ -94,6 +99,8 @@ export function initializeState(input: {
   sessionMemoryTokensSinceUpdate = 0
   sessionMemoryToolCallsSinceUpdate = 0
   sessionMemoryUpdateCount = 0
+  perToolSummaryCount = 0
+  idleMicroCompactCount = 0
 }
 
 function requireState(): SessionState {
@@ -346,4 +353,22 @@ export function getSessionMemoryUpdateCount(): number {
 export function incrementSessionMemoryUpdateCount(): number {
   sessionMemoryUpdateCount += 1
   return sessionMemoryUpdateCount
+}
+
+export function getPerToolSummaryCount(): number {
+  return perToolSummaryCount
+}
+
+export function incrementPerToolSummaryCount(): number {
+  perToolSummaryCount += 1
+  return perToolSummaryCount
+}
+
+export function getIdleMicroCompactCount(): number {
+  return idleMicroCompactCount
+}
+
+export function incrementIdleMicroCompactCount(): number {
+  idleMicroCompactCount += 1
+  return idleMicroCompactCount
 }

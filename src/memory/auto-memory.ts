@@ -1,4 +1,4 @@
-import { readdir, readFile, rm, mkdir, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rm, mkdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -10,7 +10,7 @@ const MEMORY_INDEX_FILE = 'MEMORY.md'
 const MAX_INDEX_LINES = 200
 const MAX_INDEX_BYTES = 25 * 1024
 
-function normalizeMemoryFilename(filename: string): string {
+export function normalizeMemoryFilename(filename: string): string {
   const trimmed = filename.trim()
   if (trimmed.length === 0) {
     throw new Error('Memory filename is required.')
@@ -161,7 +161,11 @@ export async function scanMemoryFiles(memoryDir: string): Promise<MemoryEntry[]>
       entries
         .filter(entry => entry.isFile() && entry.name.endsWith('.md') && entry.name !== MEMORY_INDEX_FILE)
         .map(async entry => {
-          const content = await readFile(path.join(memoryDir, entry.name), 'utf8')
+          const filePath = path.join(memoryDir, entry.name)
+          const [content, stats] = await Promise.all([
+            readFile(filePath, 'utf8'),
+            stat(filePath),
+          ])
           const parsed = parseFrontmatter(content)
           const type = typeof parsed.frontmatter.type === 'string' ? parsed.frontmatter.type : ''
           const description =
@@ -178,6 +182,7 @@ export async function scanMemoryFiles(memoryDir: string): Promise<MemoryEntry[]>
             type,
             description,
             content: parsed.body.trim(),
+            mtimeMs: stats.mtimeMs,
           } satisfies MemoryEntry
         }),
     )
