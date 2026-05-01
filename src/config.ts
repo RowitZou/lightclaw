@@ -44,6 +44,23 @@ export type RlaunchRuntimeSettings = {
   healthCheckIntervalMs: number
   preheatOnStartup: boolean
   preheatOnApproval: boolean
+  env: Record<string, string>
+}
+
+export type NetworkBridgeSettings = {
+  mode: 'isolated' | 'host'
+  /**
+   * 'inherit' (default) snapshots the LightClaw process's http_proxy /
+   * https_proxy at startup; 'direct' forces no upstream; an explicit URL
+   * pins it. Containers/pods only ever see the bridge address, never
+   * this value.
+   */
+  upstream: 'inherit' | 'direct' | string
+  port: number
+  /** Host interface the bridge listens on. 0.0.0.0 lets cluster pods reach it. */
+  bindHost: string
+  /** CIDR allowlist (default safe values keep it off the open internet). */
+  acl: string[]
 }
 
 export type RoutingConfig = {
@@ -142,6 +159,7 @@ export type LightClawConfig = {
     backend: RuntimeKind
     docker: DockerRuntimeSettings
     rlaunch: RlaunchRuntimeSettings
+    network: NetworkBridgeSettings
   }
   memoryRecall: MemoryRecallConfig
   sessionMemory: SessionMemoryConfig
@@ -544,6 +562,7 @@ export function getConfig(): LightClawConfig {
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
     : ['/tmp']
   const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
+  const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -652,8 +671,26 @@ export function getConfig(): LightClawConfig {
         autoPull: dockerConfig.autoPull ?? true,
       },
       rlaunch: rlaunchConfig,
+      network: networkConfig,
     },
   }
+}
+
+function resolveNetworkBridgeSettings(
+  fileConfig: NonNullable<NonNullable<ConfigFileShape['runtime']>['network']>,
+): NetworkBridgeSettings {
+  const mode: NetworkBridgeSettings['mode'] = fileConfig.mode === 'host' ? 'host' : 'isolated'
+  const upstreamRaw = fileConfig.upstream ?? 'inherit'
+  const upstream: NetworkBridgeSettings['upstream'] =
+    upstreamRaw === 'direct' ? 'direct' :
+    upstreamRaw === 'inherit' ? 'inherit' :
+    upstreamRaw
+  const port = Math.max(1, Math.min(65535, Math.floor(Number(fileConfig.port ?? 18080))))
+  const bindHost = (fileConfig.bindHost ?? '0.0.0.0').trim() || '0.0.0.0'
+  const acl = Array.isArray(fileConfig.acl) && fileConfig.acl.length > 0
+    ? fileConfig.acl.filter(entry => typeof entry === 'string' && entry.trim()).map(entry => entry.trim())
+    : ['127.0.0.0/8', '100.100.0.0/16', '172.17.0.0/16']
+  return { mode, upstream, port, bindHost, acl }
 }
 
 function resolveRlaunchRuntimeSettings(
@@ -696,5 +733,6 @@ function resolveRlaunchRuntimeSettings(
     healthCheckIntervalMs: Math.max(10_000, Math.floor(Number(fileConfig.healthCheckIntervalMs ?? 300_000))),
     preheatOnStartup: fileConfig.preheatOnStartup ?? true,
     preheatOnApproval: fileConfig.preheatOnApproval ?? true,
+    env: fileConfig.env && typeof fileConfig.env === 'object' ? fileConfig.env : {},
   }
 }

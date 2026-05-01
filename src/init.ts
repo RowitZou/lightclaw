@@ -8,17 +8,20 @@ import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
+import { NetworkBridge } from './runtime/network-bridge.js'
 import { resolveDockerImage } from './runtime/pool.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
   getAbortController,
   getImageReadiness,
+  getNetworkBridge,
   getRuntime,
   getRuntimePool,
   initializeState,
   resetAbortController,
   clearActiveSkillAllowedTools,
   setFileRules,
+  setNetworkBridge,
   setRuntime,
 } from './state.js'
 import type { TodoItem } from './types.js'
@@ -61,6 +64,11 @@ export class LocalRuntimeAdminOnlyError extends Error {
 export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
   const config = getConfig()
   const resolvedConfig = resolveConfig(config, input)
+  // NetworkBridge must come up BEFORE pool/preheat — when network.mode=host,
+  // pool.ts auto-injects http_proxy pointing at this bridge's address into
+  // every container, so a not-yet-listening bridge would mean the first
+  // worker spawned during preheat would have a dangling proxy URL.
+  await startNetworkBridgeIfNeeded(resolvedConfig)
   // Kick off image prefetch BEFORE writeSessionState — DockerRuntime construction
   // takes the tracker, and the tracker's first inspect/pull starts here.
   // Local backend never instantiates the tracker (lazy via getImageReadiness),
@@ -73,6 +81,26 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   await getRuntimePool().sweepOrphans(resolvedConfig)
   startRlaunchPreheatIfNeeded(resolvedConfig)
   return resolvedConfig
+}
+
+async function startNetworkBridgeIfNeeded(config: LightClawConfig): Promise<void> {
+  if (config.runtime.network.mode !== 'host') {
+    return
+  }
+  if (getNetworkBridge()) {
+    return
+  }
+  const bridge = new NetworkBridge(config.runtime.network)
+  try {
+    await bridge.start()
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `NetworkBridge failed to start on ${config.runtime.network.bindHost}:${config.runtime.network.port}: ${detail}. ` +
+      'Set runtime.network.mode = "isolated" or change the port.',
+    )
+  }
+  setNetworkBridge(bridge)
 }
 
 function startImagePrefetchIfNeeded(config: LightClawConfig): void {
@@ -203,6 +231,7 @@ function installSignalHandlers(): void {
       runtimeStopSafely(),
       runtimePoolReleaseSafely(),
       workerHealthCheckerStopSafely(),
+      networkBridgeStopSafely(),
     ]).finally(() => process.exit(exitCode))
 
     // Hard cap if cleanup hangs (e.g. docker daemon unresponsive).
@@ -219,6 +248,16 @@ function installSignalHandlers(): void {
 
 async function workerHealthCheckerStopSafely(): Promise<void> {
   workerHealthChecker?.stop()
+}
+
+async function networkBridgeStopSafely(): Promise<void> {
+  const bridge = getNetworkBridge()
+  if (!bridge) return
+  try {
+    await bridge.stop()
+  } finally {
+    setNetworkBridge(null)
+  }
 }
 
 async function runtimeStopSafely(): Promise<void> {

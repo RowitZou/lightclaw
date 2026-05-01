@@ -37,6 +37,8 @@ export type RlaunchRuntimeConfig = {
   workspaceGpfsMount: string
   workspaceContainerPath: string
   helperContainerPath: string
+  /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
+  env: Readonly<Record<string, string>>
 }
 
 type ProcessState =
@@ -412,42 +414,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private launchArgs(input: { detach: boolean; predictOnly: boolean }): string[] {
-    const args = [
-      '--gpu',
-      String(this.cfg.gpu),
-      '--cpu',
-      String(this.cfg.cpu),
-      '--memory',
-      String(this.cfg.memoryMb),
-      '--namespace',
-      this.cfg.namespace,
-      '--charged-group',
-      this.cfg.chargedGroup,
-      `--image=${this.cfg.image}`,
-      `--private-machine=${this.cfg.privateMachine}`,
-      `--image-pull-policy=${this.cfg.imagePullPolicy}`,
-      `--max-wait-duration=${this.cfg.maxWaitDuration}`,
-      `--worker-garbage-collection-time=${formatGcDuration(this.cfg.workerGcTimeHours)}`,
-      `--mount=${this.cfg.workspaceGpfsMount}`,
-    ]
-    for (const tag of this.cfg.positiveTags) {
-      args.push(`--positive-tags=${tag}`)
-    }
-    if (input.predictOnly) {
-      args.push('--predict-only=true', '--', 'bash')
-      return args
-    }
-    if (input.detach) {
-      args.unshift('-d')
-    }
-    args.push(
-      `--comment=lightclaw-runtime-${this.cfg.canonicalUser}-${this.cfg.deploymentHash}`,
-      '--',
-      'bash',
-      '-c',
-      'sleep infinity',
-    )
-    return args
+    return buildLaunchArgs(this.cfg, input)
   }
 
   private async processPhase(name: string): Promise<ProcessState> {
@@ -524,6 +491,54 @@ export class RlaunchRuntime implements Runtime {
 
     throw new Error(`Path is not within RlaunchRuntime workspace: ${pathname}`)
   }
+}
+
+export function buildLaunchArgs(
+  cfg: RlaunchRuntimeConfig,
+  input: { detach: boolean; predictOnly: boolean },
+): string[] {
+  const args = [
+    '--gpu',
+    String(cfg.gpu),
+    '--cpu',
+    String(cfg.cpu),
+    '--memory',
+    String(cfg.memoryMb),
+    '--namespace',
+    cfg.namespace,
+    '--charged-group',
+    cfg.chargedGroup,
+    `--image=${cfg.image}`,
+    `--private-machine=${cfg.privateMachine}`,
+    `--image-pull-policy=${cfg.imagePullPolicy}`,
+    `--max-wait-duration=${cfg.maxWaitDuration}`,
+    `--worker-garbage-collection-time=${formatGcDuration(cfg.workerGcTimeHours)}`,
+    `--mount=${cfg.workspaceGpfsMount}`,
+  ]
+  for (const tag of cfg.positiveTags) {
+    args.push(`--positive-tags=${tag}`)
+  }
+  // env injection happens before predictOnly fast-return so predict and
+  // detached spawn share identical args (predict surfaces env-related
+  // failures fail-fast before the real worker burns scheduling time).
+  for (const [key, value] of Object.entries(cfg.env)) {
+    args.push('-e', `${key}=${value}`)
+  }
+  if (input.predictOnly) {
+    args.push('--predict-only=true', '--', 'bash')
+    return args
+  }
+  if (input.detach) {
+    args.unshift('-d')
+  }
+  args.push(
+    `--comment=lightclaw-runtime-${cfg.canonicalUser}-${cfg.deploymentHash}`,
+    '--',
+    'bash',
+    '-c',
+    'sleep infinity',
+  )
+  return args
 }
 
 export function parseWorkerName(output: string): string | null {

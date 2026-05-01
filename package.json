@@ -26,6 +26,7 @@
     "fast-glob": "^3.3.3",
     "https-proxy-agent": "^9.0.0",
     "openai": "^6.34.0",
+    "proxy-chain": "^2.7.1",
     "qrcode-terminal": "^0.12.0",
     "undici": "^8.1.0",
     "zod": "^4.1.12"
