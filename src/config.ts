@@ -26,6 +26,26 @@ export type DockerRuntimeSettings = {
   autoPull: boolean
 }
 
+export type RlaunchRuntimeSettings = {
+  image: string
+  chargedGroup: string
+  namespace: string
+  cpu: number
+  memoryMb: number
+  gpu: number
+  privateMachine: 'group' | 'yes' | 'no' | 'project' | 'tenant'
+  positiveTags: string[]
+  gpfsHostPrefix: string
+  gpfsMountPrefix: string
+  imagePullPolicy: 'IfNotPresent' | 'Always' | 'Never'
+  maxWaitDuration: string
+  workerGcTimeHours: number
+  predictBeforeStart: boolean
+  healthCheckIntervalMs: number
+  preheatOnStartup: boolean
+  preheatOnApproval: boolean
+}
+
 export type RoutingConfig = {
   main: string
   compact?: string
@@ -121,6 +141,7 @@ export type LightClawConfig = {
   runtime: {
     backend: RuntimeKind
     docker: DockerRuntimeSettings
+    rlaunch: RlaunchRuntimeSettings
   }
   memoryRecall: MemoryRecallConfig
   sessionMemory: SessionMemoryConfig
@@ -185,11 +206,25 @@ function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined
     return undefined
   }
 
-  if (value === 'local' || value === 'docker' || value === 'rjob') {
+  if (value === 'local' || value === 'docker' || value === 'rlaunch' || value === 'rjob') {
     return value
   }
 
   throw new Error(`Unknown runtime backend: ${value}`)
+}
+
+function parsePrivateMachine(value: string | undefined): RlaunchRuntimeSettings['privateMachine'] | undefined {
+  if (value === 'group' || value === 'yes' || value === 'no' || value === 'project' || value === 'tenant') {
+    return value
+  }
+  return undefined
+}
+
+function parseImagePullPolicy(value: string | undefined): RlaunchRuntimeSettings['imagePullPolicy'] | undefined {
+  if (value === 'IfNotPresent' || value === 'Always' || value === 'Never') {
+    return value
+  }
+  return undefined
 }
 
 function parseStringList(value: string | undefined): string[] | undefined {
@@ -403,6 +438,7 @@ export function getConfig(): LightClawConfig {
     parseRuntimeBackend(fileConfig.runtime?.backend) ??
     'local'
   const dockerConfig = fileConfig.runtime?.docker ?? {}
+  const rlaunchFileConfig = fileConfig.runtime?.rlaunch ?? {}
   const dockerIdleTimeoutMs = Math.max(
     60_000,
     Math.floor(
@@ -507,6 +543,7 @@ export function getConfig(): LightClawConfig {
   const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
     : ['/tmp']
+  const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
 
   if (provider === 'anthropic' && !anthropicApiKey) {
     throw new Error(
@@ -614,6 +651,50 @@ export function getConfig(): LightClawConfig {
         env: dockerConfig.env ?? {},
         autoPull: dockerConfig.autoPull ?? true,
       },
+      rlaunch: rlaunchConfig,
     },
+  }
+}
+
+function resolveRlaunchRuntimeSettings(
+  backend: RuntimeKind,
+  fileConfig: NonNullable<NonNullable<ConfigFileShape['runtime']>['rlaunch']>,
+): RlaunchRuntimeSettings {
+  const required = (field: 'image' | 'chargedGroup' | 'namespace' | 'gpfsHostPrefix' | 'gpfsMountPrefix'): string => {
+    const value = field === 'namespace'
+      ? fileConfig[field] ?? process.env.KUBEBRAIN_NAMESPACE
+      : fileConfig[field]
+    if (value && value.trim()) {
+      return value.trim()
+    }
+    if (backend === 'rlaunch') {
+      throw new Error(
+        `runtime.rlaunch.${field} is required when runtime.backend = "rlaunch". ` +
+        `Set it in ${path.join(lightclawHome(), 'config.json')}.`,
+      )
+    }
+    return ''
+  }
+
+  return {
+    image: required('image'),
+    chargedGroup: required('chargedGroup'),
+    namespace: required('namespace'),
+    cpu: Math.max(1, Math.floor(Number(fileConfig.cpu ?? 8))),
+    memoryMb: Math.max(1024, Math.floor(Number(fileConfig.memoryMb ?? 16_000))),
+    gpu: Math.max(0, Math.floor(Number(fileConfig.gpu ?? 0))),
+    privateMachine: parsePrivateMachine(fileConfig.privateMachine) ?? 'group',
+    positiveTags: Array.isArray(fileConfig.positiveTags)
+      ? fileConfig.positiveTags.filter(tag => typeof tag === 'string' && tag.trim()).map(tag => tag.trim())
+      : [],
+    gpfsHostPrefix: required('gpfsHostPrefix'),
+    gpfsMountPrefix: required('gpfsMountPrefix'),
+    imagePullPolicy: parseImagePullPolicy(fileConfig.imagePullPolicy) ?? 'IfNotPresent',
+    maxWaitDuration: fileConfig.maxWaitDuration ?? '5m',
+    workerGcTimeHours: clampNumber(Number(fileConfig.workerGcTimeHours ?? 24), 0.25, 168),
+    predictBeforeStart: fileConfig.predictBeforeStart ?? true,
+    healthCheckIntervalMs: Math.max(10_000, Math.floor(Number(fileConfig.healthCheckIntervalMs ?? 300_000))),
+    preheatOnStartup: fileConfig.preheatOnStartup ?? true,
+    preheatOnApproval: fileConfig.preheatOnApproval ?? true,
   }
 }

@@ -109,6 +109,25 @@ export type ConfigFileShape = {
       env?: Record<string, string>
       autoPull?: boolean
     }
+    rlaunch?: {
+      image?: string
+      chargedGroup?: string
+      namespace?: string
+      cpu?: number
+      memoryMb?: number
+      gpu?: number
+      privateMachine?: string
+      positiveTags?: string[]
+      gpfsHostPrefix?: string
+      gpfsMountPrefix?: string
+      imagePullPolicy?: string
+      maxWaitDuration?: string
+      workerGcTimeHours?: number
+      predictBeforeStart?: boolean
+      healthCheckIntervalMs?: number
+      preheatOnStartup?: boolean
+      preheatOnApproval?: boolean
+    }
   }
 }
 

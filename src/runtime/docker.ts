@@ -1,6 +1,4 @@
-import { spawn } from 'node:child_process'
 import path from 'node:path'
-import { StringDecoder } from 'node:string_decoder'
 
 import type {
   ExecInput,
@@ -16,6 +14,7 @@ import {
   isImageMissingError,
   formatPullError,
 } from './image-readiness.js'
+import { runProcess, shellQuote } from './process.js'
 
 export type DockerMount = {
   host: string
@@ -368,98 +367,6 @@ export async function dockerCmdRaw(args: string[]): Promise<ExecResult> {
     maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
     limitMessage: 'docker command terminated',
   })
-}
-
-async function runProcess(
-  command: string,
-  args: string[],
-  options: {
-    abortSignal?: AbortSignal
-    stdin?: string | Buffer
-    timeoutMs: number
-    maxBufferBytes: number
-    limitMessage: string
-  },
-): Promise<ExecResult> {
-  return new Promise(resolve => {
-    let settled = false
-    let killed = false
-    let stdout = ''
-    let stderr = ''
-    let stdoutBytes = 0
-    let stderrBytes = 0
-    const stdoutDecoder = new StringDecoder('utf8')
-    const stderrDecoder = new StringDecoder('utf8')
-    const child = spawn(command, args, {
-      signal: options.abortSignal,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-
-    const finish = (result: ExecResult): void => {
-      if (settled) {
-        return
-      }
-      settled = true
-      clearTimeout(timeout)
-      resolve({
-        ...result,
-        stdout: result.stdout + stdoutDecoder.end(),
-        stderr: result.stderr + stderrDecoder.end(),
-      })
-    }
-
-    const killForLimit = (streamName: 'stdout' | 'stderr'): void => {
-      if (killed) {
-        return
-      }
-      killed = true
-      stderr += `\n${streamName} exceeded maxBufferBytes (${options.maxBufferBytes}); ${options.limitMessage}.`
-      child.kill('SIGTERM')
-    }
-
-    const timeout = setTimeout(() => {
-      if (killed) {
-        return
-      }
-      killed = true
-      stderr += `\ncommand timed out after ${options.timeoutMs}ms.`
-      child.kill('SIGTERM')
-    }, options.timeoutMs)
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBytes += chunk.length
-      if (stdoutBytes <= options.maxBufferBytes) {
-        stdout += stdoutDecoder.write(chunk)
-      } else {
-        killForLimit('stdout')
-      }
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrBytes += chunk.length
-      if (stderrBytes <= options.maxBufferBytes) {
-        stderr += stderrDecoder.write(chunk)
-      } else {
-        killForLimit('stderr')
-      }
-    })
-    child.on('error', error => {
-      finish({ stdout, stderr: stderr || error.message, exitCode: -1 })
-    })
-    child.on('close', (code, signal) => {
-      finish({ stdout, stderr, exitCode: killed || signal ? -1 : code ?? 1 })
-    })
-    child.stdin.on('error', () => { /* ignored */ })
-
-    if (options.stdin !== undefined) {
-      child.stdin.end(options.stdin)
-    } else {
-      child.stdin.end()
-    }
-  })
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 function delay(ms: number): Promise<void> {
