@@ -2,11 +2,8 @@ import path from 'node:path'
 
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { runHook } from '../hooks/index.js'
-import { initializeHooks } from '../hooks/index.js'
 import { workspaceFor } from '../identity/paths.js'
-import { initializeMcp } from '../mcp/index.js'
 import {
-  initializeApp,
   beginQuery,
   resetSessionContext,
   LocalRuntimeAdminOnlyError,
@@ -105,22 +102,17 @@ export class ChannelRunner {
   constructor(private readonly strategy: ChannelRunnerStrategy) {}
 
   /**
-   * One-shot bootstrap of app-level singletons (agents registry, signal
-   * handlers, hook loader, MCP connections, skill registry). Per-message
-   * state (sessionId, cwd, permissionMode) is refreshed on each message
-   * via resetSessionContext() inside handleMessage().
+   * Refresh per-channel state. App-level singletons (agents registry, signal
+   * handlers, hook loader, MCP, runtime pool) are bootstrapped by cli.ts
+   * BEFORE channels start; doing it here would re-enter initializeApp without
+   * a currentUserId, which leaves a ghost runtime in the pool. Per-message
+   * state (sessionId, cwd, permissionMode) is refreshed on each message via
+   * resetSessionContext() inside handleMessage().
    */
   async initialize(): Promise<void> {
     if (this.initialized) {
       return
     }
-
-    const appConfig = await initializeApp({
-      cwd: this.strategy.cwd,
-      permissionMode: this.strategy.permissionMode,
-    })
-    await initializeHooks(appConfig)
-    await initializeMcp(appConfig)
     await refreshSkillRegistry(getCwd())
     this.initialized = true
   }

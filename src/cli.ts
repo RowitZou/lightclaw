@@ -145,20 +145,23 @@ async function main(): Promise<void> {
     resumeMeta = resumeSessionId ? await loadMeta(resumeSessionId) : null
   }
 
+  // Order matters: initializeApp must run BEFORE startEnabledChannels so the
+  // channel runner doesn't try to bootstrap the app itself (without a
+  // currentUserId, which would acquire a ghost "__terminal__" runtime).
+  const config = await initializeApp({
+    model: resumeMeta?.model,
+    sessionId: resumeSessionId,
+    resumedFrom: resumeSessionId ?? null,
+    compactionCount: resumeMeta?.compactionCount,
+    lastExtractedAt: resumeMeta?.lastExtractedAt,
+    todos: resumeMeta?.todos,
+    permissionMode: resumeMeta?.permissionMode,
+    currentUserId: resumeMeta?.userId ?? currentUserId,
+  })
+  await initializeHooks(config)
+  await initializeMcp(config)
   const channelHandles = args.prompt ? [] : await startEnabledChannels()
   try {
-    const config = await initializeApp({
-      model: resumeMeta?.model,
-      sessionId: resumeSessionId,
-      resumedFrom: resumeSessionId ?? null,
-      compactionCount: resumeMeta?.compactionCount,
-      lastExtractedAt: resumeMeta?.lastExtractedAt,
-      todos: resumeMeta?.todos,
-      permissionMode: resumeMeta?.permissionMode,
-      currentUserId: resumeMeta?.userId ?? currentUserId,
-    })
-    await initializeHooks(config)
-    await initializeMcp(config)
     const provider = getProvider(config)
     await startRepl({
       config,

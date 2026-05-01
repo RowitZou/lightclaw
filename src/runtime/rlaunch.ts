@@ -352,17 +352,21 @@ export class RlaunchRuntime implements Runtime {
     if (!this.workerName) {
       throw new Error('RlaunchRuntime worker is not started.')
     }
-    return runProcess('brainctl', [
-      '-n',
-      this.cfg.namespace,
-      'exec',
-      `process/${this.workerName}`,
-      '-i',
-      '--',
-      'bash',
-      '-c',
-      this.wrapCommand(input),
-    ], {
+    // Pass -i only when there is actual stdin to relay. brainctl exec -i with
+    // an immediately-closed stdin pipe drops the child's stdout entirely (the
+    // exec wrapper appears to race the close against stream attachment), so
+    // commands like `echo hello` come back with exitCode=0 and empty stdout.
+    // Without -i, stdout streams back normally; when stdin is present we still
+    // need -i so the child can read the piped bytes (fs.writeFile / base64 -d).
+    const args = [
+      '-n', this.cfg.namespace,
+      'exec', `process/${this.workerName}`,
+    ]
+    if (input.stdin !== undefined) {
+      args.push('-i')
+    }
+    args.push('--', 'bash', '-c', this.wrapCommand(input))
+    return runProcess('brainctl', args, {
       abortSignal: input.abortSignal,
       stdin: input.stdin,
       timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
