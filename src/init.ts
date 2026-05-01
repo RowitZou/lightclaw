@@ -180,9 +180,16 @@ async function writeSessionState(
     }
   }
 
-  const runtimeUserId = input?.currentUserId ?? '__terminal__'
+  // Acquire a runtime only when we know which canonical user owns this state.
+  // Without this guard, the channel runner's lazy bootstrap (initializeApp({}))
+  // would populate the pool with a "__terminal__" ghost runtime that the
+  // health checker then tries to keep alive forever — even when every real
+  // session (terminal REPL + every channel handleMessage) already passes a
+  // proper currentUserId.
   const tracker = resolvedConfig.runtime.backend === 'docker' ? getImageReadiness() : undefined
-  const runtime = getRuntimePool().acquire(runtimeUserId, resolvedConfig, resolvedCwd, tracker)
+  const runtime = input?.currentUserId
+    ? getRuntimePool().acquire(input.currentUserId, resolvedConfig, resolvedCwd, tracker)
+    : undefined
   initializeState({
     cwd: resolvedCwd,
     model: resolvedConfig.model,
@@ -203,7 +210,9 @@ async function writeSessionState(
     projectPath: resolvedConfig.permissionRuleFiles.project,
     localPath: resolvedConfig.permissionRuleFiles.local,
   }))
-  setRuntime(runtime)
+  if (runtime) {
+    setRuntime(runtime)
+  }
 }
 
 function installSignalHandlers(): void {
