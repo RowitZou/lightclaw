@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, networkInterfaces } from 'node:os'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
@@ -235,6 +235,15 @@ export function buildDockerRuntimeConfig(
   deploymentHash = computeDeploymentHash(),
 ): DockerRuntimeConfig {
   const docker = config.runtime.docker
+  const network = config.runtime.network
+  // mode=host puts the container in the host's net namespace and routes its
+  // proxy env through the in-process NetworkBridge over loopback. Admin env
+  // wins (...docker.env last) so per-user overrides remain authoritative.
+  const useHost = network.mode === 'host'
+  const dockerNetwork = useHost ? 'host' : docker.network
+  const env = useHost
+    ? { ...buildBridgeEnv('127.0.0.1', network.port), ...docker.env }
+    : docker.env
   return {
     image: resolveDockerImage(config),
     workspaceHostPath,
@@ -243,10 +252,10 @@ export function buildDockerRuntimeConfig(
     workspaceContainerPath: '/workspace',
     mounts: docker.mounts,
     tmpfs: docker.tmpfs,
-    env: docker.env,
+    env,
     memoryLimit: docker.memoryLimit,
     cpuLimit: docker.cpuLimit,
-    network: docker.network,
+    network: dockerNetwork,
     autoPull: docker.autoPull,
   }
 }
@@ -258,7 +267,13 @@ export function buildRlaunchRuntimeConfig(
   deploymentHash = computeDeploymentHash(),
 ): RlaunchRuntimeConfig {
   const rlaunch = config.runtime.rlaunch
+  const network = config.runtime.network
   const gpfs = workspaceToGpfsMount(userId, rlaunch)
+  // rlaunch worker is on a different cluster node, so it cannot reach the
+  // bridge over loopback — point at the host's first non-internal IPv4.
+  const env = network.mode === 'host'
+    ? { ...buildBridgeEnv(detectHostIp(), network.port), ...rlaunch.env }
+    : rlaunch.env
   return {
     canonicalUser: userId,
     deploymentHash,
@@ -278,7 +293,36 @@ export function buildRlaunchRuntimeConfig(
     workspaceGpfsMount: gpfs.mount,
     helperContainerPath: '/opt/lightclaw/sandbox-helpers',
     workspaceContainerPath: '/workspace',
+    env,
   }
+}
+
+export function buildBridgeEnv(host: string, port: number): Record<string, string> {
+  const url = `http://${host}:${port}`
+  return {
+    http_proxy: url,
+    https_proxy: url,
+    HTTP_PROXY: url,
+    HTTPS_PROXY: url,
+    no_proxy: 'localhost,127.0.0.1,::1,.local',
+    NO_PROXY: 'localhost,127.0.0.1,::1,.local',
+  }
+}
+
+export function detectHostIp(): string {
+  const ifaces = networkInterfaces()
+  for (const list of Object.values(ifaces)) {
+    if (!list) continue
+    for (const entry of list) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        return entry.address
+      }
+    }
+  }
+  // Fallback — admin can override via runtime.network.bindHost; if even
+  // that is 0.0.0.0 the rlaunch pod cannot reach back, but the bridge
+  // will still spawn so we surface a clearer failure later.
+  return '127.0.0.1'
 }
 
 function computeDeploymentHash(): string {

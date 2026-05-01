@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { PermissionMode, PermissionRule } from './permission/types.js'
 import { ImageReadinessTracker } from './runtime/image-readiness.js'
+import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
@@ -32,6 +33,7 @@ type SessionState = {
 let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
 let imageReadiness: ImageReadinessTracker | null = null
+let networkBridge: NetworkBridge | null = null
 // Session-memory write throttle counters. Module-level rather than per-state
 // because they reset on every initializeState (a new session starts with
 // zero accumulated work). They drive the SessionMemory double-threshold:
@@ -255,6 +257,14 @@ export function getRuntimePool(): RuntimePool {
 export function getImageReadiness(): ImageReadinessTracker {
   imageReadiness ??= new ImageReadinessTracker()
   return imageReadiness
+}
+
+export function getNetworkBridge(): NetworkBridge | null {
+  return networkBridge
+}
+
+export function setNetworkBridge(bridge: NetworkBridge | null): void {
+  networkBridge = bridge
 }
 
 export function getAllPermissionRules(): PermissionRule[] {

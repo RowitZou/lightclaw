@@ -127,6 +127,14 @@ export type ConfigFileShape = {
       healthCheckIntervalMs?: number
       preheatOnStartup?: boolean
       preheatOnApproval?: boolean
+      env?: Record<string, string>
+    }
+    network?: {
+      mode?: string
+      upstream?: string
+      port?: number
+      bindHost?: string
+      acl?: string[]
     }
   }
 }

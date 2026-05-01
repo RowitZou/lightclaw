@@ -6,7 +6,7 @@ import path from 'node:path'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { workspaceToGpfsMount } from '../identity/paths.js'
-import { parseWorkerName } from './rlaunch.js'
+import { buildLaunchArgs, parseWorkerName, type RlaunchRuntimeConfig } from './rlaunch.js'
 import {
   deleteWorkerRecord,
   lookupWorkerRecord,
@@ -123,6 +123,58 @@ describe('WorkerReadinessTracker', () => {
     assert.equal(tracker.snapshot().lastError, 'boom')
     tracker.markQuotaDenied('quota')
     assert.equal(tracker.snapshot().state, 'quota-denied')
+  })
+})
+
+describe('buildLaunchArgs', () => {
+  const baseCfg: RlaunchRuntimeConfig = {
+    canonicalUser: 'alice',
+    deploymentHash: 'abc12345',
+    image: 'registry/x:tag',
+    chargedGroup: 'hs_cpu',
+    namespace: 'ailab-hs',
+    cpu: 8,
+    memoryMb: 16000,
+    gpu: 0,
+    privateMachine: 'group',
+    positiveTags: [],
+    workerGcTimeHours: 24,
+    imagePullPolicy: 'IfNotPresent',
+    maxWaitDuration: '5m',
+    predictBeforeStart: true,
+    workspaceHostPath: '/mnt/host/alice',
+    workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+    workspaceContainerPath: '/workspace',
+    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+    env: {},
+  }
+
+  it('emits -e KEY=VAL for every env entry on detached spawn', () => {
+    const args = buildLaunchArgs(
+      { ...baseCfg, env: { http_proxy: 'http://10.0.0.1:18080', no_proxy: 'localhost' } },
+      { detach: true, predictOnly: false },
+    )
+    const eIdx1 = args.indexOf('-e', 0)
+    const eIdx2 = args.indexOf('-e', eIdx1 + 1)
+    assert.ok(eIdx1 >= 0 && eIdx2 > eIdx1, '-e flags emitted twice')
+    const pairs = [args[eIdx1 + 1], args[eIdx2 + 1]].sort()
+    assert.deepEqual(pairs, ['http_proxy=http://10.0.0.1:18080', 'no_proxy=localhost'])
+    assert.equal(args[0], '-d', 'detach prepends -d')
+  })
+
+  it('emits env on predict-only and stops at -- bash', () => {
+    const args = buildLaunchArgs(
+      { ...baseCfg, env: { http_proxy: 'http://h:1' } },
+      { detach: false, predictOnly: true },
+    )
+    const tail = args.slice(-3)
+    assert.deepEqual(tail, ['--predict-only=true', '--', 'bash'])
+    assert.ok(args.includes('-e'), 'predict still inherits env so failures fail-fast')
+  })
+
+  it('omits -e when env is empty', () => {
+    const args = buildLaunchArgs(baseCfg, { detach: true, predictOnly: false })
+    assert.equal(args.includes('-e'), false)
   })
 })
 
