@@ -66,6 +66,7 @@ export class RlaunchRuntime implements Runtime {
   private readonly mountTable: Array<[string, string]>
   private workerName: string | null = null
   private lastKnownState: ProcessState = 'unknown'
+  private inflightStart: Promise<void> | null = null
 
   constructor(config: RlaunchRuntimeConfig, tracker: WorkerReadinessTracker) {
     this.cfg = config
@@ -81,10 +82,31 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async start(): Promise<void> {
+    // Dedup concurrent callers (preheat-on-startup, preheat-on-approval,
+    // ensureRunning, health checker restart) so they don't each spawn a
+    // duplicate cluster worker and orphan the older ones.
+    if (this.inflightStart) {
+      return this.inflightStart
+    }
+    this.inflightStart = this._startOnce().finally(() => {
+      this.inflightStart = null
+    })
+    return this.inflightStart
+  }
+
+  private async _startOnce(): Promise<void> {
     const record = lookupWorkerRecord(this.cfg.canonicalUser)
     if (record && record.deploymentHash === this.cfg.deploymentHash) {
       const phase = await this.processPhase(record.name)
-      if (phase === 'running' || phase === 'starting' || phase === 'pending') {
+      // 'unknown' = transient brainctl-get failure (API blip / unknown column).
+      // The worker is most likely still alive — attaching is safer than
+      // discarding the record and orphaning a running worker on the cluster.
+      if (
+        phase === 'running' ||
+        phase === 'starting' ||
+        phase === 'pending' ||
+        phase === 'unknown'
+      ) {
         this.workerName = record.name
         if (phase === 'running') {
           this.tracker.markReady()

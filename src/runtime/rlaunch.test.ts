@@ -89,6 +89,24 @@ describe('Rlaunch worker state', () => {
     await deleteWorkerRecord('alice')
     assert.equal(lookupWorkerRecord('alice'), undefined)
   })
+
+  it('preserves all entries under concurrent writes for different users', async () => {
+    const users = ['alice', 'bob', 'carol', 'dave', 'eve']
+    await Promise.all(users.map(user =>
+      writeWorkerRecord(user, {
+        name: `ws-${user}`,
+        namespace: 'ailab-hs',
+        chargedGroup: 'hs_gpu',
+        image: 'registry/image:tag',
+        deploymentHash: 'abc12345',
+        createdAt: 1,
+      }),
+    ))
+    for (const user of users) {
+      assert.equal(lookupWorkerRecord(user)?.name, `ws-${user}`,
+        `expected user ${user} to survive concurrent writes`)
+    }
+  })
 })
 
 describe('WorkerReadinessTracker', () => {
