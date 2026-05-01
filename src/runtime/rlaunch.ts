@@ -305,6 +305,15 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async restartUnhealthy(): Promise<void> {
+    // Stop the old worker before forgetting it. Without this, every health
+    // tick that triggers a restart leaves the previous worker alive on the
+    // cluster (workerGcTimeHours collects it, but that may be hours away),
+    // so a flapping worker accumulates orphans under the same canonicalUser.
+    const oldName =
+      this.workerName ?? lookupWorkerRecord(this.cfg.canonicalUser)?.name ?? null
+    if (oldName) {
+      await this.stopWorker(oldName).catch(() => {})
+    }
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
     await this.start()
