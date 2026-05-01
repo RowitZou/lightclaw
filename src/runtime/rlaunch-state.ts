@@ -32,22 +32,36 @@ export function lookupWorkerRecord(canonicalUser: string): RlaunchWorkerRecord |
   return readWorkerState()[canonicalUser]
 }
 
+// Serialize read-modify-write so concurrent preheat/start across users doesn't
+// drop entries (each writer reads its own copy of the state, last writer wins).
+let writeQueue: Promise<unknown> = Promise.resolve()
+
+function withStateLock<T>(action: () => Promise<T>): Promise<T> {
+  const next = writeQueue.then(action, action)
+  writeQueue = next.catch(() => {})
+  return next
+}
+
 export async function writeWorkerRecord(
   canonicalUser: string,
   record: RlaunchWorkerRecord,
 ): Promise<void> {
-  const state = readWorkerState()
-  state[canonicalUser] = record
-  await writeWorkerState(state)
+  await withStateLock(async () => {
+    const state = readWorkerState()
+    state[canonicalUser] = record
+    await writeWorkerState(state)
+  })
 }
 
 export async function deleteWorkerRecord(canonicalUser: string): Promise<void> {
-  const state = readWorkerState()
-  if (!(canonicalUser in state)) {
-    return
-  }
-  delete state[canonicalUser]
-  await writeWorkerState(state)
+  await withStateLock(async () => {
+    const state = readWorkerState()
+    if (!(canonicalUser in state)) {
+      return
+    }
+    delete state[canonicalUser]
+    await writeWorkerState(state)
+  })
 }
 
 async function writeWorkerState(state: RlaunchWorkerState): Promise<void> {
