@@ -59,6 +59,10 @@ export async function listIdentities(): Promise<IdentitiesFile> {
   return readJson<IdentitiesFile>(identitiesPath(), {})
 }
 
+export async function listActiveCanonicalUsers(): Promise<string[]> {
+  return Object.keys(await listIdentities()).sort()
+}
+
 export async function getIdentity(name: string): Promise<IdentityRecord | null> {
   const identities = await listIdentities()
   return identities[name] ?? null

@@ -4,11 +4,12 @@ import path from 'node:path'
 import { getConfig, type LightClawConfig } from './config.js'
 import { initializeAgents } from './agents/registry.js'
 import { workspaceFor } from './identity/paths.js'
-import { getAdmin } from './identity/store.js'
+import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
 import { resolveDockerImage } from './runtime/pool.js'
+import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
   getAbortController,
   getImageReadiness,
@@ -23,6 +24,7 @@ import {
 import type { TodoItem } from './types.js'
 
 let signalHandlersInstalled = false
+let workerHealthChecker: WorkerHealthChecker | null = null
 
 type CommonStateInput = {
   cwd?: string
@@ -69,6 +71,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   installSignalHandlers()
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
+  startRlaunchPreheatIfNeeded(resolvedConfig)
   return resolvedConfig
 }
 
@@ -78,6 +81,23 @@ function startImagePrefetchIfNeeded(config: LightClawConfig): void {
   getImageReadiness().startPrefetch(image, {
     inspectOnly: !config.runtime.docker.autoPull,
   })
+}
+
+function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
+  if (config.runtime.backend !== 'rlaunch') return
+  const pool = getRuntimePool()
+  if (config.runtime.rlaunch.preheatOnStartup) {
+    void listActiveCanonicalUsers()
+      .then(users => Promise.allSettled(users.map(userId =>
+        pool.acquire(userId, config).start(),
+      )))
+      .catch(error => {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`[rlaunch-preheat] failed to list users: ${detail}\n`)
+      })
+  }
+  workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.rlaunch.healthCheckIntervalMs)
+  workerHealthChecker.start()
 }
 
 /**
@@ -182,6 +202,7 @@ function installSignalHandlers(): void {
     void Promise.allSettled([
       runtimeStopSafely(),
       runtimePoolReleaseSafely(),
+      workerHealthCheckerStopSafely(),
     ]).finally(() => process.exit(exitCode))
 
     // Hard cap if cleanup hangs (e.g. docker daemon unresponsive).
@@ -194,6 +215,10 @@ function installSignalHandlers(): void {
   process.on('SIGINT', () => handleInterrupt(130))
   process.on('SIGTERM', () => handleInterrupt(143))
   signalHandlersInstalled = true
+}
+
+async function workerHealthCheckerStopSafely(): Promise<void> {
+  workerHealthChecker?.stop()
 }
 
 async function runtimeStopSafely(): Promise<void> {

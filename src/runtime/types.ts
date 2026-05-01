@@ -1,4 +1,4 @@
-export type RuntimeKind = 'local' | 'docker' | 'rjob'
+export type RuntimeKind = 'local' | 'docker' | 'rlaunch' | 'rjob'
 
 export type ExecInput = {
   command: string
@@ -47,6 +47,7 @@ export type RuntimeAvailability =
   | {
       ok: false
       reason: 'image-pulling' | 'image-failed' | 'image-not-attempted' | 'autopull-disabled'
+        | 'worker-scheduling' | 'worker-failed' | 'worker-quota-denied'
       /**
        * Channel-user-facing message: soft, no docker stderr leakage.
        */

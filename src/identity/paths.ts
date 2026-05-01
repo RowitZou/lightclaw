@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { loadConfigFile } from '../config-file.js'
+import type { RlaunchRuntimeSettings } from '../config.js'
 import { expandHomePath, lightclawHome } from '../paths.js'
 
 export function identityRoot(): string {
@@ -34,6 +35,29 @@ export function workspaceRoot(): string {
 
 export function workspaceFor(canonicalUser: string): string {
   return path.join(workspaceRoot(), sanitizePathSegment(canonicalUser))
+}
+
+export function workspaceToGpfsMount(
+  canonicalUser: string,
+  rlaunchConfig: Pick<RlaunchRuntimeSettings, 'gpfsHostPrefix' | 'gpfsMountPrefix'>,
+): { hostPath: string; mount: string } {
+  const root = workspaceRoot()
+  const hostPrefix = path.resolve(expandHomePath(rlaunchConfig.gpfsHostPrefix))
+  const mountPrefix = rlaunchConfig.gpfsMountPrefix.replace(/\/+$/, '')
+  if (root !== hostPrefix && !root.startsWith(`${hostPrefix}${path.sep}`)) {
+    throw new Error(
+      `RlaunchRuntime requires LIGHTCLAW_WORKSPACE_ROOT under "${hostPrefix}" (gpfs); ` +
+      `got "${root}". Set LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ` +
+      `${hostPrefix}/<namespace>/<user>/lightclaw-workspaces`,
+    )
+  }
+
+  const hostPath = path.join(root, sanitizePathSegment(canonicalUser))
+  const suffix = hostPath.slice(hostPrefix.length).split(path.sep).filter(Boolean).join('/')
+  return {
+    hostPath,
+    mount: `${mountPrefix}${suffix ? `/${suffix}` : ''}:/workspace`,
+  }
 }
 
 export function sanitizePathSegment(input: string): string {

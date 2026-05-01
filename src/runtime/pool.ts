@@ -4,12 +4,26 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
-import { adminPath, sanitizePathSegment, workspaceFor } from '../identity/paths.js'
+import {
+  adminPath,
+  sanitizePathSegment,
+  workspaceFor,
+  workspaceToGpfsMount,
+} from '../identity/paths.js'
 
-import { createRuntime, DockerRuntime, type DockerRuntimeConfig } from './index.js'
+import {
+  createRuntime,
+  DockerRuntime,
+  RlaunchRuntime,
+  type DockerRuntimeConfig,
+  type RlaunchRuntimeConfig,
+} from './index.js'
 import { dockerCmdRaw } from './docker.js'
 import type { ImageReadinessTracker } from './image-readiness.js'
+import { runProcess } from './process.js'
+import { deleteWorkerRecord, readWorkerState } from './rlaunch-state.js'
 import type { Runtime } from './types.js'
+import { WorkerReadinessTracker } from './worker-readiness.js'
 
 const REAPER_INTERVAL_MS = 60_000
 const DEFAULT_IMAGE_OWNER = 'rowitzou'
@@ -62,6 +76,8 @@ export class RuntimePool {
     await runtime.stop().catch(() => {})
     if (runtime instanceof DockerRuntime) {
       await runtime.remove()
+    } else if (runtime instanceof RlaunchRuntime) {
+      await runtime.remove()
     }
     this.runtimes.delete(key)
     return result
@@ -69,6 +85,10 @@ export class RuntimePool {
 
   async releaseAll(): Promise<void> {
     await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.stop()))
+  }
+
+  allRuntimes(): Iterable<Runtime> {
+    return this.runtimes.values()
   }
 
   startReaper(): void {
@@ -90,6 +110,10 @@ export class RuntimePool {
   }
 
   async sweepOrphans(config: LightClawConfig): Promise<void> {
+    if (config.runtime.backend === 'rlaunch') {
+      await this.sweepRlaunchOrphans()
+      return
+    }
     if (config.runtime.backend !== 'docker') {
       return
     }
@@ -121,6 +145,26 @@ export class RuntimePool {
       if (shouldRemove) {
         await dockerCmdRaw(['rm', '-f', name])
       }
+    }
+  }
+
+  private async sweepRlaunchOrphans(): Promise<void> {
+    const state = readWorkerState()
+    for (const [canonical, record] of Object.entries(state)) {
+      if (record.deploymentHash === this.deploymentHash) {
+        continue
+      }
+      await runProcess('brainctl', [
+        '-n',
+        record.namespace,
+        'stop',
+        `process/${record.name}`,
+      ], {
+        timeoutMs: 30_000,
+        maxBufferBytes: 1024 * 1024,
+        limitMessage: 'brainctl stop process terminated',
+      }).catch(() => undefined)
+      await deleteWorkerRecord(canonical)
     }
   }
 
@@ -161,6 +205,13 @@ export class RuntimePool {
         tracker,
       })
     }
+    if (config.runtime.backend === 'rlaunch') {
+      return createRuntime({
+        kind: 'rlaunch',
+        config: buildRlaunchRuntimeConfig(userId, workspaceHostPath, config, this.deploymentHash),
+        tracker: new WorkerReadinessTracker(userId),
+      })
+    }
     return createRuntime({ kind: 'rjob' })
   }
 }
@@ -197,6 +248,36 @@ export function buildDockerRuntimeConfig(
     cpuLimit: docker.cpuLimit,
     network: docker.network,
     autoPull: docker.autoPull,
+  }
+}
+
+export function buildRlaunchRuntimeConfig(
+  userId: string,
+  workspaceHostPath: string,
+  config: LightClawConfig,
+  deploymentHash = computeDeploymentHash(),
+): RlaunchRuntimeConfig {
+  const rlaunch = config.runtime.rlaunch
+  const gpfs = workspaceToGpfsMount(userId, rlaunch)
+  return {
+    canonicalUser: userId,
+    deploymentHash,
+    image: rlaunch.image,
+    chargedGroup: rlaunch.chargedGroup,
+    namespace: rlaunch.namespace,
+    cpu: rlaunch.cpu,
+    memoryMb: rlaunch.memoryMb,
+    gpu: rlaunch.gpu,
+    privateMachine: rlaunch.privateMachine,
+    positiveTags: rlaunch.positiveTags,
+    workerGcTimeHours: rlaunch.workerGcTimeHours,
+    imagePullPolicy: rlaunch.imagePullPolicy,
+    maxWaitDuration: rlaunch.maxWaitDuration,
+    predictBeforeStart: rlaunch.predictBeforeStart,
+    workspaceHostPath: gpfs.hostPath || workspaceHostPath,
+    workspaceGpfsMount: gpfs.mount,
+    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+    workspaceContainerPath: '/workspace',
   }
 }
 

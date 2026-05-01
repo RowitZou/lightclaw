@@ -23,7 +23,7 @@ import {
   type PermissionMode,
   type PermissionRule,
 } from '../permission/types.js'
-import { DockerRuntime } from '../runtime/index.js'
+import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
@@ -148,6 +148,8 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         const runtime = getRuntime()
         if (runtime instanceof DockerRuntime) {
           lines.push(`  container: ${runtime.containerName}`)
+        } else if (runtime instanceof RlaunchRuntime) {
+          lines.push(`  worker: ${runtime.name ?? '(not started)'}`)
         } else {
           lines.push('  (local runtime active; readiness tracker unused)')
         }
@@ -197,6 +199,16 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
       }
       const runtime = getRuntime()
       if (!(runtime instanceof DockerRuntime)) {
+        if (runtime instanceof RlaunchRuntime) {
+          await getRuntimePool().remove(userId)
+          ctx.output.write([
+            'Stopped and removed rlaunch worker state.',
+            'Workspace gpfs mount was preserved.',
+            'Next environment tool call will recreate the worker.',
+            '',
+          ].join('\n'))
+          return
+        }
         ctx.output.write('sandbox: local runtime is active; nothing to reset.\n')
         return
       }
@@ -446,6 +458,7 @@ async function identityApprove(args: string[]): Promise<string> {
       ? `${link} is already bound to ${linked.boundTo}\n`
       : `No such user: ${name}\n`
   }
+  preheatRlaunchForUser(name)
   return `${created.ok ? 'Created' : 'Updated'} identity '${name}'\nLinked ${link} -> ${name}\n`
 }
 
@@ -486,7 +499,20 @@ async function identityLink(args: string[]): Promise<string> {
       ? `${rawLink} is already bound to ${linked.boundTo}\n`
       : `No such user: ${name}\n`
   }
+  preheatRlaunchForUser(name)
   return `Linked ${rawLink} -> ${name}\n`
+}
+
+function preheatRlaunchForUser(name: string): void {
+  const config = getConfig()
+  if (config.runtime.backend !== 'rlaunch' || !config.runtime.rlaunch.preheatOnApproval) {
+    return
+  }
+  const runtime = getRuntimePool().acquire(name, config)
+  void runtime.start().catch(error => {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[rlaunch-preheat-on-approval] ${name}: ${detail}\n`)
+  })
 }
 
 async function identityUnlink(args: string[]): Promise<string> {
