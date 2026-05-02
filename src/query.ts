@@ -87,6 +87,20 @@ type QueryParams = {
   onTextDelta?(text: string): void
   onToolUse?(event: { name: string; input: Record<string, unknown> }): void
   onToolResult?(event: ToolExecutionEvent): void
+  /**
+   * Fires once per assistant turn that emitted a non-empty text body, with
+   * the turn's full text. Channels (notably feishu) use this to deliver
+   * intermediate narration progressively — the model often drops a long
+   * research output mid-loop alongside a closing tool_use rather than at
+   * the very end of the query, and waiting for end-of-query to send a
+   * single reply leaves the user staring at silence for minutes. Fires
+   * before tool dispatch for the same turn, so the receiver can surface
+   * model intent before the next round of tool calls runs.
+   *
+   * Empty turns are skipped (no callback invocation). Failures are
+   * caught + logged so a flaky channel send never aborts the agent loop.
+   */
+  onAssistantTurn?(text: string): Promise<void> | void
   onCompactStart?(): void
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
@@ -489,6 +503,16 @@ export async function query(params: QueryParams): Promise<{
     const turnText = collectAssistantText(stopEvent.content)
     if (turnText.length > 0) {
       assistantTexts.push(turnText)
+      if (params.onAssistantTurn) {
+        try {
+          await params.onAssistantTurn(turnText)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(
+            `[query] onAssistantTurn callback failed: ${detail}\n`,
+          )
+        }
+      }
     }
     const assistantMessage = createAssistantMessage({
       content: stopEvent.content,
@@ -497,6 +521,18 @@ export async function query(params: QueryParams): Promise<{
       parentUuid: getLastUuid(messages),
     })
     messages.push(assistantMessage)
+
+    const toolUses = stopEvent.content.filter(
+      (block): block is ToolUseBlock => block.type === 'tool_use',
+    )
+
+    // Snapshot cacheSafeParams unconditionally after every assistant push —
+    // forks (AgentTool / memory extraction) read forkContextMessages and
+    // synthesize placeholder tool_results for any pending tool_use blocks at
+    // construction time (see runForkedAgent), so a "dirty" snapshot ending
+    // in an assistant turn with pending tool_uses is fine. Always snapshotting
+    // keeps the parent prefix (history bytes) cache-aligned across all forks
+    // dispatched in the same turn.
     if (mode !== 'subagent') {
       saveCacheSafeParams(
         createCacheSafeParams({
@@ -507,10 +543,6 @@ export async function query(params: QueryParams): Promise<{
         }),
       )
     }
-
-    const toolUses = stopEvent.content.filter(
-      (block): block is ToolUseBlock => block.type === 'tool_use',
-    )
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]

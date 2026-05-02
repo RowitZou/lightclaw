@@ -53,7 +53,9 @@ export function messageToSearchText(message: Message): string {
   if (typeof message.message.content === 'string') {
     return message.message.content
   }
-  return message.message.content.map(block => block.content).join('\n')
+  return message.message.content
+    .map(block => (block.type === 'text' ? block.text : block.content))
+    .join('\n')
 }
 
 export function simplifyMessage(message: Message): string {
@@ -67,6 +69,9 @@ export function simplifyMessage(message: Message): string {
   if (typeof message.message.content === 'string') {
     return `[${timestamp}] user: ${message.message.content}`
   }
-  return `[${timestamp}] tool_result: ${message.message.content.map(block => block.content).join('\n')}`
+  const rendered = message.message.content
+    .map(block => (block.type === 'text' ? block.text : block.content))
+    .join('\n')
+  return `[${timestamp}] user: ${rendered}`
 }
 

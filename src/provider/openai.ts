@@ -67,18 +67,39 @@ function convertMessages(
   for (const message of messages) {
     if (message.role === 'user') {
       if (Array.isArray(message.content)) {
+        // Mixed user content: emit each tool_result as a `role: 'tool'` message
+        // (OpenAI's per-result message form) and concatenate any text blocks
+        // into one `role: 'user'` message at the end. Mirrors the Anthropic
+        // shape where tool_results + accompanying text live in a single user
+        // message.
         const toolResults = message.content.filter(
           (block): block is UserToolResultBlock =>
             isRecord(block) && block.type === 'tool_result',
         )
-        if (toolResults.length > 0) {
-          for (const block of toolResults) {
-            converted.push({
-              role: 'tool',
-              tool_call_id: block.tool_use_id,
-              content: block.content,
-            })
-          }
+        const textParts = message.content
+          .filter(
+            (block): block is { type: 'text'; text: string } =>
+              isRecord(block) &&
+              block.type === 'text' &&
+              typeof block.text === 'string',
+          )
+          .map(block => block.text)
+          .filter(text => text.length > 0)
+
+        for (const block of toolResults) {
+          converted.push({
+            role: 'tool',
+            tool_call_id: block.tool_use_id,
+            content: block.content,
+          })
+        }
+        if (textParts.length > 0) {
+          converted.push({
+            role: 'user',
+            content: textParts.join('\n'),
+          })
+        }
+        if (toolResults.length > 0 || textParts.length > 0) {
           continue
         }
       }

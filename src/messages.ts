@@ -6,12 +6,12 @@ import type {
   Message,
   SystemCompactMessage,
   UsageStats,
+  UserContentBlock,
   UserMessage,
-  UserToolResultBlock,
 } from './types.js'
 
 export function createUserMessage(
-  content: string | UserToolResultBlock[],
+  content: string | UserContentBlock[],
   parentUuid: string | null = null,
   timestamp = Date.now(),
 ): UserMessage {
