@@ -1,17 +1,41 @@
-import { streamChat } from '../api.js'
 import type { LightClawConfig } from '../config.js'
-import { collectAssistantText } from '../messages.js'
+import {
+  getLastCacheSafeParams,
+  createCacheSafeParams,
+} from '../agents/cache-safe-params.js'
+import { runForkedAgent } from '../agents/forked-agent.js'
+import { createUserMessage, collectAssistantText } from '../messages.js'
 import { modelFor } from '../provider/index.js'
 import type { Message } from '../types.js'
-import {
-  ensureMemoryDir,
-  scanMemoryFiles,
-  writeMemoryFile,
-} from './auto-memory.js'
+import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
+import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
 import type { MemoryEntry } from './types.js'
-import { isMemoryType } from './types.js'
 
-function messageToText(message: Message): string {
+export type ExtractCtx = {
+  messages: Message[]
+  lastExtractedAt: number
+  memoryDir: string
+  config: LightClawConfig
+}
+
+type ExtractState = {
+  inProgress: boolean
+  pendingContext: ExtractCtx | undefined
+  inFlight: Set<Promise<ExtractResult>>
+}
+
+type ExtractResult = {
+  saved: MemoryEntry[]
+  lastExtractedAt: number
+}
+
+const state: ExtractState = {
+  inProgress: false,
+  pendingContext: undefined,
+  inFlight: new Set(),
+}
+
+export function messageToText(message: Message): string {
   if (message.type === 'system') {
     return `[system-summary]\n${message.message.summary}`
   }
@@ -39,44 +63,22 @@ function messageToText(message: Message): string {
   ].join('\n')
 }
 
-function extractJsonArray(text: string): string {
-  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fencedMatch?.[1]) {
-    return fencedMatch[1].trim()
-  }
-
-  const startIndex = text.indexOf('[')
-  const endIndex = text.lastIndexOf(']')
-  if (startIndex >= 0 && endIndex > startIndex) {
-    return text.slice(startIndex, endIndex + 1)
-  }
-
-  return text.trim()
+export function hasMemoryWritesSince(
+  messages: Message[],
+  cutoff: number,
+): boolean {
+  return messages.some(message => {
+    if (message.type !== 'assistant' || message.timestamp <= cutoff) {
+      return false
+    }
+    return message.message.content.some(
+      block => block.type === 'tool_use' && block.name === 'MemoryWrite',
+    )
+  })
 }
 
-function normalizeExtractedEntry(entry: unknown): MemoryEntry | null {
-  if (!entry || typeof entry !== 'object') {
-    return null
-  }
-
-  const candidate = entry as Record<string, unknown>
-  const filename = typeof candidate.filename === 'string' ? candidate.filename.trim() : ''
-  const type = typeof candidate.type === 'string' ? candidate.type.trim() : ''
-  const description =
-    typeof candidate.description === 'string' ? candidate.description.trim() : ''
-  const content = typeof candidate.content === 'string' ? candidate.content.trim() : ''
-
-  if (!filename || !description || !content || !isMemoryType(type)) {
-    return null
-  }
-
-  return {
-    filename,
-    type,
-    description,
-    content,
-    mtimeMs: Date.now(),
-  }
+function newestTimestamp(messages: Message[], fallback: number): number {
+  return Math.max(fallback, ...messages.map(message => message.timestamp))
 }
 
 export function buildExtractPrompt(
@@ -86,19 +88,17 @@ export function buildExtractPrompt(
   const existingSummary =
     existingMemories.length > 0
       ? existingMemories
-          .map(
-            entry =>
-              `- [${entry.type}] ${entry.filename}: ${entry.description}`,
-          )
+          .map(entry => `- [${entry.type}] ${entry.filename}: ${entry.description}`)
           .join('\n')
       : '[none]'
 
   const conversationText = newMessages
     .map(message => messageToText(message))
     .join('\n\n')
+    .slice(0, 100_000)
 
   return [
-    'Analyze the following conversation segment and extract key information worth persisting across sessions.',
+    'Extract durable memories from the following conversation segment by calling the MemoryWrite tool.',
     '',
     '## Existing memories (do not duplicate)',
     existingSummary,
@@ -107,87 +107,167 @@ export function buildExtractPrompt(
     conversationText || '[empty]',
     '',
     '## Instructions',
-    '- Extract only information that will be valuable in future sessions.',
+    '- Call MemoryWrite 0 to 3 times to save durable memories.',
+    '- Each MemoryWrite call must include filename, type, description, and content.',
+    '- Allowed types: user, feedback, project, reference.',
     '- Do not save code snippets, file structure details, git history, or temporary task context.',
     '- Do save user preferences, project conventions, technical decisions, feedback, corrections, and ongoing work status.',
-    '- Return a JSON array only. Each entry must have filename, type, description, and content.',
-    '- Allowed types: user, feedback, project, reference.',
     '- For feedback or project entries, include Why: and How to apply: sections in the content.',
-    '- If nothing is worth saving, return [].',
     '- Convert relative dates to absolute dates.',
-    '- Maximum 3 entries.',
+    '- Do not output JSON in text. Use the MemoryWrite tool for saves.',
+    '- If nothing is worth saving, reply with "no new memories".',
   ].join('\n')
 }
 
-export async function requestExtraction(
-  prompt: string,
-  config: LightClawConfig,
-): Promise<MemoryEntry[]> {
-  let responseText = ''
+function extractionConfig(config: LightClawConfig): LightClawConfig {
+  const extractModel = modelFor('extract', config)
+  return {
+    ...config,
+    model: extractModel,
+    routing: {
+      ...config.routing,
+      main: extractModel,
+    },
+  }
+}
 
-  for await (const event of streamChat({
-    config,
-    model: modelFor('extract', config),
-    messages: [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    system:
-      'You are a memory extraction agent. Return only a JSON array of durable memories.',
-    tools: [],
-    maxTokens: 2048,
-  })) {
-    if (event.type === 'text') {
-      responseText += event.text
+async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
+  const newMessages = ctx.messages.filter(
+    message =>
+      message.type !== 'system' && message.timestamp > ctx.lastExtractedAt,
+  )
+
+  if (newMessages.length === 0) {
+    return {
+      saved: [],
+      lastExtractedAt: ctx.lastExtractedAt,
     }
   }
 
-  const jsonPayload = extractJsonArray(responseText)
-  const parsed = JSON.parse(jsonPayload) as unknown
-  if (!Array.isArray(parsed)) {
-    return []
+  if (hasMemoryWritesSince(ctx.messages, ctx.lastExtractedAt)) {
+    return {
+      saved: [],
+      lastExtractedAt: newestTimestamp(ctx.messages, ctx.lastExtractedAt),
+    }
   }
 
-  return parsed
-    .map(entry => normalizeExtractedEntry(entry))
-    .filter((entry): entry is MemoryEntry => entry !== null)
-    .slice(0, 3)
+  await ensureMemoryDir(ctx.memoryDir)
+  const existingMemories = await scanMemoryFiles(ctx.memoryDir)
+  const cacheSafeParams = getLastCacheSafeParams()
+  if (!cacheSafeParams) {
+    console.error('[memory] no cacheSafeParams available, skipping extraction')
+    return {
+      saved: [],
+      lastExtractedAt: ctx.lastExtractedAt,
+    }
+  }
+
+  const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
+  const prompt = buildExtractPrompt(newMessages, existingMemories)
+  await runForkedAgent({
+    promptMessages: [createUserMessage(prompt)],
+    cacheSafeParams: createCacheSafeParams({
+      systemPrompt: cacheSafeParams.systemPrompt,
+      tools: cacheSafeParams.tools,
+      messages: cacheSafeParams.forkContextMessages,
+      config: extractionConfig(ctx.config),
+    }),
+    config: extractionConfig(ctx.config),
+    canUseTool: createAutoMemCanUseTool(ctx.memoryDir),
+    maxTurns: 5,
+    label: 'extract_memories',
+    skipTranscript: true,
+  })
+
+  const after = await scanMemoryFiles(ctx.memoryDir)
+  const saved = after.filter(entry => !beforeFiles.has(entry.filename))
+  return {
+    saved,
+    lastExtractedAt: newestTimestamp(ctx.messages, ctx.lastExtractedAt),
+  }
 }
 
-/**
- * P2: synchronously run extractMemories before compaction so hard facts
- * (file paths, decisions, user preferences) are persisted to auto-memory
- * before the LLM summarizer collapses the prefix into a 4096-token blob.
- *
- * Times out after `timeoutMs` and falls back to {saved: [], lastExtractedAt}
- * unchanged — the caller continues to compact regardless. The underlying
- * extractMemories promise is intentionally NOT aborted on timeout: if it
- * eventually completes it still writes hard facts to disk, giving us an
- * "extra insurance" path for the next query-time recall.
- */
+async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult> {
+  let current = initial
+  let finalResult: ExtractResult = {
+    saved: [],
+    lastExtractedAt: initial.lastExtractedAt,
+  }
+
+  while (true) {
+    const result = await runExtractionInner(current)
+    finalResult = {
+      saved: [...finalResult.saved, ...result.saved],
+      lastExtractedAt: Math.max(finalResult.lastExtractedAt, result.lastExtractedAt),
+    }
+    if (!state.pendingContext) {
+      return finalResult
+    }
+    current = {
+      ...state.pendingContext,
+      lastExtractedAt: finalResult.lastExtractedAt,
+    }
+    state.pendingContext = undefined
+  }
+}
+
+export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult> {
+  if (state.inProgress) {
+    state.pendingContext = ctx
+    return {
+      saved: [],
+      lastExtractedAt: ctx.lastExtractedAt,
+    }
+  }
+
+  state.inProgress = true
+  const task = runExtractionPipeline(ctx)
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[memory] extraction failed: ${message}`)
+      return {
+        saved: [] as MemoryEntry[],
+        lastExtractedAt: ctx.lastExtractedAt,
+      }
+    })
+    .finally(() => {
+      state.inProgress = false
+    })
+
+  state.inFlight.add(task)
+  void task.finally(() => {
+    state.inFlight.delete(task)
+  })
+  return task
+}
+
+export async function drainPendingExtraction(timeoutMs = 60_000): Promise<void> {
+  if (state.inFlight.size === 0) {
+    return
+  }
+  const TIMEOUT = Symbol('drain-timeout')
+  await Promise.race([
+    Promise.allSettled([...state.inFlight]),
+    new Promise<typeof TIMEOUT>(resolve =>
+      setTimeout(() => resolve(TIMEOUT), timeoutMs).unref(),
+    ),
+  ])
+}
+
 export async function flushBeforeCompact(params: {
   messages: Message[]
   lastExtractedAt: number
   memoryDir: string
   config: LightClawConfig
   timeoutMs: number
-}): Promise<{ saved: MemoryEntry[]; lastExtractedAt: number }> {
+}): Promise<ExtractResult> {
   const TIMEOUT = Symbol('flush-timeout')
   const result = await Promise.race([
-    extractMemories({
+    executeExtraction({
       messages: params.messages,
       lastExtractedAt: params.lastExtractedAt,
       memoryDir: params.memoryDir,
       config: params.config,
-    }).catch(err => {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[memory] pre-compact flush failed: ${msg}`)
-      return {
-        saved: [] as MemoryEntry[],
-        lastExtractedAt: params.lastExtractedAt,
-      }
     }),
     new Promise<typeof TIMEOUT>(resolve =>
       setTimeout(() => resolve(TIMEOUT), params.timeoutMs).unref(),
@@ -202,43 +282,4 @@ export async function flushBeforeCompact(params: {
   return result
 }
 
-export async function extractMemories(params: {
-  messages: Message[]
-  lastExtractedAt: number
-  memoryDir: string
-  config: LightClawConfig
-}): Promise<{
-  saved: MemoryEntry[]
-  lastExtractedAt: number
-}> {
-  const newMessages = params.messages.filter(
-    message =>
-      message.type !== 'system' && message.timestamp > params.lastExtractedAt,
-  )
-
-  if (newMessages.length === 0) {
-    return {
-      saved: [],
-      lastExtractedAt: params.lastExtractedAt,
-    }
-  }
-
-  await ensureMemoryDir(params.memoryDir)
-  const existingMemories = await scanMemoryFiles(params.memoryDir)
-  const prompt = buildExtractPrompt(newMessages, existingMemories)
-  const extracted = await requestExtraction(prompt, params.config)
-  const saved: MemoryEntry[] = []
-
-  for (const entry of extracted) {
-    await writeMemoryFile(params.memoryDir, entry)
-    saved.push(entry)
-  }
-
-  return {
-    saved,
-    lastExtractedAt: Math.max(
-      params.lastExtractedAt,
-      ...newMessages.map(message => message.timestamp),
-    ),
-  }
-}
+export const extractMemories = executeExtraction

@@ -2,6 +2,10 @@ import type { Interface } from 'node:readline/promises'
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
+import {
+  createCacheSafeParams,
+  saveCacheSafeParams,
+} from './agents/cache-safe-params.js'
 import { runHook } from './hooks/index.js'
 import { extractMemories, flushBeforeCompact } from './memory/extract.js'
 import {
@@ -46,12 +50,18 @@ import {
   updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
-import { findToolByName, toolToAPISchema, type Tool } from './tool.js'
+import {
+  findToolByName,
+  toolToAPISchema,
+  type CanUseToolFn,
+  type Tool,
+} from './tool.js'
 import { estimateMessagesTokens } from './token-estimate.js'
 import type {
   AssistantContentBlock,
   Message,
   ToolExecutionEvent,
+  UsageStats,
   UserToolResultBlock,
 } from './types.js'
 
@@ -89,6 +99,11 @@ type QueryParams = {
   channelContext?: string
   /** Async permission UI for non-REPL channels such as Feishu cards. */
   permissionApprover?: PermissionApprover
+  /** Function-based tool gate used by forked agents before permission policy. */
+  canUseTool?: CanUseToolFn
+  /** Message index to mark as the fork prefix cache breakpoint. */
+  cacheBreakpointMessageIndex?: number
+  signal?: AbortSignal
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -101,6 +116,21 @@ type DispatchContext = {
   onToolResult?(event: ToolExecutionEvent): void
   maxToolOutputBytes: number
   config: LightClawConfig
+  canUseTool?: CanUseToolFn
+  signal: AbortSignal
+}
+
+function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
+  return {
+    input_tokens: (base.input_tokens ?? 0) + (next.input_tokens ?? 0),
+    output_tokens: (base.output_tokens ?? 0) + (next.output_tokens ?? 0),
+    cache_creation_input_tokens:
+      (base.cache_creation_input_tokens ?? 0)
+      + (next.cache_creation_input_tokens ?? 0),
+    cache_read_input_tokens:
+      (base.cache_read_input_tokens ?? 0)
+      + (next.cache_read_input_tokens ?? 0),
+  }
 }
 
 function snipContent(content: string, maxBytes: number): string {
@@ -141,6 +171,7 @@ export async function query(params: QueryParams): Promise<{
   lastAssistantText: string
   stopReason: string | null
   didCompact: boolean
+  usage: UsageStats
 }> {
   const config = params.config ?? getConfig()
   const maxTurns = params.maxTurns ?? 20
@@ -149,6 +180,7 @@ export async function query(params: QueryParams): Promise<{
   let lastAssistantText = ''
   let stopReason: string | null = null
   let didCompact = false
+  let totalUsage: UsageStats = {}
 
   // P1: SessionMemory write triggered post-turn when both token and tool_call
   // accumulators cross their thresholds. Synchronous so the next prompt build
@@ -281,6 +313,7 @@ export async function query(params: QueryParams): Promise<{
 
       messages.splice(0, messages.length, ...result.messages)
       addUsage(result.usage)
+      totalUsage = mergeUsage(totalUsage, result.usage)
       incrementCompactionCount()
       didCompact = true
       params.onCompactEnd?.({
@@ -334,6 +367,7 @@ export async function query(params: QueryParams): Promise<{
       lastAssistantText: '',
       stopReason: 'hook_abort',
       didCompact,
+      usage: totalUsage,
     }
   }
 
@@ -345,6 +379,8 @@ export async function query(params: QueryParams): Promise<{
     onToolResult: params.onToolResult,
     maxToolOutputBytes: config.maxToolOutputBytes,
     config,
+    canUseTool: params.canUseTool,
+    signal: params.signal ?? getAbortController().signal,
   }
 
   type StopEvent = Extract<
@@ -392,7 +428,8 @@ export async function query(params: QueryParams): Promise<{
           messages: toApiMessages(messages),
           system: systemPrompt,
           tools: params.tools.map(toolToAPISchema),
-          signal: getAbortController().signal,
+          cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
+          signal: params.signal ?? getAbortController().signal,
         })) {
           if (event.type === 'text') {
             params.onTextDelta?.(event.text)
@@ -423,19 +460,29 @@ export async function query(params: QueryParams): Promise<{
     }
 
     addUsage(stopEvent.usage)
+    totalUsage = mergeUsage(totalUsage, stopEvent.usage)
     addSessionMemoryTokens(
       (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
     )
     stopReason = stopEvent.stopReason
     lastAssistantText = collectAssistantText(stopEvent.content)
-    messages.push(
-      createAssistantMessage({
-        content: stopEvent.content,
-        stopReason: stopEvent.stopReason,
-        usage: stopEvent.usage,
-        parentUuid: getLastUuid(messages),
-      }),
-    )
+    const assistantMessage = createAssistantMessage({
+      content: stopEvent.content,
+      stopReason: stopEvent.stopReason,
+      usage: stopEvent.usage,
+      parentUuid: getLastUuid(messages),
+    })
+    messages.push(assistantMessage)
+    if (mode !== 'subagent') {
+      saveCacheSafeParams(
+        createCacheSafeParams({
+          systemPrompt: renderEffectiveSystemPrompt(),
+          tools: params.tools,
+          messages: [...messages],
+          config,
+        }),
+      )
+    }
 
     const toolUses = stopEvent.content.filter(
       (block): block is ToolUseBlock => block.type === 'tool_use',
@@ -460,6 +507,7 @@ export async function query(params: QueryParams): Promise<{
         lastAssistantText,
         stopReason,
         didCompact,
+        usage: totalUsage,
       }
     }
 
@@ -573,13 +621,20 @@ async function dispatchToolCall(
       return reportToolResult(ctx, toolUse, hookDecision.replacementResult, false)
     }
 
+    if (ctx.canUseTool) {
+      const gate = await ctx.canUseTool(tool, effectiveInput)
+      if (gate.behavior === 'deny') {
+        return reportToolResult(ctx, toolUse, gate.reason, true)
+      }
+    }
+
     const decision = await requestPermission({
       tool,
       toolInput: effectiveInput,
       ctx: {
         isInteractive: ctx.mode === 'interactive' && ctx.rl !== undefined,
         isSubagent: ctx.mode === 'subagent',
-        signal: getAbortController().signal,
+        signal: ctx.signal,
         permissionApprover: ctx.permissionApprover,
       },
       rl: ctx.rl,
@@ -600,8 +655,9 @@ async function dispatchToolCall(
     const start = Date.now()
     const result = await tool.call(effectiveInput, {
       cwd: getCwd(),
-      abortSignal: getAbortController().signal,
+      abortSignal: ctx.signal,
       runtime: getRuntime(),
+      canUseTool: ctx.canUseTool,
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 
@@ -630,7 +686,7 @@ async function dispatchToolCall(
       content: formatted.content,
       callId,
       isError: Boolean(formatted.is_error),
-      signal: getAbortController().signal,
+      signal: ctx.signal,
       config: ctx.config,
       enabled: ctx.mode !== 'subagent',
     })

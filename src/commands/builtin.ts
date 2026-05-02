@@ -367,7 +367,7 @@ async function runIdentityCommand(rawArgs: string): Promise<string> {
  * (see init.ts:LocalRuntimeAdminOnlyError). Reject upfront at approve / link
  * time so the operator gets immediate, actionable feedback instead of
  * approving + linking + then watching the user receive a single-user-mode
- * rejection in Feishu / WeChat. Admin not yet wizarded → no constraint
+ * rejection in Feishu. Admin not yet wizarded → no constraint
  * (wizard path runs before any pairing can happen).
  */
 async function rejectNonAdminInLocal(name: string): Promise<string | null> {
@@ -399,7 +399,7 @@ async function identityList(): Promise<string> {
     const record = identities[name]
     const marker = await isAdmin(name) ? ' *admin' : ''
     lines.push(`${name}${marker} ceiling=${record.permissionCeiling ?? 'default'}`)
-    for (const channel of ['terminal', 'feishu', 'wechat'] as const) {
+    for (const channel of ['terminal', 'feishu'] as const) {
       for (const peerId of record.channels[channel]) {
         lines.push(`  - ${channel}:${peerId}`)
       }

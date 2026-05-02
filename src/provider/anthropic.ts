@@ -21,6 +21,10 @@ type PendingToolUseBlock = {
   input: string
 }
 
+type CacheControl = { type: 'ephemeral' }
+
+const EPHEMERAL_CACHE: CacheControl = { type: 'ephemeral' }
+
 function isPendingToolUseBlock(
   block: AssistantContentBlock | PendingToolUseBlock,
 ): block is PendingToolUseBlock {
@@ -60,6 +64,91 @@ function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
     cache_read_input_tokens:
       next.cache_read_input_tokens ?? base.cache_read_input_tokens,
   }
+}
+
+function withCacheControl<T extends Record<string, unknown>>(block: T): T {
+  return {
+    ...block,
+    cache_control: EPHEMERAL_CACHE,
+  }
+}
+
+function cacheSystem(system: string): Array<Record<string, unknown>> {
+  return [
+    {
+      type: 'text',
+      text: system,
+      cache_control: EPHEMERAL_CACHE,
+    },
+  ]
+}
+
+function cacheTools(tools: unknown[]): unknown[] {
+  if (tools.length === 0) {
+    return tools
+  }
+  return tools.map((tool, index) => {
+    if (index !== tools.length - 1 || !isRecord(tool)) {
+      return tool
+    }
+    return withCacheControl(tool)
+  })
+}
+
+function asContentBlocks(content: unknown): Array<Record<string, unknown>> {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }]
+  }
+  if (Array.isArray(content)) {
+    return content.map(block => isRecord(block) ? { ...block } : { type: 'text', text: String(block) })
+  }
+  return [{ type: 'text', text: String(content ?? '') }]
+}
+
+function cacheMessageContent(content: unknown): Array<Record<string, unknown>> {
+  const blocks = asContentBlocks(content)
+  if (blocks.length === 0) {
+    return blocks
+  }
+  return blocks.map((block, index) =>
+    index === blocks.length - 1 ? withCacheControl(block) : block,
+  )
+}
+
+function cacheMessages(
+  messages: Array<{ role: 'user' | 'assistant'; content: unknown }>,
+  cacheBreakpointMessageIndex?: number,
+): Array<{ role: 'user' | 'assistant'; content: unknown }> {
+  const breakpoints = new Set<number>()
+  if (cacheBreakpointMessageIndex !== undefined) {
+    for (
+      let index = Math.min(cacheBreakpointMessageIndex, messages.length - 1);
+      index >= 0;
+      index -= 1
+    ) {
+      if (messages[index]?.role === 'user') {
+        breakpoints.add(index)
+        break
+      }
+    }
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      breakpoints.add(index)
+      break
+    }
+  }
+
+  return messages.map((message, index) => {
+    if (!breakpoints.has(index)) {
+      return message
+    }
+    return {
+      ...message,
+      content: cacheMessageContent(message.content),
+    }
+  })
 }
 
 function finalizeContentBlocks(
@@ -147,9 +236,12 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
       const stream = await client.messages.create({
         model: params.model,
         max_tokens: params.maxTokens ?? 8192,
-        system: params.system,
-        messages: params.messages as never,
-        tools: params.tools as never,
+        system: cacheSystem(params.system) as never,
+        messages: cacheMessages(
+          params.messages,
+          params.cacheBreakpointMessageIndex,
+        ) as never,
+        tools: cacheTools(params.tools) as never,
         stream: true,
       }, {
         signal: params.signal,

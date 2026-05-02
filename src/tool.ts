@@ -10,7 +10,17 @@ export type ToolCallContext = {
   cwd: string
   abortSignal: AbortSignal
   runtime: Runtime
+  canUseTool?: CanUseToolFn
 }
+
+export type CanUseToolDecision =
+  | { behavior: 'allow' }
+  | { behavior: 'deny'; reason: string }
+
+export type CanUseToolFn = (
+  tool: Tool,
+  input: unknown,
+) => Promise<CanUseToolDecision> | CanUseToolDecision
 
 export type ToolCallResult<TOutput> = {
   output: TOutput

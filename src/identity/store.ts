@@ -91,7 +91,6 @@ export async function createUser(
     permissionCeiling: 'default',
     channels: {
       feishu: [],
-      wechat: [],
       terminal: [],
     },
   }
@@ -243,7 +242,7 @@ async function purgeUserData(name: string): Promise<void> {
         continue
       }
       const meta = await loadMeta(entry.name)
-      if (meta?.userId === name || entry.name === `feishu-${name}` || entry.name === `wechat-${name}`) {
+      if (meta?.userId === name || entry.name === `feishu-${name}`) {
         await rm(getSessionDir(entry.name), { recursive: true, force: true })
       }
     }
@@ -263,5 +262,5 @@ async function chmodBestEffort(filePath: string, mode: number): Promise<void> {
 }
 
 function isChannelKind(input: string): input is ChannelKind {
-  return input === 'feishu' || input === 'wechat' || input === 'terminal'
+  return input === 'feishu' || input === 'terminal'
 }

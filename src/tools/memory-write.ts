@@ -12,10 +12,22 @@ export const memoryWriteTool = buildTool({
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({
-    filename: z.string().min(1),
-    type: z.enum(['user', 'feedback', 'project', 'reference']),
-    description: z.string().min(1),
-    content: z.string().min(1),
+    filename: z
+      .string()
+      .min(1)
+      .describe('Markdown filename for the memory. Use a concise kebab/snake name; .md is optional.'),
+    type: z
+      .enum(['user', 'feedback', 'project', 'reference'])
+      .describe('Memory category: user preference, feedback/correction, project convention, or stable reference.'),
+    description: z
+      .string()
+      .min(5)
+      .max(150)
+      .describe('One-line summary used in MEMORY.md and recall selection.'),
+    content: z
+      .string()
+      .min(10)
+      .describe('Markdown body. For feedback/project memories include Why: and How to apply: sections.'),
   }),
   async call(input) {
     try {
