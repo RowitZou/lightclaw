@@ -35,13 +35,15 @@ function serializeMessage(message: Message): string {
       return `[User]\n${message.message.content}`
     }
 
-    const toolResults = message.message.content
-      .map(
-        block =>
-          `[Tool Result: ${block.tool_use_id}${block.is_error ? ' error' : ''}]\n${block.content}`,
-      )
+    const blocks = message.message.content
+      .map(block => {
+        if (block.type === 'text') {
+          return `[User Text]\n${block.text}`
+        }
+        return `[Tool Result: ${block.tool_use_id}${block.is_error ? ' error' : ''}]\n${block.content}`
+      })
       .join('\n')
-    return `[User]\n${toolResults}`
+    return `[User]\n${blocks}`
   }
 
   const assistantBlocks = message.message.content

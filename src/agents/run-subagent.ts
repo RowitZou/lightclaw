@@ -1,5 +1,4 @@
 import { getConfig } from '../config.js'
-import { createUserMessage } from '../messages.js'
 import { buildSubagentPrompt } from '../prompt.js'
 import { getProvider } from '../provider/index.js'
 import { getRuntime } from '../state.js'
@@ -84,7 +83,7 @@ export async function runSubagent(params: {
   // Claude Code, which has no documented default for Task subagents).
   const subagentMaxTurns = agent.maxTurns ?? config.subagentMaxTurns
   const result = await runForkedAgent({
-    promptMessages: [createUserMessage(params.prompt)],
+    promptText: params.prompt,
     cacheSafeParams,
     canUseTool: createSubagentCanUseTool(agent.tools),
     ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),

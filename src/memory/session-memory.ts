@@ -75,13 +75,16 @@ function serializeMessageForSm(message: Message): string {
       return `[User]\n${message.message.content}`
     }
 
-    const toolResults = message.message.content
+    const blocks = message.message.content
       .map(block => {
+        if (block.type === 'text') {
+          return `[User Text]\n${block.text}`
+        }
         const status = block.is_error ? 'error' : 'ok'
         return `[Tool Result ${status}: ${block.tool_use_id}]\n${block.content}`
       })
       .join('\n')
-    return `[User]\n${toolResults}`
+    return `[User]\n${blocks}`
   }
 
   // Assistant: skip thinking / redacted_thinking — chain-of-thought has no

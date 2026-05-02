@@ -38,10 +38,14 @@ export function estimateMessageTokens(message: Message): number {
       return estimateTokens(message.message.content) + 4
     }
 
-    const toolResultText = message.message.content
-      .map(block => `${block.tool_use_id}\n${block.content}`)
+    const userBlockText = message.message.content
+      .map(block =>
+        block.type === 'tool_result'
+          ? `${block.tool_use_id}\n${block.content}`
+          : block.text,
+      )
       .join('\n')
-    return estimateTokens(toolResultText) + 4
+    return estimateTokens(userBlockText) + 4
   }
 
   return (

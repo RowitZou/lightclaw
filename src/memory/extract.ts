@@ -1,7 +1,7 @@
 import type { LightClawConfig } from '../config.js'
 import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runForkedAgent } from '../agents/forked-agent.js'
-import { createUserMessage, collectAssistantText } from '../messages.js'
+import { collectAssistantText } from '../messages.js'
 import type { Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
@@ -51,8 +51,11 @@ export function messageToText(message: Message): string {
   }
 
   return [
-    '[user-tool-results]',
+    '[user-blocks]',
     ...message.message.content.map(block => {
+      if (block.type === 'text') {
+        return `text: ${block.text}`
+      }
       const prefix = block.is_error ? 'error' : 'ok'
       return `${prefix}: ${block.content}`
     }),
@@ -155,7 +158,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   // cheaper extract model is dwarfed by the cache hit (typically 80%+ on
   // back-to-back forks within the 5min ephemeral TTL).
   await runForkedAgent({
-    promptMessages: [createUserMessage(prompt)],
+    promptText: prompt,
     cacheSafeParams,
     canUseTool: createAutoMemCanUseTool(ctx.memoryDir),
     // Extraction is one MemoryRead/Grep+ several MemoryWrite calls, so a

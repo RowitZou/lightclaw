@@ -497,6 +497,18 @@ export async function query(params: QueryParams): Promise<{
       parentUuid: getLastUuid(messages),
     })
     messages.push(assistantMessage)
+
+    const toolUses = stopEvent.content.filter(
+      (block): block is ToolUseBlock => block.type === 'tool_use',
+    )
+
+    // Snapshot cacheSafeParams unconditionally after every assistant push —
+    // forks (AgentTool / memory extraction) read forkContextMessages and
+    // synthesize placeholder tool_results for any pending tool_use blocks at
+    // construction time (see runForkedAgent), so a "dirty" snapshot ending
+    // in an assistant turn with pending tool_uses is fine. Always snapshotting
+    // keeps the parent prefix (history bytes) cache-aligned across all forks
+    // dispatched in the same turn.
     if (mode !== 'subagent') {
       saveCacheSafeParams(
         createCacheSafeParams({
@@ -507,10 +519,6 @@ export async function query(params: QueryParams): Promise<{
         }),
       )
     }
-
-    const toolUses = stopEvent.content.filter(
-      (block): block is ToolUseBlock => block.type === 'tool_use',
-    )
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]
