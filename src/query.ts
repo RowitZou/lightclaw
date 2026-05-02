@@ -168,7 +168,18 @@ function isPromptTooLongError(err: unknown): boolean {
 
 export async function query(params: QueryParams): Promise<{
   messages: Message[]
-  lastAssistantText: string
+  /**
+   * Accumulated non-empty text from every assistant turn in this query loop,
+   * joined with double-newlines. The model often delivers its real reply in
+   * a turn that *also* emits a tool_use (e.g. final research output + a
+   * closing TodoWrite to mark done), then ends turn empty after the
+   * tool_result. Channels that send a single reply at end-of-query (feishu)
+   * and AgentTool callers that bundle the subagent's response into a parent
+   * tool_result both want to see *all* of the model's narration, not just
+   * the literal last turn — otherwise the closing empty end_turn produces
+   * "(no response)" while the long body block-above gets dropped.
+   */
+  assistantText: string
   stopReason: string | null
   didCompact: boolean
   usage: UsageStats
@@ -182,7 +193,7 @@ export async function query(params: QueryParams): Promise<{
     params.maxTurns ?? config.maxTurns ?? Number.POSITIVE_INFINITY
   const mode: QueryMode = params.mode ?? 'interactive'
   const messages = [...params.messages]
-  let lastAssistantText = ''
+  const assistantTexts: string[] = []
   let stopReason: string | null = null
   let didCompact = false
   let totalUsage: UsageStats = {}
@@ -369,7 +380,7 @@ export async function query(params: QueryParams): Promise<{
     })
     return {
       messages,
-      lastAssistantText: '',
+      assistantText: '',
       stopReason: 'hook_abort',
       didCompact,
       usage: totalUsage,
@@ -470,7 +481,15 @@ export async function query(params: QueryParams): Promise<{
       (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
     )
     stopReason = stopEvent.stopReason
-    lastAssistantText = collectAssistantText(stopEvent.content)
+    // Skip empty turns (model often ends a turn with no text after a closing
+    // tool_use's tool_result is processed). Accumulating only non-empty text
+    // ensures the channel reply / AgentTool tool_result preserve everything
+    // the model actually said, not just whatever the final turn happened to
+    // emit.
+    const turnText = collectAssistantText(stopEvent.content)
+    if (turnText.length > 0) {
+      assistantTexts.push(turnText)
+    }
     const assistantMessage = createAssistantMessage({
       content: stopEvent.content,
       stopReason: stopEvent.stopReason,
@@ -498,9 +517,10 @@ export async function query(params: QueryParams): Promise<{
       await maybeUpdateSessionMemory(extractionSnapshot)
       await runCompaction(false)
       scheduleMemoryExtraction(extractionSnapshot)
+      const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
         sessionId: getSessionId(),
-        finalText: lastAssistantText,
+        finalText: assistantText,
         usage: {
           input: stopEvent.usage.input_tokens ?? 0,
           output: stopEvent.usage.output_tokens ?? 0,
@@ -509,7 +529,7 @@ export async function query(params: QueryParams): Promise<{
       })
       return {
         messages,
-        lastAssistantText,
+        assistantText,
         stopReason,
         didCompact,
         usage: totalUsage,

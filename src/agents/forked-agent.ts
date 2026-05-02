@@ -57,7 +57,7 @@ export async function runForkedAgent(
   })
 
   return {
-    finalText: result.lastAssistantText,
+    finalText: result.assistantText,
     stopReason: result.stopReason,
     usage: result.usage,
   }
