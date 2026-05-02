@@ -67,7 +67,6 @@ export type RoutingConfig = {
   main: string
   compact?: string
   extract?: string
-  subagent?: string
   webSearch?: string
 }
 
@@ -342,8 +341,6 @@ export function getConfig(): LightClawConfig {
       process.env.LIGHTCLAW_ROUTING_COMPACT ?? fileConfig.routing?.compact,
     extract:
       process.env.LIGHTCLAW_ROUTING_EXTRACT ?? fileConfig.routing?.extract,
-    subagent:
-      process.env.LIGHTCLAW_ROUTING_SUBAGENT ?? fileConfig.routing?.subagent,
     webSearch:
       process.env.LIGHTCLAW_ROUTING_WEBSEARCH ?? fileConfig.routing?.webSearch,
   }
