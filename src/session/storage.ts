@@ -59,7 +59,21 @@ export async function loadTranscript(sessionId: string): Promise<Message[]> {
       }
 
       try {
-        messages.push(JSON.parse(trimmed) as Message)
+        const message = JSON.parse(trimmed) as Message
+        // Skip degenerate empty-content assistant messages persisted by an
+        // older build (or a future provider hiccup that slipped through):
+        // Anthropic 400s when the conversation history contains an assistant
+        // turn with content: [], which then cascades into every subsequent
+        // turn returning empty too. Dropping them is safe — they carry no
+        // information and the user-facing turn count is unchanged.
+        if (
+          message.type === 'assistant' &&
+          Array.isArray(message.message.content) &&
+          message.message.content.length === 0
+        ) {
+          continue
+        }
+        messages.push(message)
       } catch {
         continue
       }
