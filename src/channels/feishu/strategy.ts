@@ -1,4 +1,3 @@
-import { fetchBestEffortDisplayName } from '../../identity/name-fetcher.js'
 import type { ChannelRunnerStrategy, SystemNoticeKind } from '../runner.js'
 import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import { buildFeishuChannelPrompt } from './channel-prompt.js'
@@ -43,10 +42,5 @@ export function createFeishuStrategy(
           ) => permissions.createApprover({ message, sessionId, userId }),
         }
       : {}),
-    fetchSenderName: peerId => fetchBestEffortDisplayName({
-      channel: 'feishu',
-      peerId,
-      client,
-    }).then(name => name || undefined),
   }
 }
