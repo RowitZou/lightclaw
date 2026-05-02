@@ -218,12 +218,21 @@ export class ChannelRunner {
 
         let result: Awaited<ReturnType<typeof query>> | undefined
         let lastError: unknown
+        // Track whether the agent emitted any non-empty assistant text mid
+        // query — if it did, the channel already received those bodies via
+        // onAssistantTurn and we skip the end-of-query single-shot reply.
+        // Without this guard the user would get every intermediate body
+        // twice (streamed once, then re-sent as the accumulated final).
+        let streamedAtLeastOnce = false
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
           // after a successful stop event, but defensive against compaction-
           // or hook-side transient errors that could leave a partial tail.
           messages.length = messageCountBeforeQuery
+          // Reset the streaming guard on each attempt; a retried query
+          // re-emits the same turns from scratch.
+          streamedAtLeastOnce = false
           try {
             result = await query({
               config: appConfig,
@@ -238,6 +247,15 @@ export class ChannelRunner {
               ),
               onToolUse(event) {
                 process.stderr.write(`${channelId}: tool ${event.name}\n`)
+              },
+              // Stream each non-empty assistant turn back to the channel as
+              // soon as it lands. The user sees progress instead of waiting
+              // for the whole tool loop to finish; the final reply at
+              // end-of-query is suppressed when this fired at least once
+              // (see streamedAtLeastOnce below).
+              onAssistantTurn: async (text: string) => {
+                streamedAtLeastOnce = true
+                await this.sendReply(message, text)
               },
             })
             break
@@ -310,7 +328,14 @@ export class ChannelRunner {
         // (cli.ts SIGINT/SIGTERM/finally) drains before process shutdown.
         await awaitBackgroundTasks()
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
-        await this.sendReply(message, result.assistantText || '(no response)')
+        // If onAssistantTurn streamed body text mid-query, the user already
+        // saw it — sending result.assistantText here would just duplicate.
+        // Only fall back to a final single-shot reply when nothing was
+        // streamed (e.g. the model produced zero non-empty turns and we'd
+        // otherwise leave the user in silence).
+        if (!streamedAtLeastOnce) {
+          await this.sendReply(message, result.assistantText || '(no response)')
+        }
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
