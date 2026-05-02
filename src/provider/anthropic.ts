@@ -151,6 +151,34 @@ function cacheMessages(
   })
 }
 
+// Parse the accumulated `input_json_delta` payload for one tool_use block.
+// Returns `{}` on JSON.parse failure rather than throwing — mirrors Claude
+// Code's `safeParseJSON` fallback (utils/messages.ts normalizeContentFromAPI):
+// the streaming layer must never crash the whole agent loop because the model
+// emitted slightly malformed JSON (or because an upstream proxy truncated a
+// partial_json delta). With input degraded to `{}`, the tool's Zod schema
+// validation will fail in dispatchToolCall and surface a tool_result with
+// `is_error: true` ("Invalid input for X: ..."), which the model can read
+// and retry on its own.
+function safeParseToolInput(
+  toolName: string,
+  rawInput: string,
+): Record<string, unknown> {
+  if (rawInput.trim().length === 0) {
+    return {}
+  }
+  try {
+    return JSON.parse(rawInput) as Record<string, unknown>
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const preview = rawInput.slice(0, 200)
+    process.stderr.write(
+      `[provider/anthropic] tool_use input JSON parse failed for ${toolName}: ${detail}; raw[0..200]=${preview}\n`,
+    )
+    return {}
+  }
+}
+
 function finalizeContentBlocks(
   blocks: Map<number, AssistantContentBlock | PendingToolUseBlock>,
 ): AssistantContentBlock[] {
@@ -169,10 +197,7 @@ function finalizeContentBlocks(
         type: 'tool_use',
         id: block.id,
         name: block.name,
-        input:
-          block.input.trim().length === 0
-            ? {}
-            : (JSON.parse(block.input) as Record<string, unknown>),
+        input: safeParseToolInput(block.name, block.input),
       }
     })
 }
@@ -395,10 +420,7 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
               break
             }
 
-            const input =
-              contentBlock.input.trim().length === 0
-                ? {}
-                : (JSON.parse(contentBlock.input) as Record<string, unknown>)
+            const input = safeParseToolInput(contentBlock.name, contentBlock.input)
             const finalized = {
               type: 'tool_use' as const,
               id: contentBlock.id,

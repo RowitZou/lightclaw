@@ -19,6 +19,9 @@ function buildAgentToolDescription(): string {
   lines.push(
     '',
     'Do not use this for trivial tasks. Each subagent starts a fresh context and is relatively expensive.',
+    '',
+    'When you launch multiple agents for independent work, send them in a single assistant message with multiple AgentTool tool_use blocks so they run concurrently.',
+    'Only dispatch in parallel when the tasks operate on disjoint files, branches, working directories, or external resources — the runtime does not isolate subagent file systems or shared state, so concurrent writes to the same path will race. If two tasks could touch the same resource, run them serially in successive turns instead.',
   )
   return lines.join('\n')
 }
@@ -28,6 +31,10 @@ export const agentTool = buildTool({
   description: buildAgentToolDescription(),
   domain: 'host',
   riskLevel: 'execute',
+  // Multiple AgentTool tool_use blocks emitted in the same assistant message
+  // run as a single Promise.all batch (query.ts dispatcher). Independence is
+  // the dispatching model's responsibility — see the description above.
+  concurrencySafe: true,
   inputSchema: z.object({
     subagent_type: z.enum(['general-purpose', 'explore']),
     description: z.string().min(3).max(80),

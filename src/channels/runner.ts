@@ -310,7 +310,7 @@ export class ChannelRunner {
         // (cli.ts SIGINT/SIGTERM/finally) drains before process shutdown.
         await awaitBackgroundTasks()
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
-        await this.sendReply(message, result.lastAssistantText || '(no response)')
+        await this.sendReply(message, result.assistantText || '(no response)')
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
