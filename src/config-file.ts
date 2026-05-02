@@ -29,7 +29,6 @@ export type ConfigFileShape = {
     main?: string
     compact?: string
     extract?: string
-    subagent?: string
     webSearch?: string
   }
   sessionsDir?: string

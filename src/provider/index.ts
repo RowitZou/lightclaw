@@ -3,7 +3,7 @@ import { createAnthropicProvider } from './anthropic.js'
 import { createOpenAIProvider } from './openai.js'
 import type { Provider } from './types.js'
 
-export type ModelTask = 'main' | 'compact' | 'extract' | 'subagent' | 'webSearch'
+export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch'
 
 let cachedProvider: Provider | null = null
 let cachedKey = ''

@@ -67,10 +67,10 @@ export async function runSubagent(params: {
   const provider = getProvider(config)
   const tools = filterTools(agent.tools, getEnabledTools(provider, getAllTools()))
   // Subagents reuse the parent's model so the prompt cache breakpoints in
-  // tools / system / messages stay valid across the fork. Switching to a
-  // dedicated `routing.subagent` model would invalidate the cache key on every
-  // AgentTool call. Auto-compact / auto-memory gating is driven by
-  // `mode: 'subagent'` in query.ts.
+  // tools / system / messages stay valid across the fork. Do not introduce a
+  // dedicated subagent model routing key — model name is part of the cache
+  // key, so a swap forces 100% cache miss on every AgentTool call. Auto-compact
+  // / auto-memory gating is driven by `mode: 'subagent'` in query.ts.
   const existingCache = getLastCacheSafeParams()
   const cacheSafeParams = createCacheSafeParams({
     systemPrompt: buildSubagentPrompt(tools, getRuntime().workspaceRoot, agent),
