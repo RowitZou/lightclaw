@@ -92,6 +92,11 @@ export type ConfigFileShape = {
       keepRecent?: number
     }
   }
+  tools?: {
+    webSearch?: {
+      braveApiKey?: string
+    }
+  }
   runtime?: {
     backend?: string
     docker?: {

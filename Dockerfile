@@ -40,7 +40,9 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir \
       "numpy==2.*" "pandas==2.*" "scipy==1.*" "matplotlib==3.*" \
       tqdm pyarrow jsonlines \
       requests httpx pyyaml python-dotenv \
-      markdownify==1.2.2
+      markdownify==1.2.2 \
+      trafilatura==2.0.0 \
+      lxml_html_clean==0.4.4
 
 # Layer 4: Node 22 LTS + pnpm 10 (covers lightclaw self-debug and Node-flavored
 # user scripts; tarball install avoids nvm rc-file overhead and apt repo coupling)
@@ -67,7 +69,7 @@ RUN chmod +x /opt/lightclaw/sandbox-helpers/*.py
 
 # Build-time smoke: fail the build if any expected tool is missing
 RUN jq --version && yq --version \
-    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify" \
+    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, trafilatura" \
     && node --version && pnpm --version \
     && rg --version | head -1
 

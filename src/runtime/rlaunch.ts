@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import type {
@@ -9,6 +10,7 @@ import type {
   RuntimeFs,
   RuntimeStat,
 } from './types.js'
+import { resolveDefaultHelperRoot } from './local.js'
 import { runProcess, shellQuote } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
@@ -69,6 +71,11 @@ export class RlaunchRuntime implements Runtime {
   private workerName: string | null = null
   private lastKnownState: ProcessState = 'unknown'
   private inflightStart: Promise<void> | null = null
+  /** Memoizes successful helper staging per worker. Reset implicitly when
+   *  workerName changes (worker restart / GC) so the next ensureRunning()
+   *  re-stages into the fresh container. */
+  private helpersStagedFor: string | null = null
+  private inflightStaging: Promise<void> | null = null
 
   constructor(config: RlaunchRuntimeConfig, tracker: WorkerReadinessTracker) {
     this.cfg = config
@@ -353,6 +360,107 @@ export class RlaunchRuntime implements Runtime {
       await this.start()
     }
     await this.waitUntilRunning()
+    await this.ensureHelpersStaged()
+  }
+
+  /**
+   * Idempotently stage sandbox helpers + install Python deps in the worker.
+   *
+   * The rlaunch path uses a generic kubebrain image (no `/opt/lightclaw/`
+   * baked in, no `markdownify` / `trafilatura` pre-installed), so the first
+   * exec into a fresh worker has to seed both. Cost is one-time per worker
+   * (~30s for pip), then memoized via `helpersStagedFor === workerName`.
+   *
+   * pip is invoked with `-i https://pypi.org/simple/` to bypass the image's
+   * default index (an internal mirror unreachable from the worker pod) and
+   * relies on the http_proxy injected by NetworkBridge to tunnel egress.
+   */
+  private async ensureHelpersStaged(): Promise<void> {
+    if (this.helpersStagedFor === this.workerName) return
+    if (this.inflightStaging) return this.inflightStaging
+    this.inflightStaging = this.stageHelpersOnce().finally(() => {
+      this.inflightStaging = null
+    })
+    return this.inflightStaging
+  }
+
+  private async stageHelpersOnce(): Promise<void> {
+    const probeCmd =
+      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'webfetch.py'))} && ` +
+      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'websearch.py'))} && ` +
+      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
+      `python3 -c "import trafilatura, markdownify" 2>/dev/null`
+    const probe = await this.runBrainctlExec({
+      command: probeCmd,
+      timeoutMs: 15_000,
+    })
+    if (probe.exitCode === 0) {
+      this.helpersStagedFor = this.workerName
+      return
+    }
+
+    const sourceDir = resolveDefaultHelperRoot()
+    const filenames = ['webfetch.py', 'websearch.py', 'glob.py']
+    for (const name of filenames) {
+      const buf = readFileSync(path.join(sourceDir, name))
+      await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
+    }
+
+    // Python deps. -i overrides the image's pre-configured internal mirror.
+    // http_proxy is auto-injected by NetworkBridge when network.mode=host.
+    // lxml_html_clean is required because justext (transitive of trafilatura)
+    // imports `lxml.html.clean`, which was split out in lxml >=5. The kubebrain
+    // ml-base image ships a recent lxml so the import fails without this dep.
+    const pip = await this.runBrainctlExec({
+      command:
+        'python3 -m pip install --quiet --no-warn-script-location ' +
+        '--break-system-packages ' +
+        '-i https://pypi.org/simple/ ' +
+        'trafilatura==2.0.0 markdownify==1.2.2 lxml_html_clean==0.4.4',
+      timeoutMs: 240_000,
+      maxBufferBytes: 4 * 1024 * 1024,
+    })
+    if (pip.exitCode !== 0) {
+      throw new Error(
+        `RlaunchRuntime helper staging: pip install failed: ` +
+          `${pip.stderr.trim() || pip.stdout.trim()}`,
+      )
+    }
+
+    this.helpersStagedFor = this.workerName
+  }
+
+  private async stageHelperFile(absPath: string, content: Buffer): Promise<void> {
+    const expectedBytes = content.length
+    const b64 = content.toString('base64')
+    const MAX_INLINE_BASE64_BYTES = 512 * 1024
+    if (b64.length > MAX_INLINE_BASE64_BYTES) {
+      throw new Error(
+        `stageHelperFile ${absPath}: payload ${expectedBytes} B exceeds inline limit`,
+      )
+    }
+    const command =
+      `mkdir -p "$(dirname ${shellQuote(absPath)})" && ` +
+      `printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(absPath)} && ` +
+      `chmod +x ${shellQuote(absPath)} && ` +
+      `stat -c %s ${shellQuote(absPath)}`
+    const result = await this.runBrainctlExec({
+      command,
+      timeoutMs: 30_000,
+      maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+    })
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `stageHelperFile ${absPath}: ${result.stderr.trim() || result.stdout.trim()}`,
+      )
+    }
+    const actualBytes = Number(result.stdout.trim())
+    if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
+      throw new Error(
+        `stageHelperFile ${absPath}: byte mismatch (expected ${expectedBytes}, ` +
+          `wrote ${result.stdout.trim() || 'unknown'})`,
+      )
+    }
   }
 
   private async waitUntilRunning(): Promise<void> {

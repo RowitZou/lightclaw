@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { getConfig } from '../config.js'
 import { buildTool } from '../tool.js'
 
 const REMINDER = 'REMINDER: Cite sources with Markdown links when answering.'
@@ -26,6 +27,7 @@ export const webSearchTool = buildTool({
   }),
   async call(input, context) {
     const helper = path.join(context.runtime.helperRoot, 'websearch.py')
+    const braveApiKey = getConfig().tools.webSearch.braveApiKey ?? ''
     const result = await context.runtime.exec({
       command: `python3 ${shellQuote(helper)}`,
       stdin: JSON.stringify({
@@ -37,7 +39,7 @@ export const webSearchTool = buildTool({
       env: {
         LIGHTCLAW_SEARCH_API_KEY: process.env.LIGHTCLAW_SEARCH_API_KEY ?? '',
         LIGHTCLAW_SEARCH_API_URL: process.env.LIGHTCLAW_SEARCH_API_URL ?? '',
-        BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY ?? '',
+        BRAVE_SEARCH_API_KEY: braveApiKey,
       },
       timeoutMs: DEFAULT_TIMEOUT_MS,
       abortSignal: context.abortSignal,
