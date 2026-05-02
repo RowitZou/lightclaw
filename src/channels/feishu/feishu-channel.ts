@@ -66,10 +66,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           process.stderr.write(`feishu: permission response consumed message=${raw.messageId}\n`)
           return
         }
-        // sender displayName is intentionally not pre-fetched here. The
-        // pairing path in the runner does a fire-and-forget lookup via
-        // strategy.fetchSenderName so paired-user messages are not blocked
-        // by a per-message contact API round-trip.
+        // Sender displayName is intentionally not fetched here. The Feishu
+        // contact user.get API requires extra address-book permission and the
+        // Lark SDK logs failed best-effort lookups before callers can catch
+        // them, so pairing stays on open_id + admin-chosen canonical name.
         const message: NormalizedChannelMessage = {
           channel: FEISHU_CHANNEL_ID,
           eventId: raw.eventId,
