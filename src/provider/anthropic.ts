@@ -161,8 +161,10 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
       >()
       let usage: UsageStats = {}
       let stopReason: string | null = null
+      let sawAnyEvent = false
 
       for await (const part of stream as AsyncIterable<unknown>) {
+        sawAnyEvent = true
         if (!isRecord(part) || typeof part.type !== 'string') {
           continue
         }
@@ -333,11 +335,27 @@ export function createAnthropicProvider(config: LightClawConfig): Provider {
         }
       }
 
+      const finalContent = finalizeContentBlocks(contentBlocks)
+      // A stream that closed without yielding any events at all (or yielded
+      // events but produced no content blocks AND no stop_reason AND no
+      // usage) is the signature of an upstream/proxy hiccup that silently
+      // closed the SSE connection. Without this guard we'd persist an empty
+      // assistant message into the transcript, which then poisons every
+      // subsequent turn (Anthropic rejects messages with content: []), and
+      // the user sees a cascade of "(no response)" replies on Feishu.
+      if (
+        !sawAnyEvent ||
+        (finalContent.length === 0 && stopReason === null && Object.keys(usage).length === 0)
+      ) {
+        throw new Error(
+          'Anthropic stream returned no events (likely upstream/proxy hiccup); a retry should recover.',
+        )
+      }
       const stopEvent: StreamStopEvent = {
         type: 'stop',
         stopReason,
         usage,
-        content: finalizeContentBlocks(contentBlocks),
+        content: finalContent,
       }
       yield stopEvent
     },

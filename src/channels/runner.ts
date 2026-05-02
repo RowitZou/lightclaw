@@ -418,7 +418,7 @@ function isPairableChannel(channel: string): channel is ChannelKind {
 // failure to the user. Non-transient errors (auth, schema, prompt-too-long
 // post-compaction) skip the retry and go straight to the red notice.
 const TRANSIENT_FAILURE_PATTERN =
-  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure/i
+  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure|stream returned no events/i
 
 // Up to 3 attempts total per inbound message: the first attempt + 2 retries.
 // Exponential backoff (800ms → 1600ms) keeps the worst-case extra latency
