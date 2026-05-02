@@ -5,8 +5,8 @@ Reads JSON from stdin:
   {"url": "...", "max_bytes": 200000, "timeout_seconds": 30}
 
 Writes markdown/text to stdout on success and errors to stderr on failure.
-LocalRuntime invokes this with host python; DockerRuntime will invoke the same
-script from inside the sandbox image.
+LocalRuntime invokes this with host python; DockerRuntime / RlaunchRuntime
+invoke the same script from inside the sandbox image.
 """
 
 from __future__ import annotations
@@ -16,11 +16,37 @@ import sys
 import urllib.error
 import urllib.request
 
+# trafilatura extracts the article body from HTML (drops nav / footer / sidebars
+# / cookie banners). markdownify is the dump-everything fallback used when
+# extraction returns nothing — useful for short pages, JSON-rendered SPAs,
+# and stripped-down HTML where there's no "main content" to find.
+try:
+    import trafilatura
+except ImportError:
+    trafilatura = None
+
 try:
     from markdownify import markdownify as html_to_markdown
 except ImportError:
     print("markdownify is not installed. Run: python3 -m pip install --user markdownify", file=sys.stderr)
     sys.exit(2)
+
+# Mimic a current Chrome on Linux. urllib's default UA is `Python-urllib/x.y`,
+# which Cloudflare/Akamai/Distill flag as a bot and either 403 or serve a JS
+# challenge that this helper can't solve.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "application/rss+xml;q=0.9,application/atom+xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def format_json(text: str) -> str:
@@ -29,6 +55,27 @@ def format_json(text: str) -> str:
     except Exception:
         return text
     return "```json\n" + json.dumps(parsed, indent=2, ensure_ascii=False) + "\n```"
+
+
+def html_to_body(text: str) -> str:
+    """Prefer trafilatura main-content extraction; fall back to markdownify
+    if extraction returns nothing (typical for short pages or SPAs whose
+    static HTML is just a JS bootstrap)."""
+    if trafilatura is not None:
+        try:
+            extracted = trafilatura.extract(
+                text,
+                output_format="markdown",
+                include_links=True,
+                include_tables=True,
+                include_comments=False,
+                favor_precision=True,
+            )
+            if extracted and extracted.strip():
+                return extracted.strip()
+        except Exception as exc:
+            print(f"trafilatura extraction failed: {exc}; falling back to markdownify", file=sys.stderr)
+    return html_to_markdown(text, heading_style="ATX").strip()
 
 
 def main() -> int:
@@ -46,10 +93,7 @@ def main() -> int:
     max_bytes = int(config.get("max_bytes", 200_000))
     timeout = int(config.get("timeout_seconds", 30))
 
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "LightClaw-WebFetch/0.1"},
-    )
+    request = urllib.request.Request(url, headers=BROWSER_HEADERS)
 
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -71,9 +115,20 @@ def main() -> int:
     text = data.decode("utf-8", errors="replace")
     content_type_lower = content_type.lower()
 
-    if "html" in content_type_lower or "application/xhtml" in content_type_lower:
+    # Treat XML feeds (RSS / Atom) and generic XML as HTML-shaped content;
+    # trafilatura handles them, and markdownify is a reasonable fallback.
+    is_html_like = (
+        "html" in content_type_lower
+        or "application/xhtml" in content_type_lower
+        or "application/xml" in content_type_lower
+        or "application/rss" in content_type_lower
+        or "application/atom" in content_type_lower
+        or "text/xml" in content_type_lower
+    )
+
+    if is_html_like:
         try:
-            body = html_to_markdown(text, heading_style="ATX").strip()
+            body = html_to_body(text)
         except Exception as exc:
             print(f"markdown conversion failed: {exc}", file=sys.stderr)
             return 1

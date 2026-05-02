@@ -107,6 +107,14 @@ export type MicroCompactConfig = {
   idle: IdleMicroCompactConfig
 }
 
+export type WebSearchToolConfig = {
+  braveApiKey?: string
+}
+
+export type ToolsConfig = {
+  webSearch: WebSearchToolConfig
+}
+
 export type LightClawConfig = {
   model: string
   allowedModels: string[]
@@ -166,6 +174,7 @@ export type LightClawConfig = {
   sessionMemory: SessionMemoryConfig
   preCompactFlush: PreCompactFlushConfig
   microCompact: MicroCompactConfig
+  tools: ToolsConfig
 }
 
 type ConfigFileDockerMount = NonNullable<
@@ -671,6 +680,13 @@ export function getConfig(): LightClawConfig {
         enabled: microCompactIdleEnabled,
         gapThresholdMinutes: microCompactIdleGapThresholdMinutes,
         keepRecent: microCompactIdleKeepRecent,
+      },
+    },
+    tools: {
+      webSearch: {
+        braveApiKey:
+          process.env.BRAVE_SEARCH_API_KEY ??
+          fileConfig.tools?.webSearch?.braveApiKey,
       },
     },
     runtime: {

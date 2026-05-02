@@ -185,7 +185,7 @@ export class LocalRuntime implements Runtime {
   }
 }
 
-function resolveDefaultHelperRoot(): string {
+export function resolveDefaultHelperRoot(): string {
   const dirname = fileURLToPath(new URL('.', import.meta.url))
   const candidates = [
     path.resolve(dirname, '../../scripts/sandbox-helpers'),
