@@ -1,11 +1,7 @@
 import type { LightClawConfig } from '../config.js'
-import {
-  getLastCacheSafeParams,
-  createCacheSafeParams,
-} from '../agents/cache-safe-params.js'
+import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runForkedAgent } from '../agents/forked-agent.js'
 import { createUserMessage, collectAssistantText } from '../messages.js'
-import { modelFor } from '../provider/index.js'
 import type { Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
@@ -119,18 +115,6 @@ export function buildExtractPrompt(
   ].join('\n')
 }
 
-function extractionConfig(config: LightClawConfig): LightClawConfig {
-  const extractModel = modelFor('extract', config)
-  return {
-    ...config,
-    model: extractModel,
-    routing: {
-      ...config.routing,
-      main: extractModel,
-    },
-  }
-}
-
 async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   const newMessages = ctx.messages.filter(
     message =>
@@ -164,19 +148,18 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
   const prompt = buildExtractPrompt(newMessages, existingMemories)
+  // Reuse the parent agent's cacheSafeParams verbatim so the fork shares
+  // tools/system/messages prompt-cache breakpoints. Do not switch to
+  // routing.extract here — model name is part of the cache key, so a swap
+  // forces 100% cache miss on every extraction call. The cost win from a
+  // cheaper extract model is dwarfed by the cache hit (typically 80%+ on
+  // back-to-back forks within the 5min ephemeral TTL).
   await runForkedAgent({
     promptMessages: [createUserMessage(prompt)],
-    cacheSafeParams: createCacheSafeParams({
-      systemPrompt: cacheSafeParams.systemPrompt,
-      tools: cacheSafeParams.tools,
-      messages: cacheSafeParams.forkContextMessages,
-      config: extractionConfig(ctx.config),
-    }),
-    config: extractionConfig(ctx.config),
+    cacheSafeParams,
     canUseTool: createAutoMemCanUseTool(ctx.memoryDir),
     maxTurns: 5,
     label: 'extract_memories',
-    skipTranscript: true,
   })
 
   const after = await scanMemoryFiles(ctx.memoryDir)
