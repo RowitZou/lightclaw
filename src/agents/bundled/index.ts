@@ -9,7 +9,6 @@ export const BUNDLED_AGENTS: AgentDefinition[] = [
       'Multi-step research, ambiguous searches, or tasks that may span many files.',
     tools: ['*'],
     systemPrompt: generalPurposePrompt,
-    maxTurns: 30,
   },
   {
     agentType: 'explore',
@@ -17,6 +16,5 @@ export const BUNDLED_AGENTS: AgentDefinition[] = [
       'Fast read-only codebase exploration: find files, grep symbols, understand structure.',
     tools: ['Bash', 'Read', 'Grep', 'Glob'],
     systemPrompt: explorePrompt,
-    maxTurns: 20,
   },
 ]

@@ -79,11 +79,15 @@ export async function runSubagent(params: {
     config,
   })
 
+  // Resolve the subagent turn cap: per-agent definition wins, then the
+  // operator-supplied config.subagentMaxTurns, otherwise no cap (parity with
+  // Claude Code, which has no documented default for Task subagents).
+  const subagentMaxTurns = agent.maxTurns ?? config.subagentMaxTurns
   const result = await runForkedAgent({
     promptMessages: [createUserMessage(params.prompt)],
     cacheSafeParams,
     canUseTool: createSubagentCanUseTool(agent.tools),
-    maxTurns: agent.maxTurns,
+    ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
     label: `subagent_${params.agentType}`,
     signal: params.signal,
   })

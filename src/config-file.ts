@@ -39,6 +39,8 @@ export type ConfigFileShape = {
   contextWindow?: number
   compactThresholdRatio?: number
   compactKeepRecent?: number
+  maxTurns?: number
+  subagentMaxTurns?: number
   permissionMode?: string
   permissionRuleFiles?: {
     user?: string

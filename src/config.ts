@@ -130,6 +130,8 @@ export type LightClawConfig = {
   contextWindow: number
   compactThresholdRatio: number
   compactKeepRecent: number
+  maxTurns?: number
+  subagentMaxTurns?: number
   permissionMode: PermissionMode
   permissionRuleFiles: {
     user?: string
@@ -208,6 +210,14 @@ function parseNumber(value: string | undefined): number | undefined {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
+}
+
+// Turn caps are opt-in: undefined / null / non-positive disables the cap.
+function resolveOptionalTurnCap(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined
+  }
+  return Math.floor(value)
 }
 
 function parseProvider(value: string | undefined): ProviderName | undefined {
@@ -370,6 +380,16 @@ export function getConfig(): LightClawConfig {
         fileConfig.compactKeepRecent ??
         DEFAULT_COMPACT_KEEP_RECENT,
     ),
+  )
+  // No default cap on agent loop turns: matches Claude Code's CLI behavior
+  // (loop runs until the model stops on its own). Users can opt into a hard
+  // cap via env or config when running unattended channel sessions.
+  const maxTurns = resolveOptionalTurnCap(
+    parseNumber(process.env.LIGHTCLAW_MAX_TURNS) ?? fileConfig.maxTurns,
+  )
+  const subagentMaxTurns = resolveOptionalTurnCap(
+    parseNumber(process.env.LIGHTCLAW_SUBAGENT_MAX_TURNS) ??
+      fileConfig.subagentMaxTurns,
   )
   const autoMemory = parseBoolean(process.env.LIGHTCLAW_NO_MEMORY) === true
     ? false
@@ -604,6 +624,8 @@ export function getConfig(): LightClawConfig {
     contextWindow,
     compactThresholdRatio,
     compactKeepRecent,
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(subagentMaxTurns !== undefined ? { subagentMaxTurns } : {}),
     permissionMode,
     permissionRuleFiles: fileConfig.permissionRuleFiles ?? {},
     ...(permissionAuditLog ? { permissionAuditLog } : {}),
