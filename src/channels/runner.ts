@@ -12,7 +12,6 @@ import { generateOrReusePending, updatePendingDisplayName } from '../identity/pa
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
-import { drainPendingExtraction } from '../memory/extract.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
@@ -305,7 +304,10 @@ export class ChannelRunner {
         }
 
         await persistMeta(Date.now(), result.messages.length)
-        await drainPendingExtraction(60_000)
+        // Memory extraction stays fire-and-forget here. Draining each
+        // inbound message would force the user to wait up to 60s before
+        // the next reply when an extraction is slow. The CLI exit path
+        // (cli.ts SIGINT/SIGTERM/finally) drains before process shutdown.
         await awaitBackgroundTasks()
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
         await this.sendReply(message, result.lastAssistantText || '(no response)')

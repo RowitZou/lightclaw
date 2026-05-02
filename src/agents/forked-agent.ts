@@ -11,7 +11,6 @@
 
 import { query } from '../query.js'
 import type { Message, UsageStats } from '../types.js'
-import type { LightClawConfig } from '../config.js'
 import type { CanUseToolFn } from '../tool.js'
 import type { CacheSafeParams } from './cache-safe-params.js'
 
@@ -21,8 +20,6 @@ export type ForkedAgentParams = {
   canUseTool: CanUseToolFn
   maxTurns: number
   label: string
-  skipTranscript?: boolean
-  config?: LightClawConfig
   signal?: AbortSignal
 }
 
@@ -44,7 +41,7 @@ export async function runForkedAgent(
   const result = await query({
     messages,
     tools: cacheSafeParams.tools,
-    config: params.config ?? cacheSafeParams.config,
+    config: cacheSafeParams.config,
     maxTurns: params.maxTurns,
     systemPrompt: cacheSafeParams.systemPrompt,
     mode: 'subagent',

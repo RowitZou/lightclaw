@@ -1,7 +1,7 @@
 import { getConfig } from '../config.js'
 import { createUserMessage } from '../messages.js'
 import { buildSubagentPrompt } from '../prompt.js'
-import { getProvider, modelFor } from '../provider/index.js'
+import { getProvider } from '../provider/index.js'
 import { getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
@@ -66,22 +66,17 @@ export async function runSubagent(params: {
   const config = getConfig()
   const provider = getProvider(config)
   const tools = filterTools(agent.tools, getEnabledTools(provider, getAllTools()))
-  // Model routing for subagents is still overridden here; auto-compact /
-  // auto-memory gating is now driven by `mode: 'subagent'` in query.ts.
-  const subagentConfig = {
-    ...config,
-    model: modelFor('subagent', config),
-    routing: {
-      ...config.routing,
-      main: modelFor('subagent', config),
-    },
-  }
+  // Subagents reuse the parent's model so the prompt cache breakpoints in
+  // tools / system / messages stay valid across the fork. Switching to a
+  // dedicated `routing.subagent` model would invalidate the cache key on every
+  // AgentTool call. Auto-compact / auto-memory gating is driven by
+  // `mode: 'subagent'` in query.ts.
   const existingCache = getLastCacheSafeParams()
   const cacheSafeParams = createCacheSafeParams({
     systemPrompt: buildSubagentPrompt(tools, getRuntime().workspaceRoot, agent),
     tools,
     messages: existingCache?.forkContextMessages ?? [],
-    config: subagentConfig,
+    config,
   })
 
   const result = await runForkedAgent({
