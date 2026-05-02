@@ -239,15 +239,44 @@ export class RlaunchRuntime implements Runtime {
     writeFile: async (pathname, content) => {
       const containerPath = this.toContainerPath(pathname)
       const buffer = typeof content === 'string' ? Buffer.from(content) : content
+      const expectedBytes = buffer.length
+      const b64 = buffer.toString('base64')
+      // brainctl `exec -i` has a stdio race where stdin payloads are silently
+      // dropped before the container-side child reads them — empirically
+      // ~16% of writes lost their bytes, leaving `base64 -d > path` exit-0
+      // with a 0-byte file (silent corruption; tool reported success). Inline
+      // the base64 into the command body so we never depend on the stdin
+      // pipe. The base64 alphabet is single-quote safe, no escape needed.
+      // For very large writes refuse rather than risk hitting brainctl/gRPC
+      // arg-size limits in confusing ways; callers should chunk or write via
+      // the gpfs bind mount instead.
+      const MAX_INLINE_BASE64_BYTES = 512 * 1024
+      if (b64.length > MAX_INLINE_BASE64_BYTES) {
+        throw new Error(
+          `writeFile ${pathname}: payload ${expectedBytes} B exceeds inline limit ` +
+            `(~${Math.floor((MAX_INLINE_BASE64_BYTES * 3) / 4 / 1024)} KB raw); ` +
+            'split the write or stage via the workspace bind mount.',
+        )
+      }
+      // stat the result on the same shell hop so a partial / mismatched
+      // write becomes a thrown error instead of silent success.
       const command =
-        `mkdir -p "$(dirname ${shellQuote(containerPath)})" && base64 -d > ${shellQuote(containerPath)}`
+        `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
+        `printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(containerPath)} && ` +
+        `stat -c %s ${shellQuote(containerPath)}`
       const result = await this.exec({
         command,
-        stdin: buffer.toString('base64'),
         maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       })
       if (result.exitCode !== 0) {
         throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+      }
+      const actualBytes = Number(result.stdout.trim())
+      if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
+        throw new Error(
+          `writeFile ${pathname}: byte mismatch (expected ${expectedBytes}, ` +
+            `wrote ${result.stdout.trim() || 'unknown'})`,
+        )
       }
     },
     stat: async (pathname): Promise<RuntimeStat> => {
