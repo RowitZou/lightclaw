@@ -12,6 +12,7 @@ import { generateOrReusePending, updatePendingDisplayName } from '../identity/pa
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
+import { drainPendingExtraction } from '../memory/extract.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
@@ -43,7 +44,7 @@ import { SessionLock } from './session-lock.js'
 import type { ChannelId, NormalizedChannelMessage } from './types.js'
 
 /**
- * Per-channel strategy: everything that varies between feishu / wechat /
+ * Per-channel strategy: everything that varies between feishu /
  * ide-bridge. The shared orchestration (session lock, transcript load /
  * append / compact, hook lifecycle, runQuery with mode='channel') lives in
  * ChannelRunner and never needs channel-specific branching.
@@ -82,7 +83,7 @@ export type ChannelRunnerStrategy = {
   /**
    * Best-effort lookup of a human-readable display name for a sender (for
    * the `lightclaw identity pending` table). Channel-specific because the
-   * underlying API differs (lark contact.user.get vs no-op for wechat).
+   * underlying API differs by provider.
    * Called only when a NEW pairing code is generated, not on every message;
    * fired and forgotten so the inbound message itself is never blocked.
    */
@@ -304,6 +305,7 @@ export class ChannelRunner {
         }
 
         await persistMeta(Date.now(), result.messages.length)
+        await drainPendingExtraction(60_000)
         await awaitBackgroundTasks()
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
         await this.sendReply(message, result.lastAssistantText || '(no response)')
@@ -408,7 +410,7 @@ export class ChannelRunner {
 }
 
 function isPairableChannel(channel: string): channel is ChannelKind {
-  return channel === 'feishu' || channel === 'wechat'
+  return channel === 'feishu'
 }
 
 // Network errors that we expect to be transient. Anthropic SDK retries

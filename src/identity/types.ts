@@ -1,6 +1,6 @@
 import type { PermissionMode } from '../permission/types.js'
 
-export type ChannelKind = 'feishu' | 'wechat' | 'terminal'
+export type ChannelKind = 'feishu' | 'terminal'
 
 export type SenderKey = `${ChannelKind}:${string}`
 

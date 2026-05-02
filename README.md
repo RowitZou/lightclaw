@@ -2,11 +2,11 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted personal AI assistant. It runs in your terminal, talks to you on Feishu and WeChat, and remembers what you tell it across sessions. One install, your own machine, no SaaS account.
+LightClaw is a self-hosted personal AI assistant. It runs in your terminal, talks to you on Feishu, and remembers what you tell it across sessions. One install, your own machine, no SaaS account.
 
 ### What you can do with it
 
-- **One assistant, every channel.** Same conversation, same memory, whether you open the terminal or message it from Feishu / WeChat.
+- **One assistant, every channel.** Same conversation, same memory, whether you open the terminal or message it from Feishu.
 - **Let it actually do things.** It writes and edits files, runs shell commands, fetches web pages, and calls your MCP servers — inside a sandbox so it can't touch the rest of your machine.
 - **Approve risky actions in plain language.** When the model wants to do something irreversible, you see a clear yes/no — or pick "approve everything like this" once and move on.
 - **Keep long work coherent.** It remembers project conventions, things you've corrected, ongoing tasks, and pulls the right notes back into context when they matter — even after the conversation has been auto-compacted.
@@ -88,7 +88,7 @@ Admin-only commands:
 | `/identity list|pending|approve|reject|link|unlink|remove` | Manage pairing and user bindings. |
 | `/ceiling <default|plan|acceptEdits|bypassPermissions>` | Set the permission ceiling for identities. |
 
-Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu / WeChat account.
+Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
 
 ### Permission Modes And Ceiling
 
@@ -114,7 +114,7 @@ This two-step flow applies to the admin too — there is no environment variable
 
 ## Identity And Channels
 
-Unknown Feishu / WeChat senders receive a pairing code. The admin approves it with:
+Unknown Feishu senders receive a pairing code. The admin approves it with:
 
 ```text
 /identity approve K7YQ3RPA --as alice
@@ -124,12 +124,12 @@ Each canonical user gets:
 
 - user-scoped memory at `~/.lightclaw/memory/<user>/`
 - session metadata tagged with `userId`
-- channel sessions like `feishu-alice` and `wechat-alice`
+- channel sessions like `feishu-alice`
 - a private workspace at `~/.lightclaw/workspaces/<user>/`
 
 Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for the channels you want the main `lightclaw` process to start.
 
-Feishu defaults to a long-connection (WS) transport, so you don't need a public webhook endpoint. WeChat uses iLink's QR-login flow.
+Feishu defaults to a long-connection (WS) transport, so you don't need a public webhook endpoint.
 
 When the assistant wants to do something that needs confirmation, it sends an interactive card with three buttons:
 
@@ -228,7 +228,7 @@ src/
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
 ├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
-├── channels/           # Feishu / WeChat runners, runner strategy, session lock
+├── channels/           # Feishu runner, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy and skill tool boundaries
 ├── tools/              # built-in tools (Read, Write, Edit, Bash, Grep, Glob, ...)

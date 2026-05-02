@@ -2,11 +2,11 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个自托管的个人 AI 助手。它住在你的终端里，能在飞书 / 微信上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
+LightClaw 是一个自托管的个人 AI 助手。它住在你的终端里，能在飞书上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
 
 ### 它能为你做什么
 
-- **同一个助手，到处都能用。** 终端里和飞书 / 微信里是同一段对话、同一份记忆，不用切换工具。
+- **同一个助手，到处都能用。** 终端里和飞书里是同一段对话、同一份记忆，不用切换工具。
 - **让它真正动手做事。** 它会读写文件、跑 shell、抓网页、调你配的 MCP 工具——全在沙箱里，碰不到主机的其他部分。
 - **危险操作用人话和你确认。** 模型想做不可逆的事时给你一个明确的"是 / 否"——也可以一次"批准这一类"，之后不用再问。
 - **长任务不会越聊越糊涂。** 它记得你的项目惯例、纠正过的事、正在跑的任务；该用到的笔记会自动塞回上下文里——哪怕对话已经被自动压缩过几次。
@@ -87,7 +87,7 @@ Admin 专属：
 | `/identity list|pending|approve|reject|link|unlink|remove` | 管理 pairing 和用户绑定。 |
 | `/ceiling <default|plan|acceptEdits|bypassPermissions>` | 设置 identities 的权限上限。 |
 
-Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书 / 微信里审批 pairing code。
+Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
 
 ### 权限模式与 ceiling
 
@@ -113,7 +113,7 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 ## 身份与渠道
 
-未知飞书 / 微信 sender 会收到 pairing code。Admin 审批：
+未知飞书 sender 会收到 pairing code。Admin 审批：
 
 ```text
 /identity approve K7YQ3RPA --as alice
@@ -123,14 +123,12 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 - user-scoped memory：`~/.lightclaw/memory/<user>/`
 - 带 `userId` 的 session meta
-- `feishu-alice` / `wechat-alice` 这类 channel session
+- `feishu-alice` 这类 channel session
 - 私有 workspace：`~/.lightclaw/workspaces/<user>/`
 
 渠道配置在 `~/.lightclaw/channels.json`。需要自动启动的渠道设置 `enabled: true`。
 
 飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
-
-飞书默认走长连接（WS）transport，不需要公网 webhook。微信走 iLink 扫码登录。
 
 助手想做需要确认的事时，会发一张三按钮卡片：
 
@@ -229,7 +227,7 @@ src/
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例
 ├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
-├── channels/           # 飞书 / 微信 runner、runner strategy、session lock
+├── channels/           # 飞书 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy 和 skill tool 边界
 ├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）

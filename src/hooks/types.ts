@@ -14,7 +14,7 @@ export type OnSessionStartPayload = {
   sessionId: string
   cwd: string
   trigger: HookSessionTrigger
-  /** Present when trigger === 'channel'; e.g. 'feishu', 'wechat'. */
+  /** Present when trigger === 'channel'; e.g. 'feishu'. */
   channelId?: string
 }
 

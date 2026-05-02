@@ -5,6 +5,7 @@ import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
+import { drainPendingExtraction } from './memory/extract.js'
 import { setLightclawHomeOverride } from './paths.js'
 import {
   acquireProcessLock,
@@ -23,6 +24,27 @@ type CliArgs = {
   home?: string
   error?: string
 }
+
+let shuttingDown = false
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    return
+  }
+  shuttingDown = true
+  process.stderr.write(`[lightclaw] received ${signal}, draining memory extraction...\n`)
+  await drainPendingExtraction(60_000).catch(error => {
+    process.stderr.write(`memory extraction drain failed: ${String(error)}\n`)
+  })
+  process.exit(0)
+}
+
+process.on('SIGINT', () => {
+  void gracefulShutdown('SIGINT')
+})
+process.on('SIGTERM', () => {
+  void gracefulShutdown('SIGTERM')
+})
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { help: false }
@@ -122,7 +144,7 @@ async function main(): Promise<void> {
 
   // Mutual exclusion: refuse to start if another LightClaw is already
   // running. Multiple instances would race the same dedup file, sessions
-  // dir, identity store, and (for channels) the same Feishu/WeChat ws
+  // dir, identity store, and (for channels) the same Feishu ws
   // subscription, all of which assume a single owner.
   acquireProcessLock()
 
@@ -170,6 +192,7 @@ async function main(): Promise<void> {
       resumeSessionId,
     })
   } finally {
+    await drainPendingExtraction(60_000)
     for (const handle of channelHandles.reverse()) {
       await handle.stop().catch(error => {
         process.stderr.write(`channel stop failed: ${String(error)}\n`)
@@ -183,9 +206,6 @@ async function startEnabledChannels(): Promise<ChannelHandle[]> {
   const channels = listChannels(config).filter(channel => {
     if (channel.id === 'feishu') {
       return config.feishu.enabled
-    }
-    if (channel.id === 'wechat') {
-      return Boolean(config.wechat?.enabled)
     }
     return true
   })

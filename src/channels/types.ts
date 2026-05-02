@@ -1,8 +1,8 @@
 import type { PermissionMode } from '../permission/types.js'
 
 /**
- * Channel identifier. Kept as an open string so new channels (wechat,
- * ide-bridge, …) can be registered without widening a literal union here.
+ * Channel identifier. Kept as an open string so new channels (ide-bridge,
+ * etc.) can be registered without widening a literal union here.
  * Concrete channels expose their id as a const string literal via
  * createXxxChannel() → Channel.id.
  */
@@ -13,7 +13,7 @@ export type ChannelHandle = {
 }
 
 /**
- * Common contract every channel (feishu / wechat / ide-bridge / …) must
+ * Common contract every channel (feishu / ide-bridge / etc.) must
  * satisfy. Modeled after the Provider interface: cheap to construct, lazy
  * side effects (network / ports) deferred to start().
  */
@@ -50,7 +50,6 @@ export type NormalizedChannelMessage = {
 
 export type ChannelsConfig = {
   feishu: FeishuChannelConfig
-  wechat?: WechatChannelConfig
 }
 
 export type FeishuDomain = 'feishu' | 'lark' | string
@@ -84,15 +83,4 @@ export type FeishuChannelConfig = {
     path: string
     publicUrl?: string
   }
-}
-
-export type WechatChannelConfig = {
-  enabled: boolean
-  cwd?: string
-  permissionMode: PermissionMode
-  allowSenders: string[]
-  textChunkSize: number
-  longPollTimeoutMs: number
-  mediaEnabled: boolean
-  mediaDir: string
 }

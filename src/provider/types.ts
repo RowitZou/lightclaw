@@ -26,6 +26,7 @@ export type StreamChatParams = {
   system: string
   tools: ToolSchema[]
   maxTokens?: number
+  cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
 }
 

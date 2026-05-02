@@ -1,6 +1,5 @@
 import type { Channel, ChannelId, ChannelsConfig } from './types.js'
 import { createFeishuChannel } from './feishu/feishu-channel.js'
-import { createWechatChannel } from './wechat/wechat-channel.js'
 
 /**
  * A ChannelFactory turns the top-level ChannelsConfig into a concrete
@@ -12,7 +11,6 @@ export type ChannelFactory = (config: ChannelsConfig) => Channel | null
 
 const factories: Array<{ id: ChannelId; create: ChannelFactory }> = [
   { id: 'feishu', create: config => createFeishuChannel(config.feishu) },
-  { id: 'wechat', create: config => config.wechat ? createWechatChannel(config.wechat) : null },
 ]
 
 /**
