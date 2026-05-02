@@ -18,7 +18,10 @@ export type ForkedAgentParams = {
   promptMessages: Message[]
   cacheSafeParams: CacheSafeParams
   canUseTool: CanUseToolFn
-  maxTurns: number
+  // Optional cap on tool-use turns for this fork. Memory extraction passes a
+  // small explicit value (intentional short task); subagent invocations leave
+  // it undefined so query() falls back to config.maxTurns / no cap.
+  maxTurns?: number
   label: string
   signal?: AbortSignal
 }

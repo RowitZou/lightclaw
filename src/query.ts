@@ -174,7 +174,12 @@ export async function query(params: QueryParams): Promise<{
   usage: UsageStats
 }> {
   const config = params.config ?? getConfig()
-  const maxTurns = params.maxTurns ?? 20
+  // Mirror Claude Code CLI: no default cap on tool-use turns; loop runs until
+  // the model emits end_turn (or until abort / context exhaustion). Callers
+  // that need a hard ceiling pass it explicitly (e.g. memory extraction);
+  // operators can opt into a global ceiling via config.maxTurns.
+  const maxTurns =
+    params.maxTurns ?? config.maxTurns ?? Number.POSITIVE_INFINITY
   const mode: QueryMode = params.mode ?? 'interactive'
   const messages = [...params.messages]
   let lastAssistantText = ''

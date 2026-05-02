@@ -158,7 +158,11 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
     promptMessages: [createUserMessage(prompt)],
     cacheSafeParams,
     canUseTool: createAutoMemCanUseTool(ctx.memoryDir),
-    maxTurns: 5,
+    // Extraction is one MemoryRead/Grep+ several MemoryWrite calls, so a
+    // long session with lots of save-worthy facts (~10+ memories) can blow
+    // a tight cap and silently truncate the batch. 20 leaves headroom for
+    // index lookups + per-memory writes without unbounding the fork.
+    maxTurns: 20,
     label: 'extract_memories',
   })
 

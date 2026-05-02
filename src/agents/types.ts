@@ -5,5 +5,5 @@ export type AgentDefinition = {
   whenToUse: string
   tools: string[] | ['*']
   systemPrompt: string
-  maxTurns: number
+  maxTurns?: number
 }
