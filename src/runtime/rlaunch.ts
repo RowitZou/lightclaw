@@ -531,11 +531,16 @@ export function buildLaunchArgs(
   for (const tag of cfg.positiveTags) {
     args.push(`--positive-tags=${tag}`)
   }
-  // env injection happens before predictOnly fast-return so predict and
+  // Use --set-env (NOT -e/--env) so the value lands in the worker pod's
+  // PodSpec env. rlaunch's -e flag silently drops everything in detached
+  // mode (`rlaunch -d`); only interactive/attached mode forwards it.
+  // Verified empirically against `brainctl describe process` — -e produces
+  // an empty Env block, --set-env produces the expected entries.
+  // Env injection happens before predictOnly fast-return so predict and
   // detached spawn share identical args (predict surfaces env-related
   // failures fail-fast before the real worker burns scheduling time).
   for (const [key, value] of Object.entries(cfg.env)) {
-    args.push('-e', `${key}=${value}`)
+    args.push(`--set-env=${key}=${value}`)
   }
   if (input.predictOnly) {
     args.push('--predict-only=true', '--', 'bash')

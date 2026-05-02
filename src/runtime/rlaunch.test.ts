@@ -149,16 +149,21 @@ describe('buildLaunchArgs', () => {
     env: {},
   }
 
-  it('emits -e KEY=VAL for every env entry on detached spawn', () => {
+  it('emits --set-env=KEY=VAL for every env entry on detached spawn', () => {
     const args = buildLaunchArgs(
       { ...baseCfg, env: { http_proxy: 'http://10.0.0.1:18080', no_proxy: 'localhost' } },
       { detach: true, predictOnly: false },
     )
-    const eIdx1 = args.indexOf('-e', 0)
-    const eIdx2 = args.indexOf('-e', eIdx1 + 1)
-    assert.ok(eIdx1 >= 0 && eIdx2 > eIdx1, '-e flags emitted twice')
-    const pairs = [args[eIdx1 + 1], args[eIdx2 + 1]].sort()
-    assert.deepEqual(pairs, ['http_proxy=http://10.0.0.1:18080', 'no_proxy=localhost'])
+    const setEnvFlags = args.filter(arg => arg.startsWith('--set-env=')).sort()
+    assert.deepEqual(setEnvFlags, [
+      '--set-env=http_proxy=http://10.0.0.1:18080',
+      '--set-env=no_proxy=localhost',
+    ])
+    assert.equal(
+      args.includes('-e'),
+      false,
+      'must not use -e; rlaunch silently drops it on detached spawn',
+    )
     assert.equal(args[0], '-d', 'detach prepends -d')
   })
 
@@ -169,12 +174,15 @@ describe('buildLaunchArgs', () => {
     )
     const tail = args.slice(-3)
     assert.deepEqual(tail, ['--predict-only=true', '--', 'bash'])
-    assert.ok(args.includes('-e'), 'predict still inherits env so failures fail-fast')
+    assert.ok(
+      args.some(arg => arg.startsWith('--set-env=')),
+      'predict still inherits env so failures fail-fast',
+    )
   })
 
-  it('omits -e when env is empty', () => {
+  it('omits --set-env when env is empty', () => {
     const args = buildLaunchArgs(baseCfg, { detach: true, predictOnly: false })
-    assert.equal(args.includes('-e'), false)
+    assert.equal(args.some(arg => arg.startsWith('--set-env=')), false)
   })
 })
 
