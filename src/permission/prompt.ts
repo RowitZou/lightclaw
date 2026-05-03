@@ -23,13 +23,25 @@ export async function askUserApproval(input: {
   riskLevel: RiskLevel
   inputPreview: string
   suggestedRules: PermissionRuleValue[]
+  /**
+   * When true, the prompt only renders [1] approve once / [3] deny — the
+   * persistence option is intentionally suppressed. Selecting "2" / "a" /
+   * "批准所有" in this mode is degraded to allow-once with a warning so the
+   * user's intent (allow this command) is honored without stamping a
+   * permanent rule for `rm` / `sudo` / pipe-to-shell. Computed in
+   * permission/index.ts via isHighRiskAsk and passed through.
+   */
+  highRisk?: boolean
 }): Promise<PermissionDecision> {
   const { rl, toolName, riskLevel, inputPreview, suggestedRules } = input
+  const highRisk = Boolean(input.highRisk)
   const middleLabel = formatSuggestionLabel(suggestedRules, toolName)
-  process.stdout.write(formatPrompt(toolName, riskLevel, inputPreview, middleLabel))
+  process.stdout.write(
+    formatPrompt(toolName, riskLevel, inputPreview, middleLabel, highRisk),
+  )
 
   const answer = (await rl.question('permission> ')).trim().toLowerCase()
-  const choice = resolveChoice(answer)
+  const choice = resolveChoice(answer, highRisk)
   return applyChoice(choice, toolName, suggestedRules)
 }
 
@@ -38,7 +50,24 @@ function formatPrompt(
   riskLevel: RiskLevel,
   inputPreview: string,
   middleLabel: string,
+  highRisk: boolean,
 ): string {
+  if (highRisk) {
+    return [
+      '',
+      chalk.red('⚠️  权限请求（高危）'),
+      `  工具：${chalk.cyan(toolName)}   风险：${chalk.magenta(riskLevel)}`,
+      `  ${inputPreview}`,
+      chalk.gray(
+        '  此操作含高风险子命令（rm / sudo / pipe-to-shell 等），不能持久化。',
+      ),
+      '',
+      `  [1] 批准本次`,
+      `  [3] 拒绝`,
+      chalk.gray('  （兼容快捷键：y=1，n=3；输入 2 / a 会被降级为"仅这次"。）'),
+      '',
+    ].join('\n')
+  }
   return [
     '',
     chalk.yellow('权限请求'),
@@ -53,9 +82,21 @@ function formatPrompt(
   ].join('\n')
 }
 
-function resolveChoice(answer: string): ChoiceKind {
+function resolveChoice(answer: string, highRisk: boolean): ChoiceKind {
   if (answer === '' || answer === '1' || answer === 'y') return 'allow_once'
-  if (answer === '2' || answer === 'a') return 'allow_rules'
+  if (answer === '2' || answer === 'a') {
+    if (highRisk) {
+      // Quietly downgrade — applyChoice prints the explanatory line via the
+      // 'allow_once_high_risk_downgrade' branch below.
+      process.stdout.write(
+        chalk.gray(
+          '  （高危规则不能持久化，已按"仅这次"批准）\n',
+        ),
+      )
+      return 'allow_once'
+    }
+    return 'allow_rules'
+  }
   if (answer === '3' || answer === 'n') return 'deny'
   // Anything we don't understand defaults to deny — safer than guessing.
   return 'deny'

@@ -8,6 +8,7 @@ import {
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
+import { isHighRiskAsk } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { askUserApproval } from './prompt.js'
 import type {
@@ -48,16 +49,22 @@ export async function requestPermission(input: {
   if (verdict.behavior === 'ask') {
     const inputPreview = previewInput(tool.name, toolInput)
     const suggestedRules = computeSuggestedRules(tool, toolInput)
+    // High-risk verdict drives the "hide ‘以后都允许’" UX in both approvers.
+    // Computed once here so the policy decision is consistent across the
+    // approver call (Feishu card render) and the terminal prompt; the
+    // Feishu coordinator caches its own copy from PermissionAskInput.
+    const askInput = {
+      toolName: tool.name,
+      riskLevel: tool.riskLevel,
+      input: toolInput,
+      inputPreview,
+      mode,
+      signal: ctx.signal,
+      suggestedRules,
+    }
+    const highRisk = isHighRiskAsk(askInput)
     if (approver) {
-      decision = await approver.ask({
-        toolName: tool.name,
-        riskLevel: tool.riskLevel,
-        input: toolInput,
-        inputPreview,
-        mode,
-        signal: ctx.signal,
-        suggestedRules,
-      })
+      decision = await approver.ask(askInput)
     } else if (ctx.isInteractive && rl) {
       decision = await askUserApproval({
         rl,
@@ -65,6 +72,7 @@ export async function requestPermission(input: {
         riskLevel: tool.riskLevel,
         inputPreview,
         suggestedRules,
+        highRisk,
       })
     } else {
       decision = {
