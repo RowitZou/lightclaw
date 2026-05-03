@@ -2,6 +2,7 @@
 
 - LocalRuntime is admin-only. When `runtime.backend = "local"`, paired non-admin users must not acquire a runtime; multi-user service must use DockerRuntime or RjobRuntime.
 - Do not add path-string workspace guards to tools or permission policy. Runtime safety comes from the LocalRuntime admin-only gate, Docker/Rjob isolation, read-only mounts, and the Phase 5 permission system.
+- RlaunchRuntime never uses `brainctl exec -i`. The cluster's brainctl exec drops stdin payloads silently (the `9cafbdc` writeFile incident: ~16% silent corruption) and also suppresses stdout when `-i` is opened with no real stdin. Every `ExecInput.stdin` is folded into the bash command body via `composeExecScript` (base64 inline + brace group so the pipe feeds the whole `&&` chain). Per-call cap is 32 KB raw — empirically the brainctl ws frame fails above ~57 KB total script. `fs.writeFile` chunks transparently above the cap; new tools that hand large payloads to a helper should chunk via `fs.writeFile` + read-from-disk rather than growing the cap.
 
 # LightClaw Permission System Notes
 
