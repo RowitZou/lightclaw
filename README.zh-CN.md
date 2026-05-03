@@ -31,20 +31,141 @@ pnpm build && pnpm start # 先 build 到 dist/cli.js 再 node 跑
 python3 -m pip install --user markdownify
 ```
 
-凭据可以放在 `~/.lightclaw/config.json`，也可以走环境变量：
+写一个最小的 `~/.lightclaw/config.json` 即可启动——完整模板见下方 [配置](#配置) 一节：
 
 ```jsonc
 {
   "provider": "anthropic",
   "providerOptions": {
     "anthropic": {
-      "apiKey": "sk-..."
+      "apiKey": "<your-anthropic-api-key>"
+    }
+  },
+  "model": "claude-sonnet-4-6"
+}
+```
+
+首次交互式启动会创建 v1 单 admin 身份。之后终端启动会自动恢复当前用户最近一次 session。
+
+如果不希望状态落在 `~/.lightclaw`（比如集群开发机销毁会一并丢掉 sessions / memory / identity），把 `LIGHTCLAW_HOME` 指到共享存储后再启动：
+
+```bash
+export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
+```
+
+也可以一次性 `lightclaw --home <path>` 临时切。具体迁移步骤见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+
+---
+
+## 配置
+
+所有配置都集中在 `<LIGHTCLAW_HOME>/config.json`（默认 `~/.lightclaw/config.json`）。完整带注释模板：
+
+```jsonc
+{
+  // --- Provider 与模型 ---
+  "provider": "anthropic",                      // "anthropic" | "openai"
+  "providerOptions": {
+    "anthropic": {
+      "apiKey": "<your-anthropic-api-key>",
+      "baseUrl": "<https://your-anthropic-endpoint>"   // 可选；不填走官方端点
+    },
+    "openai": {                                  // 仅当 provider="openai" 时需要
+      "apiKey": "<your-openai-compatible-key>",
+      "baseUrl": "<https://your-openai-compatible-endpoint>"
+    }
+  },
+  "model": "claude-sonnet-4-6",                 // 默认模型；运行中可用 /model 切
+  "allowedModels": ["claude-sonnet-4-6", "claude-opus-4-7"],   // 可选，限制 /model 的可选项
+
+  // 可选 per-role 路由——未配置的字段回落到 "model"
+  "routing": {
+    "main":      "claude-sonnet-4-6",           // 主 agent 循环
+    "compact":   "claude-haiku-4-5",            // auto-compact 摘要
+    "extract":   "claude-haiku-4-5",            // memory 抽取 / micro-compact
+    "webSearch": "claude-haiku-4-5"             // WebSearch helper 询问
+  },
+
+  // --- 工具相关 ---
+  "tools": {
+    "webSearch": {
+      "braveApiKey": "<your-brave-search-api-key>"   // 可选；未配置回退 DDG HTML
+    }
+  },
+
+  // --- 存储路径（全部可选）---
+  // 默认走 <LIGHTCLAW_HOME>/{sessions,memory,workspaces}；只有需要把 workspace 单独放
+  // 到大盘 / 共享存储 / 网络挂载时才覆盖。
+  "sessionsDir":   "<absolute-path-for-sessions>",
+  "memoryDir":     "<absolute-path-for-memory>",
+  "workspaceRoot": "<absolute-path-for-workspaces>",
+
+  // --- Runtime 后端（Bash / Read / Write 实际跑的地方）---
+  "runtime": {
+    "backend": "docker",                        // "local"（admin-only） | "docker" | "rlaunch"
+
+    // 可选的进程内 forward proxy。docker host 模式 / 集群 pod 不能直连外网时启用。
+    "network": {
+      "mode": "host",                           // "host" 启动 bridge；"isolated" 关闭
+      "upstream": "inherit",                    // "inherit" | "direct" | "<http://upstream-proxy:port>"
+      "port": 18080,
+      "bindHost": "0.0.0.0",
+      "acl": ["127.0.0.0/8", "<your-pod-cidr>"]  // 来源 IP 白名单；空数组 = 只放行 loopback
+    },
+
+    // DockerRuntime —— backend = "docker" 时生效
+    "docker": {
+      "imageOverride": "<custom-sandbox-image>",      // 默认 ghcr.io/rowitzou/lightclaw-sandbox:<version>
+      "memoryLimit": "4g",
+      "cpuLimit": 4,
+      "idleTimeoutMs": 1800000,                       // 容器闲置 30 分钟自动 stop
+      "network": "bridge",
+      "tmpfs": ["/tmp"],
+      "mounts": [
+        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
+      ],
+      "env": { /* 注入到容器的静态 env */ },
+      "autoPull": true
+    },
+
+    // RlaunchRuntime —— backend = "rlaunch" 时生效（集群部署）
+    // 这些值由集群 admin 提供，LightClaw 不带默认。
+    "rlaunch": {
+      "image":            "<cluster-base-image>",
+      "chargedGroup":     "<your-charged-group>",
+      "namespace":        "<your-cluster-namespace>",
+      "cpu":              8,
+      "memoryMb":         16384,
+      "gpu":              0,
+      "privateMachine":   "group",
+      "positiveTags":     [],
+      "gpfsHostPrefix":   "<host-side-gpfs-mount>",   // 例：/mnt/shared-storage-user
+      "gpfsMountPrefix":  "<gpfs-url-prefix>",        // 例：gpfs://gpfs1
+      "imagePullPolicy":  "IfNotPresent",
+      "maxWaitDuration":  "5m",
+      "workerGcTimeHours": 24,
+      "predictBeforeStart":   true,
+      "healthCheckIntervalMs": 300000,
+      "preheatOnStartup":     true,
+      "preheatOnApproval":    true
     }
   }
 }
 ```
 
-首次交互式启动会创建 v1 单 admin 身份。之后终端启动会自动恢复当前用户最近一次 session。
+所有字段都是可选的，用不到的整段删掉即可。环境变量（`ANTHROPIC_API_KEY`、`LIGHTCLAW_MODEL`、`LIGHTCLAW_RUNTIME_BACKEND` 等）会覆盖文件里的同名字段。完整 env 参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+
+同目录下的兄弟文件：
+
+| 文件 | 用途 |
+|---|---|
+| `permissions.json` | 全局 allow/deny/ask 规则；与下面的 per-user 规则合并 |
+| `identity/per-user/<canonical>/permissions.json` | 用户在飞书 / 终端点过的"以后都允许"自动落到这里，跨重启保留，无需手动维护 |
+| `mcp.json` | MCP server 注册 |
+| `channels.json` | 飞书等渠道配置 |
+| `hooks/*.mjs` | 生命周期 hook |
+
+带凭据的文件强制 `mode 0600`。
 
 ---
 
@@ -133,41 +254,34 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 助手想做需要确认的事时，会发一张三按钮卡片：
 
 - **批准本次** —— 仅放行这一次。
-- **批准这一类** —— 卡片标签会告诉你批准的范围（比如"任何 `pip install`"而不是"全部 Bash"），可以放心地放宽，但不会一次解锁整个工具。
+- **批准这一类** —— 卡片标签会告诉你批准的范围（比如"任何 `pip install`"而不是"全部 Bash"），可以放心地放宽，但不会一次解锁整个工具。这个决定会**持久化**到 `<LIGHTCLAW_HOME>/identity/per-user/<canonical>/permissions.json`，跨进程重启保留；并发的 subagent 同类调用安装规则后会被静默放行，不会再弹一遍。
 - **拒绝** —— 直接拒绝，助手收到。
 
-按钮不可用时，回复 `1` / `2` / `3` 也行。把 channel 设成 `bypassPermissions` 跑顺也没问题——再用 `permissions.json` 的 `ask` 列表把危险操作锁死即可（比如 `"ask": ["Bash(rm:*)"]`）。
+对于高危操作（`Bash(rm/sudo/dd/sh/eval/...)`、`/etc` / `/usr` / `~/.ssh` / `~/.aws` 等敏感路径下的 Edit），中间的"批准这一类"按钮会**自动隐藏**——`cd /tmp && rm -rf foo` 这种链式命令也算高危，并且对老卡片回复 `2` / "批准所有"会被自动降级为 allow-once。所以飞书上手滑一下不可能把 `rm -rf` 永久放行。
+
+按钮不可用时，回复 `1` / `2` / `3` 也行。把 channel 设成 `bypassPermissions` 跑顺也没问题——再用 `permissions.json` 的 `ask` 列表把危险操作锁死即可（比如 `"ask": ["Bash(rm:*)"]`）；`ask` 优先级高于 `allow`，bypass 模式下也照样弹卡。
 
 ---
 
 ## 沙箱
 
-默认情况下，助手的工具——Bash、读写文件、抓网页——都跑在 Docker 容器里，不在你的主机上。模型乱来时也 `rm -rf` 不到你的 home，也可以放心把 bot 接给飞书上的朋友用，不等于给他们 shell。
+默认情况下，助手的工具——Bash、读写文件、抓网页——都跑在**沙箱**里，不在你的主机上。模型乱来时 `rm -rf` 不到你的 home，也可以放心把 bot 接给飞书上的朋友用，不等于给他们 shell。
 
-容器你自己**不用管**：LightClaw 启动时会在后台拉公开镜像（`ghcr.io/rowitzou/lightclaw-sandbox`），还没拉完时工具调用会优雅降级到 chat-only——所以第一次对话不会卡死。镜像里自带日常工具（jq、sqlite、ripgrep、Python 数科栈、Node 22），开箱就能干活。
+通过 `runtime.backend` 选三种 backend：
 
-每个用户有自己的长跑容器。Workspace 文件跨容器重启保留；只有 writable layer（比如 `pip install` 的包）会被 `/sandbox reset` 清掉。
+| Backend | 适用场景 | 备注 |
+|---|---|---|
+| `local` | 单人终端、不接飞书。 | 只 admin 可用；接飞书的 channel user 会被拒——没有真实隔离。 |
+| `docker` | 普通 Linux 主机上的多用户个人 bot。 | 每用户长跑容器，公开镜像 `ghcr.io/rowitzou/lightclaw-sandbox` lazy 拉取，闲置容器自动 stop。Workspace 文件跨重启保留；`/sandbox reset` 重建 writable layer。 |
+| `rlaunch` | 集群部署（kubebrain）。 | 每用户长跑集群 worker，gpfs workspace 挂到 `/workspace`；不做 idle stop，被 GC 后由 health checker 自动重建。 |
 
-**单用户场景** —— 设 `runtime.backend: "local"` 减少开销。Local 模式只 admin 可用，channel 用户会被拒。
+Docker 镜像自带日常工具（jq、sqlite、ripgrep、Python 数科栈、Node 22）。LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级到 chat-only——第一次对话不会卡死。
 
-**自定义镜像 / 离网内网部署** —— 在 `~/.lightclaw/config.json` 里设 `runtime.docker.imageOverride` 指向你的 tag，重启 LightClaw 即可。
+需要自定义 / 内网镜像，设 `runtime.docker.imageOverride`（或集群场景的 `runtime.rlaunch.image`）后重启 LightClaw。数据集 / 模型 checkpoint 推荐 `mode: "ro"` 挂载——内核拒绝写入。
 
-```jsonc
-{
-  "runtime": {
-    "backend": "docker",
-    "docker": {
-      "memoryLimit": "4g",
-      "cpuLimit": 4,
-      "mounts": [
-        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
-      ]
-    }
-  }
-}
-```
+**网络 bridge.** 沙箱直连不到外网时（docker host networking、集群 pod 在 NAT 后面），设 `runtime.network.mode: "host"`。LightClaw 会在指定端口起一个进程内 forward proxy，并往容器 / pod 里注入 `http_proxy`。`upstream` 控制转发到哪里（`inherit` 继承 shell、`direct` 直连、或固定的代理 URL）；`acl` 是**来源 IP 白名单**，避免 bridge 被当成开放代理白嫖——集群部署务必加自家 pod CIDR（kubebrain 用 RFC 6598 `100.64.0.0/10`）。完整 schema 见上面的 [`配置`](#配置) 一节。
 
-数据集 / 模型 checkpoint 推荐用 `mode: "ro"` 挂载——助手能读，但内核拒绝任何写入。完整配置见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+完整配置参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
 
 ---
 
@@ -198,19 +312,22 @@ LightClaw 帮你记三件事：
 
 ## 配置提示
 
-常用环境变量：
+常用环境变量（覆盖 `config.json` 同名字段）：
 
 | 变量 | 用途 |
 |---|---|
+| `LIGHTCLAW_HOME` | 所有 LightClaw 状态的根（默认 `~/.lightclaw`）。集群部署改到共享存储 |
+| `LIGHTCLAW_SESSIONS_DIR` / `LIGHTCLAW_MEMORY_DIR` / `LIGHTCLAW_WORKSPACE_ROOT` | 在 `LIGHTCLAW_HOME` 之外单独覆盖某个子目录 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic 凭据 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI-compatible 凭据 |
 | `LIGHTCLAW_PROVIDER` | `anthropic` 或 `openai` |
 | `LIGHTCLAW_MODEL` | 默认模型 |
 | `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
+| `BRAVE_SEARCH_API_KEY` | WebSearch Brave key（覆盖 `tools.webSearch.braveApiKey`）；不配走 DDG HTML |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 整个子系统关掉 |
 | `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | 记忆相关的细粒度开关与阈值，详见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md) |
 | `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | 执行环境：`local`、`docker`（多用户场景默认）、未来的 `rjob` |
+| `LIGHTCLAW_RUNTIME_BACKEND` | 执行环境：`local`、`docker`、`rlaunch`（集群） |
 | `LIGHTCLAW_DOCKER_IMAGE` / `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖沙箱镜像 / idle stop 时间 |
 
 ---
@@ -231,8 +348,8 @@ src/
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy 和 skill tool 边界
 ├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
-├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、未来 Rjob
-├── agents/             # general-purpose / explore 子 Agent
+├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、RlaunchRuntime + NetworkBridge
+├── agents/             # general-purpose / explore 子 Agent + forked-agent runner（复用父 prefix 命中 prompt cache）
 ├── skill/              # loader、registry、内置 skill（verify、remember）
 ├── memory/             # LIGHTCLAW.md 发现与 user memory
 ├── session/            # 会话 JSONL transcript + meta + auto-compact
