@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
+import { isHighRiskAsk } from '../../permission/high-risk.js'
 import { evaluatePermission } from '../../permission/policy.js'
 import {
   appendIdentityRules,
@@ -70,6 +71,14 @@ type PendingPermission = {
   message: NormalizedChannelMessage
   ask: PermissionAskInput
   suggestedRules: PermissionRuleValue[]
+  /**
+   * Cached at ask-time so the card builder, text fallback, and applyAction
+   * downgrade path see a single, consistent classification. Re-deriving on
+   * each call would risk drift if the rule set were mutated between render
+   * and click (e.g. `/permissions ask` registered a new ask rule that turns
+   * a previously-accepted command into high-risk mid-flight).
+   */
+  highRisk: boolean
   resolve(decision: PermissionDecision): void
   rendered: boolean
   abortListener?: () => void
@@ -195,6 +204,7 @@ export class FeishuPermissionCoordinator {
         message: input.message,
         ask: input.ask,
         suggestedRules: input.ask.suggestedRules ?? [],
+        highRisk: isHighRiskAsk(input.ask),
         resolve,
         rendered: false,
       }
@@ -286,6 +296,25 @@ export class FeishuPermissionCoordinator {
       return resolvedCardResponse(pending, {
         outcome: 'deny',
         label: '拒绝',
+      })
+    }
+
+    // High-risk gate: if the pending is high-risk (contains rm / sudo / sh /
+    // pipe-to-shell / Edit-of-/etc-style), the card itself doesn't render
+    // the "以后都允许" button — but a stale card (rendered before the gate
+    // existed) or a text reply ("2", "批准所有", "always") might still
+    // arrive on this path. Downgrade to allow-once + a notice that explains
+    // why no rule was installed.
+    if (pending.highRisk) {
+      this.resolvePending(pending, { behavior: 'allow' })
+      void this.safeSendNotice(
+        pending.message,
+        'info',
+        '此操作含高风险子命令（如 rm / sudo / pipe-to-shell），出于安全只批准本次，没有写入持久化规则。',
+      )
+      return resolvedCardResponse(pending, {
+        outcome: 'allow_once',
+        label: '批准本次（高危：已降级）',
       })
     }
 
@@ -512,10 +541,44 @@ export class FeishuPermissionCoordinator {
 }
 
 function buildApprovalCard(pending: PendingPermission): Record<string, unknown> {
+  // High-risk grants are not eligible for "以后都允许" (rm / dd / sudo /
+  // pipe-to-shell / Edit-of-/etc-style). The middle button is omitted, the
+  // card header turns red, and a one-line warning makes it explicit so the
+  // user knows why this card looks different from the usual yellow one.
   const middleLabel = formatSuggestionLabel(
     pending.suggestedRules,
     pending.ask.toolName,
   )
+  const headerTemplate = pending.highRisk ? 'red' : 'yellow'
+  const headerTitle = pending.highRisk
+    ? 'LightClaw 请求执行高危工具'
+    : 'LightClaw 请求执行工具'
+  const bodyLines = [
+    `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
+    `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
+    `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+    `**会话**：${escapeLarkMd(pending.sessionId)}`,
+    '',
+    '```',
+    truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
+    '```',
+  ]
+  if (pending.highRisk) {
+    bodyLines.push(
+      '',
+      '⚠️ **此操作含高风险子命令（如 `rm` / `sudo` / pipe-to-shell 等），出于安全只能"仅这次"批准，无法持久化。**',
+    )
+  }
+  const buttons = pending.highRisk
+    ? [
+        buildButton('批准本次', 'primary', pending.id, 'allow'),
+        buildButton('拒绝', 'danger', pending.id, 'deny'),
+      ]
+    : [
+        buildButton('批准', 'primary', pending.id, 'allow'),
+        buildButton(middleLabel, 'default', pending.id, 'allow_rules'),
+        buildButton('拒绝', 'danger', pending.id, 'deny'),
+      ]
 
   return {
     config: {
@@ -523,10 +586,10 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
       wide_screen_mode: true,
     },
     header: {
-      template: 'yellow',
+      template: headerTemplate,
       title: {
         tag: 'plain_text',
-        content: 'LightClaw 请求执行工具',
+        content: headerTitle,
       },
     },
     elements: [
@@ -534,26 +597,13 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
         tag: 'div',
         text: {
           tag: 'lark_md',
-          content: [
-            `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
-            `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-            `**模式**：${escapeLarkMd(pending.ask.mode)}`,
-            `**会话**：${escapeLarkMd(pending.sessionId)}`,
-            '',
-            '```',
-            truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
-            '```',
-          ].join('\n'),
+          content: bodyLines.join('\n'),
         },
       },
       {
         tag: 'action',
         layout: 'flow',
-        actions: [
-          buildButton('批准', 'primary', pending.id, 'allow'),
-          buildButton(middleLabel, 'default', pending.id, 'allow_rules'),
-          buildButton('拒绝', 'danger', pending.id, 'deny'),
-        ],
+        actions: buttons,
       },
     ],
   }
@@ -646,6 +696,22 @@ function buildResolvedCard(
 }
 
 function buildTextFallback(pending: PendingPermission): string {
+  if (pending.highRisk) {
+    return [
+      '⚠️ LightClaw 请求执行高危工具，需要你确认：',
+      `工具: ${pending.ask.toolName}`,
+      `风险: ${pending.ask.riskLevel}`,
+      `会话: ${pending.sessionId}`,
+      pending.ask.inputPreview,
+      '',
+      '此操作含高风险子命令（如 rm / sudo / pipe-to-shell），只能"仅这次"批准。',
+      '可回复：',
+      '  1 = 批准本次',
+      '  3 = 拒绝',
+      '',
+      '（输入 2 / 批准所有 / always 会被降级为"仅这次"批准并提示。）',
+    ].join('\n')
+  }
   const middleLabel = formatSuggestionLabel(
     pending.suggestedRules,
     pending.ask.toolName,
@@ -659,7 +725,7 @@ function buildTextFallback(pending: PendingPermission): string {
     '',
     '可回复：',
     '  1 = 批准本次',
-    `  2 = ${middleLabel}（本会话内自动放行）`,
+    `  2 = ${middleLabel}（持久化到当前用户）`,
     '  3 = 拒绝',
     '',
     '（旧别名 批准 / 批准所有 / 拒绝 仍然生效）',
