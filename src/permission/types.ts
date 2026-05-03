@@ -10,7 +10,7 @@ export type RiskLevel = 'safe' | 'write' | 'execute'
 export type PermissionBehavior = 'allow' | 'deny' | 'ask'
 export type PermissionRuleSource =
   | 'cliArg'
-  | 'session'
+  | 'identity'
   | 'local'
   | 'project'
   | 'user'

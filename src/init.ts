@@ -6,7 +6,7 @@ import { initializeAgents } from './agents/registry.js'
 import { workspaceFor } from './identity/paths.js'
 import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
-import { loadFileRules } from './permission/storage.js'
+import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
 import { NetworkBridge } from './runtime/network-bridge.js'
 import { resolveDockerImage } from './runtime/pool.js'
@@ -21,6 +21,7 @@ import {
   resetAbortController,
   clearActiveSkillAllowedTools,
   setFileRules,
+  setIdentityRules,
   setNetworkBridge,
   setRuntime,
 } from './state.js'
@@ -210,6 +211,11 @@ async function writeSessionState(
     projectPath: resolvedConfig.permissionRuleFiles.project,
     localPath: resolvedConfig.permissionRuleFiles.local,
   }))
+  // Identity rules are per-canonical-user and persisted (Phase 17 — replaces
+  // the old in-memory sessionRulesByUser map). Reload on every state init so
+  // rules written by FeishuPermissionCoordinator / askUserApproval since the
+  // last turn become visible immediately. Empty for terminal-only sessions.
+  setIdentityRules(loadIdentityRules(input?.currentUserId))
   if (runtime) {
     setRuntime(runtime)
   }

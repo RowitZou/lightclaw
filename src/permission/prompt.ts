@@ -2,7 +2,8 @@ import type { Interface } from 'node:readline/promises'
 
 import chalk from 'chalk'
 
-import { addSessionRule } from '../state.js'
+import { getCurrentUserId, setIdentityRules } from '../state.js'
+import { appendIdentityRules, loadIdentityRules } from './storage.js'
 import {
   formatRuleListVerbose,
   formatSuggestionLabel,
@@ -69,20 +70,22 @@ function applyChoice(
     case 'allow_once':
       return { behavior: 'allow' }
     case 'allow_rules': {
-      const installed: PermissionRule[] = []
-      for (const value of suggestedRules) {
-        const rule: PermissionRule = {
-          source: 'session',
-          behavior: 'allow',
-          value,
-        }
-        addSessionRule(rule)
-        installed.push(rule)
+      const userId = getCurrentUserId()
+      const installed: PermissionRule[] = suggestedRules.map(value => ({
+        source: 'identity' as const,
+        behavior: 'allow' as const,
+        value,
+      }))
+      if (userId) {
+        appendIdentityRules({ canonicalUser: userId, rules: installed })
+        setIdentityRules(loadIdentityRules(userId))
       }
       const verbose = formatRuleListVerbose(suggestedRules)
       process.stdout.write(
         chalk.gray(
-          `  （已添加会话规则：${verbose}；发送 /permissions clear 撤回）\n`,
+          userId
+            ? `  （已持久化授权：${verbose}；发送 /permissions clear 撤回）\n`
+            : `  （未持久化：当前无 identity 上下文；本次仍允许）\n`,
         ),
       )
       // Surface the matched rule so audit log reflects which scope unblocked

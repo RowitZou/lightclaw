@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
+import { evaluatePermission } from '../../permission/policy.js'
+import {
+  appendIdentityRules,
+  loadIdentityRules,
+} from '../../permission/storage.js'
 import {
   formatRuleListVerbose,
   formatSuggestionLabel,
@@ -13,7 +18,11 @@ import type {
   PermissionRule,
   PermissionRuleValue,
 } from '../../permission/types.js'
-import { addSessionRule } from '../../state.js'
+import {
+  getAllPermissionRules,
+  getPermissionMode,
+  setIdentityRules,
+} from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
 import type { FeishuSender } from './sender.js'
@@ -281,21 +290,58 @@ export class FeishuPermissionCoordinator {
     }
 
     // allow_rules / allow_always: install the entire suggestedRules set as
-    // session-scoped allow rules. Fall back to a tool-wide rule when the
-    // suggester contributed nothing precise, so the button always has
-    // *something* to install (matches the iter1 fallback behavior).
+    // persisted identity rules (per-canonical-user permissions.json). Fall
+    // back to a tool-wide rule when the suggester contributed nothing
+    // precise, so the button always has something to install.
+    //
+    // After install we re-evaluate every queued tail pending under the new
+    // rule set: any same-kind request (e.g. another subagent that fired the
+    // same Bash(curl:*) ask) auto-resolves with the new allow rule and is
+    // dropped from the queue without rendering its own card. Same-owner
+    // queue + reevaluate is the entire "concurrent dispatch" story for
+    // forked subagents.
     const ruleValues = pending.suggestedRules.length > 0
       ? pending.suggestedRules
       : [{ toolName: pending.ask.toolName }]
-    const installed: PermissionRule[] = []
-    for (const value of ruleValues) {
-      const rule: PermissionRule = {
-        source: 'session',
-        behavior: 'allow',
-        value,
+    const installed: PermissionRule[] = ruleValues.map(value => ({
+      source: 'identity' as const,
+      behavior: 'allow' as const,
+      value,
+    }))
+    const userId = pending.userId
+    if (userId) {
+      try {
+        appendIdentityRules({ canonicalUser: userId, rules: installed })
+        setIdentityRules(loadIdentityRules(userId))
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `feishu permission: identity persist failed for ${userId} request=${pending.id}: ${detail}\n`,
+        )
+        // Disk persist failed — still resolve the head as allow once so the
+        // user is not stuck, but do NOT install a rule; that way the next
+        // call re-prompts instead of silently relying on a missing rule.
+        this.resolvePending(pending, { behavior: 'allow' })
+        void this.safeSendNotice(
+          pending.message,
+          'error',
+          '本次允许已生效，但权限规则持久化失败；下次同类操作仍会再问一次。',
+        )
+        return resolvedCardResponse(pending, {
+          outcome: 'allow_once',
+          label: '批准（持久化失败）',
+        })
       }
-      addSessionRule(rule)
-      installed.push(rule)
+    }
+    // Sweep tail pendings under the same owner FIRST, before resolving the
+    // head — otherwise resolvePending() promotes the next id and renders a
+    // card for it before we get a chance to auto-resolve via the new rule.
+    // We pass `pending.id` to skip the head itself; head is resolved below.
+    const swept = this.reevaluateOwnerQueue(pending.message, pending.id)
+    if (swept > 0) {
+      process.stderr.write(
+        `feishu permission: reevaluated ${swept} queued request${swept === 1 ? '' : 's'} after allow install (owner=${ownerKey(pending.message)})\n`,
+      )
     }
     this.resolvePending(pending, {
       behavior: 'allow',
@@ -305,7 +351,7 @@ export class FeishuPermissionCoordinator {
       pending.message,
       'info',
       [
-        `已允许 ${formatRuleListVerbose(ruleValues)}，本会话同类调用将自动放行。`,
+        `已允许 ${formatRuleListVerbose(ruleValues)}，今后同类调用自动放行（已持久化到当前用户的权限）。`,
         '需要撤回时请发送 /permissions clear。',
       ].join('\n'),
     )
@@ -317,6 +363,76 @@ export class FeishuPermissionCoordinator {
       outcome: 'allow_rules',
       label: middleLabel,
     })
+  }
+
+  /**
+   * Re-evaluate every still-queued pending under the same owner against the
+   * current rule set, skipping the supplied head id. A pending whose verdict
+   * is now `allow` resolves silently (no card) and drops out of the queue;
+   * `deny` likewise; `ask` stays. Called after applyAction installs a new
+   * rule so concurrent same-kind requests (e.g. parallel subagents asking
+   * the same Bash(curl:*)) don't each render their own card.
+   *
+   * Returns the number of tail pendings swept. The caller's resolvePending()
+   * is responsible for promoting the next head if anything remains.
+   */
+  private reevaluateOwnerQueue(
+    message: NormalizedChannelMessage,
+    skipPendingId: string,
+  ): number {
+    const key = ownerKey(message)
+    const queue = this.queuesByOwner.get(key)
+    if (!queue || queue.length === 0) {
+      return 0
+    }
+    const mode = getPermissionMode()
+    const rules = getAllPermissionRules()
+    const remaining: string[] = []
+    let swept = 0
+    for (const id of queue) {
+      if (id === skipPendingId) {
+        remaining.push(id)
+        continue
+      }
+      const candidate = this.pendingById.get(id)
+      if (!candidate) continue
+      const verdict = evaluatePermission({
+        toolName: candidate.ask.toolName,
+        toolSource: undefined,
+        mcpServer: undefined,
+        mcpToolName: undefined,
+        input: candidate.ask.input,
+        riskLevel: candidate.ask.riskLevel,
+        mode,
+        rules,
+      })
+      if (verdict.behavior === 'allow') {
+        this.pendingById.delete(id)
+        if (candidate.abortListener && candidate.ask.signal) {
+          candidate.ask.signal.removeEventListener('abort', candidate.abortListener)
+        }
+        candidate.resolve({ behavior: 'allow', matchedRule: verdict.matchedRule })
+        swept += 1
+        continue
+      }
+      if (verdict.behavior === 'deny') {
+        this.pendingById.delete(id)
+        if (candidate.abortListener && candidate.ask.signal) {
+          candidate.ask.signal.removeEventListener('abort', candidate.abortListener)
+        }
+        candidate.resolve(verdict)
+        swept += 1
+        continue
+      }
+      // ask — keep in queue
+      remaining.push(id)
+    }
+    if (remaining.length === 0) {
+      this.queuesByOwner.delete(key)
+    } else {
+      this.queuesByOwner.set(key, remaining)
+    }
+    return swept
   }
 
   private resolvePending(
