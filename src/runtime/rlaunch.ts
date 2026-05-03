@@ -55,6 +55,26 @@ type ProcessState =
 const DEFAULT_TIMEOUT_MS = 30_000
 const START_TIMEOUT_MS = 180_000
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
+// Cap for stdin payloads inlined into the bash command body via base64. brainctl
+// exec's stdin pipe is unreliable (silent drops + stdout suppression — see
+// runBrainctlExec / wrapCommand for the full story), so RlaunchRuntime never
+// uses it; instead the stdin payload rides inside the same `bash -c` command
+// string the worker is already running.
+//
+// The bottleneck is NOT Linux's MAX_ARG_STRLEN (128 KB) but brainctl's own
+// websocket frame limit. Empirical probing on this cluster: scripts up to
+// ~56.6 KB total succeed; anything above returns `websocket: bad handshake`
+// at the host before reaching the worker. base64 expansion is 4/3, so the raw
+// payload ceiling is ~42 KB. We cap at 32 KB to leave headroom for env-var
+// exports, long container paths, and any cluster-side tightening of that
+// frame limit. fs.writeFile transparently chunks above this; helper-side
+// stdin (websearch / webfetch / glob JSON) is < 1 KB so it never gets close.
+const MAX_INLINE_STDIN_BYTES = 32 * 1024
+// fs.writeFile chunk size for payloads above MAX_INLINE_STDIN_BYTES. Each
+// chunk is one exec round-trip (truncate + N appends + stat). 32 KB chunks =
+// 32 round-trips per MB; multi-MB writes are slow but correct. If perf ever
+// matters here, write via the gpfs bind mount on the host instead.
+const WRITE_FILE_CHUNK_BYTES = 32 * 1024
 
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
@@ -247,42 +267,82 @@ export class RlaunchRuntime implements Runtime {
       const containerPath = this.toContainerPath(pathname)
       const buffer = typeof content === 'string' ? Buffer.from(content) : content
       const expectedBytes = buffer.length
-      const b64 = buffer.toString('base64')
-      // brainctl `exec -i` has a stdio race where stdin payloads are silently
-      // dropped before the container-side child reads them — empirically
-      // ~16% of writes lost their bytes, leaving `base64 -d > path` exit-0
-      // with a 0-byte file (silent corruption; tool reported success). Inline
-      // the base64 into the command body so we never depend on the stdin
-      // pipe. The base64 alphabet is single-quote safe, no escape needed.
-      // For very large writes refuse rather than risk hitting brainctl/gRPC
-      // arg-size limits in confusing ways; callers should chunk or write via
-      // the gpfs bind mount instead.
-      const MAX_INLINE_BASE64_BYTES = 512 * 1024
-      if (b64.length > MAX_INLINE_BASE64_BYTES) {
-        throw new Error(
-          `writeFile ${pathname}: payload ${expectedBytes} B exceeds inline limit ` +
-            `(~${Math.floor((MAX_INLINE_BASE64_BYTES * 3) / 4 / 1024)} KB raw); ` +
-            'split the write or stage via the workspace bind mount.',
-        )
+      // Single-hop fast path for payloads that fit under the inline cap.
+      // Stream content via ExecInput.stdin; runBrainctlExec folds it into the
+      // command body so brainctl's broken stdin pipe is never on the hot path.
+      // stat on the same shell hop catches partial / mismatched writes as a
+      // thrown error instead of silent success.
+      if (buffer.length <= WRITE_FILE_CHUNK_BYTES) {
+        const command =
+          `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
+          `cat > ${shellQuote(containerPath)} && ` +
+          `stat -c %s ${shellQuote(containerPath)}`
+        const result = await this.exec({
+          command,
+          stdin: buffer,
+          maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+        })
+        if (result.exitCode !== 0) {
+          throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+        }
+        const actualBytes = Number(result.stdout.trim())
+        if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
+          throw new Error(
+            `writeFile ${pathname}: byte mismatch (expected ${expectedBytes}, ` +
+              `wrote ${result.stdout.trim() || 'unknown'})`,
+          )
+        }
+        return
       }
-      // stat the result on the same shell hop so a partial / mismatched
-      // write becomes a thrown error instead of silent success.
-      const command =
-        `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
-        `printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(containerPath)} && ` +
-        `stat -c %s ${shellQuote(containerPath)}`
-      const result = await this.exec({
-        command,
+
+      // Chunked path for payloads above the per-arg ceiling. Each exec call
+      // streams one chunk (≤ WRITE_FILE_CHUNK_BYTES raw → comfortably under
+      // MAX_INLINE_STDIN_BYTES once base64-expanded). The first chunk truncates
+      // (`cat >`); subsequent chunks append (`cat >>`). A final stat verifies
+      // the assembled total size. We do NOT parallelize: appends must be
+      // ordered to keep the file byte-identical.
+      const firstChunk = buffer.subarray(0, WRITE_FILE_CHUNK_BYTES)
+      const truncate = await this.exec({
+        command:
+          `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
+          `cat > ${shellQuote(containerPath)}`,
+        stdin: firstChunk,
         maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       })
-      if (result.exitCode !== 0) {
-        throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+      if (truncate.exitCode !== 0) {
+        throw new Error(
+          `writeFile ${pathname} (chunk 0): ${truncate.stderr.trim() || truncate.stdout.trim()}`,
+        )
       }
-      const actualBytes = Number(result.stdout.trim())
+
+      for (let offset = WRITE_FILE_CHUNK_BYTES; offset < buffer.length; offset += WRITE_FILE_CHUNK_BYTES) {
+        const end = Math.min(offset + WRITE_FILE_CHUNK_BYTES, buffer.length)
+        const chunk = buffer.subarray(offset, end)
+        const append = await this.exec({
+          command: `cat >> ${shellQuote(containerPath)}`,
+          stdin: chunk,
+          maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+        })
+        if (append.exitCode !== 0) {
+          throw new Error(
+            `writeFile ${pathname} (chunk @${offset}): ${append.stderr.trim() || append.stdout.trim()}`,
+          )
+        }
+      }
+
+      const stat = await this.exec({
+        command: `stat -c %s ${shellQuote(containerPath)}`,
+      })
+      if (stat.exitCode !== 0) {
+        throw new Error(
+          `writeFile ${pathname} (final stat): ${stat.stderr.trim() || stat.stdout.trim()}`,
+        )
+      }
+      const actualBytes = Number(stat.stdout.trim())
       if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
         throw new Error(
           `writeFile ${pathname}: byte mismatch (expected ${expectedBytes}, ` +
-            `wrote ${result.stdout.trim() || 'unknown'})`,
+            `wrote ${stat.stdout.trim() || 'unknown'})`,
         )
       }
     },
@@ -432,20 +492,18 @@ export class RlaunchRuntime implements Runtime {
 
   private async stageHelperFile(absPath: string, content: Buffer): Promise<void> {
     const expectedBytes = content.length
-    const b64 = content.toString('base64')
-    const MAX_INLINE_BASE64_BYTES = 512 * 1024
-    if (b64.length > MAX_INLINE_BASE64_BYTES) {
-      throw new Error(
-        `stageHelperFile ${absPath}: payload ${expectedBytes} B exceeds inline limit`,
-      )
-    }
+    // Same unified-stdin path as fs.writeFile, but routed through
+    // runBrainctlExec directly: ensureRunning() → ensureHelpersStaged() →
+    // stageHelpersOnce() → stageHelperFile(); going through this.exec() would
+    // recurse via ensureRunning and deadlock on inflightStaging.
     const command =
       `mkdir -p "$(dirname ${shellQuote(absPath)})" && ` +
-      `printf %s ${shellQuote(b64)} | base64 -d > ${shellQuote(absPath)} && ` +
+      `cat > ${shellQuote(absPath)} && ` +
       `chmod +x ${shellQuote(absPath)} && ` +
       `stat -c %s ${shellQuote(absPath)}`
     const result = await this.runBrainctlExec({
       command,
+      stdin: content,
       timeoutMs: 30_000,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
     })
@@ -489,23 +547,25 @@ export class RlaunchRuntime implements Runtime {
     if (!this.workerName) {
       throw new Error('RlaunchRuntime worker is not started.')
     }
-    // Pass -i only when there is actual stdin to relay. brainctl exec -i with
-    // an immediately-closed stdin pipe drops the child's stdout entirely (the
-    // exec wrapper appears to race the close against stream attachment), so
-    // commands like `echo hello` come back with exitCode=0 and empty stdout.
-    // Without -i, stdout streams back normally; when stdin is present we still
-    // need -i so the child can read the piped bytes (fs.writeFile / base64 -d).
-    const args = [
+    // We never pass `-i` to brainctl. The cluster's brainctl exec has two
+    // related stdio bugs:
+    //   (1) stdin payloads are silently dropped before the worker-side child
+    //       reads them (~16% loss on writeFile, ~100% loss on small payloads
+    //       like helper JSON). The child sees EOF on stdin and either errors
+    //       (helper "invalid stdin json") or hangs.
+    //   (2) brainctl exec -i with no real stdin (or a closed pipe) also
+    //       suppresses the child's stdout, so even commands that don't read
+    //       stdin lose their output.
+    // Both are sidestepped by folding the stdin payload into the bash command
+    // body (wrapCommand) and never opening brainctl's stdin pipe. stdout then
+    // streams back reliably and stdin reaches the child via an in-shell pipe.
+    const wrapped = this.wrapCommand(input)
+    return runProcess('brainctl', [
       '-n', this.cfg.namespace,
       'exec', `process/${this.workerName}`,
-    ]
-    if (input.stdin !== undefined) {
-      args.push('-i')
-    }
-    args.push('--', 'bash', '-c', this.wrapCommand(input))
-    return runProcess('brainctl', args, {
+      '--', 'bash', '-c', wrapped,
+    ], {
       abortSignal: input.abortSignal,
-      stdin: input.stdin,
       timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'rlaunch worker exec terminated',
@@ -514,12 +574,12 @@ export class RlaunchRuntime implements Runtime {
 
   private wrapCommand(input: ExecInput): string {
     const cwd = input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot
-    const envPart = input.env
-      ? `${Object.entries(input.env)
-        .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
-        .join(' ')} `
-      : ''
-    return `${envPart}cd ${shellQuote(cwd)} && ${input.command}`
+    return composeExecScript({
+      command: input.command,
+      env: input.env,
+      cwd,
+      stdin: input.stdin,
+    })
   }
 
   private async spawnWorker(): Promise<string> {
@@ -641,6 +701,50 @@ export class RlaunchRuntime implements Runtime {
 
     throw new Error(`Path is not within RlaunchRuntime workspace: ${pathname}`)
   }
+}
+
+/**
+ * Build the bash script that goes to `brainctl exec ... -- bash -c <script>`.
+ * Pure: no class state, no side effects. The dispatcher (RlaunchRuntime.exec)
+ * resolves cwd against the mount table and hands us an environment-side path.
+ *
+ * Output shape:
+ *   <env exports> cd '<cwd>' && <body>
+ * where <body> is either the raw command (no stdin) or a base64 inline pipe:
+ *   { printf %s '<b64>' | base64 -d; } | { <command>; }
+ *
+ * The brace group around <command> is load-bearing: bash precedence makes `|`
+ * bind tighter than `&&`, so `{b64} | mkdir && cat` would attach stdin to
+ * mkdir only and leave `cat` reading EOF. Wrapping the user command in
+ * `{ ...; }` makes the entire chain inherit the pipe.
+ */
+export function composeExecScript(input: {
+  command: string
+  env?: Record<string, string>
+  cwd: string
+  stdin?: string | Buffer
+}): string {
+  const envPart = input.env && Object.keys(input.env).length > 0
+    ? `${Object.entries(input.env)
+      .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
+      .join(' ')} `
+    : ''
+  if (input.stdin === undefined) {
+    return `${envPart}cd ${shellQuote(input.cwd)} && ${input.command}`
+  }
+  const buffer = typeof input.stdin === 'string' ? Buffer.from(input.stdin) : input.stdin
+  if (buffer.length > MAX_INLINE_STDIN_BYTES) {
+    throw new Error(
+      `RlaunchRuntime exec: stdin payload ${buffer.length} B exceeds inline limit ` +
+        `(${MAX_INLINE_STDIN_BYTES} B). Stage via fs.writeFile + read from disk, ` +
+        'or split the call into smaller chunks.',
+    )
+  }
+  const b64 = buffer.toString('base64')
+  return (
+    `${envPart}cd ${shellQuote(input.cwd)} && ` +
+    `{ printf %s ${shellQuote(b64)} | base64 -d; } | { ${input.command}; }`
+  )
 }
 
 export function buildLaunchArgs(

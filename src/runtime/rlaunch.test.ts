@@ -6,7 +6,12 @@ import path from 'node:path'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { workspaceToGpfsMount } from '../identity/paths.js'
-import { buildLaunchArgs, parseWorkerName, type RlaunchRuntimeConfig } from './rlaunch.js'
+import {
+  buildLaunchArgs,
+  composeExecScript,
+  parseWorkerName,
+  type RlaunchRuntimeConfig,
+} from './rlaunch.js'
 import {
   deleteWorkerRecord,
   lookupWorkerRecord,
@@ -183,6 +188,109 @@ describe('buildLaunchArgs', () => {
   it('omits --set-env when env is empty', () => {
     const args = buildLaunchArgs(baseCfg, { detach: true, predictOnly: false })
     assert.equal(args.some(arg => arg.startsWith('--set-env=')), false)
+  })
+})
+
+describe('composeExecScript', () => {
+  it('emits a plain `cd && cmd` script when no stdin / env are supplied', () => {
+    const script = composeExecScript({ command: 'ls -la', cwd: '/workspace' })
+    assert.equal(script, "cd '/workspace' && ls -la")
+    // No -i flag is added by runBrainctlExec, but the script itself must also
+    // not contain anything that depends on brainctl's broken stdin pipe.
+    assert.equal(script.includes('base64 -d'), false)
+    assert.equal(script.includes('printf'), false)
+  })
+
+  it('exports env vars before the cd, with shell-safe quoting', () => {
+    const script = composeExecScript({
+      command: 'python3 helper.py',
+      env: { BRAVE_SEARCH_API_KEY: "abc'def", FOO: '$BAR' },
+      cwd: '/workspace',
+    })
+    assert.match(script, /^export BRAVE_SEARCH_API_KEY='abc'\\''def'; /)
+    assert.match(script, / export FOO='\$BAR'; /)
+    assert.match(script, / cd '\/workspace' && python3 helper.py$/)
+  })
+
+  it('folds stdin into the command body via base64 inline + brace group', () => {
+    const payload = '{"query":"hello","max_results":3}'
+    const script = composeExecScript({
+      command: 'python3 /opt/lightclaw/sandbox-helpers/websearch.py',
+      cwd: '/workspace',
+      stdin: payload,
+    })
+    const expectedB64 = Buffer.from(payload).toString('base64')
+    assert.ok(
+      script.includes(`{ printf %s '${expectedB64}' | base64 -d; }`),
+      `script must inline base64 payload: ${script}`,
+    )
+    assert.ok(
+      script.includes('| { python3 /opt/lightclaw/sandbox-helpers/websearch.py; }'),
+      'command must be wrapped in `{ ...; }` so the pipe feeds the whole chain',
+    )
+    assert.equal(script.startsWith("cd '/workspace' && "), true)
+  })
+
+  it('round-trips binary payloads through base64 (no escaping needed)', () => {
+    // bytes 0x00..0xff except newlines; covers null, quotes, dollar, backslash
+    const buf = Buffer.from(
+      Array.from({ length: 256 }, (_, i) => i).filter(b => b !== 0x0a),
+    )
+    const script = composeExecScript({
+      command: 'cat > /tmp/bin',
+      cwd: '/workspace',
+      stdin: buf,
+    })
+    const b64 = buf.toString('base64')
+    assert.ok(script.includes(`'${b64}'`), 'base64 must be single-quote enclosed')
+    // base64 alphabet [A-Za-z0-9+/=] never contains `'`, so quoting is trivial.
+    assert.equal(b64.includes("'"), false)
+  })
+
+  it('throws when stdin exceeds the 32 KB inline cap (brainctl ws-frame headroom)', () => {
+    // Cap is sized for brainctl's ~56 KB ws-frame ceiling — empirically the
+    // first failure on this cluster is around 43 KB raw / 57 KB b64. 32 KB
+    // raw → 43 KB b64 → ~44 KB script with wrap + room for env exports and
+    // long container paths. fs.writeFile chunks transparently above this;
+    // direct exec callers must refactor to write-then-read for big payloads.
+    const ok = Buffer.alloc(32 * 1024, 0x41)
+    assert.doesNotThrow(() => composeExecScript({ command: 'cat', cwd: '/workspace', stdin: ok }))
+    const oversized = Buffer.alloc(32 * 1024 + 1, 0x41)
+    assert.throws(
+      () => composeExecScript({ command: 'cat', cwd: '/workspace', stdin: oversized }),
+      /exceeds inline limit/,
+    )
+  })
+
+  it('treats empty stdin as an explicit empty pipe (caller asked for stdin)', () => {
+    const script = composeExecScript({ command: 'cat', cwd: '/workspace', stdin: '' })
+    // Empty payload still produces the pipeline; the helper sees EOF on first
+    // read, same as if we had passed nothing — keeping the path uniform avoids
+    // a surprise difference between `stdin: undefined` and `stdin: ''`.
+    assert.ok(script.includes('base64 -d'))
+    assert.ok(script.includes('| { cat; }'))
+  })
+
+  it('drops the env exports section entirely when env is an empty object', () => {
+    const script = composeExecScript({ command: 'ls', cwd: '/workspace', env: {} })
+    assert.equal(script.startsWith('export '), false)
+    assert.equal(script, "cd '/workspace' && ls")
+  })
+
+  it('preserves complex commands inside the brace group when stdin is present', () => {
+    // Mirrors fs.writeFile's command shape — the brace group must protect the
+    // chain so `cat` (not `mkdir`) receives the piped bytes.
+    const script = composeExecScript({
+      command: 'mkdir -p "$(dirname \'/tmp/x\')" && cat > \'/tmp/x\' && stat -c %s \'/tmp/x\'',
+      cwd: '/workspace',
+      stdin: 'payload',
+    })
+    assert.ok(
+      script.includes(
+        '| { mkdir -p "$(dirname \'/tmp/x\')" && cat > \'/tmp/x\' && stat -c %s \'/tmp/x\'; }',
+      ),
+      'whole && chain must be inside the brace group',
+    )
   })
 })
 
