@@ -19,6 +19,11 @@ import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import type { SenderKey } from '../identity/types.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
+  appendIdentityRules,
+  clearIdentityRules,
+  loadIdentityRules,
+} from '../permission/storage.js'
+import {
   PERMISSION_MODES,
   type PermissionMode,
   type PermissionRule,
@@ -27,16 +32,15 @@ import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
-  addSessionRule,
-  clearSessionRules,
   getCurrentUserId,
   getCwd,
+  getIdentityRules,
   getImageReadiness,
   getModel,
   getPermissionMode,
   getRuntime,
   getRuntimePool,
-  getSessionRules,
+  setIdentityRules,
   setModel,
   setPermissionMode,
 } from '../state.js'
@@ -228,32 +232,38 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
     name: '/permissions',
     usage: '/permissions [list|clear|ask <rule>]',
     description:
-      'List or clear session-scoped permission rules; /permissions ask <rule> registers a session-scoped ASK rule that forces a confirmation even under bypassPermissions',
+      'List or clear your persisted permission rules; /permissions ask <rule> registers an ASK rule that forces a confirmation even under bypassPermissions. Rules persist across daemon restarts.',
     async handler(args, ctx) {
       const trimmed = args.trim()
       const [head, ...rest] = trimmed.split(/\s+/)
       const sub = head || 'list'
+      const userId = getCurrentUserId()
       if (sub === 'list') {
-        const rules = getSessionRules()
+        const rules = getIdentityRules()
         if (rules.length === 0) {
-          ctx.output.write('No session permission rules.\n')
+          ctx.output.write('No persisted permission rules for this user.\n')
           return
         }
-        const lines = ['Session permission rules:']
+        const lines = ['Persisted permission rules (this user):']
         for (const rule of rules) {
-          lines.push(`  [${rule.behavior}] ${formatRule(rule.value)} (source: ${rule.source})`)
+          lines.push(`  [${rule.behavior}] ${formatRule(rule.value)}`)
         }
         lines.push('', 'Use /permissions clear to revoke them all.', '')
         ctx.output.write(lines.join('\n'))
         return
       }
       if (sub === 'clear') {
-        const cleared = getSessionRules().length
-        clearSessionRules()
+        const cleared = getIdentityRules().length
+        if (!userId) {
+          ctx.output.write('No active identity; nothing to clear.\n')
+          return
+        }
+        clearIdentityRules(userId)
+        setIdentityRules([])
         ctx.output.write(
           cleared === 0
-            ? 'No session rules to clear.\n'
-            : `Cleared ${cleared} session permission rule${cleared === 1 ? '' : 's'}.\n`,
+            ? 'No persisted rules to clear.\n'
+            : `Cleared ${cleared} persisted permission rule${cleared === 1 ? '' : 's'}.\n`,
         )
         return
       }
@@ -261,6 +271,10 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         const ruleText = rest.join(' ').trim()
         if (!ruleText) {
           ctx.output.write('error> Usage: /permissions ask <rule>\n')
+          return
+        }
+        if (!userId) {
+          ctx.output.write('error> /permissions ask requires an active identity.\n')
           return
         }
         let value
@@ -271,10 +285,11 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
           ctx.output.write(`error> ${detail}\n`)
           return
         }
-        const rule: PermissionRule = { source: 'session', behavior: 'ask', value }
-        addSessionRule(rule)
+        const rule: PermissionRule = { source: 'identity', behavior: 'ask', value }
+        appendIdentityRules({ canonicalUser: userId, rules: [rule] })
+        setIdentityRules(loadIdentityRules(userId))
         ctx.output.write(
-          `Registered session ASK rule: ${formatRule(value)} (overrides allow / bypassPermissions for matching calls)\n`,
+          `Registered ASK rule: ${formatRule(value)} (overrides allow / bypassPermissions for matching calls; persisted)\n`,
         )
         return
       }

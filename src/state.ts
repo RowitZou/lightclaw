@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 
-import type { PermissionMode, PermissionRule } from './permission/types.js'
+import type {
+  PermissionApprover,
+  PermissionMode,
+  PermissionRule,
+} from './permission/types.js'
 import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
@@ -22,9 +26,25 @@ type SessionState = {
   todos: TodoItem[]
   permissionMode: PermissionMode
   cliArgRules: PermissionRule[]
-  sessionRules: PermissionRule[]
+  /**
+   * Per-canonical-user persisted allow/deny/ask rules (mirrors the on-disk
+   * `<lightclawHome>/identity/per-user/<canonical>/permissions.json` file).
+   * Rebuilt from disk on every initializeState / resetSessionContext, so the
+   * Feishu coordinator's "以后都允许" path can write the file and reload here
+   * without juggling an in-memory map. Empty for terminal sessions without
+   * a paired identity.
+   */
+  identityRules: PermissionRule[]
   fileRules: PermissionRule[]
   activeSkillAllowedTools?: string[]
+  /**
+   * Channel-injected permission approver (Feishu card / future channels).
+   * Set once per query() entry by ChannelRunner so that ANY tool call —
+   * main agent or subagent — routes through the same UX. Subagent paths no
+   * longer auto-deny on `ask`; they read this approver via getPermission-
+   * Approver(). Terminal sessions leave it null and fall back to readline.
+   */
+  permissionApprover: PermissionApprover | null
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
   runtime?: Runtime
@@ -46,18 +66,6 @@ let sessionMemoryUpdateCount = 0
 // fresh session starts with zero MC actions).
 let perToolSummaryCount = 0
 let idleMicroCompactCount = 0
-// Session permission rules persist per canonical user across channel
-// resetSessionContext / initializeState calls — without this, the Feishu
-// "批准所有" button (and terminal `[a]`) would silently degrade to
-// "allow once" because writeSessionState reseeds state.sessionRules to []
-// on every inbound channel message. Module-level map (process lifetime,
-// LightClaw harness restart wipes it; same expiry as before, just no
-// longer wiped per message turn).
-const sessionRulesByUser = new Map<string, PermissionRule[]>()
-
-function userKeyForRules(currentUserId: string | undefined): string {
-  return currentUserId ?? '__terminal__'
-}
 
 export function initializeState(input: {
   cwd: string
@@ -72,9 +80,14 @@ export function initializeState(input: {
   todos?: TodoItem[]
   permissionMode?: PermissionMode
   cliArgRules?: PermissionRule[]
+  identityRules?: PermissionRule[]
   fileRules?: PermissionRule[]
   runtime?: Runtime
 }): void {
+  // Preserve the channel-injected approver across resetSessionContext —
+  // ChannelRunner sets it before each query() and clearing it here would
+  // strand subagent permission requests with no UX path.
+  const preservedApprover = state?.permissionApprover ?? null
   state = {
     sessionId: input.sessionId ?? randomUUID(),
     cwd: input.cwd,
@@ -90,9 +103,10 @@ export function initializeState(input: {
     todos: input.todos ?? [],
     permissionMode: input.permissionMode ?? 'default',
     cliArgRules: input.cliArgRules ?? [],
-    sessionRules: sessionRulesByUser.get(userKeyForRules(input.currentUserId)) ?? [],
+    identityRules: input.identityRules ?? [],
     fileRules: input.fileRules ?? [],
     activeSkillAllowedTools: undefined,
+    permissionApprover: preservedApprover,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     runtime: input.runtime,
@@ -195,25 +209,29 @@ export function setPermissionMode(mode: PermissionMode): void {
   requireState().permissionMode = mode
 }
 
-export function getSessionRules(): PermissionRule[] {
-  return [...requireState().sessionRules]
+export function getIdentityRules(): PermissionRule[] {
+  return [...requireState().identityRules]
 }
 
-export function addSessionRule(rule: PermissionRule): void {
-  // Mutate in place so the array shared with sessionRulesByUser stays in sync.
-  // (state.sessionRules and the map value point at the same Array.)
-  const current = requireState()
-  current.sessionRules.push(rule)
-  sessionRulesByUser.set(userKeyForRules(current.currentUserId), current.sessionRules)
+export function setIdentityRules(rules: PermissionRule[]): void {
+  // Replace wholesale — the caller has just reloaded from disk after writing
+  // (FeishuPermissionCoordinator / askUserApproval) or revoking. Holding a
+  // shared array reference (pre-Phase 17 sessionRulesByUser pattern) is no
+  // longer needed.
+  requireState().identityRules = [...rules]
 }
 
-export function clearSessionRules(): void {
-  const current = requireState()
-  // Clear in place to keep the map's reference aligned with state.sessionRules,
-  // then drop the map entry so a fresh `initializeState` for this user starts
-  // empty rather than reusing a now-stale array.
-  current.sessionRules.length = 0
-  sessionRulesByUser.delete(userKeyForRules(current.currentUserId))
+export function getPermissionApprover(): PermissionApprover | null {
+  return state?.permissionApprover ?? null
+}
+
+export function setPermissionApprover(approver: PermissionApprover | null): void {
+  // Tolerate state-not-yet-initialized so the channel runner's `finally`
+  // block can safely clear the approver even when resetSessionContext threw
+  // before establishing state. No-op in that case (no state to leak from).
+  if (state) {
+    state.permissionApprover = approver
+  }
 }
 
 export function getCliArgRules(): PermissionRule[] {
@@ -269,9 +287,15 @@ export function setNetworkBridge(bridge: NetworkBridge | null): void {
 
 export function getAllPermissionRules(): PermissionRule[] {
   const current = requireState()
+  // Order does not affect evaluation (deny > ask > allow is enforced inside
+  // evaluatePermission regardless of array order), but identity rules go
+  // first so they show up at the top of `/permissions list`. cli rules next
+  // (most ephemeral; tied to the current process), then file rules, then
+  // builtin denies — those last two come from loadFileRules in fileRules
+  // already concatenated.
   return [
+    ...current.identityRules,
     ...current.cliArgRules,
-    ...current.sessionRules,
     ...current.fileRules,
   ]
 }

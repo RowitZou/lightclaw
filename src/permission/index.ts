@@ -3,6 +3,7 @@ import type { Interface } from 'node:readline/promises'
 import { getConfig } from '../config.js'
 import {
   getAllPermissionRules,
+  getPermissionApprover,
   getPermissionMode,
 } from '../state.js'
 import type { Tool } from '../tool.js'
@@ -35,21 +36,20 @@ export async function requestPermission(input: {
     rules: getAllPermissionRules(),
   })
 
+  // Approver is channel-injected via state on every query() entry, but the
+  // ctx field still wins when explicitly provided (test injection / future
+  // per-call override). State approver is shared by main agent and subagents
+  // so a forked subagent's permission ask routes to the same Feishu card UX
+  // — no longer auto-denied. Subagents without an approver (terminal forks)
+  // fall through to the readline path or the final deny branch.
+  const approver = ctx.permissionApprover ?? getPermissionApprover()
+
   let decision: PermissionDecision
   if (verdict.behavior === 'ask') {
     const inputPreview = previewInput(tool.name, toolInput)
     const suggestedRules = computeSuggestedRules(tool, toolInput)
-    if (ctx.isSubagent) {
-      decision = {
-        behavior: 'deny',
-        reason: [
-          `Permission denied: ${tool.name} requires confirmation in ${mode} mode.`,
-          'Subagents are non-interactive.',
-          'Add an explicit allow rule or switch permission mode before retrying.',
-        ].join(' '),
-      }
-    } else if (ctx.permissionApprover) {
-      decision = await ctx.permissionApprover.ask({
+    if (approver) {
+      decision = await approver.ask({
         toolName: tool.name,
         riskLevel: tool.riskLevel,
         input: toolInput,
@@ -71,7 +71,9 @@ export async function requestPermission(input: {
         behavior: 'deny',
         reason: [
           `Permission denied: ${tool.name} requires confirmation in ${mode} mode.`,
-          'No interactive prompt is available.',
+          ctx.isSubagent
+            ? 'No approver is wired for this subagent (terminal fork).'
+            : 'No interactive prompt is available.',
           'Add an explicit allow rule or switch permission mode before retrying.',
         ].join(' '),
       }
