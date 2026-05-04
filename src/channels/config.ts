@@ -54,6 +54,10 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     textChunkSize: input?.textChunkSize ?? 4000,
     httpTimeoutMs: input?.httpTimeoutMs ?? 30_000,
     maxBodyBytes: input?.maxBodyBytes ?? 1024 * 1024,
+    typingReaction:
+      parseBool(process.env.LIGHTCLAW_FEISHU_TYPING_REACTION) ??
+      input?.typingReaction ??
+      true,
     mediaEnabled: input?.mediaEnabled ?? true,
     mediaDir: input?.mediaDir
       ? path.resolve(expandHomePath(input.mediaDir))
@@ -71,5 +75,15 @@ function parseTransport(value: unknown): 'ws' | 'webhook' | undefined {
   if (value === 'ws' || value === 'webhook') {
     return value
   }
+  return undefined
+}
+
+function parseBool(value: unknown): boolean | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const v = value.trim().toLowerCase()
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false
   return undefined
 }

@@ -6,6 +6,10 @@ import type { FeishuPermissionCoordinator } from './permission-card.js'
 import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard } from './system-notice.js'
+import {
+  createFeishuTypingReaction,
+  type TypingState,
+} from './typing-reaction.js'
 
 export const FEISHU_CHANNEL_ID = 'feishu'
 
@@ -15,6 +19,7 @@ export function createFeishuStrategy(
   client: FeishuClient,
   permissions?: FeishuPermissionCoordinator,
 ): ChannelRunnerStrategy {
+  const typing = config.typingReaction ? createFeishuTypingReaction(client) : null
   return {
     channelId: FEISHU_CHANNEL_ID,
     cwd: config.cwd ?? process.cwd(),
@@ -34,6 +39,13 @@ export function createFeishuStrategy(
         message,
         buildSystemNoticeCard({ kind, content, bodyFormat }),
       ),
+    ...(typing
+      ? {
+          startTyping: (message: NormalizedChannelMessage) => typing.start(message.messageId),
+          stopTyping: (_message: NormalizedChannelMessage, token: unknown) =>
+            typing.stop(token as TypingState | null),
+        }
+      : {}),
     ...(permissions
       ? {
           createPermissionApprover: (

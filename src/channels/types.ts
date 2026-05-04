@@ -77,6 +77,11 @@ export type FeishuChannelConfig = {
   maxBodyBytes: number
   mediaEnabled: boolean
   mediaDir: string
+  // While a query runs, add a "Typing" emoji reaction to the user's
+  // incoming message so they see a visible "we got it, working" signal
+  // instead of silence. Removed when the query completes or fails. Default
+  // on; admins can disable via channels.json or LIGHTCLAW_FEISHU_TYPING_REACTION=false.
+  typingReaction: boolean
   webhook: {
     host: string
     port: number
