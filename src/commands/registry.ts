@@ -26,7 +26,7 @@ export type ReplContext = {
 export type ReplCommandResult = 'continue' | 'exit'
 
 export type ReplCommand = {
-  name: string                 // e.g. "/help", "/identity"
+  name: string                 // e.g. "/help", "/user"
   usage: string                // e.g. "/mode <default|plan|acceptEdits|bypassPermissions>"
   description: string
   visibleTo?: CommandVisibility
@@ -57,7 +57,11 @@ export class ReplCommandRegistry {
     return this.list(isAdmin).map(command => command.name).join(' ')
   }
 
-  async dispatch(line: string, ctx: ReplContext): Promise<ReplCommandResult | undefined> {
+  async dispatch(
+    line: string,
+    ctx: ReplContext,
+    hints?: Record<string, string>,
+  ): Promise<ReplCommandResult | undefined> {
     if (!line.startsWith('/')) {
       return undefined
     }
@@ -68,7 +72,12 @@ export class ReplCommandRegistry {
 
     const command = this.commands.get(name)
     if (!command) {
-      ctx.output.write(`error> unknown command: ${name}\n`)
+      const hint = hints?.[name]
+      ctx.output.write(
+        hint
+          ? `error> unknown command: ${name}. Renamed to ${hint}. See /help.\n`
+          : `error> unknown command: ${name}\n`,
+      )
       return 'continue'
     }
     if ((command.visibleTo ?? 'all') === 'admin' && !ctx.isAdmin) {

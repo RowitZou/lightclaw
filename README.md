@@ -186,7 +186,7 @@ Removed Phase 9 CLI flags are now config/env driven:
 - Model/provider: `~/.lightclaw/config.json`, `LIGHTCLAW_MODEL`, `LIGHTCLAW_PROVIDER`
 - Feature toggles: `LIGHTCLAW_NO_MEMORY=1`, `LIGHTCLAW_NO_MCP=1`, `LIGHTCLAW_NO_HOOKS=1`
 - Permission rules: edit `~/.lightclaw/permissions.json`
-- Identity management: `/identity ...` slash command
+- Identity management: `/user ...` slash command
 - Channels: enable them in `~/.lightclaw/channels.json`; `lightclaw` starts enabled channels automatically
 
 ---
@@ -197,17 +197,18 @@ User-visible commands:
 
 | Command | Purpose |
 |---|---|
-| `/help` | Show what's available right now (model, mode, skills, commands). |
+| `/help` | List available commands (no state info; see `/status` for that). |
+| `/status` | Show your current user / mode / model / session / today usage. |
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
-| `/permissions` | List numbered rules, revoke by index, or register an ASK rule (see below). |
+| `/rules` | List numbered rules, revoke by index, or register an ASK rule (see below). |
 | `/sandbox` | Inspect or reset the assistant's sandboxed work environment. |
 
 Admin-only commands:
 
 | Command | Purpose |
 |---|---|
-| `/identity list|pending|approve|reject|unlink|remove` | Manage pairing and user bindings. |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | Manage pairing and user bindings; read user feedback (Iter 3). |
 | `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | Show every identity's ceiling, or set one user's ceiling. |
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
@@ -239,7 +240,7 @@ This two-step flow applies to the admin too — there is no environment variable
 Unknown Feishu senders receive a pairing code. The admin approves it with:
 
 ```text
-/identity approve K7YQ3RPA --as alice
+/user approve K7YQ3RPA --as alice
 ```
 
 Each canonical user gets:
@@ -345,7 +346,7 @@ src/
 ├── query.ts            # main agent loop (tool dispatch, auto-compact)
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
-├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
+├── commands/           # /help, /status, /model, /mode, /rules, /sandbox, /user, /ceiling, channel dispatch
 ├── channels/           # Feishu runner, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy and skill tool boundaries

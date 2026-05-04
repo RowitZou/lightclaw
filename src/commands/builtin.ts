@@ -24,23 +24,18 @@ import {
   loadIdentityRules,
   removeIdentityRule,
 } from '../permission/storage.js'
-import {
-  PERMISSION_MODES,
-  type PermissionMode,
-  type PermissionRule,
-} from '../permission/types.js'
+import type { PermissionMode, PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
-import { listRegisteredSkills, refreshSkillRegistry } from '../skill/registry.js'
 import {
   getCurrentUserId,
-  getCwd,
   getIdentityRules,
   getImageReadiness,
   getModel,
   getPermissionMode,
   getRuntime,
   getRuntimePool,
+  getUsageTotals,
   setIdentityRules,
   setModel,
   setPermissionMode,
@@ -57,13 +52,26 @@ export function createBuiltinReplRegistry(): ReplCommandRegistry {
   return registry
 }
 
+export const RENAMED_COMMANDS: Record<string, string> = {
+  '/identity': '/user',
+  '/permissions': '/rules',
+}
+
 const BUILTIN_COMMANDS: ReplCommand[] = [
   {
     name: '/help',
     usage: '/help',
-    description: 'Show available models, modes, skills, and commands',
+    description: 'List available commands',
     async handler(_args, ctx) {
       ctx.output.write(await formatHelp(ctx))
+    },
+  },
+  {
+    name: '/status',
+    usage: '/status',
+    description: 'Show current user / mode / model / session',
+    async handler(_args, ctx) {
+      ctx.output.write(await formatStatus(ctx))
     },
   },
   {
@@ -146,12 +154,12 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
     },
   },
   {
-    name: '/identity',
-    usage: '/identity list|pending|approve|reject|unlink|remove',
+    name: '/user',
+    usage: '/user list|pending|approve|reject|unlink|remove|feedback',
     description: 'Manage identities and pairing requests',
     visibleTo: 'admin',
     async handler(args, ctx) {
-      ctx.output.write(await runIdentityCommand(args))
+      ctx.output.write(await runUserCommand(args))
     },
   },
   {
@@ -250,8 +258,8 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
     },
   },
   {
-    name: '/permissions',
-    usage: '/permissions [list | revoke <n> | revoke all | ask <rule>]',
+    name: '/rules',
+    usage: '/rules [list | revoke <n> | revoke all | ask <rule>]',
     description:
       'Manage your persisted permission rules. list shows numbered rules; revoke <n> removes one; revoke all clears them; ask <rule> registers an ASK rule that overrides allow / bypassPermissions for matching calls.',
     async handler(args, ctx) {
@@ -260,17 +268,17 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
       const sub = head || 'list'
       const userId = getCurrentUserId()
       if (sub === 'list') {
-        ctx.output.write(formatPermissionsList())
+        ctx.output.write(formatRulesList())
         return
       }
       if (sub === 'revoke') {
         if (!userId) {
-          ctx.output.write('error> /permissions revoke requires an active identity.\n')
+          ctx.output.write('error> /rules revoke requires an active identity.\n')
           return
         }
         const target = rest[0]
         if (!target) {
-          ctx.output.write('error> Usage: /permissions revoke <n>|all\n')
+          ctx.output.write('error> Usage: /rules revoke <n>|all\n')
           return
         }
         if (target === 'all') {
@@ -288,7 +296,7 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         const sorted = sortRulesForDisplay(getIdentityRules())
         if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
           ctx.output.write(
-            `error> No rule at index ${target}. Run /permissions list first.\n`,
+            `error> No rule at index ${target}. Run /rules list first.\n`,
           )
           return
         }
@@ -296,18 +304,18 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         removeIdentityRule({ canonicalUser: userId, rule: victim })
         setIdentityRules(loadIdentityRules(userId))
         ctx.output.write(
-          `Revoked [${victim.behavior}] ${formatRule(victim.value)}\n\n${formatPermissionsList()}`,
+          `Revoked [${victim.behavior}] ${formatRule(victim.value)}\n\n${formatRulesList()}`,
         )
         return
       }
       if (sub === 'ask') {
         const ruleText = rest.join(' ').trim()
         if (!ruleText) {
-          ctx.output.write('error> Usage: /permissions ask <rule>\n')
+          ctx.output.write('error> Usage: /rules ask <rule>\n')
           return
         }
         if (!userId) {
-          ctx.output.write('error> /permissions ask requires an active identity.\n')
+          ctx.output.write('error> /rules ask requires an active identity.\n')
           return
         }
         let value
@@ -326,7 +334,7 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         )
         return
       }
-      ctx.output.write('error> Usage: /permissions [list | revoke <n> | revoke all | ask <rule>]\n')
+      ctx.output.write('error> Usage: /rules [list | revoke <n> | revoke all | ask <rule>]\n')
     },
   },
 ]
@@ -346,7 +354,7 @@ function sortRulesForDisplay(rules: readonly PermissionRule[]): PermissionRule[]
   })
 }
 
-function formatPermissionsList(): string {
+function formatRulesList(): string {
   const sorted = sortRulesForDisplay(getIdentityRules())
   if (sorted.length === 0) {
     return 'No persisted permission rules for this user.\n'
@@ -359,7 +367,7 @@ function formatPermissionsList(): string {
   }
   lines.push(
     '',
-    'Use /permissions revoke <n> to remove one, /permissions revoke all to clear.',
+    'Use /rules revoke <n> to remove one, /rules revoke all to clear.',
     '(numbering changes after each write — re-run list before another revoke)',
     '',
   )
@@ -387,54 +395,77 @@ async function formatCeilingList(): Promise<string> {
 }
 
 async function formatHelp(ctx: ReplContext): Promise<string> {
-  await refreshSkillRegistry(getCwd())
-  const userId = getCurrentUserId()
-  const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
-  const modes = PERMISSION_MODES.filter(mode => isModeWithinCeiling(mode, ceiling))
   const registry = createBuiltinReplRegistry()
-  const commands = registry.list(Boolean(ctx.isAdmin))
-  const skills = listRegisteredSkills()
-  const lines = [
-    'LightClaw - your personal assistant.',
+  const all = registry.list(true)
+  const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
+  const adminCmds = all.filter(c => c.visibleTo === 'admin')
+  const usageWidth = Math.max(
+    ...all.map(c => c.usage.length),
+    24,
+  )
+  const lines: string[] = [
+    'LightClaw commands:',
     '',
-    `current model: ${getModel()}`,
-    `current mode:  ${getPermissionMode()}`,
-    '',
-    'available models:',
-    ...ctx.config.allowedModels.map(model => `  - ${model}`),
-    '',
-    `available modes (within your ceiling: ${ceiling}):`,
-    ...modes.map(mode => `  - ${mode}`),
-    '',
-    'available skills:',
-    ...(skills.length
-      ? skills.map(skill => `  - ${skill.name.padEnd(14, ' ')} ${firstLine(skill.description)}`)
-      : ['  (none)']),
-    '',
-    'commands:',
-    ...commands.map(command => `  ${command.usage.padEnd(38, ' ')} ${command.description}`),
-    '',
+    ...userCmds.map(c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`),
   ]
+  if (ctx.isAdmin && adminCmds.length > 0) {
+    lines.push('', 'Admin only:', '')
+    for (const c of adminCmds) {
+      lines.push(`  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`)
+    }
+  }
+  lines.push('', 'Use /status to see your current user / mode / model / session.', '')
   return color(ctx, lines.join('\n'))
 }
 
-async function runIdentityCommand(rawArgs: string): Promise<string> {
+async function formatStatus(ctx: ReplContext): Promise<string> {
+  const userId = getCurrentUserId()
+  const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
+  const adminFlag = userId && (await isAdmin(userId)) ? ' (admin)' : ''
+  const channelLabel = ctx.isChannel ? 'channel' : 'terminal'
+  const totals = getUsageTotals()
+  const sessionTok = totals.inputTokens + totals.outputTokens
+  const lines: string[] = [
+    `You: ${userId ?? '(none)'}${adminFlag} on ${channelLabel}`,
+    `Mode: ${getPermissionMode()}  (ceiling: ${ceiling})`,
+    `Model: ${getModel()}`,
+    `Session: ${ctx.sessionId} (msgs: ${ctx.messages.length}, tok: ${sessionTok})`,
+  ]
+  if (ctx.isAdmin) {
+    const identities = await listIdentities()
+    const names = Object.keys(identities).sort()
+    if (names.length > 1) {
+      lines.push('', 'Identities:')
+      for (const name of names) {
+        const marker = (await isAdmin(name)) ? ' *admin' : ''
+        const c = identities[name]!.permissionCeiling ?? 'default'
+        lines.push(`  ${name}${marker}  ceiling=${c}`)
+      }
+    }
+  }
+  lines.push('')
+  return color(ctx, lines.join('\n'))
+}
+
+async function runUserCommand(rawArgs: string): Promise<string> {
   await rebuildReverseIndex()
   const args = rawArgs.trim().split(/\s+/).filter(Boolean)
   const action = args.shift()
   switch (action) {
     case 'list':
-      return identityList()
+      return userList()
     case 'pending':
-      return identityPending()
+      return userPending()
     case 'approve':
-      return identityApprove(args)
+      return userApprove(args)
     case 'reject':
-      return identityReject(args)
+      return userReject(args)
     case 'unlink':
-      return identityUnlink(args)
+      return userUnlink(args)
     case 'remove':
-      return identityRemove(args)
+      return userRemove(args)
+    case 'feedback':
+      return userFeedback(args)
     default: {
       const adminId = await getAdmin()
       const isLocal = getConfig().runtime.backend === 'local'
@@ -442,20 +473,25 @@ async function runIdentityCommand(rawArgs: string): Promise<string> {
         ? `Usage (LocalRuntime is single-user; bind only as admin "${adminId}"):`
         : 'Usage:'
       const approveLine = isLocal && adminId
-        ? `  /identity approve <code> --as ${adminId}`
-        : '  /identity approve <code> --as <name>'
+        ? `  /user approve <code> --as ${adminId}`
+        : '  /user approve <code> --as <name>'
       return [
         header,
-        '  /identity list',
-        '  /identity pending',
+        '  /user list',
+        '  /user pending',
         approveLine,
-        '  /identity reject <code>',
-        '  /identity unlink <channel:id>',
-        '  /identity remove <name> [--purge]',
+        '  /user reject <code>',
+        '  /user unlink <channel:id>',
+        '  /user remove <name> [--purge]',
+        '  /user feedback [--page N]',
         '',
       ].join('\n')
     }
   }
+}
+
+async function userFeedback(_args: string[]): Promise<string> {
+  return 'Feedback storage not yet wired (Iter 3 will connect this).\n'
 }
 
 /**
@@ -485,7 +521,7 @@ async function rejectNonAdminInLocal(name: string): Promise<string | null> {
   ].join('\n')
 }
 
-async function identityList(): Promise<string> {
+async function userList(): Promise<string> {
   const identities = await listIdentities()
   const names = Object.keys(identities).sort()
   if (names.length === 0) {
@@ -505,7 +541,7 @@ async function identityList(): Promise<string> {
   return `${lines.join('\n')}\n`
 }
 
-async function identityPending(): Promise<string> {
+async function userPending(): Promise<string> {
   const pending = await listPending()
   if (pending.length === 0) {
     return 'No pending pairing requests.\n'
@@ -523,12 +559,12 @@ async function identityPending(): Promise<string> {
   return `${lines.join('\n')}\n`
 }
 
-async function identityApprove(args: string[]): Promise<string> {
+async function userApprove(args: string[]): Promise<string> {
   const code = args[0]
   const asIndex = args.indexOf('--as')
   const name = asIndex >= 0 ? args[asIndex + 1] : undefined
   if (!code || !name) {
-    return 'Usage: /identity approve <code> --as <name>\n'
+    return 'Usage: /user approve <code> --as <name>\n'
   }
   // Gate before approveCode consumes the pending entry, so a rejected
   // approval leaves the pending intact for retry with the correct name.
@@ -559,10 +595,10 @@ async function identityApprove(args: string[]): Promise<string> {
   return `${created.ok ? 'Created' : 'Updated'} identity '${name}'\nLinked ${link} -> ${name}\n`
 }
 
-async function identityReject(args: string[]): Promise<string> {
+async function userReject(args: string[]): Promise<string> {
   const code = args[0]
   if (!code) {
-    return 'Usage: /identity reject <code>\n'
+    return 'Usage: /user reject <code>\n'
   }
   const result = await rejectCode(code)
   return result.ok ? `Rejected ${code}\n` : `No pending pairing code: ${code}\n`
@@ -580,10 +616,10 @@ function preheatRlaunchForUser(name: string): void {
   })
 }
 
-async function identityUnlink(args: string[]): Promise<string> {
+async function userUnlink(args: string[]): Promise<string> {
   const [rawLink] = args
   if (!rawLink) {
-    return 'Usage: /identity unlink <channel:id>\n'
+    return 'Usage: /user unlink <channel:id>\n'
   }
   try {
     parseSenderKey(rawLink)
@@ -598,10 +634,10 @@ async function identityUnlink(args: string[]): Promise<string> {
   return result.ok ? `Unlinked ${rawLink} from ${boundTo}\n` : `${rawLink} was not linked.\n`
 }
 
-async function identityRemove(args: string[]): Promise<string> {
+async function userRemove(args: string[]): Promise<string> {
   const name = args[0]
   if (!name) {
-    return 'Usage: /identity remove <name> [--purge]\n'
+    return 'Usage: /user remove <name> [--purge]\n'
   }
   if ((await getAdmin()) === name) {
     return 'Refusing to remove the v1 admin identity.\n'

@@ -289,7 +289,7 @@ export function getAllPermissionRules(): PermissionRule[] {
   const current = requireState()
   // Order does not affect evaluation (deny > ask > allow is enforced inside
   // evaluatePermission regardless of array order), but identity rules go
-  // first so they show up at the top of `/permissions list`. cli rules next
+  // first so they show up at the top of `/rules list`. cli rules next
   // (most ephemeral; tied to the current process), then file rules, then
   // builtin denies — those last two come from loadFileRules in fileRules
   // already concatenated.

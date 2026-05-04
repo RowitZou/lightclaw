@@ -184,7 +184,7 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 - 模型 / provider：`~/.lightclaw/config.json`、`LIGHTCLAW_MODEL`、`LIGHTCLAW_PROVIDER`
 - 功能开关：`LIGHTCLAW_NO_MEMORY=1`、`LIGHTCLAW_NO_MCP=1`、`LIGHTCLAW_NO_HOOKS=1`
 - 权限细规则：编辑 `~/.lightclaw/permissions.json`
-- 身份管理：`/identity ...` slash
+- 身份管理：`/user ...` slash
 - 渠道：在 `~/.lightclaw/channels.json` 里 `enabled: true`，主 `lightclaw` 进程会自动拉起
 
 ---
@@ -195,17 +195,18 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 看当前能用什么（模型、mode、skill、命令）。 |
+| `/help` | 列出可用命令（不含状态信息；状态请用 `/status`）。 |
+| `/status` | 查看当前 user / mode / model / session / 今日用量。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
-| `/permissions` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
+| `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
 | `/sandbox` | 查看或重置助手的沙箱工作环境。 |
 
 Admin 专属：
 
 | 命令 | 作用 |
 |---|---|
-| `/identity list|pending|approve|reject|unlink|remove` | 管理 pairing 和用户绑定。 |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing 和用户绑定；查看 user 反馈（Iter 3 接通）。 |
 | `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
@@ -237,7 +238,7 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 未知飞书 sender 会收到 pairing code。Admin 审批：
 
 ```text
-/identity approve K7YQ3RPA --as alice
+/user approve K7YQ3RPA --as alice
 ```
 
 每个 canonical user 都有：
@@ -343,7 +344,7 @@ src/
 ├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例
-├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
+├── commands/           # /help、/status、/model、/mode、/rules、/sandbox、/user、/ceiling、channel dispatch
 ├── channels/           # 飞书 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy 和 skill tool 边界
