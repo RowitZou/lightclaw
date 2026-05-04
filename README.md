@@ -200,15 +200,15 @@ User-visible commands:
 | `/help` | Show what's available right now (model, mode, skills, commands). |
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
-| `/permissions` | View, clear, or add per-session permission rules. |
+| `/permissions` | List numbered rules, revoke by index, or register an ASK rule (see below). |
 | `/sandbox` | Inspect or reset the assistant's sandboxed work environment. |
 
 Admin-only commands:
 
 | Command | Purpose |
 |---|---|
-| `/identity list|pending|approve|reject|link|unlink|remove` | Manage pairing and user bindings. |
-| `/ceiling <default|plan|acceptEdits|bypassPermissions>` | Set the permission ceiling for identities. |
+| `/identity list|pending|approve|reject|unlink|remove` | Manage pairing and user bindings. |
+| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | Show every identity's ceiling, or set one user's ceiling. |
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
 
@@ -226,8 +226,8 @@ Four permission modes from strictest to loosest:
 `/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `default`, which lets users opt into the safer `plan` or stay on `default`. To allow looser modes, the admin must bump the ceiling first:
 
 ```text
-/ceiling bypassPermissions   # admin: raise ceiling for everyone (admin included)
-/mode bypassPermissions      # then any user can switch
+/ceiling alice bypassPermissions   # admin: raise alice's ceiling
+/mode bypassPermissions            # alice (or admin) can then switch
 ```
 
 This two-step flow applies to the admin too — there is no environment variable shortcut.

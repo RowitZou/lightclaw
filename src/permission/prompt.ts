@@ -125,7 +125,7 @@ function applyChoice(
       process.stdout.write(
         chalk.gray(
           userId
-            ? `  （已持久化授权：${verbose}；发送 /permissions clear 撤回）\n`
+            ? `  （已持久化授权：${verbose}；发送 /permissions list 查看，/permissions revoke <n> 撤回）\n`
             : `  （未持久化：当前无 identity 上下文；本次仍允许）\n`,
         ),
       )

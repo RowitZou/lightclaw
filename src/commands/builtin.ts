@@ -13,7 +13,7 @@ import {
   rebuildReverseIndex,
   removeLink,
   removeUser,
-  setAllPermissionCeilings,
+  setUserPermissionCeiling,
 } from '../identity/store.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import type { SenderKey } from '../identity/types.js'
@@ -22,6 +22,7 @@ import {
   appendIdentityRules,
   clearIdentityRules,
   loadIdentityRules,
+  removeIdentityRule,
 } from '../permission/storage.js'
 import {
   PERMISSION_MODES,
@@ -111,22 +112,42 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/ceiling',
-    usage: '/ceiling <default|plan|acceptEdits|bypassPermissions>',
-    description: 'Set permission ceiling for LightClaw users',
+    usage: '/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]',
+    description:
+      'Show every identity\'s ceiling, or set one user\'s ceiling. Bare /ceiling lists all.',
     visibleTo: 'admin',
     async handler(args, ctx) {
-      const mode = parsePermissionMode(args.trim())
-      if (!mode) {
-        ctx.output.write('error> Usage: /ceiling default|plan|acceptEdits|bypassPermissions\n')
+      const parts = args.trim().split(/\s+/).filter(Boolean)
+      if (parts.length === 0) {
+        ctx.output.write(await formatCeilingList())
         return
       }
-      const count = await setAllPermissionCeilings(mode)
-      ctx.output.write(`ceiling: ${mode} (${count} identities updated)\n`)
+      if (parts.length !== 2) {
+        ctx.output.write(
+          'error> Usage: /ceiling                       (list all)\n' +
+          '       /ceiling <user> <default|plan|acceptEdits|bypassPermissions>\n',
+        )
+        return
+      }
+      const [name, modeText] = parts
+      const mode = parsePermissionMode(modeText)
+      if (!mode) {
+        ctx.output.write(
+          `error> Invalid mode: ${modeText}. Expected default|plan|acceptEdits|bypassPermissions.\n`,
+        )
+        return
+      }
+      const result = await setUserPermissionCeiling(name, mode)
+      if (!result.ok) {
+        ctx.output.write(`error> No such identity: ${name}\n`)
+        return
+      }
+      ctx.output.write(`ceiling: ${name} -> ${mode}\n`)
     },
   },
   {
     name: '/identity',
-    usage: '/identity list|pending|approve|reject|link|unlink|remove',
+    usage: '/identity list|pending|approve|reject|unlink|remove',
     description: 'Manage identities and pairing requests',
     visibleTo: 'admin',
     async handler(args, ctx) {
@@ -230,40 +251,52 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/permissions',
-    usage: '/permissions [list|clear|ask <rule>]',
+    usage: '/permissions [list | revoke <n> | revoke all | ask <rule>]',
     description:
-      'List or clear your persisted permission rules; /permissions ask <rule> registers an ASK rule that forces a confirmation even under bypassPermissions. Rules persist across daemon restarts.',
+      'Manage your persisted permission rules. list shows numbered rules; revoke <n> removes one; revoke all clears them; ask <rule> registers an ASK rule that overrides allow / bypassPermissions for matching calls.',
     async handler(args, ctx) {
       const trimmed = args.trim()
       const [head, ...rest] = trimmed.split(/\s+/)
       const sub = head || 'list'
       const userId = getCurrentUserId()
       if (sub === 'list') {
-        const rules = getIdentityRules()
-        if (rules.length === 0) {
-          ctx.output.write('No persisted permission rules for this user.\n')
-          return
-        }
-        const lines = ['Persisted permission rules (this user):']
-        for (const rule of rules) {
-          lines.push(`  [${rule.behavior}] ${formatRule(rule.value)}`)
-        }
-        lines.push('', 'Use /permissions clear to revoke them all.', '')
-        ctx.output.write(lines.join('\n'))
+        ctx.output.write(formatPermissionsList())
         return
       }
-      if (sub === 'clear') {
-        const cleared = getIdentityRules().length
+      if (sub === 'revoke') {
         if (!userId) {
-          ctx.output.write('No active identity; nothing to clear.\n')
+          ctx.output.write('error> /permissions revoke requires an active identity.\n')
           return
         }
-        clearIdentityRules(userId)
-        setIdentityRules([])
+        const target = rest[0]
+        if (!target) {
+          ctx.output.write('error> Usage: /permissions revoke <n>|all\n')
+          return
+        }
+        if (target === 'all') {
+          const before = getIdentityRules().length
+          clearIdentityRules(userId)
+          setIdentityRules([])
+          ctx.output.write(
+            before === 0
+              ? 'No persisted rules to revoke.\n'
+              : `Revoked all ${before} rule${before === 1 ? '' : 's'}.\n`,
+          )
+          return
+        }
+        const n = Number.parseInt(target, 10)
+        const sorted = sortRulesForDisplay(getIdentityRules())
+        if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
+          ctx.output.write(
+            `error> No rule at index ${target}. Run /permissions list first.\n`,
+          )
+          return
+        }
+        const victim = sorted[n - 1]!
+        removeIdentityRule({ canonicalUser: userId, rule: victim })
+        setIdentityRules(loadIdentityRules(userId))
         ctx.output.write(
-          cleared === 0
-            ? 'No persisted rules to clear.\n'
-            : `Cleared ${cleared} persisted permission rule${cleared === 1 ? '' : 's'}.\n`,
+          `Revoked [${victim.behavior}] ${formatRule(victim.value)}\n\n${formatPermissionsList()}`,
         )
         return
       }
@@ -293,10 +326,65 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         )
         return
       }
-      ctx.output.write('error> Usage: /permissions [list|clear|ask <rule>]\n')
+      ctx.output.write('error> Usage: /permissions [list | revoke <n> | revoke all | ask <rule>]\n')
     },
   },
 ]
+
+const BEHAVIOR_RANK: Record<PermissionRule['behavior'], number> = {
+  deny: 0,
+  ask: 1,
+  allow: 2,
+}
+
+function sortRulesForDisplay(rules: readonly PermissionRule[]): PermissionRule[] {
+  return [...rules].sort((a, b) => {
+    if (a.behavior !== b.behavior) {
+      return BEHAVIOR_RANK[a.behavior] - BEHAVIOR_RANK[b.behavior]
+    }
+    return formatRule(a.value).localeCompare(formatRule(b.value))
+  })
+}
+
+function formatPermissionsList(): string {
+  const sorted = sortRulesForDisplay(getIdentityRules())
+  if (sorted.length === 0) {
+    return 'No persisted permission rules for this user.\n'
+  }
+  const indexWidth = String(sorted.length).length
+  const lines = ['Persisted permission rules (this user):']
+  for (const [i, rule] of sorted.entries()) {
+    const idx = String(i + 1).padStart(indexWidth, ' ')
+    lines.push(`  [${idx}] ${rule.behavior.padEnd(5, ' ')} ${formatRule(rule.value)}`)
+  }
+  lines.push(
+    '',
+    'Use /permissions revoke <n> to remove one, /permissions revoke all to clear.',
+    '(numbering changes after each write — re-run list before another revoke)',
+    '',
+  )
+  return lines.join('\n')
+}
+
+async function formatCeilingList(): Promise<string> {
+  const identities = await listIdentities()
+  const names = Object.keys(identities).sort()
+  if (names.length === 0) {
+    return 'No identities.\n'
+  }
+  const lines = ['Permission ceilings:']
+  for (const name of names) {
+    const ceiling = identities[name]!.permissionCeiling ?? 'default'
+    const marker = (await isAdmin(name)) ? ' *admin' : ''
+    lines.push(`  ${name}${marker} -> ${ceiling}`)
+  }
+  lines.push(
+    '',
+    'Set with: /ceiling <user> <default|plan|acceptEdits|bypassPermissions>',
+    '',
+  )
+  return lines.join('\n')
+}
 
 async function formatHelp(ctx: ReplContext): Promise<string> {
   await refreshSkillRegistry(getCwd())
@@ -343,8 +431,6 @@ async function runIdentityCommand(rawArgs: string): Promise<string> {
       return identityApprove(args)
     case 'reject':
       return identityReject(args)
-    case 'link':
-      return identityLink(args)
     case 'unlink':
       return identityUnlink(args)
     case 'remove':
@@ -358,16 +444,12 @@ async function runIdentityCommand(rawArgs: string): Promise<string> {
       const approveLine = isLocal && adminId
         ? `  /identity approve <code> --as ${adminId}`
         : '  /identity approve <code> --as <name>'
-      const linkLine = isLocal && adminId
-        ? `  /identity link ${adminId} <channel:id>`
-        : '  /identity link <name> <channel:id>'
       return [
         header,
         '  /identity list',
         '  /identity pending',
         approveLine,
         '  /identity reject <code>',
-        linkLine,
         '  /identity unlink <channel:id>',
         '  /identity remove <name> [--purge]',
         '',
@@ -484,38 +566,6 @@ async function identityReject(args: string[]): Promise<string> {
   }
   const result = await rejectCode(code)
   return result.ok ? `Rejected ${code}\n` : `No pending pairing code: ${code}\n`
-}
-
-async function identityLink(args: string[]): Promise<string> {
-  const [name, rawLink] = args
-  if (!name || !rawLink) {
-    return 'Usage: /identity link <name> <channel:id>\n'
-  }
-  const reject = await rejectNonAdminInLocal(name)
-  if (reject) {
-    return reject
-  }
-  try {
-    parseSenderKey(rawLink)
-  } catch (error) {
-    return `${error instanceof Error ? error.message : String(error)}\n`
-  }
-  const boundTo = lookupBySender(rawLink as SenderKey)
-  if (boundTo && boundTo !== name) {
-    return `${rawLink} is already bound to ${boundTo}\n`
-  }
-  const created = await createUser(name)
-  if (!created.ok && created.reason !== 'exists') {
-    return `Invalid identity name: ${name}\n`
-  }
-  const linked = await addLink(name, rawLink as SenderKey)
-  if (!linked.ok) {
-    return linked.reason === 'already-bound'
-      ? `${rawLink} is already bound to ${linked.boundTo}\n`
-      : `No such user: ${name}\n`
-  }
-  preheatRlaunchForUser(name)
-  return `Linked ${rawLink} -> ${name}\n`
 }
 
 function preheatRlaunchForUser(name: string): void {

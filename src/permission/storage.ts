@@ -196,8 +196,8 @@ export function removeIdentityRule(input: {
 }
 
 /**
- * Drop all identity rules for a user. Used by `/permissions clear`. No-op
- * when the file does not exist.
+ * Drop all identity rules for a user. Used by `/permissions revoke all`.
+ * No-op when the file does not exist.
  */
 export function clearIdentityRules(canonicalUser: string): void {
   const targetPath = identityPermissionsPath(canonicalUser)

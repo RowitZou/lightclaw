@@ -198,15 +198,15 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/help` | 看当前能用什么（模型、mode、skill、命令）。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
-| `/permissions` | 查看、清空、追加 session 级权限规则。 |
+| `/permissions` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
 | `/sandbox` | 查看或重置助手的沙箱工作环境。 |
 
 Admin 专属：
 
 | 命令 | 作用 |
 |---|---|
-| `/identity list|pending|approve|reject|link|unlink|remove` | 管理 pairing 和用户绑定。 |
-| `/ceiling <default|plan|acceptEdits|bypassPermissions>` | 设置 identities 的权限上限。 |
+| `/identity list|pending|approve|reject|unlink|remove` | 管理 pairing 和用户绑定。 |
+| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
 
@@ -224,8 +224,8 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 `/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `default`，用户可以主动切到更安全的 `plan` 或留在 `default`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
 
 ```text
-/ceiling bypassPermissions   # admin: 抬升所有人（含 admin 自己）的上限
-/mode bypassPermissions      # 然后任何 user 才能切过去
+/ceiling alice bypassPermissions   # admin: 抬升 alice 的 ceiling
+/mode bypassPermissions            # 然后 alice（或 admin 自己）才能切过去
 ```
 
 这套两步显式流程对 admin 自己同样生效——没有环境变量短路通道。
