@@ -12,7 +12,7 @@
     "build": "tsdown src/cli.ts --format esm --out-dir dist --clean",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts src/*.test.ts"
   },
   "engines": {
     "node": ">=22.0.0"

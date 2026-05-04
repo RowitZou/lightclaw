@@ -83,7 +83,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
       return
     }
 
-    beginQuery()
+    beginQuery(getCurrentUserId())
     const userMessage = createUserMessage(trimmedPrompt, getLastUuid(messages))
     messages.push(userMessage)
     await appendMessage(sessionId, userMessage)

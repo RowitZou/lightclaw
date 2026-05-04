@@ -118,6 +118,16 @@ type QueryParams = {
   /** Message index to mark as the fork prefix cache breakpoint. */
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
+  /**
+   * Skip auto-memory recall + memory index injection. Used by /fresh so the
+   * ephemeral one-shot session starts with a clean slate.
+   */
+  noAutoMemory?: boolean
+  /**
+   * Skip auto-compact + auto-extract + session-memory updates. Used by /fresh
+   * since there's no persisted transcript for those subsystems to reason about.
+   */
+  ephemeral?: boolean
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -361,7 +371,7 @@ export async function query(params: QueryParams): Promise<{
   const systemPromptTemplate = params.systemPrompt
     ? null
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
-        autoMemory: config.autoMemory,
+        autoMemory: !params.noAutoMemory && config.autoMemory,
         config,
         queryText: getLastUserText(messages),
         sessionId: getSessionId(),
@@ -546,9 +556,11 @@ export async function query(params: QueryParams): Promise<{
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]
-      await maybeUpdateSessionMemory(extractionSnapshot)
-      await runCompaction(false)
-      scheduleMemoryExtraction(extractionSnapshot)
+      if (!params.ephemeral) {
+        await maybeUpdateSessionMemory(extractionSnapshot)
+        await runCompaction(false)
+        scheduleMemoryExtraction(extractionSnapshot)
+      }
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
         sessionId: getSessionId(),
@@ -623,8 +635,10 @@ export async function query(params: QueryParams): Promise<{
       messages.push(createUserMessage(toolResults, getLastUuid(messages)))
     }
 
-    await maybeUpdateSessionMemory([...messages])
-    await runCompaction(false)
+    if (!params.ephemeral) {
+      await maybeUpdateSessionMemory([...messages])
+      await runCompaction(false)
+    }
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)

@@ -28,6 +28,7 @@ import type { PermissionMode, PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import {
+  abortInFlightForUser,
   getCurrentUserId,
   getIdentityRules,
   getImageReadiness,
@@ -72,6 +73,44 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
     description: 'Show current user / mode / model / session',
     async handler(_args, ctx) {
       ctx.output.write(await formatStatus(ctx))
+    },
+  },
+  {
+    name: '/stop',
+    usage: '/stop',
+    description: 'Abort the in-flight turn (already-written files are not rolled back)',
+    async handler(_args, ctx) {
+      const userId = ctx.userId ?? getCurrentUserId()
+      if (!userId) {
+        ctx.output.write('error> /stop requires an active identity.\n')
+        return
+      }
+      const aborted = abortInFlightForUser(userId)
+      ctx.output.write(
+        aborted
+          ? 'Stopped. (in-flight tool calls cancelled; written files are not rolled back)\n'
+          : 'Nothing in flight.\n',
+      )
+    },
+  },
+  {
+    name: '/fresh',
+    usage: '/fresh <prompt>',
+    description: 'Run an ephemeral one-shot session (no memory, no transcript, mode=default)',
+    async handler(args, ctx) {
+      const prompt = args.trim()
+      if (!prompt) {
+        ctx.output.write('error> Usage: /fresh <prompt>\n')
+        return
+      }
+      const { runFresh } = await import('./fresh.js')
+      const result = await runFresh({
+        config: ctx.config,
+        prompt,
+        callerUserId: ctx.userId ?? getCurrentUserId(),
+        isChannel: Boolean(ctx.isChannel),
+      })
+      ctx.output.write(result)
     },
   },
   {

@@ -187,7 +187,7 @@ export class ChannelRunner {
           }
         }
 
-        beginQuery()
+        beginQuery(userId)
         const userText = formatChannelUserText(message)
         const slash = await dispatchChannelSlash(userText, {
           config: appConfig,
