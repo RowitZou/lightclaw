@@ -219,7 +219,6 @@ User-visible commands:
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
 | `/rules` | List numbered rules, revoke by index, or register an ASK rule (see below). |
-| `/sandbox` | Inspect or reset the assistant's sandboxed work environment. |
 
 Admin-only commands:
 
@@ -227,6 +226,7 @@ Admin-only commands:
 |---|---|
 | `/user list|pending|approve|reject|unlink|remove|feedback` | Manage pairing, user bindings, and read user feedback. |
 | `/ceiling [<user> <read|ask|auto|yolo>]` | Show every identity's ceiling, or set one user's ceiling. |
+| `/sandbox [status|prefetch|reset]` | Inspect / re-pull / reset the runtime sandbox image and container. |
 | `/cost` | This-month token usage by-model + by-user (with cache hit / fresh subset). |
 | `/feedback <text>` (user-only) | Send feedback to admin; admin reads via `/user feedback`. |
 | `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |

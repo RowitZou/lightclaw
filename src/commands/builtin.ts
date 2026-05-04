@@ -259,6 +259,13 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/sandbox',
     usage: t('cmd.sandbox.usage'),
     description: t('cmd.sandbox.desc'),
+    // Admin-only: status leaks deployment internals (image / container /
+    // worker names); prefetch triggers a multi-GB image pull that should
+    // not be a free button for end users; reset rebuilds a per-user
+    // worker / container which is admin maintenance, not a user knob.
+    // Sandbox is meant to be invisible to users — environment health
+    // surfaces to admin via channel notices, not via slash commands.
+    visibleTo: 'admin',
     async handler(args, ctx) {
       const action = args.trim() || 'status'
       if (action === 'status') {
