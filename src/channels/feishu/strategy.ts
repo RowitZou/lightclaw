@@ -28,10 +28,11 @@ export function createFeishuStrategy(
       message: NormalizedChannelMessage,
       kind: SystemNoticeKind,
       content: string,
+      bodyFormat?: 'lark_md' | 'plain_text',
     ) =>
       sender.sendInteractiveCard(
         message,
-        buildSystemNoticeCard({ kind, content }),
+        buildSystemNoticeCard({ kind, content, bodyFormat }),
       ),
     ...(permissions
       ? {
