@@ -23,7 +23,7 @@ export function createFeishuStrategy(
     resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     sendReply: (message: NormalizedChannelMessage, text: string) =>
-      sender.sendText(message, text),
+      sender.sendMarkdownText(message, text),
     sendNotice: (
       message: NormalizedChannelMessage,
       kind: SystemNoticeKind,
