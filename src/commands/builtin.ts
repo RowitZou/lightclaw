@@ -16,6 +16,7 @@ import {
   setUserPermissionCeiling,
 } from '../identity/store.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
+import { setIdentityPreference } from '../identity/preferences.js'
 import type { SenderKey } from '../identity/types.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
@@ -179,6 +180,10 @@ function buildBuiltinCommands(): ReplCommand[] {
       setModel(model)
       ctx.config.model = model
       ctx.config.routing.main = model
+      const callerId = getCurrentUserId()
+      if (callerId) {
+        setIdentityPreference({ canonicalUser: callerId, key: 'model', value: model })
+      }
       ctx.output.write(`${t('model.set', { name: model })}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
@@ -216,6 +221,9 @@ function buildBuiltinCommands(): ReplCommand[] {
         return
       }
       setPermissionMode(mode)
+      if (userId) {
+        setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: mode })
+      }
       ctx.output.write(`${t('mode.set', { mode: modeToAlias(mode) })}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },

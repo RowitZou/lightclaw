@@ -5,6 +5,7 @@ import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
 import { workspaceFor } from './identity/paths.js'
+import { loadIdentityPreferences } from './identity/preferences.js'
 import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
@@ -66,7 +67,8 @@ export class LocalRuntimeAdminOnlyError extends Error {
  */
 export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
   const config = getConfig()
-  const resolvedConfig = resolveConfig(config, input)
+  const inputWithPrefs = applyIdentityPreferences(input)
+  const resolvedConfig = resolveConfig(config, inputWithPrefs)
   // Activate the user-facing language as early as possible so any subsequent
   // user-visible message (banner, slash output, error notices) is rendered
   // in the configured locale. Stderr logging is unaffected.
@@ -81,7 +83,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   // Local backend never instantiates the tracker (lazy via getImageReadiness),
   // so this is a no-op for local.
   startImagePrefetchIfNeeded(resolvedConfig)
-  await writeSessionState(resolvedConfig, input)
+  await writeSessionState(resolvedConfig, inputWithPrefs)
   initializeAgents()
   installSignalHandlers()
   getRuntimePool().startReaper()
@@ -144,9 +146,35 @@ function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
  */
 export async function resetSessionContext(input: CommonStateInput): Promise<LightClawConfig> {
   const config = getConfig()
-  const resolvedConfig = resolveConfig(config, input)
-  await writeSessionState(resolvedConfig, input)
+  const inputWithPrefs = applyIdentityPreferences(input)
+  const resolvedConfig = resolveConfig(config, inputWithPrefs)
+  await writeSessionState(resolvedConfig, inputWithPrefs)
   return resolvedConfig
+}
+
+/**
+ * Per-canonical-user preferences (`<lightclawHome>/identity/per-user/<id>/
+ * preferences.json`) outrank caller-supplied input for `permissionMode` and
+ * `model`. The caller's values are typically pulled from session meta.json
+ * (terminal cli.ts) or the channel strategy default (channel runner.ts);
+ * those are correct only as a per-session fallback. The same identity using
+ * both terminal + Feishu must see one consistent mode/model, which is what
+ * preferences pin down. No-op when `currentUserId` is absent (no identity to
+ * key under) or when prefs file is missing / empty (input wins by default).
+ */
+function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefined): T | undefined {
+  if (!input?.currentUserId) {
+    return input
+  }
+  const prefs = loadIdentityPreferences(input.currentUserId)
+  if (!prefs.permissionMode && !prefs.model) {
+    return input
+  }
+  return {
+    ...input,
+    ...(prefs.permissionMode ? { permissionMode: prefs.permissionMode } : {}),
+    ...(prefs.model ? { model: prefs.model } : {}),
+  }
 }
 
 export function beginQuery(canonicalUser?: string): AbortSignal {
