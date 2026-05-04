@@ -277,6 +277,16 @@ function buildBuiltinCommands(): ReplCommand[] {
           // tracker doesn't apply — the cluster pulls images server-side,
           // we never run `docker pull` locally. Reading ImageReadiness here
           // would always show `not-attempted` since nothing populates it.
+          //
+          // The tracker is only updated when isAvailable() / waitForRunning()
+          // / runBrainctlExec() actually probes phase. preheat-on-startup
+          // calls start() which leaves the tracker on `scheduling` until the
+          // first real tool call lifts it to `ready`. Calling isAvailable()
+          // here forces a phase probe so admin sees the live state instead
+          // of a stale `scheduling` even when the cluster worker is healthy.
+          // Caught + ignored: isAvailable() returns reason objects rather
+          // than throwing, but a brainctl/network blip could still throw.
+          await runtime.isAvailable().catch(() => {})
           const snap = runtime.workerSnapshot()
           lines.push(t('sandbox.titleRlaunch'))
           lines.push(t('sandbox.state', { state: snap.state }))
