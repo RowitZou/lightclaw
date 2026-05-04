@@ -18,7 +18,7 @@ import {
   lookupWorkerRecord,
   writeWorkerRecord,
 } from './rlaunch-state.js'
-import { WorkerReadinessTracker } from './worker-readiness.js'
+import { WorkerReadinessTracker, type WorkerReadinessSnapshot } from './worker-readiness.js'
 
 export type RlaunchRuntimeConfig = {
   canonicalUser: string
@@ -108,6 +108,15 @@ export class RlaunchRuntime implements Runtime {
 
   get name(): string | null {
     return this.workerName
+  }
+
+  /** Snapshot of the per-user worker readiness tracker. Exposed so the
+   *  /sandbox status admin command can render rlaunch-flavored health
+   *  (worker state / cluster image / schedule duration / last error)
+   *  instead of the docker-flavored ImageReadinessTracker that doesn't
+   *  apply to this backend. */
+  workerSnapshot(): WorkerReadinessSnapshot {
+    return this.tracker.snapshot()
   }
 
   async start(): Promise<void> {
