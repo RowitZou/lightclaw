@@ -269,24 +269,42 @@ function buildBuiltinCommands(): ReplCommand[] {
     async handler(args, ctx) {
       const action = args.trim() || 'status'
       if (action === 'status') {
-        const tracker = getImageReadiness()
-        const snap = tracker.snapshot()
-        const lines = [t('sandbox.title')]
-        lines.push(t('sandbox.state', { state: snap.state }))
-        if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
-        if (snap.pullDurationMs !== undefined) {
-          const seconds = Math.round(snap.pullDurationMs / 1000)
-          lines.push(snap.state === 'ready'
-            ? t('sandbox.pulledIn', { seconds })
-            : t('sandbox.elapsed', { seconds }))
-        }
-        if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
         const runtime = getRuntime()
-        if (runtime instanceof DockerRuntime) {
-          lines.push(t('sandbox.container', { name: runtime.containerName }))
-        } else if (runtime instanceof RlaunchRuntime) {
+        const lines: string[] = []
+        if (runtime instanceof RlaunchRuntime) {
+          // Rlaunch backend has its own readiness tracker (per-user worker
+          // scheduling on the cluster). The docker-flavored ImageReadiness
+          // tracker doesn't apply — the cluster pulls images server-side,
+          // we never run `docker pull` locally. Reading ImageReadiness here
+          // would always show `not-attempted` since nothing populates it.
+          const snap = runtime.workerSnapshot()
+          lines.push(t('sandbox.titleRlaunch'))
+          lines.push(t('sandbox.state', { state: snap.state }))
+          if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
+          if (snap.scheduleDurationMs !== undefined) {
+            lines.push(t('sandbox.scheduleElapsed', { seconds: Math.round(snap.scheduleDurationMs / 1000) }))
+          }
+          if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
+          lines.push(t('sandbox.workerUser', { name: snap.canonicalUser }))
           lines.push(t('sandbox.worker', { name: runtime.name ?? t('sandbox.workerNone') }))
+        } else if (runtime instanceof DockerRuntime) {
+          const snap = getImageReadiness().snapshot()
+          lines.push(t('sandbox.title'))
+          lines.push(t('sandbox.state', { state: snap.state }))
+          if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
+          if (snap.pullDurationMs !== undefined) {
+            const seconds = Math.round(snap.pullDurationMs / 1000)
+            lines.push(snap.state === 'ready'
+              ? t('sandbox.pulledIn', { seconds })
+              : t('sandbox.elapsed', { seconds }))
+          }
+          if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
+          lines.push(t('sandbox.container', { name: runtime.containerName }))
         } else {
+          // LocalRuntime: admin-only single-user mode, no worker / container
+          // tracking applies — the readiness machinery is purely for the
+          // isolated-backend code path (docker / rlaunch).
+          lines.push(t('sandbox.titleLocal'))
           lines.push(t('sandbox.localActive'))
         }
         lines.push('')
