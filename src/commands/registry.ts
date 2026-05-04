@@ -7,6 +7,8 @@ import type { Message } from '../types.js'
 
 export type CommandVisibility = 'all' | 'admin' | 'user'
 
+export type SlashBodyFormat = 'lark_md' | 'plain_text'
+
 export type ReplContext = {
   config: LightClawConfig
   sessionId: string
@@ -21,6 +23,12 @@ export type ReplContext = {
   setActiveTools(tools: Tool[]): void
   runPrompt(prompt: string, permissionInteractive?: boolean): Promise<void>
   persistMeta(messageCount: number): Promise<void>
+  // Channel-only: lets a slash handler request a different body renderer for
+  // its output. Default is plain_text (structured help/status with angle
+  // brackets that lark_md would eat). LLM-output handlers like /fresh set
+  // 'lark_md' so the body renders as a markdown card instead of a plain
+  // notice. No-op in terminal mode.
+  setSlashBodyFormat?(format: SlashBodyFormat): void
 }
 
 export type ReplCommandResult = 'continue' | 'exit'

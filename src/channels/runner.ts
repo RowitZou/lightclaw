@@ -207,12 +207,23 @@ export class ChannelRunner {
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
-          // plain_text body — feishu's lark_md eats <prompt>/<n>/<rule>
-          // (HTML tag parsing) and [<list|...>] (markdown link parsing),
-          // and it doesn't honor backtick fences as a literal-render escape
-          // hatch. plain_text is the only mechanism that disables the parser
-          // entirely so the help / status / rules tables render verbatim.
-          await this.sendNotice(message, 'info', slash.output.trim() || 'ok', 'plain_text')
+          const slashText = slash.output.trim() || 'ok'
+          // Two routing paths depending on what the slash handler produced:
+          //   - 'lark_md'    → genuine markdown (only /fresh today, since its
+          //                    body is LLM-generated text). Goes through the
+          //                    same markdown reply path as a normal LLM turn,
+          //                    so **bold** / ## headings / lists render
+          //                    instead of showing literal asterisks/hashes.
+          //   - 'plain_text' → structured help/status/rules tables that
+          //                    contain `<prompt>` / `<n>` / `[<a|b|c>]` style
+          //                    placeholders. lark_md would parse those as
+          //                    HTML tags / markdown links and drop them, so
+          //                    we render via a plain_text notice card.
+          if (slash.bodyFormat === 'lark_md') {
+            await this.sendReply(message, slashText)
+          } else {
+            await this.sendNotice(message, 'info', slashText, 'plain_text')
+          }
           return
         }
 

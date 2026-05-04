@@ -154,6 +154,9 @@ function buildBuiltinCommands(): ReplCommand[] {
         callerUserId: ctx.userId ?? getCurrentUserId(),
         isChannel: Boolean(ctx.isChannel),
       })
+      // /fresh body is LLM markdown — render it through the channel's
+      // markdown reply path instead of the structured plain_text notice.
+      ctx.setSlashBodyFormat?.('lark_md')
       ctx.output.write(result)
     },
   },

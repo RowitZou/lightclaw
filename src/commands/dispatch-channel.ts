@@ -4,7 +4,18 @@ import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './builtin.js'
-import type { ReplContext } from './registry.js'
+import type { ReplContext, SlashBodyFormat } from './registry.js'
+
+export type ChannelSlashResult = {
+  handled: boolean
+  output: string
+  // Defaults to 'plain_text' — the structured /help / /status / /sandbox
+  // output contains angle brackets like `<prompt>` that lark_md would parse
+  // as HTML tags and silently drop. Handlers whose output is genuine markdown
+  // (currently only /fresh, which prints LLM-generated text) opt in to
+  // 'lark_md' so the runner routes it through the markdown reply path.
+  bodyFormat: SlashBodyFormat
+}
 
 export async function dispatchChannelSlash(
   text: string,
@@ -19,10 +30,10 @@ export async function dispatchChannelSlash(
     setActiveTools(tools: Tool[]): void
     persistMeta(messageCount: number): Promise<void>
   },
-): Promise<{ handled: boolean; output: string }> {
+): Promise<ChannelSlashResult> {
   const trimmed = text.trimStart()
   if (!trimmed.startsWith('/')) {
-    return { handled: false, output: '' }
+    return { handled: false, output: '', bodyFormat: 'plain_text' }
   }
 
   const output: string[] = []
@@ -34,9 +45,10 @@ export async function dispatchChannelSlash(
       return {
         handled: true,
         output: `unknown command: ${name}. Renamed to ${renamed}. See /help.\n`,
+        bodyFormat: 'plain_text',
       }
     }
-    return { handled: false, output: '' }
+    return { handled: false, output: '', bodyFormat: 'plain_text' }
   }
 
   const writable = {
@@ -45,6 +57,8 @@ export async function dispatchChannelSlash(
       return true
     },
   } as Writable
+
+  let bodyFormat: SlashBodyFormat = 'plain_text'
 
   const ctx: ReplContext = {
     config: input.config,
@@ -61,11 +75,15 @@ export async function dispatchChannelSlash(
       output.push('error> command cannot start an interactive prompt from channel mode.\n')
     },
     persistMeta: input.persistMeta,
+    setSlashBodyFormat(format: SlashBodyFormat) {
+      bodyFormat = format
+    },
   }
 
   const result = await registry.dispatch(trimmed, ctx)
   return {
     handled: result !== undefined,
     output: output.join(''),
+    bodyFormat,
   }
 }

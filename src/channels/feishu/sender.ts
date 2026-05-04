@@ -43,6 +43,33 @@ export class FeishuSender {
     }
   }
 
+  // LLM reply path. Feishu's plain `msg_type=text` does NOT render markdown,
+  // so a multi-paragraph response with **bold**, ## headings or `- bullets`
+  // shows as literal asterisks/hashes/dashes. We send each chunk as a
+  // headerless interactive card with a `lark_md` body so the same content
+  // renders properly. The card has no title bar — it visually reads as a
+  // bordered markdown block, not a system notice.
+  async sendMarkdownText(message: NormalizedChannelMessage, text: string): Promise<void> {
+    const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
+    let replyTo = message.messageId
+
+    for (const chunk of chunks) {
+      const card = {
+        config: { enable_forward: false, wide_screen_mode: true },
+        elements: [
+          { tag: 'div', text: { tag: 'lark_md', content: chunk } },
+        ],
+      }
+      const response = await this.sendReplyOrCreate({
+        chatId: message.chatId,
+        replyToMessageId: replyTo,
+        msgType: 'interactive',
+        content: JSON.stringify(card),
+      })
+      replyTo = response.data?.message_id ?? replyTo
+    }
+  }
+
   async sendInteractiveCard(
     message: NormalizedChannelMessage,
     card: InteractiveCard,
