@@ -90,6 +90,15 @@ export type ChannelRunnerStrategy = {
    * fired and forgotten so the inbound message itself is never blocked.
    */
   fetchSenderName?(peerId: string): Promise<string | undefined>
+  /**
+   * Optional in-flight progress signal. Channels that support per-message
+   * affordances (Feishu emoji reaction, etc.) implement this pair so users
+   * see a "we got it, working" indicator while the agent runs. The opaque
+   * token returned by `startTyping` is round-tripped to `stopTyping` for
+   * cleanup; channels with no such concept simply omit both methods.
+   */
+  startTyping?(message: NormalizedChannelMessage): Promise<unknown>
+  stopTyping?(message: NormalizedChannelMessage, token: unknown): Promise<void>
 }
 
 /**
@@ -138,6 +147,11 @@ export class ChannelRunner {
     }
     const sessionId = this.strategy.resolveSessionId(message, userId)
     await this.locks.runExclusive(sessionId, async () => {
+      // In-flight typing indicator: fire BEFORE any work so the user sees
+      // a "we got it" signal even when meta load / runtime probe is slow.
+      // The token is opaque (channel-defined) and gets handed back to
+      // stopTyping in the outer finally — we never inspect it here.
+      const typingToken = await this.startTyping(message)
       try {
         const meta = await loadMeta(sessionId)
         const messages = await loadTranscript(sessionId)
@@ -381,8 +395,41 @@ export class ChannelRunner {
         // Idempotent when the approver was never set (e.g. slash-only path,
         // LocalRuntimeAdminOnlyError before the approver assignment).
         setPermissionApprover(null)
+        await this.stopTyping(message, typingToken)
       }
     })
+  }
+
+  private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {
+    if (!this.strategy.startTyping) {
+      return null
+    }
+    try {
+      return await this.strategy.startTyping(message)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: startTyping failed for ${message.messageId}: ${detail}\n`,
+      )
+      return null
+    }
+  }
+
+  private async stopTyping(
+    message: NormalizedChannelMessage,
+    token: unknown,
+  ): Promise<void> {
+    if (!this.strategy.stopTyping || token === null || token === undefined) {
+      return
+    }
+    try {
+      await this.strategy.stopTyping(message, token)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: stopTyping failed for ${message.messageId}: ${detail}\n`,
+      )
+    }
   }
 
   private async sendReply(message: NormalizedChannelMessage, text: string): Promise<void> {
