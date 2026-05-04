@@ -5,7 +5,7 @@ import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 
-export type CommandVisibility = 'all' | 'admin'
+export type CommandVisibility = 'all' | 'admin' | 'user'
 
 export type ReplContext = {
   config: LightClawConfig
@@ -45,7 +45,13 @@ export class ReplCommandRegistry {
 
   list(isAdmin = true): ReplCommand[] {
     return [...this.commands.values()]
-      .filter(command => isAdmin || (command.visibleTo ?? 'all') === 'all')
+      .filter(command => {
+        const v = command.visibleTo ?? 'all'
+        if (v === 'all') return true
+        if (v === 'admin') return isAdmin
+        if (v === 'user') return !isAdmin
+        return false
+      })
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
@@ -80,8 +86,13 @@ export class ReplCommandRegistry {
       )
       return 'continue'
     }
-    if ((command.visibleTo ?? 'all') === 'admin' && !ctx.isAdmin) {
-      ctx.output.write('error> admin only.\n')
+    const visibility = command.visibleTo ?? 'all'
+    if (visibility === 'admin' && !ctx.isAdmin) {
+      ctx.output.write(`error> ${name} is admin-only.\n`)
+      return 'continue'
+    }
+    if (visibility === 'user' && ctx.isAdmin) {
+      ctx.output.write(`error> ${name} is user-only (admins are the recipient, not the sender).\n`)
       return 'continue'
     }
 

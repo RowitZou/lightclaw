@@ -42,8 +42,10 @@ import {
   setPermissionMode,
 } from '../state.js'
 
+import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
+import { readUsage, type UsageRecord } from '../usage/storage.js'
 
 export function createBuiltinReplRegistry(): ReplCommandRegistry {
   const registry = new ReplCommandRegistry()
@@ -91,6 +93,41 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
           ? 'Stopped. (in-flight tool calls cancelled; written files are not rolled back)\n'
           : 'Nothing in flight.\n',
       )
+    },
+  },
+  {
+    name: '/feedback',
+    usage: '/feedback <text>',
+    description: 'Send feedback to admin (admin reads via /user feedback)',
+    visibleTo: 'user',
+    async handler(args, ctx) {
+      const text = args.trim()
+      if (!text) {
+        ctx.output.write('error> Usage: /feedback <text>\n')
+        return
+      }
+      const userId = ctx.userId ?? getCurrentUserId() ?? '__terminal__'
+      try {
+        await appendFeedback({
+          ts: new Date().toISOString(),
+          user: userId,
+          channel: ctx.isChannel ? 'channel' : 'terminal',
+          text,
+        })
+        ctx.output.write('Thanks. Forwarded to admin.\n')
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        ctx.output.write(`error> Failed to forward (${detail}). Please tell admin in person.\n`)
+      }
+    },
+  },
+  {
+    name: '/cost',
+    usage: '/cost',
+    description: 'Show this month token usage by-model + by-user (admin only)',
+    visibleTo: 'admin',
+    async handler(_args, ctx) {
+      ctx.output.write(await formatCost())
     },
   },
   {
@@ -529,8 +566,76 @@ async function runUserCommand(rawArgs: string): Promise<string> {
   }
 }
 
-async function userFeedback(_args: string[]): Promise<string> {
-  return 'Feedback storage not yet wired (Iter 3 will connect this).\n'
+async function userFeedback(args: string[]): Promise<string> {
+  const pageIdx = args.indexOf('--page')
+  const page = pageIdx >= 0 ? Math.max(1, Number.parseInt(args[pageIdx + 1] ?? '1', 10) || 1) : 1
+  const pageSize = 20
+  const all = await readAllFeedback()
+  if (all.length === 0) {
+    return 'No feedback yet.\n'
+  }
+  const totalPages = Math.ceil(all.length / pageSize)
+  if (page > totalPages) {
+    return `error> Page ${page} out of range (1..${totalPages}).\n`
+  }
+  const slice = all.slice((page - 1) * pageSize, page * pageSize)
+  const lines = slice.map(r =>
+    `  ${r.ts.slice(0, 19)} ${r.user}@${r.channel}: ${truncate(r.text, 80)}`,
+  )
+  return `Feedback (page ${page}/${totalPages}, total ${all.length}):\n${lines.join('\n')}\n`
+}
+
+function truncate(text: string, maxLen: number): string {
+  const oneline = text.replace(/\s+/g, ' ').trim()
+  if (oneline.length <= maxLen) return oneline
+  return oneline.slice(0, maxLen - 1) + '…'
+}
+
+async function formatCost(): Promise<string> {
+  const now = new Date()
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+  const records: UsageRecord[] = []
+  for await (const rec of readUsage({ sinceTs: monthStart })) {
+    records.push(rec)
+  }
+  if (records.length === 0) {
+    return 'No usage recorded this month yet.\n'
+  }
+  const total = records.reduce((acc, r) => acc + r.input + r.output, 0)
+  const byModel = new Map<string, number>()
+  const byUser = new Map<string, number>()
+  let freshTok = 0
+  let cacheRead = 0
+  let cacheCreate = 0
+  for (const r of records) {
+    const tok = r.input + r.output
+    byModel.set(r.model, (byModel.get(r.model) ?? 0) + tok)
+    byUser.set(r.user, (byUser.get(r.user) ?? 0) + tok)
+    cacheRead += r.cacheRead
+    cacheCreate += r.cacheCreate
+    if (r.kind === 'fresh') freshTok += tok
+  }
+  const fmt = (n: number): string => formatTokens(n)
+  const lines: string[] = [
+    `This month: ${fmt(total)} tok (cache_read: ${fmt(cacheRead)}, cache_create: ${fmt(cacheCreate)})`,
+    '',
+    '  By model:',
+    ...[...byModel.entries()].sort((a, b) => b[1] - a[1]).map(([m, n]) => `    ${m}: ${fmt(n)}`),
+    '',
+    '  By user:',
+    ...[...byUser.entries()].sort((a, b) => b[1] - a[1]).map(([u, n]) => `    ${u}: ${fmt(n)}`),
+  ]
+  if (freshTok > 0) {
+    lines.push('', `  Fresh subset: ${fmt(freshTok)} tok (${Math.round(freshTok * 100 / total)}%)`)
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
 }
 
 /**

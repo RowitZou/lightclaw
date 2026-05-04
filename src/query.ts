@@ -28,6 +28,7 @@ import {
   addSessionMemoryTokens,
   addUsage,
   getAbortController,
+  getCurrentUserId,
   getCwd,
   getLastExtractedAt,
   getMemoryDir,
@@ -50,6 +51,7 @@ import {
   updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
+import { appendUsage } from './usage/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
@@ -501,6 +503,16 @@ export async function query(params: QueryParams): Promise<{
 
     addUsage(stopEvent.usage)
     totalUsage = mergeUsage(totalUsage, stopEvent.usage)
+    void appendUsage({
+      ts: new Date().toISOString(),
+      user: getCurrentUserId() ?? '__terminal__',
+      model: config.model,
+      kind: params.ephemeral ? 'fresh' : (mode === 'subagent' ? 'subagent' : 'main'),
+      input: stopEvent.usage.input_tokens ?? 0,
+      output: stopEvent.usage.output_tokens ?? 0,
+      cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
+      cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
+    })
     addSessionMemoryTokens(
       (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
     )
