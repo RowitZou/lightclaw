@@ -59,7 +59,7 @@ export function suggestPathRules(
 
 // WebFetch: single hostname rule. Drop the `*.<root>` tier — if a user wants
 // the wider scope, they can write `WebFetch(*.example.com)` by hand or via
-// /permissions allow.
+// /rules allow.
 export function suggestWebFetchRules(url: string): PermissionRuleValue[] {
   let hostname: string
   try {
@@ -74,7 +74,7 @@ export function suggestWebFetchRules(url: string): PermissionRuleValue[] {
 }
 
 // MCP: single `server:tool` rule. Server-wide and MCP-wide scopes are
-// available as fallbacks via the index.ts default and via /permissions allow.
+// available as fallbacks via the index.ts default and via /rules allow.
 export function suggestMcpRules(
   server: string | undefined,
   toolName: string | undefined,
@@ -151,7 +151,7 @@ function stripTailWildcard(content: string): string {
   return content.endsWith(':*') ? content.slice(0, -2) : content
 }
 
-// Verbose form for /permissions list and post-approval CLI hint.
+// Verbose form for /rules list and post-approval CLI hint.
 export function formatRuleListVerbose(rules: PermissionRuleValue[]): string {
   return rules.map(formatRule).join(', ')
 }

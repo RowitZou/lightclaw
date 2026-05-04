@@ -46,6 +46,14 @@ type SessionState = {
    */
   permissionApprover: PermissionApprover | null
   abortController: AbortController
+  /**
+   * Per-canonical-user abort controllers, populated by `beginQuery(canonical)`.
+   * Channel mode uses this so /stop from user A only aborts A's in-flight turn,
+   * not B's running concurrently. The map is never cleared — fresh entries
+   * overwrite stale ones, and aborting a stale (already-resolved) controller
+   * is a no-op. Terminal mode also writes here so /stop works there too.
+   */
+  abortControllerByUser: Map<string, AbortController>
   backgroundTasks: Set<Promise<unknown>>
   runtime?: Runtime
 }
@@ -108,6 +116,7 @@ export function initializeState(input: {
     activeSkillAllowedTools: undefined,
     permissionApprover: preservedApprover,
     abortController: new AbortController(),
+    abortControllerByUser: new Map(),
     backgroundTasks: new Set(),
     runtime: input.runtime,
   }
@@ -289,7 +298,7 @@ export function getAllPermissionRules(): PermissionRule[] {
   const current = requireState()
   // Order does not affect evaluation (deny > ask > allow is enforced inside
   // evaluatePermission regardless of array order), but identity rules go
-  // first so they show up at the top of `/permissions list`. cli rules next
+  // first so they show up at the top of `/rules list`. cli rules next
   // (most ephemeral; tied to the current process), then file rules, then
   // builtin denies — those last two come from loadFileRules in fileRules
   // already concatenated.
@@ -321,6 +330,27 @@ export function resetAbortController(): AbortController {
   const current = requireState()
   current.abortController = new AbortController()
   return current.abortController
+}
+
+export function setAbortControllerForUser(
+  canonical: string,
+  controller: AbortController,
+): void {
+  requireState().abortControllerByUser.set(canonical, controller)
+}
+
+/**
+ * Abort the most-recently-installed in-flight controller for `canonical`.
+ * Returns true if a controller existed and was aborted; false if no entry
+ * (user never ran a query) or it was already aborted.
+ */
+export function abortInFlightForUser(canonical: string): boolean {
+  const ctrl = requireState().abortControllerByUser.get(canonical)
+  if (!ctrl || ctrl.signal.aborted) {
+    return false
+  }
+  ctrl.abort()
+  return true
 }
 
 export function addUsage(usage: UsageStats): void {

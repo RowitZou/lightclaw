@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { modeToAlias } from '../../commands/mode-aliases.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
 import { isHighRiskAsk } from '../../permission/high-risk.js'
@@ -75,7 +76,7 @@ type PendingPermission = {
    * Cached at ask-time so the card builder, text fallback, and applyAction
    * downgrade path see a single, consistent classification. Re-deriving on
    * each call would risk drift if the rule set were mutated between render
-   * and click (e.g. `/permissions ask` registered a new ask rule that turns
+   * and click (e.g. `/rules ask` registered a new ask rule that turns
    * a previously-accepted command into high-risk mid-flight).
    */
   highRisk: boolean
@@ -381,7 +382,7 @@ export class FeishuPermissionCoordinator {
       'info',
       [
         `已允许 ${formatRuleListVerbose(ruleValues)}，今后同类调用自动放行（已持久化到当前用户的权限）。`,
-        '需要撤回时发送 /permissions list 查看编号，再用 /permissions revoke <n>。',
+        '需要撤回时发送 /rules list 查看编号，再用 /rules revoke <n>。',
       ].join('\n'),
     )
     const middleLabel = formatSuggestionLabel(
@@ -556,7 +557,7 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
   const bodyLines = [
     `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
     `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-    `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+    `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
     `**会话**：${escapeLarkMd(pending.sessionId)}`,
     '',
     '```',
@@ -680,7 +681,7 @@ function buildResolvedCard(
           content: [
             `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
             `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-            `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+            `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
             `**会话**：${escapeLarkMd(pending.sessionId)}`,
             '',
             '```',

@@ -184,7 +184,7 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 - 模型 / provider：`~/.lightclaw/config.json`、`LIGHTCLAW_MODEL`、`LIGHTCLAW_PROVIDER`
 - 功能开关：`LIGHTCLAW_NO_MEMORY=1`、`LIGHTCLAW_NO_MCP=1`、`LIGHTCLAW_NO_HOOKS=1`
 - 权限细规则：编辑 `~/.lightclaw/permissions.json`
-- 身份管理：`/identity ...` slash
+- 身份管理：`/user ...` slash
 - 渠道：在 `~/.lightclaw/channels.json` 里 `enabled: true`，主 `lightclaw` 进程会自动拉起
 
 ---
@@ -195,38 +195,45 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 看当前能用什么（模型、mode、skill、命令）。 |
+| `/help` | 列出可用命令（不含状态信息；状态请用 `/status`）。 |
+| `/status` | 查看当前 user / mode / model / session / 今日用量。 |
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
-| `/permissions` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
+| `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
 | `/sandbox` | 查看或重置助手的沙箱工作环境。 |
 
 Admin 专属：
 
 | 命令 | 作用 |
 |---|---|
-| `/identity list|pending|approve|reject|unlink|remove` | 管理 pairing 和用户绑定。 |
-| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing、用户绑定，并查看 user 反馈。 |
+| `/ceiling [<user> <read|ask|auto|yolo>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
+| `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
+| `/feedback <text>`（user-only）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
+| `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
+| `/stop` | 中断当前 turn（已写入的文件不回滚）。 |
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
 
 ### 权限模式与 ceiling
 
-四个 permission mode，从严到宽：
+四个 permission mode，从严到宽。channel / 用户面用 **alias** 列；**internal enum** 列是 `permissions.json` 里的原始 schema 值，作为兼容老脚本的输入也接受。
 
-| Mode | 不询问就能跑的工具 |
-|---|---|
-| `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
-| `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
-| `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
-| `bypassPermissions` | 全部自动放行。 |
+| Alias | 内部 enum | 不询问就能跑的工具 |
+|---|---|---|
+| `read` | `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
+| `ask` | `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
+| `auto` | `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
+| `yolo` | `bypassPermissions` | 全部自动放行。 |
 
-`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `default`，用户可以主动切到更安全的 `plan` 或留在 `default`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
+`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `ask`（即 `default`），用户可以主动切到更安全的 `read`（即 `plan`）或留在 `ask`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
 
 ```text
-/ceiling alice bypassPermissions   # admin: 抬升 alice 的 ceiling
-/mode bypassPermissions            # 然后 alice（或 admin 自己）才能切过去
+/ceiling alice yolo            # admin: 抬升 alice 的 ceiling
+/mode yolo                     # 然后 alice（或 admin 自己）才能切过去
 ```
+
+输入两种形式（alias / 内部 enum）都接受；输出（status 面板、飞书卡片、ceiling 列表）一律渲染 alias。
 
 这套两步显式流程对 admin 自己同样生效——没有环境变量短路通道。
 
@@ -237,7 +244,7 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 未知飞书 sender 会收到 pairing code。Admin 审批：
 
 ```text
-/identity approve K7YQ3RPA --as alice
+/user approve K7YQ3RPA --as alice
 ```
 
 每个 canonical user 都有：
@@ -343,7 +350,7 @@ src/
 ├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例
-├── commands/           # /help、/model、/mode、/sandbox、/identity、/ceiling、channel dispatch
+├── commands/           # /help、/status、/model、/mode、/rules、/sandbox、/user、/ceiling、channel dispatch
 ├── channels/           # 飞书 runner、runner strategy、session lock
 ├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
 ├── permission/         # mode/rule policy 和 skill tool 边界

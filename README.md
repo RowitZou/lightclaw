@@ -186,7 +186,7 @@ Removed Phase 9 CLI flags are now config/env driven:
 - Model/provider: `~/.lightclaw/config.json`, `LIGHTCLAW_MODEL`, `LIGHTCLAW_PROVIDER`
 - Feature toggles: `LIGHTCLAW_NO_MEMORY=1`, `LIGHTCLAW_NO_MCP=1`, `LIGHTCLAW_NO_HOOKS=1`
 - Permission rules: edit `~/.lightclaw/permissions.json`
-- Identity management: `/identity ...` slash command
+- Identity management: `/user ...` slash command
 - Channels: enable them in `~/.lightclaw/channels.json`; `lightclaw` starts enabled channels automatically
 
 ---
@@ -197,38 +197,45 @@ User-visible commands:
 
 | Command | Purpose |
 |---|---|
-| `/help` | Show what's available right now (model, mode, skills, commands). |
+| `/help` | List available commands (no state info; see `/status` for that). |
+| `/status` | Show your current user / mode / model / session / today usage. |
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
-| `/permissions` | List numbered rules, revoke by index, or register an ASK rule (see below). |
+| `/rules` | List numbered rules, revoke by index, or register an ASK rule (see below). |
 | `/sandbox` | Inspect or reset the assistant's sandboxed work environment. |
 
 Admin-only commands:
 
 | Command | Purpose |
 |---|---|
-| `/identity list|pending|approve|reject|unlink|remove` | Manage pairing and user bindings. |
-| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | Show every identity's ceiling, or set one user's ceiling. |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | Manage pairing, user bindings, and read user feedback. |
+| `/ceiling [<user> <read|ask|auto|yolo>]` | Show every identity's ceiling, or set one user's ceiling. |
+| `/cost` | This-month token usage by-model + by-user (with cache hit / fresh subset). |
+| `/feedback <text>` (user-only) | Send feedback to admin; admin reads via `/user feedback`. |
+| `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
+| `/stop` | Abort the in-flight turn (already-written files are not rolled back). |
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
 
 ### Permission Modes And Ceiling
 
-Four permission modes from strictest to loosest:
+Four permission modes from strictest to loosest. Channels and users use the **alias** column; the **internal enum** column is the raw value stored in `permissions.json` and surfaced for compatibility with older scripts.
 
-| Mode | What runs without asking |
-|---|---|
-| `plan` | Read and search tools. Write, edit, execute, network fetch, and subagent tools are denied. |
-| `default` | Read and search tools. Write, edit, execute, network fetch, and subagent tools ask for confirmation (interactive) or are denied (non-interactive). |
-| `acceptEdits` | Read, search, write, and edit tools. Execute, network fetch, and subagent tools still ask. |
-| `bypassPermissions` | Everything runs without prompting. |
+| Alias | Internal enum | What runs without asking |
+|---|---|---|
+| `read` | `plan` | Read and search tools. Write, edit, execute, network fetch, and subagent tools are denied. |
+| `ask` | `default` | Read and search tools. Write, edit, execute, network fetch, and subagent tools ask for confirmation (interactive) or are denied (non-interactive). |
+| `auto` | `acceptEdits` | Read, search, write, and edit tools. Execute, network fetch, and subagent tools still ask. |
+| `yolo` | `bypassPermissions` | Everything runs without prompting. |
 
-`/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `default`, which lets users opt into the safer `plan` or stay on `default`. To allow looser modes, the admin must bump the ceiling first:
+`/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `ask` (`default`), which lets users opt into the safer `read` (`plan`) or stay on `ask`. To allow looser modes, the admin must bump the ceiling first:
 
 ```text
-/ceiling alice bypassPermissions   # admin: raise alice's ceiling
-/mode bypassPermissions            # alice (or admin) can then switch
+/ceiling alice yolo            # admin: raise alice's ceiling
+/mode yolo                     # alice (or admin) can then switch
 ```
+
+Both alias and internal enum forms are accepted as input; outputs (status panels, Feishu cards, ceiling listings) always render the alias form.
 
 This two-step flow applies to the admin too — there is no environment variable shortcut.
 
@@ -239,7 +246,7 @@ This two-step flow applies to the admin too — there is no environment variable
 Unknown Feishu senders receive a pairing code. The admin approves it with:
 
 ```text
-/identity approve K7YQ3RPA --as alice
+/user approve K7YQ3RPA --as alice
 ```
 
 Each canonical user gets:
@@ -345,7 +352,7 @@ src/
 ├── query.ts            # main agent loop (tool dispatch, auto-compact)
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
-├── commands/           # /help, /model, /mode, /sandbox, /identity, /ceiling, channel dispatch
+├── commands/           # /help, /status, /model, /mode, /rules, /sandbox, /user, /ceiling, channel dispatch
 ├── channels/           # Feishu runner, runner strategy, session lock
 ├── identity/           # canonical users, pairing, workspaces, secure JSON state
 ├── permission/         # mode/rule policy and skill tool boundaries

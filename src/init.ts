@@ -19,6 +19,7 @@ import {
   getRuntimePool,
   initializeState,
   resetAbortController,
+  setAbortControllerForUser,
   clearActiveSkillAllowedTools,
   setFileRules,
   setIdentityRules,
@@ -143,9 +144,13 @@ export async function resetSessionContext(input: CommonStateInput): Promise<Ligh
   return resolvedConfig
 }
 
-export function beginQuery(): AbortSignal {
+export function beginQuery(canonicalUser?: string): AbortSignal {
   clearActiveSkillAllowedTools()
-  return resetAbortController().signal
+  const controller = resetAbortController()
+  if (canonicalUser) {
+    setAbortControllerForUser(canonicalUser, controller)
+  }
+  return controller.signal
 }
 
 function resolveConfig(

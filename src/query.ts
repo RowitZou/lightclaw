@@ -28,6 +28,7 @@ import {
   addSessionMemoryTokens,
   addUsage,
   getAbortController,
+  getCurrentUserId,
   getCwd,
   getLastExtractedAt,
   getMemoryDir,
@@ -50,6 +51,7 @@ import {
   updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
+import { appendUsage } from './usage/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
@@ -118,6 +120,16 @@ type QueryParams = {
   /** Message index to mark as the fork prefix cache breakpoint. */
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
+  /**
+   * Skip auto-memory recall + memory index injection. Used by /fresh so the
+   * ephemeral one-shot session starts with a clean slate.
+   */
+  noAutoMemory?: boolean
+  /**
+   * Skip auto-compact + auto-extract + session-memory updates. Used by /fresh
+   * since there's no persisted transcript for those subsystems to reason about.
+   */
+  ephemeral?: boolean
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -361,7 +373,7 @@ export async function query(params: QueryParams): Promise<{
   const systemPromptTemplate = params.systemPrompt
     ? null
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
-        autoMemory: config.autoMemory,
+        autoMemory: !params.noAutoMemory && config.autoMemory,
         config,
         queryText: getLastUserText(messages),
         sessionId: getSessionId(),
@@ -491,6 +503,16 @@ export async function query(params: QueryParams): Promise<{
 
     addUsage(stopEvent.usage)
     totalUsage = mergeUsage(totalUsage, stopEvent.usage)
+    void appendUsage({
+      ts: new Date().toISOString(),
+      user: getCurrentUserId() ?? '__terminal__',
+      model: config.model,
+      kind: params.ephemeral ? 'fresh' : (mode === 'subagent' ? 'subagent' : 'main'),
+      input: stopEvent.usage.input_tokens ?? 0,
+      output: stopEvent.usage.output_tokens ?? 0,
+      cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
+      cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
+    })
     addSessionMemoryTokens(
       (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
     )
@@ -546,9 +568,11 @@ export async function query(params: QueryParams): Promise<{
 
     if (toolUses.length === 0) {
       const extractionSnapshot = [...messages]
-      await maybeUpdateSessionMemory(extractionSnapshot)
-      await runCompaction(false)
-      scheduleMemoryExtraction(extractionSnapshot)
+      if (!params.ephemeral) {
+        await maybeUpdateSessionMemory(extractionSnapshot)
+        await runCompaction(false)
+        scheduleMemoryExtraction(extractionSnapshot)
+      }
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
         sessionId: getSessionId(),
@@ -623,8 +647,10 @@ export async function query(params: QueryParams): Promise<{
       messages.push(createUserMessage(toolResults, getLastUuid(messages)))
     }
 
-    await maybeUpdateSessionMemory([...messages])
-    await runCompaction(false)
+    if (!params.ephemeral) {
+      await maybeUpdateSessionMemory([...messages])
+      await runCompaction(false)
+    }
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)

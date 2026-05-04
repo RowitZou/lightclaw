@@ -3,7 +3,7 @@ import type { Writable } from 'node:stream'
 import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
-import { createBuiltinReplRegistry } from './builtin.js'
+import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './builtin.js'
 import type { ReplContext } from './registry.js'
 
 export async function dispatchChannelSlash(
@@ -29,6 +29,13 @@ export async function dispatchChannelSlash(
   const name = trimmed.split(/\s+/, 1)[0] ?? ''
   const registry = createBuiltinReplRegistry()
   if (!registry.find(name)) {
+    const renamed = RENAMED_COMMANDS[name]
+    if (renamed) {
+      return {
+        handled: true,
+        output: `unknown command: ${name}. Renamed to ${renamed}. See /help.\n`,
+      }
+    }
     return { handled: false, output: '' }
   }
 

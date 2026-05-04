@@ -187,7 +187,7 @@ export class ChannelRunner {
           }
         }
 
-        beginQuery()
+        beginQuery(userId)
         const userText = formatChannelUserText(message)
         const slash = await dispatchChannelSlash(userText, {
           config: appConfig,
@@ -359,7 +359,7 @@ export class ChannelRunner {
         throw error
       } finally {
         // Always wipe the approver after this turn so a slow channel-message
-        // queue or terminal `/identity ...` cycle never sees a stale binding.
+        // queue or terminal `/user ...` cycle never sees a stale binding.
         // Idempotent when the approver was never set (e.g. slash-only path,
         // LocalRuntimeAdminOnlyError before the approver assignment).
         setPermissionApprover(null)
@@ -433,7 +433,7 @@ export class ChannelRunner {
         [
           '欢迎使用 LightClaw bot。',
           `请管理员审批以下配对码：**${result.code}**`,
-          `管理员命令：\`/identity approve ${result.code} --as <名称>\``,
+          `管理员命令：\`/user approve ${result.code} --as <名称>\``,
           `（${freshnessLabel}的配对请求；配对码 1 小时内有效）`,
         ].join('\n'),
       )
@@ -442,7 +442,7 @@ export class ChannelRunner {
         await this.sendNotice(
           message,
           'error',
-          '配对请求被限流，请管理员检查 `/identity pending`。',
+          '配对请求被限流，请管理员检查 `/user pending`。',
         )
         return null
       }
