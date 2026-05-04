@@ -22,6 +22,15 @@
 - `/fresh <prompt>` runs an ephemeral one-shot session: new sessionId (`fresh-<uuid>`), no memory recall, no transcript persistence, mode forced to `default`. The output is prefixed with `[fresh] `. Do not couple `/fresh` to the forked-agent runner — it goes through the main `query()` path with `persistTranscript: false / includeMemory: false / forcedMode: 'default'` flags.
 - `/stop` aborts the in-flight turn for the calling user only. The state tracks abort controllers per-canonical (`abortControllerByUser`); never abort the global controller from a channel handler — that would also kill an admin's terminal session running concurrently.
 
+# LightClaw i18n Notes (Phase 19)
+
+- All user-facing strings (slash output, banners, feishu cards, system notices, error notices visible to users) go through `t(key, args?)` from `src/i18n/index.js`. Never hardcode user-visible CN/EN strings inline.
+- Two locales: `cn` (default) and `en`, defined in `src/i18n/locales.ts`. Adding a key requires adding it to BOTH; the `_shapeCheck` block at the bottom of locales.ts is a typescript-level guard that fails the build if a key exists in only one locale.
+- **Stderr logging stays English** regardless of locale (admin greps logs, locale drift hurts). Only user-visible output goes through `t()`. Code comments / CLAUDE.md / git commits / test files / api-logs JSON content also stay English.
+- `setLang(config.lang)` is called once at the start of `initializeApp()` (init.ts) so any subsequent t() call resolves to the configured locale. `BUILTIN_COMMANDS` is rebuilt inside `createBuiltinReplRegistry()` at call time so command descriptions/usage strings pick up the active locale (cannot be at module-top — t() would evaluate before setLang).
+- Permission card text-reply normalization (`approve` / `批准` / `1` / `yes` / `y` etc) accepts BOTH languages in any locale — input parsing should never block a user just because they typed in the other language.
+- Runtime error tables (`runtime/rlaunch-errors.ts`, `runtime/image-readiness.ts`, `runtime/docker.ts`, `runtime/rlaunch.ts`) currently still hardcode CN strings — they're stderr-dominant + low-frequency surfaces, deferred to a follow-up phase. New runtime errors SHOULD use `t()` so the deferred work doesn't grow.
+
 # LightClaw Memory Extraction Notes
 
 - Auto-memory extraction goes through the forked-agent runner (`src/agents/forked-agent.ts`) and uses tool-use (`MemoryWrite`). Do not restore the old "emit JSON text -> JSON.parse" path; long sessions with quoted or nested content can corrupt JSON text and silently lose memories.

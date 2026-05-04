@@ -3,6 +3,7 @@ import path from 'node:path'
 import { loadConfigFile, type ConfigFileShape } from './config-file.js'
 import { workspaceRoot as resolveWorkspaceRoot } from './identity/paths.js'
 import { expandHomePath, lightclawHome } from './paths.js'
+import { parseLang } from './i18n/index.js'
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ProviderName } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
@@ -116,6 +117,9 @@ export type ToolsConfig = {
 }
 
 export type LightClawConfig = {
+  /** User-facing language for slash output, feishu cards, banners, error
+   *  notices. Stderr logging stays English regardless. Default: cn. */
+  lang: 'cn' | 'en'
   model: string
   allowedModels: string[]
   provider: ProviderName
@@ -697,6 +701,9 @@ export function getConfig(): LightClawConfig {
           fileConfig.tools?.webSearch?.braveApiKey,
       },
     },
+    lang: parseLang(process.env.LIGHTCLAW_LANG)
+      ?? parseLang(fileConfig.lang)
+      ?? 'cn',
     apiLogs: {
       // Default off: this is an admin-only debug / training-data feature.
       // Multi-user deployments shouldn't burn disk recording every model

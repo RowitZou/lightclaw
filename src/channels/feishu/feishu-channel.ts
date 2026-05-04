@@ -1,5 +1,6 @@
 import path from 'node:path'
 
+import { t } from '../../i18n/index.js'
 import { lightclawHome } from '../../paths.js'
 import { ChannelRunner } from '../runner.js'
 import type { Channel, ChannelHandle, FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
@@ -96,10 +97,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
               `feishu: media saved message=${raw.messageId} path=${downloaded.path}\n`,
             )
           } else {
-            message.text = appendLine(message.text, '[媒体下载失败]')
+            message.text = appendLine(message.text, t('channel.media.downloadFailed'))
           }
         } else if (raw.mediaKeys?.length) {
-          message.text = appendLine(message.text, '[媒体附件: skipped (mediaEnabled=false)]')
+          message.text = appendLine(message.text, t('channel.media.skipped'))
         }
         await runner.handleMessage(message)
       }

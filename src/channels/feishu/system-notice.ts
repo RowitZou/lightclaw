@@ -1,10 +1,12 @@
 // System-feedback notice cards. Distinct from LLM replies (plain text) and
 // permission-request cards (yellow). Two flavors:
-//   - 'info'  → wathet (淡青蓝): success / routine notification
-//   - 'error' → red  (红): failure / warning / timeout / rate-limited
+//   - 'info'  → wathet: success / routine notification
+//   - 'error' → red:    failure / warning / timeout / rate-limited
 //
-// Title is implicit by template color so the card stays compact (no header
-// title bar required on a wathet/red card with just a body line).
+// Card title text is i18n-aware (LightClaw 提示 / LightClaw notice etc.) and
+// resolved at render time via the active locale.
+
+import { t } from '../../i18n/index.js'
 
 export type SystemNoticeKind = 'info' | 'error'
 
@@ -13,9 +15,10 @@ const TEMPLATE_BY_KIND: Record<SystemNoticeKind, string> = {
   error: 'red',
 }
 
-const TITLE_BY_KIND: Record<SystemNoticeKind, string> = {
-  info: 'LightClaw 提示',
-  error: 'LightClaw 警告',
+function defaultTitle(kind: SystemNoticeKind): string {
+  return kind === 'info'
+    ? t('channel.system.title.info')
+    : t('channel.system.title.error')
 }
 
 export function buildSystemNoticeCard(input: {
@@ -32,7 +35,7 @@ export function buildSystemNoticeCard(input: {
       template: TEMPLATE_BY_KIND[input.kind],
       title: {
         tag: 'plain_text',
-        content: input.title ?? TITLE_BY_KIND[input.kind],
+        content: input.title ?? defaultTitle(input.kind),
       },
     },
     elements: [

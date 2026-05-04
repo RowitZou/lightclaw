@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { modeToAlias } from '../../commands/mode-aliases.js'
+import { t } from '../../i18n/index.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
 import { isHighRiskAsk } from '../../permission/high-risk.js'
@@ -137,7 +138,7 @@ export class FeishuPermissionCoordinator {
       await this.safeSendNotice(
         pending.message,
         'error',
-        '这条权限请求只能由发起人或 LightClaw admin 处理。',
+        t('permission.feishu.text.notOperator'),
       )
       return {}
     }
@@ -156,7 +157,7 @@ export class FeishuPermissionCoordinator {
       await this.safeSendNotice(
         pending.message,
         'info',
-        '请先处理当前的权限请求：回复"批准"、"批准所有"或"拒绝"。',
+        t('permission.feishu.text.empty'),
       )
       return true
     }
@@ -166,12 +167,7 @@ export class FeishuPermissionCoordinator {
       await this.safeSendNotice(
         pending.message,
         'info',
-        [
-          '请先处理当前的权限请求。',
-          `工具：${pending.ask.toolName}`,
-          '可以点击卡片按钮，或回复 1 / 2 / 3 选择对应选项；',
-          '也可以回复：批准 / 批准所有 / 拒绝。',
-        ].join('\n'),
+        t('permission.feishu.text.unparsed', { tool: pending.ask.toolName }),
       )
       return true
     }
@@ -181,7 +177,7 @@ export class FeishuPermissionCoordinator {
       await this.safeSendNotice(
         pending.message,
         'error',
-        `数字 ${parsed.kind === 'numeric' ? parsed.index : ''} 超出可选范围（1-3），请重新选择。`,
+        t('permission.feishu.text.numericOutOfRange', { n: parsed.kind === 'numeric' ? parsed.index : '?' }),
       )
       return true
     }
@@ -214,7 +210,7 @@ export class FeishuPermissionCoordinator {
         const abortListener = () => {
           this.resolvePending(pending, {
             behavior: 'deny',
-            reason: `Permission denied: ${pending.ask.toolName} approval was aborted.`,
+            reason: t('permission.feishu.deniedAbort', { tool: pending.ask.toolName }),
           })
         }
         input.ask.signal.addEventListener('abort', abortListener, { once: true })
@@ -277,26 +273,26 @@ export class FeishuPermissionCoordinator {
       void this.safeSendNotice(
         pending.message,
         'info',
-        `已允许 ${pending.ask.toolName} 本次调用。`,
+        t('permission.feishu.notice.allowOnce', { tool: pending.ask.toolName }),
       )
       return resolvedCardResponse(pending, {
         outcome: 'allow_once',
-        label: '批准',
+        label: t('permission.feishu.btn.allowOnce'),
       })
     }
     if (action === 'deny') {
       this.resolvePending(pending, {
         behavior: 'deny',
-        reason: `User denied ${pending.ask.toolName} from Feishu.`,
+        reason: t('permission.feishu.deniedUser', { tool: pending.ask.toolName }),
       })
       void this.safeSendNotice(
         pending.message,
         'info',
-        `已拒绝 ${pending.ask.toolName}。`,
+        t('permission.feishu.notice.deny', { tool: pending.ask.toolName }),
       )
       return resolvedCardResponse(pending, {
         outcome: 'deny',
-        label: '拒绝',
+        label: t('permission.feishu.btn.deny'),
       })
     }
 
@@ -311,11 +307,11 @@ export class FeishuPermissionCoordinator {
       void this.safeSendNotice(
         pending.message,
         'info',
-        '此操作含高风险子命令（如 rm / sudo / pipe-to-shell），出于安全只批准本次，没有写入持久化规则。',
+        t('permission.feishu.notice.highRiskDowngrade'),
       )
       return resolvedCardResponse(pending, {
         outcome: 'allow_once',
-        label: '批准本次（高危：已降级）',
+        label: t('permission.feishu.btn.allowOnceHighRisk'),
       })
     }
 
@@ -355,11 +351,11 @@ export class FeishuPermissionCoordinator {
         void this.safeSendNotice(
           pending.message,
           'error',
-          '本次允许已生效，但权限规则持久化失败；下次同类操作仍会再问一次。',
+          t('permission.feishu.notice.allowAlwaysFail'),
         )
         return resolvedCardResponse(pending, {
           outcome: 'allow_once',
-          label: '批准（持久化失败）',
+          label: t('permission.feishu.outcome.allowOnceFail'),
         })
       }
     }
@@ -380,10 +376,7 @@ export class FeishuPermissionCoordinator {
     void this.safeSendNotice(
       pending.message,
       'info',
-      [
-        `已允许 ${formatRuleListVerbose(ruleValues)}，今后同类调用自动放行（已持久化到当前用户的权限）。`,
-        '需要撤回时发送 /rules list 查看编号，再用 /rules revoke <n>。',
-      ].join('\n'),
+      t('permission.feishu.notice.allowAlways', { label: formatRuleListVerbose(ruleValues) }),
     )
     const middleLabel = formatSuggestionLabel(
       pending.suggestedRules,
@@ -552,33 +545,30 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
   )
   const headerTemplate = pending.highRisk ? 'red' : 'yellow'
   const headerTitle = pending.highRisk
-    ? 'LightClaw 请求执行高危工具'
-    : 'LightClaw 请求执行工具'
+    ? t('permission.feishu.titleHighRisk')
+    : t('permission.feishu.title')
   const bodyLines = [
-    `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
-    `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-    `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
-    `**会话**：${escapeLarkMd(pending.sessionId)}`,
+    t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
+    t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
+    t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
+    t('permission.feishu.fields.session', { id: escapeLarkMd(pending.sessionId) }),
     '',
     '```',
     truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
     '```',
   ]
   if (pending.highRisk) {
-    bodyLines.push(
-      '',
-      '⚠️ **此操作含高风险子命令（如 `rm` / `sudo` / pipe-to-shell 等），出于安全只能"仅这次"批准，无法持久化。**',
-    )
+    bodyLines.push('', t('permission.feishu.warningHighRisk'))
   }
   const buttons = pending.highRisk
     ? [
-        buildButton('批准本次', 'primary', pending.id, 'allow'),
-        buildButton('拒绝', 'danger', pending.id, 'deny'),
+        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow'),
+        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny'),
       ]
     : [
-        buildButton('批准', 'primary', pending.id, 'allow'),
-        buildButton(middleLabel, 'default', pending.id, 'allow_rules'),
-        buildButton('拒绝', 'danger', pending.id, 'deny'),
+        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow'),
+        buildButton(t('permission.feishu.btn.allowAlways', { label: middleLabel }), 'default', pending.id, 'allow_rules'),
+        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny'),
       ]
 
   return {
@@ -658,7 +648,9 @@ function buildResolvedCard(
   // the system-notice palette so the resolved card visually matches the
   // follow-up notice it pairs with.
   const template = resolution.outcome === 'deny' ? 'red' : 'wathet'
-  const title = resolution.outcome === 'deny' ? '已拒绝' : '已批准'
+  const title = resolution.outcome === 'deny'
+    ? t('permission.feishu.summary.titleDenied')
+    : t('permission.feishu.summary.titleAccepted')
   const icon = resolution.outcome === 'deny' ? '❌' : '✅'
 
   return {
@@ -679,16 +671,16 @@ function buildResolvedCard(
         text: {
           tag: 'lark_md',
           content: [
-            `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
-            `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-            `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
-            `**会话**：${escapeLarkMd(pending.sessionId)}`,
+            t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
+            t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
+            t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
+            t('permission.feishu.fields.session', { id: escapeLarkMd(pending.sessionId) }),
             '',
             '```',
             truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
             '```',
             '',
-            `${icon} 已选：${escapeLarkMd(resolution.label)}`,
+            t('permission.feishu.summary.chosen', { icon, label: escapeLarkMd(resolution.label) }),
           ].join('\n'),
         },
       },
@@ -699,18 +691,18 @@ function buildResolvedCard(
 function buildTextFallback(pending: PendingPermission): string {
   if (pending.highRisk) {
     return [
-      '⚠️ LightClaw 请求执行高危工具，需要你确认：',
-      `工具: ${pending.ask.toolName}`,
-      `风险: ${pending.ask.riskLevel}`,
-      `会话: ${pending.sessionId}`,
+      t('permission.feishu.text.fallbackHighRiskHeader'),
+      t('permission.feishu.text.fallbackToolLine', { name: pending.ask.toolName }),
+      t('permission.feishu.text.fallbackRiskLine', { level: pending.ask.riskLevel }),
+      t('permission.feishu.text.fallbackSessionLine', { id: pending.sessionId }),
       pending.ask.inputPreview,
       '',
-      '此操作含高风险子命令（如 rm / sudo / pipe-to-shell），只能"仅这次"批准。',
-      '可回复：',
-      '  1 = 批准本次',
-      '  3 = 拒绝',
+      t('permission.feishu.text.fallbackHighRiskExplain'),
+      t('permission.feishu.text.fallbackChoiceHeader'),
+      t('permission.feishu.text.fallbackChoice1'),
+      t('permission.feishu.text.fallbackChoice3'),
       '',
-      '（输入 2 / 批准所有 / always 会被降级为"仅这次"批准并提示。）',
+      t('permission.feishu.text.fallbackHighRiskHint'),
     ].join('\n')
   }
   const middleLabel = formatSuggestionLabel(
@@ -718,18 +710,18 @@ function buildTextFallback(pending: PendingPermission): string {
     pending.ask.toolName,
   )
   return [
-    'LightClaw 请求执行工具，需要你确认：',
-    `工具: ${pending.ask.toolName}`,
-    `风险: ${pending.ask.riskLevel}`,
-    `会话: ${pending.sessionId}`,
+    t('permission.feishu.text.fallbackUserConfirm'),
+    t('permission.feishu.text.fallbackToolLine', { name: pending.ask.toolName }),
+    t('permission.feishu.text.fallbackRiskLine', { level: pending.ask.riskLevel }),
+    t('permission.feishu.text.fallbackSessionLine', { id: pending.sessionId }),
     pending.ask.inputPreview,
     '',
-    '可回复：',
-    '  1 = 批准本次',
-    `  2 = ${middleLabel}（持久化到当前用户）`,
-    '  3 = 拒绝',
+    t('permission.feishu.text.fallbackChoiceHeader'),
+    t('permission.feishu.text.fallbackChoice1'),
+    t('permission.feishu.text.fallbackChoice2', { label: middleLabel }),
+    t('permission.feishu.text.fallbackChoice3'),
     '',
-    '（旧别名 批准 / 批准所有 / 拒绝 仍然生效）',
+    t('permission.feishu.text.fallbackAliasHint'),
   ].join('\n')
 }
 

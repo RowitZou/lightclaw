@@ -87,6 +87,11 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
     "webSearch": "claude-haiku-4-5"             // WebSearch helper queries
   },
 
+  // --- User-facing language (slash output, feishu cards, banners, error notices) ---
+  // Default cn. Stderr logging stays English regardless of this setting.
+  // env: LIGHTCLAW_LANG=cn|en
+  "lang": "cn",
+
   // --- Tool-specific config ---
   "tools": {
     "webSearch": {

@@ -45,17 +45,19 @@ import {
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import {
   MODE_ALIASES,
-  MODE_DESCRIPTIONS,
   modeToAlias,
   parseMode,
 } from './mode-aliases.js'
+import { t } from '../i18n/index.js'
 import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
 
 export function createBuiltinReplRegistry(): ReplCommandRegistry {
   const registry = new ReplCommandRegistry()
-  for (const command of BUILTIN_COMMANDS) {
+  // Built inside the function so command descriptions / usage strings pick
+  // up the current locale (init.ts setLang runs before any dispatch).
+  for (const command of buildBuiltinCommands()) {
     registry.register(command)
   }
   return registry
@@ -66,11 +68,12 @@ export const RENAMED_COMMANDS: Record<string, string> = {
   '/permissions': '/rules',
 }
 
-const BUILTIN_COMMANDS: ReplCommand[] = [
+function buildBuiltinCommands(): ReplCommand[] {
+  return [
   {
     name: '/help',
     usage: '/help',
-    description: 'List available commands',
+    description: t('cmd.help.desc'),
     async handler(_args, ctx) {
       ctx.output.write(await formatHelp(ctx))
     },
@@ -78,7 +81,7 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   {
     name: '/status',
     usage: '/status',
-    description: 'Show current user / mode / model / session',
+    description: t('cmd.status.desc'),
     async handler(_args, ctx) {
       ctx.output.write(await formatStatus(ctx))
     },
@@ -86,30 +89,28 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   {
     name: '/stop',
     usage: '/stop',
-    description: 'Abort the in-flight turn (already-written files are not rolled back)',
+    description: t('cmd.stop.desc'),
     async handler(_args, ctx) {
       const userId = ctx.userId ?? getCurrentUserId()
       if (!userId) {
-        ctx.output.write('error> /stop requires an active identity.\n')
+        ctx.output.write(`${t('common.error.prefix')}${t('stop.requireIdentity')}\n`)
         return
       }
       const aborted = abortInFlightForUser(userId)
       ctx.output.write(
-        aborted
-          ? 'Stopped. (in-flight tool calls cancelled; written files are not rolled back)\n'
-          : 'Nothing in flight.\n',
+        `${aborted ? t('stop.aborted') : t('stop.nothing')}\n`,
       )
     },
   },
   {
     name: '/feedback',
-    usage: '/feedback <text>',
-    description: 'Send feedback to admin (admin reads via /user feedback)',
+    usage: t('cmd.feedback.usage'),
+    description: t('cmd.feedback.desc'),
     visibleTo: 'user',
     async handler(args, ctx) {
       const text = args.trim()
       if (!text) {
-        ctx.output.write('error> Usage: /feedback <text>\n')
+        ctx.output.write(`${t('common.error.prefix')}${t('feedback.usage')}\n`)
         return
       }
       const userId = ctx.userId ?? getCurrentUserId() ?? '__terminal__'
@@ -120,17 +121,17 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
           channel: ctx.isChannel ? 'channel' : 'terminal',
           text,
         })
-        ctx.output.write('Thanks. Forwarded to admin.\n')
+        ctx.output.write(`${t('feedback.thanks')}\n`)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        ctx.output.write(`error> Failed to forward (${detail}). Please tell admin in person.\n`)
+        ctx.output.write(`${t('common.error.prefix')}${t('feedback.fail', { detail })}\n`)
       }
     },
   },
   {
     name: '/cost',
     usage: '/cost',
-    description: 'Show this month token usage by-model + by-user (admin only)',
+    description: t('cmd.cost.desc'),
     visibleTo: 'admin',
     async handler(_args, ctx) {
       ctx.output.write(await formatCost())
@@ -138,12 +139,12 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/fresh',
-    usage: '/fresh <prompt>',
-    description: 'Run an ephemeral one-shot session (no memory, no transcript, mode=default)',
+    usage: t('cmd.fresh.usage'),
+    description: t('cmd.fresh.desc'),
     async handler(args, ctx) {
       const prompt = args.trim()
       if (!prompt) {
-        ctx.output.write('error> Usage: /fresh <prompt>\n')
+        ctx.output.write(`${t('common.error.prefix')}${t('fresh.usage')}\n`)
         return
       }
       const { runFresh } = await import('./fresh.js')
@@ -158,67 +159,68 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/model',
-    usage: '/model <name>',
-    description: 'Switch model for this session',
+    usage: t('cmd.model.usage'),
+    description: t('cmd.model.desc'),
     async handler(args, ctx) {
       const model = args.trim()
       if (!model) {
-        ctx.output.write(`current model: ${getModel()}\n`)
-        ctx.output.write(`available: ${ctx.config.allowedModels.join(', ')}\n`)
+        ctx.output.write(`${t('model.current', { name: getModel() })}\n`)
+        ctx.output.write(`${t('model.available', { list: ctx.config.allowedModels.join(', ') })}\n`)
         return
       }
       if (!ctx.config.allowedModels.includes(model)) {
-        ctx.output.write(`error> unknown model: ${model}\n`)
-        ctx.output.write(`available: ${ctx.config.allowedModels.join(', ')}\n`)
+        ctx.output.write(`${t('common.error.prefix')}${t('model.unknown', { name: model })}\n`)
+        ctx.output.write(`${t('model.available', { list: ctx.config.allowedModels.join(', ') })}\n`)
         return
       }
       setModel(model)
       ctx.config.model = model
       ctx.config.routing.main = model
-      ctx.output.write(`model: ${model}\n`)
+      ctx.output.write(`${t('model.set', { name: model })}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
   {
     name: '/mode',
-    usage: '/mode [<read|ask|auto|yolo>]',
-    description: 'Show current mode + 4-tier menu, or switch within your ceiling',
+    usage: t('cmd.mode.usage'),
+    description: t('cmd.mode.desc'),
     async handler(args, ctx) {
       const trimmed = args.trim()
       const userId = getCurrentUserId()
       const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
       if (!trimmed) {
         const current = getPermissionMode()
-        const lines: string[] = ['Modes:']
+        const lines: string[] = [t('mode.menuTitle')]
         for (const alias of MODE_ALIASES) {
           const isCurrent = alias === modeToAlias(current)
           const within = isModeWithinCeiling(parseMode(alias)!, ceiling)
-          const marker = isCurrent ? '  <- current' : (within ? '' : '  (above ceiling)')
-          lines.push(`  ${alias.padEnd(5)} ${MODE_DESCRIPTIONS[alias]}${marker}`)
+          const marker = isCurrent
+            ? t('mode.currentMarker')
+            : (within ? '' : t('mode.aboveCeilingMarker'))
+          lines.push(`  ${alias.padEnd(5)} ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
         }
-        lines.push('', `Ceiling: ${modeToAlias(ceiling)}`, '')
+        lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '')
         ctx.output.write(lines.join('\n'))
         return
       }
       const mode = parseMode(trimmed)
       if (!mode) {
-        ctx.output.write(`error> Unknown mode: ${trimmed}. Try: ${MODE_ALIASES.join(' / ')}\n`)
+        ctx.output.write(`${t('common.error.prefix')}${t('mode.unknown', { input: trimmed, aliases: MODE_ALIASES.join(' / ') })}\n`)
         return
       }
       if (!isModeWithinCeiling(mode, ceiling)) {
-        ctx.output.write(`error> mode ${modeToAlias(mode)} exceeds your ceiling ${modeToAlias(ceiling)}.\n`)
+        ctx.output.write(`${t('common.error.prefix')}${t('mode.exceedCeiling', { mode: modeToAlias(mode), ceiling: modeToAlias(ceiling) })}\n`)
         return
       }
       setPermissionMode(mode)
-      ctx.output.write(`mode: ${modeToAlias(mode)}\n`)
+      ctx.output.write(`${t('mode.set', { mode: modeToAlias(mode) })}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
   {
     name: '/ceiling',
-    usage: '/ceiling [<user> <read|ask|auto|yolo>]',
-    description:
-      'Show every identity\'s ceiling, or set one user\'s ceiling. Bare /ceiling lists all.',
+    usage: t('cmd.ceiling.usage'),
+    description: t('cmd.ceiling.desc'),
     visibleTo: 'admin',
     async handler(args, ctx) {
       const parts = args.trim().split(/\s+/).filter(Boolean)
@@ -227,32 +229,27 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
         return
       }
       if (parts.length !== 2) {
-        ctx.output.write(
-          'error> Usage: /ceiling                       (list all)\n' +
-          '       /ceiling <user> <read|ask|auto|yolo>\n',
-        )
+        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.usage')}\n`)
         return
       }
       const [name, modeText] = parts
       const mode = parseMode(modeText!)
       if (!mode) {
-        ctx.output.write(
-          `error> Invalid mode: ${modeText}. Try: ${MODE_ALIASES.join(' / ')}.\n`,
-        )
+        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.invalidMode', { input: modeText!, aliases: MODE_ALIASES.join(' / ') })}\n`)
         return
       }
       const result = await setUserPermissionCeiling(name!, mode)
       if (!result.ok) {
-        ctx.output.write(`error> No such identity: ${name}\n`)
+        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.noSuchUser', { name: name! })}\n`)
         return
       }
-      ctx.output.write(`ceiling: ${name} -> ${modeToAlias(mode)}\n`)
+      ctx.output.write(`${t('ceiling.set', { name: name!, mode: modeToAlias(mode) })}\n`)
     },
   },
   {
     name: '/user',
-    usage: '/user list|pending|approve|reject|unlink|remove|feedback',
-    description: 'Manage identities and pairing requests',
+    usage: t('cmd.user.usage'),
+    description: t('cmd.user.desc'),
     visibleTo: 'admin',
     async handler(args, ctx) {
       ctx.output.write(await runUserCommand(args))
@@ -260,27 +257,30 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/sandbox',
-    usage: '/sandbox [status|prefetch|reset]',
-    description: 'Inspect / re-pull / reset the Docker sandbox image and container',
+    usage: t('cmd.sandbox.usage'),
+    description: t('cmd.sandbox.desc'),
     async handler(args, ctx) {
       const action = args.trim() || 'status'
       if (action === 'status') {
         const tracker = getImageReadiness()
         const snap = tracker.snapshot()
-        const lines = ['Sandbox image readiness:']
-        lines.push(`  state: ${snap.state}`)
-        if (snap.image) lines.push(`  image: ${snap.image}`)
+        const lines = [t('sandbox.title')]
+        lines.push(t('sandbox.state', { state: snap.state }))
+        if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
         if (snap.pullDurationMs !== undefined) {
-          lines.push(`  ${snap.state === 'ready' ? 'pulled in' : 'elapsed'}: ${Math.round(snap.pullDurationMs / 1000)}s`)
+          const seconds = Math.round(snap.pullDurationMs / 1000)
+          lines.push(snap.state === 'ready'
+            ? t('sandbox.pulledIn', { seconds })
+            : t('sandbox.elapsed', { seconds }))
         }
-        if (snap.lastError) lines.push(`  lastError: ${snap.lastError}`)
+        if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
         const runtime = getRuntime()
         if (runtime instanceof DockerRuntime) {
-          lines.push(`  container: ${runtime.containerName}`)
+          lines.push(t('sandbox.container', { name: runtime.containerName }))
         } else if (runtime instanceof RlaunchRuntime) {
-          lines.push(`  worker: ${runtime.name ?? '(not started)'}`)
+          lines.push(t('sandbox.worker', { name: runtime.name ?? t('sandbox.workerNone') }))
         } else {
-          lines.push('  (local runtime active; readiness tracker unused)')
+          lines.push(t('sandbox.localActive'))
         }
         lines.push('')
         ctx.output.write(lines.join('\n'))
@@ -289,75 +289,54 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
       if (action === 'prefetch') {
         const tracker = getImageReadiness()
         if (ctx.config.runtime.backend !== 'docker') {
-          ctx.output.write('sandbox: prefetch requires runtime.backend = "docker".\n')
+          ctx.output.write(`${t('sandbox.prefetch.requireDocker')}\n`)
           return
         }
         const image = resolveDockerImage(ctx.config)
-        // Force re-check: clear failed/not-attempted to retry; if pulling/ready
-        // call again is a no-op handled inside the tracker.
         tracker.retryIfFailed()
         if (tracker.state === 'ready') {
-          // Even when tracker thinks ready, re-inspect via startPrefetch on a
-          // fresh tracker is too aggressive; just report. Use /sandbox reset
-          // followed by next tool call to force container recreation if image
-          // was externally rmi'd.
-          ctx.output.write(`sandbox: image ${image} marked ready; nothing to do.\n`)
+          ctx.output.write(`${t('sandbox.prefetch.alreadyReady', { image })}\n`)
           return
         }
         if (tracker.state === 'pulling') {
-          ctx.output.write(`sandbox: image ${image} pull already in progress.\n`)
+          ctx.output.write(`${t('sandbox.prefetch.inProgress', { image })}\n`)
           return
         }
-        // Force a fresh attempt by triggering retry (no-op above already moved
-        // failed→pulling); fall back to direct startPrefetch in case state is
-        // some other value.
         tracker.startPrefetch(image, {
           inspectOnly: !ctx.config.runtime.docker.autoPull,
         })
-        ctx.output.write(`sandbox: prefetch started for ${image}.\n`)
+        ctx.output.write(`${t('sandbox.prefetch.started', { image })}\n`)
         return
       }
       if (action !== 'reset') {
-        ctx.output.write('error> Usage: /sandbox [status|prefetch|reset]\n')
+        ctx.output.write(`${t('common.error.prefix')}${t('sandbox.usage')}\n`)
         return
       }
       const userId = getCurrentUserId()
       if (!userId) {
-        ctx.output.write('error> No active LightClaw identity.\n')
+        ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
         return
       }
       const runtime = getRuntime()
       if (!(runtime instanceof DockerRuntime)) {
         if (runtime instanceof RlaunchRuntime) {
           await getRuntimePool().remove(userId)
-          ctx.output.write([
-            'Stopped and removed rlaunch worker state.',
-            'Workspace gpfs mount was preserved.',
-            'Next environment tool call will recreate the worker.',
-            '',
-          ].join('\n'))
+          ctx.output.write(`${t('sandbox.reset.rlaunchDone')}\n`)
           return
         }
-        ctx.output.write('sandbox: local runtime is active; nothing to reset.\n')
+        ctx.output.write(`${t('sandbox.reset.localNothing')}\n`)
         return
       }
       const containerName = runtime.containerName
       const image = runtime.image || resolveDockerImage(ctx.config)
       await getRuntimePool().remove(userId)
-      ctx.output.write([
-        `Stopped and removed sandbox container ${containerName}.`,
-        'Tier 1 (/workspace bind mount) preserved.',
-        'Tier 2 (writable layer; pip packages, /etc edits) discarded.',
-        `Next environment tool call will recreate the container from ${image}.`,
-        '',
-      ].join('\n'))
+      ctx.output.write(`${t('sandbox.reset.dockerDone', { container: containerName, image })}\n`)
     },
   },
   {
     name: '/rules',
-    usage: '/rules [list | revoke <n> | revoke all | ask <rule>]',
-    description:
-      'Manage your persisted permission rules. list shows numbered rules; revoke <n> removes one; revoke all clears them; ask <rule> registers an ASK rule that overrides allow / bypassPermissions for matching calls.',
+    usage: t('cmd.rules.usage'),
+    description: t('cmd.rules.desc'),
     async handler(args, ctx) {
       const trimmed = args.trim()
       const [head, ...rest] = trimmed.split(/\s+/)
@@ -369,12 +348,12 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
       }
       if (sub === 'revoke') {
         if (!userId) {
-          ctx.output.write('error> /rules revoke requires an active identity.\n')
+          ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
           return
         }
         const target = rest[0]
         if (!target) {
-          ctx.output.write('error> Usage: /rules revoke <n>|all\n')
+          ctx.output.write(`${t('common.error.prefix')}${t('rules.revokeUsage')}\n`)
           return
         }
         if (target === 'all') {
@@ -383,35 +362,33 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
           setIdentityRules([])
           ctx.output.write(
             before === 0
-              ? 'No persisted rules to revoke.\n'
-              : `Revoked all ${before} rule${before === 1 ? '' : 's'}.\n`,
+              ? `${t('rules.revokedAllEmpty')}\n`
+              : `${t('rules.revokedAll', { count: before })}\n`,
           )
           return
         }
         const n = Number.parseInt(target, 10)
         const sorted = sortRulesForDisplay(getIdentityRules())
         if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
-          ctx.output.write(
-            `error> No rule at index ${target}. Run /rules list first.\n`,
-          )
+          ctx.output.write(`${t('common.error.prefix')}${t('rules.revokeNoSuch', { n: target })}\n`)
           return
         }
         const victim = sorted[n - 1]!
         removeIdentityRule({ canonicalUser: userId, rule: victim })
         setIdentityRules(loadIdentityRules(userId))
         ctx.output.write(
-          `Revoked [${victim.behavior}] ${formatRule(victim.value)}\n\n${formatRulesList()}`,
+          `${t('rules.revokedOne', { behavior: victim.behavior, rule: formatRule(victim.value) })}\n\n${formatRulesList()}`,
         )
         return
       }
       if (sub === 'ask') {
         const ruleText = rest.join(' ').trim()
         if (!ruleText) {
-          ctx.output.write('error> Usage: /rules ask <rule>\n')
+          ctx.output.write(`${t('common.error.prefix')}${t('rules.askUsage')}\n`)
           return
         }
         if (!userId) {
-          ctx.output.write('error> /rules ask requires an active identity.\n')
+          ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
           return
         }
         let value
@@ -419,21 +396,20 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
           value = parseRule(ruleText)
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
-          ctx.output.write(`error> ${detail}\n`)
+          ctx.output.write(`${t('common.error.prefix')}${detail}\n`)
           return
         }
         const rule: PermissionRule = { source: 'identity', behavior: 'ask', value }
         appendIdentityRules({ canonicalUser: userId, rules: [rule] })
         setIdentityRules(loadIdentityRules(userId))
-        ctx.output.write(
-          `Registered ASK rule: ${formatRule(value)} (overrides allow / bypassPermissions for matching calls; persisted)\n`,
-        )
+        ctx.output.write(`${t('rules.askRegistered', { rule: formatRule(value) })}\n`)
         return
       }
-      ctx.output.write('error> Usage: /rules [list | revoke <n> | revoke all | ask <rule>]\n')
+      ctx.output.write(`${t('common.error.prefix')}${t('rules.usage')}\n`)
     },
   },
-]
+  ]
+}
 
 const BEHAVIOR_RANK: Record<PermissionRule['behavior'], number> = {
   deny: 0,
@@ -453,20 +429,15 @@ function sortRulesForDisplay(rules: readonly PermissionRule[]): PermissionRule[]
 function formatRulesList(): string {
   const sorted = sortRulesForDisplay(getIdentityRules())
   if (sorted.length === 0) {
-    return 'No persisted permission rules for this user.\n'
+    return `${t('rules.empty')}\n`
   }
   const indexWidth = String(sorted.length).length
-  const lines = ['Persisted permission rules (this user):']
+  const lines = [t('rules.listTitle')]
   for (const [i, rule] of sorted.entries()) {
     const idx = String(i + 1).padStart(indexWidth, ' ')
     lines.push(`  [${idx}] ${rule.behavior.padEnd(5, ' ')} ${formatRule(rule.value)}`)
   }
-  lines.push(
-    '',
-    'Use /rules revoke <n> to remove one, /rules revoke all to clear.',
-    '(numbering changes after each write — re-run list before another revoke)',
-    '',
-  )
+  lines.push(t('rules.listFooter'))
   return lines.join('\n')
 }
 
@@ -474,19 +445,15 @@ async function formatCeilingList(): Promise<string> {
   const identities = await listIdentities()
   const names = Object.keys(identities).sort()
   if (names.length === 0) {
-    return 'No identities.\n'
+    return `${t('ceiling.empty')}\n`
   }
-  const lines = ['Permission ceilings:']
+  const lines = [t('ceiling.listTitle')]
   for (const name of names) {
     const ceiling = identities[name]!.permissionCeiling ?? 'default'
-    const marker = (await isAdmin(name)) ? ' *admin' : ''
+    const marker = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
     lines.push(`  ${name}${marker} -> ${modeToAlias(ceiling)}`)
   }
-  lines.push(
-    '',
-    'Set with: /ceiling <user> <read|ask|auto|yolo>',
-    '',
-  )
+  lines.push(t('ceiling.listFooter'))
   return lines.join('\n')
 }
 
@@ -500,42 +467,42 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
     24,
   )
   const lines: string[] = [
-    'LightClaw commands:',
+    t('help.title'),
     '',
     ...userCmds.map(c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`),
   ]
   if (ctx.isAdmin && adminCmds.length > 0) {
-    lines.push('', 'Admin only:', '')
+    lines.push('', t('help.adminTitle'), '')
     for (const c of adminCmds) {
       lines.push(`  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`)
     }
   }
-  lines.push('', 'Use /status to see your current user / mode / model / session.', '')
+  lines.push('', t('help.statusHint'), '')
   return color(ctx, lines.join('\n'))
 }
 
 async function formatStatus(ctx: ReplContext): Promise<string> {
   const userId = getCurrentUserId()
   const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
-  const adminFlag = userId && (await isAdmin(userId)) ? ' (admin)' : ''
+  const adminFlag = userId && (await isAdmin(userId)) ? t('status.adminFlag') : ''
   const channelLabel = ctx.isChannel ? 'channel' : 'terminal'
   const totals = getUsageTotals()
   const sessionTok = totals.inputTokens + totals.outputTokens
   const lines: string[] = [
-    `You: ${userId ?? '(none)'}${adminFlag} on ${channelLabel}`,
-    `Mode: ${modeToAlias(getPermissionMode())}  (ceiling: ${modeToAlias(ceiling)})`,
-    `Model: ${getModel()}`,
-    `Session: ${ctx.sessionId} (msgs: ${ctx.messages.length}, tok: ${sessionTok})`,
+    t('status.you', { user: userId ?? '(none)', adminFlag, channel: channelLabel }),
+    t('status.modeLine', { mode: modeToAlias(getPermissionMode()), ceiling: modeToAlias(ceiling) }),
+    t('status.modelLine', { model: getModel() }),
+    t('status.sessionLine', { id: ctx.sessionId, msgs: ctx.messages.length, tok: sessionTok }),
   ]
   if (ctx.isAdmin) {
     const identities = await listIdentities()
     const names = Object.keys(identities).sort()
     if (names.length > 1) {
-      lines.push('', 'Identities:')
+      lines.push('', t('status.identitiesTitle'))
       for (const name of names) {
-        const marker = (await isAdmin(name)) ? ' *admin' : ''
+        const m = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
         const c = identities[name]!.permissionCeiling ?? 'default'
-        lines.push(`  ${name}${marker}  ceiling=${modeToAlias(c)}`)
+        lines.push(t('status.identitiesLine', { name, adminFlag: m, ceiling: modeToAlias(c) }))
       }
     }
   }
@@ -566,22 +533,12 @@ async function runUserCommand(rawArgs: string): Promise<string> {
       const adminId = await getAdmin()
       const isLocal = getConfig().runtime.backend === 'local'
       const header = isLocal && adminId
-        ? `Usage (LocalRuntime is single-user; bind only as admin "${adminId}"):`
-        : 'Usage:'
-      const approveLine = isLocal && adminId
-        ? `  /user approve <code> --as ${adminId}`
-        : '  /user approve <code> --as <name>'
-      return [
-        header,
-        '  /user list',
-        '  /user pending',
-        approveLine,
-        '  /user reject <code>',
-        '  /user unlink <channel:id>',
-        '  /user remove <name> [--purge]',
-        '  /user feedback [--page N]',
-        '',
-      ].join('\n')
+        ? t('user.usage.localHeader', { admin: adminId })
+        : t('user.usage.header')
+      const approve = isLocal && adminId
+        ? t('user.usage.approveLocal', { admin: adminId })
+        : t('user.usage.approveGeneric')
+      return `${header}\n${t('user.usage.lines', { approve })}`
     }
   }
 }
@@ -592,17 +549,17 @@ async function userFeedback(args: string[]): Promise<string> {
   const pageSize = 20
   const all = await readAllFeedback()
   if (all.length === 0) {
-    return 'No feedback yet.\n'
+    return `${t('user.feedback.empty')}\n`
   }
   const totalPages = Math.ceil(all.length / pageSize)
   if (page > totalPages) {
-    return `error> Page ${page} out of range (1..${totalPages}).\n`
+    return `${t('common.error.prefix')}${t('user.feedback.pageOutOfRange', { page, total: totalPages })}\n`
   }
   const slice = all.slice((page - 1) * pageSize, page * pageSize)
   const lines = slice.map(r =>
     `  ${r.ts.slice(0, 19)} ${r.user}@${r.channel}: ${truncate(r.text, 80)}`,
   )
-  return `Feedback (page ${page}/${totalPages}, total ${all.length}):\n${lines.join('\n')}\n`
+  return `${t('user.feedback.title', { page, total: totalPages, count: all.length })}\n${lines.join('\n')}\n`
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -619,7 +576,7 @@ async function formatCost(): Promise<string> {
     records.push(rec)
   }
   if (records.length === 0) {
-    return 'No usage recorded this month yet.\n'
+    return `${t('cost.empty')}\n`
   }
   const total = records.reduce((acc, r) => acc + r.input + r.output, 0)
   const byModel = new Map<string, number>()
@@ -637,16 +594,16 @@ async function formatCost(): Promise<string> {
   }
   const fmt = (n: number): string => formatTokens(n)
   const lines: string[] = [
-    `This month: ${fmt(total)} tok (cache_read: ${fmt(cacheRead)}, cache_create: ${fmt(cacheCreate)})`,
+    t('cost.thisMonth', { total: fmt(total), cacheRead: fmt(cacheRead), cacheCreate: fmt(cacheCreate) }),
     '',
-    '  By model:',
+    t('cost.byModel'),
     ...[...byModel.entries()].sort((a, b) => b[1] - a[1]).map(([m, n]) => `    ${m}: ${fmt(n)}`),
     '',
-    '  By user:',
+    t('cost.byUser'),
     ...[...byUser.entries()].sort((a, b) => b[1] - a[1]).map(([u, n]) => `    ${u}: ${fmt(n)}`),
   ]
   if (freshTok > 0) {
-    lines.push('', `  Fresh subset: ${fmt(freshTok)} tok (${Math.round(freshTok * 100 / total)}%)`)
+    lines.push('', t('cost.freshSubset', { tok: fmt(freshTok), percent: Math.round(freshTok * 100 / total) }))
   }
   lines.push('')
   return lines.join('\n')
@@ -675,27 +632,20 @@ async function rejectNonAdminInLocal(name: string): Promise<string | null> {
   if (!adminId || name === adminId) {
     return null
   }
-  return [
-    `LocalRuntime is single-user; cannot bind sender as "${name}".`,
-    `Only the admin user "${adminId}" can be bound on this LightClaw instance.`,
-    `Either re-run with --as ${adminId} (this aliases the sender to admin),`,
-    `or switch runtime.backend to "docker" in ~/.lightclaw/config.json to enable`,
-    `multi-user mode.`,
-    '',
-  ].join('\n')
+  return `${t('user.localOnlyReject', { name, admin: adminId })}\n`
 }
 
 async function userList(): Promise<string> {
   const identities = await listIdentities()
   const names = Object.keys(identities).sort()
   if (names.length === 0) {
-    return 'No identities.\n'
+    return `${t('user.list.empty')}\n`
   }
   const lines: string[] = []
   for (const name of names) {
     const record = identities[name]
-    const marker = await isAdmin(name) ? ' *admin' : ''
-    lines.push(`${name}${marker} ceiling=${record.permissionCeiling ?? 'default'}`)
+    const marker = await isAdmin(name) ? t('status.identitiesAdmin') : ''
+    lines.push(`${name}${marker} ceiling=${modeToAlias(record.permissionCeiling ?? 'default')}`)
     for (const channel of ['terminal', 'feishu'] as const) {
       for (const peerId of record.channels[channel]) {
         lines.push(`  - ${channel}:${peerId}`)
@@ -708,9 +658,9 @@ async function userList(): Promise<string> {
 async function userPending(): Promise<string> {
   const pending = await listPending()
   if (pending.length === 0) {
-    return 'No pending pairing requests.\n'
+    return `${t('user.pending.empty')}\n`
   }
-  const lines = ['KEY      CHANNEL  PEER_ID                                  DISPLAY          REQUESTED']
+  const lines = [t('user.pending.header')]
   for (const item of pending) {
     lines.push([
       item.code.padEnd(8, ' '),
@@ -728,44 +678,45 @@ async function userApprove(args: string[]): Promise<string> {
   const asIndex = args.indexOf('--as')
   const name = asIndex >= 0 ? args[asIndex + 1] : undefined
   if (!code || !name) {
-    return 'Usage: /user approve <code> --as <name>\n'
+    return `${t('user.approve.usage')}\n`
   }
-  // Gate before approveCode consumes the pending entry, so a rejected
-  // approval leaves the pending intact for retry with the correct name.
   const reject = await rejectNonAdminInLocal(name)
   if (reject) {
     return reject
   }
   const entry = await approveCode(code)
   if (!entry) {
-    return `No pending pairing code: ${code}\n`
+    return `${t('user.approve.noSuchCode', { code })}\n`
   }
   const link = `${entry.channel}:${entry.peerId}` as SenderKey
   const boundTo = lookupBySender(link)
   if (boundTo && boundTo !== name) {
-    return `${link} is already bound to ${boundTo}\n`
+    return `${t('user.approve.alreadyBound', { link, name: boundTo })}\n`
   }
   const created = await createUser(name)
   if (!created.ok && created.reason !== 'exists') {
-    return `Invalid identity name: ${name}\n`
+    return `${t('user.approve.invalidName', { name })}\n`
   }
   const linked = await addLink(name, link)
   if (!linked.ok) {
     return linked.reason === 'already-bound'
-      ? `${link} is already bound to ${linked.boundTo}\n`
-      : `No such user: ${name}\n`
+      ? `${t('user.approve.alreadyBound', { link, name: linked.boundTo ?? '?' })}\n`
+      : `${t('user.remove.noSuch', { name })}\n`
   }
   preheatRlaunchForUser(name)
-  return `${created.ok ? 'Created' : 'Updated'} identity '${name}'\nLinked ${link} -> ${name}\n`
+  const created_or_updated = created.ok ? t('user.approve.created', { name }) : t('user.approve.updated', { name })
+  return `${created_or_updated}\n${t('user.approve.linked', { link, name })}\n`
 }
 
 async function userReject(args: string[]): Promise<string> {
   const code = args[0]
   if (!code) {
-    return 'Usage: /user reject <code>\n'
+    return `${t('user.reject.usage')}\n`
   }
   const result = await rejectCode(code)
-  return result.ok ? `Rejected ${code}\n` : `No pending pairing code: ${code}\n`
+  return result.ok
+    ? `${t('user.reject.done', { code })}\n`
+    : `${t('user.reject.noSuchCode', { code })}\n`
 }
 
 function preheatRlaunchForUser(name: string): void {
@@ -783,7 +734,7 @@ function preheatRlaunchForUser(name: string): void {
 async function userUnlink(args: string[]): Promise<string> {
   const [rawLink] = args
   if (!rawLink) {
-    return 'Usage: /user unlink <channel:id>\n'
+    return `${t('user.unlink.usage')}\n`
   }
   try {
     parseSenderKey(rawLink)
@@ -792,22 +743,26 @@ async function userUnlink(args: string[]): Promise<string> {
   }
   const boundTo = lookupBySender(rawLink as SenderKey)
   if (!boundTo) {
-    return `${rawLink} is not bound.\n`
+    return `${t('user.unlink.notBound', { link: rawLink })}\n`
   }
   const result = await removeLink(boundTo, rawLink as SenderKey)
-  return result.ok ? `Unlinked ${rawLink} from ${boundTo}\n` : `${rawLink} was not linked.\n`
+  return result.ok
+    ? `${t('user.unlink.done', { link: rawLink, name: boundTo })}\n`
+    : `${t('user.unlink.notLinked', { link: rawLink })}\n`
 }
 
 async function userRemove(args: string[]): Promise<string> {
   const name = args[0]
   if (!name) {
-    return 'Usage: /user remove <name> [--purge]\n'
+    return `${t('user.remove.usage')}\n`
   }
   if ((await getAdmin()) === name) {
-    return 'Refusing to remove the v1 admin identity.\n'
+    return `${t('user.remove.refuseAdmin')}\n`
   }
   const result = await removeUser(name, { purge: args.includes('--purge') })
-  return result.ok ? `Removed identity '${name}'\n` : `No such identity: ${name}\n`
+  return result.ok
+    ? `${t('user.remove.done', { name })}\n`
+    : `${t('user.remove.noSuch', { name })}\n`
 }
 
 function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMode): boolean {
