@@ -216,7 +216,6 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
 | `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
-| `/sandbox` | 查看或重置助手的沙箱工作环境。 |
 
 Admin 专属：
 
@@ -224,6 +223,7 @@ Admin 专属：
 |---|---|
 | `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing、用户绑定，并查看 user 反馈。 |
 | `/ceiling [<user> <read|ask|auto|yolo>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
+| `/sandbox [status|prefetch|reset]` | 查看 / 重新拉取 / 重置 runtime 沙箱镜像与容器。 |
 | `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
 | `/feedback <text>`（user-only）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
 | `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
