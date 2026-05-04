@@ -145,6 +145,7 @@ async function requestSessionMemoryUpdate(
       'You are a session working memory writer. Output a fenced-section Markdown document only. Do not call tools.',
     tools: [],
     maxTokens: 4096,
+    apiLogContext: { kind: 'session-memory' },
   })) {
     if (event.type === 'text') {
       body += event.text

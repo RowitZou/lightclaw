@@ -90,6 +90,7 @@ export async function maybeSummarizeToolResult(
       tools: [],
       maxTokens: config.microCompact.perTool.summaryMaxTokens,
       ...(input.signal ? { signal: input.signal } : {}),
+      apiLogContext: { kind: 'tool-summarize' },
     })) {
       if (event.type === 'text') {
         summary += event.text
