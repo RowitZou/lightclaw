@@ -69,10 +69,18 @@ export const LOCALES = {
     'mode.unknown': '未知模式：{input}。可选：{aliases}',
     'mode.exceedCeiling': '模式 {mode} 超过你的 ceiling {ceiling}。',
     'mode.set': '已切换模式：{mode}',
-    'mode.read.desc': '只读，不动文件',
-    'mode.ask.desc': '写操作前问我',
-    'mode.auto.desc': '自动改文件，执行类还问',
-    'mode.yolo.desc': '全部放行（用前确认作用域）',
+    'mode.read.desc': '只读，禁止写 / 执行',
+    'mode.ask.desc': '写 / 执行前确认（默认）',
+    'mode.auto.desc': '写文件 + 联网静默；命令仍询问',
+    'mode.yolo.desc': '全部静默（仅 ask / deny 规则可覆盖）',
+    'mode.read.recap':
+      '  · 读取类工具（Read / Grep / Glob）→ 静默放行\n  · 编辑、写入、命令执行 → 拒绝执行',
+    'mode.ask.recap':
+      '  · 读取类工具 → 静默放行\n  · 编辑、写入、命令执行 → 每次询问',
+    'mode.auto.recap':
+      '  · 读取、编辑、写入文件 → 静默放行\n  · 联网读取（WebFetch）→ 静默放行（不再按 host 重复询问）\n  · 命令执行（Bash 等）→ 仍会询问\n  · 提示：用 /rules ask <pattern> 强制对特定操作恢复询问',
+    'mode.yolo.recap':
+      '  · 全部工具 → 静默放行\n  · 仅 ask / deny 规则可覆盖（如 Bash(rm:*)）\n  · 高风险操作不可逆，用前请确认作用域',
 
     // ---- /model ----
     'model.current': '当前模型：{name}',
@@ -387,10 +395,18 @@ export const LOCALES = {
     'mode.unknown': 'Unknown mode: {input}. Try: {aliases}',
     'mode.exceedCeiling': 'mode {mode} exceeds your ceiling {ceiling}.',
     'mode.set': 'mode: {mode}',
-    'mode.read.desc': 'read-only, never touches files',
-    'mode.ask.desc': 'asks before writes',
-    'mode.auto.desc': 'auto-edits files; still asks for execute-class tools',
-    'mode.yolo.desc': 'all tools auto-allowed (use with care)',
+    'mode.read.desc': 'read-only; writes & execution blocked',
+    'mode.ask.desc': 'confirms writes / execution (default)',
+    'mode.auto.desc': 'writes + web fetch silent; commands still ask',
+    'mode.yolo.desc': 'all silent (only ask / deny rules override)',
+    'mode.read.recap':
+      '  · Read tools (Read / Grep / Glob): allowed silently\n  · Edits, writes, command execution: blocked',
+    'mode.ask.recap':
+      '  · Read tools: allowed silently\n  · Edits, writes, command execution: confirmed each time',
+    'mode.auto.recap':
+      '  · File reads, edits, writes: allowed silently\n  · Web fetches (WebFetch): allowed silently (no per-host prompt)\n  · Command execution (Bash, ...): still asks\n  · Tip: use /rules ask <pattern> to force confirmation on a specific operation',
+    'mode.yolo.recap':
+      '  · All tools: allowed silently\n  · Only ask / deny rules override (e.g. Bash(rm:*))\n  · High-risk ops are irreversible — double-check scope',
 
     // ---- /model ----
     'model.current': 'current model: {name}',

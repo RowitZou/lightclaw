@@ -224,7 +224,9 @@ function buildBuiltinCommands(): ReplCommand[] {
       if (userId) {
         setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: mode })
       }
-      ctx.output.write(`${t('mode.set', { mode: modeToAlias(mode) })}\n`)
+      const alias = modeToAlias(mode)
+      const recap = t(`mode.${alias}.recap` as 'mode.read.recap')
+      ctx.output.write(`${t('mode.set', { mode: alias })}\n${recap}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
