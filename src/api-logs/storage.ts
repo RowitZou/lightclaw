@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,12 +8,20 @@ import path from 'node:path'
  *
  *   <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl
  *
- * Each line is a single streamChat call (one turn — or one attempt of a
- * turn when the prompt-too-long retry path runs). The full system prompt,
- * tools schema, request messages array, and response content are stored
- * verbatim — no truncation. Intended for admin debugging (correlating a
- * Bedrock 400 with the exact request shape) and as a training-data trail
- * for future model work.
+ * Each line is a single streamChat call. The full system prompt, tools
+ * schema, request messages array, and response content are stored verbatim —
+ * no truncation. Intended for admin debugging (correlating a Bedrock 400
+ * with the exact request shape) and as a training-data trail for future
+ * model work.
+ *
+ * Coverage is universal: every streamChat call in the process is logged
+ * (main loop, subagent forks, memory recall, session-memory writes, compact
+ * summaries, per-tool LLM summaries). The active logger is propagated via
+ * AsyncLocalStorage — `query()` opens a logger and pushes it on the scope
+ * stack via `runWithApiLogger`; `streamChat` (api.ts) reads it through
+ * `getActiveApiLogger()`. Subagent forks open their own logger nested
+ * inside the parent scope, so extraction-internal calls land in the
+ * subagent file rather than the parent file.
  *
  * **Default off**: enabled only when admin explicitly turns it on via
  * `config.apiLogs.enabled` or `LIGHTCLAW_API_LOGS_ENABLED=1`. Multi-user
@@ -22,8 +31,31 @@ import path from 'node:path'
  * block or fail the main query path.
  */
 
+/**
+ * Which subsystem made this streamChat call. Readers consult this to filter
+ * the log: `main` is the primary agent loop, `subagent` is a forked agent
+ * (`subagentLabel` carries the role — `extract_memories`, `general-purpose`,
+ * `explore`), and the four one-shot kinds tag helper LLM calls that fire
+ * inside the main query lifecycle.
+ */
+export type ApiLogKind =
+  | 'main'
+  | 'subagent'
+  | 'recall'
+  | 'session-memory'
+  | 'compact'
+  | 'tool-summarize'
+
 export interface ApiLogTurnRecord {
+  kind: ApiLogKind
+  /** Forked-agent label — present only when kind === 'subagent'. */
+  subagentLabel?: string
+  sessionId: string
+  /** Canonical user id from state; absent for terminal-only sessions. */
+  user?: string
+  /** Main loop turn index. Always 0 for one-shot kinds. */
   turn: number
+  /** Attempt within turn (>0 only on prompt-too-long retry). */
   attempt: number
   ts: string  // ISO 8601
   model: string
@@ -109,6 +141,25 @@ const NOOP_LOGGER: ApiLogger = {
   filePath(): string {
     return ''
   },
+}
+
+/**
+ * AsyncLocalStorage-backed scope so `streamChat` (api.ts) can look up the
+ * current query's logger without every helper threading an `apiLogger` arg.
+ * Subagent forks call `runWithApiLogger` again with their own logger; the
+ * inner store wins for the duration of the fork.
+ */
+const apiLoggerStorage = new AsyncLocalStorage<ApiLogger>()
+
+export function runWithApiLogger<T>(
+  logger: ApiLogger,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return apiLoggerStorage.run(logger, fn)
+}
+
+export function getActiveApiLogger(): ApiLogger | null {
+  return apiLoggerStorage.getStore() ?? null
 }
 
 /**

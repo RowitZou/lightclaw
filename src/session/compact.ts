@@ -101,6 +101,7 @@ async function requestSummary(
       'Respond with TEXT ONLY. Do NOT call any tools. Return a concise markdown summary.',
     messages: [{ role: 'user', content: prompt }],
     tools: [],
+    apiLogContext: { kind: 'compact' },
   })) {
     if (event.type === 'text') {
       summary += event.text

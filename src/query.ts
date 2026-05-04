@@ -52,7 +52,7 @@ import {
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
 import { appendUsage } from './usage/storage.js'
-import { openApiLogger } from './api-logs/storage.js'
+import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
@@ -131,6 +131,11 @@ type QueryParams = {
    * since there's no persisted transcript for those subsystems to reason about.
    */
   ephemeral?: boolean
+  /**
+   * Forked-agent label propagated to api logs (`subagentLabel` field). Set by
+   * runForkedAgent when mode === 'subagent'; ignored otherwise.
+   */
+  subagentLabel?: string
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -225,13 +230,25 @@ export async function query(params: QueryParams): Promise<{
   let didCompact = false
   let totalUsage: UsageStats = {}
 
-  // Open per-query API logger. No-op when config.apiLogs.enabled is false
-  // (the default). Safe to call appendTurn on the result regardless.
+  // Open per-query API logger and push it on the AsyncLocalStorage scope so
+  // every nested streamChat call (main loop turns + recall + session-memory
+  // + compact + tool-summarize, plus subagent forks that open their own
+  // nested logger) writes into this query's file. No-op when
+  // config.apiLogs.enabled is false (the default).
   const apiLogger = openApiLogger({
     enabled: config.apiLogs.enabled,
     dir: config.apiLogs.dir,
     sessionId: getSessionId(),
   })
+  return runWithApiLogger(apiLogger, () => queryInner())
+
+  async function queryInner(): Promise<{
+    messages: Message[]
+    assistantText: string
+    stopReason: string | null
+    didCompact: boolean
+    usage: UsageStats
+  }> {
 
   // P1: SessionMemory write triggered post-turn when both token and tool_call
   // accumulators cross their thresholds. Synchronous so the next prompt build
@@ -472,22 +489,23 @@ export async function query(params: QueryParams): Promise<{
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
       const systemPrompt = renderEffectiveSystemPrompt()
-      const requestSnapshot = {
-        model: modelFor('main', config),
-        system: systemPrompt,
-        tools: params.tools.map(toolToAPISchema),
-        messages: toApiMessages(messages),
-        cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
-      }
       try {
         for await (const event of streamChat({
           config,
-          model: requestSnapshot.model,
-          messages: requestSnapshot.messages,
-          system: requestSnapshot.system,
-          tools: requestSnapshot.tools,
-          cacheBreakpointMessageIndex: requestSnapshot.cacheBreakpointMessageIndex,
+          model: modelFor('main', config),
+          messages: toApiMessages(messages),
+          system: systemPrompt,
+          tools: params.tools.map(toolToAPISchema),
+          cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
           signal: params.signal ?? getAbortController().signal,
+          apiLogContext: {
+            kind: mode === 'subagent' ? 'subagent' : 'main',
+            ...(mode === 'subagent' && params.subagentLabel
+              ? { subagentLabel: params.subagentLabel }
+              : {}),
+            turn,
+            attempt,
+          },
         })) {
           if (event.type === 'text') {
             params.onTextDelta?.(event.text)
@@ -501,32 +519,8 @@ export async function query(params: QueryParams): Promise<{
 
           stopEvent = event
         }
-        if (stopEvent) {
-          void apiLogger.appendTurn({
-            turn,
-            attempt,
-            ts: new Date().toISOString(),
-            model: requestSnapshot.model,
-            request: requestSnapshot,
-            response: {
-              content: stopEvent.content,
-              stopReason: stopEvent.stopReason,
-              usage: stopEvent.usage,
-            },
-          })
-        }
         break
       } catch (error) {
-        const errName = error instanceof Error ? error.name : 'Error'
-        const errMessage = error instanceof Error ? error.message : String(error)
-        void apiLogger.appendTurn({
-          turn,
-          attempt,
-          ts: new Date().toISOString(),
-          model: requestSnapshot.model,
-          request: requestSnapshot,
-          error: { name: errName, message: errMessage },
-        })
         if (attempt === 0 && isPromptTooLongError(error)) {
           const compacted = await runCompaction(true)
           if (compacted) {
@@ -694,6 +688,7 @@ export async function query(params: QueryParams): Promise<{
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
+  }  // end queryInner
 }
 
 async function dispatchToolCall(

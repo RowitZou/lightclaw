@@ -57,6 +57,7 @@ export async function requestRecall(
     tools: [],
     maxTokens: 256,
     ...(signal ? { signal } : {}),
+    apiLogContext: { kind: 'recall' },
   })) {
     if (event.type === 'text') {
       responseText += event.text

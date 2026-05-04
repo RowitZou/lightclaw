@@ -101,6 +101,7 @@ export async function runForkedAgent(
     cacheBreakpointMessageIndex:
       prefix.length > 0 ? prefix.length - 1 : undefined,
     signal: params.signal,
+    subagentLabel: params.label,
   })
 
   return {
