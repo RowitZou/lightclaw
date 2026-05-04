@@ -52,6 +52,7 @@ import {
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
 import { appendUsage } from './usage/storage.js'
+import { openApiLogger } from './api-logs/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
@@ -223,6 +224,14 @@ export async function query(params: QueryParams): Promise<{
   let stopReason: string | null = null
   let didCompact = false
   let totalUsage: UsageStats = {}
+
+  // Open per-query API logger. No-op when config.apiLogs.enabled is false
+  // (the default). Safe to call appendTurn on the result regardless.
+  const apiLogger = openApiLogger({
+    enabled: config.apiLogs.enabled,
+    dir: config.apiLogs.dir,
+    sessionId: getSessionId(),
+  })
 
   // P1: SessionMemory write triggered post-turn when both token and tool_call
   // accumulators cross their thresholds. Synchronous so the next prompt build
@@ -462,15 +471,22 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
+      const systemPrompt = renderEffectiveSystemPrompt()
+      const requestSnapshot = {
+        model: modelFor('main', config),
+        system: systemPrompt,
+        tools: params.tools.map(toolToAPISchema),
+        messages: toApiMessages(messages),
+        cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
+      }
       try {
-        const systemPrompt = renderEffectiveSystemPrompt()
         for await (const event of streamChat({
           config,
-          model: modelFor('main', config),
-          messages: toApiMessages(messages),
-          system: systemPrompt,
-          tools: params.tools.map(toolToAPISchema),
-          cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
+          model: requestSnapshot.model,
+          messages: requestSnapshot.messages,
+          system: requestSnapshot.system,
+          tools: requestSnapshot.tools,
+          cacheBreakpointMessageIndex: requestSnapshot.cacheBreakpointMessageIndex,
           signal: params.signal ?? getAbortController().signal,
         })) {
           if (event.type === 'text') {
@@ -485,8 +501,32 @@ export async function query(params: QueryParams): Promise<{
 
           stopEvent = event
         }
+        if (stopEvent) {
+          void apiLogger.appendTurn({
+            turn,
+            attempt,
+            ts: new Date().toISOString(),
+            model: requestSnapshot.model,
+            request: requestSnapshot,
+            response: {
+              content: stopEvent.content,
+              stopReason: stopEvent.stopReason,
+              usage: stopEvent.usage,
+            },
+          })
+        }
         break
       } catch (error) {
+        const errName = error instanceof Error ? error.name : 'Error'
+        const errMessage = error instanceof Error ? error.message : String(error)
+        void apiLogger.appendTurn({
+          turn,
+          attempt,
+          ts: new Date().toISOString(),
+          model: requestSnapshot.model,
+          request: requestSnapshot,
+          error: { name: errName, message: errMessage },
+        })
         if (attempt === 0 && isPromptTooLongError(error)) {
           const compacted = await runCompaction(true)
           if (compacted) {
