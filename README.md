@@ -94,6 +94,18 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
     }
   },
 
+  // --- Per-call API logging (admin debug / training-data trail) ---
+  // Off by default. When enabled, every streamChat request + response is
+  // persisted verbatim (full system prompt, tools schema, messages array,
+  // response content / usage). One file per query() call:
+  //   <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl
+  // Each line = one turn (one streamChat call). Useful for diagnosing
+  // upstream protocol errors and as raw data for future training work.
+  "apiLogs": {
+    "enabled": false,                             // env: LIGHTCLAW_API_LOGS_ENABLED=1
+    "dir": "<lightclaw_home>/api-logs"            // env: LIGHTCLAW_API_LOGS_DIR
+  },
+
   // --- Storage layout (all optional) ---
   // Defaults are <LIGHTCLAW_HOME>/{sessions,memory,workspaces}; override individually
   // when, e.g., you want big workspaces on a separate disk.

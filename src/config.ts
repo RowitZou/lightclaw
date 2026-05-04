@@ -175,6 +175,14 @@ export type LightClawConfig = {
   preCompactFlush: PreCompactFlushConfig
   microCompact: MicroCompactConfig
   tools: ToolsConfig
+  apiLogs: ApiLogsConfig
+}
+
+export type ApiLogsConfig = {
+  /** Persist every streamChat request + response to <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl. */
+  enabled: boolean
+  /** Defaults to <lightclawHome>/api-logs. */
+  dir: string
 }
 
 type ConfigFileDockerMount = NonNullable<
@@ -688,6 +696,18 @@ export function getConfig(): LightClawConfig {
           process.env.BRAVE_SEARCH_API_KEY ??
           fileConfig.tools?.webSearch?.braveApiKey,
       },
+    },
+    apiLogs: {
+      // Default off: this is an admin-only debug / training-data feature.
+      // Multi-user deployments shouldn't burn disk recording every model
+      // call. Admin enables explicitly via config.apiLogs.enabled or
+      // LIGHTCLAW_API_LOGS_ENABLED=1.
+      enabled: parseBoolean(process.env.LIGHTCLAW_API_LOGS_ENABLED)
+        ?? fileConfig.apiLogs?.enabled
+        ?? false,
+      dir: process.env.LIGHTCLAW_API_LOGS_DIR
+        ?? (fileConfig.apiLogs?.dir ? expandHomePath(fileConfig.apiLogs.dir) : undefined)
+        ?? path.join(lightclawHome(), 'api-logs'),
     },
     runtime: {
       backend: runtimeBackend,

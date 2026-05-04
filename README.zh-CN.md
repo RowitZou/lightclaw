@@ -93,6 +93,17 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
     }
   },
 
+  // --- API 调用日志（admin 调试 / 训练数据用） ---
+  // 默认关闭。开启后每次 streamChat 请求 + 响应原样持久化（完整 system
+  // prompt、tools schema、messages 数组、响应 content / usage）。一 query
+  // 一文件：<dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl，每行一
+  // 个 turn。用于排查上游协议错误，也可作为未来训练数据的原始 trace。
+  // 多 user 部署不该默认开（占存储），admin 在自己机器上按需打开。
+  "apiLogs": {
+    "enabled": false,                             // env: LIGHTCLAW_API_LOGS_ENABLED=1
+    "dir": "<lightclaw_home>/api-logs"            // env: LIGHTCLAW_API_LOGS_DIR
+  },
+
   // --- 存储路径（全部可选）---
   // 默认走 <LIGHTCLAW_HOME>/{sessions,memory,workspaces}；只有需要把 workspace 单独放
   // 到大盘 / 共享存储 / 网络挂载时才覆盖。

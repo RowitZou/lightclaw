@@ -143,6 +143,10 @@ export type ConfigFileShape = {
       acl?: string[]
     }
   }
+  apiLogs?: {
+    enabled?: boolean
+    dir?: string
+  }
 }
 
 export function loadConfigFile(): ConfigFileShape {
