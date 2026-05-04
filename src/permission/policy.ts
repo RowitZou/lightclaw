@@ -88,6 +88,15 @@ export function evaluatePermission(args: {
   }
 
   if (mode === 'acceptEdits') {
+    // WebFetch is read-only against the network, doesn't write disk or run
+    // arbitrary commands; in auto mode we treat it as non-execute so users
+    // aren't asked once per hostname (`docs.example.com`, `api.example.com`,
+    // ...). To force confirmation on a specific host (e.g. an internal
+    // service) add an explicit ask rule like `WebFetch(localhost)` — `ask`
+    // outranks this fallback.
+    if (toolName === 'WebFetch') {
+      return { behavior: 'allow' }
+    }
     return riskLevel === 'execute' ? { behavior: 'ask' } : { behavior: 'allow' }
   }
 
