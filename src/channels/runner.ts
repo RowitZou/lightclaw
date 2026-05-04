@@ -164,11 +164,12 @@ export class ChannelRunner {
           compactionCount: meta?.compactionCount,
           lastExtractedAt: meta?.lastExtractedAt,
           todos: meta?.todos,
-          // Prefer the persisted session mode so an in-channel `/mode <m>`
-          // survives across messages. The channels.json default only applies
-          // for the first message of a session (when meta does not exist
-          // yet); after that the user-driven mode change is the source of
-          // truth, mirroring how the REPL resumes mode from meta.
+          // Per-identity preferences (loaded inside resetSessionContext) win
+          // over both arguments below — that is what aligns mode/model across
+          // the same user's terminal + channel sessions. This line provides
+          // the fallback chain when prefs are absent: meta (so an in-channel
+          // `/mode <m>` survives reload) > channels.json default (first ever
+          // message of a brand-new feishu session).
           permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
           currentUserId: userId,
         })
