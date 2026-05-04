@@ -381,7 +381,7 @@ export class FeishuPermissionCoordinator {
       'info',
       [
         `已允许 ${formatRuleListVerbose(ruleValues)}，今后同类调用自动放行（已持久化到当前用户的权限）。`,
-        '需要撤回时请发送 /permissions clear。',
+        '需要撤回时发送 /permissions list 查看编号，再用 /permissions revoke <n>。',
       ].join('\n'),
     )
     const middleLabel = formatSuggestionLabel(

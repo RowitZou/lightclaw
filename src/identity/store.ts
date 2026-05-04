@@ -103,17 +103,19 @@ export async function getUserPermissionCeiling(name: string): Promise<Permission
   return identity?.permissionCeiling ?? 'default'
 }
 
-export async function setAllPermissionCeilings(mode: PermissionMode): Promise<number> {
+export async function setUserPermissionCeiling(
+  name: string,
+  mode: PermissionMode,
+): Promise<{ ok: boolean }> {
   const identities = await listIdentities()
-  const now = new Date().toISOString()
-  let count = 0
-  for (const record of Object.values(identities)) {
-    record.permissionCeiling = mode
-    record.updatedAt = now
-    count += 1
+  const record = identities[name]
+  if (!record) {
+    return { ok: false }
   }
+  record.permissionCeiling = mode
+  record.updatedAt = new Date().toISOString()
   await writeIdentities(identities)
-  return count
+  return { ok: true }
 }
 
 export async function addLink(
