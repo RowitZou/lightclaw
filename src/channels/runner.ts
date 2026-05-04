@@ -296,16 +296,16 @@ export class ChannelRunner {
             messages.push(assistantMessage)
             await appendMessage(sessionId, assistantMessage)
             await persistMeta(Date.now(), messages.length)
-            // Only the "transient retries exhausted" case surfaces a red
-            // notice — that's a genuine "your message was lost, please
-            // resend" signal. Every other failure (non-transient API errors,
-            // tool/runtime hiccups, parse errors) stays silent: the user
-            // sees no reply, naturally resends, and stderr has the audit
-            // trail. The LocalRuntimeAdminOnlyError business-deny case is
-            // surfaced separately in the outer catch below.
-            if (isTransient) {
-              await this.sendNotice(message, 'error', failureText)
-            }
+            // Surface every query failure as a red notice card so the user
+            // always gets visible feedback. Previously only transient
+            // network errors surfaced; non-transient (API 400, tool dispatch
+            // throws, model-side ValidationException) stayed silent and the
+            // user saw nothing — which was the wrong UX (the user just sat
+            // and waited indefinitely). The full detail still goes to
+            // stderr; the card carries a friendly summary built by
+            // formatQueryFailure (which already truncates and avoids
+            // dumping raw provider error envelopes).
+            await this.sendNotice(message, 'error', formatNoticeFromFailure(detail))
             return
           }
         }
@@ -485,6 +485,54 @@ function formatQueryFailure(detail: string): string {
     ].join('\n')
   }
   return `这轮处理失败了：${detail}`
+}
+
+// Friendly summary for the red notice card. The transcript marker (built by
+// formatQueryFailure) keeps the full detail for debugging; the card stays
+// short so the user gets a clear, non-overwhelming signal.
+function formatNoticeFromFailure(detail: string): string {
+  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
+    return [
+      '**本轮请求失败**',
+      '',
+      '原因：上游网络抖动（已自动重试 2 次仍失败）',
+      '建议：稍后重发同一条消息',
+    ].join('\n')
+  }
+  // Non-transient (API 400, tool error, validation, etc). Show category +
+  // a 240-char head of the raw detail so admin can eyeball without dumping
+  // the entire provider error envelope (which can be multi-KB JSON).
+  const category = classifyFailure(detail)
+  const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
+  return [
+    '**本轮请求失败**',
+    '',
+    `原因：${category}`,
+    '建议：可重发消息再试；若反复出现请联系管理员（stderr 有完整日志）',
+    '',
+    '```',
+    head,
+    '```',
+  ].join('\n')
+}
+
+function classifyFailure(detail: string): string {
+  if (/ValidationException|invalid.*request|messages\.\d+/i.test(detail)) {
+    return '上游模型协议错误（messages 数组校验失败）'
+  }
+  if (/AccessDenied|Unauthorized|InvalidSignature|Forbidden|401|403/i.test(detail)) {
+    return '上游认证 / 授权失败'
+  }
+  if (/ThrottlingException|RateLimit|429|quota/i.test(detail)) {
+    return '上游限流 / 配额耗尽'
+  }
+  if (/Tool execution|tool.*error|Permission denied|abort/i.test(detail)) {
+    return '工具调用失败 / 权限拒绝'
+  }
+  if (/StatusCode: 400|InvokeModel/i.test(detail)) {
+    return '上游模型返回 400（请求被拒）'
+  }
+  return '内部错误'
 }
 
 function formatChannelUserText(message: NormalizedChannelMessage): string {
