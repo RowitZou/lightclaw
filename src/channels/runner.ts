@@ -206,7 +206,7 @@ export class ChannelRunner {
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
-          await this.sendNotice(message, 'info', slash.output.trim() || 'ok')
+          await this.sendNotice(message, 'info', wrapAsCodeBlock(slash.output.trim() || 'ok'))
           return
         }
 
@@ -478,6 +478,23 @@ const QUERY_RETRY_BASE_MS = 800
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Wrap slash-command output in a fenced code block so feishu's lark_md
+ * renderer doesn't eat angle-bracketed args (`<prompt>`, `<n>`, `<rule>`)
+ * thinking they're HTML tags, or eat square-bracketed alternation
+ * (`[<read|ask|auto|yolo>]`) thinking it's a markdown link. Inside a
+ * code block lark_md is literal — and the monospace font keeps the
+ * command-list table aligned.
+ *
+ * The output may contain backticks of its own (rare for slash commands
+ * but possible — e.g. embedded inline code in a description). Use a
+ * 4-backtick fence so any inner ``` doesn't terminate the wrapper.
+ * lark_md handles 4+ backticks correctly per its CommonMark base.
+ */
+function wrapAsCodeBlock(content: string): string {
+  return `\`\`\`\`\n${content}\n\`\`\`\``
 }
 
 function formatQueryFailure(detail: string): string {
