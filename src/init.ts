@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig, type LightClawConfig } from './config.js'
+import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
 import { workspaceFor } from './identity/paths.js'
 import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
@@ -66,6 +67,10 @@ export class LocalRuntimeAdminOnlyError extends Error {
 export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
   const config = getConfig()
   const resolvedConfig = resolveConfig(config, input)
+  // Activate the user-facing language as early as possible so any subsequent
+  // user-visible message (banner, slash output, error notices) is rendered
+  // in the configured locale. Stderr logging is unaffected.
+  setLang(resolvedConfig.lang)
   // NetworkBridge must come up BEFORE pool/preheat — when network.mode=host,
   // pool.ts auto-injects http_proxy pointing at this bridge's address into
   // every container, so a not-yet-listening bridge would mean the first

@@ -4,6 +4,7 @@ import { stdin as input, stdout as output } from 'node:process'
 import chalk from 'chalk'
 
 import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './commands/builtin.js'
+import { t } from './i18n/index.js'
 import type { ReplContext } from './commands/registry.js'
 import { type LightClawConfig } from './config.js'
 import { runHook } from './hooks/index.js'
@@ -176,8 +177,12 @@ export async function startRepl(params: ReplParams): Promise<void> {
     persistMeta: count => persistMeta(sessionId, createdAt, count),
   }
 
-  output.write(chalk.cyan(`${currentUserId ? `Hi ${currentUserId}. I'm here.` : 'LightClaw is ready.'}\n`))
-  output.write(chalk.gray(`Commands: ${registry.bannerLine(currentUserIsAdmin)}\n\n`))
+  output.write(chalk.cyan(
+    `${currentUserId ? t('banner.greet', { name: currentUserId }) : t('banner.greetAnonymous')}\n`,
+  ))
+  output.write(chalk.gray(
+    `${t('banner.commands', { list: registry.bannerLine(currentUserIsAdmin) })}\n\n`,
+  ))
 
   if (params.initialPrompt) {
     await runPrompt(params.initialPrompt, false)

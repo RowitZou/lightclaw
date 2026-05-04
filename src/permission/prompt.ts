@@ -2,6 +2,7 @@ import type { Interface } from 'node:readline/promises'
 
 import chalk from 'chalk'
 
+import { t } from '../i18n/index.js'
 import { getCurrentUserId, setIdentityRules } from '../state.js'
 import { appendIdentityRules, loadIdentityRules } from './storage.js'
 import {
@@ -40,7 +41,7 @@ export async function askUserApproval(input: {
     formatPrompt(toolName, riskLevel, inputPreview, middleLabel, highRisk),
   )
 
-  const answer = (await rl.question('permission> ')).trim().toLowerCase()
+  const answer = (await rl.question(t('permission.terminal.promptInput'))).trim().toLowerCase()
   const choice = resolveChoice(answer, highRisk)
   return applyChoice(choice, toolName, suggestedRules)
 }
@@ -55,29 +56,27 @@ function formatPrompt(
   if (highRisk) {
     return [
       '',
-      chalk.red('⚠️  权限请求（高危）'),
-      `  工具：${chalk.cyan(toolName)}   风险：${chalk.magenta(riskLevel)}`,
-      `  ${inputPreview}`,
-      chalk.gray(
-        '  此操作含高风险子命令（rm / sudo / pipe-to-shell 等），不能持久化。',
-      ),
+      chalk.red(t('permission.terminal.headerHighRisk')),
+      t('permission.terminal.toolRisk', { tool: chalk.cyan(toolName), risk: chalk.magenta(riskLevel) }),
+      t('permission.terminal.preview', { preview: inputPreview }),
+      chalk.gray(t('permission.terminal.highRiskExplain')),
       '',
-      `  [1] 批准本次`,
-      `  [3] 拒绝`,
-      chalk.gray('  （兼容快捷键：y=1，n=3；输入 2 / a 会被降级为"仅这次"。）'),
+      t('permission.terminal.choice1Allow'),
+      t('permission.terminal.choice3'),
+      chalk.gray(t('permission.terminal.shortcutsHighRisk')),
       '',
     ].join('\n')
   }
   return [
     '',
-    chalk.yellow('权限请求'),
-    `  工具：${chalk.cyan(toolName)}   风险：${chalk.magenta(riskLevel)}`,
-    `  ${inputPreview}`,
+    chalk.yellow(t('permission.terminal.header')),
+    t('permission.terminal.toolRisk', { tool: chalk.cyan(toolName), risk: chalk.magenta(riskLevel) }),
+    t('permission.terminal.preview', { preview: inputPreview }),
     '',
-    `  [1] 批准`,
-    `  [2] ${middleLabel}`,
-    `  [3] 拒绝`,
-    `  ${chalk.gray('(兼容快捷键：y=1，a=2，n=3)')}`,
+    t('permission.terminal.choice1Approve'),
+    t('permission.terminal.choice2', { label: middleLabel }),
+    t('permission.terminal.choice3'),
+    `  ${chalk.gray(t('permission.terminal.shortcuts'))}`,
     '',
   ].join('\n')
 }
@@ -88,11 +87,7 @@ function resolveChoice(answer: string, highRisk: boolean): ChoiceKind {
     if (highRisk) {
       // Quietly downgrade — applyChoice prints the explanatory line via the
       // 'allow_once_high_risk_downgrade' branch below.
-      process.stdout.write(
-        chalk.gray(
-          '  （高危规则不能持久化，已按"仅这次"批准）\n',
-        ),
-      )
+      process.stdout.write(chalk.gray(`${t('permission.terminal.downgradeHighRisk')}\n`))
       return 'allow_once'
     }
     return 'allow_rules'
@@ -122,13 +117,11 @@ function applyChoice(
         setIdentityRules(loadIdentityRules(userId))
       }
       const verbose = formatRuleListVerbose(suggestedRules)
-      process.stdout.write(
-        chalk.gray(
-          userId
-            ? `  （已持久化授权：${verbose}；发送 /rules list 查看，/rules revoke <n> 撤回）\n`
-            : `  （未持久化：当前无 identity 上下文；本次仍允许）\n`,
-        ),
-      )
+      process.stdout.write(chalk.gray(
+        userId
+          ? `${t('permission.terminal.allowedPersisted', { verbose })}\n`
+          : `${t('permission.terminal.allowedNoPersist')}\n`,
+      ))
       // Surface the matched rule so audit log reflects which scope unblocked
       // this call. Pick the first rule — they share semantics for this turn.
       return { behavior: 'allow', matchedRule: installed[0] }
@@ -136,7 +129,7 @@ function applyChoice(
     case 'deny':
       return {
         behavior: 'deny',
-        reason: `Permission denied: user denied ${toolName}.`,
+        reason: t('permission.terminal.deniedByUser', { tool: toolName }),
       }
   }
 }

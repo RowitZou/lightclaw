@@ -2,6 +2,7 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as Lark from '@larksuiteoapi/node-sdk'
 
+import { t } from '../../i18n/index.js'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
@@ -290,7 +291,7 @@ function buildUnsupportedCardActionResponse(): FeishuCardActionResponse {
   return {
     toast: {
       type: 'error',
-      content: '卡片回调格式暂未识别。请直接回复“是”或“否”。',
+      content: t('channel.cardCallbackUnknown'),
     },
   }
 }

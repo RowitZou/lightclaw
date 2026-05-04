@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { URL } from 'node:url'
 
+import { t } from '../i18n/index.js'
 import { extractSegmentHead, splitBashCommand } from './bash-parse.js'
 import { formatRule } from './rules.js'
 import type { PermissionRuleValue } from './types.js'
@@ -102,10 +103,10 @@ export function formatSuggestionLabel(
   // Empty / tool-wide-only fallback: the only rule is `{toolName}` with no
   // ruleContent, meaning the suggester couldn't derive a precise scope.
   if (rules.length === 0) {
-    return `批准所有 ${toolName} 操作`
+    return t('permission.suggestion.allowAllTool', { tool: toolName })
   }
   if (rules.length === 1 && rules[0]!.ruleContent === undefined) {
-    return `批准所有 ${toolName} 操作`
+    return t('permission.suggestion.allowAllTool', { tool: toolName })
   }
 
   // All rules are for `toolName` (suggester invariant).
@@ -118,23 +119,19 @@ export function formatSuggestionLabel(
     return formatBashLabel(heads)
   }
   if (toolName === 'WebFetch') {
-    // Suggester only ever produces a single hostname.
-    return `批准 ${contents[0]} 的所有访问`
+    return t('permission.suggestion.allowAllWebFetch', { host: contents[0]! })
   }
   if (toolName === 'MCP') {
-    // Suggester only ever produces a single `server:tool`.
-    return `批准 ${contents[0]} 的所有调用`
+    return t('permission.suggestion.allowAllMcp', { target: contents[0]! })
   }
-  // Path tools (Edit/Write/Read): single `dir/**` rule. The card body already
-  // shows the absolute path, so the button keeps "此路径" as the deictic.
-  return `批准此路径下的所有 ${toolName} 操作`
+  return t('permission.suggestion.allowAllPath', { tool: toolName })
 }
 
 function formatBashLabel(heads: string[]): string {
   if (heads.length === 0) {
-    return '批准所有 Bash 操作'
+    return t('permission.suggestion.bashAll')
   }
-  const inline = `批准所有 ${heads.join('/')} 命令`
+  const inline = t('permission.suggestion.bashCmds', { heads: heads.join('/') })
   if (inline.length <= MAX_INLINE_LABEL_CHARS) {
     return inline
   }
@@ -143,8 +140,8 @@ function formatBashLabel(heads: string[]): string {
   const keep = heads.slice(0, TRUNCATED_HEAD_KEEP)
   const remaining = heads.length - keep.length
   return remaining > 0
-    ? `批准所有 ${keep.join('/')} 等 ${heads.length} 个命令`
-    : `批准所有 ${keep.join('/')} 命令`
+    ? t('permission.suggestion.bashCmdsTrunc', { heads: keep.join('/'), count: heads.length })
+    : t('permission.suggestion.bashCmds', { heads: keep.join('/') })
 }
 
 function stripTailWildcard(content: string): string {

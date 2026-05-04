@@ -25,12 +25,9 @@ export const MODE_TO_ALIAS: Record<PermissionMode, string> = {
   bypassPermissions: 'yolo',
 }
 
-export const MODE_DESCRIPTIONS: Record<string, string> = {
-  read: '只读，不动文件',
-  ask: '写操作前问我',
-  auto: '自动改文件，执行类还问',
-  yolo: '全放行（用前确认作用域）',
-}
+// MODE_DESCRIPTIONS used to live here; descriptions now flow through i18n
+// (see locales.ts: 'mode.read.desc' .. 'mode.yolo.desc') and are looked up
+// by the /mode handler at render time so the active locale wins.
 
 export const MODE_ALIASES = Object.keys(ALIAS_TO_MODE) as ReadonlyArray<string>
 

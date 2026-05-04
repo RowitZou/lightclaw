@@ -86,6 +86,11 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
     "webSearch": "claude-haiku-4-5"             // WebSearch helper 询问
   },
 
+  // --- 用户面语言（slash 输出、飞书卡片、banner、错误通知）---
+  // 默认 cn。stderr 日志一律英文（admin grep 友好），不受此设置影响。
+  // env: LIGHTCLAW_LANG=cn|en
+  "lang": "cn",
+
   // --- 工具相关 ---
   "tools": {
     "webSearch": {

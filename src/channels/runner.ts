@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
+import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
 import { workspaceFor } from '../identity/paths.js'
 import {
@@ -345,14 +346,14 @@ export class ChannelRunner {
         // streamed (e.g. the model produced zero non-empty turns and we'd
         // otherwise leave the user in silence).
         if (!streamedAtLeastOnce) {
-          await this.sendReply(message, result.assistantText || '(no response)')
+          await this.sendReply(message, result.assistantText || t('fresh.empty'))
         }
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
             message,
             'error',
-            '当前 bot 运行在单用户模式下，只有管理员可以使用，请联系 bot 运营者获取访问权限。',
+            t('channel.localRuntimeReject'),
           )
           return
         }
@@ -426,15 +427,17 @@ export class ChannelRunner {
           },
         )
       }
-      const freshnessLabel = result.created ? '新建' : '复用'
+      const freshnessLabel = result.created
+        ? t('channel.pairing.freshnessNew')
+        : t('channel.pairing.freshnessReuse')
       await this.sendNotice(
         message,
         'info',
         [
-          '欢迎使用 LightClaw bot。',
-          `请管理员审批以下配对码：**${result.code}**`,
-          `管理员命令：\`/user approve ${result.code} --as <名称>\``,
-          `（${freshnessLabel}的配对请求；配对码 1 小时内有效）`,
+          t('channel.pairing.welcome'),
+          t('channel.pairing.codeLine', { code: result.code }),
+          t('channel.pairing.adminCmd', { code: result.code }),
+          t('channel.pairing.freshness', { when: freshnessLabel }),
         ].join('\n'),
       )
     } catch (error) {
@@ -442,7 +445,7 @@ export class ChannelRunner {
         await this.sendNotice(
           message,
           'error',
-          '配对请求被限流，请管理员检查 `/user pending`。',
+          t('channel.pairing.rateLimited'),
         )
         return null
       }
@@ -479,12 +482,9 @@ function delay(ms: number): Promise<void> {
 
 function formatQueryFailure(detail: string): string {
   if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
-    return [
-      '本轮因网络抖动中断（已自动重试 2 次仍失败），可重发消息再试。',
-      `（详细错误：${detail}）`,
-    ].join('\n')
+    return t('channel.failure.transcriptTransient', { detail })
   }
-  return `这轮处理失败了：${detail}`
+  return t('channel.failure.transcript', { detail })
 }
 
 // Friendly summary for the red notice card. The transcript marker (built by
@@ -493,22 +493,19 @@ function formatQueryFailure(detail: string): string {
 function formatNoticeFromFailure(detail: string): string {
   if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
     return [
-      '**本轮请求失败**',
+      t('channel.failure.title'),
       '',
-      '原因：上游网络抖动（已自动重试 2 次仍失败）',
-      '建议：稍后重发同一条消息',
+      t('channel.failure.transientReason'),
+      t('channel.failure.transientHint'),
     ].join('\n')
   }
-  // Non-transient (API 400, tool error, validation, etc). Show category +
-  // a 240-char head of the raw detail so admin can eyeball without dumping
-  // the entire provider error envelope (which can be multi-KB JSON).
   const category = classifyFailure(detail)
   const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
   return [
-    '**本轮请求失败**',
+    t('channel.failure.title'),
     '',
-    `原因：${category}`,
-    '建议：可重发消息再试；若反复出现请联系管理员（stderr 有完整日志）',
+    t('channel.failure.reason', { category }),
+    t('channel.failure.hint'),
     '',
     '```',
     head,
@@ -518,21 +515,21 @@ function formatNoticeFromFailure(detail: string): string {
 
 function classifyFailure(detail: string): string {
   if (/ValidationException|invalid.*request|messages\.\d+/i.test(detail)) {
-    return '上游模型协议错误（messages 数组校验失败）'
+    return t('channel.failure.cat.validation')
   }
   if (/AccessDenied|Unauthorized|InvalidSignature|Forbidden|401|403/i.test(detail)) {
-    return '上游认证 / 授权失败'
+    return t('channel.failure.cat.auth')
   }
   if (/ThrottlingException|RateLimit|429|quota/i.test(detail)) {
-    return '上游限流 / 配额耗尽'
+    return t('channel.failure.cat.rate')
   }
   if (/Tool execution|tool.*error|Permission denied|abort/i.test(detail)) {
-    return '工具调用失败 / 权限拒绝'
+    return t('channel.failure.cat.tool')
   }
   if (/StatusCode: 400|InvokeModel/i.test(detail)) {
-    return '上游模型返回 400（请求被拒）'
+    return t('channel.failure.cat.bad400')
   }
-  return '内部错误'
+  return t('channel.failure.cat.generic')
 }
 
 function formatChannelUserText(message: NormalizedChannelMessage): string {
@@ -542,7 +539,7 @@ function formatChannelUserText(message: NormalizedChannelMessage): string {
   return [
     message.text || '(no text)',
     '',
-    '[媒体附件]',
+    t('channel.media.attachment'),
     `- type: ${message.mediaType ?? 'unknown'}`,
     `- path: ${message.mediaPath}`,
   ].join('\n')

@@ -147,6 +147,7 @@ export type ConfigFileShape = {
     enabled?: boolean
     dir?: string
   }
+  lang?: string
 }
 
 export function loadConfigFile(): ConfigFileShape {
