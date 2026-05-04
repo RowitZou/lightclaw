@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 
-import { getConfig, parsePermissionMode } from '../config.js'
+import { getConfig } from '../config.js'
 import {
   addLink,
   createUser,
@@ -43,6 +43,12 @@ import {
 } from '../state.js'
 
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
+import {
+  MODE_ALIASES,
+  MODE_DESCRIPTIONS,
+  modeToAlias,
+  parseMode,
+} from './mode-aliases.js'
 import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
@@ -175,28 +181,42 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
   },
   {
     name: '/mode',
-    usage: '/mode <default|plan|acceptEdits|bypassPermissions>',
-    description: 'Switch permission mode within your ceiling',
+    usage: '/mode [<read|ask|auto|yolo>]',
+    description: 'Show current mode + 4-tier menu, or switch within your ceiling',
     async handler(args, ctx) {
-      const mode = parsePermissionMode(args.trim())
-      if (!mode) {
-        ctx.output.write('error> Usage: /mode default|plan|acceptEdits|bypassPermissions\n')
-        return
-      }
+      const trimmed = args.trim()
       const userId = getCurrentUserId()
       const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
+      if (!trimmed) {
+        const current = getPermissionMode()
+        const lines: string[] = ['Modes:']
+        for (const alias of MODE_ALIASES) {
+          const isCurrent = alias === modeToAlias(current)
+          const within = isModeWithinCeiling(parseMode(alias)!, ceiling)
+          const marker = isCurrent ? '  <- current' : (within ? '' : '  (above ceiling)')
+          lines.push(`  ${alias.padEnd(5)} ${MODE_DESCRIPTIONS[alias]}${marker}`)
+        }
+        lines.push('', `Ceiling: ${modeToAlias(ceiling)}`, '')
+        ctx.output.write(lines.join('\n'))
+        return
+      }
+      const mode = parseMode(trimmed)
+      if (!mode) {
+        ctx.output.write(`error> Unknown mode: ${trimmed}. Try: ${MODE_ALIASES.join(' / ')}\n`)
+        return
+      }
       if (!isModeWithinCeiling(mode, ceiling)) {
-        ctx.output.write(`error> mode ${mode} exceeds your ceiling ${ceiling}.\n`)
+        ctx.output.write(`error> mode ${modeToAlias(mode)} exceeds your ceiling ${modeToAlias(ceiling)}.\n`)
         return
       }
       setPermissionMode(mode)
-      ctx.output.write(`mode: ${mode}\n`)
+      ctx.output.write(`mode: ${modeToAlias(mode)}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
   {
     name: '/ceiling',
-    usage: '/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]',
+    usage: '/ceiling [<user> <read|ask|auto|yolo>]',
     description:
       'Show every identity\'s ceiling, or set one user\'s ceiling. Bare /ceiling lists all.',
     visibleTo: 'admin',
@@ -209,24 +229,24 @@ const BUILTIN_COMMANDS: ReplCommand[] = [
       if (parts.length !== 2) {
         ctx.output.write(
           'error> Usage: /ceiling                       (list all)\n' +
-          '       /ceiling <user> <default|plan|acceptEdits|bypassPermissions>\n',
+          '       /ceiling <user> <read|ask|auto|yolo>\n',
         )
         return
       }
       const [name, modeText] = parts
-      const mode = parsePermissionMode(modeText)
+      const mode = parseMode(modeText!)
       if (!mode) {
         ctx.output.write(
-          `error> Invalid mode: ${modeText}. Expected default|plan|acceptEdits|bypassPermissions.\n`,
+          `error> Invalid mode: ${modeText}. Try: ${MODE_ALIASES.join(' / ')}.\n`,
         )
         return
       }
-      const result = await setUserPermissionCeiling(name, mode)
+      const result = await setUserPermissionCeiling(name!, mode)
       if (!result.ok) {
         ctx.output.write(`error> No such identity: ${name}\n`)
         return
       }
-      ctx.output.write(`ceiling: ${name} -> ${mode}\n`)
+      ctx.output.write(`ceiling: ${name} -> ${modeToAlias(mode)}\n`)
     },
   },
   {
@@ -460,11 +480,11 @@ async function formatCeilingList(): Promise<string> {
   for (const name of names) {
     const ceiling = identities[name]!.permissionCeiling ?? 'default'
     const marker = (await isAdmin(name)) ? ' *admin' : ''
-    lines.push(`  ${name}${marker} -> ${ceiling}`)
+    lines.push(`  ${name}${marker} -> ${modeToAlias(ceiling)}`)
   }
   lines.push(
     '',
-    'Set with: /ceiling <user> <default|plan|acceptEdits|bypassPermissions>',
+    'Set with: /ceiling <user> <read|ask|auto|yolo>',
     '',
   )
   return lines.join('\n')
@@ -503,7 +523,7 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
   const sessionTok = totals.inputTokens + totals.outputTokens
   const lines: string[] = [
     `You: ${userId ?? '(none)'}${adminFlag} on ${channelLabel}`,
-    `Mode: ${getPermissionMode()}  (ceiling: ${ceiling})`,
+    `Mode: ${modeToAlias(getPermissionMode())}  (ceiling: ${modeToAlias(ceiling)})`,
     `Model: ${getModel()}`,
     `Session: ${ctx.sessionId} (msgs: ${ctx.messages.length}, tok: ${sessionTok})`,
   ]
@@ -515,7 +535,7 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
       for (const name of names) {
         const marker = (await isAdmin(name)) ? ' *admin' : ''
         const c = identities[name]!.permissionCeiling ?? 'default'
-        lines.push(`  ${name}${marker}  ceiling=${c}`)
+        lines.push(`  ${name}${marker}  ceiling=${modeToAlias(c)}`)
       }
     }
   }

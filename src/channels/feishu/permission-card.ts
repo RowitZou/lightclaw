@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { modeToAlias } from '../../commands/mode-aliases.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
 import { isHighRiskAsk } from '../../permission/high-risk.js'
@@ -556,7 +557,7 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
   const bodyLines = [
     `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
     `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-    `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+    `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
     `**会话**：${escapeLarkMd(pending.sessionId)}`,
     '',
     '```',
@@ -680,7 +681,7 @@ function buildResolvedCard(
           content: [
             `**工具**：${escapeLarkMd(pending.ask.toolName)}`,
             `**风险**：${escapeLarkMd(pending.ask.riskLevel)}`,
-            `**模式**：${escapeLarkMd(pending.ask.mode)}`,
+            `**模式**：${escapeLarkMd(modeToAlias(pending.ask.mode))}`,
             `**会话**：${escapeLarkMd(pending.sessionId)}`,
             '',
             '```',

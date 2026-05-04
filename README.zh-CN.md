@@ -206,28 +206,34 @@ Admin 专属：
 
 | 命令 | 作用 |
 |---|---|
-| `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing 和用户绑定；查看 user 反馈（Iter 3 接通）。 |
-| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing、用户绑定，并查看 user 反馈。 |
+| `/ceiling [<user> <read|ask|auto|yolo>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
+| `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
+| `/feedback <text>`（user-only）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
+| `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
+| `/stop` | 中断当前 turn（已写入的文件不回滚）。 |
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
 
 ### 权限模式与 ceiling
 
-四个 permission mode，从严到宽：
+四个 permission mode，从严到宽。channel / 用户面用 **alias** 列；**internal enum** 列是 `permissions.json` 里的原始 schema 值，作为兼容老脚本的输入也接受。
 
-| Mode | 不询问就能跑的工具 |
-|---|---|
-| `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
-| `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
-| `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
-| `bypassPermissions` | 全部自动放行。 |
+| Alias | 内部 enum | 不询问就能跑的工具 |
+|---|---|---|
+| `read` | `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
+| `ask` | `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
+| `auto` | `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
+| `yolo` | `bypassPermissions` | 全部自动放行。 |
 
-`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `default`，用户可以主动切到更安全的 `plan` 或留在 `default`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
+`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `ask`（即 `default`），用户可以主动切到更安全的 `read`（即 `plan`）或留在 `ask`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
 
 ```text
-/ceiling alice bypassPermissions   # admin: 抬升 alice 的 ceiling
-/mode bypassPermissions            # 然后 alice（或 admin 自己）才能切过去
+/ceiling alice yolo            # admin: 抬升 alice 的 ceiling
+/mode yolo                     # 然后 alice（或 admin 自己）才能切过去
 ```
+
+输入两种形式（alias / 内部 enum）都接受；输出（status 面板、飞书卡片、ceiling 列表）一律渲染 alias。
 
 这套两步显式流程对 admin 自己同样生效——没有环境变量短路通道。
 

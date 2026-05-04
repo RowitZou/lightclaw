@@ -208,28 +208,34 @@ Admin-only commands:
 
 | Command | Purpose |
 |---|---|
-| `/user list|pending|approve|reject|unlink|remove|feedback` | Manage pairing and user bindings; read user feedback (Iter 3). |
-| `/ceiling [<user> <default|plan|acceptEdits|bypassPermissions>]` | Show every identity's ceiling, or set one user's ceiling. |
+| `/user list|pending|approve|reject|unlink|remove|feedback` | Manage pairing, user bindings, and read user feedback. |
+| `/ceiling [<user> <read|ask|auto|yolo>]` | Show every identity's ceiling, or set one user's ceiling. |
+| `/cost` | This-month token usage by-model + by-user (with cache hit / fresh subset). |
+| `/feedback <text>` (user-only) | Send feedback to admin; admin reads via `/user feedback`. |
+| `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
+| `/stop` | Abort the in-flight turn (already-written files are not rolled back). |
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
 
 ### Permission Modes And Ceiling
 
-Four permission modes from strictest to loosest:
+Four permission modes from strictest to loosest. Channels and users use the **alias** column; the **internal enum** column is the raw value stored in `permissions.json` and surfaced for compatibility with older scripts.
 
-| Mode | What runs without asking |
-|---|---|
-| `plan` | Read and search tools. Write, edit, execute, network fetch, and subagent tools are denied. |
-| `default` | Read and search tools. Write, edit, execute, network fetch, and subagent tools ask for confirmation (interactive) or are denied (non-interactive). |
-| `acceptEdits` | Read, search, write, and edit tools. Execute, network fetch, and subagent tools still ask. |
-| `bypassPermissions` | Everything runs without prompting. |
+| Alias | Internal enum | What runs without asking |
+|---|---|---|
+| `read` | `plan` | Read and search tools. Write, edit, execute, network fetch, and subagent tools are denied. |
+| `ask` | `default` | Read and search tools. Write, edit, execute, network fetch, and subagent tools ask for confirmation (interactive) or are denied (non-interactive). |
+| `auto` | `acceptEdits` | Read, search, write, and edit tools. Execute, network fetch, and subagent tools still ask. |
+| `yolo` | `bypassPermissions` | Everything runs without prompting. |
 
-`/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `default`, which lets users opt into the safer `plan` or stay on `default`. To allow looser modes, the admin must bump the ceiling first:
+`/mode <m>` is allowed only when `m` is at least as strict as the current ceiling. Default ceiling is `ask` (`default`), which lets users opt into the safer `read` (`plan`) or stay on `ask`. To allow looser modes, the admin must bump the ceiling first:
 
 ```text
-/ceiling alice bypassPermissions   # admin: raise alice's ceiling
-/mode bypassPermissions            # alice (or admin) can then switch
+/ceiling alice yolo            # admin: raise alice's ceiling
+/mode yolo                     # alice (or admin) can then switch
 ```
+
+Both alias and internal enum forms are accepted as input; outputs (status panels, Feishu cards, ceiling listings) always render the alias form.
 
 This two-step flow applies to the admin too — there is no environment variable shortcut.
 
