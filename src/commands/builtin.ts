@@ -497,19 +497,26 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   const all = registry.list(true)
   const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
   const adminCmds = all.filter(c => c.visibleTo === 'admin')
-  const usageWidth = Math.max(
-    ...all.map(c => c.usage.length),
-    24,
-  )
+  // Channel uses a `usage: description` colon layout rather than the
+  // padEnd-aligned terminal layout. Reason: feishu IM wraps long lines,
+  // which destroys column alignment anyway, and the resulting visual
+  // mess is worse than a simple colon-separated row. Terminal keeps
+  // the aligned table since fixed-width fonts make it readable.
+  const formatRow = ctx.isChannel
+    ? (c: { usage: string; description: string }) => `  ${c.usage}: ${c.description}`
+    : ((): ((c: { usage: string; description: string }) => string) => {
+        const usageWidth = Math.max(...all.map(c => c.usage.length), 24)
+        return c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`
+      })()
   const lines: string[] = [
     t('help.title'),
     '',
-    ...userCmds.map(c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`),
+    ...userCmds.map(formatRow),
   ]
   if (ctx.isAdmin && adminCmds.length > 0) {
     lines.push('', t('help.adminTitle'), '')
     for (const c of adminCmds) {
-      lines.push(`  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`)
+      lines.push(formatRow(c))
     }
   }
   lines.push('', t('help.statusHint'), '')
