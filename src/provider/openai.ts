@@ -4,7 +4,7 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat/completions'
 
-import type { EndpointConfig } from '../config.js'
+import type { ApiKeyEndpoint } from '../config.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -173,7 +173,7 @@ function mapUsage(usage: unknown): UsageStats {
   return result
 }
 
-export function createOpenAIProvider(endpoint: EndpointConfig): Provider {
+export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
   const client = new OpenAI({
     apiKey: endpoint.apiKey,
     ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),

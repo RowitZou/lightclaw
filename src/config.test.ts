@@ -143,7 +143,7 @@ describe('config: endpoints + models registry', () => {
     })
     assert.throws(
       () => getConfig(),
-      /schema must be "anthropic" or "openai"/,
+      /schema must be one of: "anthropic", "openai", "openai-auth"/,
     )
   })
 
@@ -169,6 +169,121 @@ describe('config: endpoints + models registry', () => {
       () => getConfig(),
       /routing\.extract = "phantom" is not in models/,
     )
+  })
+
+  it('parses an OAuth endpoint without apiKey', () => {
+    writeConfig({
+      endpoints: {
+        codex: { auth: 'codex-oauth' },
+      },
+      models: {
+        'gpt-5-codex': {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5',
+        },
+      },
+      defaultModel: 'gpt-5-codex',
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
+    assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
+  })
+
+  it('rejects endpoints with both apiKey and auth', () => {
+    writeConfig({
+      endpoints: {
+        bad: { apiKey: 'sk-x', auth: 'codex-oauth' },
+      },
+      models: {
+        m: { endpoint: 'bad', schema: 'openai-auth', upstreamModel: 'gpt-5' },
+      },
+    })
+    assert.throws(
+      () => getConfig(),
+      /apiKey and auth are mutually exclusive/,
+    )
+  })
+
+  it('rejects unknown auth values', () => {
+    writeConfig({
+      endpoints: {
+        weird: { auth: 'mystery-oauth' as 'codex-oauth' },
+      },
+      models: {
+        m: { endpoint: 'weird', schema: 'openai-auth', upstreamModel: 'gpt-5' },
+      },
+    })
+    assert.throws(
+      () => getConfig(),
+      /auth = "mystery-oauth" is not recognized/,
+    )
+  })
+
+  it('rejects openai-auth schema on apiKey endpoint', () => {
+    writeConfig({
+      endpoints: { keyed: { apiKey: 'sk-x' } },
+      models: {
+        bad: {
+          endpoint: 'keyed',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5',
+        },
+      },
+    })
+    assert.throws(
+      () => getConfig(),
+      /schema = "openai-auth" requires endpoint "keyed" to have an auth field/,
+    )
+  })
+
+  it('rejects apiKey-bearing schemas on OAuth endpoint', () => {
+    writeConfig({
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      models: {
+        bad: {
+          endpoint: 'codex',
+          schema: 'openai',
+          upstreamModel: 'gpt-5-mini',
+        },
+      },
+    })
+    assert.throws(
+      () => getConfig(),
+      /schema = "openai" cannot use endpoint "codex"/,
+    )
+  })
+
+  it('round-trips a registry mixing apiKey and OAuth endpoints', () => {
+    writeConfig({
+      endpoints: {
+        newapi: { apiKey: 'sk-a', baseUrl: 'http://gw/' },
+        codex: { auth: 'codex-oauth' },
+      },
+      models: {
+        sonnet: {
+          endpoint: 'newapi',
+          schema: 'anthropic',
+          upstreamModel: 'claude-sonnet-4-6',
+        },
+        'gpt-5-codex': {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5',
+        },
+      },
+      defaultModel: 'sonnet',
+      routing: { main: 'sonnet', extract: 'gpt-5-codex' },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.routing.main, 'sonnet')
+    assert.equal(cfg.routing.extract, 'gpt-5-codex')
+    assert.deepEqual(cfg.endpoints.newapi, {
+      apiKey: 'sk-a',
+      baseUrl: 'http://gw/',
+    })
+    assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
+    assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
   })
 
   it('supports heterogeneous routing across schemas', () => {

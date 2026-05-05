@@ -116,10 +116,21 @@ export type ToolsConfig = {
   webSearch: WebSearchToolConfig
 }
 
-export type EndpointConfig = {
+/** Endpoint backed by a static API key sent as Bearer auth. */
+export type ApiKeyEndpoint = {
   apiKey: string
   baseUrl?: string
 }
+
+/** Endpoint whose credentials come from an `AuthProvider` lookup at request
+ *  time. Currently only Codex (`auth: 'codex-oauth'`) — extends to Copilot /
+ *  Gemini OAuth without changing this shape. */
+export type OAuthEndpoint = {
+  auth: 'codex-oauth'
+  baseUrl?: string
+}
+
+export type EndpointConfig = ApiKeyEndpoint | OAuthEndpoint
 
 export type ModelEntry = {
   /** Alias key into `endpoints`. */
@@ -245,7 +256,7 @@ function resolveOptionalTurnCap(value: number | undefined): number | undefined {
 }
 
 function parseSchema(value: string | undefined): Schema | undefined {
-  if (value === 'anthropic' || value === 'openai') {
+  if (value === 'anthropic' || value === 'openai' || value === 'openai-auth') {
     return value
   }
 
@@ -263,13 +274,32 @@ function resolveEndpoints(
     if (!raw || typeof raw !== 'object') {
       throw new Error(`endpoints["${alias}"] must be an object.`)
     }
+    const auth = raw.auth?.trim()
     const apiKey = raw.apiKey?.trim()
+    const baseUrl = raw.baseUrl?.trim()
+    if (auth) {
+      if (auth !== 'codex-oauth') {
+        throw new Error(
+          `endpoints["${alias}"].auth = "${auth}" is not recognized. Currently only "codex-oauth" is supported.`,
+        )
+      }
+      if (apiKey) {
+        throw new Error(
+          `endpoints["${alias}"]: apiKey and auth are mutually exclusive (auth=${auth} sources credentials at request time).`,
+        )
+      }
+      out[alias] = {
+        auth: 'codex-oauth',
+        ...(baseUrl ? { baseUrl } : {}),
+      }
+      continue
+    }
     if (!apiKey) {
       throw new Error(`endpoints["${alias}"].apiKey is required.`)
     }
     out[alias] = {
       apiKey,
-      ...(raw.baseUrl?.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
     }
   }
   return out
@@ -299,13 +329,25 @@ function resolveModels(
     const schema = parseSchema(raw.schema)
     if (!schema) {
       throw new Error(
-        `models["${displayName}"].schema must be "anthropic" or "openai".`,
+        `models["${displayName}"].schema must be one of: "anthropic", "openai", "openai-auth".`,
       )
     }
     const upstreamModel = raw.upstreamModel?.trim()
     if (!upstreamModel) {
       throw new Error(
         `models["${displayName}"].upstreamModel is required.`,
+      )
+    }
+    const endpointConfig = endpoints[endpoint]
+    const isOAuthEndpoint = 'auth' in endpointConfig
+    if (schema === 'openai-auth' && !isOAuthEndpoint) {
+      throw new Error(
+        `models["${displayName}"].schema = "openai-auth" requires endpoint "${endpoint}" to have an auth field; got an apiKey endpoint.`,
+      )
+    }
+    if (schema !== 'openai-auth' && isOAuthEndpoint) {
+      throw new Error(
+        `models["${displayName}"].schema = "${schema}" cannot use endpoint "${endpoint}" (auth=${endpointConfig.auth}); use schema "openai-auth" or pick an apiKey endpoint.`,
       )
     }
     out[displayName] = { endpoint, schema, upstreamModel }

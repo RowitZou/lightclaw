@@ -27,9 +27,26 @@ function buildProvider(
   schema: Schema,
   endpoint: EndpointConfig,
 ): Provider {
-  return schema === 'openai'
-    ? createOpenAIProvider(endpoint)
-    : createAnthropicProvider(endpoint)
+  switch (schema) {
+    case 'anthropic':
+    case 'openai': {
+      // resolveModels enforces apiKey shape for these schemas; this branch
+      // is defensive against misuse from non-config callers.
+      if ('auth' in endpoint) {
+        throw new Error(
+          `Schema "${schema}" requires an apiKey endpoint, got auth=${endpoint.auth}.`,
+        )
+      }
+      return schema === 'openai'
+        ? createOpenAIProvider(endpoint)
+        : createAnthropicProvider(endpoint)
+    }
+    case 'openai-auth':
+      // Iter 3 fills this in (createOpenAIAuthProvider).
+      throw new Error(
+        'openai-auth provider is not yet implemented. Currently only schema-level extension is in place.',
+      )
+  }
 }
 
 /**
