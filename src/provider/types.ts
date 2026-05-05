@@ -1,6 +1,12 @@
 import type { StreamEvent } from '../types.js'
 
-export type ProviderName = 'anthropic' | 'openai'
+/** Wire protocol the provider speaks. The same physical endpoint may host
+ *  both, distinguished per-model in `LightClawConfig.models`. */
+export type Schema = 'anthropic' | 'openai'
+
+/** @deprecated kept for back-compat in any in-tree caller; new code should
+ *  use `Schema`. */
+export type ProviderName = Schema
 
 export type ProviderCapabilities = {
   serverTools: {
@@ -45,7 +51,7 @@ export type WebSearchResult = {
 }
 
 export type Provider = {
-  name: ProviderName
+  name: Schema
   capabilities: ProviderCapabilities
   streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent>
   webSearch?(params: WebSearchParams): Promise<WebSearchResult>

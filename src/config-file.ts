@@ -9,22 +9,33 @@ import { lightclawHome } from './paths.js'
 // `config.ts`'s downstream type imports — keeps the import graph acyclic
 // even if someone later adds a non-type runtime import to `config.ts`.
 
-export type ConfigFileShape = {
+export type ConfigFileEndpoint = {
   apiKey?: string
   baseUrl?: string
-  model?: string
-  allowedModels?: string[]
-  provider?: string
-  providerOptions?: {
-    anthropic?: {
-      apiKey?: string
-      baseUrl?: string
-    }
-    openai?: {
-      apiKey?: string
-      baseUrl?: string
-    }
-  }
+}
+
+export type ConfigFileModel = {
+  /** Reference to a key in `endpoints`. */
+  endpoint?: string
+  /** Wire protocol the SDK speaks. Decides which client/provider services
+   *  this model. */
+  schema?: string
+  /** Real model id as the upstream expects it. The display name (this
+   *  entry's outer key) is decoupled. */
+  upstreamModel?: string
+}
+
+export type ConfigFileShape = {
+  /** Named endpoint pool (apiKey + optional baseUrl) referenced by models.
+   *  Same physical gateway can host both anthropic and openai protocols —
+   *  schema lives on each model entry, not here. */
+  endpoints?: Record<string, ConfigFileEndpoint>
+  /** Display-name -> { endpoint alias, schema, upstreamModel }. The keys
+   *  are what users see in `/model` and write into routing. */
+  models?: Record<string, ConfigFileModel>
+  /** Display name picked at startup when no env / per-identity preference
+   *  overrides. Must exist in `models`. */
+  defaultModel?: string
   routing?: {
     main?: string
     compact?: string

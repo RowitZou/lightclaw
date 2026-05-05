@@ -167,14 +167,22 @@ function buildBuiltinCommands(): ReplCommand[] {
     description: t('cmd.model.desc'),
     async handler(args, ctx) {
       const model = args.trim()
+      const registered = Object.keys(ctx.config.models)
+      const formatList = (): string =>
+        registered
+          .map(name => {
+            const entry = ctx.config.models[name]
+            return `${name} (${entry.schema}, ${entry.endpoint} -> ${entry.upstreamModel})`
+          })
+          .join(', ')
       if (!model) {
         ctx.output.write(`${t('model.current', { name: getModel() })}\n`)
-        ctx.output.write(`${t('model.available', { list: ctx.config.allowedModels.join(', ') })}\n`)
+        ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
         return
       }
-      if (!ctx.config.allowedModels.includes(model)) {
+      if (!ctx.config.models[model]) {
         ctx.output.write(`${t('common.error.prefix')}${t('model.unknown', { name: model })}\n`)
-        ctx.output.write(`${t('model.available', { list: ctx.config.allowedModels.join(', ') })}\n`)
+        ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
         return
       }
       setModel(model)

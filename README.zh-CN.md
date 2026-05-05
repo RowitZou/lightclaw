@@ -35,13 +35,17 @@ python3 -m pip install --user markdownify
 
 ```jsonc
 {
-  "provider": "anthropic",
-  "providerOptions": {
-    "anthropic": {
-      "apiKey": "<your-anthropic-api-key>"
+  "endpoints": {
+    "anthropic-direct": { "apiKey": "<your-anthropic-api-key>" }
+  },
+  "models": {
+    "claude-sonnet-4-6": {
+      "endpoint": "anthropic-direct",
+      "schema": "anthropic",
+      "upstreamModel": "claude-sonnet-4-6"
     }
   },
-  "model": "claude-sonnet-4-6"
+  "defaultModel": "claude-sonnet-4-6"
 }
 ```
 
@@ -63,27 +67,52 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
 
 ```jsonc
 {
-  // --- Provider 与模型 ---
-  "provider": "anthropic",                      // "anthropic" | "openai"
-  "providerOptions": {
-    "anthropic": {
-      "apiKey": "<your-anthropic-api-key>",
-      "baseUrl": "<https://your-anthropic-endpoint>"   // 可选；不填走官方端点
+  // --- Endpoints：具名的 (apiKey + 可选 baseUrl) 池，被 models 引用 ---
+  // 同一个网关可同时承载 anthropic 和 openai 协议；schema 在 models 里给，
+  // 不在 endpoints 这里。
+  "endpoints": {
+    "anthropic-direct": {
+      "apiKey": "<your-anthropic-api-key>"
+      // 走官方 api.anthropic.com 时省略 baseUrl
     },
-    "openai": {                                  // 仅当 provider="openai" 时需要
-      "apiKey": "<your-openai-compatible-key>",
-      "baseUrl": "<https://your-openai-compatible-endpoint>"
+    "newapi": {
+      "apiKey": "<your-gateway-key>",
+      "baseUrl": "<https://your-gateway-host>"
     }
   },
-  "model": "claude-sonnet-4-6",                 // 默认模型；运行中可用 /model 切
-  "allowedModels": ["claude-sonnet-4-6", "claude-opus-4-7"],   // 可选，限制 /model 的可选项
 
-  // 可选 per-role 路由——未配置的字段回落到 "model"
+  // --- Models：display 名 -> { endpoint alias, schema, upstreamModel } ---
+  // display 名是 /model 列表和 routing 字段里看到的名字，自由命名。
+  // upstreamModel 才是发到上游 API 的真实 model id。
+  "models": {
+    "claude-sonnet-4-6": {
+      "endpoint": "anthropic-direct",
+      "schema": "anthropic",                      // "anthropic" | "openai"
+      "upstreamModel": "claude-sonnet-4-6"
+    },
+    "claude-haiku-4-5": {
+      "endpoint": "newapi",
+      "schema": "anthropic",
+      "upstreamModel": "claude-haiku-4-5-20251001"
+    },
+    "gpt-5-mini": {
+      "endpoint": "newapi",
+      "schema": "openai",
+      "upstreamModel": "gpt-5-mini"
+    }
+  },
+
+  // 启动时默认选哪个 display 名；运行时 /model <name> 可切换。
+  // 不填则取 models 里的第一个。
+  "defaultModel": "claude-sonnet-4-6",
+
+  // 可选 per-role 路由——值都是 models 里的 display 名。未填回落到 defaultModel。
+  // 支持跨 schema 异构（main 走 Claude、extract 走 GPT 等）。
   "routing": {
-    "main":      "claude-sonnet-4-6",           // 主 agent 循环
-    "compact":   "claude-haiku-4-5",            // auto-compact 摘要
-    "extract":   "claude-haiku-4-5",            // memory 抽取 / micro-compact
-    "webSearch": "claude-haiku-4-5"             // WebSearch helper 询问
+    "main":      "claude-sonnet-4-6",
+    "compact":   "claude-haiku-4-5",
+    "extract":   "gpt-5-mini",
+    "webSearch": "claude-haiku-4-5"
   },
 
   // --- 用户面语言（slash 输出、飞书卡片、banner、错误通知）---
@@ -169,7 +198,7 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
 }
 ```
 
-所有字段都是可选的，用不到的整段删掉即可。环境变量（`ANTHROPIC_API_KEY`、`LIGHTCLAW_MODEL`、`LIGHTCLAW_RUNTIME_BACKEND` 等）会覆盖文件里的同名字段。完整 env 参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+`endpoints` 和 `models` 必填（没有任何 model 时启动会拒绝）；其他段全部可选，用不到的整段删掉即可。环境变量（`LIGHTCLAW_MODEL`、`LIGHTCLAW_RUNTIME_BACKEND` 等）会覆盖文件里的同名字段。完整 env 参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
 
 同目录下的兄弟文件：
 
@@ -197,7 +226,7 @@ lightclaw --help
 
 Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 
-- 模型 / provider：`~/.lightclaw/config.json`、`LIGHTCLAW_MODEL`、`LIGHTCLAW_PROVIDER`
+- 模型：`~/.lightclaw/config.json`（`endpoints` + `models` registry，`defaultModel`）；`LIGHTCLAW_MODEL` 按 display 名覆盖默认值
 - 功能开关：`LIGHTCLAW_NO_MEMORY=1`、`LIGHTCLAW_NO_MCP=1`、`LIGHTCLAW_NO_HOOKS=1`
 - 权限细规则：编辑 `~/.lightclaw/permissions.json`
 - 身份管理：`/user ...` slash
@@ -341,11 +370,8 @@ LightClaw 帮你记三件事：
 |---|---|
 | `LIGHTCLAW_HOME` | 所有 LightClaw 状态的根（默认 `~/.lightclaw`）。集群部署改到共享存储 |
 | `LIGHTCLAW_SESSIONS_DIR` / `LIGHTCLAW_MEMORY_DIR` / `LIGHTCLAW_WORKSPACE_ROOT` | 在 `LIGHTCLAW_HOME` 之外单独覆盖某个子目录 |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic 凭据 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI-compatible 凭据 |
-| `LIGHTCLAW_PROVIDER` | `anthropic` 或 `openai` |
-| `LIGHTCLAW_MODEL` | 默认模型 |
-| `LIGHTCLAW_ALLOWED_MODELS` | `/model` 可选模型列表，逗号分隔 |
+| `LIGHTCLAW_MODEL` | 覆盖 `defaultModel`（值是 `models` 里的 display 名）|
+| `LIGHTCLAW_ROUTING_MAIN` / `_COMPACT` / `_EXTRACT` / `_WEBSEARCH` | 单 task 路由覆盖（同样是 display 名）|
 | `BRAVE_SEARCH_API_KEY` | WebSearch Brave key（覆盖 `tools.webSearch.braveApiKey`）；不配走 DDG HTML |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 整个子系统关掉 |
 | `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | 记忆相关的细粒度开关与阈值，详见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md) |

@@ -185,7 +185,6 @@ export async function buildSystemPromptTemplate(
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     `Current date: ${new Date().toISOString()}`,
     `Platform: ${platform}`,
-    `Provider: ${options.config.provider}`,
     `Model: ${modelFor('main', options.config)}`,
   ]
 

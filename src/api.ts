@@ -1,5 +1,5 @@
 import { getConfig, type LightClawConfig } from './config.js'
-import { getProvider } from './provider/index.js'
+import { getProviderFor } from './provider/index.js'
 import type { StreamChatParams } from './provider/types.js'
 import type { StreamEvent, UsageStats } from './types.js'
 import {
@@ -37,13 +37,19 @@ export async function* streamChat(
 ): AsyncGenerator<StreamEvent> {
   const { config: paramConfig, apiLogContext, ...rest } = params
   const config = paramConfig ?? getConfig()
-  const provider = getProvider(config)
+  // The caller passes a display model name (the key in config.models).
+  // Resolve it once here to (a) pick the right provider instance, and
+  // (b) substitute the real upstream id for the wire request. Logging
+  // continues to record the display name on the log record so traces stay
+  // aligned with what the user sees in `/model` and routing config.
+  const { provider, entry } = getProviderFor(config, rest.model)
+  const wireParams = { ...rest, model: entry.upstreamModel }
 
   const logger = getActiveApiLogger()
   // Fast path: no active query scope OR caller didn't tag the call. Bail
   // before touching the buffering branch so cost stays at zero.
   if (!logger || !apiLogContext) {
-    yield* provider.streamChat(rest)
+    yield* provider.streamChat(wireParams)
     return
   }
 
@@ -53,7 +59,7 @@ export async function* streamChat(
   let errorRec: { name: string; message: string } | null = null
 
   try {
-    for await (const event of provider.streamChat(rest)) {
+    for await (const event of provider.streamChat(wireParams)) {
       if (event.type === 'stop') {
         stopContent = event.content
         stopReason = event.stopReason
