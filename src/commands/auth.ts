@@ -3,6 +3,7 @@ import {
   autoRegisterCodex,
   purgeCodexFromConfig,
 } from '../auth/codex/auto-register.js'
+import { discoverDefaultCodexSlug } from '../auth/codex/models.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 
@@ -152,9 +153,27 @@ async function runAuthImport(
   // providers (copilot etc.) plug their own auto-register here.
   const lines: string[] = [t('auth.import.success', { name: providerName })]
   if (providerName === 'codex') {
-    const reg = autoRegisterCodex()
+    // Live model discovery: ask the Codex backend which slug is currently
+    // the priority-0 default and use that for the auto-registered entry.
+    // Failures fall back silently to the hardcoded default — discovery is
+    // opportunistic, the user's Codex login already worked at this point.
+    let upstreamModel: string | undefined
+    try {
+      const credentials = await provider.getCredentials()
+      const discovered = await discoverDefaultCodexSlug(credentials)
+      if (discovered) upstreamModel = discovered
+    } catch {
+      // ignore — fall through to autoRegisterCodex's static default
+    }
+    const reg = autoRegisterCodex(
+      upstreamModel ? { upstreamModel } : {},
+    )
     if (reg.endpointAdded || reg.modelAdded) {
-      lines.push(t('auth.codex.registered'))
+      lines.push(
+        upstreamModel
+          ? t('auth.codex.registeredWithDiscovery', { slug: upstreamModel })
+          : t('auth.codex.registered'),
+      )
     } else {
       lines.push(t('auth.codex.alreadyRegistered'))
     }

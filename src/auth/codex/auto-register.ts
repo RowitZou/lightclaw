@@ -54,8 +54,14 @@ function atomicWriteJson(file: string, body: unknown): void {
 }
 
 /** Add `endpoints.codex = { auth: 'codex-oauth' }` and
- *  `models.gpt-5-codex = { ... }` if absent. Idempotent. */
-export function autoRegisterCodex(): AutoRegisterResult {
+ *  `models.gpt-5-codex = { ... }` if absent. Idempotent.
+ *
+ *  `upstreamModel` lets the caller plug in a slug it just discovered
+ *  from the Codex backend's live `/models` endpoint; absent or empty
+ *  falls back to the static default. */
+export function autoRegisterCodex(
+  opts: { upstreamModel?: string } = {},
+): AutoRegisterResult {
   const file = configPath()
   const cfg = readConfigJsonOrEmpty(file)
 
@@ -75,10 +81,14 @@ export function autoRegisterCodex(): AutoRegisterResult {
     endpointAdded = true
   }
   if (!modelPreexisting) {
+    const upstream =
+      opts.upstreamModel && opts.upstreamModel.trim().length > 0
+        ? opts.upstreamModel.trim()
+        : DEFAULT_CODEX_UPSTREAM_MODEL
     models[DEFAULT_CODEX_DISPLAY_MODEL] = {
       endpoint: DEFAULT_CODEX_ENDPOINT_ALIAS,
       schema: 'openai-auth',
-      upstreamModel: DEFAULT_CODEX_UPSTREAM_MODEL,
+      upstreamModel: upstream,
     }
     modelAdded = true
   }
