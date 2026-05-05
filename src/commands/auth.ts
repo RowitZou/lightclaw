@@ -3,6 +3,7 @@ import {
   autoRegisterCodex,
   purgeCodexFromConfig,
 } from '../auth/codex/auto-register.js'
+import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 
 // `/auth` admin-only slash command.
@@ -20,7 +21,10 @@ import { t } from '../i18n/index.js'
 const SUPPORTED_PROVIDERS = ['codex'] as const
 type SupportedProvider = typeof SUPPORTED_PROVIDERS[number]
 
-export async function runAuthCommand(args: string): Promise<string> {
+export async function runAuthCommand(
+  args: string,
+  liveConfig?: LightClawConfig,
+): Promise<string> {
   const trimmed = args.trim()
   const [head, ...rest] = trimmed.split(/\s+/).filter(Boolean)
   const sub = (head ?? 'list').toLowerCase()
@@ -29,12 +33,40 @@ export async function runAuthCommand(args: string): Promise<string> {
     return runAuthList()
   }
   if (sub === 'import') {
-    return runAuthImport(rest)
+    return runAuthImport(rest, liveConfig)
   }
   if (sub === 'logout') {
-    return runAuthLogout(rest)
+    return runAuthLogout(rest, liveConfig)
   }
   return `${t('common.error.prefix')}${t('auth.usage')}\n`
+}
+
+/**
+ * Sync the live in-memory LightClawConfig with whatever auto-register just
+ * wrote to disk. The /auth slash handler captures ctx.config at REPL boot,
+ * but auto-register mutates the file — without this refresh, /model would
+ * still see the pre-import model list.
+ *
+ * We mutate `endpoints` and `models` in place to preserve object identity
+ * (other modules cache references to ctx.config). routing / defaultModel
+ * are intentionally left alone — admin owns those.
+ */
+function refreshConfigAfterDiskWrite(liveConfig: LightClawConfig | undefined): void {
+  if (!liveConfig) return
+  try {
+    const fresh = getConfig()
+    for (const k of Object.keys(liveConfig.endpoints)) {
+      delete liveConfig.endpoints[k]
+    }
+    Object.assign(liveConfig.endpoints, fresh.endpoints)
+    for (const k of Object.keys(liveConfig.models)) {
+      delete liveConfig.models[k]
+    }
+    Object.assign(liveConfig.models, fresh.models)
+  } catch {
+    // getConfig() throws when the on-disk config is invalid; surface
+    // the next /model call instead of breaking the import flow.
+  }
 }
 
 function runAuthList(): string {
@@ -90,7 +122,10 @@ function formatRelativeTime(deltaMs: number): string {
   return t('auth.list.inDays', { n: days })
 }
 
-async function runAuthImport(rest: string[]): Promise<string> {
+async function runAuthImport(
+  rest: string[],
+  liveConfig: LightClawConfig | undefined,
+): Promise<string> {
   const providerName = rest[0]
   if (!providerName) {
     return `${t('common.error.prefix')}${t('auth.import.usage')}\n`
@@ -123,6 +158,10 @@ async function runAuthImport(rest: string[]): Promise<string> {
     } else {
       lines.push(t('auth.codex.alreadyRegistered'))
     }
+    // Refresh the running process's in-memory config so /model gpt-5-codex
+    // works without a daemon restart. ctx.config is captured at REPL boot
+    // and channels keep references to the same object.
+    refreshConfigAfterDiskWrite(liveConfig)
   }
   lines.push('')
   lines.push(t('auth.codex.banRiskWarning'))
@@ -130,7 +169,10 @@ async function runAuthImport(rest: string[]): Promise<string> {
   return lines.join('\n')
 }
 
-async function runAuthLogout(rest: string[]): Promise<string> {
+async function runAuthLogout(
+  rest: string[],
+  liveConfig: LightClawConfig | undefined,
+): Promise<string> {
   const providerName = rest[0]
   const purge = rest.includes('--purge')
   if (!providerName) {
@@ -157,6 +199,7 @@ async function runAuthLogout(rest: string[]): Promise<string> {
     } else {
       lines.push(t('auth.logout.purgeNothing'))
     }
+    refreshConfigAfterDiskWrite(liveConfig)
   }
   return `${lines.join('\n')}\n`
 }
