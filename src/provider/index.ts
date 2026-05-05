@@ -4,6 +4,7 @@ import type {
   ModelEntry,
 } from '../config.js'
 import { createAnthropicProvider } from './anthropic.js'
+import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
 import type { Provider, Schema } from './types.js'
 
@@ -41,11 +42,14 @@ function buildProvider(
         ? createOpenAIProvider(endpoint)
         : createAnthropicProvider(endpoint)
     }
-    case 'openai-auth':
-      // Iter 3 fills this in (createOpenAIAuthProvider).
-      throw new Error(
-        'openai-auth provider is not yet implemented. Currently only schema-level extension is in place.',
-      )
+    case 'openai-auth': {
+      if (!('auth' in endpoint)) {
+        throw new Error(
+          `Schema "openai-auth" requires an OAuth endpoint, got apiKey endpoint.`,
+        )
+      }
+      return createOpenAIAuthProvider(endpoint)
+    }
   }
 }
 
