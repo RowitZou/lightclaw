@@ -6,6 +6,7 @@ import type {
   ResponseStreamEvent,
 } from 'openai/resources/responses/responses'
 import type { FunctionTool } from 'openai/resources/responses/responses'
+import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici'
 
 import { getCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
@@ -23,6 +24,42 @@ import type { ApiMessage, Provider, StreamChatParams } from './types.js'
 // canonical case is the Codex backend (chatgpt.com/backend-api/codex)
 // behind a ChatGPT subscription token. The provider re-resolves
 // credentials on every streamChat call so refreshes happen transparently.
+//
+// Proxy gotcha: Node's built-in fetch (used by the OpenAI SDK) does NOT
+// honor http_proxy / https_proxy env vars. LightClaw runs inside a
+// network that requires the corporate proxy to reach external hosts
+// (chatgpt.com is external), so we wire an undici fetch + ProxyAgent
+// per-client. Without this the SDK call hangs until its 10-minute
+// timeout — exactly the symptom the first round of testing surfaced.
+
+function defaultProxyDispatcher(): Dispatcher | undefined {
+  const proxyUrl =
+    process.env.https_proxy ??
+    process.env.HTTPS_PROXY ??
+    process.env.http_proxy ??
+    process.env.HTTP_PROXY
+  if (!proxyUrl) return undefined
+  try {
+    return new ProxyAgent(proxyUrl)
+  } catch {
+    return undefined
+  }
+}
+
+function buildProxyAwareFetch(
+  dispatcher: Dispatcher | undefined,
+): typeof globalThis.fetch | undefined {
+  if (!dispatcher) return undefined
+  return ((url: string | URL | Request, init?: RequestInit) =>
+    // undici.fetch is API-compatible with the global fetch; the dispatcher
+    // field is the only undici extension we rely on here. The cast is the
+    // standard way to bridge the two type spaces — safe in practice
+    // because Node's fetch IS undici's fetch since Node 18.
+    undiciFetch(url as never, {
+      ...(init ?? {}),
+      dispatcher,
+    } as never) as unknown as Promise<Response>) as typeof globalThis.fetch
+}
 //
 // The Responses API has a different shape from Chat Completions:
 // - `instructions` carries the system prompt
@@ -186,12 +223,14 @@ export function createOpenAIAuthProvider(
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)
+      const proxiedFetch = buildProxyAwareFetch(defaultProxyDispatcher())
       const client = new OpenAI({
         apiKey: credentials.accessToken,
         baseURL,
         defaultHeaders: {
           'chatgpt-account-id': credentials.accountId,
         },
+        ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
       })
 
       const input = convertMessagesToResponsesInput(params.messages)
