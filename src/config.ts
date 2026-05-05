@@ -5,7 +5,7 @@ import { workspaceRoot as resolveWorkspaceRoot } from './identity/paths.js'
 import { expandHomePath, lightclawHome } from './paths.js'
 import { parseLang } from './i18n/index.js'
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
-import type { ProviderName } from './provider/types.js'
+import type { Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 
 export type DockerMountConfig = {
@@ -116,23 +116,32 @@ export type ToolsConfig = {
   webSearch: WebSearchToolConfig
 }
 
+export type EndpointConfig = {
+  apiKey: string
+  baseUrl?: string
+}
+
+export type ModelEntry = {
+  /** Alias key into `endpoints`. */
+  endpoint: string
+  /** Wire protocol used to call this model. */
+  schema: Schema
+  /** Real model id sent to the upstream API. */
+  upstreamModel: string
+}
+
 export type LightClawConfig = {
   /** User-facing language for slash output, feishu cards, banners, error
    *  notices. Stderr logging stays English regardless. Default: cn. */
   lang: 'cn' | 'en'
+  /** Currently selected display name. Always a key of `models`. */
   model: string
-  allowedModels: string[]
-  provider: ProviderName
-  providerOptions: {
-    anthropic?: {
-      apiKey: string
-      baseUrl?: string
-    }
-    openai?: {
-      apiKey: string
-      baseUrl?: string
-    }
-  }
+  /** Display-name -> { endpoint, schema, upstreamModel }. Source of truth
+   *  for which models the user can pick via `/model`. */
+  models: Record<string, ModelEntry>
+  /** Named endpoint pool (apiKey + baseUrl). Models reference these by
+   *  alias. */
+  endpoints: Record<string, EndpointConfig>
   routing: RoutingConfig
   sessionsDir: string
   autoCompact: boolean
@@ -193,12 +202,6 @@ type ConfigFileDockerMount = NonNullable<
   NonNullable<ConfigFileShape['runtime']>['docker']
 >['mounts'] extends Array<infer T> | undefined ? T : never
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6'
-const DEFAULT_ALLOWED_MODELS = [
-  'claude-opus-4-7',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5',
-]
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
@@ -241,12 +244,73 @@ function resolveOptionalTurnCap(value: number | undefined): number | undefined {
   return Math.floor(value)
 }
 
-function parseProvider(value: string | undefined): ProviderName | undefined {
+function parseSchema(value: string | undefined): Schema | undefined {
   if (value === 'anthropic' || value === 'openai') {
     return value
   }
 
   return undefined
+}
+
+function resolveEndpoints(
+  fileEndpoints: ConfigFileShape['endpoints'],
+): Record<string, EndpointConfig> {
+  const out: Record<string, EndpointConfig> = {}
+  if (!fileEndpoints || typeof fileEndpoints !== 'object') {
+    return out
+  }
+  for (const [alias, raw] of Object.entries(fileEndpoints)) {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(`endpoints["${alias}"] must be an object.`)
+    }
+    const apiKey = raw.apiKey?.trim()
+    if (!apiKey) {
+      throw new Error(`endpoints["${alias}"].apiKey is required.`)
+    }
+    out[alias] = {
+      apiKey,
+      ...(raw.baseUrl?.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
+    }
+  }
+  return out
+}
+
+function resolveModels(
+  fileModels: ConfigFileShape['models'],
+  endpoints: Record<string, EndpointConfig>,
+): Record<string, ModelEntry> {
+  const out: Record<string, ModelEntry> = {}
+  if (!fileModels || typeof fileModels !== 'object') {
+    return out
+  }
+  for (const [displayName, raw] of Object.entries(fileModels)) {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(`models["${displayName}"] must be an object.`)
+    }
+    const endpoint = raw.endpoint?.trim()
+    if (!endpoint) {
+      throw new Error(`models["${displayName}"].endpoint is required.`)
+    }
+    if (!endpoints[endpoint]) {
+      throw new Error(
+        `models["${displayName}"].endpoint = "${endpoint}" is not defined in endpoints.`,
+      )
+    }
+    const schema = parseSchema(raw.schema)
+    if (!schema) {
+      throw new Error(
+        `models["${displayName}"].schema must be "anthropic" or "openai".`,
+      )
+    }
+    const upstreamModel = raw.upstreamModel?.trim()
+    if (!upstreamModel) {
+      throw new Error(
+        `models["${displayName}"].upstreamModel is required.`,
+      )
+    }
+    out[displayName] = { endpoint, schema, upstreamModel }
+  }
+  return out
 }
 
 function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined {
@@ -342,38 +406,56 @@ export function resolveSessionsDir(): string {
 
 export function getConfig(): LightClawConfig {
   const fileConfig = loadConfigFile()
-  const provider: ProviderName =
-    parseProvider(process.env.LIGHTCLAW_PROVIDER) ??
-    parseProvider(fileConfig.provider) ??
-    'anthropic'
-  const anthropicApiKey =
-    process.env.ANTHROPIC_API_KEY ??
-    fileConfig.providerOptions?.anthropic?.apiKey ??
-    fileConfig.apiKey
-  const anthropicBaseUrl =
-    process.env.ANTHROPIC_BASE_URL ??
-    fileConfig.providerOptions?.anthropic?.baseUrl ??
-    fileConfig.baseUrl
-  const openaiApiKey =
-    process.env.OPENAI_API_KEY ?? fileConfig.providerOptions?.openai?.apiKey
-  const openaiBaseUrl =
-    process.env.OPENAI_BASE_URL ?? fileConfig.providerOptions?.openai?.baseUrl
-  const model = process.env.LIGHTCLAW_MODEL ?? fileConfig.model ?? DEFAULT_MODEL
-  const allowedModels =
-    parseStringList(process.env.LIGHTCLAW_ALLOWED_MODELS) ??
-    fileConfig.allowedModels ??
-    DEFAULT_ALLOWED_MODELS
+  const endpoints = resolveEndpoints(fileConfig.endpoints)
+  const models = resolveModels(fileConfig.models, endpoints)
+  const modelNames = Object.keys(models)
+  if (modelNames.length === 0) {
+    throw new Error(
+      `No models configured. Define endpoints + models in ${path.join(lightclawHome(), 'config.json')}.`,
+    )
+  }
+  const requestedModel =
+    process.env.LIGHTCLAW_MODEL ??
+    fileConfig.defaultModel ??
+    modelNames[0]
+  if (!models[requestedModel]) {
+    throw new Error(
+      `Selected model "${requestedModel}" is not in models. Available: ${modelNames.join(', ')}.`,
+    )
+  }
+  const model = requestedModel
+  const validateRoutingTarget = (
+    target: string | undefined,
+    field: string,
+  ): string | undefined => {
+    if (target === undefined) {
+      return undefined
+    }
+    if (!models[target]) {
+      throw new Error(
+        `routing.${field} = "${target}" is not in models. Available: ${modelNames.join(', ')}.`,
+      )
+    }
+    return target
+  }
   const routing: RoutingConfig = {
     main:
-      process.env.LIGHTCLAW_ROUTING_MAIN ??
-      fileConfig.routing?.main ??
-      model,
-    compact:
+      validateRoutingTarget(
+        process.env.LIGHTCLAW_ROUTING_MAIN ?? fileConfig.routing?.main,
+        'main',
+      ) ?? model,
+    compact: validateRoutingTarget(
       process.env.LIGHTCLAW_ROUTING_COMPACT ?? fileConfig.routing?.compact,
-    extract:
+      'compact',
+    ),
+    extract: validateRoutingTarget(
       process.env.LIGHTCLAW_ROUTING_EXTRACT ?? fileConfig.routing?.extract,
-    webSearch:
+      'extract',
+    ),
+    webSearch: validateRoutingTarget(
       process.env.LIGHTCLAW_ROUTING_WEBSEARCH ?? fileConfig.routing?.webSearch,
+      'webSearch',
+    ),
   }
   const autoCompact =
     parseBoolean(process.env.LIGHTCLAW_AUTO_COMPACT) ??
@@ -602,40 +684,10 @@ export function getConfig(): LightClawConfig {
   const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
 
-  if (provider === 'anthropic' && !anthropicApiKey) {
-    throw new Error(
-      `Missing Anthropic API key. Set ANTHROPIC_API_KEY or ${path.join(lightclawHome(), 'config.json')}.`,
-    )
-  }
-
-  if (provider === 'openai' && !openaiApiKey) {
-    throw new Error(
-      `Missing OpenAI API key. Set OPENAI_API_KEY or ${path.join(lightclawHome(), 'config.json')}.`,
-    )
-  }
-
   return {
     model,
-    allowedModels,
-    provider,
-    providerOptions: {
-      ...(anthropicApiKey
-        ? {
-            anthropic: {
-              apiKey: anthropicApiKey,
-              ...(anthropicBaseUrl ? { baseUrl: anthropicBaseUrl } : {}),
-            },
-          }
-        : {}),
-      ...(openaiApiKey
-        ? {
-            openai: {
-              apiKey: openaiApiKey,
-              ...(openaiBaseUrl ? { baseUrl: openaiBaseUrl } : {}),
-            },
-          }
-        : {}),
-    },
+    models,
+    endpoints,
     routing,
     sessionsDir: resolveSessionsDir(),
     autoCompact,

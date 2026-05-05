@@ -4,7 +4,7 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat/completions'
 
-import type { LightClawConfig } from '../config.js'
+import type { EndpointConfig } from '../config.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -173,11 +173,10 @@ function mapUsage(usage: unknown): UsageStats {
   return result
 }
 
-export function createOpenAIProvider(config: LightClawConfig): Provider {
-  const openaiConfig = config.providerOptions.openai
+export function createOpenAIProvider(endpoint: EndpointConfig): Provider {
   const client = new OpenAI({
-    apiKey: openaiConfig?.apiKey,
-    ...(openaiConfig?.baseUrl ? { baseURL: openaiConfig.baseUrl } : {}),
+    apiKey: endpoint.apiKey,
+    ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
   })
 
   return {

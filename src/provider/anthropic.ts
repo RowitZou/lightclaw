@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-import type { LightClawConfig } from '../config.js'
+import type { EndpointConfig } from '../config.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -240,13 +240,16 @@ function formatWebSearchBlocks(blocks: unknown[]): string {
   return lines.join('\n').trim()
 }
 
-export function createAnthropicProvider(config: LightClawConfig): Provider {
-  const anthropicConfig = config.providerOptions.anthropic
-  const baseURL = anthropicConfig?.baseUrl
+export function createAnthropicProvider(endpoint: EndpointConfig): Provider {
+  const baseURL = endpoint.baseUrl
   const client = new Anthropic({
-    apiKey: anthropicConfig?.apiKey ?? '',
+    apiKey: endpoint.apiKey,
     ...(baseURL ? { baseURL } : {}),
   })
+  // Server-side WebSearch is only supported by Anthropic's first-party API.
+  // Third-party gateways (Bedrock-backed New API, etc.) usually don't proxy
+  // it cleanly, so we gate by absence of baseUrl as a conservative proxy
+  // for "talking to api.anthropic.com".
   const webSearchSupported = !baseURL
 
   return {

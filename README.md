@@ -36,13 +36,17 @@ Drop a minimal `~/.lightclaw/config.json` to get started — see [Configuration]
 
 ```jsonc
 {
-  "provider": "anthropic",
-  "providerOptions": {
-    "anthropic": {
-      "apiKey": "<your-anthropic-api-key>"
+  "endpoints": {
+    "anthropic-direct": { "apiKey": "<your-anthropic-api-key>" }
+  },
+  "models": {
+    "claude-sonnet-4-6": {
+      "endpoint": "anthropic-direct",
+      "schema": "anthropic",
+      "upstreamModel": "claude-sonnet-4-6"
     }
   },
-  "model": "claude-sonnet-4-6"
+  "defaultModel": "claude-sonnet-4-6"
 }
 ```
 
@@ -64,27 +68,53 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
 
 ```jsonc
 {
-  // --- Provider & model ---
-  "provider": "anthropic",                      // "anthropic" | "openai"
-  "providerOptions": {
-    "anthropic": {
-      "apiKey": "<your-anthropic-api-key>",
-      "baseUrl": "<https://your-anthropic-endpoint>"   // optional; omit for the official endpoint
+  // --- Endpoints: named (apiKey + optional baseUrl) entries that models reference ---
+  // The same physical gateway can serve both anthropic and openai protocols;
+  // schema lives on each model entry, not here.
+  "endpoints": {
+    "anthropic-direct": {
+      "apiKey": "<your-anthropic-api-key>"
+      // omit baseUrl for the official api.anthropic.com endpoint
     },
-    "openai": {                                  // only needed if provider = "openai"
-      "apiKey": "<your-openai-compatible-key>",
-      "baseUrl": "<https://your-openai-compatible-endpoint>"
+    "newapi": {
+      "apiKey": "<your-gateway-key>",
+      "baseUrl": "<https://your-gateway-host>"
     }
   },
-  "model": "claude-sonnet-4-6",                 // default model; /model can switch at runtime
-  "allowedModels": ["claude-sonnet-4-6", "claude-opus-4-7"],   // optional /model allowlist
 
-  // Optional per-role routing — anything missing falls back to "model"
+  // --- Models: display name -> { endpoint alias, schema, upstreamModel } ---
+  // The display name is what shows up in `/model` and routing config; it can
+  // be anything memorable. `upstreamModel` is the real id sent on the wire.
+  "models": {
+    "claude-sonnet-4-6": {
+      "endpoint": "anthropic-direct",
+      "schema": "anthropic",                      // "anthropic" | "openai"
+      "upstreamModel": "claude-sonnet-4-6"
+    },
+    "claude-haiku-4-5": {
+      "endpoint": "newapi",
+      "schema": "anthropic",
+      "upstreamModel": "claude-haiku-4-5-20251001"
+    },
+    "gpt-5-mini": {
+      "endpoint": "newapi",
+      "schema": "openai",
+      "upstreamModel": "gpt-5-mini"
+    }
+  },
+
+  // The display name picked at startup; `/model <name>` switches at runtime.
+  // Falls back to the first registered model if omitted.
+  "defaultModel": "claude-sonnet-4-6",
+
+  // Optional per-role routing — each value is a display name from `models`.
+  // Missing values fall back to defaultModel. Mixing schemas across tasks
+  // (heterogeneous routing) is supported — e.g. main on Claude, extract on GPT.
   "routing": {
-    "main":      "claude-sonnet-4-6",           // main agent loop
-    "compact":   "claude-haiku-4-5",            // auto-compact summarizer
-    "extract":   "claude-haiku-4-5",            // memory extraction / micro-compact
-    "webSearch": "claude-haiku-4-5"             // WebSearch helper queries
+    "main":      "claude-sonnet-4-6",
+    "compact":   "claude-haiku-4-5",
+    "extract":   "gpt-5-mini",
+    "webSearch": "claude-haiku-4-5"
   },
 
   // --- User-facing language (slash output, feishu cards, banners, error notices) ---
@@ -172,7 +202,7 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
 }
 ```
 
-All keys are optional — drop the sections you don't use. Environment variables (`ANTHROPIC_API_KEY`, `LIGHTCLAW_MODEL`, `LIGHTCLAW_RUNTIME_BACKEND`, …) override the file. The full env-var reference is at [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md).
+All keys outside of `endpoints` and `models` are optional — drop the sections you don't use. `endpoints` + `models` are required (LightClaw refuses to start with no models registered). Environment variables (`LIGHTCLAW_MODEL`, `LIGHTCLAW_RUNTIME_BACKEND`, …) override the file. The full env-var reference is at [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md).
 
 Sibling files in the same directory:
 
@@ -200,7 +230,7 @@ lightclaw --help
 
 Removed Phase 9 CLI flags are now config/env driven:
 
-- Model/provider: `~/.lightclaw/config.json`, `LIGHTCLAW_MODEL`, `LIGHTCLAW_PROVIDER`
+- Models: `~/.lightclaw/config.json` (`endpoints` + `models` registry, `defaultModel`); `LIGHTCLAW_MODEL` overrides defaultModel by display name
 - Feature toggles: `LIGHTCLAW_NO_MEMORY=1`, `LIGHTCLAW_NO_MCP=1`, `LIGHTCLAW_NO_HOOKS=1`
 - Permission rules: edit `~/.lightclaw/permissions.json`
 - Identity management: `/user ...` slash command
@@ -344,11 +374,8 @@ Selected environment variables (override the matching `config.json` keys):
 |---|---|
 | `LIGHTCLAW_HOME` | Root of all LightClaw state (default `~/.lightclaw`). Move it to shared storage for cluster deployments. |
 | `LIGHTCLAW_SESSIONS_DIR` / `LIGHTCLAW_MEMORY_DIR` / `LIGHTCLAW_WORKSPACE_ROOT` | Override individual subdirectories independently of `LIGHTCLAW_HOME`. |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Anthropic credentials |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI-compatible credentials |
-| `LIGHTCLAW_PROVIDER` | `anthropic` or `openai` |
-| `LIGHTCLAW_MODEL` | Default model |
-| `LIGHTCLAW_ALLOWED_MODELS` | Comma-separated model allowlist for `/model` |
+| `LIGHTCLAW_MODEL` | Override `defaultModel` (must be a display name registered in `models`) |
+| `LIGHTCLAW_ROUTING_MAIN` / `_COMPACT` / `_EXTRACT` / `_WEBSEARCH` | Per-task routing override (each must be a display name in `models`) |
 | `BRAVE_SEARCH_API_KEY` | WebSearch Brave key (overrides `tools.webSearch.braveApiKey`); falls back to DDG HTML when unset. |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable a subsystem entirely |
 | `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | Fine-grained memory toggles and thresholds (see [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)) |
