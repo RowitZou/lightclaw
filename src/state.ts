@@ -10,6 +10,7 @@ import type { Runtime } from './runtime/index.js'
 import {
   getCurrentSessionContext,
   requireSessionContext,
+  type ChannelFileSender,
   type SessionContext,
 } from './session-context.js'
 import type { TodoItem, UsageStats } from './types.js'
@@ -163,6 +164,14 @@ export function getPermissionApprover(): PermissionApprover | null {
 
 export function setPermissionApprover(approver: PermissionApprover | null): void {
   currentState().permissionApprover = approver
+}
+
+export function getChannelFileSender(): ChannelFileSender | null {
+  return currentState().channelFileSender
+}
+
+export function setChannelFileSender(sender: ChannelFileSender | null): void {
+  currentState().channelFileSender = sender
 }
 
 export function getCliArgRules(): PermissionRule[] {

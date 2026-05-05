@@ -48,6 +48,12 @@ export type NormalizedChannelMessage = {
   mediaType?: string
 }
 
+export type OutgoingChannelFile = {
+  path: string
+  name?: string
+  mimeType?: string
+}
+
 export type ChannelsConfig = {
   feishu: FeishuChannelConfig
 }

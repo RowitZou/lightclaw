@@ -1,10 +1,19 @@
-import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import path from 'node:path'
+
+import type {
+  FeishuChannelConfig,
+  NormalizedChannelMessage,
+  OutgoingChannelFile,
+} from '../types.js'
 import type { FeishuClient } from './client.js'
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_DELAY_MS = 500
+const MAX_FEISHU_FILE_BYTES = 30 * 1024 * 1024
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -20,6 +29,12 @@ type SendResponse = {
   msg?: string
   data?: { message_id?: string }
 }
+
+type FeishuFileType = 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream'
+
+type UploadFileResponse = {
+  file_key?: string
+} | null
 
 type InteractiveCard = Record<string, unknown>
 
@@ -82,11 +97,54 @@ export class FeishuSender {
     })
   }
 
+  async sendFile(message: NormalizedChannelMessage, file: OutgoingChannelFile): Promise<void> {
+    const fileKey = await this.uploadFile(file)
+    await this.sendReplyOrCreate({
+      chatId: message.chatId,
+      replyToMessageId: message.messageId,
+      msgType: 'file',
+      content: JSON.stringify({ file_key: fileKey }),
+    })
+  }
+
+  private async uploadFile(file: OutgoingChannelFile): Promise<string> {
+    const filePath = path.resolve(file.path)
+    const info = await stat(filePath)
+    if (!info.isFile()) {
+      throw new Error(`Feishu file upload failed: not a file (${filePath})`)
+    }
+    if (info.size <= 0) {
+      throw new Error(`Feishu file upload failed: empty file (${filePath})`)
+    }
+    if (info.size > MAX_FEISHU_FILE_BYTES) {
+      throw new Error(
+        `Feishu file upload failed: file exceeds 30 MB (${info.size} bytes)`,
+      )
+    }
+
+    const fileName = file.name?.trim() || path.basename(filePath)
+    const fileType = inferFeishuFileType(fileName)
+    const response = await retryOnTransient(
+      `upload ${fileType}`,
+      () => this.client.im.file.create({
+        data: {
+          file_type: fileType,
+          file_name: fileName,
+          file: createReadStream(filePath),
+        },
+      }) as Promise<UploadFileResponse>,
+    )
+    if (!response?.file_key) {
+      throw new Error('Feishu file upload failed: missing file_key')
+    }
+    return response.file_key
+  }
+
   private async sendReplyOrCreate(input: {
     chatId: string
     replyToMessageId?: string
     text?: string
-    msgType?: 'text' | 'interactive'
+    msgType?: 'text' | 'interactive' | 'file'
     content?: string
   }): Promise<SendResponse> {
     const msgType = input.msgType ?? 'text'
@@ -130,6 +188,29 @@ export class FeishuSender {
     assertOk(response, 'Feishu create message failed')
     return response
   }
+}
+
+export function inferFeishuFileType(fileName: string): FeishuFileType {
+  const ext = path.extname(fileName).toLowerCase()
+  if (ext === '.mp4') {
+    return 'mp4'
+  }
+  if (ext === '.opus') {
+    return 'opus'
+  }
+  if (ext === '.pdf') {
+    return 'pdf'
+  }
+  if (['.doc', '.docx'].includes(ext)) {
+    return 'doc'
+  }
+  if (['.xls', '.xlsx'].includes(ext)) {
+    return 'xls'
+  }
+  if (['.ppt', '.pptx'].includes(ext)) {
+    return 'ppt'
+  }
+  return 'stream'
 }
 
 function isTransientSendError(error: unknown): boolean {

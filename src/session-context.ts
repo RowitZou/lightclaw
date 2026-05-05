@@ -5,6 +5,17 @@ import type { PermissionApprover, PermissionMode, PermissionRule } from './permi
 import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
 
+export type ChannelFileSendInput = {
+  path: string
+  name?: string
+  mimeType?: string
+}
+
+export type ChannelFileSender = {
+  channelId: string
+  sendFile(file: ChannelFileSendInput): Promise<void>
+}
+
 /**
  * Per-query / per-REPL-loop session context. Every field that can differ
  * between concurrent users lives here. Process-wide services such as the
@@ -29,6 +40,7 @@ export type SessionContext = {
   fileRules: PermissionRule[]
   activeSkillAllowedTools?: string[]
   permissionApprover: PermissionApprover | null
+  channelFileSender: ChannelFileSender | null
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
   runtime?: Runtime
@@ -88,6 +100,7 @@ export function createSessionContext(input: {
   fileRules?: PermissionRule[]
   activeSkillAllowedTools?: string[]
   permissionApprover?: PermissionApprover | null
+  channelFileSender?: ChannelFileSender | null
   runtime?: Runtime
 }): SessionContext {
   return {
@@ -109,6 +122,7 @@ export function createSessionContext(input: {
     fileRules: input.fileRules ?? [],
     activeSkillAllowedTools: input.activeSkillAllowedTools,
     permissionApprover: input.permissionApprover ?? null,
+    channelFileSender: input.channelFileSender ?? null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     runtime: input.runtime,
@@ -145,6 +159,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     fileRules: [],
     activeSkillAllowedTools: undefined,
     permissionApprover: null,
+    channelFileSender: null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     runtime: undefined,

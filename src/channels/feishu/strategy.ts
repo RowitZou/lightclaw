@@ -29,6 +29,7 @@ export function createFeishuStrategy(
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendMarkdownText(message, text),
+    sendFile: (message, file) => sender.sendFile(message, file),
     sendNotice: (
       message: NormalizedChannelMessage,
       kind: SystemNoticeKind,

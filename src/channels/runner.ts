@@ -45,7 +45,7 @@ import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
 import { assertSessionIdShape, SessionLock } from './session-lock.js'
-import type { ChannelId, NormalizedChannelMessage } from './types.js'
+import type { ChannelId, NormalizedChannelMessage, OutgoingChannelFile } from './types.js'
 
 /**
  * Per-channel strategy: everything that varies between feishu /
@@ -79,6 +79,10 @@ export type ChannelRunnerStrategy = {
     kind: SystemNoticeKind,
     text: string,
     bodyFormat?: 'lark_md' | 'plain_text',
+  ): Promise<void>
+  sendFile?(
+    message: NormalizedChannelMessage,
+    file: OutgoingChannelFile,
   ): Promise<void>
   createPermissionApprover?(
     message: NormalizedChannelMessage,
@@ -175,6 +179,12 @@ export class ChannelRunner {
           userId,
         )
         sessionContext.permissionApprover = approver ?? null
+        sessionContext.channelFileSender = this.strategy.sendFile
+          ? {
+              channelId: this.strategy.channelId,
+              sendFile: file => this.strategy.sendFile!(message, file),
+            }
+          : null
         await runWithSessionContext(sessionContext, async () => {
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
@@ -194,8 +204,10 @@ export class ChannelRunner {
           currentUserId: userId,
         })
         const pinnedApprover = sessionContext.permissionApprover
+        const pinnedChannelFileSender = sessionContext.channelFileSender
         Object.assign(sessionContext, resolvedContext)
         sessionContext.permissionApprover = pinnedApprover
+        sessionContext.channelFileSender = pinnedChannelFileSender
         await refreshSkillRegistry(getCwd())
         if (!meta) {
           await runHook('onSessionStart', {
