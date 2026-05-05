@@ -1,8 +1,11 @@
 import type { StreamEvent } from '../types.js'
 
 /** Wire protocol the provider speaks. The same physical endpoint may host
- *  both, distinguished per-model in `LightClawConfig.models`. */
-export type Schema = 'anthropic' | 'openai'
+ *  both, distinguished per-model in `LightClawConfig.models`. `openai-auth`
+ *  uses the OpenAI Responses API on the Codex backend
+ *  (chatgpt.com/backend-api/codex) with OAuth credentials sourced from the
+ *  endpoint's auth provider. */
+export type Schema = 'anthropic' | 'openai' | 'openai-auth'
 
 /** @deprecated kept for back-compat in any in-tree caller; new code should
  *  use `Schema`. */

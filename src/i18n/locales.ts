@@ -50,6 +50,42 @@ export const LOCALES = {
     'cmd.feedback.desc': '给 admin 留反馈（admin 通过 /user feedback 阅读）',
     'cmd.cost.usage': '/cost',
     'cmd.cost.desc': '查看本月 token 用量按 model / user 聚合（admin 专属）',
+    'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
+    'cmd.auth.desc': '管理外部 provider OAuth 凭证（admin 专属）。当前支持 OpenAI Codex（用 ChatGPT 订阅自带的 Codex 配额）',
+
+    // ---- /auth (admin) ----
+    'auth.usage': '用法：/auth list | import codex | logout codex [--purge]',
+    'auth.import.usage': '用法：/auth import <provider>。当前支持：codex',
+    'auth.import.notSupported': 'provider {name} 不支持 import。',
+    'auth.logout.usage': '用法：/auth logout <provider> [--purge]',
+    'auth.unsupportedProvider': '不支持的 provider：{name}。当前支持：{list}',
+    'auth.list.title': '已注册 auth provider：',
+    'auth.list.noProviders': '当前没有任何 auth provider 注册。',
+    'auth.list.entry': '  {name}：accountId={accountId}，{expiresIn}过期',
+    'auth.list.entryEmpty': '  {name}：未登录（运行 /auth import {name} 导入官方 CLI 凭证）',
+    'auth.list.expired': '已过期，',
+    'auth.list.inMinutes': '约 {n} 分钟后',
+    'auth.list.inHours': '约 {n} 小时后',
+    'auth.list.inDays': '约 {n} 天后',
+    'auth.import.success': '已导入 {name} 凭证。',
+    'auth.codex.registered': '已自动注册 endpoints.codex + models.gpt-5-codex 到 config.json。运行 /model gpt-5-codex 切换。',
+    'auth.codex.alreadyRegistered': 'config.json 已存在 codex endpoint / gpt-5-codex model，未覆盖。',
+    'auth.logout.success': '已删除 {name} 凭证文件。',
+    'auth.logout.purged': '已同步移除 endpoint={endpoint}、models={models}。',
+    'auth.logout.purgeNothing': 'config.json 中无 codex 相关注册，无需清理。',
+    'auth.codex.banRiskWarning':
+      '⚠️  Codex OAuth 实验性通路 — 请阅读\n\n' +
+      'LightClaw 通过 OpenAI Codex CLI 的 OAuth 凭证调用 ChatGPT 订阅自带的\n' +
+      'Codex 配额。这一做法当前未在 OpenAI ToS 中明确白名单。\n\n' +
+      '已知风险：\n' +
+      '• Anthropic 已在 2026 年初对相似的第三方 OAuth 复用模式实施封号\n' +
+      '  （参考 Hermes issue #6475 / #15080）\n' +
+      '• OpenAI 走相同剧本只是时间问题，不是是否\n' +
+      '• 持续 429 限流 / 401 鉴权失败 / chat.openai.com 收到 warning\n' +
+      '  都是封号前兆 — 出现请立即停手并切回 API key 通路\n\n' +
+      '凭证安全：token 文件位于 <home>/auth/codex.json (0600)，等同账号密码。\n' +
+      '不要分享、不要带 sandbox 工具读 <home>/auth/。\n\n' +
+      '继续使用即视为知晓上述风险。',
 
     // ---- /status ----
     'status.you': '你：{user}{adminFlag} （来自 {channel}）',
@@ -376,6 +412,45 @@ export const LOCALES = {
     'cmd.feedback.desc': 'Send feedback to admin (admin reads via /user feedback)',
     'cmd.cost.usage': '/cost',
     'cmd.cost.desc': 'Show this month token usage by-model + by-user (admin only)',
+    'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
+    'cmd.auth.desc': 'Manage OAuth credentials for external providers (admin only). Currently supports OpenAI Codex (use the Codex quota that comes with your ChatGPT subscription).',
+
+    // ---- /auth (admin) ----
+    'auth.usage': 'Usage: /auth list | import codex | logout codex [--purge]',
+    'auth.import.usage': 'Usage: /auth import <provider>. Supported: codex',
+    'auth.import.notSupported': 'provider {name} does not support import.',
+    'auth.logout.usage': 'Usage: /auth logout <provider> [--purge]',
+    'auth.unsupportedProvider': 'Unsupported provider: {name}. Supported: {list}',
+    'auth.list.title': 'Registered auth providers:',
+    'auth.list.noProviders': 'No auth provider is registered.',
+    'auth.list.entry': '  {name}: accountId={accountId}, expires {expiresIn}',
+    'auth.list.entryEmpty': '  {name}: not logged in (run /auth import {name} to import from the official CLI)',
+    'auth.list.expired': 'expired,',
+    'auth.list.inMinutes': 'in ~{n} min',
+    'auth.list.inHours': 'in ~{n} h',
+    'auth.list.inDays': 'in ~{n} d',
+    'auth.import.success': 'Imported {name} credentials.',
+    'auth.codex.registered': 'Auto-registered endpoints.codex + models.gpt-5-codex into config.json. Run /model gpt-5-codex to switch.',
+    'auth.codex.alreadyRegistered': 'config.json already has codex endpoint / gpt-5-codex model — left untouched.',
+    'auth.logout.success': 'Removed {name} credential file.',
+    'auth.logout.purged': 'Also removed endpoint={endpoint}, models={models}.',
+    'auth.logout.purgeNothing': 'No codex-related entries in config.json to purge.',
+    'auth.codex.banRiskWarning':
+      '⚠️  Codex OAuth — experimental path, please read\n\n' +
+      'LightClaw uses the OAuth credentials from OpenAI\'s Codex CLI to call\n' +
+      'the Codex quota that comes with your ChatGPT subscription. This usage\n' +
+      'is NOT explicitly whitelisted in OpenAI\'s Terms of Service.\n\n' +
+      'Known risks:\n' +
+      '• Anthropic banned similar third-party OAuth reuse in early 2026\n' +
+      '  (see Hermes issue #6475 / #15080 for community reports)\n' +
+      '• OpenAI may follow the same playbook — it is a question of when, not if\n' +
+      '• Continuous 429 rate-limits / 401 auth failures / warnings on\n' +
+      '  chat.openai.com are precursors to a ban — stop immediately and switch\n' +
+      '  back to API-key access if you see them\n\n' +
+      'Credential safety: the token file at <home>/auth/codex.json (mode 0600)\n' +
+      'is equivalent to your password. Do not share. Do not let sandbox tools\n' +
+      'read <home>/auth/.\n\n' +
+      'Continued use implies acknowledgement of these risks.',
 
     // ---- /status ----
     'status.you': 'You: {user}{adminFlag} on {channel}',

@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-import type { EndpointConfig } from '../config.js'
+import type { ApiKeyEndpoint } from '../config.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -240,7 +240,7 @@ function formatWebSearchBlocks(blocks: unknown[]): string {
   return lines.join('\n').trim()
 }
 
-export function createAnthropicProvider(endpoint: EndpointConfig): Provider {
+export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
   const baseURL = endpoint.baseUrl
   const client = new Anthropic({
     apiKey: endpoint.apiKey,

@@ -12,6 +12,10 @@ import { lightclawHome } from './paths.js'
 export type ConfigFileEndpoint = {
   apiKey?: string
   baseUrl?: string
+  /** When set, the endpoint is sourced via OAuth (no apiKey on this entry).
+   *  Currently only `'codex-oauth'` is recognized; it routes to the
+   *  Codex backend with credentials managed by `src/auth/codex/`. */
+  auth?: 'codex-oauth'
 }
 
 export type ConfigFileModel = {
