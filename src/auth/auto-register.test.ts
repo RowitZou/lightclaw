@@ -116,6 +116,22 @@ describe('auth/codex/auto-register', () => {
     assert.equal(before, after)
   })
 
+  it('uses the caller-supplied upstreamModel when provided', () => {
+    autoRegisterCodex({ upstreamModel: 'gpt-5.4' })
+    const cfg = readConfig() as {
+      models: Record<string, { upstreamModel: string }>
+    }
+    assert.equal(cfg.models['gpt-5-codex'].upstreamModel, 'gpt-5.4')
+  })
+
+  it('falls back to the default when upstreamModel is empty / whitespace', () => {
+    autoRegisterCodex({ upstreamModel: '   ' })
+    const cfg = readConfig() as {
+      models: Record<string, { upstreamModel: string }>
+    }
+    assert.equal(cfg.models['gpt-5-codex'].upstreamModel, 'gpt-5.5')
+  })
+
   it('purgeCodexFromConfig drops endpoint + every model pointing at it', () => {
     writeConfig({
       endpoints: {
