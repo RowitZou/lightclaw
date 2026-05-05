@@ -48,7 +48,7 @@ describe('auth/codex/auto-register', () => {
     assert.deepEqual(cfg.models['gpt-5-codex'], {
       endpoint: 'codex',
       schema: 'openai-auth',
-      upstreamModel: 'gpt-5',
+      upstreamModel: 'gpt-5.5',
     })
   })
 
