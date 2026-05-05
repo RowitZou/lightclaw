@@ -13,7 +13,12 @@ import { lightclawHome } from '../../paths.js'
 // per-user config the user added manually. We round-trip the raw JSON.
 
 const DEFAULT_CODEX_DISPLAY_MODEL = 'gpt-5-codex'
-const DEFAULT_CODEX_UPSTREAM_MODEL = 'gpt-5'
+// As of 2026-05-05 the Codex backend (chatgpt.com/backend-api/codex/models)
+// returns gpt-5.5 (priority=0) as the default model; gpt-5.4 / gpt-5.4-mini
+// / gpt-5.3-codex / gpt-5.2 are also visible. Sending model='gpt-5' returns
+// 4xx — there is no gpt-5 slug on the Codex backend. Admin can edit
+// upstreamModel in config.json post-import to pick a different slug.
+const DEFAULT_CODEX_UPSTREAM_MODEL = 'gpt-5.5'
 const DEFAULT_CODEX_ENDPOINT_ALIAS = 'codex'
 
 export type AutoRegisterResult = {
