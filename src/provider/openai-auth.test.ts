@@ -4,8 +4,10 @@ import assert from 'node:assert/strict'
 import {
   convertMessagesToResponsesInput,
   convertToolsToResponsesShape,
+  processResponseStream,
 } from './openai-auth.js'
 import type { ApiMessage } from './types.js'
+import type { StreamEvent, StreamStopEvent } from '../types.js'
 
 describe('openai-auth: convertMessagesToResponsesInput', () => {
   it('converts a plain user message to input_text', () => {
@@ -193,5 +195,146 @@ describe('openai-auth: convertToolsToResponsesShape', () => {
   it('emits an empty array for no tools', () => {
     const out = convertToolsToResponsesShape([])
     assert.equal(out.length, 0)
+  })
+})
+
+async function* fromArray<T>(items: T[]): AsyncIterable<T> {
+  for (const item of items) yield item
+}
+
+async function collect(
+  stream: AsyncIterable<StreamEvent>,
+): Promise<StreamEvent[]> {
+  const out: StreamEvent[] = []
+  for await (const ev of stream) out.push(ev)
+  return out
+}
+
+describe('openai-auth: processResponseStream', () => {
+  // Regression: when gpt-5-codex emits ONLY function_call items (no
+  // output_text), stopEvent.content must include the tool_use block — the
+  // agent loop in query.ts dispatches tools off stopEvent.content, not the
+  // streaming events. Previously content stayed empty and the turn ended
+  // as a vacuous end_turn with zero tool dispatches; the user saw "no
+  // reply" while output_tokens > 0.
+  it('folds tool_use blocks into stopEvent.content (no text)', async () => {
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Write' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{"file_path":"/tmp/test.md","content":"hi"}',
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Write' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 100, output_tokens: 30 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.stopReason, 'tool_use', 'stopReason flips to tool_use when blocks present')
+    assert.equal(stop.content.length, 1)
+    const block = stop.content[0]
+    assert.equal(block.type, 'tool_use')
+    if (block.type === 'tool_use') {
+      assert.equal(block.id, 'call_1')
+      assert.equal(block.name, 'Write')
+      assert.deepEqual(block.input, { file_path: '/tmp/test.md', content: 'hi' })
+    }
+  })
+
+  it('preserves text + multiple tool_use blocks in content order', async () => {
+    const events = [
+      { type: 'response.output_text.delta', delta: 'I will write the file. ' },
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Write' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{"path":"/a"}',
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Write' },
+      },
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'Read' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_2',
+        delta: '{"path":"/b"}',
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'Read' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 50, output_tokens: 20 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.content.length, 3)
+    assert.equal(stop.content[0]?.type, 'text')
+    assert.equal(stop.content[1]?.type, 'tool_use')
+    assert.equal(stop.content[2]?.type, 'tool_use')
+    if (stop.content[1]?.type === 'tool_use') {
+      assert.equal(stop.content[1].name, 'Write')
+    }
+    if (stop.content[2]?.type === 'tool_use') {
+      assert.equal(stop.content[2].name, 'Read')
+    }
+  })
+
+  it('text-only response keeps stopReason=end_turn with no tool_use', async () => {
+    const events = [
+      { type: 'response.output_text.delta', delta: 'hello there' },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 3 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.stopReason, 'end_turn')
+    assert.equal(stop.content.length, 1)
+    assert.equal(stop.content[0]?.type, 'text')
+  })
+
+  it('empty function_call arguments parse as {} not throwing', async () => {
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'NoArgsTool' },
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'NoArgsTool' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 5 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.content.length, 1)
+    if (stop.content[0]?.type === 'tool_use') {
+      assert.deepEqual(stop.content[0].input, {})
+    }
   })
 })
