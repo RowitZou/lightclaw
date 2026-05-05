@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
+import { registerCodexAuthProvider } from './auth/codex/index.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
@@ -85,6 +86,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   startImagePrefetchIfNeeded(resolvedConfig)
   await writeSessionState(resolvedConfig, inputWithPrefs)
   initializeAgents()
+  registerCodexAuthProvider()
   installSignalHandlers()
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)

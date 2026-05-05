@@ -43,6 +43,7 @@ import {
   setPermissionMode,
 } from '../state.js'
 
+import { runAuthCommand } from './auth.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import {
   MODE_ALIASES,
@@ -462,6 +463,20 @@ function buildBuiltinCommands(): ReplCommand[] {
         return
       }
       ctx.output.write(`${t('common.error.prefix')}${t('rules.usage')}\n`)
+    },
+  },
+  {
+    name: '/auth',
+    usage: t('cmd.auth.usage'),
+    description: t('cmd.auth.desc'),
+    // Admin-only: OAuth credentials are endpoint-level state, equivalent
+    // in scope to the apiKey on a config-defined endpoint. Letting any
+    // user log in / out would let them rebind the host's outbound
+    // identity to their own ChatGPT account, which is not what the
+    // multi-user model implies.
+    visibleTo: 'admin',
+    async handler(args, ctx) {
+      ctx.output.write(await runAuthCommand(args))
     },
   },
   ]
