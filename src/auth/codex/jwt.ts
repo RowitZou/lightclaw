@@ -54,3 +54,30 @@ export function extractAccountIdFromTokens(tokens: {
   if (access) return access
   return ''
 }
+
+/** Decode the JWT `exp` claim and return it as Unix epoch ms.
+ *  Returns null when the token isn't a valid JWT or has no numeric exp. */
+export function decodeExpiresAtMs(jwt: string): number | null {
+  const parts = jwt.split('.')
+  if (parts.length !== 3) {
+    return null
+  }
+  let payload: unknown
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const raw = Buffer.from(padded, 'base64').toString('utf8')
+    payload = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+  const exp = (payload as Record<string, unknown>).exp
+  if (typeof exp !== 'number' || !Number.isFinite(exp)) {
+    return null
+  }
+  // JWT exp is unix seconds; LightClaw stores ms.
+  return Math.floor(exp * 1000)
+}
