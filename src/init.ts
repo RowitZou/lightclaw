@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { registerCodexAuthProvider } from './auth/codex/index.js'
+import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
@@ -74,6 +75,19 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   // user-visible message (banner, slash output, error notices) is rendered
   // in the configured locale. Stderr logging is unaffected.
   setLang(resolvedConfig.lang)
+  // Auth providers must be registered before the OAuth model usability
+  // check below: ensureOAuthModelsUsable looks up `getAuthProvider('codex')`.
+  // Moved up from its previous spot below initializeAgents() because the
+  // usability check may degrade `config.models` / `routing` / `model`
+  // before writeSessionState reads them into the session meta.
+  registerCodexAuthProvider()
+  // If any registered model uses schema = 'openai-auth', ensure Codex
+  // credentials work (read stored token + auto-refresh; fall back to
+  // import from ~/.codex/auth.json only when the LightClaw store is
+  // empty). On failure, disable the OAuth models in-memory and rewrite
+  // defaultModel / routing.* away from them. Throws same-shape as
+  // 'No models configured' if every model was OAuth and login failed.
+  await ensureOAuthModelsUsable(resolvedConfig)
   // NetworkBridge must come up BEFORE pool/preheat — when network.mode=host,
   // pool.ts auto-injects http_proxy pointing at this bridge's address into
   // every container, so a not-yet-listening bridge would mean the first
@@ -86,7 +100,6 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   startImagePrefetchIfNeeded(resolvedConfig)
   await writeSessionState(resolvedConfig, inputWithPrefs)
   initializeAgents()
-  registerCodexAuthProvider()
   installSignalHandlers()
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
