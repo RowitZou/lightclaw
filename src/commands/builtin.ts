@@ -476,7 +476,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     // multi-user model implies.
     visibleTo: 'admin',
     async handler(args, ctx) {
-      ctx.output.write(await runAuthCommand(args))
+      ctx.output.write(await runAuthCommand(args, ctx.config))
     },
   },
   ]
