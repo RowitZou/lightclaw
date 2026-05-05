@@ -17,7 +17,7 @@ import {
   CODEX_REFRESH_SKEW_SECONDS,
   codexCliAuthFilePath,
 } from './constants.js'
-import { extractAccountIdFromTokens } from './jwt.js'
+import { decodeExpiresAtMs, extractAccountIdFromTokens } from './jwt.js'
 
 const PROVIDER_NAME = 'codex'
 
@@ -36,16 +36,19 @@ type StoredCodexTokens = {
   source: 'codex-cli-import' | 'lightclaw-refresh'
 }
 
-/** Shape of the OpenAI Codex CLI's `~/.codex/auth.json`. We only consume
- *  the fields we actually need; extra fields are ignored. */
+/** Shape of the OpenAI Codex CLI's `~/.codex/auth.json` as of mid-2026.
+ *  Important: the upstream file does NOT carry an explicit expires_at —
+ *  we derive expiry from the access_token JWT's `exp` claim. The
+ *  account_id is stored under tokens.account_id (not as a JWT claim,
+ *  though the JWT also carries it as fallback). Extra fields ignored. */
 type CodexCliAuthFile = {
+  auth_mode?: string
   OPENAI_API_KEY?: string | null
   tokens?: {
     id_token?: string
     access_token?: string
     refresh_token?: string
-    /** Stored as ISO 8601 string in the upstream CLI. */
-    expires_at?: string | number
+    account_id?: string
   }
   last_refresh?: string
 }
@@ -103,14 +106,6 @@ function isExpiringSoon(expiresAtMs: number, skewSeconds: number): boolean {
   return Date.now() + skewSeconds * 1000 >= expiresAtMs
 }
 
-function parseCliExpiresAt(value: string | number | undefined): number | null {
-  if (value === undefined) return null
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null
-  }
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? null : parsed
-}
 
 function readStored(): StoredCodexTokens | null {
   const raw = readTokenFile(PROVIDER_NAME)
@@ -260,13 +255,18 @@ function importFromCodexCli(): StoredCodexTokens {
         `Re-run \`codex login\`.`,
     })
   }
-  const expiresAtMs = parseCliExpiresAt(tokens.expires_at)
+  // The upstream Codex CLI file does NOT carry an explicit expires_at.
+  // Derive it from the access_token JWT's `exp` claim — that's where
+  // OpenAI auth.openai.com stamps the expiry, and what hermes /
+  // openclaw both decode at import time.
+  const expiresAtMs = decodeExpiresAtMs(tokens.access_token)
   if (expiresAtMs === null) {
     throw new AuthError({
       code: 'tokens_invalid_shape',
       provider: PROVIDER_NAME,
       message:
-        `Codex CLI auth file at ${cliPath} has missing or unparseable tokens.expires_at.`,
+        `Codex CLI auth file at ${cliPath}: could not decode expiry from access_token JWT. ` +
+        `Re-run \`codex login\` to mint fresh tokens.`,
     })
   }
   if (expiresAtMs <= Date.now()) {
@@ -278,10 +278,14 @@ function importFromCodexCli(): StoredCodexTokens {
         `Re-run \`codex login\` to mint fresh tokens.`,
     })
   }
-  const accountId = extractAccountIdFromTokens({
-    id_token: tokens.id_token,
-    access_token: tokens.access_token,
-  })
+  // account_id is stored at tokens.account_id directly in the upstream
+  // CLI file. Fall back to JWT decode for older variants.
+  const accountId =
+    (typeof tokens.account_id === 'string' && tokens.account_id) ||
+    extractAccountIdFromTokens({
+      id_token: tokens.id_token,
+      access_token: tokens.access_token,
+    })
   const stored: StoredCodexTokens = {
     tokens: {
       access_token: tokens.access_token,
