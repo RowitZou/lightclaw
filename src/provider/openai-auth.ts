@@ -13,6 +13,7 @@ import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
 import type { OAuthEndpoint } from '../config.js'
 import type {
   AssistantContentBlock,
+  AssistantToolUseBlock,
   StreamEvent,
   StreamStopEvent,
   UsageStats,
@@ -251,148 +252,185 @@ export function createOpenAIAuthProvider(
         signal: params.signal,
       })
 
-      const pending = new Map<string, PendingFunctionCall>()
-      let textBuffer = ''
-      let usage: UsageStats = {}
-      let stopReason: string | null = null
-      let toolUseIndex = 0
-
-      for await (const event of stream as AsyncIterable<ResponseStreamEvent>) {
-        switch (event.type) {
-          case 'response.output_item.added': {
-            const item = event.item as { type?: string; id?: string; call_id?: string; name?: string }
-            if (item.type === 'function_call' && item.id) {
-              pending.set(item.id, {
-                id: item.call_id ?? item.id,
-                name: item.name ?? '',
-                args: '',
-              })
-            }
-            break
-          }
-          case 'response.function_call_arguments.delta': {
-            const ev = event as { item_id: string; delta: string }
-            const slot = pending.get(ev.item_id)
-            if (slot) {
-              slot.args += ev.delta
-            }
-            break
-          }
-          case 'response.output_item.done': {
-            const item = event.item as { id?: string; type?: string; name?: string; arguments?: string; call_id?: string }
-            if (item.type === 'function_call' && item.id) {
-              const slot = pending.get(item.id)
-              if (slot) {
-                if (item.arguments && slot.args.length === 0) {
-                  slot.args = item.arguments
-                }
-                if (item.name && !slot.name) slot.name = item.name
-                if (item.call_id) slot.id = item.call_id
-                let parsedInput: Record<string, unknown> = {}
-                if (slot.args.trim().length > 0) {
-                  try {
-                    parsedInput = JSON.parse(slot.args) as Record<string, unknown>
-                  } catch {
-                    // Leave parsedInput as {}; the model will see the
-                    // mismatch via the resulting tool_result error.
-                  }
-                }
-                yield {
-                  type: 'tool_use',
-                  id: slot.id,
-                  name: slot.name,
-                  input: parsedInput,
-                  index: toolUseIndex++,
-                }
-                pending.delete(item.id)
-              }
-            }
-            break
-          }
-          case 'response.output_text.delta': {
-            const ev = event as { delta: string }
-            if (ev.delta && ev.delta.length > 0) {
-              textBuffer += ev.delta
-              yield { type: 'text', text: ev.delta }
-            }
-            break
-          }
-          case 'response.completed': {
-            const response = event.response as {
-              status?: string
-              incomplete_details?: { reason?: string } | null
-              usage?: unknown
-            }
-            usage = mapResponsesUsage(response.usage)
-            const finishReason = response.status ?? 'completed'
-            const incompleteReason = response.incomplete_details?.reason
-            if (finishReason === 'completed') {
-              stopReason = 'end_turn'
-            } else if (incompleteReason === 'max_output_tokens') {
-              stopReason = 'max_tokens'
-            } else if (finishReason === 'incomplete') {
-              stopReason = 'max_tokens'
-            } else {
-              stopReason = 'end_turn'
-            }
-            break
-          }
-          case 'response.failed':
-          case 'response.incomplete': {
-            const response = event.response as { usage?: unknown }
-            usage = mapResponsesUsage(response.usage)
-            stopReason = event.type === 'response.failed' ? 'error' : 'max_tokens'
-            break
-          }
-          case 'error': {
-            const ev = event as { code?: string; message?: string }
-            throw new Error(
-              `OpenAI Responses API error${ev.code ? ` (${ev.code})` : ''}: ${ev.message ?? 'unknown'}`,
-            )
-          }
-          default:
-            // Reasoning summary / annotations / refusal / web_search etc.
-            // Not exposed yet — observed via Iter 5 telemetry before
-            // surfacing.
-            break
-        }
-      }
-
-      // pending function_calls without a corresponding output_item.done
-      // (defensive — should not happen in normal flow).
-      for (const [, slot] of pending) {
-        let parsedInput: Record<string, unknown> = {}
-        if (slot.args.trim().length > 0) {
-          try {
-            parsedInput = JSON.parse(slot.args) as Record<string, unknown>
-          } catch {
-            // ignore
-          }
-        }
-        yield {
-          type: 'tool_use',
-          id: slot.id,
-          name: slot.name,
-          input: parsedInput,
-          index: toolUseIndex++,
-        }
-      }
-
-      const content: AssistantContentBlock[] = []
-      if (textBuffer.length > 0) {
-        content.push({ type: 'text', text: textBuffer })
-      }
-      // We don't reconstruct tool_use blocks into `content` here because
-      // the agent loop builds AssistantContentBlocks from streaming events,
-      // not the stop event's content array (mirrors openai.ts behavior).
-
-      const stopEvent: StreamStopEvent = {
-        type: 'stop',
-        stopReason: stopReason ?? 'end_turn',
-        usage,
-        content,
-      }
-      yield stopEvent
+      yield* processResponseStream(stream as AsyncIterable<ResponseStreamEvent>)
     },
   }
+}
+
+/**
+ * Reduce a Responses API event stream into LightClaw StreamEvents. Exported
+ * for tests — feed a hand-rolled async iterable of ResponseStreamEvents.
+ */
+export async function* processResponseStream(
+  stream: AsyncIterable<ResponseStreamEvent>,
+): AsyncGenerator<StreamEvent> {
+  const pending = new Map<string, PendingFunctionCall>()
+  let textBuffer = ''
+  let usage: UsageStats = {}
+  let stopReason: string | null = null
+  let toolUseIndex = 0
+  // Tool_use blocks accumulated here are folded into stopEvent.content at
+  // the end. query.ts reads tool_uses off stopEvent.content (not the
+  // streaming events), so leaving them out causes silent drops where the
+  // model emits a function_call but no dispatch happens — turn ends as a
+  // vacuous end_turn with empty content. Matches openai.ts behavior.
+  const toolUseBlocks: AssistantToolUseBlock[] = []
+
+  for await (const event of stream) {
+    switch (event.type) {
+      case 'response.output_item.added': {
+        const item = event.item as { type?: string; id?: string; call_id?: string; name?: string }
+        if (item.type === 'function_call' && item.id) {
+          pending.set(item.id, {
+            id: item.call_id ?? item.id,
+            name: item.name ?? '',
+            args: '',
+          })
+        }
+        break
+      }
+      case 'response.function_call_arguments.delta': {
+        const ev = event as { item_id: string; delta: string }
+        const slot = pending.get(ev.item_id)
+        if (slot) {
+          slot.args += ev.delta
+        }
+        break
+      }
+      case 'response.output_item.done': {
+        const item = event.item as { id?: string; type?: string; name?: string; arguments?: string; call_id?: string }
+        if (item.type === 'function_call' && item.id) {
+          const slot = pending.get(item.id)
+          if (slot) {
+            if (item.arguments && slot.args.length === 0) {
+              slot.args = item.arguments
+            }
+            if (item.name && !slot.name) slot.name = item.name
+            if (item.call_id) slot.id = item.call_id
+            let parsedInput: Record<string, unknown> = {}
+            if (slot.args.trim().length > 0) {
+              try {
+                parsedInput = JSON.parse(slot.args) as Record<string, unknown>
+              } catch {
+                // Leave parsedInput as {}; the model will see the
+                // mismatch via the resulting tool_result error.
+              }
+            }
+            toolUseBlocks.push({
+              type: 'tool_use',
+              id: slot.id,
+              name: slot.name,
+              input: parsedInput,
+            })
+            yield {
+              type: 'tool_use',
+              id: slot.id,
+              name: slot.name,
+              input: parsedInput,
+              index: toolUseIndex++,
+            }
+            pending.delete(item.id)
+          }
+        }
+        break
+      }
+      case 'response.output_text.delta': {
+        const ev = event as { delta: string }
+        if (ev.delta && ev.delta.length > 0) {
+          textBuffer += ev.delta
+          yield { type: 'text', text: ev.delta }
+        }
+        break
+      }
+      case 'response.completed': {
+        const response = event.response as {
+          status?: string
+          incomplete_details?: { reason?: string } | null
+          usage?: unknown
+        }
+        usage = mapResponsesUsage(response.usage)
+        const finishReason = response.status ?? 'completed'
+        const incompleteReason = response.incomplete_details?.reason
+        if (finishReason === 'completed') {
+          stopReason = 'end_turn'
+        } else if (incompleteReason === 'max_output_tokens') {
+          stopReason = 'max_tokens'
+        } else if (finishReason === 'incomplete') {
+          stopReason = 'max_tokens'
+        } else {
+          stopReason = 'end_turn'
+        }
+        break
+      }
+      case 'response.failed':
+      case 'response.incomplete': {
+        const response = event.response as { usage?: unknown }
+        usage = mapResponsesUsage(response.usage)
+        stopReason = event.type === 'response.failed' ? 'error' : 'max_tokens'
+        break
+      }
+      case 'error': {
+        const ev = event as { code?: string; message?: string }
+        throw new Error(
+          `OpenAI Responses API error${ev.code ? ` (${ev.code})` : ''}: ${ev.message ?? 'unknown'}`,
+        )
+      }
+      default:
+        // Reasoning summary / annotations / refusal / web_search etc.
+        // Not exposed yet — observed via Iter 5 telemetry before
+        // surfacing.
+        break
+    }
+  }
+
+  // pending function_calls without a corresponding output_item.done
+  // (defensive — should not happen in normal flow).
+  for (const [, slot] of pending) {
+    let parsedInput: Record<string, unknown> = {}
+    if (slot.args.trim().length > 0) {
+      try {
+        parsedInput = JSON.parse(slot.args) as Record<string, unknown>
+      } catch {
+        // ignore
+      }
+    }
+    toolUseBlocks.push({
+      type: 'tool_use',
+      id: slot.id,
+      name: slot.name,
+      input: parsedInput,
+    })
+    yield {
+      type: 'tool_use',
+      id: slot.id,
+      name: slot.name,
+      input: parsedInput,
+      index: toolUseIndex++,
+    }
+  }
+
+  const content: AssistantContentBlock[] = []
+  if (textBuffer.length > 0) {
+    content.push({ type: 'text', text: textBuffer })
+  }
+  for (const block of toolUseBlocks) {
+    content.push(block)
+  }
+  // When the model emitted any tool_use, surface stopReason='tool_use' so
+  // the agent loop's downstream signals (and any provider-shape consumers)
+  // see the same shape Anthropic/Chat Completions return. The Responses
+  // API doesn't expose a distinct finish_reason for tool calls — it
+  // reports status='completed' even when only function_calls were emitted.
+  const effectiveStopReason =
+    toolUseBlocks.length > 0 && stopReason === 'end_turn'
+      ? 'tool_use'
+      : (stopReason ?? 'end_turn')
+
+  const stopEvent: StreamStopEvent = {
+    type: 'stop',
+    stopReason: effectiveStopReason,
+    usage,
+    content,
+  }
+  yield stopEvent
 }
