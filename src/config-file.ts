@@ -159,6 +159,10 @@ export type ConfigFileShape = {
       /** Explicit proxy URL forwarded by the bridge and injected into
        *  LocalRuntime Bash subprocess env. Empty / omitted = direct. */
       proxy?: string
+      /** Destinations that bypass `proxy` (CIDR / `.suffix` / exact
+       *  hostname). Same list drives bridge routing + container/Bash
+       *  `no_proxy` env. */
+      noProxy?: string[]
       port?: number
       bindHost?: string
       acl?: string[]

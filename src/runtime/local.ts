@@ -26,17 +26,21 @@ export class LocalRuntime implements Runtime {
   readonly workspaceRoot: string
   readonly helperRoot: string
   /** Proxy env injected into every spawned Bash subprocess, sourced
-   *  from `runtime.network.proxy`. Null = no injection (subprocesses
-   *  see the parent process env unchanged). LightClaw's own outbound
-   *  HTTP paths read proxy from per-component config, never from this
-   *  shared parent env, so injection here only affects user shell
-   *  tools (curl/git/pnpm/etc.). */
+   *  from `runtime.network.proxy` + `runtime.network.noProxy`. Null =
+   *  no injection (subprocesses see the parent process env unchanged).
+   *  LightClaw's own outbound HTTP paths read proxy from per-component
+   *  config, never from this shared parent env, so injection here only
+   *  affects user shell tools (curl/git/pnpm/etc.). */
   private readonly proxyEnv: Record<string, string> | null
 
-  constructor(workspaceRoot: string, proxy?: string | null) {
+  constructor(
+    workspaceRoot: string,
+    proxy?: string | null,
+    noProxy: readonly string[] = [],
+  ) {
     this.workspaceRoot = path.resolve(workspaceRoot)
     this.helperRoot = resolveDefaultHelperRoot()
-    this.proxyEnv = buildLocalProxyEnv(proxy)
+    this.proxyEnv = buildLocalProxyEnv(proxy, noProxy)
   }
 
   async start(): Promise<void> {
@@ -202,18 +206,23 @@ export class LocalRuntime implements Runtime {
   }
 }
 
-function buildLocalProxyEnv(proxy: string | null | undefined): Record<string, string> | null {
+function buildLocalProxyEnv(
+  proxy: string | null | undefined,
+  noProxy: readonly string[],
+): Record<string, string> | null {
   const trimmed = typeof proxy === 'string' ? proxy.trim() : ''
   if (!trimmed) return null
   // Match buildBridgeEnv's shape so admin sees the same env semantics
   // regardless of runtime backend (local / docker host / rlaunch host).
+  const builtin = ['localhost', '127.0.0.1', '::1', '.local']
+  const merged = [...builtin, ...noProxy.filter(Boolean)].join(',')
   return {
     http_proxy: trimmed,
     https_proxy: trimmed,
     HTTP_PROXY: trimmed,
     HTTPS_PROXY: trimmed,
-    no_proxy: 'localhost,127.0.0.1,::1,.local',
-    NO_PROXY: 'localhost,127.0.0.1,::1,.local',
+    no_proxy: merged,
+    NO_PROXY: merged,
   }
 }
 

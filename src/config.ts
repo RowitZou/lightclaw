@@ -64,6 +64,20 @@ export type NetworkBridgeSettings = {
    * `status()`.
    */
   proxy: string | null
+  /**
+   * Destinations that should bypass the proxy and connect directly.
+   * Standard `no_proxy` semantics — each entry is one of:
+   *   - CIDR (`10.0.0.0/8`, `100.96.0.0/12`) — matched against IP
+   *     literals only, never resolves DNS
+   *   - leading-dot suffix (`.pjlab.org.cn`) — matches that domain and
+   *     all subdomains
+   *   - exact hostname (`gpfs1.pjlab.org.cn`) — only that string
+   * Applied in three places that share this same list: the bridge's
+   * upstream routing decision, the `no_proxy`/`NO_PROXY` env injected
+   * into Docker/Rlaunch containers, and the same env injected into
+   * LocalRuntime Bash subprocesses.
+   */
+  noProxy: string[]
   port: number
   /** Host interface the bridge listens on. 0.0.0.0 lets cluster pods reach it. */
   bindHost: string
@@ -862,7 +876,10 @@ function resolveNetworkBridgeSettings(
   const acl = Array.isArray(fileConfig.acl) && fileConfig.acl.length > 0
     ? fileConfig.acl.filter(entry => typeof entry === 'string' && entry.trim()).map(entry => entry.trim())
     : ['127.0.0.0/8', '100.100.0.0/16', '172.17.0.0/16']
-  return { mode, proxy, port, bindHost, acl }
+  const noProxy = Array.isArray(fileConfig.noProxy)
+    ? fileConfig.noProxy.filter(entry => typeof entry === 'string' && entry.trim()).map(entry => entry.trim())
+    : []
+  return { mode, proxy, noProxy, port, bindHost, acl }
 }
 
 function resolveRlaunchRuntimeSettings(

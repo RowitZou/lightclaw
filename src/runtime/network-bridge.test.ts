@@ -6,6 +6,7 @@ import { AddressInfo } from 'node:net'
 import type { LightClawConfig, NetworkBridgeSettings } from '../config.js'
 import {
   buildBlockList,
+  compileNoProxy,
   NetworkBridge,
 } from './network-bridge.js'
 import {
@@ -15,11 +16,75 @@ import {
   detectHostIp,
 } from './pool.js'
 
+describe('compileNoProxy', () => {
+  it('matches IPv4 inside CIDR', () => {
+    const m = compileNoProxy(['10.0.0.0/8', '100.96.0.0/12'])
+    assert.equal(m('10.5.6.7'), true)
+    assert.equal(m('100.100.245.246'), true)
+    assert.equal(m('8.8.8.8'), false)
+  })
+
+  it('matches IPv6 inside CIDR', () => {
+    const m = compileNoProxy(['fd00::/8'])
+    assert.equal(m('fd12::1'), true)
+    assert.equal(m('2001:db8::1'), false)
+  })
+
+  it('does not resolve DNS for CIDR matches', () => {
+    // example.com ought to resolve to a public IP, but compileNoProxy
+    // only matches literals — names never CIDR-match by design.
+    const m = compileNoProxy(['10.0.0.0/8'])
+    assert.equal(m('example.com'), false)
+  })
+
+  it('leading-dot suffix matches subdomains and the apex', () => {
+    const m = compileNoProxy(['.pjlab.org.cn'])
+    assert.equal(m('gpfs1.pjlab.org.cn'), true)
+    assert.equal(m('a.b.pjlab.org.cn'), true)
+    assert.equal(m('pjlab.org.cn'), true) // apex itself
+    assert.equal(m('evilpjlab.org.cn'), false) // suffix without dot must not match
+    assert.equal(m('pjlab.org.cn.attacker.com'), false)
+  })
+
+  it('exact hostname matches only that string', () => {
+    const m = compileNoProxy(['internal.svc'])
+    assert.equal(m('internal.svc'), true)
+    assert.equal(m('a.internal.svc'), false)
+  })
+
+  it('case-insensitive matching', () => {
+    const m = compileNoProxy(['.PJLab.org.cn', 'Internal.SVC'])
+    assert.equal(m('GPFS1.pjlab.ORG.cn'), true)
+    assert.equal(m('internal.svc'), true)
+  })
+
+  it('mixed pattern types coexist', () => {
+    const m = compileNoProxy(['10.0.0.0/8', '.pjlab.org.cn', 'localhost'])
+    assert.equal(m('10.1.2.3'), true)
+    assert.equal(m('x.pjlab.org.cn'), true)
+    assert.equal(m('localhost'), true)
+    assert.equal(m('public.com'), false)
+  })
+
+  it('empty / whitespace patterns are ignored', () => {
+    const m = compileNoProxy(['', '   ', 'localhost'])
+    assert.equal(m('localhost'), true)
+    assert.equal(m('public.com'), false)
+  })
+
+  it('empty pattern list never matches', () => {
+    const m = compileNoProxy([])
+    assert.equal(m('10.0.0.1'), false)
+    assert.equal(m('anything'), false)
+  })
+})
+
 describe('NetworkBridge proxy resolution', () => {
-  function bridgeFor(proxy: string | null): NetworkBridge {
+  function bridgeFor(proxy: string | null, noProxy: string[] = []): NetworkBridge {
     return new NetworkBridge({
       mode: 'host',
       proxy,
+      noProxy,
       port: 0,
       bindHost: '127.0.0.1',
       acl: [],
@@ -48,6 +113,12 @@ describe('NetworkBridge proxy resolution', () => {
   it('whitespace-only proxy degrades to direct', () => {
     const status = bridgeFor('   ').status()
     assert.equal(status.upstreamSource, 'direct')
+  })
+
+  it('status exposes the configured noProxy list', () => {
+    const status = bridgeFor('http://up:1', ['10.0.0.0/8', '.local']).status()
+    assert.deepEqual(status.noProxy, ['10.0.0.0/8', '.local'])
+    assert.equal(status.noProxyHitCount, 0)
   })
 })
 
@@ -80,6 +151,16 @@ describe('buildBridgeEnv', () => {
     assert.equal(env.HTTPS_PROXY, 'http://100.100.245.246:18080')
     assert.match(env.no_proxy, /127\.0\.0\.1/)
   })
+
+  it('appends configured noProxy entries after the built-ins', () => {
+    const env = buildBridgeEnv('h', 1, ['10.0.0.0/8', '.pjlab.org.cn'])
+    const parts = env.no_proxy.split(',')
+    assert.deepEqual(
+      parts,
+      ['localhost', '127.0.0.1', '::1', '.local', '10.0.0.0/8', '.pjlab.org.cn'],
+    )
+    assert.equal(env.no_proxy, env.NO_PROXY)
+  })
 })
 
 describe('detectHostIp', () => {
@@ -95,6 +176,7 @@ describe('pool config builders with network.mode=host', () => {
   const networkHost: NetworkBridgeSettings = {
     mode: 'host',
     proxy: 'http://corp-proxy:1091',
+    noProxy: [],
     port: 18080,
     bindHost: '0.0.0.0',
     acl: ['100.100.0.0/16'],
@@ -185,6 +267,7 @@ describe('NetworkBridge end-to-end (direct mode, no upstream)', () => {
     const bridge = new NetworkBridge({
       mode: 'host',
       proxy: null,
+      noProxy: [],
       port: 0,                 // ask OS for a free port
       bindHost: '127.0.0.1',
       acl: [],                 // loopback is always allowed
