@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 import type {
   PermissionApprover,
   PermissionMode,
@@ -11,91 +9,31 @@ import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
 import {
   getCurrentSessionContext,
+  requireSessionContext,
   type SessionContext,
 } from './session-context.js'
 import type { TodoItem, UsageStats } from './types.js'
 
-/** @deprecated singleton fallback; Phase 20 Iter 4 removes this slot. */
 type SessionState = SessionContext
 
-let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
 let imageReadiness: ImageReadinessTracker | null = null
 let networkBridge: NetworkBridge | null = null
 const abortControllerByUser = new Map<string, AbortController>()
 // Session-memory write throttle counters. Module-level rather than per-state
-// because they reset on every initializeState (a new session starts with
+// because they reset on every resolved SessionContext (a new session starts with
 // zero accumulated work). They drive the SessionMemory double-threshold:
 // SM is rewritten only when both token AND tool_call counters cross.
 let sessionMemoryTokensSinceUpdate = 0
 let sessionMemoryToolCallsSinceUpdate = 0
 let sessionMemoryUpdateCount = 0
 // Phase 14 micro-compact counters. Module-level for the same reason as the
-// SessionMemory throttles above — they reset on every initializeState (a
+// SessionMemory throttles above — they reset on every resolved SessionContext (a
 // fresh session starts with zero MC actions).
 let perToolSummaryCount = 0
 let idleMicroCompactCount = 0
 
-export function initializeState(input: {
-  cwd: string
-  model: string
-  sessionsDir: string
-  memoryDir: string
-  currentUserId?: string
-  sessionId?: string
-  resumedFrom?: string | null
-  compactionCount?: number
-  lastExtractedAt?: number
-  todos?: TodoItem[]
-  permissionMode?: PermissionMode
-  cliArgRules?: PermissionRule[]
-  identityRules?: PermissionRule[]
-  fileRules?: PermissionRule[]
-  runtime?: Runtime
-}): void {
-  const next: SessionState = {
-    sessionId: input.sessionId ?? randomUUID(),
-    cwd: input.cwd,
-    model: input.model,
-    sessionsDir: input.sessionsDir,
-    memoryDir: input.memoryDir,
-    currentUserId: input.currentUserId,
-    resumedFrom: input.resumedFrom ?? null,
-    compactionCount: input.compactionCount ?? 0,
-    lastExtractedAt: input.lastExtractedAt ?? 0,
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    todos: input.todos ?? [],
-    permissionMode: input.permissionMode ?? 'default',
-    cliArgRules: input.cliArgRules ?? [],
-    identityRules: input.identityRules ?? [],
-    fileRules: input.fileRules ?? [],
-    activeSkillAllowedTools: undefined,
-    permissionApprover: null,
-    abortController: new AbortController(),
-    backgroundTasks: new Set(),
-    runtime: input.runtime,
-  }
-  // When called inside a runWithSessionContext scope (the channel runner
-  // path), mutate the active context only — never touch the singleton, or
-  // two concurrent users' resets would clobber the shared module slot
-  // before snapshotSessionContext / currentState have a chance to see them.
-  // The singleton is only used by terminal REPL / cli.ts, which never run
-  // inside an ALS scope at startup.
-  const ctx = getCurrentSessionContext()
-  if (ctx) {
-    // Preserve the channel-managed approver across reset. The runner pins
-    // it on the placeholder ctx BEFORE this call so subagent forks (which
-    // start their work inside this scope) can read it via getPermissionApprover.
-    // Object.assign(ctx, next) without this guard would wipe it back to
-    // null and break the permission UX path.
-    const preservedApprover = ctx.permissionApprover
-    Object.assign(ctx, cloneSessionContext(next))
-    ctx.permissionApprover = preservedApprover
-  } else {
-    state = next
-  }
-
+export function resetSessionScopedCounters(): void {
   sessionMemoryTokensSinceUpdate = 0
   sessionMemoryToolCallsSinceUpdate = 0
   sessionMemoryUpdateCount = 0
@@ -103,16 +41,8 @@ export function initializeState(input: {
   idleMicroCompactCount = 0
 }
 
-function requireState(): SessionState {
-  if (!state) {
-    throw new Error('State has not been initialized.')
-  }
-
-  return state
-}
-
 function currentState(): SessionState {
-  return getCurrentSessionContext() ?? requireState()
+  return requireSessionContext()
 }
 
 function cloneSessionContext(current: SessionState): SessionContext {
@@ -228,19 +158,11 @@ export function setIdentityRules(rules: PermissionRule[]): void {
 }
 
 export function getPermissionApprover(): PermissionApprover | null {
-  return getCurrentSessionContext()?.permissionApprover ?? state?.permissionApprover ?? null
+  return currentState().permissionApprover
 }
 
 export function setPermissionApprover(approver: PermissionApprover | null): void {
-  // Tolerate state-not-yet-initialized so the channel runner's `finally`
-  // block can safely clear the approver even when resetSessionContext threw
-  // before establishing state. No-op in that case (no state to leak from).
-  const ctx = getCurrentSessionContext()
-  if (ctx) {
-    ctx.permissionApprover = approver
-  } else if (state) {
-    state.permissionApprover = approver
-  }
+  currentState().permissionApprover = approver
 }
 
 export function getCliArgRules(): PermissionRule[] {
@@ -269,7 +191,7 @@ export function getRuntime(): Runtime {
 }
 
 export function getRuntimeIfInitialized(): Runtime | undefined {
-  return getCurrentSessionContext()?.runtime ?? state?.runtime
+  return getCurrentSessionContext()?.runtime
 }
 
 export function setRuntime(runtime: Runtime): void {

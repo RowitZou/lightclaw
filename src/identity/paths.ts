@@ -27,8 +27,8 @@ export function rateLimitsPath(): string {
 /**
  * Per-canonical-user persisted permission rules. Replaces the old in-memory
  * sessionRulesByUser map: when a user picks "以后都允许" / `[a]` the rule is
- * written here and survives daemon restarts. Loaded into `state.identityRules`
- * on every initializeState / resetSessionContext for the active user, and
+ * written here and survives daemon restarts. Loaded into the active
+ * SessionContext for the active user, and
  * evaluated alongside cli / file / builtin sources by `evaluatePermission`.
  */
 export function identityPermissionsPath(canonicalUser: string): string {

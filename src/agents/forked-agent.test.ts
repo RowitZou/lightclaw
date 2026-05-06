@@ -10,8 +10,8 @@ import {
   saveCacheSafeParams,
 } from './cache-safe-params.js'
 import { createSubagentCanUseTool } from './run-subagent.js'
-import { getCwd, initializeState, snapshotSessionContext } from '../state.js'
-import { runWithSessionContext } from '../session-context.js'
+import { getCwd } from '../state.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
 
 const dummyConfig = {
   model: 'claude-sonnet-4-6',
@@ -89,13 +89,12 @@ test('subagent tool gate allows listed tools', async () => {
 })
 
 test('async fork-like work inherits the parent SessionContext', async () => {
-  initializeState({
+  const ctx = createSessionContext({
     cwd: '/tmp/fork-parent',
     model: 'test-model',
     sessionsDir: '/tmp/lightclaw-sessions',
     memoryDir: '/tmp/lightclaw-memory',
   })
-  const ctx = snapshotSessionContext()
 
   await runWithSessionContext(ctx, async () => {
     const child = Promise.resolve().then(() => getCwd())

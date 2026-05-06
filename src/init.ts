@@ -16,20 +16,19 @@ import { NetworkBridge } from './runtime/network-bridge.js'
 import { resolveDockerImage } from './runtime/pool.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
-  getAbortController,
   getImageReadiness,
   getNetworkBridge,
-  getRuntime,
   getRuntimePool,
-  initializeState,
+  resetSessionScopedCounters,
   resetAbortController,
   setAbortControllerForUser,
   clearActiveSkillAllowedTools,
-  setFileRules,
-  setIdentityRules,
   setNetworkBridge,
-  setRuntime,
 } from './state.js'
+import {
+  createSessionContext,
+  type SessionContext,
+} from './session-context.js'
 import type { TodoItem } from './types.js'
 
 let signalHandlersInstalled = false
@@ -62,12 +61,17 @@ export class LocalRuntimeAdminOnlyError extends Error {
   }
 }
 
+export type SessionBootstrap = {
+  config: LightClawConfig
+  sessionContext: SessionContext
+}
+
 /**
  * One-time application bootstrap. Idempotent at the signal-handler / agents
  * level, but callers should not use this for per-session state resets — use
  * resetSessionContext() instead, which skips the one-shot wiring.
  */
-export async function initializeApp(input?: InitializeAppInput): Promise<LightClawConfig> {
+export async function initializeApp(input?: InitializeAppInput): Promise<SessionBootstrap> {
   const config = getConfig()
   const inputWithPrefs = applyIdentityPreferences(input)
   const resolvedConfig = resolveConfig(config, inputWithPrefs)
@@ -79,7 +83,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   // check below: ensureOAuthModelsUsable looks up `getAuthProvider('codex')`.
   // Moved up from its previous spot below initializeAgents() because the
   // usability check may degrade `config.models` / `routing` / `model`
-  // before writeSessionState reads them into the session meta.
+  // before createResolvedSessionContext reads them into the session meta.
   registerCodexAuthProvider()
   // If any registered model uses schema = 'openai-auth', ensure Codex
   // credentials work (read stored token + auto-refresh; fall back to
@@ -93,18 +97,18 @@ export async function initializeApp(input?: InitializeAppInput): Promise<LightCl
   // every container, so a not-yet-listening bridge would mean the first
   // worker spawned during preheat would have a dangling proxy URL.
   await startNetworkBridgeIfNeeded(resolvedConfig)
-  // Kick off image prefetch BEFORE writeSessionState — DockerRuntime construction
+  // Kick off image prefetch BEFORE createResolvedSessionContext — DockerRuntime construction
   // takes the tracker, and the tracker's first inspect/pull starts here.
   // Local backend never instantiates the tracker (lazy via getImageReadiness),
   // so this is a no-op for local.
   startImagePrefetchIfNeeded(resolvedConfig)
-  await writeSessionState(resolvedConfig, inputWithPrefs)
+  const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   initializeAgents()
-  installSignalHandlers()
+  installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
   startRlaunchPreheatIfNeeded(resolvedConfig)
-  return resolvedConfig
+  return { config: resolvedConfig, sessionContext }
 }
 
 async function startNetworkBridgeIfNeeded(config: LightClawConfig): Promise<void> {
@@ -159,12 +163,12 @@ function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
  * bootstrap across many incoming messages without re-registering agents or
  * signal handlers.
  */
-export async function resetSessionContext(input: CommonStateInput): Promise<LightClawConfig> {
+export async function resetSessionContext(input: CommonStateInput): Promise<SessionBootstrap> {
   const config = getConfig()
   const inputWithPrefs = applyIdentityPreferences(input)
   const resolvedConfig = resolveConfig(config, inputWithPrefs)
-  await writeSessionState(resolvedConfig, inputWithPrefs)
-  return resolvedConfig
+  const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
+  return { config: resolvedConfig, sessionContext }
 }
 
 /**
@@ -218,10 +222,10 @@ function resolveConfig(
   }
 }
 
-async function writeSessionState(
+async function createResolvedSessionContext(
   resolvedConfig: LightClawConfig,
   input: InitializeAppInput | undefined,
-): Promise<void> {
+): Promise<SessionContext> {
   const resolvedCwd = input?.currentUserId
     ? path.resolve(workspaceFor(input.currentUserId))
     : path.resolve(input?.cwd ?? process.cwd())
@@ -244,7 +248,8 @@ async function writeSessionState(
   const runtime = input?.currentUserId
     ? getRuntimePool().acquire(input.currentUserId, resolvedConfig, resolvedCwd, tracker)
     : undefined
-  initializeState({
+  resetSessionScopedCounters()
+  return createSessionContext({
     cwd: resolvedCwd,
     model: resolvedConfig.model,
     sessionsDir: resolvedConfig.sessionsDir,
@@ -257,24 +262,22 @@ async function writeSessionState(
     todos: input?.todos,
     permissionMode: input?.permissionMode ?? resolvedConfig.permissionMode,
     runtime,
+    fileRules: loadFileRules({
+      cwd: resolvedCwd,
+      userPath: resolvedConfig.permissionRuleFiles.user,
+      projectPath: resolvedConfig.permissionRuleFiles.project,
+      localPath: resolvedConfig.permissionRuleFiles.local,
+    }),
+    // Identity rules are per-canonical-user and persisted (Phase 17 —
+    // replaces the old in-memory sessionRulesByUser map). Reload on every
+    // state init so rules written by FeishuPermissionCoordinator /
+    // askUserApproval since the last turn become visible immediately. Empty
+    // for terminal-only sessions.
+    identityRules: loadIdentityRules(input?.currentUserId),
   })
-  setFileRules(loadFileRules({
-    cwd: resolvedCwd,
-    userPath: resolvedConfig.permissionRuleFiles.user,
-    projectPath: resolvedConfig.permissionRuleFiles.project,
-    localPath: resolvedConfig.permissionRuleFiles.local,
-  }))
-  // Identity rules are per-canonical-user and persisted (Phase 17 — replaces
-  // the old in-memory sessionRulesByUser map). Reload on every state init so
-  // rules written by FeishuPermissionCoordinator / askUserApproval since the
-  // last turn become visible immediately. Empty for terminal-only sessions.
-  setIdentityRules(loadIdentityRules(input?.currentUserId))
-  if (runtime) {
-    setRuntime(runtime)
-  }
 }
 
-function installSignalHandlers(): void {
+function installSignalHandlers(sessionContext: SessionContext): void {
   if (signalHandlersInstalled) {
     return
   }
@@ -288,15 +291,15 @@ function installSignalHandlers(): void {
     }
     interruptHandled = true
 
-    if (!getAbortController().signal.aborted) {
-      getAbortController().abort()
+    if (!sessionContext.abortController.signal.aborted) {
+      sessionContext.abortController.abort()
     }
 
     // Best-effort async cleanup, then exit. Without explicit process.exit
     // the channel runners' ws connections / reaper interval / readline
     // would keep the event loop alive indefinitely.
     void Promise.allSettled([
-      runtimeStopSafely(),
+      runtimeStopSafely(sessionContext),
       runtimePoolReleaseSafely(),
       workerHealthCheckerStopSafely(),
       networkBridgeStopSafely(),
@@ -328,9 +331,9 @@ async function networkBridgeStopSafely(): Promise<void> {
   }
 }
 
-async function runtimeStopSafely(): Promise<void> {
+async function runtimeStopSafely(sessionContext: SessionContext): Promise<void> {
   try {
-    await getRuntime().stop()
+    await sessionContext.runtime?.stop()
   } catch {
     // Runtime may not exist if a signal arrives during early bootstrap.
   }

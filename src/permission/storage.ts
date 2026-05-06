@@ -80,8 +80,8 @@ export function loadFileRules(input: {
 }
 
 /**
- * Per-canonical-user identity rules. Loaded fresh on every initializeState /
- * resetSessionContext so daemon-internal mutations to the file (via
+ * Per-canonical-user identity rules. Loaded fresh into every resolved
+ * SessionContext so daemon-internal mutations to the file (via
  * appendIdentityRules) become visible to the next turn without needing a
  * full restart.
  *

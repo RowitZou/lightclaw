@@ -12,9 +12,9 @@ import { identityRoot, sanitizePathSegment } from './paths.js'
  * terminal session and a Feishu session simultaneously (each owns its own
  * sessionId / meta.json). Storing mode + model in session meta meant a
  * `/mode auto` in the terminal never reached the Feishu session, and vice
- * versa. Preferences are read on every initializeState / resetSessionContext
- * with priority `prefs > caller input > config default`, so a user-driven
- * change in either surface is the source of truth for the next turn.
+ * versa. Preferences are read into every resolved SessionContext with
+ * priority `prefs > caller input > config default`, so a user-driven change
+ * in either surface is the source of truth for the next turn.
  */
 
 export type IdentityPreferences = {

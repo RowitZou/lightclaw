@@ -15,6 +15,7 @@ import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
+import { runWithSessionContext } from './session-context.js'
 import { getAllTools, getEnabledTools } from './tools.js'
 
 type CliArgs = {
@@ -170,7 +171,7 @@ async function main(): Promise<void> {
   // Order matters: initializeApp must run BEFORE startEnabledChannels so the
   // channel runner doesn't try to bootstrap the app itself (without a
   // currentUserId, which would acquire a ghost "__terminal__" runtime).
-  const config = await initializeApp({
+  const { config, sessionContext } = await initializeApp({
     model: resumeMeta?.model,
     sessionId: resumeSessionId,
     resumedFrom: resumeSessionId ?? null,
@@ -180,25 +181,27 @@ async function main(): Promise<void> {
     permissionMode: resumeMeta?.permissionMode,
     currentUserId: resumeMeta?.userId ?? currentUserId,
   })
-  await initializeHooks(config)
-  await initializeMcp(config)
-  const channelHandles = args.prompt ? [] : await startEnabledChannels()
-  try {
-    const provider = getProvider(config)
-    await startRepl({
-      config,
-      tools: getEnabledTools(provider, getAllTools()),
-      initialPrompt: args.prompt,
-      resumeSessionId,
-    })
-  } finally {
-    await drainPendingExtraction(60_000)
-    for (const handle of channelHandles.reverse()) {
-      await handle.stop().catch(error => {
-        process.stderr.write(`channel stop failed: ${String(error)}\n`)
+  await runWithSessionContext(sessionContext, async () => {
+    await initializeHooks(config)
+    await initializeMcp(config)
+    const channelHandles = args.prompt ? [] : await startEnabledChannels()
+    try {
+      const provider = getProvider(config)
+      await startRepl({
+        config,
+        tools: getEnabledTools(provider, getAllTools()),
+        initialPrompt: args.prompt,
+        resumeSessionId,
       })
+    } finally {
+      await drainPendingExtraction(60_000)
+      for (const handle of channelHandles.reverse()) {
+        await handle.stop().catch(error => {
+          process.stderr.write(`channel stop failed: ${String(error)}\n`)
+        })
+      }
     }
-  }
+  })
 }
 
 async function startEnabledChannels(): Promise<ChannelHandle[]> {
