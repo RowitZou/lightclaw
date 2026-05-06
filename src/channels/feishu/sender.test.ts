@@ -60,10 +60,12 @@ test('FeishuSender falls back to create message after transient reply failure', 
     },
   } as unknown as FeishuClient
 
-  const sender = new FeishuSender(client, baseConfig)
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
   await sender.sendInteractiveCard(baseMessage, { elements: [] })
 
-  assert.equal(replyCalls, 3)
+  // Production retries 7 times before falling back to create (cd7282e widened
+  // the budget to ~30s of corp-proxy-reset coverage; see sender.ts comment).
+  assert.equal(replyCalls, 7)
   assert.equal(createCalls, 1)
 })
 

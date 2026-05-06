@@ -59,11 +59,25 @@ type UploadFileResponse = {
 
 type InteractiveCard = Record<string, unknown>
 
+// Test-only seam: lets sender.test.ts collapse the ~23.5s real-time backoff
+// schedule down to milliseconds. Production callers pass nothing.
+export type SendRetryOptions = {
+  attempts?: number
+  baseDelayMs?: number
+}
+
 export class FeishuSender {
+  private readonly retryAttempts: number
+  private readonly retryBaseDelayMs: number
+
   constructor(
     private client: FeishuClient,
     private config: FeishuChannelConfig,
-  ) {}
+    retryOptions: SendRetryOptions = {},
+  ) {
+    this.retryAttempts = retryOptions.attempts ?? SEND_RETRY_ATTEMPTS
+    this.retryBaseDelayMs = retryOptions.baseDelayMs ?? SEND_RETRY_BASE_DELAY_MS
+  }
 
   async sendText(message: NormalizedChannelMessage, text: string): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
@@ -133,6 +147,8 @@ export class FeishuSender {
           content: JSON.stringify(card),
         },
       }),
+      this.retryAttempts,
+      this.retryBaseDelayMs,
     )
     assertOk(response, 'Feishu create message (open_id) failed')
   }
@@ -170,6 +186,8 @@ export class FeishuSender {
         }
         return withFileUploadTimeout(FILE_UPLOAD_RETRY_TIMEOUT_MS, call)
       },
+      this.retryAttempts,
+      this.retryBaseDelayMs,
     )
     if (!response?.file_key) {
       throw new Error('Feishu file upload failed: missing file_key')
@@ -197,6 +215,8 @@ export class FeishuSender {
               content,
             },
           }),
+          this.retryAttempts,
+          this.retryBaseDelayMs,
         )
         if (!shouldFallbackFromReply(response)) {
           assertOk(response, 'Feishu reply failed')
@@ -227,6 +247,8 @@ export class FeishuSender {
           content,
         },
       }),
+      this.retryAttempts,
+      this.retryBaseDelayMs,
     )
     assertOk(response, 'Feishu create message failed')
     return response
