@@ -21,11 +21,27 @@ export function createFeishuClient(config: FeishuChannelConfig): FeishuClient {
   })
 }
 
+// File upload (im/v1/files, drive/v1/files, ...) carries multi-MB payloads
+// over the corp proxy + open.feishu.cn TLS path; the default 30 s
+// httpTimeoutMs that's right for token / message calls is too tight for
+// 30 MB through a flaky proxy. Bump it to 5 min for upload paths only;
+// other endpoints keep the fast-fail default so genuine outages still
+// surface within seconds.
+const FILE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000
+const FILE_UPLOAD_PATH_PATTERN = /\/(im|drive)\/v1\/files\b/
+
 function createHttpInstance(config: FeishuChannelConfig): Lark.HttpInstance {
   const agent = config.proxy ? new HttpsProxyAgent(config.proxy) : undefined
   const instance = axios.create({
     timeout: config.httpTimeoutMs,
     ...(agent ? { httpAgent: agent, httpsAgent: agent, proxy: false } : {}),
+  })
+  instance.interceptors.request.use(request => {
+    const url = request.url ?? ''
+    if (request.method?.toLowerCase() === 'post' && FILE_UPLOAD_PATH_PATTERN.test(url)) {
+      request.timeout = FILE_UPLOAD_TIMEOUT_MS
+    }
+    return request
   })
   // The Lark SDK destructures `{ code, data, msg }` directly from the request
   // result, so the httpInstance must yield the unwrapped response body — not
