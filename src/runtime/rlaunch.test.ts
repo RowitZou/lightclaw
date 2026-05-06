@@ -10,8 +10,11 @@ import {
   buildLaunchArgs,
   composeExecScript,
   parseWorkerName,
+  readFileViaExec,
+  READ_FILE_CHUNK_BYTES_FOR_TESTS,
   type RlaunchRuntimeConfig,
 } from './rlaunch.js'
+import type { ExecInput, ExecResult } from './types.js'
 import {
   deleteWorkerRecord,
   lookupWorkerRecord,
@@ -310,5 +313,150 @@ describe('translateRlaunchError', () => {
   it('falls back for unknown errors', () => {
     const translated = translateRlaunchError('something odd')
     assert.match(translated.admin, /RlaunchRuntime failed/)
+  })
+})
+
+describe('readFileViaExec (rlaunch chunked readFile)', () => {
+  // Builds a stub exec that simulates `stat` and `dd | base64 -w 0` /
+  // `base64 -w 0` against an in-memory `payload` Buffer. Captures every
+  // exec command for assertion.
+  function makeStubExec(payload: Buffer): {
+    exec: (input: ExecInput) => Promise<ExecResult>
+    commands: string[]
+  } {
+    const commands: string[] = []
+    const exec = async (input: ExecInput): Promise<ExecResult> => {
+      commands.push(input.command)
+      const cmd = input.command
+      if (cmd.startsWith('stat -c %s ')) {
+        return { stdout: `${payload.length}\n`, stderr: '', exitCode: 0 }
+      }
+      const ddMatch = cmd.match(/bs=(\d+) skip=(\d+) count=1/)
+      if (ddMatch) {
+        const bs = Number(ddMatch[1])
+        const skip = Number(ddMatch[2])
+        const start = bs * skip
+        const end = Math.min(start + bs, payload.length)
+        const slice = payload.subarray(start, end)
+        return { stdout: slice.toString('base64'), stderr: '', exitCode: 0 }
+      }
+      if (cmd.startsWith('base64 -w 0 ')) {
+        return { stdout: payload.toString('base64'), stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: `unknown command in stub: ${cmd}`, exitCode: 1 }
+    }
+    return { exec, commands }
+  }
+
+  it('takes the single-hop fast path for small files', async () => {
+    const payload = Buffer.from('hello world', 'utf8')
+    const { exec, commands } = makeStubExec(payload)
+    const out = await readFileViaExec(exec, '/workspace/file.txt', '/workspace/file.txt')
+    assert.deepEqual(out, payload)
+    // Expect: stat + base64 (NOT dd) — i.e. exactly 2 hops.
+    assert.equal(commands.length, 2)
+    assert.match(commands[0], /^stat -c %s /)
+    assert.match(commands[1], /^base64 -w 0 /)
+    assert.equal(commands.some(c => c.includes('dd if=')), false)
+  })
+
+  it('chunks large files via dd skip=K count=1', async () => {
+    // Just over one chunk so we exercise the chunked branch with minimal data.
+    const totalBytes = READ_FILE_CHUNK_BYTES_FOR_TESTS + 100
+    const payload = Buffer.alloc(totalBytes)
+    for (let i = 0; i < totalBytes; i += 1) payload[i] = i % 256
+    const { exec, commands } = makeStubExec(payload)
+    const out = await readFileViaExec(exec, '/workspace/big.bin', '/workspace/big.bin')
+    assert.equal(out.length, totalBytes)
+    assert.deepEqual(out, payload)
+    // 1 stat + 2 dd hops (chunk 0 covers full chunk, chunk 1 covers 100 bytes).
+    assert.equal(commands.length, 3)
+    assert.match(commands[0], /^stat -c %s /)
+    assert.match(commands[1], /dd if=.* bs=\d+ skip=0 count=1 status=none/)
+    assert.match(commands[2], /dd if=.* bs=\d+ skip=1 count=1 status=none/)
+  })
+
+  it('round-trips a 30 MB binary payload byte-for-byte', async () => {
+    const totalBytes = 30 * 1024 * 1024
+    const payload = Buffer.alloc(totalBytes)
+    // Pseudo-random fill that makes byte mismatches obvious. xorshift32 keeps
+    // the test fast vs. crypto.randomBytes on a 30 MB buffer.
+    let seed = 0x9e3779b9
+    for (let i = 0; i < totalBytes; i += 1) {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      payload[i] = seed & 0xff
+    }
+    const { exec, commands } = makeStubExec(payload)
+    const out = await readFileViaExec(exec, '/workspace/30mb.bin', '/workspace/30mb.bin')
+    assert.equal(out.length, totalBytes)
+    assert.equal(Buffer.compare(out, payload), 0)
+    // 30 MB / 512 KB chunk = 60 dd hops + 1 stat.
+    const expectedChunkCount = Math.ceil(totalBytes / READ_FILE_CHUNK_BYTES_FOR_TESTS)
+    assert.equal(commands.length, expectedChunkCount + 1)
+  })
+
+  it('throws when stat reports a non-numeric size', async () => {
+    const exec = async (): Promise<ExecResult> => ({
+      stdout: 'not-a-number\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    await assert.rejects(
+      readFileViaExec(exec, '/workspace/x', '/workspace/x'),
+      /invalid stat size/,
+    )
+  })
+
+  it('throws on byte mismatch after assembly', async () => {
+    // stat says 1000 bytes, but the chunk hops only return 100. The mismatch
+    // guard is a tripwire for partial reads (truncated container output, dd
+    // count desync) — without it large files would silently corrupt.
+    const exec = async (input: ExecInput): Promise<ExecResult> => {
+      if (input.command.startsWith('stat -c %s ')) {
+        return { stdout: '1000\n', stderr: '', exitCode: 0 }
+      }
+      // dd hops: return exactly 100 bytes total (truncate after first chunk).
+      if (input.command.includes('skip=0')) {
+        return { stdout: Buffer.alloc(100, 0xab).toString('base64'), stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+    // Force chunked path: total > READ_FILE_CHUNK_BYTES would normally chunk,
+    // but here total=1000 is below the threshold so stat-says-1000 actually
+    // goes single-hop. We exercise the mismatch branch by returning 100-byte
+    // single-hop instead of the full 1000.
+    await assert.rejects(
+      readFileViaExec(
+        async input => {
+          if (input.command.startsWith('stat -c %s ')) {
+            return { stdout: `${READ_FILE_CHUNK_BYTES_FOR_TESTS + 50}\n`, stderr: '', exitCode: 0 }
+          }
+          // Both dd hops return only 50 bytes each, so assembled = 100 bytes
+          // but stat said chunkSize+50 — guard fires.
+          return { stdout: Buffer.alloc(50, 0xcd).toString('base64'), stderr: '', exitCode: 0 }
+        },
+        '/workspace/short.bin',
+        '/workspace/short.bin',
+      ),
+      /byte mismatch/,
+    )
+  })
+
+  it('propagates exec failure with chunk index in the error', async () => {
+    const exec = async (input: ExecInput): Promise<ExecResult> => {
+      if (input.command.startsWith('stat -c %s ')) {
+        return { stdout: `${READ_FILE_CHUNK_BYTES_FOR_TESTS * 3}\n`, stderr: '', exitCode: 0 }
+      }
+      if (input.command.includes('skip=2')) {
+        return { stdout: '', stderr: 'no space left on device', exitCode: 1 }
+      }
+      return { stdout: Buffer.alloc(READ_FILE_CHUNK_BYTES_FOR_TESTS).toString('base64'), stderr: '', exitCode: 0 }
+    }
+    await assert.rejects(
+      readFileViaExec(exec, '/workspace/y', '/workspace/y'),
+      /chunk 2\/3.*no space left/,
+    )
   })
 })

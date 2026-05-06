@@ -49,8 +49,8 @@ export type NormalizedChannelMessage = {
 }
 
 export type OutgoingChannelFile = {
-  path: string
-  name?: string
+  content: Buffer
+  name: string
   mimeType?: string
 }
 

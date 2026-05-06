@@ -50,6 +50,9 @@ type ContainerState =
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
+// fs.readFile single-hop ceiling: docker exec stdout is unbounded but child_process
+// buffering is not. 64 MB covers a 30 MB file (~40 MB base64) plus headroom.
+const READ_FILE_BUFFER_BYTES = 64 * 1024 * 1024
 const TMPFS_SIZE = '2g'
 
 export class DockerRuntime implements Runtime {
@@ -187,8 +190,13 @@ export class DockerRuntime implements Runtime {
       const containerPath = this.toContainerPath(pathname)
       // base64 transit keeps binary content intact across the docker exec
       // string pipe (StringDecoder is UTF-8 and would mangle non-text bytes).
+      // Single-hop with a roomy buffer: docker exec has no ws frame ceiling,
+      // so a 30 MB file (~40 MB base64) fits in one read with READ_FILE_BUFFER
+      // headroom. If we ever need >50 MB reads, switch to chunked dd like
+      // RlaunchRuntime does.
       const result = await this.exec({
         command: `base64 -w 0 ${shellQuote(containerPath)}`,
+        maxBufferBytes: READ_FILE_BUFFER_BYTES,
       })
       if (result.exitCode !== 0) {
         throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)

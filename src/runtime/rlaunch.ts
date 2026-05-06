@@ -75,6 +75,14 @@ const MAX_INLINE_STDIN_BYTES = 32 * 1024
 // 32 round-trips per MB; multi-MB writes are slow but correct. If perf ever
 // matters here, write via the gpfs bind mount on the host instead.
 const WRITE_FILE_CHUNK_BYTES = 32 * 1024
+// fs.readFile chunk size: per-hop raw bytes pulled via `dd | base64 -w 0`.
+// Stdout is bounded by READ_FILE_BUFFER_BYTES (the exec maxBufferBytes we set
+// for read hops) — the brainctl ws frame limit on the input direction does
+// not apply to the response stream, but child_process buffering still does.
+// 512 KB raw → ~683 KB base64 stdout, comfortably under READ_FILE_BUFFER_BYTES.
+// At this size 30 MB takes 60 hops; on a healthy cluster that's a few seconds.
+const READ_FILE_CHUNK_BYTES = 512 * 1024
+const READ_FILE_BUFFER_BYTES = 4 * 1024 * 1024
 
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
@@ -262,16 +270,8 @@ export class RlaunchRuntime implements Runtime {
   }
 
   fs: RuntimeFs = {
-    readFile: async pathname => {
-      const containerPath = this.toContainerPath(pathname)
-      const result = await this.exec({
-        command: `base64 -w 0 ${shellQuote(containerPath)}`,
-      })
-      if (result.exitCode !== 0) {
-        throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
-      }
-      return Buffer.from(result.stdout.trim(), 'base64')
-    },
+    readFile: async pathname =>
+      readFileViaExec(input => this.exec(input), this.toContainerPath(pathname), pathname),
     writeFile: async (pathname, content) => {
       const containerPath = this.toContainerPath(pathname)
       const buffer = typeof content === 'string' ? Buffer.from(content) : content
@@ -860,3 +860,69 @@ function formatGcDuration(hours: number): string {
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+type ReadFileExec = (input: ExecInput) => Promise<ExecResult>
+
+/**
+ * Chunked fs.readFile for backends behind a frame-bounded exec channel
+ * (brainctl ws). First hop runs `stat -c %s` to learn size; small files come
+ * back via single-hop `base64 -w 0`, anything above READ_FILE_CHUNK_BYTES is
+ * pulled chunk by chunk via `dd skip=K count=1 | base64 -w 0`. Sequential so
+ * the byte order is preserved; final size is verified before returning.
+ *
+ * Exported for unit testing — production callers go through fs.readFile which
+ * resolves the runtime path via toContainerPath first.
+ */
+export async function readFileViaExec(
+  exec: ReadFileExec,
+  containerPath: string,
+  pathname: string,
+): Promise<Buffer> {
+  const sizeRes = await exec({
+    command: `stat -c %s ${shellQuote(containerPath)}`,
+  })
+  if (sizeRes.exitCode !== 0) {
+    throw new Error(`readFile ${pathname}: ${sizeRes.stderr.trim() || sizeRes.stdout.trim()}`)
+  }
+  const totalBytes = Number(sizeRes.stdout.trim())
+  if (!Number.isFinite(totalBytes) || totalBytes < 0) {
+    throw new Error(`readFile ${pathname}: invalid stat size '${sizeRes.stdout.trim()}'`)
+  }
+
+  if (totalBytes <= READ_FILE_CHUNK_BYTES) {
+    const result = await exec({
+      command: `base64 -w 0 ${shellQuote(containerPath)}`,
+      maxBufferBytes: READ_FILE_BUFFER_BYTES,
+    })
+    if (result.exitCode !== 0) {
+      throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+    }
+    return Buffer.from(result.stdout.trim(), 'base64')
+  }
+
+  const chunks: Buffer[] = []
+  const chunkCount = Math.ceil(totalBytes / READ_FILE_CHUNK_BYTES)
+  for (let index = 0; index < chunkCount; index += 1) {
+    const result = await exec({
+      command:
+        `dd if=${shellQuote(containerPath)} bs=${READ_FILE_CHUNK_BYTES} ` +
+        `skip=${index} count=1 status=none 2>/dev/null | base64 -w 0`,
+      maxBufferBytes: READ_FILE_BUFFER_BYTES,
+    })
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `readFile ${pathname} (chunk ${index}/${chunkCount}): ${result.stderr.trim() || result.stdout.trim()}`,
+      )
+    }
+    chunks.push(Buffer.from(result.stdout.trim(), 'base64'))
+  }
+  const assembled = Buffer.concat(chunks)
+  if (assembled.length !== totalBytes) {
+    throw new Error(
+      `readFile ${pathname}: byte mismatch (expected ${totalBytes}, got ${assembled.length})`,
+    )
+  }
+  return assembled
+}
+
+export const READ_FILE_CHUNK_BYTES_FOR_TESTS = READ_FILE_CHUNK_BYTES

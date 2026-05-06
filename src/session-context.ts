@@ -6,8 +6,8 @@ import type { Runtime } from './runtime/index.js'
 import type { TodoItem, UsageStats } from './types.js'
 
 export type ChannelFileSendInput = {
-  path: string
-  name?: string
+  content: Buffer
+  name: string
   mimeType?: string
 }
 

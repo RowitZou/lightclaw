@@ -1,5 +1,3 @@
-import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import type {
@@ -13,7 +11,6 @@ const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_DELAY_MS = 500
-const MAX_FEISHU_FILE_BYTES = 30 * 1024 * 1024
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -108,29 +105,16 @@ export class FeishuSender {
   }
 
   private async uploadFile(file: OutgoingChannelFile): Promise<string> {
-    const filePath = path.resolve(file.path)
-    const info = await stat(filePath)
-    if (!info.isFile()) {
-      throw new Error(`Feishu file upload failed: not a file (${filePath})`)
-    }
-    if (info.size <= 0) {
-      throw new Error(`Feishu file upload failed: empty file (${filePath})`)
-    }
-    if (info.size > MAX_FEISHU_FILE_BYTES) {
-      throw new Error(
-        `Feishu file upload failed: file exceeds 30 MB (${info.size} bytes)`,
-      )
-    }
-
-    const fileName = file.name?.trim() || path.basename(filePath)
-    const fileType = inferFeishuFileType(fileName)
+    // Caller (SendFile tool) owns size + isFile validation against runtime.fs;
+    // sender just hands the buffer to the SDK as a stream.
+    const fileType = inferFeishuFileType(file.name)
     const response = await retryOnTransient(
       `upload ${fileType}`,
       () => this.client.im.file.create({
         data: {
           file_type: fileType,
-          file_name: fileName,
-          file: createReadStream(filePath),
+          file_name: file.name,
+          file: file.content,
         },
       }) as Promise<UploadFileResponse>,
     )

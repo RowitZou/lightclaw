@@ -1,4 +1,3 @@
-import { stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -29,21 +28,12 @@ export const sendFileTool = buildTool({
       }
     }
 
-    const targetPath = resolveWorkspaceFilePath(
-      context.cwd,
-      context.runtime.workspaceRoot,
-      input.file_path,
-    )
-    if (!isWithinWorkspace(context.cwd, targetPath)) {
-      return {
-        output: `SendFile refused to send a file outside the workspace: ${input.file_path}`,
-        isError: true,
-      }
-    }
-
     try {
-      const info = await stat(targetPath)
-      if (!info.isFile()) {
+      // runtime.fs owns the workspace boundary: each backend's path
+      // translation throws on out-of-sandbox paths. The 30 MB ceiling stays
+      // here because it's a Feishu API constraint, not a runtime one.
+      const info = await context.runtime.fs.stat(input.file_path)
+      if (!info.isFile) {
         return { output: `SendFile expected a regular file: ${input.file_path}`, isError: true }
       }
       if (info.size <= 0) {
@@ -56,8 +46,9 @@ export const sendFileTool = buildTool({
         }
       }
 
-      const displayName = input.name?.trim() || path.basename(targetPath)
-      await sender.sendFile({ path: targetPath, name: displayName })
+      const content = await context.runtime.fs.readFile(input.file_path)
+      const displayName = input.name?.trim() || path.basename(input.file_path)
+      await sender.sendFile({ content, name: displayName })
       return {
         output: `Sent ${displayName} to ${sender.channelId}.`,
       }
@@ -69,30 +60,3 @@ export const sendFileTool = buildTool({
     }
   },
 })
-
-function resolveWorkspaceFilePath(
-  hostWorkspaceRoot: string,
-  runtimeWorkspaceRoot: string,
-  inputPath: string,
-): string {
-  if (!path.isAbsolute(inputPath)) {
-    return path.resolve(hostWorkspaceRoot, inputPath)
-  }
-
-  const absoluteInput = path.resolve(inputPath)
-  const absoluteRuntimeRoot = path.resolve(runtimeWorkspaceRoot)
-  if (
-    absoluteInput === absoluteRuntimeRoot ||
-    absoluteInput.startsWith(`${absoluteRuntimeRoot}${path.sep}`)
-  ) {
-    const relative = path.relative(absoluteRuntimeRoot, absoluteInput)
-    return path.resolve(hostWorkspaceRoot, relative)
-  }
-
-  return absoluteInput
-}
-
-function isWithinWorkspace(hostWorkspaceRoot: string, targetPath: string): boolean {
-  const relative = path.relative(path.resolve(hostWorkspaceRoot), path.resolve(targetPath))
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
-}
