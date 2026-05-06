@@ -10,6 +10,7 @@ import { FeishuDedup } from './dedup.js'
 import { downloadFeishuMedia } from './media.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import { FeishuSender } from './sender.js'
+import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
 import { startFeishuWsClient } from './transport-ws.js'
@@ -49,6 +50,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       const client = createFeishuClient(config)
       const sender = new FeishuSender(client, config)
+      // Register the sender on a module-level slot so paths outside the
+      // channel runner (notably /user approve in commands/builtin.ts) can
+      // push proactive cards. Cleared in stop() so a restart re-registers.
+      registerFeishuSender(sender)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
       const runner = new ChannelRunner(
         createFeishuStrategy(config, sender, client, permissionCoordinator),
@@ -113,7 +118,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           onCardAction: action => permissionCoordinator.handleCardAction(action),
         })
         process.stderr.write('feishu: ws client started (long-lived subscription, no public ingress)\n')
-        return { stop: () => handle.close() }
+        return {
+          stop: () => {
+            clearFeishuSender(sender)
+            return handle.close()
+          },
+        }
       }
 
       const server = await startFeishuWebhookServer({
@@ -123,7 +133,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       })
       const { host, port, path: webhookPath } = config.webhook
       process.stderr.write(`feishu: webhook listening on ${host}:${port}${webhookPath}\n`)
-      return { stop: () => server.close() }
+      return {
+        stop: () => {
+          clearFeishuSender(sender)
+          return server.close()
+        },
+      }
     },
   }
 }

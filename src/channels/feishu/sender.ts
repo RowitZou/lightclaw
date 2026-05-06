@@ -118,6 +118,25 @@ export class FeishuSender {
     })
   }
 
+  // Proactive push to a feishu open_id. Used when there's no inbound message
+  // to reply against — e.g. /user approve in commands/builtin.ts pushes a
+  // welcome card to a freshly approved user, who is offline at approval time.
+  // The Lark IM API auto-routes open_id sends to the bot↔user p2p chat.
+  async sendInteractiveCardToOpenId(openId: string, card: InteractiveCard): Promise<void> {
+    const response = await retryOnTransient(
+      'create interactive (open_id)',
+      () => this.client.im.message.create({
+        params: { receive_id_type: 'open_id' },
+        data: {
+          receive_id: openId,
+          msg_type: 'interactive',
+          content: JSON.stringify(card),
+        },
+      }),
+    )
+    assertOk(response, 'Feishu create message (open_id) failed')
+  }
+
   async sendFile(message: NormalizedChannelMessage, file: OutgoingChannelFile): Promise<void> {
     const fileKey = await this.uploadFile(file)
     await this.sendReplyOrCreate({
