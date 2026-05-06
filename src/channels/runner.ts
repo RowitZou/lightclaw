@@ -36,8 +36,9 @@ import {
   getRuntime,
   getSessionId,
   getTodos,
-  setPermissionApprover,
+  snapshotSessionContext,
 } from '../state.js'
+import { runWithSessionContext } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
@@ -173,6 +174,14 @@ export class ChannelRunner {
           permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
           currentUserId: userId,
         })
+        const approver = this.strategy.createPermissionApprover?.(
+          message,
+          sessionId,
+          userId,
+        )
+        const sessionContext = snapshotSessionContext()
+        sessionContext.permissionApprover = approver ?? null
+        await runWithSessionContext(sessionContext, async () => {
         await refreshSkillRegistry(getCwd())
         if (!meta) {
           await runHook('onSessionStart', {
@@ -258,20 +267,6 @@ export class ChannelRunner {
         // Without this guard the user would get every intermediate body
         // twice (streamed once, then re-sent as the accumulated final).
         let streamedAtLeastOnce = false
-        // Per-message approver: bound to this user's chat / sender so the
-        // card lands in the right thread. Mirrored onto state so subagent
-        // forks (run-subagent → forked-agent → query) reach the same UX
-        // without any extra plumbing — the permission router prefers
-        // ctx.approver but falls back to state.approver, which is identical
-        // here. Cleared in the outer try's `finally` below so a stale
-        // approver from a previous turn never leaks into a parallel chat
-        // or the terminal flow.
-        const approver = this.strategy.createPermissionApprover?.(
-          message,
-          sessionId,
-          userId,
-        )
-        setPermissionApprover(approver ?? null)
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
@@ -380,6 +375,7 @@ export class ChannelRunner {
         if (!streamedAtLeastOnce) {
           await this.sendReply(message, result.assistantText || t('fresh.empty'))
         }
+        })
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
@@ -391,11 +387,6 @@ export class ChannelRunner {
         }
         throw error
       } finally {
-        // Always wipe the approver after this turn so a slow channel-message
-        // queue or terminal `/user ...` cycle never sees a stale binding.
-        // Idempotent when the approver was never set (e.g. slash-only path,
-        // LocalRuntimeAdminOnlyError before the approver assignment).
-        setPermissionApprover(null)
         await this.stopTyping(message, typingToken)
       }
     })
