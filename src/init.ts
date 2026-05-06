@@ -84,7 +84,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   // Moved up from its previous spot below initializeAgents() because the
   // usability check may degrade `config.models` / `routing` / `model`
   // before createResolvedSessionContext reads them into the session meta.
-  registerCodexAuthProvider()
+  registerCodexAuthProvider(resolvedConfig)
   // If any registered model uses schema = 'openai-auth', ensure Codex
   // credentials work (read stored token + auto-refresh; fall back to
   // import from ~/.codex/auth.json only when the LightClaw store is

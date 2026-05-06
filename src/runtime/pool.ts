@@ -191,7 +191,11 @@ export class RuntimePool {
   ): Runtime {
     const workspaceHostPath = path.resolve(workspaceRoot ?? workspaceFor(userId))
     if (config.runtime.backend === 'local') {
-      return createRuntime({ kind: 'local', workspaceRoot: workspaceHostPath })
+      return createRuntime({
+        kind: 'local',
+        workspaceRoot: workspaceHostPath,
+        proxy: config.runtime.network.proxy,
+      })
     }
     if (config.runtime.backend === 'docker') {
       if (!tracker) {

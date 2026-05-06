@@ -25,10 +25,18 @@ export class LocalRuntime implements Runtime {
   readonly isolated = false
   readonly workspaceRoot: string
   readonly helperRoot: string
+  /** Proxy env injected into every spawned Bash subprocess, sourced
+   *  from `runtime.network.proxy`. Null = no injection (subprocesses
+   *  see the parent process env unchanged). LightClaw's own outbound
+   *  HTTP paths read proxy from per-component config, never from this
+   *  shared parent env, so injection here only affects user shell
+   *  tools (curl/git/pnpm/etc.). */
+  private readonly proxyEnv: Record<string, string> | null
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, proxy?: string | null) {
     this.workspaceRoot = path.resolve(workspaceRoot)
     this.helperRoot = resolveDefaultHelperRoot()
+    this.proxyEnv = buildLocalProxyEnv(proxy)
   }
 
   async start(): Promise<void> {
@@ -71,9 +79,18 @@ export class LocalRuntime implements Runtime {
       const stdoutDecoder = new StringDecoder('utf8')
       const stderrDecoder = new StringDecoder('utf8')
 
+      // Build env precedence: process.env < proxyEnv (from
+      // runtime.network.proxy) < input.env (caller override). When no
+      // proxy is configured and no caller override is supplied we pass
+      // `undefined` so child inherits parent env directly — matching
+      // the historical behavior for the un-configured case.
+      const env =
+        this.proxyEnv || input.env
+          ? { ...process.env, ...(this.proxyEnv ?? {}), ...(input.env ?? {}) }
+          : undefined
       const child = spawn('/bin/bash', ['-c', input.command], {
         cwd: this.absolutize(input.cwd),
-        env: input.env ? { ...process.env, ...input.env } : undefined,
+        env,
         signal: input.abortSignal,
         stdio: ['pipe', 'pipe', 'pipe'],
       })
@@ -182,6 +199,21 @@ export class LocalRuntime implements Runtime {
       })
     },
     readdir: async pathname => readdir(this.absolutize(pathname)),
+  }
+}
+
+function buildLocalProxyEnv(proxy: string | null | undefined): Record<string, string> | null {
+  const trimmed = typeof proxy === 'string' ? proxy.trim() : ''
+  if (!trimmed) return null
+  // Match buildBridgeEnv's shape so admin sees the same env semantics
+  // regardless of runtime backend (local / docker host / rlaunch host).
+  return {
+    http_proxy: trimmed,
+    https_proxy: trimmed,
+    HTTP_PROXY: trimmed,
+    HTTPS_PROXY: trimmed,
+    no_proxy: 'localhost,127.0.0.1,::1,.local',
+    NO_PROXY: 'localhost,127.0.0.1,::1,.local',
   }
 }
 

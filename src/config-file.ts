@@ -16,6 +16,10 @@ export type ConfigFileEndpoint = {
    *  Currently only `'codex-oauth'` is recognized; it routes to the
    *  Codex backend with credentials managed by `src/auth/codex/`. */
   auth?: 'codex-oauth'
+  /** Explicit proxy URL for outbound calls to this endpoint. Empty string
+   *  / omitted = direct connect. Never inherits from ambient
+   *  `http_proxy` / `HTTPS_PROXY` env. */
+  proxy?: string
 }
 
 export type ConfigFileModel = {
@@ -152,7 +156,9 @@ export type ConfigFileShape = {
     }
     network?: {
       mode?: string
-      upstream?: string
+      /** Explicit proxy URL forwarded by the bridge and injected into
+       *  LocalRuntime Bash subprocess env. Empty / omitted = direct. */
+      proxy?: string
       port?: number
       bindHost?: string
       acl?: string[]

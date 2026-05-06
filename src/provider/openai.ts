@@ -12,6 +12,7 @@ import type {
   UsageStats,
   UserToolResultBlock,
 } from '../types.js'
+import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, Provider, StreamChatParams } from './types.js'
 
 type PendingToolCall = {
@@ -174,9 +175,11 @@ function mapUsage(usage: unknown): UsageStats {
 }
 
 export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
+  const proxyFetch = buildProxyAwareFetch(buildProxyDispatcher(endpoint.proxy))
   const client = new OpenAI({
     apiKey: endpoint.apiKey,
     ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
+    ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
 
   return {

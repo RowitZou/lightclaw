@@ -35,7 +35,7 @@ export {
 } from './worker-readiness.js'
 
 export type CreateRuntimeOptions =
-  | { kind: 'local'; workspaceRoot: string }
+  | { kind: 'local'; workspaceRoot: string; proxy?: string | null }
   | { kind: 'docker'; config: DockerRuntimeConfig; tracker: ImageReadinessTracker }
   | { kind: 'rlaunch'; config: RlaunchRuntimeConfig; tracker: WorkerReadinessTracker }
   | { kind: 'rjob' }
@@ -43,7 +43,7 @@ export type CreateRuntimeOptions =
 export function createRuntime(options: CreateRuntimeOptions): Runtime {
   switch (options.kind) {
     case 'local':
-      return new LocalRuntime(options.workspaceRoot)
+      return new LocalRuntime(options.workspaceRoot, options.proxy ?? null)
     case 'docker':
       return new DockerRuntime(options.config, options.tracker)
     case 'rlaunch':

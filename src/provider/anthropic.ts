@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 
 import type { ApiKeyEndpoint } from '../config.js'
+import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -242,9 +243,11 @@ function formatWebSearchBlocks(blocks: unknown[]): string {
 
 export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
   const baseURL = endpoint.baseUrl
+  const proxyFetch = buildProxyAwareFetch(buildProxyDispatcher(endpoint.proxy))
   const client = new Anthropic({
     apiKey: endpoint.apiKey,
     ...(baseURL ? { baseURL } : {}),
+    ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
   // Server-side WebSearch is only supported by Anthropic's first-party API.
   // Third-party gateways (Bedrock-backed New API, etc.) usually don't proxy

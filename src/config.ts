@@ -51,12 +51,19 @@ export type RlaunchRuntimeSettings = {
 export type NetworkBridgeSettings = {
   mode: 'isolated' | 'host'
   /**
-   * 'inherit' (default) snapshots the LightClaw process's http_proxy /
-   * https_proxy at startup; 'direct' forces no upstream; an explicit URL
-   * pins it. Containers/pods only ever see the bridge address, never
-   * this value.
+   * Explicit upstream proxy URL the bridge forwards CONNECT/HTTP through.
+   * `null` (or empty string) forces direct connect — the bridge becomes
+   * a pass-through forwarder. There is no env-derived "inherit" mode
+   * anymore: ambient `http_proxy` env vars never leak into LightClaw's
+   * outbound paths. This is also the proxy LocalRuntime injects into
+   * Bash subprocess env, so admin sets it once and every runtime kind
+   * (local / docker / rlaunch) routes consistently.
+   *
+   * Containers/pods still only ever see the bridge address, never this
+   * value — the bridge sanitizes credentials before exposing it via
+   * `status()`.
    */
-  upstream: 'inherit' | 'direct' | string
+  proxy: string | null
   port: number
   /** Host interface the bridge listens on. 0.0.0.0 lets cluster pods reach it. */
   bindHost: string
@@ -120,6 +127,12 @@ export type ToolsConfig = {
 export type ApiKeyEndpoint = {
   apiKey: string
   baseUrl?: string
+  /** Explicit proxy URL for outbound calls to this endpoint. Empty /
+   *  undefined = direct. LightClaw never falls back to ambient
+   *  `http_proxy` / `HTTPS_PROXY` env vars — config is the only source
+   *  of truth, so per-endpoint routing (e.g. Anthropic gateway direct,
+   *  ChatGPT through US proxy) stays predictable. */
+  proxy?: string
 }
 
 /** Endpoint whose credentials come from an `AuthProvider` lookup at request
@@ -128,6 +141,9 @@ export type ApiKeyEndpoint = {
 export type OAuthEndpoint = {
   auth: 'codex-oauth'
   baseUrl?: string
+  /** Explicit proxy URL — same semantics as `ApiKeyEndpoint.proxy`. The
+   *  Codex token-refresh path also routes through this. */
+  proxy?: string
 }
 
 export type EndpointConfig = ApiKeyEndpoint | OAuthEndpoint
@@ -277,6 +293,7 @@ function resolveEndpoints(
     const auth = raw.auth?.trim()
     const apiKey = raw.apiKey?.trim()
     const baseUrl = raw.baseUrl?.trim()
+    const proxy = raw.proxy?.trim()
     if (auth) {
       if (auth !== 'codex-oauth') {
         throw new Error(
@@ -291,6 +308,7 @@ function resolveEndpoints(
       out[alias] = {
         auth: 'codex-oauth',
         ...(baseUrl ? { baseUrl } : {}),
+        ...(proxy ? { proxy } : {}),
       }
       continue
     }
@@ -300,6 +318,7 @@ function resolveEndpoints(
     out[alias] = {
       apiKey,
       ...(baseUrl ? { baseUrl } : {}),
+      ...(proxy ? { proxy } : {}),
     }
   }
   return out
@@ -836,17 +855,14 @@ function resolveNetworkBridgeSettings(
   fileConfig: NonNullable<NonNullable<ConfigFileShape['runtime']>['network']>,
 ): NetworkBridgeSettings {
   const mode: NetworkBridgeSettings['mode'] = fileConfig.mode === 'host' ? 'host' : 'isolated'
-  const upstreamRaw = fileConfig.upstream ?? 'inherit'
-  const upstream: NetworkBridgeSettings['upstream'] =
-    upstreamRaw === 'direct' ? 'direct' :
-    upstreamRaw === 'inherit' ? 'inherit' :
-    upstreamRaw
+  const proxyRaw = typeof fileConfig.proxy === 'string' ? fileConfig.proxy.trim() : ''
+  const proxy: NetworkBridgeSettings['proxy'] = proxyRaw ? proxyRaw : null
   const port = Math.max(1, Math.min(65535, Math.floor(Number(fileConfig.port ?? 18080))))
   const bindHost = (fileConfig.bindHost ?? '0.0.0.0').trim() || '0.0.0.0'
   const acl = Array.isArray(fileConfig.acl) && fileConfig.acl.length > 0
     ? fileConfig.acl.filter(entry => typeof entry === 'string' && entry.trim()).map(entry => entry.trim())
     : ['127.0.0.0/8', '100.100.0.0/16', '172.17.0.0/16']
-  return { mode, upstream, port, bindHost, acl }
+  return { mode, proxy, port, bindHost, acl }
 }
 
 function resolveRlaunchRuntimeSettings(

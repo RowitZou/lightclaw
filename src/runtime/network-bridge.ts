@@ -8,7 +8,7 @@ export type NetworkBridgeStatus = {
   running: boolean
   bindHost: string
   port: number
-  upstreamSource: 'direct' | 'env' | 'explicit'
+  upstreamSource: 'direct' | 'explicit'
   /** Sanitized upstream — never includes credentials. */
   upstreamSanitized: string | null
   acl: string[]
@@ -24,16 +24,16 @@ export class NetworkBridge {
   private server: Server | null = null
   private readonly blockList: BlockList
   private readonly upstreamUrl: string | null
-  private readonly upstreamSource: 'direct' | 'env' | 'explicit'
+  private readonly upstreamSource: 'direct' | 'explicit'
   private readonly upstreamSanitized: string | null
   private requestCount = 0
   private aclRejectedCount = 0
 
   constructor(private readonly settings: NetworkBridgeSettings) {
-    const { url, source } = resolveUpstream(settings.upstream)
-    this.upstreamUrl = url
-    this.upstreamSource = source
-    this.upstreamSanitized = url ? sanitizeUpstream(url) : null
+    const trimmed = settings.proxy ? settings.proxy.trim() : ''
+    this.upstreamUrl = trimmed || null
+    this.upstreamSource = this.upstreamUrl ? 'explicit' : 'direct'
+    this.upstreamSanitized = this.upstreamUrl ? sanitizeUpstream(this.upstreamUrl) : null
     this.blockList = buildBlockList(settings.acl)
   }
 
@@ -103,24 +103,6 @@ export class NetworkBridge {
     const family = remote.includes(':') ? 'ipv6' : 'ipv4'
     return this.blockList.check(remote, family)
   }
-}
-
-export function resolveUpstream(
-  upstream: NetworkBridgeSettings['upstream'],
-): { url: string | null; source: 'direct' | 'env' | 'explicit' } {
-  if (upstream === 'direct') {
-    return { url: null, source: 'direct' }
-  }
-  if (upstream === 'inherit') {
-    const candidate =
-      process.env.http_proxy ??
-      process.env.HTTP_PROXY ??
-      process.env.https_proxy ??
-      process.env.HTTPS_PROXY ??
-      null
-    return { url: candidate ? candidate.trim() : null, source: 'env' }
-  }
-  return { url: upstream.trim(), source: 'explicit' }
 }
 
 export function buildBlockList(acl: readonly string[]): BlockList {

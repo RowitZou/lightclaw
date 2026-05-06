@@ -1,4 +1,4 @@
-import { afterEach, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -7,7 +7,6 @@ import type { LightClawConfig, NetworkBridgeSettings } from '../config.js'
 import {
   buildBlockList,
   NetworkBridge,
-  resolveUpstream,
 } from './network-bridge.js'
 import {
   buildBridgeEnv,
@@ -16,52 +15,39 @@ import {
   detectHostIp,
 } from './pool.js'
 
-describe('resolveUpstream', () => {
-  const saved = {
-    http: process.env.http_proxy,
-    HTTP: process.env.HTTP_PROXY,
-    https: process.env.https_proxy,
-    HTTPS: process.env.HTTPS_PROXY,
+describe('NetworkBridge proxy resolution', () => {
+  function bridgeFor(proxy: string | null): NetworkBridge {
+    return new NetworkBridge({
+      mode: 'host',
+      proxy,
+      port: 0,
+      bindHost: '127.0.0.1',
+      acl: [],
+    })
   }
 
-  afterEach(() => {
-    for (const [key, value] of Object.entries({
-      http_proxy: saved.http,
-      HTTP_PROXY: saved.HTTP,
-      https_proxy: saved.https,
-      HTTPS_PROXY: saved.HTTPS,
-    })) {
-      if (value === undefined) {
-        delete process.env[key]
-      } else {
-        process.env[key] = value
-      }
-    }
+  it('null proxy yields direct mode', () => {
+    const status = bridgeFor(null).status()
+    assert.equal(status.upstreamSource, 'direct')
+    assert.equal(status.upstreamSanitized, null)
   })
 
-  it('direct returns null', () => {
-    assert.deepEqual(resolveUpstream('direct'), { url: null, source: 'direct' })
+  it('explicit URL is preserved (sanitized)', () => {
+    const status = bridgeFor('http://upstream.example:3128').status()
+    assert.equal(status.upstreamSource, 'explicit')
+    assert.equal(status.upstreamSanitized, 'http://upstream.example:3128/')
   })
 
-  it('inherit reads process http_proxy', () => {
-    process.env.http_proxy = 'http://1.2.3.4:9'
-    assert.deepEqual(resolveUpstream('inherit'), { url: 'http://1.2.3.4:9', source: 'env' })
+  it('credentials in proxy URL are stripped from sanitized status', () => {
+    const status = bridgeFor('http://user:secret@upstream.example:3128').status()
+    assert.equal(status.upstreamSource, 'explicit')
+    assert.match(status.upstreamSanitized ?? '', /^http:\/\/upstream\.example:3128/)
+    assert.doesNotMatch(status.upstreamSanitized ?? '', /secret/)
   })
 
-  it('inherit returns null when no env present', () => {
-    delete process.env.http_proxy
-    delete process.env.HTTP_PROXY
-    delete process.env.https_proxy
-    delete process.env.HTTPS_PROXY
-    assert.deepEqual(resolveUpstream('inherit'), { url: null, source: 'env' })
-  })
-
-  it('explicit URL takes precedence', () => {
-    process.env.http_proxy = 'http://env:1'
-    assert.deepEqual(resolveUpstream('http://explicit:2'), {
-      url: 'http://explicit:2',
-      source: 'explicit',
-    })
+  it('whitespace-only proxy degrades to direct', () => {
+    const status = bridgeFor('   ').status()
+    assert.equal(status.upstreamSource, 'direct')
   })
 })
 
@@ -108,7 +94,7 @@ describe('detectHostIp', () => {
 describe('pool config builders with network.mode=host', () => {
   const networkHost: NetworkBridgeSettings = {
     mode: 'host',
-    upstream: 'inherit',
+    proxy: 'http://corp-proxy:1091',
     port: 18080,
     bindHost: '0.0.0.0',
     acl: ['100.100.0.0/16'],
@@ -198,7 +184,7 @@ describe('NetworkBridge end-to-end (direct mode, no upstream)', () => {
 
     const bridge = new NetworkBridge({
       mode: 'host',
-      upstream: 'direct',
+      proxy: null,
       port: 0,                 // ask OS for a free port
       bindHost: '127.0.0.1',
       acl: [],                 // loopback is always allowed
