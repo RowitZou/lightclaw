@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import {
   abortInFlightForUser,
+  getCurrentUserId,
   getCwd,
   getPermissionApprover,
   getSessionId,
@@ -13,6 +14,7 @@ import {
   setAbortControllerForUser,
 } from './state.js'
 import {
+  createEmptySessionContext,
   createSessionContext,
   runWithSessionContext,
   SessionContextNotInitializedError,
@@ -153,5 +155,105 @@ describe('SessionContext ALS-only state', () => {
         assert.equal(getPermissionApprover(), approverB)
       }),
     ])
+  })
+})
+
+// Mirrors the channel runner's reset+scope path post-Iter 4: handleMessage
+// creates an empty placeholder ctx, pins the per-message approver, wraps
+// runWithSessionContext, then resetSessionContext returns a fully-resolved
+// SessionContext that the runner Object.assign's onto the placeholder
+// (preserving the approver). These tests pin that contract so two
+// concurrent users never end up reading each other's cwd / sessionId /
+// approver, even when their reset+assign sequences interleave.
+describe('channel runner reset+scope path (concurrent user isolation)', () => {
+  it('two simulated channel turns do not clobber cwd/sessionId/approver across reset+assign', async () => {
+    const approverA = { ask: async () => ({ behavior: 'allow' }) } as PermissionApprover
+    const approverB = { ask: async () => ({ behavior: 'deny', reason: 'no' }) } as PermissionApprover
+
+    async function simulateChannelTurn(
+      userId: string,
+      sessionId: string,
+      cwd: string,
+      approver: PermissionApprover,
+      midScopeDelay: number,
+    ): Promise<{
+      cwd: string
+      sessionId: string
+      userId: string | undefined
+      approver: PermissionApprover | null
+    }> {
+      const ctx = createEmptySessionContext({ sessionId, currentUserId: userId })
+      ctx.permissionApprover = approver
+      return runWithSessionContext(ctx, async () => {
+        // Mimic resetSessionContext: returns a freshly built ctx that the
+        // runner then Object.assign's onto the placeholder, preserving the
+        // pre-pinned approver explicitly.
+        const resolvedCtx = createSessionContext({
+          cwd,
+          model: 'test-model',
+          sessionsDir: path.join(tmpdir(), `sessions-${userId}`),
+          memoryDir: path.join(tmpdir(), `memory-${userId}`),
+          sessionId,
+          currentUserId: userId,
+        })
+        const preservedApprover = ctx.permissionApprover
+        Object.assign(ctx, resolvedCtx)
+        ctx.permissionApprover = preservedApprover
+
+        // Yield mid-turn so the other Promise.all task gets to run its own
+        // reset+assign. If the runner ever drops the placeholder ctx in
+        // favour of a process-wide singleton, this delay would surface the
+        // resulting cross-user clobber.
+        await delay(midScopeDelay)
+
+        return {
+          cwd: getCwd(),
+          sessionId: getSessionId(),
+          userId: getCurrentUserId(),
+          approver: getPermissionApprover(),
+        }
+      })
+    }
+
+    const [alice, bob] = await Promise.all([
+      simulateChannelTurn('alice', 'sess-A', '/tmp/alice-cwd', approverA, 30),
+      simulateChannelTurn('bob', 'sess-B', '/tmp/bob-cwd', approverB, 10),
+    ])
+
+    assert.equal(alice.cwd, '/tmp/alice-cwd')
+    assert.equal(alice.sessionId, 'sess-A')
+    assert.equal(alice.userId, 'alice')
+    assert.equal(alice.approver, approverA)
+
+    assert.equal(bob.cwd, '/tmp/bob-cwd')
+    assert.equal(bob.sessionId, 'sess-B')
+    assert.equal(bob.userId, 'bob')
+    assert.equal(bob.approver, approverB)
+  })
+
+  it('Object.assign preserves the runner-pinned approver via preserve-then-restore', async () => {
+    const approver = { ask: async () => ({ behavior: 'allow' }) } as PermissionApprover
+    const ctx = createEmptySessionContext({ sessionId: 'pinned' })
+    ctx.permissionApprover = approver
+
+    await runWithSessionContext(ctx, async () => {
+      // resetSessionContext's resolved ctx defaults permissionApprover to
+      // null; without the explicit preserve-then-restore the channel
+      // runner's pin would be lost mid-turn, breaking the subagent
+      // permission UX inheritance contract from lightclaw/CLAUDE.md.
+      const resolvedCtx = createSessionContext({
+        cwd: '/tmp/pinned-cwd',
+        model: 'test-model',
+        sessionsDir: path.join(tmpdir(), 'sessions-pinned'),
+        memoryDir: path.join(tmpdir(), 'memory-pinned'),
+        sessionId: 'pinned',
+      })
+      const preservedApprover = ctx.permissionApprover
+      Object.assign(ctx, resolvedCtx)
+      ctx.permissionApprover = preservedApprover
+
+      assert.equal(getPermissionApprover(), approver, 'approver survives Object.assign')
+      assert.equal(getCwd(), '/tmp/pinned-cwd', 'reset values still take effect')
+    })
   })
 })
