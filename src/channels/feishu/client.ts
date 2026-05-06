@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as Lark from '@larksuiteoapi/node-sdk'
@@ -5,6 +7,16 @@ import * as Lark from '@larksuiteoapi/node-sdk'
 import type { FeishuChannelConfig } from '../types.js'
 
 export type FeishuClient = Lark.Client
+
+// Per-call file upload timeout override. The interceptor below reads from
+// this ALS so a caller (sender.uploadFile) can switch between a generous
+// first-attempt budget and short retry budgets without racing across
+// concurrent uploads from different sessions.
+const fileUploadTimeoutALS = new AsyncLocalStorage<number>()
+
+export function withFileUploadTimeout<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+  return fileUploadTimeoutALS.run(timeoutMs, fn)
+}
 
 export function createFeishuClient(config: FeishuChannelConfig): FeishuClient {
   if (!config.appId || !config.appSecret) {
@@ -39,7 +51,7 @@ function createHttpInstance(config: FeishuChannelConfig): Lark.HttpInstance {
   instance.interceptors.request.use(request => {
     const url = request.url ?? ''
     if (request.method?.toLowerCase() === 'post' && FILE_UPLOAD_PATH_PATTERN.test(url)) {
-      request.timeout = FILE_UPLOAD_TIMEOUT_MS
+      request.timeout = fileUploadTimeoutALS.getStore() ?? FILE_UPLOAD_TIMEOUT_MS
     }
     return request
   })

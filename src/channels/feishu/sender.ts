@@ -6,6 +6,7 @@ import type {
   OutgoingChannelFile,
 } from '../types.js'
 import type { FeishuClient } from './client.js'
+import { withFileUploadTimeout } from './client.js'
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
@@ -23,6 +24,17 @@ const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 const SEND_RETRY_ATTEMPTS = 7
 const SEND_RETRY_BASE_DELAY_MS = 500
 const SEND_RETRY_MAX_DELAY_MS = 8000
+
+// File upload uses a generous first-attempt budget so a real 30 MB / slow
+// proxy upload has time to complete (the upstream reason 92a4711 bumped
+// it to 5 min). But once attempt 1 fails, we already know the link is
+// degraded — subsequent retries with the full 5 min budget would mean a
+// single SendFile call could burn 35 min when the proxy is dropping TLS.
+// Drop retry attempts to a fast 30 s timeout so we fail-fast on TLS / DNS
+// blips and let the caller (the agent loop) move on to the next user
+// turn. Worst-case SendFile under a sustained outage becomes
+// 5 min + 6 * 30 s + ~24 s backoff ~= 8.4 min instead of ~35 min.
+const FILE_UPLOAD_RETRY_TIMEOUT_MS = 30 * 1000
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -122,13 +134,23 @@ export class FeishuSender {
     const fileType = inferFeishuFileType(file.name)
     const response = await retryOnTransient(
       `upload ${fileType}`,
-      () => this.client.im.file.create({
-        data: {
-          file_type: fileType,
-          file_name: file.name,
-          file: file.content,
-        },
-      }) as Promise<UploadFileResponse>,
+      attempt => {
+        const call = () => this.client.im.file.create({
+          data: {
+            file_type: fileType,
+            file_name: file.name,
+            file: file.content,
+          },
+        }) as Promise<UploadFileResponse>
+        // Attempt 1 keeps the default 5 min file-upload budget (real slow
+        // upload). Attempts 2+ override to 30 s — by retry time we already
+        // know the link is degraded, so fail-fast and let the next retry
+        // (or the caller) react instead of burning another 5 min stalled.
+        if (attempt === 1) {
+          return call()
+        }
+        return withFileUploadTimeout(FILE_UPLOAD_RETRY_TIMEOUT_MS, call)
+      },
     )
     if (!response?.file_key) {
       throw new Error('Feishu file upload failed: missing file_key')
@@ -237,14 +259,14 @@ function isTransientSendError(error: unknown): boolean {
 
 async function retryOnTransient<T>(
   label: string,
-  fn: () => Promise<T>,
+  fn: (attempt: number) => Promise<T>,
   attempts: number = SEND_RETRY_ATTEMPTS,
   baseDelayMs: number = SEND_RETRY_BASE_DELAY_MS,
 ): Promise<T> {
   let lastError: unknown
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await fn()
+      return await fn(attempt)
     } catch (error) {
       lastError = error
       const transient = isTransientSendError(error)
