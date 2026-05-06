@@ -15,8 +15,8 @@ export type ExtractCtx = {
 }
 
 type ExtractState = {
-  inProgress: boolean
-  pendingContext: ExtractCtx | undefined
+  inProgressByDir: Set<string>
+  pendingContextByDir: Map<string, ExtractCtx>
   inFlight: Set<Promise<ExtractResult>>
 }
 
@@ -26,13 +26,24 @@ type ExtractResult = {
 }
 
 const state: ExtractState = {
-  inProgress: false,
-  pendingContext: undefined,
+  inProgressByDir: new Set(),
+  pendingContextByDir: new Map(),
   inFlight: new Set(),
 }
 
-export function isExtractionInProgress(): boolean {
-  return state.inProgress
+export function isExtractionInProgressFor(memoryDir: string): boolean {
+  return state.inProgressByDir.has(memoryDir)
+}
+
+export function setExtractionInProgressForTest(
+  memoryDir: string,
+  value: boolean,
+): void {
+  if (value) {
+    state.inProgressByDir.add(memoryDir)
+  } else {
+    state.inProgressByDir.delete(memoryDir)
+  }
 }
 
 export function messageToText(message: Message): string {
@@ -194,27 +205,28 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       saved: [...finalResult.saved, ...result.saved],
       lastExtractedAt: Math.max(finalResult.lastExtractedAt, result.lastExtractedAt),
     }
-    if (!state.pendingContext) {
+    const pending = state.pendingContextByDir.get(current.memoryDir)
+    if (!pending) {
       return finalResult
     }
+    state.pendingContextByDir.delete(current.memoryDir)
     current = {
-      ...state.pendingContext,
+      ...pending,
       lastExtractedAt: finalResult.lastExtractedAt,
     }
-    state.pendingContext = undefined
   }
 }
 
 export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult> {
-  if (state.inProgress) {
-    state.pendingContext = ctx
+  if (state.inProgressByDir.has(ctx.memoryDir)) {
+    state.pendingContextByDir.set(ctx.memoryDir, ctx)
     return {
       saved: [],
       lastExtractedAt: ctx.lastExtractedAt,
     }
   }
 
-  state.inProgress = true
+  state.inProgressByDir.add(ctx.memoryDir)
   const task = runExtractionPipeline(ctx)
     .catch(error => {
       const message = error instanceof Error ? error.message : String(error)
@@ -225,7 +237,7 @@ export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult>
       }
     })
     .finally(() => {
-      state.inProgress = false
+      state.inProgressByDir.delete(ctx.memoryDir)
     })
 
   state.inFlight.add(task)
