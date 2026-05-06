@@ -9,8 +9,20 @@ import type { FeishuClient } from './client.js'
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
-const SEND_RETRY_ATTEMPTS = 3
+// Send retry coverage: capped exponential backoff that rides out short
+// proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
+// SNI-targeted resets recurring on the corp proxy, kicking in mid-burst and
+// silently dropping every user-facing notice within the window). Sequence
+// at base=500 / cap=8000 / attempts=7 is 0.5s + 1s + 2s + 4s + 8s + 8s of
+// waits = 23.5s plus ~1s per fast-fail attempt, ~30s total coverage per
+// retryOnTransient call. A reply→create fallback (sendReplyOrCreate) can
+// chain a second 30s budget for ~60s worst-case reply latency — acceptable
+// versus the prior 1.5s hard fail that lost the entire turn (permission
+// card, deny notice, assistant reply all silently dropped). Outages longer
+// than ~60s need a persistent pending-notice queue, not more retries.
+const SEND_RETRY_ATTEMPTS = 7
 const SEND_RETRY_BASE_DELAY_MS = 500
+const SEND_RETRY_MAX_DELAY_MS = 8000
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -245,7 +257,7 @@ async function retryOnTransient<T>(
         }
         throw error
       }
-      const backoff = baseDelayMs * 2 ** (attempt - 1)
+      const backoff = Math.min(baseDelayMs * 2 ** (attempt - 1), SEND_RETRY_MAX_DELAY_MS)
       process.stderr.write(
         `feishu send: ${label} attempt ${attempt} transient (${detail}); retry in ${backoff}ms\n`,
       )
