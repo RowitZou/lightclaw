@@ -21,7 +21,6 @@ import {
   refreshSkillRegistry,
 } from './skill/registry.js'
 import type { Tool } from './tool.js'
-import { toolToAPISchema } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
 import type { PermissionMode } from './permission/types.js'
@@ -51,6 +50,15 @@ function formatSkillsSection(): string {
       const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
       return `- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`
     })
+    .join('\n')
+}
+
+// Tool catalog: name + 1-line description only. Full input schema travels via
+// the API native `tools` parameter; duplicating it in the prompt wastes tokens
+// and breaks the cache on any schema tweak.
+function formatToolCatalog(tools: Tool[]): string {
+  return tools
+    .map(tool => `- ${tool.name}: ${tool.description}`)
     .join('\n')
 }
 
@@ -166,16 +174,7 @@ export async function buildSystemPromptTemplate(
       : Promise.resolve(''),
   ])
 
-  const toolDescriptions = tools
-    .map(tool => {
-      const schema = toolToAPISchema(tool)
-      return [
-        `Tool: ${tool.name}`,
-        `Description: ${tool.description}`,
-        `Input schema: ${JSON.stringify(schema.input_schema)}`,
-      ].join('\n')
-    })
-    .join('\n\n')
+  const toolDescriptions = formatToolCatalog(tools)
 
   const preTodoSections: string[] = [
     'You are LightClaw, a personal assistant running across terminal and chat channels.',
@@ -278,16 +277,7 @@ export function buildSubagentPrompt(
   environmentRoot: string,
   agent: AgentDefinition,
 ): string {
-  const toolDescriptions = tools
-    .map(tool => {
-      const schema = toolToAPISchema(tool)
-      return [
-        `Tool: ${tool.name}`,
-        `Description: ${tool.description}`,
-        `Input schema: ${JSON.stringify(schema.input_schema)}`,
-      ].join('\n')
-    })
-    .join('\n\n')
+  const toolDescriptions = formatToolCatalog(tools)
 
   const permissionSection = formatPermissionSection(true)
   const sections: string[] = [
