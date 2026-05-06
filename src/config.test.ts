@@ -313,4 +313,45 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models.sonnet.schema, 'anthropic')
     assert.equal(cfg.models['gpt-mini'].schema, 'openai')
   })
+
+  it('defaults autoDream to dark launch off', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.autoDream, {
+      enabled: false,
+      minHours: 24,
+      minSessions: 3,
+      scanThrottleMs: 600_000,
+      maxTurns: 30,
+    })
+  })
+
+  it('parses autoDream overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      autoDream: {
+        enabled: true,
+        minHours: 0.5,
+        minSessions: 2,
+        scanThrottleMs: 30_000,
+        maxTurns: 12,
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.autoDream, {
+      enabled: true,
+      minHours: 0.5,
+      minSessions: 2,
+      scanThrottleMs: 30_000,
+      maxTurns: 12,
+    })
+  })
 })

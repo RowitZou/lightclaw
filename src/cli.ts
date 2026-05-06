@@ -5,6 +5,7 @@ import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { initializeMcp } from './mcp/index.js'
+import { drainPendingDream } from './memory/dream/dream.js'
 import { drainPendingExtraction } from './memory/extract.js'
 import { setLightclawHomeOverride } from './paths.js'
 import {
@@ -33,9 +34,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
     return
   }
   shuttingDown = true
-  process.stderr.write(`[lightclaw] received ${signal}, draining memory extraction...\n`)
+  process.stderr.write(`[lightclaw] received ${signal}, draining memory tasks...\n`)
   await drainPendingExtraction(60_000).catch(error => {
     process.stderr.write(`memory extraction drain failed: ${String(error)}\n`)
+  })
+  await drainPendingDream(60_000).catch(error => {
+    process.stderr.write(`auto-dream drain failed: ${String(error)}\n`)
   })
   process.exit(0)
 }

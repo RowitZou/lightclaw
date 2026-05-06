@@ -53,6 +53,13 @@ export type ConfigFileShape = {
   sessionsDir?: string
   autoCompact?: boolean
   autoMemory?: boolean
+  autoDream?: {
+    enabled?: boolean
+    minHours?: number
+    minSessions?: number
+    scanThrottleMs?: number
+    maxTurns?: number
+  }
   memoryDir?: string
   workspaceRoot?: string
   contextWindow?: number

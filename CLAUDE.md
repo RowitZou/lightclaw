@@ -37,3 +37,11 @@
 - The extraction subagent's tool gate is `createAutoMemCanUseTool`: `MemoryWrite`, `MemoryRead`, `Read`, `Grep`, `Glob`, and read-only `Bash` are allowed; everything else, including `Write`, `Edit`, `AgentTool`, and MCP tools, is denied.
 - `inProgress + pendingContext` coalescing prevents high-frequency turns from spawning many extraction forks. Do not bypass it by calling the extraction inner loop directly.
 - `drainPendingExtraction(60_000)` must run from process exit paths. New daemon or shutdown paths need to wire the same drain.
+
+# LightClaw autoDream Notes
+
+- autoDream is dark-launched: `config.autoDream.enabled` defaults to `false`. Do not add a `/dream` slash or turn it on by default without a separate dogfood decision.
+- The runner lives in `src/memory/dream/` and reuses `runForkedAgent`, `getLastCacheSafeParams`, and `createAutoMemCanUseTool`. Do not add a broader dream-only tool gate unless a concrete memory workflow proves the current read-only + MemoryWrite set is insufficient.
+- Triggering is per canonical user: time gate, scan throttle, session-count gate, and `.consolidate-lock` all operate under that user's memory directory. Never introduce a global dream lock that makes one user's consolidation block another user's.
+- Dream forks run as `mode: 'subagent'` with `subagentLabel: 'auto_dream'`, so api-logs should show `kind: 'subagent'` rather than a new top-level ApiLogKind. Keep this label stable for admin grep.
+- `drainPendingDream(60_000)` must stay next to `drainPendingExtraction(60_000)` in process exit paths. `/stop` must not abort dream forks; they use their own signal and are not registered in `abortControllerByUser`.
