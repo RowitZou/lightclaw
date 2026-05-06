@@ -44,7 +44,7 @@ import {
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
-import { SessionLock } from './session-lock.js'
+import { assertSessionIdShape, SessionLock } from './session-lock.js'
 import type { ChannelId, NormalizedChannelMessage } from './types.js'
 
 /**
@@ -149,6 +149,7 @@ export class ChannelRunner {
       return
     }
     const sessionId = this.strategy.resolveSessionId(message, userId)
+    assertSessionIdShape(sessionId)
     await this.locks.runExclusive(sessionId, async () => {
       // In-flight typing indicator: fire BEFORE any work so the user sees
       // a "we got it" signal even when meta load / runtime probe is slow.
