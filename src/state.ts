@@ -9,59 +9,20 @@ import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
+import {
+  getCurrentSessionContext,
+  type SessionContext,
+} from './session-context.js'
 import type { TodoItem, UsageStats } from './types.js'
 
-type SessionState = {
-  sessionId: string
-  cwd: string
-  model: string
-  sessionsDir: string
-  memoryDir: string
-  currentUserId?: string
-  resumedFrom: string | null
-  compactionCount: number
-  lastExtractedAt: number
-  totalInputTokens: number
-  totalOutputTokens: number
-  todos: TodoItem[]
-  permissionMode: PermissionMode
-  cliArgRules: PermissionRule[]
-  /**
-   * Per-canonical-user persisted allow/deny/ask rules (mirrors the on-disk
-   * `<lightclawHome>/identity/per-user/<canonical>/permissions.json` file).
-   * Rebuilt from disk on every initializeState / resetSessionContext, so the
-   * Feishu coordinator's "以后都允许" path can write the file and reload here
-   * without juggling an in-memory map. Empty for terminal sessions without
-   * a paired identity.
-   */
-  identityRules: PermissionRule[]
-  fileRules: PermissionRule[]
-  activeSkillAllowedTools?: string[]
-  /**
-   * Channel-injected permission approver (Feishu card / future channels).
-   * Set once per query() entry by ChannelRunner so that ANY tool call —
-   * main agent or subagent — routes through the same UX. Subagent paths no
-   * longer auto-deny on `ask`; they read this approver via getPermission-
-   * Approver(). Terminal sessions leave it null and fall back to readline.
-   */
-  permissionApprover: PermissionApprover | null
-  abortController: AbortController
-  /**
-   * Per-canonical-user abort controllers, populated by `beginQuery(canonical)`.
-   * Channel mode uses this so /stop from user A only aborts A's in-flight turn,
-   * not B's running concurrently. The map is never cleared — fresh entries
-   * overwrite stale ones, and aborting a stale (already-resolved) controller
-   * is a no-op. Terminal mode also writes here so /stop works there too.
-   */
-  abortControllerByUser: Map<string, AbortController>
-  backgroundTasks: Set<Promise<unknown>>
-  runtime?: Runtime
-}
+/** @deprecated singleton fallback; Phase 20 Iter 4 removes this slot. */
+type SessionState = SessionContext
 
 let state: SessionState | null = null
 let runtimePool: RuntimePool | null = null
 let imageReadiness: ImageReadinessTracker | null = null
 let networkBridge: NetworkBridge | null = null
+const abortControllerByUser = new Map<string, AbortController>()
 // Session-memory write throttle counters. Module-level rather than per-state
 // because they reset on every initializeState (a new session starts with
 // zero accumulated work). They drive the SessionMemory double-threshold:
@@ -92,11 +53,7 @@ export function initializeState(input: {
   fileRules?: PermissionRule[]
   runtime?: Runtime
 }): void {
-  // Preserve the channel-injected approver across resetSessionContext —
-  // ChannelRunner sets it before each query() and clearing it here would
-  // strand subagent permission requests with no UX path.
-  const preservedApprover = state?.permissionApprover ?? null
-  state = {
+  const next: SessionState = {
     sessionId: input.sessionId ?? randomUUID(),
     cwd: input.cwd,
     model: input.model,
@@ -114,11 +71,15 @@ export function initializeState(input: {
     identityRules: input.identityRules ?? [],
     fileRules: input.fileRules ?? [],
     activeSkillAllowedTools: undefined,
-    permissionApprover: preservedApprover,
+    permissionApprover: null,
     abortController: new AbortController(),
-    abortControllerByUser: new Map(),
     backgroundTasks: new Set(),
     runtime: input.runtime,
+  }
+  state = next
+  const ctx = getCurrentSessionContext()
+  if (ctx) {
+    Object.assign(ctx, cloneSessionContext(next))
   }
 
   sessionMemoryTokensSinceUpdate = 0
@@ -136,40 +97,62 @@ function requireState(): SessionState {
   return state
 }
 
+function currentState(): SessionState {
+  return getCurrentSessionContext() ?? requireState()
+}
+
+function cloneSessionContext(current: SessionState): SessionContext {
+  return {
+    ...current,
+    todos: [...current.todos],
+    cliArgRules: [...current.cliArgRules],
+    identityRules: [...current.identityRules],
+    fileRules: [...current.fileRules],
+    activeSkillAllowedTools: current.activeSkillAllowedTools
+      ? [...current.activeSkillAllowedTools]
+      : undefined,
+    backgroundTasks: new Set(current.backgroundTasks),
+  }
+}
+
+export function snapshotSessionContext(): SessionContext {
+  return cloneSessionContext(requireState())
+}
+
 export function getSessionId(): string {
-  return requireState().sessionId
+  return currentState().sessionId
 }
 
 export function getCwd(): string {
-  return requireState().cwd
+  return currentState().cwd
 }
 
 export function setCwd(cwd: string): void {
-  requireState().cwd = cwd
+  currentState().cwd = cwd
 }
 
 export function getModel(): string {
-  return requireState().model
+  return currentState().model
 }
 
 export function setModel(model: string): void {
-  requireState().model = model
+  currentState().model = model
 }
 
 export function getSessionsDir(): string {
-  return requireState().sessionsDir
+  return currentState().sessionsDir
 }
 
 export function getMemoryDir(): string {
-  return requireState().memoryDir
+  return currentState().memoryDir
 }
 
 export function getCurrentUserId(): string | undefined {
-  return requireState().currentUserId
+  return currentState().currentUserId
 }
 
 export function requireCurrentUserId(): string {
-  const userId = requireState().currentUserId
+  const userId = currentState().currentUserId
   if (!userId) {
     throw new Error('No LightClaw identity is active for this session.')
   }
@@ -177,49 +160,49 @@ export function requireCurrentUserId(): string {
 }
 
 export function setCurrentUserId(userId: string | undefined): void {
-  requireState().currentUserId = userId
+  currentState().currentUserId = userId
 }
 
 export function getResumedFrom(): string | null {
-  return requireState().resumedFrom
+  return currentState().resumedFrom
 }
 
 export function incrementCompactionCount(): number {
-  const current = requireState()
+  const current = currentState()
   current.compactionCount += 1
   return current.compactionCount
 }
 
 export function getCompactionCount(): number {
-  return requireState().compactionCount
+  return currentState().compactionCount
 }
 
 export function getLastExtractedAt(): number {
-  return requireState().lastExtractedAt
+  return currentState().lastExtractedAt
 }
 
 export function setLastExtractedAt(timestamp: number): void {
-  requireState().lastExtractedAt = timestamp
+  currentState().lastExtractedAt = timestamp
 }
 
 export function getTodos(): TodoItem[] {
-  return [...requireState().todos]
+  return [...currentState().todos]
 }
 
 export function setTodos(todos: TodoItem[]): void {
-  requireState().todos = [...todos]
+  currentState().todos = [...todos]
 }
 
 export function getPermissionMode(): PermissionMode {
-  return requireState().permissionMode
+  return currentState().permissionMode
 }
 
 export function setPermissionMode(mode: PermissionMode): void {
-  requireState().permissionMode = mode
+  currentState().permissionMode = mode
 }
 
 export function getIdentityRules(): PermissionRule[] {
-  return [...requireState().identityRules]
+  return [...currentState().identityRules]
 }
 
 export function setIdentityRules(rules: PermissionRule[]): void {
@@ -227,40 +210,43 @@ export function setIdentityRules(rules: PermissionRule[]): void {
   // (FeishuPermissionCoordinator / askUserApproval) or revoking. Holding a
   // shared array reference (pre-Phase 17 sessionRulesByUser pattern) is no
   // longer needed.
-  requireState().identityRules = [...rules]
+  currentState().identityRules = [...rules]
 }
 
 export function getPermissionApprover(): PermissionApprover | null {
-  return state?.permissionApprover ?? null
+  return getCurrentSessionContext()?.permissionApprover ?? state?.permissionApprover ?? null
 }
 
 export function setPermissionApprover(approver: PermissionApprover | null): void {
   // Tolerate state-not-yet-initialized so the channel runner's `finally`
   // block can safely clear the approver even when resetSessionContext threw
   // before establishing state. No-op in that case (no state to leak from).
-  if (state) {
+  const ctx = getCurrentSessionContext()
+  if (ctx) {
+    ctx.permissionApprover = approver
+  } else if (state) {
     state.permissionApprover = approver
   }
 }
 
 export function getCliArgRules(): PermissionRule[] {
-  return [...requireState().cliArgRules]
+  return [...currentState().cliArgRules]
 }
 
 export function setCliArgRules(rules: PermissionRule[]): void {
-  requireState().cliArgRules = [...rules]
+  currentState().cliArgRules = [...rules]
 }
 
 export function getFileRules(): PermissionRule[] {
-  return [...requireState().fileRules]
+  return [...currentState().fileRules]
 }
 
 export function setFileRules(rules: PermissionRule[]): void {
-  requireState().fileRules = [...rules]
+  currentState().fileRules = [...rules]
 }
 
 export function getRuntime(): Runtime {
-  const runtime = requireState().runtime
+  const runtime = currentState().runtime
   if (!runtime) {
     throw new Error('Runtime has not been initialized. Did initializeApp() complete?')
   }
@@ -269,11 +255,11 @@ export function getRuntime(): Runtime {
 }
 
 export function getRuntimeIfInitialized(): Runtime | undefined {
-  return state?.runtime
+  return getCurrentSessionContext()?.runtime ?? state?.runtime
 }
 
 export function setRuntime(runtime: Runtime): void {
-  requireState().runtime = runtime
+  currentState().runtime = runtime
 }
 
 export function getRuntimePool(): RuntimePool {
@@ -295,7 +281,7 @@ export function setNetworkBridge(bridge: NetworkBridge | null): void {
 }
 
 export function getAllPermissionRules(): PermissionRule[] {
-  const current = requireState()
+  const current = currentState()
   // Order does not affect evaluation (deny > ask > allow is enforced inside
   // evaluatePermission regardless of array order), but identity rules go
   // first so they show up at the top of `/rules list`. cli rules next
@@ -310,24 +296,24 @@ export function getAllPermissionRules(): PermissionRule[] {
 }
 
 export function getActiveSkillAllowedTools(): string[] | undefined {
-  const allowedTools = requireState().activeSkillAllowedTools
+  const allowedTools = currentState().activeSkillAllowedTools
   return allowedTools ? [...allowedTools] : undefined
 }
 
 export function setActiveSkillAllowedTools(allowedTools: string[] | undefined): void {
-  requireState().activeSkillAllowedTools = allowedTools ? [...allowedTools] : undefined
+  currentState().activeSkillAllowedTools = allowedTools ? [...allowedTools] : undefined
 }
 
 export function clearActiveSkillAllowedTools(): void {
-  requireState().activeSkillAllowedTools = undefined
+  currentState().activeSkillAllowedTools = undefined
 }
 
 export function getAbortController(): AbortController {
-  return requireState().abortController
+  return currentState().abortController
 }
 
 export function resetAbortController(): AbortController {
-  const current = requireState()
+  const current = currentState()
   current.abortController = new AbortController()
   return current.abortController
 }
@@ -336,7 +322,7 @@ export function setAbortControllerForUser(
   canonical: string,
   controller: AbortController,
 ): void {
-  requireState().abortControllerByUser.set(canonical, controller)
+  abortControllerByUser.set(canonical, controller)
 }
 
 /**
@@ -345,7 +331,7 @@ export function setAbortControllerForUser(
  * (user never ran a query) or it was already aborted.
  */
 export function abortInFlightForUser(canonical: string): boolean {
-  const ctrl = requireState().abortControllerByUser.get(canonical)
+  const ctrl = abortControllerByUser.get(canonical)
   if (!ctrl || ctrl.signal.aborted) {
     return false
   }
@@ -354,7 +340,7 @@ export function abortInFlightForUser(canonical: string): boolean {
 }
 
 export function addUsage(usage: UsageStats): void {
-  const current = requireState()
+  const current = currentState()
   current.totalInputTokens += usage.input_tokens ?? 0
   current.totalOutputTokens += usage.output_tokens ?? 0
 }
@@ -363,7 +349,7 @@ export function getUsageTotals(): {
   inputTokens: number
   outputTokens: number
 } {
-  const current = requireState()
+  const current = currentState()
   return {
     inputTokens: current.totalInputTokens,
     outputTokens: current.totalOutputTokens,
@@ -371,7 +357,7 @@ export function getUsageTotals(): {
 }
 
 export function registerBackgroundTask(task: Promise<unknown>): void {
-  const current = requireState()
+  const current = currentState()
   current.backgroundTasks.add(task)
   void task.finally(() => {
     current.backgroundTasks.delete(task)
@@ -379,7 +365,7 @@ export function registerBackgroundTask(task: Promise<unknown>): void {
 }
 
 export async function awaitBackgroundTasks(): Promise<void> {
-  const current = requireState()
+  const current = currentState()
   if (current.backgroundTasks.size === 0) {
     return
   }
