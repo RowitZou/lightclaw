@@ -191,7 +191,12 @@ export class RuntimePool {
   ): Runtime {
     const workspaceHostPath = path.resolve(workspaceRoot ?? workspaceFor(userId))
     if (config.runtime.backend === 'local') {
-      return createRuntime({ kind: 'local', workspaceRoot: workspaceHostPath })
+      return createRuntime({
+        kind: 'local',
+        workspaceRoot: workspaceHostPath,
+        proxy: config.runtime.network.proxy,
+        noProxy: config.runtime.network.noProxy,
+      })
     }
     if (config.runtime.backend === 'docker') {
       if (!tracker) {
@@ -242,7 +247,7 @@ export function buildDockerRuntimeConfig(
   const useHost = network.mode === 'host'
   const dockerNetwork = useHost ? 'host' : docker.network
   const env = useHost
-    ? { ...buildBridgeEnv('127.0.0.1', network.port), ...docker.env }
+    ? { ...buildBridgeEnv('127.0.0.1', network.port, network.noProxy), ...docker.env }
     : docker.env
   return {
     image: resolveDockerImage(config),
@@ -272,7 +277,7 @@ export function buildRlaunchRuntimeConfig(
   // rlaunch worker is on a different cluster node, so it cannot reach the
   // bridge over loopback — point at the host's first non-internal IPv4.
   const env = network.mode === 'host'
-    ? { ...buildBridgeEnv(detectHostIp(), network.port), ...rlaunch.env }
+    ? { ...buildBridgeEnv(detectHostIp(), network.port, network.noProxy), ...rlaunch.env }
     : rlaunch.env
   return {
     canonicalUser: userId,
@@ -297,15 +302,25 @@ export function buildRlaunchRuntimeConfig(
   }
 }
 
-export function buildBridgeEnv(host: string, port: number): Record<string, string> {
+export function buildBridgeEnv(
+  host: string,
+  port: number,
+  noProxy: readonly string[] = [],
+): Record<string, string> {
   const url = `http://${host}:${port}`
+  // The bridge itself already enforces no_proxy on the upstream-routing
+  // side, but the in-container env is what user shell tools (curl,
+  // pnpm, git, etc.) consult — so we mirror the same list into the
+  // env so those tools skip the bridge entirely for matching destinations.
+  const builtin = ['localhost', '127.0.0.1', '::1', '.local']
+  const merged = [...builtin, ...noProxy.filter(Boolean)].join(',')
   return {
     http_proxy: url,
     https_proxy: url,
     HTTP_PROXY: url,
     HTTPS_PROXY: url,
-    no_proxy: 'localhost,127.0.0.1,::1,.local',
-    NO_PROXY: 'localhost,127.0.0.1,::1,.local',
+    no_proxy: merged,
+    NO_PROXY: merged,
   }
 }
 

@@ -45,7 +45,12 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     encryptKey: process.env.FEISHU_ENCRYPT_KEY ?? input?.encryptKey,
     verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? input?.verificationToken,
     domain: input?.domain ?? 'feishu',
-    proxy: process.env.FEISHU_PROXY ?? input?.proxy ?? process.env.https_proxy ?? process.env.http_proxy,
+    // Explicit only — no ambient `https_proxy` / `http_proxy` fallback.
+    // LightClaw's outbound paths (feishu, providers, runtime bridge)
+    // all read proxy from config so per-component routing is
+    // predictable. Ambient env still flows into Bash subprocesses on
+    // LocalRuntime via the per-runtime injection path.
+    proxy: process.env.FEISHU_PROXY ?? input?.proxy,
     cwd: input?.cwd ? path.resolve(expandHomePath(input.cwd)) : undefined,
     transport,
     permissionMode,

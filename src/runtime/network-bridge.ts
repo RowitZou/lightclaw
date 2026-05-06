@@ -1,4 +1,4 @@
-import { BlockList } from 'node:net'
+import { BlockList, isIP } from 'node:net'
 
 import { Server, type PrepareRequestFunctionResult } from 'proxy-chain'
 
@@ -8,14 +8,17 @@ export type NetworkBridgeStatus = {
   running: boolean
   bindHost: string
   port: number
-  upstreamSource: 'direct' | 'env' | 'explicit'
+  upstreamSource: 'direct' | 'explicit'
   /** Sanitized upstream — never includes credentials. */
   upstreamSanitized: string | null
   acl: string[]
+  noProxy: string[]
   /** Total proxy requests served (HTTP + CONNECT). */
   requestCount: number
   /** Requests rejected by ACL. */
   aclRejectedCount: number
+  /** Requests that bypassed the upstream proxy via noProxy. */
+  noProxyHitCount: number
 }
 
 const SUPPORTED_PREFIXES = ['127.0.0.0/8', '::1/128']
@@ -24,17 +27,20 @@ export class NetworkBridge {
   private server: Server | null = null
   private readonly blockList: BlockList
   private readonly upstreamUrl: string | null
-  private readonly upstreamSource: 'direct' | 'env' | 'explicit'
+  private readonly upstreamSource: 'direct' | 'explicit'
   private readonly upstreamSanitized: string | null
+  private readonly noProxyMatch: (host: string) => boolean
   private requestCount = 0
   private aclRejectedCount = 0
+  private noProxyHitCount = 0
 
   constructor(private readonly settings: NetworkBridgeSettings) {
-    const { url, source } = resolveUpstream(settings.upstream)
-    this.upstreamUrl = url
-    this.upstreamSource = source
-    this.upstreamSanitized = url ? sanitizeUpstream(url) : null
+    const trimmed = settings.proxy ? settings.proxy.trim() : ''
+    this.upstreamUrl = trimmed || null
+    this.upstreamSource = this.upstreamUrl ? 'explicit' : 'direct'
+    this.upstreamSanitized = this.upstreamUrl ? sanitizeUpstream(this.upstreamUrl) : null
     this.blockList = buildBlockList(settings.acl)
+    this.noProxyMatch = compileNoProxy(settings.noProxy)
   }
 
   async start(): Promise<void> {
@@ -73,13 +79,16 @@ export class NetworkBridge {
       upstreamSource: this.upstreamSource,
       upstreamSanitized: this.upstreamSanitized,
       acl: [...this.settings.acl],
+      noProxy: [...this.settings.noProxy],
       requestCount: this.requestCount,
       aclRejectedCount: this.aclRejectedCount,
+      noProxyHitCount: this.noProxyHitCount,
     }
   }
 
   private handlePrepare(opts: {
     request: { socket?: { remoteAddress?: string | null } }
+    hostname?: string
   }): PrepareRequestFunctionResult {
     const remote = normalizeAddress(opts.request.socket?.remoteAddress ?? '')
     if (!remote || !this.isAllowed(remote)) {
@@ -93,7 +102,14 @@ export class NetworkBridge {
       }
     }
     this.requestCount += 1
+    // noProxy is consulted only when an upstream is configured —
+    // direct mode already bypasses everything, no decision to make.
     if (this.upstreamUrl) {
+      const dest = stripBrackets(opts.hostname ?? '')
+      if (dest && this.noProxyMatch(dest)) {
+        this.noProxyHitCount += 1
+        return {}
+      }
       return { upstreamProxyUrl: this.upstreamUrl }
     }
     return {}
@@ -103,24 +119,6 @@ export class NetworkBridge {
     const family = remote.includes(':') ? 'ipv6' : 'ipv4'
     return this.blockList.check(remote, family)
   }
-}
-
-export function resolveUpstream(
-  upstream: NetworkBridgeSettings['upstream'],
-): { url: string | null; source: 'direct' | 'env' | 'explicit' } {
-  if (upstream === 'direct') {
-    return { url: null, source: 'direct' }
-  }
-  if (upstream === 'inherit') {
-    const candidate =
-      process.env.http_proxy ??
-      process.env.HTTP_PROXY ??
-      process.env.https_proxy ??
-      process.env.HTTPS_PROXY ??
-      null
-    return { url: candidate ? candidate.trim() : null, source: 'env' }
-  }
-  return { url: upstream.trim(), source: 'explicit' }
 }
 
 export function buildBlockList(acl: readonly string[]): BlockList {
@@ -159,6 +157,61 @@ function normalizeAddress(remote: string): string {
     return remote.slice('::ffff:'.length)
   }
   return remote
+}
+
+/**
+ * Compile a `no_proxy` pattern list into a fast destination matcher.
+ * Patterns follow standard `no_proxy` conventions:
+ *   - CIDR (`10.0.0.0/8`, `100.96.0.0/12`) — matched against IP literals
+ *     only; never resolves DNS, by design (avoids `proxy-bypass via DNS`
+ *     class of attacks where a hostile DNS resolves a public name to an
+ *     internal IP).
+ *   - leading-dot suffix (`.pjlab.org.cn`) — matches that domain and any
+ *     subdomain.
+ *   - exact hostname (`gpfs1.pjlab.org.cn`) — matches that string only.
+ * Empty / whitespace entries are dropped silently.
+ */
+export function compileNoProxy(patterns: readonly string[]): (host: string) => boolean {
+  const cidr = new BlockList()
+  let hasCidr = false
+  const exact = new Set<string>()
+  const suffixes: string[] = []
+  for (const raw of patterns) {
+    const trimmed = raw.trim().toLowerCase()
+    if (!trimmed) continue
+    if (trimmed.includes('/')) {
+      addCidr(cidr, trimmed)
+      hasCidr = true
+      continue
+    }
+    if (trimmed.startsWith('.')) {
+      suffixes.push(trimmed)
+      continue
+    }
+    exact.add(trimmed)
+  }
+  return (host: string): boolean => {
+    if (!host) return false
+    const lower = host.toLowerCase()
+    if (exact.has(lower)) return true
+    for (const sfx of suffixes) {
+      // .pjlab.org.cn matches both pjlab.org.cn (the apex itself) and
+      // x.pjlab.org.cn (subdomains).
+      if (lower === sfx.slice(1) || lower.endsWith(sfx)) return true
+    }
+    if (hasCidr) {
+      const family = isIP(lower)
+      if (family === 4 && cidr.check(lower, 'ipv4')) return true
+      if (family === 6 && cidr.check(lower, 'ipv6')) return true
+    }
+    return false
+  }
+}
+
+function stripBrackets(host: string): string {
+  // proxy-chain mostly hands us bare hostnames, but be defensive — IPv6
+  // literals are conventionally bracketed in URLs.
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
 }
 
 function sanitizeUpstream(url: string): string {

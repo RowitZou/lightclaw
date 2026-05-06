@@ -1,3 +1,4 @@
+import type { LightClawConfig } from '../../config.js'
 import { registerAuthProvider } from '../index.js'
 import { createCodexAuthProvider } from './provider.js'
 
@@ -10,7 +11,17 @@ export {
 } from './constants.js'
 
 /** Idempotent. Called once from `init.ts:initializeApp` so the provider is
- *  always reachable via `getAuthProvider('codex')`. */
-export function registerCodexAuthProvider(): void {
-  registerAuthProvider(createCodexAuthProvider())
+ *  always reachable via `getAuthProvider('codex')`. The proxy URL for the
+ *  OAuth token refresh path is sourced from `endpoints.codex.proxy` if
+ *  that endpoint exists in config — first-time imports (no endpoints.codex
+ *  yet) get a direct-connect provider, which is fine because the import
+ *  flow itself does not refresh; subsequent process restarts pick up the
+ *  proxy after `auto-register` has written the endpoint. */
+export function registerCodexAuthProvider(config?: LightClawConfig): void {
+  const codexEndpoint = config?.endpoints['codex']
+  const proxy =
+    codexEndpoint && 'proxy' in codexEndpoint && codexEndpoint.proxy
+      ? codexEndpoint.proxy
+      : undefined
+  registerAuthProvider(createCodexAuthProvider({ ...(proxy ? { proxy } : {}) }))
 }

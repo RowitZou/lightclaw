@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { ProxyAgent, request, type Dispatcher } from 'undici'
+import { request, type Dispatcher } from 'undici'
 
+import { buildProxyDispatcher } from '../../provider/proxy.js'
 import {
   AuthError,
   type AuthCredentials,
@@ -68,38 +69,26 @@ type RefreshErrorResponse = {
   error_description?: string
 }
 
-/** Pluggable HTTP for tests. Production uses undici with a ProxyAgent
- *  derived from the LightClaw process's proxy env. */
+/** Pluggable HTTP for tests. Production uses undici with an optional
+ *  ProxyAgent built from the `endpoints.codex.proxy` config value passed
+ *  to `createCodexAuthProvider({ proxy })`. */
 export type HttpFn = (input: {
   url: string
   body: string
   headers: Record<string, string>
 }) => Promise<{ statusCode: number; bodyText: string }>
 
-function defaultProxyDispatcher(): Dispatcher | undefined {
-  const proxyUrl =
-    process.env.https_proxy ??
-    process.env.HTTPS_PROXY ??
-    process.env.http_proxy ??
-    process.env.HTTP_PROXY
-  if (!proxyUrl) return undefined
-  try {
-    return new ProxyAgent(proxyUrl)
-  } catch {
-    return undefined
+function buildDefaultHttp(dispatcher: Dispatcher | undefined): HttpFn {
+  return async ({ url, body, headers }) => {
+    const res = await request(url, {
+      method: 'POST',
+      body,
+      headers,
+      ...(dispatcher ? { dispatcher } : {}),
+    })
+    const bodyText = await res.body.text()
+    return { statusCode: res.statusCode, bodyText }
   }
-}
-
-const defaultHttp: HttpFn = async ({ url, body, headers }) => {
-  const dispatcher = defaultProxyDispatcher()
-  const res = await request(url, {
-    method: 'POST',
-    body,
-    headers,
-    ...(dispatcher ? { dispatcher } : {}),
-  })
-  const bodyText = await res.body.text()
-  return { statusCode: res.statusCode, bodyText }
 }
 
 function isExpiringSoon(expiresAtMs: number, skewSeconds: number): boolean {
@@ -307,12 +296,16 @@ export type CodexAuthProviderOptions = {
   http?: HttpFn
   /** Override the refresh skew (seconds). Production uses the constant. */
   refreshSkewSeconds?: number
+  /** Explicit proxy URL for the OAuth token refresh path. Sourced from
+   *  `endpoints.codex.proxy` at registration time. Empty / undefined =
+   *  direct connect. */
+  proxy?: string
 }
 
 export function createCodexAuthProvider(
   opts: CodexAuthProviderOptions = {},
 ): AuthProvider {
-  const http = opts.http ?? defaultHttp
+  const http = opts.http ?? buildDefaultHttp(buildProxyDispatcher(opts.proxy))
   const skew = opts.refreshSkewSeconds ?? CODEX_REFRESH_SKEW_SECONDS
 
   async function getCredentials(): Promise<AuthCredentials> {

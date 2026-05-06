@@ -160,7 +160,16 @@ async function runAuthImport(
     let upstreamModel: string | undefined
     try {
       const credentials = await provider.getCredentials()
-      const discovered = await discoverDefaultCodexSlug(credentials)
+      // First-time imports run before auto-register has written
+      // endpoints.codex, so this proxy lookup is usually empty. Re-runs
+      // (after the user has manually set endpoints.codex.proxy) pick it
+      // up. Failures here just fall through to the static default.
+      const codexEp = liveConfig?.endpoints['codex']
+      const proxy = codexEp && 'proxy' in codexEp ? codexEp.proxy : undefined
+      const discovered = await discoverDefaultCodexSlug(
+        credentials,
+        proxy ? { proxy } : {},
+      )
       if (discovered) upstreamModel = discovered
     } catch {
       // ignore — fall through to autoRegisterCodex's static default

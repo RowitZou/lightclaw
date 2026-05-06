@@ -1,5 +1,6 @@
-import { ProxyAgent, request, type Dispatcher } from 'undici'
+import { request, type Dispatcher } from 'undici'
 
+import { buildProxyDispatcher } from '../../provider/proxy.js'
 import { CODEX_BACKEND_BASE_URL } from './constants.js'
 import type { AuthCredentials } from '../types.js'
 
@@ -32,29 +33,16 @@ export type ModelsHttpFn = (input: {
   headers: Record<string, string>
 }) => Promise<{ statusCode: number; bodyText: string }>
 
-function defaultProxyDispatcher(): Dispatcher | undefined {
-  const proxyUrl =
-    process.env.https_proxy ??
-    process.env.HTTPS_PROXY ??
-    process.env.http_proxy ??
-    process.env.HTTP_PROXY
-  if (!proxyUrl) return undefined
-  try {
-    return new ProxyAgent(proxyUrl)
-  } catch {
-    return undefined
+function buildDefaultHttp(dispatcher: Dispatcher | undefined): ModelsHttpFn {
+  return async ({ url, headers }) => {
+    const res = await request(url, {
+      method: 'GET',
+      headers,
+      ...(dispatcher ? { dispatcher } : {}),
+    })
+    const bodyText = await res.body.text()
+    return { statusCode: res.statusCode, bodyText }
   }
-}
-
-const defaultHttp: ModelsHttpFn = async ({ url, headers }) => {
-  const dispatcher = defaultProxyDispatcher()
-  const res = await request(url, {
-    method: 'GET',
-    headers,
-    ...(dispatcher ? { dispatcher } : {}),
-  })
-  const bodyText = await res.body.text()
-  return { statusCode: res.statusCode, bodyText }
 }
 
 /**
@@ -96,9 +84,9 @@ export function selectDefaultCodexSlug(payload: unknown): string | null {
  */
 export async function discoverDefaultCodexSlug(
   credentials: AuthCredentials,
-  opts: { http?: ModelsHttpFn; baseUrl?: string } = {},
+  opts: { http?: ModelsHttpFn; baseUrl?: string; proxy?: string } = {},
 ): Promise<string | null> {
-  const http = opts.http ?? defaultHttp
+  const http = opts.http ?? buildDefaultHttp(buildProxyDispatcher(opts.proxy))
   const base = (opts.baseUrl ?? CODEX_BACKEND_BASE_URL).replace(/\/+$/, '')
   const url = `${base}/models?client_version=1.0.0`
   try {
