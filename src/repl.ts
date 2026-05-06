@@ -12,6 +12,7 @@ import { isAdmin as checkIsAdmin } from './identity/store.js'
 import { beginQuery } from './init.js'
 import { createUserMessage, getLastUuid } from './messages.js'
 import { cleanupMcp } from './mcp/index.js'
+import { drainPendingDream } from './memory/dream/dream.js'
 import { drainPendingExtraction } from './memory/extract.js'
 import { query } from './query.js'
 import {
@@ -187,6 +188,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
   if (params.initialPrompt) {
     await runPrompt(params.initialPrompt, false)
     await drainPendingExtraction(60_000)
+    await drainPendingDream(60_000)
     await awaitBackgroundTasks()
     rl.close()
     await persistMeta(sessionId, createdAt, messages.length)
@@ -223,6 +225,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
 
   rl.close()
   await drainPendingExtraction(60_000)
+  await drainPendingDream(60_000)
   await awaitBackgroundTasks()
   await persistMeta(sessionId, createdAt, messages.length)
   await runHook('onSessionEnd', { sessionId, reason: 'exit' })

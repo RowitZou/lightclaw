@@ -187,6 +187,7 @@ export type LightClawConfig = {
   sessionsDir: string
   autoCompact: boolean
   autoMemory: boolean
+  autoDream: AutoDreamConfig
   memoryDir: string
   workspaceRoot: string
   contextWindow: number
@@ -232,6 +233,14 @@ export type LightClawConfig = {
   apiLogs: ApiLogsConfig
 }
 
+export type AutoDreamConfig = {
+  enabled: boolean
+  minHours: number
+  minSessions: number
+  scanThrottleMs: number
+  maxTurns: number
+}
+
 export type ApiLogsConfig = {
   /** Persist every streamChat request + response to <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl. */
   enabled: boolean
@@ -246,6 +255,13 @@ type ConfigFileDockerMount = NonNullable<
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
+const DEFAULT_AUTO_DREAM: AutoDreamConfig = {
+  enabled: false,
+  minHours: 24,
+  minSessions: 3,
+  scanThrottleMs: 10 * 60 * 1000,
+  maxTurns: 30,
+}
 
 function parseBoolean(value: string | undefined): boolean | undefined {
   if (!value) {
@@ -574,6 +590,7 @@ export function getConfig(): LightClawConfig {
     : parseBoolean(process.env.LIGHTCLAW_AUTO_MEMORY) ??
       fileConfig.autoMemory ??
       true
+  const autoDream = resolveAutoDreamConfig(fileConfig.autoDream ?? {})
   const memoryDir = path.resolve(
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
@@ -767,6 +784,7 @@ export function getConfig(): LightClawConfig {
     sessionsDir: resolveSessionsDir(),
     autoCompact,
     autoMemory,
+    autoDream,
     memoryDir,
     workspaceRoot: resolveWorkspaceRoot(),
     contextWindow,
@@ -880,6 +898,39 @@ function resolveNetworkBridgeSettings(
     ? fileConfig.noProxy.filter(entry => typeof entry === 'string' && entry.trim()).map(entry => entry.trim())
     : []
   return { mode, proxy, noProxy, port, bindHost, acl }
+}
+
+function resolveAutoDreamConfig(
+  fileConfig: NonNullable<ConfigFileShape['autoDream']>,
+): AutoDreamConfig {
+  const minSessionsRaw = Number(fileConfig.minSessions)
+  const scanThrottleRaw = Number(fileConfig.scanThrottleMs)
+  const maxTurnsRaw = Number(fileConfig.maxTurns)
+  return {
+    enabled: fileConfig.enabled ?? DEFAULT_AUTO_DREAM.enabled,
+    minHours: Math.max(
+      0,
+      Number.isFinite(Number(fileConfig.minHours))
+        ? Number(fileConfig.minHours)
+        : DEFAULT_AUTO_DREAM.minHours,
+    ),
+    minSessions: Math.max(
+      1,
+      Math.floor(Number.isFinite(minSessionsRaw)
+        ? minSessionsRaw
+        : DEFAULT_AUTO_DREAM.minSessions),
+    ),
+    scanThrottleMs: Math.max(
+      0,
+      Math.floor(Number.isFinite(scanThrottleRaw)
+        ? scanThrottleRaw
+        : DEFAULT_AUTO_DREAM.scanThrottleMs),
+    ),
+    maxTurns: Math.max(
+      1,
+      Math.floor(Number.isFinite(maxTurnsRaw) ? maxTurnsRaw : DEFAULT_AUTO_DREAM.maxTurns),
+    ),
+  }
 }
 
 function resolveRlaunchRuntimeSettings(

@@ -7,6 +7,7 @@ import {
   saveCacheSafeParams,
 } from './agents/cache-safe-params.js'
 import { runHook } from './hooks/index.js'
+import { executeAutoDream } from './memory/dream/dream.js'
 import { extractMemories, flushBeforeCompact } from './memory/extract.js'
 import {
   updateSessionMemory,
@@ -329,6 +330,34 @@ export async function query(params: QueryParams): Promise<{
     registerBackgroundTask(task)
   }
 
+  const scheduleAutoDream = () => {
+    if (
+      mode === 'subagent' ||
+      stopReason !== 'end_turn' ||
+      !config.autoMemory ||
+      !config.autoDream.enabled
+    ) {
+      return
+    }
+
+    const userId = getCurrentUserId()
+    if (!userId) {
+      return
+    }
+
+    const task = executeAutoDream({
+      userId,
+      memoryDir: getMemoryDir(),
+      config,
+      currentSessionId: getSessionId(),
+    }).catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[auto-dream] ${message}`)
+    })
+
+    registerBackgroundTask(task)
+  }
+
   /**
    * Run conversation compaction and splice the result into `messages` in
    * place. When `force=false`, only runs if estimated tokens exceed the
@@ -606,6 +635,7 @@ export async function query(params: QueryParams): Promise<{
         await maybeUpdateSessionMemory(extractionSnapshot)
         await runCompaction(false)
         scheduleMemoryExtraction(extractionSnapshot)
+        scheduleAutoDream()
       }
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {

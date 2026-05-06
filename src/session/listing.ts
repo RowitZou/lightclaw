@@ -31,6 +31,31 @@ export async function listSessions(userId?: string): Promise<SessionMeta[]> {
   }
 }
 
+export async function listSessionsTouchedSince(
+  userId: string,
+  sinceMs: number,
+): Promise<string[]> {
+  try {
+    const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
+    const sessions = await Promise.all(
+      entries
+        .filter(entry => entry.isDirectory())
+        .map(async entry => loadMeta(entry.name)),
+    )
+
+    return sessions
+      .filter((session): session is SessionMeta => session !== null)
+      .filter(session => session.userId === userId && session.lastActiveAt > sinceMs)
+      .map(session => session.sessionId)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return []
+    }
+
+    throw error
+  }
+}
+
 export async function getLatestSessionId(userId?: string): Promise<string | null> {
   const sessions = await listSessions(userId)
   return sessions[0]?.sessionId ?? null

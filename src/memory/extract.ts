@@ -31,6 +31,10 @@ const state: ExtractState = {
   inFlight: new Set(),
 }
 
+export function isExtractionInProgress(): boolean {
+  return state.inProgress
+}
+
 export function messageToText(message: Message): string {
   if (message.type === 'system') {
     return `[system-summary]\n${message.message.summary}`
