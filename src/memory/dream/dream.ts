@@ -3,7 +3,7 @@ import { runForkedAgent } from '../../agents/forked-agent.js'
 import type { LightClawConfig } from '../../config.js'
 import { createAutoMemCanUseTool } from '../auto-mem-can-use-tool.js'
 import { ensureMemoryDir } from '../auto-memory.js'
-import { isExtractionInProgress } from '../extract.js'
+import { isExtractionInProgressFor } from '../extract.js'
 import {
   markConsolidationSucceeded,
   readLastConsolidatedAt,
@@ -25,6 +25,15 @@ const state: DreamState = {
   lastSessionScanAtByUser: new Map(),
 }
 
+// Test seam: dream.test.ts replaces the fork runner with a fake so
+// gate-pass / rollback / success paths are exercised without a real LLM call.
+type RunForkedAgentFn = typeof runForkedAgent
+let runForkedAgentImpl: RunForkedAgentFn = runForkedAgent
+
+export function setRunForkedAgentForTest(impl: RunForkedAgentFn | null): void {
+  runForkedAgentImpl = impl ?? runForkedAgent
+}
+
 export async function executeAutoDream(params: {
   userId: string
   memoryDir: string
@@ -35,15 +44,23 @@ export async function executeAutoDream(params: {
     return
   }
 
-  if (state.inProgressByUser.has(params.userId) || isExtractionInProgress()) {
+  if (
+    state.inProgressByUser.has(params.userId) ||
+    isExtractionInProgressFor(params.memoryDir)
+  ) {
     return
   }
 
   const task = executeAutoDreamInner(params)
   state.inFlight.add(task)
-  void task.finally(() => {
-    state.inFlight.delete(task)
-  })
+  // Track completion separately. `.catch` here consumes the rejection so a
+  // failed dream does not surface as an unhandledRejection — the caller
+  // still sees the original error via `await task`.
+  task
+    .finally(() => {
+      state.inFlight.delete(task)
+    })
+    .catch(() => {})
   return task
 }
 
@@ -93,8 +110,7 @@ async function executeAutoDreamInner(params: {
     }
 
     try {
-      const abortController = new AbortController()
-      await runForkedAgent({
+      await runForkedAgentImpl({
         promptText: buildDreamPrompt({
           memoryDir: params.memoryDir,
           transcriptDir: params.config.sessionsDir,
@@ -104,7 +120,6 @@ async function executeAutoDreamInner(params: {
         canUseTool: createAutoMemCanUseTool(params.memoryDir),
         maxTurns: params.config.autoDream.maxTurns,
         label: 'auto_dream',
-        signal: abortController.signal,
       })
       await markConsolidationSucceeded(params.memoryDir)
     } catch (error) {
