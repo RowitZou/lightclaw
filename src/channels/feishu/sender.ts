@@ -151,10 +151,16 @@ export class FeishuSender {
         }
         process.stderr.write('feishu send: reply unavailable, fallback to create message\n')
       } catch (error) {
-        if (!isWithdrawnReplyError(error)) {
+        if (isWithdrawnReplyError(error)) {
+          process.stderr.write('feishu send: reply target unavailable, fallback to create message\n')
+        } else if (isTransientSendError(error)) {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(
+            `feishu send: reply ${msgType} transient fallback to create message (${detail})\n`,
+          )
+        } else {
           throw error
         }
-        process.stderr.write('feishu send: reply target unavailable, fallback to create message\n')
       }
     }
 
