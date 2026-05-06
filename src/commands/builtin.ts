@@ -781,7 +781,7 @@ async function userApprove(args: string[]): Promise<string> {
       ? `${t('user.approve.alreadyBound', { link, name: linked.boundTo ?? '?' })}\n`
       : `${t('user.remove.noSuch', { name })}\n`
   }
-  preheatRlaunchForUser(name)
+  preheatAndWelcomeOnApproval(name, link)
   const created_or_updated = created.ok ? t('user.approve.created', { name }) : t('user.approve.updated', { name })
   return `${created_or_updated}\n${t('user.approve.linked', { link, name })}\n`
 }
@@ -797,16 +797,122 @@ async function userReject(args: string[]): Promise<string> {
     : `${t('user.reject.noSuchCode', { code })}\n`
 }
 
-function preheatRlaunchForUser(name: string): void {
+function preheatAndWelcomeOnApproval(name: string, link: SenderKey): void {
+  // Fire-and-forget at the call site (admin's /user approve returns
+  // immediately), but the inner task awaits readiness so the welcome card
+  // is only pushed once the user can actually exercise tools. Failure /
+  // timeout pushes a failure card so the approved user is never left
+  // wondering whether the bot got their request.
+  void runApprovalPreheat(name, link).catch(error => {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[preheat-on-approval] ${name}: unhandled ${detail}\n`)
+  })
+}
+
+async function runApprovalPreheat(name: string, link: SenderKey): Promise<void> {
   const config = getConfig()
-  if (config.runtime.backend !== 'rlaunch' || !config.runtime.rlaunch.preheatOnApproval) {
+  const backend = config.runtime.backend
+  // local: admin-only, no per-user runtime to warm up.
+  // rjob: not productionized yet, skip.
+  if (backend !== 'docker' && backend !== 'rlaunch') {
     return
   }
-  const runtime = getRuntimePool().acquire(name, config)
-  void runtime.start().catch(error => {
+  // Rlaunch keeps the original opt-out toggle; Docker has no equivalent
+  // toggle today and is always-on (the welcome push is what the toggle
+  // would otherwise gate, and the user-visible UX is the whole point).
+  if (backend === 'rlaunch' && !config.runtime.rlaunch.preheatOnApproval) {
+    return
+  }
+
+  const channel = link.split(':', 1)[0]
+  if (channel !== 'feishu') {
+    // Future channels: add a registry per channel kind. For now non-feishu
+    // approvals just preheat without a welcome push.
+    const runtime = backend === 'docker'
+      ? getRuntimePool().acquire(name, config, undefined, getImageReadiness())
+      : getRuntimePool().acquire(name, config)
+    await runtime.start().catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[preheat-on-approval] ${name}: ${detail}\n`)
+    })
+    return
+  }
+
+  const openId = link.slice('feishu:'.length)
+  const { getFeishuSender } = await import('../channels/feishu/sender-registry.js')
+  const { buildApprovalWelcomeCard, buildStartupFailureCard } =
+    await import('../channels/feishu/welcome-card.js')
+  const { waitUntilRuntimeAvailable } = await import('../runtime/wait-ready.js')
+
+  const sender = getFeishuSender()
+  if (!sender) {
+    // Channel hasn't started (admin running approve from terminal-only
+    // process). Still preheat so the user's first message later isn't
+    // blocked, but no push surface to deliver the welcome card.
+    process.stderr.write(
+      `[preheat-on-approval] ${name}: feishu sender not registered; preheating without welcome push\n`,
+    )
+    const runtime = backend === 'docker'
+      ? getRuntimePool().acquire(name, config, undefined, getImageReadiness())
+      : getRuntimePool().acquire(name, config)
+    await runtime.start().catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[preheat-on-approval] ${name}: ${detail}\n`)
+    })
+    return
+  }
+
+  const tracker = backend === 'docker' ? getImageReadiness() : undefined
+  const runtime = getRuntimePool().acquire(name, config, undefined, tracker)
+  try {
+    await runtime.start()
+  } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[rlaunch-preheat-on-approval] ${name}: ${detail}\n`)
-  })
+    process.stderr.write(`[preheat-on-approval] ${name}: start failed: ${detail}\n`)
+    await sender
+      .sendInteractiveCardToOpenId(
+        openId,
+        buildStartupFailureCard({ reason: detail, elapsedSeconds: 0, timedOut: false }),
+      )
+      .catch(pushError => {
+        const pd = pushError instanceof Error ? pushError.message : String(pushError)
+        process.stderr.write(`[preheat-on-approval] ${name}: failure push send failed: ${pd}\n`)
+      })
+    return
+  }
+
+  const ready = await waitUntilRuntimeAvailable(runtime)
+  if (!ready.ok) {
+    const elapsedSeconds = Math.round(ready.elapsedMs / 1000)
+    const reason =
+      ready.availability.ok === false
+        ? ready.availability.adminMessage || ready.availability.userMessage || ready.availability.reason
+        : 'unknown'
+    process.stderr.write(
+      `[preheat-on-approval] ${name}: not ready after ${elapsedSeconds}s (timedOut=${ready.timedOut}): ${reason}\n`,
+    )
+    await sender
+      .sendInteractiveCardToOpenId(
+        openId,
+        buildStartupFailureCard({ reason, elapsedSeconds, timedOut: ready.timedOut }),
+      )
+      .catch(pushError => {
+        const pd = pushError instanceof Error ? pushError.message : String(pushError)
+        process.stderr.write(`[preheat-on-approval] ${name}: failure push send failed: ${pd}\n`)
+      })
+    return
+  }
+
+  const elapsedSeconds = Math.round(ready.elapsedMs / 1000)
+  process.stderr.write(
+    `[preheat-on-approval] ${name}: runtime ready after ${elapsedSeconds}s; sending welcome card\n`,
+  )
+  await sender
+    .sendInteractiveCardToOpenId(openId, buildApprovalWelcomeCard())
+    .catch(pushError => {
+      const pd = pushError instanceof Error ? pushError.message : String(pushError)
+      process.stderr.write(`[preheat-on-approval] ${name}: welcome push send failed: ${pd}\n`)
+    })
 }
 
 async function userUnlink(args: string[]): Promise<string> {
