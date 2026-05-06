@@ -944,9 +944,18 @@ async function userRemove(args: string[]): Promise<string> {
     return `${t('user.remove.refuseAdmin')}\n`
   }
   const result = await removeUser(name, { purge: args.includes('--purge') })
-  return result.ok
-    ? `${t('user.remove.done', { name })}\n`
-    : `${t('user.remove.noSuch', { name })}\n`
+  if (!result.ok) {
+    return `${t('user.remove.noSuch', { name })}\n`
+  }
+  const cleanup = await getRuntimePool().purgeUser(name, getConfig())
+  let response = `${t('user.remove.done', { name })}\n`
+  if (cleanup.rlaunchWorker) {
+    response += `${t('user.remove.cleanupRlaunch', { worker: cleanup.rlaunchWorker })}\n`
+  }
+  if (cleanup.dockerContainer) {
+    response += `${t('user.remove.cleanupDocker', { container: cleanup.dockerContainer })}\n`
+  }
+  return response
 }
 
 function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMode): boolean {

@@ -10,6 +10,7 @@ import {
   workspaceFor,
   workspaceToGpfsMount,
 } from '../identity/paths.js'
+import { listActiveCanonicalUsers } from '../identity/store.js'
 
 import {
   createRuntime,
@@ -87,6 +88,61 @@ export class RuntimePool {
     await Promise.allSettled([...this.runtimes.values()].map(runtime => runtime.stop()))
   }
 
+  /**
+   * Total cleanup for a user being removed. Stops + removes any in-pool
+   * runtime, then probes the backend by name to clean remnants that the
+   * pool didn't know about (cluster worker / docker container that
+   * survived from a prior process). Safe to call when nothing exists.
+   *
+   * Returns what was actually cleaned so callers can surface it to admin.
+   */
+  async purgeUser(
+    userId: string,
+    config: LightClawConfig,
+  ): Promise<{ rlaunchWorker?: string; dockerContainer?: string }> {
+    const summary: { rlaunchWorker?: string; dockerContainer?: string } = {}
+
+    const runtime = this.runtimes.get(userId)
+    if (runtime) {
+      if (runtime instanceof DockerRuntime) {
+        summary.dockerContainer = runtime.containerName
+        await runtime.remove()
+      } else if (runtime instanceof RlaunchRuntime) {
+        summary.rlaunchWorker = runtime.name ?? undefined
+        await runtime.remove()
+      } else {
+        await runtime.stop().catch(() => {})
+      }
+      this.runtimes.delete(userId)
+    }
+
+    if (config.runtime.backend === 'rlaunch') {
+      const record = readWorkerState()[userId]
+      if (record) {
+        summary.rlaunchWorker ??= record.name
+        await runProcess('brainctl', [
+          '-n', record.namespace,
+          'stop', `process/${record.name}`,
+        ], {
+          timeoutMs: 30_000,
+          maxBufferBytes: 1024 * 1024,
+          limitMessage: 'brainctl stop process terminated',
+        }).catch(() => undefined)
+        await deleteWorkerRecord(userId)
+      }
+    } else if (config.runtime.backend === 'docker') {
+      const containerName =
+        `${SANDBOX_PREFIX}${sanitizeDockerName(userId)}-${this.deploymentHash}`
+      const inspect = await dockerCmdRaw(['inspect', '--format', '{{.Id}}', containerName])
+      if (inspect.exitCode === 0) {
+        summary.dockerContainer ??= containerName
+        await dockerCmdRaw(['rm', '-f', containerName]).catch(() => undefined)
+      }
+    }
+
+    return summary
+  }
+
   allRuntimes(): Iterable<Runtime> {
     return this.runtimes.values()
   }
@@ -118,6 +174,9 @@ export class RuntimePool {
       return
     }
     const expectedImage = resolveDockerImage(config)
+    const activeSanitized = new Set(
+      (await listActiveCanonicalUsers()).map(u => sanitizeDockerName(u)),
+    )
     const result = await dockerCmdRaw([
       'ps',
       '-a',
@@ -135,13 +194,16 @@ export class RuntimePool {
       if (!name?.startsWith(SANDBOX_PREFIX)) {
         continue
       }
-      const hash = name.split('-').at(-1)
+      const segments = name.split('-')
+      const hash = segments.at(-1)
+      const userSegment = segments.slice(2, -1).join('-')
       const statusLower = (status ?? '').toLowerCase()
       const shouldRemove =
         hash !== this.deploymentHash ||
         image !== expectedImage ||
         statusLower.startsWith('dead') ||
-        statusLower.startsWith('removing')
+        statusLower.startsWith('removing') ||
+        !activeSanitized.has(userSegment)
       if (shouldRemove) {
         await dockerCmdRaw(['rm', '-f', name])
       }
@@ -150,8 +212,11 @@ export class RuntimePool {
 
   private async sweepRlaunchOrphans(): Promise<void> {
     const state = readWorkerState()
+    const activeUsers = new Set(await listActiveCanonicalUsers())
     for (const [canonical, record] of Object.entries(state)) {
-      if (record.deploymentHash === this.deploymentHash) {
+      const hashMismatch = record.deploymentHash !== this.deploymentHash
+      const userGone = !activeUsers.has(canonical)
+      if (!hashMismatch && !userGone) {
         continue
       }
       await runProcess('brainctl', [
