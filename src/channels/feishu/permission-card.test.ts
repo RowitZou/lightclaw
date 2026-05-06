@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { setLightclawHomeOverride } from '../../paths.js'
-import { initializeState } from '../../state.js'
+import {
+  createSessionContext,
+  runWithSessionContext,
+  type SessionContext,
+} from '../../session-context.js'
 import type {
   PermissionAskInput,
   PermissionDecision,
@@ -44,10 +48,13 @@ function ask(
   toolName: string,
   ruleContent: string | undefined = undefined,
 ): PermissionAskInput {
+  const command = ruleContent
+    ? `${ruleContent.replace(/:\*$/, '')} arg`
+    : 'cmd'
   return {
     toolName,
     riskLevel: 'execute',
-    input: { command: ruleContent ? `${toolName.toLowerCase()} ${ruleContent} arg` : 'cmd' },
+    input: { command },
     inputPreview: ruleContent ? `Command: ${ruleContent}` : 'Command: cmd',
     mode: 'default',
     suggestedRules: ruleContent ? [{ toolName, ruleContent }] : [{ toolName }],
@@ -56,11 +63,12 @@ function ask(
 
 describe('FeishuPermissionCoordinator queue + reevaluate', () => {
   let home: string
+  let ctx: SessionContext
 
   beforeEach(() => {
     home = mkdtempSync(path.join(tmpdir(), 'lightclaw-perm-coord-'))
     setLightclawHomeOverride(home)
-    initializeState({
+    ctx = createSessionContext({
       cwd: home,
       model: 'fake-model',
       sessionsDir: path.join(home, 'sessions'),
@@ -74,7 +82,11 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it('queues concurrent asks per owner, renders only the head', async () => {
+  function inSession<T>(fn: () => Promise<T>): Promise<T> {
+    return runWithSessionContext(ctx, fn)
+  }
+
+  it('queues concurrent asks per owner, renders only the head', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -113,9 +125,9 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     for (const d of decisions) {
       assert.equal(d.behavior, 'deny')
     }
-  })
+  }))
 
-  it('allow_rules sweeps tail same-kind requests without rendering more cards', async () => {
+  it('allow_rules sweeps tail same-kind requests without rendering more cards', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -145,12 +157,12 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     assert.equal(decisions[2].behavior, 'allow', 'tail2 swept by new rule')
     assert.equal(
       sender.cardSends,
-      1,
-      'no extra cards rendered after the first; tail resolved silently',
+      2,
+      'only the original approval card plus the follow-up notice were sent',
     )
-  })
+  }))
 
-  it('allow_rules does not sweep different-kind tail requests (still asked)', async () => {
+  it('allow_rules does not sweep different-kind tail requests (still asked)', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -173,7 +185,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     await new Promise(r => setImmediate(r))
 
     assert.equal((await headCurl).behavior, 'allow')
-    assert.equal(sender.cardSends, 2, 'rm tail still gets its own card')
+    assert.equal(sender.cardSends, 3, 'rm tail still gets its own card after the notice')
 
     // Cleanup: deny the rm tail
     await coord.handleCardAction({
@@ -182,9 +194,9 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
       operatorOpenId: 'alice-open-id',
     })
     assert.equal((await tailRm).behavior, 'deny')
-  })
+  }))
 
-  it('allow_rules persists to disk so a subsequent ask hits the new rule', async () => {
+  it('allow_rules persists to disk so a subsequent ask hits the new rule', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -211,9 +223,9 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     assert.equal(reloaded[0].behavior, 'allow')
     assert.equal(reloaded[0].value.toolName, 'Bash')
     assert.equal(reloaded[0].value.ruleContent, 'curl:*')
-  })
+  }))
 
-  it('high-risk pending: card has no middle button + applyAction degrades allow_rules to allow once + no rule persisted', async () => {
+  it('high-risk pending: card has no middle button + applyAction degrades allow_rules to allow once + no rule persisted', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -243,7 +255,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     const action = card!.elements.find((e: any) => e.tag === 'action')
     assert.ok(action, 'action row present')
     assert.equal(action.actions.length, 2, 'high-risk → 2 buttons only')
-    assert.equal(action.actions[0].text.content, '批准本次')
+    assert.equal(action.actions[0].text.content, '本次允许')
     assert.equal(action.actions[1].text.content, '拒绝')
     assert.equal((card as any).header.template, 'red', 'header turns red for high-risk')
 
@@ -255,11 +267,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     })
     const decision = await headPromise
     assert.equal(decision.behavior, 'allow', 'still allow (downgraded to once)')
-    assert.equal(
-      'matchedRule' in decision && decision.matchedRule,
-      undefined,
-      'no matched rule (no install)',
-    )
+    assert.equal('matchedRule' in decision, false, 'no matched rule (no install)')
 
     const { loadIdentityRules } = await import('../../permission/storage.js')
     assert.deepEqual(
@@ -267,9 +275,9 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
       [],
       'no identity rule persisted for high-risk grant',
     )
-  })
+  }))
 
-  it('high-risk via raw input only (suggestedRules empty fallback) still hides middle button', async () => {
+  it('high-risk via raw input only (suggestedRules empty fallback) still hides middle button', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const message = fakeMessage('alice-open-id')
@@ -300,9 +308,9 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
       operatorOpenId: 'alice-open-id',
     })
     assert.equal((await head).behavior, 'deny')
-  })
+  }))
 
-  it('isolates queues per owner (different sender)', async () => {
+  it('isolates queues per owner (different sender)', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const aliceMsg = fakeMessage('alice-open-id', 'chat-1')
@@ -337,7 +345,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     const [aliceR, bobR] = await Promise.all([aliceP, bobP])
     assert.equal(aliceR.behavior, 'deny')
     assert.equal(bobR.behavior, 'deny')
-  })
+  }))
 })
 
 // ---- helpers ----

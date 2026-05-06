@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
 
 import type { PermissionApprover, PermissionMode, PermissionRule } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
@@ -46,6 +47,14 @@ export function getCurrentSessionContext(): SessionContext | undefined {
   return sessionContextStorage.getStore()
 }
 
+export function requireSessionContext(): SessionContext {
+  const ctx = getCurrentSessionContext()
+  if (!ctx) {
+    throw new SessionContextNotInitializedError()
+  }
+  return ctx
+}
+
 export class SessionContextNotInitializedError extends Error {
   constructor() {
     super(
@@ -62,13 +71,57 @@ export function usageFromContext(ctx: SessionContext): UsageStats {
   }
 }
 
+export function createSessionContext(input: {
+  cwd: string
+  model: string
+  sessionsDir: string
+  memoryDir: string
+  currentUserId?: string
+  sessionId?: string
+  resumedFrom?: string | null
+  compactionCount?: number
+  lastExtractedAt?: number
+  todos?: TodoItem[]
+  permissionMode?: PermissionMode
+  cliArgRules?: PermissionRule[]
+  identityRules?: PermissionRule[]
+  fileRules?: PermissionRule[]
+  activeSkillAllowedTools?: string[]
+  permissionApprover?: PermissionApprover | null
+  runtime?: Runtime
+}): SessionContext {
+  return {
+    sessionId: input.sessionId ?? randomUUID(),
+    cwd: input.cwd,
+    model: input.model,
+    sessionsDir: input.sessionsDir,
+    memoryDir: input.memoryDir,
+    currentUserId: input.currentUserId,
+    resumedFrom: input.resumedFrom ?? null,
+    compactionCount: input.compactionCount ?? 0,
+    lastExtractedAt: input.lastExtractedAt ?? 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    todos: input.todos ?? [],
+    permissionMode: input.permissionMode ?? 'default',
+    cliArgRules: input.cliArgRules ?? [],
+    identityRules: input.identityRules ?? [],
+    fileRules: input.fileRules ?? [],
+    activeSkillAllowedTools: input.activeSkillAllowedTools,
+    permissionApprover: input.permissionApprover ?? null,
+    abortController: new AbortController(),
+    backgroundTasks: new Set(),
+    runtime: input.runtime,
+  }
+}
+
 /**
  * Channel runner / future REPL bootstrap helper. Returns a fully-typed but
  * empty SessionContext so callers can wrap the rest of the turn in
  * runWithSessionContext BEFORE resetSessionContext runs. Once inside the
- * scope, initializeState detects the active ctx and Object.assign's the
- * resolved fields onto it — never the module singleton — which is what
- * keeps two concurrent users' resets from clobbering each other.
+ * scope, callers can Object.assign the resolved fields onto it — never a
+ * module singleton — which is what keeps two concurrent users' resets from
+ * clobbering each other.
  *
  * Pass the few fields known up-front (sessionId, currentUserId); the rest
  * are placeholders overwritten by reset.

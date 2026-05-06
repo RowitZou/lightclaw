@@ -128,7 +128,7 @@ export class ChannelRunner {
     if (this.initialized) {
       return
     }
-    await refreshSkillRegistry(getCwd())
+    await refreshSkillRegistry(this.strategy.cwd)
     this.initialized = true
   }
 
@@ -161,11 +161,10 @@ export class ChannelRunner {
         const messages = await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
         // Wrap the entire turn in a SessionContext scope BEFORE
-        // resetSessionContext runs. resetSessionContext -> initializeState
-        // detects the active ctx and Object.assign's resolved fields onto
-        // it instead of writing the module singleton. Two concurrent users
-        // each have their own ctx — the singleton (only consulted by
-        // terminal REPL fallback) is never racing.
+        // resetSessionContext resolves the real fields. The placeholder ctx
+        // is then hydrated in-place so downstream state getters see only
+        // this message's session data; no module-level session singleton
+        // exists in the channel or terminal paths.
         const sessionContext = createEmptySessionContext({
           sessionId,
           currentUserId: userId,
@@ -177,7 +176,7 @@ export class ChannelRunner {
         )
         sessionContext.permissionApprover = approver ?? null
         await runWithSessionContext(sessionContext, async () => {
-        const appConfig = await resetSessionContext({
+        const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
           model: meta?.model,
           sessionId,
@@ -194,6 +193,9 @@ export class ChannelRunner {
           permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
           currentUserId: userId,
         })
+        const pinnedApprover = sessionContext.permissionApprover
+        Object.assign(sessionContext, resolvedContext)
+        sessionContext.permissionApprover = pinnedApprover
         await refreshSkillRegistry(getCwd())
         if (!meta) {
           await runHook('onSessionStart', {
