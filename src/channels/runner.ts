@@ -36,9 +36,11 @@ import {
   getRuntime,
   getSessionId,
   getTodos,
-  snapshotSessionContext,
 } from '../state.js'
-import { runWithSessionContext } from '../session-context.js'
+import {
+  createEmptySessionContext,
+  runWithSessionContext,
+} from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
@@ -157,6 +159,23 @@ export class ChannelRunner {
         const meta = await loadMeta(sessionId)
         const messages = await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
+        // Wrap the entire turn in a SessionContext scope BEFORE
+        // resetSessionContext runs. resetSessionContext -> initializeState
+        // detects the active ctx and Object.assign's resolved fields onto
+        // it instead of writing the module singleton. Two concurrent users
+        // each have their own ctx — the singleton (only consulted by
+        // terminal REPL fallback) is never racing.
+        const sessionContext = createEmptySessionContext({
+          sessionId,
+          currentUserId: userId,
+        })
+        const approver = this.strategy.createPermissionApprover?.(
+          message,
+          sessionId,
+          userId,
+        )
+        sessionContext.permissionApprover = approver ?? null
+        await runWithSessionContext(sessionContext, async () => {
         const appConfig = await resetSessionContext({
           cwd: workspace,
           model: meta?.model,
@@ -174,14 +193,6 @@ export class ChannelRunner {
           permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
           currentUserId: userId,
         })
-        const approver = this.strategy.createPermissionApprover?.(
-          message,
-          sessionId,
-          userId,
-        )
-        const sessionContext = snapshotSessionContext()
-        sessionContext.permissionApprover = approver ?? null
-        await runWithSessionContext(sessionContext, async () => {
         await refreshSkillRegistry(getCwd())
         if (!meta) {
           await runHook('onSessionStart', {

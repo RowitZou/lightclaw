@@ -61,3 +61,40 @@ export function usageFromContext(ctx: SessionContext): UsageStats {
     output_tokens: ctx.totalOutputTokens,
   }
 }
+
+/**
+ * Channel runner / future REPL bootstrap helper. Returns a fully-typed but
+ * empty SessionContext so callers can wrap the rest of the turn in
+ * runWithSessionContext BEFORE resetSessionContext runs. Once inside the
+ * scope, initializeState detects the active ctx and Object.assign's the
+ * resolved fields onto it — never the module singleton — which is what
+ * keeps two concurrent users' resets from clobbering each other.
+ *
+ * Pass the few fields known up-front (sessionId, currentUserId); the rest
+ * are placeholders overwritten by reset.
+ */
+export function createEmptySessionContext(input?: Partial<SessionContext>): SessionContext {
+  return {
+    sessionId: '',
+    cwd: '',
+    model: '',
+    sessionsDir: '',
+    memoryDir: '',
+    resumedFrom: null,
+    compactionCount: 0,
+    lastExtractedAt: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    todos: [],
+    permissionMode: 'default',
+    cliArgRules: [],
+    identityRules: [],
+    fileRules: [],
+    activeSkillAllowedTools: undefined,
+    permissionApprover: null,
+    abortController: new AbortController(),
+    backgroundTasks: new Set(),
+    runtime: undefined,
+    ...input,
+  }
+}
