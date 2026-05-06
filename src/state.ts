@@ -76,10 +76,24 @@ export function initializeState(input: {
     backgroundTasks: new Set(),
     runtime: input.runtime,
   }
-  state = next
+  // When called inside a runWithSessionContext scope (the channel runner
+  // path), mutate the active context only — never touch the singleton, or
+  // two concurrent users' resets would clobber the shared module slot
+  // before snapshotSessionContext / currentState have a chance to see them.
+  // The singleton is only used by terminal REPL / cli.ts, which never run
+  // inside an ALS scope at startup.
   const ctx = getCurrentSessionContext()
   if (ctx) {
+    // Preserve the channel-managed approver across reset. The runner pins
+    // it on the placeholder ctx BEFORE this call so subagent forks (which
+    // start their work inside this scope) can read it via getPermissionApprover.
+    // Object.assign(ctx, next) without this guard would wipe it back to
+    // null and break the permission UX path.
+    const preservedApprover = ctx.permissionApprover
     Object.assign(ctx, cloneSessionContext(next))
+    ctx.permissionApprover = preservedApprover
+  } else {
+    state = next
   }
 
   sessionMemoryTokensSinceUpdate = 0
@@ -116,7 +130,7 @@ function cloneSessionContext(current: SessionState): SessionContext {
 }
 
 export function snapshotSessionContext(): SessionContext {
-  return cloneSessionContext(requireState())
+  return cloneSessionContext(currentState())
 }
 
 export function getSessionId(): string {
