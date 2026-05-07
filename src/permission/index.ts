@@ -88,6 +88,17 @@ export async function requestPermission(input: {
             'Add this operation to the task allowed_tools and retry.',
           ].join(' '),
         }
+        // Only the ask→fallback-deny path is repairable by adding the suggested
+        // rule to task.allowedTools. Identity deny rules (verdict.behavior ===
+        // 'deny' below) are NOT repairable that way — task.allowedTools is
+        // outranked by deny rules in evaluatePermission, so surfacing those
+        // denials would loop the user through approve→retry→deny indefinitely.
+        // Keep the callback strictly to "verdict was ask, allowlist denied".
+        ctx.onPermissionDenial?.({
+          toolName: tool.name,
+          inputPreview,
+          suggestedRules: suggestedRules.map(formatRule),
+        })
       }
     } else {
       decision = {
@@ -103,16 +114,6 @@ export async function requestPermission(input: {
     }
   } else {
     decision = verdict
-  }
-
-  if (decision.behavior === 'deny' && ctx.isBackgroundTask && ctx.onPermissionDenial) {
-    const inputPreview = previewInput(tool.name, toolInput)
-    const suggestedRules = computeSuggestedRules(tool, toolInput).map(formatRule)
-    ctx.onPermissionDenial({
-      toolName: tool.name,
-      inputPreview,
-      suggestedRules,
-    })
   }
 
   recordAudit({

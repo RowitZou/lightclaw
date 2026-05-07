@@ -31,6 +31,31 @@ type QueueItem = {
 
 const RETRY_BASE_MS = 2000
 
+/**
+ * Effective delivery target for a completed fire. High-risk permission denials
+ * are FORCED to the user permission-failure card (regardless of task.notifyTo
+ * === 'agent'); the wake path never sees high-risk patterns. This is the
+ * Phase 23 safety invariant — surfacing high-risk rules to a human approval
+ * card is safer than letting the main agent self-update task.allowedTools in
+ * wake mode.
+ */
+export function resolveEffectiveNotifyTo(
+  outcome: FireOutcome,
+  taskNotifyTo: 'user' | 'agent',
+): 'user' | 'agent' {
+  if (outcome.kind !== 'failure') {
+    return taskNotifyTo
+  }
+  const denials = outcome.permissionDenials
+  if (!denials || denials.length === 0) {
+    return taskNotifyTo
+  }
+  const hasHighRisk = denials.some(denial =>
+    denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
+  )
+  return hasHighRisk ? 'user' : taskNotifyTo
+}
+
 export class BackgroundTaskScheduler {
   private readonly heapByUser = new Map<string, HeapItem[]>()
   private readonly runningCountByUser = new Map<string, number>()
@@ -318,11 +343,7 @@ export class BackgroundTaskScheduler {
       return
     }
 
-    const denials = outcome.kind === 'failure' ? outcome.permissionDenials : undefined
-    const hasHighRiskDenial = denials?.some(denial =>
-      denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
-    ) ?? false
-    const notifyTo = hasHighRiskDenial ? 'user' : task.notifyTo
+    const notifyTo = resolveEffectiveNotifyTo(outcome, task.notifyTo)
 
     if (notifyTo === 'agent') {
       const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')

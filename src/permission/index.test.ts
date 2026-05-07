@@ -65,6 +65,42 @@ describe('requestPermission background-task allowlist fallback', () => {
       suggestedRules: ['Bash(rm:*)'],
     }])
   })
+
+  it('does NOT report a denial detail when an identity deny rule causes the deny', async () => {
+    // Adding the suggested rule to task.allowedTools cannot repair this kind of
+    // deny — deny rules outrank allow rules in evaluatePermission, so surfacing
+    // it as a card "[Approve & Retry]" would loop the user. Callback must stay
+    // limited to ask→allowlist-deny to keep the retry loop honest.
+    const denials: unknown[] = []
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'm',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 'permission-index-test',
+      permissionMode: 'default',
+      identityRules: [{
+        source: 'user',
+        behavior: 'deny',
+        value: { toolName: 'Bash', ruleContent: 'rm:*' },
+      }],
+    })
+    const decision = await runWithSessionContext(ctx, async () => requestPermission({
+      tool: fakeTool('Bash', 'execute'),
+      toolInput: { command: 'rm -rf x' },
+      ctx: {
+        isInteractive: false,
+        isSubagent: true,
+        isBackgroundTask: true,
+        taskAllowedTools: [],
+        onPermissionDenial(detail) {
+          denials.push(detail)
+        },
+      },
+    }))
+    assert.equal(decision.behavior, 'deny')
+    assert.deepEqual(denials, [])
+  })
 })
 
 async function withPermissionState<T>(fn: () => Promise<T>): Promise<T> {

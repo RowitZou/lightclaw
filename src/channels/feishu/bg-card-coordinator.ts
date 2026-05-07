@@ -123,9 +123,9 @@ export class BackgroundTaskCardCoordinator {
     return {
       card: {
         type: 'raw',
-          data: buildApproveRetryStartedCard(pending, approvedRules),
-        },
-      }
+        data: buildApproveRetryStartedCard(pending, approvedRules),
+      },
+    }
   }
 }
 
