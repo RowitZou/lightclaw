@@ -188,6 +188,7 @@ export type LightClawConfig = {
   autoCompact: boolean
   autoMemory: boolean
   autoDream: AutoDreamConfig
+  backgroundTask: BackgroundTaskConfig
   memoryDir: string
   workspaceRoot: string
   contextWindow: number
@@ -241,6 +242,13 @@ export type AutoDreamConfig = {
   maxTurns: number
 }
 
+export type BackgroundTaskConfig = {
+  maxConcurrentRunsPerUser: number
+  startupCatchupIntervalMs: number
+  fireRetryMaxAttempts: number
+  recurringAutoDisableThreshold: number
+}
+
 export type ApiLogsConfig = {
   /** Persist every streamChat request + response to <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl. */
   enabled: boolean
@@ -261,6 +269,13 @@ const DEFAULT_AUTO_DREAM: AutoDreamConfig = {
   minSessions: 3,
   scanThrottleMs: 10 * 60 * 1000,
   maxTurns: 30,
+}
+
+const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
+  maxConcurrentRunsPerUser: 3,
+  startupCatchupIntervalMs: 60_000,
+  fireRetryMaxAttempts: 3,
+  recurringAutoDisableThreshold: 3,
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
@@ -591,6 +606,7 @@ export function getConfig(): LightClawConfig {
       fileConfig.autoMemory ??
       true
   const autoDream = resolveAutoDreamConfig(fileConfig.autoDream ?? {})
+  const backgroundTask = resolveBackgroundTaskConfig(fileConfig.backgroundTask ?? {})
   const memoryDir = path.resolve(
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
@@ -785,6 +801,7 @@ export function getConfig(): LightClawConfig {
     autoCompact,
     autoMemory,
     autoDream,
+    backgroundTask,
     memoryDir,
     workspaceRoot: resolveWorkspaceRoot(),
     contextWindow,
@@ -929,6 +946,41 @@ function resolveAutoDreamConfig(
     maxTurns: Math.max(
       1,
       Math.floor(Number.isFinite(maxTurnsRaw) ? maxTurnsRaw : DEFAULT_AUTO_DREAM.maxTurns),
+    ),
+  }
+}
+
+function resolveBackgroundTaskConfig(
+  fileConfig: NonNullable<ConfigFileShape['backgroundTask']>,
+): BackgroundTaskConfig {
+  const maxConcurrentRaw = Number(fileConfig.maxConcurrentRunsPerUser)
+  const catchupRaw = Number(fileConfig.startupCatchupIntervalMs)
+  const retryRaw = Number(fileConfig.fireRetryMaxAttempts)
+  const disableRaw = Number(fileConfig.recurringAutoDisableThreshold)
+  return {
+    maxConcurrentRunsPerUser: Math.max(
+      1,
+      Math.floor(Number.isFinite(maxConcurrentRaw)
+        ? maxConcurrentRaw
+        : DEFAULT_BACKGROUND_TASK.maxConcurrentRunsPerUser),
+    ),
+    startupCatchupIntervalMs: Math.max(
+      0,
+      Math.floor(Number.isFinite(catchupRaw)
+        ? catchupRaw
+        : DEFAULT_BACKGROUND_TASK.startupCatchupIntervalMs),
+    ),
+    fireRetryMaxAttempts: Math.max(
+      1,
+      Math.floor(Number.isFinite(retryRaw)
+        ? retryRaw
+        : DEFAULT_BACKGROUND_TASK.fireRetryMaxAttempts),
+    ),
+    recurringAutoDisableThreshold: Math.max(
+      1,
+      Math.floor(Number.isFinite(disableRaw)
+        ? disableRaw
+        : DEFAULT_BACKGROUND_TASK.recurringAutoDisableThreshold),
     ),
   }
 }

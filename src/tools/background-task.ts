@@ -1,0 +1,209 @@
+import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
+
+import {
+  addBackgroundTask,
+  loadBackgroundTasks,
+  removeBackgroundTask,
+  updateBackgroundTask,
+} from '../background-task/store.js'
+import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
+import { notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
+import {
+  scheduleSpecSchema,
+  type BackgroundTaskEntry,
+} from '../background-task/types.js'
+import { requireCurrentUserId } from '../state.js'
+import { buildTool } from '../tool.js'
+
+function shortId(): string {
+  return randomUUID().slice(0, 8)
+}
+
+function normalizeNotifyOn(value: 'success' | 'failure' | 'always' | undefined): 'success' | 'failure' | 'always' {
+  return value ?? 'always'
+}
+
+function normalizeNotifyTo(value: 'user' | 'agent' | undefined): 'user' | 'agent' {
+  return value ?? 'user'
+}
+
+export const backgroundTaskTool = buildTool({
+  name: 'BackgroundTask',
+  description: [
+    'Schedule a task to run at a future time, once or repeatedly. Returns immediately.',
+    'Use this for reminders, periodic scans, scheduled checks, and monitoring.',
+    'Do not use this for work the user is waiting on now; use AgentTool for immediate parallel work that must return to the current turn.',
+    "notify_to='user' pushes the result to the user. notify_to='agent' wakes the main agent later so it can decide whether to notify the user.",
+  ].join('\n'),
+  domain: 'host',
+  riskLevel: 'execute',
+  inputSchema: z.object({
+    prompt: z.string().min(10),
+    schedule: scheduleSpecSchema,
+    label: z.string().min(2).max(80),
+    notify_on: z.enum(['success', 'failure', 'always']).optional(),
+    notify_to: z.enum(['user', 'agent']).optional(),
+  }),
+  async call(input) {
+    const userId = requireCurrentUserId()
+    if (input.schedule.kind === 'oneshot') {
+      const at = new Date(input.schedule.at)
+      if (!Number.isFinite(at.getTime())) {
+        return { output: 'Invalid oneshot schedule time.', isError: true }
+      }
+      if (at.getTime() <= Date.now()) {
+        return {
+          output: 'BackgroundTask oneshot time must be in the future. Use AgentTool for immediate work.',
+          isError: true,
+        }
+      }
+    }
+
+    const now = new Date().toISOString()
+    const entry: BackgroundTaskEntry = {
+      id: `${userId}-${shortId()}`,
+      ownerCanonicalUser: userId,
+      prompt: input.prompt,
+      schedule: input.schedule,
+      label: input.label,
+      notifyOn: normalizeNotifyOn(input.notify_on),
+      notifyTo: normalizeNotifyTo(input.notify_to),
+      enabled: true,
+      createdAt: now,
+      consecutiveFailures: 0,
+      fireHistory: [],
+    }
+    addBackgroundTask(userId, entry)
+    notifyBackgroundTaskChanged(userId, entry.id)
+    return {
+      output: [
+        `Background task scheduled: ${entry.id} (${entry.label})`,
+        `Next run: ${describeNextRun(computeTaskNextRunAt(entry))}`,
+        `Notify: ${entry.notifyTo} / ${entry.notifyOn}`,
+      ].join('\n'),
+    }
+  },
+})
+
+export const listBackgroundTasksTool = buildTool({
+  name: 'ListBackgroundTasks',
+  description: 'List scheduled background tasks for the current user.',
+  domain: 'host',
+  riskLevel: 'safe',
+  concurrencySafe: true,
+  inputSchema: z.object({
+    include_history: z.boolean().optional(),
+  }),
+  async call(input) {
+    const userId = requireCurrentUserId()
+    const tasks = loadBackgroundTasks(userId).map(task => ({
+      id: task.id,
+      label: task.label,
+      schedule: task.schedule,
+      enabled: task.enabled,
+      nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
+      lastFiredAt: task.lastFiredAt ?? null,
+      notifyOn: task.notifyOn,
+      notifyTo: task.notifyTo,
+      consecutiveFailures: task.consecutiveFailures,
+      ...(input.include_history ? { fireHistory: task.fireHistory ?? [] } : {}),
+    }))
+    return {
+      output: tasks.length === 0
+        ? 'No background tasks.'
+        : JSON.stringify(tasks, null, 2),
+    }
+  },
+})
+
+export const cancelBackgroundTaskTool = buildTool({
+  name: 'CancelBackgroundTask',
+  description: 'Cancel a scheduled background task. An already in-flight fire is allowed to finish.',
+  domain: 'host',
+  riskLevel: 'write',
+  inputSchema: z.object({
+    id: z.string().min(1),
+  }),
+  async call(input) {
+    const userId = requireCurrentUserId()
+    const removed = removeBackgroundTask(userId, input.id)
+    notifyBackgroundTaskChanged(userId, input.id)
+    return {
+      output: removed
+        ? `Cancelled background task ${input.id}.`
+        : `Background task not found: ${input.id}`,
+      ...(removed ? {} : { isError: true }),
+    }
+  },
+})
+
+export const updateBackgroundTaskTool = buildTool({
+  name: 'UpdateBackgroundTask',
+  description: 'Update schedule, label, enabled flag, or notification settings for a background task. Prompt changes are not supported; cancel and create a new task instead.',
+  domain: 'host',
+  riskLevel: 'write',
+  inputSchema: z.object({
+    id: z.string().min(1),
+    schedule: scheduleSpecSchema.optional(),
+    label: z.string().min(2).max(80).optional(),
+    enabled: z.boolean().optional(),
+    notify_on: z.enum(['success', 'failure', 'always']).optional(),
+    notify_to: z.enum(['user', 'agent']).optional(),
+  }),
+  async call(input) {
+    const userId = requireCurrentUserId()
+    const updated = updateBackgroundTask(userId, input.id, {
+      ...(input.schedule ? { schedule: input.schedule } : {}),
+      ...(input.label ? { label: input.label } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.notify_on ? { notifyOn: input.notify_on } : {}),
+      ...(input.notify_to ? { notifyTo: input.notify_to } : {}),
+    })
+    notifyBackgroundTaskChanged(userId, input.id)
+    if (!updated) {
+      return {
+        output: `Background task not found: ${input.id}`,
+        isError: true,
+      }
+    }
+    return {
+      output: [
+        `Updated background task ${updated.id} (${updated.label}).`,
+        `Next run: ${describeNextRun(computeTaskNextRunAt(updated))}`,
+      ].join('\n'),
+    }
+  },
+})
+
+export const notifyUserTool = buildTool({
+  name: 'notify_user',
+  description: 'Wake-mode only: send a message to the user.',
+  domain: 'host',
+  riskLevel: 'write',
+  inputSchema: z.object({
+    text: z.string().min(1),
+  }),
+  async call() {
+    return {
+      output: 'notify_user is wake-mode only and is not available in normal turns yet.',
+      isError: true,
+    }
+  },
+})
+
+export const staySilentTool = buildTool({
+  name: 'stay_silent',
+  description: 'Wake-mode only: end a background-task wake without disturbing the user.',
+  domain: 'host',
+  riskLevel: 'safe',
+  inputSchema: z.object({
+    reason: z.string().optional(),
+  }),
+  async call() {
+    return {
+      output: 'stay_silent is wake-mode only and is not available in normal turns yet.',
+      isError: true,
+    }
+  },
+})

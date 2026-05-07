@@ -14,6 +14,9 @@ import { runForkedAgent } from './forked-agent.js'
 
 const BLOCKED_SUBAGENT_TOOLS = new Set([
   'AgentTool',
+  'BackgroundTask',
+  'notify_user',
+  'stay_silent',
   'TodoWrite',
   'MemoryWrite',
 ])

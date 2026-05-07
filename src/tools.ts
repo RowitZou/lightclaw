@@ -1,4 +1,10 @@
 import { agentTool } from './tools/agent.js'
+import {
+  backgroundTaskTool,
+  cancelBackgroundTaskTool,
+  listBackgroundTasksTool,
+  updateBackgroundTaskTool,
+} from './tools/background-task.js'
 import { bashTool } from './tools/bash.js'
 import { conversationGrepTool } from './tools/conversation-grep.js'
 import { conversationListTool } from './tools/conversation-list.js'
@@ -37,6 +43,10 @@ export const builtinTools = [
   webFetchTool,
   webSearchTool,
   agentTool,
+  backgroundTaskTool,
+  listBackgroundTasksTool,
+  cancelBackgroundTaskTool,
+  updateBackgroundTaskTool,
 ]
 
 export function getAllTools(): Tool[] {

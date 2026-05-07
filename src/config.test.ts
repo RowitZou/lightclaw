@@ -354,4 +354,42 @@ describe('config: endpoints + models registry', () => {
       maxTurns: 12,
     })
   })
+
+  it('defaults backgroundTask governance config', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.backgroundTask, {
+      maxConcurrentRunsPerUser: 3,
+      startupCatchupIntervalMs: 60_000,
+      fireRetryMaxAttempts: 3,
+      recurringAutoDisableThreshold: 3,
+    })
+  })
+
+  it('parses backgroundTask overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      backgroundTask: {
+        maxConcurrentRunsPerUser: 2,
+        startupCatchupIntervalMs: 5000,
+        fireRetryMaxAttempts: 5,
+        recurringAutoDisableThreshold: 4,
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.backgroundTask, {
+      maxConcurrentRunsPerUser: 2,
+      startupCatchupIntervalMs: 5000,
+      fireRetryMaxAttempts: 5,
+      recurringAutoDisableThreshold: 4,
+    })
+  })
 })
