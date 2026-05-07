@@ -13,6 +13,18 @@ export function computeNextRunAt(
     return at.getTime() > from.getTime() ? at : null
   }
 
+  if (spec.kind === 'after') {
+    // 'after' is normalized to 'oneshot' at the tool boundary — stored
+    // entries should never carry kind:'after'. This branch is defensive
+    // for any caller that somehow passes a raw 'after' spec (e.g. test
+    // fixture, future API): compute the same "createdAt + afterMinutes"
+    // anchor an explicit oneshot would carry, then apply the same
+    // future-only filter as oneshot.
+    const anchor = new Date(options?.createdAt ?? from.toISOString())
+    const at = new Date(anchor.getTime() + spec.afterMinutes * MINUTE_MS)
+    return at.getTime() > from.getTime() ? at : null
+  }
+
   if (spec.kind === 'interval') {
     const anchor = new Date(spec.anchorAt ?? options?.createdAt ?? from.toISOString())
     const everyMs = spec.everyMinutes * MINUTE_MS

@@ -5,6 +5,18 @@ export const scheduleSpecSchema = z.discriminatedUnion('kind', [
     kind: z.literal('oneshot'),
     at: z.string().datetime({ offset: true }),
   }),
+  // 'after' is a convenience shorthand for "fire once, N minutes from now".
+  // The tool layer normalizes it to { kind: 'oneshot', at: <now+afterMinutes> }
+  // before storage, so on-disk shape stays at oneshot/recurring/interval.
+  // Why this exists: LLMs reliably pick this when the user says
+  // "1 minute test" / "remind me in 5 minutes" — without it they tend to
+  // (a) compute an ISO8601 timestamp incorrectly, or worse (b) silently
+  // fall through to interval { everyMinutes: 1 } and give the user a
+  // recurring task instead of a one-time fire.
+  z.object({
+    kind: z.literal('after'),
+    afterMinutes: z.number().positive().max(7 * 24 * 60),
+  }),
   z.object({
     kind: z.literal('recurring'),
     daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1),
