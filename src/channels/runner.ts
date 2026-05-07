@@ -275,6 +275,7 @@ export class ChannelRunner {
         // promise before its own rewriteTranscript so the placeholder
         // is in place when merge-back tries to find it by branchId.
         let spawnPairPromise: Promise<void> | undefined
+        const branchStartedAt = new Date().toISOString()
         if (branchRequest) {
           spawnPairPromise = appendBranchSpawnPair({
             mainSessionId,
@@ -283,7 +284,7 @@ export class ChannelRunner {
               branchId: branchRequest.branchId,
               branchSessionId: branchRequest.branchSessionId,
               status: 'running',
-              startedAt: new Date().toISOString(),
+              startedAt: branchStartedAt,
             },
           }).catch(error => {
             const detail = error instanceof Error ? error.message : String(error)
@@ -447,6 +448,11 @@ export class ChannelRunner {
                 mainSessionId,
                 branchId: branchRequest.branchId,
                 outcome: { kind: 'failure', reason: detail },
+                fallback: {
+                  userQuery: branchRequest.prompt,
+                  branchSessionId: branchRequest.branchSessionId,
+                  startedAt: branchStartedAt,
+                },
               }).catch(mergeError => {
                 process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(mergeError)}\n`)
               })
@@ -492,6 +498,11 @@ export class ChannelRunner {
             outcome: {
               kind: 'success',
               finalText: result.assistantText || t('fresh.empty'),
+            },
+            fallback: {
+              userQuery: branchRequest.prompt,
+              branchSessionId: branchRequest.branchSessionId,
+              startedAt: branchStartedAt,
             },
           }).catch(error => {
             process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(error)}\n`)
