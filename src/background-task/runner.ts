@@ -10,7 +10,7 @@ import { getAdmin } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
-import { getRuntimePool } from '../state.js'
+import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
   createSessionContext,
   runWithSessionContext,
@@ -68,7 +68,11 @@ export async function runBackgroundTaskFire(input: {
     const provider = getProvider(config)
     const { getAllTools, getEnabledTools } = await import('../tools.js')
     const tools = getEnabledTools(provider, getAllTools())
-    const tracker = undefined
+    // Docker backend requires the tracker; local / rlaunch ignore it. Pass it
+    // unconditionally so a task fire under any backend gets a valid runtime —
+    // missing this caused DockerRuntime to throw at acquire() and every fire
+    // to fail-transient-then-disable on docker hosts.
+    const tracker = config.runtime.backend === 'docker' ? getImageReadiness() : undefined
     const runtime = getRuntimePool().acquire(input.task.ownerCanonicalUser, config, cwd, tracker)
     const userMessage = createUserMessage(input.task.prompt)
     const ctx = createSessionContext({

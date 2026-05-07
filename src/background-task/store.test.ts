@@ -7,10 +7,14 @@ import { tmpdir } from 'node:os'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   addBackgroundTask,
+  appendFireHistory,
   backgroundTaskStorePath,
   flushLastFiredAt,
+  listAllUsersWithBackgroundTasks,
   loadBackgroundTasks,
+  removeBackgroundTask,
   saveBackgroundTasks,
+  updateBackgroundTask,
   updateLastFiredAt,
 } from './store.js'
 import type { BackgroundTaskEntry } from './types.js'
@@ -64,6 +68,61 @@ describe('background-task store', () => {
       loadBackgroundTasks('alice')[0].lastFiredAt,
       '2026-05-07T10:01:00.000Z',
     )
+  })
+
+  it('caps fireHistory FIFO at 20 entries', () => {
+    addBackgroundTask('alice', fakeTask('alice', 'task-1'))
+    for (let i = 0; i < 25; i += 1) {
+      appendFireHistory({
+        canonicalUser: 'alice',
+        taskId: 'task-1',
+        entry: {
+          firedAt: new Date(Date.UTC(2026, 4, 7, 10, i, 0)).toISOString(),
+          summary: `fire-${i}`,
+          success: true,
+        },
+      })
+    }
+    const history = loadBackgroundTasks('alice')[0].fireHistory ?? []
+    assert.equal(history.length, 20)
+    assert.equal(history[0].summary, 'fire-5') // earliest 5 dropped
+    assert.equal(history[history.length - 1].summary, 'fire-24')
+  })
+
+  it('removes a task and is a no-op when id is unknown', () => {
+    addBackgroundTask('alice', fakeTask('alice', 'task-1'))
+    addBackgroundTask('alice', fakeTask('alice', 'task-2'))
+    assert.equal(removeBackgroundTask('alice', 'task-1'), true)
+    assert.deepEqual(
+      loadBackgroundTasks('alice').map(task => task.id),
+      ['task-2'],
+    )
+    assert.equal(removeBackgroundTask('alice', 'task-1'), false)
+    assert.equal(removeBackgroundTask('alice', 'never'), false)
+  })
+
+  it('updates only the requested fields and leaves others untouched', () => {
+    addBackgroundTask('alice', fakeTask('alice', 'task-1'))
+    const updated = updateBackgroundTask('alice', 'task-1', {
+      enabled: false,
+      label: 'paused',
+    })
+    assert.ok(updated)
+    assert.equal(updated?.enabled, false)
+    assert.equal(updated?.label, 'paused')
+    assert.equal(updated?.notifyOn, 'always')
+    assert.equal(updated?.notifyTo, 'user')
+    assert.equal(updated?.consecutiveFailures, 0)
+    assert.equal(updateBackgroundTask('alice', 'never', { enabled: true }), null)
+  })
+
+  it('lists every per-user store under per-user/<canonical>/bg-tasks.json', () => {
+    addBackgroundTask('alice', fakeTask('alice', 'task-1'))
+    addBackgroundTask('bob', fakeTask('bob', 'task-9'))
+    const all = listAllUsersWithBackgroundTasks()
+    const byUser = new Map(all.map(entry => [entry.canonicalUser, entry.tasks.length]))
+    assert.equal(byUser.get('alice'), 1)
+    assert.equal(byUser.get('bob'), 1)
   })
 })
 
