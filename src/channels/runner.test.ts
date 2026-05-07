@@ -129,3 +129,127 @@ describe('ChannelRunner multi-user concurrency', () => {
     assert.ok(strategy.notices.some(item => item.messageId === alice.messageId))
   })
 })
+
+describe('ChannelRunner pre-lock fast path', () => {
+  it('parseFastPathSlash classifies /stop, read whitelist, and write/non-slash correctly', async () => {
+    const { parseFastPathSlash } = await import('./runner.js')
+    // /stop short-circuit
+    assert.equal(parseFastPathSlash('/stop'), 'stop')
+    assert.equal(parseFastPathSlash('  /stop  '), 'stop')
+    // Read whitelist
+    assert.equal(parseFastPathSlash('/help'), 'read')
+    assert.equal(parseFastPathSlash('/help anything trailing'), 'read')
+    assert.equal(parseFastPathSlash('/cost'), 'read')
+    assert.equal(parseFastPathSlash('/mode'), 'read')
+    assert.equal(parseFastPathSlash('/model'), 'read')
+    assert.equal(parseFastPathSlash('/rules'), 'read')
+    assert.equal(parseFastPathSlash('/rules list'), 'read')
+    assert.equal(parseFastPathSlash('/rules list ...filter'), 'read')
+    assert.equal(parseFastPathSlash('/auth list'), 'read')
+    assert.equal(parseFastPathSlash('/user'), 'read')
+    assert.equal(parseFastPathSlash('/user list'), 'read')
+    assert.equal(parseFastPathSlash('/user pending'), 'read')
+    assert.equal(parseFastPathSlash('/user feedback --page 2'), 'read')
+    // Write variants of sub-command slashes — must NOT fast-path so they
+    // serialize behind any in-flight turn.
+    assert.equal(parseFastPathSlash('/mode auto'), null)
+    assert.equal(parseFastPathSlash('/model claude-x'), null)
+    assert.equal(parseFastPathSlash('/rules allow Bash(curl:*)'), null)
+    assert.equal(parseFastPathSlash('/rules deny Edit(/etc/**)'), null)
+    assert.equal(parseFastPathSlash('/rules revoke 3'), null)
+    assert.equal(parseFastPathSlash('/auth import codex'), null)
+    assert.equal(parseFastPathSlash('/auth logout codex'), null)
+    assert.equal(parseFastPathSlash('/user approve abc123 --as alice'), null)
+    assert.equal(parseFastPathSlash('/user remove bob'), null)
+    // /status and /sandbox stay in the lock — they want live in-memory state.
+    assert.equal(parseFastPathSlash('/status'), null)
+    assert.equal(parseFastPathSlash('/sandbox status'), null)
+    assert.equal(parseFastPathSlash('/sandbox prefetch'), null)
+    // /branch / /fresh have their own lock keys, not pre-lock.
+    assert.equal(parseFastPathSlash('/branch hi'), null)
+    assert.equal(parseFastPathSlash('/b hi'), null)
+    assert.equal(parseFastPathSlash('/fresh hi'), null)
+    assert.equal(parseFastPathSlash('/feedback something'), null)
+    // Non-slash falls through.
+    assert.equal(parseFastPathSlash('hello'), null)
+    assert.equal(parseFastPathSlash(''), null)
+  })
+
+  it('runs /stop without waiting for the main session lock to release', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    // Hold the main session lock externally for 3 seconds — simulating an
+    // in-flight long query that would otherwise queue /stop behind itself.
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      'feishu-alice',
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const stopMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/stop',
+      sessionId: 'feishu-alice',
+    })
+    const startedAt = Date.now()
+    await runner.handleMessage(stopMessage)
+    const elapsed = Date.now() - startedAt
+
+    assert.ok(
+      elapsed < 500,
+      `/stop should fast-path past the held lock; got elapsed ${elapsed}ms`,
+    )
+    assert.ok(
+      strategy.notices.some(item => item.messageId === stopMessage.messageId),
+      '/stop should produce a notice even when the main lock is held',
+    )
+
+    releaseHold?.()
+    await heldLock
+  })
+
+  it('runs /help via the read fast path while the main lock is held', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      'feishu-alice',
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const helpMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/help',
+      sessionId: 'feishu-alice',
+    })
+    const startedAt = Date.now()
+    await runner.handleMessage(helpMessage)
+    const elapsed = Date.now() - startedAt
+
+    assert.ok(
+      elapsed < 500,
+      `/help should fast-path past the held lock; got elapsed ${elapsed}ms`,
+    )
+    assert.ok(
+      strategy.notices.some(item => item.messageId === helpMessage.messageId),
+      '/help should produce a notice even when the main lock is held',
+    )
+
+    releaseHold?.()
+    await heldLock
+  })
+})
