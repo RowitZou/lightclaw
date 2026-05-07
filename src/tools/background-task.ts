@@ -184,7 +184,11 @@ export const notifyUserTool = buildTool({
   inputSchema: z.object({
     text: z.string().min(1),
   }),
-  async call() {
+  async call(input, context) {
+    if (context.wakeNotifications) {
+      context.wakeNotifications.push({ kind: 'notify', text: input.text })
+      return { output: 'Notification recorded for delivery.' }
+    }
     return {
       output: 'notify_user is wake-mode only and is not available in normal turns yet.',
       isError: true,
@@ -200,7 +204,14 @@ export const staySilentTool = buildTool({
   inputSchema: z.object({
     reason: z.string().optional(),
   }),
-  async call() {
+  async call(input, context) {
+    if (context.wakeNotifications) {
+      context.wakeNotifications.push({
+        kind: 'silent',
+        ...(input.reason ? { reason: input.reason } : {}),
+      })
+      return { output: 'Silent decision recorded.' }
+    }
     return {
       output: 'stay_silent is wake-mode only and is not available in normal turns yet.',
       isError: true,

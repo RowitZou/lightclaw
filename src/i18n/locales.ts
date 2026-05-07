@@ -44,6 +44,8 @@ export const LOCALES = {
     'cmd.user.desc': '管理身份与配对请求',
     'cmd.fresh.usage': '/fresh <prompt>',
     'cmd.fresh.desc': '运行临时一次性会话（不读 memory、不留 transcript、强制 mode=default）',
+    'cmd.branch.usage': '/branch <prompt>',
+    'cmd.branch.desc': '从主对话分一条独立线运行，完成后结果回写主对话',
     'cmd.stop.usage': '/stop',
     'cmd.stop.desc': '中断进行中的 turn（已写入的文件不会回滚）',
     'cmd.feedback.usage': '/feedback <text>',
@@ -187,6 +189,11 @@ export const LOCALES = {
     'fresh.prefix': '[fresh]',
     'fresh.empty': '(无回复)',
     'fresh.error': '[fresh] 错误：{detail}',
+
+    // ---- /branch ----
+    'branch.usage': '用法：/branch <prompt>',
+    'branch.channelOnly': '/branch 当前只在 channel 会话中可用。',
+    'branch.runnerOnly': 'branch runner 未接管这条命令；请重发 /branch <prompt>。',
 
     // ---- /stop ----
     'stop.requireIdentity': '/stop 需要一个有效的身份。',
@@ -421,6 +428,8 @@ export const LOCALES = {
     'cmd.user.desc': 'Manage identities and pairing requests',
     'cmd.fresh.usage': '/fresh <prompt>',
     'cmd.fresh.desc': 'Run an ephemeral one-shot session (no memory, no transcript, mode=default)',
+    'cmd.branch.usage': '/branch <prompt>',
+    'cmd.branch.desc': 'Run an independent branch and merge the result back into the main conversation',
     'cmd.stop.usage': '/stop',
     'cmd.stop.desc': 'Abort the in-flight turn (already-written files are not rolled back)',
     'cmd.feedback.usage': '/feedback <text>',
@@ -567,6 +576,11 @@ export const LOCALES = {
     'fresh.prefix': '[fresh]',
     'fresh.empty': '(no response)',
     'fresh.error': '[fresh] error: {detail}',
+
+    // ---- /branch ----
+    'branch.usage': 'Usage: /branch <prompt>',
+    'branch.channelOnly': '/branch is currently only available in channel sessions.',
+    'branch.runnerOnly': 'The branch runner did not intercept this command; please resend /branch <prompt>.',
 
     // ---- /stop ----
     'stop.requireIdentity': '/stop requires an active identity.',

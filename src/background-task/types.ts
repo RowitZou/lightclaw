@@ -47,10 +47,12 @@ export type FireOutcome =
 
 export type PendingCardAction = {
   fireUuid: string
-  taskId: string
+  task: BackgroundTaskEntry
   ownerCanonicalUser: string
+  ownerOpenId: string
   outcome: FireOutcome
-  createdAt: number
+  firedAt: string
+  autopaused?: boolean
 }
 
 export type WakeNotifyResult =

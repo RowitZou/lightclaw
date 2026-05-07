@@ -163,6 +163,34 @@ function buildBuiltinCommands(): ReplCommand[] {
     },
   },
   {
+    name: '/branch',
+    usage: t('cmd.branch.usage'),
+    description: t('cmd.branch.desc'),
+    async handler(args, ctx) {
+      if (!args.trim()) {
+        ctx.output.write(`${t('common.error.prefix')}${t('branch.usage')}\n`)
+        return
+      }
+      if (ctx.isChannel) {
+        // ChannelRunner intercepts valid /branch commands before slash
+        // dispatch so it can allocate an independent lock/session id and
+        // stream the branch reply to the original message.
+        ctx.output.write(`${t('branch.runnerOnly')}\n`)
+        return
+      }
+      ctx.output.write(`${t('branch.channelOnly')}\n`)
+    },
+  },
+  {
+    name: '/b',
+    usage: '/b <prompt>',
+    description: t('cmd.branch.desc'),
+    async handler(args, ctx) {
+      const command = buildBuiltinCommands().find(item => item.name === '/branch')
+      await command?.handler(args, ctx)
+    },
+  },
+  {
     name: '/model',
     usage: t('cmd.model.usage'),
     description: t('cmd.model.desc'),

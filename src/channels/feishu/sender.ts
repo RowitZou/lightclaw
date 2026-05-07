@@ -153,6 +153,32 @@ export class FeishuSender {
     assertOk(response, 'Feishu create message (open_id) failed')
   }
 
+  async sendMarkdownTextToOpenId(openId: string, text: string): Promise<void> {
+    const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
+    for (const chunk of chunks) {
+      const card = {
+        config: { enable_forward: false, wide_screen_mode: true },
+        elements: [
+          { tag: 'div', text: { tag: 'lark_md', content: chunk } },
+        ],
+      }
+      const response = await retryOnTransient(
+        'create markdown (open_id)',
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'open_id' },
+          data: {
+            receive_id: openId,
+            msg_type: 'interactive',
+            content: JSON.stringify(card),
+          },
+        }),
+        this.retryAttempts,
+        this.retryBaseDelayMs,
+      )
+      assertOk(response, 'Feishu create markdown message (open_id) failed')
+    }
+  }
+
   async sendFile(message: NormalizedChannelMessage, file: OutgoingChannelFile): Promise<void> {
     const fileKey = await this.uploadFile(file)
     await this.sendReplyOrCreate({

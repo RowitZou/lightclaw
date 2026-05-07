@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
+import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
 import type { LightClawConfig } from '../config.js'
+import { getIdentity } from '../identity/store.js'
 import {
   appendFireHistory,
   flushLastFiredAt,
@@ -250,10 +252,11 @@ export class BackgroundTaskScheduler {
       return
     }
 
+    const firedAt = new Date().toISOString()
+    let autopaused = false
     if (task.schedule.kind === 'oneshot') {
       removeBackgroundTask(canonicalUser, task.id)
     } else {
-      const firedAt = new Date().toISOString()
       updateLastFiredAt(canonicalUser, task.id, firedAt)
       appendFireHistory({
         canonicalUser,
@@ -278,6 +281,7 @@ export class BackgroundTaskScheduler {
           consecutiveFailures: failures,
           ...(failures >= threshold ? { enabled: false } : {}),
         })
+        autopaused = failures >= threshold
       }
     }
 
@@ -286,13 +290,54 @@ export class BackgroundTaskScheduler {
       (task.notifyOn === 'success' && outcome.kind === 'success') ||
       (task.notifyOn === 'failure' && outcome.kind === 'failure')
     if (shouldNotify) {
-      const status = outcome.kind === 'success'
-        ? `success: ${outcome.summary}`
-        : `failure: ${outcome.reason}`
-      process.stderr.write(
-        `[background-task] ${task.id} fire ${fireUuid} completed (${status})\n`,
-      )
+      await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome, autopaused)
     }
+  }
+
+  private async deliverCompletion(
+    canonicalUser: string,
+    task: BackgroundTaskEntry,
+    fireUuid: string,
+    firedAt: string,
+    outcome: FireOutcome,
+    autopaused: boolean,
+  ): Promise<void> {
+    const identity = await getIdentity(canonicalUser).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (!ownerOpenId) {
+      process.stderr.write(
+        `[background-task] ${task.id} fire ${fireUuid} completed but no feishu open_id is bound for ${canonicalUser}\n`,
+      )
+      return
+    }
+
+    if (task.notifyTo === 'agent') {
+      const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
+      const result = await wakeMainAgent({ canonicalUser, task, outcome })
+      await deliverWakeNotification({
+        ownerOpenId,
+        taskLabel: task.label,
+        result,
+      })
+      return
+    }
+
+    const coordinator = getBackgroundTaskCardCoordinator()
+    if (!coordinator) {
+      process.stderr.write(
+        `[background-task] ${task.id} fire ${fireUuid} completed but no Feishu card coordinator is registered\n`,
+      )
+      return
+    }
+    await coordinator.sendCompletionCard({
+      fireUuid,
+      task,
+      ownerCanonicalUser: canonicalUser,
+      ownerOpenId,
+      outcome,
+      firedAt,
+      ...(autopaused ? { autopaused: true } : {}),
+    })
   }
 }
 

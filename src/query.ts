@@ -68,6 +68,7 @@ import type {
   UsageStats,
   UserToolResultBlock,
 } from './types.js'
+import type { WakeNotifyResult } from './background-task/types.js'
 
 /**
  * QueryMode selects orchestration behavior that differs between the REPL
@@ -137,6 +138,7 @@ type QueryParams = {
    * runForkedAgent when mode === 'subagent'; ignored otherwise.
    */
   subagentLabel?: string
+  wakeNotifications?: WakeNotifyResult[]
 }
 
 type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
@@ -151,6 +153,7 @@ type DispatchContext = {
   config: LightClawConfig
   canUseTool?: CanUseToolFn
   signal: AbortSignal
+  wakeNotifications?: WakeNotifyResult[]
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -478,6 +481,7 @@ export async function query(params: QueryParams): Promise<{
     config,
     canUseTool: params.canUseTool,
     signal: params.signal ?? getAbortController().signal,
+    wakeNotifications: params.wakeNotifications,
   }
 
   type StopEvent = Extract<
@@ -806,6 +810,7 @@ async function dispatchToolCall(
       abortSignal: ctx.signal,
       runtime: getRuntime(),
       canUseTool: ctx.canUseTool,
+      wakeNotifications: ctx.wakeNotifications,
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 
