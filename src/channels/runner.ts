@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
+import { getConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
 import { workspaceFor } from '../identity/paths.js'
+import { loadIdentityPreferences } from '../identity/preferences.js'
 import {
   beginQuery,
   resetSessionContext,
@@ -13,7 +15,9 @@ import {
 import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
 import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
+import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
+import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
@@ -30,6 +34,7 @@ import {
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import {
+  abortInFlightForUser,
   awaitBackgroundTasks,
   getCompactionCount,
   getCurrentUserId,
@@ -44,6 +49,7 @@ import {
 } from '../state.js'
 import {
   createEmptySessionContext,
+  createSessionContext,
   runWithSessionContext,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
@@ -157,6 +163,26 @@ export class ChannelRunner {
       )
       return
     }
+    // Pre-lock fast path: /stop must short-circuit, otherwise it queues
+    // behind the very query it is trying to abort. Read-only slashes that
+    // pull state from disk also bypass the lock so a long-running main
+    // turn does not freeze /help, /rules list, /cost, etc.
+    const fastPath = parseFastPathSlash(message.text)
+    if (fastPath === 'stop') {
+      const aborted = abortInFlightForUser(userId)
+      await this.sendNotice(
+        message,
+        'info',
+        aborted ? t('stop.aborted') : t('stop.nothing'),
+        'plain_text',
+      )
+      return
+    }
+    if (fastPath === 'read') {
+      await this.runReadSlashFastPath(message, userId)
+      return
+    }
+
     const mainSessionId = this.strategy.resolveSessionId(message, userId)
     const branchRequest = parseBranchRequest(message.text, userId)
     const freshSessionId = parseFreshRequest(message.text)
@@ -470,6 +496,80 @@ export class ChannelRunner {
     })
   }
 
+  /**
+   * Run a whitelisted read-only slash WITHOUT entering the channel lock.
+   * Builds a fresh, disk-only SessionContext (preferences / identity rules
+   * loaded from disk; token-usage counters, todos, message history all
+   * default to fresh values) so dispatchChannelSlash gets a valid scope.
+   * Read slashes in the whitelist do not depend on live in-flight state,
+   * so the fresh ctx faithfully represents what they want to display.
+   *
+   * Eligibility is decided by parseFastPathSlash; this method assumes the
+   * caller already classified the message as a read-fast-path candidate.
+   */
+  private async runReadSlashFastPath(
+    message: NormalizedChannelMessage,
+    userId: string,
+  ): Promise<void> {
+    const config = getConfig()
+    const prefs = loadIdentityPreferences(userId)
+    const cwd = workspaceFor(userId)
+    const sessionId = this.strategy.resolveSessionId(message, userId)
+    assertSessionIdShape(sessionId)
+    const ctx = createSessionContext({
+      cwd,
+      model: prefs.model ?? config.model,
+      sessionsDir: config.sessionsDir,
+      memoryDir: getMemoryDir(userId, config),
+      currentUserId: userId,
+      sessionId,
+      permissionMode: prefs.permissionMode ?? config.permissionMode,
+      identityRules: loadIdentityRules(userId),
+      fileRules: loadFileRules({
+        cwd,
+        userPath: config.permissionRuleFiles.user,
+        projectPath: config.permissionRuleFiles.project,
+        localPath: config.permissionRuleFiles.local,
+      }),
+    })
+
+    const provider = getProvider(config)
+    const tools = getEnabledTools(provider, getAllTools())
+    let activeTools = tools
+    const adminFlag = (await isAdmin(userId)) === true
+    const result = await runWithSessionContext(ctx, () =>
+      dispatchChannelSlash(message.text, {
+        config,
+        sessionId,
+        createdAt: Date.now(),
+        messages: [],
+        userId,
+        isAdmin: adminFlag,
+        getActiveTools: () => activeTools,
+        setActiveTools(next: typeof tools) {
+          activeTools = next
+        },
+        async persistMeta() {
+          // Read-fast-path never mutates session meta — the slash is read-only.
+        },
+      }),
+    )
+    if (!result.handled) {
+      // Whitelist drift: parseFastPathSlash matched but dispatch did not. Be
+      // visible about it so a future reviewer notices instead of silent drop.
+      process.stderr.write(
+        `${this.strategy.channelId}: read-fast-path slash not handled: ${message.text.slice(0, 60)}\n`,
+      )
+      return
+    }
+    const slashText = result.output.trim() || 'ok'
+    if (result.bodyFormat === 'lark_md') {
+      await this.sendReply(message, slashText)
+    } else {
+      await this.sendNotice(message, 'info', slashText, 'plain_text')
+    }
+  }
+
   private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {
     if (!this.strategy.startTyping) {
       return null
@@ -593,6 +693,69 @@ export class ChannelRunner {
 
 function parseFreshRequest(text: string): boolean {
   return /^\/fresh(?:\s|$)/.test(text.trimStart())
+}
+
+/**
+ * Pre-lock fast path classifier. The channel runner's main FIFO lock is
+ * held for the entire duration of an LLM turn (potentially minutes), so
+ * any slash that queues behind it would either be useless (/stop after
+ * the very query it is trying to abort) or unnecessarily delayed (read
+ * slashes that only inspect disk state).
+ *
+ * Returns:
+ * - 'stop': /stop — must abort the in-flight turn synchronously, before
+ *   the lock can serialize this message behind that same turn.
+ * - 'read': read-only slashes whose handlers only consult disk-resident
+ *   state (identity rules / preferences / cost ledger / identity store).
+ *   Excluded on purpose: /status, /sandbox status — they want live in-
+ *   memory state (token usage, runtime), so a fresh-context fast path
+ *   would lie. Those queue behind the lock so they see the live snapshot
+ *   once the in-flight turn finishes.
+ * - null: not eligible — proceed to the lock path.
+ */
+export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
+  const trimmed = text.trimStart()
+  if (!trimmed.startsWith('/')) {
+    return null
+  }
+  const parts = trimmed.split(/\s+/)
+  const head = parts[0] ?? ''
+  const argText = parts.slice(1).join(' ').trim()
+
+  if (head === '/stop') {
+    return 'stop'
+  }
+  // Always-read entries: handler does not depend on which sub-arg is given.
+  if (head === '/help') {
+    return 'read'
+  }
+  // No-arg read variants: with arguments these slashes mutate state and
+  // must keep their queued ordering with the in-flight turn.
+  if ((head === '/mode' || head === '/model') && argText.length === 0) {
+    return 'read'
+  }
+  // /cost is admin-only (gated inside dispatchChannelSlash) and only reads
+  // the per-day cost ledger from disk. Always read-only.
+  if (head === '/cost') {
+    return 'read'
+  }
+  // Sub-command read variants. The write variants (allow / deny / revoke /
+  // approve / reject / unlink / remove / import / logout / prefetch / reset)
+  // intentionally fall through to the lock path so they serialize with any
+  // in-flight turn.
+  if (head === '/rules' && (argText === '' || /^list(?:\s|$)/.test(argText))) {
+    return 'read'
+  }
+  if (head === '/auth' && /^list(?:\s|$)/.test(argText)) {
+    return 'read'
+  }
+  if (
+    head === '/user' &&
+    (argText === '' || /^(list|pending|feedback)(?:\s|$)/.test(argText))
+  ) {
+    return 'read'
+  }
+  return null
 }
 
 function parseBranchRequest(
