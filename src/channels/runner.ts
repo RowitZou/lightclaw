@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
@@ -16,6 +17,10 @@ import { createAssistantMessage, createUserMessage, getLastUuid } from '../messa
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
+import {
+  appendBranchSpawnPair,
+  mergeBranchResultBack,
+} from '../session/branch-merge.js'
 import {
   appendMessage,
   loadMeta,
@@ -44,7 +49,7 @@ import {
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
-import { assertSessionIdShape, SessionLock } from './session-lock.js'
+import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
 import type { ChannelId, NormalizedChannelMessage, OutgoingChannelFile } from './types.js'
 
 /**
@@ -115,7 +120,7 @@ export type ChannelRunnerStrategy = {
  * the strategy's sender.
  */
 export class ChannelRunner {
-  private locks = new SessionLock()
+  private locks = channelSessionLock
   private initialized = false
 
   constructor(private readonly strategy: ChannelRunnerStrategy) {}
@@ -152,7 +157,16 @@ export class ChannelRunner {
       )
       return
     }
-    const sessionId = this.strategy.resolveSessionId(message, userId)
+    const mainSessionId = this.strategy.resolveSessionId(message, userId)
+    const branchRequest = parseBranchRequest(message.text, userId)
+    const freshSessionId = parseFreshRequest(message.text)
+      ? `fresh-${randomUUID()}`
+      : null
+    const sessionId = branchRequest?.branchSessionId ?? freshSessionId ?? mainSessionId
+    const effectiveMessage = branchRequest
+      ? { ...message, text: branchRequest.prompt }
+      : message
+    assertSessionIdShape(mainSessionId)
     assertSessionIdShape(sessionId)
     await this.locks.runExclusive(sessionId, async () => {
       // In-flight typing indicator: fire BEFORE any work so the user sees
@@ -162,7 +176,9 @@ export class ChannelRunner {
       const typingToken = await this.startTyping(message)
       try {
         const meta = await loadMeta(sessionId)
-        const messages = await loadTranscript(sessionId)
+        const messages = branchRequest
+          ? await loadTranscript(mainSessionId)
+          : await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
         // Wrap the entire turn in a SessionContext scope BEFORE
         // resetSessionContext resolves the real fields. The placeholder ctx
@@ -174,9 +190,9 @@ export class ChannelRunner {
           currentUserId: userId,
         })
         const approver = this.strategy.createPermissionApprover?.(
-          message,
-          sessionId,
-          userId,
+            effectiveMessage,
+            sessionId,
+            userId,
         )
         sessionContext.permissionApprover = approver ?? null
         sessionContext.channelFileSender = this.strategy.sendFile
@@ -218,6 +234,19 @@ export class ChannelRunner {
           })
         }
 
+        if (branchRequest) {
+          await appendBranchSpawnPair({
+            mainSessionId,
+            userQuery: branchRequest.prompt,
+            meta: {
+              branchId: branchRequest.branchId,
+              branchSessionId: branchRequest.branchSessionId,
+              status: 'running',
+              startedAt: new Date().toISOString(),
+            },
+          })
+        }
+
         // Image readiness self-healing: if a previous failure left the tracker
         // in 'failed' / 'not-attempted', kick a retry now so by the time the
         // agent attempts an environment tool we may already be ready (or at
@@ -240,7 +269,7 @@ export class ChannelRunner {
         }
 
         beginQuery(userId)
-        const userText = formatChannelUserText(message)
+        const userText = formatChannelUserText(effectiveMessage)
         const slash = await dispatchChannelSlash(userText, {
           config: appConfig,
           sessionId,
@@ -253,7 +282,9 @@ export class ChannelRunner {
           persistMeta: count => persistMeta(Date.now(), count),
         })
         if (slash.handled) {
-          await persistMeta(Date.now(), messages.length)
+          if (!sessionId.startsWith('fresh-')) {
+            await persistMeta(Date.now(), messages.length)
+          }
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
@@ -270,9 +301,9 @@ export class ChannelRunner {
           //                    HTML tags / markdown links and drop them, so
           //                    we render via a plain_text notice card.
           if (slash.bodyFormat === 'lark_md') {
-            await this.sendReply(message, slashText)
+            await this.sendReply(effectiveMessage, slashText)
           } else {
-            await this.sendNotice(message, 'info', slashText, 'plain_text')
+            await this.sendNotice(effectiveMessage, 'info', slashText, 'plain_text')
           }
           return
         }
@@ -308,7 +339,7 @@ export class ChannelRunner {
               messages,
               tools: getEnabledTools(provider, getAllTools()),
               mode: 'channel',
-              channelContext: this.strategy.buildChannelPrompt(message),
+              channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
               permissionApprover: approver,
               onToolUse(event) {
                 process.stderr.write(`${channelId}: tool ${event.name}\n`)
@@ -320,7 +351,7 @@ export class ChannelRunner {
               // (see streamedAtLeastOnce below).
               onAssistantTurn: async (text: string) => {
                 streamedAtLeastOnce = true
-                await this.sendReply(message, text)
+                await this.sendReply(effectiveMessage, text)
               },
             })
             break
@@ -359,7 +390,16 @@ export class ChannelRunner {
             // stderr; the card carries a friendly summary built by
             // formatQueryFailure (which already truncates and avoids
             // dumping raw provider error envelopes).
-            await this.sendNotice(message, 'error', formatNoticeFromFailure(detail))
+            if (branchRequest) {
+              await mergeBranchResultBack({
+                mainSessionId,
+                branchId: branchRequest.branchId,
+                outcome: { kind: 'failure', reason: detail },
+              }).catch(mergeError => {
+                process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(mergeError)}\n`)
+              })
+            }
+            await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail))
             return
           }
         }
@@ -378,7 +418,7 @@ export class ChannelRunner {
         const didMutateExistingHistory =
           JSON.stringify(previousTail) !== JSON.stringify(nextTail)
         const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
-        if (result.didCompact || didMutateExistingHistory) {
+        if (branchRequest || result.didCompact || didMutateExistingHistory) {
           await rewriteTranscript(sessionId, result.messages)
         } else {
           for (const item of newlyAddedMessages) {
@@ -387,6 +427,18 @@ export class ChannelRunner {
         }
 
         await persistMeta(Date.now(), result.messages.length)
+        if (branchRequest) {
+          await mergeBranchResultBack({
+            mainSessionId,
+            branchId: branchRequest.branchId,
+            outcome: {
+              kind: 'success',
+              finalText: result.assistantText || t('fresh.empty'),
+            },
+          }).catch(error => {
+            process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(error)}\n`)
+          })
+        }
         // Memory extraction stays fire-and-forget here. Draining each
         // inbound message would force the user to wait up to 60s before
         // the next reply when an extraction is slow. The CLI exit path
@@ -399,13 +451,13 @@ export class ChannelRunner {
         // streamed (e.g. the model produced zero non-empty turns and we'd
         // otherwise leave the user in silence).
         if (!streamedAtLeastOnce) {
-          await this.sendReply(message, result.assistantText || t('fresh.empty'))
+          await this.sendReply(effectiveMessage, result.assistantText || t('fresh.empty'))
         }
         })
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
-            message,
+            effectiveMessage,
             'error',
             t('channel.localRuntimeReject'),
           )
@@ -536,6 +588,32 @@ export class ChannelRunner {
     }
 
     return null
+  }
+}
+
+function parseFreshRequest(text: string): boolean {
+  return /^\/fresh(?:\s|$)/.test(text.trimStart())
+}
+
+function parseBranchRequest(
+  text: string,
+  canonicalUser: string,
+): { branchId: string; branchSessionId: string; prompt: string } | null {
+  const trimmed = text.trimStart()
+  const match = /^\/(?:branch|b)(?:\s+([\s\S]+))?$/.exec(trimmed)
+  if (!match) {
+    return null
+  }
+  const prompt = (match[1] ?? '').trim()
+  if (!prompt) {
+    return null
+  }
+  const branchId = randomUUID().slice(0, 8)
+  const safeUser = canonicalUser.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return {
+    branchId,
+    branchSessionId: `branch-${safeUser}-${branchId}`,
+    prompt,
   }
 }
 

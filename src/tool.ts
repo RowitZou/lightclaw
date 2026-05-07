@@ -4,6 +4,7 @@ import { toJSONSchema } from 'zod/v4'
 import type { Provider } from './provider/types.js'
 import type { PermissionRuleValue, RiskLevel } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
+import type { WakeNotifyResult } from './background-task/types.js'
 import type { UserToolResultBlock } from './types.js'
 
 export type ToolCallContext = {
@@ -11,6 +12,7 @@ export type ToolCallContext = {
   abortSignal: AbortSignal
   runtime: Runtime
   canUseTool?: CanUseToolFn
+  wakeNotifications?: WakeNotifyResult[]
 }
 
 export type CanUseToolDecision =

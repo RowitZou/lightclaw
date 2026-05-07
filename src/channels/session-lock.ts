@@ -18,6 +18,8 @@ export class SessionLock {
   }
 }
 
+export const channelSessionLock = new SessionLock()
+
 export function assertSessionIdShape(sessionId: string): void {
   if (
     sessionId.trim().length === 0 ||

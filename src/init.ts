@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { registerCodexAuthProvider } from './auth/codex/index.js'
 import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
+import { getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
@@ -14,6 +15,7 @@ import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
 import { NetworkBridge } from './runtime/network-bridge.js'
 import { resolveDockerImage } from './runtime/pool.js'
+import { recoverOrphanedBranchPlaceholders } from './session/branch-merge.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
   getImageReadiness,
@@ -104,6 +106,16 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   startImagePrefetchIfNeeded(resolvedConfig)
   const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   initializeAgents()
+  await recoverOrphanedBranchPlaceholders(resolvedConfig.sessionsDir)
+    .then(count => {
+      if (count > 0) {
+        process.stderr.write(`[branch] recovered ${count} orphaned placeholder(s)\n`)
+      }
+    })
+    .catch(error => {
+      process.stderr.write(`[branch] orphan recovery failed: ${String(error)}\n`)
+    })
+  getBackgroundTaskScheduler().start(resolvedConfig)
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)

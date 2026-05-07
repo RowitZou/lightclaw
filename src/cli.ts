@@ -1,6 +1,7 @@
 import { loadChannelConfig } from './channels/config.js'
 import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
+import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
@@ -34,12 +35,18 @@ async function gracefulShutdown(signal: string): Promise<void> {
     return
   }
   shuttingDown = true
-  process.stderr.write(`[lightclaw] received ${signal}, draining memory tasks...\n`)
+  process.stderr.write(`[lightclaw] received ${signal}, draining background work...\n`)
   await drainPendingExtraction(60_000).catch(error => {
     process.stderr.write(`memory extraction drain failed: ${String(error)}\n`)
   })
   await drainPendingDream(60_000).catch(error => {
     process.stderr.write(`auto-dream drain failed: ${String(error)}\n`)
+  })
+  await drainPendingBackgroundTasks(60_000).catch(error => {
+    process.stderr.write(`background task drain failed: ${String(error)}\n`)
+  })
+  await getBackgroundTaskScheduler().stop().catch(error => {
+    process.stderr.write(`background scheduler stop failed: ${String(error)}\n`)
   })
   process.exit(0)
 }
@@ -199,6 +206,9 @@ async function main(): Promise<void> {
       })
     } finally {
       await drainPendingExtraction(60_000)
+      await drainPendingDream(60_000)
+      await drainPendingBackgroundTasks(60_000)
+      await getBackgroundTaskScheduler().stop()
       for (const handle of channelHandles.reverse()) {
         await handle.stop().catch(error => {
           process.stderr.write(`channel stop failed: ${String(error)}\n`)

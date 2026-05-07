@@ -5,6 +5,7 @@ import * as Lark from '@larksuiteoapi/node-sdk'
 import { t } from '../../i18n/index.js'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
+import type { BackgroundTaskCardAction } from './bg-card-coordinator.js'
 import { FeishuDedup } from './dedup.js'
 import type {
   FeishuCardAction,
@@ -55,7 +56,7 @@ export async function startFeishuWsClient(input: {
   dedup: FeishuDedup
   onMessage(message: FeishuRawMessage): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction,
+    action: FeishuCardAction | BackgroundTaskCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -81,7 +82,7 @@ export async function startFeishuWsClient(input: {
       return buildUnsupportedCardActionResponse()
     }
     process.stderr.write(
-      `feishu ws: card action request=${action.requestId} action=${action.action}\n`,
+      `feishu ws: card action request=${'requestId' in action ? action.requestId : action.fireUuid} action=${action.action}\n`,
     )
     return await input.onCardAction?.(action)
   }
@@ -163,7 +164,7 @@ export async function startFeishuWsClient(input: {
   }
 }
 
-function normalizeCardAction(data: unknown): FeishuCardAction | null {
+function normalizeCardAction(data: unknown): FeishuCardAction | BackgroundTaskCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -172,12 +173,10 @@ function normalizeCardAction(data: unknown): FeishuCardAction | null {
   const event = asRecord(record.event)
   const action = asRecord(record.action) ?? asRecord(event?.action)
   const value = parseActionValue(action?.value)
-  if (value?.kind !== 'lightclaw_permission') {
+  if (value?.kind !== 'lightclaw_permission' && value?.kind !== 'lightclaw_bg_task') {
     return null
   }
 
-  const requestId = stringValue(value.requestId)
-  const actionKind = parsePermissionAction(value.action)
   const operator = asRecord(record.operator) ?? asRecord(event?.operator)
   const operatorId = asRecord(operator?.operator_id)
   const user = asRecord(record.user) ?? asRecord(event?.user)
@@ -189,6 +188,27 @@ function normalizeCardAction(data: unknown): FeishuCardAction | null {
     stringValue(operatorId?.open_id) ??
     stringValue(user?.open_id) ??
     stringValue(userId?.open_id)
+
+  if (value.kind === 'lightclaw_bg_task') {
+    const actionKind = value.action === 'retry_now' ? 'retry_now' : null
+    const fireUuid = stringValue(value.fireUuid)
+    const taskId = stringValue(value.taskId)
+    const ownerCanonicalUser = stringValue(value.ownerCanonicalUser)
+    if (!actionKind || !fireUuid || !taskId || !ownerCanonicalUser) {
+      return null
+    }
+    return {
+      kind: 'background_task',
+      action: actionKind,
+      fireUuid,
+      taskId,
+      ownerCanonicalUser,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
+    }
+  }
+
+  const requestId = stringValue(value.requestId)
+  const actionKind = parsePermissionAction(value.action)
 
   if (!requestId || !actionKind || !operatorOpenId) {
     return null

@@ -7,8 +7,15 @@ import type { Channel, ChannelHandle, FeishuChannelConfig, NormalizedChannelMess
 import type { FeishuRawMessage } from './bot-content.js'
 import { createFeishuClient } from './client.js'
 import { FeishuDedup } from './dedup.js'
+import {
+  BackgroundTaskCardCoordinator,
+  clearBackgroundTaskCardCoordinator,
+  registerBackgroundTaskCardCoordinator,
+  type BackgroundTaskCardAction,
+} from './bg-card-coordinator.js'
 import { downloadFeishuMedia } from './media.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
+import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
@@ -55,6 +62,8 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       // push proactive cards. Cleared in stop() so a restart re-registers.
       registerFeishuSender(sender)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
+      const bgCardCoordinator = new BackgroundTaskCardCoordinator(sender)
+      registerBackgroundTaskCardCoordinator(bgCardCoordinator)
       const runner = new ChannelRunner(
         createFeishuStrategy(config, sender, client, permissionCoordinator),
       )
@@ -115,12 +124,18 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           config,
           dedup,
           onMessage,
-          onCardAction: action => permissionCoordinator.handleCardAction(action),
+          onCardAction: action => {
+            if ('kind' in action && action.kind === 'background_task') {
+              return bgCardCoordinator.handleCardAction(action)
+            }
+            return permissionCoordinator.handleCardAction(action as FeishuCardAction)
+          },
         })
         process.stderr.write('feishu: ws client started (long-lived subscription, no public ingress)\n')
         return {
           stop: () => {
             clearFeishuSender(sender)
+            clearBackgroundTaskCardCoordinator(bgCardCoordinator)
             return handle.close()
           },
         }
@@ -136,6 +151,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       return {
         stop: () => {
           clearFeishuSender(sender)
+          clearBackgroundTaskCardCoordinator(bgCardCoordinator)
           return server.close()
         },
       }

@@ -60,6 +60,12 @@ export type ConfigFileShape = {
     scanThrottleMs?: number
     maxTurns?: number
   }
+  backgroundTask?: {
+    maxConcurrentRunsPerUser?: number
+    startupCatchupIntervalMs?: number
+    fireRetryMaxAttempts?: number
+    recurringAutoDisableThreshold?: number
+  }
   memoryDir?: string
   workspaceRoot?: string
   contextWindow?: number
