@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir, networkInterfaces } from 'node:os'
 import path from 'node:path'
 
@@ -255,6 +255,14 @@ export class RuntimePool {
     tracker?: ImageReadinessTracker,
   ): Runtime {
     const workspaceHostPath = path.resolve(workspaceRoot ?? workspaceFor(userId))
+    // Ensure the per-user workspace dir exists before any backend hands the
+    // path to a bind-mount. RlaunchRuntime in particular fails fast at the
+    // kubelet `hostPath type check` (5 min ForceGC, then a fresh failed
+    // worker) when the GPFS dir is missing — the channel runner's
+    // resetSessionContext mkdir doesn't cover preheat-on-approval /
+    // preheat-on-startup / `/sandbox prefetch`, all of which acquire a
+    // runtime without going through that path.
+    mkdirSync(workspaceHostPath, { recursive: true, mode: 0o700 })
     if (config.runtime.backend === 'local') {
       return createRuntime({
         kind: 'local',
