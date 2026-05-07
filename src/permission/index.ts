@@ -11,11 +11,13 @@ import { recordAudit } from './audit.js'
 import { isHighRiskAsk } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { askUserApproval } from './prompt.js'
+import { formatRule } from './rules.js'
 import type {
   PermissionContext,
   PermissionDecision,
   PermissionRuleValue,
 } from './types.js'
+import { matchesUnattendedAllowlist } from './unattended-allowlist.js'
 
 export async function requestPermission(input: {
   tool: Tool
@@ -74,6 +76,19 @@ export async function requestPermission(input: {
         suggestedRules,
         highRisk,
       })
+    } else if (ctx.isBackgroundTask) {
+      if (matchesUnattendedAllowlist(tool, toolInput, ctx.taskAllowedTools)) {
+        decision = { behavior: 'allow' }
+      } else {
+        decision = {
+          behavior: 'deny',
+          reason: [
+            `Permission denied: ${tool.name} not in background-task allowlist.`,
+            `background-task-not-in-allowlist: ${tool.name} requires confirmation in ${mode} mode, but no approver is attached.`,
+            'Add this operation to the task allowed_tools and retry.',
+          ].join(' '),
+        }
+      }
     } else {
       decision = {
         behavior: 'deny',
@@ -90,6 +105,16 @@ export async function requestPermission(input: {
     decision = verdict
   }
 
+  if (decision.behavior === 'deny' && ctx.isBackgroundTask && ctx.onPermissionDenial) {
+    const inputPreview = previewInput(tool.name, toolInput)
+    const suggestedRules = computeSuggestedRules(tool, toolInput).map(formatRule)
+    ctx.onPermissionDenial({
+      toolName: tool.name,
+      inputPreview,
+      suggestedRules,
+    })
+  }
+
   recordAudit({
     path: config.permissionAuditLog,
     toolName: tool.name,
@@ -97,6 +122,7 @@ export async function requestPermission(input: {
     decision,
     mode,
     isSubagent: ctx.isSubagent,
+    isBackgroundTask: ctx.isBackgroundTask,
   })
 
   return decision

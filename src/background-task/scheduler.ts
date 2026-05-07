@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
 import type { LightClawConfig } from '../config.js'
 import { getIdentity } from '../identity/store.js'
+import { isHighRiskRulePattern } from '../permission/high-risk.js'
 import {
   appendFireHistory,
   flushLastFiredAt,
@@ -254,10 +255,16 @@ export class BackgroundTaskScheduler {
 
     const firedAt = new Date().toISOString()
     let autopaused = false
-    if (task.schedule.kind === 'oneshot') {
+    if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
       removeBackgroundTask(canonicalUser, task.id)
     } else {
-      updateLastFiredAt(canonicalUser, task.id, firedAt)
+      if (task.schedule.kind === 'oneshot') {
+        updateBackgroundTask(canonicalUser, task.id, {
+          lastFiredAt: firedAt,
+        })
+      } else {
+        updateLastFiredAt(canonicalUser, task.id, firedAt)
+      }
       appendFireHistory({
         canonicalUser,
         taskId: task.id,
@@ -311,7 +318,13 @@ export class BackgroundTaskScheduler {
       return
     }
 
-    if (task.notifyTo === 'agent') {
+    const denials = outcome.kind === 'failure' ? outcome.permissionDenials : undefined
+    const hasHighRiskDenial = denials?.some(denial =>
+      denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
+    ) ?? false
+    const notifyTo = hasHighRiskDenial ? 'user' : task.notifyTo
+
+    if (notifyTo === 'agent') {
       const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
       const result = await wakeMainAgent({ canonicalUser, task, outcome })
       await deliverWakeNotification({

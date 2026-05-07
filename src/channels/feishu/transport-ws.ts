@@ -190,7 +190,10 @@ function normalizeCardAction(data: unknown): FeishuCardAction | BackgroundTaskCa
     stringValue(userId?.open_id)
 
   if (value.kind === 'lightclaw_bg_task') {
-    const actionKind = value.action === 'retry_now' ? 'retry_now' : null
+    const actionKind =
+      value.action === 'retry_now' || value.action === 'approve_and_retry'
+        ? value.action
+        : null
     const fireUuid = stringValue(value.fireUuid)
     const taskId = stringValue(value.taskId)
     const ownerCanonicalUser = stringValue(value.ownerCanonicalUser)

@@ -16,7 +16,7 @@ import {
   type FireHistoryEntry,
 } from './types.js'
 
-const STORE_VERSION = 1
+const STORE_VERSION = 2
 const FIRE_HISTORY_LIMIT = 20
 
 type LastFiredDirty = {
@@ -49,12 +49,16 @@ export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[
       return []
     }
     const raw = parsed as Partial<BackgroundTaskStoreFile>
-    if (raw.version !== STORE_VERSION || !Array.isArray(raw.tasks)) {
+    if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.tasks)) {
       return []
     }
     const tasks: BackgroundTaskEntry[] = []
     for (const candidate of raw.tasks) {
-      const result = backgroundTaskEntrySchema.safeParse(candidate)
+      const candidateWithMigration =
+        raw.version === 1
+          ? { ...(candidate as object), allowedTools: undefined }
+          : candidate
+      const result = backgroundTaskEntrySchema.safeParse(candidateWithMigration)
       if (result.success) {
         tasks.push(result.data)
       }
@@ -111,6 +115,7 @@ export type BackgroundTaskPatch = Partial<
     | 'lastFiredAt'
     | 'consecutiveFailures'
     | 'fireHistory'
+    | 'allowedTools'
   >
 >
 

@@ -1,3 +1,5 @@
+import type { PermissionDenialDetail } from '../background-task/types.js'
+
 export const PERMISSION_MODES = [
   'default',
   'acceptEdits',
@@ -54,4 +56,7 @@ export type PermissionContext = {
   isSubagent: boolean
   signal?: AbortSignal
   permissionApprover?: PermissionApprover
+  isBackgroundTask?: boolean
+  taskAllowedTools?: string[]
+  onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }

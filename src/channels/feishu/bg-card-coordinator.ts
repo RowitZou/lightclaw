@@ -1,15 +1,21 @@
 import type { PendingCardAction } from '../../background-task/types.js'
+import {
+  getBackgroundTask,
+  updateBackgroundTask,
+} from '../../background-task/store.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
 import type { FeishuSender } from './sender.js'
 import {
+  buildApproveRetryStartedCard,
   buildBackgroundTaskFailureCard,
   buildBackgroundTaskRetryStartedCard,
   buildBackgroundTaskSuccessCard,
+  buildPermissionFailureCard,
 } from './bg-completion-card.js'
 
 export type BackgroundTaskCardAction = {
   kind: 'background_task'
-  action: 'retry_now'
+  action: 'retry_now' | 'approve_and_retry'
   fireUuid: string
   taskId: string
   ownerCanonicalUser: string
@@ -50,7 +56,9 @@ export class BackgroundTaskCardCoordinator {
     }
     const card = pending.outcome.kind === 'success'
       ? buildBackgroundTaskSuccessCard(pending)
-      : buildBackgroundTaskFailureCard(pending)
+      : pending.outcome.permissionDenials?.length
+        ? buildPermissionFailureCard(pending)
+        : buildBackgroundTaskFailureCard(pending)
     await this.sender.sendInteractiveCardToOpenId(pending.ownerOpenId, card)
   }
 
@@ -62,10 +70,51 @@ export class BackgroundTaskCardCoordinator {
       )
       return {}
     }
-    if (action.action !== 'retry_now') {
+    if (action.action === 'approve_and_retry') {
+      return this.handleApproveRetry(pending)
+    }
+    if (action.action === 'retry_now') {
+      this.pendingByFireUuid.delete(action.fireUuid)
+      const { getBackgroundTaskScheduler } = await import('../../background-task/scheduler.js')
+      getBackgroundTaskScheduler().fireImmediate(
+        pending.ownerCanonicalUser,
+        pending.task.id,
+      )
+      return {
+        card: {
+          type: 'raw',
+          data: buildBackgroundTaskRetryStartedCard(pending),
+        },
+      }
+    }
+    return {}
+  }
+
+  private async handleApproveRetry(
+    pending: PendingCardAction,
+  ): Promise<FeishuCardActionResponse> {
+    if (pending.outcome.kind !== 'failure' || !pending.outcome.permissionDenials?.length) {
       return {}
     }
-    this.pendingByFireUuid.delete(action.fireUuid)
+    const approvedRules = unique(
+      pending.outcome.permissionDenials.flatMap(denial => denial.suggestedRules),
+    )
+    if (approvedRules.length === 0) {
+      return {}
+    }
+
+    const old = getBackgroundTask(pending.ownerCanonicalUser, pending.task.id)
+    if (!old) {
+      process.stderr.write(
+        `background-task card: ignored approve_and_retry for missing task ${pending.task.id}\n`,
+      )
+      return {}
+    }
+    const merged = unique([...(old.allowedTools ?? []), ...approvedRules])
+    updateBackgroundTask(pending.ownerCanonicalUser, pending.task.id, {
+      allowedTools: merged,
+    })
+    this.pendingByFireUuid.delete(pending.fireUuid)
     const { getBackgroundTaskScheduler } = await import('../../background-task/scheduler.js')
     getBackgroundTaskScheduler().fireImmediate(
       pending.ownerCanonicalUser,
@@ -74,8 +123,12 @@ export class BackgroundTaskCardCoordinator {
     return {
       card: {
         type: 'raw',
-        data: buildBackgroundTaskRetryStartedCard(pending),
-      },
-    }
+          data: buildApproveRetryStartedCard(pending, approvedRules),
+        },
+      }
   }
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)]
 }

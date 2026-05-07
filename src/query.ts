@@ -52,6 +52,7 @@ import {
   updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
+import { getCurrentSessionContext } from './session-context.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
@@ -780,6 +781,7 @@ async function dispatchToolCall(
       }
     }
 
+    const sessionCtx = getCurrentSessionContext()
     const decision = await requestPermission({
       tool,
       toolInput: effectiveInput,
@@ -788,6 +790,9 @@ async function dispatchToolCall(
         isSubagent: ctx.mode === 'subagent',
         signal: ctx.signal,
         permissionApprover: ctx.permissionApprover,
+        isBackgroundTask: sessionCtx?.isBackgroundTask,
+        taskAllowedTools: sessionCtx?.taskAllowedTools,
+        onPermissionDenial: sessionCtx?.onPermissionDenial,
       },
       rl: ctx.rl,
     })

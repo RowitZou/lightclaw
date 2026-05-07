@@ -21,7 +21,7 @@ import {
   touchMeta,
 } from '../session/storage.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import type { BackgroundTaskEntry, FireOutcome } from './types.js'
+import type { BackgroundTaskEntry, FireOutcome, PermissionDenialDetail } from './types.js'
 
 type QueryFn = typeof query
 let queryImpl: QueryFn = query
@@ -75,6 +75,7 @@ export async function runBackgroundTaskFire(input: {
     const tracker = config.runtime.backend === 'docker' ? getImageReadiness() : undefined
     const runtime = getRuntimePool().acquire(input.task.ownerCanonicalUser, config, cwd, tracker)
     const userMessage = createUserMessage(input.task.prompt)
+    const permissionDenials: PermissionDenialDetail[] = []
     const ctx = createSessionContext({
       cwd,
       model,
@@ -91,6 +92,11 @@ export async function runBackgroundTaskFire(input: {
         localPath: config.permissionRuleFiles.local,
       }),
       identityRules: loadIdentityRules(input.task.ownerCanonicalUser),
+      isBackgroundTask: true,
+      taskAllowedTools: input.task.allowedTools ?? [],
+      onPermissionDenial(detail) {
+        permissionDenials.push(detail)
+      },
     })
 
     const result = await runWithSessionContext(ctx, async () => {
@@ -115,6 +121,16 @@ export async function runBackgroundTaskFire(input: {
       return output
     })
 
+    if (permissionDenials.length > 0) {
+      return {
+        kind: 'failure',
+        reason: 'permission denied',
+        transient: false,
+        attempt: 1,
+        permissionDenials: dedupePermissionDenials(permissionDenials),
+      }
+    }
+
     return {
       kind: 'success',
       summary: result.assistantText || '(background task returned empty text)',
@@ -128,6 +144,22 @@ export async function runBackgroundTaskFire(input: {
       attempt: 1,
     }
   }
+}
+
+function dedupePermissionDenials(
+  denials: PermissionDenialDetail[],
+): PermissionDenialDetail[] {
+  const seen = new Set<string>()
+  const out: PermissionDenialDetail[] = []
+  for (const denial of denials) {
+    const key = `${denial.toolName}\n${denial.inputPreview}\n${denial.suggestedRules.join('\n')}`
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    out.push(denial)
+  }
+  return out
 }
 
 export function createBackgroundTaskCanUseTool(): CanUseToolFn {

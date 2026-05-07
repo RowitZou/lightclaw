@@ -16,6 +16,7 @@
 // suggester returns nothing precise, we re-scan the raw tool input.
 
 import { extractSegmentHead, splitBashCommand } from './bash-parse.js'
+import { parseRule } from './rules.js'
 import type { PermissionAskInput, PermissionRuleValue } from './types.js'
 
 // Bash subcommand heads whose effects are too destructive / privilege-shifting
@@ -74,6 +75,14 @@ export function isHighRiskRule(value: PermissionRuleValue): boolean {
     return isHighRiskPathContent(value.ruleContent)
   }
   return false
+}
+
+export function isHighRiskRulePattern(pattern: string): boolean {
+  try {
+    return isHighRiskRule(parseRule(pattern))
+  } catch {
+    return false
+  }
 }
 
 /**

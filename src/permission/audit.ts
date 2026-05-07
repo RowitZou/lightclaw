@@ -15,6 +15,7 @@ export function recordAudit(input: {
   decision: PermissionDecision
   mode: PermissionMode
   isSubagent: boolean
+  isBackgroundTask?: boolean
   source?: 'permission' | 'hook' | 'feishu'
   hookDecisionBefore?: 'allow' | 'deny'
   hookReason?: string
@@ -36,6 +37,7 @@ export function recordAudit(input: {
       ? formatMatchedRule(input.decision.matchedRule)
       : null,
     isSubagent: input.isSubagent,
+    ...(input.isBackgroundTask !== undefined ? { isBackgroundTask: input.isBackgroundTask } : {}),
   })
 
   try {
