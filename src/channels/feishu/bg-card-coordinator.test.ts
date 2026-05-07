@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import path from 'node:path'
+import { tmpdir } from 'node:os'
 
+import { setLightclawHomeOverride } from '../../paths.js'
+import { addBackgroundTask, loadBackgroundTasks } from '../../background-task/store.js'
 import type { PendingCardAction } from '../../background-task/types.js'
 import { BackgroundTaskCardCoordinator } from './bg-card-coordinator.js'
 import type { FeishuSender } from './sender.js'
+
+let tmpHome: string
+
+beforeEach(() => {
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-bg-card-test-'))
+  setLightclawHomeOverride(tmpHome)
+})
+
+afterEach(() => {
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
+})
 
 describe('BackgroundTaskCardCoordinator', () => {
   it('sends success cards without retaining retry state', async () => {
@@ -39,6 +56,59 @@ describe('BackgroundTaskCardCoordinator', () => {
       ownerCanonicalUser: 'alice',
     })
     assert.equal(typeof retry.card, 'object')
+  })
+
+  it('sends permission failure cards with approve-and-retry state', async () => {
+    const sender = fakeSender()
+    const coord = new BackgroundTaskCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendCompletionCard(fakePending({
+      kind: 'failure',
+      reason: 'permission denied',
+      transient: false,
+      attempt: 1,
+      permissionDenials: [{
+        toolName: 'Bash',
+        inputPreview: 'Command: rsync -av a b',
+        suggestedRules: ['Bash(rsync:*)'],
+      }],
+    }))
+    const text = JSON.stringify(sender.cards[0])
+    assert.match(text, /批准并重试|Approve/)
+    assert.match(text, /Bash\(rsync:\*\)/)
+  })
+
+  it('approve_and_retry merges suggested rules into task.allowedTools', async () => {
+    const sender = fakeSender()
+    const coord = new BackgroundTaskCardCoordinator(sender as unknown as FeishuSender)
+    const pending = fakePending({
+      kind: 'failure',
+      reason: 'permission denied',
+      transient: false,
+      attempt: 1,
+      permissionDenials: [{
+        toolName: 'Bash',
+        inputPreview: 'Command: rm -rf x',
+        suggestedRules: ['Bash(rm:*)', 'Bash(find:*)'],
+      }],
+    })
+    addBackgroundTask('alice', {
+      ...pending.task,
+      allowedTools: ['Bash(find:*)'],
+    })
+    await coord.sendCompletionCard(pending)
+    const response = await coord.handleCardAction({
+      kind: 'background_task',
+      action: 'approve_and_retry',
+      fireUuid: 'fire-1',
+      taskId: 'task-1',
+      ownerCanonicalUser: 'alice',
+    })
+
+    assert.equal(typeof response.card, 'object')
+    assert.deepEqual(loadBackgroundTasks('alice')[0].allowedTools, [
+      'Bash(find:*)',
+      'Bash(rm:*)',
+    ])
   })
 })
 

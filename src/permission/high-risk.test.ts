@@ -6,6 +6,7 @@ import {
   containsHighRiskRule,
   isHighRiskAsk,
   isHighRiskRule,
+  isHighRiskRulePattern,
 } from './high-risk.js'
 import type {
   PermissionAskInput,
@@ -123,6 +124,22 @@ describe('containsHighRiskRule (chained spec)', () => {
 
   it('FALSE for an empty group', () => {
     assert.equal(containsHighRiskRule([]), false)
+  })
+})
+
+describe('isHighRiskRulePattern', () => {
+  it('parses and flags high-risk persisted rule patterns', () => {
+    assert.equal(isHighRiskRulePattern('Bash(rm:*)'), true)
+    assert.equal(isHighRiskRulePattern('Bash(sudo:*)'), true)
+    assert.equal(isHighRiskRulePattern('Bash(mkfs.ext4:*)'), true)
+    assert.equal(isHighRiskRulePattern('Edit(/etc/passwd)'), true)
+  })
+
+  it('returns false for benign or malformed patterns', () => {
+    assert.equal(isHighRiskRulePattern('Bash(rsync:*)'), false)
+    assert.equal(isHighRiskRulePattern('Read(/var/log/app.log)'), false)
+    assert.equal(isHighRiskRulePattern('Edit(/tmp/foo)'), false)
+    assert.equal(isHighRiskRulePattern('Bash[rm]'), false)
   })
 })
 

@@ -51,11 +51,24 @@ export type BackgroundTaskEntry = {
   lastFiredAt?: string
   consecutiveFailures: number
   fireHistory?: FireHistoryEntry[]
+  allowedTools?: string[]
+}
+
+export type PermissionDenialDetail = {
+  toolName: string
+  inputPreview: string
+  suggestedRules: string[]
 }
 
 export type FireOutcome =
   | { kind: 'success'; summary: string; transcriptPath: string }
-  | { kind: 'failure'; reason: string; transient: boolean; attempt: number }
+  | {
+      kind: 'failure'
+      reason: string
+      transient: boolean
+      attempt: number
+      permissionDenials?: PermissionDenialDetail[]
+    }
 
 export type PendingCardAction = {
   fireUuid: string
@@ -72,10 +85,15 @@ export type WakeNotifyResult =
   | { kind: 'silent'; reason?: string }
   | { kind: 'no-decision' }
 
-export type BackgroundTaskStoreFile = {
-  version: 1
-  tasks: BackgroundTaskEntry[]
-}
+export type BackgroundTaskStoreFile =
+  | {
+      version: 1
+      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools'>>
+    }
+  | {
+      version: 2
+      tasks: BackgroundTaskEntry[]
+    }
 
 export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.object({
   id: z.string().min(1),
@@ -94,4 +112,5 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
     summary: z.string(),
     success: z.boolean(),
   })).optional(),
+  allowedTools: z.array(z.string().min(1)).optional(),
 })

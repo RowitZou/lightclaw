@@ -2,17 +2,19 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import {
+  getBackgroundTask,
   addBackgroundTask,
   loadBackgroundTasks,
   removeBackgroundTask,
   updateBackgroundTask,
 } from '../background-task/store.js'
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
-import { notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
+import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import {
   scheduleSpecSchema,
   type BackgroundTaskEntry,
 } from '../background-task/types.js'
+import { parseRule } from '../permission/rules.js'
 import { requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -26,6 +28,21 @@ function normalizeNotifyOn(value: 'success' | 'failure' | 'always' | undefined):
 
 function normalizeNotifyTo(value: 'user' | 'agent' | undefined): 'user' | 'agent' {
   return value ?? 'user'
+}
+
+const allowedToolsSchema = z.array(
+  z.string().min(1).refine(isValidPermissionRulePattern, {
+    message: 'invalid permission rule pattern',
+  }),
+).optional()
+
+function isValidPermissionRulePattern(value: string): boolean {
+  try {
+    const parsed = parseRule(value)
+    return parsed.ruleContent === undefined || parsed.ruleContent.trim().length > 0
+  } catch {
+    return false
+  }
 }
 
 export const backgroundTaskTool = buildTool({
@@ -42,6 +59,11 @@ export const backgroundTaskTool = buildTool({
     "  { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.",
     '',
     "notify_to='user' pushes the result to the user. notify_to='agent' wakes the main agent later so it can decide whether to notify the user.",
+    '',
+    'allowed_tools is optional. It grants this task permission to use specific tools without user approval, using the same pattern syntax as /rules allow.',
+    'Built-in safe tools are already allowed for background fires: Read, Glob, Grep, TodoWrite, MemoryRead, ListBackgroundTasks.',
+    'Any Bash/WebFetch/Edit/Write/MCP operation the task needs should be listed precisely, e.g. Bash(rsync:*), Bash(find:*), WebFetch(api.example.com), Edit(/tmp/**).',
+    'Be conservative; if you miss a needed rule, the task will fail with permission details and the user/main agent can expand allowed_tools later.',
   ].join('\n'),
   domain: 'host',
   riskLevel: 'execute',
@@ -51,6 +73,7 @@ export const backgroundTaskTool = buildTool({
     label: z.string().min(2).max(80),
     notify_on: z.enum(['success', 'failure', 'always']).optional(),
     notify_to: z.enum(['user', 'agent']).optional(),
+    allowed_tools: allowedToolsSchema,
   }),
   async call(input) {
     const userId = requireCurrentUserId()
@@ -89,6 +112,7 @@ export const backgroundTaskTool = buildTool({
       createdAt: now,
       consecutiveFailures: 0,
       fireHistory: [],
+      ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
     }
     addBackgroundTask(userId, entry)
     notifyBackgroundTaskChanged(userId, entry.id)
@@ -123,6 +147,7 @@ export const listBackgroundTasksTool = buildTool({
       notifyOn: task.notifyOn,
       notifyTo: task.notifyTo,
       consecutiveFailures: task.consecutiveFailures,
+      allowedTools: task.allowedTools ?? [],
       ...(input.include_history ? { fireHistory: task.fireHistory ?? [] } : {}),
     }))
     return {
@@ -156,7 +181,7 @@ export const cancelBackgroundTaskTool = buildTool({
 
 export const updateBackgroundTaskTool = buildTool({
   name: 'UpdateBackgroundTask',
-  description: 'Update schedule, label, enabled flag, or notification settings for a background task. Prompt changes are not supported; cancel and create a new task instead.',
+  description: 'Update schedule, label, enabled flag, notification settings, or allowed_tools for a background task. Prompt changes are not supported; cancel and create a new task instead. allowed_tools is a full replacement, not a diff.',
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -166,9 +191,11 @@ export const updateBackgroundTaskTool = buildTool({
     enabled: z.boolean().optional(),
     notify_on: z.enum(['success', 'failure', 'always']).optional(),
     notify_to: z.enum(['user', 'agent']).optional(),
+    allowed_tools: allowedToolsSchema,
   }),
   async call(input) {
     const userId = requireCurrentUserId()
+    const existing = getBackgroundTask(userId, input.id)
     // Normalize 'after' shorthand to 'oneshot' on update too — same reason
     // as in BackgroundTask spawn: store stays at oneshot/recurring/interval.
     let schedule = input.schedule
@@ -191,6 +218,7 @@ export const updateBackgroundTaskTool = buildTool({
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.notify_on ? { notifyOn: input.notify_on } : {}),
       ...(input.notify_to ? { notifyTo: input.notify_to } : {}),
+      ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
     })
     notifyBackgroundTaskChanged(userId, input.id)
     if (!updated) {
@@ -199,10 +227,20 @@ export const updateBackgroundTaskTool = buildTool({
         isError: true,
       }
     }
+    const shouldRetryOneshot =
+      input.allowed_tools !== undefined &&
+      existing?.schedule.kind === 'oneshot' &&
+      existing.lastFiredAt !== undefined
+    if (shouldRetryOneshot) {
+      getBackgroundTaskScheduler().fireImmediate(userId, input.id)
+    }
     return {
       output: [
         `Updated background task ${updated.id} (${updated.label}).`,
         `Next run: ${describeNextRun(computeTaskNextRunAt(updated))}`,
+        ...(shouldRetryOneshot
+          ? ['Triggered immediate retry because this oneshot task already fired.']
+          : []),
       ].join('\n'),
     }
   },

@@ -109,9 +109,19 @@ export async function wakeMainAgent(input: {
         permissionMode,
         userId: input.canonicalUser,
       })
-      return wakeNotifications.find(item => item.kind === 'notify') ??
+      const decision = wakeNotifications.find(item => item.kind === 'notify') ??
         wakeNotifications.find(item => item.kind === 'silent') ??
         { kind: 'no-decision' }
+      if (
+        input.outcome.kind === 'failure' &&
+        input.outcome.permissionDenials?.length &&
+        decision.kind !== 'notify'
+      ) {
+        process.stderr.write(
+          `[background-task] wake ended without user notification for permission_denied task ${input.task.id}; task may remain broken if allowedTools was not updated\n`,
+        )
+      }
+      return decision
     })
   })
 }
@@ -135,10 +145,37 @@ export async function deliverWakeNotification(input: {
   )
 }
 
-function buildWakePrompt(task: BackgroundTaskEntry, outcome: FireOutcome): string {
+export function buildWakePrompt(task: BackgroundTaskEntry, outcome: FireOutcome): string {
   const resultText = outcome.kind === 'success'
     ? outcome.summary
     : `FAILED: ${outcome.reason}`
+  if (outcome.kind === 'failure' && outcome.permissionDenials?.length) {
+    return [
+      '<background-task-fire>',
+      `<label>${task.label}</label>`,
+      `<task-id>${task.id}</task-id>`,
+      '<outcome-kind>permission_denied</outcome-kind>',
+      '<denials>',
+      ...outcome.permissionDenials.flatMap(denial => [
+        '  <denial>',
+        `    <tool>${denial.toolName}</tool>`,
+        `    <input>${denial.inputPreview}</input>`,
+        `    <suggested>${denial.suggestedRules.join(', ')}</suggested>`,
+        '  </denial>',
+      ]),
+      '</denials>',
+      '</background-task-fire>',
+      '',
+      'This BackgroundTask fire was denied because the listed tools are not in the task allowed_tools.',
+      'Decide now:',
+      `  (a) If the suggested rules fit the task purpose, call UpdateBackgroundTask({ id: '${task.id}', allowed_tools: [the merged full list] }). For a oneshot that already fired, this will trigger an immediate retry. Then call stay_silent({reason}).`,
+      `  (b) If the task is wrong or runaway, call CancelBackgroundTask({ id: '${task.id}' }) and notify_user({text}) with a brief explanation.`,
+      '  (c) If the suggested rules look unrelated or suspicious, call notify_user({text}) and explain what you saw.',
+      '',
+      'If you call stay_silent without updating allowed_tools, the task remains broken and will likely fail again.',
+      'High-risk patterns such as rm/dd/sudo are routed directly to the user approval card and should not appear in this wake.',
+    ].join('\n')
+  }
   return [
     '<background-task-fire>',
     `<label>${task.label}</label>`,

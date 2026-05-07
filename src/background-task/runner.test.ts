@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
+import { requireSessionContext } from '../session-context.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 import {
@@ -106,6 +107,71 @@ describe('runBackgroundTaskFire', () => {
     if (outcome.kind === 'success') {
       assert.equal(outcome.summary, 'experiment loss is 2.1, training stable')
       assert.match(outcome.transcriptPath, /transcript\.jsonl$/)
+    }
+  })
+
+  it('marks the inner SessionContext as background task and passes task allowedTools', async () => {
+    let observed = { isBackgroundTask: false as boolean | undefined, allowedTools: undefined as string[] | undefined }
+    setBackgroundTaskQueryForTest(async () => {
+      const ctx = requireSessionContext()
+      observed = {
+        isBackgroundTask: ctx.isBackgroundTask,
+        allowedTools: ctx.taskAllowedTools,
+      }
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({
+        id: 'alice-task1',
+        ownerCanonicalUser: 'alice',
+        allowedTools: ['Bash(rsync:*)'],
+      }),
+      fireUuid: 'fire-allowed',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(observed.isBackgroundTask, true)
+    assert.deepEqual(observed.allowedTools, ['Bash(rsync:*)'])
+  })
+
+  it('turns collected permission denials into a failure outcome', async () => {
+    setBackgroundTaskQueryForTest(async () => {
+      requireSessionContext().onPermissionDenial?.({
+        toolName: 'Bash',
+        inputPreview: 'Command: rm -rf x',
+        suggestedRules: ['Bash(rm:*)'],
+      })
+      return {
+        messages: [],
+        assistantText: 'I could not run it.',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    const outcome = await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-denied',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'failure')
+    if (outcome.kind === 'failure') {
+      assert.equal(outcome.transient, false)
+      assert.equal(outcome.reason, 'permission denied')
+      assert.deepEqual(outcome.permissionDenials, [{
+        toolName: 'Bash',
+        inputPreview: 'Command: rm -rf x',
+        suggestedRules: ['Bash(rm:*)'],
+      }])
     }
   })
 

@@ -89,26 +89,43 @@ describe('BackgroundTask tools', () => {
       schedule: { kind: 'interval', everyMinutes: 60 },
       label: 'Workspace check',
       notify_to: 'agent',
+      allowed_tools: ['Bash(find:*)'],
     }, fakeContext()))
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
     assert.equal(task.label, 'Workspace check')
     assert.equal(task.notifyTo, 'agent')
+    assert.deepEqual(task.allowedTools, ['Bash(find:*)'])
 
     const updated = await withUser(async () => updateBackgroundTaskTool.call({
       id: task.id,
       enabled: false,
       label: 'Paused check',
+      allowed_tools: ['Bash(rsync:*)', 'WebFetch(api.example.com)'],
     }, fakeContext()))
     assert.equal(updated.isError, undefined)
     assert.equal(loadBackgroundTasks('alice')[0].enabled, false)
     assert.equal(loadBackgroundTasks('alice')[0].label, 'Paused check')
+    assert.deepEqual(loadBackgroundTasks('alice')[0].allowedTools, [
+      'Bash(rsync:*)',
+      'WebFetch(api.example.com)',
+    ])
 
     const cancelled = await withUser(async () => cancelBackgroundTaskTool.call({
       id: task.id,
     }, fakeContext()))
     assert.equal(cancelled.isError, undefined)
     assert.deepEqual(loadBackgroundTasks('alice'), [])
+  })
+
+  it('rejects malformed allowed_tools patterns during input validation', () => {
+    const parsed = backgroundTaskTool.inputSchema?.safeParse({
+      prompt: 'check the workspace and summarize anything important',
+      schedule: { kind: 'interval', everyMinutes: 60 },
+      label: 'Bad rules',
+      allowed_tools: ['Bash[rsync]'],
+    })
+    assert.equal(parsed?.success, false)
   })
 })
 

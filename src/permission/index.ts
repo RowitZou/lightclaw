@@ -11,11 +11,13 @@ import { recordAudit } from './audit.js'
 import { isHighRiskAsk } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { askUserApproval } from './prompt.js'
+import { formatRule } from './rules.js'
 import type {
   PermissionContext,
   PermissionDecision,
   PermissionRuleValue,
 } from './types.js'
+import { matchesUnattendedAllowlist } from './unattended-allowlist.js'
 
 export async function requestPermission(input: {
   tool: Tool
@@ -74,6 +76,30 @@ export async function requestPermission(input: {
         suggestedRules,
         highRisk,
       })
+    } else if (ctx.isBackgroundTask) {
+      if (matchesUnattendedAllowlist(tool, toolInput, ctx.taskAllowedTools)) {
+        decision = { behavior: 'allow' }
+      } else {
+        decision = {
+          behavior: 'deny',
+          reason: [
+            `Permission denied: ${tool.name} not in background-task allowlist.`,
+            `background-task-not-in-allowlist: ${tool.name} requires confirmation in ${mode} mode, but no approver is attached.`,
+            'Add this operation to the task allowed_tools and retry.',
+          ].join(' '),
+        }
+        // Only the ask→fallback-deny path is repairable by adding the suggested
+        // rule to task.allowedTools. Identity deny rules (verdict.behavior ===
+        // 'deny' below) are NOT repairable that way — task.allowedTools is
+        // outranked by deny rules in evaluatePermission, so surfacing those
+        // denials would loop the user through approve→retry→deny indefinitely.
+        // Keep the callback strictly to "verdict was ask, allowlist denied".
+        ctx.onPermissionDenial?.({
+          toolName: tool.name,
+          inputPreview,
+          suggestedRules: suggestedRules.map(formatRule),
+        })
+      }
     } else {
       decision = {
         behavior: 'deny',
@@ -97,6 +123,7 @@ export async function requestPermission(input: {
     decision,
     mode,
     isSubagent: ctx.isSubagent,
+    isBackgroundTask: ctx.isBackgroundTask,
   })
 
   return decision

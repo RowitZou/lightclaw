@@ -2,6 +2,7 @@ import { URL } from 'node:url'
 import path from 'node:path'
 
 import { expandHomePath } from '../paths.js'
+import { splitBashCommand } from './bash-parse.js'
 
 export function matchString(pattern: string, value: string): boolean {
   if (pattern.endsWith(':*')) {
@@ -12,17 +13,31 @@ export function matchString(pattern: string, value: string): boolean {
   return pattern === value
 }
 
+// Split chained commands on `;` / `&&` / `||` / `|` / `&` (top-level only,
+// quote-and-paren-aware via splitBashCommand) and match if ANY segment hits
+// the pattern. This is the same semantics that high-risk.ts:isHighRiskAsk
+// uses — `cd /tmp && rm -rf foo` should match `Bash(rm:*)` for both deny
+// rules (security) and allow rules (consistent with user intent: writing
+// `Bash(grep:*) allow` should cover `grep foo | wc` too).
 export function matchBashCommand(pattern: string, command: string): boolean {
   const trimmed = command.trim()
   if (!trimmed) {
     return false
   }
 
-  if (matchString(pattern, trimmed)) {
+  // splitBashCommand may return [] on inputs it can't make sense of (mid-quote
+  // garbage, etc); fall back to whole-command matching in that case.
+  const segments = splitBashCommand(trimmed).map(s => s.trim()).filter(Boolean)
+  const candidates = segments.length > 0 ? segments : [trimmed]
+  return candidates.some(seg => matchSingleBashSegment(pattern, seg))
+}
+
+function matchSingleBashSegment(pattern: string, segment: string): boolean {
+  if (matchString(pattern, segment)) {
     return true
   }
 
-  const tokens = trimmed.split(/\s+/)
+  const tokens = segment.split(/\s+/)
   if (tokens.length >= 2 && matchString(pattern, `${tokens[0]} ${tokens[1]}`)) {
     return true
   }

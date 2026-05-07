@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
 import type { LightClawConfig } from '../config.js'
 import { getIdentity } from '../identity/store.js'
+import { isHighRiskRulePattern } from '../permission/high-risk.js'
 import {
   appendFireHistory,
   flushLastFiredAt,
@@ -29,6 +30,31 @@ type QueueItem = {
 }
 
 const RETRY_BASE_MS = 2000
+
+/**
+ * Effective delivery target for a completed fire. High-risk permission denials
+ * are FORCED to the user permission-failure card (regardless of task.notifyTo
+ * === 'agent'); the wake path never sees high-risk patterns. This is the
+ * Phase 23 safety invariant — surfacing high-risk rules to a human approval
+ * card is safer than letting the main agent self-update task.allowedTools in
+ * wake mode.
+ */
+export function resolveEffectiveNotifyTo(
+  outcome: FireOutcome,
+  taskNotifyTo: 'user' | 'agent',
+): 'user' | 'agent' {
+  if (outcome.kind !== 'failure') {
+    return taskNotifyTo
+  }
+  const denials = outcome.permissionDenials
+  if (!denials || denials.length === 0) {
+    return taskNotifyTo
+  }
+  const hasHighRisk = denials.some(denial =>
+    denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
+  )
+  return hasHighRisk ? 'user' : taskNotifyTo
+}
 
 export class BackgroundTaskScheduler {
   private readonly heapByUser = new Map<string, HeapItem[]>()
@@ -254,10 +280,16 @@ export class BackgroundTaskScheduler {
 
     const firedAt = new Date().toISOString()
     let autopaused = false
-    if (task.schedule.kind === 'oneshot') {
+    if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
       removeBackgroundTask(canonicalUser, task.id)
     } else {
-      updateLastFiredAt(canonicalUser, task.id, firedAt)
+      if (task.schedule.kind === 'oneshot') {
+        updateBackgroundTask(canonicalUser, task.id, {
+          lastFiredAt: firedAt,
+        })
+      } else {
+        updateLastFiredAt(canonicalUser, task.id, firedAt)
+      }
       appendFireHistory({
         canonicalUser,
         taskId: task.id,
@@ -311,7 +343,9 @@ export class BackgroundTaskScheduler {
       return
     }
 
-    if (task.notifyTo === 'agent') {
+    const notifyTo = resolveEffectiveNotifyTo(outcome, task.notifyTo)
+
+    if (notifyTo === 'agent') {
       const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
       const result = await wakeMainAgent({ canonicalUser, task, outcome })
       await deliverWakeNotification({

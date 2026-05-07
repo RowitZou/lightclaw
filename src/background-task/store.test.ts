@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -44,10 +44,28 @@ describe('background-task store', () => {
   })
 
   it('saves and loads tasks atomically', () => {
-    const task = fakeTask('alice', 'task-1')
+    const task = { ...fakeTask('alice', 'task-1'), allowedTools: ['Bash(rsync:*)'] }
     saveBackgroundTasks('alice', [task])
     assert.deepEqual(loadBackgroundTasks('alice'), [task])
     assert.ok(existsSync(backgroundTaskStorePath('alice')))
+  })
+
+  it('lazy-migrates v1 stores without allowedTools and saves back as v2', () => {
+    const target = backgroundTaskStorePath('alice')
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, JSON.stringify({
+      version: 1,
+      tasks: [fakeTask('alice', 'task-1')],
+    }), 'utf8')
+
+    const loaded = loadBackgroundTasks('alice')
+    assert.equal(loaded.length, 1)
+    assert.equal(loaded[0].allowedTools, undefined)
+
+    saveBackgroundTasks('alice', [{ ...loaded[0], allowedTools: ['Bash(find:*)'] }])
+    const raw = JSON.parse(readFileSync(target, 'utf8'))
+    assert.equal(raw.version, 2)
+    assert.deepEqual(raw.tasks[0].allowedTools, ['Bash(find:*)'])
   })
 
   it('adds multiple tasks without replacing unrelated entries', () => {

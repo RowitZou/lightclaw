@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { PermissionApprover, PermissionMode, PermissionRule } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
+import type { PermissionDenialDetail } from './background-task/types.js'
 import type { TodoItem, UsageStats } from './types.js'
 
 export type ChannelFileSendInput = {
@@ -44,6 +45,9 @@ export type SessionContext = {
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
   runtime?: Runtime
+  isBackgroundTask?: boolean
+  taskAllowedTools?: string[]
+  onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }
 
 export const sessionContextStorage = new AsyncLocalStorage<SessionContext>()
@@ -102,6 +106,9 @@ export function createSessionContext(input: {
   permissionApprover?: PermissionApprover | null
   channelFileSender?: ChannelFileSender | null
   runtime?: Runtime
+  isBackgroundTask?: boolean
+  taskAllowedTools?: string[]
+  onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }): SessionContext {
   return {
     sessionId: input.sessionId ?? randomUUID(),
@@ -126,6 +133,9 @@ export function createSessionContext(input: {
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     runtime: input.runtime,
+    isBackgroundTask: input.isBackgroundTask,
+    taskAllowedTools: input.taskAllowedTools,
+    onPermissionDenial: input.onPermissionDenial,
   }
 }
 
