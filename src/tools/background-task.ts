@@ -34,6 +34,13 @@ export const backgroundTaskTool = buildTool({
     'Schedule a task to run at a future time, once or repeatedly. Returns immediately.',
     'Use this for reminders, periodic scans, scheduled checks, and monitoring.',
     'Do not use this for work the user is waiting on now; use AgentTool for immediate parallel work that must return to the current turn.',
+    '',
+    'Schedule shapes:',
+    "  { kind: 'oneshot', at: <ISO8601 absolute time> } — fire once at a specific time.",
+    "  { kind: 'after', afterMinutes: <number> } — fire ONCE after N minutes from now. Use this for short tests / reminders like \"1 minute test\" or \"remind me in 5 minutes\". This is NOT recurring — pick interval if you actually want repetition. afterMinutes accepts fractional values (0.5 = 30 seconds).",
+    "  { kind: 'recurring', daysOfWeek: [0..6], hour, minute } — weekly schedule.",
+    "  { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.",
+    '',
     "notify_to='user' pushes the result to the user. notify_to='agent' wakes the main agent later so it can decide whether to notify the user.",
   ].join('\n'),
   domain: 'host',
@@ -47,8 +54,17 @@ export const backgroundTaskTool = buildTool({
   }),
   async call(input) {
     const userId = requireCurrentUserId()
-    if (input.schedule.kind === 'oneshot') {
-      const at = new Date(input.schedule.at)
+    // Normalize 'after' shorthand to 'oneshot' so the on-disk store shape
+    // and downstream schedule-calc only ever see {oneshot, recurring,
+    // interval}. Computed at spawn time = "now + afterMinutes", baked
+    // into ISO8601, never re-evaluated.
+    let schedule: typeof input.schedule = input.schedule
+    if (schedule.kind === 'after') {
+      const at = new Date(Date.now() + schedule.afterMinutes * 60_000).toISOString()
+      schedule = { kind: 'oneshot', at }
+    }
+    if (schedule.kind === 'oneshot') {
+      const at = new Date(schedule.at)
       if (!Number.isFinite(at.getTime())) {
         return { output: 'Invalid oneshot schedule time.', isError: true }
       }
@@ -65,7 +81,7 @@ export const backgroundTaskTool = buildTool({
       id: `${userId}-${shortId()}`,
       ownerCanonicalUser: userId,
       prompt: input.prompt,
-      schedule: input.schedule,
+      schedule,
       label: input.label,
       notifyOn: normalizeNotifyOn(input.notify_on),
       notifyTo: normalizeNotifyTo(input.notify_to),
@@ -153,8 +169,24 @@ export const updateBackgroundTaskTool = buildTool({
   }),
   async call(input) {
     const userId = requireCurrentUserId()
+    // Normalize 'after' shorthand to 'oneshot' on update too — same reason
+    // as in BackgroundTask spawn: store stays at oneshot/recurring/interval.
+    let schedule = input.schedule
+    if (schedule?.kind === 'after') {
+      const at = new Date(Date.now() + schedule.afterMinutes * 60_000).toISOString()
+      schedule = { kind: 'oneshot', at }
+    }
+    if (schedule?.kind === 'oneshot') {
+      const at = new Date(schedule.at)
+      if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) {
+        return {
+          output: 'BackgroundTask oneshot time must be in the future.',
+          isError: true,
+        }
+      }
+    }
     const updated = updateBackgroundTask(userId, input.id, {
-      ...(input.schedule ? { schedule: input.schedule } : {}),
+      ...(schedule ? { schedule } : {}),
       ...(input.label ? { label: input.label } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.notify_on ? { notifyOn: input.notify_on } : {}),

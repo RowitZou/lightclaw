@@ -36,6 +36,53 @@ describe('BackgroundTask tools', () => {
     assert.match(result.output, /future/)
   })
 
+  it("normalizes { kind: 'after', afterMinutes } to { kind: 'oneshot', at } at spawn time", async () => {
+    const before = Date.now()
+    const result = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'simple smoke test that fires once after a short delay',
+      schedule: { kind: 'after', afterMinutes: 1 },
+      label: '1-minute test',
+    }, fakeContext()))
+    const after = Date.now()
+    assert.equal(result.isError, undefined)
+
+    const [task] = loadBackgroundTasks('alice')
+    assert.equal(task.label, '1-minute test')
+    // Stored shape is oneshot — 'after' is purely an input-side shorthand.
+    assert.equal(task.schedule.kind, 'oneshot')
+    if (task.schedule.kind === 'oneshot') {
+      const scheduledAt = new Date(task.schedule.at).getTime()
+      // Should be roughly now + 60s, give or take a few seconds for CI jitter.
+      assert.ok(
+        scheduledAt >= before + 60_000 - 1_000,
+        `expected scheduledAt >= now+59s, got ${scheduledAt - before}ms`,
+      )
+      assert.ok(
+        scheduledAt <= after + 60_000 + 1_000,
+        `expected scheduledAt <= now+61s, got ${scheduledAt - after}ms`,
+      )
+    }
+  })
+
+  it('accepts fractional afterMinutes for sub-minute test fires', async () => {
+    const before = Date.now()
+    const result = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'half-minute fire to verify fractional afterMinutes works',
+      schedule: { kind: 'after', afterMinutes: 0.5 },
+      label: '30s fire',
+    }, fakeContext()))
+    assert.equal(result.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+    assert.equal(task.schedule.kind, 'oneshot')
+    if (task.schedule.kind === 'oneshot') {
+      const scheduledAt = new Date(task.schedule.at).getTime()
+      assert.ok(
+        scheduledAt >= before + 30_000 - 1_000 && scheduledAt <= before + 30_000 + 2_000,
+        `expected scheduledAt ≈ now+30s, got delta ${scheduledAt - before}ms`,
+      )
+    }
+  })
+
   it('creates, updates, and cancels a task for the current user', async () => {
     const created = await withUser(async () => backgroundTaskTool.call({
       prompt: 'check the workspace and summarize anything important',
