@@ -112,3 +112,96 @@ describe('evaluatePermission — acceptEdits WebFetch exception', () => {
     assert.equal(r.behavior, 'deny')
   })
 })
+
+// Phase 23 Iter 0: matchBashCommand chained-command coverage. Before this
+// change, deny rules like Bash(rm:*) did not match `cd /tmp && rm -rf foo`
+// — only the trimmed command's first 1-2 tokens were checked, so a
+// leading `cd` (or any harmless prefix command) silently let `rm` slip
+// past. Pattern matching now splits on `;`/`&&`/`||`/`|`/`&` and tests
+// each segment; ANY segment matching the pattern is enough. This is the
+// same semantics high-risk.ts already used for chained-command high-risk
+// classification.
+describe('evaluatePermission — chained Bash command segment matching', () => {
+  const denyRm: PermissionRule = {
+    source: 'user',
+    behavior: 'deny',
+    value: { toolName: 'Bash', ruleContent: 'rm:*' },
+  }
+  const denyCurl: PermissionRule = {
+    source: 'user',
+    behavior: 'deny',
+    value: { toolName: 'Bash', ruleContent: 'curl:*' },
+  }
+  const allowGrep: PermissionRule = {
+    source: 'user',
+    behavior: 'allow',
+    value: { toolName: 'Bash', ruleContent: 'grep:*' },
+  }
+
+  it('deny Bash(rm:*) catches the rm in a `cd && rm` chain', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'cd /tmp && rm -rf foo' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [denyRm],
+    })
+    assert.equal(r.behavior, 'deny')
+  })
+
+  it('deny Bash(rm:*) still catches a bare rm (single-segment regression)', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'rm -rf foo' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [denyRm],
+    })
+    assert.equal(r.behavior, 'deny')
+  })
+
+  it('deny Bash(rm:*) does NOT catch a quoted "rm" inside echo (rm not at command head)', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'echo "rm is dangerous" > note.txt' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [denyRm],
+    })
+    // No deny match: only echo is at the segment head.
+    assert.notEqual(r.behavior, 'deny')
+  })
+
+  it('deny Bash(curl:*) catches curl piped into jq', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'curl https://api.example.com | jq .' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [denyCurl],
+    })
+    assert.equal(r.behavior, 'deny')
+  })
+
+  it('deny Bash(curl:*) catches curl after a semicolon-separated prelude', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'echo starting; curl https://api.example.com' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [denyCurl],
+    })
+    assert.equal(r.behavior, 'deny')
+  })
+
+  it('allow Bash(grep:*) covers grep piped into wc (any-segment match symmetric for allow)', async () => {
+    const r = await evaluateInContext({
+      toolName: 'Bash',
+      input: { command: 'grep foo bar.txt | wc -l' },
+      riskLevel: 'execute',
+      mode: 'default',
+      rules: [allowGrep],
+    })
+    assert.equal(r.behavior, 'allow')
+  })
+})
