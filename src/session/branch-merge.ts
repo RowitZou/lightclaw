@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 
+import { t } from '../i18n/index.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
 import type {
   BranchPlaceholderMeta,
@@ -146,15 +147,18 @@ export async function recoverOrphanedBranchPlaceholders(
 
 function branchPlaceholderText(meta: BranchPlaceholderMeta, reason?: string): string {
   if (meta.status === 'running') {
-    return `[branch #${meta.branchId} running...]`
+    return t('branch.placeholder.running', { id: meta.branchId })
   }
   if (meta.status === 'failed') {
-    return `[branch #${meta.branchId} failed: ${reason ?? 'unknown error'}]`
+    return t('branch.placeholder.failed', {
+      id: meta.branchId,
+      reason: reason ?? t('bg.card.failure.unknownReason'),
+    })
   }
   if (meta.status === 'interrupted') {
-    return `[branch #${meta.branchId} interrupted before completion]`
+    return t('branch.placeholder.interrupted', { id: meta.branchId })
   }
-  return `[branch #${meta.branchId} completed]`
+  return t('branch.placeholder.completed', { id: meta.branchId })
 }
 
 function lastUuid(messages: Message[]): string | null {
