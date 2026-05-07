@@ -44,6 +44,7 @@ import {
   getModel,
   getPermissionMode,
   getRuntime,
+  getRuntimePool,
   getSessionId,
   getTodos,
 } from '../state.js'
@@ -260,8 +261,22 @@ export class ChannelRunner {
           })
         }
 
+        // Branch spawn pair (user `/b X` + assistant placeholder) MUST land
+        // on the main transcript at a between-turn boundary — interleaving
+        // mid-turn would split a tool_use from its tool_result and break
+        // the Anthropic API protocol on the next replay. `appendBranchSpawnPair`
+        // re-acquires the main session lock to enforce that boundary.
+        //
+        // We do NOT await it here. Awaiting would block the branch query
+        // behind the very main turn the user just side-stepped — exactly
+        // the symptom /branch is meant to avoid. Instead the write is
+        // queued FIFO behind any in-flight main turn, the branch query
+        // runs in parallel, and the merge-back path below awaits this
+        // promise before its own rewriteTranscript so the placeholder
+        // is in place when merge-back tries to find it by branchId.
+        let spawnPairPromise: Promise<void> | undefined
         if (branchRequest) {
-          await appendBranchSpawnPair({
+          spawnPairPromise = appendBranchSpawnPair({
             mainSessionId,
             userQuery: branchRequest.prompt,
             meta: {
@@ -270,6 +285,11 @@ export class ChannelRunner {
               status: 'running',
               startedAt: new Date().toISOString(),
             },
+          }).catch(error => {
+            const detail = error instanceof Error ? error.message : String(error)
+            process.stderr.write(
+              `branch ${branchRequest!.branchId} spawn-pair write failed: ${detail}\n`,
+            )
           })
         }
 
@@ -417,6 +437,12 @@ export class ChannelRunner {
             // formatQueryFailure (which already truncates and avoids
             // dumping raw provider error envelopes).
             if (branchRequest) {
+              // Wait for the deferred spawn-pair write to land first so the
+              // placeholder is on disk by the time merge-back searches for it
+              // by branchId. Both go through channelSessionLock(mainSessionId)
+              // FIFO, so this awaits at most until the main turn (if any in
+              // flight when /b arrived) finishes and the spawn pair settles.
+              await spawnPairPromise
               await mergeBranchResultBack({
                 mainSessionId,
                 branchId: branchRequest.branchId,
@@ -454,6 +480,12 @@ export class ChannelRunner {
 
         await persistMeta(Date.now(), result.messages.length)
         if (branchRequest) {
+          // See the failure-path comment above: the deferred spawn-pair
+          // write is FIFO-ordered ahead of merge-back on the same lock,
+          // but we still await its promise so any error path that resolved
+          // out-of-band (e.g. rejected promise turned into a stderr log)
+          // is settled before we try to find the placeholder.
+          await spawnPairPromise
           await mergeBranchResultBack({
             mainSessionId,
             branchId: branchRequest.branchId,
@@ -516,6 +548,24 @@ export class ChannelRunner {
     const cwd = workspaceFor(userId)
     const sessionId = this.strategy.resolveSessionId(message, userId)
     assertSessionIdShape(sessionId)
+    // /sandbox status is the only read-fast-path slash that touches a live
+    // Runtime (workerSnapshot / isAvailable probe). Acquire from the per-
+    // canonical pool unconditionally for /sandbox text — pool.acquire is
+    // a Map lookup if the user already has a runtime, otherwise creates one
+    // (heavyweight on first call but acceptable since /sandbox is admin
+    // diagnostics, not a hot-path user command). Other read slashes don't
+    // need a runtime; the resulting `ctx.runtime` is undefined and any
+    // accidental getRuntime() call would throw — which is what we want.
+    const sandboxNeedsRuntime = /^\/sandbox(?:\s|$)/.test(message.text.trimStart())
+    const sandboxRuntime = sandboxNeedsRuntime
+      ? getRuntimePool().acquire(
+          userId,
+          config,
+          cwd,
+          config.runtime.backend === 'docker' ? getImageReadiness() : undefined,
+        )
+      : undefined
+
     const ctx = createSessionContext({
       cwd,
       model: prefs.model ?? config.model,
@@ -531,18 +581,25 @@ export class ChannelRunner {
         projectPath: config.permissionRuleFiles.project,
         localPath: config.permissionRuleFiles.local,
       }),
+      runtime: sandboxRuntime,
     })
 
     const provider = getProvider(config)
     const tools = getEnabledTools(provider, getAllTools())
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
+    // Load transcript from disk so /status (and any other read slash that
+    // wants ctx.messages.length) sees the persisted message count instead
+    // of 0. Catches ENOENT for fresh users — empty array is fine.
+    const messagesOnDisk = await loadTranscript(sessionId).catch(() => [])
+    const meta = await loadMeta(sessionId).catch(() => null)
+    const createdAt = meta?.createdAt ?? Date.now()
     const result = await runWithSessionContext(ctx, () =>
       dispatchChannelSlash(message.text, {
         config,
         sessionId,
-        createdAt: Date.now(),
-        messages: [],
+        createdAt,
+        messages: messagesOnDisk,
         userId,
         isAdmin: adminFlag,
         getActiveTools: () => activeTools,
@@ -705,12 +762,13 @@ function parseFreshRequest(text: string): boolean {
  * Returns:
  * - 'stop': /stop — must abort the in-flight turn synchronously, before
  *   the lock can serialize this message behind that same turn.
- * - 'read': read-only slashes whose handlers only consult disk-resident
- *   state (identity rules / preferences / cost ledger / identity store).
- *   Excluded on purpose: /status, /sandbox status — they want live in-
- *   memory state (token usage, runtime), so a fresh-context fast path
- *   would lie. Those queue behind the lock so they see the live snapshot
- *   once the in-flight turn finishes.
+ * - 'read': read-only slashes whose handlers consult only disk-resident
+ *   state (identity rules / preferences / cost ledger / transcript meta /
+ *   identity store). The fast path loads `messages` from disk so message
+ *   counts and other transcript-derived fields stay accurate; live
+ *   in-flight per-turn counters (current `totalInputTokens`) read 0,
+ *   which is correct semantics for "between turns" pre-lock view.
+ *   Excluded on purpose: /sandbox status (wants live runtime state).
  * - null: not eligible — proceed to the lock path.
  */
 export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
@@ -726,7 +784,11 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
     return 'stop'
   }
   // Always-read entries: handler does not depend on which sub-arg is given.
-  if (head === '/help') {
+  // /status's persisted view (msgs from disk transcript, mode/model from
+  // identity prefs, sessionId from main-canonical) is sufficient for the
+  // user-visible information; the in-flight turn's running token total is
+  // not surfaced and 0 is honest semantics for "before this turn started".
+  if (head === '/help' || head === '/status') {
     return 'read'
   }
   // No-arg read variants: with arguments these slashes mutate state and
@@ -753,6 +815,21 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
     head === '/user' &&
     (argText === '' || /^(list|pending|feedback)(?:\s|$)/.test(argText))
   ) {
+    return 'read'
+  }
+  // /sandbox status reads runtime / image-readiness state. The handler
+  // calls runtime.workerSnapshot() / runtime.isAvailable() which need an
+  // active Runtime in ctx — runReadSlashFastPath acquires one from the
+  // per-canonical pool for /sandbox specifically. Other /sandbox actions
+  // (prefetch / reset) write state and stay in the lock.
+  if (head === '/sandbox' && (argText === '' || /^status(?:\s|$)/.test(argText))) {
+    return 'read'
+  }
+  // /feedback writes to feedback.jsonl on disk — a completely separate
+  // path from the channel session transcript. No live in-memory state,
+  // no LLM call, no contention with the main session lock. (User-only
+  // gating still applies inside dispatchChannelSlash.)
+  if (head === '/feedback') {
     return 'read'
   }
   return null

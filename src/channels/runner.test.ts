@@ -161,15 +161,24 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.equal(parseFastPathSlash('/auth logout codex'), null)
     assert.equal(parseFastPathSlash('/user approve abc123 --as alice'), null)
     assert.equal(parseFastPathSlash('/user remove bob'), null)
-    // /status and /sandbox stay in the lock — they want live in-memory state.
-    assert.equal(parseFastPathSlash('/status'), null)
-    assert.equal(parseFastPathSlash('/sandbox status'), null)
+    // /status fast-path: msgs from disk transcript, mode/model from
+    // prefs, sessionId from main-canonical. In-flight token = 0 is
+    // honest semantics for "before this turn started".
+    assert.equal(parseFastPathSlash('/status'), 'read')
+    // /sandbox status fast-path: runReadSlashFastPath acquires a runtime
+    // from the per-canonical pool so workerSnapshot / isAvailable work.
+    assert.equal(parseFastPathSlash('/sandbox'), 'read')
+    assert.equal(parseFastPathSlash('/sandbox status'), 'read')
+    // /sandbox writes (prefetch / reset) must still queue.
     assert.equal(parseFastPathSlash('/sandbox prefetch'), null)
+    assert.equal(parseFastPathSlash('/sandbox reset'), null)
+    // /feedback writes feedback.jsonl on a separate path from the
+    // session transcript — no main-lock contention, no LLM call.
+    assert.equal(parseFastPathSlash('/feedback something'), 'read')
     // /branch / /fresh have their own lock keys, not pre-lock.
     assert.equal(parseFastPathSlash('/branch hi'), null)
     assert.equal(parseFastPathSlash('/b hi'), null)
     assert.equal(parseFastPathSlash('/fresh hi'), null)
-    assert.equal(parseFastPathSlash('/feedback something'), null)
     // Non-slash falls through.
     assert.equal(parseFastPathSlash('hello'), null)
     assert.equal(parseFastPathSlash(''), null)
@@ -247,6 +256,85 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.ok(
       strategy.notices.some(item => item.messageId === helpMessage.messageId),
       '/help should produce a notice even when the main lock is held',
+    )
+
+    releaseHold?.()
+    await heldLock
+  })
+
+  it('runs /status via the read fast path while the main lock is held', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      'feishu-alice',
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const statusMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/status',
+      sessionId: 'feishu-alice',
+    })
+    const startedAt = Date.now()
+    await runner.handleMessage(statusMessage)
+    const elapsed = Date.now() - startedAt
+
+    assert.ok(
+      elapsed < 500,
+      `/status should fast-path past the held lock; got elapsed ${elapsed}ms`,
+    )
+    const statusNotice = strategy.notices.find(
+      item => item.messageId === statusMessage.messageId,
+    )
+    assert.ok(statusNotice, '/status should produce a notice even when the main lock is held')
+    // The /status output mentions the user — confirms the fresh-ctx path
+    // wired the currentUserId correctly even outside the main lock.
+    assert.match(statusNotice!.text, /alice/)
+
+    releaseHold?.()
+    await heldLock
+  })
+
+  it('runs /feedback via the read fast path while the main lock is held', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      'feishu-alice',
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const feedbackMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/feedback love this bot',
+      sessionId: 'feishu-alice',
+    })
+    const startedAt = Date.now()
+    await runner.handleMessage(feedbackMessage)
+    const elapsed = Date.now() - startedAt
+
+    assert.ok(
+      elapsed < 500,
+      `/feedback should fast-path past the held lock; got elapsed ${elapsed}ms`,
+    )
+    assert.ok(
+      strategy.notices.some(item => item.messageId === feedbackMessage.messageId),
+      '/feedback should produce a notice even when the main lock is held',
     )
 
     releaseHold?.()
