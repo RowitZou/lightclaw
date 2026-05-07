@@ -18,6 +18,7 @@ import { startRepl } from './repl.js'
 import { getLatestSessionId } from './session/listing.js'
 import { loadMeta } from './session/storage.js'
 import { runWithSessionContext } from './session-context.js'
+import { getRuntimePool } from './state.js'
 import { getAllTools, getEnabledTools } from './tools.js'
 
 type CliArgs = {
@@ -47,6 +48,13 @@ async function gracefulShutdown(signal: string): Promise<void> {
   })
   await getBackgroundTaskScheduler().stop().catch(error => {
     process.stderr.write(`background scheduler stop failed: ${String(error)}\n`)
+  })
+  // Release cluster runtimes (rlaunch workers, docker containers) before
+  // exit. init.ts's parallel cleanup also calls releaseAll, but its hard
+  // cap can fire before the brainctl/docker stop calls return — having
+  // cli.ts await it here is the deterministic path.
+  await getRuntimePool().releaseAll().catch(error => {
+    process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
   })
   process.exit(0)
 }
