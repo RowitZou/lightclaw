@@ -317,11 +317,15 @@ function installSignalHandlers(sessionContext: SessionContext): void {
       networkBridgeStopSafely(),
     ]).finally(() => process.exit(exitCode))
 
-    // Hard cap if cleanup hangs (e.g. docker daemon unresponsive).
+    // Hard cap if cleanup hangs (e.g. docker daemon unresponsive). Sized
+    // to fit one brainctl stop (30s timeout) plus buffer; previously 5s,
+    // which preempted cli.ts's drains+release before they could finish
+    // and left rlaunch workers leaking on every shutdown. Second SIGINT
+    // still hard-exits via the `interruptHandled` branch above.
     setTimeout(() => {
-      process.stderr.write('LightClaw: cleanup timeout (5s), force exit\n')
+      process.stderr.write('LightClaw: cleanup timeout (60s), force exit\n')
       process.exit(exitCode)
-    }, 5_000)
+    }, 60_000)
   }
 
   process.on('SIGINT', () => handleInterrupt(130))

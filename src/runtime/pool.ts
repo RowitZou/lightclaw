@@ -120,14 +120,11 @@ export class RuntimePool {
       const record = readWorkerState()[userId]
       if (record) {
         summary.rlaunchWorker ??= record.name
-        await runProcess('brainctl', [
-          '-n', record.namespace,
-          'stop', `process/${record.name}`,
-        ], {
-          timeoutMs: 30_000,
-          maxBufferBytes: 1024 * 1024,
-          limitMessage: 'brainctl stop process terminated',
-        }).catch(() => undefined)
+        // Best-effort. If stop fails the record stays gone (admin removed
+        // the user; no point keeping the link), but the cluster sweep
+        // matches `comment` against listActiveCanonicalUsers and catches
+        // workers for inactive users on the next pass.
+        await stopRlaunchProcess(record.namespace, record.name, '[rlaunch] purgeUser stop')
         await deleteWorkerRecord(userId)
       }
     } else if (config.runtime.backend === 'docker') {
@@ -167,7 +164,7 @@ export class RuntimePool {
 
   async sweepOrphans(config: LightClawConfig): Promise<void> {
     if (config.runtime.backend === 'rlaunch') {
-      await this.sweepRlaunchOrphans()
+      await this.sweepRlaunchOrphans(config)
       return
     }
     if (config.runtime.backend !== 'docker') {
@@ -210,26 +207,98 @@ export class RuntimePool {
     }
   }
 
-  private async sweepRlaunchOrphans(): Promise<void> {
+  private async sweepRlaunchOrphans(config: LightClawConfig): Promise<void> {
     const state = readWorkerState()
     const activeUsers = new Set(await listActiveCanonicalUsers())
+    // Tracks workers that stay legitimately bound to an active user under the
+    // current deploymentHash. Drives the cluster-side filter: anything in our
+    // namespace with a `lightclaw-runtime-*` comment whose name is NOT in
+    // here (and hash matches) is a leaked orphan.
+    const trackedNamesByUser = new Map<string, string>()
+    // Namespaces to scan — start from the configured one, then union in any
+    // namespace seen in state in case admin pivoted rlaunch.namespace and
+    // left workers behind.
+    const namespacesToScan = new Set<string>([config.runtime.rlaunch.namespace])
+
     for (const [canonical, record] of Object.entries(state)) {
+      namespacesToScan.add(record.namespace)
       const hashMismatch = record.deploymentHash !== this.deploymentHash
       const userGone = !activeUsers.has(canonical)
       if (!hashMismatch && !userGone) {
+        trackedNamesByUser.set(canonical, record.name)
         continue
       }
-      await runProcess('brainctl', [
-        '-n',
+      const stopped = await stopRlaunchProcess(
         record.namespace,
-        'stop',
-        `process/${record.name}`,
-      ], {
-        timeoutMs: 30_000,
-        maxBufferBytes: 1024 * 1024,
-        limitMessage: 'brainctl stop process terminated',
-      }).catch(() => undefined)
+        record.name,
+        '[rlaunch-sweep] state-based stop',
+      )
+      if (!stopped) {
+        // Keep the record so the next sweep retries; the cluster scan below
+        // will also catch it via `comment`. Treating it as still tracked for
+        // this pass prevents the cluster scan from racing the same stop call.
+        trackedNamesByUser.set(canonical, record.name)
+        continue
+      }
       await deleteWorkerRecord(canonical)
+    }
+
+    for (const namespace of namespacesToScan) {
+      await this.sweepClusterRlaunchOrphans(namespace, activeUsers, trackedNamesByUser)
+    }
+  }
+
+  private async sweepClusterRlaunchOrphans(
+    namespace: string,
+    activeUsers: ReadonlySet<string>,
+    trackedNamesByUser: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    const result = await runProcess('brainctl', [
+      '-n', namespace,
+      'get', 'process',
+      '-o', 'json',
+    ], {
+      timeoutMs: 30_000,
+      maxBufferBytes: 16 * 1024 * 1024,
+      limitMessage: 'brainctl get process terminated',
+    }).catch(error => {
+      process.stderr.write(
+        `[rlaunch-sweep] brainctl get -n ${namespace} failed: ${String(error)}\n`,
+      )
+      return null
+    })
+    if (!result) return
+    if (result.exitCode !== 0) {
+      process.stderr.write(
+        `[rlaunch-sweep] brainctl get -n ${namespace} exit ${result.exitCode}: ` +
+        `${result.stderr.trim() || result.stdout.trim()}\n`,
+      )
+      return
+    }
+
+    let processes: ClusterRlaunchProcess[]
+    try {
+      processes = parseBrainctlProcessList(result.stdout)
+    } catch (error) {
+      process.stderr.write(
+        `[rlaunch-sweep] failed to parse brainctl json from -n ${namespace}: ${String(error)}\n`,
+      )
+      return
+    }
+
+    const orphans = selectRlaunchOrphans({
+      processes,
+      deploymentHash: this.deploymentHash,
+      activeUsers,
+      trackedNamesByUser,
+    })
+    for (const orphan of orphans) {
+      process.stderr.write(
+        `[rlaunch-sweep] stopping orphan worker ${orphan.name} ` +
+        `(canonical=${orphan.canonical}, hash=${orphan.hash}, ` +
+        `phase=${orphan.phase}, reason=${orphan.reason})\n`,
+      )
+      await stopRlaunchProcess(namespace, orphan.name, '[rlaunch-sweep] cluster stop')
     }
   }
 
@@ -459,4 +528,139 @@ function readPackageVersion(): string {
 
 function fileDirname(): string {
   return path.dirname(new URL(import.meta.url).pathname)
+}
+
+const RLAUNCH_COMMENT_PREFIX = 'lightclaw-runtime-'
+const RLAUNCH_COMMENT_RE = /^lightclaw-runtime-(.+)-([a-f0-9]{4,})$/
+const RLAUNCH_LIVE_PHASES = new Set(['running', 'starting', 'pending', 'containercreating'])
+
+export type ClusterRlaunchProcess = {
+  name: string
+  comment: string
+  phase: string
+}
+
+export type RlaunchOrphanSelection = {
+  name: string
+  canonical: string
+  hash: string
+  phase: string
+  reason: 'foreign-hash' | 'inactive-user' | 'untracked-name'
+}
+
+/**
+ * Parse `brainctl get process -o json` output into the minimum surface we
+ * need to make orphan decisions: name + comment annotation + phase. Foreign
+ * processes (no `lightclaw-runtime-` comment) are dropped at parse time.
+ */
+export function parseBrainctlProcessList(json: string): ClusterRlaunchProcess[] {
+  const parsed = JSON.parse(json) as { items?: unknown }
+  if (!Array.isArray(parsed.items)) return []
+  const out: ClusterRlaunchProcess[] = []
+  for (const item of parsed.items) {
+    if (!item || typeof item !== 'object') continue
+    const meta = (item as { metadata?: unknown }).metadata as
+      | { name?: unknown; annotations?: Record<string, unknown> }
+      | undefined
+    const status = (item as { status?: unknown }).status as { phase?: unknown } | undefined
+    const name = typeof meta?.name === 'string' ? meta.name : null
+    const comment = meta?.annotations?.['workspace.brainpp.cn/comment']
+    if (!name || typeof comment !== 'string') continue
+    if (!comment.startsWith(RLAUNCH_COMMENT_PREFIX)) continue
+    const phase = typeof status?.phase === 'string' ? status.phase : ''
+    out.push({ name, comment, phase })
+  }
+  return out
+}
+
+/**
+ * Decide which cluster-side processes are orphans and should be stopped.
+ * Pure: no I/O. Inputs come from `parseBrainctlProcessList` + state file +
+ * identity store.
+ *
+ * Stop reasons (order of evaluation):
+ *   - foreign-hash: comment hash != current deploymentHash. Not safe to
+ *     stop in general (could be a sibling lightclaw build sharing the
+ *     cluster), so we currently SKIP these. Kept in the type for future
+ *     use behind an admin opt-in.
+ *   - inactive-user: comment canonical is not in the current activeUsers
+ *     set — admin removed the user but the worker leaked.
+ *   - untracked-name: hash matches and user is active, but state holds a
+ *     different name (or no name) for this canonical. The classic
+ *     spawn-then-crash orphan; this is the case the screenshot bug hit.
+ *
+ * Phase filter: only Live phases are returned. Stopped/Failed workers
+ * cost no GPU and brainctl stop on them is a no-op anyway.
+ */
+export function selectRlaunchOrphans(input: {
+  processes: readonly ClusterRlaunchProcess[]
+  deploymentHash: string
+  activeUsers: ReadonlySet<string>
+  trackedNamesByUser: ReadonlyMap<string, string>
+}): RlaunchOrphanSelection[] {
+  const out: RlaunchOrphanSelection[] = []
+  for (const proc of input.processes) {
+    const match = RLAUNCH_COMMENT_RE.exec(proc.comment)
+    if (!match) continue
+    const [, canonical, hash] = match
+    if (!RLAUNCH_LIVE_PHASES.has(proc.phase.toLowerCase())) continue
+    if (hash !== input.deploymentHash) {
+      // Skip: could belong to a sibling deployment sharing the cluster.
+      continue
+    }
+    if (!input.activeUsers.has(canonical)) {
+      out.push({
+        name: proc.name,
+        canonical,
+        hash,
+        phase: proc.phase,
+        reason: 'inactive-user',
+      })
+      continue
+    }
+    const trackedName = input.trackedNamesByUser.get(canonical)
+    if (trackedName === proc.name) continue
+    out.push({
+      name: proc.name,
+      canonical,
+      hash,
+      phase: proc.phase,
+      reason: 'untracked-name',
+    })
+  }
+  return out
+}
+
+/**
+ * Centralized brainctl stop helper. Logs failure to stderr and returns true
+ * iff the worker is now in a terminal state (stopped or never existed).
+ * Treats `current phase is Stopped` and `not found` as success — matches
+ * RlaunchRuntime.stopWorker's classifier.
+ */
+async function stopRlaunchProcess(
+  namespace: string,
+  name: string,
+  context: string,
+): Promise<boolean> {
+  const result = await runProcess('brainctl', [
+    '-n', namespace,
+    'stop', `process/${name}`,
+  ], {
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    limitMessage: 'brainctl stop process terminated',
+  }).catch(error => {
+    process.stderr.write(`${context} ${name}: ${String(error)}\n`)
+    return null
+  })
+  if (!result) return false
+  if (result.exitCode === 0) return true
+  const text = `${result.stderr}\n${result.stdout}`
+  if (/current phase is Stopped|not found/i.test(text)) {
+    return true
+  }
+  process.stderr.write(
+    `${context} ${name} exit ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}\n`,
+  )
+  return false
 }

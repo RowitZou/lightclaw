@@ -163,7 +163,18 @@ export class RlaunchRuntime implements Runtime {
       }
       await deleteWorkerRecord(this.cfg.canonicalUser)
     } else if (record) {
-      await this.stopWorker(record.name).catch(() => {})
+      // Best-effort: still drop the record + spawn fresh even if the cluster
+      // stop fails, so a transient cluster blip doesn't permanently lock a
+      // user out of acquiring a runtime. The orphan is recoverable —
+      // RuntimePool.sweepOrphans scans the cluster by `comment` annotation
+      // (independent of the lost name here) and will reap on the next pass.
+      await this.stopWorker(record.name).catch(error => {
+        process.stderr.write(
+          `[rlaunch] failed to stop stale worker ${record.name} for ` +
+          `${this.cfg.canonicalUser} on hash change: ${String(error)}; ` +
+          `cluster sweep will reap orphan\n`,
+        )
+      })
       await deleteWorkerRecord(this.cfg.canonicalUser)
     }
 
@@ -417,7 +428,16 @@ export class RlaunchRuntime implements Runtime {
     const oldName =
       this.workerName ?? lookupWorkerRecord(this.cfg.canonicalUser)?.name ?? null
     if (oldName) {
-      await this.stopWorker(oldName).catch(() => {})
+      // Same trade-off as `_startOnce`: log loudly and continue so the
+      // health restart loop can still bring up a fresh worker. Cluster-side
+      // sweep reaps the orphan on the next pass via `comment` annotation.
+      await this.stopWorker(oldName).catch(error => {
+        process.stderr.write(
+          `[rlaunch] restartUnhealthy failed to stop ${oldName} for ` +
+          `${this.cfg.canonicalUser}: ${String(error)}; ` +
+          `cluster sweep will reap orphan\n`,
+        )
+      })
     }
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
