@@ -24,6 +24,7 @@ import { query } from '../query.js'
 import {
   appendBranchSpawnPair,
   mergeBranchResultBack,
+  trimToLastCompletedTurn,
 } from '../session/branch-merge.js'
 import {
   appendMessage,
@@ -204,7 +205,7 @@ export class ChannelRunner {
       try {
         const meta = await loadMeta(sessionId)
         const messages = branchRequest
-          ? await loadTranscript(mainSessionId)
+          ? trimToLastCompletedTurn(await loadTranscript(mainSessionId))
           : await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
         // Wrap the entire turn in a SessionContext scope BEFORE

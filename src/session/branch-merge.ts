@@ -21,6 +21,56 @@ export type BranchOutcome =
   | { kind: 'success'; finalText: string }
   | { kind: 'failure'; reason: string }
 
+/**
+ * Trim a snapshot of the main transcript to the last stable boundary so a
+ * branch session can safely append its own user query and the LLM sees a
+ * clean "last completed turn → new user query" structure.
+ *
+ * Without this, when `/branch` fires while the main turn is still in flight,
+ * `loadTranscript(mainSessionId)` returns the user's in-progress query that
+ * has not yet received any assistant response. The branch then appends its
+ * own user query right after, producing two consecutive user messages.
+ * Lenient providers (gpt-5-codex among them) tolerate this by treating the
+ * pair as a batch and answering BOTH — so the branch ends up solving the
+ * main session's question alongside its own. (See `feishu-zouyicheng` /
+ * `branch-zouyicheng-5fce2af1` 2026-05-07 incident — branch's TodoWrite
+ * carried both deepseek and glm todos.)
+ *
+ * The trimmed snapshot also keeps branch transcripts compact, which in
+ * turn keeps the branch's auto-memory extraction fast (extraction blocks
+ * `awaitBackgroundTasks` at the end of the branch's runner block, and on
+ * a 60-message inherited transcript it can outlast the next main turn —
+ * the visible "branch done last in tmux" symptom from the same incident).
+ *
+ * Stable boundaries (walked backwards from the end):
+ *   - an `assistant` message that contains NO `tool_use` block (the agent
+ *     ended its turn with text / thinking only — nothing pending);
+ *   - a `system` compact_boundary message (compact already collapsed the
+ *     prefix into a summary; nothing dangling).
+ *
+ * If no stable boundary exists, returns `[]` — branch then sees only its
+ * own user query, which is a clean fresh-context start (no protocol
+ * violation). This happens at most on a session whose very first user
+ * message is the one that's mid-flight.
+ */
+export function trimToLastCompletedTurn(messages: Message[]): Message[] {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i]
+    if (m.type === 'system') {
+      return messages.slice(0, i + 1)
+    }
+    if (m.type === 'assistant') {
+      const content = m.message.content
+      const hasToolUse = Array.isArray(content)
+        && content.some(block => block.type === 'tool_use')
+      if (!hasToolUse) {
+        return messages.slice(0, i + 1)
+      }
+    }
+  }
+  return []
+}
+
 export async function appendBranchSpawnPair(input: {
   mainSessionId: string
   userQuery: string

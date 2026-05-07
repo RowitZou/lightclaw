@@ -5,10 +5,13 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setLightclawHomeOverride } from '../paths.js'
+import { createAssistantMessage, createUserMessage } from '../messages.js'
+import type { Message } from '../types.js'
 import {
   appendBranchSpawnPair,
   mergeBranchResultBack,
   recoverOrphanedBranchPlaceholders,
+  trimToLastCompletedTurn,
 } from './branch-merge.js'
 import { loadTranscript, rewriteTranscript } from './storage.js'
 
@@ -179,5 +182,127 @@ describe('branch merge-back', () => {
       ? transcript[1].message.content[0].text
       : ''
     assert.match(text, /upstream 503/)
+  })
+})
+
+describe('trimToLastCompletedTurn', () => {
+  function userText(text: string, parent: string | null = null) {
+    return createUserMessage(text, parent)
+  }
+  function assistantText(text: string, parent: string | null = null) {
+    return createAssistantMessage({
+      content: [{ type: 'text', text }],
+      stopReason: 'end_turn',
+      usage: {},
+      parentUuid: parent,
+    })
+  }
+  function assistantToolUse(name: string, parent: string | null = null) {
+    return createAssistantMessage({
+      content: [{ type: 'tool_use', id: 'tu_' + name, name, input: {} }],
+      stopReason: 'tool_use',
+      usage: {},
+      parentUuid: parent,
+    })
+  }
+  function userToolResult(text: string, parent: string | null = null) {
+    return createUserMessage(
+      [{ type: 'tool_result', tool_use_id: 'tu_x', content: text }],
+      parent,
+    )
+  }
+
+  it('returns the snapshot unchanged when it already ends on assistant text', () => {
+    const messages: Message[] = [
+      userText('hi'),
+      assistantText('hello'),
+    ]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 2)
+    assert.equal(trimmed[1]?.type, 'assistant')
+  })
+
+  it('drops a trailing in-flight user message (the /branch incident)', () => {
+    // Reproduces the feishu-zouyicheng / branch-zouyicheng-5fce2af1
+    // 2026-05-07 case: main turn answered "city weather", then the user
+    // sent "deepseek history" and the assistant had not yet responded
+    // when /branch fired. trim should drop the dangling deepseek user
+    // message so the branch does not see two consecutive user messages.
+    const messages: Message[] = [
+      userText('city weather'),
+      assistantText('here is the weather...'),
+      userText('我想知道deepseek的演进历史'),
+    ]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 2)
+    assert.equal(trimmed[trimmed.length - 1]?.type, 'assistant')
+    if (trimmed[1]?.type === 'assistant' && trimmed[1].message.content[0]?.type === 'text') {
+      assert.match(trimmed[1].message.content[0].text, /weather/)
+    }
+  })
+
+  it('drops a partial tool_use chain back to the previous completed turn', () => {
+    // Main turn has emitted TodoWrite + Bash tool_use chain but no final
+    // assistant text yet. trim should walk back through the (assistant
+    // tool_use, user tool_result) pairs to the last assistant text.
+    const messages: Message[] = [
+      userText('first turn done'),
+      assistantText('first answer'),
+      userText('second turn in flight'),
+      assistantToolUse('TodoWrite'),
+      userToolResult('todo updated'),
+      assistantToolUse('Bash'),
+      userToolResult('bash output'),
+    ]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 2)
+    assert.equal(trimmed[1]?.type, 'assistant')
+  })
+
+  it('keeps a system compact_boundary as a stable terminus', () => {
+    const compact: Message = {
+      type: 'system',
+      uuid: 'sys-1',
+      parentUuid: null,
+      timestamp: 1000,
+      message: { content: 'compact_boundary', summary: 'older history summarized' },
+    }
+    const messages: Message[] = [
+      userText('old'),
+      assistantText('old reply'),
+      compact,
+    ]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 3)
+    assert.equal(trimmed[2]?.type, 'system')
+  })
+
+  it('treats an assistant message with both text and tool_use as in-flight', () => {
+    // text+tool_use means the agent commented then called a tool — turn is
+    // not over until the tool result comes back and a follow-up assistant
+    // message lands without tool_use.
+    const messages: Message[] = [
+      userText('do it'),
+      createAssistantMessage({
+        content: [
+          { type: 'text', text: 'on it' },
+          { type: 'tool_use', id: 'tu_a', name: 'Bash', input: {} },
+        ],
+        stopReason: 'tool_use',
+        usage: {},
+      }),
+    ]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 0)
+  })
+
+  it('returns [] when the very first user message is mid-flight', () => {
+    const messages: Message[] = [userText('first ever query')]
+    const trimmed = trimToLastCompletedTurn(messages)
+    assert.equal(trimmed.length, 0)
+  })
+
+  it('returns [] for an empty transcript', () => {
+    assert.equal(trimToLastCompletedTurn([]).length, 0)
   })
 })
