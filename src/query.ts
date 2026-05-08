@@ -45,6 +45,7 @@ import {
   setLastExtractedAt,
 } from './state.js'
 import { compactConversation } from './session/compact.js'
+import { compactFallbackTruncate } from './session/compact-fallback.js'
 import { maybeIdleMicroCompact } from './session/idle-mc.js'
 import { maybeSummarizeToolResult } from './session/tool-summarize.js'
 import {
@@ -424,7 +425,36 @@ export async function query(params: QueryParams): Promise<{
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      // Always log: proactive compaction failures used to be completely
+      // silent, so a session could quietly accumulate context until the
+      // next turn 400s. One stderr line per failure lets admin grep.
+      process.stderr.write(`[compact] LLM compaction failed (force=${force}): ${message}\n`)
       params.onCompactError?.(message)
+
+      // Reactive recovery only: the caller (prompt-too-long handler) has
+      // nowhere else to go if we return false here. Fall back to a hard
+      // truncation so the user is never stuck on "compact failed".
+      // Background passes (force=false) skip this — the next turn's
+      // proactive compact has another shot.
+      if (force) {
+        const fallback = compactFallbackTruncate(messages, {
+          keepRecent: Math.max(2, config.compactKeepRecent * 2),
+          reason: message,
+        })
+        if (fallback.removedCount > 0) {
+          messages.splice(0, messages.length, ...fallback.messages)
+          incrementCompactionCount()
+          didCompact = true
+          process.stderr.write(
+            `[compact] hard-truncate fallback elided ${fallback.removedCount} messages after LLM failure\n`,
+          )
+          params.onCompactEnd?.({
+            removedCount: fallback.removedCount,
+            summaryTokens: 0,
+          })
+          return true
+        }
+      }
       return false
     }
   }
