@@ -24,6 +24,12 @@ import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { modelFor } from './provider/index.js'
 import { requestPermission } from './permission/index.js'
 import type { PermissionApprover } from './permission/types.js'
+import type { InterjectionEntry } from './channels/feishu/interjection-queue.js'
+import {
+  buildInterjectionBlock,
+  extractCompletedToolUses,
+  extractOriginalUserText,
+} from './channels/feishu/interjection-prompt.js'
 import {
   addSessionMemoryToolCall,
   addSessionMemoryTokens,
@@ -68,6 +74,7 @@ import type {
   Message,
   ToolExecutionEvent,
   UsageStats,
+  UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
 import type { WakeNotifyResult } from './background-task/types.js'
@@ -118,6 +125,8 @@ type QueryParams = {
   systemPrompt?: string
   /** Prepended to the default system prompt when provided (used by channels). */
   channelContext?: string
+  /** Drains mid-flight channel interjections at the next tool boundary. */
+  interjectionDrain?: () => InterjectionEntry[]
   /** Async permission UI for non-REPL channels such as Feishu cards. */
   permissionApprover?: PermissionApprover
   /** Function-based tool gate used by forked agents before permission policy. */
@@ -743,7 +752,34 @@ export async function query(params: QueryParams): Promise<{
           })
         }
       }
-      messages.push(createUserMessage(toolResults, getLastUuid(messages)))
+      const interjections = params.interjectionDrain?.() ?? []
+      const content: UserContentBlock[] = [...toolResults]
+      if (interjections.length > 0) {
+        content.push({
+          type: 'text',
+          text: buildInterjectionBlock({
+            interjections,
+            originalUserText: extractOriginalUserText(messages),
+            completedToolUses: extractCompletedToolUses(messages),
+          }),
+        })
+        process.stderr.write(
+          `query: injected ${interjections.length} interjection${interjections.length === 1 ? '' : 's'} into next user message\n`,
+        )
+      }
+      const nextUserMessage = createUserMessage(content, getLastUuid(messages))
+      if (interjections.length > 0) {
+        nextUserMessage.metadata = {
+          ...(nextUserMessage.metadata ?? {}),
+          interjectionEntries: interjections.map(entry => ({
+            messageId: entry.messageId,
+            senderOpenId: entry.senderOpenId,
+            arrivedAt: entry.arrivedAt,
+            text: entry.text,
+          })),
+        }
+      }
+      messages.push(nextUserMessage)
     }
 
     if (!params.ephemeral) {

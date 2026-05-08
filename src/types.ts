@@ -72,6 +72,14 @@ export type UserMessage = {
   timestamp: number
   branchSpawn?: BranchSpawnMeta
   origin?: 'bg-task-wake'
+  metadata?: {
+    interjectionEntries?: Array<{
+      messageId: string
+      senderOpenId: string
+      arrivedAt: number
+      text: string
+    }>
+  }
   message: {
     role: 'user'
     content: string | UserContentBlock[]

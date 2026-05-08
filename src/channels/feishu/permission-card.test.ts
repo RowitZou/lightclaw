@@ -24,11 +24,16 @@ class FakeSender {
   textSends = 0
   lastCard: Record<string, any> | null = null
   lastDmCard: Record<string, any> | null = null
+  lastText: string | null = null
+  cardShouldFail = false
   dmShouldFail = false
 
   async sendInteractiveCard(_msg: unknown, card: Record<string, any>): Promise<void> {
     this.cardSends += 1
     this.lastCard = card
+    if (this.cardShouldFail) {
+      throw new Error('card blocked')
+    }
   }
 
   async sendInteractiveCardToOpenId(_openId: string, card: Record<string, any>): Promise<void> {
@@ -39,8 +44,9 @@ class FakeSender {
     }
   }
 
-  async sendText(): Promise<void> {
+  async sendText(_msg: unknown, text: string): Promise<void> {
     this.textSends += 1
+    this.lastText = text
   }
 }
 
@@ -488,51 +494,51 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     assert.equal(sender.cardSends, 0, 'resolution notice did NOT leak to the group')
   }))
 
-  it('tryConsumePermissionMessage ignores raw group messages even when sender matches the head', () => inSession(async () => {
+  it('approval card delivery failure auto-denies and notifies user via plain text', () => inSession(async () => {
+    const sender = new FakeSender()
+    sender.cardShouldFail = true
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const decisionP = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+    const decision = await decisionP
+
+    assert.equal(sender.cardSends, 1, 'card send attempted once')
+    assert.equal(sender.textSends, 1, 'plain text failure notice sent')
+    assert.match(sender.lastText ?? '', /Bash/)
+    assert.equal(decision.behavior, 'deny')
+    assert.match(decision.reason ?? '', /card could not be delivered/i)
+  }))
+
+  it('tryAutoDenyForInterjection denies the visible head pending', () => inSession(async () => {
     const sender = new FakeSender()
     const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
     const approver = coord.createApprover({
-      message: fakeMessage('alice-open-id', 'chat-group', 'group'),
-      sessionId: 'feishu:group:chat-group:alice-open-id',
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
       userId: 'alice',
     })
 
     const pending = approver.ask(ask('Bash', 'curl:*'))
     await new Promise(r => setImmediate(r))
-    assert.equal(sender.dmCardSends, 1)
+    const denied = await coord.tryAutoDenyForInterjection('sess-1')
+    const decision = await pending
 
-    // A group message from the sender containing literal "1" must NOT be
-    // consumed as an approval. Otherwise mention gating is fully bypassed:
-    // any background chatter from a user with an active head pending
-    // ("ok", "好的", numeric "1") becomes a hidden approve / deny because
-    // tryConsumePermissionMessage runs in feishu-channel.ts onMessage
-    // *before* the runner-level mention gate. Card clicks via onCardAction
-    // continue to work; only raw text → applyAction is sealed off.
-    const consumed = await coord.tryConsumePermissionMessage({
-      eventId: 'evt-group-1',
-      chatId: 'chat-group',
-      chatType: 'group',
-      senderOpenId: 'alice-open-id',
-      messageId: 'msg-group-text',
-      text: '1',
-    })
-    assert.equal(consumed, false, 'group raw text does not consume pending')
-    assert.equal(sender.dmCardSends, 1, 'no notice sent — pending untouched')
-    assert.equal(sender.cardSends, 0, 'no in-chat notice')
+    assert.equal(denied, true)
+    assert.equal(decision.behavior, 'deny')
+    assert.match(decision.reason ?? '', /interjected mid-flight/)
+  }))
 
-    // Same text from the sender's DM (where the card actually lives) DOES
-    // consume — that is the user's intended fallback channel for the case
-    // where the card UI fails and they type the action manually.
-    const consumedDm = await coord.tryConsumePermissionMessage({
-      eventId: 'evt-dm-1',
-      chatId: 'chat-dm-alice',
-      chatType: 'p2p',
-      senderOpenId: 'alice-open-id',
-      messageId: 'msg-dm-text',
-      text: '1',
-    })
-    assert.equal(consumedDm, true, 'DM raw text consumes pending')
-    assert.equal((await pending).behavior, 'allow', 'pending resolved as allow once via "1"')
+  it('tryAutoDenyForInterjection returns false for sessions with no pending head', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+
+    assert.equal(await coord.tryAutoDenyForInterjection('missing-session'), false)
   }))
 
   // Mock timers so the 24h fallback fires deterministically inside a

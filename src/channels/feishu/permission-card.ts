@@ -27,7 +27,6 @@ import {
   setIdentityRules,
 } from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
-import type { FeishuRawMessage } from './bot-content.js'
 import { isFeishuGroupChatType } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js'
@@ -76,7 +75,7 @@ type PendingPermission = {
   ask: PermissionAskInput
   suggestedRules: PermissionRuleValue[]
   /**
-   * Cached at ask-time so the card builder, text fallback, and applyAction
+   * Cached at ask-time so the card builder and applyAction
    * downgrade path see a single, consistent classification. Re-deriving on
    * each call would risk drift if the rule set were mutated between render
    * and click (e.g. `/rules ask` registered a new ask rule that turns
@@ -90,12 +89,6 @@ type PendingPermission = {
    *  channel session lock pinned forever. Cleared on normal resolve / abort. */
   expireTimer?: NodeJS.Timeout
 }
-
-type ParsedTextAction =
-  | { kind: 'allow' }
-  | { kind: 'allow_rules' }
-  | { kind: 'deny' }
-  | { kind: 'numeric'; index: number }
 
 export class FeishuPermissionCoordinator {
   private pendingById = new Map<string, PendingPermission>()
@@ -164,66 +157,12 @@ export class FeishuPermissionCoordinator {
       await this.safeSendNotice(
         pending.message,
         'error',
-        t('permission.feishu.text.notOperator'),
+        t('permission.feishu.notice.notOperator'),
       )
       return {}
     }
 
     return await this.applyAction(pending, action.action)
-  }
-
-  async tryConsumePermissionMessage(raw: FeishuRawMessage): Promise<boolean> {
-    // Phase 26: text replies are honored only from a 1:1 chat. The approval
-    // card is pushed to the sender's DM (sendApprovalPrompt routes group
-    // asks via sendInteractiveCardToOpenId), so the only place a user
-    // legitimately types "1" / "allow" / "拒绝" as a fallback is their DM.
-    // Group raw messages must NOT consume a pending — otherwise mention
-    // gating is fully bypassed: any group message from a user with an
-    // active head pending (e.g. an idle "ok" or "好的" in chat) becomes a
-    // hidden approve / deny because tryConsumePermissionMessage runs in
-    // feishu-channel.ts onMessage *before* runner's mention gate fires.
-    // Card clicks via onCardAction continue to work in any chat the SDK
-    // delivered the card to (incl. the rare in-group fallback path).
-    if (raw.chatType !== 'p2p' && raw.chatType !== 'private') {
-      return false
-    }
-    const pending = this.findActivePendingForRawMessage(raw)
-    if (!pending) {
-      return false
-    }
-
-    const text = raw.text.trim()
-    if (!text) {
-      await this.safeSendNotice(
-        pending.message,
-        'info',
-        t('permission.feishu.text.empty'),
-      )
-      return true
-    }
-
-    const parsed = parseTextAction(text)
-    if (!parsed) {
-      await this.safeSendNotice(
-        pending.message,
-        'info',
-        t('permission.feishu.text.unparsed', { tool: pending.ask.toolName }),
-      )
-      return true
-    }
-
-    const action = resolveTextAction(parsed)
-    if (!action) {
-      await this.safeSendNotice(
-        pending.message,
-        'error',
-        t('permission.feishu.text.numericOutOfRange', { n: parsed.kind === 'numeric' ? parsed.index : '?' }),
-      )
-      return true
-    }
-
-    await this.applyAction(pending, action)
-    return true
   }
 
   private ask(input: {
@@ -318,10 +257,7 @@ export class FeishuPermissionCoordinator {
           process.stderr.write(
             `feishu permission: fallback send failed request=${pending.id}: ${fallbackDetail}\n`,
           )
-          this.resolvePending(pending, {
-            behavior: 'deny',
-            reason: `Permission denied: ${pending.ask.toolName} approval prompt could not be delivered in Feishu.`,
-          })
+          await this.notifyCardDeliveryFailureAndDeny(pending, fallbackDetail)
           return
         }
       }
@@ -334,22 +270,30 @@ export class FeishuPermissionCoordinator {
       process.stderr.write(
         `feishu permission: card send failed request=${pending.id}: ${detail}\n`,
       )
-      try {
-        await this.sender.sendText(pending.message, buildTextFallback(pending))
-      } catch (fallbackError) {
-        const fallbackDetail = fallbackError instanceof Error
-          ? fallbackError.message
-          : String(fallbackError)
-        process.stderr.write(
-          `feishu permission: fallback send failed request=${pending.id}: ${fallbackDetail}\n`,
-        )
-        this.resolvePending(pending, {
-          behavior: 'deny',
-          reason: `Permission denied: ${pending.ask.toolName} approval prompt could not be delivered in Feishu.`,
-        })
-      }
+      await this.notifyCardDeliveryFailureAndDeny(pending, detail)
       return
     }
+  }
+
+  private async notifyCardDeliveryFailureAndDeny(
+    pending: PendingPermission,
+    detail: string,
+  ): Promise<void> {
+    try {
+      await this.sender.sendText(
+        pending.message,
+        t('permission.feishu.cardSendFailed', { tool: pending.ask.toolName }),
+      )
+    } catch (error) {
+      const textDetail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `feishu permission: failure notification also failed request=${pending.id}: ${textDetail}\n`,
+      )
+    }
+    this.resolvePending(pending, {
+      behavior: 'deny',
+      reason: `Permission denied: ${pending.ask.toolName} approval card could not be delivered in Feishu (${detail.slice(0, 120)}).`,
+    })
   }
 
   private async applyAction(
@@ -386,10 +330,9 @@ export class FeishuPermissionCoordinator {
 
     // High-risk gate: if the pending is high-risk (contains rm / sudo / sh /
     // pipe-to-shell / Edit-of-/etc-style), the card itself doesn't render
-    // the "以后都允许" button — but a stale card (rendered before the gate
-    // existed) or a text reply ("2", "批准所有", "always") might still
-    // arrive on this path. Downgrade to allow-once + a notice that explains
-    // why no rule was installed.
+    // the "以后都允许" button — but a stale card rendered before the gate
+    // existed might still arrive on this path. Downgrade to allow-once + a
+    // notice that explains why no rule was installed.
     if (pending.highRisk) {
       this.resolvePending(pending, { behavior: 'allow' })
       void this.safeSendNotice(
@@ -618,19 +561,24 @@ export class FeishuPermissionCoordinator {
     }
   }
 
-  private findActivePendingForRawMessage(raw: FeishuRawMessage): PendingPermission | null {
-    // Text replies act on the *visible* card — that's always the head of the
-    // owner's queue. Tail entries (queued behind the head) cannot be
-    // approved by text reply because the user hasn't seen them yet.
-    for (const queue of this.queuesByOwner.values()) {
-      const head = queue[0]
-      if (!head) continue
-      const pending = this.pendingById.get(head)
-      if (pending?.message.senderOpenId === raw.senderOpenId) {
-        return pending
-      }
+  async tryAutoDenyForInterjection(sessionId: string): Promise<boolean> {
+    const queue = this.queuesByOwner.get(sessionId)
+    if (!queue || queue.length === 0) {
+      return false
     }
-    return null
+    const headId = queue[0]
+    const pending = this.pendingById.get(headId)
+    if (!pending) {
+      return false
+    }
+    process.stderr.write(
+      `feishu permission: auto-denying head pending request=${pending.id} for session ${sessionId} due to interjection\n`,
+    )
+    this.resolvePending(pending, {
+      behavior: 'deny',
+      reason: 'Auto-denied: user interjected mid-flight. Re-evaluate after reading the interjection.',
+    })
+    return true
   }
 
   private async canOperate(
@@ -836,92 +784,8 @@ function buildResolvedCard(
   }
 }
 
-function buildTextFallback(pending: PendingPermission): string {
-  if (pending.highRisk) {
-    return [
-      t('permission.feishu.text.fallbackHighRiskHeader'),
-      t('permission.feishu.text.fallbackToolLine', { name: pending.ask.toolName }),
-      t('permission.feishu.text.fallbackRiskLine', { level: pending.ask.riskLevel }),
-      t('permission.feishu.text.fallbackSessionLine', { id: pending.sessionId }),
-      pending.ask.inputPreview,
-      '',
-      t('permission.feishu.text.fallbackHighRiskExplain'),
-      t('permission.feishu.text.fallbackChoiceHeader'),
-      t('permission.feishu.text.fallbackChoice1'),
-      t('permission.feishu.text.fallbackChoice3'),
-      '',
-      t('permission.feishu.text.fallbackHighRiskHint'),
-    ].join('\n')
-  }
-  const middleLabel = formatSuggestionLabel(
-    pending.suggestedRules,
-    pending.ask.toolName,
-  )
-  return [
-    t('permission.feishu.text.fallbackUserConfirm'),
-    t('permission.feishu.text.fallbackToolLine', { name: pending.ask.toolName }),
-    t('permission.feishu.text.fallbackRiskLine', { level: pending.ask.riskLevel }),
-    t('permission.feishu.text.fallbackSessionLine', { id: pending.sessionId }),
-    pending.ask.inputPreview,
-    '',
-    t('permission.feishu.text.fallbackChoiceHeader'),
-    t('permission.feishu.text.fallbackChoice1'),
-    t('permission.feishu.text.fallbackChoice2', { label: middleLabel }),
-    t('permission.feishu.text.fallbackChoice3'),
-    '',
-    t('permission.feishu.text.fallbackAliasHint'),
-  ].join('\n')
-}
-
 function ownerKey(pending: PendingPermission): string {
   return pending.sessionId
-}
-
-function parseTextAction(text: string): ParsedTextAction | null {
-  const normalized = text.trim().toLowerCase()
-  if (/^\d+$/.test(normalized)) {
-    return { kind: 'numeric', index: Number(normalized) }
-  }
-  if (
-    [
-      '批准所有',
-      '都允许',
-      '都批准',
-      '总是允许',
-      '总是批准',
-      'always',
-      'allow all',
-      'always allow',
-      'a',
-    ].some(token => normalized === token) ||
-    normalized.startsWith('批准所有') ||
-    normalized.startsWith('always')
-  ) {
-    return { kind: 'allow_rules' }
-  }
-  if (['是', '批准', '允许', '同意', 'yes', 'y', 'ok'].includes(normalized)) {
-    return { kind: 'allow' }
-  }
-  if ([
-    '否', '不', '拒绝', 'no', 'n',
-    '取消', '取消权限', '清除', '清除权限',
-    'cancel', '/cancel', '/permission cancel',
-  ].includes(normalized)) {
-    return { kind: 'deny' }
-  }
-  return null
-}
-
-function resolveTextAction(parsed: ParsedTextAction): FeishuPermissionActionKind | null {
-  if (parsed.kind === 'allow') return 'allow'
-  if (parsed.kind === 'deny') return 'deny'
-  if (parsed.kind === 'allow_rules') return 'allow_rules'
-
-  // Numeric: 1 = allow, 2 = allow_rules, 3 = deny.
-  if (parsed.index === 1) return 'allow'
-  if (parsed.index === 2) return 'allow_rules'
-  if (parsed.index === 3) return 'deny'
-  return null
 }
 
 function escapeLarkMd(value: string): string {

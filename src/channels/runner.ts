@@ -69,6 +69,10 @@ import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
+import {
+  channelInterjectionQueue,
+  type InterjectionEntry,
+} from './feishu/interjection-queue.js'
 import type {
   ChannelId,
   MaterializedAttachment,
@@ -129,6 +133,7 @@ export type ChannelRunnerStrategy = {
     sessionId: string,
     userId: string,
   ): PermissionApprover
+  tryAutoDenyForInterjection?(sessionId: string): Promise<boolean>
   /**
    * Best-effort lookup of a human-readable display name for a sender (for
    * the `lightclaw identity pending` table). Channel-specific because the
@@ -248,7 +253,31 @@ export class ChannelRunner {
       : message
     assertSessionIdShape(mainSessionId)
     assertSessionIdShape(sessionId)
+    if (
+      !branchRequest &&
+      !freshSessionId &&
+      channelInterjectionQueue.hasInflightFor(mainSessionId)
+    ) {
+      const entry: InterjectionEntry = {
+        messageId: message.messageId,
+        senderOpenId: message.senderOpenId,
+        senderName: await this.resolveSenderNameForInterjection(message),
+        text: message.text,
+        arrivedAt: Date.now(),
+      }
+      channelInterjectionQueue.push(mainSessionId, entry)
+      const denied = await this.strategy.tryAutoDenyForInterjection?.(mainSessionId)
+      if (denied) {
+        entry.triggeredAutoDeny = true
+      }
+      process.stderr.write(
+        `${this.strategy.channelId}: interjection queued for session ${mainSessionId} (size=${channelInterjectionQueue.size(mainSessionId)})\n`,
+      )
+      await this.sendNotice(message, 'info', t('channel.interjection.acked'), 'plain_text')
+      return
+    }
     await this.locks.runExclusive(sessionId, async () => {
+      let markedInFlight = false
       // In-flight typing indicator: fire BEFORE any work so the user sees
       // a "we got it" signal even when meta load / runtime probe is slow.
       // The token is opaque (channel-defined) and gets handed back to
@@ -418,6 +447,10 @@ export class ChannelRunner {
           return
         }
 
+        if (!branchRequest && !freshSessionId) {
+          channelInterjectionQueue.markInFlight(mainSessionId)
+          markedInFlight = true
+        }
         const userMessage = createUserMessage(userText, getLastUuid(messages))
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
@@ -463,6 +496,7 @@ export class ChannelRunner {
                 streamedAtLeastOnce = true
                 await this.sendReply(effectiveMessage, text)
               },
+              interjectionDrain: () => channelInterjectionQueue.drain(mainSessionId),
             })
             break
           } catch (error) {
@@ -597,9 +631,28 @@ export class ChannelRunner {
         }
         throw error
       } finally {
+        if (markedInFlight) {
+          channelInterjectionQueue.unmarkInFlight(mainSessionId)
+        }
         await this.stopTyping(message, typingToken)
       }
     })
+  }
+
+  private async resolveSenderNameForInterjection(
+    message: NormalizedChannelMessage,
+  ): Promise<string | undefined> {
+    if (!this.strategy.resolveSenderName || !isGroupLikeChannelMessage(message)) {
+      return undefined
+    }
+    try {
+      return await this.strategy.resolveSenderName(
+        message.senderOpenId,
+        buildMentionNameMap(message),
+      )
+    } catch {
+      return undefined
+    }
   }
 
   /**

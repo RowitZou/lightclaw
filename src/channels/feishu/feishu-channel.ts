@@ -98,10 +98,6 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         process.stderr.write(
           `feishu: inbound event=${raw.eventId} message=${raw.messageId}\n`,
         )
-        if (await permissionCoordinator.tryConsumePermissionMessage(raw)) {
-          process.stderr.write(`feishu: permission response consumed message=${raw.messageId}\n`)
-          return
-        }
         // Sender info is fetched lazily in the runner's pairing branch. The
         // strategy returns undefined on contact-scope or network failures so
         // the card flow degrades to open_id without blocking inbound routing.
