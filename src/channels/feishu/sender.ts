@@ -229,11 +229,17 @@ export class FeishuSender {
   // to reply against — e.g. /user approve in commands/builtin.ts pushes a
   // welcome card to a freshly approved user, who is offline at approval time.
   // The Lark IM API auto-routes open_id sends to the bot↔user p2p chat.
+  // Returns { chatId } when the platform reports it. Post-approval replay
+  // uses the chatId to construct a synthetic NormalizedChannelMessage with
+  // the same DM session id the future inbound DMs from this user will
+  // produce — so the replay turn and follow-up DMs share one transcript.
+  // Empty object on enqueue path (transient failure) or if the response
+  // shape lacks chat_id.
   async sendInteractiveCardToOpenId(
     openId: string,
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
-  ): Promise<void> {
+  ): Promise<{ chatId?: string }> {
     try {
       const response = await retryOnTransient(
         'create interactive (open_id)',
@@ -249,13 +255,15 @@ export class FeishuSender {
         this.retryBaseDelayMs,
       )
       assertOk(response, 'Feishu create message (open_id) failed')
+      const data = (response as { data?: { chat_id?: string } }).data
+      return data?.chat_id ? { chatId: data.chat_id } : {}
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: { type: 'open_id', openId },
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
-        return
+        return {}
       }
       throw err
     }

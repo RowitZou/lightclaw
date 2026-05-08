@@ -1,15 +1,40 @@
+import { randomUUID } from 'node:crypto'
+
 import { getConfig } from '../config.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
+import { isAdmin } from './store.js'
 import type { SenderKey } from './types.js'
 
-export function preheatAndWelcomeOnApproval(name: string, link: SenderKey): void {
-  void runApprovalPreheat(name, link).catch(error => {
+export type PreheatOptions = {
+  /**
+   * The applicant's pre-approval text, captured from the pending entry
+   * (or directly from the application card state when called from the
+   * card flow). When non-empty AND the welcome card push reports a DM
+   * chat_id, post-approve replays this text through the channel runner
+   * so the user's first message is actually answered. Empty / missing
+   * text simply skips replay; daemon shutdown / restart between approval
+   * and welcome is tolerated because pending.json is the durable source
+   * of truth.
+   */
+  applicantText?: string
+}
+
+export function preheatAndWelcomeOnApproval(
+  name: string,
+  link: SenderKey,
+  opts: PreheatOptions = {},
+): void {
+  void runApprovalPreheat(name, link, opts).catch(error => {
     const detail = error instanceof Error ? error.message : String(error)
     process.stderr.write(`[preheat-on-approval] ${name}: unhandled ${detail}\n`)
   })
 }
 
-async function runApprovalPreheat(name: string, link: SenderKey): Promise<void> {
+async function runApprovalPreheat(
+  name: string,
+  link: SenderKey,
+  opts: PreheatOptions,
+): Promise<void> {
   const config = getConfig()
   const backend = config.runtime.backend
   if (backend !== 'docker' && backend !== 'rlaunch') {
@@ -97,10 +122,64 @@ async function runApprovalPreheat(name: string, link: SenderKey): Promise<void> 
   process.stderr.write(
     `[preheat-on-approval] ${name}: runtime ready after ${elapsedSeconds}s; sending welcome card\n`,
   )
-  await sender
-    .sendInteractiveCardToOpenId(openId, buildApprovalWelcomeCard())
+  const recipientIsAdmin = await isAdmin(name)
+  const sendResult = await sender
+    .sendInteractiveCardToOpenId(openId, buildApprovalWelcomeCard({ isAdmin: recipientIsAdmin }))
     .catch(pushError => {
       const pd = pushError instanceof Error ? pushError.message : String(pushError)
       process.stderr.write(`[preheat-on-approval] ${name}: welcome push send failed: ${pd}\n`)
+      return null
     })
+
+  // Replay the pre-approval message so the user's first @ doesn't get
+  // dropped on the floor. Requires:
+  //   - a stashed text (the applicant actually said something with their
+  //     first contact, not just an empty mention)
+  //   - the welcome card send returned a chat_id (so the synthetic
+  //     replay message lands in the same DM session future inbound
+  //     messages will use, keeping transcript continuity)
+  //   - the channel runner is registered (the daemon owns one)
+  // All three are best-effort — replay is a UX nicety, not a correctness
+  // contract; if any prerequisite is missing we log to stderr and stop.
+  const applicantText = opts.applicantText?.trim()
+  if (!applicantText) {
+    return
+  }
+  const dmChatId = sendResult?.chatId
+  if (!dmChatId) {
+    process.stderr.write(
+      `[preheat-on-approval] ${name}: welcome card returned no chat_id; skipping replay\n`,
+    )
+    return
+  }
+  const { getChannelRunner } = await import('../channels/feishu/runner-registry.js')
+  const runner = getChannelRunner()
+  if (!runner) {
+    process.stderr.write(
+      `[preheat-on-approval] ${name}: channel runner not registered; skipping replay\n`,
+    )
+    return
+  }
+  // Construct a minimal NormalizedChannelMessage matching what an actual
+  // inbound DM from this user would look like. chatType='p2p' so it
+  // routes to feishu:dm:<chatId> per Phase 26. eventId / messageId have
+  // a 'replay-' prefix for grep-ability in dedup / api-logs (the dedup
+  // layer is bypassed here — dedup runs in feishu-channel onMessage,
+  // before this synthetic injection point).
+  process.stderr.write(
+    `[preheat-on-approval] ${name}: replaying pre-approval text (${applicantText.length} chars) into ${dmChatId}\n`,
+  )
+  await runner.handleMessage({
+    channel: 'feishu',
+    eventId: `replay-${randomUUID()}`,
+    chatId: dmChatId,
+    senderOpenId: openId,
+    senderKey: link,
+    chatType: 'p2p',
+    messageId: `replay-${randomUUID()}`,
+    text: applicantText,
+  }).catch(error => {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[preheat-on-approval] ${name}: replay failed: ${detail}\n`)
+  })
 }

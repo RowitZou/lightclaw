@@ -23,6 +23,7 @@ import { PendingQueueStore } from './pending-queue.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
+import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
@@ -89,6 +90,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator, botSelf),
       )
       await runner.initialize()
+      // Expose the runner so post-approval replay can inject a synthetic
+      // inbound message carrying the applicant's pre-approval text. Cleared
+      // alongside the sender on stop().
+      registerChannelRunner(runner)
 
       const dedup = new FeishuDedup(
         path.join(lightclawHome(), 'state', 'feishu-dedup.json'),
@@ -148,6 +153,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           stop: () => {
             pendingDrainer.stop()
             clearFeishuSender(sender)
+            clearChannelRunner(runner)
             clearBackgroundTaskCardCoordinator(bgCardCoordinator)
             return handle.close()
           },

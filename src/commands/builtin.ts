@@ -849,7 +849,7 @@ export async function userApprove(args: string[]): Promise<string> {
       ? `${t('user.approve.alreadyBound', { link, name: linked.boundTo ?? '?' })}\n`
       : `${t('user.remove.noSuch', { name })}\n`
   }
-  preheatAndWelcomeOnApproval(name, link)
+  preheatAndWelcomeOnApproval(name, link, { applicantText: entry.lastApplicantText })
   const created_or_updated = created.ok ? t('user.approve.created', { name }) : t('user.approve.updated', { name })
   return `${created_or_updated}\n${t('user.approve.linked', { link, name })}\n`
 }

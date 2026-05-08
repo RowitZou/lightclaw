@@ -167,6 +167,47 @@ export async function updatePendingUserInfo(
   }
 }
 
+/**
+ * Stash the applicant's most recent inbound text on the pending entry so
+ * the post-approval welcome flow can replay it instead of letting the
+ * pre-approval message drop on the floor. Looks up the entry by senderKey
+ * (more robust than passing a code that the runner does not always have
+ * yet), no-ops if there is no pending entry for this sender, and
+ * intentionally does NOT touch createdAt / ttlMs — the pairing TTL keeps
+ * measuring from initial application time.
+ */
+export async function updatePendingApplicantText(
+  senderKey: SenderKey,
+  text: string,
+  chatId?: string,
+): Promise<void> {
+  const trimmed = text.trim()
+  if (!trimmed) {
+    return
+  }
+  const pending = await readJson<PendingFile>(pendingPath(), {})
+  let mutatedKey: string | null = null
+  for (const [code, entry] of Object.entries(pending)) {
+    if (`${entry.channel}:${entry.peerId}` !== senderKey) {
+      continue
+    }
+    if (entry.lastApplicantText === trimmed && entry.lastApplicantChatId === chatId) {
+      // Nothing to write; user resent identical text from the same chat.
+      return
+    }
+    entry.lastApplicantText = trimmed
+    entry.lastApplicantTextAt = Date.now()
+    if (chatId !== undefined) {
+      entry.lastApplicantChatId = chatId
+    }
+    mutatedKey = code
+    break
+  }
+  if (mutatedKey) {
+    await writeJsonSecure(pendingPath(), pending)
+  }
+}
+
 async function cleanExpiredPending(): Promise<PendingFile> {
   const now = Date.now()
   const pending = await readJson<PendingFile>(pendingPath(), {})

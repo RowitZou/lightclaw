@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe('PairingCardCoordinator', () => {
-  it('renders application cards and cancels without creating pending entries', async () => {
+  it('renders application cards to applicant DM and cancels without creating pending entries', async () => {
     const sender = new FakeSender()
     const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
     await coord.sendApplicationCard(fakeMessage('ou_user'), {
@@ -50,10 +50,16 @@ describe('PairingCardCoordinator', () => {
       applicantName: 'Alice',
     })
 
-    const action = extractAction(sender.replyCards[0], 'cancel')
+    // Application card pushed to applicant DM, never echoed in the original
+    // chat (group privacy). Phase 25 → 28: was sender.sendInteractiveCard,
+    // now sender.sendInteractiveCardToOpenId.
+    assert.equal(sender.replyCards.length, 0, 'no in-chat echo')
+    assert.equal(sender.openIdCards.length, 1)
+    assert.equal(sender.openIdCards[0].openId, 'ou_user')
+
+    const action = extractAction(cardForOpenId(sender, 'ou_user'), 'cancel')
     const response = await coord.handleCardAction(action)
 
-    assert.equal(sender.replyCards.length, 1)
     assert.match(JSON.stringify(response), /已取消申请/)
     assert.equal((await listPending()).length, 0)
   })
@@ -71,15 +77,18 @@ describe('PairingCardCoordinator', () => {
       applicantUserId: 'abcd1234',
     })
 
-    const response = await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+    const response = await coord.handleCardAction(
+      extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'),
+    )
     const pending = await listPending()
 
     assert.equal(pending.length, 1)
     assert.equal(pending[0].displayName, 'Alice')
     assert.equal(pending[0].email, 'alice@example.com')
     assert.equal(pending[0].userId, 'abcd1234')
-    assert.equal(sender.openIdCards.length, 1)
-    assert.equal(sender.openIdCards[0].openId, 'ou_admin')
+    // openIdCards: [0] application card to applicant, [1] review card to admin.
+    assert.equal(sender.openIdCards.length, 2)
+    assert.equal(cardsForOpenId(sender, 'ou_admin').length, 1, 'review card to admin')
     assert.match(JSON.stringify(response), /等待管理员审批/)
   })
 
@@ -95,9 +104,9 @@ describe('PairingCardCoordinator', () => {
       applicantEmail: 'zouyicheng@pjlab.org.cn',
       applicantUserId: '62236ecd',
     })
-    const confirm = extractAction(sender.replyCards[0], 'confirm')
+    const confirm = extractAction(cardForOpenId(sender, 'ou_user'), 'confirm')
     await coord.handleCardAction(confirm)
-    const reviewCard = sender.openIdCards[0].card
+    const reviewCard = cardForOpenId(sender, 'ou_admin')
     const approve = {
       ...extractAction(reviewCard, 'approve'),
       operatorOpenId: 'ou_admin',
@@ -120,9 +129,9 @@ describe('PairingCardCoordinator', () => {
       applicantOpenId: 'ou_user',
       applicantName: 'Alice',
     })
-    await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+    await coord.handleCardAction(extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'))
     const reject = {
-      ...extractAction(sender.openIdCards[0].card, 'reject'),
+      ...extractAction(cardForOpenId(sender, 'ou_admin'), 'reject'),
       operatorOpenId: 'ou_admin',
     }
 
@@ -144,9 +153,9 @@ describe('PairingCardCoordinator', () => {
       applicantOpenId: 'ou_user',
       applicantName: 'Alice',
     })
-    await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+    await coord.handleCardAction(extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'))
     const approve = {
-      ...extractAction(sender.openIdCards[0].card, 'approve'),
+      ...extractAction(cardForOpenId(sender, 'ou_admin'), 'approve'),
       operatorOpenId: 'ou_not_admin',
     }
 
@@ -171,10 +180,14 @@ describe('PairingCardCoordinator', () => {
       applicantName: 'Alice',
     })
 
-    const response = await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+    const response = await coord.handleCardAction(
+      extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'),
+    )
 
     assert.equal((await listPending()).length, 1)
-    assert.equal(sender.openIdCards.length, 0, 'no admin card pushed when admin has no feishu binding')
+    // openIdCards still has the application card to applicant DM, but no
+    // admin review card (admin has no feishu binding to receive it).
+    assert.equal(cardsForOpenId(sender, 'ou_admin').length, 0, 'no admin card pushed when admin has no feishu binding')
     assert.match(JSON.stringify(response), /等待管理员审批/)
   })
 
@@ -194,8 +207,8 @@ describe('PairingCardCoordinator', () => {
       applicantOpenId: 'ou_user',
       applicantName: 'Alice',
     })
-    await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
-    const reviewCard = sender.openIdCards[0].card
+    await coord.handleCardAction(extractAction(cardForOpenId(sender, 'ou_user'), 'confirm'))
+    const reviewCard = cardForOpenId(sender, 'ou_admin')
     const approve = {
       ...extractAction(reviewCard, 'approve'),
       operatorOpenId: 'ou_admin',
@@ -207,8 +220,11 @@ describe('PairingCardCoordinator', () => {
     const response = await coord.handleCardAction(approve)
 
     assert.match(JSON.stringify(response), /已通过其他渠道处理/)
-    // No follow-up handover card pushed (we never minted a canonical here).
-    assert.equal(sender.openIdCards.length, 1, 'only the original review card was pushed')
+    // No follow-up handover card pushed to the applicant (we never minted
+    // a canonical here). The application card to applicant DM and the
+    // review card to admin DM both remain as the only sends.
+    assert.equal(cardsForOpenId(sender, 'ou_admin').length, 1, 'only one admin review card')
+    assert.equal(cardsForOpenId(sender, 'ou_user').length, 1, 'no extra applicant card')
   })
 
   it('double-tap confirm only pushes one admin review card', async () => {
@@ -227,14 +243,14 @@ describe('PairingCardCoordinator', () => {
       applicantEmail: 'alice@example.com',
       applicantUserId: 'abcd1234',
     })
-    const confirm = extractAction(sender.replyCards[0], 'confirm')
+    const confirm = extractAction(cardForOpenId(sender, 'ou_user'), 'confirm')
 
     const [first, second] = await Promise.all([
       coord.handleCardAction(confirm),
       coord.handleCardAction(confirm),
     ])
 
-    assert.equal(sender.openIdCards.length, 1, 'only one admin review card pushed')
+    assert.equal(cardsForOpenId(sender, 'ou_admin').length, 1, 'only one admin review card pushed')
     // First fires the admin push + waiting card; second sees `submitting`
     // and renders the polite "still processing" body. Order isn't fixed
     // by Promise.all (microtask scheduling), so accept either ordering.
@@ -259,6 +275,28 @@ describe('PairingCardCoordinator', () => {
     assert.equal(sender.openIdCards.length, 0)
   })
 
+  it('group-context application falls back to in-chat send when DM push fails', async () => {
+    // Privacy invariant: pairing cards target applicant DM. But Feishu DM
+    // push CAN fail (extremely rare; bot disabled / api outage). When it
+    // does, we'd rather leak the application card to the original chat
+    // than swallow the user's request and look unresponsive.
+    const sender = new FlakyDmSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    const groupMsg: NormalizedChannelMessage = {
+      ...fakeMessage('ou_user'),
+      chatType: 'group',
+      chatId: 'oc_group_xyz',
+    }
+    await coord.sendApplicationCard(groupMsg, {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+
+    assert.equal(sender.openIdAttempts.length, 1, 'attempted DM push first')
+    assert.equal(sender.openIdAttempts[0], 'ou_user')
+    assert.equal(sender.replyCards.length, 1, 'fell back to in-chat after DM failure')
+  })
+
   it('evicts in-memory token state after the configured TTL elapses', async () => {
     // Without eviction, byToken would grow forever as cancelled / resolved
     // entries accumulate over the daemon's uptime. Evict after a short TTL
@@ -276,7 +314,7 @@ describe('PairingCardCoordinator', () => {
       applicantOpenId: 'ou_user',
       applicantName: 'Alice',
     })
-    const cancel = extractAction(sender.replyCards[0], 'cancel')
+    const cancel = extractAction(cardForOpenId(sender, 'ou_user'), 'cancel')
     await coord.handleCardAction(cancel)
 
     await new Promise(resolve => setTimeout(resolve, 30))
@@ -303,6 +341,20 @@ class FakeSender {
   }
 }
 
+class FlakyDmSender {
+  replyCards: Record<string, unknown>[] = []
+  openIdAttempts: string[] = []
+
+  async sendInteractiveCard(_message: unknown, card: Record<string, unknown>): Promise<void> {
+    this.replyCards.push(card)
+  }
+
+  async sendInteractiveCardToOpenId(openId: string, _card: Record<string, unknown>): Promise<void> {
+    this.openIdAttempts.push(openId)
+    throw new Error('simulated DM push failure (recipient unreachable)')
+  }
+}
+
 function fakeMessage(senderOpenId: string): NormalizedChannelMessage {
   return {
     channel: 'feishu',
@@ -313,6 +365,26 @@ function fakeMessage(senderOpenId: string): NormalizedChannelMessage {
     messageId: `msg-${senderOpenId}`,
     text: 'hello',
   }
+}
+
+function cardForOpenId(
+  sender: { openIdCards: Array<{ openId: string; card: Record<string, unknown> }> },
+  openId: string,
+): Record<string, unknown> {
+  const entry = sender.openIdCards.find(e => e.openId === openId)
+  if (!entry) {
+    throw new Error(`no DM card pushed for ${openId}`)
+  }
+  return entry.card
+}
+
+function cardsForOpenId(
+  sender: { openIdCards: Array<{ openId: string; card: Record<string, unknown> }> },
+  openId: string,
+): Record<string, unknown>[] {
+  return sender.openIdCards
+    .filter(e => e.openId === openId)
+    .map(e => e.card)
 }
 
 function extractAction(card: Record<string, unknown>, action: string): PairingCardAction {

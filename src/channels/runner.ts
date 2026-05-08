@@ -16,6 +16,7 @@ import {
   findExistingPending,
   generateOrReusePending,
   getPairingRateLimitStatus,
+  updatePendingApplicantText,
   updatePendingUserInfo,
 } from '../identity/pairing.js'
 import {
@@ -152,6 +153,15 @@ export type ChannelRunnerStrategy = {
     applicantName?: string
     applicantEmail?: string
     applicantUserId?: string
+    /**
+     * The applicant's pre-approval text. Stashed inside the pairing-card
+     * coordinator's in-memory state, then promoted to pending.json the
+     * moment the applicant clicks [confirm], so the post-approval replay
+     * path has it durably.
+     */
+    applicantText?: string
+    /** chatId of the message that triggered the application card. */
+    applicantChatId?: string
   }): Promise<void>
   renderPairingWaitingCard?(input: {
     message: NormalizedChannelMessage
@@ -161,6 +171,7 @@ export type ChannelRunnerStrategy = {
   }): Promise<void>
   renderPairingCooldownCard?(input: {
     message: NormalizedChannelMessage
+    applicantOpenId: string
     elapsedMinutes: number
     remainMinutes: number
   }): Promise<void>
@@ -854,6 +865,11 @@ export class ChannelRunner {
     )
     const existing = await findExistingPending(senderKey)
     if (canRenderPairingCard && existing) {
+      // Stash the latest applicant text BEFORE rendering the waiting card,
+      // so even if the card push fails the text is durable on disk for
+      // post-approval replay. Updates pending.json in-place; does not
+      // touch createdAt/ttlMs (TTL still measures from initial application).
+      await updatePendingApplicantText(senderKey, message.text, message.chatId)
       await this.strategy.renderPairingWaitingCard!({
         message,
         code: existing.code,
@@ -869,6 +885,7 @@ export class ChannelRunner {
         if (this.strategy.renderPairingCooldownCard) {
           await this.strategy.renderPairingCooldownCard({
             message,
+            applicantOpenId: message.senderOpenId,
             elapsedMinutes: Math.max(0, Math.floor(status.elapsedMs / 60_000)),
             remainMinutes: Math.max(1, Math.ceil(status.remainingMs / 60_000)),
           })
@@ -885,6 +902,8 @@ export class ChannelRunner {
         applicantName: info?.name,
         applicantEmail: info?.email,
         applicantUserId: info?.userId,
+        applicantText: message.text,
+        applicantChatId: message.chatId,
       })
       return null
     }
@@ -913,7 +932,6 @@ export class ChannelRunner {
         [
           t('channel.pairing.welcome'),
           t('channel.pairing.codeLine', { code: result.code }),
-          t('channel.pairing.adminCmd', { code: result.code }),
           t('channel.pairing.freshness', { when: freshnessLabel }),
         ].join('\n'),
       )
