@@ -234,8 +234,6 @@ export type LightClawConfig = {
   mcpConnectConcurrency: number
   mcpConfigFiles: {
     user?: string
-    project?: string
-    local?: string
   }
   mcpMaxToolOutputBytes: number
   maxToolOutputBytes: number
@@ -244,7 +242,6 @@ export type LightClawConfig = {
   hookTimeoutNonBlocking: number
   hookDirs: {
     user?: string
-    project?: string
   }
   runtime: {
     backend: RuntimeKind
@@ -594,6 +591,29 @@ function resolveDockerSecurity(
   }
 }
 
+const warnedDeprecatedDiscoveryConfig = new Set<string>()
+
+function warnDeprecatedDiscoveryConfig(fileConfig: ConfigFileShape): void {
+  const mcpConfigFiles = fileConfig.mcpConfigFiles as
+    | { project?: unknown; local?: unknown }
+    | undefined
+  const hookDirs = fileConfig.hookDirs as { project?: unknown } | undefined
+  const deprecated: Array<[string, unknown]> = [
+    ['mcpConfigFiles.project', mcpConfigFiles?.project],
+    ['mcpConfigFiles.local', mcpConfigFiles?.local],
+    ['hookDirs.project', hookDirs?.project],
+  ]
+  for (const [key, value] of deprecated) {
+    if (value === undefined || warnedDeprecatedDiscoveryConfig.has(key)) {
+      continue
+    }
+    warnedDeprecatedDiscoveryConfig.add(key)
+    process.stderr.write(
+      `config: ${key} is deprecated and ignored; use admin-owned LightClaw home discovery paths instead.\n`,
+    )
+  }
+}
+
 function expandOptionalPath(value: string | undefined): string | undefined {
   return value ? path.resolve(expandHomePath(value)) : undefined
 }
@@ -899,6 +919,7 @@ export function getConfig(): LightClawConfig {
     : ['/tmp']
   const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
+  warnDeprecatedDiscoveryConfig(fileConfig)
 
   return {
     model,
@@ -925,8 +946,6 @@ export function getConfig(): LightClawConfig {
     mcpConnectConcurrency,
     mcpConfigFiles: {
       user: expandOptionalPath(fileConfig.mcpConfigFiles?.user),
-      project: expandOptionalPath(fileConfig.mcpConfigFiles?.project),
-      local: expandOptionalPath(fileConfig.mcpConfigFiles?.local),
     },
     mcpMaxToolOutputBytes,
     maxToolOutputBytes,
@@ -935,7 +954,6 @@ export function getConfig(): LightClawConfig {
     hookTimeoutNonBlocking,
     hookDirs: {
       user: expandOptionalPath(fileConfig.hookDirs?.user),
-      project: expandOptionalPath(fileConfig.hookDirs?.project),
     },
     memoryRecall: {
       enabled: memoryRecallEnabled,

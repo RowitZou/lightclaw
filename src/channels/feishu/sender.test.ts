@@ -16,7 +16,6 @@ const baseConfig: FeishuChannelConfig = {
   httpTimeoutMs: 30_000,
   maxBodyBytes: 1024 * 1024,
   mediaEnabled: true,
-  mediaDir: '/tmp/lightclaw-feishu-test',
   typingReaction: false,
   webhook: {
     host: '0.0.0.0',

@@ -85,8 +85,6 @@ export type ConfigFileShape = {
   mcpConnectConcurrency?: number
   mcpConfigFiles?: {
     user?: string
-    project?: string
-    local?: string
   }
   mcpMaxToolOutputBytes?: number
   maxToolOutputBytes?: number
@@ -95,7 +93,6 @@ export type ConfigFileShape = {
   hookTimeoutNonBlocking?: number
   hookDirs?: {
     user?: string
-    project?: string
   }
   memoryRecall?: {
     enabled?: boolean

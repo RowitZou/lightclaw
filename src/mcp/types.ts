@@ -1,6 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 
-export type McpScope = 'user' | 'project' | 'local'
+export type McpScope = 'user'
 export type McpTransportType = 'stdio' | 'http' | 'sse'
 
 export type McpStdioConfig = {

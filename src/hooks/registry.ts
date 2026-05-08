@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { readdir } from 'node:fs/promises'
 
 import type { LightClawConfig } from '../config.js'
 import { lightclawHome } from '../paths.js'
@@ -13,6 +14,7 @@ const manager = new HookManager({
 })
 
 let enabled = true
+const warnedLegacyHookDirs = new Set<string>()
 
 export function getHookManager(): HookManager {
   return manager
@@ -35,11 +37,25 @@ export async function loadHooks(config: LightClawConfig): Promise<RegisteredHook
   }
 
   const userDir = config.hookDirs.user ?? path.join(lightclawHome(), 'hooks')
-  const projectDir = config.hookDirs.project ?? path.join(getCwd(), '.lightclaw', 'hooks')
-  const hooks = [
-    ...await scanHookDir(userDir, 'user'),
-    ...await scanHookDir(projectDir, 'project'),
-  ]
+  void warnIfLegacyHooksDir(path.join(getCwd(), '.lightclaw', 'hooks'))
+  const hooks = await scanHookDir(userDir, 'user')
   manager.setHooks(hooks)
   return hooks
+}
+
+async function warnIfLegacyHooksDir(dir: string): Promise<void> {
+  if (warnedLegacyHookDirs.has(dir)) {
+    return
+  }
+  warnedLegacyHookDirs.add(dir)
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    if (entries.some(entry => entry.isFile() && entry.name.endsWith('.mjs'))) {
+      process.stderr.write(
+        `hooks: ${dir} is no longer scanned. Move .mjs files to ${path.join(lightclawHome(), 'hooks')}/\n`,
+      )
+    }
+  } catch {
+    // Missing or unreadable legacy directories are non-fatal migration noise.
+  }
 }

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { lightclawHome } from '../paths.js'
@@ -12,17 +12,15 @@ import type {
 
 export type McpConfigPaths = {
   user?: string
-  project?: string
-  local?: string
 }
 
 const ENV_VAR_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/gi
+const warnedLegacyMcpPaths = new Set<string>()
 
-export function defaultMcpConfigPaths(cwd = getCwd()): Required<McpConfigPaths> {
+export function defaultMcpConfigPaths(): Required<McpConfigPaths> {
+  void warnIfLegacyMcpConfig(getCwd())
   return {
     user: path.join(lightclawHome(), 'mcp.json'),
-    project: path.join(cwd, '.lightclaw', 'mcp.json'),
-    local: path.join(cwd, '.lightclaw', 'mcp.local.json'),
   }
 }
 
@@ -171,14 +169,10 @@ export async function loadMcpConfig(
   paths: McpConfigPaths,
 ): Promise<ScopedMcpServerConfig[]> {
   const warnedKeys = new Set<string>()
-  const [user, project, local] = await Promise.all([
-    loadOneFile(paths.user, 'user', warnedKeys),
-    loadOneFile(paths.project, 'project', warnedKeys),
-    loadOneFile(paths.local, 'local', warnedKeys),
-  ])
+  const user = await loadOneFile(paths.user, 'user', warnedKeys)
   const merged = new Map<string, ScopedMcpServerConfig>()
 
-  for (const config of [...user, ...project, ...local]) {
+  for (const config of user) {
     const existing = merged.get(config.normalizedName)
     if (existing && existing.name !== config.name) {
       throw new Error(
@@ -189,4 +183,25 @@ export async function loadMcpConfig(
   }
 
   return [...merged.values()]
+}
+
+async function warnIfLegacyMcpConfig(cwd: string): Promise<void> {
+  const legacyPaths = [
+    path.join(cwd, '.lightclaw', 'mcp.json'),
+    path.join(cwd, '.lightclaw', 'mcp.local.json'),
+  ]
+  for (const legacyPath of legacyPaths) {
+    if (warnedLegacyMcpPaths.has(legacyPath)) {
+      continue
+    }
+    warnedLegacyMcpPaths.add(legacyPath)
+    try {
+      await access(legacyPath)
+      process.stderr.write(
+        `mcp: ${legacyPath} is no longer scanned. Move admin-owned MCP config to ${path.join(lightclawHome(), 'mcp.json')}\n`,
+      )
+    } catch {
+      // ENOENT and permission failures should not block startup.
+    }
+  }
 }
