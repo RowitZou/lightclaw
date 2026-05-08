@@ -112,6 +112,8 @@ export function createFeishuStrategy(
             sessionId: string,
             userId: string,
           ) => permissions.createApprover({ message, sessionId, userId }),
+          tryAutoDenyForInterjection: (sessionId: string) =>
+            permissions.tryAutoDenyForInterjection(sessionId),
         }
       : {}),
   }
