@@ -84,6 +84,9 @@ type PendingPermission = {
   resolve(decision: PermissionDecision): void
   rendered: boolean
   abortListener?: () => void
+  /** 24h fallback so a card the user has forgotten about doesn't keep the
+   *  channel session lock pinned forever. Cleared on normal resolve / abort. */
+  expireTimer?: NodeJS.Timeout
 }
 
 type ParsedTextAction =
@@ -100,8 +103,23 @@ export class FeishuPermissionCoordinator {
   // query.ts's Promise.all batch), they line up here instead of overwriting
   // each other — every request gets its own card and own decision.
   private queuesByOwner = new Map<string, string[]>()
+  private readonly expiryMs: number
 
-  constructor(private readonly sender: FeishuSender) {}
+  // 24h is the chat-UX-friendly version of the 60s auto-deny that commit
+  // 96b8bc2 (2026-04-29) removed for being asymmetric with the terminal
+  // REPL and far too short for stepping-away-to-a-meeting users. The
+  // longer window solves a different problem: a card the user has
+  // forgotten about pinning the channel session lock indefinitely.
+  // 24h matches the pending-notice queue TTL so all "stale" thresholds
+  // stay coherent. Tests inject a small expiryMs to exercise the path.
+  static readonly DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000
+
+  constructor(
+    private readonly sender: FeishuSender,
+    options: { expiryMs?: number } = {},
+  ) {
+    this.expiryMs = options.expiryMs ?? FeishuPermissionCoordinator.DEFAULT_EXPIRY_MS
+  }
 
   createApprover(input: {
     message: NormalizedChannelMessage
@@ -215,6 +233,23 @@ export class FeishuPermissionCoordinator {
         }
         input.ask.signal.addEventListener('abort', abortListener, { once: true })
         pending.abortListener = abortListener
+      }
+
+      if (this.expiryMs > 0) {
+        const timer = setTimeout(() => {
+          void this.expirePending(pending)
+        }, this.expiryMs)
+        // unref so the timer doesn't keep the test runner / shutdown
+        // path waiting on a 24h ghost. The pending Promise itself is
+        // what gates daemon shutdown — once it resolves (via approve /
+        // deny / abort / expire), clearTimeout fires and the timer is
+        // gone anyway. Tests use t.mock.timers.tick() to drive the
+        // expire path deterministically; real-time elapse only happens
+        // in production.
+        if (typeof timer.unref === 'function') {
+          timer.unref()
+        }
+        pending.expireTimer = timer
       }
 
       this.pendingById.set(id, pending)
@@ -458,12 +493,49 @@ export class FeishuPermissionCoordinator {
     return swept
   }
 
+  /**
+   * Reached when a pending sits unanswered past expiryMs (24h default).
+   * Resolves as deny, pushes a system notice card so the user knows what
+   * happened on next visit, and frees the channel session lock that the
+   * stuck `ask` promise was pinning. Clicks / text replies that arrive
+   * after this point hit the regular "stale action" path because the id
+   * is gone from `pendingById`.
+   */
+  private async expirePending(pending: PendingPermission): Promise<void> {
+    if (!this.pendingById.has(pending.id)) {
+      // Already resolved (approve / deny / abort raced the timer).
+      return
+    }
+    process.stderr.write(
+      `feishu permission: expired request=${pending.id} after ${this.expiryMs}ms\n`,
+    )
+    this.resolvePending(pending, {
+      behavior: 'deny',
+      reason: t('permission.feishu.deniedExpired', {
+        tool: pending.ask.toolName,
+        hours: Math.round(this.expiryMs / (60 * 60 * 1000)),
+      }),
+    })
+    void this.safeSendNotice(
+      pending.message,
+      'info',
+      t('permission.feishu.notice.expired', {
+        tool: pending.ask.toolName,
+        hours: Math.round(this.expiryMs / (60 * 60 * 1000)),
+      }),
+    )
+  }
+
   private resolvePending(
     pending: PendingPermission,
     decision: PermissionDecision,
   ): void {
     if (pending.abortListener && pending.ask.signal) {
       pending.ask.signal.removeEventListener('abort', pending.abortListener)
+    }
+    if (pending.expireTimer) {
+      clearTimeout(pending.expireTimer)
+      pending.expireTimer = undefined
     }
     this.pendingById.delete(pending.id)
     const key = ownerKey(pending.message)

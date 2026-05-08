@@ -346,6 +346,96 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     assert.equal(aliceR.behavior, 'deny')
     assert.equal(bobR.behavior, 'deny')
   }))
+
+  // Mock timers so the 24h fallback fires deterministically inside a
+  // subprocess test runner. Real-time setTimeout + node:test worker
+  // subprocess interaction is finicky (the worker holds shutdown until
+  // the loop drains, which conflates test completion with timer
+  // lifecycle); mock timers tick.advance us through the path without
+  // touching real time.
+  it('expires pending after expiryMs, resolving as deny + pushing expired notice', t => inSession(async () => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(
+      sender as unknown as FeishuSender,
+      { expiryMs: 24 * 60 * 60 * 1000 },
+    )
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const decisionP = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => process.nextTick(r))
+    assert.equal(sender.cardSends, 1, 'approval card rendered')
+
+    t.mock.timers.tick(24 * 60 * 60 * 1000)
+    const decision = await decisionP
+    assert.equal(decision.behavior, 'deny')
+    assert.match(decision.reason ?? '', /(expired|失效)/i)
+    // expirePending fires safeSendNotice → second sendInteractiveCard call.
+    assert.equal(sender.cardSends, 2, 'expired notice card sent')
+  }))
+
+  it('normal resolution clears the expiry timer (no double-resolve)', t => inSession(async () => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(
+      sender as unknown as FeishuSender,
+      { expiryMs: 24 * 60 * 60 * 1000 },
+    )
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const decisionP = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => process.nextTick(r))
+    await coord.handleCardAction({
+      requestId: extractHeadId(coord),
+      action: 'allow',
+      operatorOpenId: 'alice-open-id',
+    })
+    const decision = await decisionP
+    assert.equal(decision.behavior, 'allow')
+
+    // Tick past 24h. If the timer wasn't cleared in resolvePending, the
+    // expirePending callback would fire and we'd see a 3rd card (the
+    // "expired" notice). With proper clearTimeout, the tick is a no-op.
+    t.mock.timers.tick(24 * 60 * 60 * 1000 + 1)
+    assert.equal(sender.cardSends, 2, 'no expired card after normal resolve')
+  }))
+
+  it('aborted ask clears the expiry timer (no double-resolve)', t => inSession(async () => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(
+      sender as unknown as FeishuSender,
+      { expiryMs: 24 * 60 * 60 * 1000 },
+    )
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+    const controller = new AbortController()
+    const askInput: PermissionAskInput = {
+      ...ask('Bash', 'curl:*'),
+      signal: controller.signal,
+    }
+    const decisionP = approver.ask(askInput)
+    await new Promise(r => process.nextTick(r))
+    controller.abort()
+    const decision = await decisionP
+    assert.equal(decision.behavior, 'deny')
+    assert.match(decision.reason ?? '', /(abort|中断)/i)
+
+    t.mock.timers.tick(24 * 60 * 60 * 1000 + 1)
+    // No expired notice card after the abort path resolved + cleared timer.
+    assert.equal(sender.cardSends, 1, 'no expired card after abort')
+  }))
 })
 
 // ---- helpers ----
