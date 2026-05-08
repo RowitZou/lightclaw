@@ -233,7 +233,23 @@ export class ChannelRunner {
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
-    if (this.strategy.isMessageTargeted && !this.strategy.isMessageTargeted(message)) {
+    // Synthetic messages (Phase 25 post-approval pre-text replay) bypass the
+    // mention gate. The gate is "did the user point this at us?" — meaningful
+    // only for live user input. Replay re-injects text the user typed BEFORE
+    // pairing, when Phase 26 mention gating either fail-opened (botOpenId
+    // undefined) or never ran for that text (it went through the pairing
+    // card path). After the b5f16a7 bot-info parse fix lets the gate go
+    // strict, a group-origin replay whose stashed text has no `@<bot>` would
+    // hit `no-mention` and get dropped — visible in stderr as "drop
+    // non-mention msg in group" right after "[preheat-on-approval] ...
+    // replaying pre-approval text". Same shape of synthetic-flag bypass as
+    // the existing reply / typing-reaction short-circuits in the Feishu
+    // sender.
+    if (
+      !message.synthetic &&
+      this.strategy.isMessageTargeted &&
+      !this.strategy.isMessageTargeted(message)
+    ) {
       return
     }
     // User lookup runs FIRST (and pairing falls out of unknown sender).
