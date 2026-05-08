@@ -10,6 +10,7 @@ import { requireSessionContext } from '../session-context.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 import {
+  buildBackgroundTaskFirePrompt,
   buildBackgroundTaskSessionId,
   createBackgroundTaskCanUseTool,
   runBackgroundTaskFire,
@@ -41,6 +42,31 @@ describe('background-task runner tool gate', () => {
     const gate = createBackgroundTaskCanUseTool()
     assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })
     assert.deepEqual(await gate(fakeTool('AgentTool'), {}), { behavior: 'allow' })
+  })
+})
+
+describe('buildBackgroundTaskFirePrompt', () => {
+  it('embeds the task instruction inside an <instruction> block within the envelope', () => {
+    const prompt = buildBackgroundTaskFirePrompt(
+      fakeTask({
+        id: 'alice-task1',
+        label: 'GPU check',
+        prompt: 'Run nvidia-smi and report any GPU with utilization above 95%.',
+      }),
+    )
+    assert.match(prompt, /^<background-task-fire>/)
+    assert.ok(prompt.includes('<label>GPU check</label>'))
+    assert.ok(prompt.includes('<task-id>alice-task1</task-id>'))
+    assert.ok(prompt.includes('<instruction>\nRun nvidia-smi and report any GPU with utilization above 95%.\n</instruction>'))
+    // <fired-at> is a stable ISO8601 string.
+    assert.match(prompt, /<fired-at>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+  })
+
+  it('explicitly tells the agent the scheduled time has already arrived', () => {
+    const prompt = buildBackgroundTaskFirePrompt(fakeTask())
+    assert.match(prompt, /scheduled fire time is NOW/i)
+    assert.match(prompt, /Do not ask the user clarifying questions/i)
+    assert.match(prompt, /not (read|treat) the instruction as a future event/i)
   })
 })
 
@@ -175,15 +201,15 @@ describe('runBackgroundTaskFire', () => {
     }
   })
 
-  it('feeds task.prompt verbatim to the inner query (no history block, no sentinel)', async () => {
-    let observedFirstUserContent: unknown = null
+  it('wraps task.prompt in a fire envelope so the executor knows it is the scheduled run', async () => {
+    let observedFirstUserContent = ''
     setBackgroundTaskQueryForTest(async input => {
       const messages = input.messages as Message[]
       const head = messages[0]
       observedFirstUserContent =
-        head?.type === 'user'
+        head?.type === 'user' && typeof head.message.content === 'string'
           ? head.message.content
-          : null
+          : ''
       return {
         messages: [],
         assistantText: 'ok',
@@ -199,12 +225,21 @@ describe('runBackgroundTaskFire', () => {
         id: 'alice-task1',
         ownerCanonicalUser: 'alice',
         prompt: promptText,
+        label: 'Workspace check',
       }),
       fireUuid: 'fire-2',
       signal: new AbortController().signal,
     })
 
-    assert.equal(observedFirstUserContent, promptText)
+    // The original instruction is preserved verbatim inside <instruction>...
+    assert.ok(observedFirstUserContent.includes(promptText))
+    // ...wrapped in the fire envelope identifying this as the scheduled run.
+    assert.ok(observedFirstUserContent.includes('<background-task-fire>'))
+    assert.ok(observedFirstUserContent.includes('<task-id>alice-task1</task-id>'))
+    assert.ok(observedFirstUserContent.includes('<label>Workspace check</label>'))
+    assert.ok(observedFirstUserContent.includes('<instruction>'))
+    // ...and tells the agent to execute now rather than treat it as a future event.
+    assert.match(observedFirstUserContent, /scheduled fire time is NOW/)
   })
 
   it('returns transient failure for ECONNRESET-class errors', async () => {
