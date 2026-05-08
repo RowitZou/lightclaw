@@ -53,16 +53,28 @@ describe('updatePendingUserInfo', () => {
 })
 
 describe('updatePendingApplicantText', () => {
-  it('stashes the latest applicant text and chatId on the matching entry', async () => {
+  it('stashes the latest applicant text, chatId, and chatType on the matching entry', async () => {
     await generateOrReusePending('feishu', 'ou_alice', 'Alice')
     const senderKey: SenderKey = 'feishu:ou_alice'
 
-    await updatePendingApplicantText(senderKey, '我想用 LightClaw 帮我看一下日志', 'oc_dm_alice')
+    await updatePendingApplicantText(senderKey, '我想用 LightClaw 帮我看一下日志', 'oc_group_alice', 'group')
 
     const [entry] = await listPending()
     assert.equal(entry.lastApplicantText, '我想用 LightClaw 帮我看一下日志')
-    assert.equal(entry.lastApplicantChatId, 'oc_dm_alice')
+    assert.equal(entry.lastApplicantChatId, 'oc_group_alice')
+    assert.equal(entry.lastApplicantChatType, 'group')
     assert.ok(entry.lastApplicantTextAt && entry.lastApplicantTextAt > 0)
+  })
+
+  it('records chatType=p2p for DM inbounds so replay routes back to DM', async () => {
+    await generateOrReusePending('feishu', 'ou_alice', 'Alice')
+    const senderKey: SenderKey = 'feishu:ou_alice'
+
+    await updatePendingApplicantText(senderKey, 'hello', 'oc_dm_alice', 'p2p')
+
+    const [entry] = await listPending()
+    assert.equal(entry.lastApplicantChatType, 'p2p')
+    assert.equal(entry.lastApplicantChatId, 'oc_dm_alice')
   })
 
   it('overwrites previous text when the applicant resends', async () => {

@@ -40,13 +40,24 @@ export type PendingEntry = {
   /** Epoch ms of the last lastApplicantText update. Used by replay paths. */
   lastApplicantTextAt?: number
   /**
-   * The applicant's most recent inbound chatId, captured alongside
-   * lastApplicantText. Replay does NOT use this — replay always lands in
-   * the applicant↔bot DM regardless of where they sent the original
-   * message — but it lets future paths reason about "where was this
-   * message originally sent" without rebuilding the message envelope.
+   * The applicant's most recent inbound chatId. Post-approval replay
+   * routes back HERE so the agent reply lands in the chat the user
+   * originally @'d the bot in (group → group, DM → DM). Cards
+   * (welcome / pairing / permission) stay on DM regardless — that is
+   * a privacy boundary, distinct from the agent-conversation
+   * continuity boundary that this field encodes.
    */
   lastApplicantChatId?: string
+  /**
+   * Captured alongside lastApplicantChatId so replay can reconstruct
+   * the right NormalizedChannelMessage shape: chatType drives the
+   * Phase 26 sessionId formula (`feishu:dm:<chatId>` for p2p vs
+   * `feishu:group:<chatId>:<senderOpenId>` for groups), which in
+   * turn determines transcript persistence + the Phase 26 [senderName]
+   * prefix on group user messages. Missing on old pending.json files;
+   * replay falls back to 'p2p' when absent.
+   */
+  lastApplicantChatType?: string
 }
 
 export type PendingFile = Record<string, PendingEntry>

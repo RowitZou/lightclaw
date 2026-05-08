@@ -22,16 +22,19 @@ export function makeFakeFeishuMessage(opts: {
   sender: string
   text: string
   sessionId?: string
+  chatType?: string
+  chatId?: string
 }): NormalizedChannelMessage {
   const sessionPart = opts.sessionId ?? opts.sender
   return {
     channel: 'feishu',
     eventId: `event-${sessionPart}`,
-    chatId: `chat-${sessionPart}`,
+    chatId: opts.chatId ?? `chat-${sessionPart}`,
     senderOpenId: opts.sender,
     senderKey: `feishu:${opts.sender}`,
     messageId: `msg-${sessionPart}`,
     text: opts.text,
+    ...(opts.chatType !== undefined ? { chatType: opts.chatType } : {}),
   }
 }
 

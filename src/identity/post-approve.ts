@@ -9,14 +9,29 @@ export type PreheatOptions = {
   /**
    * The applicant's pre-approval text, captured from the pending entry
    * (or directly from the application card state when called from the
-   * card flow). When non-empty AND the welcome card push reports a DM
-   * chat_id, post-approve replays this text through the channel runner
-   * so the user's first message is actually answered. Empty / missing
-   * text simply skips replay; daemon shutdown / restart between approval
-   * and welcome is tolerated because pending.json is the durable source
-   * of truth.
+   * card flow). When non-empty, post-approve replays this text through
+   * the channel runner so the user's first @ message is actually
+   * answered. Empty / missing text simply skips replay; daemon shutdown
+   * / restart between approval and welcome is tolerated because
+   * pending.json is the durable source of truth.
    */
   applicantText?: string
+  /**
+   * The chatId where the user originally @'d the bot. Replay routes
+   * the agent reply HERE (group → group, DM → DM), preserving the
+   * "user-asked-where-the-agent-answers" continuity. Welcome / pairing
+   * / permission cards remain DM-only by separate design — the
+   * privacy boundary and the agent-conversation continuity boundary
+   * are different concerns. When missing (old pending.json shape),
+   * fall back to the welcome card's DM chat_id (always-DM degraded
+   * default).
+   */
+  applicantChatId?: string
+  /**
+   * Drives Phase 26 sessionId routing on replay (`feishu:dm:<chatId>`
+   * vs `feishu:group:<chatId>:<senderOpenId>`). Defaults to 'p2p'.
+   */
+  applicantChatType?: string
 }
 
 export function preheatAndWelcomeOnApproval(
@@ -135,9 +150,10 @@ async function runApprovalPreheat(
   // dropped on the floor. Requires:
   //   - a stashed text (the applicant actually said something with their
   //     first contact, not just an empty mention)
-  //   - the welcome card send returned a chat_id (so the synthetic
-  //     replay message lands in the same DM session future inbound
-  //     messages will use, keeping transcript continuity)
+  //   - a target chatId (prefer the original chat from the pending
+  //     entry — group → group, DM → DM. Fall back to the welcome
+  //     card's DM chat_id when unknown, e.g. old pending.json files
+  //     written before this field was tracked)
   //   - the channel runner is registered (the daemon owns one)
   // All three are best-effort — replay is a UX nicety, not a correctness
   // contract; if any prerequisite is missing we log to stderr and stop.
@@ -145,13 +161,15 @@ async function runApprovalPreheat(
   if (!applicantText) {
     return
   }
-  const dmChatId = sendResult?.chatId
-  if (!dmChatId) {
+  const replayChatId = opts.applicantChatId ?? sendResult?.chatId
+  if (!replayChatId) {
     process.stderr.write(
-      `[preheat-on-approval] ${name}: welcome card returned no chat_id; skipping replay\n`,
+      `[preheat-on-approval] ${name}: no replay chatId (no original chat stashed and welcome card returned no chat_id); skipping replay\n`,
     )
     return
   }
+  const replayChatType = opts.applicantChatType ?? 'p2p'
+  const replayingTo = opts.applicantChatId ? 'origin' : 'dm-fallback'
   const { getChannelRunner } = await import('../channels/feishu/runner-registry.js')
   const runner = getChannelRunner()
   if (!runner) {
@@ -160,22 +178,22 @@ async function runApprovalPreheat(
     )
     return
   }
-  // Construct a minimal NormalizedChannelMessage matching what an actual
-  // inbound DM from this user would look like. chatType='p2p' so it
-  // routes to feishu:dm:<chatId> per Phase 26. eventId / messageId have
-  // a 'replay-' prefix for grep-ability in dedup / api-logs (the dedup
-  // layer is bypassed here — dedup runs in feishu-channel onMessage,
-  // before this synthetic injection point).
+  // Construct a minimal NormalizedChannelMessage matching what the
+  // user's actual @bot looked like. chatType drives the Phase 26
+  // sessionId formula so the replay turn lands in the same transcript
+  // future inbounds will continue. eventId / messageId have a 'replay-'
+  // prefix for grep-ability; dedup is bypassed because we never went
+  // through feishu-channel onMessage.
   process.stderr.write(
-    `[preheat-on-approval] ${name}: replaying pre-approval text (${applicantText.length} chars) into ${dmChatId}\n`,
+    `[preheat-on-approval] ${name}: replaying pre-approval text (${applicantText.length} chars) ${replayingTo}=${replayChatId} type=${replayChatType}\n`,
   )
   await runner.handleMessage({
     channel: 'feishu',
     eventId: `replay-${randomUUID()}`,
-    chatId: dmChatId,
+    chatId: replayChatId,
     senderOpenId: openId,
     senderKey: link,
-    chatType: 'p2p',
+    chatType: replayChatType,
     messageId: `replay-${randomUUID()}`,
     text: applicantText,
     // The platform never saw this message; reply / reaction APIs would

@@ -180,6 +180,7 @@ export async function updatePendingApplicantText(
   senderKey: SenderKey,
   text: string,
   chatId?: string,
+  chatType?: string,
 ): Promise<void> {
   const trimmed = text.trim()
   if (!trimmed) {
@@ -191,7 +192,11 @@ export async function updatePendingApplicantText(
     if (`${entry.channel}:${entry.peerId}` !== senderKey) {
       continue
     }
-    if (entry.lastApplicantText === trimmed && entry.lastApplicantChatId === chatId) {
+    if (
+      entry.lastApplicantText === trimmed &&
+      entry.lastApplicantChatId === chatId &&
+      entry.lastApplicantChatType === chatType
+    ) {
       // Nothing to write; user resent identical text from the same chat.
       return
     }
@@ -199,6 +204,9 @@ export async function updatePendingApplicantText(
     entry.lastApplicantTextAt = Date.now()
     if (chatId !== undefined) {
       entry.lastApplicantChatId = chatId
+    }
+    if (chatType !== undefined) {
+      entry.lastApplicantChatType = chatType
     }
     mutatedKey = code
     break
