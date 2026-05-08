@@ -28,6 +28,7 @@ import {
 } from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
+import { isFeishuGroupChatType } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js'
 
@@ -57,6 +58,7 @@ export type FeishuCardAction = {
   requestId: string
   action: FeishuPermissionActionKind
   operatorOpenId: string
+  originSessionId?: string
   openMessageId?: string
 }
 
@@ -97,7 +99,7 @@ type ParsedTextAction =
 
 export class FeishuPermissionCoordinator {
   private pendingById = new Map<string, PendingPermission>()
-  // FIFO queue per owner (chatId:senderOpenId). Only the head is rendered;
+  // FIFO queue per owner (sessionId). Only the head is rendered;
   // tail entries wait quietly. When an LLM turn dispatches multiple
   // concurrent permission asks (e.g. parallel WebFetch / WebSearch through
   // query.ts's Promise.all batch), they line up here instead of overwriting
@@ -143,6 +145,12 @@ export class FeishuPermissionCoordinator {
       // card looks like in place.
       process.stderr.write(
         `feishu permission: ignored stale action request=${action.requestId}\n`,
+      )
+      return {}
+    }
+    if (action.originSessionId && action.originSessionId !== pending.sessionId) {
+      process.stderr.write(
+        `feishu permission: ignored action with session mismatch request=${action.requestId} origin=${action.originSessionId} pending=${pending.sessionId}\n`,
       )
       return {}
     }
@@ -253,7 +261,7 @@ export class FeishuPermissionCoordinator {
       }
 
       this.pendingById.set(id, pending)
-      const key = ownerKey(pending.message)
+      const key = ownerKey(pending)
       const queue = this.queuesByOwner.get(key) ?? []
       const isHead = queue.length === 0
       queue.push(id)
@@ -274,6 +282,37 @@ export class FeishuPermissionCoordinator {
 
   private async sendApprovalPrompt(pending: PendingPermission): Promise<void> {
     const card = buildApprovalCard(pending)
+    if (isFeishuGroupChatType(pending.message.chatType)) {
+      try {
+        await this.sender.sendInteractiveCardToOpenId(
+          pending.message.senderOpenId,
+          card,
+        )
+        return
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `feishu permission: DM push failed for ${pending.message.senderOpenId}, falling back to in-chat card request=${pending.id}: ${detail}\n`,
+        )
+        try {
+          await this.sender.sendInteractiveCard(pending.message, card)
+          return
+        } catch (fallbackError) {
+          const fallbackDetail = fallbackError instanceof Error
+            ? fallbackError.message
+            : String(fallbackError)
+          process.stderr.write(
+            `feishu permission: fallback send failed request=${pending.id}: ${fallbackDetail}\n`,
+          )
+          this.resolvePending(pending, {
+            behavior: 'deny',
+            reason: `Permission denied: ${pending.ask.toolName} approval prompt could not be delivered in Feishu.`,
+          })
+          return
+        }
+      }
+    }
+
     try {
       await this.sender.sendInteractiveCard(pending.message, card)
     } catch (error) {
@@ -398,10 +437,10 @@ export class FeishuPermissionCoordinator {
     // head — otherwise resolvePending() promotes the next id and renders a
     // card for it before we get a chance to auto-resolve via the new rule.
     // We pass `pending.id` to skip the head itself; head is resolved below.
-    const swept = this.reevaluateOwnerQueue(pending.message, pending.id)
+    const swept = this.reevaluateOwnerQueue(pending, pending.id)
     if (swept > 0) {
       process.stderr.write(
-        `feishu permission: reevaluated ${swept} queued request${swept === 1 ? '' : 's'} after allow install (owner=${ownerKey(pending.message)})\n`,
+        `feishu permission: reevaluated ${swept} queued request${swept === 1 ? '' : 's'} after allow install (owner=${ownerKey(pending)})\n`,
       )
     }
     this.resolvePending(pending, {
@@ -435,10 +474,10 @@ export class FeishuPermissionCoordinator {
    * is responsible for promoting the next head if anything remains.
    */
   private reevaluateOwnerQueue(
-    message: NormalizedChannelMessage,
+    pending: PendingPermission,
     skipPendingId: string,
   ): number {
-    const key = ownerKey(message)
+    const key = ownerKey(pending)
     const queue = this.queuesByOwner.get(key)
     if (!queue || queue.length === 0) {
       return 0
@@ -538,7 +577,7 @@ export class FeishuPermissionCoordinator {
       pending.expireTimer = undefined
     }
     this.pendingById.delete(pending.id)
-    const key = ownerKey(pending.message)
+    const key = ownerKey(pending)
     const queue = this.queuesByOwner.get(key)
     let promotedHead: PendingPermission | null = null
     if (queue) {
@@ -569,12 +608,15 @@ export class FeishuPermissionCoordinator {
     // Text replies act on the *visible* card — that's always the head of the
     // owner's queue. Tail entries (queued behind the head) cannot be
     // approved by text reply because the user hasn't seen them yet.
-    const key = `${raw.chatId}:${raw.senderOpenId}`
-    const queue = this.queuesByOwner.get(key)
-    if (!queue || queue.length === 0) {
-      return null
+    for (const queue of this.queuesByOwner.values()) {
+      const head = queue[0]
+      if (!head) continue
+      const pending = this.pendingById.get(head)
+      if (pending?.message.senderOpenId === raw.senderOpenId) {
+        return pending
+      }
     }
-    return this.pendingById.get(queue[0]) ?? null
+    return null
   }
 
   private async canOperate(
@@ -634,13 +676,13 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
   }
   const buttons = pending.highRisk
     ? [
-        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow'),
-        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny'),
+        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow', pending.sessionId),
+        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny', pending.sessionId),
       ]
     : [
-        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow'),
-        buildButton(t('permission.feishu.btn.allowAlways', { label: middleLabel }), 'default', pending.id, 'allow_rules'),
-        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny'),
+        buildButton(t('permission.feishu.btn.allowOnce'), 'primary', pending.id, 'allow', pending.sessionId),
+        buildButton(t('permission.feishu.btn.allowAlways', { label: middleLabel }), 'default', pending.id, 'allow_rules', pending.sessionId),
+        buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny', pending.sessionId),
       ]
 
   return {
@@ -677,6 +719,7 @@ function buildButton(
   type: 'default' | 'primary' | 'danger',
   requestId: string,
   action: FeishuPermissionActionKind,
+  originSessionId: string,
 ): Record<string, unknown> {
   return {
     tag: 'button',
@@ -689,6 +732,7 @@ function buildButton(
       kind: 'lightclaw_permission',
       requestId,
       action,
+      originSessionId,
     },
   }
 }
@@ -797,8 +841,8 @@ function buildTextFallback(pending: PendingPermission): string {
   ].join('\n')
 }
 
-function ownerKey(message: NormalizedChannelMessage): string {
-  return `${message.chatId}:${message.senderOpenId}`
+function ownerKey(pending: PendingPermission): string {
+  return pending.sessionId
 }
 
 function parseTextAction(text: string): ParsedTextAction | null {

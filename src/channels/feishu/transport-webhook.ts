@@ -202,7 +202,7 @@ function normalizeEvent(body: Record<string, unknown>): FeishuRawMessage | null 
   const parsed = parseMessageContent({
     content: stringValue(message?.content),
     messageType,
-    mentions: Array.isArray(message?.mentions) ? message.mentions : [],
+    mentions: parseMentions(message?.mentions),
   })
 
   if (
@@ -221,10 +221,30 @@ function normalizeEvent(body: Record<string, unknown>): FeishuRawMessage | null 
     senderOpenId,
     chatType: stringValue(message?.chat_type),
     messageId,
-    parentId: stringValue(message?.parent_id) ?? stringValue(message?.root_id),
+    threadId: stringValue(message?.thread_id),
+    rootId: stringValue(message?.root_id),
+    mentions: parseMentions(message?.mentions),
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }
+}
+
+function parseMentions(value: unknown): Array<{ key?: string; name?: string; openId?: string }> {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const mentions: Array<{ key?: string; name?: string; openId?: string }> = []
+  for (const item of value) {
+    const record = asRecord(item)
+    if (!record) continue
+    const id = asRecord(record.id)
+    mentions.push({
+      key: stringValue(record.key),
+      name: stringValue(record.name),
+      openId: stringValue(id?.open_id) ?? stringValue(record.open_id),
+    })
+  }
+  return mentions
 }
 
 function parseJson(raw: string): Record<string, unknown> | null {

@@ -1,6 +1,7 @@
 export type FeishuMention = {
   key?: string
   name?: string
+  openId?: string
 }
 
 export type ParsedMediaKey = {
@@ -25,7 +26,9 @@ export type FeishuRawMessage = {
   chatType?: string
   senderOpenId: string
   messageId: string
-  parentId?: string
+  threadId?: string
+  rootId?: string
+  mentions?: FeishuMention[]
   text: string
   mediaKeys?: ParsedMediaKey[]
 }

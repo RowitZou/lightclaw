@@ -16,6 +16,7 @@ const baseConfig: FeishuChannelConfig = {
   permissionMode: 'default',
   allowUsers: ['*'],
   allowChats: ['*'],
+  requireMention: true,
   textChunkSize: 4000,
   httpTimeoutMs: 30_000,
   maxBodyBytes: 1024 * 1024,

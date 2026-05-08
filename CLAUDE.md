@@ -19,6 +19,16 @@
 - Pairing card tokens are in-memory only. After a daemon restart, old card clicks resolve as expired or already handled; users can resend a message and `pending.json` remains the durable source of truth.
 - Admin review card clicks must validate the operator through `lookupBySender(feishu:<open_id>)` + `isAdmin()`. Never trust the card payload alone for approval authority.
 
+# LightClaw Feishu Session Isolation Notes (Phase 26)
+
+- Feishu sessionId formula is now `feishu:dm:<chatId>` for p2p/private chats, and `feishu:group:<chatId>[:<threadId>]:<senderOpenId>` for group/topic-group/unknown chat types. `threadId` comes from Feishu `message.thread_id` and is a topic-group sub-channel; `rootId` comes from `message.root_id` and is only reply-chain metadata. Do not merge them back into `parentId`, and do not make `rootId` influence sessionId.
+- Same Feishu user in DM, each group, and each topic thread runs an independent transcript, `session-memory.md`, channel lock, and permission FIFO queue. Canonical identity, identity preferences, permission rules, and auto-memory stay per canonical user so long-term facts and user-level rules still cross sessions.
+- Group mention gating is enforced in application code before pairing/session routing. With `channels.feishu.requireMention` (default `true`), group messages pass only when `mentions[]` contains the bot open_id or the parsed text contains `@<botName>`. The Feishu open-platform "only messages that mention bot" backend toggle is not enough; keep this gate as the safety net. `requireMention: false` is the explicit admin escape hatch.
+- Bot self identity is probed once at startup via `/open-apis/bot/v3/info`. If it cannot be fetched, the gate falls back to "pass" with a stderr warning instead of killing the daemon, because a bot-info outage should not make the channel unusable.
+- Group user messages are prefixed before the LLM sees them: `[<senderName>] <text>`. Sender name is best-effort contact lookup, then mention sidecar name, then open_id suffix. DM messages do not get this prefix. The Feishu system prompt tells the model that the prefix is sender metadata, not user words.
+- Permission approval cards from group-triggered tool calls are pushed to the sender's DM via `sendInteractiveCardToOpenId(senderOpenId)`. The card button value carries `originSessionId`; callbacks validate it before resolving the pending ask. If DM push fails, fall back to the original chat and log stderr so the turn never hangs silently.
+- Permission `ownerKey` is the sessionId. Same user in DM and group can have independent pending approval queues. Do not restore `chatId:senderOpenId`; that collapses unrelated session decisions back together.
+
 # LightClaw Permission System Notes
 
 - `Tool.suggestPermissionRules(input)` returns a *set of rules to install as a group* — not a precise→broad menu. For a chained Bash command the suggester emits one `Bash(<head>:*)` rule per subcommand (split on `;`/`&&`/`||`/`|`, max 5); for path tools a single `Tool(<dir>/**)` rule; for WebFetch a single `WebFetch(<hostname>)` rule; for MCP a single `MCP(<server>:<tool>)` rule. New tools should follow the same shape — return an empty array when no precise scope is derivable, and the approver will fall back to a single tool-wide allow rule.

@@ -16,6 +16,7 @@ import type { Runtime } from '../runtime/types.js'
 import {
   applyAttachmentMaterialization,
   ChannelRunner,
+  formatChannelUserText,
   type ChannelRunnerStrategy,
 } from './runner.js'
 import type {
@@ -565,6 +566,50 @@ describe('applyAttachmentMaterialization', () => {
       ),
       `expected throw-path warn, got: ${JSON.stringify(stderr.lines)}`,
     )
+  })
+})
+
+describe('formatChannelUserText', () => {
+  it('prefixes Feishu group messages with the resolved sender name', async () => {
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async (_openId, mentions) =>
+      mentions?.get('ou_alice') ?? 'fallback'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_group',
+        senderOpenId: 'ou_alice',
+        chatType: 'group',
+        messageId: 'om',
+        feishuMentions: [{ openId: 'ou_alice', name: '张三' }],
+        text: 'hello',
+      },
+      null,
+    )
+
+    assert.equal(text, '[张三] hello')
+  })
+
+  it('does not prefix Feishu DM messages', async () => {
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => '张三'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_dm',
+        senderOpenId: 'ou_alice',
+        chatType: 'p2p',
+        messageId: 'om',
+        text: 'hello',
+      },
+      null,
+    )
+
+    assert.equal(text, 'hello')
   })
 })
 
