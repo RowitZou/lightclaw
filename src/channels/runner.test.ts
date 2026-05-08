@@ -786,6 +786,31 @@ describe('ChannelRunner pairing branch', () => {
     assert.match(harness.dmNotices[0].text, /配对码|approve/)
   })
 
+  it('bootstrap fallback also stashes applicant text on the new pending entry for replay', async () => {
+    // The 2026-05-08 issue-3 fix added updatePendingApplicantText only on
+    // the card paths (existing-pending + applyConfirm promotion). Real
+    // dogfood: admin self-pairing via group @ never hits either of those —
+    // it goes straight through the bootstrap fallback `try` block when
+    // canRenderPairingCard is false. Without stashing on this path, the
+    // pending entry's lastApplicantText stays undefined and post-approve
+    // replay silently skips. Verify the bootstrap fallback now stashes.
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(
+      makeFakeFeishuMessage({ sender: 'ou_user', text: '请帮我看一下日志' }),
+    )
+
+    const { listPending } = await import('../identity/pairing.js')
+    const pending = await listPending()
+    assert.equal(pending.length, 1, 'bootstrap fallback created the pending entry')
+    assert.equal(pending[0].lastApplicantText, '请帮我看一下日志', 'applicant text stashed for replay')
+    assert.ok(pending[0].lastApplicantTextAt, 'stash timestamp recorded')
+  })
+
   it('falls back to in-chat notice when sendNoticeToOpenId hook is absent (legacy strategy)', async () => {
     // Channels without a "send to specific user without an inbound" surface
     // (or future test stubs that omit the hook) keep the old behavior so the
