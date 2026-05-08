@@ -674,6 +674,45 @@ export async function query(params: QueryParams): Promise<{
     }
 
     if (toolUses.length === 0) {
+      // Phase 27 late-interjection rescue: if the user sent an interjection
+      // *during* the LLM turn that just produced a final answer (no
+      // tool_use), the tool-boundary drain in the finally block below
+      // never ran for it. Without this rescue the queued entries are
+      // silently dropped when the channel runner unmarks in-flight, and
+      // the user sees "插嘴模式没生效" — visible in stderr as
+      //   "interjection queued for session ... (size=N)"
+      //   "query done"
+      // with NO "query: injected" between them. Drain here, inject as a
+      // standalone user message, and continue the loop so the LLM gets
+      // another turn to react. Same `<user-interjection>` framing as the
+      // tool-boundary path.
+      const lateInterjections = params.interjectionDrain?.() ?? []
+      if (lateInterjections.length > 0) {
+        const lateContent: UserContentBlock[] = [{
+          type: 'text',
+          text: buildInterjectionBlock({
+            interjections: lateInterjections,
+            originalUserText: extractOriginalUserText(messages),
+            completedToolUses: extractCompletedToolUses(messages),
+          }),
+        }]
+        const lateUserMessage = createUserMessage(lateContent, getLastUuid(messages))
+        lateUserMessage.metadata = {
+          ...(lateUserMessage.metadata ?? {}),
+          interjectionEntries: lateInterjections.map(entry => ({
+            messageId: entry.messageId,
+            senderOpenId: entry.senderOpenId,
+            arrivedAt: entry.arrivedAt,
+            text: entry.text,
+          })),
+        }
+        messages.push(lateUserMessage)
+        process.stderr.write(
+          `query: injected ${lateInterjections.length} late interjection${lateInterjections.length === 1 ? '' : 's'} after end_turn\n`,
+        )
+        // Loop back to send the new user message to the LLM.
+        continue
+      }
       const extractionSnapshot = [...messages]
       if (!params.ephemeral) {
         await maybeUpdateSessionMemory(extractionSnapshot)

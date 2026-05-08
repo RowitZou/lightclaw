@@ -138,7 +138,7 @@ describe('requestPermission disk-fresh identity rules reload', () => {
       const decision = await requestPermission({
         tool: fakeTool('WebSearch', 'execute'),
         toolInput: { query: 'lightclaw architecture' },
-        ctx: { isInteractive: false },
+        ctx: { isInteractive: false, isSubagent: false },
       })
       assert.equal(
         decision.behavior,
