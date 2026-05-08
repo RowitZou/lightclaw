@@ -5,6 +5,7 @@ import { collectAssistantText } from '../messages.js'
 import type { Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
+import { maybeEvictAgedMemories } from './aging-eviction.js'
 import type { MemoryEntry } from './types.js'
 
 export type ExtractCtx = {
@@ -207,6 +208,17 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
     }
     const pending = state.pendingContextByDir.get(current.memoryDir)
     if (!pending) {
+      // Run aging eviction on the way out of the pipeline. The throttle
+      // file inside `<memoryDir>/.last-eviction` caps this to ~once a day
+      // even if extraction fires on every turn. Failures are logged but
+      // never propagate — eviction is a maintenance task, not on the
+      // hot path's success criteria.
+      try {
+        await maybeEvictAgedMemories(current.memoryDir)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[memory aging] eviction failed: ${message}`)
+      }
       return finalResult
     }
     state.pendingContextByDir.delete(current.memoryDir)
