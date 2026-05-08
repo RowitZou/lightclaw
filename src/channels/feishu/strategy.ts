@@ -113,7 +113,16 @@ export function createFeishuStrategy(
     },
     ...(typing
       ? {
-          startTyping: (message: NormalizedChannelMessage) => typing.start(message.messageId),
+          startTyping: (message: NormalizedChannelMessage) => {
+            // Synthetic messages (post-approval replay) carry a fake
+            // messageId. messageReaction.create returns 400 for it, so
+            // skip the reaction round-trip entirely; downstream stopTyping
+            // gets a null token and no-ops.
+            if (message.synthetic) {
+              return Promise.resolve(null)
+            }
+            return typing.start(message.messageId)
+          },
           stopTyping: (_message: NormalizedChannelMessage, token: unknown) =>
             typing.stop(token as TypingState | null),
         }

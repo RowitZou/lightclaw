@@ -120,7 +120,7 @@ export class FeishuSender {
     ctx: SendNoticeContext = {},
   ): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
-    let replyTo = message.messageId
+    let replyTo = this.replyTargetFor(message)
 
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
@@ -167,7 +167,7 @@ export class FeishuSender {
     ctx: SendNoticeContext = {},
   ): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
-    let replyTo = message.messageId
+    let replyTo = this.replyTargetFor(message)
 
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
@@ -206,16 +206,17 @@ export class FeishuSender {
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
   ): Promise<void> {
+    const replyTarget = this.replyTargetFor(message)
     try {
       await this.sendReplyOrCreate({
         chatId: message.chatId,
-        replyToMessageId: message.messageId,
+        replyToMessageId: replyTarget,
         msgType: 'interactive',
         content: JSON.stringify(card),
       })
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
-        recipient: this.replyRecipient(message.chatId, message.messageId),
+        recipient: this.replyRecipient(message.chatId, replyTarget),
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
@@ -318,7 +319,7 @@ export class FeishuSender {
     const fileKey = await this.uploadFile(file)
     await this.sendReplyOrCreate({
       chatId: message.chatId,
-      replyToMessageId: message.messageId,
+      replyToMessageId: this.replyTargetFor(message),
       msgType: 'file',
       content: JSON.stringify({ file_key: fileKey }),
     })
@@ -420,6 +421,17 @@ export class FeishuSender {
       return { type: 'reply', chatId, replyToMessageId }
     }
     return { type: 'create', chatId }
+  }
+
+  /**
+   * Resolve the message_id we should pass to im.message.reply for this
+   * inbound. Synthetic messages (post-approval replay) carry a fake
+   * messageId the platform never saw; reply API returns 400 on it. Skip
+   * the reply attempt entirely and force the create path by returning
+   * undefined.
+   */
+  private replyTargetFor(message: NormalizedChannelMessage): string | undefined {
+    return message.synthetic ? undefined : message.messageId
   }
 
   /**

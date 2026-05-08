@@ -178,6 +178,11 @@ async function runApprovalPreheat(
     chatType: 'p2p',
     messageId: `replay-${randomUUID()}`,
     text: applicantText,
+    // The platform never saw this message; reply / reaction APIs would
+    // 400 on the synthetic messageId. Channel adapters short-circuit
+    // those affordances when this flag is set (sender skips reply path
+    // and creates against chat_id; typing skips messageReaction).
+    synthetic: true,
   }).catch(error => {
     const detail = error instanceof Error ? error.message : String(error)
     process.stderr.write(`[preheat-on-approval] ${name}: replay failed: ${detail}\n`)
