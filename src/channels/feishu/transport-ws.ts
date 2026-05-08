@@ -61,6 +61,15 @@ const STALE_EVENT_BUFFER_MS = 5_000
 export async function startFeishuWsClient(input: {
   config: FeishuChannelConfig
   dedup: FeishuDedup
+  /**
+   * Bot's own open_id, fetched at startup via /open-apis/bot/v3/info.
+   * Threaded through to `parseMessageContent` so leading-or-mid-text
+   * "@<bot>" mentions are erased before runner-side slash detection.
+   * Optional because bot-info probe can fail (network / scope) — without
+   * it, group inbound text retains the "@<botName>" string but everything
+   * else still works.
+   */
+  botOpenId?: string
   onMessage(message: FeishuRawMessage): void | Promise<void>
   onCardAction?(
     action: FeishuCardAction | BackgroundTaskCardAction | PairingCardAction,
@@ -102,7 +111,7 @@ export async function startFeishuWsClient(input: {
 
   eventDispatcher.register({
     'im.message.receive_v1': async (data: ReceiveV1Data) => {
-      const message = normalizeReceiveV1(data)
+      const message = normalizeReceiveV1(data, input.botOpenId)
       if (!message) {
         process.stderr.write('feishu ws: dropped empty or unsupported receive_v1 event\n')
         return
@@ -301,7 +310,10 @@ function parsePermissionAction(value: unknown): FeishuPermissionActionKind | nul
   return null
 }
 
-function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
+function normalizeReceiveV1(
+  data: ReceiveV1Data,
+  botOpenId?: string,
+): FeishuRawMessage | null {
   const message = data.message
   if (!message) {
     return null
@@ -321,6 +333,7 @@ function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
       name: mention.name,
       openId: mention.id?.open_id ?? mention.open_id,
     })),
+    botStripId: botOpenId,
   })
   if (!parsed.text && !parsed.mediaKeys?.length) {
     return null

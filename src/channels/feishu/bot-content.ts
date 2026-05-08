@@ -37,18 +37,27 @@ export function parseMessageContent(input: {
   content?: string
   messageType?: string
   mentions?: FeishuMention[]
+  /**
+   * Bot's own open_id. When set, mentions whose openId matches are erased
+   * entirely (any position, any count) — group inbound text like
+   * "@LightClaw /b foo" becomes "/b foo" so slash detection downstream
+   * (`parseFastPathSlash`, `parseBranchRequest`, `parseFreshRequest`)
+   * matches just like in DM. Other mentions are still rendered as
+   * "@<name>" so the LLM keeps user-of-interest context.
+   */
+  botStripId?: string
 }): ParsedFeishuMessage {
   const content = input.content ?? ''
   const messageType = input.messageType ?? 'text'
+  const mentions = input.mentions ?? []
+  const botStripId = input.botStripId
 
   if (messageType === 'text') {
-    const text = stripMentions(parseTextContent(content), input.mentions ?? []).trim()
-    return { text }
+    return { text: stripMentions(parseTextContent(content), mentions, botStripId) }
   }
 
   if (messageType === 'post') {
-    const text = stripMentions(parsePostContent(content), input.mentions ?? []).trim()
-    return { text }
+    return { text: stripMentions(parsePostContent(content), mentions, botStripId) }
   }
 
   return parseMediaContent(content, messageType)
@@ -122,14 +131,36 @@ function parseMediaContent(content: string, messageType: string): ParsedFeishuMe
   return { text: '' }
 }
 
-function stripMentions(text: string, mentions: FeishuMention[]): string {
+function stripMentions(
+  text: string,
+  mentions: FeishuMention[],
+  botStripId?: string,
+): string {
   let next = text
   for (const mention of mentions) {
-    if (mention.key) {
-      next = next.replaceAll(mention.key, mention.name ? `@${mention.name}` : '')
+    if (!mention.key) {
+      continue
     }
+    // Use mention.key (e.g. "@_user_1") as the precise locator. Display name
+    // matching is fragile — a user can rename themselves to "LightClaw" and
+    // collide with the bot's mention; the key is platform-assigned and
+    // unique. Escape regex metachars defensively even though Lark keys are
+    // currently always `@_user_<n>` — the cost is one extra string op per
+    // mention; the upside is robustness if Lark ever changes the format.
+    const target = new RegExp(escapeRegex(mention.key), 'g')
+    const replacement =
+      botStripId && mention.openId === botStripId
+        ? ''
+        : mention.name
+          ? `@${mention.name}`
+          : ''
+    next = next.replace(target, () => replacement)
   }
-  return next
+  return next.replace(/\s+/g, ' ').trim()
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function parseJsonObject(content: string): Record<string, unknown> | null {

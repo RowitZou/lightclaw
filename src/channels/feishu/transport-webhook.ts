@@ -15,6 +15,13 @@ export type { FeishuRawMessage }
 export async function startFeishuWebhookServer(input: {
   config: FeishuChannelConfig
   dedup: FeishuDedup
+  /**
+   * Bot's own open_id, fetched at startup. Threaded through to
+   * `parseMessageContent` so any "@<bot>" mention in inbound text is
+   * erased before runner-side slash detection — see startFeishuWsClient
+   * for the matching parameter.
+   */
+  botOpenId?: string
   onMessage(message: FeishuRawMessage): void | Promise<void>
 }): Promise<WebhookServer> {
   const server = http.createServer((req, res) => {
@@ -40,6 +47,7 @@ async function handleRequest(
   input: {
     config: FeishuChannelConfig
     dedup: FeishuDedup
+    botOpenId?: string
     onMessage(message: FeishuRawMessage): void | Promise<void>
   },
 ): Promise<void> {
@@ -100,7 +108,7 @@ async function handleRequest(
     return
   }
 
-  const message = normalizeEvent(body)
+  const message = normalizeEvent(body, input.botOpenId)
   if (!message) {
     respondJson(res, 200, {})
     return
@@ -184,7 +192,10 @@ function decryptLarkPayload(encrypted: string, encryptKey: string): string {
   ]).toString('utf8')
 }
 
-function normalizeEvent(body: Record<string, unknown>): FeishuRawMessage | null {
+function normalizeEvent(
+  body: Record<string, unknown>,
+  botOpenId?: string,
+): FeishuRawMessage | null {
   const headerValue = asRecord(body.header)
   if (headerValue?.event_type !== 'im.message.receive_v1') {
     return null
@@ -203,6 +214,7 @@ function normalizeEvent(body: Record<string, unknown>): FeishuRawMessage | null 
     content: stringValue(message?.content),
     messageType,
     mentions: parseMentions(message?.mentions),
+    botStripId: botOpenId,
   })
 
   if (
