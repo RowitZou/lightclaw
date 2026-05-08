@@ -161,44 +161,6 @@ export class ChannelRunner {
     this.initialized = true
   }
 
-  private async materializeAttachment(
-    message: NormalizedChannelMessage,
-    runtime: Runtime,
-    sessionId: string,
-  ): Promise<MaterializedAttachment | null> {
-    if (!message.pendingAttachment) {
-      return null
-    }
-    if (!this.strategy.materializeAttachment) {
-      process.stderr.write(
-        `channel: ${this.strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
-      )
-      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-      return null
-    }
-
-    try {
-      const materialized = await this.strategy.materializeAttachment({
-        pending: message.pendingAttachment,
-        runtime,
-        message,
-      })
-      if (!materialized) {
-        message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-        return null
-      }
-      process.stderr.write(
-        `channel: attachment materialized session=${sessionId} path=${materialized.path}\n`,
-      )
-      return materialized
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
-      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-      return null
-    }
-  }
-
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
     // User lookup runs FIRST (and pairing falls out of unknown sender).
     // The Phase 8 allowlist gate runs after — otherwise a tight allowlist
@@ -366,7 +328,8 @@ export class ChannelRunner {
           }
         }
 
-        const materializedAttachment = await this.materializeAttachment(
+        const materializedAttachment = await applyAttachmentMaterialization(
+          this.strategy,
           effectiveMessage,
           getRuntime(),
           sessionId,
@@ -817,6 +780,59 @@ export class ChannelRunner {
 
 function parseFreshRequest(text: string): boolean {
   return /^\/fresh(?:\s|$)/.test(text.trimStart())
+}
+
+/**
+ * Apply the channel strategy's `materializeAttachment` hook to a message
+ * carrying a `pendingAttachment`. Encapsulates the full failure matrix
+ * (no pending → null; missing hook → warn + downloadFailed notice; hook
+ * returns null → downloadFailed notice; hook throws → warn +
+ * downloadFailed notice) so the runner's main loop stays narrow and the
+ * logic is unit-testable without spinning up a session lock / runtime.
+ *
+ * Mutates `message.text` to append the i18n download-failed notice on
+ * any failure path; returns the materialized attachment on success or
+ * null otherwise. The runner threads the returned value into
+ * `formatChannelUserText` so the LLM-facing prompt sees the runtime-view
+ * path (or no attachment block when materialization failed).
+ */
+export async function applyAttachmentMaterialization(
+  strategy: ChannelRunnerStrategy,
+  message: NormalizedChannelMessage,
+  runtime: Runtime,
+  sessionId: string,
+): Promise<MaterializedAttachment | null> {
+  if (!message.pendingAttachment) {
+    return null
+  }
+  if (!strategy.materializeAttachment) {
+    process.stderr.write(
+      `channel: ${strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
+    )
+    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+    return null
+  }
+
+  try {
+    const materialized = await strategy.materializeAttachment({
+      pending: message.pendingAttachment,
+      runtime,
+      message,
+    })
+    if (!materialized) {
+      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+      return null
+    }
+    process.stderr.write(
+      `channel: attachment materialized session=${sessionId} path=${materialized.path}\n`,
+    )
+    return materialized
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
+    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+    return null
+  }
 }
 
 /**
