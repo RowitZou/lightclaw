@@ -20,8 +20,29 @@ const IMAGE_MISSING_PATTERNS = [
   /repository .* not found/i,
 ]
 
+// Transient network blips during the GHCR auth probe / blob fetch that a
+// single retry typically clears. The 2026-05-08 incident: dockerd caches
+// auth tokens per image:tag, so the first pull of a fresh tag does an
+// extra `GET /v2/` probe; if that hits a network blip we get
+// `Get "https://ghcr.io/v2/": EOF` while the same image:tag pulls clean
+// 1.4s later. Permanent failures (manifest unknown, unauthorized,
+// proxy misconfig) are excluded so we don't burn time retrying them.
+const TRANSIENT_PULL_PATTERNS = [
+  /:\s*EOF\s*$/i,
+  /TLS handshake timeout/i,
+  /i\/o timeout/i,
+  /connection reset by peer/i,
+  /temporarily unavailable/i,
+]
+
 export function isImageMissingError(message: string): boolean {
   return IMAGE_MISSING_PATTERNS.some(pattern => pattern.test(message))
+}
+
+export function isTransientPullError(message: string): boolean {
+  if (isImageMissingError(message)) return false
+  if (/unauthorized|denied|requires authentication/i.test(message)) return false
+  return TRANSIENT_PULL_PATTERNS.some(pattern => pattern.test(message))
 }
 
 export function formatPullError(message: string): string {
@@ -287,21 +308,41 @@ export class ImageReadinessTracker {
 
     process.stderr.write(`🐳 sandbox: pulling ${image} ...\n`)
 
-    try {
-      await dockerPullStreaming(image)
-      this._state = 'ready'
-      this._pullCompletedAt = Date.now()
-      const tookSec = Math.round(
-        (this._pullCompletedAt - (this._pullStartedAt ?? this._pullCompletedAt)) / 1000,
-      )
-      process.stderr.write(`✓ Sandbox image ready (${tookSec}s)\n`)
-      this.emit()
-    } catch (err) {
-      this._state = 'failed'
-      this._lastError = formatPullError((err as Error).message)
-      this._pullCompletedAt = Date.now()
-      process.stderr.write(`✗ Sandbox image pull failed: ${this._lastError}\n`)
-      this.emit()
+    let lastError: Error | undefined
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await dockerPullStreaming(image)
+        this._state = 'ready'
+        this._pullCompletedAt = Date.now()
+        const tookSec = Math.round(
+          (this._pullCompletedAt - (this._pullStartedAt ?? this._pullCompletedAt)) / 1000,
+        )
+        process.stderr.write(`✓ Sandbox image ready (${tookSec}s)\n`)
+        this.emit()
+        return
+      } catch (err) {
+        lastError = err as Error
+        // One retry for transient auth-probe / blob-fetch blips. Skip retry
+        // on permanent classes (manifest missing, auth, network misconfig).
+        if (attempt === 0 && isTransientPullError(lastError.message)) {
+          process.stderr.write(
+            `⚠ Sandbox image pull transient error, retrying once: ${lastError.message.trim()}\n`,
+          )
+          await delay(2000)
+          continue
+        }
+        break
+      }
     }
+
+    this._state = 'failed'
+    this._lastError = formatPullError((lastError ?? new Error('unknown pull error')).message)
+    this._pullCompletedAt = Date.now()
+    process.stderr.write(`✗ Sandbox image pull failed: ${this._lastError}\n`)
+    this.emit()
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
