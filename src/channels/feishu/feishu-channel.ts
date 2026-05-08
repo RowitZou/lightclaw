@@ -198,19 +198,32 @@ async function fetchBotSelfInfo(
     const resp = typed.bot?.v3?.info?.get
       ? await typed.bot.v3.info.get()
       : await requestBotInfo(typed)
+    // Feishu's /open-apis/bot/v3/info response per
+    // https://open.feishu.cn/document/server-docs/im-v1/bot/get is
+    //   { code: 0, msg: "success", bot: { open_id, app_name, ... } }
+    // The `bot` field lives at the envelope ROOT, not under `data`. Some SDK
+    // builds additionally wrap the body under `data` after their interceptor
+    // pass — accept either shape so unwrapping never silently drops the
+    // open_id we need to power Phase 26 mention gating + the bot-mention
+    // strip path. Pre-fix dogfood symptom: stderr "code=0; mention gating
+    // disabled", botSelf.openId undefined, and `@LightClaw /model` in
+    // groups never reaches dispatchChannelSlash because parseMessageContent
+    // can't strip the bot mention.
     const envelope = resp as {
       code?: number
       msg?: string
+      bot?: { open_id?: string; app_name?: string }
       data?: { bot?: { open_id?: string; app_name?: string } }
     } | undefined
-    if (envelope?.code === 0 && envelope.data?.bot?.open_id) {
+    const botData = envelope?.bot ?? envelope?.data?.bot
+    if (envelope?.code === 0 && botData?.open_id) {
       return {
-        openId: envelope.data.bot.open_id,
-        name: envelope.data.bot.app_name,
+        openId: botData.open_id,
+        name: botData.app_name,
       }
     }
     process.stderr.write(
-      `[feishu] bot.v3.info.get returned code=${envelope?.code ?? 'unknown'}; mention gating disabled\n`,
+      `[feishu] bot.v3.info.get returned code=${envelope?.code ?? 'unknown'} bot=${botData?.open_id ? 'present' : 'missing'}; mention gating disabled\n`,
     )
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
