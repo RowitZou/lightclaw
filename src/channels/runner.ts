@@ -979,6 +979,14 @@ export class ChannelRunner {
           },
         )
       }
+      // Stash the applicant's pre-approval text on the freshly-created or
+      // reused pending entry. Card paths stash via the existing-pending
+      // branch above and via PairingCardCoordinator.applyConfirm; the
+      // bootstrap text fallback (no admin Feishu binding) was missing this
+      // call until 2026-05-08, which silently broke replay for the very
+      // first @ that bootstraps an admin's own pairing — exactly the
+      // dogfood scenario admin self-pairing uses.
+      await updatePendingApplicantText(senderKey, message.text, message.chatId)
       const freshnessLabel = result.created
         ? t('channel.pairing.freshnessNew')
         : t('channel.pairing.freshnessReuse')
