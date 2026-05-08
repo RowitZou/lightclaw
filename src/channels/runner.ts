@@ -276,8 +276,24 @@ export class ChannelRunner {
       await this.sendNotice(message, 'info', t('channel.interjection.acked'), 'plain_text')
       return
     }
+    // Phase 27: mark in-flight BEFORE entering the lock so any concurrent
+    // message arriving during setup (loadMeta / refreshSkillRegistry /
+    // applyAttachmentMaterialization / dispatchChannelSlash etc — all of
+    // which sit BETWEEN runExclusive entry and the actual query() call) is
+    // correctly routed to the interjection queue instead of stacking on
+    // the same sessionId lock. Marking inside the lock body would lose any
+    // message that arrives during that ~50-500ms setup window: the second
+    // handleMessage call would see hasInflightFor() === false and queue
+    // itself on the lock instead of pushing to the interjection queue,
+    // and by the time fn1 finally marks in-flight fn2 is already past the
+    // routing decision. /b and /fresh always run on independent sessionIds
+    // so they never need this mark.
+    const shouldMarkInFlight = !branchRequest && !freshSessionId
+    if (shouldMarkInFlight) {
+      channelInterjectionQueue.markInFlight(mainSessionId)
+    }
+    try {
     await this.locks.runExclusive(sessionId, async () => {
-      let markedInFlight = false
       // In-flight typing indicator: fire BEFORE any work so the user sees
       // a "we got it" signal even when meta load / runtime probe is slow.
       // The token is opaque (channel-defined) and gets handed back to
@@ -447,10 +463,6 @@ export class ChannelRunner {
           return
         }
 
-        if (!branchRequest && !freshSessionId) {
-          channelInterjectionQueue.markInFlight(mainSessionId)
-          markedInFlight = true
-        }
         const userMessage = createUserMessage(userText, getLastUuid(messages))
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
@@ -631,12 +643,20 @@ export class ChannelRunner {
         }
         throw error
       } finally {
-        if (markedInFlight) {
-          channelInterjectionQueue.unmarkInFlight(mainSessionId)
-        }
         await this.stopTyping(message, typingToken)
       }
     })
+    } finally {
+      // Always unmark in-flight when the lock body returns, regardless of
+      // whether query() succeeded, slash-handled return early, threw, or
+      // was abort-cancelled. Pairs with the markInFlight that ran BEFORE
+      // runExclusive above — the symmetric outer try/finally is the only
+      // way to guarantee the queue's in-flight set is consistent with the
+      // session's actual liveness across every exit path of handleMessage.
+      if (shouldMarkInFlight) {
+        channelInterjectionQueue.unmarkInFlight(mainSessionId)
+      }
+    }
   }
 
   private async resolveSenderNameForInterjection(
