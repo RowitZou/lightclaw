@@ -4,6 +4,12 @@
 - Do not add path-string workspace guards to tools or permission policy. Runtime safety comes from the LocalRuntime admin-only gate, Docker/Rjob isolation, read-only mounts, and the Phase 5 permission system.
 - RlaunchRuntime never uses `brainctl exec -i`. The cluster's brainctl exec drops stdin payloads silently (the `9cafbdc` writeFile incident: ~16% silent corruption) and also suppresses stdout when `-i` is opened with no real stdin. Every `ExecInput.stdin` is folded into the bash command body via `composeExecScript` (base64 inline + brace group so the pipe feeds the whole `&&` chain). Per-call cap is 32 KB raw — empirically the brainctl ws frame fails above ~57 KB total script. `fs.writeFile` chunks transparently above the cap; new tools that hand large payloads to a helper should chunk via `fs.writeFile` + read-from-disk rather than growing the cap.
 
+# LightClaw Cwd Layout Notes (Phase 24)
+
+- `<cwd>/.lightclaw/` is a data write area, never a code discovery root. The only LightClaw write inside this namespace is `inbox/<chatId>/<fileName>` for incoming channel media, written through `runtime.fs.writeFile` rather than host fs.
+- Hook / MCP / Skill discovery is admin-side only: `<lightclawHome>/hooks/`, `<lightclawHome>/mcp.json`, and `<lightclawHome>/skills/`. Do not reintroduce a project-layer scan path under `<cwd>/.lightclaw/` even if Claude Code does.
+- Channel attachments sink in two phases: Feishu `onMessage` attaches `pendingAttachment` metadata to `NormalizedChannelMessage`; `ChannelRunner` materializes it after pairing and runtime acquire via `ChannelRunnerStrategy.materializeAttachment`. New channel adapters should follow the same shape: channel code does not touch identity or runtime pools directly.
+
 # LightClaw Permission System Notes
 
 - `Tool.suggestPermissionRules(input)` returns a *set of rules to install as a group* — not a precise→broad menu. For a chained Bash command the suggester emits one `Bash(<head>:*)` rule per subcommand (split on `;`/`&&`/`||`/`|`, max 5); for path tools a single `Tool(<dir>/**)` rule; for WebFetch a single `WebFetch(<hostname>)` rule; for MCP a single `MCP(<server>:<tool>)` rule. New tools should follow the same shape — return an empty array when no precise scope is derivable, and the approver will fall back to a single tool-wide allow rule.
