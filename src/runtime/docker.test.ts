@@ -15,6 +15,8 @@ const DEFAULT_SECURITY: DockerRuntimeSecurity = {
   pidsLimit: 512,
   ulimits: { nofile: '4096:8192', nproc: '1024:2048' },
   tmpfsOptions: 'rw,nosuid,size=512m',
+  storageOptSize: '32g',
+  workspaceQuotaMb: 524288,
 }
 
 function makeConfig(overrides: Partial<DockerRuntimeConfig> = {}): DockerRuntimeConfig {
@@ -59,6 +61,7 @@ test('buildDockerCreateArgs applies the OpenClaw-style hardening defaults', () =
   assert.deepEqual(pairsAfter(args, '--security-opt'), ['no-new-privileges'])
   assert.equal(args.includes('--read-only'), false, 'readOnlyRootfs is opt-in')
   assert.deepEqual(pairsAfter(args, '--pids-limit'), ['512'])
+  assert.deepEqual(pairsAfter(args, '--storage-opt'), ['size=32g'])
   assert.deepEqual(
     pairsAfter(args, '--ulimit').sort(),
     ['nofile=4096:8192', 'nproc=1024:2048'],
@@ -67,6 +70,20 @@ test('buildDockerCreateArgs applies the OpenClaw-style hardening defaults', () =
     pairsAfter(args, '--tmpfs'),
     ['/tmp:rw,nosuid,size=512m'],
   )
+})
+
+test('buildDockerCreateArgs omits --storage-opt when storageOptSize is null', () => {
+  const args = buildDockerCreateArgs(makeConfig({
+    security: { ...DEFAULT_SECURITY, storageOptSize: null, ulimits: {} },
+  }))
+  assert.deepEqual(pairsAfter(args, '--storage-opt'), [])
+})
+
+test('buildDockerCreateArgs respects custom storageOptSize values', () => {
+  const args = buildDockerCreateArgs(makeConfig({
+    security: { ...DEFAULT_SECURITY, storageOptSize: '128g', ulimits: {} },
+  }))
+  assert.deepEqual(pairsAfter(args, '--storage-opt'), ['size=128g'])
 })
 
 test('buildDockerCreateArgs respects readOnlyRootfs when admin opts in', () => {
@@ -106,6 +123,8 @@ test('buildDockerCreateArgs disables hardening flags when admin clears them', ()
       pidsLimit: null,
       ulimits: {},
       tmpfsOptions: 'rw,size=2g',
+      storageOptSize: null,
+      workspaceQuotaMb: null,
     },
   }))
   assert.deepEqual(pairsAfter(args, '--cap-drop'), [])
@@ -113,6 +132,7 @@ test('buildDockerCreateArgs disables hardening flags when admin clears them', ()
   assert.equal(args.includes('--security-opt'), false)
   assert.equal(args.includes('--read-only'), false)
   assert.equal(args.includes('--pids-limit'), false)
+  assert.equal(args.includes('--storage-opt'), false)
   assert.equal(args.includes('--ulimit'), false)
 })
 

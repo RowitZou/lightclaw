@@ -151,6 +151,16 @@ export type ConfigFileShape = {
         pidsLimit?: number | null
         ulimits?: Record<string, string>
         tmpfsOptions?: string
+        /** Docker `--storage-opt size=<value>` cap on the container's
+         *  rootfs writable layer. Null = omit the flag (host default,
+         *  which is the entire docker storage volume). Requires
+         *  overlay2 + XFS with `prjquota`; non-conforming hosts will
+         *  fail container creation. */
+        storageOptSize?: string | null
+        /** Hard cap (MiB) on `/workspace` bind-mount usage. Polled via
+         *  `du -sb` with a 60s cache; over-cap exec() and writeFile()
+         *  refuse with an error. Null / 0 = disabled. */
+        workspaceQuotaMb?: number | null
       }
     }
     rlaunch?: {

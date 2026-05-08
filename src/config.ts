@@ -37,6 +37,19 @@ export type DockerSecuritySettings = {
   /** Default mount options applied to tmpfs entries that don't carry their
    *  own `:options` suffix. Format: docker --tmpfs option string. */
   tmpfsOptions: string
+  /** `docker create --storage-opt size=<value>` cap on the container's
+   *  rootfs writable layer (pip/apt caches, /root, etc.). `null` omits
+   *  the flag, leaving rootfs equal to the entire docker storage volume.
+   *  Requires the docker daemon to use overlay2 on XFS with `prjquota`;
+   *  non-conforming hosts (macOS Docker Desktop, ext4-backed Linux)
+   *  will fail at container creation. */
+  storageOptSize: string | null
+  /** Hard cap (MiB) on `/workspace` bind-mount usage, polled via
+   *  `du -sb` with a 60s cache. Over-cap exec / writeFile is refused
+   *  with an error so the LLM can self-correct (clean up or stop).
+   *  `null` / `0` disables the check. Cross-fs portable: works on any
+   *  host filesystem, including macOS / ext4 where storageOptSize fails. */
+  workspaceQuotaMb: number | null
 }
 
 export type DockerRuntimeSettings = {
@@ -305,7 +318,8 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
 // 4-cap allowlist suffices for ordinary file ops and user switches inside
 // the sandbox image; readOnlyRootfs stays off because /root caching paths
 // (pip, pnpm) would break and the bind-mounted /workspace already absorbs
-// the bulk of legitimate writes.
+// the bulk of legitimate writes — that absorption is now bounded by the
+// workspaceQuotaMb du-poll guard, while storageOptSize bounds the rootfs.
 const DEFAULT_DOCKER_SECURITY: DockerSecuritySettings = {
   capDrop: ['ALL'],
   capAdd: ['DAC_OVERRIDE', 'CHOWN', 'SETUID', 'SETGID'],
@@ -317,6 +331,13 @@ const DEFAULT_DOCKER_SECURITY: DockerSecuritySettings = {
     nproc: '1024:2048',
   },
   tmpfsOptions: 'rw,nosuid,size=512m',
+  // 32 GiB rootfs is plenty for pip/apt/pnpm caches without leaking the
+  // entire docker storage volume to a runaway container.
+  storageOptSize: '32g',
+  // 512 GiB default leaves room for typical research workloads
+  // (models, datasets, intermediate artifacts) on a hefty backing volume.
+  // Hosts with smaller / larger volumes should override.
+  workspaceQuotaMb: 524288,
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
@@ -580,6 +601,34 @@ function resolveDockerSecurity(
     }
     return fileSecurity.tmpfsOptions.trim()
   })()
+  const storageOptSize = (() => {
+    if (fileSecurity.storageOptSize === undefined) return DEFAULT_DOCKER_SECURITY.storageOptSize
+    if (fileSecurity.storageOptSize === null) return null
+    if (typeof fileSecurity.storageOptSize !== 'string' || !fileSecurity.storageOptSize.trim()) {
+      throw new Error('runtime.docker.security.storageOptSize must be a non-empty string (e.g. "32g") or null.')
+    }
+    if (!/^\d+(?:\.\d+)?[kmgtKMGT]?b?$/.test(fileSecurity.storageOptSize.trim())) {
+      throw new Error(
+        'runtime.docker.security.storageOptSize must look like a docker size (e.g. "32g", "10240m", "1t").',
+      )
+    }
+    return fileSecurity.storageOptSize.trim()
+  })()
+  const workspaceQuotaMb = (() => {
+    if (fileSecurity.workspaceQuotaMb === undefined) return DEFAULT_DOCKER_SECURITY.workspaceQuotaMb
+    if (fileSecurity.workspaceQuotaMb === null) return null
+    if (
+      typeof fileSecurity.workspaceQuotaMb !== 'number' ||
+      !Number.isFinite(fileSecurity.workspaceQuotaMb) ||
+      fileSecurity.workspaceQuotaMb < 0
+    ) {
+      throw new Error(
+        'runtime.docker.security.workspaceQuotaMb must be a non-negative number (MiB) or null.',
+      )
+    }
+    // 0 == disabled, normalize to null so downstream only checks one shape.
+    return fileSecurity.workspaceQuotaMb === 0 ? null : Math.floor(fileSecurity.workspaceQuotaMb)
+  })()
   return {
     capDrop: validateStringArray(fileSecurity.capDrop, 'capDrop', DEFAULT_DOCKER_SECURITY.capDrop),
     capAdd: validateStringArray(fileSecurity.capAdd, 'capAdd', DEFAULT_DOCKER_SECURITY.capAdd),
@@ -588,6 +637,8 @@ function resolveDockerSecurity(
     pidsLimit,
     ulimits: validateUlimits(fileSecurity.ulimits),
     tmpfsOptions,
+    storageOptSize,
+    workspaceQuotaMb,
   }
 }
 
