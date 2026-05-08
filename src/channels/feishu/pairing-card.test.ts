@@ -258,6 +258,36 @@ describe('PairingCardCoordinator', () => {
     assert.equal(sender.replyCards.length, 0)
     assert.equal(sender.openIdCards.length, 0)
   })
+
+  it('evicts in-memory token state after the configured TTL elapses', async () => {
+    // Without eviction, byToken would grow forever as cancelled / resolved
+    // entries accumulate over the daemon's uptime. Evict after a short TTL
+    // (10ms here) so a click on an evicted token falls into the !current
+    // expired branch the same way an unknown token does. Use a small
+    // numeric TTL via the coordinator's options injector rather than node
+    // mock.timers — keeps the test free of global timer interception that
+    // could affect other suites running in parallel.
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(
+      sender as unknown as FeishuSender,
+      { evictionTtlMs: 10 },
+    )
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+    const cancel = extractAction(sender.replyCards[0], 'cancel')
+    await coord.handleCardAction(cancel)
+
+    await new Promise(resolve => setTimeout(resolve, 30))
+
+    // After the TTL fires, the cancelled state has been evicted from
+    // byToken. A re-click on the same token now hits the expired branch
+    // (the resolved card sender already saw remains visible to the user
+    // — we are testing internal map cleanup, not card UX).
+    const response = await coord.handleCardAction(cancel)
+    assert.match(JSON.stringify(response), /申请已过期/)
+  })
 })
 
 class FakeSender {

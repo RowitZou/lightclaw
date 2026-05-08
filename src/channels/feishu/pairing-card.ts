@@ -57,10 +57,53 @@ type ApplicationState =
   | { kind: 'cancelled' }
   | { kind: 'resolved'; outcome: 'approved' | 'rejected'; code: string }
 
+// Aligned with pairing.ts PAIRING_TTL_MS so an in-memory token outlives the
+// pending.json entry by no more than its own age. After eviction a stale
+// click (e.g. admin re-opening a 2-hour-old review card) hits the !current
+// branch in handleCardAction and renders the "expired" terminal card —
+// which is the correct UX since the underlying pending.json entry has
+// long since been cleaned up by cleanExpiredPending.
+const TOKEN_EVICTION_TTL_MS = 60 * 60 * 1000
+
 export class PairingCardCoordinator {
   private readonly byToken = new Map<string, ApplicationState>()
+  private readonly evictionTimers = new Map<string, NodeJS.Timeout>()
+  private readonly evictionTtlMs: number
 
-  constructor(private readonly sender: FeishuSender) {}
+  constructor(
+    private readonly sender: FeishuSender,
+    options?: { evictionTtlMs?: number },
+  ) {
+    this.evictionTtlMs = options?.evictionTtlMs ?? TOKEN_EVICTION_TTL_MS
+  }
+
+  /**
+   * Single mutation funnel for byToken. Schedules a self-evicting timer so
+   * the map cannot grow unbounded across long-running daemon uptime.
+   *
+   * Each set() resets any existing timer for the same token (e.g. pending →
+   * submitting → submitted), so the eviction clock measures from the LAST
+   * state transition, not card creation. Terminal states (cancelled /
+   * resolved) thus stick around for the full TTL after they happen — long
+   * enough for the user to glance at the resolved card without "expired"
+   * snapping back when they tap a button moments later.
+   *
+   * The timer is unref'd: an idle daemon shutdown is not blocked by
+   * pending evictions.
+   */
+  private setState(token: string, state: ApplicationState): void {
+    this.byToken.set(token, state)
+    const existing = this.evictionTimers.get(token)
+    if (existing) {
+      clearTimeout(existing)
+    }
+    const timer = setTimeout(() => {
+      this.byToken.delete(token)
+      this.evictionTimers.delete(token)
+    }, this.evictionTtlMs)
+    timer.unref()
+    this.evictionTimers.set(token, timer)
+  }
 
   async sendApplicationCard(
     message: NormalizedChannelMessage,
@@ -72,7 +115,7 @@ export class PairingCardCoordinator {
     },
   ): Promise<void> {
     const token = randomUUID()
-    this.byToken.set(token, {
+    this.setState(token, {
       kind: 'pending',
       applicantOpenId: input.applicantOpenId,
       applicantName: input.applicantName,
@@ -140,7 +183,7 @@ export class PairingCardCoordinator {
 
   private applyCancel(token: string, state: ApplicationState): FeishuCardActionResponse {
     if (state.kind === 'pending') {
-      this.byToken.set(token, { kind: 'cancelled' })
+      this.setState(token, { kind: 'cancelled' })
     }
     return rawCard(buildTerminalCard({
       template: 'grey',
@@ -183,7 +226,7 @@ export class PairingCardCoordinator {
       }))
     }
 
-    this.byToken.set(token, {
+    this.setState(token, {
       kind: 'submitting',
       applicantOpenId: current.applicantOpenId,
       applicantName: current.applicantName,
@@ -201,7 +244,7 @@ export class PairingCardCoordinator {
           userId: current.applicantUserId,
         },
       )
-      this.byToken.set(token, {
+      this.setState(token, {
         kind: 'submitted',
         applicantOpenId: current.applicantOpenId,
         applicantName: current.applicantName,
@@ -233,7 +276,7 @@ export class PairingCardCoordinator {
       // captured pending snapshot (current was 'pending' above) rather
       // than picking up whatever byToken currently holds — the rollback
       // must be deterministic regardless of what the failed branch did.
-      this.byToken.set(token, current)
+      this.setState(token, current)
       if (error instanceof Error && error.message === 'rate-limited') {
         return rawCard(buildTerminalCard({
           template: 'red',
@@ -266,7 +309,7 @@ export class PairingCardCoordinator {
 
     const entry = await approveCode(state.code)
     if (!entry) {
-      this.byToken.set(token, { kind: 'resolved', outcome: 'approved', code: state.code })
+      this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.review.title'),
@@ -297,7 +340,7 @@ export class PairingCardCoordinator {
     }
 
     preheatAndWelcomeOnApproval(canonical, link)
-    this.byToken.set(token, { kind: 'resolved', outcome: 'approved', code: state.code })
+    this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(
       state.applicantOpenId,
       buildHandoverCard({ operator: operatorCanonical }),
@@ -333,14 +376,14 @@ export class PairingCardCoordinator {
     }
     const result = await rejectCode(state.code)
     if (!result.ok) {
-      this.byToken.set(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
+      this.setState(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.review.title'),
         body: t('channel.pairing.review.resolvedElsewhere'),
       }))
     }
-    this.byToken.set(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
+    this.setState(token, { kind: 'resolved', outcome: 'rejected', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(
       state.applicantOpenId,
       buildRejectedCard({ minutes: 10 }),
