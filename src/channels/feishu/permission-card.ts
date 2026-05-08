@@ -173,6 +173,20 @@ export class FeishuPermissionCoordinator {
   }
 
   async tryConsumePermissionMessage(raw: FeishuRawMessage): Promise<boolean> {
+    // Phase 26: text replies are honored only from a 1:1 chat. The approval
+    // card is pushed to the sender's DM (sendApprovalPrompt routes group
+    // asks via sendInteractiveCardToOpenId), so the only place a user
+    // legitimately types "1" / "allow" / "拒绝" as a fallback is their DM.
+    // Group raw messages must NOT consume a pending — otherwise mention
+    // gating is fully bypassed: any group message from a user with an
+    // active head pending (e.g. an idle "ok" or "好的" in chat) becomes a
+    // hidden approve / deny because tryConsumePermissionMessage runs in
+    // feishu-channel.ts onMessage *before* runner's mention gate fires.
+    // Card clicks via onCardAction continue to work in any chat the SDK
+    // delivered the card to (incl. the rare in-group fallback path).
+    if (raw.chatType !== 'p2p' && raw.chatType !== 'private') {
+      return false
+    }
     const pending = this.findActivePendingForRawMessage(raw)
     if (!pending) {
       return false
@@ -636,11 +650,29 @@ export class FeishuPermissionCoordinator {
     kind: SystemNoticeKind,
     content: string,
   ): Promise<void> {
+    const card = buildSystemNoticeCard({ kind, content })
+    // Phase 26: keep group chats clean of permission-flow chatter. The
+    // approval card itself is already pushed to the sender's DM for
+    // group-triggered asks (see sendApprovalPrompt); the resolution
+    // notice ("✅ 已允许" / "已拒绝" / 高危 downgrade) must follow the
+    // same destination, otherwise group members see the outcome of an
+    // approval flow they were never meant to see — including the
+    // command's command-string reflected in the notice for high-risk
+    // downgrades. Fall back to in-chat only when the DM push fails, to
+    // match the same fallback shape used by sendApprovalPrompt.
+    if (isFeishuGroupChatType(message.chatType)) {
+      try {
+        await this.sender.sendInteractiveCardToOpenId(message.senderOpenId, card)
+        return
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `feishu permission: notice DM push failed for ${message.senderOpenId}, falling back to in-chat: ${detail}\n`,
+        )
+      }
+    }
     try {
-      await this.sender.sendInteractiveCard(
-        message,
-        buildSystemNoticeCard({ kind, content }),
-      )
+      await this.sender.sendInteractiveCard(message, card)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(`feishu permission: notice send failed: ${detail}\n`)
