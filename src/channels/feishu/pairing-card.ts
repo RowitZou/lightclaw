@@ -6,6 +6,7 @@ import {
   approveCode,
   generateOrReusePending,
   rejectCode,
+  updatePendingApplicantText,
 } from '../../identity/pairing.js'
 import { preheatAndWelcomeOnApproval } from '../../identity/post-approve.js'
 import {
@@ -38,6 +39,8 @@ type ApplicationState =
       applicantName?: string
       applicantEmail?: string
       applicantUserId?: string
+      applicantText?: string
+      applicantChatId?: string
     }
   | {
       kind: 'submitting'
@@ -45,6 +48,8 @@ type ApplicationState =
       applicantName?: string
       applicantEmail?: string
       applicantUserId?: string
+      applicantText?: string
+      applicantChatId?: string
     }
   | {
       kind: 'submitted'
@@ -112,6 +117,8 @@ export class PairingCardCoordinator {
       applicantName?: string
       applicantEmail?: string
       applicantUserId?: string
+      applicantText?: string
+      applicantChatId?: string
     },
   ): Promise<void> {
     const token = randomUUID()
@@ -121,14 +128,18 @@ export class PairingCardCoordinator {
       applicantName: input.applicantName,
       applicantEmail: input.applicantEmail,
       applicantUserId: input.applicantUserId,
+      applicantText: input.applicantText,
+      applicantChatId: input.applicantChatId,
     })
-    await this.sender.sendInteractiveCard(
+    await this.pushApplicantCard(
       message,
+      input.applicantOpenId,
       buildApplicationCard({
         token,
         applicantOpenId: input.applicantOpenId,
         applicantName: input.applicantName,
       }),
+      'application',
     )
   }
 
@@ -140,20 +151,58 @@ export class PairingCardCoordinator {
       applicantName?: string
     },
   ): Promise<void> {
-    await this.sender.sendInteractiveCard(
+    await this.pushApplicantCard(
       message,
+      input.applicantOpenId,
       buildWaitingCard(input),
+      'waiting',
     )
   }
 
   async sendCooldownCard(
     message: NormalizedChannelMessage,
-    input: { elapsedMinutes: number; remainMinutes: number },
+    input: {
+      applicantOpenId: string
+      elapsedMinutes: number
+      remainMinutes: number
+    },
   ): Promise<void> {
-    await this.sender.sendInteractiveCard(
+    await this.pushApplicantCard(
       message,
+      input.applicantOpenId,
       buildCooldownCard(input),
+      'cooldown',
     )
+  }
+
+  /**
+   * Push an applicant-facing pairing card to the applicant's DM via
+   * `sendInteractiveCardToOpenId`, falling back to in-chat reply only when
+   * the DM push fails. Mirrors the Phase 26 pattern used by
+   * permission-card.sendApprovalPrompt: keep the card body out of any group
+   * the applicant happened to @-mention the bot in (which would otherwise
+   * leak applicant identity / pairing code to every group member).
+   *
+   * Feishu's `im.message.create` with `receive_id_type=open_id` auto-routes
+   * to the bot↔user p2p chat without requiring the user to have initiated
+   * a DM first, so first-contact-in-group flows still work.
+   */
+  private async pushApplicantCard(
+    message: NormalizedChannelMessage,
+    applicantOpenId: string,
+    card: Record<string, unknown>,
+    kind: 'application' | 'waiting' | 'cooldown',
+  ): Promise<void> {
+    try {
+      await this.sender.sendInteractiveCardToOpenId(applicantOpenId, card)
+      return
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `pairing-card: DM push failed (${kind}) for ${applicantOpenId}: ${detail}; falling back to in-chat\n`,
+      )
+      await this.sender.sendInteractiveCard(message, card)
+    }
   }
 
   async handleCardAction(action: PairingCardAction): Promise<FeishuCardActionResponse> {
@@ -232,6 +281,8 @@ export class PairingCardCoordinator {
       applicantName: current.applicantName,
       applicantEmail: current.applicantEmail,
       applicantUserId: current.applicantUserId,
+      applicantText: current.applicantText,
+      applicantChatId: current.applicantChatId,
     })
 
     try {
@@ -244,6 +295,20 @@ export class PairingCardCoordinator {
           userId: current.applicantUserId,
         },
       )
+      // Promote pre-approval text from in-memory state to durable
+      // pending.json so post-approval replay survives daemon restarts.
+      // Fire-and-forget; replay tolerates absence of the text field.
+      if (current.applicantText) {
+        const senderKey = `feishu:${current.applicantOpenId}` as SenderKey
+        void updatePendingApplicantText(
+          senderKey,
+          current.applicantText,
+          current.applicantChatId,
+        ).catch(error => {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
+        })
+      }
       this.setState(token, {
         kind: 'submitted',
         applicantOpenId: current.applicantOpenId,
@@ -339,7 +404,11 @@ export class PairingCardCoordinator {
       return toast('error', reason)
     }
 
-    preheatAndWelcomeOnApproval(canonical, link)
+    // entry.lastApplicantText was already promoted from in-memory state to
+    // pending.json by applyConfirm, so the durable DB value is canonical.
+    preheatAndWelcomeOnApproval(canonical, link, {
+      applicantText: entry.lastApplicantText,
+    })
     this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(
       state.applicantOpenId,
