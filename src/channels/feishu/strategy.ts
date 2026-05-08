@@ -2,6 +2,8 @@ import type { ChannelRunnerStrategy, SystemNoticeKind } from '../runner.js'
 import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import { buildFeishuChannelPrompt } from './channel-prompt.js'
 import type { FeishuClient } from './client.js'
+import { fetchFeishuUserInfo } from './contact.js'
+import type { PairingCardCoordinator } from './pairing-card.js'
 import type { FeishuPermissionCoordinator } from './permission-card.js'
 import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
@@ -19,6 +21,7 @@ export function createFeishuStrategy(
   sender: FeishuSender,
   client: FeishuClient,
   permissions?: FeishuPermissionCoordinator,
+  pairing?: PairingCardCoordinator,
 ): ChannelRunnerStrategy {
   const typing = config.typingReaction ? createFeishuTypingReaction(client) : null
   return {
@@ -28,6 +31,17 @@ export function createFeishuStrategy(
     isMessageAllowed: message => isFeishuMessageAllowed(message, config),
     resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
+    fetchSenderInfo: openId => fetchFeishuUserInfo(client, openId),
+    ...(pairing
+      ? {
+          renderPairingApplicationCard: input =>
+            pairing.sendApplicationCard(input.message, input),
+          renderPairingWaitingCard: input =>
+            pairing.sendWaitingCard(input.message, input),
+          renderPairingCooldownCard: input =>
+            pairing.sendCooldownCard(input.message, input),
+        }
+      : {}),
     async materializeAttachment({ pending, runtime, message }) {
       if (pending.kind !== 'feishu-media') {
         return null

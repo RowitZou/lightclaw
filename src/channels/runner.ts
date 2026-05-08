@@ -12,8 +12,18 @@ import {
   resetSessionContext,
   LocalRuntimeAdminOnlyError,
 } from '../init.js'
-import { generateOrReusePending, updatePendingDisplayName } from '../identity/pairing.js'
-import { isAdmin, lookupBySender, rebuildReverseIndex } from '../identity/store.js'
+import {
+  findExistingPending,
+  generateOrReusePending,
+  getPairingRateLimitStatus,
+  updatePendingUserInfo,
+} from '../identity/pairing.js'
+import {
+  getAdminFeishuOpenId,
+  isAdmin,
+  lookupBySender,
+  rebuildReverseIndex,
+} from '../identity/store.js'
 import type { ChannelKind, SenderKey } from '../identity/types.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
@@ -121,7 +131,29 @@ export type ChannelRunnerStrategy = {
    * Called only when a NEW pairing code is generated, not on every message;
    * fired and forgotten so the inbound message itself is never blocked.
    */
-  fetchSenderName?(peerId: string): Promise<string | undefined>
+  fetchSenderInfo?(peerId: string): Promise<{
+    name?: string
+    email?: string
+    userId?: string
+  } | undefined>
+  renderPairingApplicationCard?(input: {
+    message: NormalizedChannelMessage
+    applicantOpenId: string
+    applicantName?: string
+    applicantEmail?: string
+    applicantUserId?: string
+  }): Promise<void>
+  renderPairingWaitingCard?(input: {
+    message: NormalizedChannelMessage
+    code: string
+    applicantOpenId: string
+    applicantName?: string
+  }): Promise<void>
+  renderPairingCooldownCard?(input: {
+    message: NormalizedChannelMessage
+    elapsedMinutes: number
+    remainMinutes: number
+  }): Promise<void>
   /**
    * Optional in-flight progress signal. Channels that support per-message
    * affordances (Feishu emoji reaction, etc.) implement this pair so users
@@ -729,23 +761,61 @@ export class ChannelRunner {
       return approvedUser
     }
 
+    const adminFeishuOpenId = await getAdminFeishuOpenId()
+    const canRenderPairingCard = Boolean(
+      adminFeishuOpenId &&
+      this.strategy.renderPairingApplicationCard &&
+      this.strategy.renderPairingWaitingCard,
+    )
+    const existing = await findExistingPending(senderKey)
+    if (canRenderPairingCard && existing) {
+      await this.strategy.renderPairingWaitingCard!({
+        message,
+        code: existing.code,
+        applicantOpenId: message.senderOpenId,
+        applicantName: existing.entry.displayName || undefined,
+      })
+      return null
+    }
+
+    if (canRenderPairingCard) {
+      const status = await getPairingRateLimitStatus(senderKey)
+      if (status.limited) {
+        if (this.strategy.renderPairingCooldownCard) {
+          await this.strategy.renderPairingCooldownCard({
+            message,
+            elapsedMinutes: Math.max(0, Math.floor(status.elapsedMs / 60_000)),
+            remainMinutes: Math.max(1, Math.ceil(status.remainingMs / 60_000)),
+          })
+        } else {
+          await this.sendNotice(message, 'error', t('channel.pairing.rateLimited'))
+        }
+        return null
+      }
+
+      const info = await this.fetchSenderInfoWithTimeout(message.senderOpenId)
+      await this.strategy.renderPairingApplicationCard!({
+        message,
+        applicantOpenId: message.senderOpenId,
+        applicantName: info?.name,
+        applicantEmail: info?.email,
+        applicantUserId: info?.userId,
+      })
+      return null
+    }
+
     try {
       const result = await generateOrReusePending(channel, message.senderOpenId)
-      // Display name is fetched async via the strategy's optional fetcher and
-      // patched into pending.json after the fact, so the inbound message is
-      // never blocked by a platform user.get round-trip. Only fired for new
-      // pending entries — reused codes already have whatever name we managed
-      // to capture before.
-      if (result.created && this.strategy.fetchSenderName) {
-        void this.strategy.fetchSenderName(message.senderOpenId).then(
-          async name => {
-            if (name) {
-              await updatePendingDisplayName(result.code, name)
+      if (result.created && this.strategy.fetchSenderInfo) {
+        void this.strategy.fetchSenderInfo(message.senderOpenId).then(
+          async info => {
+            if (info) {
+              await updatePendingUserInfo(result.code, info)
             }
           },
           error => {
             const text = error instanceof Error ? error.message : String(error)
-            process.stderr.write(`${this.strategy.channelId}: name fetch failed: ${text}\n`)
+            process.stderr.write(`${this.strategy.channelId}: sender info fetch failed: ${text}\n`)
           },
         )
       }
@@ -775,6 +845,24 @@ export class ChannelRunner {
     }
 
     return null
+  }
+
+  private async fetchSenderInfoWithTimeout(peerId: string): Promise<{
+    name?: string
+    email?: string
+    userId?: string
+  } | undefined> {
+    if (!this.strategy.fetchSenderInfo) {
+      return undefined
+    }
+    return Promise.race([
+      this.strategy.fetchSenderInfo(peerId).catch(error => {
+        const text = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`${this.strategy.channelId}: sender info fetch failed: ${text}\n`)
+        return undefined
+      }),
+      new Promise<undefined>(resolve => setTimeout(resolve, 1_000)),
+    ])
   }
 }
 

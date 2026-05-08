@@ -28,22 +28,47 @@ export async function findExistingPending(
 }
 
 export async function isRateLimited(senderKey: SenderKey): Promise<boolean> {
+  return (await getPairingRateLimitStatus(senderKey)).limited
+}
+
+export async function getPairingRateLimitStatus(
+  senderKey: SenderKey,
+): Promise<{ limited: boolean; elapsedMs: number; remainingMs: number }> {
   const limits = await readJson<RateLimitsFile>(rateLimitsPath(), {})
   const lastRequestAt = limits[senderKey] ?? 0
-  return Date.now() - lastRequestAt < PAIRING_RATE_LIMIT_MS
+  const elapsedMs = Date.now() - lastRequestAt
+  const remainingMs = Math.max(0, PAIRING_RATE_LIMIT_MS - elapsedMs)
+  return {
+    limited: elapsedMs < PAIRING_RATE_LIMIT_MS,
+    elapsedMs,
+    remainingMs,
+  }
 }
 
 export async function generateOrReusePending(
   channel: ChannelKind,
   peerId: string,
   displayName = '',
+  info?: { email?: string; userId?: string },
 ): Promise<{ code: string; created: boolean }> {
   const senderKey: SenderKey = `${channel}:${peerId}`
   const pending = await cleanExpiredPending()
   for (const [code, entry] of Object.entries(pending)) {
     if (`${entry.channel}:${entry.peerId}` === senderKey) {
+      let changed = false
       if (displayName && entry.displayName !== displayName) {
         entry.displayName = displayName
+        changed = true
+      }
+      if (info?.email && entry.email !== info.email) {
+        entry.email = info.email
+        changed = true
+      }
+      if (info?.userId && entry.userId !== info.userId) {
+        entry.userId = info.userId
+        changed = true
+      }
+      if (changed) {
         await writeJsonSecure(pendingPath(), pending)
       }
       return { code, created: false }
@@ -59,6 +84,8 @@ export async function generateOrReusePending(
     channel,
     peerId,
     displayName,
+    ...(info?.email ? { email: info.email } : {}),
+    ...(info?.userId ? { userId: info.userId } : {}),
     createdAt: Date.now(),
     ttlMs: PAIRING_TTL_MS,
   }
@@ -100,28 +127,44 @@ export async function rejectCode(code: string): Promise<{ ok: boolean }> {
 }
 
 /**
- * Best-effort: update an existing pending entry's displayName without
+ * Best-effort: update an existing pending entry's user info without
  * resetting its TTL. Called from a fire-and-forget Promise in the channel
  * runner after generateOrReusePending creates a new code, so the inbound
- * message itself is not blocked by the platform name-lookup API call.
+ * message itself is not blocked by the platform user-info lookup API call.
  * Silently no-ops if the code has been approved / rejected / expired.
  */
-export async function updatePendingDisplayName(
+export async function updatePendingUserInfo(
   code: string,
-  displayName: string,
+  info: { name?: string; email?: string; userId?: string },
 ): Promise<void> {
   const normalized = code.trim().toUpperCase()
-  const trimmed = displayName.trim()
-  if (!trimmed) {
+  const name = info.name?.trim()
+  const email = info.email?.trim()
+  const userId = info.userId?.trim()
+  if (!name && !email && !userId) {
     return
   }
   const pending = await readJson<PendingFile>(pendingPath(), {})
   const entry = pending[normalized]
-  if (!entry || entry.displayName === trimmed) {
+  if (!entry) {
     return
   }
-  entry.displayName = trimmed
-  await writeJsonSecure(pendingPath(), pending)
+  let changed = false
+  if (name && entry.displayName !== name) {
+    entry.displayName = name
+    changed = true
+  }
+  if (email && entry.email !== email) {
+    entry.email = email
+    changed = true
+  }
+  if (userId && entry.userId !== userId) {
+    entry.userId = userId
+    changed = true
+  }
+  if (changed) {
+    await writeJsonSecure(pendingPath(), pending)
+  }
 }
 
 async function cleanExpiredPending(): Promise<PendingFile> {
@@ -151,4 +194,3 @@ function generateUniqueCode(existing: Set<string>): string {
     }
   }
 }
-

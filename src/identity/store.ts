@@ -201,6 +201,16 @@ export async function getAdmin(): Promise<string | null> {
   return admin.admins[0] ?? null
 }
 
+export async function getAdminFeishuOpenId(): Promise<string | null> {
+  const adminName = await getAdmin()
+  if (!adminName) {
+    return null
+  }
+  const identities = await listIdentities()
+  const bindings = identities[adminName]?.channels.feishu ?? []
+  return bindings[0] ?? null
+}
+
 export async function setAdmin(name: string): Promise<void> {
   if (!isValidIdentityName(name)) {
     throw new Error(`Invalid identity name: ${name}`)

@@ -10,6 +10,15 @@
 - Hook / MCP / Skill discovery is admin-side only: `<lightclawHome>/hooks/`, `<lightclawHome>/mcp.json`, and `<lightclawHome>/skills/`. Do not reintroduce a project-layer scan path under `<cwd>/.lightclaw/` even if Claude Code does.
 - Channel attachments sink in two phases: Feishu `onMessage` attaches `pendingAttachment` metadata to `NormalizedChannelMessage`; `ChannelRunner` materializes it after pairing and runtime acquire via `ChannelRunnerStrategy.materializeAttachment`. New channel adapters should follow the same shape: channel code does not touch identity or runtime pools directly.
 
+# LightClaw Pairing Card Notes (Phase 25)
+
+- Unknown Feishu senders take the card path only when the canonical admin already has a Feishu binding. Otherwise `ChannelRunner.resolveMessageUser()` must keep the old text fallback, because an application card with no admin target is worse than a visible pairing code.
+- The card path does not create `pending.json` entries until the user clicks `[确认申请]`. Cancel stays silent and does not consume the pairing rate-limit slot. If a pending code already exists, repeated user messages render the waiting card instead of sending another review card.
+- `fetchFeishuUserInfo()` is cosmetic and best-effort: it uses `contact.v3.user.get` with `user_id_type=open_id`, returns `{ name, email, userId }`, and falls back to open_id on any failure. Do not make pairing depend on this API being healthy.
+- `/user approve` is single-argument now: `/user approve <code>`. Both terminal approval and admin card approval call `deriveCanonicalName({ name, email, openId, userId })`, so canonical names are deterministic (`<base>_<user_id>` when Feishu user_id is available).
+- Pairing card tokens are in-memory only. After a daemon restart, old card clicks resolve as expired or already handled; users can resend a message and `pending.json` remains the durable source of truth.
+- Admin review card clicks must validate the operator through `lookupBySender(feishu:<open_id>)` + `isAdmin()`. Never trust the card payload alone for approval authority.
+
 # LightClaw Permission System Notes
 
 - `Tool.suggestPermissionRules(input)` returns a *set of rules to install as a group* — not a precise→broad menu. For a chained Bash command the suggester emits one `Bash(<head>:*)` rule per subcommand (split on `;`/`&&`/`||`/`|`, max 5); for path tools a single `Tool(<dir>/**)` rule; for WebFetch a single `WebFetch(<hostname>)` rule; for MCP a single `MCP(<server>:<tool>)` rule. New tools should follow the same shape — return an empty array when no precise scope is derivable, and the approver will fall back to a single tool-wide allow rule.

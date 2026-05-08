@@ -170,7 +170,7 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.equal(parseFastPathSlash('/rules revoke 3'), null)
     assert.equal(parseFastPathSlash('/auth import codex'), null)
     assert.equal(parseFastPathSlash('/auth logout codex'), null)
-    assert.equal(parseFastPathSlash('/user approve abc123 --as alice'), null)
+    assert.equal(parseFastPathSlash('/user approve abc123'), null)
     assert.equal(parseFastPathSlash('/user remove bob'), null)
     // /status fast-path: msgs from disk transcript, mode/model from
     // prefs, sessionId from main-canonical. In-flight token = 0 is
