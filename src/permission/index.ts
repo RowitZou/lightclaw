@@ -3,8 +3,10 @@ import type { Interface } from 'node:readline/promises'
 import { getConfig } from '../config.js'
 import {
   getAllPermissionRules,
+  getCurrentUserId,
   getPermissionApprover,
   getPermissionMode,
+  setIdentityRules,
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
@@ -12,6 +14,7 @@ import { isHighRiskAsk } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { askUserApproval } from './prompt.js'
 import { formatRule } from './rules.js'
+import { loadIdentityRules } from './storage.js'
 import type {
   PermissionContext,
   PermissionDecision,
@@ -28,6 +31,26 @@ export async function requestPermission(input: {
   const { tool, toolInput, ctx, rl } = input
   const config = getConfig()
   const mode = getPermissionMode()
+  // Identity rules are persisted per-canonical-user but cached as an
+  // in-memory snapshot on each `SessionContext` (Phase 20 ALS isolation).
+  // A card-click `allow_rules` runs in the Feishu callback's own ALS
+  // context, so it can `setIdentityRules` only on its own snapshot — the
+  // long-running query() loop here never sees the new rule until the next
+  // resetSessionContext, which in long turns causes the same kind of ASK
+  // (e.g. WebSearch x N concurrent / sequential) to keep prompting even
+  // after the user already picked "always allow". reevaluateOwnerQueue
+  // sweeps already-pending tails (it reloads from disk), but the *next*
+  // tool_use evaluatePermission call against this stale snapshot still
+  // verdicts 'ask'. Reload from disk on every requestPermission so the
+  // freshly-installed rule takes effect immediately. Cost: one tiny JSON
+  // read per tool call; permissions.json is per-user and small. Mirror the
+  // refresh into the local in-memory snapshot too so callers that read it
+  // later in the same tool call (audit / suggester) see the current set.
+  const userId = getCurrentUserId()
+  if (userId) {
+    const fresh = loadIdentityRules(userId)
+    setIdentityRules(fresh)
+  }
   const verdict = evaluatePermission({
     toolName: tool.name,
     toolSource: tool.source,
