@@ -103,6 +103,52 @@ describe('requestPermission background-task allowlist fallback', () => {
   })
 })
 
+describe('requestPermission disk-fresh identity rules reload', () => {
+  // Phase 20 ALS isolation regression (2026-05-08 dogfood): a long query() loop's
+  // SessionContext snapshots identityRules at resetSessionContext time; when the
+  // user clicks "以后都允许" on a Feishu permission card, the callback runs in a
+  // *different* ALS context and updates only its own snapshot. Without disk-
+  // fresh reload here, the next ASK for the same tool inside the running query
+  // verdicts 'ask' again because its snapshot is stale — visible as WebSearch
+  // x N popups even after the user repeatedly approved them.
+  it('picks up an identity rule installed mid-query without resetSessionContext', async () => {
+    const { appendIdentityRules } = await import('./storage.js')
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'm',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 'permission-index-test',
+      currentUserId: 'alice',
+      permissionMode: 'default',
+      // Snapshot starts empty; the request would normally verdict 'ask'.
+      identityRules: [],
+    })
+    return runWithSessionContext(ctx, async () => {
+      // Simulate the Feishu card callback installing a rule on disk in
+      // another ALS context — the SessionContext snapshot is NOT updated.
+      appendIdentityRules({
+        canonicalUser: 'alice',
+        rules: [{
+          source: 'identity',
+          behavior: 'allow',
+          value: { toolName: 'WebSearch' },
+        }],
+      })
+      const decision = await requestPermission({
+        tool: fakeTool('WebSearch', 'execute'),
+        toolInput: { query: 'lightclaw architecture' },
+        ctx: { isInteractive: false },
+      })
+      assert.equal(
+        decision.behavior,
+        'allow',
+        'fresh disk reload must surface the just-installed rule on this same call',
+      )
+    })
+  })
+})
+
 async function withPermissionState<T>(fn: () => Promise<T>): Promise<T> {
   const ctx = createSessionContext({
     cwd: tmpHome,
