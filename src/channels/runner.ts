@@ -184,6 +184,22 @@ export type ChannelRunnerStrategy = {
    */
   startTyping?(message: NormalizedChannelMessage): Promise<unknown>
   stopTyping?(message: NormalizedChannelMessage, token: unknown): Promise<void>
+  /**
+   * Push a system-notice text directly to a specific user's DM rather than
+   * back to the chat the inbound message came from. Used by the bootstrap
+   * pairing path (welcome / pairing-code / rate-limited) when admin has no
+   * Feishu binding so card UX cannot activate — without this hook those
+   * notices fall back to in-chat send and leak applicant identity / pairing
+   * code into any group the applicant @-mentioned the bot in. Channels
+   * without a "send to specific user without an inbound" surface simply
+   * omit this; runner falls through to in-chat sendNotice.
+   */
+  sendNoticeToOpenId?(input: {
+    message: NormalizedChannelMessage
+    applicantOpenId: string
+    kind: SystemNoticeKind
+    content: string
+  }): Promise<void>
 }
 
 /**
@@ -844,6 +860,41 @@ export class ChannelRunner {
     }
   }
 
+  /**
+   * Pairing-only DM-first notice. Used for the three bootstrap text fallback
+   * sites (welcome+code, rate-limited, cooldown-hook-missing) when admin has
+   * no Feishu binding so card UX is bypassed. Without DM routing these
+   * notices echo back to whatever chat the applicant @-mentioned the bot in
+   * — including groups, leaking applicant open_id / pairing code to every
+   * group member. Falls through to in-chat sendNotice if the strategy hook
+   * is missing or the DM push fails (so a degraded channel never just
+   * silently drops the response).
+   */
+  private async sendApplicantNotice(
+    message: NormalizedChannelMessage,
+    applicantOpenId: string,
+    kind: SystemNoticeKind,
+    text: string,
+  ): Promise<void> {
+    if (this.strategy.sendNoticeToOpenId) {
+      try {
+        await this.strategy.sendNoticeToOpenId({
+          message,
+          applicantOpenId,
+          kind,
+          content: text,
+        })
+        return
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `${this.strategy.channelId}: applicant DM notice failed for ${applicantOpenId}: ${detail}; falling back to in-chat\n`,
+        )
+      }
+    }
+    await this.sendNotice(message, kind, text)
+  }
+
   private async resolveMessageUser(message: NormalizedChannelMessage): Promise<string | null> {
     const channel = this.strategy.channelId
     if (!isPairableChannel(channel)) {
@@ -890,7 +941,12 @@ export class ChannelRunner {
             remainMinutes: Math.max(1, Math.ceil(status.remainingMs / 60_000)),
           })
         } else {
-          await this.sendNotice(message, 'error', t('channel.pairing.rateLimited'))
+          await this.sendApplicantNotice(
+            message,
+            message.senderOpenId,
+            'error',
+            t('channel.pairing.rateLimited'),
+          )
         }
         return null
       }
@@ -926,8 +982,9 @@ export class ChannelRunner {
       const freshnessLabel = result.created
         ? t('channel.pairing.freshnessNew')
         : t('channel.pairing.freshnessReuse')
-      await this.sendNotice(
+      await this.sendApplicantNotice(
         message,
+        message.senderOpenId,
         'info',
         [
           t('channel.pairing.welcome'),
@@ -937,8 +994,9 @@ export class ChannelRunner {
       )
     } catch (error) {
       if (error instanceof Error && error.message === 'rate-limited') {
-        await this.sendNotice(
+        await this.sendApplicantNotice(
           message,
+          message.senderOpenId,
           'error',
           t('channel.pairing.rateLimited'),
         )
