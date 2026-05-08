@@ -137,6 +137,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         const handle = await startFeishuWsClient({
           config,
           dedup,
+          botOpenId: botSelf.openId,
           onMessage,
           onCardAction: action => {
             if ('kind' in action && action.kind === 'background_task') {
@@ -163,6 +164,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       const server = await startFeishuWebhookServer({
         config,
         dedup,
+        botOpenId: botSelf.openId,
         onMessage,
       })
       const { host, port, path: webhookPath } = config.webhook

@@ -282,9 +282,20 @@ export class ChannelRunner {
       : message
     assertSessionIdShape(mainSessionId)
     assertSessionIdShape(sessionId)
+    // Slash commands carry user-to-system meta intent (e.g. /mode, /rules
+    // allow, /auth import, /user approve, /sandbox prefetch). Wrapping them
+    // as `<user-interjection>` is wrong: the LLM treats the text as natural
+    // language and `dispatchChannelSlash` never runs, so the command is
+    // effectively dropped. Read-only slashes and /stop already short-circuit
+    // via parseFastPathSlash above; /b and /fresh are caught by their own
+    // parsers. This guard covers the remaining write slashes — they fall
+    // through to the in-lock dispatchChannelSlash path so they serialize
+    // with the in-flight turn instead of being eaten by the queue.
+    const looksLikeSlash = isLikelySlashCommand(message.text)
     if (
       !branchRequest &&
       !freshSessionId &&
+      !looksLikeSlash &&
       channelInterjectionQueue.hasInflightFor(mainSessionId)
     ) {
       const entry: InterjectionEntry = {
@@ -1176,6 +1187,18 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
     return 'read'
   }
   return null
+}
+
+/**
+ * Cheap "is this user input a slash command?" classifier used by the
+ * in-flight interjection guard. Anything starting with "/" after trim is
+ * treated as a slash even if `dispatchChannelSlash` will reject it as
+ * unknown — that's still the right routing decision (run it inside the
+ * lock so `dispatchChannelSlash` can produce its own usage notice instead
+ * of being silently absorbed into the next `<user-interjection>` block).
+ */
+export function isLikelySlashCommand(text: string): boolean {
+  return text.trimStart().startsWith('/')
 }
 
 function parseBranchRequest(

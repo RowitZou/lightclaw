@@ -142,6 +142,31 @@ describe('ChannelRunner multi-user concurrency', () => {
   })
 })
 
+describe('ChannelRunner slash detection', () => {
+  it('isLikelySlashCommand recognizes any text starting with / after trim', async () => {
+    const { isLikelySlashCommand } = await import('./runner.js')
+    // Recognized slashes (incl. write variants and unknown — we route by
+    // shape, not by allowlist; dispatchChannelSlash will produce a usage
+    // notice for unknown slashes, which is the right UX).
+    assert.equal(isLikelySlashCommand('/help'), true)
+    assert.equal(isLikelySlashCommand('/mode auto'), true)
+    assert.equal(isLikelySlashCommand('/rules allow Bash(curl:*)'), true)
+    assert.equal(isLikelySlashCommand('/auth import codex'), true)
+    assert.equal(isLikelySlashCommand('/user approve abc'), true)
+    assert.equal(isLikelySlashCommand('/sandbox prefetch'), true)
+    assert.equal(isLikelySlashCommand('/whatever-unknown'), true)
+    assert.equal(isLikelySlashCommand('  /stop  '), true)
+    assert.equal(isLikelySlashCommand('\t/help'), true)
+    // Non-slashes — including text that contains a slash later but does not
+    // start with one. This is the in-flight interjection path: bare chat
+    // ("好的"/"等下") must still queue as an interjection.
+    assert.equal(isLikelySlashCommand('hello'), false)
+    assert.equal(isLikelySlashCommand(''), false)
+    assert.equal(isLikelySlashCommand('please run /help'), false)
+    assert.equal(isLikelySlashCommand('好的'), false)
+  })
+})
+
 describe('ChannelRunner pre-lock fast path', () => {
   it('parseFastPathSlash classifies /stop, read whitelist, and write/non-slash correctly', async () => {
     const { parseFastPathSlash } = await import('./runner.js')
@@ -349,6 +374,111 @@ describe('ChannelRunner pre-lock fast path', () => {
       '/feedback should produce a notice even when the main lock is held',
     )
 
+    releaseHold?.()
+    await heldLock
+  })
+})
+
+describe('ChannelRunner in-flight slash routing', () => {
+  // Smoke-cover the regression behind the 2026-05-08 dogfood incident
+  // (group session feishu:group:oc_4e92...:ou_7f0fb...): with a session
+  // marked in-flight, write-style slashes ("/mode auto", "/rules allow X",
+  // ...) were swept into the interjection queue, packed into the next
+  // <user-interjection> block, and the LLM received "/mode auto" as natural
+  // language — dispatchChannelSlash never ran. The interjection-guard now
+  // checks isLikelySlashCommand BEFORE consulting the queue, so any text
+  // starting with "/" routes to the in-lock dispatchChannelSlash path.
+  it('does not push a write slash into the interjection queue while in-flight', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelInterjectionQueue } = await import('./feishu/interjection-queue.js')
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    // Stub resolveSessionId so handleMessage's mainSessionId matches the
+    // string we mark in-flight below; default fake resolver returns chatId.
+    const mainSessionId = 'feishu-alice-main'
+    strategy.resolveSessionId = () => mainSessionId
+
+    // Externally mark the session as in-flight AND hold its lock so the
+    // turn never makes progress past `runExclusive` — handleMessage routes
+    // by the synchronous interjection-guard check before any await, so this
+    // is enough to prove the routing decision without standing up a full
+    // LLM/runtime stack.
+    channelInterjectionQueue.markInFlight(mainSessionId)
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      mainSessionId,
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const slashMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/mode auto',
+      chatId: mainSessionId,
+    })
+    // handleMessage will await runExclusive forever (the held lock); fire
+    // and forget, then probe the queue state on the next microtask. The
+    // synchronous interjection-guard runs before any await, so the decision
+    // is already locked in by the time we yield.
+    void runner.handleMessage(slashMessage)
+    await delay(20)
+
+    assert.equal(
+      channelInterjectionQueue.size(mainSessionId),
+      0,
+      'write slash must not be pushed into the interjection queue',
+    )
+    assert.equal(
+      strategy.notices.find(n => n.messageId === slashMessage.messageId),
+      undefined,
+      'no interjection.acked notice should be produced for a slash',
+    )
+
+    // Cleanup: release the lock and the in-flight marker so the suspended
+    // handleMessage can unwind without leaking into the next test.
+    channelInterjectionQueue.unmarkInFlight(mainSessionId)
+    releaseHold?.()
+    await heldLock.catch(() => {})
+  })
+
+  it('still queues bare chat as an interjection while in-flight', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelInterjectionQueue } = await import('./feishu/interjection-queue.js')
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-alice-chat-only'
+    strategy.resolveSessionId = () => mainSessionId
+
+    channelInterjectionQueue.markInFlight(mainSessionId)
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      mainSessionId,
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const chatMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '顺便帮我查一下天气',
+      chatId: mainSessionId,
+    })
+    await runner.handleMessage(chatMessage)
+
+    assert.equal(
+      channelInterjectionQueue.size(mainSessionId),
+      1,
+      'bare chat must still be pushed into the interjection queue',
+    )
+
+    channelInterjectionQueue.unmarkInFlight(mainSessionId)
     releaseHold?.()
     await heldLock
   })
