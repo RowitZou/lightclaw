@@ -567,3 +567,177 @@ describe('applyAttachmentMaterialization', () => {
     )
   })
 })
+
+describe('ChannelRunner pairing branch', () => {
+  // Pairing branch tests stop short before any LLM / runtime acquire — the
+  // unpaired sender path returns null from resolveMessageUser, so handleMessage
+  // exits before entering the channel session lock + runtime pool. That keeps
+  // these tests free of LLM stubs while still exercising the full dispatch:
+  // already-pending → waiting card; rate-limited → cooldown card; fresh →
+  // application card; admin without feishu binding → legacy text fallback.
+
+  // Lock locale so assertions on the cn i18n strings are deterministic.
+  beforeEach(() => {
+    setLang('cn')
+  })
+
+  function makePairingStrategy(opts?: {
+    hasApplicationHook?: boolean
+    hasWaitingHook?: boolean
+    hasCooldownHook?: boolean
+  }): {
+    strategy: ChannelRunnerStrategy
+    notices: Array<{ messageId: string; text: string }>
+    appCalls: Array<{ applicantOpenId: string; applicantName?: string; applicantEmail?: string; applicantUserId?: string }>
+    waitCalls: Array<{ code: string; applicantName?: string }>
+    cooldownCalls: Array<{ elapsedMinutes: number; remainMinutes: number }>
+    senderInfo: Map<string, { name?: string; email?: string; userId?: string }>
+  } {
+    const notices: Array<{ messageId: string; text: string }> = []
+    const appCalls: Array<{
+      applicantOpenId: string
+      applicantName?: string
+      applicantEmail?: string
+      applicantUserId?: string
+    }> = []
+    const waitCalls: Array<{ code: string; applicantName?: string }> = []
+    const cooldownCalls: Array<{ elapsedMinutes: number; remainMinutes: number }> = []
+    const senderInfo = new Map<string, { name?: string; email?: string; userId?: string }>()
+
+    const strategy: ChannelRunnerStrategy = {
+      channelId: 'feishu',
+      cwd: process.cwd(),
+      permissionMode: 'default',
+      isMessageAllowed: () => true,
+      resolveSessionId: (_message, userId) => `feishu-${userId}`,
+      buildChannelPrompt: () => 'fake',
+      async sendReply() {},
+      async sendNotice(message, _kind, text) {
+        notices.push({ messageId: message.messageId, text })
+      },
+      async fetchSenderInfo(peerId) {
+        return senderInfo.get(peerId)
+      },
+    }
+    if (opts?.hasApplicationHook !== false) {
+      strategy.renderPairingApplicationCard = async input => {
+        appCalls.push({
+          applicantOpenId: input.applicantOpenId,
+          applicantName: input.applicantName,
+          applicantEmail: input.applicantEmail,
+          applicantUserId: input.applicantUserId,
+        })
+      }
+    }
+    if (opts?.hasWaitingHook !== false) {
+      strategy.renderPairingWaitingCard = async input => {
+        waitCalls.push({ code: input.code, applicantName: input.applicantName })
+      }
+    }
+    if (opts?.hasCooldownHook !== false) {
+      strategy.renderPairingCooldownCard = async input => {
+        cooldownCalls.push({
+          elapsedMinutes: input.elapsedMinutes,
+          remainMinutes: input.remainMinutes,
+        })
+      }
+    }
+    return { strategy, notices, appCalls, waitCalls, cooldownCalls, senderInfo }
+  }
+
+  it('renders the application card when admin has a feishu binding and the sender is fresh', async () => {
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+
+    const harness = makePairingStrategy()
+    harness.senderInfo.set('ou_user', { name: 'Alice', email: 'alice@x.com', userId: 'abcd1234' })
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+
+    assert.equal(harness.appCalls.length, 1, 'application card hook fires once')
+    assert.equal(harness.appCalls[0].applicantOpenId, 'ou_user')
+    assert.equal(harness.appCalls[0].applicantName, 'Alice')
+    assert.equal(harness.appCalls[0].applicantEmail, 'alice@x.com')
+    assert.equal(harness.appCalls[0].applicantUserId, 'abcd1234')
+    assert.equal(harness.waitCalls.length, 0)
+    assert.equal(harness.cooldownCalls.length, 0)
+    assert.equal(harness.notices.length, 0, 'no text fallback when card path is live')
+  })
+
+  it('re-renders the waiting card when sender already has a pending entry', async () => {
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    const { generateOrReusePending } = await import('../identity/pairing.js')
+    const { code } = await generateOrReusePending('feishu', 'ou_user', 'Alice')
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello again' }))
+
+    assert.equal(harness.waitCalls.length, 1, 'waiting card hook fires for existing pending')
+    assert.equal(harness.waitCalls[0].code, code)
+    assert.equal(harness.waitCalls[0].applicantName, 'Alice')
+    assert.equal(harness.appCalls.length, 0, 'no fresh application card when pending exists')
+  })
+
+  it('renders the cooldown card when sender is rate-limited', async () => {
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    const { generateOrReusePending, approveCode } = await import('../identity/pairing.js')
+    // Generate then immediately consume so rate-limits.json is set but
+    // pending.json is empty — emulates a fresh reject flow's cooldown.
+    const { code } = await generateOrReusePending('feishu', 'ou_user')
+    await approveCode(code)
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hi again' }))
+
+    assert.equal(harness.cooldownCalls.length, 1, 'cooldown card hook fires when rate-limited')
+    assert.ok(
+      harness.cooldownCalls[0].remainMinutes > 0 &&
+      harness.cooldownCalls[0].remainMinutes <= 10,
+      `remain minutes within (0, 10], got ${harness.cooldownCalls[0].remainMinutes}`,
+    )
+    assert.equal(harness.appCalls.length, 0)
+    assert.equal(harness.waitCalls.length, 0)
+  })
+
+  it('falls back to text pairing notice when admin has no feishu binding', async () => {
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    // Intentionally no addLink for feishu — admin paired only via terminal.
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+
+    assert.equal(harness.appCalls.length, 0, 'no card path when admin lacks feishu binding')
+    assert.equal(harness.waitCalls.length, 0)
+    assert.equal(harness.cooldownCalls.length, 0)
+    assert.equal(harness.notices.length, 1, 'text pairing notice still fires as bootstrap fallback')
+    assert.match(harness.notices[0].text, /配对码|approve/)
+  })
+
+  it('falls back to text pairing notice when strategy lacks the application card hook', async () => {
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+
+    const harness = makePairingStrategy({ hasApplicationHook: false })
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+
+    assert.equal(harness.appCalls.length, 0)
+    assert.equal(harness.notices.length, 1, 'text fallback when strategy is missing the hook')
+    assert.match(harness.notices[0].text, /配对码|approve/)
+  })
+})

@@ -155,6 +155,109 @@ describe('PairingCardCoordinator', () => {
     assert.match(JSON.stringify(response), /仅管理员可审批/)
     assert.equal((await listPending()).length, 1)
   })
+
+  it('confirm without admin feishu binding still creates pending; no admin card pushed', async () => {
+    // Bootstrap case: admin canonical exists but is not yet bound to any
+    // Feishu open_id (e.g. fresh deployment, admin only on terminal). The
+    // coordinator must still create the pending entry so admin can approve
+    // via terminal /user approve <code>, and must NOT push a review card
+    // to nowhere.
+    await createUser('admin')
+    await setAdmin('admin')
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+
+    const response = await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+
+    assert.equal((await listPending()).length, 1)
+    assert.equal(sender.openIdCards.length, 0, 'no admin card pushed when admin has no feishu binding')
+    assert.match(JSON.stringify(response), /等待管理员审批/)
+  })
+
+  it('approve detects code already consumed elsewhere (terminal /user approve raced)', async () => {
+    // Simulates the double-channel race: admin runs /user approve <code>
+    // in terminal while the review card is still live. The card click then
+    // finds approveCode() returns null because the entry was already
+    // removed; coordinator must surface "已通过其他渠道处理" instead of
+    // failing or double-creating identities.
+    const { approveCode: approveCodeDirect } = await import('../../identity/pairing.js')
+    await createUser('admin')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+    await coord.handleCardAction(extractAction(sender.replyCards[0], 'confirm'))
+    const reviewCard = sender.openIdCards[0].card
+    const approve = {
+      ...extractAction(reviewCard, 'approve'),
+      operatorOpenId: 'ou_admin',
+    }
+    // Race: terminal consumes the pending entry FIRST.
+    const [{ code: stolenCode }] = await listPending()
+    await approveCodeDirect(stolenCode)
+
+    const response = await coord.handleCardAction(approve)
+
+    assert.match(JSON.stringify(response), /已通过其他渠道处理/)
+    // No follow-up handover card pushed (we never minted a canonical here).
+    assert.equal(sender.openIdCards.length, 1, 'only the original review card was pushed')
+  })
+
+  it('double-tap confirm only pushes one admin review card', async () => {
+    // Mobile double-tap fires two handlers for the same applicationToken
+    // before either mutates byToken. CAS pending → submitting before the
+    // first await must lock the second tap out so admin does not see two
+    // identical review cards.
+    await createUser('admin')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+      applicantEmail: 'alice@example.com',
+      applicantUserId: 'abcd1234',
+    })
+    const confirm = extractAction(sender.replyCards[0], 'confirm')
+
+    const [first, second] = await Promise.all([
+      coord.handleCardAction(confirm),
+      coord.handleCardAction(confirm),
+    ])
+
+    assert.equal(sender.openIdCards.length, 1, 'only one admin review card pushed')
+    // First fires the admin push + waiting card; second sees `submitting`
+    // and renders the polite "still processing" body. Order isn't fixed
+    // by Promise.all (microtask scheduling), so accept either ordering.
+    const bodies = [JSON.stringify(first), JSON.stringify(second)]
+    assert.ok(bodies.some(body => /等待管理员审批/.test(body)), 'one response is the waiting card')
+    assert.ok(bodies.some(body => /正在提交申请/.test(body)), 'other response is the submitting toast')
+    assert.equal((await listPending()).length, 1)
+  })
+
+  it('unknown application token returns expired card', async () => {
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+
+    const response = await coord.handleCardAction({
+      kind: 'lightclaw_pairing',
+      action: 'confirm',
+      applicationToken: 'not-a-real-token',
+    })
+
+    assert.match(JSON.stringify(response), /申请已过期/)
+    assert.equal(sender.replyCards.length, 0)
+    assert.equal(sender.openIdCards.length, 0)
+  })
 })
 
 class FakeSender {

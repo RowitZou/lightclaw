@@ -40,6 +40,13 @@ type ApplicationState =
       applicantUserId?: string
     }
   | {
+      kind: 'submitting'
+      applicantOpenId: string
+      applicantName?: string
+      applicantEmail?: string
+      applicantUserId?: string
+    }
+  | {
       kind: 'submitted'
       applicantOpenId: string
       applicantName?: string
@@ -144,9 +151,31 @@ export class PairingCardCoordinator {
 
   private async applyConfirm(
     token: string,
-    state: ApplicationState,
+    _state: ApplicationState,
   ): Promise<FeishuCardActionResponse> {
-    if (state.kind !== 'pending') {
+    // Re-read live state instead of trusting the parameter snapshot:
+    // mobile double-tap can fire two handler invocations before either
+    // mutates byToken. We then synchronously CAS pending → submitting
+    // BEFORE any await; the second tap's get() runs after the first's
+    // set() (single-threaded JS), so it sees `submitting` and bails
+    // with a quiet `still processing` card without re-pushing the
+    // admin review card or re-calling generateOrReusePending.
+    const current = this.byToken.get(token)
+    if (!current) {
+      return rawCard(buildTerminalCard({
+        template: 'grey',
+        title: t('channel.pairing.application.expired'),
+        body: t('channel.pairing.application.expired'),
+      }))
+    }
+    if (current.kind === 'submitting' || current.kind === 'submitted') {
+      return rawCard(buildTerminalCard({
+        template: 'wathet',
+        title: t('channel.pairing.waiting.title'),
+        body: t('channel.pairing.application.submitting'),
+      }))
+    }
+    if (current.kind !== 'pending') {
       return rawCard(buildTerminalCard({
         template: 'grey',
         title: t('channel.pairing.waiting.title'),
@@ -154,22 +183,30 @@ export class PairingCardCoordinator {
       }))
     }
 
+    this.byToken.set(token, {
+      kind: 'submitting',
+      applicantOpenId: current.applicantOpenId,
+      applicantName: current.applicantName,
+      applicantEmail: current.applicantEmail,
+      applicantUserId: current.applicantUserId,
+    })
+
     try {
       const result = await generateOrReusePending(
         'feishu',
-        state.applicantOpenId,
-        state.applicantName ?? '',
+        current.applicantOpenId,
+        current.applicantName ?? '',
         {
-          email: state.applicantEmail,
-          userId: state.applicantUserId,
+          email: current.applicantEmail,
+          userId: current.applicantUserId,
         },
       )
       this.byToken.set(token, {
         kind: 'submitted',
-        applicantOpenId: state.applicantOpenId,
-        applicantName: state.applicantName,
-        applicantEmail: state.applicantEmail,
-        applicantUserId: state.applicantUserId,
+        applicantOpenId: current.applicantOpenId,
+        applicantName: current.applicantName,
+        applicantEmail: current.applicantEmail,
+        applicantUserId: current.applicantUserId,
         code: result.code,
       })
       const adminOpenId = await getAdminFeishuOpenId()
@@ -177,8 +214,8 @@ export class PairingCardCoordinator {
         await this.sender
           .sendInteractiveCardToOpenId(adminOpenId, buildReviewCard({
             token,
-            applicantOpenId: state.applicantOpenId,
-            applicantName: state.applicantName,
+            applicantOpenId: current.applicantOpenId,
+            applicantName: current.applicantName,
             code: result.code,
           }))
           .catch(error => {
@@ -188,10 +225,15 @@ export class PairingCardCoordinator {
       }
       return rawCard(buildWaitingCard({
         code: result.code,
-        applicantOpenId: state.applicantOpenId,
-        applicantName: state.applicantName,
+        applicantOpenId: current.applicantOpenId,
+        applicantName: current.applicantName,
       }))
     } catch (error) {
+      // Rollback so the user can retry on the same card. Re-set the
+      // captured pending snapshot (current was 'pending' above) rather
+      // than picking up whatever byToken currently holds — the rollback
+      // must be deterministic regardless of what the failed branch did.
+      this.byToken.set(token, current)
       if (error instanceof Error && error.message === 'rate-limited') {
         return rawCard(buildTerminalCard({
           template: 'red',
