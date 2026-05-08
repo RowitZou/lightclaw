@@ -456,6 +456,85 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     assert.equal((await groupPending).behavior, 'deny')
   }))
 
+  it('group ask: resolution notice is pushed to the sender DM, not back to the group', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id', 'chat-group', 'group'),
+      sessionId: 'feishu:group:chat-group:alice-open-id',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+    // Approval card already pushed to DM (existing behavior, asserted by
+    // earlier tests). dm=1, in-chat=0.
+    assert.equal(sender.dmCardSends, 1, 'approval card pushed to DM')
+    assert.equal(sender.cardSends, 0, 'approval card not sent to group')
+
+    await coord.handleCardAction({
+      requestId: extractPendingForSession(coord, 'feishu:group:chat-group:alice-open-id'),
+      action: 'deny',
+      operatorOpenId: 'alice-open-id',
+      originSessionId: 'feishu:group:chat-group:alice-open-id',
+    })
+    assert.equal((await pending).behavior, 'deny')
+
+    // The deny notice MUST follow the approval card to the DM. Sending it
+    // back to the group would leak the resolution (and, for high-risk
+    // downgrades, the command preview) to bystanders that the Phase 26
+    // routing was meant to keep out of the loop entirely.
+    assert.equal(sender.dmCardSends, 2, 'resolution notice pushed to DM')
+    assert.equal(sender.cardSends, 0, 'resolution notice did NOT leak to the group')
+  }))
+
+  it('tryConsumePermissionMessage ignores raw group messages even when sender matches the head', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id', 'chat-group', 'group'),
+      sessionId: 'feishu:group:chat-group:alice-open-id',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+    assert.equal(sender.dmCardSends, 1)
+
+    // A group message from the sender containing literal "1" must NOT be
+    // consumed as an approval. Otherwise mention gating is fully bypassed:
+    // any background chatter from a user with an active head pending
+    // ("ok", "好的", numeric "1") becomes a hidden approve / deny because
+    // tryConsumePermissionMessage runs in feishu-channel.ts onMessage
+    // *before* the runner-level mention gate. Card clicks via onCardAction
+    // continue to work; only raw text → applyAction is sealed off.
+    const consumed = await coord.tryConsumePermissionMessage({
+      eventId: 'evt-group-1',
+      chatId: 'chat-group',
+      chatType: 'group',
+      senderOpenId: 'alice-open-id',
+      messageId: 'msg-group-text',
+      text: '1',
+    })
+    assert.equal(consumed, false, 'group raw text does not consume pending')
+    assert.equal(sender.dmCardSends, 1, 'no notice sent — pending untouched')
+    assert.equal(sender.cardSends, 0, 'no in-chat notice')
+
+    // Same text from the sender's DM (where the card actually lives) DOES
+    // consume — that is the user's intended fallback channel for the case
+    // where the card UI fails and they type the action manually.
+    const consumedDm = await coord.tryConsumePermissionMessage({
+      eventId: 'evt-dm-1',
+      chatId: 'chat-dm-alice',
+      chatType: 'p2p',
+      senderOpenId: 'alice-open-id',
+      messageId: 'msg-dm-text',
+      text: '1',
+    })
+    assert.equal(consumedDm, true, 'DM raw text consumes pending')
+    assert.equal((await pending).behavior, 'allow', 'pending resolved as allow once via "1"')
+  }))
+
   // Mock timers so the 24h fallback fires deterministically inside a
   // subprocess test runner. Real-time setTimeout + node:test worker
   // subprocess interaction is finicky (the worker holds shutdown until
