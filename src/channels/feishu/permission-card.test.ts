@@ -20,12 +20,23 @@ import type { FeishuSender } from './sender.js'
 
 class FakeSender {
   cardSends = 0
+  dmCardSends = 0
   textSends = 0
   lastCard: Record<string, any> | null = null
+  lastDmCard: Record<string, any> | null = null
+  dmShouldFail = false
 
   async sendInteractiveCard(_msg: unknown, card: Record<string, any>): Promise<void> {
     this.cardSends += 1
     this.lastCard = card
+  }
+
+  async sendInteractiveCardToOpenId(_openId: string, card: Record<string, any>): Promise<void> {
+    this.dmCardSends += 1
+    this.lastDmCard = card
+    if (this.dmShouldFail) {
+      throw new Error('blocked')
+    }
   }
 
   async sendText(): Promise<void> {
@@ -33,12 +44,17 @@ class FakeSender {
   }
 }
 
-function fakeMessage(senderOpenId: string, chatId = 'chat-1'): NormalizedChannelMessage {
+function fakeMessage(
+  senderOpenId: string,
+  chatId = 'chat-1',
+  chatType = 'p2p',
+): NormalizedChannelMessage {
   return {
     channel: 'feishu',
     eventId: `evt-${Math.random().toString(36).slice(2)}`,
     chatId,
     senderOpenId,
+    chatType,
     messageId: `msg-${Math.random().toString(36).slice(2)}`,
     text: 'hi',
   }
@@ -333,18 +349,111 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
 
     // Resolve both quickly so the test exits cleanly.
     await coord.handleCardAction({
-      requestId: extractPendingForOwner(coord, 'alice-open-id'),
+      requestId: extractPendingForSession(coord, 'sess-alice'),
       action: 'deny',
       operatorOpenId: 'alice-open-id',
     })
     await coord.handleCardAction({
-      requestId: extractPendingForOwner(coord, 'bob-open-id'),
+      requestId: extractPendingForSession(coord, 'sess-bob'),
       action: 'deny',
       operatorOpenId: 'bob-open-id',
     })
     const [aliceR, bobR] = await Promise.all([aliceP, bobP])
     assert.equal(aliceR.behavior, 'deny')
     assert.equal(bobR.behavior, 'deny')
+  }))
+
+  it('pushes group approval cards to the sender DM with originSessionId in button values', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const message = fakeMessage('alice-open-id', 'chat-group', 'group')
+    const approver = coord.createApprover({
+      message,
+      sessionId: 'feishu:group:chat-group:alice-open-id',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.dmCardSends, 1)
+    assert.equal(sender.cardSends, 0)
+    const actionRow = sender.lastDmCard!.elements.find((e: any) => e.tag === 'action')
+    assert.equal(
+      actionRow.actions[0].value.originSessionId,
+      'feishu:group:chat-group:alice-open-id',
+    )
+
+    await coord.handleCardAction({
+      requestId: extractPendingForSession(coord, 'feishu:group:chat-group:alice-open-id'),
+      action: 'deny',
+      operatorOpenId: 'alice-open-id',
+      originSessionId: 'feishu:group:chat-group:alice-open-id',
+    })
+    assert.equal((await pending).behavior, 'deny')
+  }))
+
+  it('falls back to in-chat group card when DM push fails', () => inSession(async () => {
+    const sender = new FakeSender()
+    sender.dmShouldFail = true
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id', 'chat-group', 'group'),
+      sessionId: 'feishu:group:chat-group:alice-open-id',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.dmCardSends, 1)
+    assert.equal(sender.cardSends, 1)
+
+    await coord.handleCardAction({
+      requestId: extractPendingForSession(coord, 'feishu:group:chat-group:alice-open-id'),
+      action: 'deny',
+      operatorOpenId: 'alice-open-id',
+      originSessionId: 'feishu:group:chat-group:alice-open-id',
+    })
+    assert.equal((await pending).behavior, 'deny')
+  }))
+
+  it('keeps DM and group queues independent for the same sender', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const dmApprover = coord.createApprover({
+      message: fakeMessage('alice-open-id', 'chat-dm', 'p2p'),
+      sessionId: 'feishu:dm:chat-dm',
+      userId: 'alice',
+    })
+    const groupApprover = coord.createApprover({
+      message: fakeMessage('alice-open-id', 'chat-group', 'group'),
+      sessionId: 'feishu:group:chat-group:alice-open-id',
+      userId: 'alice',
+    })
+
+    const dmPending = dmApprover.ask(ask('Bash', 'curl:*'))
+    const groupPending = groupApprover.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.cardSends, 1, 'DM card renders in-chat')
+    assert.equal(sender.dmCardSends, 1, 'group card renders in sender DM')
+
+    await coord.handleCardAction({
+      requestId: extractPendingForSession(coord, 'feishu:dm:chat-dm'),
+      action: 'deny',
+      operatorOpenId: 'alice-open-id',
+      originSessionId: 'feishu:dm:chat-dm',
+    })
+    await coord.handleCardAction({
+      requestId: extractPendingForSession(coord, 'feishu:group:chat-group:alice-open-id'),
+      action: 'deny',
+      operatorOpenId: 'alice-open-id',
+      originSessionId: 'feishu:group:chat-group:alice-open-id',
+    })
+
+    assert.equal((await dmPending).behavior, 'deny')
+    assert.equal((await groupPending).behavior, 'deny')
   }))
 
   // Mock timers so the 24h fallback fires deterministically inside a
@@ -450,15 +559,14 @@ function extractHeadId(coord: FeishuPermissionCoordinator): string {
   throw new Error('extractHeadId: queue is empty')
 }
 
-function extractPendingForOwner(
+function extractPendingForSession(
   coord: FeishuPermissionCoordinator,
-  senderOpenId: string,
+  sessionId: string,
 ): string {
   const map: Map<string, string[]> = (coord as any).queuesByOwner
-  for (const [key, queue] of map.entries()) {
-    if (key.endsWith(`:${senderOpenId}`) && queue.length > 0) {
-      return queue[0]
-    }
+  const queue = map.get(sessionId)
+  if (queue && queue.length > 0) {
+    return queue[0]
   }
-  throw new Error(`extractPendingForOwner: no queue for ${senderOpenId}`)
+  throw new Error(`extractPendingForSession: no queue for ${sessionId}`)
 }

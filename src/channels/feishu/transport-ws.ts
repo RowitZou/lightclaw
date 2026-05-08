@@ -36,7 +36,13 @@ type ReceiveV1Data = {
     create_time?: string
     parent_id?: string
     root_id?: string
-    mentions?: Array<{ key?: string; name?: string }>
+    thread_id?: string
+    mentions?: Array<{
+      key?: string
+      name?: string
+      id?: { open_id?: string }
+      open_id?: string
+    }>
   }
 }
 
@@ -257,6 +263,7 @@ function normalizeCardAction(
     requestId,
     action: actionKind,
     operatorOpenId,
+    ...(stringValue(value.originSessionId) ? { originSessionId: stringValue(value.originSessionId) } : {}),
     ...(openMessageId ? { openMessageId } : {}),
   }
 }
@@ -312,6 +319,7 @@ function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
     mentions: (message.mentions ?? []).map(mention => ({
       key: mention.key,
       name: mention.name,
+      openId: mention.id?.open_id ?? mention.open_id,
     })),
   })
   if (!parsed.text && !parsed.mediaKeys?.length) {
@@ -323,7 +331,13 @@ function normalizeReceiveV1(data: ReceiveV1Data): FeishuRawMessage | null {
     chatType: message.chat_type,
     senderOpenId,
     messageId,
-    parentId: message.parent_id || message.root_id,
+    threadId: message.thread_id,
+    rootId: message.root_id,
+    mentions: (message.mentions ?? []).map(mention => ({
+      key: mention.key,
+      name: mention.name,
+      openId: mention.id?.open_id ?? mention.open_id,
+    })),
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }

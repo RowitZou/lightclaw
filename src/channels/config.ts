@@ -62,6 +62,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     permissionMode,
     allowUsers: input?.allowUsers ?? [],
     allowChats: input?.allowChats ?? [],
+    requireMention: input?.requireMention ?? true,
     textChunkSize: input?.textChunkSize ?? 4000,
     httpTimeoutMs: input?.httpTimeoutMs ?? 30_000,
     maxBodyBytes: input?.maxBodyBytes ?? 1024 * 1024,

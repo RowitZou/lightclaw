@@ -1,4 +1,5 @@
 import type { NormalizedChannelMessage } from '../types.js'
+import { isFeishuGroupChatType } from './routing.js'
 
 export function buildFeishuChannelPrompt(
   message: NormalizedChannelMessage,
@@ -17,5 +18,11 @@ export function buildFeishuChannelPrompt(
     `- Chat ID: ${message.chatId}`,
     `- Sender open_id: ${message.senderOpenId}`,
   ]
+  if (isFeishuGroupChatType(message.chatType)) {
+    lines.push(
+      '',
+      'In group chats, each user message is prefixed with [name] to indicate the sender; treat this prefix as metadata, not part of the user\'s words.',
+    )
+  }
   return lines.join('\n')
 }

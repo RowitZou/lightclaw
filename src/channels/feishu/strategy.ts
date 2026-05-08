@@ -5,8 +5,13 @@ import type { FeishuClient } from './client.js'
 import { fetchFeishuUserInfo } from './contact.js'
 import type { PairingCardCoordinator } from './pairing-card.js'
 import type { FeishuPermissionCoordinator } from './permission-card.js'
-import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
+import {
+  isFeishuMessageAllowed,
+  isMentionGateSatisfied,
+  resolveFeishuSessionId,
+} from './routing.js'
 import type { FeishuSender } from './sender.js'
+import { createSenderNameResolver } from './sender-name.js'
 import { buildSystemNoticeCard } from './system-notice.js'
 import { fetchFeishuMediaPayload, materializeFeishuMedia } from './media.js'
 import {
@@ -22,16 +27,36 @@ export function createFeishuStrategy(
   client: FeishuClient,
   permissions?: FeishuPermissionCoordinator,
   pairing?: PairingCardCoordinator,
+  botSelf: { openId?: string; name?: string } = {},
 ): ChannelRunnerStrategy {
   const typing = config.typingReaction ? createFeishuTypingReaction(client) : null
+  const senderNames = createSenderNameResolver({
+    fetchUserName: async openId => (await fetchFeishuUserInfo(client, openId))?.name,
+  })
   return {
     channelId: FEISHU_CHANNEL_ID,
     cwd: config.cwd ?? process.cwd(),
     permissionMode: config.permissionMode,
+    isMessageTargeted: message => {
+      const result = isMentionGateSatisfied({
+        message,
+        config,
+        botOpenId: botSelf.openId,
+        botName: botSelf.name,
+      })
+      if (!result.ok) {
+        process.stderr.write(
+          `[feishu] drop non-mention msg in group ${message.chatId} sender ${message.senderOpenId}\n`,
+        )
+      }
+      return result.ok
+    },
     isMessageAllowed: message => isFeishuMessageAllowed(message, config),
     resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     fetchSenderInfo: openId => fetchFeishuUserInfo(client, openId),
+    resolveSenderName: (openId, mentionNames) =>
+      senderNames.resolve({ openId, mentionNames }),
     ...(pairing
       ? {
           renderPairingApplicationCard: input =>

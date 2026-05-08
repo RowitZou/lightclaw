@@ -1,5 +1,5 @@
 import type { PermissionMode } from '../permission/types.js'
-import type { ParsedMediaKey } from './feishu/bot-content.js'
+import type { FeishuMention, ParsedMediaKey } from './feishu/bot-content.js'
 
 /**
  * Channel identifier. Kept as an open string so new channels (ide-bridge,
@@ -43,7 +43,12 @@ export type NormalizedChannelMessage = {
   senderKey?: string
   chatType?: string
   messageId: string
-  parentId?: string
+  /** Feishu topic-group thread id. Routes channel sessions. */
+  threadId?: string
+  /** Feishu reply-chain root id. Metadata only; does not route sessions. */
+  rootId?: string
+  /** Feishu-only sidecar used for mention gating and sender-name hints. */
+  feishuMentions?: readonly FeishuMention[]
   text: string
   pendingAttachment?: PendingAttachment
 }
@@ -90,6 +95,7 @@ export type FeishuChannelConfig = {
   permissionMode: PermissionMode
   allowUsers: string[]
   allowChats: string[]
+  requireMention: boolean
   textChunkSize: number
   httpTimeoutMs: number
   maxBodyBytes: number

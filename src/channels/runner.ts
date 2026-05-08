@@ -89,9 +89,14 @@ export type ChannelRunnerStrategy = {
   channelId: ChannelId
   cwd: string
   permissionMode: PermissionMode
+  isMessageTargeted?(message: NormalizedChannelMessage): boolean
   isMessageAllowed(message: NormalizedChannelMessage): boolean
   resolveSessionId(message: NormalizedChannelMessage, userId: string): string
   buildChannelPrompt(message: NormalizedChannelMessage): string
+  resolveSenderName?(
+    openId: string,
+    mentionNames?: ReadonlyMap<string, string>,
+  ): Promise<string>
   /** Reply with the LLM's natural-language output. Plain text. */
   sendReply(
     message: NormalizedChannelMessage,
@@ -194,6 +199,9 @@ export class ChannelRunner {
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
+    if (this.strategy.isMessageTargeted && !this.strategy.isMessageTargeted(message)) {
+      return
+    }
     // User lookup runs FIRST (and pairing falls out of unknown sender).
     // The Phase 8 allowlist gate runs after — otherwise a tight allowlist
     // (e.g. allowUsers=["ou_alice"]) would silently drop unknown senders
@@ -367,8 +375,12 @@ export class ChannelRunner {
           sessionId,
         )
         beginQuery(userId)
-        const userText = formatChannelUserText(effectiveMessage, materializedAttachment)
-        const slash = await dispatchChannelSlash(userText, {
+        const userText = await formatChannelUserText(
+          this.strategy,
+          effectiveMessage,
+          materializedAttachment,
+        )
+        const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
           sessionId,
           createdAt: meta?.createdAt ?? Date.now(),
@@ -1104,20 +1116,44 @@ function classifyFailure(detail: string): string {
   return t('channel.failure.cat.generic')
 }
 
-function formatChannelUserText(
+export async function formatChannelUserText(
+  strategy: ChannelRunnerStrategy,
   message: NormalizedChannelMessage,
   materialized: MaterializedAttachment | null,
-): string {
+): Promise<string> {
+  const mentionNames = buildMentionNameMap(message)
+  let body = message.text
+  if (strategy.resolveSenderName && isGroupLikeChannelMessage(message)) {
+    const senderName = await strategy.resolveSenderName(message.senderOpenId, mentionNames)
+    body = `[${senderName}] ${body}`
+  }
   if (!materialized) {
-    return message.text
+    return body
   }
   return [
-    message.text || '(no text)',
+    body || '(no text)',
     '',
     t('channel.media.attachment'),
     `- type: ${materialized.mimeType}`,
     `- path: ${materialized.path}`,
   ].join('\n')
+}
+
+function isGroupLikeChannelMessage(message: NormalizedChannelMessage): boolean {
+  if (message.channel !== 'feishu') {
+    return false
+  }
+  const chatType = message.chatType?.toLowerCase()
+  return chatType !== 'p2p' && chatType !== 'private'
+}
+
+function buildMentionNameMap(
+  message: NormalizedChannelMessage,
+): ReadonlyMap<string, string> | undefined {
+  const entries = (message.feishuMentions ?? [])
+    .filter(item => item.openId && item.name)
+    .map(item => [item.openId!, item.name!] as const)
+  return entries.length > 0 ? new Map(entries) : undefined
 }
 
 function appendLine(text: string, line: string): string {

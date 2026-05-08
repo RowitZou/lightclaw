@@ -58,10 +58,11 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         )
       }
       process.stderr.write(
-        `feishu: starting transport=${config.transport} encryption=${config.encryptKey ? 'on' : 'off'} allowUsers=${summarizeAllowList(config.allowUsers)} allowChats=${summarizeAllowList(config.allowChats)} permissionMode=${config.permissionMode}\n`,
+        `feishu: starting transport=${config.transport} encryption=${config.encryptKey ? 'on' : 'off'} allowUsers=${summarizeAllowList(config.allowUsers)} allowChats=${summarizeAllowList(config.allowChats)} requireMention=${config.requireMention ? 'on' : 'off'} permissionMode=${config.permissionMode}\n`,
       )
 
       const client = createFeishuClient(config)
+      const botSelf = await fetchBotSelfInfo(client, config.requireMention)
       const sender = new FeishuSender(client, config)
 
       // Persistent pending-notice queue + drainer. Catches the >60s outage
@@ -85,7 +86,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       const pairingCoordinator = new PairingCardCoordinator(sender)
       registerBackgroundTaskCardCoordinator(bgCardCoordinator)
       const runner = new ChannelRunner(
-        createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator),
+        createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator, botSelf),
       )
       await runner.initialize()
 
@@ -112,7 +113,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           senderKey: `feishu:${raw.senderOpenId}`,
           chatType: raw.chatType,
           messageId: raw.messageId,
-          parentId: raw.parentId,
+          threadId: raw.threadId,
+          rootId: raw.rootId,
+          feishuMentions: raw.mentions,
           text: raw.text,
         }
         if (raw.mediaKeys?.length && config.mediaEnabled) {
@@ -172,6 +175,62 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       }
     },
   }
+}
+
+async function fetchBotSelfInfo(
+  client: unknown,
+  requireMention: boolean,
+): Promise<{ openId?: string; name?: string }> {
+  if (!requireMention) {
+    return {}
+  }
+  try {
+    const typed = client as {
+      bot?: { v3?: { info?: { get?: () => Promise<unknown> } } }
+      formatPayload?: () => Promise<{ headers?: Record<string, unknown> }>
+      httpInstance?: { request?: (opts: Record<string, unknown>) => Promise<unknown> }
+      domain?: string
+    }
+    const resp = typed.bot?.v3?.info?.get
+      ? await typed.bot.v3.info.get()
+      : await requestBotInfo(typed)
+    const envelope = resp as {
+      code?: number
+      msg?: string
+      data?: { bot?: { open_id?: string; app_name?: string } }
+    } | undefined
+    if (envelope?.code === 0 && envelope.data?.bot?.open_id) {
+      return {
+        openId: envelope.data.bot.open_id,
+        name: envelope.data.bot.app_name,
+      }
+    }
+    process.stderr.write(
+      `[feishu] bot.v3.info.get returned code=${envelope?.code ?? 'unknown'}; mention gating disabled\n`,
+    )
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[feishu] failed to fetch bot self info: ${detail}; mention gating disabled\n`)
+  }
+  return {}
+}
+
+async function requestBotInfo(client: {
+  formatPayload?: () => Promise<{ headers?: Record<string, unknown> }>
+  httpInstance?: { request?: (opts: Record<string, unknown>) => Promise<unknown> }
+  domain?: string
+}): Promise<unknown> {
+  if (!client.httpInstance?.request) {
+    return undefined
+  }
+  const headers = (await client.formatPayload?.())?.headers ?? {}
+  const url = `${client.domain ?? 'https://open.feishu.cn'}/open-apis/bot/v3/info`
+  const getResp = await client.httpInstance.request({ url, method: 'GET', headers })
+  if ((getResp as { code?: number } | undefined)?.code === 0) {
+    return getResp
+  }
+  const postResp = await client.httpInstance.request({ url, method: 'POST', headers })
+  return postResp ?? getResp
 }
 
 function summarizeAllowList(list: string[]): string {
