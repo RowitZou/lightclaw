@@ -7,6 +7,12 @@ import type {
 } from '../types.js'
 import type { FeishuClient } from './client.js'
 import { withFileUploadTimeout } from './client.js'
+import type {
+  PendingNotice,
+  PendingPayload,
+  PendingQueueStore,
+  PendingRecipient,
+} from './pending-queue.js'
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
 
@@ -66,9 +72,20 @@ export type SendRetryOptions = {
   baseDelayMs?: number
 }
 
+export type SendNoticeContext = {
+  /** Tag carried into the pending queue so admin grep can tell what
+   *  kind of notice landed in the JSONL. Does not gate behavior. */
+  purpose?: PendingNotice['purpose']
+  /** Canonical user id, when known by the caller (channel runner has
+   *  it; bg-task / welcome paths know the recipient binding). Drives
+   *  per-user FIFO eviction inside the queue. */
+  canonicalUser?: string
+}
+
 export class FeishuSender {
   private readonly retryAttempts: number
   private readonly retryBaseDelayMs: number
+  private pendingStore: PendingQueueStore | null = null
 
   constructor(
     private client: FeishuClient,
@@ -79,17 +96,62 @@ export class FeishuSender {
     this.retryBaseDelayMs = retryOptions.baseDelayMs ?? SEND_RETRY_BASE_DELAY_MS
   }
 
-  async sendText(message: NormalizedChannelMessage, text: string): Promise<void> {
+  /** Wires the persistent queue. When set, transient send failures
+   *  (after the in-process retry budget is exhausted) enqueue the
+   *  payload instead of throwing. The drainer running on the same
+   *  store replays them once the link recovers. */
+  attachPendingStore(store: PendingQueueStore): void {
+    this.pendingStore = store
+  }
+
+  /** Replay a queued notice. NEVER re-enqueues on failure — the
+   *  drainer owns retry tracking. Throws on transient failure so the
+   *  drainer can call markRetry; throws on permanent failure too,
+   *  but those will keep retrying until the 24h TTL archives them
+   *  (acceptable: a permanently-bad open_id is rare and ~96 retries
+   *  over 24h is harmless). */
+  async sendForDrain(notice: PendingNotice): Promise<void> {
+    await this.replayPendingNotice(notice)
+  }
+
+  async sendText(
+    message: NormalizedChannelMessage,
+    text: string,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
     let replyTo = message.messageId
 
-    for (const chunk of chunks) {
-      const response = await this.sendReplyOrCreate({
-        chatId: message.chatId,
-        replyToMessageId: replyTo,
-        text: chunk,
-      })
-      replyTo = response.data?.message_id ?? replyTo
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i]!
+      try {
+        const response = await this.sendReplyOrCreate({
+          chatId: message.chatId,
+          replyToMessageId: replyTo,
+          text: chunk,
+        })
+        replyTo = response.data?.message_id ?? replyTo
+      } catch (err) {
+        if (await this.maybeEnqueueOnTransient(err, {
+          recipient: this.replyRecipient(message.chatId, replyTo),
+          payload: { kind: 'text', text: chunk },
+          ctx,
+        })) {
+          // Enqueue remaining chunks too — same recipient, no replyTo
+          // chain (Feishu reply target was the original inbound; we
+          // can't reuse a chunk's message_id we never received).
+          for (let j = i + 1; j < chunks.length; j += 1) {
+            await this.enqueue({
+              recipient: this.replyRecipient(message.chatId, replyTo),
+              payload: { kind: 'text', text: chunks[j]! },
+              ctx,
+              lastError: 'follow-up chunk enqueued after preceding chunk failed',
+            })
+          }
+          return
+        }
+        throw err
+      }
     }
   }
 
@@ -99,71 +161,82 @@ export class FeishuSender {
   // headerless interactive card with a `lark_md` body so the same content
   // renders properly. The card has no title bar — it visually reads as a
   // bordered markdown block, not a system notice.
-  async sendMarkdownText(message: NormalizedChannelMessage, text: string): Promise<void> {
+  async sendMarkdownText(
+    message: NormalizedChannelMessage,
+    text: string,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
     let replyTo = message.messageId
 
-    for (const chunk of chunks) {
-      const card = {
-        config: { enable_forward: false, wide_screen_mode: true },
-        elements: [
-          { tag: 'div', text: { tag: 'lark_md', content: chunk } },
-        ],
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i]!
+      const card = buildMarkdownCard(chunk)
+      try {
+        const response = await this.sendReplyOrCreate({
+          chatId: message.chatId,
+          replyToMessageId: replyTo,
+          msgType: 'interactive',
+          content: JSON.stringify(card),
+        })
+        replyTo = response.data?.message_id ?? replyTo
+      } catch (err) {
+        if (await this.maybeEnqueueOnTransient(err, {
+          recipient: this.replyRecipient(message.chatId, replyTo),
+          payload: { kind: 'card', card },
+          ctx,
+        })) {
+          for (let j = i + 1; j < chunks.length; j += 1) {
+            await this.enqueue({
+              recipient: this.replyRecipient(message.chatId, replyTo),
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              ctx,
+              lastError: 'follow-up chunk enqueued after preceding chunk failed',
+            })
+          }
+          return
+        }
+        throw err
       }
-      const response = await this.sendReplyOrCreate({
-        chatId: message.chatId,
-        replyToMessageId: replyTo,
-        msgType: 'interactive',
-        content: JSON.stringify(card),
-      })
-      replyTo = response.data?.message_id ?? replyTo
     }
   }
 
   async sendInteractiveCard(
     message: NormalizedChannelMessage,
     card: InteractiveCard,
+    ctx: SendNoticeContext = {},
   ): Promise<void> {
-    await this.sendReplyOrCreate({
-      chatId: message.chatId,
-      replyToMessageId: message.messageId,
-      msgType: 'interactive',
-      content: JSON.stringify(card),
-    })
+    try {
+      await this.sendReplyOrCreate({
+        chatId: message.chatId,
+        replyToMessageId: message.messageId,
+        msgType: 'interactive',
+        content: JSON.stringify(card),
+      })
+    } catch (err) {
+      if (await this.maybeEnqueueOnTransient(err, {
+        recipient: this.replyRecipient(message.chatId, message.messageId),
+        payload: { kind: 'card', card: card as Record<string, unknown> },
+        ctx,
+      })) {
+        return
+      }
+      throw err
+    }
   }
 
   // Proactive push to a feishu open_id. Used when there's no inbound message
   // to reply against — e.g. /user approve in commands/builtin.ts pushes a
   // welcome card to a freshly approved user, who is offline at approval time.
   // The Lark IM API auto-routes open_id sends to the bot↔user p2p chat.
-  async sendInteractiveCardToOpenId(openId: string, card: InteractiveCard): Promise<void> {
-    const response = await retryOnTransient(
-      'create interactive (open_id)',
-      () => this.client.im.message.create({
-        params: { receive_id_type: 'open_id' },
-        data: {
-          receive_id: openId,
-          msg_type: 'interactive',
-          content: JSON.stringify(card),
-        },
-      }),
-      this.retryAttempts,
-      this.retryBaseDelayMs,
-    )
-    assertOk(response, 'Feishu create message (open_id) failed')
-  }
-
-  async sendMarkdownTextToOpenId(openId: string, text: string): Promise<void> {
-    const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
-    for (const chunk of chunks) {
-      const card = {
-        config: { enable_forward: false, wide_screen_mode: true },
-        elements: [
-          { tag: 'div', text: { tag: 'lark_md', content: chunk } },
-        ],
-      }
+  async sendInteractiveCardToOpenId(
+    openId: string,
+    card: InteractiveCard,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
+    try {
       const response = await retryOnTransient(
-        'create markdown (open_id)',
+        'create interactive (open_id)',
         () => this.client.im.message.create({
           params: { receive_id_type: 'open_id' },
           data: {
@@ -175,7 +248,61 @@ export class FeishuSender {
         this.retryAttempts,
         this.retryBaseDelayMs,
       )
-      assertOk(response, 'Feishu create markdown message (open_id) failed')
+      assertOk(response, 'Feishu create message (open_id) failed')
+    } catch (err) {
+      if (await this.maybeEnqueueOnTransient(err, {
+        recipient: { type: 'open_id', openId },
+        payload: { kind: 'card', card: card as Record<string, unknown> },
+        ctx,
+      })) {
+        return
+      }
+      throw err
+    }
+  }
+
+  async sendMarkdownTextToOpenId(
+    openId: string,
+    text: string,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
+    const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i]!
+      const card = buildMarkdownCard(chunk)
+      try {
+        const response = await retryOnTransient(
+          'create markdown (open_id)',
+          () => this.client.im.message.create({
+            params: { receive_id_type: 'open_id' },
+            data: {
+              receive_id: openId,
+              msg_type: 'interactive',
+              content: JSON.stringify(card),
+            },
+          }),
+          this.retryAttempts,
+          this.retryBaseDelayMs,
+        )
+        assertOk(response, 'Feishu create markdown message (open_id) failed')
+      } catch (err) {
+        if (await this.maybeEnqueueOnTransient(err, {
+          recipient: { type: 'open_id', openId },
+          payload: { kind: 'card', card },
+          ctx,
+        })) {
+          for (let j = i + 1; j < chunks.length; j += 1) {
+            await this.enqueue({
+              recipient: { type: 'open_id', openId },
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              ctx,
+              lastError: 'follow-up chunk enqueued after preceding chunk failed',
+            })
+          }
+          return
+        }
+        throw err
+      }
     }
   }
 
@@ -279,6 +406,111 @@ export class FeishuSender {
     assertOk(response, 'Feishu create message failed')
     return response
   }
+
+  private replyRecipient(chatId: string, replyToMessageId: string | undefined): PendingRecipient {
+    if (replyToMessageId) {
+      return { type: 'reply', chatId, replyToMessageId }
+    }
+    return { type: 'create', chatId }
+  }
+
+  /**
+   * If the queue is wired AND the failure looks transient, enqueue
+   * the payload and return true so the caller swallows the error.
+   * Returns false on any non-transient failure or when no queue is
+   * attached — caller rethrows in those cases.
+   */
+  private async maybeEnqueueOnTransient(
+    err: unknown,
+    input: {
+      recipient: PendingRecipient
+      payload: PendingPayload
+      ctx: SendNoticeContext
+    },
+  ): Promise<boolean> {
+    if (!this.pendingStore || !isTransientSendError(err)) {
+      return false
+    }
+    const detail = err instanceof Error ? err.message : String(err)
+    await this.enqueue({
+      recipient: input.recipient,
+      payload: input.payload,
+      ctx: input.ctx,
+      lastError: detail,
+    })
+    return true
+  }
+
+  private async enqueue(input: {
+    recipient: PendingRecipient
+    payload: PendingPayload
+    ctx: SendNoticeContext
+    lastError?: string
+  }): Promise<void> {
+    if (!this.pendingStore) return
+    await this.pendingStore.enqueue({
+      recipient: input.recipient,
+      payload: input.payload,
+      ...(input.ctx.canonicalUser !== undefined ? { canonicalUser: input.ctx.canonicalUser } : {}),
+      ...(input.ctx.purpose !== undefined ? { purpose: input.ctx.purpose } : {}),
+      ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
+    })
+    process.stderr.write(
+      `[feishu pending] enqueued ${input.ctx.purpose ?? 'other'} for ${describeRecipient(input.recipient)}: ${input.lastError ?? 'no error detail'}\n`,
+    )
+  }
+
+  /**
+   * Replay one queued notice. Maps {recipient, payload} back to the
+   * underlying SDK shape — no chunking (chunks were materialized at
+   * enqueue time), no further enqueue (drainer owns retry tracking).
+   */
+  private async replayPendingNotice(notice: PendingNotice): Promise<void> {
+    const content = notice.payload.kind === 'text'
+      ? JSON.stringify({ text: notice.payload.text })
+      : JSON.stringify(notice.payload.card)
+    const msgType = notice.payload.kind === 'text' ? 'text' : 'interactive'
+
+    if (notice.recipient.type === 'open_id') {
+      const response = await retryOnTransient(
+        'drain replay (open_id)',
+        () => this.client.im.message.create({
+          params: { receive_id_type: 'open_id' },
+          data: {
+            receive_id: notice.recipient.type === 'open_id' ? notice.recipient.openId : '',
+            msg_type: msgType,
+            content,
+          },
+        }),
+        this.retryAttempts,
+        this.retryBaseDelayMs,
+      )
+      assertOk(response, 'Feishu drain replay (open_id) failed')
+      return
+    }
+    const recipient = notice.recipient
+    await this.sendReplyOrCreate({
+      chatId: recipient.chatId,
+      replyToMessageId: recipient.type === 'reply' ? recipient.replyToMessageId : undefined,
+      msgType,
+      content,
+    })
+  }
+}
+
+function buildMarkdownCard(content: string): Record<string, unknown> {
+  return {
+    config: { enable_forward: false, wide_screen_mode: true },
+    elements: [
+      { tag: 'div', text: { tag: 'lark_md', content } },
+    ],
+  }
+}
+
+function describeRecipient(recipient: PendingRecipient): string {
+  if (recipient.type === 'open_id') return `open_id=${recipient.openId}`
+  if (recipient.type === 'reply') return `reply chat=${recipient.chatId} msg=${recipient.replyToMessageId}`
+  return `create chat=${recipient.chatId}`
 }
 
 export function inferFeishuFileType(fileName: string): FeishuFileType {
