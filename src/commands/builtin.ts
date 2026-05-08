@@ -16,6 +16,8 @@ import {
   setUserPermissionCeiling,
 } from '../identity/store.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
+import { deriveCanonicalName } from '../identity/derive-canonical.js'
+import { preheatAndWelcomeOnApproval } from '../identity/post-approve.js'
 import { setIdentityPreference } from '../identity/preferences.js'
 import type { SenderKey } from '../identity/types.js'
 import { formatRule, parseRule } from '../permission/rules.js'
@@ -781,20 +783,24 @@ async function userPending(): Promise<string> {
 
 async function userApprove(args: string[]): Promise<string> {
   const code = args[0]
-  const asIndex = args.indexOf('--as')
-  const name = asIndex >= 0 ? args[asIndex + 1] : undefined
-  if (!code || !name) {
+  if (!code || args.length !== 1) {
     return `${t('user.approve.usage')}\n`
-  }
-  const reject = await rejectNonAdminInLocal(name)
-  if (reject) {
-    return reject
   }
   const entry = await approveCode(code)
   if (!entry) {
     return `${t('user.approve.noSuchCode', { code })}\n`
   }
   const link = `${entry.channel}:${entry.peerId}` as SenderKey
+  const name = deriveCanonicalName({
+    name: entry.displayName,
+    email: entry.email,
+    openId: entry.peerId,
+    userId: entry.userId,
+  })
+  const reject = await rejectNonAdminInLocal(name)
+  if (reject) {
+    return reject
+  }
   const boundTo = lookupBySender(link)
   if (boundTo && boundTo !== name) {
     return `${t('user.approve.alreadyBound', { link, name: boundTo })}\n`
@@ -823,124 +829,6 @@ async function userReject(args: string[]): Promise<string> {
   return result.ok
     ? `${t('user.reject.done', { code })}\n`
     : `${t('user.reject.noSuchCode', { code })}\n`
-}
-
-function preheatAndWelcomeOnApproval(name: string, link: SenderKey): void {
-  // Fire-and-forget at the call site (admin's /user approve returns
-  // immediately), but the inner task awaits readiness so the welcome card
-  // is only pushed once the user can actually exercise tools. Failure /
-  // timeout pushes a failure card so the approved user is never left
-  // wondering whether the bot got their request.
-  void runApprovalPreheat(name, link).catch(error => {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[preheat-on-approval] ${name}: unhandled ${detail}\n`)
-  })
-}
-
-async function runApprovalPreheat(name: string, link: SenderKey): Promise<void> {
-  const config = getConfig()
-  const backend = config.runtime.backend
-  // local: admin-only, no per-user runtime to warm up.
-  // rjob: not productionized yet, skip.
-  if (backend !== 'docker' && backend !== 'rlaunch') {
-    return
-  }
-  // Rlaunch keeps the original opt-out toggle; Docker has no equivalent
-  // toggle today and is always-on (the welcome push is what the toggle
-  // would otherwise gate, and the user-visible UX is the whole point).
-  if (backend === 'rlaunch' && !config.runtime.rlaunch.preheatOnApproval) {
-    return
-  }
-
-  const channel = link.split(':', 1)[0]
-  if (channel !== 'feishu') {
-    // Future channels: add a registry per channel kind. For now non-feishu
-    // approvals just preheat without a welcome push.
-    const runtime = backend === 'docker'
-      ? getRuntimePool().acquire(name, config, undefined, getImageReadiness())
-      : getRuntimePool().acquire(name, config)
-    await runtime.start().catch(error => {
-      const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[preheat-on-approval] ${name}: ${detail}\n`)
-    })
-    return
-  }
-
-  const openId = link.slice('feishu:'.length)
-  const { getFeishuSender } = await import('../channels/feishu/sender-registry.js')
-  const { buildApprovalWelcomeCard, buildStartupFailureCard } =
-    await import('../channels/feishu/welcome-card.js')
-  const { waitUntilRuntimeAvailable } = await import('../runtime/wait-ready.js')
-
-  const sender = getFeishuSender()
-  if (!sender) {
-    // Channel hasn't started (admin running approve from terminal-only
-    // process). Still preheat so the user's first message later isn't
-    // blocked, but no push surface to deliver the welcome card.
-    process.stderr.write(
-      `[preheat-on-approval] ${name}: feishu sender not registered; preheating without welcome push\n`,
-    )
-    const runtime = backend === 'docker'
-      ? getRuntimePool().acquire(name, config, undefined, getImageReadiness())
-      : getRuntimePool().acquire(name, config)
-    await runtime.start().catch(error => {
-      const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[preheat-on-approval] ${name}: ${detail}\n`)
-    })
-    return
-  }
-
-  const tracker = backend === 'docker' ? getImageReadiness() : undefined
-  const runtime = getRuntimePool().acquire(name, config, undefined, tracker)
-  try {
-    await runtime.start()
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[preheat-on-approval] ${name}: start failed: ${detail}\n`)
-    await sender
-      .sendInteractiveCardToOpenId(
-        openId,
-        buildStartupFailureCard({ reason: detail, elapsedSeconds: 0, timedOut: false }),
-      )
-      .catch(pushError => {
-        const pd = pushError instanceof Error ? pushError.message : String(pushError)
-        process.stderr.write(`[preheat-on-approval] ${name}: failure push send failed: ${pd}\n`)
-      })
-    return
-  }
-
-  const ready = await waitUntilRuntimeAvailable(runtime)
-  if (!ready.ok) {
-    const elapsedSeconds = Math.round(ready.elapsedMs / 1000)
-    const reason =
-      ready.availability.ok === false
-        ? ready.availability.adminMessage || ready.availability.userMessage || ready.availability.reason
-        : 'unknown'
-    process.stderr.write(
-      `[preheat-on-approval] ${name}: not ready after ${elapsedSeconds}s (timedOut=${ready.timedOut}): ${reason}\n`,
-    )
-    await sender
-      .sendInteractiveCardToOpenId(
-        openId,
-        buildStartupFailureCard({ reason, elapsedSeconds, timedOut: ready.timedOut }),
-      )
-      .catch(pushError => {
-        const pd = pushError instanceof Error ? pushError.message : String(pushError)
-        process.stderr.write(`[preheat-on-approval] ${name}: failure push send failed: ${pd}\n`)
-      })
-    return
-  }
-
-  const elapsedSeconds = Math.round(ready.elapsedMs / 1000)
-  process.stderr.write(
-    `[preheat-on-approval] ${name}: runtime ready after ${elapsedSeconds}s; sending welcome card\n`,
-  )
-  await sender
-    .sendInteractiveCardToOpenId(openId, buildApprovalWelcomeCard())
-    .catch(pushError => {
-      const pd = pushError instanceof Error ? pushError.message : String(pushError)
-      process.stderr.write(`[preheat-on-approval] ${name}: welcome push send failed: ${pd}\n`)
-    })
 }
 
 async function userUnlink(args: string[]): Promise<string> {

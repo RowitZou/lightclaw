@@ -7,6 +7,7 @@ import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import type { BackgroundTaskCardAction } from './bg-card-coordinator.js'
 import { FeishuDedup } from './dedup.js'
+import type { PairingCardAction } from './pairing-card.js'
 import type {
   FeishuCardAction,
   FeishuCardActionResponse,
@@ -56,7 +57,7 @@ export async function startFeishuWsClient(input: {
   dedup: FeishuDedup
   onMessage(message: FeishuRawMessage): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | BackgroundTaskCardAction,
+    action: FeishuCardAction | BackgroundTaskCardAction | PairingCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -81,8 +82,14 @@ export async function startFeishuWsClient(input: {
       process.stderr.write('feishu ws: dropped unsupported card action callback\n')
       return buildUnsupportedCardActionResponse()
     }
+    const actionId =
+      'requestId' in action
+        ? action.requestId
+        : 'fireUuid' in action
+          ? action.fireUuid
+          : action.applicationToken
     process.stderr.write(
-      `feishu ws: card action request=${'requestId' in action ? action.requestId : action.fireUuid} action=${action.action}\n`,
+      `feishu ws: card action request=${actionId} action=${action.action}\n`,
     )
     return await input.onCardAction?.(action)
   }
@@ -164,7 +171,9 @@ export async function startFeishuWsClient(input: {
   }
 }
 
-function normalizeCardAction(data: unknown): FeishuCardAction | BackgroundTaskCardAction | null {
+function normalizeCardAction(
+  data: unknown,
+): FeishuCardAction | BackgroundTaskCardAction | PairingCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -173,7 +182,11 @@ function normalizeCardAction(data: unknown): FeishuCardAction | BackgroundTaskCa
   const event = asRecord(record.event)
   const action = asRecord(record.action) ?? asRecord(event?.action)
   const value = parseActionValue(action?.value)
-  if (value?.kind !== 'lightclaw_permission' && value?.kind !== 'lightclaw_bg_task') {
+  if (
+    value?.kind !== 'lightclaw_permission' &&
+    value?.kind !== 'lightclaw_bg_task' &&
+    value?.kind !== 'lightclaw_pairing'
+  ) {
     return null
   }
 
@@ -207,6 +220,28 @@ function normalizeCardAction(data: unknown): FeishuCardAction | BackgroundTaskCa
       taskId,
       ownerCanonicalUser,
       ...(operatorOpenId ? { operatorOpenId } : {}),
+    }
+  }
+
+  if (value.kind === 'lightclaw_pairing') {
+    const actionKind =
+      value.action === 'confirm' ||
+      value.action === 'cancel' ||
+      value.action === 'approve' ||
+      value.action === 'reject'
+        ? value.action
+        : null
+    const applicationToken = stringValue(value.applicationToken)
+    if (!actionKind || !applicationToken) {
+      return null
+    }
+    const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
+    return {
+      kind: 'lightclaw_pairing',
+      action: actionKind,
+      applicationToken,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
     }
   }
 

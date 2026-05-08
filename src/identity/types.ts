@@ -21,6 +21,8 @@ export type PendingEntry = {
   channel: ChannelKind
   peerId: string
   displayName: string
+  email?: string
+  userId?: string
   createdAt: number
   ttlMs: number
 }

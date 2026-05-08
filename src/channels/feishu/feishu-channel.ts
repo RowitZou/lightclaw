@@ -14,6 +14,10 @@ import {
   type BackgroundTaskCardAction,
 } from './bg-card-coordinator.js'
 import { fileNameFor } from './media.js'
+import {
+  PairingCardCoordinator,
+  type PairingCardAction,
+} from './pairing-card.js'
 import { PendingNoticeDrainer } from './pending-drainer.js'
 import { PendingQueueStore } from './pending-queue.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
@@ -78,9 +82,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       registerFeishuSender(sender)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
       const bgCardCoordinator = new BackgroundTaskCardCoordinator(sender)
+      const pairingCoordinator = new PairingCardCoordinator(sender)
       registerBackgroundTaskCardCoordinator(bgCardCoordinator)
       const runner = new ChannelRunner(
-        createFeishuStrategy(config, sender, client, permissionCoordinator),
+        createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator),
       )
       await runner.initialize()
 
@@ -96,10 +101,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           process.stderr.write(`feishu: permission response consumed message=${raw.messageId}\n`)
           return
         }
-        // Sender displayName is intentionally not fetched here. The Feishu
-        // contact user.get API requires extra address-book permission and the
-        // Lark SDK logs failed best-effort lookups before callers can catch
-        // them, so pairing stays on open_id + admin-chosen canonical name.
+        // Sender info is fetched lazily in the runner's pairing branch. The
+        // strategy returns undefined on contact-scope or network failures so
+        // the card flow degrades to open_id without blocking inbound routing.
         const message: NormalizedChannelMessage = {
           channel: FEISHU_CHANNEL_ID,
           eventId: raw.eventId,
@@ -133,6 +137,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           onCardAction: action => {
             if ('kind' in action && action.kind === 'background_task') {
               return bgCardCoordinator.handleCardAction(action)
+            }
+            if ('kind' in action && action.kind === 'lightclaw_pairing') {
+              return pairingCoordinator.handleCardAction(action as PairingCardAction)
             }
             return permissionCoordinator.handleCardAction(action as FeishuCardAction)
           },
