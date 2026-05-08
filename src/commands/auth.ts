@@ -177,11 +177,17 @@ async function runAuthImport(
     const reg = autoRegisterCodex(
       upstreamModel ? { upstreamModel } : {},
     )
-    if (reg.endpointAdded || reg.modelAdded) {
+    if (reg.endpointAdded || reg.modelsAdded.length > 0) {
+      const tierList = reg.modelsAdded.length > 0
+        ? reg.modelsAdded.join(', ')
+        : 'none'
       lines.push(
         upstreamModel
-          ? t('auth.codex.registeredWithDiscovery', { slug: upstreamModel })
-          : t('auth.codex.registered'),
+          ? t('auth.codex.registeredWithDiscovery', {
+              slug: upstreamModel,
+              tiers: tierList,
+            })
+          : t('auth.codex.registered', { tiers: tierList }),
       )
     } else {
       lines.push(t('auth.codex.alreadyRegistered'))

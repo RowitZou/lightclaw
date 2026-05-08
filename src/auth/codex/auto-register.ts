@@ -12,22 +12,41 @@ import { lightclawHome } from '../../paths.js'
 // typed projection that drops unknown keys, which would silently destroy
 // per-user config the user added manually. We round-trip the raw JSON.
 
-const DEFAULT_CODEX_DISPLAY_MODEL = 'gpt-5-codex'
+// Three reasoning tiers exposed as separate display names so the user can
+// pick effort directly via /model — the same upstream slug is used for all
+// three; only `reasoningEffort` differs. Display names are version-stable
+// (no embedded "gpt-5" / "gpt-6"); upstream is whatever live discovery
+// (see ./models.ts) returns at import time, falling back to the
+// hardcoded default below.
+//
 // As of 2026-05-05 the Codex backend (chatgpt.com/backend-api/codex/models)
-// returns gpt-5.5 (priority=0) as the default model; gpt-5.4 / gpt-5.4-mini
-// / gpt-5.3-codex / gpt-5.2 are also visible. Sending model='gpt-5' returns
+// returns gpt-5.5 (priority=0) as the default; gpt-5.4 / gpt-5.4-mini /
+// gpt-5.3-codex / gpt-5.2 are also visible. Sending model='gpt-5' returns
 // 4xx — there is no gpt-5 slug on the Codex backend. Admin can edit
 // upstreamModel in config.json post-import to pick a different slug.
 const DEFAULT_CODEX_UPSTREAM_MODEL = 'gpt-5.5'
 const DEFAULT_CODEX_ENDPOINT_ALIAS = 'codex'
 
+type CodexTier = {
+  display: string
+  reasoningEffort: 'high' | 'medium' | 'low'
+}
+
+const CODEX_TIERS: readonly CodexTier[] = [
+  { display: 'gpt-codex-deep', reasoningEffort: 'high' },
+  { display: 'gpt-codex-mid', reasoningEffort: 'medium' },
+  { display: 'gpt-codex-fast', reasoningEffort: 'low' },
+]
+
 export type AutoRegisterResult = {
   configPath: string
   endpointAdded: boolean
-  modelAdded: boolean
-  /** Existing entries that we left untouched. */
+  /** Display names that this call newly inserted into `models`. */
+  modelsAdded: string[]
+  /** Display names already present and left untouched. */
+  modelsPreexisting: string[]
+  /** Existing endpoint entry that we left untouched. */
   endpointPreexisting: boolean
-  modelPreexisting: boolean
 }
 
 function configPath(): string {
@@ -53,8 +72,15 @@ function atomicWriteJson(file: string, body: unknown): void {
   renameSync(tmp, file)
 }
 
-/** Add `endpoints.codex = { auth: 'codex-oauth' }` and
- *  `models.gpt-5-codex = { ... }` if absent. Idempotent.
+/** Add `endpoints.codex = { auth: 'codex-oauth' }` and three model
+ *  entries `gpt-codex-{deep,mid,fast}` (high/medium/low reasoning effort,
+ *  shared upstream slug) if absent. Idempotent — each tier is checked
+ *  individually, so a partial config (some tiers added, some missing)
+ *  recovers cleanly on re-import.
+ *
+ *  Legacy display names from earlier `/auth import codex` runs (e.g.
+ *  `gpt-5-codex`) are NOT touched. Users keep them by inertia until they
+ *  manually rename or `/auth logout codex --purge` and re-import.
  *
  *  `upstreamModel` lets the caller plug in a slug it just discovered
  *  from the Codex backend's live `/models` endpoint; absent or empty
@@ -71,29 +97,34 @@ export function autoRegisterCodex(
     isPlainObject(cfg.models) ? { ...cfg.models } : {}
 
   const endpointPreexisting = Boolean(endpoints[DEFAULT_CODEX_ENDPOINT_ALIAS])
-  const modelPreexisting = Boolean(models[DEFAULT_CODEX_DISPLAY_MODEL])
-
   let endpointAdded = false
-  let modelAdded = false
-
   if (!endpointPreexisting) {
     endpoints[DEFAULT_CODEX_ENDPOINT_ALIAS] = { auth: 'codex-oauth' }
     endpointAdded = true
   }
-  if (!modelPreexisting) {
-    const upstream =
-      opts.upstreamModel && opts.upstreamModel.trim().length > 0
-        ? opts.upstreamModel.trim()
-        : DEFAULT_CODEX_UPSTREAM_MODEL
-    models[DEFAULT_CODEX_DISPLAY_MODEL] = {
+
+  const upstream =
+    opts.upstreamModel && opts.upstreamModel.trim().length > 0
+      ? opts.upstreamModel.trim()
+      : DEFAULT_CODEX_UPSTREAM_MODEL
+
+  const modelsAdded: string[] = []
+  const modelsPreexisting: string[] = []
+  for (const tier of CODEX_TIERS) {
+    if (models[tier.display]) {
+      modelsPreexisting.push(tier.display)
+      continue
+    }
+    models[tier.display] = {
       endpoint: DEFAULT_CODEX_ENDPOINT_ALIAS,
       schema: 'openai-auth',
       upstreamModel: upstream,
+      reasoningEffort: tier.reasoningEffort,
     }
-    modelAdded = true
+    modelsAdded.push(tier.display)
   }
 
-  if (endpointAdded || modelAdded) {
+  if (endpointAdded || modelsAdded.length > 0) {
     const next = { ...cfg, endpoints, models }
     atomicWriteJson(file, next)
   }
@@ -101,9 +132,9 @@ export function autoRegisterCodex(
   return {
     configPath: file,
     endpointAdded,
-    modelAdded,
+    modelsAdded,
+    modelsPreexisting,
     endpointPreexisting,
-    modelPreexisting,
   }
 }
 
@@ -157,6 +188,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** Test-only escape hatch for inspection. */
 export const _CODEX_DEFAULTS = {
   endpoint: DEFAULT_CODEX_ENDPOINT_ALIAS,
-  display: DEFAULT_CODEX_DISPLAY_MODEL,
+  tiers: CODEX_TIERS,
   upstream: DEFAULT_CODEX_UPSTREAM_MODEL,
 }
