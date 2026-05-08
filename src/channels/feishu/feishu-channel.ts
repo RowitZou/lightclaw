@@ -14,6 +14,8 @@ import {
   type BackgroundTaskCardAction,
 } from './bg-card-coordinator.js'
 import { fileNameFor } from './media.js'
+import { PendingNoticeDrainer } from './pending-drainer.js'
+import { PendingQueueStore } from './pending-queue.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
@@ -57,6 +59,19 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       const client = createFeishuClient(config)
       const sender = new FeishuSender(client, config)
+
+      // Persistent pending-notice queue + drainer. Catches the >60s outage
+      // gap that the in-process sender backoff can't cover (sender doc
+      // explicitly defers persistence to this layer). On daemon startup
+      // we drain whatever survived a previous shutdown before serving new
+      // traffic; the recurring interval handles ongoing transient
+      // failures.
+      const pendingDir = path.join(lightclawHome(), 'state', 'feishu')
+      const pendingStore = new PendingQueueStore(pendingDir)
+      sender.attachPendingStore(pendingStore)
+      const pendingDrainer = new PendingNoticeDrainer(pendingStore, sender)
+      pendingDrainer.start()
+
       // Register the sender on a module-level slot so paths outside the
       // channel runner (notably /user approve in commands/builtin.ts) can
       // push proactive cards. Cleared in stop() so a restart re-registers.
@@ -125,6 +140,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         process.stderr.write('feishu: ws client started (long-lived subscription, no public ingress)\n')
         return {
           stop: () => {
+            pendingDrainer.stop()
             clearFeishuSender(sender)
             clearBackgroundTaskCardCoordinator(bgCardCoordinator)
             return handle.close()
@@ -141,6 +157,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       process.stderr.write(`feishu: webhook listening on ${host}:${port}${webhookPath}\n`)
       return {
         stop: () => {
+          pendingDrainer.stop()
           clearFeishuSender(sender)
           clearBackgroundTaskCardCoordinator(bgCardCoordinator)
           return server.close()
