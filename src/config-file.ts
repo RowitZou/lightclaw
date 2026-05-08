@@ -146,6 +146,15 @@ export type ConfigFileShape = {
       tmpfs?: string[]
       env?: Record<string, string>
       autoPull?: boolean
+      security?: {
+        capDrop?: string[]
+        capAdd?: string[]
+        noNewPrivileges?: boolean
+        readOnlyRootfs?: boolean
+        pidsLimit?: number | null
+        ulimits?: Record<string, string>
+        tmpfsOptions?: string
+      }
     }
     rlaunch?: {
       image?: string

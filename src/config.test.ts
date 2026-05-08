@@ -393,3 +393,69 @@ describe('config: endpoints + models registry', () => {
     })
   })
 })
+
+describe('config: runtime.docker.security', () => {
+  it('uses the OpenClaw-style hardening defaults when section is omitted', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.runtime.docker.security, {
+      capDrop: ['ALL'],
+      capAdd: ['DAC_OVERRIDE', 'CHOWN', 'SETUID', 'SETGID'],
+      noNewPrivileges: true,
+      readOnlyRootfs: false,
+      pidsLimit: 512,
+      ulimits: { nofile: '4096:8192', nproc: '1024:2048' },
+      tmpfsOptions: 'rw,nosuid,size=512m',
+    })
+  })
+
+  it('applies admin overrides + null pidsLimit + readOnlyRootfs opt-in', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        docker: {
+          security: {
+            capAdd: ['DAC_OVERRIDE', 'CHOWN'],
+            readOnlyRootfs: true,
+            pidsLimit: null,
+            ulimits: { nofile: '8192:16384' },
+            tmpfsOptions: 'rw,size=1g',
+          },
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.runtime.docker.security, {
+      capDrop: ['ALL'],
+      capAdd: ['DAC_OVERRIDE', 'CHOWN'],
+      noNewPrivileges: true,
+      readOnlyRootfs: true,
+      pidsLimit: null,
+      ulimits: { nofile: '8192:16384' },
+      tmpfsOptions: 'rw,size=1g',
+    })
+  })
+
+  it('rejects invalid security values', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        docker: {
+          security: { pidsLimit: -1 },
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /pidsLimit must be a positive number or null/)
+  })
+})

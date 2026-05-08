@@ -22,6 +22,16 @@ export type DockerMount = {
   mode: 'rw' | 'ro'
 }
 
+export type DockerRuntimeSecurity = {
+  capDrop: readonly string[]
+  capAdd: readonly string[]
+  noNewPrivileges: boolean
+  readOnlyRootfs: boolean
+  pidsLimit: number | null
+  ulimits: Readonly<Record<string, string>>
+  tmpfsOptions: string
+}
+
 export type DockerRuntimeConfig = {
   image: string
   workspaceHostPath: string
@@ -35,6 +45,7 @@ export type DockerRuntimeConfig = {
   cpuLimit: number
   network: string
   autoPull: boolean
+  security: DockerRuntimeSecurity
 }
 
 type ContainerState =
@@ -53,7 +64,6 @@ const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // fs.readFile single-hop ceiling: docker exec stdout is unbounded but child_process
 // buffering is not. 64 MB covers a 30 MB file (~40 MB base64) plus headroom.
 const READ_FILE_BUFFER_BYTES = 64 * 1024 * 1024
-const TMPFS_SIZE = '2g'
 
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
@@ -308,34 +318,7 @@ export class DockerRuntime implements Runtime {
   }
 
   private async createContainer(): Promise<void> {
-    const args = [
-      'create',
-      '--name',
-      this.cfg.containerName,
-      '--label',
-      'lightclaw.runtime=docker',
-      '--label',
-      `lightclaw.image=${this.cfg.image}`,
-      '--memory',
-      this.cfg.memoryLimit,
-      '--cpus',
-      String(this.cfg.cpuLimit),
-      '--network',
-      this.cfg.network,
-      '-v',
-      `${this.cfg.workspaceHostPath}:${this.cfg.workspaceContainerPath}:rw`,
-    ]
-
-    for (const mount of this.cfg.mounts) {
-      args.push('-v', `${mount.host}:${mount.container}:${mount.mode}`)
-    }
-    for (const tmpfs of this.cfg.tmpfs) {
-      args.push('--tmpfs', `${tmpfs}:size=${TMPFS_SIZE}`)
-    }
-    for (const [key, value] of Object.entries(this.cfg.env)) {
-      args.push('-e', `${key}=${value}`)
-    }
-    args.push(this.cfg.image, 'sleep', 'infinity')
+    const args = buildDockerCreateArgs(this.cfg)
     try {
       await this.dockerCmd(args)
     } catch (err) {
@@ -367,6 +350,75 @@ export class DockerRuntime implements Runtime {
       throw new Error(`docker ${args[0]} failed: ${result.stderr.trim() || result.stdout.trim()}`)
     }
   }
+}
+
+/**
+ * Pure builder for `docker create` argv. Extracted from createContainer so
+ * the security-flag wiring is unit-testable without spawning docker.
+ *
+ * Tmpfs entries support per-entry options: a bare path like `"/tmp"` picks
+ * up `cfg.security.tmpfsOptions` as the mount option string, while an
+ * entry that already contains `:` (e.g. `"/tmp:rw,nosuid,size=1g"`) is
+ * used verbatim. This keeps the legacy path-only config working while
+ * giving admins full docker-tmpfs syntax when they need it.
+ */
+export function buildDockerCreateArgs(cfg: DockerRuntimeConfig): string[] {
+  const args = [
+    'create',
+    '--name',
+    cfg.containerName,
+    '--label',
+    'lightclaw.runtime=docker',
+    '--label',
+    `lightclaw.image=${cfg.image}`,
+    '--memory',
+    cfg.memoryLimit,
+    '--cpus',
+    String(cfg.cpuLimit),
+    '--network',
+    cfg.network,
+    '-v',
+    `${cfg.workspaceHostPath}:${cfg.workspaceContainerPath}:rw`,
+  ]
+
+  const sec = cfg.security
+  for (const cap of sec.capDrop) {
+    args.push('--cap-drop', cap)
+  }
+  for (const cap of sec.capAdd) {
+    args.push('--cap-add', cap)
+  }
+  if (sec.noNewPrivileges) {
+    args.push('--security-opt', 'no-new-privileges')
+  }
+  if (sec.readOnlyRootfs) {
+    args.push('--read-only')
+  }
+  if (sec.pidsLimit !== null) {
+    args.push('--pids-limit', String(sec.pidsLimit))
+  }
+  for (const [name, value] of Object.entries(sec.ulimits)) {
+    args.push('--ulimit', `${name}=${value}`)
+  }
+
+  for (const mount of cfg.mounts) {
+    args.push('-v', `${mount.host}:${mount.container}:${mount.mode}`)
+  }
+  for (const tmpfs of cfg.tmpfs) {
+    args.push('--tmpfs', formatTmpfsArg(tmpfs, sec.tmpfsOptions))
+  }
+  for (const [key, value] of Object.entries(cfg.env)) {
+    args.push('-e', `${key}=${value}`)
+  }
+  args.push(cfg.image, 'sleep', 'infinity')
+  return args
+}
+
+function formatTmpfsArg(entry: string, defaultOptions: string): string {
+  // Per-entry options win: `/tmp:size=1g` is honored verbatim. A bare path
+  // (no `:`) picks up the security default so admin-supplied lists like
+  // `["/tmp", "/var/tmp"]` get the same hardened mount opts.
+  return entry.includes(':') ? entry : `${entry}:${defaultOptions}`
 }
 
 export async function dockerCmdRaw(args: string[]): Promise<ExecResult> {

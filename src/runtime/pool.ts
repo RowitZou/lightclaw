@@ -404,6 +404,7 @@ export function buildDockerRuntimeConfig(
     cpuLimit: docker.cpuLimit,
     network: dockerNetwork,
     autoPull: docker.autoPull,
+    security: docker.security,
   }
 }
 

@@ -14,6 +14,31 @@ export type DockerMountConfig = {
   mode: 'rw' | 'ro'
 }
 
+export type DockerSecuritySettings = {
+  /** Linux capabilities to drop. `["ALL"]` drops every cap, then capAdd
+   *  re-adds the minimal set. Empty array disables --cap-drop entirely. */
+  capDrop: string[]
+  /** Capabilities to add back after capDrop. The default 4-cap set covers
+   *  ordinary file/user-switch flows under the sandbox image. */
+  capAdd: string[]
+  /** When true, sets --security-opt no-new-privileges (blocks privilege
+   *  escalation through setuid binaries). */
+  noNewPrivileges: boolean
+  /** When true, sets --read-only on the container rootfs. Off by default
+   *  because the sandbox image's $HOME=/root sits on the rootfs and pip /
+   *  pnpm cache writes there; admin can flip on after auditing workflows. */
+  readOnlyRootfs: boolean
+  /** Maximum number of processes inside the container. `null` omits
+   *  --pids-limit so the host default applies. */
+  pidsLimit: number | null
+  /** ulimit map (`name -> "soft:hard"` or `"value"`). Each entry becomes
+   *  one --ulimit flag. Empty map omits all ulimit flags. */
+  ulimits: Record<string, string>
+  /** Default mount options applied to tmpfs entries that don't carry their
+   *  own `:options` suffix. Format: docker --tmpfs option string. */
+  tmpfsOptions: string
+}
+
 export type DockerRuntimeSettings = {
   image?: string
   imageOverride?: string
@@ -25,6 +50,7 @@ export type DockerRuntimeSettings = {
   tmpfs: string[]
   env: Record<string, string>
   autoPull: boolean
+  security: DockerSecuritySettings
 }
 
 export type RlaunchRuntimeSettings = {
@@ -278,6 +304,24 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
   recurringAutoDisableThreshold: 3,
 }
 
+// Defaults track OpenClaw's minimal hardening profile. capDrop=ALL plus the
+// 4-cap allowlist suffices for ordinary file ops and user switches inside
+// the sandbox image; readOnlyRootfs stays off because /root caching paths
+// (pip, pnpm) would break and the bind-mounted /workspace already absorbs
+// the bulk of legitimate writes.
+const DEFAULT_DOCKER_SECURITY: DockerSecuritySettings = {
+  capDrop: ['ALL'],
+  capAdd: ['DAC_OVERRIDE', 'CHOWN', 'SETUID', 'SETGID'],
+  noNewPrivileges: true,
+  readOnlyRootfs: false,
+  pidsLimit: 512,
+  ulimits: {
+    nofile: '4096:8192',
+    nproc: '1024:2048',
+  },
+  tmpfsOptions: 'rw,nosuid,size=512m',
+}
+
 function parseBoolean(value: string | undefined): boolean | undefined {
   if (!value) {
     return undefined
@@ -484,6 +528,70 @@ function validateDockerMounts(
       mode: mount.mode,
     }
   })
+}
+
+function resolveDockerSecurity(
+  fileSecurity: NonNullable<NonNullable<ConfigFileShape['runtime']>['docker']>['security'] | undefined,
+): DockerSecuritySettings {
+  if (!fileSecurity) {
+    return { ...DEFAULT_DOCKER_SECURITY, ulimits: { ...DEFAULT_DOCKER_SECURITY.ulimits } }
+  }
+  if (typeof fileSecurity !== 'object' || Array.isArray(fileSecurity)) {
+    throw new Error('runtime.docker.security must be an object.')
+  }
+  const validateStringArray = (value: unknown, field: string, fallback: string[]): string[] => {
+    if (value === undefined) return [...fallback]
+    if (!Array.isArray(value)) {
+      throw new Error(`runtime.docker.security.${field} must be an array of strings.`)
+    }
+    return value.map((entry, idx) => {
+      if (typeof entry !== 'string' || !entry.trim()) {
+        throw new Error(`runtime.docker.security.${field}[${idx}] must be a non-empty string.`)
+      }
+      return entry.trim()
+    })
+  }
+  const validateUlimits = (value: unknown): Record<string, string> => {
+    if (value === undefined) return { ...DEFAULT_DOCKER_SECURITY.ulimits }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('runtime.docker.security.ulimits must be an object of name -> "soft:hard".')
+    }
+    const out: Record<string, string> = {}
+    for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (!name) {
+        throw new Error('runtime.docker.security.ulimits has an empty key.')
+      }
+      if (typeof raw !== 'string' || !raw.trim()) {
+        throw new Error(`runtime.docker.security.ulimits.${name} must be a non-empty string.`)
+      }
+      out[name] = raw.trim()
+    }
+    return out
+  }
+  const pidsLimit = (() => {
+    if (fileSecurity.pidsLimit === undefined) return DEFAULT_DOCKER_SECURITY.pidsLimit
+    if (fileSecurity.pidsLimit === null) return null
+    if (typeof fileSecurity.pidsLimit !== 'number' || !Number.isFinite(fileSecurity.pidsLimit) || fileSecurity.pidsLimit <= 0) {
+      throw new Error('runtime.docker.security.pidsLimit must be a positive number or null.')
+    }
+    return Math.floor(fileSecurity.pidsLimit)
+  })()
+  const tmpfsOptions = (() => {
+    if (fileSecurity.tmpfsOptions === undefined) return DEFAULT_DOCKER_SECURITY.tmpfsOptions
+    if (typeof fileSecurity.tmpfsOptions !== 'string' || !fileSecurity.tmpfsOptions.trim()) {
+      throw new Error('runtime.docker.security.tmpfsOptions must be a non-empty string.')
+    }
+    return fileSecurity.tmpfsOptions.trim()
+  })()
+  return {
+    capDrop: validateStringArray(fileSecurity.capDrop, 'capDrop', DEFAULT_DOCKER_SECURITY.capDrop),
+    capAdd: validateStringArray(fileSecurity.capAdd, 'capAdd', DEFAULT_DOCKER_SECURITY.capAdd),
+    noNewPrivileges: fileSecurity.noNewPrivileges ?? DEFAULT_DOCKER_SECURITY.noNewPrivileges,
+    readOnlyRootfs: fileSecurity.readOnlyRootfs ?? DEFAULT_DOCKER_SECURITY.readOnlyRootfs,
+    pidsLimit,
+    ulimits: validateUlimits(fileSecurity.ulimits),
+    tmpfsOptions,
+  }
 }
 
 function expandOptionalPath(value: string | undefined): string | undefined {
@@ -893,6 +1001,7 @@ export function getConfig(): LightClawConfig {
         tmpfs: dockerTmpfs,
         env: dockerConfig.env ?? {},
         autoPull: dockerConfig.autoPull ?? true,
+        security: resolveDockerSecurity(dockerConfig.security),
       },
       rlaunch: rlaunchConfig,
       network: networkConfig,
