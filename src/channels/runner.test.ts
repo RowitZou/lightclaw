@@ -379,6 +379,65 @@ describe('ChannelRunner pre-lock fast path', () => {
   })
 })
 
+describe('ChannelRunner mention gate', () => {
+  // Regression: Phase 25 post-approval text replay (preheatAndWelcomeOnApproval
+  // → handleMessage(synthetic message)) was silently dropped after b5f16a7
+  // made the Feishu mention gate strict. Dogfood stderr:
+  //   [preheat-on-approval] zouyicheng: replaying pre-approval text (2 chars) ...
+  //   [feishu] drop non-mention msg in group oc_4e92...
+  // The replay text is system-injected from `lastApplicantText`; the user
+  // sent it BEFORE pairing, so it doesn't carry an @bot mention and the
+  // mention-gate check is meaningless for it.
+  it('non-synthetic group message without mention is dropped at the mention gate', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    let mentionCheckCalls = 0
+    let allowedChecks = 0
+    strategy.isMessageTargeted = () => {
+      mentionCheckCalls += 1
+      return false
+    }
+    const origAllowed = strategy.isMessageAllowed!
+    strategy.isMessageAllowed = (m) => {
+      allowedChecks += 1
+      return origAllowed(m)
+    }
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: 'hello',
+      chatType: 'group',
+    }))
+    assert.equal(mentionCheckCalls, 1)
+    assert.equal(allowedChecks, 0, 'must not progress past the mention gate')
+  })
+
+  it('synthetic message bypasses the mention gate even when isMessageTargeted=false', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    let mentionCheckCalls = 0
+    strategy.isMessageTargeted = () => {
+      mentionCheckCalls += 1
+      return false
+    }
+    const synthetic: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'hello',
+        chatType: 'group',
+      }),
+      synthetic: true,
+    }
+    await runner.handleMessage(synthetic)
+    assert.equal(
+      mentionCheckCalls,
+      0,
+      'synthetic must short-circuit before the mention gate is consulted',
+    )
+  })
+})
+
 describe('ChannelRunner in-flight slash routing', () => {
   // Smoke-cover the regression behind the 2026-05-08 dogfood incident
   // (group session feishu:group:oc_4e92...:ou_7f0fb...): with a session
