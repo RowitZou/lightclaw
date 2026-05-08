@@ -7,6 +7,7 @@ import type { ChannelsConfig, FeishuChannelConfig } from './types.js'
 
 type ChannelsFileShape = {
   feishu?: Partial<FeishuChannelConfig> & {
+    mediaDir?: string
     webhook?: Partial<FeishuChannelConfig['webhook']>
   }
 }
@@ -28,6 +29,11 @@ function loadChannelsFile(): ChannelsFileShape {
 }
 
 function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelConfig {
+  if (input?.mediaDir) {
+    process.stderr.write(
+      'channels.feishu.mediaDir is deprecated and ignored; inbound media is written to the runtime workspace .lightclaw/inbox/ path.\n',
+    )
+  }
   const permissionMode =
     parsePermissionMode(process.env.LIGHTCLAW_FEISHU_PERMISSION_MODE) ??
     parsePermissionMode(input?.permissionMode) ??
@@ -64,9 +70,6 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
       input?.typingReaction ??
       true,
     mediaEnabled: input?.mediaEnabled ?? true,
-    mediaDir: input?.mediaDir
-      ? path.resolve(expandHomePath(input.mediaDir))
-      : path.join(lightclawHome(), 'state', 'feishu', 'media'),
     webhook: {
       host: webhook.host ?? '0.0.0.0',
       port: webhook.port ?? 18_850,

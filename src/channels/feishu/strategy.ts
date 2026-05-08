@@ -6,6 +6,7 @@ import type { FeishuPermissionCoordinator } from './permission-card.js'
 import { isFeishuMessageAllowed, resolveFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard } from './system-notice.js'
+import { fetchFeishuMediaPayload, materializeFeishuMedia } from './media.js'
 import {
   createFeishuTypingReaction,
   type TypingState,
@@ -27,6 +28,24 @@ export function createFeishuStrategy(
     isMessageAllowed: message => isFeishuMessageAllowed(message, config),
     resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
+    async materializeAttachment({ pending, runtime, message }) {
+      if (pending.kind !== 'feishu-media') {
+        return null
+      }
+      const payload = await fetchFeishuMediaPayload({
+        client,
+        messageId: pending.messageId,
+        mediaKey: pending.mediaKey,
+      })
+      if (!payload) {
+        return null
+      }
+      return materializeFeishuMedia({
+        payload,
+        runtime,
+        chatId: message.chatId,
+      })
+    },
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendMarkdownText(message, text),
     sendFile: (message, file) => sender.sendFile(message, file),

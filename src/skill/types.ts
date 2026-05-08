@@ -1,4 +1,4 @@
-export type SkillSource = 'builtin' | 'user' | 'project'
+export type SkillSource = 'builtin' | 'user'
 
 export type SkillMeta = {
   name: string

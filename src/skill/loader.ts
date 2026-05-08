@@ -6,6 +6,8 @@ import { lightclawHome } from '../paths.js'
 import type { LoadedSkill, SkillMeta, SkillSource } from './types.js'
 import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 
+const warnedLegacySkillDirs = new Set<string>()
+
 function toBoolean(value: string | string[] | undefined, fallback: boolean): boolean {
   if (typeof value !== 'string') {
     return fallback
@@ -111,12 +113,7 @@ export async function discoverSkills(cwd: string): Promise<SkillMeta[]> {
     skillMap.set(skill.name, skill)
   }
 
-  for (const skill of await loadSkillsFromDirectory(
-    path.join(path.resolve(cwd), '.lightclaw', 'skills'),
-    'project',
-  )) {
-    skillMap.set(skill.name, skill)
-  }
+  void warnIfLegacySkillDir(path.join(path.resolve(cwd), '.lightclaw', 'skills'))
 
   return [...skillMap.values()].sort((left, right) => left.name.localeCompare(right.name))
 }
@@ -132,4 +129,21 @@ export async function loadSkillBody(skill: SkillMeta): Promise<string> {
 
   const raw = await readFile(skill.filePath, 'utf8')
   return parseFrontmatter(raw).body.trim()
+}
+
+async function warnIfLegacySkillDir(dir: string): Promise<void> {
+  if (warnedLegacySkillDirs.has(dir)) {
+    return
+  }
+  warnedLegacySkillDirs.add(dir)
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    if (entries.some(entry => entry.isDirectory())) {
+      process.stderr.write(
+        `skills: ${dir} is no longer scanned. Move reviewed skills to ${path.join(lightclawHome(), 'skills')}/\n`,
+      )
+    }
+  } catch {
+    // Missing or unreadable legacy directories are ignored.
+  }
 }

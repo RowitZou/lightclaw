@@ -6,7 +6,7 @@ export type HookName =
   | 'afterQuery'
   | 'onSessionEnd'
 
-export type HookSource = 'user' | 'project'
+export type HookSource = 'user'
 export type HookSessionTrigger = 'repl' | 'single' | 'channel' | 'resume'
 export type HookToolSource = 'builtin' | 'mcp'
 

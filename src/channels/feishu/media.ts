@@ -1,24 +1,26 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
 
 import type * as lark from '@larksuiteoapi/node-sdk'
 
+import type { Runtime } from '../../runtime/types.js'
 import type { ParsedMediaKey } from './bot-content.js'
 
-export type DownloadedMedia = {
+export type FeishuMediaPayload = {
+  buffer: Buffer
+  mimeType: string
+  fileName: string
+}
+
+export type MaterializedFeishuMedia = {
   path: string
   mimeType: string
 }
 
-export async function downloadFeishuMedia(input: {
+export async function fetchFeishuMediaPayload(input: {
   client: lark.Client
   messageId: string
   mediaKey: ParsedMediaKey
-  mediaDir: string
-  chatId: string
-}): Promise<DownloadedMedia | null> {
+}): Promise<FeishuMediaPayload | null> {
   const sdkType = input.mediaKey.kind === 'image' ? 'image' : 'file'
   try {
     const resp = await input.client.im.messageResource.get({
@@ -40,14 +42,11 @@ export async function downloadFeishuMedia(input: {
       return null
     }
 
-    const dir = path.join(input.mediaDir, sanitize(input.chatId))
-    await fs.mkdir(dir, { recursive: true })
-    const fileName = fileNameFor(input.messageId, input.mediaKey)
-    const destPath = path.join(dir, fileName)
-    await writePayload(envelope.data ?? resp, destPath)
+    const buffer = await bufferizePayload(envelope.data ?? resp)
     return {
-      path: destPath,
+      buffer,
       mimeType: inferMime(input.mediaKey),
+      fileName: fileNameFor(input.messageId, input.mediaKey),
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error)
@@ -58,7 +57,26 @@ export async function downloadFeishuMedia(input: {
   }
 }
 
-function fileNameFor(messageId: string, key: ParsedMediaKey): string {
+export async function materializeFeishuMedia(input: {
+  payload: FeishuMediaPayload
+  runtime: Runtime
+  chatId: string
+}): Promise<MaterializedFeishuMedia | null> {
+  const destPath = `${input.runtime.workspaceRoot}/.lightclaw/inbox/${sanitize(input.chatId)}/${input.payload.fileName}`
+  try {
+    await input.runtime.fs.writeFile(destPath, input.payload.buffer)
+    return {
+      path: destPath,
+      mimeType: input.payload.mimeType,
+    }
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`feishu media: writeFile failed path=${destPath}: ${text}\n`)
+    return null
+  }
+}
+
+export function fileNameFor(messageId: string, key: ParsedMediaKey): string {
   const ext = inferExt(key)
   const rawName = key.fileName?.trim()
   if (rawName) {
@@ -87,36 +105,31 @@ function inferMime(key: ParsedMediaKey): string {
   return 'application/octet-stream'
 }
 
-async function writePayload(payload: unknown, destPath: string): Promise<void> {
+async function bufferizePayload(payload: unknown): Promise<Buffer> {
   if (Buffer.isBuffer(payload)) {
-    await fs.writeFile(destPath, payload)
-    return
+    return payload
   }
   if (payload instanceof Uint8Array) {
-    await fs.writeFile(destPath, Buffer.from(payload))
-    return
+    return Buffer.from(payload)
   }
   if (payload instanceof ArrayBuffer) {
-    await fs.writeFile(destPath, Buffer.from(payload))
-    return
+    return Buffer.from(payload)
   }
   if (payload instanceof Readable) {
-    await pipeline(payload, await fs.open(destPath, 'w').then(handle => {
-      const stream = handle.createWriteStream()
-      stream.once('close', () => void handle.close())
-      return stream
-    }))
-    return
+    return streamToBuffer(payload)
   }
   if (payload && typeof (payload as { pipe?: unknown }).pipe === 'function') {
-    await pipeline(payload as NodeJS.ReadableStream, await fs.open(destPath, 'w').then(handle => {
-      const stream = handle.createWriteStream()
-      stream.once('close', () => void handle.close())
-      return stream
-    }))
-    return
+    return streamToBuffer(payload as NodeJS.ReadableStream)
   }
   throw new Error('unsupported payload type from Feishu messageResource.get')
+}
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks)
 }
 
 function sanitize(input: string): string {

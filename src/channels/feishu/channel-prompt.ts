@@ -17,10 +17,5 @@ export function buildFeishuChannelPrompt(
     `- Chat ID: ${message.chatId}`,
     `- Sender open_id: ${message.senderOpenId}`,
   ]
-  if (message.mediaPath) {
-    lines.push(
-      `- Media received: type=${message.mediaType ?? 'unknown'} path=${message.mediaPath} (use Read or appropriate tools).`,
-    )
-  }
   return lines.join('\n')
 }

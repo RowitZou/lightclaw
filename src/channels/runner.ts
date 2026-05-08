@@ -21,6 +21,7 @@ import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
+import type { Runtime } from '../runtime/types.js'
 import {
   appendBranchSpawnPair,
   mergeBranchResultBack,
@@ -58,7 +59,13 @@ import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta } from '../types.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
-import type { ChannelId, NormalizedChannelMessage, OutgoingChannelFile } from './types.js'
+import type {
+  ChannelId,
+  MaterializedAttachment,
+  NormalizedChannelMessage,
+  OutgoingChannelFile,
+  PendingAttachment,
+} from './types.js'
 
 /**
  * Per-channel strategy: everything that varies between feishu /
@@ -97,6 +104,11 @@ export type ChannelRunnerStrategy = {
     message: NormalizedChannelMessage,
     file: OutgoingChannelFile,
   ): Promise<void>
+  materializeAttachment?(input: {
+    pending: PendingAttachment
+    runtime: Runtime
+    message: NormalizedChannelMessage
+  }): Promise<MaterializedAttachment | null>
   createPermissionApprover?(
     message: NormalizedChannelMessage,
     sessionId: string,
@@ -147,6 +159,44 @@ export class ChannelRunner {
     }
     await refreshSkillRegistry(this.strategy.cwd)
     this.initialized = true
+  }
+
+  private async materializeAttachment(
+    message: NormalizedChannelMessage,
+    runtime: Runtime,
+    sessionId: string,
+  ): Promise<MaterializedAttachment | null> {
+    if (!message.pendingAttachment) {
+      return null
+    }
+    if (!this.strategy.materializeAttachment) {
+      process.stderr.write(
+        `channel: ${this.strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
+      )
+      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+      return null
+    }
+
+    try {
+      const materialized = await this.strategy.materializeAttachment({
+        pending: message.pendingAttachment,
+        runtime,
+        message,
+      })
+      if (!materialized) {
+        message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+        return null
+      }
+      process.stderr.write(
+        `channel: attachment materialized session=${sessionId} path=${materialized.path}\n`,
+      )
+      return materialized
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
+      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+      return null
+    }
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
@@ -316,8 +366,13 @@ export class ChannelRunner {
           }
         }
 
+        const materializedAttachment = await this.materializeAttachment(
+          effectiveMessage,
+          getRuntime(),
+          sessionId,
+        )
         beginQuery(userId)
-        const userText = formatChannelUserText(effectiveMessage)
+        const userText = formatChannelUserText(effectiveMessage, materializedAttachment)
         const slash = await dispatchChannelSlash(userText, {
           config: appConfig,
           sessionId,
@@ -945,17 +1000,24 @@ function classifyFailure(detail: string): string {
   return t('channel.failure.cat.generic')
 }
 
-function formatChannelUserText(message: NormalizedChannelMessage): string {
-  if (!message.mediaPath) {
+function formatChannelUserText(
+  message: NormalizedChannelMessage,
+  materialized: MaterializedAttachment | null,
+): string {
+  if (!materialized) {
     return message.text
   }
   return [
     message.text || '(no text)',
     '',
     t('channel.media.attachment'),
-    `- type: ${message.mediaType ?? 'unknown'}`,
-    `- path: ${message.mediaPath}`,
+    `- type: ${materialized.mimeType}`,
+    `- path: ${materialized.path}`,
   ].join('\n')
+}
+
+function appendLine(text: string, line: string): string {
+  return text ? `${text}\n${line}` : line
 }
 
 async function persistMeta(createdAt: number, messageCount: number): Promise<void> {

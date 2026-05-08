@@ -13,7 +13,7 @@ import {
   registerBackgroundTaskCardCoordinator,
   type BackgroundTaskCardAction,
 } from './bg-card-coordinator.js'
-import { downloadFeishuMedia } from './media.js'
+import { fileNameFor } from './media.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
@@ -97,21 +97,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           text: raw.text,
         }
         if (raw.mediaKeys?.length && config.mediaEnabled) {
-          const downloaded = await downloadFeishuMedia({
-            client,
+          const mediaKey = raw.mediaKeys[0]
+          message.pendingAttachment = {
+            kind: 'feishu-media',
             messageId: raw.messageId,
-            mediaKey: raw.mediaKeys[0],
-            mediaDir: config.mediaDir,
-            chatId: raw.chatId,
-          })
-          if (downloaded) {
-            message.mediaPath = downloaded.path
-            message.mediaType = downloaded.mimeType
-            process.stderr.write(
-              `feishu: media saved message=${raw.messageId} path=${downloaded.path}\n`,
-            )
-          } else {
-            message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+            mediaKey,
+            fileName: fileNameFor(raw.messageId, mediaKey),
           }
         } else if (raw.mediaKeys?.length) {
           message.text = appendLine(message.text, t('channel.media.skipped'))

@@ -1,4 +1,5 @@
 import type { PermissionMode } from '../permission/types.js'
+import type { ParsedMediaKey } from './feishu/bot-content.js'
 
 /**
  * Channel identifier. Kept as an open string so new channels (ide-bridge,
@@ -44,8 +45,19 @@ export type NormalizedChannelMessage = {
   messageId: string
   parentId?: string
   text: string
-  mediaPath?: string
-  mediaType?: string
+  pendingAttachment?: PendingAttachment
+}
+
+export type PendingAttachment = {
+  kind: 'feishu-media'
+  messageId: string
+  mediaKey: ParsedMediaKey
+  fileName: string
+}
+
+export type MaterializedAttachment = {
+  path: string
+  mimeType: string
 }
 
 export type OutgoingChannelFile = {
@@ -82,7 +94,6 @@ export type FeishuChannelConfig = {
   httpTimeoutMs: number
   maxBodyBytes: number
   mediaEnabled: boolean
-  mediaDir: string
   // While a query runs, add a "Typing" emoji reaction to the user's
   // incoming message so they see a visible "we got it, working" signal
   // instead of silence. Removed when the query completes or fails. Default
