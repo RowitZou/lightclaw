@@ -200,6 +200,15 @@ describe('pool config builders with network.mode=host', () => {
           tmpfs: ['/tmp'],
           env: {},
           autoPull: true,
+          security: {
+            capDrop: ['ALL'],
+            capAdd: ['DAC_OVERRIDE', 'CHOWN', 'SETUID', 'SETGID'],
+            noNewPrivileges: true,
+            readOnlyRootfs: false,
+            pidsLimit: 512,
+            ulimits: { nofile: '4096:8192', nproc: '1024:2048' },
+            tmpfsOptions: 'rw,nosuid,size=512m',
+          },
         },
         rlaunch: {
           image: 'registry/x:tag',
