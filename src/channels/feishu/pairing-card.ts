@@ -41,6 +41,7 @@ type ApplicationState =
       applicantUserId?: string
       applicantText?: string
       applicantChatId?: string
+      applicantChatType?: string
     }
   | {
       kind: 'submitting'
@@ -50,6 +51,7 @@ type ApplicationState =
       applicantUserId?: string
       applicantText?: string
       applicantChatId?: string
+      applicantChatType?: string
     }
   | {
       kind: 'submitted'
@@ -119,6 +121,7 @@ export class PairingCardCoordinator {
       applicantUserId?: string
       applicantText?: string
       applicantChatId?: string
+      applicantChatType?: string
     },
   ): Promise<void> {
     const token = randomUUID()
@@ -130,6 +133,7 @@ export class PairingCardCoordinator {
       applicantUserId: input.applicantUserId,
       applicantText: input.applicantText,
       applicantChatId: input.applicantChatId,
+      applicantChatType: input.applicantChatType,
     })
     await this.pushApplicantCard(
       message,
@@ -283,6 +287,7 @@ export class PairingCardCoordinator {
       applicantUserId: current.applicantUserId,
       applicantText: current.applicantText,
       applicantChatId: current.applicantChatId,
+      applicantChatType: current.applicantChatType,
     })
 
     try {
@@ -304,6 +309,7 @@ export class PairingCardCoordinator {
           senderKey,
           current.applicantText,
           current.applicantChatId,
+          current.applicantChatType,
         ).catch(error => {
           const detail = error instanceof Error ? error.message : String(error)
           process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
@@ -404,10 +410,13 @@ export class PairingCardCoordinator {
       return toast('error', reason)
     }
 
-    // entry.lastApplicantText was already promoted from in-memory state to
-    // pending.json by applyConfirm, so the durable DB value is canonical.
+    // entry.lastApplicantText / lastApplicantChatId / lastApplicantChatType
+    // were already promoted from in-memory state to pending.json by
+    // applyConfirm, so the durable DB values are canonical here.
     preheatAndWelcomeOnApproval(canonical, link, {
       applicantText: entry.lastApplicantText,
+      applicantChatId: entry.lastApplicantChatId,
+      applicantChatType: entry.lastApplicantChatType,
     })
     this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(
