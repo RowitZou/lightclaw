@@ -630,15 +630,18 @@ describe('ChannelRunner pairing branch', () => {
     hasApplicationHook?: boolean
     hasWaitingHook?: boolean
     hasCooldownHook?: boolean
+    hasNoticeToOpenIdHook?: boolean
   }): {
     strategy: ChannelRunnerStrategy
     notices: Array<{ messageId: string; text: string }>
+    dmNotices: Array<{ applicantOpenId: string; text: string }>
     appCalls: Array<{ applicantOpenId: string; applicantName?: string; applicantEmail?: string; applicantUserId?: string }>
     waitCalls: Array<{ code: string; applicantName?: string }>
     cooldownCalls: Array<{ elapsedMinutes: number; remainMinutes: number }>
     senderInfo: Map<string, { name?: string; email?: string; userId?: string }>
   } {
     const notices: Array<{ messageId: string; text: string }> = []
+    const dmNotices: Array<{ applicantOpenId: string; text: string }> = []
     const appCalls: Array<{
       applicantOpenId: string
       applicantName?: string
@@ -664,6 +667,11 @@ describe('ChannelRunner pairing branch', () => {
         return senderInfo.get(peerId)
       },
     }
+    if (opts?.hasNoticeToOpenIdHook !== false) {
+      strategy.sendNoticeToOpenId = async ({ applicantOpenId, content }) => {
+        dmNotices.push({ applicantOpenId, text: content })
+      }
+    }
     if (opts?.hasApplicationHook !== false) {
       strategy.renderPairingApplicationCard = async input => {
         appCalls.push({
@@ -687,7 +695,7 @@ describe('ChannelRunner pairing branch', () => {
         })
       }
     }
-    return { strategy, notices, appCalls, waitCalls, cooldownCalls, senderInfo }
+    return { strategy, notices, dmNotices, appCalls, waitCalls, cooldownCalls, senderInfo }
   }
 
   it('renders the application card when admin has a feishu binding and the sender is fresh', async () => {
@@ -754,7 +762,12 @@ describe('ChannelRunner pairing branch', () => {
     assert.equal(harness.waitCalls.length, 0)
   })
 
-  it('falls back to text pairing notice when admin has no feishu binding', async () => {
+  it('routes bootstrap text notice to applicant DM when admin has no feishu binding', async () => {
+    // The original Phase 25 fallback echoed the welcome+code+freshness back
+    // into the inbound chat via sendNotice(message, ...). For group inbounds
+    // that leaked applicant identity / pairing code to the entire group.
+    // 2026-05-08 fix: when sendNoticeToOpenId is wired, runner pushes
+    // pairing-bootstrap notices to applicant DM instead.
     await createUser('admin')
     const { setAdmin } = await import('../identity/store.js')
     await setAdmin('admin')
@@ -767,11 +780,34 @@ describe('ChannelRunner pairing branch', () => {
     assert.equal(harness.appCalls.length, 0, 'no card path when admin lacks feishu binding')
     assert.equal(harness.waitCalls.length, 0)
     assert.equal(harness.cooldownCalls.length, 0)
-    assert.equal(harness.notices.length, 1, 'text pairing notice still fires as bootstrap fallback')
+    assert.equal(harness.notices.length, 0, 'NO in-chat echo (would leak in groups)')
+    assert.equal(harness.dmNotices.length, 1, 'pairing notice routed to applicant DM')
+    assert.equal(harness.dmNotices[0].applicantOpenId, 'ou_user')
+    assert.match(harness.dmNotices[0].text, /配对码|approve/)
+  })
+
+  it('falls back to in-chat notice when sendNoticeToOpenId hook is absent (legacy strategy)', async () => {
+    // Channels without a "send to specific user without an inbound" surface
+    // (or future test stubs that omit the hook) keep the old behavior so the
+    // applicant is never silently ignored. This is the only allowed
+    // in-chat path for pairing notices in 2026-05-08+.
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+
+    const harness = makePairingStrategy({ hasNoticeToOpenIdHook: false })
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+
+    assert.equal(harness.dmNotices.length, 0)
+    assert.equal(harness.notices.length, 1, 'in-chat fallback when strategy lacks DM hook')
     assert.match(harness.notices[0].text, /配对码|approve/)
   })
 
-  it('falls back to text pairing notice when strategy lacks the application card hook', async () => {
+  it('routes bootstrap notice to DM even when strategy lacks the application card hook', async () => {
+    // canRenderPairingCard depends on { adminFeishuOpenId, application,
+    // waiting } — missing application hook drops to bootstrap fallback even
+    // with admin bound. DM route still wins.
     await createUser('admin')
     const { setAdmin } = await import('../identity/store.js')
     await setAdmin('admin')
@@ -782,7 +818,8 @@ describe('ChannelRunner pairing branch', () => {
     await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
 
     assert.equal(harness.appCalls.length, 0)
-    assert.equal(harness.notices.length, 1, 'text fallback when strategy is missing the hook')
-    assert.match(harness.notices[0].text, /配对码|approve/)
+    assert.equal(harness.notices.length, 0)
+    assert.equal(harness.dmNotices.length, 1, 'DM route still wins')
+    assert.equal(harness.dmNotices[0].applicantOpenId, 'ou_user')
   })
 })

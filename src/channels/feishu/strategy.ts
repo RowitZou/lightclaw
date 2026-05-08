@@ -98,6 +98,19 @@ export function createFeishuStrategy(
         message,
         buildSystemNoticeCard({ kind, content, bodyFormat }),
       ),
+    sendNoticeToOpenId: async ({ applicantOpenId, kind, content }) => {
+      // Bootstrap-fallback notice routed to applicant DM. Used when admin
+      // has no Feishu binding so the card UX is bypassed and the runner
+      // would otherwise echo the welcome/code/rate-limited text back into
+      // whatever chat the applicant @-mentioned the bot in (group leak).
+      // sendInteractiveCardToOpenId auto-routes via Lark im.message.create
+      // receive_id_type=open_id; runner falls back to in-chat sendNotice
+      // if this throws.
+      await sender.sendInteractiveCardToOpenId(
+        applicantOpenId,
+        buildSystemNoticeCard({ kind, content }),
+      )
+    },
     ...(typing
       ? {
           startTyping: (message: NormalizedChannelMessage) => typing.start(message.messageId),
