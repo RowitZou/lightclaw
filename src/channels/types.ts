@@ -51,6 +51,20 @@ export type NormalizedChannelMessage = {
   feishuMentions?: readonly FeishuMention[]
   text: string
   pendingAttachment?: PendingAttachment
+  /**
+   * Marks a message that the runner synthesized (e.g. post-approval
+   * pre-approval-text replay), as opposed to one that arrived from the
+   * channel platform. The platform never saw `messageId`, so APIs that
+   * reference it ("reply to message X", "react to message X") return
+   * 400. Channel adapters check this flag and short-circuit:
+   *   - Feishu sender: skip im.message.reply, go straight to
+   *     im.message.create with receive_id_type=chat_id.
+   *   - Feishu typing reaction: skip messageReaction.create/delete.
+   * Mention gating, pairing, transcript persistence, and the agent loop
+   * itself all still apply — the message is otherwise indistinguishable
+   * from a real inbound.
+   */
+  synthetic?: boolean
 }
 
 export type PendingAttachment = {
