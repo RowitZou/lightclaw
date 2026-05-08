@@ -6,6 +6,7 @@ import type {
   PermissionRule,
   RiskLevel,
 } from './types.js'
+import { findHardlineMatch } from './hardline.js'
 import { matchMcpToolContent, matchToolContent } from './matchers.js'
 import { formatRule } from './rules.js'
 
@@ -20,6 +21,27 @@ export function evaluatePermission(args: {
   rules: PermissionRule[]
 }): PermissionDecision | PermissionAskDecision {
   const { toolName, toolSource, mcpServer, mcpToolName, input, riskLevel, mode, rules } = args
+
+  // Hardline blocklist outranks identity allow rules, mode = bypassPermissions,
+  // and the ceiling. Patterns block catastrophic shell commands (`rm -rf /`,
+  // `mkfs`, `dd of=/dev/sda`, fork bomb, `shutdown`) whose blast radius is the
+  // host or container filesystem. The companion to high-risk.ts: where that
+  // hardens the ASK flow by hiding 以后都允许, hardline hardens the BYPASS flow.
+  if (toolName === 'Bash') {
+    const cmd = (input as { command?: unknown })?.command
+    if (typeof cmd === 'string') {
+      const hardline = findHardlineMatch(cmd)
+      if (hardline) {
+        return {
+          behavior: 'deny',
+          reason:
+            `Permission denied: hardline blocklist (${hardline.ruleId}) — ${hardline.description}. ` +
+            `This rule is unconditional and cannot be overridden by mode, ceiling, or per-rule allow.`,
+        }
+      }
+    }
+  }
+
   const skillBoundary = evaluateSkillBoundary(toolName)
   if (skillBoundary) {
     return skillBoundary
