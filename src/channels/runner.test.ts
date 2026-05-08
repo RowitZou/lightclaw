@@ -10,8 +10,19 @@ import {
 } from '../__tests__/concurrency-helpers.js'
 import { createUser, addLink } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import { setLang } from '../i18n/index.js'
+import type { Runtime } from '../runtime/types.js'
 
-import { ChannelRunner } from './runner.js'
+import {
+  applyAttachmentMaterialization,
+  ChannelRunner,
+  type ChannelRunnerStrategy,
+} from './runner.js'
+import type {
+  MaterializedAttachment,
+  NormalizedChannelMessage,
+  PendingAttachment,
+} from './types.js'
 
 const ENV_KEYS = [
   'LIGHTCLAW_MODEL',
@@ -339,5 +350,220 @@ describe('ChannelRunner pre-lock fast path', () => {
 
     releaseHold?.()
     await heldLock
+  })
+})
+
+describe('applyAttachmentMaterialization', () => {
+  // Phase 24 contract: feishu raw onMessage attaches `pendingAttachment`,
+  // ChannelRunner materializes it after pairing + runtime acquire via the
+  // strategy hook. This block exercises the hook dispatcher in isolation
+  // (no session lock / runtime pool / LLM) so each branch of the failure
+  // matrix is unit-covered.
+
+  function makePending(): PendingAttachment {
+    return {
+      kind: 'feishu-media',
+      messageId: 'om_test',
+      mediaKey: { kind: 'image', key: 'img_test' },
+      fileName: 'test.jpg',
+    }
+  }
+
+  function makeMessage(opts?: { withPending?: boolean }): NormalizedChannelMessage {
+    const message: NormalizedChannelMessage = {
+      channel: 'feishu',
+      eventId: 'evt-1',
+      chatId: 'oc_chat',
+      senderOpenId: 'ou_alice',
+      messageId: 'om_test',
+      text: 'hello',
+    }
+    if (opts?.withPending !== false) {
+      message.pendingAttachment = makePending()
+    }
+    return message
+  }
+
+  function makeRuntime(): Runtime {
+    return { workspaceRoot: '/workspace' } as unknown as Runtime
+  }
+
+  function captureStderr(): { lines: string[]; restore: () => void } {
+    const lines: string[] = []
+    const original = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: unknown) => {
+      lines.push(typeof chunk === 'string' ? chunk : String(chunk))
+      return true
+    }) as typeof process.stderr.write
+    return {
+      lines,
+      restore: () => {
+        process.stderr.write = original
+      },
+    }
+  }
+
+  // Lock locale so assertions on the i18n download-failed notice are
+  // deterministic regardless of which test ran before.
+  beforeEach(() => {
+    setLang('cn')
+  })
+
+  it('returns null and leaves text untouched when no pendingAttachment is set', async () => {
+    const strategy = installFakeStrategy('feishu')
+    let hookCalls = 0
+    strategy.materializeAttachment = async () => {
+      hookCalls += 1
+      return null
+    }
+    const message = makeMessage({ withPending: false })
+    const originalText = message.text
+
+    const result = await applyAttachmentMaterialization(
+      strategy,
+      message,
+      makeRuntime(),
+      'feishu-alice',
+    )
+
+    assert.equal(result, null)
+    assert.equal(hookCalls, 0, 'hook should not run when pendingAttachment is absent')
+    assert.equal(message.text, originalText, 'text must not be mutated')
+  })
+
+  it('warns to stderr and appends download-failed notice when strategy lacks the hook', async () => {
+    const strategy = installFakeStrategy('feishu')
+    // Explicitly absent: makes the missing-hook branch unambiguous.
+    delete strategy.materializeAttachment
+    const message = makeMessage()
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment | null
+    try {
+      result = await applyAttachmentMaterialization(
+        strategy,
+        message,
+        makeRuntime(),
+        'feishu-alice',
+      )
+    } finally {
+      stderr.restore()
+    }
+
+    assert.equal(result, null)
+    assert.match(message.text, /\[媒体下载失败\]$/)
+    assert.ok(
+      stderr.lines.some(line =>
+        line.includes('feishu got pendingAttachment without materializeAttachment hook'),
+      ),
+      `expected stderr warn, got: ${JSON.stringify(stderr.lines)}`,
+    )
+  })
+
+  it('returns materialized attachment and leaves text untouched on hook success', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const calls: Array<{
+      pending: PendingAttachment
+      runtime: Runtime
+      message: NormalizedChannelMessage
+    }> = []
+    strategy.materializeAttachment = async input => {
+      calls.push(input)
+      return {
+        path: '/workspace/.lightclaw/inbox/oc_chat/test.jpg',
+        mimeType: 'image/jpeg',
+      }
+    }
+    const message = makeMessage()
+    const runtime = makeRuntime()
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment | null
+    try {
+      result = await applyAttachmentMaterialization(
+        strategy,
+        message,
+        runtime,
+        'feishu-alice',
+      )
+    } finally {
+      stderr.restore()
+    }
+
+    assert.deepEqual(result, {
+      path: '/workspace/.lightclaw/inbox/oc_chat/test.jpg',
+      mimeType: 'image/jpeg',
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].pending.fileName, 'test.jpg')
+    assert.equal(calls[0].runtime, runtime, 'runtime must be threaded through unchanged')
+    assert.equal(calls[0].message, message, 'message must be passed by reference')
+    assert.equal(message.text, 'hello', 'text must not be mutated on success')
+    assert.ok(
+      stderr.lines.some(line =>
+        line.includes('attachment materialized') &&
+        line.includes('session=feishu-alice') &&
+        line.includes('/workspace/.lightclaw/inbox/oc_chat/test.jpg'),
+      ),
+      `expected materialized stderr line, got: ${JSON.stringify(stderr.lines)}`,
+    )
+  })
+
+  it('returns null and appends download-failed notice when hook returns null', async () => {
+    const strategy = installFakeStrategy('feishu')
+    strategy.materializeAttachment = async () => null
+    const message = makeMessage()
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment | null
+    try {
+      result = await applyAttachmentMaterialization(
+        strategy,
+        message,
+        makeRuntime(),
+        'feishu-alice',
+      )
+    } finally {
+      stderr.restore()
+    }
+
+    assert.equal(result, null)
+    assert.match(message.text, /\[媒体下载失败\]$/)
+    // No "threw" warn — null return is a graceful failure path that the
+    // hook itself already logged in stderr (e.g. SDK error envelope).
+    assert.ok(
+      !stderr.lines.some(line => line.includes('materializeAttachment threw')),
+      'null return must not emit the throw-path warn',
+    )
+  })
+
+  it('returns null, warns, and appends notice when hook throws', async () => {
+    const strategy = installFakeStrategy('feishu')
+    strategy.materializeAttachment = async () => {
+      throw new Error('disk full')
+    }
+    const message = makeMessage()
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment | null
+    try {
+      result = await applyAttachmentMaterialization(
+        strategy,
+        message,
+        makeRuntime(),
+        'feishu-alice',
+      )
+    } finally {
+      stderr.restore()
+    }
+
+    assert.equal(result, null)
+    assert.match(message.text, /\[媒体下载失败\]$/)
+    assert.ok(
+      stderr.lines.some(line =>
+        line.includes('materializeAttachment threw') && line.includes('disk full'),
+      ),
+      `expected throw-path warn, got: ${JSON.stringify(stderr.lines)}`,
+    )
   })
 })
