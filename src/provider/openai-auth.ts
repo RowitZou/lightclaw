@@ -253,9 +253,14 @@ export function createOpenAIAuthProvider(
         store: false,
       }
 
-      const stream = await client.responses.create(body, {
-        signal: params.signal,
-      })
+      let stream: Awaited<ReturnType<typeof client.responses.create>>
+      try {
+        stream = await client.responses.create(body, {
+          signal: params.signal,
+        })
+      } catch (error) {
+        throw formatOpenAIAuthError('OpenAI Responses streamChat request failed', error)
+      }
 
       yield* processResponseStream(stream as AsyncIterable<ResponseStreamEvent>)
     },

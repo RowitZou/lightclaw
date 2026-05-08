@@ -9,6 +9,8 @@ import type {
   UsageStats,
 } from '../types.js'
 import type {
+  DescribeImageParams,
+  DescribeImageResult,
   Provider,
   StreamChatParams,
   WebSearchParams,
@@ -478,6 +480,57 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         content: finalContent,
       }
       yield stopEvent
+    },
+    async describeImage(
+      params: DescribeImageParams,
+    ): Promise<DescribeImageResult> {
+      const images = params.images ?? (params.image ? [params.image] : [])
+      if (images.length === 0) {
+        throw new Error('describeImage requires at least one image.')
+      }
+      const response = await client.messages.create(
+        {
+          model: params.model,
+          max_tokens: params.maxTokens ?? 1200,
+          ...(params.system ? { system: params.system } : {}),
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: params.prompt },
+                ...images.map(image => ({
+                  type: 'image' as const,
+                  source: {
+                    type: 'base64' as const,
+                    // Anthropic SDK accepts the four standard vision MIME
+                    // types plus aliases; cast through `as never` because
+                    // upstream typings narrow further than runtime requires.
+                    media_type: image.mimeType,
+                    data: image.buffer.toString('base64'),
+                  },
+                })),
+              ],
+            },
+          ],
+        } as never,
+        {
+          signal: params.signal,
+        },
+      )
+      const textParts: string[] = []
+      for (const block of response.content as unknown[]) {
+        if (
+          isRecord(block) &&
+          block.type === 'text' &&
+          typeof block.text === 'string'
+        ) {
+          textParts.push(block.text)
+        }
+      }
+      return {
+        text: textParts.join(''),
+        model: response.model ?? params.model,
+      }
     },
     ...(webSearchSupported
       ? {

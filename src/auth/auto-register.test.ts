@@ -36,20 +36,36 @@ afterEach(() => {
 })
 
 describe('auth/codex/auto-register', () => {
-  it('creates endpoint + model when config.json is empty', () => {
+  it('creates endpoint + three reasoning tiers when config.json is empty', () => {
     const result = autoRegisterCodex()
     assert.equal(result.endpointAdded, true)
-    assert.equal(result.modelAdded, true)
+    assert.deepEqual(result.modelsAdded.sort(), ['gpt-codex-deep', 'gpt-codex-fast', 'gpt-codex-mid'])
+    assert.deepEqual(result.modelsPreexisting, [])
     const cfg = readConfig() as {
       endpoints: Record<string, unknown>
       models: Record<string, unknown>
     }
     assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
-    assert.deepEqual(cfg.models['gpt-5-codex'], {
+    assert.deepEqual(cfg.models['gpt-codex-deep'], {
       endpoint: 'codex',
       schema: 'openai-auth',
       upstreamModel: 'gpt-5.5',
+      reasoningEffort: 'high',
     })
+    assert.deepEqual(cfg.models['gpt-codex-mid'], {
+      endpoint: 'codex',
+      schema: 'openai-auth',
+      upstreamModel: 'gpt-5.5',
+      reasoningEffort: 'medium',
+    })
+    assert.deepEqual(cfg.models['gpt-codex-fast'], {
+      endpoint: 'codex',
+      schema: 'openai-auth',
+      upstreamModel: 'gpt-5.5',
+      reasoningEffort: 'low',
+    })
+    // Legacy display name no longer auto-created.
+    assert.equal(cfg.models['gpt-5-codex'], undefined)
   })
 
   it('preserves unrelated user config', () => {
@@ -70,7 +86,8 @@ describe('auth/codex/auto-register', () => {
     assert.equal(cfg.lang, 'en')
     assert.deepEqual(cfg.endpoints.existing, { apiKey: 'sk-x' })
     assert.deepEqual(cfg.endpoints.codex, { auth: 'codex-oauth' })
-    assert.ok(cfg.models['gpt-5-codex'])
+    assert.ok(cfg.models['gpt-codex-mid'])
+    assert.ok(cfg.models.existing)
   })
 
   it('does not overwrite a pre-existing codex endpoint', () => {
@@ -88,7 +105,7 @@ describe('auth/codex/auto-register', () => {
     assert.equal(cfg.endpoints.codex.baseUrl, 'http://my-mirror/')
   })
 
-  it('does not overwrite a pre-existing gpt-5-codex model', () => {
+  it('preserves legacy gpt-5-codex display name and adds three new tiers alongside', () => {
     writeConfig({
       endpoints: { codex: { auth: 'codex-oauth' } },
       models: {
@@ -100,12 +117,34 @@ describe('auth/codex/auto-register', () => {
       },
     })
     const result = autoRegisterCodex()
-    assert.equal(result.modelAdded, false)
-    assert.equal(result.modelPreexisting, true)
+    assert.deepEqual(result.modelsAdded.sort(), ['gpt-codex-deep', 'gpt-codex-fast', 'gpt-codex-mid'])
+    assert.deepEqual(result.modelsPreexisting, [])
     const cfg = readConfig() as {
       models: Record<string, { upstreamModel: string }>
     }
+    // Legacy entry preserved verbatim.
     assert.equal(cfg.models['gpt-5-codex'].upstreamModel, 'gpt-5.4-codex')
+    // Three new tiers added.
+    assert.ok(cfg.models['gpt-codex-deep'])
+    assert.ok(cfg.models['gpt-codex-mid'])
+    assert.ok(cfg.models['gpt-codex-fast'])
+  })
+
+  it('partial-tier config recovers — only missing tiers are added', () => {
+    writeConfig({
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      models: {
+        'gpt-codex-mid': {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+          reasoningEffort: 'medium',
+        },
+      },
+    })
+    const result = autoRegisterCodex()
+    assert.deepEqual(result.modelsAdded.sort(), ['gpt-codex-deep', 'gpt-codex-fast'])
+    assert.deepEqual(result.modelsPreexisting, ['gpt-codex-mid'])
   })
 
   it('is idempotent — second run touches nothing', () => {
@@ -116,12 +155,14 @@ describe('auth/codex/auto-register', () => {
     assert.equal(before, after)
   })
 
-  it('uses the caller-supplied upstreamModel when provided', () => {
+  it('uses the caller-supplied upstreamModel for all three tiers', () => {
     autoRegisterCodex({ upstreamModel: 'gpt-5.4' })
     const cfg = readConfig() as {
       models: Record<string, { upstreamModel: string }>
     }
-    assert.equal(cfg.models['gpt-5-codex'].upstreamModel, 'gpt-5.4')
+    assert.equal(cfg.models['gpt-codex-deep'].upstreamModel, 'gpt-5.4')
+    assert.equal(cfg.models['gpt-codex-mid'].upstreamModel, 'gpt-5.4')
+    assert.equal(cfg.models['gpt-codex-fast'].upstreamModel, 'gpt-5.4')
   })
 
   it('falls back to the default when upstreamModel is empty / whitespace', () => {
@@ -129,7 +170,7 @@ describe('auth/codex/auto-register', () => {
     const cfg = readConfig() as {
       models: Record<string, { upstreamModel: string }>
     }
-    assert.equal(cfg.models['gpt-5-codex'].upstreamModel, 'gpt-5.5')
+    assert.equal(cfg.models['gpt-codex-mid'].upstreamModel, 'gpt-5.5')
   })
 
   it('purgeCodexFromConfig drops endpoint + every model pointing at it', () => {
