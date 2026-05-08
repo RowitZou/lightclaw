@@ -72,6 +72,40 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models.opus.schema, 'anthropic')
   })
 
+  it('parses model-level reasoningEffort', () => {
+    writeConfig({
+      endpoints: {
+        codex: { auth: 'codex-oauth' },
+      },
+      models: {
+        'gpt-5.5': {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+          reasoningEffort: 'high',
+        },
+      },
+      defaultModel: 'gpt-5.5',
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.models['gpt-5.5'].reasoningEffort, 'high')
+  })
+
+  it('rejects invalid model-level reasoningEffort', () => {
+    writeConfig({
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      models: {
+        bad: {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+          reasoningEffort: 'extreme',
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /reasoningEffort must be one of/)
+  })
+
   it('falls back to the first model name when defaultModel is omitted', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },

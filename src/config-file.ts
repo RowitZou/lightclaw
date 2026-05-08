@@ -31,6 +31,8 @@ export type ConfigFileModel = {
   /** Real model id as the upstream expects it. The display name (this
    *  entry's outer key) is decoupled. */
   upstreamModel?: string
+  /** Optional Responses API reasoning effort for reasoning-capable models. */
+  reasoningEffort?: string
 }
 
 export type ConfigFileShape = {

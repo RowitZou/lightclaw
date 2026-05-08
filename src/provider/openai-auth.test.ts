@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   convertMessagesToResponsesInput,
   convertToolsToResponsesShape,
+  formatOpenAIAuthError,
   processResponseStream,
 } from './openai-auth.js'
 import type { ApiMessage } from './types.js'
@@ -336,5 +337,23 @@ describe('openai-auth: processResponseStream', () => {
     if (stop.content[0]?.type === 'tool_use') {
       assert.deepEqual(stop.content[0].input, {})
     }
+  })
+})
+
+describe('openai-auth: formatOpenAIAuthError', () => {
+  it('preserves Responses API 400 field details', () => {
+    const error = formatOpenAIAuthError('vision failed', {
+      status: 400,
+      error: {
+        code: 'invalid_request_error',
+        type: 'invalid_request_error',
+        param: 'input[0].content[1].image_url',
+        message: 'Invalid image.',
+      },
+    })
+    assert.equal(
+      error.message,
+      'vision failed status=400: code=invalid_request_error, type=invalid_request_error, param=input[0].content[1].image_url, message=Invalid image.',
+    )
   })
 })

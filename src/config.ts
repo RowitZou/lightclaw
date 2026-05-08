@@ -5,7 +5,7 @@ import { workspaceRoot as resolveWorkspaceRoot } from './identity/paths.js'
 import { expandHomePath, lightclawHome } from './paths.js'
 import { parseLang } from './i18n/index.js'
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
-import type { Schema } from './provider/types.js'
+import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 
 export type DockerMountConfig = {
@@ -208,6 +208,8 @@ export type ModelEntry = {
   schema: Schema
   /** Real model id sent to the upstream API. */
   upstreamModel: string
+  /** Optional Responses API reasoning effort. */
+  reasoningEffort?: ReasoningEffort
 }
 
 export type LightClawConfig = {
@@ -386,6 +388,19 @@ function parseSchema(value: string | undefined): Schema | undefined {
   return undefined
 }
 
+function parseReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized
+  }
+  throw new Error(
+    `reasoningEffort must be one of: "low", "medium", "high".`,
+  )
+}
+
 function resolveEndpoints(
   fileEndpoints: ConfigFileShape['endpoints'],
 ): Record<string, EndpointConfig> {
@@ -476,7 +491,13 @@ function resolveModels(
         `models["${displayName}"].schema = "${schema}" cannot use endpoint "${endpoint}" (auth=${endpointConfig.auth}); use schema "openai-auth" or pick an apiKey endpoint.`,
       )
     }
-    out[displayName] = { endpoint, schema, upstreamModel }
+    const reasoningEffort = parseReasoningEffort(raw.reasoningEffort)
+    out[displayName] = {
+      endpoint,
+      schema,
+      upstreamModel,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    }
   }
   return out
 }

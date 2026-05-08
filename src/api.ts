@@ -1,6 +1,12 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { getProviderFor } from './provider/index.js'
-import type { StreamChatParams } from './provider/types.js'
+import type {
+  DescribeImageParams,
+  DescribeImageResult,
+  StreamChatParams,
+  TranscribeAudioParams,
+  TranscribeAudioResult,
+} from './provider/types.js'
 import type { StreamEvent, UsageStats } from './types.js'
 import {
   getActiveApiLogger,
@@ -43,7 +49,11 @@ export async function* streamChat(
   // continues to record the display name on the log record so traces stay
   // aligned with what the user sees in `/model` and routing config.
   const { provider, entry } = getProviderFor(config, rest.model)
-  const wireParams = { ...rest, model: entry.upstreamModel }
+  const wireParams = {
+    ...rest,
+    model: entry.upstreamModel,
+    reasoningEffort: rest.reasoningEffort ?? entry.reasoningEffort,
+  }
 
   const logger = getActiveApiLogger()
   // Fast path: no active query scope OR caller didn't tag the call. Bail
@@ -92,6 +102,8 @@ export async function* streamChat(
         ...(rest.cacheBreakpointMessageIndex !== undefined
           ? { cacheBreakpointMessageIndex: rest.cacheBreakpointMessageIndex }
           : {}),
+        ...(wireParams.maxTokens !== undefined ? { maxTokens: wireParams.maxTokens } : {}),
+        ...(wireParams.reasoningEffort ? { reasoningEffort: wireParams.reasoningEffort } : {}),
       },
       ...(errorRec
         ? { error: errorRec }
@@ -107,4 +119,43 @@ export async function* streamChat(
     }
     void logger.appendTurn(record)
   }
+}
+
+export async function describeImage(
+  params: Omit<DescribeImageParams, 'model'> & {
+    model?: string
+    config?: LightClawConfig
+  },
+): Promise<DescribeImageResult> {
+  const { config: paramConfig, model: requestedModel, ...rest } = params
+  const config = paramConfig ?? getConfig()
+  const model = requestedModel ?? config.routing.extract ?? config.routing.main ?? config.model
+  const { provider, entry } = getProviderFor(config, model)
+  if (!provider.describeImage) {
+    throw new Error(`Model provider "${provider.name}" does not support image inspection yet.`)
+  }
+  return provider.describeImage({
+    ...rest,
+    model: entry.upstreamModel,
+    // Vision helper calls are intentionally conservative: the main chat
+    // model may be configured with a reasoning effort, but some Responses
+    // API vision paths reject reasoning + image input with HTTP 400.
+    reasoningEffort: rest.reasoningEffort,
+  })
+}
+
+export async function transcribeAudio(
+  params: TranscribeAudioParams & {
+    model?: string
+    config?: LightClawConfig
+  },
+): Promise<TranscribeAudioResult> {
+  const { config: paramConfig, model: requestedModel, ...rest } = params
+  const config = paramConfig ?? getConfig()
+  const model = requestedModel ?? config.routing.extract ?? config.routing.main ?? config.model
+  const { provider } = getProviderFor(config, model)
+  if (!provider.transcribeAudio) {
+    throw new Error(`Model provider "${provider.name}" does not support audio transcription yet.`)
+  }
+  return provider.transcribeAudio(rest)
 }
