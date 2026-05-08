@@ -298,5 +298,61 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       }
       yield stopEvent
     },
+    async describeImage(params) {
+      const images = params.images ?? (params.image ? [params.image] : [])
+      if (images.length === 0) {
+        throw new Error('describeImage requires at least one image.')
+      }
+      const completion = await client.chat.completions.create({
+        model: params.model,
+        messages: [
+          ...(params.system
+            ? [{ role: 'system' as const, content: params.system }]
+            : []),
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: params.prompt },
+              ...images.map(image => ({
+                type: 'image_url',
+                image_url: {
+                  url: `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
+                },
+              } as const)),
+            ],
+          },
+        ],
+        max_tokens: params.maxTokens ?? 1200,
+      }, {
+        signal: params.signal,
+      })
+      return {
+        text: completion.choices[0]?.message.content ?? '',
+        model: completion.model,
+      }
+    },
+    async transcribeAudio(params) {
+      const arrayBuffer = params.audio.buffer.buffer.slice(
+        params.audio.buffer.byteOffset,
+        params.audio.buffer.byteOffset + params.audio.buffer.byteLength,
+      ) as ArrayBuffer
+      const file = new File(
+        [arrayBuffer],
+        params.audio.fileName ?? 'audio',
+        params.audio.mimeType ? { type: params.audio.mimeType } : undefined,
+      )
+      const transcription = await client.audio.transcriptions.create({
+        file,
+        model: params.model ?? 'whisper-1',
+        ...(params.prompt ? { prompt: params.prompt } : {}),
+        ...(params.language ? { language: params.language } : {}),
+      }, {
+        signal: params.signal,
+      })
+      return {
+        text: transcription.text,
+        model: params.model ?? 'whisper-1',
+      }
+    },
   }
 }

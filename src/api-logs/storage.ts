@@ -64,6 +64,8 @@ export interface ApiLogTurnRecord {
     tools: unknown[]
     messages: Array<{ role: string; content: unknown }>
     cacheBreakpointMessageIndex?: number
+    maxTokens?: number
+    reasoningEffort?: string
   }
   response?: {
     content: unknown[]

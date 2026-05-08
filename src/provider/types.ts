@@ -7,6 +7,8 @@ import type { StreamEvent } from '../types.js'
  *  endpoint's auth provider. */
 export type Schema = 'anthropic' | 'openai' | 'openai-auth'
 
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 /** @deprecated kept for back-compat in any in-tree caller; new code should
  *  use `Schema`. */
 export type ProviderName = Schema
@@ -35,6 +37,7 @@ export type StreamChatParams = {
   system: string
   tools: ToolSchema[]
   maxTokens?: number
+  reasoningEffort?: ReasoningEffort
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
 }
@@ -53,9 +56,50 @@ export type WebSearchResult = {
   text: string
 }
 
+export type DescribeImageInput = {
+  buffer: Buffer
+  mimeType: string
+  fileName?: string
+}
+
+export type DescribeImageParams = {
+  model: string
+  prompt: string
+  system?: string
+  image?: DescribeImageInput
+  images?: DescribeImageInput[]
+  maxTokens?: number
+  reasoningEffort?: ReasoningEffort
+  signal?: AbortSignal
+}
+
+export type DescribeImageResult = {
+  text: string
+  model?: string
+}
+
+export type TranscribeAudioParams = {
+  model?: string
+  audio: {
+    buffer: Buffer
+    mimeType?: string
+    fileName?: string
+  }
+  prompt?: string
+  language?: string
+  signal?: AbortSignal
+}
+
+export type TranscribeAudioResult = {
+  text: string
+  model?: string
+}
+
 export type Provider = {
   name: Schema
   capabilities: ProviderCapabilities
   streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent>
   webSearch?(params: WebSearchParams): Promise<WebSearchResult>
+  describeImage?(params: DescribeImageParams): Promise<DescribeImageResult>
+  transcribeAudio?(params: TranscribeAudioParams): Promise<TranscribeAudioResult>
 }
