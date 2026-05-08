@@ -74,7 +74,7 @@ export async function runBackgroundTaskFire(input: {
     // to fail-transient-then-disable on docker hosts.
     const tracker = config.runtime.backend === 'docker' ? getImageReadiness() : undefined
     const runtime = getRuntimePool().acquire(input.task.ownerCanonicalUser, config, cwd, tracker)
-    const userMessage = createUserMessage(input.task.prompt)
+    const userMessage = createUserMessage(buildBackgroundTaskFirePrompt(input.task))
     const permissionDenials: PermissionDenialDetail[] = []
     const ctx = createSessionContext({
       cwd,
@@ -187,6 +187,31 @@ export function buildBackgroundTaskSessionId(
   const taskId = task.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80)
   const fireId = fireUuid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48)
   return `bg-${task.ownerCanonicalUser}-${taskId}-${fireId}`
+}
+
+// Wrap task.prompt in a fire envelope so the fresh subagent knows it is the
+// scheduled execution agent and not a normal chat turn. Without this envelope,
+// prompts phrased as "when the time comes do X" / "到时间后 X" leak the
+// scheduling tense into the executor and the agent reads them as a request to
+// schedule a future event — producing a clarifying question instead of doing
+// the work. Same shape as buildWakePrompt; stays English on purpose because
+// it is an LLM system instruction, not user-visible display.
+export function buildBackgroundTaskFirePrompt(task: BackgroundTaskEntry): string {
+  return [
+    '<background-task-fire>',
+    `<label>${task.label}</label>`,
+    `<task-id>${task.id}</task-id>`,
+    `<fired-at>${new Date().toISOString()}</fired-at>`,
+    '<instruction>',
+    task.prompt,
+    '</instruction>',
+    '</background-task-fire>',
+    '',
+    'You are a background-task agent invoked by the scheduler. The scheduled fire time is NOW.',
+    'Execute the instruction above immediately and produce the result.',
+    'Do not ask the user clarifying questions, do not schedule a new task, and do not read the instruction as a future event — the schedule has already resolved, this fire IS the moment "after the time comes".',
+    'If the instruction is too underspecified to act on, do your best with reasonable defaults and explain your assumption in the result.',
+  ].join('\n')
 }
 
 function isTransientFireError(error: unknown): boolean {
