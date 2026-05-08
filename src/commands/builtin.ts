@@ -7,6 +7,7 @@ import {
   getAdmin,
   getUserPermissionCeiling,
   isAdmin,
+  isValidIdentityName,
   listIdentities,
   lookupBySender,
   parseSenderKey,
@@ -781,17 +782,50 @@ async function userPending(): Promise<string> {
   return `${lines.join('\n')}\n`
 }
 
-async function userApprove(args: string[]): Promise<string> {
+type ParsedApproveArgs =
+  | { ok: true; code: string; asName: string | undefined }
+  | { ok: false }
+
+function parseApproveArgs(args: string[]): ParsedApproveArgs {
+  // Accepted forms:
+  //   /user approve <code>
+  //   /user approve <code> --as <name>
+  // --as overrides the auto-derived canonical name; useful for binding an IM
+  // sender into an existing identity (typically the admin) instead of always
+  // creating a fresh `<base>_<userId>` user.
+  if (args.length === 0) {
+    return { ok: false }
+  }
   const code = args[0]
-  if (!code || args.length !== 1) {
+  if (!code) {
+    return { ok: false }
+  }
+  if (args.length === 1) {
+    return { ok: true, code, asName: undefined }
+  }
+  if (args.length === 3 && args[1] === '--as' && args[2]) {
+    return { ok: true, code, asName: args[2] }
+  }
+  return { ok: false }
+}
+
+export async function userApprove(args: string[]): Promise<string> {
+  const parsed = parseApproveArgs(args)
+  if (!parsed.ok) {
     return `${t('user.approve.usage')}\n`
+  }
+  const { code, asName } = parsed
+  // Validate --as name BEFORE consuming the pending code, so a typo doesn't
+  // burn the pairing entry.
+  if (asName !== undefined && !isValidIdentityName(asName)) {
+    return `${t('user.approve.invalidName', { name: asName })}\n`
   }
   const entry = await approveCode(code)
   if (!entry) {
     return `${t('user.approve.noSuchCode', { code })}\n`
   }
   const link = `${entry.channel}:${entry.peerId}` as SenderKey
-  const name = deriveCanonicalName({
+  const name = asName ?? deriveCanonicalName({
     name: entry.displayName,
     email: entry.email,
     openId: entry.peerId,
