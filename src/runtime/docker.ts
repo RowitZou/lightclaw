@@ -30,6 +30,11 @@ export type DockerRuntimeSecurity = {
   pidsLimit: number | null
   ulimits: Readonly<Record<string, string>>
   tmpfsOptions: string
+  /** docker create `--storage-opt size=<value>` cap on rootfs writable
+   *  layer. Null omits the flag. Requires overlay2 + XFS prjquota. */
+  storageOptSize: string | null
+  /** Hard cap (MiB) on `/workspace` bind-mount usage; null disables. */
+  workspaceQuotaMb: number | null
 }
 
 export type DockerRuntimeConfig = {
@@ -64,6 +69,10 @@ const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // fs.readFile single-hop ceiling: docker exec stdout is unbounded but child_process
 // buffering is not. 64 MB covers a 30 MB file (~40 MB base64) plus headroom.
 const READ_FILE_BUFFER_BYTES = 64 * 1024 * 1024
+// Cache TTL for the workspace `du` poll. Du on a multi-GB workspace is not
+// free, but a 60s lag on quota detection is acceptable: the quota is the
+// runaway-write tripwire, not a precise accountant.
+const WORKSPACE_DU_CACHE_MS = 60_000
 
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
@@ -79,6 +88,9 @@ export class DockerRuntime implements Runtime {
   private readonly mountTable: Array<[string, string]>
   private readonly tracker: ImageReadinessTracker
   private lastKnownState: ContainerState = 'unknown'
+  private workspaceUsageBytes = 0
+  private workspaceUsageCheckedAtMs = 0
+  private workspaceUsageInflight: Promise<number> | null = null
 
   constructor(config: DockerRuntimeConfig, tracker: ImageReadinessTracker) {
     this.cfg = config
@@ -192,6 +204,7 @@ export class DockerRuntime implements Runtime {
   async exec(input: ExecInput): Promise<ExecResult> {
     this.lastActivityMs = Date.now()
     await this.ensureRunning()
+    await this.assertWorkspaceQuota()
     return this.runDockerExec(input)
   }
 
@@ -279,6 +292,54 @@ export class DockerRuntime implements Runtime {
       await delay(100)
     }
     await this.start()
+  }
+
+  private async assertWorkspaceQuota(): Promise<void> {
+    const limitMb = this.cfg.security.workspaceQuotaMb
+    if (limitMb === null) return
+    const used = await this.getWorkspaceUsageBytes()
+    const limitBytes = limitMb * 1024 * 1024
+    if (used > limitBytes) {
+      const usedMb = Math.round(used / 1024 / 1024)
+      throw new Error(
+        `workspace quota exceeded: ${usedMb} MiB used > ${limitMb} MiB limit at ${this.workspaceRoot}. ` +
+        `Clean up files or raise runtime.docker.security.workspaceQuotaMb.`,
+      )
+    }
+  }
+
+  // `du -sb` runs inside the container against the bind-mounted workspace,
+  // so the result reflects host-fs usage. Cached for WORKSPACE_DU_CACHE_MS
+  // because du on a multi-GB tree is not free; concurrent calls coalesce
+  // through a single inflight promise. A failed du does not block the
+  // operation — we keep the prior cached value rather than spuriously
+  // refusing exec when the helper transiently fails.
+  private async getWorkspaceUsageBytes(): Promise<number> {
+    const now = Date.now()
+    if (now - this.workspaceUsageCheckedAtMs < WORKSPACE_DU_CACHE_MS) {
+      return this.workspaceUsageBytes
+    }
+    if (this.workspaceUsageInflight) return this.workspaceUsageInflight
+    this.workspaceUsageInflight = (async () => {
+      try {
+        const result = await this.runDockerExec({
+          command: `du -sb ${shellQuote(this.workspaceRoot)} 2>/dev/null | awk '{print $1}'`,
+        })
+        if (result.exitCode === 0) {
+          const bytes = Number.parseInt(result.stdout.trim(), 10)
+          if (Number.isFinite(bytes) && bytes >= 0) {
+            this.workspaceUsageBytes = bytes
+            this.workspaceUsageCheckedAtMs = Date.now()
+          }
+        }
+      } catch {
+        // swallow: keep cached value, retry on next exec
+      }
+      return this.workspaceUsageBytes
+    })().finally(() => {
+      this.workspaceUsageInflight = null
+    })
+    return this.workspaceUsageInflight
   }
 
   private async runDockerExec(input: ExecInput): Promise<ExecResult> {
@@ -396,6 +457,9 @@ export function buildDockerCreateArgs(cfg: DockerRuntimeConfig): string[] {
   }
   if (sec.pidsLimit !== null) {
     args.push('--pids-limit', String(sec.pidsLimit))
+  }
+  if (sec.storageOptSize !== null) {
+    args.push('--storage-opt', `size=${sec.storageOptSize}`)
   }
   for (const [name, value] of Object.entries(sec.ulimits)) {
     args.push('--ulimit', `${name}=${value}`)

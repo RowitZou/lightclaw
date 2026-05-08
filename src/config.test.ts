@@ -411,6 +411,8 @@ describe('config: runtime.docker.security', () => {
       pidsLimit: 512,
       ulimits: { nofile: '4096:8192', nproc: '1024:2048' },
       tmpfsOptions: 'rw,nosuid,size=512m',
+      storageOptSize: '32g',
+      workspaceQuotaMb: 524288,
     })
   })
 
@@ -428,6 +430,8 @@ describe('config: runtime.docker.security', () => {
             pidsLimit: null,
             ulimits: { nofile: '8192:16384' },
             tmpfsOptions: 'rw,size=1g',
+            storageOptSize: '64g',
+            workspaceQuotaMb: 10485760,
           },
         },
       },
@@ -441,7 +445,29 @@ describe('config: runtime.docker.security', () => {
       pidsLimit: null,
       ulimits: { nofile: '8192:16384' },
       tmpfsOptions: 'rw,size=1g',
+      storageOptSize: '64g',
+      workspaceQuotaMb: 10485760,
     })
+  })
+
+  it('disables disk quotas when admin sets them to null / 0', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        docker: {
+          security: {
+            storageOptSize: null,
+            workspaceQuotaMb: 0,
+          },
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.runtime.docker.security.storageOptSize, null)
+    assert.equal(cfg.runtime.docker.security.workspaceQuotaMb, null)
   })
 
   it('rejects invalid security values', () => {
@@ -457,5 +483,35 @@ describe('config: runtime.docker.security', () => {
       },
     })
     assert.throws(() => getConfig(), /pidsLimit must be a positive number or null/)
+  })
+
+  it('rejects malformed storageOptSize', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        docker: {
+          security: { storageOptSize: '32 gigs' },
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /storageOptSize must look like a docker size/)
+  })
+
+  it('rejects negative workspaceQuotaMb', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        docker: {
+          security: { workspaceQuotaMb: -1 },
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /workspaceQuotaMb must be a non-negative number/)
   })
 })
