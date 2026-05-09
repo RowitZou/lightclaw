@@ -88,7 +88,7 @@
 
 # LightClaw autoDream Notes
 
-- autoDream is dark-launched: `config.autoDream.enabled` defaults to `false`. Do not add a `/dream` slash or turn it on by default without a separate dogfood decision.
+- autoDream defaults ON (`config.autoDream.enabled` defaults to `true`, flipped 2026-05-09 once multi-user dogfood validated per-user isolation). Operators can still set `enabled: false` in config.json, or use `LIGHTCLAW_NO_MEMORY=1` to kill extract + dream together. There is intentionally NO `/dream` slash — dream is purely time/threshold-driven background work, surfacing it as a slash would invite users to retry-spam consolidate runs that the per-user `.consolidate-lock` and scan-throttle are designed to coalesce.
 - The runner lives in `src/memory/dream/` and reuses `runForkedAgent`, `getLastCacheSafeParams`, and `createAutoMemCanUseTool`. Do not add a broader dream-only tool gate unless a concrete memory workflow proves the current read-only + MemoryWrite set is insufficient.
 - Triggering is per canonical user: time gate, scan throttle, session-count gate, and `.consolidate-lock` all operate under that user's memory directory. The runner also defers when `isExtractionInProgressFor(memoryDir)` is true so dream and extract never write the same user's `MEMORY.md` concurrently. Never introduce a global dream lock that makes one user's consolidation block another user's.
 - Dream forks run as `mode: 'subagent'` with `subagentLabel: 'auto_dream'`, so api-logs should show `kind: 'subagent'` rather than a new top-level ApiLogKind. Keep this label stable for admin grep.
