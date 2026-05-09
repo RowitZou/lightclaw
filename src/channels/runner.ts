@@ -74,12 +74,13 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
-import type {
-  ChannelId,
-  MaterializedAttachment,
-  NormalizedChannelMessage,
-  OutgoingChannelFile,
-  PendingAttachment,
+import {
+  getPendingAttachments,
+  type ChannelId,
+  type MaterializedAttachment,
+  type NormalizedChannelMessage,
+  type OutgoingChannelFile,
+  type PendingAttachment,
 } from './types.js'
 
 /**
@@ -1095,38 +1096,48 @@ export async function applyAttachmentMaterialization(
   message: NormalizedChannelMessage,
   runtime: Runtime,
   sessionId: string,
-): Promise<MaterializedAttachment | null> {
-  if (!message.pendingAttachment) {
-    return null
+): Promise<MaterializedAttachment[]> {
+  const pendingList = getPendingAttachments(message)
+  if (pendingList.length === 0) {
+    return []
   }
   if (!strategy.materializeAttachment) {
     process.stderr.write(
       `channel: ${strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
     )
     message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-    return null
+    return []
   }
 
-  try {
-    const materialized = await strategy.materializeAttachment({
-      pending: message.pendingAttachment,
-      runtime,
-      message,
-    })
-    if (!materialized) {
-      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-      return null
+  const materialized: MaterializedAttachment[] = []
+  let failureCount = 0
+  for (const pending of pendingList) {
+    try {
+      const result = await strategy.materializeAttachment({
+        pending,
+        runtime,
+        message,
+      })
+      if (!result) {
+        failureCount += 1
+        continue
+      }
+      process.stderr.write(
+        `channel: attachment materialized session=${sessionId} path=${result.path}\n`,
+      )
+      materialized.push(result)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
+      failureCount += 1
     }
-    process.stderr.write(
-      `channel: attachment materialized session=${sessionId} path=${materialized.path}\n`,
-    )
-    return materialized
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
-    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-    return null
   }
+  if (failureCount > 0) {
+    // Surface a single download-failed notice regardless of N; the agent
+    // does not benefit from per-attachment failure counts in its prompt.
+    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+  }
+  return materialized
 }
 
 /**
@@ -1338,7 +1349,7 @@ function classifyFailure(detail: string): string {
 export async function formatChannelUserText(
   strategy: ChannelRunnerStrategy,
   message: NormalizedChannelMessage,
-  materialized: MaterializedAttachment | null,
+  materialized: MaterializedAttachment[] | MaterializedAttachment | null,
 ): Promise<string> {
   const mentionNames = buildMentionNameMap(message)
   let body = message.text
@@ -1346,16 +1357,24 @@ export async function formatChannelUserText(
     const senderName = await strategy.resolveSenderName(message.senderOpenId, mentionNames)
     body = `[${senderName}] ${body}`
   }
-  if (!materialized) {
+  const list: MaterializedAttachment[] = Array.isArray(materialized)
+    ? materialized
+    : materialized
+      ? [materialized]
+      : []
+  if (list.length === 0) {
     return body
   }
-  return [
-    body || '(no text)',
-    '',
-    t('channel.media.attachment'),
-    `- type: ${materialized.mimeType}`,
-    `- path: ${materialized.path}`,
-  ].join('\n')
+  // Multi-attachment: keep one breadcrumb header + per-attachment lines so
+  // the agent can reference each by index. Order matches the order channel
+  // adapter parsed them in (which matches the user's send order for Feishu
+  // post content).
+  const lines: string[] = [body || '(no text)', '', t('channel.media.attachment')]
+  for (const att of list) {
+    lines.push(`- type: ${att.mimeType}`)
+    lines.push(`- path: ${att.path}`)
+  }
+  return lines.join('\n')
 }
 
 function isGroupLikeChannelMessage(message: NormalizedChannelMessage): boolean {

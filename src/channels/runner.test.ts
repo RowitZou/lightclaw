@@ -599,7 +599,7 @@ describe('applyAttachmentMaterialization', () => {
     setLang('cn')
   })
 
-  it('returns null and leaves text untouched when no pendingAttachment is set', async () => {
+  it('returns [] and leaves text untouched when no pendingAttachment is set', async () => {
     const strategy = installFakeStrategy('feishu')
     let hookCalls = 0
     strategy.materializeAttachment = async () => {
@@ -616,7 +616,7 @@ describe('applyAttachmentMaterialization', () => {
       'feishu-alice',
     )
 
-    assert.equal(result, null)
+    assert.deepEqual(result, [])
     assert.equal(hookCalls, 0, 'hook should not run when pendingAttachment is absent')
     assert.equal(message.text, originalText, 'text must not be mutated')
   })
@@ -628,7 +628,7 @@ describe('applyAttachmentMaterialization', () => {
     const message = makeMessage()
     const stderr = captureStderr()
 
-    let result: MaterializedAttachment | null
+    let result: MaterializedAttachment[]
     try {
       result = await applyAttachmentMaterialization(
         strategy,
@@ -640,7 +640,7 @@ describe('applyAttachmentMaterialization', () => {
       stderr.restore()
     }
 
-    assert.equal(result, null)
+    assert.deepEqual(result, [])
     assert.match(message.text, /\[媒体下载失败\]$/)
     assert.ok(
       stderr.lines.some(line =>
@@ -668,7 +668,7 @@ describe('applyAttachmentMaterialization', () => {
     const runtime = makeRuntime()
     const stderr = captureStderr()
 
-    let result: MaterializedAttachment | null
+    let result: MaterializedAttachment[]
     try {
       result = await applyAttachmentMaterialization(
         strategy,
@@ -680,10 +680,10 @@ describe('applyAttachmentMaterialization', () => {
       stderr.restore()
     }
 
-    assert.deepEqual(result, {
+    assert.deepEqual(result, [{
       path: '/workspace/.lightclaw/inbox/oc_chat/test.jpg',
       mimeType: 'image/jpeg',
-    })
+    }])
     assert.equal(calls.length, 1)
     assert.equal(calls[0].pending.fileName, 'test.jpg')
     assert.equal(calls[0].runtime, runtime, 'runtime must be threaded through unchanged')
@@ -705,7 +705,7 @@ describe('applyAttachmentMaterialization', () => {
     const message = makeMessage()
     const stderr = captureStderr()
 
-    let result: MaterializedAttachment | null
+    let result: MaterializedAttachment[]
     try {
       result = await applyAttachmentMaterialization(
         strategy,
@@ -717,7 +717,7 @@ describe('applyAttachmentMaterialization', () => {
       stderr.restore()
     }
 
-    assert.equal(result, null)
+    assert.deepEqual(result, [])
     assert.match(message.text, /\[媒体下载失败\]$/)
     // No "threw" warn — null return is a graceful failure path that the
     // hook itself already logged in stderr (e.g. SDK error envelope).
@@ -735,7 +735,7 @@ describe('applyAttachmentMaterialization', () => {
     const message = makeMessage()
     const stderr = captureStderr()
 
-    let result: MaterializedAttachment | null
+    let result: MaterializedAttachment[]
     try {
       result = await applyAttachmentMaterialization(
         strategy,
@@ -747,13 +747,79 @@ describe('applyAttachmentMaterialization', () => {
       stderr.restore()
     }
 
-    assert.equal(result, null)
+    assert.deepEqual(result, [])
     assert.match(message.text, /\[媒体下载失败\]$/)
     assert.ok(
       stderr.lines.some(line =>
         line.includes('materializeAttachment threw') && line.includes('disk full'),
       ),
       `expected throw-path warn, got: ${JSON.stringify(stderr.lines)}`,
+    )
+  })
+
+  it('materializes every entry in pendingAttachments[] and preserves order', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const calls: PendingAttachment[] = []
+    strategy.materializeAttachment = async input => {
+      calls.push(input.pending)
+      return {
+        path: `/workspace/.lightclaw/inbox/oc_chat/${input.pending.fileName}`,
+        mimeType: 'image/jpeg',
+      }
+    }
+    const message = makeMessage({ withPending: false })
+    message.pendingAttachments = [
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k1' }, fileName: 'a.jpg' },
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k2' }, fileName: 'b.jpg' },
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k3' }, fileName: 'c.jpg' },
+    ]
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment[]
+    try {
+      result = await applyAttachmentMaterialization(strategy, message, makeRuntime(), 'feishu-alice')
+    } finally {
+      stderr.restore()
+    }
+
+    assert.equal(result.length, 3)
+    assert.equal(result[0].path, '/workspace/.lightclaw/inbox/oc_chat/a.jpg')
+    assert.equal(result[2].path, '/workspace/.lightclaw/inbox/oc_chat/c.jpg')
+    assert.deepEqual(calls.map(c => c.fileName), ['a.jpg', 'b.jpg', 'c.jpg'])
+    assert.equal(message.text, 'hello', 'no failure → no notice appended')
+  })
+
+  it('partially materializes: keeps successes, surfaces single notice for any failure', async () => {
+    const strategy = installFakeStrategy('feishu')
+    let n = 0
+    strategy.materializeAttachment = async input => {
+      n += 1
+      if (input.pending.fileName === 'b.jpg') return null  // fail middle
+      return { path: `/p/${input.pending.fileName}`, mimeType: 'image/jpeg' }
+    }
+    const message = makeMessage({ withPending: false })
+    message.pendingAttachments = [
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k1' }, fileName: 'a.jpg' },
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k2' }, fileName: 'b.jpg' },
+      { kind: 'feishu-media', messageId: 'om_test', mediaKey: { kind: 'image', key: 'k3' }, fileName: 'c.jpg' },
+    ]
+    const stderr = captureStderr()
+
+    let result: MaterializedAttachment[]
+    try {
+      result = await applyAttachmentMaterialization(strategy, message, makeRuntime(), 'feishu-alice')
+    } finally {
+      stderr.restore()
+    }
+
+    assert.equal(n, 3, 'each pending attempted once')
+    assert.equal(result.length, 2, 'two successes returned')
+    assert.deepEqual(result.map(r => r.path), ['/p/a.jpg', '/p/c.jpg'])
+    // Single download-failed notice regardless of N failures (N=1 here)
+    assert.equal(
+      (message.text.match(/\[媒体下载失败\]/g) ?? []).length,
+      1,
+      'exactly one notice appended, not per-failure',
     )
   })
 })
