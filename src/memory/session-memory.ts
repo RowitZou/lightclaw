@@ -5,7 +5,7 @@ import { streamChat } from '../api.js'
 import type { LightClawConfig } from '../config.js'
 import { collectAssistantText } from '../messages.js'
 import { modelFor } from '../provider/index.js'
-import type { Message } from '../types.js'
+import { toolResultContentToText, type Message } from '../types.js'
 
 export const SESSION_MEMORY_FILENAME = 'session-memory.md'
 
@@ -87,7 +87,7 @@ function serializeMessageForSm(message: Message): string {
           return `[Inline Document: ${block.source.mediaType}]`
         }
         const status = block.is_error ? 'error' : 'ok'
-        return `[Tool Result ${status}: ${block.tool_use_id}]\n${block.content}`
+        return `[Tool Result ${status}: ${block.tool_use_id}]\n${toolResultContentToText(block.content)}`
       })
       .join('\n')
     return `[User]\n${blocks}`

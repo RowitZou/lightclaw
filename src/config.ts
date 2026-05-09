@@ -276,7 +276,7 @@ export type LightClawConfig = {
 /** Inline-multimodal size policy. Image: bytes above the cap → Pillow resize
  *  down to ~cap, then submit; PDF: bytes above the cap → skip inline (no
  *  meaningful resize), surface as a file_path text breadcrumb so the agent
- *  can use Read / AnalyzeVisuals tools instead. Defaults are calibrated for
+ *  can use Read tool instead. Defaults are calibrated for
  *  Anthropic's documented inline limits (image 5 MB, document 32 MB), which
  *  are the most restrictive among providers that support inline multimodal.
  *  Provider-side vision towers downscale to a fixed patch grid regardless,
@@ -286,7 +286,7 @@ export type AttachmentsConfig = {
   pdfMaxMb: number
   /** Per-turn cap on inline content blocks (image + pdf combined). Materialized
    *  attachments past the cap fall through to the text-path breadcrumb so the
-   *  agent picks them up via Read / AnalyzeVisuals tools. Bounds context-window
+   *  agent picks them up via Read tool. Bounds context-window
    *  blow-up on multi-image batches; default 5. */
   maxInlinePerTurn: number
 }
@@ -1119,7 +1119,7 @@ export function getConfig(): LightClawConfig {
       // outside `models` because they're not model-specific. PR3 inline
       // path consumes these (image: resize down to cap; pdf: skip inline
       // when over cap, fall back to text path so the agent uses Read /
-      // AnalyzeVisuals tools).
+      // Read tool).
       imageMaxMb:
         parsePositiveNumber(process.env.LIGHTCLAW_IMAGE_MAX_MB, 'imageMaxMb')
         ?? fileConfig.attachments?.imageMaxMb

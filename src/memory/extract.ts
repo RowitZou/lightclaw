@@ -2,7 +2,7 @@ import type { LightClawConfig } from '../config.js'
 import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runForkedAgent } from '../agents/forked-agent.js'
 import { collectAssistantText } from '../messages.js'
-import type { Message } from '../types.js'
+import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
 import { maybeEvictAgedMemories } from './aging-eviction.js'
@@ -79,7 +79,7 @@ export function messageToText(message: Message): string {
         return `document: ${block.source.mediaType}`
       }
       const prefix = block.is_error ? 'error' : 'ok'
-      return `${prefix}: ${block.content}`
+      return `${prefix}: ${toolResultContentToText(block.content)}`
     }),
   ].join('\n')
 }

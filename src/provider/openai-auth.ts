@@ -10,13 +10,14 @@ import type { FunctionTool } from 'openai/resources/responses/responses'
 import { getCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
 import type { OAuthEndpoint } from '../config.js'
-import type {
-  AssistantContentBlock,
-  AssistantToolUseBlock,
-  StreamEvent,
-  StreamStopEvent,
-  UsageStats,
-  UserToolResultBlock,
+import {
+  toolResultContentToText,
+  type AssistantContentBlock,
+  type AssistantToolUseBlock,
+  type StreamEvent,
+  type StreamStopEvent,
+  type UsageStats,
+  type UserToolResultBlock,
 } from '../types.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, Provider, StreamChatParams } from './types.js'
@@ -96,10 +97,13 @@ export function convertMessagesToResponsesInput(
         : []
 
       for (const block of toolResults) {
+        // OpenAI Responses function_call_output requires string output;
+        // collapse array shape (image blocks already replaced with text
+        // by the multimodal-finalization pass on this provider).
         out.push({
           type: 'function_call_output',
           call_id: block.tool_use_id,
-          output: block.content,
+          output: toolResultContentToText(block.content),
         } as ResponseInputItem.FunctionCallOutput)
       }
       if (text.length > 0 || imageBlocks.length > 0) {

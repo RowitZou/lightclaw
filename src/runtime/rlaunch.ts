@@ -489,7 +489,7 @@ export class RlaunchRuntime implements Runtime {
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'webfetch.py'))} && ` +
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'websearch.py'))} && ` +
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
-      // pdftotext / pdftoppm gate Read('foo.pdf') and AnalyzeVisuals respectively;
+      // pdftotext / pdftoppm gate Read('foo.pdf') text and Read('foo.pdf', pages=...) visual respectively;
       // PIL / openpyxl / docx / pptx gate the office and image-resize paths.
       `command -v pdftotext >/dev/null 2>&1 && ` +
       `command -v pdftoppm >/dev/null 2>&1 && ` +
@@ -510,8 +510,8 @@ export class RlaunchRuntime implements Runtime {
       await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
     }
 
-    // Apt deps: poppler-utils provides pdftotext + pdftoppm, used by Read /
-    // AnalyzeVisuals on PDFs. apt is best-effort: the kubebrain ml-base image
+    // Apt deps: poppler-utils provides pdftotext + pdftoppm, used by the
+    // Read tool's text and visual paths on PDFs. apt is best-effort: the kubebrain ml-base image
     // runs as root with a working corp mirror, but if either assumption fails
     // we surface the error clearly and let the PDF tools degrade with their
     // own "install poppler-utils" warnings.

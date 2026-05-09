@@ -209,7 +209,7 @@ export type ConfigFileShape = {
     imageMaxMb?: number
     /** PDF inline cap. Files above this size skip inline submission and
      *  fall through to the text-path breadcrumb so the agent picks them
-     *  up via Read / AnalyzeVisuals tools. Default 32 MB. */
+     *  up via Read tool. Default 32 MB. */
     pdfMaxMb?: number
     /** Per-turn cap on inline blocks (image + pdf combined). Excess goes
      *  to the text-path breadcrumb. Default 5. */

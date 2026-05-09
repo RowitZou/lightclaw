@@ -6,12 +6,13 @@ import type {
 } from 'openai/resources/chat/completions'
 
 import type { ApiKeyEndpoint } from '../config.js'
-import type {
-  AssistantContentBlock,
-  StreamEvent,
-  StreamStopEvent,
-  UsageStats,
-  UserToolResultBlock,
+import {
+  toolResultContentToText,
+  type AssistantContentBlock,
+  type StreamEvent,
+  type StreamStopEvent,
+  type UsageStats,
+  type UserToolResultBlock,
 } from '../types.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, Provider, StreamChatParams } from './types.js'
@@ -42,8 +43,8 @@ function contentToText(content: unknown): string {
           return block.text
         }
 
-        if (block.type === 'tool_result' && typeof block.content === 'string') {
-          return block.content
+        if (block.type === 'tool_result') {
+          return toolResultContentToText(block.content as UserToolResultBlock['content'])
         }
 
         return ''
@@ -97,10 +98,13 @@ function convertMessages(
         )
 
         for (const block of toolResults) {
+          // OpenAI Chat Completions tool messages require string content;
+          // collapse array shape (image blocks already replaced with text
+          // by the multimodal-finalization pass on this provider).
           converted.push({
             role: 'tool',
             tool_call_id: block.tool_use_id,
-            content: block.content,
+            content: toolResultContentToText(block.content),
           })
         }
         if (textParts.length > 0 || imageBlocks.length > 0) {
@@ -114,7 +118,7 @@ function convertMessages(
             // not pushed here because OpenAI Chat Completions does not have
             // an equivalent of Anthropic's `document` block — pdf goes to
             // the text path on this provider via the capability flag, and
-            // the agent uses Read / AnalyzeVisuals tools instead.
+            // the agent uses Read tool instead.
             const parts: ChatCompletionContentPart[] = []
             for (const text of textParts) {
               parts.push({ type: 'text', text })

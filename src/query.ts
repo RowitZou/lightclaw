@@ -77,6 +77,7 @@ import type {
   UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
+import { toolResultContentToText } from './types.js'
 import type { WakeNotifyResult } from './background-task/types.js'
 
 /**
@@ -924,6 +925,11 @@ async function dispatchToolCall(
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 
+    // Hooks / snip / summarize are string-shape contracts; multimodal
+    // tool_result.content arrays (image blocks from Read on image / pdf-pages)
+    // bypass these post-processing steps. The text-collapsed view goes to
+    // hooks for observability so afterToolCall can still inspect / log.
+    const formattedTextView = toolResultContentToText(formatted.content)
     const afterTool = await runHook('afterToolCall', {
       sessionId: getSessionId(),
       callId,
@@ -931,40 +937,45 @@ async function dispatchToolCall(
       source: tool.source,
       mcpServer: tool.mcpServer,
       input: effectiveInput,
-      result: formatted.content,
+      result: formattedTextView,
       durationMs: Date.now() - start,
-      ...(formatted.is_error ? { error: formatted.content } : {}),
+      ...(formatted.is_error ? { error: formattedTextView } : {}),
     })
     if (afterTool?.replacementResult !== undefined) {
+      // Hook replacement collapses multimodal output back to plain text,
+      // since hooks contract on `string`. Hooks that need to preserve
+      // images should not return replacementResult.
       formatted.content = afterTool.replacementResult
     }
 
-    formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
+    if (typeof formatted.content === 'string') {
+      formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
 
-    // Iter 2: per-tool LLM summarize. Runs after snipContent so very large
-    // outputs are byte-capped first. Subagent gating is caller-driven via
-    // `enabled`. Failures fall back to the snipped content via passthrough.
-    const summarizeResult = await maybeSummarizeToolResult({
-      toolName: tool.name,
-      content: formatted.content,
-      callId,
-      isError: Boolean(formatted.is_error),
-      signal: ctx.signal,
-      config: ctx.config,
-      enabled: ctx.mode !== 'subagent',
-    })
-    formatted.content = summarizeResult.output
-    if (summarizeResult.summarized) {
-      console.log(
-        `[micro-compact:per-tool] ${tool.name} ${callId} `
-        + `${summarizeResult.origTokens}→${summarizeResult.newTokens} tokens`,
-      )
+      // Iter 2: per-tool LLM summarize. Runs after snipContent so very large
+      // outputs are byte-capped first. Subagent gating is caller-driven via
+      // `enabled`. Failures fall back to the snipped content via passthrough.
+      const summarizeResult = await maybeSummarizeToolResult({
+        toolName: tool.name,
+        content: formatted.content,
+        callId,
+        isError: Boolean(formatted.is_error),
+        signal: ctx.signal,
+        config: ctx.config,
+        enabled: ctx.mode !== 'subagent',
+      })
+      formatted.content = summarizeResult.output
+      if (summarizeResult.summarized) {
+        console.log(
+          `[micro-compact:per-tool] ${tool.name} ${callId} `
+          + `${summarizeResult.origTokens}→${summarizeResult.newTokens} tokens`,
+        )
+      }
     }
 
     ctx.onToolResult?.({
       toolName: toolUse.name,
       isError: Boolean(formatted.is_error),
-      content: formatted.content,
+      content: toolResultContentToText(formatted.content),
     })
     return formatted
   } catch (error) {

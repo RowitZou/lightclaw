@@ -128,8 +128,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           // blocks (config.attachments.maxInlinePerTurn) decides which of
           // these end up in the LLM-facing content array vs the text-path
           // breadcrumb; the channel adapter materializes every one so
-          // overflow paths are still agent-readable via Read /
-          // AnalyzeVisuals.
+          // overflow paths are still agent-readable via Read.
           message.pendingAttachments = raw.mediaKeys.map(mediaKey => ({
             kind: 'feishu-media' as const,
             messageId: raw.messageId,

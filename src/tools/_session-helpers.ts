@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises'
 import { collectAssistantText } from '../messages.js'
 import { resolveSessionsDir } from '../config.js'
 import { loadMeta, loadTranscript } from '../session/storage.js'
-import type { Message, SessionMeta } from '../types.js'
+import { toolResultContentToText, type Message, type SessionMeta } from '../types.js'
 
 export type OwnedSession = {
   meta: SessionMeta
@@ -56,7 +56,7 @@ export function messageToSearchText(message: Message): string {
   return message.message.content
     .map(block => {
       if (block.type === 'text') return block.text
-      if (block.type === 'tool_result') return block.content
+      if (block.type === 'tool_result') return toolResultContentToText(block.content)
       if (block.type === 'image') return `[image: ${block.source.mediaType}]`
       if (block.type === 'document') return `[document: ${block.source.mediaType}]`
       return ''
@@ -78,7 +78,7 @@ export function simplifyMessage(message: Message): string {
   const rendered = message.message.content
     .map(block => {
       if (block.type === 'text') return block.text
-      if (block.type === 'tool_result') return block.content
+      if (block.type === 'tool_result') return toolResultContentToText(block.content)
       if (block.type === 'image') return `[image: ${block.source.mediaType}]`
       if (block.type === 'document') return `[document: ${block.source.mediaType}]`
       return ''
