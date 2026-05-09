@@ -544,9 +544,9 @@ describe('ChannelRunner in-flight slash routing', () => {
 })
 
 describe('applyAttachmentMaterialization', () => {
-  // Phase 24 contract: feishu raw onMessage attaches `pendingAttachment`,
-  // ChannelRunner materializes it after pairing + runtime acquire via the
-  // strategy hook. This block exercises the hook dispatcher in isolation
+  // Phase 24 contract: feishu raw onMessage attaches `pendingAttachments`,
+  // ChannelRunner materializes each entry after pairing + runtime acquire
+  // via the strategy hook. This block exercises the hook dispatcher in isolation
   // (no session lock / runtime pool / LLM) so each branch of the failure
   // matrix is unit-covered.
 
@@ -569,7 +569,7 @@ describe('applyAttachmentMaterialization', () => {
       text: 'hello',
     }
     if (opts?.withPending !== false) {
-      message.pendingAttachment = makePending()
+      message.pendingAttachments = [makePending()]
     }
     return message
   }
@@ -599,7 +599,7 @@ describe('applyAttachmentMaterialization', () => {
     setLang('cn')
   })
 
-  it('returns [] and leaves text untouched when no pendingAttachment is set', async () => {
+  it('returns [] and leaves text untouched when no pendingAttachments are set', async () => {
     const strategy = installFakeStrategy('feishu')
     let hookCalls = 0
     strategy.materializeAttachment = async () => {
@@ -617,7 +617,7 @@ describe('applyAttachmentMaterialization', () => {
     )
 
     assert.deepEqual(result, [])
-    assert.equal(hookCalls, 0, 'hook should not run when pendingAttachment is absent')
+    assert.equal(hookCalls, 0, 'hook should not run when pendingAttachments is empty')
     assert.equal(message.text, originalText, 'text must not be mutated')
   })
 
@@ -644,7 +644,7 @@ describe('applyAttachmentMaterialization', () => {
     assert.match(message.text, /\[媒体下载失败\]$/)
     assert.ok(
       stderr.lines.some(line =>
-        line.includes('feishu got pendingAttachment without materializeAttachment hook'),
+        line.includes('feishu got pendingAttachments without materializeAttachment hook'),
       ),
       `expected stderr warn, got: ${JSON.stringify(stderr.lines)}`,
     )

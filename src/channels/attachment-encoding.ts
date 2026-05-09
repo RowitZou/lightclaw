@@ -76,7 +76,13 @@ export function classifyAttachment(
  *  config caps, then encode each inline-bound attachment to a base64
  *  content block (image: resize down to imageMaxMb if needed; pdf: skip
  *  inline if larger than pdfMaxMb). Reads through the runtime fs so this
- *  works uniformly across LocalRuntime / DockerRuntime / RlaunchRuntime. */
+ *  works uniformly across LocalRuntime / DockerRuntime / RlaunchRuntime.
+ *
+ *  Attachments past `config.attachments.maxInlinePerTurn` go straight to
+ *  fallbackPaths so multi-image batches can't blow up the LLM context.
+ *  Materialization (which already happened in the runner) is preserved
+ *  for every attachment, so overflow remains agent-readable via Read /
+ *  AnalyzeVisuals through the path-text breadcrumb. */
 export async function encodeAttachmentsForInline(input: {
   attachments: MaterializedAttachment[]
   provider: Provider
@@ -88,10 +94,20 @@ export async function encodeAttachmentsForInline(input: {
   const inlineBlocks: UserContentBlock[] = []
   const fallbackPaths: MaterializedAttachment[] = []
   const warnings: string[] = []
+  const maxInline = input.config.attachments.maxInlinePerTurn
 
   for (const att of input.attachments) {
     const kind = classifyAttachment(att)
     if (kind === null) {
+      fallbackPaths.push(att)
+      continue
+    }
+    if (inlineBlocks.length >= maxInline) {
+      // Per-turn inline cap reached; remainder must use the text path so
+      // the agent still sees the file via Read / AnalyzeVisuals.
+      warnings.push(
+        `inline cap ${maxInline} reached; ${att.path} routed to text path`,
+      )
       fallbackPaths.push(att)
       continue
     }

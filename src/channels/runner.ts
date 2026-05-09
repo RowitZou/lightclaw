@@ -1178,18 +1178,18 @@ function parseFreshRequest(text: string): boolean {
 }
 
 /**
- * Apply the channel strategy's `materializeAttachment` hook to a message
- * carrying a `pendingAttachment`. Encapsulates the full failure matrix
- * (no pending → null; missing hook → warn + downloadFailed notice; hook
- * returns null → downloadFailed notice; hook throws → warn +
- * downloadFailed notice) so the runner's main loop stays narrow and the
- * logic is unit-testable without spinning up a session lock / runtime.
+ * Apply the channel strategy's `materializeAttachment` hook to every entry
+ * in `message.pendingAttachments`. Encapsulates the full failure matrix
+ * (empty pending list → []; missing hook → warn + downloadFailed notice;
+ * any hook returning null / throwing → counted as a failure) so the
+ * runner's main loop stays narrow and the logic is unit-testable without
+ * spinning up a session lock / runtime.
  *
- * Mutates `message.text` to append the i18n download-failed notice on
- * any failure path; returns the materialized attachment on success or
- * null otherwise. The runner threads the returned value into
- * `formatChannelUserText` so the LLM-facing prompt sees the runtime-view
- * path (or no attachment block when materialization failed).
+ * Mutates `message.text` to append a single i18n download-failed notice
+ * when any attachment failed (count-agnostic — the LLM does not benefit
+ * from per-attachment failure detail in its prompt); returns every
+ * successfully-materialized attachment in input order so the runner can
+ * thread them into `formatChannelUserText` and the inline encoder.
  */
 export async function applyAttachmentMaterialization(
   strategy: ChannelRunnerStrategy,
@@ -1203,7 +1203,7 @@ export async function applyAttachmentMaterialization(
   }
   if (!strategy.materializeAttachment) {
     process.stderr.write(
-      `channel: ${strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
+      `channel: ${strategy.channelId} got pendingAttachments without materializeAttachment hook\n`,
     )
     message.text = appendLine(message.text, t('channel.media.downloadFailed'))
     return []

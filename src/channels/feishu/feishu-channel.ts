@@ -120,13 +120,22 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           text: raw.text,
         }
         if (raw.mediaKeys?.length && config.mediaEnabled) {
-          const mediaKey = raw.mediaKeys[0]
-          message.pendingAttachment = {
-            kind: 'feishu-media',
+          // One PendingAttachment per parsed mediaKey. Multi-image batches
+          // arrive either as N separate `image`-type events (one mediaKey
+          // each) or as a single `post` event whose content array carries
+          // multiple `<img>`/`<file>` tags — `parsePostContent` extracts
+          // them all into `mediaKeys[]`. The runner-side cap on inline
+          // blocks (config.attachments.maxInlinePerTurn) decides which of
+          // these end up in the LLM-facing content array vs the text-path
+          // breadcrumb; the channel adapter materializes every one so
+          // overflow paths are still agent-readable via Read /
+          // AnalyzeVisuals.
+          message.pendingAttachments = raw.mediaKeys.map(mediaKey => ({
+            kind: 'feishu-media' as const,
             messageId: raw.messageId,
             mediaKey,
             fileName: fileNameFor(raw.messageId, mediaKey),
-          }
+          }))
         } else if (raw.mediaKeys?.length) {
           message.text = appendLine(message.text, t('channel.media.skipped'))
         }

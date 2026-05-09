@@ -56,9 +56,9 @@ function makeProvider(overrides: Partial<Provider['capabilities']['attachments']
   } as unknown as Provider
 }
 
-function makeConfig(imageMaxMb = 5, pdfMaxMb = 32) {
+function makeConfig(imageMaxMb = 5, pdfMaxMb = 32, maxInlinePerTurn = 50) {
   return {
-    attachments: { imageMaxMb, pdfMaxMb },
+    attachments: { imageMaxMb, pdfMaxMb, maxInlinePerTurn },
   } as unknown as Parameters<typeof encodeAttachmentsForInline>[0]['config']
 }
 
@@ -195,6 +195,63 @@ describe('encodeAttachmentsForInline', () => {
     assert.equal(result.inlineBlocks.length, 1, 'image inlines')
     assert.equal(result.fallbackPaths.length, 1, 'pdf falls back')
     assert.equal(result.fallbackPaths[0].path, pdf)
+  })
+
+  it('inlines up to maxInlinePerTurn and routes the rest to fallback', async () => {
+    // 7 small images, cap = 5 → first 5 inline, last 2 fallback. Multi-image
+    // batches (Feishu post-type or rapid-fire image events) hit this path;
+    // bounding inline count keeps a 50-image dump from blowing the LLM
+    // context while keeping every file readable via the path breadcrumb.
+    const files: string[] = []
+    for (let i = 0; i < 7; i++) {
+      const file = path.join(workspace, `img${i}.jpg`)
+      writeFileSync(file, Buffer.from([0xff, 0xd8, 0xff, 0xe0]))
+      files.push(file)
+    }
+    const result = await encodeAttachmentsForInline({
+      attachments: files.map(file => ({ path: file, mimeType: 'image/jpeg' })),
+      provider: makeProvider(),
+      endpoint: 'newapi',
+      upstreamModel: 'claude-sonnet-4-6',
+      runtime,
+      config: makeConfig(5, 32, 5),
+    })
+    assert.equal(result.inlineBlocks.length, 5, 'first 5 inline')
+    assert.equal(result.fallbackPaths.length, 2, 'remaining 2 fallback')
+    assert.equal(result.fallbackPaths[0].path, files[5])
+    assert.equal(result.fallbackPaths[1].path, files[6])
+    assert.ok(
+      result.warnings.some(w => /inline cap 5 reached/.test(w)),
+      `expected cap warning, got: ${JSON.stringify(result.warnings)}`,
+    )
+  })
+
+  it('cap counts image + pdf together', async () => {
+    // image, pdf, image, pdf, image with cap=3 → first 3 inline (image,
+    // pdf, image), remaining 2 fallback. Cap is on inline blocks total,
+    // not per kind.
+    const files = [
+      { path: path.join(workspace, 'a.jpg'), mimeType: 'image/jpeg' },
+      { path: path.join(workspace, 'b.pdf'), mimeType: 'application/pdf' },
+      { path: path.join(workspace, 'c.jpg'), mimeType: 'image/jpeg' },
+      { path: path.join(workspace, 'd.pdf'), mimeType: 'application/pdf' },
+      { path: path.join(workspace, 'e.jpg'), mimeType: 'image/jpeg' },
+    ]
+    for (const f of files) {
+      writeFileSync(f.path, Buffer.from([0xff, 0xd8, 0xff, 0xe0]))
+    }
+    const result = await encodeAttachmentsForInline({
+      attachments: files,
+      provider: makeProvider(),
+      endpoint: 'newapi',
+      upstreamModel: 'claude-sonnet-4-6',
+      runtime,
+      config: makeConfig(5, 32, 3),
+    })
+    assert.equal(result.inlineBlocks.length, 3)
+    assert.equal(result.fallbackPaths.length, 2)
+    assert.equal(result.fallbackPaths[0].path, files[3].path)
+    assert.equal(result.fallbackPaths[1].path, files[4].path)
   })
 
   it('routes audio / video to fallback (default capability=false)', async () => {

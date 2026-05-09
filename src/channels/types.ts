@@ -53,12 +53,9 @@ export type NormalizedChannelMessage = {
   /** Channel-side attachment metadata, materialized lazily by the runner
    *  via `ChannelRunnerStrategy.materializeAttachment`. Multiple entries
    *  represent multi-attachment messages (e.g. Feishu `post` content with
-   *  several images / files mixed in with text). Order is preserved so
-   *  agent-facing breadcrumbs and inline content blocks remain sequential.
-   *  Singular `pendingAttachment` is kept as a legacy shorthand that maps
-   *  to a one-element `pendingAttachments` array — runner consumers should
-   *  use `getPendingAttachments(message)` to read both shapes uniformly. */
-  pendingAttachment?: PendingAttachment
+   *  several images / files mixed in with text, or multi-image batches
+   *  delivered as a single inbound message). Order is preserved so
+   *  agent-facing breadcrumbs and inline content blocks remain sequential. */
   pendingAttachments?: PendingAttachment[]
   /**
    * Marks a message that the runner synthesized (e.g. post-approval
@@ -88,21 +85,13 @@ export type MaterializedAttachment = {
   mimeType: string
 }
 
-/** Read both legacy `pendingAttachment` (singular) and new
- *  `pendingAttachments` (array) into a single ordered list. Singular always
- *  goes first so the legacy shape's "first attachment" position is stable.
- *  Returns an empty array when neither field is set. */
+/** Convenience accessor for `message.pendingAttachments`. Always returns an
+ *  array (empty when the field is unset) so callers can iterate without a
+ *  null check. */
 export function getPendingAttachments(
   message: NormalizedChannelMessage,
 ): PendingAttachment[] {
-  const list: PendingAttachment[] = []
-  if (message.pendingAttachment) {
-    list.push(message.pendingAttachment)
-  }
-  if (message.pendingAttachments && message.pendingAttachments.length > 0) {
-    list.push(...message.pendingAttachments)
-  }
-  return list
+  return message.pendingAttachments ?? []
 }
 
 export type OutgoingChannelFile = {
