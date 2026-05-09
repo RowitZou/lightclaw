@@ -42,7 +42,7 @@ export async function fetchFeishuMediaPayload(input: {
       return null
     }
 
-    const buffer = await bufferizePayload(envelope.data ?? resp)
+    const buffer = await bufferizePayload(unwrapResourceResponse(envelope.data ?? resp))
     return {
       buffer,
       mimeType: inferMime(input.mediaKey),
@@ -103,6 +103,27 @@ function inferMime(key: ParsedMediaKey): string {
   if (key.kind === 'audio') return 'audio/opus'
   if (key.kind === 'media') return 'video/mp4'
   return 'application/octet-stream'
+}
+
+/** Lark SDK binary endpoints (im.messageResource.get and friends) return a
+ *  wrapper object `{ writeFile(path), getReadableStream(), headers }`
+ *  instead of the raw stream/buffer — see node_modules/@larksuiteoapi
+ *  /node-sdk/lib/index.js (≈18 binary endpoints all use this shape).
+ *  Unwrap to the readable stream so bufferizePayload's existing branches
+ *  handle it. Older SDK versions / JSON envelopes that hand us a Buffer
+ *  / Uint8Array / Stream directly bypass this unwrap. Without it,
+ *  bufferizePayload's five branches all miss the wrapper and throw
+ *  "unsupported payload type", which surfaces as channel.media.downloadFailed
+ *  to the user. */
+export function unwrapResourceResponse(payload: unknown): unknown {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { getReadableStream?: unknown }).getReadableStream === 'function'
+  ) {
+    return (payload as { getReadableStream: () => unknown }).getReadableStream()
+  }
+  return payload
 }
 
 async function bufferizePayload(payload: unknown): Promise<Buffer> {

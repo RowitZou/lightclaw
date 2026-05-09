@@ -7,6 +7,7 @@ import {
   fetchFeishuMediaPayload,
   fileNameFor,
   materializeFeishuMedia,
+  unwrapResourceResponse,
 } from './media.js'
 
 function makeClient(payload: unknown): never {
@@ -52,6 +53,54 @@ test('fetchFeishuMediaPayload bufferizes SDK payload variants', async () => {
   }
 
   assert.deepEqual(texts, ['a', 'b', 'c', 'd'])
+})
+
+test('fetchFeishuMediaPayload unwraps Lark binary-endpoint wrapper { getReadableStream, ... }', async () => {
+  // Lark SDK binary endpoints (im.messageResource.get etc.) return a
+  // wrapper object instead of an envelope with `data`. Without the
+  // unwrap step in fetchFeishuMediaPayload, bufferizePayload throws
+  // "unsupported payload type" and the user sees [媒体下载失败].
+  let streamCalled = false
+  const wrapper = {
+    writeFile: async () => undefined,
+    headers: { 'content-type': 'image/jpeg' },
+    getReadableStream: () => {
+      streamCalled = true
+      return Readable.from(['wrapper-bytes'])
+    },
+  }
+  const client = {
+    im: {
+      messageResource: {
+        get: async () => wrapper,
+      },
+    },
+  } as never
+
+  const result = await fetchFeishuMediaPayload({
+    client,
+    messageId: 'om_123',
+    mediaKey: { kind: 'image', key: 'img_456' },
+  })
+
+  assert.ok(result)
+  assert.equal(streamCalled, true)
+  assert.equal(result.buffer.toString(), 'wrapper-bytes')
+})
+
+test('unwrapResourceResponse pulls stream from Lark wrapper, passes through plain payloads', () => {
+  const stream = Readable.from(['x'])
+  const wrapper = { getReadableStream: () => stream, writeFile: async () => undefined }
+  assert.equal(unwrapResourceResponse(wrapper), stream)
+
+  // Non-wrapper payloads pass through verbatim.
+  const buf = Buffer.from('z')
+  assert.equal(unwrapResourceResponse(buf), buf)
+  assert.equal(unwrapResourceResponse(undefined), undefined)
+  assert.equal(unwrapResourceResponse(null), null)
+  // Object that has `getReadableStream` but it's not a function — pass through.
+  const fake = { getReadableStream: 'not a function' }
+  assert.equal(unwrapResourceResponse(fake), fake)
 })
 
 test('fetchFeishuMediaPayload returns null on SDK error envelope', async () => {
