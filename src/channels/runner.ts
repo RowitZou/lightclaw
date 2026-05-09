@@ -498,10 +498,18 @@ export class ChannelRunner {
             `${this.strategy.channelId}: attachment encoding warnings: ${inlineEncoding.warnings.join(' | ')}\n`,
           )
         }
+        // Pass the FULL materialized list (not just fallbackPaths). The
+        // breadcrumb header lists every attachment's path so the agent
+        // can refer back to inline-encoded blocks by path (useful when
+        // the user follows up with "translate the OTHER image" — the
+        // model needs paths to disambiguate from the visible inline
+        // bytes). Fallback (non-inline) paths still appear in the
+        // same list; the model infers inline-vs-fallback from whether
+        // matching image content blocks appear in the same user message.
         const userText = await formatChannelUserText(
           this.strategy,
           effectiveMessage,
-          inlineEncoding.fallbackPaths,
+          materializedAttachment,
         )
         const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
@@ -689,7 +697,7 @@ export class ChannelRunner {
               const reText = await formatChannelUserText(
                 this.strategy,
                 effectiveMessage,
-                reEncoded.fallbackPaths,
+                materializedAttachment,
               )
               const newContent = reEncoded.inlineBlocks.length > 0
                 ? [
