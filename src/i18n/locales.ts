@@ -414,7 +414,6 @@ export const LOCALES = {
     'channel.media.skipped': '[媒体附件: skipped (mediaEnabled=false)]',
     'channel.media.attachment': '[媒体附件]',
     'channel.cardCallbackUnknown': '卡片回调格式暂未识别。请直接回复"是"或"否"。',
-    'channel.emptyMention.greet': '在的，需要什么帮助？告诉我具体想做的事就行。',
     'channel.failure.transcriptAborted': '本轮已被 /stop 中止。',
 
     // ---- Tool errors (user-visible from tool_result) ----
@@ -852,7 +851,6 @@ export const LOCALES = {
     'channel.media.skipped': '[media attachment: skipped (mediaEnabled=false)]',
     'channel.media.attachment': '[media attachment]',
     'channel.cardCallbackUnknown': 'Unrecognized card callback shape. Please reply "yes" or "no" instead.',
-    'channel.emptyMention.greet': "Yes? Tell me what you'd like me to do.",
     'channel.failure.transcriptAborted': 'This turn was aborted by /stop.',
 
     // ---- Tool errors ----

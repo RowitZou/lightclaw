@@ -267,17 +267,6 @@ export class ChannelRunner {
       )
       return
     }
-    // Pure "@bot" ping with no content (text stripped to '' by parseMessageContent
-    // and no media attached): user pinged us but didn't actually ask anything.
-    // Past the mention gate + pairing, so the sender is paired. Reply with a
-    // short greet notice instead of feeding empty user content into the LLM
-    // — which either confuses the model or burns a turn for no reason. The
-    // transport layer admits this case specifically so pairing can run for
-    // unpaired senders; once paired, a no-op greet is the right UX.
-    if (!message.text.trim() && !message.pendingAttachment) {
-      await this.sendNotice(message, 'info', t('channel.emptyMention.greet'), 'plain_text')
-      return
-    }
     // Pre-lock fast path: /stop must short-circuit, otherwise it queues
     // behind the very query it is trying to abort. Read-only slashes that
     // pull state from disk also bypass the lock so a long-running main
