@@ -192,7 +192,9 @@ function decryptLarkPayload(encrypted: string, encryptKey: string): string {
   ]).toString('utf8')
 }
 
-function normalizeEvent(
+// Exported for unit-test access. Production callers reach this via the
+// HTTP handler / event-source bridge at the top of this file.
+export function normalizeEvent(
   body: Record<string, unknown>,
   botOpenId?: string,
 ): FeishuRawMessage | null {
@@ -217,12 +219,18 @@ function normalizeEvent(
     botStripId: botOpenId,
   })
 
+  // Pure "@bot" inputs strip to '' — same reasoning as transport-ws.ts; let
+  // them flow into the runner so pairing / greet short-circuit can fire.
+  const mentionedBot = !!botOpenId && parseMentions(message?.mentions).some(
+    mention => mention.openId === botOpenId,
+  )
+
   if (
     !eventId ||
     !messageId ||
     !chatId ||
     !senderOpenId ||
-    (!parsed.text && !parsed.mediaKeys?.length)
+    (!parsed.text && !parsed.mediaKeys?.length && !mentionedBot)
   ) {
     return null
   }

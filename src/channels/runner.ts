@@ -267,6 +267,17 @@ export class ChannelRunner {
       )
       return
     }
+    // Pure "@bot" ping with no content (text stripped to '' by parseMessageContent
+    // and no media attached): user pinged us but didn't actually ask anything.
+    // Past the mention gate + pairing, so the sender is paired. Reply with a
+    // short greet notice instead of feeding empty user content into the LLM
+    // — which either confuses the model or burns a turn for no reason. The
+    // transport layer admits this case specifically so pairing can run for
+    // unpaired senders; once paired, a no-op greet is the right UX.
+    if (!message.text.trim() && !message.pendingAttachment) {
+      await this.sendNotice(message, 'info', t('channel.emptyMention.greet'), 'plain_text')
+      return
+    }
     // Pre-lock fast path: /stop must short-circuit, otherwise it queues
     // behind the very query it is trying to abort. Read-only slashes that
     // pull state from disk also bypass the lock so a long-running main
@@ -622,7 +633,14 @@ export class ChannelRunner {
                 process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(mergeError)}\n`)
               })
             }
-            await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail))
+            // /stop already surfaced its own "Stopped." notice via the
+            // pre-lock fast path; an extra red failure card here would imply
+            // a real error occurred and contradict the user's deliberate
+            // abort. Skip the notice (transcript marker already records the
+            // /stop attribution via formatQueryFailure).
+            if (!ABORT_FAILURE_PATTERN.test(detail)) {
+              await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail))
+            }
             return
           }
         }
@@ -1263,7 +1281,20 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// User-driven /stop and channel-runner-driven interjection auto-aborts both
+// surface as the SDK's "Request was aborted." string. Without explicit
+// attribution the next turn (or the agent itself reading transcript) sees
+// only the generic "本轮处理失败" wrapper and has to guess between network
+// glitch / model error / user stop — Phase 27 dogfood produced exactly this
+// confusion. Whitelist by signature instead of plumbing reason through the
+// abort controller, which matches how /stop already piggybacks on the SDK's
+// AbortError.
+const ABORT_FAILURE_PATTERN = /Request was aborted/i
+
 function formatQueryFailure(detail: string): string {
+  if (ABORT_FAILURE_PATTERN.test(detail)) {
+    return t('channel.failure.transcriptAborted')
+  }
   if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
     return t('channel.failure.transcriptTransient', { detail })
   }

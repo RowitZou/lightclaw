@@ -310,7 +310,9 @@ function parsePermissionAction(value: unknown): FeishuPermissionActionKind | nul
   return null
 }
 
-function normalizeReceiveV1(
+// Exported for unit-test access. Production code goes through the WS handler
+// at line 113 which calls this internally.
+export function normalizeReceiveV1(
   data: ReceiveV1Data,
   botOpenId?: string,
 ): FeishuRawMessage | null {
@@ -335,7 +337,17 @@ function normalizeReceiveV1(
     })),
     botStripId: botOpenId,
   })
-  if (!parsed.text && !parsed.mediaKeys?.length) {
+  // Pure "@bot" inputs (no other text or media) strip down to '' here. Without
+  // the mention-aware escape, this branch would drop a deliberate ping before
+  // it ever reached the runner — silent for the sender, no pairing, no notice.
+  // Letting it through with empty text lets `isMentionGateSatisfied` see the
+  // bot mention and either kick off pairing (unpaired) or surface a greet
+  // notice (paired, runner-side short-circuit). Other empty-payload events
+  // (sticker reactions, recall, etc.) continue to drop here.
+  const mentionedBot = !!botOpenId && (message.mentions ?? []).some(
+    mention => (mention.id?.open_id ?? mention.open_id) === botOpenId,
+  )
+  if (!parsed.text && !parsed.mediaKeys?.length && !mentionedBot) {
     return null
   }
   return {
