@@ -74,7 +74,8 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
-import { encodeAttachmentsForInline } from './attachment-encoding.js'
+import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
+import { recordCapability } from '../provider/capability-cache.js'
 import {
   getPendingAttachments,
   type ChannelId,
@@ -551,7 +552,12 @@ export class ChannelRunner {
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
         const messageCountBeforeQuery = messages.length
-        const provider = getProvider(appConfig)
+        // Resolve provider via the same resolver the encoder used so endpoint
+        // / upstreamModel match the cache key for any capability flips.
+        const { provider, entry: providerEntry } = getProviderFor(
+          appConfig,
+          appConfig.routing.main ?? appConfig.model,
+        )
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
@@ -563,6 +569,14 @@ export class ChannelRunner {
         // Without this guard the user would get every intermediate body
         // twice (streamed once, then re-sent as the accumulated final).
         let streamedAtLeastOnce = false
+        // Capability autopilot state. On a provider response that pattern-
+        // matches "this kind is not supported" (image/pdf/audio/video), flip
+        // the cached flag for endpoint × upstreamModel and rebuild the user
+        // message with that kind moved to the fallback path. Cap at one flip
+        // per kind per turn so a misconfigured provider can't loop us — the
+        // four-kind universe gives 4 max retries on top of the transient
+        // retry budget.
+        const capabilityFlipped = new Set<string>()
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
@@ -598,6 +612,65 @@ export class ChannelRunner {
           } catch (error) {
             lastError = error
             const detail = error instanceof Error ? error.message : String(error)
+            // Capability autopilot: per-kind one-shot. Detect provider
+            // signal, flip the cache, rebuild the user message without
+            // the offending content blocks (paths fall through to the
+            // text breadcrumb so the agent uses Read / AnalyzeVisuals),
+            // and retry without consuming a transient attempt.
+            const missingKind = isCapabilityMissingError(error)
+            if (
+              missingKind &&
+              !capabilityFlipped.has(missingKind) &&
+              materializedAttachment.length > 0
+            ) {
+              capabilityFlipped.add(missingKind)
+              recordCapability({
+                endpoint: providerEntry.endpoint,
+                upstreamModel: providerEntry.upstreamModel,
+                kind: missingKind,
+                value: false,
+              })
+              process.stderr.write(
+                `${channelId}: capability flipped (${missingKind}=false) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
+              )
+              // Rebuild encoding with the now-cached false. Re-render text
+              // (sender prefix + path breadcrumbs for ALL fallbacks) and
+              // replace the in-memory + on-disk last user message.
+              const reEncoded = await encodeAttachmentsForInlineForSession({
+                materialized: materializedAttachment,
+                config: appConfig,
+                runtime: getRuntime(),
+              })
+              const reText = await formatChannelUserText(
+                this.strategy,
+                effectiveMessage,
+                reEncoded.fallbackPaths,
+              )
+              const newContent = reEncoded.inlineBlocks.length > 0
+                ? [
+                    ...(reText.length > 0
+                      ? [{ type: 'text' as const, text: reText }]
+                      : []),
+                    ...reEncoded.inlineBlocks,
+                  ]
+                : reText
+              const replaced = createUserMessage(
+                newContent,
+                userMessage.parentUuid,
+                userMessage.timestamp,
+              )
+              // Preserve the same uuid so transcript continuity (parentUuid
+              // chains, branch/merge resolution) stays intact across the
+              // retry.
+              replaced.uuid = userMessage.uuid
+              messages[messages.length - 1] = replaced
+              // Persist: rewrite the last user message on disk so a crash
+              // mid-retry leaves a coherent transcript. rewriteTranscript
+              // overwrites the whole jsonl atomically.
+              await rewriteTranscript(sessionId, messages)
+              attempt -= 1  // structural retry, not transient
+              continue
+            }
             const isTransient = TRANSIENT_FAILURE_PATTERN.test(detail)
             const willRetry = isTransient && attempt < MAX_QUERY_RETRIES
             if (willRetry) {
