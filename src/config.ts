@@ -270,6 +270,20 @@ export type LightClawConfig = {
   microCompact: MicroCompactConfig
   tools: ToolsConfig
   apiLogs: ApiLogsConfig
+  attachments: AttachmentsConfig
+}
+
+/** Inline-multimodal size policy. Image: bytes above the cap → Pillow resize
+ *  down to ~cap, then submit; PDF: bytes above the cap → skip inline (no
+ *  meaningful resize), surface as a file_path text breadcrumb so the agent
+ *  can use Read / AnalyzeVisuals tools instead. Defaults are calibrated for
+ *  Anthropic's documented inline limits (image 5 MB, document 32 MB), which
+ *  are the most restrictive among providers that support inline multimodal.
+ *  Provider-side vision towers downscale to a fixed patch grid regardless,
+ *  so values above the cap have negligible quality impact. */
+export type AttachmentsConfig = {
+  imageMaxMb: number
+  pdfMaxMb: number
 }
 
 export type AutoDreamConfig = {
@@ -374,6 +388,17 @@ function parseNumber(value: string | undefined): number | undefined {
 
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function parsePositiveNumber(value: string | undefined, fieldName: string): number | undefined {
+  const parsed = parseNumber(value)
+  if (parsed === undefined) {
+    return undefined
+  }
+  if (parsed <= 0) {
+    throw new Error(`${fieldName} must be a positive number; got ${parsed}.`)
+  }
+  return parsed
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -1083,6 +1108,21 @@ export function getConfig(): LightClawConfig {
       dir: process.env.LIGHTCLAW_API_LOGS_DIR
         ?? (fileConfig.apiLogs?.dir ? expandHomePath(fileConfig.apiLogs.dir) : undefined)
         ?? path.join(lightclawHome(), 'api-logs'),
+    },
+    attachments: {
+      // Inline-multimodal byte caps. Cross-channel, cross-provider — kept
+      // outside `models` because they're not model-specific. PR3 inline
+      // path consumes these (image: resize down to cap; pdf: skip inline
+      // when over cap, fall back to text path so the agent uses Read /
+      // AnalyzeVisuals tools).
+      imageMaxMb:
+        parsePositiveNumber(process.env.LIGHTCLAW_IMAGE_MAX_MB, 'imageMaxMb')
+        ?? fileConfig.attachments?.imageMaxMb
+        ?? 5,
+      pdfMaxMb:
+        parsePositiveNumber(process.env.LIGHTCLAW_PDF_MAX_MB, 'pdfMaxMb')
+        ?? fileConfig.attachments?.pdfMaxMb
+        ?? 32,
     },
     runtime: {
       backend: runtimeBackend,
