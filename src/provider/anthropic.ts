@@ -115,7 +115,9 @@ function asContentBlocks(content: unknown): Array<Record<string, unknown>> {
 /** Anthropic's Messages API uses snake_case for `media_type`; LightClaw's
  *  internal UserContentBlock uses camelCase `mediaType` (matches the rest
  *  of the codebase's convention and TypeScript style). Image and document
- *  blocks need translation; tool_result and text pass through. */
+ *  blocks need translation; text blocks pass through. tool_result blocks
+ *  with array `content` (multimodal Read / pdf-pages output) recurse so
+ *  image blocks nested inside also get the camelCase→snake_case fix. */
 function translateBlockToAnthropicShape(block: Record<string, unknown>): Record<string, unknown> {
   if (block.type === 'image' || block.type === 'document') {
     const source = isRecord(block.source) ? block.source : null
@@ -128,6 +130,14 @@ function translateBlockToAnthropicShape(block: Record<string, unknown>): Record<
           data: source.data,
         },
       }
+    }
+  }
+  if (block.type === 'tool_result' && Array.isArray(block.content)) {
+    return {
+      ...block,
+      content: block.content.map(inner =>
+        isRecord(inner) ? translateBlockToAnthropicShape(inner) : inner,
+      ),
     }
   }
   return { ...block }

@@ -7,7 +7,7 @@ import {
 } from '../messages.js'
 import { modelFor } from '../provider/index.js'
 import { estimateTokens } from '../token-estimate.js'
-import type { Message, UsageStats } from '../types.js'
+import { toolResultContentToText, type Message, type UsageStats } from '../types.js'
 
 type CompactParams = {
   messages: Message[]
@@ -46,7 +46,7 @@ function serializeMessage(message: Message): string {
         if (block.type === 'document') {
           return `[Inline Document: ${block.source.mediaType}]`
         }
-        return `[Tool Result: ${block.tool_use_id}${block.is_error ? ' error' : ''}]\n${block.content}`
+        return `[Tool Result: ${block.tool_use_id}${block.is_error ? ' error' : ''}]\n${toolResultContentToText(block.content)}`
       })
       .join('\n')
     return `[User]\n${blocks}`

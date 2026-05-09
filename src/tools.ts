@@ -9,7 +9,6 @@ import { bashTool } from './tools/bash.js'
 import { conversationGrepTool } from './tools/conversation-grep.js'
 import { conversationListTool } from './tools/conversation-list.js'
 import { conversationReadTool } from './tools/conversation-read.js'
-import { analyzeVisualsTool } from './tools/analyze-visuals.js'
 import { fileEditTool } from './tools/file-edit.js'
 import { fileReadTool } from './tools/file-read.js'
 import { fileWriteTool } from './tools/file-write.js'
@@ -43,7 +42,6 @@ export const builtinTools = [
   todoWriteTool,
   webFetchTool,
   webSearchTool,
-  analyzeVisualsTool,
   agentTool,
   backgroundTaskTool,
   listBackgroundTasksTool,

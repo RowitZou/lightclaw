@@ -6,7 +6,7 @@ const PDF_HEADER = '%PDF-'
 /** Sandbox `pdftotext -layout` extracts the textual layer of a PDF preserving
  *  approximate column / table structure. Reading-order quirks are accepted as
  *  cost — `-raw` is available as a future option if a use case demands it.
- *  AnalyzeVisuals (sandbox `pdftoppm` + vision model) handles the visual
+ *  Read('foo.pdf', pages='1-3') (sandbox `pdftoppm` + vision model) handles the visual
  *  modality: figures, formulas, scanned-only PDFs, and complex layouts. The
  *  two paths are intentionally complementary, picked by the LLM per intent. */
 export const pdfExtractor: ArtifactExtractor = {
@@ -32,7 +32,7 @@ export const pdfExtractor: ArtifactExtractor = {
     })
     if (result.exitCode === 127) {
       return pdfWarning(
-        'pdftotext is not installed in this runtime. Install poppler-utils or use AnalyzeVisuals to inspect pages visually.',
+        'pdftotext is not installed in this runtime. Install poppler-utils or use Read with `pages` to inspect pages visually.',
       )
     }
     if (result.exitCode !== 0) {
@@ -52,7 +52,7 @@ export const pdfExtractor: ArtifactExtractor = {
       text: value,
       truncated,
       warnings: value.trim() ? [] : [
-        'pdftotext returned no text. The PDF may be scanned (image-only); use AnalyzeVisuals to inspect pages visually.',
+        'pdftotext returned no text. The PDF may be scanned (image-only); use Read with `pages` to inspect pages visually.',
       ],
       metadata: {
         extractor: 'pdftotext',

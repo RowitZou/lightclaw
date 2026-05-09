@@ -41,7 +41,19 @@ export function estimateMessageTokens(message: Message): number {
     const userBlockText = message.message.content
       .map(block => {
         if (block.type === 'tool_result') {
-          return `${block.tool_use_id}\n${block.content}`
+          if (typeof block.content === 'string') {
+            return `${block.tool_use_id}\n${block.content}`
+          }
+          // Array shape: text blocks contribute their text; image blocks
+          // estimated by base64 payload like top-level images.
+          const inner = block.content.map(inner => {
+            if (inner.type === 'text') return inner.text
+            if (inner.type === 'image') {
+              return ''.padEnd(Math.floor(inner.source.data.length / 4), 'x')
+            }
+            return ''
+          }).join('\n')
+          return `${block.tool_use_id}\n${inner}`
         }
         if (block.type === 'text') {
           return block.text

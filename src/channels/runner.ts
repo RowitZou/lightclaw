@@ -481,7 +481,7 @@ export class ChannelRunner {
         beginQuery(userId)
         // Decide which attachments go inline (image / pdf to vision-capable
         // models) vs which fall back to text path breadcrumbs (the LLM uses
-        // Read / AnalyzeVisuals tools). Capability flag per kind, persisted
+        // Read tools). Capability flag per kind, persisted
         // in <home>/auth/capabilities-cache.json so subsequent turns skip
         // the wasted round-trip on known-incapable endpoints.
         const inlineEncoding = await encodeAttachmentsForInlineForSession({
@@ -615,7 +615,7 @@ export class ChannelRunner {
             // Capability autopilot: per-kind one-shot. Detect provider
             // signal, flip the cache, rebuild the user message without
             // the offending content blocks (paths fall through to the
-            // text breadcrumb so the agent uses Read / AnalyzeVisuals),
+            // text breadcrumb so the agent uses Read),
             // and retry without consuming a transient attempt.
             const missingKind = isCapabilityMissingError(error)
             if (

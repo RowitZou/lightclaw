@@ -41,11 +41,58 @@ export type AssistantContentBlock =
   | AssistantThinkingBlock
   | AssistantRedactedThinkingBlock
 
+// Inner blocks allowed inside `UserToolResultBlock.content` array shape.
+// Mirrors Anthropic's `tool_result.content` spec: only text and image
+// blocks are allowed (NOT document — Anthropic rejects document blocks
+// inside tool_result; PDF page rendering must produce image blocks).
+export type ToolResultTextBlock = {
+  type: 'text'
+  text: string
+}
+
+export type ToolResultImageBlock = {
+  type: 'image'
+  source: {
+    type: 'base64'
+    mediaType: string
+    data: string
+  }
+}
+
+export type ToolResultContentBlock = ToolResultTextBlock | ToolResultImageBlock
+
 export type UserToolResultBlock = {
   type: 'tool_result'
   tool_use_id: string
-  content: string
+  /** String for the common text-only case (most tools); content-block
+   *  array when the tool produced multimodal output (image bytes from
+   *  Read on an image / pdf-pages, etc.). The multimodal-finalization
+   *  pass walks this array before send and replaces image blocks with
+   *  describe-text when the destination provider/endpoint cannot accept
+   *  images in tool_result. */
+  content: string | ToolResultContentBlock[]
   is_error?: boolean
+}
+
+/** Collapse a tool_result.content (string or array) into plain text for
+ *  consumers that only care about the textual portion (token estimator,
+ *  transcript compact summarizer, session-memory exporter, idle-mc, etc.).
+ *  Image blocks render as a `[Image: <mime>]` placeholder so length-based
+ *  decisions stay reasonable without counting base64 bytes. */
+export function toolResultContentToText(
+  content: UserToolResultBlock['content'],
+): string {
+  if (typeof content === 'string') {
+    return content
+  }
+  return content
+    .map(block => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'image') return `[Image: ${block.source.mediaType}]`
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
 }
 
 // Plain text block inside a user message's content array. Coexists with

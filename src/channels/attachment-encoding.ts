@@ -22,7 +22,7 @@ export type AttachmentEncodingResult = {
   inlineBlocks: UserContentBlock[]
   /** Attachments that did NOT make it inline (capability=false, oversize
    *  PDF, encoding error). Caller renders these as the existing path-text
-   *  breadcrumb so the agent picks them up via Read / AnalyzeVisuals. */
+   *  breadcrumb so the agent picks them up via Read (with `pages` for PDFs). */
   fallbackPaths: MaterializedAttachment[]
   /** Per-attachment notes (resize warnings, oversize-pdf reasons) that the
    *  caller can stash in a turn-level metadata channel. Stderr-only — never
@@ -81,8 +81,8 @@ export function classifyAttachment(
  *  Attachments past `config.attachments.maxInlinePerTurn` go straight to
  *  fallbackPaths so multi-image batches can't blow up the LLM context.
  *  Materialization (which already happened in the runner) is preserved
- *  for every attachment, so overflow remains agent-readable via Read /
- *  AnalyzeVisuals through the path-text breadcrumb. */
+ *  for every attachment, so overflow remains agent-readable via Read
+ *  through the path-text breadcrumb. */
 export async function encodeAttachmentsForInline(input: {
   attachments: MaterializedAttachment[]
   provider: Provider
@@ -104,7 +104,7 @@ export async function encodeAttachmentsForInline(input: {
     }
     if (inlineBlocks.length >= maxInline) {
       // Per-turn inline cap reached; remainder must use the text path so
-      // the agent still sees the file via Read / AnalyzeVisuals.
+      // the agent still sees the file via Read (with `pages` for PDFs).
       warnings.push(
         `inline cap ${maxInline} reached; ${att.path} routed to text path`,
       )
@@ -146,7 +146,7 @@ export async function encodeAttachmentsForInline(input: {
           inlineBlocks.push(block)
         } else {
           // Oversize PDF → text path. The agent can still Read or
-          // AnalyzeVisuals it; size cap is just for inline submission.
+          // Read it; size cap is just for inline submission.
           warnings.push(
             `PDF ${att.path} exceeds inline cap ${input.config.attachments.pdfMaxMb}MB; agent will use tools.`,
           )
