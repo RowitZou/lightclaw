@@ -5,12 +5,7 @@ import { z } from 'zod'
 
 import { describeImage } from '../api.js'
 import { inspectImageBuffer } from '../artifacts/media/image.js'
-import {
-  lookupArtifact,
-  resolveArtifactPath,
-  touchArtifact,
-  type ArtifactRecord,
-} from '../artifacts/registry.js'
+import { suggestPathRules } from '../permission/suggestions.js'
 import { buildTool, type ToolCallContext } from '../tool.js'
 
 const PDF_HEADER = '%PDF-'
@@ -21,19 +16,14 @@ const DEFAULT_MAX_CHARS = 8_000
 const MAX_MAX_CHARS = 40_000
 
 const inputSchema = z.object({
-  artifact_id: z.string().min(1).optional(),
-  file_path: z.string().min(1).optional(),
+  file_path: z.string().min(1),
   pages: z.string().min(1).optional(),
   prompt: z.string().min(1).max(4000).optional(),
   max_chars: z.number().int().min(1).max(MAX_MAX_CHARS).optional(),
-}).refine(input => Boolean(input.artifact_id) !== Boolean(input.file_path), {
-  message: 'Provide exactly one of artifact_id or file_path.',
 })
 
 export type RenderPdfPagesOutput = {
-  artifactId?: string
   filePath: string
-  title?: string
   sizeBytes: number
   requestedPages?: string
   pageCount?: number
@@ -56,41 +46,48 @@ export const renderPdfPagesTool = buildTool<
 >({
   name: 'RenderPdfPages',
   description:
-    'Render selected PDF pages to temporary images and inspect them together with a vision-capable model. The rendered page images are deleted after inspection and are not stored as artifacts. pages is optional and defaults to the first few pages; examples: "1", "1-5", "10-12". Maximum 20 pages per call.',
+    'Render selected PDF pages to temporary images and inspect them together with a vision-capable model. The rendered page images are deleted after inspection. ' +
+    'pages is optional and defaults to the first few pages; examples: "1", "1-5", "10-12". Maximum 20 pages per call.',
   domain: 'environment',
   riskLevel: 'execute',
   concurrencySafe: true,
   inputSchema,
   suggestPermissionRules(input) {
-    void input
-    return [{ toolName: 'RenderPdfPages' }]
+    return suggestPathRules('RenderPdfPages', input.file_path)
   },
   async call(input, context) {
     let outputDirToCleanup: string | undefined
     try {
-      const resolved = await resolveSource(input, context)
-      const stat = await context.runtime.fs.stat(resolved.filePath)
+      const filePath = path.isAbsolute(input.file_path)
+        ? input.file_path
+        : path.resolve(context.runtime.workspaceRoot, input.file_path)
+      const stat = await context.runtime.fs.stat(filePath)
       if (!stat.isFile) {
-        return { output: `RenderPdfPages expected a regular file: ${resolved.filePath}`, isError: true }
+        return { output: `RenderPdfPages expected a regular file: ${filePath}`, isError: true }
       }
       if (stat.size === 0) {
-        return { output: `PDF file is empty: ${resolved.filePath}`, isError: true }
+        return { output: `PDF file is empty: ${filePath}`, isError: true }
       }
       if (stat.size > MAX_PDF_BYTES) {
         return {
-          output: `RenderPdfPages refused to read ${stat.size} bytes from ${resolved.filePath}; limit is ${MAX_PDF_BYTES} bytes.`,
+          output: `RenderPdfPages refused to read ${stat.size} bytes from ${filePath}; limit is ${MAX_PDF_BYTES} bytes.`,
           isError: true,
         }
       }
 
-      await assertPdfHeader(context, resolved.filePath)
-      const pageCount = await getPdfPageCount(context, resolved.filePath)
+      await assertPdfHeader(context, filePath)
+      const pageCount = await getPdfPageCount(context, filePath)
       const range = resolvePageRange(input.pages, pageCount)
-      const outputWorkspaceDir = path.posix.join('.lightclaw', 'tmp', 'pdf-pages', randomUUID())
-      const outputDir = resolveArtifactPath(context.runtime.workspaceRoot, outputWorkspaceDir)
+      const outputDir = path.posix.join(
+        context.runtime.workspaceRoot,
+        '.lightclaw',
+        'tmp',
+        'pdf-pages',
+        randomUUID(),
+      )
       outputDirToCleanup = outputDir
       await renderPdfPages(context, {
-        filePath: resolved.filePath,
+        filePath,
         outputDir,
         firstPage: range.firstPage,
         lastPage: range.lastPage,
@@ -129,7 +126,7 @@ export const renderPdfPagesTool = buildTool<
         images.push({
           buffer,
           mimeType: inspected.metadata.mimeType,
-          fileName: `${path.basename(resolved.filePath)}-page-${page}.jpg`,
+          fileName: `${path.basename(filePath)}-page-${page}.jpg`,
         })
         pageOutputs.push({
           page,
@@ -151,15 +148,6 @@ export const renderPdfPagesTool = buildTool<
         }
       }
 
-      if (resolved.artifact) {
-        await touchArtifact(
-          context.runtime.fs,
-          resolved.artifact.artifactId,
-          new Date().toISOString(),
-          context.runtime.workspaceRoot,
-        )
-      }
-
       const response = await describeImage({
         prompt: input.prompt ?? defaultPdfInspectionPrompt(range.firstPage, range.lastPage),
         images,
@@ -172,9 +160,7 @@ export const renderPdfPagesTool = buildTool<
 
       return {
         output: {
-          artifactId: resolved.artifact?.artifactId,
-          filePath: resolved.filePath,
-          title: resolved.artifact?.title,
+          filePath,
           sizeBytes: stat.size,
           requestedPages: input.pages,
           pageCount,
@@ -254,34 +240,6 @@ function resolvePageRange(
 
 function defaultPageRange(pageCount: number | undefined): string {
   return `1-${Math.min(pageCount ?? DEFAULT_RENDER_PAGES, DEFAULT_RENDER_PAGES)}`
-}
-
-async function resolveSource(
-  input: z.infer<typeof inputSchema>,
-  context: { runtime: { workspaceRoot: string; fs: Parameters<typeof lookupArtifact>[0] } },
-): Promise<{ filePath: string; artifact?: ArtifactRecord }> {
-  if (input.artifact_id) {
-    const artifact = await lookupArtifact(
-      context.runtime.fs,
-      input.artifact_id,
-      context.runtime.workspaceRoot,
-    )
-    if (!artifact) {
-      throw new Error(`Artifact not found: ${input.artifact_id}`)
-    }
-    if (!artifact.workspacePath) {
-      throw new Error(`Artifact has no workspace-readable path: ${input.artifact_id}`)
-    }
-    return { filePath: resolveArtifactPath(context.runtime.workspaceRoot, artifact.workspacePath), artifact }
-  }
-  if (!input.file_path) {
-    throw new Error('Provide exactly one of artifact_id or file_path.')
-  }
-  return {
-    filePath: path.isAbsolute(input.file_path)
-      ? input.file_path
-      : path.resolve(context.runtime.workspaceRoot, input.file_path),
-  }
 }
 
 async function assertPdfHeader(context: ToolCallContext, filePath: string): Promise<void> {

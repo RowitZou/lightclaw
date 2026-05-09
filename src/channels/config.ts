@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { DEFAULT_INBOX_AGING_CONFIG } from './feishu/inbox-aging.js'
 import { parsePermissionMode } from '../config.js'
 import { expandHomePath, lightclawHome } from '../paths.js'
 import type { ChannelsConfig, FeishuChannelConfig } from './types.js'
@@ -9,6 +10,7 @@ type ChannelsFileShape = {
   feishu?: Partial<FeishuChannelConfig> & {
     mediaDir?: string
     webhook?: Partial<FeishuChannelConfig['webhook']>
+    inboxAging?: Partial<FeishuChannelConfig['inboxAging']>
   }
 }
 
@@ -71,6 +73,12 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
       input?.typingReaction ??
       true,
     mediaEnabled: input?.mediaEnabled ?? true,
+    inboxAging: {
+      enabled: input?.inboxAging?.enabled ?? DEFAULT_INBOX_AGING_CONFIG.enabled,
+      ttlDays: input?.inboxAging?.ttlDays ?? DEFAULT_INBOX_AGING_CONFIG.ttlDays,
+      intervalMinutes:
+        input?.inboxAging?.intervalMinutes ?? DEFAULT_INBOX_AGING_CONFIG.intervalMinutes,
+    },
     webhook: {
       host: webhook.host ?? '0.0.0.0',
       port: webhook.port ?? 18_850,

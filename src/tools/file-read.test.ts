@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
-import { upsertArtifact } from '../artifacts/registry.js'
 import { LocalRuntime } from '../runtime/local.js'
 import type { ToolCallContext } from '../tool.js'
 
@@ -57,65 +56,10 @@ describe('Read (legacy text path)', () => {
   })
 })
 
-describe('Read (artifact_id resolution)', () => {
-  it('reads text by artifact id and touches the artifact', async () => {
-    await runtime.fs.writeFile('.attachments/feishu/msg/00-report.md', '# Report\nbody')
-    await upsertArtifact(runtime.fs, {
-      artifactId: 'artifact_feishu_attachment_msg_0_hash',
-      kind: 'feishu_attachment',
-      source: 'feishu',
-      title: 'report.md',
-      workspacePath: '.attachments/feishu/msg/00-report.md',
-      sessionId: 'session',
-      createdAt: '2026-05-07T00:00:00.000Z',
-      lastAccessedAt: null,
-      status: 'imported',
-    })
-
-    const result = await fileReadTool.call(
-      { artifact_id: 'artifact_feishu_attachment_msg_0_hash' },
-      context(),
-    )
-    assert.equal(result.isError, undefined)
-    assert.equal(typeof result.output, 'string')
-    assert.match(String(result.output), /# Report/)
-  })
-
-  it('refuses both artifact_id and file_path together', async () => {
-    await runtime.fs.writeFile('foo.txt', 'x')
-    const result = await fileReadTool.call(
-      // exclusive refine triggers via Zod parse upstream; calling with both
-      // shapes here drops into the non-validated runtime resolveSource branch.
-      { file_path: 'foo.txt', artifact_id: 'missing' },
-      context(),
-    )
-    assert.equal(result.isError, true)
-  })
-})
-
 describe('Read (PDF rejection)', () => {
   it('rejects .pdf files and points to RenderPdfPages', async () => {
     await runtime.fs.writeFile('paper.pdf', Buffer.from('%PDF-1.7\n'))
     const result = await fileReadTool.call({ file_path: 'paper.pdf' }, context())
-    assert.equal(result.isError, true)
-    assert.match(String(result.output), /RenderPdfPages/)
-  })
-
-  it('rejects PDF artifacts by mime type', async () => {
-    await runtime.fs.writeFile('.attachments/feishu/msg/file', Buffer.from('%PDF-1.7\n'))
-    await upsertArtifact(runtime.fs, {
-      artifactId: 'pdf_artifact',
-      kind: 'feishu_attachment',
-      source: 'feishu',
-      title: 'whatever',
-      mimeType: 'application/pdf',
-      workspacePath: '.attachments/feishu/msg/file',
-      sessionId: 'session',
-      createdAt: '2026-05-07T00:00:00.000Z',
-      lastAccessedAt: null,
-      status: 'imported',
-    })
-    const result = await fileReadTool.call({ artifact_id: 'pdf_artifact' }, context())
     assert.equal(result.isError, true)
     assert.match(String(result.output), /RenderPdfPages/)
   })
