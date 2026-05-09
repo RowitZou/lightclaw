@@ -34,7 +34,7 @@ describe('artifact extractor registry', () => {
     assert.match(invalid.warnings[0] ?? '', /JSON/)
   })
 
-  it('does not treat PDF text extraction as reliable content', async () => {
+  it('PDF extraction without an executor returns a clear warning', async () => {
     const result = await extractArtifactText({
       buffer: Buffer.from('%PDF-'),
       filePath: 'paper.pdf',
@@ -42,7 +42,32 @@ describe('artifact extractor registry', () => {
     })
     assert.equal(result.format, 'pdf')
     assert.equal(result.text, '')
-    assert.match(result.warnings[0] ?? '', /disabled/)
-    assert.deepEqual(result.metadata?.readableWith, ['RenderPdfPages'])
+    assert.match(result.warnings[0] ?? '', /executor/i)
+  })
+
+  it('PDF extraction surfaces a missing-pdftotext warning when exec returns 127', async () => {
+    const result = await extractArtifactText({
+      buffer: Buffer.from('%PDF-1.7\n'),
+      filePath: 'paper.pdf',
+      maxChars: 100,
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 127 }),
+    })
+    assert.equal(result.format, 'pdf')
+    assert.equal(result.text, '')
+    assert.match(result.warnings[0] ?? '', /pdftotext/i)
+  })
+
+  it('PDF extraction returns text and metadata when pdftotext succeeds', async () => {
+    const stdout = 'Page 1 line 1\nPage 1 line 2\n\fPage 2 line 1\n'
+    const result = await extractArtifactText({
+      buffer: Buffer.from('%PDF-1.7\n'),
+      filePath: 'paper.pdf',
+      maxChars: 100,
+      exec: async () => ({ stdout, stderr: '', exitCode: 0 }),
+    })
+    assert.equal(result.format, 'pdf')
+    assert.equal(result.text, stdout)
+    assert.equal(result.truncated, false)
+    assert.equal(result.metadata?.extractor, 'pdftotext')
   })
 })

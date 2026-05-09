@@ -56,12 +56,24 @@ describe('Read (legacy text path)', () => {
   })
 })
 
-describe('Read (PDF rejection)', () => {
-  it('rejects .pdf files and points to RenderPdfPages', async () => {
-    await runtime.fs.writeFile('paper.pdf', Buffer.from('%PDF-1.7\n'))
-    const result = await fileReadTool.call({ file_path: 'paper.pdf' }, context())
-    assert.equal(result.isError, true)
-    assert.match(String(result.output), /RenderPdfPages/)
+describe('Read (PDF text path)', () => {
+  it('rejects empty PDF files', async () => {
+    await runtime.fs.writeFile('empty.pdf', Buffer.alloc(0))
+    const result = await fileReadTool.call({ file_path: 'empty.pdf' }, context())
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadStructuredOutput
+    assert.equal(output.format, 'pdf')
+    assert.equal(output.text, '')
+    assert.match(output.warnings[0] ?? '', /empty/i)
+  })
+
+  it('rejects files lacking %PDF- header', async () => {
+    await runtime.fs.writeFile('not-a.pdf', Buffer.from('plain text content'))
+    const result = await fileReadTool.call({ file_path: 'not-a.pdf' }, context())
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadStructuredOutput
+    assert.equal(output.format, 'pdf')
+    assert.match(output.warnings[0] ?? '', /not a valid PDF/i)
   })
 })
 

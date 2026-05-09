@@ -12,9 +12,7 @@ import { buildTool } from '../tool.js'
 const DEFAULT_MAX_CHARS = 20_000
 const MAX_MAX_CHARS = 100_000
 const MAX_OFFICE_BYTES = 20 * 1024 * 1024
-
-const PDF_REJECT_MESSAGE =
-  'Read does not extract PDF text because plain text extraction can lose layout, tables, figures, formulas, and scanned content. Use RenderPdfPages to inspect selected PDF pages visually.'
+const MAX_PDF_BYTES = 100 * 1024 * 1024
 
 const inputSchema = z.object({
   file_path: z.string().min(1),
@@ -65,7 +63,7 @@ export const fileReadTool = buildTool<
   description:
     'Read a file as text. Plain text / code / log / json / csv returns line-numbered output sliceable with offset and limit. ' +
     'Office documents (.xlsx, .docx) are auto-extracted via sandbox parser; xlsx accepts sheet / range / max_rows / max_cols. ' +
-    'PDF files are not supported here — use RenderPdfPages instead. ' +
+    'PDF returns extracted text via pdftotext layout mode; for figures / formulas / scanned PDFs use AnalyzeVisuals to inspect pages visually. ' +
     'Channel attachments live under .lightclaw/inbox/<chatId>/<file>.',
   domain: 'environment',
   riskLevel: 'safe',
@@ -79,11 +77,11 @@ export const fileReadTool = buildTool<
       const filePath = resolveInputPath(context.runtime.workspaceRoot, input.file_path)
       const probableFormat = inferArtifactFormat(filePath, undefined)
 
-      if (probableFormat === 'pdf') {
-        return { output: PDF_REJECT_MESSAGE, isError: true }
-      }
-
-      if (probableFormat === 'xlsx' || probableFormat === 'docx') {
+      if (
+        probableFormat === 'pdf' ||
+        probableFormat === 'xlsx' ||
+        probableFormat === 'docx'
+      ) {
         const stat = await context.runtime.fs.stat(filePath)
         if (!stat.isFile) {
           return {
@@ -91,10 +89,11 @@ export const fileReadTool = buildTool<
             isError: true,
           }
         }
-        if (stat.size > MAX_OFFICE_BYTES) {
+        const sizeCap = probableFormat === 'pdf' ? MAX_PDF_BYTES : MAX_OFFICE_BYTES
+        if (stat.size > sizeCap) {
           return {
             output:
-              `Read refused to extract ${stat.size} bytes from ${filePath}; office-doc limit is ${MAX_OFFICE_BYTES} bytes.`,
+              `Read refused to extract ${stat.size} bytes from ${filePath}; ${probableFormat} limit is ${sizeCap} bytes.`,
             isError: true,
           }
         }
