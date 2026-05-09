@@ -17,6 +17,17 @@ export function buildInterjectionBlock(ctx: InterjectionContext): string {
   for (const entry of ctx.interjections) {
     const from = entry.senderName ? ` (from ${entry.senderName})` : ''
     lines.push(`Interjection${from}: ${JSON.stringify(entry.text)}`)
+    if (entry.attachmentPaths?.length) {
+      // Path-only breadcrumb: the model can open the file via Read for
+      // inline pixels. Mid-flight inline isn't worth the architectural
+      // cost (forwarding the bytes through interjectionDrain would
+      // double-spend turn-1's attachment budget); a path the model can
+      // crack open on demand is the cheap correct answer.
+      lines.push('  Files attached (open via Read for inline view):')
+      for (const p of entry.attachmentPaths) {
+        lines.push(`  - ${p}`)
+      }
+    }
   }
   lines.push(
     '',

@@ -61,6 +61,49 @@ describe('buildInterjectionBlock', () => {
 
     assert.match(block, /"say \\"hi\\"\\nthen continue"/)
   })
+
+  it('renders attachment paths as a Read-able breadcrumb', () => {
+    // The attachment path breadcrumb solves the "user dropped an image
+    // mid-flight, but interjections are text-only" gap: the model sees
+    // the path on disk and can `Read('<path>')` to inline the bytes
+    // when needed, without requiring the bytes themselves to ride along
+    // through the interjection queue (which would double-spend turn 1's
+    // attachment budget and complicate dedup).
+    const block = buildInterjectionBlock({
+      interjections: [{
+        messageId: 'm1',
+        senderOpenId: 'ou_alice',
+        senderName: 'Alice',
+        text: '翻译一下',
+        arrivedAt: 1,
+        attachmentPaths: [
+          '/workspace/.lightclaw/inbox/oc_chat/om_post-image-aa.jpg',
+          '/workspace/.lightclaw/inbox/oc_chat/om_post-image-bb.jpg',
+        ],
+      }],
+      originalUserText: 'describe these images',
+      completedToolUses: [],
+    })
+
+    assert.match(block, /Files attached \(open via Read for inline view\):/)
+    assert.match(block, /- \/workspace\/\.lightclaw\/inbox\/oc_chat\/om_post-image-aa\.jpg/)
+    assert.match(block, /- \/workspace\/\.lightclaw\/inbox\/oc_chat\/om_post-image-bb\.jpg/)
+  })
+
+  it('omits the attachment breadcrumb when no paths are present', () => {
+    const block = buildInterjectionBlock({
+      interjections: [{
+        messageId: 'm1',
+        senderOpenId: 'ou_alice',
+        text: 'plain follow-up',
+        arrivedAt: 1,
+      }],
+      originalUserText: 'task',
+      completedToolUses: [],
+    })
+
+    assert.doesNotMatch(block, /Files attached/)
+  })
 })
 
 describe('interjection prompt extractors', () => {

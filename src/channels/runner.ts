@@ -317,12 +317,16 @@ export class ChannelRunner {
       !looksLikeSlash &&
       channelInterjectionQueue.hasInflightFor(mainSessionId)
     ) {
+      const pendingForInterjection = getPendingAttachments(message)
       const entry: InterjectionEntry = {
         messageId: message.messageId,
         senderOpenId: message.senderOpenId,
         senderName: await this.resolveSenderNameForInterjection(message),
         text: message.text,
         arrivedAt: Date.now(),
+        ...(pendingForInterjection.length > 0
+          ? { pendingAttachments: pendingForInterjection }
+          : {}),
       }
       channelInterjectionQueue.push(mainSessionId, entry)
       const denied = await this.strategy.tryAutoDenyForInterjection?.(mainSessionId)
@@ -606,7 +610,48 @@ export class ChannelRunner {
                 streamedAtLeastOnce = true
                 await this.sendReply(effectiveMessage, text)
               },
-              interjectionDrain: () => channelInterjectionQueue.drain(mainSessionId),
+              interjectionDrain: async () => {
+                // Drain returns the queued entries; we then materialize any
+                // attached media so the interjection prompt block can render
+                // path breadcrumbs the model can Read. Materialization is
+                // deferred to here (inside the in-flight turn's lock) so we
+                // can reuse the same runtime + strategy hook the main user
+                // message path already uses, without acquiring a separate
+                // runtime from the queue handler. Failures are best-effort:
+                // a download error reverts the entry to text-only and emits
+                // a stderr breadcrumb; the interjection still goes to the
+                // model so the user's typed words aren't lost.
+                const entries = channelInterjectionQueue.drain(mainSessionId)
+                for (const entry of entries) {
+                  if (!entry.pendingAttachments?.length) continue
+                  const synthetic: NormalizedChannelMessage = {
+                    channel: this.strategy.channelId,
+                    eventId: entry.messageId,
+                    chatId: effectiveMessage.chatId,
+                    chatType: effectiveMessage.chatType,
+                    senderOpenId: entry.senderOpenId,
+                    messageId: entry.messageId,
+                    text: '',
+                    pendingAttachments: entry.pendingAttachments,
+                  }
+                  try {
+                    const materialized = await applyAttachmentMaterialization(
+                      this.strategy,
+                      synthetic,
+                      getRuntime(),
+                      sessionId,
+                    )
+                    if (materialized.length > 0) {
+                      entry.attachmentPaths = materialized.map(m => m.path)
+                    }
+                  } catch (error) {
+                    process.stderr.write(
+                      `${this.strategy.channelId}: interjection materialize failed for ${entry.messageId}: ${error instanceof Error ? error.message : String(error)}\n`,
+                    )
+                  }
+                }
+                return entries
+              },
             })
             break
           } catch (error) {
