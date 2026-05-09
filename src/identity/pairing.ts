@@ -183,35 +183,38 @@ export async function updatePendingApplicantText(
   chatType?: string,
 ): Promise<void> {
   const trimmed = text.trim()
-  if (!trimmed) {
+  // Empty text is a valid case (group @-bot with no other content). We do
+  // NOT stash empty text — there's nothing to remember — but we DO stash
+  // chatId / chatType when present, so post-approve replay can route a
+  // synthetic empty message back to the original chat. The LLM then
+  // responds to the bare `[senderName] ` prefix naturally per the
+  // empty-mention-natural-reply design (commit 9af7001). Fully no-op
+  // only when both text and routing fields are absent.
+  if (!trimmed && chatId === undefined && chatType === undefined) {
     return
   }
   const pending = await readJson<PendingFile>(pendingPath(), {})
-  let mutatedKey: string | null = null
-  for (const [code, entry] of Object.entries(pending)) {
+  let mutated = false
+  for (const [, entry] of Object.entries(pending)) {
     if (`${entry.channel}:${entry.peerId}` !== senderKey) {
       continue
     }
-    if (
-      entry.lastApplicantText === trimmed &&
-      entry.lastApplicantChatId === chatId &&
-      entry.lastApplicantChatType === chatType
-    ) {
-      // Nothing to write; user resent identical text from the same chat.
-      return
+    if (trimmed && entry.lastApplicantText !== trimmed) {
+      entry.lastApplicantText = trimmed
+      entry.lastApplicantTextAt = Date.now()
+      mutated = true
     }
-    entry.lastApplicantText = trimmed
-    entry.lastApplicantTextAt = Date.now()
-    if (chatId !== undefined) {
+    if (chatId !== undefined && entry.lastApplicantChatId !== chatId) {
       entry.lastApplicantChatId = chatId
+      mutated = true
     }
-    if (chatType !== undefined) {
+    if (chatType !== undefined && entry.lastApplicantChatType !== chatType) {
       entry.lastApplicantChatType = chatType
+      mutated = true
     }
-    mutatedKey = code
     break
   }
-  if (mutatedKey) {
+  if (mutated) {
     await writeJsonSecure(pendingPath(), pending)
   }
 }
