@@ -18,12 +18,13 @@ export function buildInterjectionBlock(ctx: InterjectionContext): string {
     const from = entry.senderName ? ` (from ${entry.senderName})` : ''
     lines.push(`Interjection${from}: ${JSON.stringify(entry.text)}`)
     if (entry.attachmentPaths?.length) {
-      // Path-only breadcrumb: the model can open the file via Read for
-      // inline pixels. Mid-flight inline isn't worth the architectural
-      // cost (forwarding the bytes through interjectionDrain would
-      // double-spend turn-1's attachment budget); a path the model can
-      // crack open on demand is the cheap correct answer.
-      lines.push('  Files attached (open via Read for inline view):')
+      // Path-only breadcrumb: the model opens the file via Read for
+      // pixels. The "NEW input" framing matters — without it the model
+      // tends to map "this image" / "translate it" onto inline blocks
+      // already in conversation history rather than the just-attached
+      // file (5/10 dogfood: agent translated turn-1's images instead of
+      // the interjection's new image until the user complained).
+      lines.push('  Newly attached file(s) — NOT yet seen by you. Call Read on each if the interjection refers to them:')
       for (const p of entry.attachmentPaths) {
         lines.push(`  - ${p}`)
       }

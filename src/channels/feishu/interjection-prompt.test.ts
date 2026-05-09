@@ -85,7 +85,8 @@ describe('buildInterjectionBlock', () => {
       completedToolUses: [],
     })
 
-    assert.match(block, /Files attached \(open via Read for inline view\):/)
+    assert.match(block, /Newly attached file\(s\) — NOT yet seen by you/)
+    assert.match(block, /Call Read on each if the interjection refers to them/)
     assert.match(block, /- \/workspace\/\.lightclaw\/inbox\/oc_chat\/om_post-image-aa\.jpg/)
     assert.match(block, /- \/workspace\/\.lightclaw\/inbox\/oc_chat\/om_post-image-bb\.jpg/)
   })
@@ -102,7 +103,7 @@ describe('buildInterjectionBlock', () => {
       completedToolUses: [],
     })
 
-    assert.doesNotMatch(block, /Files attached/)
+    assert.doesNotMatch(block, /Newly attached file/)
   })
 })
 
