@@ -284,6 +284,11 @@ export type LightClawConfig = {
 export type AttachmentsConfig = {
   imageMaxMb: number
   pdfMaxMb: number
+  /** Per-turn cap on inline content blocks (image + pdf combined). Materialized
+   *  attachments past the cap fall through to the text-path breadcrumb so the
+   *  agent picks them up via Read / AnalyzeVisuals tools. Bounds context-window
+   *  blow-up on multi-image batches; default 5. */
+  maxInlinePerTurn: number
 }
 
 export type AutoDreamConfig = {
@@ -1123,6 +1128,10 @@ export function getConfig(): LightClawConfig {
         parsePositiveNumber(process.env.LIGHTCLAW_PDF_MAX_MB, 'pdfMaxMb')
         ?? fileConfig.attachments?.pdfMaxMb
         ?? 32,
+      maxInlinePerTurn:
+        parsePositiveNumber(process.env.LIGHTCLAW_MAX_INLINE_PER_TURN, 'maxInlinePerTurn')
+        ?? fileConfig.attachments?.maxInlinePerTurn
+        ?? 5,
     },
     runtime: {
       backend: runtimeBackend,

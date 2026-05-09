@@ -211,6 +211,9 @@ export type ConfigFileShape = {
      *  fall through to the text-path breadcrumb so the agent picks them
      *  up via Read / AnalyzeVisuals tools. Default 32 MB. */
     pdfMaxMb?: number
+    /** Per-turn cap on inline blocks (image + pdf combined). Excess goes
+     *  to the text-path breadcrumb. Default 5. */
+    maxInlinePerTurn?: number
   }
   lang?: string
 }
