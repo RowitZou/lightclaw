@@ -103,9 +103,34 @@ function asContentBlocks(content: unknown): Array<Record<string, unknown>> {
     return [{ type: 'text', text: content }]
   }
   if (Array.isArray(content)) {
-    return content.map(block => isRecord(block) ? { ...block } : { type: 'text', text: String(block) })
+    return content.map(block =>
+      isRecord(block)
+        ? translateBlockToAnthropicShape(block)
+        : { type: 'text', text: String(block) },
+    )
   }
   return [{ type: 'text', text: String(content ?? '') }]
+}
+
+/** Anthropic's Messages API uses snake_case for `media_type`; LightClaw's
+ *  internal UserContentBlock uses camelCase `mediaType` (matches the rest
+ *  of the codebase's convention and TypeScript style). Image and document
+ *  blocks need translation; tool_result and text pass through. */
+function translateBlockToAnthropicShape(block: Record<string, unknown>): Record<string, unknown> {
+  if (block.type === 'image' || block.type === 'document') {
+    const source = isRecord(block.source) ? block.source : null
+    if (source && source.type === 'base64' && typeof source.mediaType === 'string') {
+      return {
+        ...block,
+        source: {
+          type: 'base64',
+          media_type: source.mediaType,
+          data: source.data,
+        },
+      }
+    }
+  }
+  return { ...block }
 }
 
 function cacheMessageContent(content: unknown): Array<Record<string, unknown>> {
@@ -144,13 +169,22 @@ function cacheMessages(
   }
 
   return messages.map((message, index) => {
-    if (!breakpoints.has(index)) {
-      return message
+    if (breakpoints.has(index)) {
+      return {
+        ...message,
+        content: cacheMessageContent(message.content),
+      }
     }
-    return {
-      ...message,
-      content: cacheMessageContent(message.content),
+    // Non-cached user messages still need image / document mediaType
+    // translation; only assistant messages are pass-through. This keeps
+    // historical attachments in the transcript replayable.
+    if (message.role === 'user' && Array.isArray(message.content)) {
+      return {
+        ...message,
+        content: asContentBlocks(message.content),
+      }
     }
+    return message
   })
 }
 

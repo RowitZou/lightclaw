@@ -72,6 +72,12 @@ export function messageToText(message: Message): string {
       if (block.type === 'text') {
         return `text: ${block.text}`
       }
+      if (block.type === 'image') {
+        return `image: ${block.source.mediaType}`
+      }
+      if (block.type === 'document') {
+        return `document: ${block.source.mediaType}`
+      }
       const prefix = block.is_error ? 'error' : 'ok'
       return `${prefix}: ${block.content}`
     }),

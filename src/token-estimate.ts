@@ -39,11 +39,22 @@ export function estimateMessageTokens(message: Message): number {
     }
 
     const userBlockText = message.message.content
-      .map(block =>
-        block.type === 'tool_result'
-          ? `${block.tool_use_id}\n${block.content}`
-          : block.text,
-      )
+      .map(block => {
+        if (block.type === 'tool_result') {
+          return `${block.tool_use_id}\n${block.content}`
+        }
+        if (block.type === 'text') {
+          return block.text
+        }
+        // image / document blocks: estimate by base64 payload size, since
+        // patch-grid token cost on the provider side is roughly bounded by
+        // raw bytes / 4 for vision and ~per-page for documents. Simple
+        // heuristic — actual provider tokenization runs server-side.
+        if (block.type === 'image' || block.type === 'document') {
+          return ''.padEnd(Math.floor(block.source.data.length / 4), 'x')
+        }
+        return ''
+      })
       .join('\n')
     return estimateTokens(userBlockText) + 4
   }

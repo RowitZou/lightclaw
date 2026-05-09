@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import type {
+  ChatCompletionContentPart,
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions'
@@ -72,7 +73,8 @@ function convertMessages(
         // (OpenAI's per-result message form) and concatenate any text blocks
         // into one `role: 'user'` message at the end. Mirrors the Anthropic
         // shape where tool_results + accompanying text live in a single user
-        // message.
+        // message. Image / document blocks become OpenAI content parts
+        // (image_url / file_id) on the trailing user message.
         const toolResults = message.content.filter(
           (block): block is UserToolResultBlock =>
             isRecord(block) && block.type === 'tool_result',
@@ -86,6 +88,13 @@ function convertMessages(
           )
           .map(block => block.text)
           .filter(text => text.length > 0)
+        const imageBlocks = message.content.filter(
+          (block): block is { type: 'image'; source: { type: 'base64'; mediaType: string; data: string } } =>
+            isRecord(block) &&
+            block.type === 'image' &&
+            isRecord(block.source) &&
+            block.source.type === 'base64',
+        )
 
         for (const block of toolResults) {
           converted.push({
@@ -94,13 +103,37 @@ function convertMessages(
             content: block.content,
           })
         }
-        if (textParts.length > 0) {
-          converted.push({
-            role: 'user',
-            content: textParts.join('\n'),
-          })
+        if (textParts.length > 0 || imageBlocks.length > 0) {
+          if (imageBlocks.length === 0) {
+            converted.push({
+              role: 'user',
+              content: textParts.join('\n'),
+            })
+          } else {
+            // Mixed text + image: use OpenAI content parts. PDF inline is
+            // not pushed here because OpenAI Chat Completions does not have
+            // an equivalent of Anthropic's `document` block — pdf goes to
+            // the text path on this provider via the capability flag, and
+            // the agent uses Read / AnalyzeVisuals tools instead.
+            const parts: ChatCompletionContentPart[] = []
+            for (const text of textParts) {
+              parts.push({ type: 'text', text })
+            }
+            for (const block of imageBlocks) {
+              parts.push({
+                type: 'image_url',
+                image_url: {
+                  url: `data:${block.source.mediaType};base64,${block.source.data}`,
+                },
+              })
+            }
+            converted.push({
+              role: 'user',
+              content: parts,
+            })
+          }
         }
-        if (toolResults.length > 0 || textParts.length > 0) {
+        if (toolResults.length > 0 || textParts.length > 0 || imageBlocks.length > 0) {
           continue
         }
       }

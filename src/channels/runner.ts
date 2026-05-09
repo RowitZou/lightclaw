@@ -30,7 +30,7 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
-import { getProvider } from '../provider/index.js'
+import { getProvider, getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import type { Runtime } from '../runtime/types.js'
 import {
@@ -74,6 +74,7 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
+import { encodeAttachmentsForInline } from './attachment-encoding.js'
 import {
   getPendingAttachments,
   type ChannelId,
@@ -477,10 +478,25 @@ export class ChannelRunner {
           sessionId,
         )
         beginQuery(userId)
+        // Decide which attachments go inline (image / pdf to vision-capable
+        // models) vs which fall back to text path breadcrumbs (the LLM uses
+        // Read / AnalyzeVisuals tools). Capability flag per kind, persisted
+        // in <home>/auth/capabilities-cache.json so subsequent turns skip
+        // the wasted round-trip on known-incapable endpoints.
+        const inlineEncoding = await encodeAttachmentsForInlineForSession({
+          materialized: materializedAttachment,
+          config: appConfig,
+          runtime: getRuntime(),
+        })
+        if (inlineEncoding.warnings.length > 0) {
+          process.stderr.write(
+            `${this.strategy.channelId}: attachment encoding warnings: ${inlineEncoding.warnings.join(' | ')}\n`,
+          )
+        }
         const userText = await formatChannelUserText(
           this.strategy,
           effectiveMessage,
-          materializedAttachment,
+          inlineEncoding.fallbackPaths,
         )
         const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
@@ -520,7 +536,18 @@ export class ChannelRunner {
           return
         }
 
-        const userMessage = createUserMessage(userText, getLastUuid(messages))
+        // If anything was encoded inline, build a content array (text + image
+        // / document blocks). Otherwise stay on the legacy string content
+        // shape — keeps transcripts compact for plain text turns.
+        const userMessageContent = inlineEncoding.inlineBlocks.length > 0
+          ? [
+              ...(userText.length > 0
+                ? [{ type: 'text' as const, text: userText }]
+                : []),
+              ...inlineEncoding.inlineBlocks,
+            ]
+          : userText
+        const userMessage = createUserMessage(userMessageContent, getLastUuid(messages))
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
         const messageCountBeforeQuery = messages.length
@@ -1138,6 +1165,30 @@ export async function applyAttachmentMaterialization(
     message.text = appendLine(message.text, t('channel.media.downloadFailed'))
   }
   return materialized
+}
+
+/** Resolve provider + endpoint + upstreamModel from the session's currently
+ *  selected model, then defer to encodeAttachmentsForInline. Returns the
+ *  same `{inlineBlocks, fallbackPaths, warnings}` shape so the runner can
+ *  branch on whether to build a content array vs a plain string. */
+async function encodeAttachmentsForInlineForSession(input: {
+  materialized: MaterializedAttachment[]
+  config: ReturnType<typeof getConfig>
+  runtime: Runtime
+}): Promise<Awaited<ReturnType<typeof encodeAttachmentsForInline>>> {
+  if (input.materialized.length === 0) {
+    return { inlineBlocks: [], fallbackPaths: [], warnings: [] }
+  }
+  const displayModel = input.config.routing.main ?? input.config.model
+  const { provider, entry } = getProviderFor(input.config, displayModel)
+  return encodeAttachmentsForInline({
+    attachments: input.materialized,
+    provider,
+    endpoint: entry.endpoint,
+    upstreamModel: entry.upstreamModel,
+    runtime: input.runtime,
+    config: input.config,
+  })
 }
 
 /**

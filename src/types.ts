@@ -63,7 +63,34 @@ export type UserTextBlock = {
   text: string
 }
 
-export type UserContentBlock = UserToolResultBlock | UserTextBlock
+// Inline image / pdf attachments. Encoded base64 directly so the transcript
+// snapshot is self-contained — replaying a session does not need the original
+// file on disk anymore. Anthropic-style shape (mediaType + base64 data) is
+// canonical; per-provider message converters translate to image_url for
+// OpenAI Responses, etc.
+export type UserImageBlock = {
+  type: 'image'
+  source: {
+    type: 'base64'
+    mediaType: string
+    data: string
+  }
+}
+
+export type UserDocumentBlock = {
+  type: 'document'
+  source: {
+    type: 'base64'
+    mediaType: string
+    data: string
+  }
+}
+
+export type UserContentBlock =
+  | UserToolResultBlock
+  | UserTextBlock
+  | UserImageBlock
+  | UserDocumentBlock
 
 export type UserMessage = {
   type: 'user'

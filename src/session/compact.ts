@@ -40,6 +40,12 @@ function serializeMessage(message: Message): string {
         if (block.type === 'text') {
           return `[User Text]\n${block.text}`
         }
+        if (block.type === 'image') {
+          return `[Inline Image: ${block.source.mediaType}]`
+        }
+        if (block.type === 'document') {
+          return `[Inline Document: ${block.source.mediaType}]`
+        }
         return `[Tool Result: ${block.tool_use_id}${block.is_error ? ' error' : ''}]\n${block.content}`
       })
       .join('\n')
