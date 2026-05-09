@@ -155,17 +155,61 @@ function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
   if (config.runtime.backend !== 'rlaunch') return
   const pool = getRuntimePool()
   if (config.runtime.rlaunch.preheatOnStartup) {
-    void listActiveCanonicalUsers()
-      .then(users => Promise.allSettled(users.map(userId =>
-        pool.acquire(userId, config).start(),
-      )))
-      .catch(error => {
-        const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[rlaunch-preheat] failed to list users: ${detail}\n`)
-      })
+    void runRlaunchStartupPreheat(pool, config).catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[rlaunch-preheat] aborted: ${detail}\n`)
+    })
   }
   workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.rlaunch.healthCheckIntervalMs)
   workerHealthChecker.start()
+}
+
+/** Iterate over every paired canonical user and call `pool.acquire(...).start()`.
+ *  Each `start()` either reuses an existing cluster worker (state.json record
+ *  is still alive on the cluster) or spawns a fresh one — RlaunchRuntime
+ *  decides per user. We log the entry / per-user failure / summary at this
+ *  layer so admins can confirm preheat ran even when every user reused
+ *  (the reuse path inside RlaunchRuntime is intentionally silent for cluster
+ *  log noise reasons; the per-instance reuse / spawn breadcrumbs come out
+ *  inside _startOnce). */
+async function runRlaunchStartupPreheat(
+  pool: ReturnType<typeof getRuntimePool>,
+  config: LightClawConfig,
+): Promise<void> {
+  let users: string[]
+  try {
+    users = await listActiveCanonicalUsers()
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[rlaunch-preheat] failed to list users: ${detail}\n`)
+    return
+  }
+  if (users.length === 0) {
+    process.stderr.write(`[rlaunch-preheat] no paired users — nothing to preheat\n`)
+    return
+  }
+  process.stderr.write(
+    `[rlaunch-preheat] preheating ${users.length} paired user(s): ${users.join(', ')}\n`,
+  )
+  const results = await Promise.allSettled(
+    users.map(userId => pool.acquire(userId, config).start()),
+  )
+  let succeeded = 0
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'fulfilled') {
+      succeeded += 1
+    } else {
+      const detail = result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason)
+      process.stderr.write(
+        `[rlaunch-preheat] ${users[index]}: start failed: ${detail}\n`,
+      )
+    }
+  }
+  process.stderr.write(
+    `[rlaunch-preheat] finished — ${succeeded}/${users.length} ready\n`,
+  )
 }
 
 /**

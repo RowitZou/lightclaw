@@ -159,8 +159,15 @@ export class RlaunchRuntime implements Runtime {
         } else {
           this.tracker.startSchedule(this.cfg.image)
         }
+        process.stderr.write(
+          `[rlaunch] reused worker ${record.name} for ${this.cfg.canonicalUser} (phase=${phase})\n`,
+        )
         return
       }
+      process.stderr.write(
+        `[rlaunch] dropping stale worker ${record.name} for ${this.cfg.canonicalUser} ` +
+        `(phase=${phase}); will spawn fresh\n`,
+      )
       await deleteWorkerRecord(this.cfg.canonicalUser)
     } else if (record) {
       // Best-effort: still drop the record + spawn fresh even if the cluster
@@ -193,6 +200,10 @@ export class RlaunchRuntime implements Runtime {
       deploymentHash: this.cfg.deploymentHash,
       createdAt: Date.now(),
     })
+    process.stderr.write(
+      `[rlaunch] spawned worker ${newName} for ${this.cfg.canonicalUser} ` +
+      `(image=${this.cfg.image})\n`,
+    )
   }
 
   async isAvailable(): Promise<RuntimeAvailability> {
