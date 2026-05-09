@@ -1077,6 +1077,37 @@ describe('ChannelRunner pairing branch', () => {
     assert.ok(pending[0].lastApplicantTextAt, 'stash timestamp recorded')
   })
 
+  it('bootstrap fallback stashes chatId + chatType even when applicant @-ed bot with empty body', async () => {
+    // 2026-05-09 dogfood: admin's first @ in group was just `@LightClaw`
+    // with no body. After botStripId the message text is empty. The old
+    // updatePendingApplicantText short-circuited on empty text, dropping
+    // chatId / chatType too — post-approve replay then had no way to
+    // route. We now stash routing fields independently of text so an
+    // empty replay still lands in the originating group; the LLM greets
+    // via the bare `[senderName] ` prefix per 9af7001.
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_user',
+        text: '',
+        chatId: 'oc_real_group',
+        chatType: 'group',
+      }),
+    )
+
+    const { listPending } = await import('../identity/pairing.js')
+    const pending = await listPending()
+    assert.equal(pending.length, 1, 'bootstrap fallback created the pending entry')
+    assert.equal(pending[0].lastApplicantText, undefined, 'no body to stash')
+    assert.equal(pending[0].lastApplicantChatId, 'oc_real_group', 'origin chatId stashed for routing')
+    assert.equal(pending[0].lastApplicantChatType, 'group', 'origin chatType stashed for routing')
+  })
+
   it('falls back to in-chat notice when sendNoticeToOpenId hook is absent (legacy strategy)', async () => {
     // Channels without a "send to specific user without an inbound" surface
     // (or future test stubs that omit the hook) keep the old behavior so the

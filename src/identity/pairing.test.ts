@@ -105,7 +105,7 @@ describe('updatePendingApplicantText', () => {
     assert.equal(after.lastApplicantText, 'late ping')
   })
 
-  it('no-ops on empty / whitespace text or unknown sender', async () => {
+  it('no-ops when both text and routing fields are absent or unknown sender', async () => {
     await generateOrReusePending('feishu', 'ou_alice', 'Alice')
     const senderKey: SenderKey = 'feishu:ou_alice'
 
@@ -115,5 +115,38 @@ describe('updatePendingApplicantText', () => {
 
     const [entry] = await listPending()
     assert.equal(entry.lastApplicantText, undefined)
+    assert.equal(entry.lastApplicantChatId, undefined)
+    assert.equal(entry.lastApplicantChatType, undefined)
+  })
+
+  it('stashes chatId / chatType even when applicant text is empty (so replay can route)', async () => {
+    await generateOrReusePending('feishu', 'ou_alice', 'Alice')
+    const senderKey: SenderKey = 'feishu:ou_alice'
+
+    // User @-ed the bot in a group with no body — text is empty after
+    // bot-mention strip, but we still must stash chatId / chatType so
+    // post-approve can route the synthetic empty replay to that group.
+    await updatePendingApplicantText(senderKey, '', 'oc_group_alice', 'group')
+
+    const [entry] = await listPending()
+    assert.equal(entry.lastApplicantText, undefined, 'no text body to stash')
+    assert.equal(entry.lastApplicantChatId, 'oc_group_alice')
+    assert.equal(entry.lastApplicantChatType, 'group')
+    assert.equal(entry.lastApplicantTextAt, undefined, 'no textAt when text not set')
+  })
+
+  it('updates chatId independently of text on a later resend', async () => {
+    await generateOrReusePending('feishu', 'ou_alice', 'Alice')
+    const senderKey: SenderKey = 'feishu:ou_alice'
+
+    // Initial empty @ in group
+    await updatePendingApplicantText(senderKey, '', 'oc_group_alice', 'group')
+    // Then user types a real follow-up in the same group
+    await updatePendingApplicantText(senderKey, 'hello there', 'oc_group_alice', 'group')
+
+    const [entry] = await listPending()
+    assert.equal(entry.lastApplicantText, 'hello there')
+    assert.equal(entry.lastApplicantChatId, 'oc_group_alice')
+    assert.equal(entry.lastApplicantChatType, 'group')
   })
 })

@@ -147,20 +147,18 @@ async function runApprovalPreheat(
     })
 
   // Replay the pre-approval message so the user's first @ doesn't get
-  // dropped on the floor. Requires:
-  //   - a stashed text (the applicant actually said something with their
-  //     first contact, not just an empty mention)
-  //   - a target chatId (prefer the original chat from the pending
-  //     entry — group → group, DM → DM. Fall back to the welcome
-  //     card's DM chat_id when unknown, e.g. old pending.json files
-  //     written before this field was tracked)
-  //   - the channel runner is registered (the daemon owns one)
-  // All three are best-effort — replay is a UX nicety, not a correctness
+  // dropped on the floor. Requires only a target chatId now — we replay
+  // even when applicantText is empty (just `@bot` with no body) so the
+  // LLM can greet via the bare `[senderName] ` prefix per 9af7001.
+  // Routing rules:
+  //   - target chatId: prefer the original chat from the pending entry
+  //     (group → group, DM → DM); fall back to the welcome card's DM
+  //     chat_id when unknown, e.g. old pending.json files written before
+  //     this field was tracked.
+  //   - the channel runner must be registered (the daemon owns one).
+  // Both are best-effort — replay is a UX nicety, not a correctness
   // contract; if any prerequisite is missing we log to stderr and stop.
-  const applicantText = opts.applicantText?.trim()
-  if (!applicantText) {
-    return
-  }
+  const applicantText = opts.applicantText?.trim() ?? ''
   const replayChatId = opts.applicantChatId ?? sendResult?.chatId
   if (!replayChatId) {
     process.stderr.write(

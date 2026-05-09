@@ -300,21 +300,23 @@ export class PairingCardCoordinator {
           userId: current.applicantUserId,
         },
       )
-      // Promote pre-approval text from in-memory state to durable
-      // pending.json so post-approval replay survives daemon restarts.
-      // Fire-and-forget; replay tolerates absence of the text field.
-      if (current.applicantText) {
-        const senderKey = `feishu:${current.applicantOpenId}` as SenderKey
-        void updatePendingApplicantText(
-          senderKey,
-          current.applicantText,
-          current.applicantChatId,
-          current.applicantChatType,
-        ).catch(error => {
-          const detail = error instanceof Error ? error.message : String(error)
-          process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
-        })
-      }
+      // Promote pre-approval text + routing fields from in-memory state to
+      // durable pending.json so post-approval replay survives daemon
+      // restarts. Fire-and-forget; replay tolerates absence of the text
+      // field. Called unconditionally (not gated on applicantText) so that
+      // chatId / chatType still land when the user @-ed the bot with no
+      // body — replay then sends an empty synthetic message that the LLM
+      // greets naturally per 9af7001.
+      const senderKey = `feishu:${current.applicantOpenId}` as SenderKey
+      void updatePendingApplicantText(
+        senderKey,
+        current.applicantText ?? '',
+        current.applicantChatId,
+        current.applicantChatType,
+      ).catch(error => {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
+      })
       this.setState(token, {
         kind: 'submitted',
         applicantOpenId: current.applicantOpenId,
