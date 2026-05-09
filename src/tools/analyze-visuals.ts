@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { describeImage } from '../api.js'
 import { inspectImageBuffer } from '../artifacts/media/image.js'
 import { resizeImageForVision } from '../artifacts/media/resize.js'
+import { getConfig } from '../config.js'
 import { suggestPathRules } from '../permission/suggestions.js'
 import { buildTool, type ToolCallContext } from '../tool.js'
 
@@ -17,11 +18,19 @@ const DEFAULT_RENDER_PAGES = 3
 const DEFAULT_MAX_CHARS = 8_000
 const MAX_MAX_CHARS = 40_000
 
+const MAX_RESIZE_TARGET_MB = 16
+
 const inputSchema = z.object({
   file_path: z.string().min(1),
   pages: z.string().min(1).optional(),
   prompt: z.string().min(1).max(4000).optional(),
   max_chars: z.number().int().min(1).max(MAX_MAX_CHARS).optional(),
+  /** Override the per-image resize target (megabytes). Defaults to the
+   *  value of `attachments.imageMaxMb` in config; raise this when the
+   *  default description is too coarse and the LLM needs higher fidelity
+   *  (fine OCR text, dense diagrams). Capped at 16 MB so a runaway prompt
+   *  cannot send unbounded base64. */
+  resize_target_mb: z.number().min(0.5).max(MAX_RESIZE_TARGET_MB).optional(),
 })
 
 export type AnalyzeVisualsOutput = {
@@ -62,7 +71,8 @@ export const analyzeVisualsTool = buildTool<
   description:
     'Inspect a workspace image (.jpg/.png/.gif/.webp) or PDF visually with a vision-capable model. ' +
     'For PDF, "pages" picks page range (e.g. "1", "1-5", "10-12"); defaults to first 3, max 20 per call. ' +
-    'For text-heavy PDFs, prefer Read first — it is cheaper and more accurate; come here for figures, formulas, layout, scanned PDFs.',
+    'For text-heavy PDFs, prefer Read first — it is cheaper and more accurate; come here for figures, formulas, layout, scanned PDFs. ' +
+    'resize_target_mb (optional, default = attachments.imageMaxMb config, max 16): raise when the description is too coarse and you need higher fidelity (fine OCR text, dense diagrams).',
   domain: 'environment',
   riskLevel: 'execute',
   concurrencySafe: true,
@@ -117,6 +127,7 @@ async function analyzeImage(args: {
     fs: context.runtime.fs,
     workspaceRoot: context.runtime.workspaceRoot,
     exec: params => context.runtime.exec(params),
+    targetBytes: resolveResizeTarget(input.resize_target_mb),
   })
   const inspected = inspectImageBuffer(resized.buffer, {
     mimeType: resized.mimeType,
@@ -222,6 +233,7 @@ async function analyzePdf(args: {
         fs: context.runtime.fs,
         workspaceRoot: context.runtime.workspaceRoot,
         exec: params => context.runtime.exec(params),
+        targetBytes: resolveResizeTarget(input.resize_target_mb),
       })
       if (resized.warnings.length > 0) {
         resizeWarnings.push(`page ${page}: ${resized.warnings.join('; ')}`)
@@ -460,6 +472,18 @@ function pageNumberFromImageName(fileName: string): number | undefined {
 
 function comparePdfPageImageNames(a: string, b: string): number {
   return (pageNumberFromImageName(a) ?? 0) - (pageNumberFromImageName(b) ?? 0) || a.localeCompare(b)
+}
+
+/** Resolve the resize target bytes for a single AnalyzeVisuals call. The
+ *  LLM-supplied `resize_target_mb` overrides; otherwise we default to the
+ *  global `attachments.imageMaxMb` from config so this tool stays in sync
+ *  with the inline-submission resize policy across providers. */
+function resolveResizeTarget(overrideMb: number | undefined): number {
+  if (overrideMb !== undefined) {
+    return overrideMb * 1024 * 1024
+  }
+  const cfg = getConfig().attachments
+  return cfg.imageMaxMb * 1024 * 1024
 }
 
 function truncate(input: string, maxChars: number): { value: string; truncated: boolean } {
