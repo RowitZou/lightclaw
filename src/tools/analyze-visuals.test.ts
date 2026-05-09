@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { parsePdfPageRange } from './pdf-pages.js'
+import { parsePdfPageRange } from './analyze-visuals.js'
 
-describe('RenderPdfPages page ranges', () => {
+describe('AnalyzeVisuals page ranges', () => {
   it('parses explicit PDF page ranges', () => {
     assert.deepEqual(parsePdfPageRange('1'), { firstPage: 1, lastPage: 1 })
     assert.deepEqual(parsePdfPageRange('2-5'), { firstPage: 2, lastPage: 5 })
