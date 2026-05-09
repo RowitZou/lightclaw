@@ -148,4 +148,74 @@ describe('parseMessageContent stripMentions', () => {
     })
     assert.equal(parsed.text, '/rules allow Bash(rsync:*)')
   })
+
+  it('extracts img tag from post content as image mediaKey', () => {
+    // Real Feishu group "@bot + image" payload: post message with an `at`
+    // tag for the bot mention and an `img` tag carrying image_key. Pre-fix
+    // the image_key was silently dropped because parsePostContent only
+    // collected `text` items.
+    const postContent = JSON.stringify({
+      content: [[
+        { tag: 'at', user_id: BOT_OPEN_ID, text: '@_user_1' },
+        { tag: 'img', image_key: 'img_v3_abcdef' },
+      ]],
+    })
+    const parsed = parseMessageContent({
+      content: postContent,
+      messageType: 'post',
+      mentions: [
+        { key: '@_user_1', name: 'LightClaw', openId: BOT_OPEN_ID },
+      ],
+      botStripId: BOT_OPEN_ID,
+    })
+    assert.equal(parsed.text, '')
+    assert.deepEqual(parsed.mediaKeys, [{ kind: 'image', key: 'img_v3_abcdef' }])
+  })
+
+  it('extracts mixed text + image + file from post content in order', () => {
+    const postContent = JSON.stringify({
+      content: [
+        [
+          { tag: 'at', user_id: BOT_OPEN_ID, text: '@_user_1' },
+          { tag: 'text', text: '看看这个截图和报告' },
+        ],
+        [
+          { tag: 'img', image_key: 'img_v3_screenshot' },
+        ],
+        [
+          { tag: 'file', file_key: 'file_v3_report', file_name: 'report.pdf' },
+        ],
+      ],
+    })
+    const parsed = parseMessageContent({
+      content: postContent,
+      messageType: 'post',
+      mentions: [
+        { key: '@_user_1', name: 'LightClaw', openId: BOT_OPEN_ID },
+      ],
+      botStripId: BOT_OPEN_ID,
+    })
+    assert.equal(parsed.text, '看看这个截图和报告')
+    assert.deepEqual(parsed.mediaKeys, [
+      { kind: 'image', key: 'img_v3_screenshot' },
+      { kind: 'file', key: 'file_v3_report', fileName: 'report.pdf' },
+    ])
+  })
+
+  it('passes through emotion / unknown tags without injecting empty mediaKeys', () => {
+    const postContent = JSON.stringify({
+      content: [[
+        { tag: 'text', text: 'emoji-only' },
+        { tag: 'emotion', emoji_type: 'SMILE' },
+        { tag: 'unknown_future_tag', payload: 'whatever' },
+      ]],
+    })
+    const parsed = parseMessageContent({
+      content: postContent,
+      messageType: 'post',
+      mentions: [],
+    })
+    assert.equal(parsed.text, 'emoji-only')
+    assert.equal(parsed.mediaKeys, undefined)
+  })
 })
