@@ -28,66 +28,109 @@ export type InboxAgingSweepResult = {
 
 let intervalHandle: NodeJS.Timeout | null = null
 
-/** Walk one user's `<workspaceRoot>/<canonical>/.lightclaw/inbox/<chatId>/` dir
- *  and delete files older than the configured TTL. Hermes-style mtime sweep —
- *  no archive, no soft-delete, no sidecar manifest. Empty chat directories
- *  are left in place; cleaning empty dirs would race against in-flight
- *  attachment writes. */
+/** Walk one user's `<workspaceRoot>/<canonical>/.lightclaw/inbox/<chatId>/` and
+ *  `<workspaceRoot>/<canonical>/.lightclaw/downloads/` dirs and delete files
+ *  older than the configured TTL. Hermes-style mtime sweep — no archive, no
+ *  soft-delete, no sidecar manifest. Empty subdirectories are left in place;
+ *  cleaning empty dirs would race against in-flight writes.
+ *
+ *  inbox/ is two-deep (inbox/<chatId>/<file>) because attachments are scoped
+ *  per chat. downloads/ is flat (downloads/<file>) because WebFetch has no
+ *  natural namespace key — both share the same TTL since they are the same
+ *  class of cache: agent-readable artifacts that decay in time. */
 export async function sweepInboxForUser(input: {
   canonicalUser: string
   ttlDays: number
 }): Promise<InboxAgingSweepResult> {
   const workspaceRoot = workspaceFor(input.canonicalUser)
-  const inboxRoot = path.join(workspaceRoot, '.lightclaw', 'inbox')
   const cutoffMs = Date.now() - input.ttlDays * 86_400_000
   let removedCount = 0
   let bytesFreed = 0
+  let firstError: string | undefined
 
-  let chatDirs: string[]
+  const inboxResult = await sweepNestedDir(
+    path.join(workspaceRoot, '.lightclaw', 'inbox'),
+    cutoffMs,
+  )
+  removedCount += inboxResult.removedCount
+  bytesFreed += inboxResult.bytesFreed
+  if (inboxResult.error && !firstError) firstError = inboxResult.error
+
+  const downloadsResult = await sweepFlatDir(
+    path.join(workspaceRoot, '.lightclaw', 'downloads'),
+    cutoffMs,
+  )
+  removedCount += downloadsResult.removedCount
+  bytesFreed += downloadsResult.bytesFreed
+  if (downloadsResult.error && !firstError) firstError = downloadsResult.error
+
+  return {
+    user: input.canonicalUser,
+    removedCount,
+    bytesFreed,
+    error: firstError,
+  }
+}
+
+type SweepDirResult = { removedCount: number; bytesFreed: number; error?: string }
+
+async function sweepFlatDir(root: string, cutoffMs: number): Promise<SweepDirResult> {
+  let files: string[]
   try {
-    chatDirs = await fs.readdir(inboxRoot)
+    files = await fs.readdir(root)
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') {
-      return { user: input.canonicalUser, removedCount, bytesFreed }
-    }
+    if (code === 'ENOENT') return { removedCount: 0, bytesFreed: 0 }
     return {
-      user: input.canonicalUser,
-      removedCount,
-      bytesFreed,
+      removedCount: 0,
+      bytesFreed: 0,
       error: error instanceof Error ? error.message : String(error),
     }
   }
-
-  for (const chatDir of chatDirs) {
-    const chatPath = path.join(inboxRoot, chatDir)
-    let files: string[]
+  let removedCount = 0
+  let bytesFreed = 0
+  for (const file of files) {
+    const filePath = path.join(root, file)
+    let stat: Awaited<ReturnType<typeof fs.stat>>
     try {
-      files = await fs.readdir(chatPath)
+      stat = await fs.stat(filePath)
     } catch {
       continue
     }
-    for (const file of files) {
-      const filePath = path.join(chatPath, file)
-      let stat: Awaited<ReturnType<typeof fs.stat>>
-      try {
-        stat = await fs.stat(filePath)
-      } catch {
-        continue
-      }
-      if (!stat.isFile() || stat.mtimeMs >= cutoffMs) continue
-      try {
-        await fs.unlink(filePath)
-        removedCount += 1
-        bytesFreed += stat.size
-      } catch {
-        // Concurrent removal or permission error — skip silently. Aging is
-        // best-effort; a stuck file is not worth surfacing every hour.
-      }
+    if (!stat.isFile() || stat.mtimeMs >= cutoffMs) continue
+    try {
+      await fs.unlink(filePath)
+      removedCount += 1
+      bytesFreed += stat.size
+    } catch {
+      // Concurrent removal or permission error — skip silently. Aging is
+      // best-effort; a stuck file is not worth surfacing every hour.
     }
   }
+  return { removedCount, bytesFreed }
+}
 
-  return { user: input.canonicalUser, removedCount, bytesFreed }
+async function sweepNestedDir(root: string, cutoffMs: number): Promise<SweepDirResult> {
+  let chatDirs: string[]
+  try {
+    chatDirs = await fs.readdir(root)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { removedCount: 0, bytesFreed: 0 }
+    return {
+      removedCount: 0,
+      bytesFreed: 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  let removedCount = 0
+  let bytesFreed = 0
+  for (const chatDir of chatDirs) {
+    const sub = await sweepFlatDir(path.join(root, chatDir), cutoffMs)
+    removedCount += sub.removedCount
+    bytesFreed += sub.bytesFreed
+  }
+  return { removedCount, bytesFreed }
 }
 
 export async function runInboxAgingSweepOnce(

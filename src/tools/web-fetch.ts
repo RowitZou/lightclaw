@@ -11,7 +11,7 @@ const DEFAULT_TIMEOUT_MS = 35_000
 export const webFetchTool = buildTool({
   name: 'WebFetch',
   description:
-    'Fetch content from a URL and return it as Markdown. Supports HTML, plain text, Markdown, and JSON. Binary content is rejected.',
+    'Fetch content from a URL. Text-shaped responses (HTML, plain text, Markdown, JSON, XML) are returned as Markdown. Binary responses (PDF, images, archives, office docs, ...) are downloaded to .lightclaw/downloads/ inside the workspace and the saved path is returned for follow-up tools to consume.',
   domain: 'environment',
   riskLevel: 'execute',
   concurrencySafe: true,
@@ -27,12 +27,22 @@ export const webFetchTool = buildTool({
     const maxBytes = input.maxBytes ?? 200_000
     const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const helper = path.join(context.runtime.helperRoot, 'webfetch.py')
+    // workspaceRoot is in the runtime's own path view (LocalRuntime: host
+    // path, Docker/Rlaunch: /workspace). Posix join is correct in both —
+    // /workspace/.lightclaw/downloads on the sandbox side, /abs/host/...
+    // on LocalRuntime which is also already posix on Linux.
+    const downloadDir = path.posix.join(
+      context.runtime.workspaceRoot.replace(/\\/g, '/'),
+      '.lightclaw',
+      'downloads',
+    )
     const result = await context.runtime.exec({
       command: `python3 ${shellQuote(helper)}`,
       stdin: JSON.stringify({
         url: input.url,
         max_bytes: maxBytes,
         timeout_seconds: Math.ceil(timeoutMs / 1000),
+        download_dir: downloadDir,
       }),
       timeoutMs,
       abortSignal: context.abortSignal,

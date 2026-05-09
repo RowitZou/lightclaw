@@ -89,4 +89,45 @@ describe('inbox aging', () => {
     assert.equal(result.removedCount, 0)
     assert.equal(existsSync(recent), true)
   })
+
+  it('also ages files in the flat downloads/ dir alongside inbox/', async () => {
+    const root = path.join(homeRoot, 'eve', '.lightclaw')
+    const inbox = path.join(root, 'inbox', 'oc_chat')
+    const downloads = path.join(root, 'downloads')
+    mkdirSync(inbox, { recursive: true })
+    mkdirSync(downloads, { recursive: true })
+    const oldInbox = path.join(inbox, 'old.jpg')
+    const oldDownload = path.join(downloads, 'paper-abc123.pdf')
+    const freshDownload = path.join(downloads, 'recent-xyz789.pdf')
+    writeFileSync(oldInbox, 'inboxbytes')
+    writeFileSync(oldDownload, 'downloadbytes')
+    writeFileSync(freshDownload, 'fresh')
+    const tenDaysAgo = Date.now() / 1000 - 10 * 86_400
+    const now = Date.now() / 1000
+    utimesSync(oldInbox, tenDaysAgo, tenDaysAgo)
+    utimesSync(oldDownload, tenDaysAgo, tenDaysAgo)
+    utimesSync(freshDownload, now, now)
+
+    const result = await sweepInboxForUser({ canonicalUser: 'eve', ttlDays: 7 })
+
+    assert.equal(result.removedCount, 2)
+    assert.equal(result.bytesFreed, 'inboxbytes'.length + 'downloadbytes'.length)
+    assert.equal(existsSync(oldInbox), false)
+    assert.equal(existsSync(oldDownload), false)
+    assert.equal(existsSync(freshDownload), true)
+  })
+
+  it('handles missing downloads dir gracefully when inbox exists', async () => {
+    const inbox = path.join(homeRoot, 'frank', '.lightclaw', 'inbox', 'oc_chat')
+    mkdirSync(inbox, { recursive: true })
+    const oldFile = path.join(inbox, 'old.jpg')
+    writeFileSync(oldFile, 'old')
+    const tenDaysAgo = Date.now() / 1000 - 10 * 86_400
+    utimesSync(oldFile, tenDaysAgo, tenDaysAgo)
+
+    const result = await sweepInboxForUser({ canonicalUser: 'frank', ttlDays: 7 })
+
+    assert.equal(result.removedCount, 1)
+    assert.equal(result.error, undefined)
+  })
 })
