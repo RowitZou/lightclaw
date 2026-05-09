@@ -1,3 +1,5 @@
+import type { PendingAttachment } from '../types.js'
+
 export type InterjectionEntry = {
   messageId: string
   senderOpenId: string
@@ -5,6 +7,18 @@ export type InterjectionEntry = {
   text: string
   arrivedAt: number
   triggeredAutoDeny?: boolean
+  /** Captured at queue time from the inbound message — list of mediaKey
+   *  metadata that the runner needs to materialize before the
+   *  interjection block reaches the model. Materialization is deferred
+   *  to drain time because the queue path runs outside the lock /
+   *  outside ALS, and the in-flight turn's runtime is the cheapest
+   *  handle to reach for downloading + writing into inbox. */
+  pendingAttachments?: PendingAttachment[]
+  /** Populated at drain time after `applyAttachmentMaterialization`
+   *  resolves. The interjection prompt block renders these as a
+   *  "Files attached:" breadcrumb so the model sees the path; it can
+   *  open them inline via the Read tool when needed. */
+  attachmentPaths?: string[]
 }
 
 export class InterjectionQueue {

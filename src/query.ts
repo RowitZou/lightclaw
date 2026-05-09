@@ -127,7 +127,7 @@ type QueryParams = {
   /** Prepended to the default system prompt when provided (used by channels). */
   channelContext?: string
   /** Drains mid-flight channel interjections at the next tool boundary. */
-  interjectionDrain?: () => InterjectionEntry[]
+  interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
   /** Async permission UI for non-REPL channels such as Feishu cards. */
   permissionApprover?: PermissionApprover
   /** Function-based tool gate used by forked agents before permission policy. */
@@ -687,7 +687,7 @@ export async function query(params: QueryParams): Promise<{
       // standalone user message, and continue the loop so the LLM gets
       // another turn to react. Same `<user-interjection>` framing as the
       // tool-boundary path.
-      const lateInterjections = params.interjectionDrain?.() ?? []
+      const lateInterjections = (await params.interjectionDrain?.()) ?? []
       if (lateInterjections.length > 0) {
         const lateContent: UserContentBlock[] = [{
           type: 'text',
@@ -792,7 +792,7 @@ export async function query(params: QueryParams): Promise<{
           })
         }
       }
-      const interjections = params.interjectionDrain?.() ?? []
+      const interjections = (await params.interjectionDrain?.()) ?? []
       const content: UserContentBlock[] = [...toolResults]
       if (interjections.length > 0) {
         content.push({
