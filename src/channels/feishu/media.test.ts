@@ -30,7 +30,7 @@ test('fetchFeishuMediaPayload returns buffered media metadata', async () => {
   assert.ok(result)
   assert.equal(result.buffer.toString(), 'image-bytes')
   assert.equal(result.mimeType, 'image/jpeg')
-  assert.equal(result.fileName, 'om_123-image.jpg')
+  assert.match(result.fileName, /^om_123-image-[0-9a-f]{8}\.jpg$/)
 })
 
 test('fetchFeishuMediaPayload bufferizes SDK payload variants', async () => {
@@ -174,10 +174,39 @@ test('materializeFeishuMedia returns null when runtime write fails', async () =>
   assert.equal(result, null)
 })
 
-test('fileNameFor prefers sanitized Feishu filenames', () => {
-  assert.equal(
-    fileNameFor('om_123', { kind: 'file', key: 'file_456', fileName: '../report final.pdf' }),
-    '.._report_final.pdf',
-  )
-  assert.equal(fileNameFor('om_123', { kind: 'audio', key: 'audio_456' }), 'om_123-audio.opus')
+test('fileNameFor prefers sanitized Feishu filenames with per-key prefix', () => {
+  // Even when an upstream filename is provided, the prefix avoids
+  // collisions when two post-message attachments share the same display
+  // name (rare but possible, e.g. two screenshots both named "image.png").
+  const out = fileNameFor('om_123', {
+    kind: 'file',
+    key: 'file_456',
+    fileName: '../report final.pdf',
+  })
+  assert.match(out, /^[0-9a-f]{8}-\.\._report_final\.pdf$/)
+})
+
+test('fileNameFor synthesizes <messageId>-<kind>-<keyHash><ext> for unnamed media', () => {
+  // Unnamed audio: synthesized name carries the hash of the unique
+  // file_key so two audios in the same message land at distinct paths.
+  const out = fileNameFor('om_123', { kind: 'audio', key: 'audio_456' })
+  assert.match(out, /^om_123-audio-[0-9a-f]{8}\.opus$/)
+})
+
+test('fileNameFor avoids collisions across multiple attachments in one message', () => {
+  // The bug we fixed: Feishu `post` messages with N img tags share the
+  // same messageId. Without keying on the unique mediaKey too, all N
+  // would writeFile() to the same inbox path, overwriting each other,
+  // and the encoder would then read the same bytes N times — model
+  // sees "the same image repeated N times".
+  const a = fileNameFor('om_post', { kind: 'image', key: 'img_v3_AAA' })
+  const b = fileNameFor('om_post', { kind: 'image', key: 'img_v3_BBB' })
+  const c = fileNameFor('om_post', { kind: 'image', key: 'img_v3_CCC' })
+  assert.notEqual(a, b)
+  assert.notEqual(b, c)
+  assert.notEqual(a, c)
+  // Same key under different messages stays stable per-message — the
+  // messageId prefix means historical traces don't merge across turns.
+  const d = fileNameFor('om_other', { kind: 'image', key: 'img_v3_AAA' })
+  assert.notEqual(a, d)
 })
