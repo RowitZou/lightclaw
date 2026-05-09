@@ -5,6 +5,7 @@ export type ArtifactExtractionFormat =
   | 'pdf'
   | 'xlsx'
   | 'docx'
+  | 'pptx'
   | 'binary'
 
 export type ArtifactExtractionInput = {

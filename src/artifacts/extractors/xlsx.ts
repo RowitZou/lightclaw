@@ -1,13 +1,27 @@
 import { truncate } from './common.js'
 import type { ArtifactExtractionInput, ArtifactExtractionResult, ArtifactExtractor } from './types.js'
 
+/** openpyxl-based extraction. Handles dates / merged cells / cached formula
+ *  values out of the box (raw stdlib XML parsing got these all wrong). Sheet
+ *  selection by name; range as A1:D20; max_rows / max_cols clamp. Returns
+ *  tab-separated rows + sheet metadata.
+ *  Failure modes:
+ *    127 → python missing
+ *    1   → openpyxl missing (re-emitted as "Install openpyxl")
+ *    2   → file not a valid xlsx zip
+ *    3   → sheet not found / invalid range */
 const XLSX_SCRIPT = String.raw`
 import json
 import os
-import re
 import sys
-import zipfile
-import xml.etree.ElementTree as ET
+from datetime import date, datetime, time
+
+try:
+    import openpyxl
+    from openpyxl.utils import range_boundaries
+except ImportError:
+    sys.stderr.write("openpyxl is not installed in this runtime. Install with: pip install openpyxl")
+    sys.exit(1)
 
 path = os.environ["LIGHTCLAW_EXTRACT_PATH"]
 requested_sheet = os.environ.get("LIGHTCLAW_EXTRACT_SHEET", "").strip()
@@ -15,137 +29,85 @@ requested_range = os.environ.get("LIGHTCLAW_EXTRACT_RANGE", "").strip()
 max_rows = int(os.environ.get("LIGHTCLAW_EXTRACT_MAX_ROWS", "50"))
 max_cols = int(os.environ.get("LIGHTCLAW_EXTRACT_MAX_COLS", "20"))
 
-main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-pkg_rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
-ns = {"x": main_ns, "r": rel_ns, "pr": pkg_rel_ns}
-
-def col_to_num(col):
-    n = 0
-    for ch in col:
-        n = n * 26 + ord(ch.upper()) - 64
-    return n
-
-def cell_ref(ref):
-    m = re.match(r"^([A-Z]+)([0-9]+)", ref or "")
-    if not m:
-        return None
-    return int(m.group(2)), col_to_num(m.group(1))
-
-def range_bounds(value):
-    m = re.match(r"^([A-Z]+)([0-9]+):([A-Z]+)([0-9]+)$", value.upper())
-    if not m:
-        return None
-    left = (int(m.group(2)), col_to_num(m.group(1)))
-    right = (int(m.group(4)), col_to_num(m.group(3)))
-    return min(left[0], right[0]), min(left[1], right[1]), max(left[0], right[0]), max(left[1], right[1])
-
-def text_of(node):
-    return "".join(t.text or "" for t in node.findall(".//x:t", ns))
-
 try:
-    zf = zipfile.ZipFile(path)
-except zipfile.BadZipFile:
-    print("XLSX file is not a valid ZIP archive.", file=sys.stderr)
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+except Exception as exc:
+    msg = str(exc).lower()
+    if "not a zip" in msg or "bad zip" in msg or "badzipfile" in msg:
+        sys.stderr.write("File is not a valid .xlsx (OOXML zip). Legacy .xls files must be saved as .xlsx first.")
+        sys.exit(2)
+    sys.stderr.write(f"openpyxl could not open the workbook: {exc}")
     sys.exit(2)
 
-try:
-    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
-    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-except KeyError as exc:
-    print(f"XLSX archive missing {exc}.", file=sys.stderr)
+sheet_names = wb.sheetnames
+if not sheet_names:
+    sys.stderr.write("XLSX workbook has no sheets.")
     sys.exit(2)
 
-rel_targets = {}
-for rel in rels.findall("pr:Relationship", ns):
-    rid = rel.attrib.get("Id")
-    target = rel.attrib.get("Target")
-    if rid and target:
-        rel_targets[rid] = "xl/" + target.lstrip("/")
-
-sheets = []
-for sheet in workbook.findall(".//x:sheet", ns):
-    name = sheet.attrib.get("name", "")
-    rid = sheet.attrib.get(f"{{{rel_ns}}}id")
-    if name and rid and rid in rel_targets:
-        sheets.append({"name": name, "path": rel_targets[rid]})
-
-if not sheets:
-    print("XLSX workbook has no sheets.", file=sys.stderr)
-    sys.exit(2)
-
-selected = None
 if requested_sheet:
-    for sheet in sheets:
-        if sheet["name"] == requested_sheet:
-            selected = sheet
-            break
-    if selected is None:
-        print(f"Sheet not found: {requested_sheet}", file=sys.stderr)
+    if requested_sheet not in sheet_names:
+        sys.stderr.write(f"Sheet not found: {requested_sheet}. Available: {', '.join(sheet_names)}")
+        sys.exit(3)
+    ws = wb[requested_sheet]
+else:
+    ws = wb[sheet_names[0]]
+
+if requested_range:
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(requested_range.upper())
+    except Exception:
+        sys.stderr.write(f"Invalid range: {requested_range}. Use A1-style, e.g. A1:D20.")
         sys.exit(3)
 else:
-    selected = sheets[0]
+    min_col, min_row = 1, 1
+    max_col = min_col + max_cols - 1
+    max_row = min_row + max_rows - 1
 
-shared = []
-try:
-    shared_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-    shared = [text_of(si) for si in shared_root.findall(".//x:si", ns)]
-except KeyError:
-    shared = []
+def fmt_cell(v):
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.isoformat(sep=" ", timespec="seconds")
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, time):
+        return v.isoformat(timespec="seconds")
+    if isinstance(v, float):
+        if v.is_integer():
+            return str(int(v))
+        return repr(v)
+    return str(v)
 
-bounds = range_bounds(requested_range) if requested_range else None
-if requested_range and bounds is None:
-    print(f"Unsupported range format: {requested_range}", file=sys.stderr)
-    sys.exit(3)
-
-sheet_root = ET.fromstring(zf.read(selected["path"]))
-rows = []
-max_seen_col = 0
-for row in sheet_root.findall(".//x:row", ns):
-    row_index = int(row.attrib.get("r", "0") or "0")
-    if bounds and (row_index < bounds[0] or row_index > bounds[2]):
-        continue
-    values = {}
-    for cell in row.findall("x:c", ns):
-        ref = cell.attrib.get("r", "")
-        parsed = cell_ref(ref)
-        if not parsed:
-            continue
-        _, col_index = parsed
-        if bounds and (col_index < bounds[1] or col_index > bounds[3]):
-            continue
-        if len(rows) >= max_rows:
-            continue
-        raw = cell.find("x:v", ns)
-        inline = cell.find("x:is", ns)
-        value = ""
-        if cell.attrib.get("t") == "s" and raw is not None and raw.text:
-            idx = int(raw.text)
-            value = shared[idx] if 0 <= idx < len(shared) else raw.text
-        elif inline is not None:
-            value = text_of(inline)
-        elif raw is not None and raw.text:
-            value = raw.text
-        values[col_index] = value
-        max_seen_col = max(max_seen_col, col_index)
-    if values:
-        rows.append(values)
-    if len(rows) >= max_rows:
-        break
-
-start_col = bounds[1] if bounds else 1
-end_col = min(bounds[3] if bounds else max_seen_col, start_col + max_cols - 1)
 lines = []
-for row in rows:
-    lines.append("\t".join(row.get(col, "") for col in range(start_col, end_col + 1)))
+rows_read = 0
+cols_read = 0
+truncated_rows = False
+truncated_cols = False
+
+for row_idx, row in enumerate(
+    ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col),
+    start=min_row,
+):
+    if row_idx > min_row + max_rows - 1:
+        truncated_rows = True
+        break
+    cells = list(row)
+    if len(cells) > max_cols:
+        cells = cells[:max_cols]
+        truncated_cols = True
+    cols_read = max(cols_read, len(cells))
+    lines.append("\t".join(fmt_cell(c.value) for c in cells))
+    rows_read += 1
 
 sys.stdout.write(json.dumps({
     "text": "\n".join(lines),
-    "sheet": selected["name"],
-    "sheets": [sheet["name"] for sheet in sheets],
-    "rowsRead": len(rows),
-    "colsRead": max(0, end_col - start_col + 1),
-    "truncated": len(rows) >= max_rows,
+    "sheet": ws.title,
+    "sheets": sheet_names,
+    "rowsRead": rows_read,
+    "colsRead": cols_read,
+    "truncated": truncated_rows or truncated_cols,
+    "totalRows": ws.max_row,
+    "totalCols": ws.max_column,
 }, ensure_ascii=False))
 `
 
@@ -171,6 +133,20 @@ export const xlsxExtractor: ArtifactExtractor = {
     if (result.exitCode === 127) {
       return unsupportedXlsx('python3 is not installed in this runtime.')
     }
+    if (result.exitCode === 1) {
+      return unsupportedXlsx(
+        result.stderr.trim() || 'openpyxl is not installed in this runtime. Install with: pip install openpyxl',
+      )
+    }
+    if (result.exitCode === 2) {
+      return unsupportedXlsx(
+        result.stderr.trim() ||
+          'File is not a valid .xlsx (OOXML zip). Legacy .xls files must be saved as .xlsx first.',
+      )
+    }
+    if (result.exitCode === 3) {
+      return unsupportedXlsx(result.stderr.trim() || 'XLSX sheet or range not found.')
+    }
     if (result.exitCode !== 0) {
       return unsupportedXlsx(result.stderr.trim() || 'XLSX extraction failed.')
     }
@@ -182,6 +158,8 @@ export const xlsxExtractor: ArtifactExtractor = {
         rowsRead?: number
         colsRead?: number
         truncated?: boolean
+        totalRows?: number
+        totalCols?: number
       }
       const { value, truncated } = truncate(parsed.text ?? '', input.maxChars)
       return {
@@ -190,11 +168,13 @@ export const xlsxExtractor: ArtifactExtractor = {
         truncated: Boolean(parsed.truncated) || truncated,
         warnings: parsed.text ? [] : ['XLSX extraction returned no cell text.'],
         metadata: {
-          extractor: 'python-zipfile',
+          extractor: 'openpyxl',
           sheet: parsed.sheet,
           sheets: parsed.sheets,
           rowsRead: parsed.rowsRead,
           colsRead: parsed.colsRead,
+          totalRows: parsed.totalRows,
+          totalCols: parsed.totalCols,
         },
       }
     } catch {

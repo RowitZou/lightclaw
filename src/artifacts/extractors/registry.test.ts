@@ -11,6 +11,7 @@ describe('artifact extractor registry', () => {
     assert.equal(inferArtifactFormat('report.pdf', undefined), 'pdf')
     assert.equal(inferArtifactFormat('book.xlsx', undefined), 'xlsx')
     assert.equal(inferArtifactFormat('doc.docx', undefined), 'docx')
+    assert.equal(inferArtifactFormat('deck.pptx', undefined), 'pptx')
     assert.equal(inferArtifactFormat('image.png', undefined), 'binary')
     assert.equal(inferArtifactFormat('unknown.bin', 'text/plain'), 'text')
   })

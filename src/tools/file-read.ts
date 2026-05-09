@@ -62,7 +62,7 @@ export const fileReadTool = buildTool<
   name: 'Read',
   description:
     'Read a file as text. Plain text / code / log / json / csv returns line-numbered output sliceable with offset and limit. ' +
-    'Office documents (.xlsx, .docx) are auto-extracted via sandbox parser; xlsx accepts sheet / range / max_rows / max_cols. ' +
+    'Office documents (.xlsx, .docx, .pptx) are auto-extracted via sandbox parser (openpyxl / python-docx / python-pptx); xlsx accepts sheet / range / max_rows / max_cols. ' +
     'PDF returns extracted text via pdftotext layout mode; for figures / formulas / scanned PDFs use AnalyzeVisuals to inspect pages visually. ' +
     'Channel attachments live under .lightclaw/inbox/<chatId>/<file>.',
   domain: 'environment',
@@ -80,7 +80,8 @@ export const fileReadTool = buildTool<
       if (
         probableFormat === 'pdf' ||
         probableFormat === 'xlsx' ||
-        probableFormat === 'docx'
+        probableFormat === 'docx' ||
+        probableFormat === 'pptx'
       ) {
         const stat = await context.runtime.fs.stat(filePath)
         if (!stat.isFile) {

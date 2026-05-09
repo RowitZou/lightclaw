@@ -4,6 +4,7 @@ import { csvExtractor } from './csv.js'
 import { docxExtractor } from './docx.js'
 import { jsonExtractor } from './json.js'
 import { pdfExtractor } from './pdf.js'
+import { pptxExtractor } from './pptx.js'
 import { textExtractor } from './text.js'
 import type {
   ArtifactExtractionFormat,
@@ -21,6 +22,7 @@ const extractorByFormat = new Map<ArtifactExtractionFormat, ArtifactExtractor>([
   ['pdf', pdfExtractor],
   ['xlsx', xlsxExtractor],
   ['docx', docxExtractor],
+  ['pptx', pptxExtractor],
   ['binary', createUnsupportedExtractor('binary')],
 ])
 
@@ -52,6 +54,13 @@ export function inferArtifactFormat(
     ext === '.doc'
   ) {
     return 'docx'
+  }
+  if (
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    ext === '.pptx' ||
+    ext === '.ppt'
+  ) {
+    return 'pptx'
   }
   if (mime.includes('json') || ext === '.json') return 'json'
   if (mime.includes('csv') || ext === '.csv' || ext === '.tsv') return 'csv'
@@ -100,7 +109,5 @@ function looksBinaryExtension(ext: string): boolean {
     '.mov',
     '.mp3',
     '.wav',
-    '.ppt',
-    '.pptx',
   ].includes(ext)
 }

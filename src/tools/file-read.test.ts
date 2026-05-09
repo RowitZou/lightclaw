@@ -77,7 +77,7 @@ describe('Read (PDF text path)', () => {
   })
 })
 
-describe('Read (xlsx / docx structured extraction)', () => {
+describe('Read (office structured extraction)', () => {
   it('returns structured warning when xlsx is malformed', async () => {
     await runtime.fs.writeFile('table.xlsx', Buffer.from([0x50, 0x4b]))
     const result = await fileReadTool.call({ file_path: 'table.xlsx' }, context())
@@ -85,20 +85,21 @@ describe('Read (xlsx / docx structured extraction)', () => {
     const output = result.output as FileReadStructuredOutput
     assert.equal(output.format, 'xlsx')
     assert.equal(output.text, '')
-    assert.match(output.warnings[0] ?? '', /XLSX|runtime|python/i)
+    assert.match(output.warnings[0] ?? '', /xlsx|openpyxl|workbook|zip/i)
   })
 
-  it('extracts docx text through the runtime parser', async () => {
+  it('extracts docx text through python-docx', async () => {
     await createDocxFixture('sample.docx')
     const result = await fileReadTool.call({ file_path: 'sample.docx' }, context())
     assert.equal(result.isError, undefined)
     const output = result.output as FileReadStructuredOutput
     assert.equal(output.format, 'docx')
-    assert.equal(output.text, 'Hello from docx\nSecond paragraph')
-    assert.equal(output.metadata?.extractor, 'python-zipfile')
+    assert.match(output.text, /Hello from docx/)
+    assert.match(output.text, /Second paragraph/)
+    assert.equal(output.metadata?.extractor, 'python-docx')
   })
 
-  it('extracts xlsx cells through the runtime parser', async () => {
+  it('extracts xlsx cells through openpyxl', async () => {
     await createXlsxFixture('sample.xlsx')
     const result = await fileReadTool.call(
       { file_path: 'sample.xlsx', max_rows: 2, max_cols: 2 },
@@ -109,6 +110,19 @@ describe('Read (xlsx / docx structured extraction)', () => {
     assert.equal(output.format, 'xlsx')
     assert.equal(output.text, 'Name\tScore\nLightClaw\t100')
     assert.equal(output.metadata?.sheet, 'Sheet1')
+    assert.equal(output.metadata?.extractor, 'openpyxl')
+  })
+
+  it('extracts pptx slides through python-pptx', async () => {
+    await createPptxFixture('sample.pptx')
+    const result = await fileReadTool.call({ file_path: 'sample.pptx' }, context())
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadStructuredOutput
+    assert.equal(output.format, 'pptx')
+    assert.match(output.text, /=== Slide 1/)
+    assert.match(output.text, /Welcome to LightClaw/)
+    assert.equal(output.metadata?.extractor, 'python-pptx')
+    assert.equal(output.metadata?.slideCount, 2)
   })
 })
 
@@ -118,17 +132,13 @@ async function createDocxFixture(filePath: string): Promise<void> {
     env: {
       OUT: path.join(tmp, filePath),
       LIGHTCLAW_FIXTURE_SCRIPT: `
-import os, zipfile
+import os
+from docx import Document
 out = os.environ["OUT"]
-xml = """<?xml version="1.0" encoding="UTF-8"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>
-    <w:p><w:r><w:t>Hello from docx</w:t></w:r></w:p>
-    <w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p>
-  </w:body>
-</w:document>"""
-with zipfile.ZipFile(out, "w") as zf:
-    zf.writestr("word/document.xml", xml)
+doc = Document()
+doc.add_paragraph("Hello from docx")
+doc.add_paragraph("Second paragraph")
+doc.save(out)
 `,
     },
   })
@@ -141,34 +151,43 @@ async function createXlsxFixture(filePath: string): Promise<void> {
     env: {
       OUT: path.join(tmp, filePath),
       LIGHTCLAW_FIXTURE_SCRIPT: `
-import os, zipfile
+import os
+import openpyxl
 out = os.environ["OUT"]
-workbook = """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
-</workbook>"""
-rels = """<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Target="worksheets/sheet1.xml" Type=""/>
-</Relationships>"""
-sheet = """<?xml version="1.0" encoding="UTF-8"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData>
-    <row r="1">
-      <c r="A1" t="inlineStr"><is><t>Name</t></is></c>
-      <c r="B1" t="inlineStr"><is><t>Score</t></is></c>
-    </row>
-    <row r="2">
-      <c r="A2" t="inlineStr"><is><t>LightClaw</t></is></c>
-      <c r="B2"><v>100</v></c>
-    </row>
-  </sheetData>
-</worksheet>"""
-with zipfile.ZipFile(out, "w") as zf:
-    zf.writestr("xl/workbook.xml", workbook)
-    zf.writestr("xl/_rels/workbook.xml.rels", rels)
-    zf.writestr("xl/worksheets/sheet1.xml", sheet)
+wb = openpyxl.Workbook()
+ws = wb.active
+ws.title = "Sheet1"
+ws["A1"] = "Name"
+ws["B1"] = "Score"
+ws["A2"] = "LightClaw"
+ws["B2"] = 100
+wb.save(out)
+`,
+    },
+  })
+  assert.equal(result.exitCode, 0, result.stderr)
+}
+
+async function createPptxFixture(filePath: string): Promise<void> {
+  const result = await runtime.exec({
+    command: 'python3 -c "$LIGHTCLAW_FIXTURE_SCRIPT"',
+    env: {
+      OUT: path.join(tmp, filePath),
+      LIGHTCLAW_FIXTURE_SCRIPT: `
+import os
+from pptx import Presentation
+out = os.environ["OUT"]
+prs = Presentation()
+
+s1 = prs.slides.add_slide(prs.slide_layouts[0])
+s1.shapes.title.text = "Welcome to LightClaw"
+
+s2 = prs.slides.add_slide(prs.slide_layouts[1])
+s2.shapes.title.text = "Agenda"
+body = s2.placeholders[1]
+body.text = "Revenue\\nCosts\\nQ4 plan"
+
+prs.save(out)
 `,
     },
   })
