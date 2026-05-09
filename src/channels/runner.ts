@@ -1254,29 +1254,55 @@ export async function applyAttachmentMaterialization(
     return []
   }
 
+  // Concurrent materialization. Each pending entry is an independent
+  // Feishu API download (im.messageResource.get) followed by a writeFile
+  // to a distinct inbox path (per-mediaKey-hash filename ensures no path
+  // collision after 5/10's `fileNameFor` fix). The two halves of the
+  // critical path — HTTP roundtrip + chunked brainctl writeFile on
+  // Rlaunch — are 1-5 sec each, so a serial loop added (1-5)*N sec of
+  // dead air before the agent's first streamChat call. For a 3-image
+  // post message that's noticeable enough that mid-flight interjections
+  // arrive AFTER the last "channel: attachment materialized" line.
+  //
+  // Promise.allSettled preserves index-based ordering, so the returned
+  // MaterializedAttachment[] keeps the same order as pendingList — the
+  // encoder + agent breadcrumbs stay sequential. Each pending failure
+  // (settled rejection or null return) is counted but does not abort
+  // siblings; admins still see a single i18n download-failed notice in
+  // message.text per turn so the LLM doesn't see per-attachment
+  // failure detail.
+  const startedAt = Date.now()
+  process.stderr.write(
+    `channel: materialize start session=${sessionId} count=${pendingList.length}\n`,
+  )
+  const settled = await Promise.allSettled(
+    pendingList.map(pending =>
+      strategy.materializeAttachment!({ pending, runtime, message }),
+    ),
+  )
   const materialized: MaterializedAttachment[] = []
   let failureCount = 0
-  for (const pending of pendingList) {
-    try {
-      const result = await strategy.materializeAttachment({
-        pending,
-        runtime,
-        message,
-      })
-      if (!result) {
-        failureCount += 1
-        continue
-      }
-      process.stderr.write(
-        `channel: attachment materialized session=${sessionId} path=${result.path}\n`,
-      )
-      materialized.push(result)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+  for (const result of settled) {
+    if (result.status === 'rejected') {
+      const detail = result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason)
       process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
       failureCount += 1
+      continue
     }
+    if (!result.value) {
+      failureCount += 1
+      continue
+    }
+    process.stderr.write(
+      `channel: attachment materialized session=${sessionId} path=${result.value.path}\n`,
+    )
+    materialized.push(result.value)
   }
+  process.stderr.write(
+    `channel: materialize done session=${sessionId} ok=${materialized.length} failed=${failureCount} ms=${Date.now() - startedAt}\n`,
+  )
   if (failureCount > 0) {
     // Surface a single download-failed notice regardless of N; the agent
     // does not benefit from per-attachment failure counts in its prompt.
