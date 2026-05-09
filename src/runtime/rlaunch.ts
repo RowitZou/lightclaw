@@ -489,7 +489,11 @@ export class RlaunchRuntime implements Runtime {
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'webfetch.py'))} && ` +
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'websearch.py'))} && ` +
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
-      `python3 -c "import trafilatura, markdownify" 2>/dev/null`
+      // pdftotext / pdftoppm gate Read('foo.pdf') and AnalyzeVisuals respectively;
+      // PIL / openpyxl / docx / pptx gate the office and image-resize paths.
+      `command -v pdftotext >/dev/null 2>&1 && ` +
+      `command -v pdftoppm >/dev/null 2>&1 && ` +
+      `python3 -c "import trafilatura, markdownify, openpyxl, docx, pptx, PIL" 2>/dev/null`
     const probe = await this.runBrainctlExec({
       command: probeCmd,
       timeoutMs: 15_000,
@@ -506,17 +510,39 @@ export class RlaunchRuntime implements Runtime {
       await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
     }
 
+    // Apt deps: poppler-utils provides pdftotext + pdftoppm, used by Read /
+    // AnalyzeVisuals on PDFs. apt is best-effort: the kubebrain ml-base image
+    // runs as root with a working corp mirror, but if either assumption fails
+    // we surface the error clearly and let the PDF tools degrade with their
+    // own "install poppler-utils" warnings.
+    const apt = await this.runBrainctlExec({
+      command:
+        'command -v pdftotext >/dev/null 2>&1 && command -v pdftoppm >/dev/null 2>&1 || ' +
+        'apt-get update -qq && apt-get install -y -qq --no-install-recommends poppler-utils',
+      timeoutMs: 240_000,
+      maxBufferBytes: 4 * 1024 * 1024,
+    })
+    if (apt.exitCode !== 0) {
+      process.stderr.write(
+        `[rlaunch] poppler-utils install failed (PDF tools will degrade): ${apt.stderr.trim() || apt.stdout.trim()}\n`,
+      )
+    }
+
     // Python deps. -i overrides the image's pre-configured internal mirror.
     // http_proxy is auto-injected by NetworkBridge when network.mode=host.
     // lxml_html_clean is required because justext (transitive of trafilatura)
     // imports `lxml.html.clean`, which was split out in lxml >=5. The kubebrain
     // ml-base image ships a recent lxml so the import fails without this dep.
+    // Pillow / openpyxl / python-docx / python-pptx feed the resize gate +
+    // office extractors; pin only minor floors to track upstream security
+    // fixes without bumping major API breakage.
     const pip = await this.runBrainctlExec({
       command:
         'python3 -m pip install --quiet --no-warn-script-location ' +
         '--break-system-packages ' +
         '-i https://pypi.org/simple/ ' +
-        'trafilatura==2.0.0 markdownify==1.2.2 lxml_html_clean==0.4.4',
+        'trafilatura==2.0.0 markdownify==1.2.2 lxml_html_clean==0.4.4 ' +
+        '"Pillow>=10,<12" "openpyxl>=3.1,<4" "python-docx>=1.1,<2" "python-pptx>=1.0,<2"',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,
     })
