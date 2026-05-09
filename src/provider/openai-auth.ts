@@ -224,6 +224,15 @@ export function createOpenAIAuthProvider(
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
+      // gpt-codex authenticated path runs against the Codex Responses API
+      // with reasoning effort. Image/pdf inline support is uncertain on
+      // gpt-5.5 codex tier — let the autopilot discover and cache.
+      attachments: {
+        image: 'unknown',
+        pdf: 'unknown',
+        audio: false,
+        video: false,
+      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)

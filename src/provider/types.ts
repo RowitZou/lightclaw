@@ -18,7 +18,26 @@ export type ProviderCapabilities = {
     webSearch: boolean
   }
   promptCaching: boolean
+  /** Per-attachment-kind inline support flags. Three states:
+   *    true     — provider documented to accept this kind inline; submit it
+   *    false    — provider rejects this kind inline; fall back to text path
+   *    'unknown' — never tested for this endpoint × upstream-model combo;
+   *                runner submits inline, autopilot flips on capability-
+   *                missing error, and the cache persists the verdict so
+   *                subsequent turns skip the wasted round-trip.
+   *  Defaults are 'unknown' for image/pdf (we'll discover at first use);
+   *  audio/video stay false until provider audio/video APIs are wired. */
+  attachments: {
+    image: AttachmentCapability
+    pdf: AttachmentCapability
+    audio: AttachmentCapability
+    video: AttachmentCapability
+  }
 }
+
+export type AttachmentKind = 'image' | 'pdf' | 'audio' | 'video'
+
+export type AttachmentCapability = boolean | 'unknown'
 
 export type ApiMessage = {
   role: 'user' | 'assistant'

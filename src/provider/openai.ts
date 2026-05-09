@@ -189,6 +189,17 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: false,
       },
       promptCaching: false,
+      // OpenAI Responses API supports image input via image_url parts. PDF
+      // input is supported on selected gpt-4o / gpt-5 generations via the
+      // file input shape, but coverage is uneven across compat layers
+      // (newapi proxy in particular may strip `file` content). Start at
+      // 'unknown' for both and let the autopilot discover.
+      attachments: {
+        image: 'unknown',
+        pdf: 'unknown',
+        audio: false,
+        video: false,
+      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const pendingTools = new Map<number, PendingToolCall>()

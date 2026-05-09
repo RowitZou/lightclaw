@@ -264,6 +264,16 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: webSearchSupported,
       },
       promptCaching: true,
+      // Anthropic Messages API supports image inline (image content block,
+      // 5MB cap) and PDF inline (document content block, 32MB / 100 pages
+      // cap, since 2024-mid). Audio / video inline are not on the chat API
+      // — only Realtime, which we do not target here.
+      attachments: {
+        image: 'unknown',
+        pdf: 'unknown',
+        audio: false,
+        video: false,
+      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const stream = await client.messages.create({
