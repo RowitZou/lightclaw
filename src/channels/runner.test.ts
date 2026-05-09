@@ -436,6 +436,36 @@ describe('ChannelRunner mention gate', () => {
       'synthetic must short-circuit before the mention gate is consulted',
     )
   })
+
+  // Regression: pre-fix, a "pure @bot" group message was dropped by the
+  // transport layer (parseMessageContent stripped the mention → empty text →
+  // !text && !mediaKeys returned null). After the transport-side mention-
+  // aware escape, the runner sees text='' for paired senders and must not
+  // forward the empty content into the LLM. Reply with a short greet notice
+  // and bail out before the lock / query path.
+  it('paired sender empty-text @bot ping replies with greet notice and skips LLM path', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    let allowedChecks = 0
+    const origAllowed = strategy.isMessageAllowed!
+    strategy.isMessageAllowed = (m) => {
+      allowedChecks += 1
+      return origAllowed(m)
+    }
+    setLang('cn')
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '',
+      chatType: 'group',
+    }))
+    assert.equal(allowedChecks, 1, 'must reach isMessageAllowed (past pairing)')
+    assert.equal(strategy.notices.length, 1, 'exactly one greet notice')
+    assert.equal(strategy.notices[0].kind, 'info')
+    assert.match(strategy.notices[0].text, /需要什么帮助/)
+    assert.equal(strategy.replies.length, 0, 'must not enter the LLM reply path')
+  })
 })
 
 describe('ChannelRunner in-flight slash routing', () => {
