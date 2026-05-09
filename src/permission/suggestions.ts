@@ -45,7 +45,7 @@ export function suggestBashRules(command: string): PermissionRuleValue[] {
 // The permission/index.ts fallback handles the "no precise rule available"
 // case (relative path, root path) with a tool-wide allow.
 export function suggestPathRules(
-  toolName: 'Edit' | 'Write' | 'Read',
+  toolName: 'Edit' | 'Write' | 'Read' | 'AnalyzeVisuals',
   filePath: string,
 ): PermissionRuleValue[] {
   if (!filePath || !path.isAbsolute(filePath)) {

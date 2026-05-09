@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils sed gawk grep \
       ripgrep git curl ca-certificates \
       python3 python3-pip \
+      poppler-utils \
       build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
@@ -42,7 +43,11 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir \
       requests httpx pyyaml python-dotenv \
       markdownify==1.2.2 \
       trafilatura==2.0.0 \
-      lxml_html_clean==0.4.4
+      lxml_html_clean==0.4.4 \
+      "Pillow>=10,<12" \
+      "openpyxl>=3.1,<4" \
+      "python-docx>=1.1,<2" \
+      "python-pptx>=1.0,<2"
 
 # Layer 4: Node 22 LTS + pnpm 10 (covers lightclaw self-debug and Node-flavored
 # user scripts; tarball install avoids nvm rc-file overhead and apt repo coupling)
@@ -69,7 +74,9 @@ RUN chmod +x /opt/lightclaw/sandbox-helpers/*.py
 
 # Build-time smoke: fail the build if any expected tool is missing
 RUN jq --version && yq --version \
-    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, trafilatura" \
+    && pdftotext -v 2>&1 | head -1 \
+    && pdftoppm -v 2>&1 | head -1 \
+    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, trafilatura, openpyxl, docx, pptx, PIL" \
     && node --version && pnpm --version \
     && rg --version | head -1
 

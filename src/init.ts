@@ -4,6 +4,8 @@ import path from 'node:path'
 import { registerCodexAuthProvider } from './auth/codex/index.js'
 import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
 import { getBackgroundTaskScheduler } from './background-task/scheduler.js'
+import { loadChannelConfig } from './channels/config.js'
+import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents } from './agents/registry.js'
@@ -120,7 +122,14 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
   startRlaunchPreheatIfNeeded(resolvedConfig)
+  startInboxAgingIfNeeded()
   return { config: resolvedConfig, sessionContext }
+}
+
+function startInboxAgingIfNeeded(): void {
+  const channels = loadChannelConfig()
+  if (!channels.feishu.enabled) return
+  startInboxAgingScheduler(channels.feishu.inboxAging)
 }
 
 async function startNetworkBridgeIfNeeded(config: LightClawConfig): Promise<void> {

@@ -22,6 +22,7 @@ const baseConfig: FeishuChannelConfig = {
   maxBodyBytes: 1024 * 1024,
   mediaEnabled: true,
   typingReaction: false,
+  inboxAging: { enabled: false, ttlDays: 7, intervalMinutes: 60 },
   webhook: {
     host: '0.0.0.0',
     port: 18_850,
