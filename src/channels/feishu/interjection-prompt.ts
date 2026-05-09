@@ -61,9 +61,28 @@ export function buildInterjectionBlock(ctx: InterjectionContext): string {
 }
 
 export function extractOriginalUserText(messages: Message[]): string {
-  const user = messages.find(message => message.type === 'user')
-  if (!user) return ''
-  return contentToText(user.message.content)
+  // The "original request" is the LAST real user input — what the model is
+  // currently working on when the interjection arrives — NOT the first
+  // user message ever in the conversation. A naive `messages.find` returns
+  // turn-1 input even after dozens of turns, which makes the interjection
+  // block point at stale (and after empty-mention replay, sometimes empty)
+  // text and dilutes the "previous request must be completed" rule.
+  //
+  // Walk backward; skip system-injected user messages so we land on the
+  // most recent natural input:
+  //   - tool_result-only user messages (no text block) — internal turn
+  //     plumbing, not a user utterance.
+  //   - earlier <user-interjection> blocks (text starts with that tag) —
+  //     also system-injected, never the "original request".
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i]
+    if (m.type !== 'user') continue
+    const text = contentToText(m.message.content)
+    if (!text) continue
+    if (text.startsWith('<user-interjection>')) continue
+    return text
+  }
+  return ''
 }
 
 export function extractCompletedToolUses(messages: Message[]): Array<{ name: string; brief: string }> {
