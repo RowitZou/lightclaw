@@ -6,9 +6,12 @@
 
 # LightClaw Cwd Layout Notes (Phase 24)
 
-- `<cwd>/.lightclaw/` is a data write area, never a code discovery root. The only LightClaw write inside this namespace is `inbox/<chatId>/<fileName>` for incoming channel media, written through `runtime.fs.writeFile` rather than host fs.
+- `<cwd>/.lightclaw/` is a data write area, never a code discovery root. LightClaw writes inside this namespace fall into two categories:
+  - **Persistent, agent-readable**: `inbox/<chatId>/<fileName>` for incoming channel media (`runtime.fs.writeFile`). The agent can `Read` / `AnalyzeVisuals` these via `<workspaceRoot>/.lightclaw/inbox/<chatId>/<fileName>`. Aged out by the per-canonical-user `inbox-aging` sweep (Hermes-style hourly mtime scan, default ttl 7 days, configurable via `channels.feishu.inboxAging`).
+  - **Ephemeral, tool-internal**: `tmp/pdf-pages/<uuid>/page-N.jpg` (AnalyzeVisuals' pdftoppm output) and `tmp/resize/<uuid>.jpg` (vision resize subroutine output). Both are deleted by the producing tool's `finally` block; inbox-aging will pick up stragglers only on a process crash mid-tool-call. Never agent-readable as artifacts — they exist for the duration of a single tool call.
 - Hook / MCP / Skill discovery is admin-side only: `<lightclawHome>/hooks/`, `<lightclawHome>/mcp.json`, and `<lightclawHome>/skills/`. Do not reintroduce a project-layer scan path under `<cwd>/.lightclaw/` even if Claude Code does.
 - Channel attachments sink in two phases: Feishu `onMessage` attaches `pendingAttachment` metadata to `NormalizedChannelMessage`; `ChannelRunner` materializes it after pairing and runtime acquire via `ChannelRunnerStrategy.materializeAttachment`. New channel adapters should follow the same shape: channel code does not touch identity or runtime pools directly.
+- LightClaw deliberately does NOT register persistent attachments in any sidecar registry / index. Path-as-handle is sufficient for local files; cloud documents (PR4 Feishu collab) will pass tokens directly as tool arguments. This matches Claude Code / OpenClaw / Hermes — none ship an artifact registry. If a future feature genuinely needs cross-session lookup or token-as-handle, scope the abstraction narrowly to that feature instead of resurrecting a global registry.
 
 # LightClaw Pairing Card Notes (Phase 25)
 
