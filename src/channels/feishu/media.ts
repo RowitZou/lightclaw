@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 
 import type * as lark from '@larksuiteoapi/node-sdk'
@@ -80,9 +81,27 @@ export function fileNameFor(messageId: string, key: ParsedMediaKey): string {
   const ext = inferExt(key)
   const rawName = key.fileName?.trim()
   if (rawName) {
-    return sanitize(rawName)
+    // Even when the upstream provided a file name, include the
+    // per-mediaKey suffix so multi-attachment post messages whose
+    // attachments happen to share the same display name don't
+    // collide on disk.
+    return sanitize(`${shortKeyHash(key.key)}-${rawName}`)
   }
-  return sanitize(`${messageId}-${key.kind}${ext}`)
+  // Multi-attachment Feishu `post` messages share `messageId` across
+  // every img / file / media tag, so keying the inbox filename on
+  // (messageId, kind) alone causes every attachment to write to the
+  // same path — earlier downloads silently overwrite later ones, and
+  // the encoder then reads the same bytes N times, producing the
+  // "duplicated images" bug. Include a short hash of the unique
+  // mediaKey (image_key / file_key) so each attachment lands at a
+  // distinct path. Hash kept short so filenames stay readable; SHA-1
+  // first-8-hex collision space (16^8 = 4.3B) is plenty for the
+  // per-message attachment count cap.
+  return sanitize(`${messageId}-${key.kind}-${shortKeyHash(key.key)}${ext}`)
+}
+
+function shortKeyHash(rawKey: string): string {
+  return createHash('sha1').update(rawKey).digest('hex').slice(0, 8)
 }
 
 function inferExt(key: ParsedMediaKey): string {
