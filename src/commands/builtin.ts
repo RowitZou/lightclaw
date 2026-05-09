@@ -235,7 +235,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     async handler(args, ctx) {
       const trimmed = args.trim()
       const userId = getCurrentUserId()
-      const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
+      const ceiling = userId ? await getUserPermissionCeiling(userId) : 'acceptEdits'
       if (!trimmed) {
         const current = getPermissionMode()
         const lines: string[] = [t('mode.menuTitle')]
@@ -551,7 +551,7 @@ async function formatCeilingList(): Promise<string> {
   }
   const lines = [t('ceiling.listTitle')]
   for (const name of names) {
-    const ceiling = identities[name]!.permissionCeiling ?? 'default'
+    const ceiling = identities[name]!.permissionCeiling ?? 'acceptEdits'
     const marker = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
     lines.push(`  ${name}${marker} -> ${modeToAlias(ceiling)}`)
   }
@@ -592,7 +592,7 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
 
 async function formatStatus(ctx: ReplContext): Promise<string> {
   const userId = getCurrentUserId()
-  const ceiling = userId ? await getUserPermissionCeiling(userId) : 'default'
+  const ceiling = userId ? await getUserPermissionCeiling(userId) : 'acceptEdits'
   const adminFlag = userId && (await isAdmin(userId)) ? t('status.adminFlag') : ''
   const channelLabel = ctx.isChannel ? 'channel' : 'terminal'
   const totals = getUsageTotals()
@@ -610,7 +610,7 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
       lines.push('', t('status.identitiesTitle'))
       for (const name of names) {
         const m = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
-        const c = identities[name]!.permissionCeiling ?? 'default'
+        const c = identities[name]!.permissionCeiling ?? 'acceptEdits'
         lines.push(t('status.identitiesLine', { name, adminFlag: m, ceiling: modeToAlias(c) }))
       }
     }
@@ -754,7 +754,7 @@ async function userList(): Promise<string> {
   for (const name of names) {
     const record = identities[name]
     const marker = await isAdmin(name) ? t('status.identitiesAdmin') : ''
-    lines.push(`${name}${marker} ceiling=${modeToAlias(record.permissionCeiling ?? 'default')}`)
+    lines.push(`${name}${marker} ceiling=${modeToAlias(record.permissionCeiling ?? 'acceptEdits')}`)
     for (const channel of ['terminal', 'feishu'] as const) {
       for (const peerId of record.channels[channel]) {
         lines.push(`  - ${channel}:${peerId}`)

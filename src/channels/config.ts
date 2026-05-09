@@ -39,7 +39,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
   const permissionMode =
     parsePermissionMode(process.env.LIGHTCLAW_FEISHU_PERMISSION_MODE) ??
     parsePermissionMode(input?.permissionMode) ??
-    'default'
+    'acceptEdits'
   const webhook: Partial<FeishuChannelConfig['webhook']> = input?.webhook ?? {}
   const transport =
     parseTransport(process.env.LIGHTCLAW_FEISHU_TRANSPORT) ??

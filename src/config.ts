@@ -850,7 +850,7 @@ export function getConfig(): LightClawConfig {
   const permissionMode =
     parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_MODE) ??
     parsePermissionMode(fileConfig.permissionMode) ??
-    'default'
+    'acceptEdits'
   const permissionAuditLog =
     process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
     fileConfig.permissionAuditLog
