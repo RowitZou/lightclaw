@@ -55,12 +55,30 @@ function createHttpInstance(config: FeishuChannelConfig): Lark.HttpInstance {
     }
     return request
   })
-  // The Lark SDK destructures `{ code, data, msg }` directly from the request
-  // result, so the httpInstance must yield the unwrapped response body — not
-  // the standard axios envelope. Without this interceptor every API call
-  // (token fetch, message send, messageResource.get, ...) fails with
-  // "failed to obtain token" + downstream HTTP 400.
-  instance.interceptors.response.use(response => response.data)
+  // The Lark SDK destructures `{ code, data, msg }` directly from most
+  // request results, so JSON APIs need the unwrapped response body — without
+  // this interceptor every API call (token fetch, message send, ...) fails
+  // with "failed to obtain token" + downstream HTTP 400.
+  //
+  // Stream downloads (im.messageResource.get and the ~18 other binary
+  // endpoints) are different: the SDK wraps them as
+  // `{ writeFile, getReadableStream, headers }` and `getReadableStream`
+  // internally reads `res.data.readable` + `res.headers` off the FULL axios
+  // envelope. If we unwrap to `response.data` here, the SDK wrapper sees an
+  // unwrapped Readable as its `res` and crashes with
+  // `Cannot read properties of undefined (reading 'readable')`.
+  // Skip the unwrap for `responseType: 'stream'` / `$return_headers`
+  // requests.
+  instance.interceptors.response.use(response => {
+    const config = response.config as {
+      responseType?: string
+      $return_headers?: boolean
+    }
+    if (config.responseType === 'stream' || config.$return_headers) {
+      return response
+    }
+    return response.data
+  })
   return instance as unknown as Lark.HttpInstance
 }
 
