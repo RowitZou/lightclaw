@@ -9,13 +9,20 @@ import { bashTool } from './tools/bash.js'
 import { conversationGrepTool } from './tools/conversation-grep.js'
 import { conversationListTool } from './tools/conversation-list.js'
 import { conversationReadTool } from './tools/conversation-read.js'
+import {
+  feishuAttachmentListTool,
+  fileArtifactListTool,
+  fileArtifactLookupTool,
+} from './tools/file-artifacts.js'
 import { fileEditTool } from './tools/file-edit.js'
 import { fileReadTool } from './tools/file-read.js'
 import { fileWriteTool } from './tools/file-write.js'
 import { globTool } from './tools/glob.js'
 import { grepTool } from './tools/grep.js'
+import { inspectImageTool } from './tools/image-inspect.js'
 import { memoryReadTool } from './tools/memory-read.js'
 import { memoryWriteTool } from './tools/memory-write.js'
+import { renderPdfPagesTool } from './tools/pdf-pages.js'
 import { sendFileTool } from './tools/send-file.js'
 import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
@@ -42,6 +49,11 @@ export const builtinTools = [
   todoWriteTool,
   webFetchTool,
   webSearchTool,
+  fileArtifactListTool,
+  fileArtifactLookupTool,
+  feishuAttachmentListTool,
+  inspectImageTool,
+  renderPdfPagesTool,
   agentTool,
   backgroundTaskTool,
   listBackgroundTasksTool,

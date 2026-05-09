@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils sed gawk grep \
       ripgrep git curl ca-certificates \
       python3 python3-pip \
+      poppler-utils \
       build-essential \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
@@ -69,6 +70,7 @@ RUN chmod +x /opt/lightclaw/sandbox-helpers/*.py
 
 # Build-time smoke: fail the build if any expected tool is missing
 RUN jq --version && yq --version \
+    && pdftotext -v 2>&1 | head -1 \
     && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, trafilatura" \
     && node --version && pnpm --version \
     && rg --version | head -1
