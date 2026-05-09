@@ -203,6 +203,15 @@ export type ConfigFileShape = {
     enabled?: boolean
     dir?: string
   }
+  attachments?: {
+    /** Image inline cap. Files above this size are Pillow-resized down
+     *  before submission to a vision-capable model. Default 5 MB. */
+    imageMaxMb?: number
+    /** PDF inline cap. Files above this size skip inline submission and
+     *  fall through to the text-path breadcrumb so the agent picks them
+     *  up via Read / AnalyzeVisuals tools. Default 32 MB. */
+    pdfMaxMb?: number
+  }
   lang?: string
 }
 

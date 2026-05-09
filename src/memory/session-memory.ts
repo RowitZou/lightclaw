@@ -80,6 +80,12 @@ function serializeMessageForSm(message: Message): string {
         if (block.type === 'text') {
           return `[User Text]\n${block.text}`
         }
+        if (block.type === 'image') {
+          return `[Inline Image: ${block.source.mediaType}]`
+        }
+        if (block.type === 'document') {
+          return `[Inline Document: ${block.source.mediaType}]`
+        }
         const status = block.is_error ? 'error' : 'ok'
         return `[Tool Result ${status}: ${block.tool_use_id}]\n${block.content}`
       })

@@ -50,7 +50,16 @@ export type NormalizedChannelMessage = {
   /** Feishu-only sidecar used for mention gating and sender-name hints. */
   feishuMentions?: readonly FeishuMention[]
   text: string
+  /** Channel-side attachment metadata, materialized lazily by the runner
+   *  via `ChannelRunnerStrategy.materializeAttachment`. Multiple entries
+   *  represent multi-attachment messages (e.g. Feishu `post` content with
+   *  several images / files mixed in with text). Order is preserved so
+   *  agent-facing breadcrumbs and inline content blocks remain sequential.
+   *  Singular `pendingAttachment` is kept as a legacy shorthand that maps
+   *  to a one-element `pendingAttachments` array — runner consumers should
+   *  use `getPendingAttachments(message)` to read both shapes uniformly. */
   pendingAttachment?: PendingAttachment
+  pendingAttachments?: PendingAttachment[]
   /**
    * Marks a message that the runner synthesized (e.g. post-approval
    * pre-approval-text replay), as opposed to one that arrived from the
@@ -77,6 +86,23 @@ export type PendingAttachment = {
 export type MaterializedAttachment = {
   path: string
   mimeType: string
+}
+
+/** Read both legacy `pendingAttachment` (singular) and new
+ *  `pendingAttachments` (array) into a single ordered list. Singular always
+ *  goes first so the legacy shape's "first attachment" position is stable.
+ *  Returns an empty array when neither field is set. */
+export function getPendingAttachments(
+  message: NormalizedChannelMessage,
+): PendingAttachment[] {
+  const list: PendingAttachment[] = []
+  if (message.pendingAttachment) {
+    list.push(message.pendingAttachment)
+  }
+  if (message.pendingAttachments && message.pendingAttachments.length > 0) {
+    list.push(...message.pendingAttachments)
+  }
+  return list
 }
 
 export type OutgoingChannelFile = {

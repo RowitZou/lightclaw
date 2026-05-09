@@ -54,7 +54,13 @@ export function messageToSearchText(message: Message): string {
     return message.message.content
   }
   return message.message.content
-    .map(block => (block.type === 'text' ? block.text : block.content))
+    .map(block => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'tool_result') return block.content
+      if (block.type === 'image') return `[image: ${block.source.mediaType}]`
+      if (block.type === 'document') return `[document: ${block.source.mediaType}]`
+      return ''
+    })
     .join('\n')
 }
 
@@ -70,7 +76,13 @@ export function simplifyMessage(message: Message): string {
     return `[${timestamp}] user: ${message.message.content}`
   }
   const rendered = message.message.content
-    .map(block => (block.type === 'text' ? block.text : block.content))
+    .map(block => {
+      if (block.type === 'text') return block.text
+      if (block.type === 'tool_result') return block.content
+      if (block.type === 'image') return `[image: ${block.source.mediaType}]`
+      if (block.type === 'document') return `[document: ${block.source.mediaType}]`
+      return ''
+    })
     .join('\n')
   return `[${timestamp}] user: ${rendered}`
 }

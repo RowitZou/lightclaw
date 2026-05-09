@@ -85,6 +85,15 @@ export function convertMessagesToResponsesInput(
     if (message.role === 'user') {
       const toolResults = userToolResults(message.content)
       const text = userContentText(message.content)
+      const imageBlocks = Array.isArray(message.content)
+        ? message.content.filter(
+            (block): block is { type: 'image'; source: { type: 'base64'; mediaType: string; data: string } } =>
+              isRecord(block) &&
+              block.type === 'image' &&
+              isRecord(block.source) &&
+              block.source.type === 'base64',
+          )
+        : []
 
       for (const block of toolResults) {
         out.push({
@@ -93,12 +102,22 @@ export function convertMessagesToResponsesInput(
           output: block.content,
         } as ResponseInputItem.FunctionCallOutput)
       }
-      if (text.length > 0) {
+      if (text.length > 0 || imageBlocks.length > 0) {
+        const parts: Array<Record<string, unknown>> = []
+        if (text.length > 0) {
+          parts.push({ type: 'input_text', text })
+        }
+        for (const block of imageBlocks) {
+          parts.push({
+            type: 'input_image',
+            image_url: `data:${block.source.mediaType};base64,${block.source.data}`,
+          })
+        }
         out.push({
           type: 'message',
           role: 'user',
-          content: [{ type: 'input_text', text }],
-        } as ResponseInputItem.Message)
+          content: parts,
+        } as unknown as ResponseInputItem.Message)
       }
       continue
     }
@@ -224,6 +243,15 @@ export function createOpenAIAuthProvider(
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
+      // gpt-codex authenticated path runs against the Codex Responses API
+      // with reasoning effort. Image/pdf inline support is uncertain on
+      // gpt-5.5 codex tier — let the autopilot discover and cache.
+      attachments: {
+        image: 'unknown',
+        pdf: 'unknown',
+        audio: false,
+        video: false,
+      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)

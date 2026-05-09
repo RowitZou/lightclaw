@@ -30,7 +30,7 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
-import { getProvider } from '../provider/index.js'
+import { getProvider, getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import type { Runtime } from '../runtime/types.js'
 import {
@@ -74,12 +74,15 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
-import type {
-  ChannelId,
-  MaterializedAttachment,
-  NormalizedChannelMessage,
-  OutgoingChannelFile,
-  PendingAttachment,
+import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
+import { recordCapability } from '../provider/capability-cache.js'
+import {
+  getPendingAttachments,
+  type ChannelId,
+  type MaterializedAttachment,
+  type NormalizedChannelMessage,
+  type OutgoingChannelFile,
+  type PendingAttachment,
 } from './types.js'
 
 /**
@@ -476,10 +479,25 @@ export class ChannelRunner {
           sessionId,
         )
         beginQuery(userId)
+        // Decide which attachments go inline (image / pdf to vision-capable
+        // models) vs which fall back to text path breadcrumbs (the LLM uses
+        // Read / AnalyzeVisuals tools). Capability flag per kind, persisted
+        // in <home>/auth/capabilities-cache.json so subsequent turns skip
+        // the wasted round-trip on known-incapable endpoints.
+        const inlineEncoding = await encodeAttachmentsForInlineForSession({
+          materialized: materializedAttachment,
+          config: appConfig,
+          runtime: getRuntime(),
+        })
+        if (inlineEncoding.warnings.length > 0) {
+          process.stderr.write(
+            `${this.strategy.channelId}: attachment encoding warnings: ${inlineEncoding.warnings.join(' | ')}\n`,
+          )
+        }
         const userText = await formatChannelUserText(
           this.strategy,
           effectiveMessage,
-          materializedAttachment,
+          inlineEncoding.fallbackPaths,
         )
         const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
@@ -519,11 +537,27 @@ export class ChannelRunner {
           return
         }
 
-        const userMessage = createUserMessage(userText, getLastUuid(messages))
+        // If anything was encoded inline, build a content array (text + image
+        // / document blocks). Otherwise stay on the legacy string content
+        // shape — keeps transcripts compact for plain text turns.
+        const userMessageContent = inlineEncoding.inlineBlocks.length > 0
+          ? [
+              ...(userText.length > 0
+                ? [{ type: 'text' as const, text: userText }]
+                : []),
+              ...inlineEncoding.inlineBlocks,
+            ]
+          : userText
+        const userMessage = createUserMessage(userMessageContent, getLastUuid(messages))
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
         const messageCountBeforeQuery = messages.length
-        const provider = getProvider(appConfig)
+        // Resolve provider via the same resolver the encoder used so endpoint
+        // / upstreamModel match the cache key for any capability flips.
+        const { provider, entry: providerEntry } = getProviderFor(
+          appConfig,
+          appConfig.routing.main ?? appConfig.model,
+        )
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
@@ -535,6 +569,14 @@ export class ChannelRunner {
         // Without this guard the user would get every intermediate body
         // twice (streamed once, then re-sent as the accumulated final).
         let streamedAtLeastOnce = false
+        // Capability autopilot state. On a provider response that pattern-
+        // matches "this kind is not supported" (image/pdf/audio/video), flip
+        // the cached flag for endpoint × upstreamModel and rebuild the user
+        // message with that kind moved to the fallback path. Cap at one flip
+        // per kind per turn so a misconfigured provider can't loop us — the
+        // four-kind universe gives 4 max retries on top of the transient
+        // retry budget.
+        const capabilityFlipped = new Set<string>()
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
@@ -570,6 +612,65 @@ export class ChannelRunner {
           } catch (error) {
             lastError = error
             const detail = error instanceof Error ? error.message : String(error)
+            // Capability autopilot: per-kind one-shot. Detect provider
+            // signal, flip the cache, rebuild the user message without
+            // the offending content blocks (paths fall through to the
+            // text breadcrumb so the agent uses Read / AnalyzeVisuals),
+            // and retry without consuming a transient attempt.
+            const missingKind = isCapabilityMissingError(error)
+            if (
+              missingKind &&
+              !capabilityFlipped.has(missingKind) &&
+              materializedAttachment.length > 0
+            ) {
+              capabilityFlipped.add(missingKind)
+              recordCapability({
+                endpoint: providerEntry.endpoint,
+                upstreamModel: providerEntry.upstreamModel,
+                kind: missingKind,
+                value: false,
+              })
+              process.stderr.write(
+                `${channelId}: capability flipped (${missingKind}=false) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
+              )
+              // Rebuild encoding with the now-cached false. Re-render text
+              // (sender prefix + path breadcrumbs for ALL fallbacks) and
+              // replace the in-memory + on-disk last user message.
+              const reEncoded = await encodeAttachmentsForInlineForSession({
+                materialized: materializedAttachment,
+                config: appConfig,
+                runtime: getRuntime(),
+              })
+              const reText = await formatChannelUserText(
+                this.strategy,
+                effectiveMessage,
+                reEncoded.fallbackPaths,
+              )
+              const newContent = reEncoded.inlineBlocks.length > 0
+                ? [
+                    ...(reText.length > 0
+                      ? [{ type: 'text' as const, text: reText }]
+                      : []),
+                    ...reEncoded.inlineBlocks,
+                  ]
+                : reText
+              const replaced = createUserMessage(
+                newContent,
+                userMessage.parentUuid,
+                userMessage.timestamp,
+              )
+              // Preserve the same uuid so transcript continuity (parentUuid
+              // chains, branch/merge resolution) stays intact across the
+              // retry.
+              replaced.uuid = userMessage.uuid
+              messages[messages.length - 1] = replaced
+              // Persist: rewrite the last user message on disk so a crash
+              // mid-retry leaves a coherent transcript. rewriteTranscript
+              // overwrites the whole jsonl atomically.
+              await rewriteTranscript(sessionId, messages)
+              attempt -= 1  // structural retry, not transient
+              continue
+            }
             const isTransient = TRANSIENT_FAILURE_PATTERN.test(detail)
             const willRetry = isTransient && attempt < MAX_QUERY_RETRIES
             if (willRetry) {
@@ -1095,38 +1196,72 @@ export async function applyAttachmentMaterialization(
   message: NormalizedChannelMessage,
   runtime: Runtime,
   sessionId: string,
-): Promise<MaterializedAttachment | null> {
-  if (!message.pendingAttachment) {
-    return null
+): Promise<MaterializedAttachment[]> {
+  const pendingList = getPendingAttachments(message)
+  if (pendingList.length === 0) {
+    return []
   }
   if (!strategy.materializeAttachment) {
     process.stderr.write(
       `channel: ${strategy.channelId} got pendingAttachment without materializeAttachment hook\n`,
     )
     message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-    return null
+    return []
   }
 
-  try {
-    const materialized = await strategy.materializeAttachment({
-      pending: message.pendingAttachment,
-      runtime,
-      message,
-    })
-    if (!materialized) {
-      message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-      return null
+  const materialized: MaterializedAttachment[] = []
+  let failureCount = 0
+  for (const pending of pendingList) {
+    try {
+      const result = await strategy.materializeAttachment({
+        pending,
+        runtime,
+        message,
+      })
+      if (!result) {
+        failureCount += 1
+        continue
+      }
+      process.stderr.write(
+        `channel: attachment materialized session=${sessionId} path=${result.path}\n`,
+      )
+      materialized.push(result)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
+      failureCount += 1
     }
-    process.stderr.write(
-      `channel: attachment materialized session=${sessionId} path=${materialized.path}\n`,
-    )
-    return materialized
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`channel: materializeAttachment threw: ${detail}\n`)
-    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
-    return null
   }
+  if (failureCount > 0) {
+    // Surface a single download-failed notice regardless of N; the agent
+    // does not benefit from per-attachment failure counts in its prompt.
+    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+  }
+  return materialized
+}
+
+/** Resolve provider + endpoint + upstreamModel from the session's currently
+ *  selected model, then defer to encodeAttachmentsForInline. Returns the
+ *  same `{inlineBlocks, fallbackPaths, warnings}` shape so the runner can
+ *  branch on whether to build a content array vs a plain string. */
+async function encodeAttachmentsForInlineForSession(input: {
+  materialized: MaterializedAttachment[]
+  config: ReturnType<typeof getConfig>
+  runtime: Runtime
+}): Promise<Awaited<ReturnType<typeof encodeAttachmentsForInline>>> {
+  if (input.materialized.length === 0) {
+    return { inlineBlocks: [], fallbackPaths: [], warnings: [] }
+  }
+  const displayModel = input.config.routing.main ?? input.config.model
+  const { provider, entry } = getProviderFor(input.config, displayModel)
+  return encodeAttachmentsForInline({
+    attachments: input.materialized,
+    provider,
+    endpoint: entry.endpoint,
+    upstreamModel: entry.upstreamModel,
+    runtime: input.runtime,
+    config: input.config,
+  })
 }
 
 /**
@@ -1338,7 +1473,7 @@ function classifyFailure(detail: string): string {
 export async function formatChannelUserText(
   strategy: ChannelRunnerStrategy,
   message: NormalizedChannelMessage,
-  materialized: MaterializedAttachment | null,
+  materialized: MaterializedAttachment[] | MaterializedAttachment | null,
 ): Promise<string> {
   const mentionNames = buildMentionNameMap(message)
   let body = message.text
@@ -1346,16 +1481,24 @@ export async function formatChannelUserText(
     const senderName = await strategy.resolveSenderName(message.senderOpenId, mentionNames)
     body = `[${senderName}] ${body}`
   }
-  if (!materialized) {
+  const list: MaterializedAttachment[] = Array.isArray(materialized)
+    ? materialized
+    : materialized
+      ? [materialized]
+      : []
+  if (list.length === 0) {
     return body
   }
-  return [
-    body || '(no text)',
-    '',
-    t('channel.media.attachment'),
-    `- type: ${materialized.mimeType}`,
-    `- path: ${materialized.path}`,
-  ].join('\n')
+  // Multi-attachment: keep one breadcrumb header + per-attachment lines so
+  // the agent can reference each by index. Order matches the order channel
+  // adapter parsed them in (which matches the user's send order for Feishu
+  // post content).
+  const lines: string[] = [body || '(no text)', '', t('channel.media.attachment')]
+  for (const att of list) {
+    lines.push(`- type: ${att.mimeType}`)
+    lines.push(`- path: ${att.path}`)
+  }
+  return lines.join('\n')
 }
 
 function isGroupLikeChannelMessage(message: NormalizedChannelMessage): boolean {
