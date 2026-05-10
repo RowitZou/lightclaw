@@ -14,6 +14,7 @@ import {
   type UsageStats,
   type UserToolResultBlock,
 } from '../types.js'
+import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, Provider, StreamChatParams } from './types.js'
 
@@ -244,9 +245,10 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       let usage: UsageStats = {}
       let finishReason: string | null = null
 
+      const sanitizedMessages = dropOrphanToolResults(params.messages)
       const stream = await client.chat.completions.create({
         model: params.model,
-        messages: convertMessages(params.system, params.messages),
+        messages: convertMessages(params.system, sanitizedMessages),
         tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,
         max_tokens: params.maxTokens ?? 8192,
         stream: true,
