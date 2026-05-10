@@ -38,13 +38,15 @@ import path from 'node:path'
  * `explore`), and the four one-shot kinds tag helper LLM calls that fire
  * inside the main query lifecycle.
  *
- * `describe-image` tags vision sub-LLM calls made by the multimodal
- * finalization pass (Read tool produces image_block in tool_result; OpenAI
- * Chat / Responses tool messages are string-only so we run a sub-LLM
- * describe-and-replace on the chunked images). These calls go through
- * `provider.describeImage` instead of `streamChat`, but they consume tokens
- * and matter for cost / failure analysis, so the api-logs surface tracks
- * them alongside the streamChat record kinds.
+ * `describe-image` and `transcribe-audio` tag sub-LLM helper calls that
+ * bypass `streamChat`: vision describe (OpenAI Chat/Responses tool
+ * messages are string-only so we describe-and-replace image blocks via
+ * `provider.describeImage`) and audio transcription (`provider.transcribeAudio`,
+ * typically whisper-1 on OpenAI). These consume tokens / per-second billing
+ * and matter for cost & failure analysis, so the api-logs surface tracks
+ * them alongside the streamChat record kinds. Raw image bytes / audio
+ * buffers are deliberately omitted from the request payload — the wrapper
+ * records prompt + image_count or model + audio metadata + result text.
  */
 export type ApiLogKind =
   | 'main'
@@ -54,6 +56,7 @@ export type ApiLogKind =
   | 'compact'
   | 'tool-summarize'
   | 'describe-image'
+  | 'transcribe-audio'
 
 export interface ApiLogTurnRecord {
   kind: ApiLogKind

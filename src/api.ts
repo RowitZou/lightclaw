@@ -321,5 +321,78 @@ export async function transcribeAudio(
   if (!provider.transcribeAudio) {
     throw new Error(`Model provider "${provider.name}" does not support audio transcription yet.`)
   }
-  return provider.transcribeAudio(rest)
+  return loggedTranscribeAudio({ provider, displayModel: model, params: rest })
+}
+
+/** Invoke `provider.transcribeAudio` and append a `kind: 'transcribe-audio'`
+ *  record to api-logs. Same shape contract as `loggedDescribeImage`: raw
+ *  audio bytes are omitted from the request payload (would defeat the cost
+ *  observability point); records the model + filename + mimeType + audio
+ *  size in bytes + result text. Errors are captured and re-thrown so caller
+ *  error handling stays unchanged. */
+async function loggedTranscribeAudio(input: {
+  provider: { transcribeAudio?: (p: TranscribeAudioParams) => Promise<TranscribeAudioResult> }
+  displayModel: string
+  params: TranscribeAudioParams
+}): Promise<TranscribeAudioResult> {
+  const fn = input.provider.transcribeAudio
+  if (!fn) {
+    throw new Error(`transcribeAudio not available on this provider`)
+  }
+  const logger = getActiveApiLogger()
+  if (!logger) {
+    return fn(input.params)
+  }
+  const audioBytes = input.params.audio?.buffer?.byteLength ?? 0
+  const audioName = input.params.audio?.fileName ?? '(unnamed)'
+  const audioMime = input.params.audio?.mimeType ?? '(unknown)'
+  const startedAt = new Date().toISOString()
+  let result: TranscribeAudioResult | undefined
+  let errorRec: { name: string; message: string } | null = null
+  try {
+    result = await fn(input.params)
+    return result
+  } catch (error) {
+    errorRec = {
+      name: error instanceof Error ? error.name : 'Error',
+      message: error instanceof Error ? error.message : String(error),
+    }
+    throw error
+  } finally {
+    const record: ApiLogTurnRecord = {
+      kind: 'transcribe-audio',
+      sessionId: getSessionId(),
+      ...(getCurrentUserId() ? { user: getCurrentUserId()! } : {}),
+      turn: 0,
+      attempt: 0,
+      ts: startedAt,
+      model: input.displayModel,
+      request: {
+        system: '',
+        tools: [],
+        messages: [
+          {
+            role: 'user',
+            content:
+              `Audio: ${audioName} (${audioMime}, ${audioBytes} bytes)` +
+              (input.params.prompt ? `\nPrompt: ${input.params.prompt}` : '') +
+              (input.params.language ? `\nLanguage: ${input.params.language}` : '') +
+              `\n[audio buffer omitted from log]`,
+          },
+        ],
+      },
+      ...(errorRec
+        ? { error: errorRec }
+        : result !== undefined
+          ? {
+              response: {
+                content: [{ type: 'text', text: result.text }],
+                stopReason: 'end_turn',
+                usage: {},  // transcribeAudio providers don't expose usage today
+              },
+            }
+          : {}),
+    }
+    void logger.appendTurn(record)
+  }
 }

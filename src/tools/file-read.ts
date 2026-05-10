@@ -105,7 +105,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   description:
     'Read a file. Plain text / code / log / json / csv returns line-numbered output sliceable with offset and limit. '
     + 'Office documents (.xlsx, .docx, .pptx) auto-extract via sandbox parser (openpyxl / python-docx / python-pptx); xlsx accepts sheet / range / max_rows / max_cols. '
-    + 'PDF returns extracted text via pdftotext layout mode by default. To inspect figures / formulas / scanned pages, pass `pages` (e.g. "1", "1-5", max 20) — that path renders pages with pdftoppm and emits inline image blocks for vision-capable models, or sub-LLM-described text otherwise. '
+    + 'PDF returns extracted text via pdftotext layout mode by default — prefer this path when the text alone is sufficient (papers, reports, code docs); the visual path costs an extra sub-LLM describe pass per page on non-Anthropic providers. To inspect figures / formulas / scanned pages, pass `pages` (e.g. "1", "1-5", max 20) — that path renders pages with pdftoppm and emits inline image blocks for vision-capable models, or sub-LLM-described text otherwise. '
     + 'Image files (.jpg/.png/.gif/.webp) return inline image blocks so the model sees pixels directly; on non-vision endpoints they degrade to a sub-LLM description. '
     + 'resize_target_mb (optional, default = attachments.imageMaxMb config, max 16): raise when the default fidelity is too coarse and the model needs more detail. '
     + 'Channel attachments live under .lightclaw/inbox/<chatId>/<file>; web downloads under .lightclaw/downloads/<file>.',
