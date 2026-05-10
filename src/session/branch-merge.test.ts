@@ -83,6 +83,51 @@ describe('branch merge-back', () => {
     assert.equal(transcript[1]?.branchPlaceholder?.status, 'interrupted')
   })
 
+  it('recovers placeholders in Phase 26 feishu:dm:<chatId> sessions (todo §1.7.1 regression)', async () => {
+    // Phase 26 sessionId formula: `feishu:dm:<chatId>` for DMs and
+    // `feishu:group:<chatId>:<senderOpenId>` for groups. Pre-fix the
+    // recovery sweep guarded on startsWith('feishu-') and skipped every
+    // modern session, so any /branch placeholder stuck in 'running' after
+    // a daemon crash never recovered. Cover both DM and group shapes.
+    await appendBranchSpawnPair({
+      mainSessionId: 'feishu:dm:oc_alice_dm',
+      userQuery: 'long work in DM',
+      meta: {
+        branchId: 'dm-lost',
+        branchSessionId: 'branch-alice-dm-lost',
+        status: 'running',
+        startedAt: '2026-05-07T10:00:00.000Z',
+      },
+    })
+    await appendBranchSpawnPair({
+      mainSessionId: 'feishu:group:oc_g:ou_alice',
+      userQuery: 'long work in group',
+      meta: {
+        branchId: 'grp-lost',
+        branchSessionId: 'branch-alice-grp-lost',
+        status: 'running',
+        startedAt: '2026-05-07T10:00:00.000Z',
+      },
+    })
+
+    const count = await recoverOrphanedBranchPlaceholders(path.join(tmpHome, 'sessions'))
+    assert.equal(count, 2, 'both DM and group session placeholders must recover')
+
+    const dmTranscript = await loadTranscript('feishu:dm:oc_alice_dm')
+    const dmPlaceholder = dmTranscript[1]
+    assert.equal(dmPlaceholder?.type, 'assistant')
+    if (dmPlaceholder?.type === 'assistant') {
+      assert.equal(dmPlaceholder.branchPlaceholder?.status, 'interrupted')
+    }
+    const groupTranscript = await loadTranscript('feishu:group:oc_g:ou_alice')
+    const groupPlaceholder = groupTranscript[1]
+    assert.equal(groupPlaceholder?.type, 'assistant')
+    if (groupPlaceholder?.type === 'assistant') {
+      assert.equal(groupPlaceholder.branchPlaceholder?.status, 'interrupted')
+    }
+  })
+
+
   it('returns kind=replaced when placeholder is found and rewritten', async () => {
     await appendBranchSpawnPair({
       mainSessionId: 'feishu-alice',
