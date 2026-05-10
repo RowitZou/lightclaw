@@ -235,7 +235,19 @@ export async function recoverOrphanedBranchPlaceholders(
 
   let recovered = 0
   for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith('feishu-')) {
+    // Phase 26 sessionId formula uses `feishu:` (colons, no sanitize), e.g.
+    // `feishu:dm:<chatId>` and `feishu:group:<chatId>:<senderOpenId>`. The
+    // legacy Phase 20 form was `feishu-<canonical>`. Both are accepted so a
+    // daemon-crash recovery sweep covers both modern Feishu sessions and any
+    // pre-Phase-26 session directories that may still be on disk after an
+    // upgrade. Without the `feishu:` branch, every modern session's stuck
+    // /branch placeholder slips past recovery and poisons the next turn
+    // (transcript ends in a `running` assistant message that the LLM either
+    // can't pair to a user message or interprets as an unfinished tool_use).
+    if (
+      !entry.isDirectory() ||
+      (!entry.name.startsWith('feishu:') && !entry.name.startsWith('feishu-'))
+    ) {
       continue
     }
     const messages = await loadTranscript(entry.name)
