@@ -41,7 +41,7 @@ beforeEach(() => {
   tmpMemoryDir = path.join(tmpRoot, 'memory', 'alice')
   savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
   process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
-  saveCacheSafeParams(null)
+  saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
   setRunForkedAgentForTest(null)
 })
@@ -52,7 +52,7 @@ afterEach(() => {
   } else {
     process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
   }
-  saveCacheSafeParams(null)
+  saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
   setRunForkedAgentForTest(null)
   rmSync(tmpRoot, { recursive: true, force: true })
@@ -112,7 +112,7 @@ describe('autoDream runner', () => {
   it('does not count the current session toward the session gate', async () => {
     writeSession('current', 'alice', Date.now())
     writeSession('old-1', 'alice', Date.now() + 1)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvoked = false
     setRunForkedAgentForTest(async () => {
@@ -135,7 +135,7 @@ describe('autoDream runner', () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
     writeSession('s3', 'alice', Date.now() + 2)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     mkdirSync(tmpMemoryDir, { recursive: true })
     writeFileSync(consolidationLockPath(tmpMemoryDir), `${process.pid}\n`)
@@ -157,7 +157,7 @@ describe('autoDream runner', () => {
   })
 
   it('skips when scan throttle is active', async () => {
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
     setRunForkedAgentForTest(async () => fakeForkResult())
 
     writeSession('s1', 'alice', Date.now())
@@ -204,7 +204,7 @@ describe('autoDream runner', () => {
       writeSession('s1', 'alice', Date.now())
       writeSession('s2', 'alice', Date.now() + 1)
       writeSession('s3', 'alice', Date.now() + 2)
-      saveCacheSafeParams(fakeCacheSafeParams())
+      saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
       setRunForkedAgentForTest(async () => {
@@ -232,7 +232,7 @@ describe('autoDream runner', () => {
     try {
       writeSession('s1', 'alice', Date.now())
       writeSession('s2', 'alice', Date.now() + 1)
-      saveCacheSafeParams(fakeCacheSafeParams())
+      saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
       setRunForkedAgentForTest(async () => {
@@ -256,7 +256,7 @@ describe('autoDream runner', () => {
   it('runs the fork and marks consolidation succeeded when all gates pass', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvocations = 0
     setRunForkedAgentForTest(async () => {
@@ -282,7 +282,7 @@ describe('autoDream runner', () => {
   it('rolls back the lock when the fork throws', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     await tryAcquireConsolidationLock(tmpMemoryDir)
     const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
@@ -318,7 +318,7 @@ describe('autoDream runner', () => {
   it('does not run a second fork while one is in progress for the same user', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvocations = 0
     let signalForkEntered: () => void = () => {}
@@ -353,7 +353,7 @@ describe('autoDream runner', () => {
   it('drainPendingDream waits for in-flight runs', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams(fakeCacheSafeParams())
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let signalForkEntered: () => void = () => {}
     const forkEntered = new Promise<void>(resolve => {

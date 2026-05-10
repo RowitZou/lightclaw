@@ -12,6 +12,12 @@ export type ExtractCtx = {
   messages: Message[]
   lastExtractedAt: number
   memoryDir: string
+  /** Canonical user keyed under per-user `cacheSafeParams` storage. Without
+   *  this the extraction fork would read whichever main turn last finished
+   *  process-wide — see Phase 28 audit §1.7.4 (cross-user MEMORY.md
+   *  contamination). Optional (terminal admin without identity returns
+   *  undefined and the fork is skipped via the no-cacheSafeParams branch). */
+  canonicalUser: string | undefined
   config: LightClawConfig
 }
 
@@ -162,7 +168,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   await ensureMemoryDir(ctx.memoryDir)
   const existingMemories = await scanMemoryFiles(ctx.memoryDir)
-  const cacheSafeParams = getLastCacheSafeParams()
+  const cacheSafeParams = getLastCacheSafeParams(ctx.canonicalUser)
   if (!cacheSafeParams) {
     console.error('[memory] no cacheSafeParams available, skipping extraction')
     return {
@@ -282,6 +288,7 @@ export async function flushBeforeCompact(params: {
   messages: Message[]
   lastExtractedAt: number
   memoryDir: string
+  canonicalUser: string | undefined
   config: LightClawConfig
   timeoutMs: number
 }): Promise<ExtractResult> {
@@ -291,6 +298,7 @@ export async function flushBeforeCompact(params: {
       messages: params.messages,
       lastExtractedAt: params.lastExtractedAt,
       memoryDir: params.memoryDir,
+      canonicalUser: params.canonicalUser,
       config: params.config,
     }),
     new Promise<typeof TIMEOUT>(resolve =>

@@ -1,7 +1,7 @@
 import { getConfig } from '../config.js'
 import { buildSubagentPrompt } from '../prompt.js'
 import { getProvider } from '../provider/index.js'
-import { getRuntime } from '../state.js'
+import { getCurrentUserId, getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { AgentType } from './types.js'
@@ -73,7 +73,7 @@ export async function runSubagent(params: {
   // dedicated subagent model routing key — model name is part of the cache
   // key, so a swap forces 100% cache miss on every AgentTool call. Auto-compact
   // / auto-memory gating is driven by `mode: 'subagent'` in query.ts.
-  const existingCache = getLastCacheSafeParams()
+  const existingCache = getLastCacheSafeParams(getCurrentUserId())
   const cacheSafeParams = createCacheSafeParams({
     systemPrompt: buildSubagentPrompt(tools, getRuntime().workspaceRoot, agent),
     tools,

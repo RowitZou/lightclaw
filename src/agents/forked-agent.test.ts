@@ -5,6 +5,7 @@ import type { LightClawConfig } from '../config.js'
 import { createUserMessage } from '../messages.js'
 import type { Tool } from '../tool.js'
 import {
+  _resetCacheSafeParamsForTest,
   createCacheSafeParams,
   getLastCacheSafeParams,
   saveCacheSafeParams,
@@ -38,7 +39,8 @@ function tool(name: string): Tool {
   }
 }
 
-test('cache-safe params save/get round-trip', () => {
+test('cache-safe params save/get round-trip per user', () => {
+  _resetCacheSafeParamsForTest()
   const params = createCacheSafeParams({
     systemPrompt: 'system',
     tools: [tool('Read')],
@@ -46,10 +48,53 @@ test('cache-safe params save/get round-trip', () => {
     config: dummyConfig,
   })
 
-  saveCacheSafeParams(params)
-  assert.equal(getLastCacheSafeParams(), params)
-  saveCacheSafeParams(null)
-  assert.equal(getLastCacheSafeParams(), null)
+  saveCacheSafeParams('alice', params)
+  assert.equal(getLastCacheSafeParams('alice'), params)
+  saveCacheSafeParams('alice', null)
+  assert.equal(getLastCacheSafeParams('alice'), null)
+})
+
+test('cache-safe params keep users isolated (Phase 28 §1.7.4 regression)', () => {
+  _resetCacheSafeParamsForTest()
+  const aliceParams = createCacheSafeParams({
+    systemPrompt: 'alice-system',
+    tools: [tool('Read')],
+    messages: [createUserMessage('alice', null, 1)],
+    config: dummyConfig,
+  })
+  const bobParams = createCacheSafeParams({
+    systemPrompt: 'bob-system',
+    tools: [tool('Read')],
+    messages: [createUserMessage('bob', null, 2)],
+    config: dummyConfig,
+  })
+
+  // The race the per-canonical Map closes: A saves, B saves, A reads — A
+  // must still see A's snapshot, not whatever B last wrote process-wide.
+  saveCacheSafeParams('alice', aliceParams)
+  saveCacheSafeParams('bob', bobParams)
+
+  assert.equal(getLastCacheSafeParams('alice'), aliceParams)
+  assert.equal(getLastCacheSafeParams('bob'), bobParams)
+
+  saveCacheSafeParams('alice', null)
+  assert.equal(getLastCacheSafeParams('alice'), null)
+  assert.equal(getLastCacheSafeParams('bob'), bobParams, "deleting alice must not touch bob's slot")
+})
+
+test('cache-safe params no-op on undefined canonical user', () => {
+  _resetCacheSafeParamsForTest()
+  const params = createCacheSafeParams({
+    systemPrompt: 'system',
+    tools: [tool('Read')],
+    messages: [createUserMessage('hello', null, 1)],
+    config: dummyConfig,
+  })
+
+  // Terminal admin without an identity yet: save / get must be inert
+  // rather than collapse every undefined caller into one shared slot.
+  saveCacheSafeParams(undefined, params)
+  assert.equal(getLastCacheSafeParams(undefined), null)
 })
 
 test('cache-safe params snapshots message and tool arrays', () => {
