@@ -28,6 +28,8 @@ export type FeishuRawMessage = {
   messageId: string
   threadId?: string
   rootId?: string
+  /** Feishu inbound message.parent_id, present when the user replied to another message. */
+  parentId?: string
   mentions?: FeishuMention[]
   text: string
   mediaKeys?: ParsedMediaKey[]

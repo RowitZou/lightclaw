@@ -68,6 +68,7 @@ describe('normalizeReceiveV1 strip-empty escape', () => {
         chat_type: 'group',
         message_type: 'text',
         content: JSON.stringify({ text: '@_user_1 hello' }),
+        parent_id: 'om_parent',
         mentions: [
           { key: '@_user_1', name: 'LightClaw', id: { open_id: BOT_ID } },
         ],
@@ -76,6 +77,7 @@ describe('normalizeReceiveV1 strip-empty escape', () => {
 
     assert.ok(result)
     assert.equal(result.text, 'hello')
+    assert.equal(result.parentId, 'om_parent')
   })
 
   it('escape does not fire when bot open_id is unknown', () => {
@@ -115,6 +117,7 @@ describe('normalizeEvent (webhook) strip-empty escape', () => {
           chat_type: 'group',
           message_type: 'text',
           content: JSON.stringify({ text: overrides.text }),
+          parent_id: 'om_webhook_parent',
           mentions: overrides.mentions ?? [],
         },
       },
@@ -133,6 +136,7 @@ describe('normalizeEvent (webhook) strip-empty escape', () => {
     assert.equal(result.text, '')
     assert.equal(result.chatId, 'oc_test')
     assert.equal(result.chatType, 'group')
+    assert.equal(result.parentId, 'om_webhook_parent')
   })
 
   it('still drops empty messages without any bot mention', () => {

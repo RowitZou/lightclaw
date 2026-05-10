@@ -413,6 +413,9 @@ export const LOCALES = {
     'channel.media.downloadFailed': '[媒体下载失败]',
     'channel.media.skipped': '[媒体附件: skipped (mediaEnabled=false)]',
     'channel.media.attachment': '[媒体附件]',
+    'channel.quote.author.unknown': '未知发送者',
+    'channel.quote.truncated': '...(已截断)',
+    'channel.quote.attachedSuffix': ' (来自引用消息)',
     'channel.cardCallbackUnknown': '卡片回调格式暂未识别。请直接回复"是"或"否"。',
     'channel.failure.transcriptAborted': '本轮已被 /stop 中止。',
 
@@ -850,6 +853,9 @@ export const LOCALES = {
     'channel.media.downloadFailed': '[media download failed]',
     'channel.media.skipped': '[media attachment: skipped (mediaEnabled=false)]',
     'channel.media.attachment': '[media attachment]',
+    'channel.quote.author.unknown': 'unknown sender',
+    'channel.quote.truncated': '...(truncated)',
+    'channel.quote.attachedSuffix': ' (via quoted message)',
     'channel.cardCallbackUnknown': 'Unrecognized card callback shape. Please reply "yes" or "no" instead.',
     'channel.failure.transcriptAborted': 'This turn was aborted by /stop.',
 

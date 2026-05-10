@@ -15,6 +15,9 @@ export function buildInterjectionBlock(ctx: InterjectionContext): string {
     '',
   ]
   for (const entry of ctx.interjections) {
+    if (entry.quotedSummary) {
+      lines.push(entry.quotedSummary)
+    }
     const from = entry.senderName ? ` (from ${entry.senderName})` : ''
     lines.push(`Interjection${from}: ${JSON.stringify(entry.text)}`)
     if (entry.attachmentPaths?.length) {

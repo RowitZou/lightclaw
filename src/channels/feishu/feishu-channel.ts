@@ -3,7 +3,13 @@ import path from 'node:path'
 import { t } from '../../i18n/index.js'
 import { lightclawHome } from '../../paths.js'
 import { ChannelRunner } from '../runner.js'
-import type { Channel, ChannelHandle, FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
+import type {
+  Channel,
+  ChannelHandle,
+  FeishuChannelConfig,
+  NormalizedChannelMessage,
+  PendingAttachment,
+} from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
 import { createFeishuClient } from './client.js'
 import { FeishuDedup } from './dedup.js'
@@ -18,6 +24,7 @@ import {
   PairingCardCoordinator,
   type PairingCardAction,
 } from './pairing-card.js'
+import { ParentMessageFetcher, type ParsedParent } from './parent-fetch.js'
 import { PendingNoticeDrainer } from './pending-drainer.js'
 import { PendingQueueStore } from './pending-queue.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
@@ -64,6 +71,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       const client = createFeishuClient(config)
       const botSelf = await fetchBotSelfInfo(client, config.requireMention)
+      const parentFetcher = new ParentMessageFetcher(client)
       const sender = new FeishuSender(client, config)
 
       // Persistent pending-notice queue + drainer. Catches the >60s outage
@@ -116,9 +124,11 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           messageId: raw.messageId,
           threadId: raw.threadId,
           rootId: raw.rootId,
+          parentId: raw.parentId,
           feishuMentions: raw.mentions,
           text: raw.text,
         }
+        const pendingAttachments: PendingAttachment[] = []
         if (raw.mediaKeys?.length && config.mediaEnabled) {
           // One PendingAttachment per parsed mediaKey. Multi-image batches
           // arrive either as N separate `image`-type events (one mediaKey
@@ -129,14 +139,45 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           // these end up in the LLM-facing content array vs the text-path
           // breadcrumb; the channel adapter materializes every one so
           // overflow paths are still agent-readable via Read.
-          message.pendingAttachments = raw.mediaKeys.map(mediaKey => ({
+          pendingAttachments.push(...raw.mediaKeys.map(mediaKey => ({
             kind: 'feishu-media' as const,
             messageId: raw.messageId,
             mediaKey,
             fileName: fileNameFor(raw.messageId, mediaKey),
-          }))
+          })))
         } else if (raw.mediaKeys?.length) {
           message.text = appendLine(message.text, t('channel.media.skipped'))
+        }
+        if (raw.parentId) {
+          const parent = await parentFetcher.fetch(raw.parentId, botSelf.openId)
+          if (parent) {
+            const attachedFileNames: string[] = []
+            if (config.mediaEnabled) {
+              for (const mediaKey of parent.mediaKeys) {
+                const fileName = fileNameFor(raw.parentId, mediaKey)
+                pendingAttachments.push({
+                  kind: 'feishu-media',
+                  messageId: raw.parentId,
+                  mediaKey,
+                  fileName,
+                  quotedFromMessageId: raw.parentId,
+                })
+                attachedFileNames.push(fileName)
+              }
+            }
+            if (parent.text || attachedFileNames.length > 0) {
+              message.quotedMessage = {
+                author: resolveQuotedAuthorLabel(parent, botSelf),
+                ...(parent.isFromBot ? { authorIsBot: true } : {}),
+                ...(parent.text ? { text: parent.text } : {}),
+                ...(attachedFileNames.length > 0 ? { attachedFileNames } : {}),
+                ...(parent.truncated ? { truncated: true } : {}),
+              }
+            }
+          }
+        }
+        if (pendingAttachments.length > 0) {
+          message.pendingAttachments = pendingAttachments
         }
         await runner.handleMessage(message)
       }
@@ -189,10 +230,23 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
   }
 }
 
+type BotSelfInfo = {
+  openId?: string
+  name?: string
+}
+
+function resolveQuotedAuthorLabel(parent: ParsedParent, botSelf: BotSelfInfo): string {
+  if (parent.isFromBot) {
+    return botSelf.name ?? 'LightClaw'
+  }
+  return parent.senderName
+    ?? (parent.senderOpenId ? `@user_${parent.senderOpenId.slice(-4)}` : t('channel.quote.author.unknown'))
+}
+
 async function fetchBotSelfInfo(
   client: unknown,
   requireMention: boolean,
-): Promise<{ openId?: string; name?: string }> {
+): Promise<BotSelfInfo> {
   if (!requireMention) {
     return {}
   }
