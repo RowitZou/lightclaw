@@ -129,6 +129,7 @@ export type ConfigFileShape = {
     }
     deferredLoading?: string
     deferredLoadingThreshold?: number
+    discoveredToolsMaxSize?: number
   }
   runtime?: {
     backend?: string
