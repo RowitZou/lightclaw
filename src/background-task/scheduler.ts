@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
 import type { LightClawConfig } from '../config.js'
-import { getIdentity } from '../identity/store.js'
+import { getAdmin, getIdentity } from '../identity/store.js'
 import { isHighRiskRulePattern } from '../permission/high-risk.js'
 import {
   appendFireHistory,
@@ -346,14 +346,52 @@ export class BackgroundTaskScheduler {
     const notifyTo = resolveEffectiveNotifyTo(outcome, task.notifyTo)
 
     if (notifyTo === 'agent') {
-      const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
-      const result = await wakeMainAgent({ canonicalUser, task, outcome })
-      await deliverWakeNotification({
-        ownerOpenId,
-        taskLabel: task.label,
-        result,
-      })
-      return
+      // Gate the wake path BEFORE dispatching, so failures degrade to the
+      // user-card path instead of vanishing. Two preconditions must hold:
+      //   (1) LocalRuntime is admin-only (mirrors runner.ts:56). A failure
+      //       outcome from a non-admin under local backend can still reach
+      //       deliverCompletion, and resolveEffectiveNotifyTo would otherwise
+      //       send it through wake — which would re-acquire LocalRuntime in a
+      //       new context. Block here instead.
+      //   (2) Phase 26 sessionId formula requires a real on-disk DM session;
+      //       the legacy `feishu-<canonical>` hard-code orphaned the wake
+      //       transcript and broke FIFO with the user's actual DM lock.
+      const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
+      const adminBlocksWake = adminId !== null && adminId !== canonicalUser
+      const sessionsDir = this.config?.sessionsDir
+      let wakeSessionId: string | null = null
+      if (!adminBlocksWake && sessionsDir) {
+        const { resolveWakeSessionId } = await import('./wake.js')
+        wakeSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
+      }
+      if (adminBlocksWake) {
+        process.stderr.write(
+          `[background-task] ${task.id} fire ${fireUuid} wake skipped: LocalRuntime admin-only; user "${canonicalUser}" is not admin; falling back to user card\n`,
+        )
+      } else if (!sessionsDir) {
+        process.stderr.write(
+          `[background-task] ${task.id} fire ${fireUuid} wake skipped: scheduler has no config bound; falling back to user card\n`,
+        )
+      } else if (!wakeSessionId) {
+        process.stderr.write(
+          `[background-task] ${task.id} fire ${fireUuid} wake skipped: no feishu DM session for ${canonicalUser}; falling back to user card\n`,
+        )
+      } else {
+        const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
+        const result = await wakeMainAgent({
+          canonicalUser,
+          mainSessionId: wakeSessionId,
+          task,
+          outcome,
+        })
+        await deliverWakeNotification({
+          ownerOpenId,
+          taskLabel: task.label,
+          result,
+        })
+        return
+      }
+      // fall through to coordinator card path below
     }
 
     const coordinator = getBackgroundTaskCardCoordinator()

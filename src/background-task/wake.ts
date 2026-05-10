@@ -1,10 +1,12 @@
-import { mkdir } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
+import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { channelSessionLock } from '../channels/session-lock.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { getConfig } from '../config.js'
+import { getAdmin } from '../identity/store.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { createUserMessage } from '../messages.js'
 import { getProvider } from '../provider/index.js'
@@ -26,14 +28,105 @@ import {
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { BackgroundTaskEntry, FireOutcome, WakeNotifyResult } from './types.js'
 
+/**
+ * Resolve the wake-target sessionId for a canonical user — the most-recently-
+ * active feishu DM session belonging to that user. Returns null when no DM
+ * session is on disk; caller must fall back to the user-card path rather than
+ * fabricating a session id (the pre-Phase-26 `feishu-<canonical>` format
+ * silently created an orphan transcript that did not lock against the user's
+ * real DM session, breaking turn-level FIFO).
+ *
+ * Why DM, not group:
+ *   - Privacy: BackgroundTask completion is a 1-on-1 reminder; surfacing it
+ *     in a group leaks task content to other group members.
+ *   - Continuity: DM is where the user is most likely to read agent output;
+ *     Phase 26 group sessions are sender-specific and can be silent for days.
+ *   - Phase 26 sessionId formula already gives us `feishu:dm:<chatId>`; meta
+ *     `userId` ties each on-disk session back to its canonical user, so no
+ *     new schema is needed.
+ */
+export async function resolveWakeSessionId(
+  canonicalUser: string,
+  sessionsDir: string,
+): Promise<string | null> {
+  let entries: Dirent[]
+  try {
+    entries = await readdir(sessionsDir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+    throw error
+  }
+  let best: { sessionId: string; lastActiveAt: number } | null = null
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('feishu:dm:')) {
+      continue
+    }
+    // Read meta.json directly via the caller-supplied sessionsDir rather than
+    // through `loadMeta(sessionId)` (which resolves its own dir from config) —
+    // tests construct an isolated tmp sessionsDir, and the resolver's contract
+    // is "scan EXACTLY the directory you were given, ignore ambient config".
+    const meta = await readMetaFromDir(sessionsDir, entry.name)
+    if (!meta || meta.userId !== canonicalUser) {
+      continue
+    }
+    if (!best || meta.lastActiveAt > best.lastActiveAt) {
+      best = { sessionId: entry.name, lastActiveAt: meta.lastActiveAt }
+    }
+  }
+  return best?.sessionId ?? null
+}
+
+async function readMetaFromDir(
+  sessionsDir: string,
+  sessionId: string,
+): Promise<{ userId?: string; lastActiveAt: number } | null> {
+  try {
+    const raw = await readFile(path.join(sessionsDir, sessionId, 'meta.json'), 'utf8')
+    const parsed = JSON.parse(raw) as { userId?: string; lastActiveAt?: number }
+    if (typeof parsed.lastActiveAt !== 'number') {
+      return null
+    }
+    return { userId: parsed.userId, lastActiveAt: parsed.lastActiveAt }
+  } catch {
+    return null
+  }
+}
+
 export async function wakeMainAgent(input: {
   canonicalUser: string
+  /** Resolved by caller via `resolveWakeSessionId`; must be a real on-disk
+   *  session id (Phase 26 `feishu:dm:<chatId>`). The pre-Phase-26 hard-coded
+   *  `feishu-<canonical>` form is rejected here as defense-in-depth. */
+  mainSessionId: string
   task: BackgroundTaskEntry
   outcome: FireOutcome
 }): Promise<WakeNotifyResult> {
-  const mainSessionId = `feishu-${input.canonicalUser}`
+  const { mainSessionId } = input
+  if (!mainSessionId.startsWith('feishu:dm:')) {
+    process.stderr.write(
+      `[background-task] wake refused: mainSessionId "${mainSessionId}" is not a feishu DM session id (Phase 26 format)\n`,
+    )
+    return { kind: 'silent', reason: 'wake-refused-bad-session-id' }
+  }
   return channelSessionLock.runExclusive(mainSessionId, async () => {
     const config = getConfig()
+
+    // LocalRuntime is admin-only — defense-in-depth mirror of
+    // `runner.ts:56-66`. Caller (scheduler) should already route non-admin
+    // wakes to the user-card path, but a future caller bypassing that must
+    // not silently acquire a LocalRuntime for a paired non-admin.
+    if (config.runtime.backend === 'local') {
+      const adminId = await getAdmin()
+      if (adminId && adminId !== input.canonicalUser) {
+        process.stderr.write(
+          `[background-task] wake refused: LocalRuntime is admin-only; user "${input.canonicalUser}" is not admin\n`,
+        )
+        return { kind: 'silent', reason: 'wake-refused-admin-only' }
+      }
+    }
+
     const prefs = loadIdentityPreferences(input.canonicalUser)
     const model = prefs.model ?? config.model
     const permissionMode = prefs.permissionMode ?? config.permissionMode
