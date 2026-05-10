@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import type { Tool } from './tool.js'
-import { isToolVisibleInChannel } from './tools.js'
+import { getAllTools, isToolVisibleInChannel } from './tools.js'
 
 describe('channel-aware tool visibility', () => {
   it('defaults tools to visible in every channel', () => {
@@ -21,6 +21,13 @@ describe('channel-aware tool visibility', () => {
     const tool = fakeTool({ name: 'TerminalOnly', channelScope: ['terminal'] })
     assert.equal(isToolVisibleInChannel(tool, 'terminal'), true)
     assert.equal(isToolVisibleInChannel(tool, 'feishu'), false)
+  })
+
+  it('hides SendFile from the terminal channel catalog', () => {
+    const terminal = getAllTools('terminal').map(tool => tool.name)
+    const feishu = getAllTools('feishu').map(tool => tool.name)
+    assert.equal(terminal.includes('SendFile'), false)
+    assert.equal(feishu.includes('SendFile'), true)
   })
 })
 

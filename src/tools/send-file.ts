@@ -18,6 +18,16 @@ export const sendFileTool = buildTool({
     'Send a file from the current workspace to the active channel conversation. Only works in supported channel sessions such as Feishu.',
   domain: 'host',
   riskLevel: 'write',
+  // Phase 29 channel-aware catalog: SendFile depends on the runner-installed
+  // `ChannelFileSender`, which only the Feishu channel populates. Without
+  // narrowing the scope the terminal REPL would still see SendFile in its
+  // tool catalog and the model would happily call it, producing the
+  // self-defense error "SendFile is only available while handling a
+  // supported channel message." That is wasted prompt tokens + a useless
+  // tool_result round-trip. Future channel adapters that wire `sendFile`
+  // into their `ChannelRunnerStrategy` should either inherit this scope
+  // (`['feishu', '<new-channel>']`) or open a sibling tool.
+  channelScope: ['feishu'],
   inputSchema,
   async call(input, context) {
     const sender = getChannelFileSender()
