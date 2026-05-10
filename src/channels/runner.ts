@@ -504,18 +504,23 @@ export class ChannelRunner {
             `${this.strategy.channelId}: attachment encoding warnings: ${inlineEncoding.warnings.join(' | ')}\n`,
           )
         }
-        // Pass the FULL materialized list (not just fallbackPaths). The
+        // Pass the FULL materialized list AND the fallbackPaths subset. The
         // breadcrumb header lists every attachment's path so the agent
         // can refer back to inline-encoded blocks by path (useful when
         // the user follows up with "translate the OTHER image" — the
         // model needs paths to disambiguate from the visible inline
-        // bytes). Fallback (non-inline) paths still appear in the
-        // same list; the model infers inline-vs-fallback from whether
-        // matching image content blocks appear in the same user message.
+        // bytes). Each line carries an explicit `inline` / `pending`
+        // status marker built from `inlineEncoding.fallbackPaths`,
+        // because the prior "model infers inline-vs-fallback from
+        // whether matching image content blocks appear" contract is too
+        // weak for codex / gpt-5.x — they default to "path = unread →
+        // call Read" and burn turns re-opening files already inline in
+        // the same user message (Bug 4 in 2026-05-10 audit).
         const userText = await formatChannelUserText(
           this.strategy,
           effectiveMessage,
           materializedAttachment,
+          inlineEncoding.fallbackPaths,
         )
         const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
@@ -704,6 +709,7 @@ export class ChannelRunner {
                 this.strategy,
                 effectiveMessage,
                 materializedAttachment,
+                reEncoded.fallbackPaths,
               )
               const newContent = reEncoded.inlineBlocks.length > 0
                 ? [
@@ -877,7 +883,72 @@ export class ChannelRunner {
       // way to guarantee the queue's in-flight set is consistent with the
       // session's actual liveness across every exit path of handleMessage.
       if (shouldMarkInFlight) {
-        channelInterjectionQueue.unmarkInFlight(mainSessionId)
+        const leftover = channelInterjectionQueue.unmarkInFlight(mainSessionId)
+        if (leftover.length > 0) {
+          // Bug 9 (2026-05-10 audit): query() drains interjections at
+          // tool-boundary + late-rescue, but anything that arrived AFTER
+          // the rescue check (during awaitBackgroundTasks / sendReply /
+          // stopTyping) was being silently delete()d by the old
+          // unmarkInFlight. Now they come back as `leftover`; replay each
+          // as a fresh turn through handleMessage so the standard ack /
+          // drain / lock-FIFO path takes over. No `<user-interjection>`
+          // wrapping — by the time we get here this is a brand new
+          // user turn arriving at an idle session, not a mid-flight
+          // interjection.
+          process.stderr.write(
+            `${this.strategy.channelId}: rescuing ${leftover.length} post-query interjection(s) for ${mainSessionId}\n`,
+          )
+          this.replayLeftoverInterjections(message, leftover).catch(error => {
+            const detail = error instanceof Error ? error.message : String(error)
+            process.stderr.write(
+              `${this.strategy.channelId}: post-query interjection replay failed for ${mainSessionId}: ${detail}\n`,
+            )
+          })
+        }
+      }
+    }
+  }
+
+  /**
+   * Re-enter handleMessage for each leftover interjection, in arrival order,
+   * by synthesizing a fresh NormalizedChannelMessage that carries the
+   * interjection text + any pendingAttachments. Each replay walks through
+   * the standard handleMessage path (lock acquire → markInFlight → query →
+   * unmark) so the entries are no longer "interjections" — they're a
+   * normal sequence of user turns that simply got delayed.
+   *
+   * Best-effort: replay errors are logged to stderr but never thrown back
+   * to the original caller's finally chain (which has already
+   * unmarkInFlight'd; we don't want a replay failure to mask the original
+   * turn's outcome).
+   */
+  private async replayLeftoverInterjections(
+    originalMessage: NormalizedChannelMessage,
+    leftover: InterjectionEntry[],
+  ): Promise<void> {
+    for (const entry of leftover) {
+      const synthetic: NormalizedChannelMessage = {
+        ...originalMessage,
+        eventId: `replay-${entry.messageId}`,
+        messageId: entry.messageId,
+        senderOpenId: entry.senderOpenId,
+        text: entry.text,
+        ...(entry.pendingAttachments?.length
+          ? { pendingAttachments: entry.pendingAttachments }
+          : {}),
+        // Drop the original quotedMessage — the leftover entry has its own
+        // quotedSummary that came from the interjection enqueue path. If
+        // the entry itself was quoted, we'll lose that ancestry on replay,
+        // which is acceptable (Phase 28 quote context is best-effort).
+        quotedMessage: undefined,
+      }
+      try {
+        await this.handleMessage(synthetic)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `${this.strategy.channelId}: replay handleMessage failed for ${entry.messageId}: ${detail}\n`,
+        )
       }
     }
   }
@@ -1566,6 +1637,14 @@ export async function formatChannelUserText(
   strategy: ChannelRunnerStrategy,
   message: NormalizedChannelMessage,
   materialized: MaterializedAttachment[] | MaterializedAttachment | null,
+  /** Subset of `materialized` that did NOT make it into inline content blocks
+   *  this turn (capability=false / over maxInline / size-cap rejected etc).
+   *  Each path is annotated with `pending` (not yet seen by the model — must
+   *  Read); paths NOT in this set get `inline` (already visible — path only
+   *  for file operations). When omitted we treat every path as `inline` to
+   *  match pre-Phase-30 callers; new callers should always pass it.
+   *  Bug 4 in the 2026-05-10 audit. */
+  fallbackPaths?: MaterializedAttachment[],
 ): Promise<string> {
   const mentionNames = buildMentionNameMap(message)
   let body = message.text
@@ -1584,6 +1663,9 @@ export async function formatChannelUserText(
   if (list.length === 0) {
     return `${prefix}${body}`
   }
+  // Reference-identity Set so we can label each path inline-vs-pending in O(1).
+  // The encoder hands back the same MaterializedAttachment objects it received.
+  const pendingSet = new Set<MaterializedAttachment>(fallbackPaths ?? [])
   // Multi-attachment: keep one breadcrumb header + per-attachment lines so
   // the agent can reference each by index. Order matches the order channel
   // adapter parsed them in (which matches the user's send order for Feishu
@@ -1591,10 +1673,17 @@ export async function formatChannelUserText(
   const lines: string[] = [`${prefix}${body}` || '(no text)', '', t('channel.media.attachment')]
   for (const att of list) {
     lines.push(`- type: ${att.mimeType}`)
+    // Status marker so the agent does not Read paths whose bytes are already
+    // inline in this same user message. Without this, codex / gpt-5.x prior
+    // ("path = unread resource → call Read") wins and the agent burns turns
+    // re-opening files it can already see.
+    const status = pendingSet.has(att)
+      ? t('channel.media.statusPending')
+      : t('channel.media.statusInline')
     const suffix = att.quotedFromMessageId
       ? t('channel.quote.attachedSuffix')
       : ''
-    lines.push(`- path: ${att.path}${suffix}`)
+    lines.push(`- ${status}, path: ${att.path}${suffix}`)
   }
   return lines.join('\n')
 }

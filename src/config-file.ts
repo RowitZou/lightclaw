@@ -111,12 +111,6 @@ export type ConfigFileShape = {
   }
   microCompact?: {
     enabled?: boolean
-    perTool?: {
-      enabled?: boolean
-      tokenThreshold?: number
-      summaryMaxTokens?: number
-      archiveOriginals?: boolean
-    }
     idle?: {
       enabled?: boolean
       gapThresholdMinutes?: number

@@ -39,6 +39,26 @@ export type SystemPromptTemplate = {
   postTodos: string
 }
 
+/**
+ * Render the system-prompt's date line in natural language plus an explicit
+ * staleness anchor. The prior `new Date().toISOString()` form (e.g.
+ * `2026-05-10T11:04:17.352Z`) reads with weak attention — codex / gpt-5.x
+ * routinely failed to compare retrieved-data timestamps against it,
+ * surfacing yesterday's web snippets as today's facts (Bug 7 in 2026-05-10
+ * audit). The natural-language form anchors the comparison explicitly so
+ * the model has an unambiguous "anything before this is stale" prior.
+ */
+function formatCurrentDateLine(now: Date = new Date()): string {
+  const weekday = now.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
+  const monthYear = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  const ymd = now.toISOString().slice(0, 10)
+  return (
+    `Current date: ${ymd} (${weekday}, ${monthYear}). When evaluating retrieved data ` +
+    `(web search snippets, document timestamps, cached pages), compare against today's date — ` +
+    `anything dated before today is potentially stale and may need a follow-up WebFetch to confirm.`
+  )
+}
+
 export type SystemPromptRenderOptions = {
   tools: Tool[]
   deferredTools?: Tool[]
@@ -186,7 +206,7 @@ export async function buildSystemPromptTemplate(
     '',
     `Workspace directory: ${environmentRoot}`,
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
-    `Current date: ${new Date().toISOString()}`,
+    formatCurrentDateLine(),
     `Platform: ${platform}`,
     `Model: ${modelFor('main', options.config)}`,
   ]
@@ -251,6 +271,13 @@ export async function buildSystemPromptTemplate(
     '- When editing files, be precise and avoid unrelated changes.',
     '- If a tool fails, explain the failure and recover with a narrower step.',
     '- Memory may be stale; verify remembered details before acting on them.',
+    // Bug 10 in 2026-05-10 audit: visual content rendered to text by Read on
+    // images / PDF page renders is transcribed by a smaller vision model.
+    // Treat its output as a hint, not as ground truth, for any precise token
+    // — main agent was copying "Suhiln Cao" / "Unslo th" verbatim into
+    // answers because the OCR string was indistinguishable from a tool's
+    // exact return value.
+    '- Visual content described by Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, identifiers, and other precise tokens in such transcriptions may have OCR errors. When the user is asking for an exact name / value / spelling, treat sub-LLM transcription as a hint rather than ground truth — re-render at higher fidelity (Read with `pages=` / different page range) or ask the user to confirm before committing the value to a final answer. Tokens flagged as `[unclear: ...]` MUST be re-rendered or confirmed before citing.',
     '',
     'Sandbox availability:',
     '- If an environment-domain tool (Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch) returns an error mentioning "Sandbox 镜像" being not ready / pulling / failed / autoPull disabled, do not retry that tool.',
@@ -294,7 +321,7 @@ export function buildSubagentPrompt(
   const sections: string[] = [
     'You are LightClaw running as an isolated subagent.',
     `Working directory: ${environmentRoot}`,
-    `Current date: ${new Date().toISOString()}`,
+    formatCurrentDateLine(),
     `Platform: ${platform}`,
     '',
     agent.systemPrompt,

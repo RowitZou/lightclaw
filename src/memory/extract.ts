@@ -307,7 +307,15 @@ export async function flushBeforeCompact(params: {
   ])
 
   if (result === TIMEOUT) {
-    console.error('[memory] pre-compact flush timed out')
+    // The race timed out but the underlying executeExtraction Promise is NOT
+    // aborted — it continues running and will write its results to MEMORY.md
+    // when the subagent finishes. The point of the race is only to keep
+    // compaction from blocking on a slow extraction; the extraction itself
+    // is still in flight. Phrase the log so admin doesn't read this as a
+    // data-loss event (Bug 2 in the 2026-05-10 audit).
+    console.error(
+      `[memory] pre-compact flush timeout reached after ${params.timeoutMs}ms — compaction proceeding without waiting (extraction continues in background and will land on MEMORY.md when ready)`,
+    )
     return { saved: [], lastExtractedAt: params.lastExtractedAt }
   }
 

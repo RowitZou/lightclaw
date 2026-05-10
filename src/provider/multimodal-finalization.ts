@@ -1,4 +1,5 @@
 import { describeImagesAdaptive, joinSegmentsForLLM } from './describe-adaptive.js'
+import { getCachedDescribe, putCachedDescribe } from './describe-cache.js'
 import { readCachedCapability } from './capability-cache.js'
 import type { LightClawConfig } from '../config.js'
 import type {
@@ -159,6 +160,25 @@ async function replaceImageBlocksWithDescribeText(
       buffer: Buffer.from(p.block.source.data, 'base64'),
       mimeType: p.block.source.mediaType,
     }))
+    // Bug 8: cache by sha256(image_bytes) + describe model. Same bytes
+    // re-described in a later turn is a guaranteed hit (description is
+    // deterministic for given bytes + model + prompt). The cache is
+    // module-level since same-bytes => same description regardless of
+    // session.
+    const imageBuffers = images.map(img => img.buffer)
+    const cached = getCachedDescribe({
+      imageBuffers,
+      describeEndpoint: ctx.describeEndpoint,
+      describeUpstreamModel: ctx.describeUpstreamModel,
+    })
+    if (cached !== null) {
+      out.push({
+        type: 'text',
+        text: cached,
+      })
+      pending = []
+      return
+    }
     try {
       const result = await describeImagesAdaptive({
         images,
@@ -170,13 +190,28 @@ async function replaceImageBlocksWithDescribeText(
       const joined = joinSegmentsForLLM(result.segments, {
         sourceLabel: 'tool image',
       })
+      const replacementText = joined.length > 0
+        ? buildDescribeEnvelope({
+            modelLabel: ctx.describeUpstreamModel,
+            imageCount: pending.length,
+            body: joined,
+          })
+        : `[Vision sub-LLM produced no description for ${pending.length} image${pending.length === 1 ? '' : 's'}]`
       const replacement: ToolResultTextBlock = {
         type: 'text',
-        text: joined.length > 0
-          ? `[Vision sub-LLM description, ${pending.length} image${pending.length === 1 ? '' : 's'}]\n${joined}`
-          : `[Vision sub-LLM produced no description for ${pending.length} image${pending.length === 1 ? '' : 's'}]`,
+        text: replacementText,
       }
       out.push(replacement)
+      // Only cache positive results — failed describes shouldn't be
+      // memoized (the next turn might be on a healthier endpoint).
+      if (joined.length > 0) {
+        putCachedDescribe({
+          imageBuffers,
+          describeEndpoint: ctx.describeEndpoint,
+          describeUpstreamModel: ctx.describeUpstreamModel,
+          text: replacementText,
+        })
+      }
       if (result.trace.length > 0) {
         for (const line of result.trace) {
           process.stderr.write(`${line}\n`)
@@ -220,4 +255,34 @@ function isToolResultBlock(block: unknown): block is UserToolResultBlock {
   if (!block || typeof block !== 'object') return false
   const rec = block as Record<string, unknown>
   return rec.type === 'tool_result'
+}
+
+/**
+ * Wrap describe-image text with a header that tells the main agent the
+ * underlying tokens came from a smaller vision model and may have OCR errors.
+ *
+ * Bug 10 in 2026-05-10 audit: Q11 main agent wrote "Suhiln Cao" / "Shuang Li
+ * (李巍 vs 李沂)" / "Unslo th" / disordered alphabetical lists into the final
+ * answer because sub-LLM transcribed strings looked indistinguishable from
+ * "user said this" / "tool returned this exact value". The disclaimer makes
+ * the provenance + reliability boundary explicit so the main agent knows to
+ * cross-check names / numbers / identifiers before committing them.
+ */
+function buildDescribeEnvelope(input: {
+  modelLabel: string
+  imageCount: number
+  body: string
+}): string {
+  const { modelLabel, imageCount, body } = input
+  const plural = imageCount === 1 ? '' : 's'
+  return [
+    `[Sub-LLM visual transcription — model: ${modelLabel}, ${imageCount} image${plural}]`,
+    'NOTE: The text below is produced by a smaller vision model transcribing image content. '
+    + 'Names, numbers, identifiers, and code/symbol tokens may contain OCR errors. '
+    + 'Before citing any specific name, number, or precise token from this envelope in a '
+    + 'final answer, prefer rendering the underlying page again at higher fidelity (Read with `pages=`) '
+    + 'or asking the user to confirm the spelling.',
+    '----',
+    body,
+  ].join('\n')
 }

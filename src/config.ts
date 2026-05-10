@@ -147,13 +147,6 @@ export type PreCompactFlushConfig = {
   timeoutMs: number
 }
 
-export type PerToolSummarizeConfig = {
-  enabled: boolean
-  tokenThreshold: number
-  summaryMaxTokens: number
-  archiveOriginals: boolean
-}
-
 export type IdleMicroCompactConfig = {
   enabled: boolean
   gapThresholdMinutes: number
@@ -161,10 +154,9 @@ export type IdleMicroCompactConfig = {
 }
 
 export type MicroCompactConfig = {
-  /** Master switch — when false, perTool and idle do not run regardless of
-   *  their own enabled flags. */
+  /** Master switch — when false, idle does not run regardless of its own
+   *  enabled flag. */
   enabled: boolean
-  perTool: PerToolSummarizeConfig
   idle: IdleMicroCompactConfig
 }
 
@@ -1001,30 +993,6 @@ export function getConfig(): LightClawConfig {
     parseBoolean(process.env.LIGHTCLAW_MICRO_COMPACT_ENABLED) ??
     fileConfig.microCompact?.enabled ??
     true
-  const microCompactPerToolEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MC_PER_TOOL_ENABLED) ??
-    fileConfig.microCompact?.perTool?.enabled ??
-    true
-  const microCompactPerToolTokenThreshold = Math.max(
-    100,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MC_PER_TOOL_TOKEN_THRESHOLD) ??
-        fileConfig.microCompact?.perTool?.tokenThreshold ??
-        5000,
-    ),
-  )
-  const microCompactPerToolSummaryMaxTokens = Math.max(
-    64,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MC_PER_TOOL_SUMMARY_MAX_TOKENS) ??
-        fileConfig.microCompact?.perTool?.summaryMaxTokens ??
-        1024,
-    ),
-  )
-  const microCompactPerToolArchiveOriginals =
-    parseBoolean(process.env.LIGHTCLAW_MC_PER_TOOL_ARCHIVE_ORIGINALS) ??
-    fileConfig.microCompact?.perTool?.archiveOriginals ??
-    false
   const microCompactIdleEnabled =
     parseBoolean(process.env.LIGHTCLAW_MC_IDLE_ENABLED) ??
     fileConfig.microCompact?.idle?.enabled ??
@@ -1102,12 +1070,6 @@ export function getConfig(): LightClawConfig {
     },
     microCompact: {
       enabled: microCompactEnabled,
-      perTool: {
-        enabled: microCompactPerToolEnabled,
-        tokenThreshold: microCompactPerToolTokenThreshold,
-        summaryMaxTokens: microCompactPerToolSummaryMaxTokens,
-        archiveOriginals: microCompactPerToolArchiveOriginals,
-      },
       idle: {
         enabled: microCompactIdleEnabled,
         gapThresholdMinutes: microCompactIdleGapThresholdMinutes,

@@ -9,6 +9,7 @@ import {
   _resetCacheForTests as resetCapabilityCache,
 } from './capability-cache.js'
 import { _resetCacheForTests as resetBatchCache } from './batch-size-cache.js'
+import { _clearDescribeCacheForTests } from './describe-cache.js'
 import { finalizeToolResultImageBlocks } from './multimodal-finalization.js'
 import type { ApiMessage, Provider } from './types.js'
 import type { LightClawConfig } from '../config.js'
@@ -22,6 +23,7 @@ beforeEach(() => {
   process.env.LIGHTCLAW_HOME = homeDir
   resetCapabilityCache()
   resetBatchCache()
+  _clearDescribeCacheForTests()
 })
 
 afterEach(() => {
@@ -33,6 +35,7 @@ afterEach(() => {
   rmSync(homeDir, { recursive: true, force: true })
   resetCapabilityCache()
   resetBatchCache()
+  _clearDescribeCacheForTests()
 })
 
 function makeProvider(name: 'anthropic' | 'openai' | 'openai-auth'): Provider {

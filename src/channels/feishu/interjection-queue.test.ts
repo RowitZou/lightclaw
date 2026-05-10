@@ -25,15 +25,29 @@ describe('InterjectionQueue', () => {
     assert.deepEqual(queue.drain('s2').map(item => item.text), ['other'])
   })
 
-  it('unmarkInFlight clears stale queued entries', () => {
+  it('unmarkInFlight returns and clears leftover entries', () => {
+    // Bug 9 in 2026-05-10 audit: prior shape silently dropped the queue
+    // here, losing post-query interjections. Now leftovers come back so
+    // the runner can replay them as fresh turns.
     const queue = new InterjectionQueue()
     queue.markInFlight('s1')
     queue.push('s1', entry('m1', 'stale'))
 
-    queue.unmarkInFlight('s1')
+    const leftover = queue.unmarkInFlight('s1')
 
     assert.equal(queue.hasInflightFor('s1'), false)
+    assert.deepEqual(leftover.map(e => e.text), ['stale'])
+    // Subsequent drain still returns empty — leftovers are consumed by the
+    // unmarkInFlight return value, not left in the queue for double-drain.
     assert.deepEqual(queue.drain('s1'), [])
+  })
+
+  it('unmarkInFlight returns empty array when no entries pending', () => {
+    const queue = new InterjectionQueue()
+    queue.markInFlight('s1')
+    const leftover = queue.unmarkInFlight('s1')
+    assert.equal(queue.hasInflightFor('s1'), false)
+    assert.deepEqual(leftover, [])
   })
 })
 

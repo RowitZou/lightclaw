@@ -923,7 +923,37 @@ describe('formatChannelUserText', () => {
     )
 
     assert.match(text, /<attached>om_parent-image-aa\.jpg<\/attached>/)
-    assert.match(text, /- path: .*om_parent-image-aa\.jpg \(via quoted message\)/)
+    // No fallbackPaths passed → defaults to `inline` status marker.
+    assert.match(text, /- inline \(already visible[^,]*, path: .*om_parent-image-aa\.jpg \(via quoted message\)/)
+  })
+
+  it('marks inline-vs-pending paths via fallbackPaths', async () => {
+    setLang('en')
+    const strategy = installFakeStrategy('feishu')
+    const inlineAtt = {
+      path: '/workspace/.lightclaw/inbox/oc_dm/om-image-aa.jpg',
+      mimeType: 'image/jpeg' as const,
+    }
+    const pendingAtt = {
+      path: '/workspace/.lightclaw/inbox/oc_dm/om-image-bb.pdf',
+      mimeType: 'application/pdf' as const,
+    }
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_dm',
+        senderOpenId: 'ou_alice',
+        chatType: 'p2p',
+        messageId: 'om',
+        text: 'two attachments',
+      },
+      [inlineAtt, pendingAtt],
+      [pendingAtt],
+    )
+    assert.match(text, /- inline \(already visible[^,]*, path: .*om-image-aa\.jpg/)
+    assert.match(text, /- pending \(not yet read[^,]*, path: .*om-image-bb\.pdf/)
   })
 
   it('renders bot self-quotes as LightClaw and escapes quoted body', () => {
