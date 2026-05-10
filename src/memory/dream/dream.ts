@@ -98,7 +98,7 @@ async function executeAutoDreamInner(params: {
       return
     }
 
-    const cacheSafeParams = getLastCacheSafeParams()
+    const cacheSafeParams = getLastCacheSafeParams(params.userId)
     if (!cacheSafeParams) {
       console.error('[auto-dream] no cacheSafeParams available, skipping')
       return

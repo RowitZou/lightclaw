@@ -327,6 +327,7 @@ export async function query(params: QueryParams): Promise<{
       messages: snapshot,
       lastExtractedAt,
       memoryDir: getMemoryDir(),
+      canonicalUser: getCurrentUserId(),
       config,
     })
       .then(async result => {
@@ -401,6 +402,7 @@ export async function query(params: QueryParams): Promise<{
         messages: [...messages],
         lastExtractedAt: getLastExtractedAt(),
         memoryDir: getMemoryDir(),
+        canonicalUser: getCurrentUserId(),
         config,
         timeoutMs: config.preCompactFlush.timeoutMs,
       })
@@ -665,6 +667,7 @@ export async function query(params: QueryParams): Promise<{
     // dispatched in the same turn.
     if (mode !== 'subagent') {
       saveCacheSafeParams(
+        getCurrentUserId(),
         createCacheSafeParams({
           systemPrompt: renderEffectiveSystemPrompt(),
           tools: params.tools,
