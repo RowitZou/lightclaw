@@ -235,28 +235,10 @@ export type StreamStopEvent = {
   content: AssistantContentBlock[]
 }
 
-/** Emitted by `provider.streamChat` BEFORE any text/tool events when the
- *  provider's `convertMessages` (or equivalent wire-shape translation) had
- *  to drop a content kind from the request because the destination API
- *  schema has no slot for it. Consumed by the api.ts logging wrapper to
- *  call `recordCapability(... false)` so subsequent encode passes can skip
- *  generating that kind altogether (e.g., openai-auth + PDF document blocks
- *  → flip pdf=false → encodePdfInline never runs again on this endpoint).
- *  This is the "silent drop made observable" signal — without it, autopilot
- *  only catches drops that surface as wire-side 4xx errors. */
-export type StreamContentDroppedEvent = {
-  type: 'content_dropped'
-  kind: 'image' | 'pdf' | 'audio' | 'video'
-  /** Free-form short tag for diagnostics. Not a closed enum so future
-   *  providers can describe novel reasons without touching this file. */
-  reason: string
-}
-
 export type StreamEvent =
   | StreamTextEvent
   | StreamToolUseEvent
   | StreamStopEvent
-  | StreamContentDroppedEvent
 
 export type ToolExecutionEvent = {
   toolName: string
