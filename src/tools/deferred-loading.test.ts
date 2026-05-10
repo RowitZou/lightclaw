@@ -12,7 +12,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Set(),
-      config: fakeConfig({ webSearch: {}, deferredLoading: 'off', deferredLoadingThreshold: 1 }),
+      config: fakeConfig({ webSearch: {}, deferredLoading: 'off', deferredLoadingThreshold: 1, discoveredToolsMaxSize: 30 }),
     })
     assert.deepEqual(result.tools.map(tool => tool.name), ['Read', 'mcp__github__read_file'])
     assert.equal(result.deferredEnabled, false)
@@ -23,7 +23,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Set(),
-      config: fakeConfig({ webSearch: {}, deferredLoading: 'auto', deferredLoadingThreshold: 2 }),
+      config: fakeConfig({ webSearch: {}, deferredLoading: 'auto', deferredLoadingThreshold: 2, discoveredToolsMaxSize: 30 }),
     })
     assert.equal(result.deferredEnabled, true)
     assert.deepEqual(result.tools.map(tool => tool.name), ['Read', toolSearchTool.name])
@@ -35,7 +35,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Set(['mcp__github__read_file']),
-      config: fakeConfig({ webSearch: {}, deferredLoading: 'always', deferredLoadingThreshold: 30 }),
+      config: fakeConfig({ webSearch: {}, deferredLoading: 'always', deferredLoadingThreshold: 30, discoveredToolsMaxSize: 30 }),
     })
     assert.deepEqual(result.tools.map(tool => tool.name), [
       'Read',

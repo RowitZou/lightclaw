@@ -176,6 +176,13 @@ export type ToolsConfig = {
   webSearch: WebSearchToolConfig
   deferredLoading: 'auto' | 'always' | 'off'
   deferredLoadingThreshold: number
+  /** Per-session bound on `SessionContext.discoveredTools`. When the LRU
+   *  set exceeds this size, the least-recently-used entry is evicted before
+   *  the new entry lands; the model can re-discover via ToolSearch on demand.
+   *  `0` disables the cap (legacy unbounded growth, not recommended for
+   *  long-running channel sessions). Default 30 — about the working-set
+   *  size most users actually reach for in a single conversation. */
+  discoveredToolsMaxSize: number
 }
 
 /** Endpoint backed by a static API key sent as Bearer auth. */
@@ -1122,6 +1129,14 @@ export function getConfig(): LightClawConfig {
         Math.floor(
           parseNumber(process.env.LIGHTCLAW_DEFERRED_LOADING_THRESHOLD) ??
           fileConfig.tools?.deferredLoadingThreshold ??
+          30,
+        ),
+      ),
+      discoveredToolsMaxSize: Math.max(
+        0,
+        Math.floor(
+          parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE) ??
+          fileConfig.tools?.discoveredToolsMaxSize ??
           30,
         ),
       ),

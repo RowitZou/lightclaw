@@ -3,6 +3,10 @@ import { beginQuery } from '../init.js'
 import { createUserMessage } from '../messages.js'
 import { getProvider } from '../provider/index.js'
 import { query } from '../query.js'
+import {
+  getCurrentSessionContext,
+  runWithSessionContext,
+} from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { Message } from '../types.js'
 
@@ -33,15 +37,28 @@ export async function runFresh(args: {
     getProvider(config),
     getAllTools(isChannel ? 'feishu' : 'terminal'),
   )
+  // Phase 29 isolation: /fresh is an independent ephemeral session and must
+  // not inherit the parent main session's `discoveredTools`. Without this
+  // wrap, the fresh turn would see the parent's promoted MCP tools as
+  // already-loaded (skewing the system-reminder list and the tools-array
+  // composition). Mirrors `runForkedAgent`'s shape so the contract is
+  // consistent across all fork-like entry points.
+  const runQuery = () => query({
+    config,
+    messages,
+    tools,
+    mode: isChannel ? 'channel' : 'interactive',
+    noAutoMemory: true,
+    ephemeral: true,
+  })
   try {
-    const result = await query({
-      config,
-      messages,
-      tools,
-      mode: isChannel ? 'channel' : 'interactive',
-      noAutoMemory: true,
-      ephemeral: true,
-    })
+    const parentCtx = getCurrentSessionContext()
+    const result = parentCtx
+      ? await runWithSessionContext(
+          { ...parentCtx, discoveredTools: new Set<string>() },
+          runQuery,
+        )
+      : await runQuery()
     const text = result.assistantText.trim() || '(no response)'
     return `[fresh] ${text}\n`
   } catch (error) {

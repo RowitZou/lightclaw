@@ -64,6 +64,8 @@ import {
   buildTurnToolCatalog,
   findDeferredTool,
 } from './tools/deferred-loading.js'
+import { markDiscovered } from './tools/discovered-tools.js'
+import { isDeferredTool } from './tools/is-deferred.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
@@ -967,6 +969,23 @@ async function dispatchToolCall(
       }
     }
 
+    // Refresh LRU position for deferred tools that were promoted on a prior
+    // turn. Without this, a tool the user actively invokes would slide
+    // toward eviction purely because newer ToolSearch hits keep landing at
+    // the back of the set. Touching only deferred-eligible tools avoids
+    // marking always-loaded builtins as "discovered" (they aren't tracked
+    // in `discoveredTools` at all).
+    if (isDeferredTool(tool)) {
+      const current = getCurrentSessionContext()
+      if (current && current.discoveredTools.has(tool.name)) {
+        markDiscovered(
+          current.discoveredTools,
+          tool.name,
+          ctx.config.tools.discoveredToolsMaxSize,
+        )
+      }
+    }
+
     const start = Date.now()
     const result = await tool.call(effectiveInput, {
       cwd: getCwd(),
@@ -977,7 +996,12 @@ async function dispatchToolCall(
       deferredTools: ctx.deferredTools,
       discoverTool(name) {
         const current = getCurrentSessionContext()
-        current?.discoveredTools.add(name)
+        if (!current) return
+        markDiscovered(
+          current.discoveredTools,
+          name,
+          ctx.config.tools.discoveredToolsMaxSize,
+        )
       },
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
