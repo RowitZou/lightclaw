@@ -292,14 +292,13 @@ export function createOpenAIAuthProvider(
       })
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      const dropped = new Set<AttachmentKind>()
-      const input = convertMessagesToResponsesInput(sanitizedMessages, dropped)
-      // Surface silent drops BEFORE the first SSE chunk so the wrapper at
-      // api.ts can flip the capability cache (no future encodePdfInline
-      // / etc. on this endpoint × upstreamModel pair).
-      for (const kind of dropped) {
-        yield { type: 'content_dropped', kind, reason: 'schema_unsupported' }
-      }
+      // Drop tracking is now surfaced ONLY through `detectStaticDropKinds()`
+      // (run once at construction by getProviderFor → recordCapability).
+      // Schema-level drops are deterministic; the runtime event would just
+      // re-write the same cache bit. Wire-side errors that ARE
+      // context-sensitive (e.g., proxy strips an image_url) still go
+      // through `isCapabilityMissingError` catch in `channels/runner.ts`.
+      const input = convertMessagesToResponsesInput(sanitizedMessages)
       const tools = convertToolsToResponsesShape(params.tools)
 
       const body: ResponseCreateParamsStreaming = {

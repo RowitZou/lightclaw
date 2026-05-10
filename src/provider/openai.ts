@@ -72,7 +72,7 @@ function contentToText(content: unknown): string {
 function convertMessages(
   system: string,
   messages: ApiMessage[],
-  dropped: Set<AttachmentKind>,
+  dropped?: Set<AttachmentKind>,
 ): ChatCompletionMessageParam[] {
   const converted: ChatCompletionMessageParam[] = [
     {
@@ -115,10 +115,12 @@ function convertMessages(
         // cache to false. Without this, a `document` block silently falls
         // through every filter above and never reaches `converted` —
         // observable only by reading the raw transcript.
-        for (const block of message.content) {
-          if (!isRecord(block)) continue
-          const kind = classifyUnsupportedBlock(block.type)
-          if (kind) dropped.add(kind)
+        if (dropped) {
+          for (const block of message.content) {
+            if (!isRecord(block)) continue
+            const kind = classifyUnsupportedBlock(block.type)
+            if (kind) dropped.add(kind)
+          }
         }
 
         for (const block of toolResults) {
@@ -269,15 +271,14 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       let finishReason: string | null = null
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      const dropped = new Set<AttachmentKind>()
-      const wireMessages = convertMessages(params.system, sanitizedMessages, dropped)
-      // Surface any kind we silently skipped during translation BEFORE the
-      // first SSE chunk arrives. Consumed by api.ts streamChat wrapper +
-      // capability autopilot to flip the cache so subsequent encode passes
-      // don't bother generating these blocks.
-      for (const kind of dropped) {
-        yield { type: 'content_dropped', kind, reason: 'schema_unsupported' }
-      }
+      // Drop tracking is now surfaced ONLY through `detectStaticDropKinds()`
+      // (run once at construction by `getProviderFor` → recordCapability).
+      // The schema is deterministic, so a runtime event would just rewrite
+      // the same cache bit the static probe already set. Wire-side errors
+      // that ARE context-sensitive (e.g., proxy strips an image_url, model
+      // version difference) still go through `isCapabilityMissingError`
+      // catch in `channels/runner.ts`.
+      const wireMessages = convertMessages(params.system, sanitizedMessages)
       const stream = await client.chat.completions.create({
         model: params.model,
         messages: wireMessages,

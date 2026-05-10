@@ -1,6 +1,5 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { getProviderFor } from './provider/index.js'
-import { recordCapability } from './provider/capability-cache.js'
 import { finalizeToolResultImageBlocks } from './provider/multimodal-finalization.js'
 import type {
   DescribeImageParams,
@@ -103,16 +102,9 @@ export async function* streamChat(
 
   const logger = getActiveApiLogger()
   // Fast path: no active query scope OR caller didn't tag the call. Bail
-  // before touching the buffering branch so cost stays at zero — but still
-  // observe content_dropped events for capability autopilot, since their
-  // usefulness is independent of whether this call is being logged.
+  // before touching the buffering branch so cost stays at zero.
   if (!logger || !apiLogContext) {
-    for await (const event of provider.streamChat(wireParams)) {
-      if (event.type === 'content_dropped') {
-        observeContentDropped(event, entry.endpoint, entry.upstreamModel)
-      }
-      yield event
-    }
+    yield* provider.streamChat(wireParams)
     return
   }
 
@@ -127,9 +119,6 @@ export async function* streamChat(
         stopContent = event.content
         stopReason = event.stopReason
         stopUsage = event.usage
-      }
-      if (event.type === 'content_dropped') {
-        observeContentDropped(event, entry.endpoint, entry.upstreamModel)
       }
       yield event
     }
@@ -204,24 +193,6 @@ export async function describeImage(
       reasoningEffort: rest.reasoningEffort,
     },
   })
-}
-
-/** Bridge `content_dropped` stream events into the capability cache, so the
- *  channel-runner's `encodeAttachmentsForInline` can short-circuit on the
- *  next call. The event is also yielded downstream unchanged (see callers)
- *  in case future consumers (e.g. an admin breadcrumb in tmux) want to
- *  observe drops independently of the cache. Idempotent: recordCapability
- *  is a flat-write to a JSON file, repeated `false` writes are harmless. */
-function observeContentDropped(
-  event: { type: 'content_dropped'; kind: 'image' | 'pdf' | 'audio' | 'video'; reason: string },
-  endpoint: string,
-  upstreamModel: string,
-): void {
-  recordCapability({ endpoint, upstreamModel, kind: event.kind, value: false })
-  process.stderr.write(
-    `[capability] runtime drop: ${endpoint}/${upstreamModel} ${event.kind}=false ` +
-    `(reason=${event.reason})\n`,
-  )
 }
 
 /** Invoke `provider.describeImage` and append a `kind: 'describe-image'`
