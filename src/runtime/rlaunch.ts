@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import type {
@@ -104,6 +105,14 @@ export class RlaunchRuntime implements Runtime {
    *  re-stages into the fresh container. */
   private helpersStagedFor: string | null = null
   private inflightStaging: Promise<void> | null = null
+  /** Sticky negative cache for the host-mount fast-write path. Set to true
+   *  on the first failed attempt (typically EACCES / ENOENT on the host-side
+   *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
+   *  so subsequent calls don't pay another doomed round-trip before falling
+   *  back to the brainctl chunked path. The gpfs/virtiofs mount is set up at
+   *  boot and doesn't appear/disappear at runtime, so a process-lifetime
+   *  cache is safe; a daemon restart re-probes. */
+  private hostMountFastWriteDisabled = false
 
   constructor(config: RlaunchRuntimeConfig, tracker: WorkerReadinessTracker) {
     this.cfg = config
@@ -417,6 +426,36 @@ export class RlaunchRuntime implements Runtime {
         throw new Error(`readdir ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
       }
       return result.stdout.split('\n').filter(Boolean)
+    },
+    writeFileViaHostMount: async (pathname, content) => {
+      // Opportunistic: if the daemon has a host-side view of the same gpfs/
+      // virtiofs share that the worker pod mounts at /workspace, write through
+      // the host fs and skip the per-32KB exec round-trips entirely. The
+      // worker sees the new file immediately via the bind mount.
+      //
+      // We never throw on failure — the contract is "return null and let the
+      // caller fall back to writeFile()". A flaky host write should not be
+      // worse than the slow-but-correct path it's meant to optimize.
+      if (this.hostMountFastWriteDisabled) {
+        return null
+      }
+      const hostPath = this.toHostPath(pathname)
+      if (!hostPath) {
+        return null
+      }
+      try {
+        await fsp.mkdir(path.dirname(hostPath), { recursive: true })
+        await fsp.writeFile(hostPath, content)
+        return { ok: true }
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error)
+        this.hostMountFastWriteDisabled = true
+        process.stderr.write(
+          `[rlaunch] host-mount fast write disabled for worker ${this.workerName ?? '<unbound>'}; ` +
+          `falling back to brainctl chunked path: ${text}\n`,
+        )
+        return null
+      }
     },
   }
 
@@ -766,6 +805,31 @@ export class RlaunchRuntime implements Runtime {
     }
 
     throw new Error(`Path is not within RlaunchRuntime workspace: ${pathname}`)
+  }
+
+  /** Reverse of {@link toContainerPath}. Container path → host path via
+   *  `mountTable`. Accepts either a container path (`/workspace/...`) or an
+   *  already-host path (`/mnt/.../...`); returns null if the input falls
+   *  outside every mount, which lets `writeFileViaHostMount` opt out cleanly
+   *  without throwing. Pure: no fs probing here, the caller does that. */
+  private toHostPath(pathname: string): string | null {
+    const normalizedContainer = path.posix.normalize(pathname)
+    for (const [hostPrefix, containerPrefix] of this.mountTable) {
+      if (
+        normalizedContainer === containerPrefix ||
+        normalizedContainer.startsWith(`${containerPrefix}/`)
+      ) {
+        const suffix = normalizedContainer.slice(containerPrefix.length)
+        return path.join(hostPrefix, suffix)
+      }
+    }
+    const resolvedHost = path.resolve(pathname)
+    for (const [hostPrefix] of this.mountTable) {
+      if (resolvedHost === hostPrefix || resolvedHost.startsWith(`${hostPrefix}${path.sep}`)) {
+        return resolvedHost
+      }
+    }
+    return null
   }
 }
 

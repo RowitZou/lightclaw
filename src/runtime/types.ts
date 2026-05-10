@@ -40,6 +40,23 @@ export type RuntimeFs = {
   stat(pathname: string): Promise<RuntimeStat>
   glob(pattern: string | string[], options?: GlobOptions): Promise<string[]>
   readdir(pathname: string): Promise<string[]>
+  /**
+   * Opportunistic fast path for "host already has the full buffer in memory and
+   * the target lives in a host-visible bind mount" — currently Feishu media
+   * materialize, future host-side WebFetch downloads. Implementations write
+   * directly via host fs and skip the per-32KB exec round-trips that the
+   * sandbox-safe `writeFile` uses for fairness/sandbox reasons.
+   *
+   * Returns `null` when the runtime cannot satisfy the request via host fs
+   * (target falls outside `mountTable`, host can't write to the host-side
+   * prefix, runtime backend has no shared mount, etc.). The caller MUST treat
+   * `null` as "fast path unavailable" and transparently fall back to
+   * `writeFile()` so the call is still safe to make even when the runtime
+   * doesn't support it. Only RlaunchRuntime implements this today; LocalRuntime
+   * has no need (its `writeFile` is already a host-side write); DockerRuntime
+   * can opt in later if a bind mount is detected.
+   */
+  writeFileViaHostMount?(pathname: string, content: Buffer): Promise<{ ok: true } | null>
 }
 
 export type RuntimeAvailability =
