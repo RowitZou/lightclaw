@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -12,6 +12,7 @@ import {
   parseWorkerName,
   readFileViaExec,
   READ_FILE_CHUNK_BYTES_FOR_TESTS,
+  RlaunchRuntime,
   type RlaunchRuntimeConfig,
 } from './rlaunch.js'
 import type { ExecInput, ExecResult } from './types.js'
@@ -458,5 +459,111 @@ describe('readFileViaExec (rlaunch chunked readFile)', () => {
       readFileViaExec(exec, '/workspace/y', '/workspace/y'),
       /chunk 2\/3.*no space left/,
     )
+  })
+})
+
+describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast path)', () => {
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-fastwrite-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+  })
+
+  it('writes via host fs when the container path is inside the bind mount', async () => {
+    const fastWrite = runtime.fs.writeFileViaHostMount
+    assert.ok(fastWrite, 'rlaunch fs must expose writeFileViaHostMount')
+
+    const payload = Buffer.from('hello fastpath', 'utf8')
+    const result = await fastWrite.call(
+      runtime.fs,
+      '/workspace/.lightclaw/inbox/oc_chat/photo.jpg',
+      payload,
+    )
+    assert.deepEqual(result, { ok: true })
+
+    // The reverse mapping must land the file under the host root, mirroring
+    // the worker-side container path. The bind mount will then make it
+    // visible at /workspace/... inside the worker without any further work.
+    const expectedHost = path.join(hostRoot, '.lightclaw', 'inbox', 'oc_chat', 'photo.jpg')
+    const onDisk = readFileSync(expectedHost)
+    assert.equal(Buffer.compare(onDisk, payload), 0)
+  })
+
+  it('accepts a host-rooted path as input as well', async () => {
+    const fastWrite = runtime.fs.writeFileViaHostMount!
+    const payload = Buffer.from('host-rooted', 'utf8')
+    const hostInput = path.join(hostRoot, 'a', 'b.txt')
+    const result = await fastWrite.call(runtime.fs, hostInput, payload)
+    assert.deepEqual(result, { ok: true })
+    assert.equal(readFileSync(hostInput, 'utf8'), 'host-rooted')
+  })
+
+  it('returns null without writing when the path falls outside every mount entry', async () => {
+    const fastWrite = runtime.fs.writeFileViaHostMount!
+    // /opt is neither the container prefix (/workspace) nor under the host
+    // workspace root we configured. Caller should fall back to writeFile().
+    const result = await fastWrite.call(
+      runtime.fs,
+      '/opt/something/outside.bin',
+      Buffer.from('x'),
+    )
+    assert.equal(result, null)
+  })
+
+  it('sticky-disables itself after a host fs failure and returns null thereafter', async () => {
+    const fastWrite = runtime.fs.writeFileViaHostMount!
+    // Plant a regular file where mkdir-recursive expects a directory; the
+    // first writeFileViaHostMount call will fail with ENOTDIR, flip the
+    // sticky-disabled flag, and return null. We rely on stderr noise being
+    // acceptable in tests (matches the channels.materialize test posture).
+    const collidingParent = path.join(hostRoot, 'collide')
+    writeFileSync(collidingParent, 'i am a file, not a directory')
+
+    const result1 = await fastWrite.call(
+      runtime.fs,
+      '/workspace/collide/child.bin',
+      Buffer.from('x'),
+    )
+    assert.equal(result1, null)
+
+    // Subsequent calls must short-circuit even if a different (otherwise
+    // valid) path is requested. This avoids paying another round-trip on a
+    // worker whose host-side mount is permanently inaccessible to the daemon.
+    const result2 = await fastWrite.call(
+      runtime.fs,
+      '/workspace/.lightclaw/inbox/other.bin',
+      Buffer.from('y'),
+    )
+    assert.equal(result2, null)
+    // And nothing was written at the still-valid path either.
+    const stillValid = path.join(hostRoot, '.lightclaw', 'inbox', 'other.bin')
+    assert.throws(() => readFileSync(stillValid), /ENOENT/)
   })
 })

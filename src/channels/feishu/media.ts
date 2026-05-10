@@ -65,6 +65,21 @@ export async function materializeFeishuMedia(input: {
 }): Promise<MaterializedFeishuMedia | null> {
   const destPath = `${input.runtime.workspaceRoot}/.lightclaw/inbox/${sanitize(input.chatId)}/${input.payload.fileName}`
   try {
+    // Opportunistic fast path: when the runtime exposes a host-side bind mount
+    // (RlaunchRuntime gpfs/virtiofs today), write directly via host fs and skip
+    // the per-32KB exec round-trips that a multi-MB image would otherwise pay
+    // through brainctl. Returns null when unsupported; we transparently fall
+    // back to writeFile() so this is always safe to attempt first.
+    const fastWrite = input.runtime.fs.writeFileViaHostMount
+    if (fastWrite) {
+      const result = await fastWrite.call(input.runtime.fs, destPath, input.payload.buffer)
+      if (result?.ok) {
+        return {
+          path: destPath,
+          mimeType: input.payload.mimeType,
+        }
+      }
+    }
     await input.runtime.fs.writeFile(destPath, input.payload.buffer)
     return {
       path: destPath,
