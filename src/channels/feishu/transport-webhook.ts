@@ -243,6 +243,7 @@ export function normalizeEvent(
     messageId,
     threadId: stringValue(message?.thread_id),
     rootId: stringValue(message?.root_id),
+    parentId: stringValue(message?.parent_id),
     mentions: parseMentions(message?.mentions),
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,

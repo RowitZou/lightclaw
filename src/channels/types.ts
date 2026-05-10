@@ -47,6 +47,10 @@ export type NormalizedChannelMessage = {
   threadId?: string
   /** Feishu reply-chain root id. Metadata only; does not route sessions. */
   rootId?: string
+  /** Feishu direct reply parent id. Used to enrich the turn with quoted context. */
+  parentId?: string
+  /** LLM-facing summary of the message being replied to, when available. */
+  quotedMessage?: QuotedMessageContext
   /** Feishu-only sidecar used for mention gating and sender-name hints. */
   feishuMentions?: readonly FeishuMention[]
   text: string
@@ -73,16 +77,26 @@ export type NormalizedChannelMessage = {
   synthetic?: boolean
 }
 
+export type QuotedMessageContext = {
+  author?: string
+  authorIsBot?: boolean
+  text?: string
+  attachedFileNames?: string[]
+  truncated?: boolean
+}
+
 export type PendingAttachment = {
   kind: 'feishu-media'
   messageId: string
   mediaKey: ParsedMediaKey
   fileName: string
+  quotedFromMessageId?: string
 }
 
 export type MaterializedAttachment = {
   path: string
   mimeType: string
+  pending?: PendingAttachment
 }
 
 /** Convenience accessor for `message.pendingAttachments`. Always returns an

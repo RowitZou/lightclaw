@@ -105,6 +105,28 @@ describe('buildInterjectionBlock', () => {
 
     assert.doesNotMatch(block, /Newly attached file/)
   })
+
+  it('prepends quoted context inside the user-interjection block', () => {
+    const block = buildInterjectionBlock({
+      interjections: [{
+        messageId: 'm1',
+        senderOpenId: 'ou_alice',
+        text: 'use this context too',
+        arrivedAt: 1,
+        quotedSummary: [
+          '<quoted-message author="Alice">',
+          '<text>earlier message</text>',
+          '</quoted-message>',
+        ].join('\n'),
+      }],
+      originalUserText: 'task',
+      completedToolUses: [],
+    })
+
+    assert.match(block, /<user-interjection>\nThe user sent/)
+    assert.match(block, /<quoted-message author="Alice">\n<text>earlier message<\/text>/)
+    assert.match(block, /Interjection: "use this context too"/)
+  })
 })
 
 describe('interjection prompt extractors', () => {

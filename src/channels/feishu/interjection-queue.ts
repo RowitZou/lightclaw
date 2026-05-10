@@ -7,6 +7,8 @@ export type InterjectionEntry = {
   text: string
   arrivedAt: number
   triggeredAutoDeny?: boolean
+  /** Pre-rendered quoted-message block from a reply/quote interjection. */
+  quotedSummary?: string
   /** Captured at queue time from the inbound message — list of mediaKey
    *  metadata that the runner needs to materialize before the
    *  interjection block reaches the model. Materialization is deferred

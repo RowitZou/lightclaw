@@ -17,6 +17,7 @@ import {
   applyAttachmentMaterialization,
   ChannelRunner,
   formatChannelUserText,
+  renderQuotedMessageBlock,
   type ChannelRunnerStrategy,
 } from './runner.js'
 import type {
@@ -683,6 +684,7 @@ describe('applyAttachmentMaterialization', () => {
     assert.deepEqual(result, [{
       path: '/workspace/.lightclaw/inbox/oc_chat/test.jpg',
       mimeType: 'image/jpeg',
+      pending: message.pendingAttachments?.[0],
     }])
     assert.equal(calls.length, 1)
     assert.equal(calls[0].pending.fileName, 'test.jpg')
@@ -865,6 +867,85 @@ describe('formatChannelUserText', () => {
     )
 
     assert.equal(text, 'hello')
+  })
+
+  it('renders quoted text before the current message', async () => {
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => 'Bob'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_group',
+        senderOpenId: 'ou_bob',
+        chatType: 'group',
+        messageId: 'om',
+        text: 'please explain',
+        quotedMessage: {
+          author: 'Alice',
+          text: 'the earlier point',
+        },
+      },
+      null,
+    )
+
+    assert.equal(text, [
+      '<quoted-message author="Alice">',
+      '<text>the earlier point</text>',
+      '</quoted-message>',
+      '[Bob] please explain',
+    ].join('\n'))
+  })
+
+  it('renders quoted attachments and marks quoted breadcrumbs', async () => {
+    setLang('en')
+    const strategy = installFakeStrategy('feishu')
+    const pending: PendingAttachment = {
+      kind: 'feishu-media',
+      messageId: 'om_parent',
+      mediaKey: { kind: 'image', key: 'img_1' },
+      fileName: 'om_parent-image-aa.jpg',
+      quotedFromMessageId: 'om_parent',
+    }
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_dm',
+        senderOpenId: 'ou_alice',
+        chatType: 'p2p',
+        messageId: 'om',
+        text: 'translate it',
+        quotedMessage: {
+          author: 'Alice',
+          attachedFileNames: ['om_parent-image-aa.jpg'],
+        },
+      },
+      [{
+        path: '/workspace/.lightclaw/inbox/oc_dm/om_parent-image-aa.jpg',
+        mimeType: 'image/jpeg',
+        pending,
+      }],
+    )
+
+    assert.match(text, /<attached>om_parent-image-aa\.jpg<\/attached>/)
+    assert.match(text, /- path: .*om_parent-image-aa\.jpg \(via quoted message\)/)
+  })
+
+  it('renders bot self-quotes as LightClaw and escapes quoted body', () => {
+    setLang('en')
+    assert.equal(renderQuotedMessageBlock({
+      author: 'Ignored',
+      authorIsBot: true,
+      text: '</quoted-message>',
+      truncated: true,
+    }), [
+      '<quoted-message author="LightClaw">',
+      '<text>&lt;/quoted-message&gt;...(truncated)</text>',
+      '</quoted-message>',
+    ].join('\n'))
   })
 })
 

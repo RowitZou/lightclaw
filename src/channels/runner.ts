@@ -83,6 +83,7 @@ import {
   type NormalizedChannelMessage,
   type OutgoingChannelFile,
   type PendingAttachment,
+  type QuotedMessageContext,
 } from './types.js'
 
 /**
@@ -326,6 +327,9 @@ export class ChannelRunner {
         arrivedAt: Date.now(),
         ...(pendingForInterjection.length > 0
           ? { pendingAttachments: pendingForInterjection }
+          : {}),
+        ...(message.quotedMessage
+          ? { quotedSummary: renderQuotedMessageBlock(message.quotedMessage) }
           : {}),
       }
       channelInterjectionQueue.push(mainSessionId, entry)
@@ -1290,7 +1294,7 @@ export async function applyAttachmentMaterialization(
   )
   const materialized: MaterializedAttachment[] = []
   let failureCount = 0
-  for (const result of settled) {
+  for (const [index, result] of settled.entries()) {
     if (result.status === 'rejected') {
       const detail = result.reason instanceof Error
         ? result.reason.message
@@ -1306,7 +1310,10 @@ export async function applyAttachmentMaterialization(
     process.stderr.write(
       `channel: attachment materialized session=${sessionId} path=${result.value.path}\n`,
     )
-    materialized.push(result.value)
+    materialized.push({
+      ...result.value,
+      pending: pendingList[index],
+    })
   }
   process.stderr.write(
     `channel: materialize done session=${sessionId} ok=${materialized.length} failed=${failureCount} ms=${Date.now() - startedAt}\n`,
@@ -1560,24 +1567,62 @@ export async function formatChannelUserText(
     const senderName = await strategy.resolveSenderName(message.senderOpenId, mentionNames)
     body = `[${senderName}] ${body}`
   }
+  const prefix = message.quotedMessage
+    ? `${renderQuotedMessageBlock(message.quotedMessage)}\n`
+    : ''
   const list: MaterializedAttachment[] = Array.isArray(materialized)
     ? materialized
     : materialized
       ? [materialized]
       : []
   if (list.length === 0) {
-    return body
+    return `${prefix}${body}`
   }
   // Multi-attachment: keep one breadcrumb header + per-attachment lines so
   // the agent can reference each by index. Order matches the order channel
   // adapter parsed them in (which matches the user's send order for Feishu
   // post content).
-  const lines: string[] = [body || '(no text)', '', t('channel.media.attachment')]
+  const lines: string[] = [`${prefix}${body}` || '(no text)', '', t('channel.media.attachment')]
   for (const att of list) {
     lines.push(`- type: ${att.mimeType}`)
-    lines.push(`- path: ${att.path}`)
+    const suffix = att.pending?.quotedFromMessageId
+      ? t('channel.quote.attachedSuffix')
+      : ''
+    lines.push(`- path: ${att.path}${suffix}`)
   }
   return lines.join('\n')
+}
+
+export function renderQuotedMessageBlock(quoted: QuotedMessageContext): string {
+  const author = quoted.authorIsBot
+    ? 'LightClaw'
+    : quoted.author ?? t('channel.quote.author.unknown')
+  const lines = [`<quoted-message author="${escapeAttr(author)}">`]
+  if (quoted.text) {
+    const suffix = quoted.truncated ? t('channel.quote.truncated') : ''
+    lines.push(`<text>${escapeText(`${quoted.text}${suffix}`)}</text>`)
+  }
+  for (const fileName of quoted.attachedFileNames ?? []) {
+    lines.push(`<attached>${escapeText(fileName)}</attached>`)
+  }
+  lines.push('</quoted-message>')
+  return lines.join('\n')
+}
+
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function escapeText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 function isGroupLikeChannelMessage(message: NormalizedChannelMessage): boolean {

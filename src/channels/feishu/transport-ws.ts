@@ -358,6 +358,7 @@ export function normalizeReceiveV1(
     messageId,
     threadId: message.thread_id,
     rootId: message.root_id,
+    parentId: message.parent_id,
     mentions: (message.mentions ?? []).map(mention => ({
       key: mention.key,
       name: mention.name,
