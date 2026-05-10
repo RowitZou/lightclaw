@@ -29,7 +29,10 @@ export async function runFresh(args: {
   const { config, prompt, callerUserId, isChannel } = args
   beginQuery(callerUserId)
   const messages: Message[] = [createUserMessage(prompt, null)]
-  const tools = getEnabledTools(getProvider(config), getAllTools())
+  const tools = getEnabledTools(
+    getProvider(config),
+    getAllTools(isChannel ? 'feishu' : 'terminal'),
+  )
   try {
     const result = await query({
       config,

@@ -11,6 +11,7 @@
 
 import { createUserMessage, getLastUuid } from '../messages.js'
 import { query } from '../query.js'
+import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
 import type { CanUseToolFn } from '../tool.js'
 import type {
   AssistantMessage,
@@ -90,7 +91,7 @@ export async function runForkedAgent(
   const promptMessage = buildPromptMessage(prefix, params.promptText)
   const messages = [...prefix, promptMessage]
 
-  const result = await query({
+  const run = () => query({
     messages,
     tools: cacheSafeParams.tools,
     config: cacheSafeParams.config,
@@ -103,6 +104,13 @@ export async function runForkedAgent(
     signal: params.signal,
     subagentLabel: params.label,
   })
+  const currentCtx = getCurrentSessionContext()
+  const result = currentCtx
+    ? await runWithSessionContext({
+        ...currentCtx,
+        discoveredTools: new Set(),
+      }, run)
+    : await run()
 
   return {
     finalText: result.assistantText,

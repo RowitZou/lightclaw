@@ -199,6 +199,7 @@ async function main(): Promise<void> {
     todos: resumeMeta?.todos,
     permissionMode: resumeMeta?.permissionMode,
     currentUserId: resumeMeta?.userId ?? currentUserId,
+    channel: 'terminal',
   })
   await runWithSessionContext(sessionContext, async () => {
     await initializeHooks(config)
@@ -208,7 +209,7 @@ async function main(): Promise<void> {
       const provider = getProvider(config)
       await startRepl({
         config,
-        tools: getEnabledTools(provider, getAllTools()),
+        tools: getEnabledTools(provider, getAllTools('terminal')),
         initialPrompt: args.prompt,
         resumeSessionId,
       })

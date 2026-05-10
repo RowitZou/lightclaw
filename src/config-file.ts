@@ -127,6 +127,8 @@ export type ConfigFileShape = {
     webSearch?: {
       braveApiKey?: string
     }
+    deferredLoading?: string
+    deferredLoadingThreshold?: number
   }
   runtime?: {
     backend?: string

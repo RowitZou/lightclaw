@@ -174,6 +174,8 @@ export type WebSearchToolConfig = {
 
 export type ToolsConfig = {
   webSearch: WebSearchToolConfig
+  deferredLoading: 'auto' | 'always' | 'off'
+  deferredLoadingThreshold: number
 }
 
 /** Endpoint backed by a static API key sent as Bearer auth. */
@@ -436,6 +438,19 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
   }
   throw new Error(
     `reasoningEffort must be one of: "low", "medium", "high".`,
+  )
+}
+
+function parseDeferredLoadingMode(value: string | undefined): ToolsConfig['deferredLoading'] | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'auto' || normalized === 'always' || normalized === 'off') {
+    return normalized
+  }
+  throw new Error(
+    `tools.deferredLoading must be one of: "auto", "always", "off".`,
   )
 }
 
@@ -1098,6 +1113,18 @@ export function getConfig(): LightClawConfig {
           process.env.BRAVE_SEARCH_API_KEY ??
           fileConfig.tools?.webSearch?.braveApiKey,
       },
+      deferredLoading:
+        parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??
+        parseDeferredLoadingMode(fileConfig.tools?.deferredLoading) ??
+        'auto',
+      deferredLoadingThreshold: Math.max(
+        1,
+        Math.floor(
+          parseNumber(process.env.LIGHTCLAW_DEFERRED_LOADING_THRESHOLD) ??
+          fileConfig.tools?.deferredLoadingThreshold ??
+          30,
+        ),
+      ),
     },
     lang: parseLang(process.env.LIGHTCLAW_LANG)
       ?? parseLang(fileConfig.lang)

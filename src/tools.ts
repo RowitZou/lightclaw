@@ -24,6 +24,7 @@ import { webSearchTool } from './tools/web-search.js'
 import { getMcpTools } from './mcp/index.js'
 import type { Provider } from './provider/types.js'
 import type { Tool } from './tool.js'
+import type { ChannelKey } from './channel-types.js'
 
 export const builtinTools = [
   bashTool,
@@ -49,8 +50,16 @@ export const builtinTools = [
   updateBackgroundTaskTool,
 ]
 
-export function getAllTools(): Tool[] {
-  return [...builtinTools, ...getMcpTools()]
+export function getAllTools(channel?: ChannelKey): Tool[] {
+  const all = [...builtinTools, ...getMcpTools()]
+  if (!channel) {
+    return all
+  }
+  return all.filter(tool => isToolVisibleInChannel(tool, channel))
+}
+
+export function isToolVisibleInChannel(tool: Tool, channel: ChannelKey): boolean {
+  return tool.channelScope === undefined || tool.channelScope.includes(channel)
 }
 
 export function getEnabledTools(

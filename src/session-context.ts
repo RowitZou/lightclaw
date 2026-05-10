@@ -5,6 +5,7 @@ import type { PermissionApprover, PermissionMode, PermissionRule } from './permi
 import type { Runtime } from './runtime/index.js'
 import type { PermissionDenialDetail } from './background-task/types.js'
 import type { TodoItem, UsageStats } from './types.js'
+import type { ChannelKey } from './channel-types.js'
 
 export type ChannelFileSendInput = {
   content: Buffer
@@ -24,6 +25,7 @@ export type ChannelFileSender = {
  */
 export type SessionContext = {
   sessionId: string
+  channel?: ChannelKey
   cwd: string
   model: string
   sessionsDir: string
@@ -44,6 +46,7 @@ export type SessionContext = {
   channelFileSender: ChannelFileSender | null
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
+  discoveredTools: Set<string>
   runtime?: Runtime
   isBackgroundTask?: boolean
   taskAllowedTools?: string[]
@@ -94,6 +97,7 @@ export function createSessionContext(input: {
   memoryDir: string
   currentUserId?: string
   sessionId?: string
+  channel?: ChannelKey
   resumedFrom?: string | null
   compactionCount?: number
   lastExtractedAt?: number
@@ -112,6 +116,7 @@ export function createSessionContext(input: {
 }): SessionContext {
   return {
     sessionId: input.sessionId ?? randomUUID(),
+    channel: input.channel,
     cwd: input.cwd,
     model: input.model,
     sessionsDir: input.sessionsDir,
@@ -132,6 +137,7 @@ export function createSessionContext(input: {
     channelFileSender: input.channelFileSender ?? null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
+    discoveredTools: new Set(),
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
     taskAllowedTools: input.taskAllowedTools,
@@ -172,6 +178,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     channelFileSender: null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
+    discoveredTools: new Set(),
     runtime: undefined,
     ...input,
   }

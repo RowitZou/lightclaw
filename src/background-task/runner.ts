@@ -67,7 +67,7 @@ export async function runBackgroundTaskFire(input: {
 
     const provider = getProvider(config)
     const { getAllTools, getEnabledTools } = await import('../tools.js')
-    const tools = getEnabledTools(provider, getAllTools())
+    const tools = getEnabledTools(provider, getAllTools('feishu'))
     // Docker backend requires the tracker; local / rlaunch ignore it. Pass it
     // unconditionally so a task fire under any backend gets a valid runtime —
     // missing this caused DockerRuntime to throw at acquire() and every fire
@@ -83,6 +83,7 @@ export async function runBackgroundTaskFire(input: {
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
       sessionId,
+      channel: 'feishu',
       permissionMode,
       runtime,
       fileRules: loadFileRules({

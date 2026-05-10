@@ -39,6 +39,12 @@ export type SystemPromptTemplate = {
   postTodos: string
 }
 
+export type SystemPromptRenderOptions = {
+  tools: Tool[]
+  deferredTools?: Tool[]
+  discoveredTools?: ReadonlySet<string>
+}
+
 function formatSkillsSection(): string {
   const skills = listRegisteredSkills()
   if (skills.length === 0) {
@@ -174,8 +180,6 @@ export async function buildSystemPromptTemplate(
       : Promise.resolve(''),
   ])
 
-  const toolDescriptions = formatToolCatalog(tools)
-
   const preTodoSections: string[] = [
     'You are LightClaw, a personal assistant running across terminal and chat channels.',
     'You help the current user inside their private LightClaw workspace. Do not frame yourself as a project-directory coding console unless the user asks for code work.',
@@ -254,7 +258,6 @@ export async function buildSystemPromptTemplate(
     '- Do not attempt environment-domain tools again until the user explicitly asks you to retry.',
     '',
     'Available tools:',
-    toolDescriptions,
   ]
 
   return {
@@ -266,10 +269,18 @@ export async function buildSystemPromptTemplate(
 export function renderSystemPrompt(
   template: SystemPromptTemplate,
   todos: TodoItem[],
+  options?: SystemPromptRenderOptions,
 ): string {
   const todoSection = formatTodoSection(todos)
   const middle = todoSection ? `\n\n${todoSection}` : ''
-  return `${template.preTodos}${middle}\n\n${template.postTodos}`
+  const tools = options?.tools ?? []
+  const toolDescriptions = formatToolCatalog(tools)
+  const base = `${template.preTodos}${middle}\n\n${template.postTodos}\n${toolDescriptions}`
+  return appendDeferredToolsReminder(
+    base,
+    options?.deferredTools ?? [],
+    options?.discoveredTools ?? new Set(),
+  )
 }
 
 export function buildSubagentPrompt(
@@ -305,4 +316,19 @@ export function buildSubagentPrompt(
   )
 
   return sections.join('\n')
+}
+
+function appendDeferredToolsReminder(
+  prompt: string,
+  deferredTools: readonly Tool[],
+  discoveredTools: ReadonlySet<string>,
+): string {
+  const undiscovered = deferredTools.filter(tool => !discoveredTools.has(tool.name))
+  if (undiscovered.length === 0) {
+    return prompt
+  }
+  return `${prompt}\n\n<system-reminder>
+The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded. Calling them directly will fail. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:
+${undiscovered.map(tool => tool.name).join('\n')}
+</system-reminder>`
 }

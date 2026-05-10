@@ -6,6 +6,7 @@ import type { PermissionRuleValue, RiskLevel } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
 import type { WakeNotifyResult } from './background-task/types.js'
 import type { UserToolResultBlock } from './types.js'
+import type { ChannelKey } from './channel-types.js'
 
 export type ToolCallContext = {
   cwd: string
@@ -13,6 +14,8 @@ export type ToolCallContext = {
   runtime: Runtime
   canUseTool?: CanUseToolFn
   wakeNotifications?: WakeNotifyResult[]
+  deferredTools?: readonly Tool[]
+  discoverTool?(name: string): void
 }
 
 export type CanUseToolDecision =
@@ -49,6 +52,12 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
    * writers, executors, or anything that mutates shared state.
    */
   concurrencySafe?: boolean
+  /** Omitted means visible in every channel. */
+  channelScope?: readonly ChannelKey[]
+  /** Force this tool into the always-loaded set. */
+  alwaysLoad?: boolean
+  /** Force this tool into the deferred set; wins over alwaysLoad. */
+  shouldDefer?: boolean
   isEnabled?(provider: Provider): boolean
   /**
    * Called when permission policy decides to ASK; the returned rules become
@@ -72,6 +81,9 @@ export function buildTool<TInput, TOutput>(input: {
   inputSchema: z.ZodType<TInput>
   riskLevel: RiskLevel
   concurrencySafe?: boolean
+  channelScope?: readonly ChannelKey[]
+  alwaysLoad?: boolean
+  shouldDefer?: boolean
   isEnabled?(provider: Provider): boolean
   suggestPermissionRules?(input: TInput): PermissionRuleValue[]
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>

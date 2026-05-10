@@ -380,6 +380,7 @@ export class ChannelRunner {
         const sessionContext = createEmptySessionContext({
           sessionId,
           currentUserId: userId,
+          channel: 'feishu',
         })
         const approver = this.strategy.createPermissionApprover?.(
             effectiveMessage,
@@ -396,6 +397,7 @@ export class ChannelRunner {
         await runWithSessionContext(sessionContext, async () => {
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
+          channel: 'feishu',
           model: meta?.model,
           sessionId,
           resumedFrom: meta ? sessionId : null,
@@ -522,7 +524,7 @@ export class ChannelRunner {
           messages,
           userId,
           isAdmin: await isAdmin(userId),
-          getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools()),
+          getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools('feishu')),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
         })
@@ -606,7 +608,7 @@ export class ChannelRunner {
             result = await query({
               config: appConfig,
               messages,
-              tools: getEnabledTools(provider, getAllTools()),
+              tools: getEnabledTools(provider, getAllTools('feishu')),
               mode: 'channel',
               channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
               permissionApprover: approver,
@@ -936,6 +938,7 @@ export class ChannelRunner {
 
     const ctx = createSessionContext({
       cwd,
+      channel: 'feishu',
       model: prefs.model ?? config.model,
       sessionsDir: config.sessionsDir,
       memoryDir: getMemoryDir(userId, config),
@@ -953,7 +956,7 @@ export class ChannelRunner {
     })
 
     const provider = getProvider(config)
-    const tools = getEnabledTools(provider, getAllTools())
+    const tools = getEnabledTools(provider, getAllTools('feishu'))
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
     // Load transcript from disk so /status (and any other read slash that

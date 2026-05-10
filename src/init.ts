@@ -34,12 +34,14 @@ import {
   type SessionContext,
 } from './session-context.js'
 import type { TodoItem } from './types.js'
+import type { ChannelKey } from './channel-types.js'
 
 let signalHandlersInstalled = false
 let workerHealthChecker: WorkerHealthChecker | null = null
 
 type CommonStateInput = {
   cwd?: string
+  channel?: ChannelKey
   model?: string
   sessionId?: string
   resumedFrom?: string | null
@@ -316,6 +318,7 @@ async function createResolvedSessionContext(
   resetSessionScopedCounters()
   return createSessionContext({
     cwd: resolvedCwd,
+    channel: input?.channel,
     model: resolvedConfig.model,
     sessionsDir: resolvedConfig.sessionsDir,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),

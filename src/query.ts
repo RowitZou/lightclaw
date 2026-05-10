@@ -60,6 +60,10 @@ import {
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
 import { getCurrentSessionContext } from './session-context.js'
+import {
+  buildTurnToolCatalog,
+  findDeferredTool,
+} from './tools/deferred-loading.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
@@ -157,6 +161,8 @@ type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
 
 type DispatchContext = {
   tools: Tool[]
+  allTools: Tool[]
+  deferredTools: Tool[]
   mode: QueryMode
   rl?: Interface
   permissionApprover?: PermissionApprover
@@ -484,7 +490,17 @@ export async function query(params: QueryParams): Promise<{
     if (params.systemPrompt) {
       return params.systemPrompt
     }
-    const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos())
+    const sessionCtx = getCurrentSessionContext()
+    const catalog = buildTurnToolCatalog({
+      allTools: params.tools,
+      discoveredTools: sessionCtx?.discoveredTools ?? new Set(),
+      config,
+    })
+    const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos(), {
+      tools: catalog.tools,
+      deferredTools: catalog.deferred,
+      discoveredTools: sessionCtx?.discoveredTools,
+    })
     return params.channelContext
       ? `${params.channelContext}\n\n${rendered}`
       : rendered
@@ -516,6 +532,8 @@ export async function query(params: QueryParams): Promise<{
 
   const dispatchCtx: DispatchContext = {
     tools: params.tools,
+    allTools: params.tools,
+    deferredTools: [],
     mode,
     rl: params.rl,
     permissionApprover: params.permissionApprover,
@@ -556,6 +574,17 @@ export async function query(params: QueryParams): Promise<{
     }
 
     let stopEvent: StopEvent | undefined
+    const sessionCtx = getCurrentSessionContext()
+    const turnCatalog = params.systemPrompt
+      ? { tools: params.tools, deferred: [], deferredEnabled: false }
+      : buildTurnToolCatalog({
+          allTools: params.tools,
+          discoveredTools: sessionCtx?.discoveredTools ?? new Set(),
+          config,
+        })
+    dispatchCtx.tools = turnCatalog.tools
+    dispatchCtx.allTools = params.tools
+    dispatchCtx.deferredTools = turnCatalog.deferred
 
     // Stream the assistant turn. If the API rejects the request as
     // prompt-too-long (typical 400 from Anthropic when input exceeds
@@ -564,14 +593,25 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
-      const systemPrompt = renderEffectiveSystemPrompt()
+      const systemPrompt = params.systemPrompt
+        ? params.systemPrompt
+        : (() => {
+            const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos(), {
+              tools: turnCatalog.tools,
+              deferredTools: turnCatalog.deferred,
+              discoveredTools: sessionCtx?.discoveredTools,
+            })
+            return params.channelContext
+              ? `${params.channelContext}\n\n${rendered}`
+              : rendered
+          })()
       try {
         for await (const event of streamChat({
           config,
           model: modelFor('main', config),
           messages: toApiMessages(messages),
           system: systemPrompt,
-          tools: params.tools.map(toolToAPISchema),
+          tools: turnCatalog.tools.map(toolToAPISchema),
           cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
           signal: params.signal ?? getAbortController().signal,
           apiLogContext: {
@@ -670,7 +710,7 @@ export async function query(params: QueryParams): Promise<{
         getCurrentUserId(),
         createCacheSafeParams({
           systemPrompt: renderEffectiveSystemPrompt(),
-          tools: params.tools,
+          tools: turnCatalog.tools,
           messages: [...messages],
           config,
         }),
@@ -756,12 +796,12 @@ export async function query(params: QueryParams): Promise<{
       let i = 0
       while (i < toolUses.length) {
         const head = toolUses[i]
-        const headTool = findToolByName(params.tools, head.name)
+        const headTool = findToolByName(turnCatalog.tools, head.name)
         if (headTool?.concurrencySafe) {
           const batch: ToolUseBlock[] = []
           while (i < toolUses.length) {
             const tu = toolUses[i]
-            const candidateTool = findToolByName(params.tools, tu.name)
+            const candidateTool = findToolByName(turnCatalog.tools, tu.name)
             if (!candidateTool?.concurrencySafe) {
               break
             }
@@ -841,6 +881,15 @@ async function dispatchToolCall(
 ): Promise<UserToolResultBlock> {
   const tool = findToolByName(ctx.tools, toolUse.name)
   if (!tool) {
+    const deferredTool = findDeferredTool(ctx.allTools, toolUse.name)
+    if (deferredTool) {
+      return reportToolResult(
+        ctx,
+        toolUse,
+        `Tool '${toolUse.name}' is deferred and not yet loaded. Call ToolSearch({query: "select:${toolUse.name}"}) to load its schema, then re-issue this tool call on your next turn.`,
+        true,
+      )
+    }
     return reportToolResult(ctx, toolUse, `Unknown tool: ${toolUse.name}`, true)
   }
 
@@ -925,6 +974,11 @@ async function dispatchToolCall(
       runtime: getRuntime(),
       canUseTool: ctx.canUseTool,
       wakeNotifications: ctx.wakeNotifications,
+      deferredTools: ctx.deferredTools,
+      discoverTool(name) {
+        const current = getCurrentSessionContext()
+        current?.discoveredTools.add(name)
+      },
     })
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 

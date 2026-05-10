@@ -2,6 +2,7 @@ import { getConfig } from '../config.js'
 import { buildSubagentPrompt } from '../prompt.js'
 import { getProvider } from '../provider/index.js'
 import { getCurrentUserId, getRuntime } from '../state.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { AgentType } from './types.js'
@@ -67,7 +68,10 @@ export async function runSubagent(params: {
 
   const config = getConfig()
   const provider = getProvider(config)
-  const tools = filterTools(agent.tools, getEnabledTools(provider, getAllTools()))
+  const tools = filterTools(
+    agent.tools,
+    getEnabledTools(provider, getAllTools(getCurrentSessionContext()?.channel)),
+  )
   // Subagents reuse the parent's model so the prompt cache breakpoints in
   // tools / system / messages stay valid across the fork. Do not introduce a
   // dedicated subagent model routing key — model name is part of the cache

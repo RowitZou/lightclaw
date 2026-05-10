@@ -145,6 +145,7 @@ export async function wakeMainAgent(input: {
       memoryDir: getMemoryDir(input.canonicalUser, config),
       currentUserId: input.canonicalUser,
       sessionId: mainSessionId,
+      channel: 'feishu',
       permissionMode,
       runtime,
       fileRules: loadFileRules({
@@ -175,7 +176,7 @@ export async function wakeMainAgent(input: {
         },
         messages,
         tools: [
-          ...getEnabledTools(provider, getAllTools()),
+          ...getEnabledTools(provider, getAllTools('feishu')),
           notifyUserTool,
           staySilentTool,
         ],

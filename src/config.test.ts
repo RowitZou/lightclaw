@@ -19,6 +19,8 @@ const ENV_KEYS = [
   'LIGHTCLAW_ROUTING_COMPACT',
   'LIGHTCLAW_ROUTING_EXTRACT',
   'LIGHTCLAW_ROUTING_WEBSEARCH',
+  'LIGHTCLAW_DEFERRED_LOADING',
+  'LIGHTCLAW_DEFERRED_LOADING_THRESHOLD',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -415,6 +417,30 @@ describe('config: endpoints + models registry', () => {
       fireRetryMaxAttempts: 3,
       recurringAutoDisableThreshold: 3,
     })
+  })
+
+  it('defaults deferred tool loading to auto at threshold 30', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.tools.deferredLoading, 'auto')
+    assert.equal(cfg.tools.deferredLoadingThreshold, 30)
+  })
+
+  it('parses deferred tool loading overrides from config', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      tools: {
+        deferredLoading: 'always',
+        deferredLoadingThreshold: 7,
+      },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.tools.deferredLoading, 'always')
+    assert.equal(cfg.tools.deferredLoadingThreshold, 7)
   })
 
   it('parses backgroundTask overrides', () => {

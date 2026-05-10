@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+
+import type { Tool } from './tool.js'
+import { isToolVisibleInChannel } from './tools.js'
+
+describe('channel-aware tool visibility', () => {
+  it('defaults tools to visible in every channel', () => {
+    const tool = fakeTool({ name: 'Everywhere' })
+    assert.equal(isToolVisibleInChannel(tool, 'feishu'), true)
+    assert.equal(isToolVisibleInChannel(tool, 'terminal'), true)
+  })
+
+  it('filters feishu-only tools out of terminal', () => {
+    const tool = fakeTool({ name: 'FeishuOnly', channelScope: ['feishu'] })
+    assert.equal(isToolVisibleInChannel(tool, 'feishu'), true)
+    assert.equal(isToolVisibleInChannel(tool, 'terminal'), false)
+  })
+
+  it('filters terminal-only tools out of feishu', () => {
+    const tool = fakeTool({ name: 'TerminalOnly', channelScope: ['terminal'] })
+    assert.equal(isToolVisibleInChannel(tool, 'terminal'), true)
+    assert.equal(isToolVisibleInChannel(tool, 'feishu'), false)
+  })
+})
+
+function fakeTool(input: Partial<Tool> & { name: string }): Tool {
+  return {
+    description: `${input.name} description`,
+    source: 'builtin',
+    domain: 'host',
+    riskLevel: 'safe',
+    async call() {
+      return { output: 'ok' }
+    },
+    formatResult(output, toolUseId) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: String(output),
+      }
+    },
+    ...input,
+  }
+}
