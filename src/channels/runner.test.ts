@@ -684,7 +684,6 @@ describe('applyAttachmentMaterialization', () => {
     assert.deepEqual(result, [{
       path: '/workspace/.lightclaw/inbox/oc_chat/test.jpg',
       mimeType: 'image/jpeg',
-      pending: message.pendingAttachments?.[0],
     }])
     assert.equal(calls.length, 1)
     assert.equal(calls[0].pending.fileName, 'test.jpg')
@@ -901,13 +900,6 @@ describe('formatChannelUserText', () => {
   it('renders quoted attachments and marks quoted breadcrumbs', async () => {
     setLang('en')
     const strategy = installFakeStrategy('feishu')
-    const pending: PendingAttachment = {
-      kind: 'feishu-media',
-      messageId: 'om_parent',
-      mediaKey: { kind: 'image', key: 'img_1' },
-      fileName: 'om_parent-image-aa.jpg',
-      quotedFromMessageId: 'om_parent',
-    }
     const text = await formatChannelUserText(
       strategy,
       {
@@ -926,7 +918,7 @@ describe('formatChannelUserText', () => {
       [{
         path: '/workspace/.lightclaw/inbox/oc_dm/om_parent-image-aa.jpg',
         mimeType: 'image/jpeg',
-        pending,
+        quotedFromMessageId: 'om_parent',
       }],
     )
 

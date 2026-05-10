@@ -85,8 +85,17 @@ export class ParentMessageFetcher {
       return result
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`feishu parent-fetch: failed parentId=${parentId} reason=${detail}\n`)
-      this.cache.set(parentId, null)
+      const permanent = isPermanentFetchError(error)
+      process.stderr.write(
+        `feishu parent-fetch: failed parentId=${parentId} permanent=${permanent} reason=${detail}\n`,
+      )
+      // Only cache permanent outcomes (parent gone / scope denied). Transient
+      // errors (timeout, 5xx, 401/429, network) must stay uncached so the next
+      // mention of the same parentId gets another chance — caching them as
+      // null would silently blackhole the parent for the LRU's lifetime.
+      if (permanent) {
+        this.cache.set(parentId, null)
+      }
       return null
     }
   }
@@ -215,4 +224,33 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+// Classify a fetch error as permanent vs transient. Permanent: HTTP 404 / 403
+// — the parent message no longer exists or the bot will never be allowed to
+// read it for the daemon's current scope. Transient: anything we can't
+// confidently classify (network, timeout, 5xx, 401, 429, missing status).
+// Bias toward transient on uncertainty so we retry rather than blackhole.
+function isPermanentFetchError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  const status = readHttpStatus(error)
+  if (status === 404 || status === 403) {
+    return true
+  }
+  return false
+}
+
+function readHttpStatus(error: object): number | undefined {
+  const e = error as Record<string, unknown>
+  const direct = typeof e.status === 'number' ? e.status : undefined
+  if (direct !== undefined) {
+    return direct
+  }
+  const response = asRecord(e.response)
+  if (response && typeof response.status === 'number') {
+    return response.status as number
+  }
+  return undefined
 }
