@@ -105,13 +105,6 @@ export class RlaunchRuntime implements Runtime {
    *  re-stages into the fresh container. */
   private helpersStagedFor: string | null = null
   private inflightStaging: Promise<void> | null = null
-  /** Memoizes the per-worker ownership-migration step that hands `<workspace>/
-   *  .lightclaw/{inbox,downloads}` to the daemon UID. Worker processes run as
-   *  root in this cluster image; without this step the host-mount fast write
-   *  fails EACCES on any directory the worker created (legacy materializes,
-   *  WebFetch helper output). One brainctl exec, idempotent. */
-  private workspaceOwnershipFor: string | null = null
-  private inflightOwnership: Promise<void> | null = null
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -506,59 +499,7 @@ export class RlaunchRuntime implements Runtime {
       await this.start()
     }
     await this.waitUntilRunning()
-    await this.ensureWorkspaceOwnership()
     await this.ensureHelpersStaged()
-  }
-
-  /** Bootstrap the host-shared data dirs (`inbox/`, `downloads/`) so that
-   *  daemon-side host fs writes (RlaunchRuntime.fs.writeFileViaHostMount,
-   *  Feishu materialize today) can drop files into them without EACCES.
-   *  The cluster's worker image runs as root, so any directory the worker
-   *  creates (legacy writeFile mkdir-p, `apt install` artifacts) ends up
-   *  root-owned and unwritable from the daemon's non-root UID. We mkdir-p
-   *  the two known data dirs and chown-R `.lightclaw/` to the daemon UID;
-   *  one round-trip, idempotent, memoized per worker. The `2>/dev/null ||
-   *  true` guard makes this a soft step — if chown fails (rare: gpfs ACL
-   *  weirdness), the fast-path will simply EACCES + sticky-disable and the
-   *  brainctl chunked path keeps things working. */
-  private async ensureWorkspaceOwnership(): Promise<void> {
-    if (this.workspaceOwnershipFor === this.workerName) return
-    if (this.inflightOwnership) return this.inflightOwnership
-    this.inflightOwnership = this.runWorkspaceOwnershipOnce().finally(() => {
-      this.inflightOwnership = null
-    })
-    return this.inflightOwnership
-  }
-
-  private async runWorkspaceOwnershipOnce(): Promise<void> {
-    const uid = process.getuid?.()
-    const gid = process.getgid?.()
-    // Daemon should always be a real Linux user; if these are unavailable
-    // (Windows / unprivileged sandbox), skip the bootstrap — the fast-path
-    // will fall back to the brainctl chunked path on its own.
-    if (uid == null || gid == null) {
-      this.workspaceOwnershipFor = this.workerName
-      return
-    }
-    const inboxPath = path.posix.join(this.workspaceRoot, '.lightclaw', 'inbox')
-    const downloadsPath = path.posix.join(this.workspaceRoot, '.lightclaw', 'downloads')
-    const lightclawPath = path.posix.join(this.workspaceRoot, '.lightclaw')
-    const result = await this.runBrainctlExec({
-      command:
-        `mkdir -p ${shellQuote(inboxPath)} ${shellQuote(downloadsPath)} && ` +
-        `chown -R ${uid}:${gid} ${shellQuote(lightclawPath)} 2>/dev/null || true`,
-      timeoutMs: 30_000,
-    })
-    if (result.exitCode !== 0) {
-      // The trailing `|| true` should make this practically impossible, but
-      // log + continue rather than throwing — every other fs.* call would be
-      // worse than a slow materialize, and the fallback path still works.
-      process.stderr.write(
-        `[rlaunch] workspace ownership bootstrap failed (continuing on slow path): ` +
-        `${result.stderr.trim() || result.stdout.trim()}\n`,
-      )
-    }
-    this.workspaceOwnershipFor = this.workerName
   }
 
   /**
