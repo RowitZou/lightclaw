@@ -76,14 +76,21 @@ const MAX_INLINE_STDIN_BYTES = 32 * 1024
 // 32 round-trips per MB; multi-MB writes are slow but correct. If perf ever
 // matters here, write via the gpfs bind mount on the host instead.
 const WRITE_FILE_CHUNK_BYTES = 32 * 1024
-// fs.readFile chunk size: per-hop raw bytes pulled via `dd | base64 -w 0`.
-// Stdout is bounded by READ_FILE_BUFFER_BYTES (the exec maxBufferBytes we set
-// for read hops) — the brainctl ws frame limit on the input direction does
-// not apply to the response stream, but child_process buffering still does.
-// 512 KB raw → ~683 KB base64 stdout, comfortably under READ_FILE_BUFFER_BYTES.
-// At this size 30 MB takes 60 hops; on a healthy cluster that's a few seconds.
-const READ_FILE_CHUNK_BYTES = 512 * 1024
-const READ_FILE_BUFFER_BYTES = 4 * 1024 * 1024
+// fs.readFile single-hop stdout cap. Output is bounded by `runProcess`'s
+// `maxBufferBytes` (a self-imposed cap, NOT a brainctl ws-frame limit — the
+// frame limit only applies to the daemon→worker stdin direction). Picked at
+// 256 MB so a 100 MB raw file (the tool-side cap for PDFs / images via
+// `MAX_PDF_BYTES` / `MAX_IMAGE_BYTES`) → ~134 MB base64 stdout fits with
+// headroom; daemon RAM (typically 16 GB+ on cluster dev nodes) is plenty.
+//
+// History: prior versions chunked at 512 KB raw via `dd skip=K count=1 |
+// base64 -w 0` to stay under a 4 MB cap. The chunked path silently truncated
+// occasional hops (~8 KB lost on a 4.5 MB PDF in 2026-05-10 dogfood) and
+// surfaced as `byte mismatch (expected X, got Y)` from the post-loop stat
+// guard. Single-hop `base64 -w 0 path` eliminates the chunking protocol
+// entirely (no per-hop seek + concat = no chance to lose hops). For files
+// > 192 MB raw, the cap throws loud rather than silently truncate.
+const READ_FILE_BUFFER_BYTES = 256 * 1024 * 1024
 
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
@@ -113,6 +120,11 @@ export class RlaunchRuntime implements Runtime {
    *  boot and doesn't appear/disappear at runtime, so a process-lifetime
    *  cache is safe; a daemon restart re-probes. */
   private hostMountFastWriteDisabled = false
+  /** Sticky negative cache for the host-mount fast-read path. Independent
+   *  from the write flag because the failure modes diverge (worker-only
+   *  permissions, race with concurrent writes, etc.); flipping read off
+   *  shouldn't penalize materialize writes that are still working. */
+  private hostMountFastReadDisabled = false
 
   constructor(config: RlaunchRuntimeConfig, tracker: WorkerReadinessTracker) {
     this.cfg = config
@@ -453,6 +465,34 @@ export class RlaunchRuntime implements Runtime {
         process.stderr.write(
           `[rlaunch] host-mount fast write disabled for worker ${this.workerName ?? '<unbound>'}; ` +
           `falling back to brainctl chunked path: ${text}\n`,
+        )
+        return null
+      }
+    },
+    readFileViaHostMount: async (pathname) => {
+      // Daemon-only fast read. Symmetric to writeFileViaHostMount; same
+      // sticky-disabled posture, same toHostPath gate. Tools must NOT call
+      // this — they use readFile() so the runtime owns sandbox semantics
+      // (path translation, perm narrowing, future overlay rules). This
+      // path is for harness-internal consumers (channel inline encoders,
+      // future webfetch staging) where the bytes have to traverse to the
+      // daemon Node process anyway and there is no value in routing a
+      // bind-mounted read through brainctl exec.
+      if (this.hostMountFastReadDisabled) {
+        return null
+      }
+      const hostPath = this.toHostPath(pathname)
+      if (!hostPath) {
+        return null
+      }
+      try {
+        return await fsp.readFile(hostPath)
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error)
+        this.hostMountFastReadDisabled = true
+        process.stderr.write(
+          `[rlaunch] host-mount fast read disabled for worker ${this.workerName ?? '<unbound>'}; ` +
+          `falling back to runtime.fs.readFile: ${text}\n`,
         )
         return null
       }
@@ -999,6 +1039,10 @@ export async function readFileViaExec(
   containerPath: string,
   pathname: string,
 ): Promise<Buffer> {
+  // Single-hop: stat to know expected size, then `base64 -w 0 path` to dump
+  // the whole file. The trailing assertion catches any truncation / silent
+  // brainctl stdout drop without falling back to a chunked retry (since
+  // chunking is what introduced the byte-mismatch bug we replaced this for).
   const sizeRes = await exec({
     command: `stat -c %s ${shellQuote(containerPath)}`,
   })
@@ -1010,40 +1054,20 @@ export async function readFileViaExec(
     throw new Error(`readFile ${pathname}: invalid stat size '${sizeRes.stdout.trim()}'`)
   }
 
-  if (totalBytes <= READ_FILE_CHUNK_BYTES) {
-    const result = await exec({
-      command: `base64 -w 0 ${shellQuote(containerPath)}`,
-      maxBufferBytes: READ_FILE_BUFFER_BYTES,
-    })
-    if (result.exitCode !== 0) {
-      throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
-    }
-    return Buffer.from(result.stdout.trim(), 'base64')
+  const result = await exec({
+    command: `base64 -w 0 ${shellQuote(containerPath)}`,
+    maxBufferBytes: READ_FILE_BUFFER_BYTES,
+  })
+  if (result.exitCode !== 0) {
+    throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
   }
-
-  const chunks: Buffer[] = []
-  const chunkCount = Math.ceil(totalBytes / READ_FILE_CHUNK_BYTES)
-  for (let index = 0; index < chunkCount; index += 1) {
-    const result = await exec({
-      command:
-        `dd if=${shellQuote(containerPath)} bs=${READ_FILE_CHUNK_BYTES} ` +
-        `skip=${index} count=1 status=none 2>/dev/null | base64 -w 0`,
-      maxBufferBytes: READ_FILE_BUFFER_BYTES,
-    })
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `readFile ${pathname} (chunk ${index}/${chunkCount}): ${result.stderr.trim() || result.stdout.trim()}`,
-      )
-    }
-    chunks.push(Buffer.from(result.stdout.trim(), 'base64'))
-  }
-  const assembled = Buffer.concat(chunks)
-  if (assembled.length !== totalBytes) {
+  const buffer = Buffer.from(result.stdout.trim(), 'base64')
+  if (buffer.length !== totalBytes) {
     throw new Error(
-      `readFile ${pathname}: byte mismatch (expected ${totalBytes}, got ${assembled.length})`,
+      `readFile ${pathname}: byte mismatch (expected ${totalBytes}, got ${buffer.length})`,
     )
   }
-  return assembled
+  return buffer
 }
 
-export const READ_FILE_CHUNK_BYTES_FOR_TESTS = READ_FILE_CHUNK_BYTES
+export const READ_FILE_BUFFER_BYTES_FOR_TESTS = READ_FILE_BUFFER_BYTES

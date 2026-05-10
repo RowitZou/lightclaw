@@ -16,7 +16,19 @@ import {
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
-import type { ApiMessage, Provider, StreamChatParams } from './types.js'
+import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
+
+/** OpenAI Chat Completions has no slot for `document` (PDF) blocks anywhere
+ *  in the schema, and audio/video are not natively expressable on this
+ *  provider either. Surface every such block we silently skip during
+ *  message conversion so the api.ts streamChat wrapper can flip the
+ *  capability cache and stop generating these blocks upstream. */
+function classifyUnsupportedBlock(blockType: unknown): AttachmentKind | null {
+  if (blockType === 'document') return 'pdf'
+  if (blockType === 'audio') return 'audio'
+  if (blockType === 'video') return 'video'
+  return null
+}
 
 type PendingToolCall = {
   id: string
@@ -60,6 +72,7 @@ function contentToText(content: unknown): string {
 function convertMessages(
   system: string,
   messages: ApiMessage[],
+  dropped: Set<AttachmentKind>,
 ): ChatCompletionMessageParam[] {
   const converted: ChatCompletionMessageParam[] = [
     {
@@ -97,6 +110,16 @@ function convertMessages(
             isRecord(block.source) &&
             block.source.type === 'base64',
         )
+        // Classify any user-content block whose type isn't accepted by the
+        // wire schema so the streamChat wrapper can flip the capability
+        // cache to false. Without this, a `document` block silently falls
+        // through every filter above and never reaches `converted` —
+        // observable only by reading the raw transcript.
+        for (const block of message.content) {
+          if (!isRecord(block)) continue
+          const kind = classifyUnsupportedBlock(block.type)
+          if (kind) dropped.add(kind)
+        }
 
         for (const block of toolResults) {
           // OpenAI Chat Completions tool messages require string content;
@@ -246,9 +269,18 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       let finishReason: string | null = null
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
+      const dropped = new Set<AttachmentKind>()
+      const wireMessages = convertMessages(params.system, sanitizedMessages, dropped)
+      // Surface any kind we silently skipped during translation BEFORE the
+      // first SSE chunk arrives. Consumed by api.ts streamChat wrapper +
+      // capability autopilot to flip the cache so subsequent encode passes
+      // don't bother generating these blocks.
+      for (const kind of dropped) {
+        yield { type: 'content_dropped', kind, reason: 'schema_unsupported' }
+      }
       const stream = await client.chat.completions.create({
         model: params.model,
-        messages: convertMessages(params.system, sanitizedMessages),
+        messages: wireMessages,
         tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,
         max_tokens: params.maxTokens ?? 8192,
         stream: true,
@@ -347,6 +379,29 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         content,
       }
       yield stopEvent
+    },
+    detectStaticDropKinds(): readonly AttachmentKind[] {
+      // Probe: synthesize a user message with one block of every attachment
+      // kind and run it through the same convertMessages this provider's
+      // streamChat uses. Kinds that fall out as `dropped` are the ones the
+      // wire schema cannot represent — return them so getProviderFor() can
+      // pre-charge `recordCapability(false)` before any real PDF / audio /
+      // video upload reaches encodeAttachmentsForInline.
+      const probe: ApiMessage[] = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '' },
+            { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: '' } },
+            { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: '' } },
+            { type: 'audio', source: { type: 'base64', mediaType: 'audio/mpeg', data: '' } },
+            { type: 'video', source: { type: 'base64', mediaType: 'video/mp4', data: '' } },
+          ],
+        },
+      ]
+      const dropped = new Set<AttachmentKind>()
+      convertMessages('', probe, dropped)
+      return Array.from(dropped)
     },
     async describeImage(params) {
       const images = params.images ?? (params.image ? [params.image] : [])

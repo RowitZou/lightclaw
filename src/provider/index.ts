@@ -4,6 +4,7 @@ import type {
   ModelEntry,
 } from '../config.js'
 import { createAnthropicProvider } from './anthropic.js'
+import { recordCapability } from './capability-cache.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
 import type { Provider, Schema } from './types.js'
@@ -19,6 +20,12 @@ export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch'
  * restart, matching the previous behavior.
  */
 const cache = new Map<string, Provider>()
+/** Per (endpoint × upstreamModel) memoization for `precharge()`. The
+ *  capability cache itself is on disk and idempotent under repeated
+ *  `recordCapability(false)` writes, but the disk IO is wasted past the
+ *  first call. Tracking the keys here keeps the steady-state cost zero
+ *  after a daemon's first turn for each model. */
+const prechargdKeys = new Set<string>()
 
 function cacheKey(schema: Schema, endpointAlias: string): string {
   return `${schema}:${endpointAlias}`
@@ -86,7 +93,37 @@ export function getProviderFor(
     provider = buildProvider(entry.schema, endpoint)
     cache.set(key, provider)
   }
+  precharge(provider, entry)
   return { provider, entry }
+}
+
+/** Run the provider's static-drop probe ONCE per (endpoint × upstreamModel)
+ *  pair and write the resulting falses into the capability cache, so the
+ *  channel-runner's `encodeAttachmentsForInline` can short-circuit on
+ *  unsupported kinds without ever reading the bytes off disk. This is the
+ *  proactive complement to the runtime `content_dropped` autopilot — most
+ *  drops we care about (OpenAI document, audio/video) are deterministic
+ *  schema-level facts that don't need a real upload to discover. */
+function precharge(provider: Provider, entry: ModelEntry): void {
+  const k = `${entry.endpoint}:${entry.upstreamModel}`
+  if (prechargdKeys.has(k)) return
+  prechargdKeys.add(k)
+
+  const dropped = provider.detectStaticDropKinds?.()
+  if (!dropped || dropped.length === 0) return
+
+  for (const kind of dropped) {
+    recordCapability({
+      endpoint: entry.endpoint,
+      upstreamModel: entry.upstreamModel,
+      kind,
+      value: false,
+    })
+  }
+  process.stderr.write(
+    `[capability] precharged ${entry.endpoint}/${entry.upstreamModel} ` +
+    `kinds=${dropped.join(',')} verdict=false (schema_unsupported)\n`,
+  )
 }
 
 /**
@@ -106,4 +143,5 @@ export function modelFor(task: ModelTask, config: LightClawConfig): string {
 /** Test-only escape hatch; production code should never need to clear. */
 export function _resetProviderCacheForTests(): void {
   cache.clear()
+  prechargdKeys.clear()
 }

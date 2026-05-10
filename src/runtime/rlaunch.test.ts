@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -11,7 +11,7 @@ import {
   composeExecScript,
   parseWorkerName,
   readFileViaExec,
-  READ_FILE_CHUNK_BYTES_FOR_TESTS,
+  READ_FILE_BUFFER_BYTES_FOR_TESTS,
   RlaunchRuntime,
   type RlaunchRuntimeConfig,
 } from './rlaunch.js'
@@ -317,10 +317,11 @@ describe('translateRlaunchError', () => {
   })
 })
 
-describe('readFileViaExec (rlaunch chunked readFile)', () => {
-  // Builds a stub exec that simulates `stat` and `dd | base64 -w 0` /
-  // `base64 -w 0` against an in-memory `payload` Buffer. Captures every
-  // exec command for assertion.
+describe('readFileViaExec (rlaunch single-hop readFile)', () => {
+  // Stub exec simulating `stat` and `base64 -w 0` against an in-memory
+  // payload Buffer. Captures every exec command for assertion. The earlier
+  // dd-chunked path is gone (see READ_FILE_BUFFER_BYTES rationale) — the
+  // stub no longer needs to handle dd at all.
   function makeStubExec(payload: Buffer): {
     exec: (input: ExecInput) => Promise<ExecResult>
     commands: string[]
@@ -332,15 +333,6 @@ describe('readFileViaExec (rlaunch chunked readFile)', () => {
       if (cmd.startsWith('stat -c %s ')) {
         return { stdout: `${payload.length}\n`, stderr: '', exitCode: 0 }
       }
-      const ddMatch = cmd.match(/bs=(\d+) skip=(\d+) count=1/)
-      if (ddMatch) {
-        const bs = Number(ddMatch[1])
-        const skip = Number(ddMatch[2])
-        const start = bs * skip
-        const end = Math.min(start + bs, payload.length)
-        const slice = payload.subarray(start, end)
-        return { stdout: slice.toString('base64'), stderr: '', exitCode: 0 }
-      }
       if (cmd.startsWith('base64 -w 0 ')) {
         return { stdout: payload.toString('base64'), stderr: '', exitCode: 0 }
       }
@@ -349,35 +341,20 @@ describe('readFileViaExec (rlaunch chunked readFile)', () => {
     return { exec, commands }
   }
 
-  it('takes the single-hop fast path for small files', async () => {
+  it('reads small files in two hops (stat + base64)', async () => {
     const payload = Buffer.from('hello world', 'utf8')
     const { exec, commands } = makeStubExec(payload)
     const out = await readFileViaExec(exec, '/workspace/file.txt', '/workspace/file.txt')
     assert.deepEqual(out, payload)
-    // Expect: stat + base64 (NOT dd) — i.e. exactly 2 hops.
     assert.equal(commands.length, 2)
     assert.match(commands[0], /^stat -c %s /)
     assert.match(commands[1], /^base64 -w 0 /)
+    // The dd-chunked protocol is intentionally retired; if it ever comes
+    // back via copy-paste, this assertion catches it.
     assert.equal(commands.some(c => c.includes('dd if=')), false)
   })
 
-  it('chunks large files via dd skip=K count=1', async () => {
-    // Just over one chunk so we exercise the chunked branch with minimal data.
-    const totalBytes = READ_FILE_CHUNK_BYTES_FOR_TESTS + 100
-    const payload = Buffer.alloc(totalBytes)
-    for (let i = 0; i < totalBytes; i += 1) payload[i] = i % 256
-    const { exec, commands } = makeStubExec(payload)
-    const out = await readFileViaExec(exec, '/workspace/big.bin', '/workspace/big.bin')
-    assert.equal(out.length, totalBytes)
-    assert.deepEqual(out, payload)
-    // 1 stat + 2 dd hops (chunk 0 covers full chunk, chunk 1 covers 100 bytes).
-    assert.equal(commands.length, 3)
-    assert.match(commands[0], /^stat -c %s /)
-    assert.match(commands[1], /dd if=.* bs=\d+ skip=0 count=1 status=none/)
-    assert.match(commands[2], /dd if=.* bs=\d+ skip=1 count=1 status=none/)
-  })
-
-  it('round-trips a 30 MB binary payload byte-for-byte', async () => {
+  it('round-trips a 30 MB binary payload byte-for-byte in a single base64 hop', async () => {
     const totalBytes = 30 * 1024 * 1024
     const payload = Buffer.alloc(totalBytes)
     // Pseudo-random fill that makes byte mismatches obvious. xorshift32 keeps
@@ -393,9 +370,27 @@ describe('readFileViaExec (rlaunch chunked readFile)', () => {
     const out = await readFileViaExec(exec, '/workspace/30mb.bin', '/workspace/30mb.bin')
     assert.equal(out.length, totalBytes)
     assert.equal(Buffer.compare(out, payload), 0)
-    // 30 MB / 512 KB chunk = 60 dd hops + 1 stat.
-    const expectedChunkCount = Math.ceil(totalBytes / READ_FILE_CHUNK_BYTES_FOR_TESTS)
-    assert.equal(commands.length, expectedChunkCount + 1)
+    // Always exactly 2 hops regardless of size: stat + base64.
+    assert.equal(commands.length, 2)
+  })
+
+  it('passes the high stdout cap to the base64 hop so big files fit', async () => {
+    const payload = Buffer.from('x', 'utf8')
+    const captured: ExecInput[] = []
+    const exec = async (input: ExecInput): Promise<ExecResult> => {
+      captured.push(input)
+      if (input.command.startsWith('stat -c %s ')) {
+        return { stdout: `${payload.length}\n`, stderr: '', exitCode: 0 }
+      }
+      return { stdout: payload.toString('base64'), stderr: '', exitCode: 0 }
+    }
+    await readFileViaExec(exec, '/workspace/x', '/workspace/x')
+    const base64Call = captured.find(c => c.command.startsWith('base64 -w 0 '))
+    assert.ok(base64Call, 'expected a base64 -w 0 hop')
+    assert.equal(base64Call.maxBufferBytes, READ_FILE_BUFFER_BYTES_FOR_TESTS)
+    // Sanity: cap is at least 256 MB so a typical 100 MB raw file's base64
+    // (~134 MB) fits with headroom.
+    assert.ok(READ_FILE_BUFFER_BYTES_FOR_TESTS >= 256 * 1024 * 1024)
   })
 
   it('throws when stat reports a non-numeric size', async () => {
@@ -410,54 +405,33 @@ describe('readFileViaExec (rlaunch chunked readFile)', () => {
     )
   })
 
-  it('throws on byte mismatch after assembly', async () => {
-    // stat says 1000 bytes, but the chunk hops only return 100. The mismatch
-    // guard is a tripwire for partial reads (truncated container output, dd
-    // count desync) — without it large files would silently corrupt.
+  it('throws on byte mismatch when base64 stdout is truncated', async () => {
+    // Simulate the symptom that motivated this whole rewrite: stat says X,
+    // base64 returns < X bytes (silent stdout drop). The single-hop guard
+    // fires loudly instead of returning a corrupt buffer.
+    const truncatedBase64 = Buffer.alloc(100, 0xab).toString('base64')
     const exec = async (input: ExecInput): Promise<ExecResult> => {
       if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: '1000\n', stderr: '', exitCode: 0 }
+        return { stdout: '4480407\n', stderr: '', exitCode: 0 }
       }
-      // dd hops: return exactly 100 bytes total (truncate after first chunk).
-      if (input.command.includes('skip=0')) {
-        return { stdout: Buffer.alloc(100, 0xab).toString('base64'), stderr: '', exitCode: 0 }
-      }
-      return { stdout: '', stderr: '', exitCode: 0 }
+      return { stdout: truncatedBase64, stderr: '', exitCode: 0 }
     }
-    // Force chunked path: total > READ_FILE_CHUNK_BYTES would normally chunk,
-    // but here total=1000 is below the threshold so stat-says-1000 actually
-    // goes single-hop. We exercise the mismatch branch by returning 100-byte
-    // single-hop instead of the full 1000.
     await assert.rejects(
-      readFileViaExec(
-        async input => {
-          if (input.command.startsWith('stat -c %s ')) {
-            return { stdout: `${READ_FILE_CHUNK_BYTES_FOR_TESTS + 50}\n`, stderr: '', exitCode: 0 }
-          }
-          // Both dd hops return only 50 bytes each, so assembled = 100 bytes
-          // but stat said chunkSize+50 — guard fires.
-          return { stdout: Buffer.alloc(50, 0xcd).toString('base64'), stderr: '', exitCode: 0 }
-        },
-        '/workspace/short.bin',
-        '/workspace/short.bin',
-      ),
-      /byte mismatch/,
+      readFileViaExec(exec, '/workspace/big.pdf', '/workspace/big.pdf'),
+      /byte mismatch \(expected 4480407, got 100\)/,
     )
   })
 
-  it('propagates exec failure with chunk index in the error', async () => {
+  it('propagates exec failure on the base64 hop', async () => {
     const exec = async (input: ExecInput): Promise<ExecResult> => {
       if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: `${READ_FILE_CHUNK_BYTES_FOR_TESTS * 3}\n`, stderr: '', exitCode: 0 }
+        return { stdout: '512\n', stderr: '', exitCode: 0 }
       }
-      if (input.command.includes('skip=2')) {
-        return { stdout: '', stderr: 'no space left on device', exitCode: 1 }
-      }
-      return { stdout: Buffer.alloc(READ_FILE_CHUNK_BYTES_FOR_TESTS).toString('base64'), stderr: '', exitCode: 0 }
+      return { stdout: '', stderr: 'no space left on device', exitCode: 1 }
     }
     await assert.rejects(
       readFileViaExec(exec, '/workspace/y', '/workspace/y'),
-      /chunk 2\/3.*no space left/,
+      /no space left on device/,
     )
   })
 })
@@ -565,5 +539,104 @@ describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast pat
     // And nothing was written at the still-valid path either.
     const stillValid = path.join(hostRoot, '.lightclaw', 'inbox', 'other.bin')
     assert.throws(() => readFileSync(stillValid), /ENOENT/)
+  })
+})
+
+describe('RlaunchRuntime.fs.readFileViaHostMount (host-side bind-mount fast path)', () => {
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-fastread-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+  })
+
+  it('reads via host fs when the container path is inside the bind mount', async () => {
+    const fastRead = runtime.fs.readFileViaHostMount
+    assert.ok(fastRead, 'rlaunch fs must expose readFileViaHostMount')
+
+    // Plant a file via host fs (simulating something the daemon wrote earlier
+    // through writeFileViaHostMount, or any other harness-internal staging).
+    const containerPath = '/workspace/.lightclaw/inbox/oc_chat/file.bin'
+    const expectedHost = path.join(hostRoot, '.lightclaw', 'inbox', 'oc_chat', 'file.bin')
+    const payload = Buffer.from('hello from host fast-read', 'utf8')
+    mkdirSync(path.dirname(expectedHost), { recursive: true })
+    writeFileSync(expectedHost, payload)
+
+    const got = await fastRead.call(runtime.fs, containerPath)
+    assert.ok(got, 'fast read should succeed for in-mount paths with extant files')
+    assert.equal(Buffer.compare(got, payload), 0)
+  })
+
+  it('returns null when the path falls outside every mount entry', async () => {
+    const fastRead = runtime.fs.readFileViaHostMount!
+    const result = await fastRead.call(runtime.fs, '/etc/something/outside.bin')
+    assert.equal(result, null)
+  })
+
+  it('sticky-disables itself after a host read failure and returns null thereafter', async () => {
+    const fastRead = runtime.fs.readFileViaHostMount!
+    // First attempt: file does not exist on host → ENOENT → sticky disable.
+    const result1 = await fastRead.call(
+      runtime.fs,
+      '/workspace/.lightclaw/inbox/missing.bin',
+    )
+    assert.equal(result1, null)
+
+    // Even with a real planted file afterwards, the second call short-circuits.
+    const containerPath = '/workspace/.lightclaw/inbox/now-exists.bin'
+    const expectedHost = path.join(hostRoot, '.lightclaw', 'inbox', 'now-exists.bin')
+    mkdirSync(path.dirname(expectedHost), { recursive: true })
+    writeFileSync(expectedHost, 'present')
+    const result2 = await fastRead.call(runtime.fs, containerPath)
+    assert.equal(result2, null,
+      'sticky-disabled fast read must return null even when the path now resolves')
+  })
+
+  it('write/read flags are independent: a write failure does not disable read', async () => {
+    const fastWrite = runtime.fs.writeFileViaHostMount!
+    const fastRead = runtime.fs.readFileViaHostMount!
+
+    // Plant a file the read can succeed on.
+    const containerPath = '/workspace/.lightclaw/inbox/readable.bin'
+    const expectedHost = path.join(hostRoot, '.lightclaw', 'inbox', 'readable.bin')
+    mkdirSync(path.dirname(expectedHost), { recursive: true })
+    writeFileSync(expectedHost, 'ok')
+
+    // Force write to fail (ENOTDIR via colliding parent file).
+    const collidingParent = path.join(hostRoot, 'wcollide')
+    writeFileSync(collidingParent, 'file-not-dir')
+    const wResult = await fastWrite.call(runtime.fs, '/workspace/wcollide/child.bin', Buffer.from('x'))
+    assert.equal(wResult, null)
+
+    // Read should still succeed — separate sticky flag.
+    const rResult = await fastRead.call(runtime.fs, containerPath)
+    assert.ok(rResult, 'read flag must be independent of write flag')
+    assert.equal(rResult.toString('utf8'), 'ok')
   })
 })

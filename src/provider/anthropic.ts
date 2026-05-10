@@ -319,6 +319,14 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         video: false,
       },
     },
+    detectStaticDropKinds(): readonly [] {
+      // Anthropic's Messages API natively accepts image and document blocks
+      // in user / tool_result content arrays — nothing is dropped during
+      // wire-shape translation. audio/video aren't expressable but we
+      // never emit those blocks to begin with (declared `false` above);
+      // returning [] here avoids muddying the cache with redundant writes.
+      return []
+    },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const stream = await client.messages.create({
         model: params.model,

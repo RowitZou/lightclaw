@@ -37,6 +37,14 @@ import path from 'node:path'
  * (`subagentLabel` carries the role — `extract_memories`, `general-purpose`,
  * `explore`), and the four one-shot kinds tag helper LLM calls that fire
  * inside the main query lifecycle.
+ *
+ * `describe-image` tags vision sub-LLM calls made by the multimodal
+ * finalization pass (Read tool produces image_block in tool_result; OpenAI
+ * Chat / Responses tool messages are string-only so we run a sub-LLM
+ * describe-and-replace on the chunked images). These calls go through
+ * `provider.describeImage` instead of `streamChat`, but they consume tokens
+ * and matter for cost / failure analysis, so the api-logs surface tracks
+ * them alongside the streamChat record kinds.
  */
 export type ApiLogKind =
   | 'main'
@@ -45,6 +53,7 @@ export type ApiLogKind =
   | 'session-memory'
   | 'compact'
   | 'tool-summarize'
+  | 'describe-image'
 
 export interface ApiLogTurnRecord {
   kind: ApiLogKind

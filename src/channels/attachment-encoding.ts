@@ -167,6 +167,21 @@ export async function encodeAttachmentsForInline(input: {
   return { inlineBlocks, fallbackPaths, warnings }
 }
 
+/** Daemon-only read: prefer host-mount fast read (skip brainctl exec) and
+ *  transparently fall back to runtime.fs.readFile when the runtime hasn't
+ *  exposed the fast path or it fell off (sticky-disabled). Wrapped here so
+ *  every channel-side inline encoder has the same posture without each
+ *  one re-implementing the fall-through. NEVER use from Tool code: tool
+ *  reads must stay on runtime.fs.readFile so sandbox boundaries hold. */
+async function readForInline(runtime: Runtime, pathname: string): Promise<Buffer> {
+  const fastRead = runtime.fs.readFileViaHostMount
+  if (fastRead) {
+    const fast = await fastRead.call(runtime.fs, pathname)
+    if (fast) return fast
+  }
+  return runtime.fs.readFile(pathname)
+}
+
 async function encodeImageInline(input: {
   att: MaterializedAttachment
   runtime: Runtime
@@ -177,7 +192,7 @@ async function encodeImageInline(input: {
   let buffer: Buffer
   let mediaType = normalizeImageMime(input.att.mimeType)
   if (stat.size <= input.imageMaxBytes) {
-    buffer = await input.runtime.fs.readFile(input.att.path)
+    buffer = await readForInline(input.runtime, input.att.path)
   } else {
     const result = await resizeImageForVision({
       filePath: input.att.path,
@@ -213,7 +228,7 @@ async function encodePdfInline(input: {
   if (stat.size > input.pdfMaxBytes) {
     return null
   }
-  const buffer = await input.runtime.fs.readFile(input.att.path)
+  const buffer = await readForInline(input.runtime, input.att.path)
   return {
     type: 'document',
     source: {

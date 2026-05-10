@@ -47,6 +47,12 @@ export type RuntimeFs = {
    * directly via host fs and skip the per-32KB exec round-trips that the
    * sandbox-safe `writeFile` uses for fairness/sandbox reasons.
    *
+   * **Daemon-only.** This is harness-internal plumbing for cases where the
+   * data was originated on host and needs to land in a path the runtime can
+   * see. Tool implementations MUST go through `writeFile()` so sandbox
+   * boundaries (permissions, audit, runtime ownership of effects) are
+   * preserved. See `lightclaw/CLAUDE.md` "Daemon-only fast IO" note.
+   *
    * Returns `null` when the runtime cannot satisfy the request via host fs
    * (target falls outside `mountTable`, host can't write to the host-side
    * prefix, runtime backend has no shared mount, etc.). The caller MUST treat
@@ -57,6 +63,22 @@ export type RuntimeFs = {
    * can opt in later if a bind mount is detected.
    */
   writeFileViaHostMount?(pathname: string, content: Buffer): Promise<{ ok: true } | null>
+  /**
+   * Symmetric counterpart to {@link writeFileViaHostMount}: read directly
+   * from the host-side mount, skipping the brainctl exec + `base64 -w 0`
+   * round-trip. **Daemon-only** — only call from harness-internal code
+   * (Feishu inline encoders today, future webfetch staging) where the bytes
+   * have to flow into the daemon Node process anyway. Tool implementations
+   * MUST stay on `readFile()` so sandbox boundaries are preserved (the
+   * runtime might enforce path translation, perm narrowing, or future
+   * overlay semantics that host-side fs would skip).
+   *
+   * Returns `null` when the path falls outside `mountTable` or the host
+   * read fails (sticky-disabled per-runtime instance after the first
+   * failure, parallel to writeFileViaHostMount). Caller transparently
+   * falls back to `readFile()`.
+   */
+  readFileViaHostMount?(pathname: string): Promise<Buffer | null>
 }
 
 export type RuntimeAvailability =

@@ -21,7 +21,18 @@ import {
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
-import type { ApiMessage, Provider, StreamChatParams } from './types.js'
+import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
+
+/** OpenAI Responses API has no `document` (PDF) content type and rejects
+ *  audio/video on the function_call_output / message paths we use. Same
+ *  classifier as openai.ts — surfaces silent drops to the streamChat
+ *  wrapper so the capability cache can flip. */
+function classifyUnsupportedBlock(blockType: unknown): AttachmentKind | null {
+  if (blockType === 'document') return 'pdf'
+  if (blockType === 'audio') return 'audio'
+  if (blockType === 'video') return 'video'
+  return null
+}
 
 // OpenAI Responses API provider, used with OAuth-sourced credentials. The
 // canonical case is the Codex backend (chatgpt.com/backend-api/codex)
@@ -76,10 +87,14 @@ function userToolResults(content: unknown): UserToolResultBlock[] {
 /**
  * Convert LightClaw's API message array into Responses API input items.
  * `system` is hoisted to the top-level `instructions` field by the caller;
- * we only handle user / assistant messages here.
+ * we only handle user / assistant messages here. The optional `dropped`
+ * out-param collects every kind that fell out of translation (e.g.
+ * `document` → 'pdf'); `streamChat` reports those upstream so the
+ * capability autopilot stops generating those blocks at the source.
  */
 export function convertMessagesToResponsesInput(
   messages: ApiMessage[],
+  dropped?: Set<AttachmentKind>,
 ): ResponseInputItem[] {
   const out: ResponseInputItem[] = []
 
@@ -96,6 +111,13 @@ export function convertMessagesToResponsesInput(
               block.source.type === 'base64',
           )
         : []
+      if (dropped && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (!isRecord(block)) continue
+          const kind = classifyUnsupportedBlock(block.type)
+          if (kind) dropped.add(kind)
+        }
+      }
 
       for (const block of toolResults) {
         // OpenAI Responses function_call_output requires string output;
@@ -270,7 +292,14 @@ export function createOpenAIAuthProvider(
       })
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      const input = convertMessagesToResponsesInput(sanitizedMessages)
+      const dropped = new Set<AttachmentKind>()
+      const input = convertMessagesToResponsesInput(sanitizedMessages, dropped)
+      // Surface silent drops BEFORE the first SSE chunk so the wrapper at
+      // api.ts can flip the capability cache (no future encodePdfInline
+      // / etc. on this endpoint × upstreamModel pair).
+      for (const kind of dropped) {
+        yield { type: 'content_dropped', kind, reason: 'schema_unsupported' }
+      }
       const tools = convertToolsToResponsesShape(params.tools)
 
       const body: ResponseCreateParamsStreaming = {
@@ -297,6 +326,29 @@ export function createOpenAIAuthProvider(
       }
 
       yield* processResponseStream(stream as AsyncIterable<ResponseStreamEvent>)
+    },
+    detectStaticDropKinds(): readonly AttachmentKind[] {
+      // Probe convertMessagesToResponsesInput with one block of every
+      // attachment kind. The wire schema (Responses input) accepts text +
+      // image; document / audio / video have no slot, so they show up as
+      // dropped. Caller (provider/index.ts) pre-charges the capability
+      // cache so the channel runner skips encodePdfInline / etc. on this
+      // endpoint × model entirely — no waste read+base64+transcript.
+      const probe: ApiMessage[] = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '' },
+            { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: '' } },
+            { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: '' } },
+            { type: 'audio', source: { type: 'base64', mediaType: 'audio/mpeg', data: '' } },
+            { type: 'video', source: { type: 'base64', mediaType: 'video/mp4', data: '' } },
+          ],
+        },
+      ]
+      const dropped = new Set<AttachmentKind>()
+      convertMessagesToResponsesInput(probe, dropped)
+      return Array.from(dropped)
     },
     async describeImage(params) {
       const images = params.images ?? (params.image ? [params.image] : [])
