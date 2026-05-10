@@ -591,6 +591,14 @@ export async function query(params: QueryParams): Promise<{
             continue
           }
 
+          if (event.type === 'content_dropped') {
+            // Provider-level capability autopilot already wrote the cache
+            // in api.ts. The main loop has nothing to do per-turn — drops
+            // surface their effect on the NEXT encodeAttachmentsForInline
+            // when the cache is consulted. Skip silently.
+            continue
+          }
+
           stopEvent = event
         }
         break

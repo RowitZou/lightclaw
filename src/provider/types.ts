@@ -121,4 +121,24 @@ export type Provider = {
   webSearch?(params: WebSearchParams): Promise<WebSearchResult>
   describeImage?(params: DescribeImageParams): Promise<DescribeImageResult>
   transcribeAudio?(params: TranscribeAudioParams): Promise<TranscribeAudioResult>
+  /**
+   * Schema-static set of content kinds this provider's `convertMessages`
+   * (or wire-shape translator) will unconditionally drop, regardless of
+   * input combinatorics. Probed at provider construction by `getProviderFor`
+   * to pre-charge `recordCapability(false)` so the channel-runner's
+   * `encodeAttachmentsForInline` skips generating those kinds in the first
+   * place — no waste reading the bytes from disk, no waste base64-encoding,
+   * no waste landing them in transcript / api-logs.
+   *
+   * Implementation pattern: feed a synthetic message containing one block
+   * of each kind through the same `convertMessages` helper that streamChat
+   * uses, and report whichever kinds got filtered out. Single source of
+   * truth — the `streamChat` and `detectStaticDropKinds` answers cannot
+   * drift, because the latter literally runs the former's translator.
+   *
+   * Returns `[]` when the provider supports every kind. Optional so legacy
+   * providers keep working without modification (autopilot then waits for
+   * the runtime `content_dropped` event or the reactive 4xx catch path).
+   */
+  detectStaticDropKinds?(): readonly AttachmentKind[]
 }

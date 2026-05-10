@@ -1,11 +1,16 @@
-import { afterEach, describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import {
   _resetProviderCacheForTests,
   getProvider,
   getProviderFor,
 } from './index.js'
+import { _resetCacheForTests, readCachedCapability } from './capability-cache.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import type { LightClawConfig } from '../config.js'
 
 // Build a minimal LightClawConfig stub. The provider layer only reads
@@ -116,5 +121,100 @@ describe('provider registry', () => {
     const gateway = getProviderFor(cfg, 'opus-via-gw').provider
     assert.strictEqual(provider, gateway)
     assert.notStrictEqual(provider, direct)
+  })
+})
+
+describe('provider.detectStaticDropKinds', () => {
+  afterEach(() => {
+    _resetProviderCacheForTests()
+  })
+
+  it('anthropic reports zero drops (it accepts every block kind we emit)', () => {
+    const cfg = buildConfig()
+    const { provider } = getProviderFor(cfg, 'opus')
+    assert.deepEqual(provider.detectStaticDropKinds?.() ?? null, [])
+  })
+
+  it('openai reports pdf + audio + video as schema-unsupported', () => {
+    const cfg = buildConfig()
+    const { provider } = getProviderFor(cfg, 'gpt-mini')
+    const dropped = (provider.detectStaticDropKinds?.() ?? []).slice().sort()
+    assert.deepEqual(dropped, ['audio', 'pdf', 'video'])
+    // Image is NOT in the dropped list — OpenAI image_url parts are how
+    // user-role images flow through. Regression guard.
+    assert.equal(dropped.includes('image'), false)
+  })
+})
+
+describe('provider precharge writes capability cache', () => {
+  let home: string
+
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), 'lightclaw-precharge-test-'))
+    setLightclawHomeOverride(home)
+    _resetProviderCacheForTests()
+    // Drop the capability-cache in-memory state too — without this, the
+    // `cached` module-level variable from a prior test (potentially under
+    // a different lightclaw home) leaks across tests and reads return
+    // stale flags. This pair (provider cache + capability cache) needs to
+    // reset together for any test that depends on a fresh precharge.
+    _resetCacheForTests()
+  })
+
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(home, { recursive: true, force: true })
+    _resetProviderCacheForTests()
+    _resetCacheForTests()
+  })
+
+  it('writes recordCapability(false) for every kind detectStaticDropKinds reports', () => {
+    const cfg = buildConfig()
+    // First lookup primes the cache.
+    getProviderFor(cfg, 'gpt-mini')
+
+    // The cache should now know that openai's gpt-5.4-mini does not
+    // support pdf / audio / video. Reading with declared='unknown' returns
+    // the cached false in each case.
+    for (const kind of ['pdf', 'audio', 'video'] as const) {
+      assert.equal(
+        readCachedCapability({
+          endpoint: 'gateway',
+          upstreamModel: 'gpt-5.4-mini',
+          kind,
+          declared: 'unknown',
+        }),
+        false,
+        `expected ${kind} cache=false after precharge`,
+      )
+    }
+    // Image stays at 'unknown' — that's the runtime-discovery path.
+    assert.equal(
+      readCachedCapability({
+        endpoint: 'gateway',
+        upstreamModel: 'gpt-5.4-mini',
+        kind: 'image',
+        declared: 'unknown',
+      }),
+      'unknown',
+    )
+  })
+
+  it('does not write any cache entry when the provider drops nothing (anthropic)', () => {
+    const cfg = buildConfig()
+    getProviderFor(cfg, 'opus')
+    // Cache reads return the declared default ('unknown') because no
+    // `false` write has occurred for this (endpoint, upstreamModel).
+    for (const kind of ['image', 'pdf', 'audio', 'video'] as const) {
+      assert.equal(
+        readCachedCapability({
+          endpoint: 'anthropic-direct',
+          upstreamModel: 'claude-opus-4-7',
+          kind,
+          declared: 'unknown',
+        }),
+        'unknown',
+      )
+    }
   })
 })
