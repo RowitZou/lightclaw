@@ -7,7 +7,12 @@ import {
 } from '../messages.js'
 import { modelFor } from '../provider/index.js'
 import { estimateTokens } from '../token-estimate.js'
-import { toolResultContentToText, type Message, type UsageStats } from '../types.js'
+import {
+  toolResultContentToText,
+  type Message,
+  type UsageStats,
+  type UserToolResultBlock,
+} from '../types.js'
 
 type CompactParams = {
   messages: Message[]
@@ -75,6 +80,49 @@ function withParentUuid(message: Message, parentUuid: string | null): Message {
   }
 }
 
+/**
+ * Walk the proposed split boundary leftward (i.e. compress more, keep more)
+ * until `messages[splitIndex]` does not start with a `user` message that
+ * carries `tool_result` blocks whose matching `tool_use` lives in the
+ * to-be-compressed prefix. Pulling the boundary left re-includes the
+ * preceding assistant message (which holds the `tool_use`) into `toKeep` so
+ * the pair stays together.
+ *
+ * OpenAI Responses API rejects orphan `function_call_output` items with a
+ * 400 (`No tool call found for function call output with call_id ...`).
+ * Anthropic Messages API is lenient about this, so the bug only surfaces
+ * when an OpenAI-schema model picks up a transcript that was compacted
+ * mid-pair.
+ */
+export function findSafeSplitIndex(
+  messages: Message[],
+  initial: number,
+): number {
+  let split = Math.max(0, Math.min(initial, messages.length))
+  // Cap the rewind so a pathologically long unbroken tool_use/tool_result
+  // chain at the boundary cannot drag the entire prefix into toKeep.
+  const maxRewind = 32
+  let rewinds = 0
+  while (split > 0 && rewinds < maxRewind) {
+    const first = messages[split]
+    if (!first || first.type !== 'user') break
+    const content = first.message.content
+    if (typeof content === 'string') break
+    const hasToolResult = content.some(
+      (block): block is UserToolResultBlock => block.type === 'tool_result',
+    )
+    if (!hasToolResult) break
+    // toKeep[0] is a user message containing tool_result(s). Since toKeep
+    // starts with this user message, the matching assistant tool_use cannot
+    // live inside toKeep — it must be in the compressed prefix. Pull the
+    // boundary left so the preceding assistant message (holding tool_use)
+    // joins toKeep, then re-evaluate.
+    split--
+    rewinds++
+  }
+  return split
+}
+
 export function buildCompactPrompt(messages: Message[]): string {
   const serializedMessages = messages.map(serializeMessage).join('\n\n')
   return [
@@ -134,7 +182,8 @@ export async function compactConversation(
   params: CompactParams,
 ): Promise<CompactResult> {
   const keepRecent = Math.max(0, params.keepRecent)
-  const splitIndex = Math.max(0, params.messages.length - keepRecent)
+  const initialSplit = Math.max(0, params.messages.length - keepRecent)
+  const splitIndex = findSafeSplitIndex(params.messages, initialSplit)
   const toCompress = params.messages.slice(0, splitIndex)
   const toKeep = params.messages.slice(splitIndex)
 

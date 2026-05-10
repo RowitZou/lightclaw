@@ -19,6 +19,7 @@ import {
   type UsageStats,
   type UserToolResultBlock,
 } from '../types.js'
+import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, Provider, StreamChatParams } from './types.js'
 
@@ -268,7 +269,8 @@ export function createOpenAIAuthProvider(
         ...(proxiedFetch ? { fetch: proxiedFetch } : {}),
       })
 
-      const input = convertMessagesToResponsesInput(params.messages)
+      const sanitizedMessages = dropOrphanToolResults(params.messages)
+      const input = convertMessagesToResponsesInput(sanitizedMessages)
       const tools = convertToolsToResponsesShape(params.tools)
 
       const body: ResponseCreateParamsStreaming = {
