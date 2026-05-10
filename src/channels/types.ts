@@ -96,7 +96,10 @@ export type PendingAttachment = {
 export type MaterializedAttachment = {
   path: string
   mimeType: string
-  pending?: PendingAttachment
+  /** Carried forward from the source PendingAttachment so renderers can
+   *  mark the path breadcrumb with `(via quoted message)` without needing
+   *  a back-reference to the full PendingAttachment object. */
+  quotedFromMessageId?: string
 }
 
 /** Convenience accessor for `message.pendingAttachments`. Always returns an

@@ -1310,9 +1310,12 @@ export async function applyAttachmentMaterialization(
     process.stderr.write(
       `channel: attachment materialized session=${sessionId} path=${result.value.path}\n`,
     )
+    const sourceQuotedFromMessageId = pendingList[index].quotedFromMessageId
     materialized.push({
       ...result.value,
-      pending: pendingList[index],
+      ...(sourceQuotedFromMessageId
+        ? { quotedFromMessageId: sourceQuotedFromMessageId }
+        : {}),
     })
   }
   process.stderr.write(
@@ -1585,7 +1588,7 @@ export async function formatChannelUserText(
   const lines: string[] = [`${prefix}${body}` || '(no text)', '', t('channel.media.attachment')]
   for (const att of list) {
     lines.push(`- type: ${att.mimeType}`)
-    const suffix = att.pending?.quotedFromMessageId
+    const suffix = att.quotedFromMessageId
       ? t('channel.quote.attachedSuffix')
       : ''
     lines.push(`- path: ${att.path}${suffix}`)

@@ -57,14 +57,14 @@ describe('ParentMessageFetcher', () => {
     assert.deepEqual(result.mediaKeys.map(item => item.key), ['img_0', 'img_1'])
   })
 
-  it('returns null and caches permanent failures', async () => {
+  it('caches null only on permanent (HTTP 404 / 403) failures', async () => {
     let calls = 0
     const writes = captureStderr()
     try {
       const fetcher = new ParentMessageFetcher(fakeClient({
         onGetMessage: () => {
           calls += 1
-          throw new Error('not found')
+          throw httpError(404, 'message not found')
         },
       }))
 
@@ -74,8 +74,74 @@ describe('ParentMessageFetcher', () => {
       writes.restore()
     }
 
-    assert.equal(calls, 1)
-    assert.match(writes.text(), /feishu parent-fetch: failed parentId=om_missing reason=not found/)
+    assert.equal(calls, 1, 'permanent failure must be cached so the second fetch is a no-op')
+    assert.match(
+      writes.text(),
+      /feishu parent-fetch: failed parentId=om_missing permanent=true reason=.*message not found/,
+    )
+  })
+
+  it('does not cache transient failures (5xx / network) so they retry', async () => {
+    let calls = 0
+    const writes = captureStderr()
+    try {
+      const fetcher = new ParentMessageFetcher(fakeClient({
+        onGetMessage: () => {
+          calls += 1
+          throw httpError(503, 'service unavailable')
+        },
+      }))
+
+      assert.equal(await fetcher.fetch('om_blip'), null)
+      assert.equal(await fetcher.fetch('om_blip'), null)
+    } finally {
+      writes.restore()
+    }
+
+    assert.equal(calls, 2, 'transient failure must not be cached; second fetch must retry')
+    assert.match(writes.text(), /permanent=false reason=.*service unavailable/)
+  })
+
+  it('does not cache timeout failures so they retry', async () => {
+    let calls = 0
+    const writes = captureStderr()
+    try {
+      const fetcher = new ParentMessageFetcher(fakeClient({
+        onGetMessage: () => {
+          calls += 1
+          return new Promise(() => undefined)
+        },
+      }), { fetchTimeoutMs: 5 })
+
+      assert.equal(await fetcher.fetch('om_slow'), null)
+      assert.equal(await fetcher.fetch('om_slow'), null)
+    } finally {
+      writes.restore()
+    }
+
+    assert.equal(calls, 2, 'timeout is transient; second fetch must retry')
+    assert.match(writes.text(), /permanent=false reason=timeout after 5ms/)
+  })
+
+  it('treats unclassifiable errors (no http status) as transient', async () => {
+    let calls = 0
+    const writes = captureStderr()
+    try {
+      const fetcher = new ParentMessageFetcher(fakeClient({
+        onGetMessage: () => {
+          calls += 1
+          throw new Error('ECONNRESET')
+        },
+      }))
+
+      assert.equal(await fetcher.fetch('om_net'), null)
+      assert.equal(await fetcher.fetch('om_net'), null)
+    } finally {
+      writes.restore()
+    }
+
+    assert.equal(calls, 2, 'no-status errors are transient by default; second fetch must retry')
+    assert.match(writes.text(), /permanent=false reason=ECONNRESET/)
   })
 
   it('deduplicates concurrent fetches for the same parent', async () => {
@@ -96,21 +162,6 @@ describe('ParentMessageFetcher', () => {
     assert.equal(calls, 1)
     assert.equal(a, b)
     assert.equal(a?.text, 'same')
-  })
-
-  it('times out and returns null', async () => {
-    const writes = captureStderr()
-    try {
-      const fetcher = new ParentMessageFetcher(fakeClient({
-        onGetMessage: () => new Promise(() => undefined),
-      }), { fetchTimeoutMs: 5 })
-
-      assert.equal(await fetcher.fetch('om_slow'), null)
-    } finally {
-      writes.restore()
-    }
-
-    assert.match(writes.text(), /timeout after 5ms/)
   })
 
   it('evicts old cache entries when the LRU is full', async () => {
@@ -207,6 +258,12 @@ function parentEnvelope(input: {
       }],
     },
   }
+}
+
+function httpError(status: number, message: string): Error & { response: { status: number } } {
+  const error = new Error(message) as Error & { response: { status: number } }
+  error.response = { status }
+  return error
 }
 
 function captureStderr(): { text(): string; restore(): void } {
