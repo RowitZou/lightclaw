@@ -31,14 +31,12 @@ let sessionMemoryUpdateCount = 0
 // Phase 14 micro-compact counters. Module-level for the same reason as the
 // SessionMemory throttles above — they reset on every resolved SessionContext (a
 // fresh session starts with zero MC actions).
-let perToolSummaryCount = 0
 let idleMicroCompactCount = 0
 
 export function resetSessionScopedCounters(): void {
   sessionMemoryTokensSinceUpdate = 0
   sessionMemoryToolCallsSinceUpdate = 0
   sessionMemoryUpdateCount = 0
-  perToolSummaryCount = 0
   idleMicroCompactCount = 0
 }
 
@@ -348,15 +346,6 @@ export function getSessionMemoryUpdateCount(): number {
 export function incrementSessionMemoryUpdateCount(): number {
   sessionMemoryUpdateCount += 1
   return sessionMemoryUpdateCount
-}
-
-export function getPerToolSummaryCount(): number {
-  return perToolSummaryCount
-}
-
-export function incrementPerToolSummaryCount(): number {
-  perToolSummaryCount += 1
-  return perToolSummaryCount
 }
 
 export function getIdleMicroCompactCount(): number {

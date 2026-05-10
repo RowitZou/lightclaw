@@ -31,9 +31,22 @@ export class InterjectionQueue {
     this.inFlightSessions.add(sessionId)
   }
 
-  unmarkInFlight(sessionId: string): void {
+  /**
+   * Clear the in-flight flag and return any leftover queued entries.
+   *
+   * Bug 9 in 2026-05-10 audit: prior shape silently `delete`d the queue,
+   * losing any interjection that arrived in the post-query window between
+   * `query()` returning and the runner's outer finally (driven mostly by
+   * `awaitBackgroundTasks()` at runner.ts:847 which can take 17s+ on the
+   * memory-extract subagent path). The user saw an "已记下" ack card but the
+   * message never reached any subsequent prompt. Returning leftovers lets
+   * the caller re-route them as a new turn instead of dropping them.
+   */
+  unmarkInFlight(sessionId: string): InterjectionEntry[] {
     this.inFlightSessions.delete(sessionId)
+    const leftover = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
+    return leftover
   }
 
   hasInflightFor(sessionId: string): boolean {

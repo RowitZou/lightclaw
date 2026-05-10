@@ -54,7 +54,6 @@ export type ApiLogKind =
   | 'recall'
   | 'session-memory'
   | 'compact'
-  | 'tool-summarize'
   | 'describe-image'
   | 'transcribe-audio'
 

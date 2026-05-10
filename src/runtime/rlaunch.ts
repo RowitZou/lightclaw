@@ -148,21 +148,26 @@ export class RlaunchRuntime implements Runtime {
     return this.tracker.snapshot()
   }
 
-  async start(): Promise<void> {
+  async start(triggerReason?: string): Promise<void> {
     // Dedup concurrent callers (preheat-on-startup, preheat-on-approval,
     // ensureRunning, health checker restart) so they don't each spawn a
     // duplicate cluster worker and orphan the older ones.
     if (this.inflightStart) {
       return this.inflightStart
     }
-    this.inflightStart = this._startOnce().finally(() => {
+    this.inflightStart = this._startOnce(triggerReason).finally(() => {
       this.inflightStart = null
     })
     return this.inflightStart
   }
 
-  private async _startOnce(): Promise<void> {
+  private async _startOnce(triggerReason?: string): Promise<void> {
     const record = lookupWorkerRecord(this.cfg.canonicalUser)
+    // Reason carried through to the spawn log so admin can grep cause when
+    // workers churn (Bug 3 in the 2026-05-10 audit). triggerReason wins so
+    // explicit callers like restartUnhealthy() get attributed correctly even
+    // when the worker record was already deleted before _startOnce ran.
+    let spawnReason: string
     if (record && record.deploymentHash === this.cfg.deploymentHash) {
       const phase = await this.processPhase(record.name)
       // 'unknown' = transient brainctl-get failure (API blip / unknown column).
@@ -190,6 +195,7 @@ export class RlaunchRuntime implements Runtime {
         `(phase=${phase}); will spawn fresh\n`,
       )
       await deleteWorkerRecord(this.cfg.canonicalUser)
+      spawnReason = triggerReason ?? `previous worker phase=${phase}`
     } else if (record) {
       // Best-effort: still drop the record + spawn fresh even if the cluster
       // stop fails, so a transient cluster blip doesn't permanently lock a
@@ -204,6 +210,11 @@ export class RlaunchRuntime implements Runtime {
         )
       })
       await deleteWorkerRecord(this.cfg.canonicalUser)
+      spawnReason =
+        triggerReason ??
+        `deploymentHash changed (${record.deploymentHash} -> ${this.cfg.deploymentHash})`
+    } else {
+      spawnReason = triggerReason ?? 'no existing record'
     }
 
     this.tracker.startSchedule(this.cfg.image)
@@ -223,7 +234,7 @@ export class RlaunchRuntime implements Runtime {
     })
     process.stderr.write(
       `[rlaunch] spawned worker ${newName} for ${this.cfg.canonicalUser} ` +
-      `(image=${this.cfg.image})\n`,
+      `(reason: ${spawnReason}; image=${this.cfg.image})\n`,
     )
   }
 
@@ -303,7 +314,7 @@ export class RlaunchRuntime implements Runtime {
 
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
-    await this.start()
+    await this.start('worker-lost on exec, retrying')
     await this.waitUntilRunning()
     const retry = await this.runBrainctlExec(input)
     return {
@@ -531,7 +542,7 @@ export class RlaunchRuntime implements Runtime {
     }
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
-    await this.start()
+    await this.start('health-check restart')
   }
 
   private async ensureRunning(): Promise<void> {

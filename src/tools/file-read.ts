@@ -169,6 +169,20 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
           output: {
             filePath,
             format: extraction.format,
+            // Anti-Grep breadcrumb: PDF/Office text is extracted by an
+            // external tool (pdftotext / openpyxl / python-docx / python-pptx),
+            // not stored as plain text on disk. Without this hint, agents
+            // routinely see the extracted text, lose track of "this came from
+            // a binary container", then later try Grep on filePath to search
+            // a keyword and get an empty result (Bug 6 in 2026-05-10 audit).
+            // The hint lives on the result envelope, not the system prompt,
+            // because it's only relevant when there IS an extracted artifact
+            // in context.
+            searchHint:
+              `To search inside this ${extraction.format} for a keyword, ` +
+              'do NOT call Grep on the filePath above (the file is binary on disk; ripgrep skips it). ' +
+              'Look at the returned `text` field directly, or call this Read again with `pages=` ' +
+              '(PDF only) to render specific pages.',
             text: extraction.text,
             truncated: extraction.truncated,
             sizeBytes: buffer.length,

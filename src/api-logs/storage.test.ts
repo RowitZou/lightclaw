@@ -149,8 +149,8 @@ describe('api-logs storage', () => {
     assert.equal(parsed.user, 'bob')
   })
 
-  it('one-shot kinds (recall / compact / tool-summarize / session-memory) round-trip', async () => {
-    const kinds = ['recall', 'compact', 'tool-summarize', 'session-memory'] as const
+  it('one-shot kinds (recall / compact / session-memory) round-trip', async () => {
+    const kinds = ['recall', 'compact', 'session-memory'] as const
     const logger = openApiLogger({ enabled: true, dir: tmpDir, sessionId: 'sess' })
     for (const kind of kinds) {
       await logger.appendTurn(rec({ kind, sessionId: 'sess' }))
