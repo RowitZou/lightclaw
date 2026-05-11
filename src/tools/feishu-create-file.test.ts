@@ -162,6 +162,34 @@ describe('FeishuCreateFile tool', () => {
     assert.equal(feishuCreateFileTool.shouldDefer, true)
     assert.match(feishuCreateFileTool.searchHint ?? '', /create/)
   })
+
+  it('passes the per-session abort signal to approver.ask so /stop cancels the pending card', async () => {
+    // Regression: a card waiting on confirmation while /stop fires must
+    // resolve (deny) instead of hanging until expiry. The Feishu coordinator
+    // wires this via `pending.abortListener` (permission-card.ts:188-196),
+    // which only attaches when `ask.signal` is provided. Earlier PR4 Iter 3-4
+    // built askInput without `signal`, so /stop mid-card-wait silently sat
+    // until the 24h expiry. requireFeishuWriteConfirmation now passes
+    // getAbortController().signal.
+    let askInput: PermissionAskInput | undefined
+    await withFeishuSession({
+      approver: {
+        ask: async input => {
+          askInput = input
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Cancellable' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'd', title: 'Cancellable' }),
+          },
+        ),
+    })
+    assert.ok(askInput?.signal instanceof AbortSignal, 'approver.ask must receive an AbortSignal')
+  })
 })
 
 async function withFeishuSession<T>(input: {

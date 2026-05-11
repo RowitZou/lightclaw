@@ -29,7 +29,12 @@ import {
   type SheetValues,
 } from '../channels/feishu/resources/sheet.js'
 import { lightclawHome } from '../paths.js'
-import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
+import {
+  getAbortController,
+  getCurrentUserId,
+  getPermissionApprover,
+  getPermissionMode,
+} from '../state.js'
 import { buildTool, type ToolCallResult } from '../tool.js'
 
 const DEFAULT_FEISHU_READ_MAX_CHARS = 100_000
@@ -266,7 +271,9 @@ export const feishuWriteSheetTool = buildTool<FeishuWriteSheetInput, FeishuWrite
   riskLevel: 'write',
   channelScope: ['feishu'],
   shouldDefer: true,
-  searchHint: 'feishu lark sheet wiki append overwrite rows cells write update existing',
+  // ≤60 chars; dropped "cells existing" (rows covers append/overwrite intent,
+  // existing is implied by url/spreadsheet_token + the description).
+  searchHint: 'feishu lark sheet wiki append overwrite rows write update',
   inputSchema: feishuWriteSheetInputSchema,
   async call(input): Promise<ToolCallResult<FeishuWriteSheetOutput | string>> {
     try {
@@ -535,6 +542,13 @@ async function requireFeishuWriteConfirmation(input: {
     throw new Error('Feishu write confirmation is unavailable in this session.')
   }
 
+  // Pass the per-session abort signal so `/stop` while a FeishuWriteConfirm
+  // card is pending fires the coordinator's abort listener and resolves the
+  // pending as deny (line ~190 in permission-card.ts). Without it, a /stop
+  // can't cancel a stale write-confirm card and the user is stuck waiting
+  // for the 24h expiry. tryAutoDenyForInterjection still works regardless
+  // (it walks the sessionId-keyed queue directly), so interjection cancel
+  // was always wired; only the explicit abort path was missing.
   const decision = await approver.ask({
     toolName: 'FeishuWriteConfirm',
     riskLevel: 'write',
@@ -545,6 +559,7 @@ async function requireFeishuWriteConfirmation(input: {
       2,
     ),
     mode: getPermissionMode(),
+    signal: safeAbortSignal(),
     suggestedRules: [{ toolName: 'FeishuWriteConfirm' }],
   })
 
@@ -607,6 +622,17 @@ function formatCreatedDoc(input: FeishuDocCreateResult): FeishuCreateFileOutput 
 function safeCurrentUserId(): string | undefined {
   try {
     return getCurrentUserId()
+  } catch {
+    return undefined
+  }
+}
+
+function safeAbortSignal(): AbortSignal | undefined {
+  // SessionContext may not be present in non-channel contexts (early test
+  // wiring, ad-hoc REPL probes). Falling back to undefined keeps approver.ask
+  // honoring the timeout-only expiry instead of throwing.
+  try {
+    return getAbortController().signal
   } catch {
     return undefined
   }
