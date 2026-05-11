@@ -28,7 +28,29 @@ function formatCommandOutput(stdout: string, stderr: string): string {
 
 export const bashTool = buildTool({
   name: 'Bash',
-  description: 'Execute a shell command in the current working directory.',
+  description: `Execute a shell command in the sandbox runtime. The working directory persists between calls; shell state (env vars, functions, aliases) does not.
+
+IMPORTANT — prefer dedicated tools when one fits. They have permission scoping, structured results, and prompt-cache friendliness that Bash stdout loses:
+- File search by name/glob → Glob (NOT \`find\` / \`ls\`)
+- Content search → Grep (NOT \`grep\` / \`rg\`)
+- Read files → Read (NOT \`cat\` / \`head\` / \`tail\`)
+- Edit files → Edit (NOT \`sed\` / \`awk\` / inline redirect)
+- Write files → Write (NOT \`echo >\` / heredoc)
+- Talk to the user → output text in your reply (NOT \`echo\` / \`printf\`)
+
+Quoting & paths: always quote paths with spaces (\`cd "path with spaces"\`); prefer absolute paths over \`cd\` unless the user asked to switch directories.
+
+Parallelism:
+- Independent commands → call Bash multiple times in PARALLEL (one tool_use block per command, all in the same assistant turn). Never serialize independent commands.
+- Dependent commands → chain with \`&&\` in a single call. Use \`;\` only when you don't care if earlier commands fail. Never split commands with newlines (newlines are fine inside quoted strings).
+
+Git rules:
+- Prefer new commits over \`--amend\`; never amend a commit you've already pushed.
+- Never \`--no-verify\` / \`--no-gpg-sign\` / \`--no-edit\` unless the user explicitly asked.
+- Never force-push to \`main\` / \`master\`. Warn the user if they request it.
+- Stage by named file, not \`git add -A\` / \`git add .\` — risk of including secrets, build artifacts, or unrelated work.
+
+Long-running work: schedule via BackgroundTask, not via Bash + \`sleep\`. Do not use \`sleep\` to poll a condition — diagnose the root cause or restructure.`,
   domain: 'environment',
   riskLevel: 'execute',
   inputSchema: z.object({

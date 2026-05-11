@@ -11,7 +11,13 @@ function resolveInputPath(cwd: string, inputPath: string): string {
 
 export const fileWriteTool = buildTool({
   name: 'Write',
-  description: 'Create or overwrite a file with the provided content.',
+  description: `Create or overwrite a file with the provided content.
+
+Usage:
+- This tool overwrites the existing file at the path. ALWAYS Read the file first if it exists, so you know what you are about to replace.
+- Prefer Edit for changing existing files — Edit sends only the diff and is much harder to misuse. Use Write only for new files or genuine full rewrites.
+- NEVER create documentation files (\`*.md\`, README, CHANGELOG) unless the user explicitly asks. Auto-generating docs annoys users and is rarely what they want.
+- Avoid adding emojis to files unless the user explicitly asks.`,
   domain: 'environment',
   riskLevel: 'write',
   inputSchema: z.object({

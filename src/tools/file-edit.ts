@@ -24,13 +24,21 @@ function countOccurrences(content: string, needle: string): number {
 
 export const fileEditTool = buildTool({
   name: 'Edit',
-  description: 'Replace a unique string in a file with a new string.',
+  description: `Performs exact string replacements in a file. Edit is the right tool for almost all in-place changes; reach for Write only for new files or full rewrites.
+
+Usage:
+- Read the file at least once in this session before editing it. Read state is what makes \`old_string\` accurate — without it you are guessing the indentation and surrounding context.
+- Read output is rendered as \`<line>\\t<content>\`. When constructing \`old_string\` from Read output, strip the line-number prefix — that prefix is display metadata, not file content. Copy the indentation AFTER the prefix exactly (tabs vs spaces matters).
+- If \`old_string\` appears more than once in the file, the edit fails. Either include more surrounding context to make the match unique, OR set \`replace_all: true\` to replace every occurrence (use this for variable / symbol renames).
+- Prefer editing existing files. Don't use Edit as a back-door to create new files — use Write instead.
+- Avoid adding emojis to code unless the user explicitly asks.`,
   domain: 'environment',
   riskLevel: 'write',
   inputSchema: z.object({
     file_path: z.string().min(1),
     old_string: z.string().min(1),
     new_string: z.string(),
+    replace_all: z.boolean().optional(),
   }),
   suggestPermissionRules(input) {
     return suggestPathRules('Edit', input.file_path)
@@ -48,10 +56,18 @@ export const fileEditTool = buildTool({
         }
       }
 
-      if (occurrences > 1) {
+      if (occurrences > 1 && !input.replace_all) {
         return {
-          output: 'old_string appears multiple times; provide more context to make the edit unique.',
+          output: `old_string appears ${occurrences} times in the file. Either include more surrounding context so the match is unique, or set replace_all: true to replace every occurrence.`,
           isError: true,
+        }
+      }
+
+      if (input.replace_all && occurrences > 1) {
+        const nextContent = original.split(input.old_string).join(input.new_string)
+        await context.runtime.fs.writeFile(targetPath, nextContent)
+        return {
+          output: `Applied edit to ${targetPath} (replaced ${occurrences} occurrences)`,
         }
       }
 
