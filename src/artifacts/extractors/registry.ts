@@ -3,6 +3,7 @@ import path from 'node:path'
 import { csvExtractor } from './csv.js'
 import { docxExtractor } from './docx.js'
 import { jsonExtractor } from './json.js'
+import { notebookExtractor } from './notebook.js'
 import { pdfExtractor } from './pdf.js'
 import { pptxExtractor } from './pptx.js'
 import { textExtractor } from './text.js'
@@ -23,6 +24,7 @@ const extractorByFormat = new Map<ArtifactExtractionFormat, ArtifactExtractor>([
   ['xlsx', xlsxExtractor],
   ['docx', docxExtractor],
   ['pptx', pptxExtractor],
+  ['notebook', notebookExtractor],
   ['binary', createUnsupportedExtractor('binary')],
 ])
 
@@ -62,6 +64,7 @@ export function inferArtifactFormat(
   ) {
     return 'pptx'
   }
+  if (ext === '.ipynb') return 'notebook'
   if (mime.includes('json') || ext === '.json') return 'json'
   if (mime.includes('csv') || ext === '.csv' || ext === '.tsv') return 'csv'
   if (mime.startsWith('text/') || isTextExtension(ext)) return 'text'

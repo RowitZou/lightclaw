@@ -4,8 +4,7 @@ import type { ArtifactExtractionInput, ArtifactExtractionResult, ArtifactExtract
 export const csvExtractor: ArtifactExtractor = {
   format: 'csv',
   extract(input: ArtifactExtractionInput): ArtifactExtractionResult {
-    const encoding = input.encoding ?? 'utf8'
-    const text = stripUtf8Bom(input.buffer.toString(encoding as BufferEncoding))
+    const text = stripUtf8Bom(input.buffer.toString('utf8'))
     const { value, truncated } = truncate(text, input.maxChars)
     return {
       format: inferDelimitedFormat(input.filePath),

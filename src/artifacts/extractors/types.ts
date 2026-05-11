@@ -6,18 +6,28 @@ export type ArtifactExtractionFormat =
   | 'xlsx'
   | 'docx'
   | 'pptx'
+  | 'notebook'
   | 'binary'
+
+/** xlsx-specific options. Packed into a sub-object because they only apply
+ *  when the file is a spreadsheet — keeping them at the top level of the
+ *  tool schema confused agents into passing `max_rows` on PDF reads
+ *  (Bug C in 2026-05-10 audit). */
+export type XlsxExtractionOptions = {
+  sheet?: string
+  range?: string
+  maxRows?: number
+  maxCols?: number
+}
 
 export type ArtifactExtractionInput = {
   buffer: Buffer
   filePath: string
   mimeType?: string
-  encoding?: string
   maxChars: number
-  sheet?: string
-  range?: string
-  maxRows?: number
-  maxCols?: number
+  /** xlsx-only options (sheet / range / maxRows / maxCols). Ignored by
+   *  other formats. The Read tool input has the same shape. */
+  xlsx?: XlsxExtractionOptions
   exec?: ArtifactExtractionExec
 }
 

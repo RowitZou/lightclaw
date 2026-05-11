@@ -4,8 +4,7 @@ import type { ArtifactExtractionInput, ArtifactExtractionResult, ArtifactExtract
 export const jsonExtractor: ArtifactExtractor = {
   format: 'json',
   extract(input: ArtifactExtractionInput): ArtifactExtractionResult {
-    const encoding = input.encoding ?? 'utf8'
-    let text = stripUtf8Bom(input.buffer.toString(encoding as BufferEncoding))
+    let text = stripUtf8Bom(input.buffer.toString('utf8'))
     const warnings: string[] = []
     try {
       text = JSON.stringify(JSON.parse(text), null, 2)

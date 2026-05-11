@@ -262,11 +262,39 @@ const BASE_COMPACT_PROMPT =
   + EXAMPLE_BLOCK
   + '\n\nPlease provide your summary based on the conversation so far, following this structure and ensuring precision and thoroughness in your response.'
 
+// Bug B in 2026-05-11 audit: in the partial path the conversation prompt
+// the sub-LLM sees is shaped like
+//
+//   Conversation:
+//   [Compact Summary]
+//   <prior summary text>
+//   [User]
+//   [Tool Result: call_...]
+//   ...
+//
+// Without explicit guidance the sub-LLM treated those bracket-markers as if
+// they were user-said text and dumped them into section 6 "All user messages"
+// before recovering to find the real query. The dumped wrapper text is noise
+// in the summary; tighten the prompt to call out the framing markers
+// explicitly so the sub-LLM knows to skip them.
+const PARTIAL_MARKER_GUIDE =
+  'When listing "All user messages", treat the following bracket-prefixed entries '
+  + 'in the Conversation block as serialization framing, NOT as user-said text: '
+  + '`[Compact Summary]`, `[Tool Result: ...]`, `[Tool Use: ...]`, `[Inline Image: ...]`, '
+  + '`[Inline Document: ...]`. Only the text body inside an entry that starts with '
+  + '`[User]` followed by `[User Text]` is an actual user message. If the recent '
+  + 'portion contains no `[User Text]` blocks (e.g. the recent activity was tool-driven '
+  + 'follow-up to a prior user message), state that explicitly: '
+  + '"No new user messages in the recent portion; the user request is the one captured '
+  + 'in the prior compact summary."'
+
 const PARTIAL_COMPACT_PROMPT =
   `Your task is to create a detailed summary of the RECENT portion of the conversation — the messages that follow an earlier compact boundary. The earlier compact summary is shown to you for context but does NOT need to be re-summarized; focus your summary on what happened AFTER it.\n\n`
   + ANALYSIS_INSTRUCTION_PARTIAL
   + '\n\n'
   + SECTIONS_PARTIAL
+  + '\n\n'
+  + PARTIAL_MARKER_GUIDE
   + '\n\n'
   + EXAMPLE_BLOCK
   + '\n\nPlease provide your summary based on the RECENT messages only (after the retained compact boundary), following this structure and ensuring precision and thoroughness.'

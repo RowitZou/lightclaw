@@ -102,7 +102,7 @@ describe('Read (office structured extraction)', () => {
   it('extracts xlsx cells through openpyxl', async () => {
     await createXlsxFixture('sample.xlsx')
     const result = await fileReadTool.call(
-      { file_path: 'sample.xlsx', max_rows: 2, max_cols: 2 },
+      { file_path: 'sample.xlsx', xlsx: { max_rows: 2, max_cols: 2 } },
       context(),
     )
     assert.equal(result.isError, undefined)
