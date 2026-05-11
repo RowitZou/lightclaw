@@ -58,6 +58,11 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   alwaysLoad?: boolean
   /** Force this tool into the deferred set; wins over alwaysLoad. */
   shouldDefer?: boolean
+  /**
+   * Optional keyword bag for ToolSearch matching. Keep this short and focused
+   * on synonyms the model may query that are not obvious from the tool name.
+   */
+  searchHint?: string
   isEnabled?(provider: Provider): boolean
   /**
    * Called when permission policy decides to ASK; the returned rules become
@@ -84,6 +89,7 @@ export function buildTool<TInput, TOutput>(input: {
   channelScope?: readonly ChannelKey[]
   alwaysLoad?: boolean
   shouldDefer?: boolean
+  searchHint?: string
   isEnabled?(provider: Provider): boolean
   suggestPermissionRules?(input: TInput): PermissionRuleValue[]
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>

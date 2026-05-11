@@ -38,16 +38,38 @@ describe('ToolSearch matching', () => {
     assert.equal(result.matches[1], 'FeishuReadSheet')
   })
 
+  it('matches optional tokens from searchHint', () => {
+    const result = matchToolSearchQuery('bitable', hintPool(), 5)
+    assert.deepEqual(result.matches, ['FeishuRead'])
+  })
+
+  it('allows required tokens to match searchHint', () => {
+    const result = matchToolSearchQuery('+wiki url', hintPool(), 5)
+    assert.deepEqual(result.matches, ['FeishuRead'])
+  })
+
   it('splits camelCase and MCP names', () => {
     assert.deepEqual(splitNameParts('FeishuReadDoc'), ['feishu', 'read', 'doc'])
     assert.deepEqual(splitNameParts('mcp__github__read_file'), ['github', 'read', 'file'])
   })
 })
 
-function fakeTool(name: string, description: string): Tool {
+function hintPool(): Tool[] {
+  return [
+    fakeTool(
+      'FeishuRead',
+      'Read a Feishu resource by URL',
+      'feishu lark doc docx wiki sheet bitable url read open view fetch',
+    ),
+    fakeTool('FeishuCreateFile', 'Create a new Feishu document'),
+  ]
+}
+
+function fakeTool(name: string, description: string, searchHint?: string): Tool {
   return {
     name,
     description,
+    ...(searchHint ? { searchHint } : {}),
     source: name.startsWith('mcp__') ? 'mcp' : 'builtin',
     domain: 'host',
     riskLevel: 'safe',

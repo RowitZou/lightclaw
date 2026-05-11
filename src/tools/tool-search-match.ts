@@ -53,9 +53,14 @@ function scoreTool(tool: Tool, required: readonly string[], optional: readonly s
   const lowerName = tool.name.toLowerCase()
   const nameParts = splitNameParts(tool.name)
   const lowerDesc = tool.description.toLowerCase()
+  const hintParts = splitHintParts(tool.searchHint)
 
   for (const token of required) {
-    if (!lowerName.includes(token) && !nameParts.some(part => part.includes(token))) {
+    if (
+      !lowerName.includes(token) &&
+      !nameParts.some(part => part.includes(token)) &&
+      !hintParts.includes(token)
+    ) {
       return 0
     }
   }
@@ -69,6 +74,7 @@ function scoreTool(tool: Tool, required: readonly string[], optional: readonly s
     if (nameParts.includes(token)) total += 10
     else if (nameParts.some(part => part.startsWith(token))) total += 7
     else if (lowerName.includes(token)) total += 5
+    else if (hintParts.includes(token)) total += 5
     else if (lowerDesc.includes(token)) total += 1
     else return 0
   }
@@ -91,4 +97,9 @@ export function splitNameParts(name: string): string[] {
     .split(/[\s_-]+/g)
     .map(part => part.toLowerCase())
     .filter(Boolean)
+}
+
+function splitHintParts(hint: string | undefined): string[] {
+  if (!hint) return []
+  return hint.toLowerCase().split(/\s+/g).filter(Boolean)
 }

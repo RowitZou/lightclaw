@@ -187,6 +187,22 @@ describe('commandContainsHighRiskBash (raw-command fallback)', () => {
 })
 
 describe('isHighRiskAsk (top-level driver)', () => {
+  it('TRUE for FeishuWriteConfirm virtual approval asks', () => {
+    assert.equal(
+      isHighRiskAsk(ask({
+        toolName: 'FeishuWriteConfirm',
+        riskLevel: 'write',
+        input: {
+          operation: 'append-doc',
+          resource: { documentId: 'doc_123' },
+          preview: 'Append 20 chars to a Feishu doc.',
+        },
+        inputPreview: 'Append 20 chars to a Feishu doc.',
+      })),
+      true,
+    )
+  })
+
   it('TRUE when suggested rules contain a high-risk rule', () => {
     assert.equal(
       isHighRiskAsk(ask({
