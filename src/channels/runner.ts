@@ -337,7 +337,9 @@ export class ChannelRunner {
           : {}),
         ...(message.quotedMessage
           ? { quotedSummary: renderQuotedMessageBlock(message.quotedMessage) }
-          : {}),
+          : message.quoteUnavailable
+            ? { quotedSummary: renderQuoteUnavailableBlock(message.quoteUnavailable) }
+            : {}),
       }
       channelInterjectionQueue.push(mainSessionId, entry)
       const denied = await this.strategy.tryAutoDenyForInterjection?.(mainSessionId)
@@ -1710,7 +1712,9 @@ export async function formatChannelUserText(
   }
   const prefix = message.quotedMessage
     ? `${renderQuotedMessageBlock(message.quotedMessage)}\n`
-    : ''
+    : message.quoteUnavailable
+      ? `${renderQuoteUnavailableBlock(message.quoteUnavailable)}\n`
+      : ''
   const list: MaterializedAttachment[] = Array.isArray(materialized)
     ? materialized
     : materialized
@@ -1758,6 +1762,24 @@ export function renderQuotedMessageBlock(quoted: QuotedMessageContext): string {
   }
   lines.push('</quoted-message>')
   return lines.join('\n')
+}
+
+/** Sentinel rendered when the user reply-quoted a message but the harness
+ *  could not load its content (timeout / 5xx / parent gone / scope denied
+ *  / empty body). The block tells the model that a quote existed and that
+ *  it should NOT guess; it should ask the user to re-send instead. The
+ *  detail reason is included in an attribute so the admin can correlate
+ *  with the stderr `feishu parent-fetch: failed ...` line, but the
+ *  body sentences are what actually steer the model. */
+export function renderQuoteUnavailableBlock(
+  failure: { permanent: boolean; reason: string },
+): string {
+  return [
+    `<quoted-message-unavailable permanent="${failure.permanent ? 'true' : 'false'}" reason="${escapeAttr(failure.reason)}">`,
+    t('channel.quote.unavailable.body'),
+    t('channel.quote.unavailable.guidance'),
+    '</quoted-message-unavailable>',
+  ].join('\n')
 }
 
 function escapeAttr(value: string): string {

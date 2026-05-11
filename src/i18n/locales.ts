@@ -418,6 +418,8 @@ export const LOCALES = {
     'channel.quote.author.unknown': '未知发送者',
     'channel.quote.truncated': '...(已截断)',
     'channel.quote.attachedSuffix': ' (来自引用消息)',
+    'channel.quote.unavailable.body': 'The user replied to / quoted a previous message, but its content could not be loaded by the harness.',
+    'channel.quote.unavailable.guidance': 'Do not guess what the quoted message contained. If the answer depends on it, briefly tell the user the quoted message could not be loaded and ask them to re-send the content (or retry the reply).',
     'channel.cardCallbackUnknown': '卡片回调格式暂未识别。请直接回复"是"或"否"。',
     'channel.failure.transcriptAborted': '本轮已被 /stop 中止。',
 
@@ -860,6 +862,8 @@ export const LOCALES = {
     'channel.quote.author.unknown': 'unknown sender',
     'channel.quote.truncated': '...(truncated)',
     'channel.quote.attachedSuffix': ' (via quoted message)',
+    'channel.quote.unavailable.body': 'The user replied to / quoted a previous message, but its content could not be loaded by the harness.',
+    'channel.quote.unavailable.guidance': 'Do not guess what the quoted message contained. If the answer depends on it, briefly tell the user the quoted message could not be loaded and ask them to re-send the content (or retry the reply).',
     'channel.cardCallbackUnknown': 'Unrecognized card callback shape. Please reply "yes" or "no" instead.',
     'channel.failure.transcriptAborted': 'This turn was aborted by /stop.',
 

@@ -73,6 +73,10 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
       input?.typingReaction ??
       true,
     mediaEnabled: input?.mediaEnabled ?? true,
+    parentFetchTimeoutMs:
+      parsePositiveInt(process.env.LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS) ??
+      input?.parentFetchTimeoutMs ??
+      8000,
     inboxAging: {
       enabled: input?.inboxAging?.enabled ?? DEFAULT_INBOX_AGING_CONFIG.enabled,
       ttlDays: input?.inboxAging?.ttlDays ?? DEFAULT_INBOX_AGING_CONFIG.ttlDays,
@@ -93,6 +97,12 @@ function parseTransport(value: unknown): 'ws' | 'webhook' | undefined {
     return value
   }
   return undefined
+}
+
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined
+  const n = Number.parseInt(value.trim(), 10)
+  return Number.isFinite(n) && n >= 0 ? n : undefined
 }
 
 function parseBool(value: unknown): boolean | undefined {
