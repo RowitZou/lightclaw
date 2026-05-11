@@ -48,9 +48,17 @@ function isValidPermissionRulePattern(value: string): boolean {
 export const backgroundTaskTool = buildTool({
   name: 'BackgroundTask',
   description: [
-    'Schedule a task to run at a future time, once or repeatedly. Returns immediately.',
-    'Use this for reminders, periodic scans, scheduled checks, and monitoring.',
-    'Do not use this for work the user is waiting on now; use AgentTool for immediate parallel work that must return to the current turn.',
+    'Schedule a task to run at a future time, once or repeatedly. Returns immediately — the result lands later via a card or a wake-up.',
+    '',
+    'BackgroundTask vs AgentTool — pick by question:',
+    '  "Do I want the result IN THIS TURN?" → AgentTool (immediate fork, returns tool_result you read NOW).',
+    '  "Do I want the result LATER / on a schedule?" → BackgroundTask.',
+    '  Examples:',
+    '    "Help me draft 3 versions in parallel" → AgentTool (parallel work, this turn).',
+    '    "Remind me to check the deploy in 30 minutes" → BackgroundTask oneshot/after.',
+    '    "Every weekday at 9am, fetch yesterday\'s sales report" → BackgroundTask recurring.',
+    '    "Find every TODO in the codebase" → AgentTool (one-shot exploration, you want the answer now).',
+    '  Do NOT schedule BackgroundTask for "right now" work; the user will be staring at a spinner for nothing.',
     '',
     'Schedule shapes:',
     "  { kind: 'oneshot', at: <ISO8601 absolute time> } — fire once at a specific time.",
@@ -63,7 +71,10 @@ export const backgroundTaskTool = buildTool({
     "  Good: \"Get the current Asia/Shanghai time and send it to the user in the format '现在的北京时间是 YYYY-MM-DD HH:mm:ss。'\"",
     "  Bad:  \"After 1 minute, get the current Beijing time and send it to the user.\" / \"到时间后获取北京时间发给用户。\"",
     '',
-    "notify_to='user' pushes the result to the user. notify_to='agent' wakes the main agent later so it can decide whether to notify the user.",
+    'notify_to (default \'user\') — pick by what the user expects:',
+    '  \'user\' — the result IS the deliverable the user explicitly asked for (a reminder, a daily report, the answer to "alert me when X"). Pushes a card with the fire result directly to the user.',
+    '  \'agent\' — the result is a SIGNAL the main agent should interpret before deciding to interrupt the user (background monitoring that may or may not need attention, a check whose outcome decides next steps). Wakes the main agent with the fire result; agent picks notify_user / stay_silent.',
+    '  Default to \'user\' for "remind me / tell me / report to me" requests. Default to \'agent\' for "watch this in the background and let me know if something\'s wrong" requests.',
     '',
     'allowed_tools is optional. It grants this task permission to use specific tools without user approval, using the same pattern syntax as /rules allow.',
     'Built-in safe tools are already allowed for background fires: Read, Glob, Grep, TodoWrite, MemoryRead, ListBackgroundTasks.',
@@ -133,7 +144,9 @@ export const backgroundTaskTool = buildTool({
 
 export const listBackgroundTasksTool = buildTool({
   name: 'ListBackgroundTasks',
-  description: 'List scheduled background tasks for the current user.',
+  description: `List the user's scheduled background tasks (active + recently failed).
+
+Use when the user asks "what reminders / scheduled tasks do I have", or before CancelBackgroundTask / UpdateBackgroundTask so you know the exact task id to target. Returns each task's id, label, schedule shape, next run time, and notify_to/notify_on.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,
@@ -165,7 +178,9 @@ export const listBackgroundTasksTool = buildTool({
 
 export const cancelBackgroundTaskTool = buildTool({
   name: 'CancelBackgroundTask',
-  description: 'Cancel a scheduled background task. An already in-flight fire is allowed to finish.',
+  description: `Cancel a scheduled background task by id. An already in-flight fire is allowed to finish; only future runs are stopped.
+
+Use when the user says "取消那个提醒" / "stop the daily X" / "don't run that anymore". Run ListBackgroundTasks first if you don't have the exact task id. To temporarily disable rather than delete, use UpdateBackgroundTask with \`enabled: false\` (preserves history; can be re-enabled later).`,
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -186,7 +201,11 @@ export const cancelBackgroundTaskTool = buildTool({
 
 export const updateBackgroundTaskTool = buildTool({
   name: 'UpdateBackgroundTask',
-  description: 'Update schedule, label, enabled flag, notification settings, or allowed_tools for a background task. Prompt changes are not supported; cancel and create a new task instead. allowed_tools is a full replacement, not a diff.',
+  description: `Update schedule, label, enabled flag, notification settings, or allowed_tools for an existing background task.
+
+Use when the user adjusts an existing task: "改成每天 9am" (update schedule), "暂停那个提醒" (set enabled: false), "把这个改成静默执行" (update notify_to to 'agent'), or to extend allowed_tools after a permission failure.
+
+Prompt changes are NOT supported — to change the prompt, CancelBackgroundTask + BackgroundTask (new). \`allowed_tools\` is a FULL REPLACEMENT, not a diff: passing \`["Bash(npm:*)"]\` replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.`,
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
