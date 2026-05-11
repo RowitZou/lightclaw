@@ -122,14 +122,23 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
   riskLevel: 'safe',
   channelScope: ['feishu'],
   shouldDefer: true,
-  searchHint: 'feishu lark doc docx wiki sheet bitable url read open view fetch metadata',
+  // ≤60 chars keyword cloud; trimmed redundant verbs (view/fetch/metadata —
+  // duplicates of read/open and the `metadata_only` field name).
+  searchHint: 'feishu lark doc docx wiki sheet bitable url read open',
   inputSchema: feishuReadInputSchema,
   async call(input): Promise<ToolCallResult<FeishuReadOutput>> {
     try {
       return await runFeishuRead(input, { client: getFeishuClient() })
     } catch (error) {
+      // feishuErrorMessage unwraps axios `error.response` (status + body +
+      // x-tt-logid) so HTTP-level failures (ScopeAccessDenied / proxy
+      // strip / network drop) reach the LLM and stderr with enough
+      // context to act on. Plain `error.message` would only say
+      // "Request failed with status code 403". FeishuCreateFile catch
+      // (Iter 3) already wired this — close the FeishuRead gap left
+      // from Iter 2.
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: feishuErrorMessage(error),
         isError: true,
       }
     }
