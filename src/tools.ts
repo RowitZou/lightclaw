@@ -17,6 +17,7 @@ import { grepTool } from './tools/grep.js'
 import { memoryReadTool } from './tools/memory-read.js'
 import { memoryWriteTool } from './tools/memory-write.js'
 import { sendFileTool } from './tools/send-file.js'
+import { sleepTool } from './tools/sleep.js'
 import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
 import { webFetchTool } from './tools/web-fetch.js'
@@ -39,6 +40,7 @@ export const builtinTools = [
   memoryReadTool,
   memoryWriteTool,
   sendFileTool,
+  sleepTool,
   useSkillTool,
   todoWriteTool,
   webFetchTool,
