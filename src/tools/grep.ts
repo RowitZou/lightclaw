@@ -42,9 +42,10 @@ function binaryHint(filePath: string): string {
     return (
       `Grep does not yield results on binary file ${filePath} ` +
       `(ripgrep skips binary files by default, so a "no matches" exit is uninformative). ` +
-      `For PDF, call Read({ file_path: "${filePath}" }) for pdftotext extraction (cheap, ` +
-      `text-based PDFs only) or Read({ file_path: "${filePath}", pages: "1-5" }) for ` +
-      `visual rendering of specific pages (image-based / scanned PDFs).`
+      `For PDF, call Read({ file_path: "${filePath}" }) for whole-document pdftotext ` +
+      `extraction, Read({ file_path: "${filePath}", pages: "1-5" }) for just those pages' ` +
+      `text, or Read({ file_path: "${filePath}", pages: "1-5", visual: true }) for ` +
+      `pdftoppm image rendering of those pages (image-based / scanned PDFs).`
     )
   }
   if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.svg'].includes(ext)) {

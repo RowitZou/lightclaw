@@ -28,6 +28,13 @@ export type ArtifactExtractionInput = {
   /** xlsx-only options (sheet / range / maxRows / maxCols). Ignored by
    *  other formats. The Read tool input has the same shape. */
   xlsx?: XlsxExtractionOptions
+  /** PDF-only: restrict text extraction to a closed inclusive page range.
+   *  When set, the PDF extractor passes `-f firstPage -l lastPage` to
+   *  pdftotext so only those pages' text comes back. Lets the agent
+   *  navigate long PDFs (e.g. a 40-page paper) one section at a time
+   *  without paying for the full document inside `max_chars`. Ignored by
+   *  non-PDF formats. */
+  pdfPageRange?: { firstPage: number; lastPage: number }
   exec?: ArtifactExtractionExec
 }
 

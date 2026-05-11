@@ -19,6 +19,7 @@ import {
   getPdfPageCount,
   isVisualImageExtension,
   pageNumberFromImageName,
+  parsePdfPageRange,
   renderPdfPages,
   resolvePageRange,
   resolveResizeTarget,
@@ -84,7 +85,9 @@ const inputSchema = z.object({
   limit: z.number().int().min(1).optional()
     .describe('Plain text / code only — number of lines to read.'),
   pages: z.string().min(1).optional()
-    .describe(`PDF only — page selector "1" / "1-5" / "10-12" to trigger visual rendering. Max ${MAX_PAGES_PER_READ} pages per call. Without pages, PDFs use the cheaper pdftotext text path.`),
+    .describe(`PDF only — page selector "1" / "1-5" / "10-12" to read just those pages. Default returns the extracted text of that range via pdftotext (cheap, exact). Pass \`visual: true\` to render the same pages as inline images instead (figures / scanned PDFs / complex layouts). Max ${MAX_PAGES_PER_READ} pages per call in either mode. Without \`pages\`, PDFs return the whole document's text capped by \`max_chars\`.`),
+  visual: z.boolean().optional()
+    .describe('PDF + `pages` only — when true, render the selected pages as inline images via pdftoppm (vision endpoints get the bytes inline; non-vision endpoints get a sub-LLM description). When false / omitted, returns the page-range text via pdftotext. No effect without `pages`.'),
   xlsx: z.object({
     sheet: z.string().min(1).optional().describe('Sheet name (defaults to first sheet).'),
     range: z.string().min(1).optional().describe('A1:D20 style cell range.'),
@@ -154,8 +157,9 @@ function formatLines(content: string, offset: number, limit?: number): string {
 const DESCRIPTION = [
   'Read a file from the workspace. Routes by file type:',
   '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output. Optional `offset` + `limit` (line-based) for paging.',
-  '- PDF (text path, default): returns extracted text via pdftotext layout mode, capped by `max_chars` (default 50000).',
-  '- PDF (visual path): pass `pages` ("1", "1-5", "10-12") to render via pdftoppm and emit inline image blocks for the main model (or sub-LLM-described text on non-vision endpoints). Max 20 pages per call.',
+  '- PDF (whole document, default): returns extracted text via pdftotext layout mode, capped by `max_chars` (default 50000). Use this for short PDFs or to skim the start of a long one.',
+  '- PDF (specific pages, text — preferred for long docs): pass `pages` ("1", "1-5", "31-31") and the tool returns just those pages\' text via pdftotext `-f -l`. Lets you jump straight to a numbered section (e.g. "go read page 31") without paying full-document `max_chars`.',
+  '- PDF (specific pages, visual): pass `pages` AND `visual: true` to render those pages via pdftoppm and emit inline image blocks (figures, formulas, scanned-only PDFs, complex layouts where text extraction loses structure). Max 20 pages per call.',
   '- Image (.jpg/.png/.gif/.webp): returns inline image block. Resize is automatic — no knob to tune.',
   '- Office (.xlsx/.docx/.pptx): auto-extracts via sandbox parser. For .xlsx pass `xlsx: { sheet, range, max_rows, max_cols }` to narrow the view.',
   '- Jupyter notebook (.ipynb): cells flattened into structured text with code/markdown/output sections.',
@@ -197,8 +201,13 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         return await readImageVisual(filePath, context)
       }
 
-      // PDF + pages: visual path. Without `pages` we keep pdftotext.
-      if (probableFormat === 'pdf' && input.pages !== undefined) {
+      // PDF + pages + visual=true: pdftoppm visual path. PDF + pages alone
+      // defaults to the page-range text path below (pdftotext -f -l), so the
+      // model gets exact text by default and only opts into the image
+      // rendering when it actually wants figures / formulas / scanned
+      // content. Without `pages` at all we still walk into the text branch
+      // below and dump the whole document, capped by max_chars.
+      if (probableFormat === 'pdf' && input.pages !== undefined && input.visual === true) {
         return await readPdfVisual(input, filePath, context)
       }
 
@@ -225,9 +234,33 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
           }
         }
 
-        // Dedup: identical (path, mtime, xlsx-spec hash, max_chars) is a
-        // cache hit. Plain text dedup runs in its own path below.
-        const dedupVariant = buildExtractDedupVariant(input, probableFormat)
+        // PDF text path with `pages`: resolve the page selector to a closed
+        // inclusive range and hand it to the extractor as `-f N -l M`. We
+        // don't query pdfinfo for the document page count here — pdftotext
+        // tolerates out-of-bounds `-l` by stopping at the last page, and
+        // skipping the round-trip keeps "Read page 31" a single exec call.
+        // Open-ended selectors ("31-") cap at firstPage + MAX_PAGES_PER_READ - 1
+        // so a careless prompt does not stream the rest of a 400-page book.
+        let pdfPageRange: { firstPage: number; lastPage: number } | undefined
+        if (probableFormat === 'pdf' && input.pages !== undefined) {
+          const parsed = parsePdfPageRange(input.pages)
+          if (!parsed) {
+            return {
+              output: `Invalid PDF page selector "${input.pages}". Use "1", "1-5", "31-31", or "31-".`,
+              isError: true,
+            }
+          }
+          const firstPage = parsed.firstPage
+          const lastPage = parsed.lastPage === 'end'
+            ? firstPage + MAX_PAGES_PER_READ - 1
+            : Math.min(parsed.lastPage, firstPage + MAX_PAGES_PER_READ - 1)
+          pdfPageRange = { firstPage, lastPage }
+        }
+
+        // Dedup: identical (path, mtime, xlsx-spec hash, max_chars, pdf
+        // page range) is a cache hit. Plain text dedup runs in its own
+        // path below.
+        const dedupVariant = buildExtractDedupVariant(input, probableFormat, pdfPageRange)
         if (hasBeenRead({ filePath, mtimeMs: stat.mtimeMs, variant: dedupVariant })) {
           return { output: { kind: 'unchanged' as const, filePath } }
         }
@@ -245,6 +278,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
                 maxCols: input.xlsx.max_cols,
               }
             : undefined,
+          pdfPageRange,
           exec: params => context.runtime.exec(params),
         })
         markRead({ filePath, mtimeMs: stat.mtimeMs, variant: dedupVariant })
@@ -266,7 +300,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
               + 'do NOT call Grep on the filePath above. '
               + 'Look at the returned `text` field directly'
               + (probableFormat === 'pdf'
-                ? ', or call this Read again with `pages=` to render specific pages.'
+                ? ', or call Read again with `pages="N"` / `"N-M"` to fetch a specific page range\'s text (add `visual: true` for image rendering).'
                 : '.'),
             text: extraction.text,
             truncated: extraction.truncated,
@@ -342,16 +376,24 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
 })
 
 /** Build the dedup variant key for the extracted-text branch. Includes
- *  xlsx options because the extracted text depends on them (different
- *  sheet/range = different content). max_chars is included so a smaller
- *  scan followed by a larger one doesn't dedup. */
-function buildExtractDedupVariant(input: FileReadInput, format: string): string {
+ *  xlsx options + pdf page range because the extracted text depends on
+ *  them (different sheet/range or different pages = different content).
+ *  max_chars is included so a smaller scan followed by a larger one
+ *  doesn't dedup. */
+function buildExtractDedupVariant(
+  input: FileReadInput,
+  format: string,
+  pdfPageRange: { firstPage: number; lastPage: number } | undefined,
+): string {
   const parts: string[] = [`extract:${format}`, `chars=${input.max_chars ?? DEFAULT_MAX_CHARS}`]
   if (format === 'xlsx' && input.xlsx) {
     parts.push(`sheet=${input.xlsx.sheet ?? ''}`)
     parts.push(`range=${input.xlsx.range ?? ''}`)
     parts.push(`rows=${input.xlsx.max_rows ?? ''}`)
     parts.push(`cols=${input.xlsx.max_cols ?? ''}`)
+  }
+  if (format === 'pdf' && pdfPageRange) {
+    parts.push(`pdfPages=${pdfPageRange.firstPage}-${pdfPageRange.lastPage}`)
   }
   return parts.join(';')
 }
