@@ -245,6 +245,11 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
 | `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
+| `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
+| `/branch <prompt>`（别名 `/b`）| 在当前 session 上分叉出并行 branch；主 turn 继续跑，branch 结果完成后合并回来。 |
+| `/stop` | 中断当前 sessionId 的 in-flight turn；branch / fresh 各自独立 sessionId，不会被一并中断。 |
+| `/feedback <text>`（channel 用户专属）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
+| `/auth import codex` | 注册 Codex OAuth token，让 OpenAI-Auth 模型不依赖 API key 就能跑。 |
 
 Admin 专属：
 
@@ -254,9 +259,6 @@ Admin 专属：
 | `/ceiling [<user> <read|ask|auto|yolo>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
 | `/sandbox [status|prefetch|reset]` | 查看 / 重新拉取 / 重置 runtime 沙箱镜像与容器。 |
 | `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
-| `/feedback <text>`（user-only）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
-| `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
-| `/stop` | 中断当前 turn（已写入的文件不回滚）。 |
 
 Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
 
@@ -327,7 +329,13 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 | `docker` | 普通 Linux 主机上的多用户个人 bot。 | 每用户长跑容器，公开镜像 `ghcr.io/rowitzou/lightclaw-sandbox` lazy 拉取，闲置容器自动 stop。Workspace 文件跨重启保留；`/sandbox reset` 重建 writable layer。 |
 | `rlaunch` | 集群部署（kubebrain）。 | 每用户长跑集群 worker，gpfs workspace 挂到 `/workspace`；不做 idle stop，被 GC 后由 health checker 自动重建。 |
 
-Docker 镜像自带日常工具（jq、sqlite、ripgrep、Python 数科栈、Node 22）。LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级到 chat-only——第一次对话不会卡死。
+Docker 镜像自带日常工具：
+
+- **Shell / 数据**：jq、yq、sqlite、ripgrep、fd、Node 22
+- **Python 数科栈**：numpy / pandas / scipy / matplotlib / pyarrow / jsonlines / dotenv / requests / httpx
+- **多模态辅助包**（`Read` 工具与 WebFetch helper 用）：`poppler-utils`（`pdftotext` + `pdftoppm`，提供 PDF 文本提取与按页栅格化）、`Pillow`（图像 resize 给 vision sub-LLM）、`openpyxl` / `python-docx` / `python-pptx`（Office 文档）、`markdownify` / `trafilatura`（HTML → Markdown）
+
+LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级到 chat-only——第一次对话不会卡死。镜像发布在 `ghcr.io/rowitzou/lightclaw-sandbox:<version>`——tag 跟 daemon 的 `package.json` 版本号对齐，另有 `:latest` 浮动 tag。
 
 需要自定义 / 内网镜像，设 `runtime.docker.imageOverride`（或集群场景的 `runtime.rlaunch.image`）后重启 LightClaw。数据集 / 模型 checkpoint 推荐 `mode: "ro"` 挂载——内核拒绝写入。
 
@@ -339,12 +347,20 @@ Docker 镜像自带日常工具（jq、sqlite、ripgrep、Python 数科栈、Nod
 
 ## 助手能用的能力
 
-- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`
-- **Web** —— `WebFetch`（URL → 可读 Markdown）、`WebSearch`
+- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`。`Read` 原生处理纯文本/代码、PDF（默认走 `pdftotext` 文本路径；带 `pages` 参数时走 `pdftoppm` 渲染图给视觉 sub-LLM 看）、Office 文档（xlsx / docx / pptx）——不需要单独的 `Extract*` 工具。
+- **Web** —— `WebFetch`（URL → 可读 Markdown，可选 sub-LLM 摘要 + 15 分钟自清理缓存）、`WebSearch`（Brave 或 DDG 降级）
+- **飞书云文档** —— 直接贴飞书 / Lark 链接：`FeishuRead` 按 canonical 类型自动路由（doc / docx / wiki → doc-or-sheet / sheet → cells 或 metadata）、`FeishuCreateFile` 新建 doc、`FeishuWriteDoc` 在已有 doc 末尾追加、`FeishuWriteSheet` 给 range append 行或 overwrite。所有写动作都弹飞书审批卡 + 落 `<LIGHTCLAW_HOME>/audit/feishu-writes/` 每日 jsonl 审计。`bitable` / `file` 类型 URL 解析但 v1 不支持读写。
+- **记忆** —— `MemoryRead` / `MemoryWrite` 做长期 per-user 笔记。自动抽取（`extract_memories`）和归并（`auto_dream`）作为后台 subagent 运行；`MemoryWrite` 是模型主动想记一条事实时的手动入口。
+- **会话历史** —— `ConversationList` / `ConversationRead` / `ConversationGrep` 跨 channel 查历史 session（terminal + 飞书 DM + 群 + topic thread）。
+- **后台任务** —— `BackgroundTask` 安排循环或一次性的任务在隔离 session 里晚些时候 fire；`ListBackgroundTasks` / `CancelBackgroundTask` / `UpdateBackgroundTask` 管理队列。完成结果走飞书 DM 卡片（`notifyTo: 'user'`）或唤醒主 agent 一轮 turn（`notifyTo: 'agent'`）。
 - **任务跟踪** —— `TodoWrite`，做多步规划
-- **子 Agent** —— 起并行的 `general-purpose` / `explore` 子助手做扇出工作
+- **子 Agent** —— 起并行的 `general-purpose` / `explore` 子助手做扇出工作；`AgentTool` 是 dispatch 入口
+- **发文件到 channel** —— `SendFile` 把 workspace 里的文件（图片 / 卡片 / doc）推到当前飞书会话
+- **Harness 等待** —— `Sleep` 短等待，不占 Bash 槽位，`/stop` 一秒打断
 - **Skill** —— 内置若干小能力（`verify`、`remember`…），任务匹配时模型自动用，不需要手动调
 - **MCP server** —— admin 配置的外部工具，模型以 `mcp__<server>__<tool>` 调用
+
+大部分工具（Memory、Web、Conversation、BackgroundTask、AgentTool、Sleep、SendFile、UseSkill、4 个飞书云文档工具）默认 **deferred**：冷启动时只有名字进 prompt 不进 schema 目录，模型用 `ToolSearch` 按需把它们 promote 出来。8 个 inline 工具是 `Bash` / `Read` / `Write` / `Edit` / `Grep` / `Glob` / `TodoWrite` / `ToolSearch`。这样每轮 prompt cache 尽可能保持紧凑；promote 出来的工具进 session-scoped LRU + turn-based TTL，长 session 也不会让 catalog 越积越多。
 
 以上所有调用都会走前面讲的同一套权限流。
 

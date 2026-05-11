@@ -249,6 +249,11 @@ User-visible commands:
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
 | `/rules` | List numbered rules, revoke by index, or register an ASK rule (see below). |
+| `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
+| `/branch <prompt>` (alias `/b`) | Spawn a parallel branch off the current session; the main turn keeps running, branch result merges back. |
+| `/stop` | Abort the in-flight turn for the current session only. Branches and fresh runs are independent and not cancelled. |
+| `/feedback <text>` (user-only on channels) | Send feedback to admin; admin reads via `/user feedback`. |
+| `/auth import codex` | Register a Codex OAuth token so OpenAI-Auth models can use it without an API key. |
 
 Admin-only commands:
 
@@ -258,9 +263,6 @@ Admin-only commands:
 | `/ceiling [<user> <read|ask|auto|yolo>]` | Show every identity's ceiling, or set one user's ceiling. |
 | `/sandbox [status|prefetch|reset]` | Inspect / re-pull / reset the runtime sandbox image and container. |
 | `/cost` | This-month token usage by-model + by-user (with cache hit / fresh subset). |
-| `/feedback <text>` (user-only) | Send feedback to admin; admin reads via `/user feedback`. |
-| `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
-| `/stop` | Abort the in-flight turn (already-written files are not rolled back). |
 
 Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
 
@@ -331,7 +333,13 @@ Three backends, picked via `runtime.backend`:
 | `docker` | Multi-user personal bot on a normal Linux box. | Per-user long-lived container, public image `ghcr.io/rowitzou/lightclaw-sandbox` pulled lazily, idle containers are stopped. Workspace files survive restarts; `/sandbox reset` rebuilds the writable layer. |
 | `rlaunch` | Cluster deployment (kubebrain). | Per-user long-running cluster worker, gpfs workspace mounted at `/workspace`, no idle stop, health-checker auto-recovers on GC. |
 
-The Docker image ships with the daily-driver toolkit (jq, sqlite, ripgrep, Python data-science stack, Node 22). At startup LightClaw pulls it in the background; tool calls degrade to chat-only until it's ready, so the first conversation never hangs.
+The Docker image ships with the daily-driver toolkit:
+
+- **Shell / data**: jq, yq, sqlite, ripgrep, fd, Node 22
+- **Python data-science**: numpy / pandas / scipy / matplotlib / pyarrow / jsonlines / dotenv / requests / httpx
+- **Multimodal helpers** (used by `Read` and the WebFetch helper): `poppler-utils` (`pdftotext` + `pdftoppm` for PDF text + page rasterization), `Pillow` (image resize for vision sub-LLM), `openpyxl` / `python-docx` / `python-pptx` (Office docs), `markdownify` / `trafilatura` (HTML → Markdown)
+
+At startup LightClaw pulls the image in the background; tool calls degrade to chat-only until it's ready, so the first conversation never hangs. The image is published as `ghcr.io/rowitzou/lightclaw-sandbox:<version>` — the tag matches the `package.json` version of the daemon you're running, plus the `:latest` floating tag.
 
 For custom or air-gapped images, set `runtime.docker.imageOverride` (or `runtime.rlaunch.image` for the cluster backend) and restart LightClaw. Mount datasets / model checkpoints with `mode: "ro"` — the kernel rejects writes inside the mount.
 
@@ -343,12 +351,20 @@ For datasets / model checkpoints, mount them with `mode: "ro"` — the assistant
 
 ## What the assistant can use
 
-- **Files & shell** — `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`
-- **Web** — `WebFetch` (URL → readable Markdown), `WebSearch`
+- **Files & shell** — `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`. `Read` natively handles plain text/code, PDFs (text via `pdftotext`, page rendering via `pdftoppm` for visual inspection), and Office documents (xlsx / docx / pptx) — no extra `Extract*` tools needed.
+- **Web** — `WebFetch` (URL → readable Markdown, with optional sub-LLM summarization and a 15-minute self-cleaning cache), `WebSearch` (Brave or DDG fallback)
+- **Feishu cloud docs** — paste a Feishu / Lark URL and the assistant works with it directly: `FeishuRead` auto-routes by canonical type (doc / docx / wiki → doc-or-sheet / sheet → cells or metadata), `FeishuCreateFile` creates a new doc, `FeishuWriteDoc` appends to an existing doc, `FeishuWriteSheet` appends rows or overwrites a range. Writes always pop a Feishu approval card and append to a per-day audit jsonl at `<LIGHTCLAW_HOME>/audit/feishu-writes/`. `bitable` / `file` URLs are parsed but read/write isn't supported in v1.
+- **Memory** — `MemoryRead` / `MemoryWrite` for durable per-user notes. Auto-extraction (`extract_memories`) and consolidation (`auto_dream`) run as background subagents; `MemoryWrite` is the manual escape hatch when the model wants to commit a fact mid-turn.
+- **Conversation history** — `ConversationList` / `ConversationRead` / `ConversationGrep` to find past sessions across channels (terminal + Feishu DM + groups + topic threads).
+- **Scheduled work** — `BackgroundTask` schedules recurring or one-shot work that fires later in an isolated session; `ListBackgroundTasks` / `CancelBackgroundTask` / `UpdateBackgroundTask` manage the queue. Completions land back via Feishu DM card (`notifyTo: 'user'`) or as a model wake-up turn (`notifyTo: 'agent'`).
 - **Task tracking** — `TodoWrite` for multi-step plans
-- **Sub-agents** — spin up parallel `general-purpose` or `explore` agents for fan-out work
+- **Sub-agents** — spin up parallel `general-purpose` or `explore` agents for fan-out work; `AgentTool` is the dispatch entry point
+- **Files to channel** — `SendFile` pushes a workspace file out to the active Feishu chat (cards / images / docs)
+- **Harness-side wait** — `Sleep` for short waits without occupying a Bash slot (`/stop` cancels it instantly)
 - **Skills** — small bundles of focused capability (`verify`, `remember`, …); the model picks them up automatically when relevant, no manual invocation
 - **MCP servers** — admin-configured external tools, available to the model as `mcp__<server>__<tool>`
+
+Most tools (Memory, Web, Conversation, BackgroundTask, AgentTool, Sleep, SendFile, UseSkill, and the four Feishu cloud-doc tools) are **deferred**: their full schemas are not in the cold-start tool catalog, and the model promotes them on demand via `ToolSearch`. The eight always-loaded inline tools are `Bash` / `Read` / `Write` / `Edit` / `Grep` / `Glob` / `TodoWrite` / `ToolSearch`. This keeps the per-turn prompt cache tight; promoted tools live in a session-scoped LRU with a turn-based TTL so the catalog stays trim across long sessions.
 
 All of the above respect the same permission flow described above.
 
