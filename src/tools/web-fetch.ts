@@ -7,9 +7,11 @@ import { suggestWebFetchRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
 import { isPreapprovedUrl } from './web-fetch-preapproved.js'
 
-const DEFAULT_MAX_BYTES = 200_000
+const DEFAULT_MAX_BYTES = 50_000     // helper exec output cap (schema default); admin can raise via input.maxBytes up to MAX_BYTES_HARD_CAP
+const MAX_BYTES_HARD_CAP = 100_000   // matches Claude Code MAX_MARKDOWN_LENGTH order of magnitude — admin cannot request more
 const DEFAULT_TIMEOUT_MS = 35_000
-const MAX_MARKDOWN_LENGTH = 100_000  // chars; matches Claude Code. Truncate before sub-LLM to avoid prompt-too-long.
+const MAX_MARKDOWN_LENGTH = 100_000  // chars; sub-LLM-path truncation before Haiku-equivalent call to avoid prompt-too-long
+const MAX_RAW_LENGTH = 50_000        // chars; no-prompt-path truncation. Past this, the raw return is sliced + a marker hint nudges toward the prompt/maxBytes escape hatches.
 
 type SummarizeFn = (input: {
   url: string
@@ -30,7 +32,7 @@ export const webFetchTool = buildTool({
   name: 'WebFetch',
   description: `Fetch content from a URL.
 
-Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For long documentation pages this can fill main-model context — pass \`prompt\` when you want a focused answer instead of the full page.
+Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — pass \`prompt\` for a focused sub-LLM summary of the full page, or raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more bytes from the helper.
 
 With a \`prompt\` field: a sub-LLM reads the fetched markdown and answers your prompt. The sub-LLM has no tool access; it only summarizes / extracts from the page. Use for "what does this page say about X" / "extract the API endpoints from this docs page" / "is there a section on Y in this README". Saves you reading the whole page.
 
@@ -45,14 +47,14 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
   inputSchema: z.object({
     url: z.string().url(),
     prompt: z.string().min(1).optional(),
-    maxBytes: z.number().int().min(1024).max(500_000).optional(),
+    maxBytes: z.number().int().min(1024).max(MAX_BYTES_HARD_CAP).optional(),
     timeoutMs: z.number().int().min(1000).max(120_000).optional(),
   }),
   suggestPermissionRules(input) {
     return suggestWebFetchRules(input.url)
   },
   async call(input, context) {
-    const maxBytes = input.maxBytes ?? 200_000
+    const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES
     const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const helper = path.join(context.runtime.helperRoot, 'webfetch.py')
     // workspaceRoot is in the runtime's own path view (LocalRuntime: host
@@ -74,7 +76,7 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
       }),
       timeoutMs,
       abortSignal: context.abortSignal,
-      maxBufferBytes: Math.max(maxBytes + 16 * 1024, DEFAULT_MAX_BYTES),
+      maxBufferBytes: maxBytes + 16 * 1024,
     })
 
     if (result.exitCode !== 0) {
@@ -86,8 +88,24 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
 
     const rawMarkdown = result.stdout.trimEnd()
 
-    // No prompt → return raw (current behavior, preserved for back-compat).
+    // No prompt → return raw, but truncate past MAX_RAW_LENGTH chars to keep
+    // a single fetch from dominating main-model context. The marker tells the
+    // model the two escape hatches: pass `prompt` for sub-LLM summarize of
+    // the full content, or raise `maxBytes` (up to MAX_BYTES_HARD_CAP) to
+    // pull more bytes from the helper. Mirrors Claude Code's MAX_MARKDOWN_LENGTH
+    // strategy but in the raw path (we deliberately lower the threshold from
+    // sub-LLM's 100K to 50K because raw text costs the main model directly
+    // rather than via summary).
     if (!input.prompt) {
+      if (rawMarkdown.length > MAX_RAW_LENGTH) {
+        return {
+          output:
+            rawMarkdown.slice(0, MAX_RAW_LENGTH) +
+            `\n\n[Page is ${rawMarkdown.length} chars, truncated to ${MAX_RAW_LENGTH}. ` +
+            `To get a focused answer on the full page, pass \`prompt\` to use the sub-LLM summarize path. ` +
+            `To raise the helper byte cap, pass \`maxBytes\` up to ${MAX_BYTES_HARD_CAP}.]`,
+        }
+      }
       return { output: rawMarkdown }
     }
 

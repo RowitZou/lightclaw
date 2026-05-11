@@ -28,7 +28,7 @@ describe('WebFetch tool — prompt + summarize', () => {
     _setWebFetchSummarizerForTests(null)
   })
 
-  it('returns raw markdown when no prompt is supplied (back-compat)', async () => {
+  it('returns raw markdown when no prompt is supplied (back-compat, short content)', async () => {
     let summarizeCalled = false
     _setWebFetchSummarizerForTests(async () => {
       summarizeCalled = true
@@ -41,7 +41,25 @@ describe('WebFetch tool — prompt + summarize', () => {
     )
     assert.equal(result.isError, undefined)
     assert.match(result.output as string, /# Hello/)
+    assert.doesNotMatch(result.output as string, /truncated to/)
     assert.equal(summarizeCalled, false, 'summarize must NOT run without prompt')
+  })
+
+  it('truncates raw markdown past MAX_RAW_LENGTH and adds marker pointing to prompt/maxBytes escape hatches', async () => {
+    const oversize = 'x'.repeat(60_000)  // > MAX_RAW_LENGTH (50_000)
+    const result = await webFetchTool.call(
+      { url: 'https://example.com', maxBytes: 100_000 },
+      buildCtx(oversize),
+    )
+    assert.equal(result.isError, undefined)
+    // Should slice to 50_000 chars + marker
+    assert.ok(
+      (result.output as string).length < 51_000,
+      `raw should be capped near MAX_RAW_LENGTH (got ${(result.output as string).length})`,
+    )
+    assert.match(result.output as string, /Page is 60000 chars, truncated to 50000/)
+    assert.match(result.output as string, /pass `prompt` to use the sub-LLM summarize path/)
+    assert.match(result.output as string, /pass `maxBytes` up to 100000/)
   })
 
   it('calls summarize when prompt + non-preapproved URL', async () => {
