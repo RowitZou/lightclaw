@@ -17,7 +17,7 @@ import {
   saveCacheSafeParams,
   type CacheSafeParams,
 } from '../../agents/cache-safe-params.js'
-import type { ForkedAgentResult } from '../../agents/forked-agent.js'
+type SubagentResult = { finalText: string; stopReason: string | null }
 import type { LightClawConfig } from '../../config.js'
 import { setExtractionInProgressForTest } from '../extract.js'
 import { consolidationLockPath, tryAcquireConsolidationLock } from './lock.js'
@@ -27,7 +27,7 @@ import {
   executeAutoDream,
   getAutoDreamInFlightCountForTest,
   resetAutoDreamStateForTest,
-  setRunForkedAgentForTest,
+  setRunSubagentForTest,
 } from './dream.js'
 
 let tmpRoot: string
@@ -43,7 +43,7 @@ beforeEach(() => {
   process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
   saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
-  setRunForkedAgentForTest(null)
+  setRunSubagentForTest(null)
 })
 
 afterEach(() => {
@@ -54,7 +54,7 @@ afterEach(() => {
   }
   saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
-  setRunForkedAgentForTest(null)
+  setRunSubagentForTest(null)
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
@@ -115,7 +115,7 @@ describe('autoDream runner', () => {
     saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvoked = false
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       forkInvoked = true
       return fakeForkResult()
     })
@@ -141,7 +141,7 @@ describe('autoDream runner', () => {
     writeFileSync(consolidationLockPath(tmpMemoryDir), `${process.pid}\n`)
 
     let forkInvoked = false
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       forkInvoked = true
       return fakeForkResult()
     })
@@ -158,7 +158,7 @@ describe('autoDream runner', () => {
 
   it('skips when scan throttle is active', async () => {
     saveCacheSafeParams('alice', fakeCacheSafeParams())
-    setRunForkedAgentForTest(async () => fakeForkResult())
+    setRunSubagentForTest(async () => fakeForkResult())
 
     writeSession('s1', 'alice', Date.now())
     await executeAutoDream({
@@ -178,7 +178,7 @@ describe('autoDream runner', () => {
     }
 
     let forkInvoked = false
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       forkInvoked = true
       return fakeForkResult()
     })
@@ -207,7 +207,7 @@ describe('autoDream runner', () => {
       saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
-      setRunForkedAgentForTest(async () => {
+      setRunSubagentForTest(async () => {
         forkInvoked = true
         return fakeForkResult()
       })
@@ -235,7 +235,7 @@ describe('autoDream runner', () => {
       saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
-      setRunForkedAgentForTest(async () => {
+      setRunSubagentForTest(async () => {
         forkInvoked = true
         return fakeForkResult()
       })
@@ -259,7 +259,7 @@ describe('autoDream runner', () => {
     saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvocations = 0
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       forkInvocations += 1
       return fakeForkResult()
     })
@@ -293,7 +293,7 @@ describe('autoDream runner', () => {
     )
     const priorMtime = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
 
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       throw new Error('fork blew up')
     })
 
@@ -326,10 +326,10 @@ describe('autoDream runner', () => {
       signalForkEntered = resolve
     })
     let releaseFork: () => void = () => {}
-    const blockedFork = new Promise<ForkedAgentResult>(resolve => {
+    const blockedFork = new Promise<SubagentResult>(resolve => {
       releaseFork = () => resolve(fakeForkResult())
     })
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       forkInvocations += 1
       signalForkEntered()
       return blockedFork
@@ -360,10 +360,10 @@ describe('autoDream runner', () => {
       signalForkEntered = resolve
     })
     let releaseFork: () => void = () => {}
-    const blockedFork = new Promise<ForkedAgentResult>(resolve => {
+    const blockedFork = new Promise<SubagentResult>(resolve => {
       releaseFork = () => resolve(fakeForkResult())
     })
-    setRunForkedAgentForTest(async () => {
+    setRunSubagentForTest(async () => {
       signalForkEntered()
       return blockedFork
     })
@@ -437,15 +437,9 @@ function fakeCacheSafeParams(): CacheSafeParams {
   }
 }
 
-function fakeForkResult(): ForkedAgentResult {
+function fakeForkResult(): SubagentResult {
   return {
     finalText: '',
     stopReason: 'end_turn',
-    usage: {
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 0,
-    },
   }
 }

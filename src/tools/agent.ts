@@ -12,7 +12,13 @@ function buildAgentToolDescription(): string {
     'Available subagent types:',
   ]
 
+  // Only surface user-facing agents to the main agent. Internal agents
+  // (extract_memories, auto_dream) are framework-managed and not dispatchable
+  // via AgentTool; including them would let the model invoke them by name.
   for (const agent of getAllAgents()) {
+    if (agent.kind === 'internal') {
+      continue
+    }
     lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
   }
 

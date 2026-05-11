@@ -1,5 +1,5 @@
 import { getLastCacheSafeParams } from '../../agents/cache-safe-params.js'
-import { runForkedAgent } from '../../agents/forked-agent.js'
+import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
 import { createAutoMemCanUseTool } from '../auto-mem-can-use-tool.js'
 import { ensureMemoryDir } from '../auto-memory.js'
@@ -25,13 +25,13 @@ const state: DreamState = {
   lastSessionScanAtByUser: new Map(),
 }
 
-// Test seam: dream.test.ts replaces the fork runner with a fake so
+// Test seam: dream.test.ts replaces the subagent runner with a fake so
 // gate-pass / rollback / success paths are exercised without a real LLM call.
-type RunForkedAgentFn = typeof runForkedAgent
-let runForkedAgentImpl: RunForkedAgentFn = runForkedAgent
+type RunSubagentFn = typeof runSubagent
+let runSubagentImpl: RunSubagentFn = runSubagent
 
-export function setRunForkedAgentForTest(impl: RunForkedAgentFn | null): void {
-  runForkedAgentImpl = impl ?? runForkedAgent
+export function setRunSubagentForTest(impl: RunSubagentFn | null): void {
+  runSubagentImpl = impl ?? runSubagent
 }
 
 export async function executeAutoDream(params: {
@@ -98,6 +98,9 @@ async function executeAutoDreamInner(params: {
       return
     }
 
+    // Gate on parent cacheSafeParams being present: runSubagent inherits the
+    // recent fork-context messages from it. Without those, dream has no
+    // baseline to reason over.
     const cacheSafeParams = getLastCacheSafeParams(params.userId)
     if (!cacheSafeParams) {
       console.error('[auto-dream] no cacheSafeParams available, skipping')
@@ -110,16 +113,21 @@ async function executeAutoDreamInner(params: {
     }
 
     try {
-      await runForkedAgentImpl({
-        promptText: buildDreamPrompt({
+      // Run through the AgentDefinition pathway (kind='internal'). The fork
+      // gets a focused systemPrompt (no Available Skills section) and a
+      // tools array containing only MemoryWrite / MemoryRead / Read / Grep /
+      // Glob / Bash. Runtime gate stays as createAutoMemCanUseTool for
+      // defense-in-depth (restricts Bash to read-only heads).
+      await runSubagentImpl({
+        agentType: 'auto_dream',
+        prompt: buildDreamPrompt({
           memoryDir: params.memoryDir,
           transcriptDir: params.config.sessionsDir,
           sessionIds,
         }),
-        cacheSafeParams,
-        canUseTool: createAutoMemCanUseTool(params.memoryDir),
-        maxTurns: params.config.autoDream.maxTurns,
-        label: 'auto_dream',
+        canUseToolOverride: createAutoMemCanUseTool(params.memoryDir),
+        canonicalUserOverride: params.userId,
+        maxTurnsOverride: params.config.autoDream.maxTurns,
       })
       await markConsolidationSucceeded(params.memoryDir)
     } catch (error) {

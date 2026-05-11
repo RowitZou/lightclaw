@@ -1,6 +1,6 @@
 import type { LightClawConfig } from '../config.js'
 import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
-import { runForkedAgent } from '../agents/forked-agent.js'
+import { runSubagent } from '../agents/run-subagent.js'
 import { collectAssistantText } from '../messages.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
@@ -168,6 +168,11 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   await ensureMemoryDir(ctx.memoryDir)
   const existingMemories = await scanMemoryFiles(ctx.memoryDir)
+  // Gate on parent cacheSafeParams being present: runSubagent inherits the
+  // recent fork-context messages from it (so the subagent sees the
+  // conversation history to reason over). Without those, extraction has
+  // nothing to look at and would just no-op. ctx.canonicalUser keying is
+  // still required for per-user isolation (Phase 28 audit §1.7.4).
   const cacheSafeParams = getLastCacheSafeParams(ctx.canonicalUser)
   if (!cacheSafeParams) {
     console.error('[memory] no cacheSafeParams available, skipping extraction')
@@ -179,22 +184,17 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
   const prompt = buildExtractPrompt(newMessages, existingMemories)
-  // Reuse the parent agent's cacheSafeParams verbatim so the fork shares
-  // tools/system/messages prompt-cache breakpoints. Do not switch to
-  // routing.extract here — model name is part of the cache key, so a swap
-  // forces 100% cache miss on every extraction call. The cost win from a
-  // cheaper extract model is dwarfed by the cache hit (typically 80%+ on
-  // back-to-back forks within the 5min ephemeral TTL).
-  await runForkedAgent({
-    promptText: prompt,
-    cacheSafeParams,
-    canUseTool: createAutoMemCanUseTool(ctx.memoryDir),
-    // Extraction is one MemoryRead/Grep+ several MemoryWrite calls, so a
-    // long session with lots of save-worthy facts (~10+ memories) can blow
-    // a tight cap and silently truncate the batch. 20 leaves headroom for
-    // index lookups + per-memory writes without unbounding the fork.
-    maxTurns: 20,
-    label: 'extract_memories',
+  // Run through the AgentDefinition pathway (kind='internal'). The subagent
+  // gets a focused systemPrompt (no Available Skills section, no UseSkill
+  // induction toward the `remember` skill) and a tools array containing only
+  // MemoryWrite / MemoryRead / Read / Grep / Glob. Runtime gate stays as
+  // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
+  // AgentDefinition (20 — see bundled/index.ts).
+  await runSubagent({
+    agentType: 'extract_memories',
+    prompt,
+    canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
+    canonicalUserOverride: ctx.canonicalUser,
   })
 
   const after = await scanMemoryFiles(ctx.memoryDir)
