@@ -11,7 +11,7 @@ import type {
   PendingAttachment,
 } from '../types.js'
 import type { FeishuRawMessage } from './bot-content.js'
-import { createFeishuClient } from './client.js'
+import { clearFeishuClient, createFeishuClient, registerFeishuClient } from './client.js'
 import { FeishuDedup } from './dedup.js'
 import {
   BackgroundTaskCardCoordinator,
@@ -90,6 +90,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       // channel runner (notably /user approve in commands/builtin.ts) can
       // push proactive cards. Cleared in stop() so a restart re-registers.
       registerFeishuSender(sender)
+      registerFeishuClient(client)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
       const bgCardCoordinator = new BackgroundTaskCardCoordinator(sender)
       const pairingCoordinator = new PairingCardCoordinator(sender)
@@ -203,6 +204,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           stop: () => {
             pendingDrainer.stop()
             clearFeishuSender(sender)
+            clearFeishuClient(client)
             clearChannelRunner(runner)
             clearBackgroundTaskCardCoordinator(bgCardCoordinator)
             return handle.close()
@@ -222,6 +224,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         stop: () => {
           pendingDrainer.stop()
           clearFeishuSender(sender)
+          clearFeishuClient(client)
           clearBackgroundTaskCardCoordinator(bgCardCoordinator)
           return server.close()
         },

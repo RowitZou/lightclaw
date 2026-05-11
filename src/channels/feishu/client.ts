@@ -8,6 +8,25 @@ import type { FeishuChannelConfig } from '../types.js'
 
 export type FeishuClient = Lark.Client
 
+let activeFeishuClient: FeishuClient | null = null
+
+export function registerFeishuClient(client: FeishuClient): void {
+  activeFeishuClient = client
+}
+
+export function clearFeishuClient(client?: FeishuClient): void {
+  if (!client || activeFeishuClient === client) {
+    activeFeishuClient = null
+  }
+}
+
+export function getFeishuClient(): FeishuClient {
+  if (!activeFeishuClient) {
+    throw new Error('Feishu client is only available while the Feishu channel is running.')
+  }
+  return activeFeishuClient
+}
+
 // Per-call file upload timeout override. The interceptor below reads from
 // this ALS so a caller (sender.uploadFile) can switch between a generous
 // first-attempt budget and short retry budgets without racing across

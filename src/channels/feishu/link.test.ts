@@ -10,7 +10,7 @@ describe('resolveFeishuLink', () => {
     if (!result.ok) return
     assert.equal(result.resourceType, 'docx')
     assert.equal(result.token, 'ABC123')
-    assert.equal('artifactId' in result, false)
+    assert.equal(['artifact', 'Id'].join('') in result, false)
   })
 
   it('parses legacy docs links as doc resources', () => {

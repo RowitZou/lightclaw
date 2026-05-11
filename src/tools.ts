@@ -12,6 +12,7 @@ import { conversationReadTool } from './tools/conversation-read.js'
 import { fileEditTool } from './tools/file-edit.js'
 import { fileReadTool } from './tools/file-read.js'
 import { fileWriteTool } from './tools/file-write.js'
+import { feishuReadTool } from './tools/feishu-collab.js'
 import { globTool } from './tools/glob.js'
 import { grepTool } from './tools/grep.js'
 import { memoryReadTool } from './tools/memory-read.js'
@@ -33,6 +34,7 @@ export const builtinTools = [
   conversationReadTool,
   conversationGrepTool,
   fileReadTool,
+  feishuReadTool,
   fileWriteTool,
   fileEditTool,
   grepTool,
