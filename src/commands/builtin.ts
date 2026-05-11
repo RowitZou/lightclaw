@@ -32,7 +32,7 @@ import type { PermissionMode, PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import {
-  abortInFlightForUser,
+  abortInFlightForSession,
   getCurrentUserId,
   getIdentityRules,
   getImageReadiness,
@@ -96,12 +96,11 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: '/stop',
     description: t('cmd.stop.desc'),
     async handler(_args, ctx) {
-      const userId = ctx.userId ?? getCurrentUserId()
-      if (!userId) {
-        ctx.output.write(`${t('common.error.prefix')}${t('stop.requireIdentity')}\n`)
-        return
-      }
-      const aborted = abortInFlightForUser(userId)
+      // Phase 32: /stop aborts the in-flight turn for THIS session only.
+      // ctx.sessionId is the terminal session id in REPL and the Feishu
+      // Phase 26 sessionId for channel slash dispatch — both map directly
+      // to the controller `beginQuery()` registered.
+      const aborted = abortInFlightForSession(ctx.sessionId)
       ctx.output.write(
         `${aborted ? t('stop.aborted') : t('stop.nothing')}\n`,
       )
@@ -156,7 +155,6 @@ function buildBuiltinCommands(): ReplCommand[] {
       const result = await runFresh({
         config: ctx.config,
         prompt,
-        callerUserId: ctx.userId ?? getCurrentUserId(),
         isChannel: Boolean(ctx.isChannel),
       })
       // /fresh body is LLM markdown — render it through the channel's

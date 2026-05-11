@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import {
-  abortInFlightForUser,
+  abortInFlightForSession,
   getCurrentUserId,
   getCwd,
   getPermissionApprover,
   getSessionId,
   setCwd,
   setPermissionApprover,
-  setAbortControllerForUser,
+  setAbortControllerForSession,
 } from './state.js'
 import {
   createEmptySessionContext,
@@ -36,44 +36,47 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-describe('per-user abort controllers', () => {
-  it('abortInFlightForUser returns false for unknown user', () => {
-    assert.equal(abortInFlightForUser('alice'), false)
+describe('per-session abort controllers', () => {
+  it('abortInFlightForSession returns false for unknown session', () => {
+    assert.equal(abortInFlightForSession('feishu:dm:nope'), false)
   })
 
-  it('aborts the latest controller installed for a user', () => {
+  it('aborts the latest controller installed for a session', () => {
     const ctrl = new AbortController()
-    setAbortControllerForUser('alice', ctrl)
+    setAbortControllerForSession('feishu:dm:chatA', ctrl)
     assert.equal(ctrl.signal.aborted, false)
-    assert.equal(abortInFlightForUser('alice'), true)
+    assert.equal(abortInFlightForSession('feishu:dm:chatA'), true)
     assert.equal(ctrl.signal.aborted, true)
   })
 
   it('returns false on second call (already aborted)', () => {
     const ctrl = new AbortController()
-    setAbortControllerForUser('alice', ctrl)
-    assert.equal(abortInFlightForUser('alice'), true)
-    assert.equal(abortInFlightForUser('alice'), false)
+    setAbortControllerForSession('feishu:dm:chatA', ctrl)
+    assert.equal(abortInFlightForSession('feishu:dm:chatA'), true)
+    assert.equal(abortInFlightForSession('feishu:dm:chatA'), false)
   })
 
-  it('isolates users — abort A does not abort B', () => {
-    const a = new AbortController()
-    const b = new AbortController()
-    setAbortControllerForUser('alice', a)
-    setAbortControllerForUser('bob', b)
-    assert.equal(abortInFlightForUser('alice'), true)
-    assert.equal(a.signal.aborted, true)
-    assert.equal(b.signal.aborted, false)
+  it('isolates sessions — abort A does not abort B (same canonical user, DM vs group)', () => {
+    // The Phase 26 scenario the per-session map exists to solve: same canonical
+    // admin has an in-flight DM long-task and a separate group quick-task. A
+    // /stop typed in either chat must only abort that chat's session.
+    const dmCtrl = new AbortController()
+    const groupCtrl = new AbortController()
+    setAbortControllerForSession('feishu:dm:chatA', dmCtrl)
+    setAbortControllerForSession('feishu:group:chatB:userX', groupCtrl)
+    assert.equal(abortInFlightForSession('feishu:group:chatB:userX'), true)
+    assert.equal(dmCtrl.signal.aborted, false, 'DM session keeps running when /stop hits group')
+    assert.equal(groupCtrl.signal.aborted, true)
   })
 
-  it('overwrites the previous controller for a user (only newest is reachable)', () => {
+  it('overwrites the previous controller for a session (only newest is reachable)', () => {
     const old = new AbortController()
-    const fresh = new AbortController()
-    setAbortControllerForUser('alice', old)
-    setAbortControllerForUser('alice', fresh)
-    abortInFlightForUser('alice')
+    const next = new AbortController()
+    setAbortControllerForSession('feishu:dm:chatA', old)
+    setAbortControllerForSession('feishu:dm:chatA', next)
+    abortInFlightForSession('feishu:dm:chatA')
     assert.equal(old.signal.aborted, false, 'stale controller is not aborted')
-    assert.equal(fresh.signal.aborted, true, 'newest controller is aborted')
+    assert.equal(next.signal.aborted, true, 'newest controller is aborted')
   })
 })
 

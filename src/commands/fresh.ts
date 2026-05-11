@@ -27,11 +27,10 @@ import type { Message } from '../types.js'
 export async function runFresh(args: {
   config: LightClawConfig
   prompt: string
-  callerUserId: string | undefined
   isChannel: boolean
 }): Promise<string> {
-  const { config, prompt, callerUserId, isChannel } = args
-  beginQuery(callerUserId)
+  const { config, prompt, isChannel } = args
+  beginQuery()
   const messages: Message[] = [createUserMessage(prompt, null)]
   const tools = getEnabledTools(
     getProvider(config),

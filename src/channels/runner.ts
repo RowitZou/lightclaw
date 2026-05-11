@@ -47,7 +47,7 @@ import {
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import {
-  abortInFlightForUser,
+  abortInFlightForSession,
   awaitBackgroundTasks,
   getCompactionCount,
   getCurrentUserId,
@@ -277,7 +277,14 @@ export class ChannelRunner {
     // turn does not freeze /help, /rules list, /cost, etc.
     const fastPath = parseFastPathSlash(message.text)
     if (fastPath === 'stop') {
-      const aborted = abortInFlightForUser(userId)
+      // Phase 32: /stop targets the sessionId of THIS inbound chat
+      // (Phase 26 formula). A /stop typed in a group never aborts the DM
+      // session's in-flight turn and vice versa. `/branch` and `/fresh`
+      // sub-sessions run on their own sessionIds and are intentionally not
+      // stoppable from a parent-chat /stop — both are designed as
+      // fire-and-forget / one-shot work.
+      const targetSessionId = this.strategy.resolveSessionId(message, userId)
+      const aborted = abortInFlightForSession(targetSessionId)
       await this.sendNotice(
         message,
         'info',
@@ -488,7 +495,7 @@ export class ChannelRunner {
           getRuntime(),
           sessionId,
         )
-        beginQuery(userId)
+        beginQuery()
         // Decide which attachments go inline (image / pdf to vision-capable
         // models) vs which fall back to text path breadcrumbs (the LLM uses
         // Read tools). Capability flag per kind, persisted

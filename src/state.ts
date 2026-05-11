@@ -20,7 +20,13 @@ type SessionState = SessionContext
 let runtimePool: RuntimePool | null = null
 let imageReadiness: ImageReadinessTracker | null = null
 let networkBridge: NetworkBridge | null = null
-const abortControllerByUser = new Map<string, AbortController>()
+// Keyed by sessionId — Phase 26 formula `feishu:dm:<chatId>` /
+// `feishu:group:<chatId>[:<threadId>]:<senderOpenId>` for channel sessions,
+// the terminal session id for the REPL, and `branch-<canonical>-<uuid>` /
+// `fresh-<uuid>` for fork-like sub-sessions. `/stop` must therefore target
+// the same sessionId the inbound message resolves to so a `/stop` typed in
+// a group never aborts the DM session's in-flight turn (or vice versa).
+const abortControllerBySession = new Map<string, AbortController>()
 // Session-memory write throttle counters. Module-level rather than per-state
 // because they reset on every resolved SessionContext (a new session starts with
 // zero accumulated work). They drive the SessionMemory double-threshold:
@@ -261,20 +267,20 @@ export function resetAbortController(): AbortController {
   return current.abortController
 }
 
-export function setAbortControllerForUser(
-  canonical: string,
+export function setAbortControllerForSession(
+  sessionId: string,
   controller: AbortController,
 ): void {
-  abortControllerByUser.set(canonical, controller)
+  abortControllerBySession.set(sessionId, controller)
 }
 
 /**
- * Abort the most-recently-installed in-flight controller for `canonical`.
+ * Abort the most-recently-installed in-flight controller for `sessionId`.
  * Returns true if a controller existed and was aborted; false if no entry
- * (user never ran a query) or it was already aborted.
+ * (no in-flight turn for that session) or it was already aborted.
  */
-export function abortInFlightForUser(canonical: string): boolean {
-  const ctrl = abortControllerByUser.get(canonical)
+export function abortInFlightForSession(sessionId: string): boolean {
+  const ctrl = abortControllerBySession.get(sessionId)
   if (!ctrl || ctrl.signal.aborted) {
     return false
   }

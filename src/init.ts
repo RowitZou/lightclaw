@@ -24,8 +24,9 @@ import {
   getNetworkBridge,
   getRuntimePool,
   resetSessionScopedCounters,
+  getSessionId,
   resetAbortController,
-  setAbortControllerForUser,
+  setAbortControllerForSession,
   clearActiveSkillAllowedTools,
   setNetworkBridge,
 } from './state.js'
@@ -263,12 +264,18 @@ function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefin
   }
 }
 
-export function beginQuery(canonicalUser?: string): AbortSignal {
+/**
+ * Reset this SessionContext's AbortController, register it under the active
+ * sessionId in the per-session abort map, and return the signal. `/stop`
+ * dispatched against the same sessionId aborts via that map entry. The
+ * function reads `getSessionId()` from the ALS, so the caller must be inside
+ * a `runWithSessionContext()` scope — every existing caller (channel runner /
+ * REPL / `/fresh`) already satisfies this.
+ */
+export function beginQuery(): AbortSignal {
   clearActiveSkillAllowedTools()
   const controller = resetAbortController()
-  if (canonicalUser) {
-    setAbortControllerForUser(canonicalUser, controller)
-  }
+  setAbortControllerForSession(getSessionId(), controller)
   return controller.signal
 }
 
