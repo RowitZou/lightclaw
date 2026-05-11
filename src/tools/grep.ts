@@ -108,8 +108,22 @@ function isCommandNotFound(result: { stderr: string; exitCode: number }): boolea
 
 export const grepTool = buildTool({
   name: 'Grep',
-  description:
-    'Search file contents with ripgrep or grep. For binary files (PDF, images, audio, video, archives, office documents), use Read with appropriate parameters instead — Grep returns empty (ripgrep skips binary by default) and provides no signal you can act on.',
+  description: `Search file contents with ripgrep.
+
+ALWAYS use Grep for content search. NEVER run \`grep\` or \`rg\` via Bash — Grep is permission-scoped, sandbox-aware, and returns structured results that survive prompt compaction.
+
+Output modes (\`output_mode\`):
+- \`content\` (default): full matching lines as \`file:line:text\` — use when you need context.
+- \`files_with_matches\`: just paths — fastest, use when you need to know which files contain X.
+- \`count\`: per-file match counts — use for triage.
+
+Filter files with \`include: "**/*.ts"\` (glob pattern) or \`type: "ts"\` (ripgrep type alias — shorter and ripgrep-native; common types include js, ts, py, rust, go, java, ruby, c, cpp, md, json, yaml, html, css, sh). Prefer \`type\` when available.
+
+Pattern syntax: ripgrep regex. Literal \`{}\` needs escaping (\`interface\\{\\}\` matches Go \`interface{}\`). Cross-line patterns require \`multiline: true\` (e.g. \`struct \\{[\\s\\S]*?field\`).
+
+For binary files (PDF / image / audio / video / Office / archives), Grep is empty — Read instead. Grep short-circuits when \`path\` directly points at a known-binary file.
+
+For open-ended exploration ("anything about authentication?"), dispatch an AgentTool subagent.`,
   domain: 'environment',
   riskLevel: 'safe',
   concurrencySafe: true,
@@ -117,6 +131,9 @@ export const grepTool = buildTool({
     pattern: z.string().min(1),
     path: z.string().optional(),
     include: z.string().optional(),
+    type: z.string().optional(),
+    output_mode: z.enum(['content', 'files_with_matches', 'count']).optional(),
+    multiline: z.boolean().optional(),
   }),
   async call(input, context) {
     const searchPath = resolveInputPath(context.runtime.workspaceRoot, input.path)
@@ -133,7 +150,15 @@ export const grepTool = buildTool({
     }
 
     try {
-      const rgArgs = ['-n', '--no-heading', '--color', 'never']
+      const mode = input.output_mode ?? 'content'
+      const rgModeFlag = mode === 'files_with_matches' ? '-l' : mode === 'count' ? '-c' : '-n'
+      const rgArgs = ['--no-heading', '--color', 'never', rgModeFlag]
+      if (input.multiline) {
+        rgArgs.push('-U', '--multiline-dotall')
+      }
+      if (input.type) {
+        rgArgs.push('-t', input.type)
+      }
       if (input.include) {
         rgArgs.push('-g', input.include)
       }
@@ -158,7 +183,11 @@ export const grepTool = buildTool({
 
       if (isCommandNotFound(result)) {
         try {
-          const grepArgs = ['-rn']
+          // grep fallback: ripgrep missing on the sandbox. `type` and `multiline`
+          // have no clean POSIX-grep equivalents and are silently dropped here;
+          // the rg path is the canonical one. `output_mode` maps via -l / -c.
+          const grepModeFlag = mode === 'files_with_matches' ? '-rl' : mode === 'count' ? '-rc' : '-rn'
+          const grepArgs = [grepModeFlag]
           if (input.include) {
             grepArgs.push(`--include=${input.include}`)
           }

@@ -18,10 +18,27 @@ function buildAgentToolDescription(): string {
 
   lines.push(
     '',
-    'Do not use this for trivial tasks. Each subagent starts a fresh context and is relatively expensive.',
+    'When NOT to use AgentTool:',
+    '- Reading a specific file → use Read.',
+    '- Finding a specific symbol / class / function → use Grep.',
+    '- Searching 2-3 known files → use Read in parallel.',
+    '- Trivial questions answerable from your own context.',
     '',
-    'When you launch multiple agents for independent work, send them in a single assistant message with multiple AgentTool tool_use blocks so they run concurrently.',
-    'Only dispatch in parallel when the tasks operate on disjoint files, branches, working directories, or external resources — the runtime does not isolate subagent file systems or shared state, so concurrent writes to the same path will race. If two tasks could touch the same resource, run them serially in successive turns instead.',
+    'Parallelism:',
+    '- Launch independent agents as multiple AgentTool tool_use blocks in a SINGLE assistant message — they run concurrently.',
+    '- Only parallelize tasks that touch disjoint files / branches / resources. The runtime does not isolate subagent file systems; concurrent writes to the same path will race. If two tasks could touch the same resource, run them serially in successive turns instead.',
+    '',
+    'Writing the prompt — the agent has NOT seen this conversation:',
+    '- Explain what you\'re trying to accomplish and why.',
+    '- Describe what you\'ve already learned or ruled out.',
+    '- Give enough surrounding context that the agent can make judgment calls, not just follow a narrow instruction.',
+    '- If you need a short response, say so ("report in under 200 words").',
+    '- Lookups: hand over the exact pattern / path. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.',
+    '- NEVER write "based on your findings, fix the bug" or "based on the research, implement it". That pushes synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.',
+    '',
+    'Trust but verify: the agent returns a single final-text summary. Tool results from inside the agent are NOT visible to you. If the agent reports writing code, check the actual changes before reporting the task as done.',
+    '',
+    'Each subagent starts a fresh context and is relatively expensive. Don\'t use it for trivial tasks.',
   )
   return lines.join('\n')
 }
