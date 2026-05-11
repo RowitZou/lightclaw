@@ -3,7 +3,7 @@ import type { Writable } from 'node:stream'
 
 import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
-import type { Message } from '../types.js'
+import type { Message, UserContentBlock } from '../types.js'
 
 export type CommandVisibility = 'all' | 'admin' | 'user'
 
@@ -29,6 +29,16 @@ export type ReplContext = {
   // 'lark_md' so the body renders as a markdown card instead of a plain
   // notice. No-op in terminal mode.
   setSlashBodyFormat?(format: SlashBodyFormat): void
+  // Channel-only: the fully-formed user-message content the channel runner
+  // built for this turn — already merged with the `[senderName]` prefix,
+  // the `<quoted-message>` / `<quoted-message-unavailable>` block, the
+  // `[媒体附件]` path breadcrumb, and any inline content blocks (image /
+  // pdf bytes) that survived the inline encoder. Slash handlers that spawn
+  // a sub-session — /fresh — should forward this verbatim so the sub
+  // agent receives the same context the main session would have seen
+  // (including reply-quoted attachments). Undefined in terminal mode and
+  // for fast-path / synthetic slash entries.
+  channelUserMessageContent?: string | UserContentBlock[]
 }
 
 export type ReplCommandResult = 'continue' | 'exit'

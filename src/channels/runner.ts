@@ -67,7 +67,7 @@ import {
   runWithSessionContext,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
-import type { SessionMeta } from '../types.js'
+import type { SessionMeta, UserContentBlock } from '../types.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
 import {
@@ -531,6 +531,21 @@ export class ChannelRunner {
           materializedAttachment,
           inlineEncoding.fallbackPaths,
         )
+        // Pre-shape the user message content the same way the main query path
+        // will (line ~575): string when nothing's inline, content-block array
+        // when there are inline image / pdf bytes. Threaded into the slash
+        // dispatcher so /fresh can forward the full quote + attachment
+        // context into its sub-session instead of seeing only the raw
+        // `/fresh <prompt>` arg text.
+        const prebuiltUserMessageContent: string | UserContentBlock[] =
+          inlineEncoding.inlineBlocks.length > 0
+            ? [
+                ...(userText.length > 0
+                  ? [{ type: 'text' as const, text: userText }]
+                  : []),
+                ...inlineEncoding.inlineBlocks,
+              ]
+            : userText
         const slash = await dispatchChannelSlash(effectiveMessage.text, {
           config: appConfig,
           sessionId,
@@ -541,6 +556,7 @@ export class ChannelRunner {
           getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools('feishu')),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
+          channelUserMessageContent: prebuiltUserMessageContent,
         })
         if (slash.handled) {
           if (!sessionId.startsWith('fresh-')) {

@@ -2,7 +2,7 @@ import type { Writable } from 'node:stream'
 
 import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
-import type { Message } from '../types.js'
+import type { Message, UserContentBlock } from '../types.js'
 import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './builtin.js'
 import type { ReplContext, SlashBodyFormat } from './registry.js'
 
@@ -29,6 +29,11 @@ export async function dispatchChannelSlash(
     getActiveTools(): Tool[]
     setActiveTools(tools: Tool[]): void
     persistMeta(messageCount: number): Promise<void>
+    // Pre-formatted user message content (text + inline blocks + quote /
+    // attachment breadcrumbs). Threaded into ReplContext so slash handlers
+    // that spawn sub-sessions (/fresh) can forward the full channel
+    // context instead of falling back to the raw `/fresh <prompt>` args.
+    channelUserMessageContent?: string | UserContentBlock[]
   },
 ): Promise<ChannelSlashResult> {
   const trimmed = text.trimStart()
@@ -78,6 +83,7 @@ export async function dispatchChannelSlash(
     setSlashBodyFormat(format: SlashBodyFormat) {
       bodyFormat = format
     },
+    channelUserMessageContent: input.channelUserMessageContent,
   }
 
   const result = await registry.dispatch(trimmed, ctx)

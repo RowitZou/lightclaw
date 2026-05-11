@@ -70,5 +70,23 @@ describe('artifact extractor registry', () => {
     assert.equal(result.text, stdout)
     assert.equal(result.truncated, false)
     assert.equal(result.metadata?.extractor, 'pdftotext')
+    assert.equal(result.metadata?.pageRange, undefined, 'no pageRange metadata when range was not requested')
+  })
+
+  it('PDF extraction passes -f N -l M to pdftotext when pdfPageRange is set + records the range in metadata', async () => {
+    let receivedCommand = ''
+    const result = await extractArtifactText({
+      buffer: Buffer.from('%PDF-1.7\n'),
+      filePath: 'paper.pdf',
+      maxChars: 100,
+      pdfPageRange: { firstPage: 31, lastPage: 33 },
+      exec: async (params) => {
+        receivedCommand = params.command
+        return { stdout: 'page 31\n\fpage 32\n\fpage 33\n', stderr: '', exitCode: 0 }
+      },
+    })
+    assert.equal(result.format, 'pdf')
+    assert.match(receivedCommand, /-f 31 -l 33/, 'pdftotext command must include -f/-l from pdfPageRange')
+    assert.equal(result.metadata?.pageRange, '31-33', 'metadata must record the page range so the agent can confirm what it got')
   })
 })

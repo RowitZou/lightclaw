@@ -8,7 +8,7 @@ import {
   runWithSessionContext,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
-import type { Message } from '../types.js'
+import type { Message, UserContentBlock } from '../types.js'
 
 /**
  * /fresh runs an ephemeral one-shot session: a synthetic message list, no
@@ -28,10 +28,20 @@ export async function runFresh(args: {
   config: LightClawConfig
   prompt: string
   isChannel: boolean
+  /** Fully-shaped user message content built by the channel runner — text
+   *  with sender prefix + `<quoted-message>` (or `<quoted-message-unavailable>`)
+   *  + `[媒体附件]` path breadcrumb, plus any inline content blocks. When
+   *  supplied, used verbatim as the synthetic user message so the fresh
+   *  sub-session inherits the original reply-quote + attachment context.
+   *  When undefined (terminal mode or no channel pre-formatting), we fall
+   *  back to the plain `prompt` string. */
+  channelUserMessageContent?: string | UserContentBlock[]
 }): Promise<string> {
-  const { config, prompt, isChannel } = args
+  const { config, prompt, isChannel, channelUserMessageContent } = args
   beginQuery()
-  const messages: Message[] = [createUserMessage(prompt, null)]
+  const userContent: string | UserContentBlock[] =
+    channelUserMessageContent ?? prompt
+  const messages: Message[] = [createUserMessage(userContent, null)]
   const tools = getEnabledTools(
     getProvider(config),
     getAllTools(isChannel ? 'feishu' : 'terminal'),
