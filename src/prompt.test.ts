@@ -14,7 +14,7 @@ describe('deferred tool system reminder', () => {
     const rendered = renderSystemPrompt(template, [], {
       tools: [fakeTool('Read')],
       deferredTools: [fakeTool('mcp__github__read_file')],
-      discoveredTools: new Set(),
+      discoveredTools: new Map(),
     })
     assert.match(rendered, /^- Read$/m)
     assert.match(rendered, /<system-reminder>/)
@@ -25,7 +25,7 @@ describe('deferred tool system reminder', () => {
     const rendered = renderSystemPrompt(template, [], {
       tools: [fakeTool('Read'), fakeTool('mcp__github__read_file')],
       deferredTools: [fakeTool('mcp__github__read_file')],
-      discoveredTools: new Set(['mcp__github__read_file']),
+      discoveredTools: new Map([['mcp__github__read_file', 1]]),
     })
     assert.doesNotMatch(rendered, /<system-reminder>/)
   })

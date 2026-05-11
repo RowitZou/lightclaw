@@ -108,6 +108,7 @@ function isCommandNotFound(result: { stderr: string; exitCode: number }): boolea
 
 export const grepTool = buildTool({
   name: 'Grep',
+  alwaysLoad: true,
   description: `Search file contents with ripgrep.
 
 ALWAYS use Grep for content search. NEVER run \`grep\` or \`rg\` via Bash — Grep is permission-scoped, sandbox-aware, and returns structured results that survive prompt compaction.

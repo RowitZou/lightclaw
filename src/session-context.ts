@@ -46,7 +46,17 @@ export type SessionContext = {
   channelFileSender: ChannelFileSender | null
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
-  discoveredTools: Set<string>
+  /** name → turn index of last use (ToolSearch match OR actual tool_use).
+   *  Map preserves insertion order for LRU cap; the value lets the per-turn
+   *  catalog builder drop entries unused for `tools.discoveredToolsTtlTurns`
+   *  turns. Session-scoped; daemon restart / `/fresh` / fork all wipe it. */
+  discoveredTools: Map<string, number>
+  /** Monotone counter incremented at the start of each query-loop turn.
+   *  Survives across multiple `query()` invocations within the same channel
+   *  session (one user message = one query() = one or more turns; the
+   *  channel runner shares the SessionContext, so the counter accumulates).
+   *  Used by `markDiscovered` / `pruneStaleDiscoveredTools` for TTL eviction. */
+  turnCounter: number
   runtime?: Runtime
   isBackgroundTask?: boolean
   taskAllowedTools?: string[]
@@ -137,7 +147,8 @@ export function createSessionContext(input: {
     channelFileSender: input.channelFileSender ?? null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
-    discoveredTools: new Set(),
+    discoveredTools: new Map(),
+    turnCounter: 0,
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
     taskAllowedTools: input.taskAllowedTools,
@@ -178,7 +189,8 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     channelFileSender: null,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
-    discoveredTools: new Set(),
+    discoveredTools: new Map(),
+    turnCounter: 0,
     runtime: undefined,
     ...input,
   }

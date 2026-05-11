@@ -7,6 +7,7 @@ import { buildTool } from '../tool.js'
 
 export const memoryWriteTool = buildTool({
   name: 'MemoryWrite',
+  shouldDefer: true,
   description: `Create or update a persistent auto-memory entry for this user.
 
 Use when the user explicitly says "记住" / "remember this" / "from now on", OR when the user has corrected your approach in a way that should apply to future sessions, OR when you've learned a non-obvious project fact / convention.

@@ -12,6 +12,7 @@ const todoItemSchema = z.object({
 
 export const todoWriteTool = buildTool({
   name: 'TodoWrite',
+  alwaysLoad: true,
   description: [
     'Maintain a structured task list for the current session. The user reads this in real time to track progress.',
     '',

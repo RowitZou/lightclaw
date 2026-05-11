@@ -14,6 +14,7 @@ const inputSchema = z.object({
 
 export const sendFileTool = buildTool({
   name: 'SendFile',
+  shouldDefer: true,
   description: `Send a file from this workspace to the active channel conversation. Currently only Feishu channel.
 
 Use when:

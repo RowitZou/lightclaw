@@ -63,7 +63,7 @@ import {
   buildTurnToolCatalog,
   findDeferredTool,
 } from './tools/deferred-loading.js'
-import { markDiscovered } from './tools/discovered-tools.js'
+import { markDiscovered, pruneStaleDiscoveredTools } from './tools/discovered-tools.js'
 import { isDeferredTool } from './tools/is-deferred.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
@@ -494,7 +494,7 @@ export async function query(params: QueryParams): Promise<{
     const sessionCtx = getCurrentSessionContext()
     const catalog = buildTurnToolCatalog({
       allTools: params.tools,
-      discoveredTools: sessionCtx?.discoveredTools ?? new Set(),
+      discoveredTools: sessionCtx?.discoveredTools ?? new Map(),
       config,
     })
     const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos(), {
@@ -576,11 +576,24 @@ export async function query(params: QueryParams): Promise<{
 
     let stopEvent: StopEvent | undefined
     const sessionCtx = getCurrentSessionContext()
+    // Session-scoped turn counter drives discoveredTools TTL eviction.
+    // Bump BEFORE prune so the cutoff is current; subagent mode skips
+    // (forked agents get fresh empty Map per `runForkedAgent` and don't
+    // need TTL within their short lifetime). systemPrompt-override callers
+    // (custom prompt) also skip — they don't use the deferred path.
+    if (sessionCtx && mode !== 'subagent' && !params.systemPrompt) {
+      sessionCtx.turnCounter += 1
+      pruneStaleDiscoveredTools(
+        sessionCtx.discoveredTools,
+        sessionCtx.turnCounter,
+        config.tools.discoveredToolsTtlTurns,
+      )
+    }
     const turnCatalog = params.systemPrompt
       ? { tools: params.tools, deferred: [], deferredEnabled: false }
       : buildTurnToolCatalog({
           allTools: params.tools,
-          discoveredTools: sessionCtx?.discoveredTools ?? new Set(),
+          discoveredTools: sessionCtx?.discoveredTools ?? new Map(),
           config,
         })
     dispatchCtx.tools = turnCatalog.tools
@@ -980,6 +993,7 @@ async function dispatchToolCall(
         markDiscovered(
           current.discoveredTools,
           tool.name,
+          current.turnCounter,
           ctx.config.tools.discoveredToolsMaxSize,
         )
       }
@@ -999,6 +1013,7 @@ async function dispatchToolCall(
         markDiscovered(
           current.discoveredTools,
           name,
+          current.turnCounter,
           ctx.config.tools.discoveredToolsMaxSize,
         )
       },

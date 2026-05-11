@@ -4,6 +4,7 @@ import { buildTool } from '../tool.js'
 
 export const globTool = buildTool({
   name: 'Glob',
+  alwaysLoad: true,
   description: 'Find files by glob pattern.',
   domain: 'environment',
   riskLevel: 'safe',

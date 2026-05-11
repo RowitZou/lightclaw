@@ -47,6 +47,7 @@ function isValidPermissionRulePattern(value: string): boolean {
 
 export const backgroundTaskTool = buildTool({
   name: 'BackgroundTask',
+  shouldDefer: true,
   description: [
     'Schedule a task to run at a future time, once or repeatedly. Returns immediately — the result lands later via a card or a wake-up.',
     '',
@@ -144,6 +145,7 @@ export const backgroundTaskTool = buildTool({
 
 export const listBackgroundTasksTool = buildTool({
   name: 'ListBackgroundTasks',
+  shouldDefer: true,
   description: `List the user's scheduled background tasks (active + recently failed).
 
 Use when the user asks "what reminders / scheduled tasks do I have", or before CancelBackgroundTask / UpdateBackgroundTask so you know the exact task id to target. Returns each task's id, label, schedule shape, next run time, and notify_to/notify_on.`,
@@ -178,6 +180,7 @@ Use when the user asks "what reminders / scheduled tasks do I have", or before C
 
 export const cancelBackgroundTaskTool = buildTool({
   name: 'CancelBackgroundTask',
+  shouldDefer: true,
   description: `Cancel a scheduled background task by id. An already in-flight fire is allowed to finish; only future runs are stopped.
 
 Use when the user says "取消那个提醒" / "stop the daily X" / "don't run that anymore". Run ListBackgroundTasks first if you don't have the exact task id. To temporarily disable rather than delete, use UpdateBackgroundTask with \`enabled: false\` (preserves history; can be re-enabled later).`,
@@ -201,6 +204,7 @@ Use when the user says "取消那个提醒" / "stop the daily X" / "don't run th
 
 export const updateBackgroundTaskTool = buildTool({
   name: 'UpdateBackgroundTask',
+  shouldDefer: true,
   description: `Update schedule, label, enabled flag, notification settings, or allowed_tools for an existing background task.
 
 Use when the user adjusts an existing task: "改成每天 9am" (update schedule), "暂停那个提醒" (set enabled: false), "把这个改成静默执行" (update notify_to to 'agent'), or to extend allowed_tools after a permission failure.

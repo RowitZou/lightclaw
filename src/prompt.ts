@@ -75,7 +75,7 @@ function formatCurrentDateLine(now: Date = new Date()): string {
 export type SystemPromptRenderOptions = {
   tools: Tool[]
   deferredTools?: Tool[]
-  discoveredTools?: ReadonlySet<string>
+  discoveredTools?: ReadonlyMap<string, number>
 }
 
 function formatSkillsSection(): string {
@@ -346,7 +346,7 @@ export function renderSystemPrompt(
   return appendDeferredToolsReminder(
     base,
     options?.deferredTools ?? [],
-    options?.discoveredTools ?? new Set(),
+    options?.discoveredTools ?? new Map(),
   )
 }
 
@@ -388,7 +388,7 @@ export function buildSubagentPrompt(
 function appendDeferredToolsReminder(
   prompt: string,
   deferredTools: readonly Tool[],
-  discoveredTools: ReadonlySet<string>,
+  discoveredTools: ReadonlyMap<string, number>,
 ): string {
   const undiscovered = deferredTools.filter(tool => !discoveredTools.has(tool.name))
   if (undiscovered.length === 0) {

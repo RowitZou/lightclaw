@@ -184,6 +184,14 @@ export type ToolsConfig = {
    *  long-running channel sessions). Default 30 — about the working-set
    *  size most users actually reach for in a single conversation. */
   discoveredToolsMaxSize: number
+  /** Turn-based TTL on `SessionContext.discoveredTools`. The per-turn
+   *  catalog builder drops tools whose `lastUsedTurn < currentTurn - ttl`.
+   *  Default 20 turns (~ one /compact cycle). `0` disables TTL so only the
+   *  cap bounds growth (V1.5 behavior). With Phase 31 default
+   *  `deferredLoading: 'always'` + most tools shouldDefer, TTL is what
+   *  prevents the steady state from collapsing back to "all tools inline"
+   *  once the model has touched everything once. */
+  discoveredToolsTtlTurns: number
 }
 
 /** Endpoint backed by a static API key sent as Bearer auth. */
@@ -1108,7 +1116,7 @@ export function getConfig(): LightClawConfig {
       deferredLoading:
         parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??
         parseDeferredLoadingMode(fileConfig.tools?.deferredLoading) ??
-        'auto',
+        'always',
       deferredLoadingThreshold: Math.max(
         1,
         Math.floor(
@@ -1123,6 +1131,14 @@ export function getConfig(): LightClawConfig {
           parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE) ??
           fileConfig.tools?.discoveredToolsMaxSize ??
           30,
+        ),
+      ),
+      discoveredToolsTtlTurns: Math.max(
+        0,
+        Math.floor(
+          parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_TTL_TURNS) ??
+          fileConfig.tools?.discoveredToolsTtlTurns ??
+          20,
         ),
       ),
     },

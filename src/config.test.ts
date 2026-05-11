@@ -419,14 +419,20 @@ describe('config: endpoints + models registry', () => {
     })
   })
 
-  it('defaults deferred tool loading to auto at threshold 30', () => {
+  it('defaults deferred tool loading to always with TTL 20 + cap 30', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: { opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
     })
     const cfg = getConfig()
-    assert.equal(cfg.tools.deferredLoading, 'auto')
+    // Phase 31 flipped the default to 'always' to keep the inline catalog
+    // tight (only alwaysLoad-tagged tools inline) regardless of total tool
+    // count. The threshold field still exists for operators who switch
+    // back to 'auto'.
+    assert.equal(cfg.tools.deferredLoading, 'always')
     assert.equal(cfg.tools.deferredLoadingThreshold, 30)
+    assert.equal(cfg.tools.discoveredToolsMaxSize, 30)
+    assert.equal(cfg.tools.discoveredToolsTtlTurns, 20)
   })
 
   it('parses deferred tool loading overrides from config', () => {

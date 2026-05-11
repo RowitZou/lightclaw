@@ -28,6 +28,7 @@ function formatCommandOutput(stdout: string, stderr: string): string {
 
 export const bashTool = buildTool({
   name: 'Bash',
+  alwaysLoad: true,
   description: `Execute a shell command in the sandbox runtime. The working directory persists between calls; shell state (env vars, functions, aliases) does not.
 
 IMPORTANT — prefer dedicated tools when one fits. They have permission scoping, structured results, and prompt-cache friendliness that Bash stdout loses:

@@ -36,6 +36,7 @@ export function _setWebFetchSummarizerForTests(fn: SummarizeFn | null): void {
 
 export const webFetchTool = buildTool({
   name: 'WebFetch',
+  shouldDefer: true,
   description: `Fetch content from a URL.
 
 Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — pass \`prompt\` for a focused sub-LLM summary of the full page, or raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more bytes from the helper.
