@@ -92,13 +92,14 @@ function formatSkillsSection(): string {
     .join('\n')
 }
 
-// Tool catalog: name + 1-line description only. Full input schema travels via
-// the API native `tools` parameter; duplicating it in the prompt wastes tokens
-// and breaks the cache on any schema tweak.
+// Tool catalog: name only. Full description / parameter schema travels via
+// the native tools API `description` field on the provider tools array (see
+// provider/{anthropic,openai,openai-auth}.ts), where it is cache-stable
+// against unrelated prompt changes. Duplicating it in the prompt catalog
+// breaks the prefix cache on any description tweak and offers the model
+// nothing it doesn't already see in the tools array.
 function formatToolCatalog(tools: Tool[]): string {
-  return tools
-    .map(tool => `- ${tool.name}: ${tool.description}`)
-    .join('\n')
+  return tools.map(tool => `- ${tool.name}`).join('\n')
 }
 
 function formatTodoSection(todos: TodoItem[]): string {
@@ -323,7 +324,7 @@ export async function buildSystemPromptTemplate(
     '- Acknowledge the situation to the user (sandbox is being prepared, or has failed and admin has been notified) and offer to continue with chat-only assistance — discussion, planning, explaining concepts.',
     '- Do not attempt environment-domain tools again until the user explicitly asks you to retry.',
     '',
-    'Available tools:',
+    'Available tools (full schemas / usage live in the tools API description field):',
   ]
 
   return {
@@ -377,7 +378,7 @@ export function buildSubagentPrompt(
     '- Use tools when the answer depends on filesystem or shell state.',
     '- Report concise findings to the parent agent.',
     '',
-    'Available tools:',
+    'Available tools (full schemas / usage live in the tools API description field):',
     toolDescriptions,
   )
 

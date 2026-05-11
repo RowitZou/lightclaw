@@ -16,7 +16,7 @@ describe('deferred tool system reminder', () => {
       deferredTools: [fakeTool('mcp__github__read_file')],
       discoveredTools: new Set(),
     })
-    assert.match(rendered, /- Read: Read description/)
+    assert.match(rendered, /^- Read$/m)
     assert.match(rendered, /<system-reminder>/)
     assert.match(rendered, /mcp__github__read_file/)
   })
