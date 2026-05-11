@@ -592,6 +592,17 @@ export class ChannelRunner {
         // Without this guard the user would get every intermediate body
         // twice (streamed once, then re-sent as the accumulated final).
         let streamedAtLeastOnce = false
+        // Reply parent message anchor. Starts at the turn-start user message
+        // (effectiveMessage). Each time interjectionDrain pulls new entries
+        // we move the anchor to the most recent (last in the FIFO drain
+        // array) interjection's messageId, so Feishu's reply quote in the
+        // next onAssistantTurn-driven sendReply threads off "the user's
+        // latest spoken input" instead of the turn opener. Best-effort UX
+        // anchor — when one assistant turn covers BOTH original task and
+        // interjection content, the UI quotes only the interjection (chosen
+        // as the timeline-recent reference, matching Slack / Discord bot
+        // conventions). See Phase 27 notes.
+        let replyTargetMessage: NormalizedChannelMessage = effectiveMessage
         // Capability autopilot state. On a provider response that pattern-
         // matches "this kind is not supported" (image/pdf/audio/video), flip
         // the cached flag for endpoint × upstreamModel and rebuild the user
@@ -609,6 +620,11 @@ export class ChannelRunner {
           // Reset the streaming guard on each attempt; a retried query
           // re-emits the same turns from scratch.
           streamedAtLeastOnce = false
+          // Reset the reply anchor on each retry: any interjections drained
+          // in the prior failed attempt were consumed from the queue and the
+          // messages slice was rolled back, so the retry's model output
+          // again corresponds to effectiveMessage only.
+          replyTargetMessage = effectiveMessage
           try {
             result = await query({
               config: appConfig,
@@ -627,9 +643,23 @@ export class ChannelRunner {
               // (see streamedAtLeastOnce below).
               onAssistantTurn: async (text: string) => {
                 streamedAtLeastOnce = true
-                await this.sendReply(effectiveMessage, text)
+                await this.sendReply(replyTargetMessage, text)
               },
               interjectionDrain: async () => {
+                // Branch and fresh sessions run on independent sessionIds
+                // (branch-<canonical>-<uuid> / fresh-<uuid>) off the main
+                // session. Interjections queued under mainSessionId belong
+                // to the main session's next turn — they must NOT be
+                // drained by a fork. Without this guard, a branch query
+                // running concurrently with a busy main DM steals the
+                // main's queued interjections and silently injects them
+                // into the branch's prompt (observed 2026-05-11 dogfood:
+                // a "/b 查一下上海的天气" turn pulled the DM's
+                // "这个图你能看见吗" interjection and the branch model
+                // started talking about images the user never sent it).
+                if (branchRequest || freshSessionId) {
+                  return []
+                }
                 // Drain returns the queued entries; we then materialize any
                 // attached media so the interjection prompt block can render
                 // path breadcrumbs the model can Read. Materialization is
@@ -667,6 +697,22 @@ export class ChannelRunner {
                     process.stderr.write(
                       `${this.strategy.channelId}: interjection materialize failed for ${entry.messageId}: ${error instanceof Error ? error.message : String(error)}\n`,
                     )
+                  }
+                }
+                // Advance the reply anchor to the most recent interjection
+                // (last in FIFO order). The next assistant turn fired by
+                // query.ts will reply-quote that message in Feishu UI, so
+                // the user reads the bot's response as the next beat after
+                // their latest input rather than after the turn opener.
+                // Severally interjections drained together collapse to the
+                // single most-recent anchor — see Phase 27 notes for the
+                // "timeline anchor, not strict semantic mapping" rationale.
+                if (entries.length > 0) {
+                  const latest = entries[entries.length - 1]!
+                  replyTargetMessage = {
+                    ...effectiveMessage,
+                    messageId: latest.messageId,
+                    senderOpenId: latest.senderOpenId,
                   }
                 }
                 return entries
@@ -856,9 +902,12 @@ export class ChannelRunner {
         // saw it — sending result.assistantText here would just duplicate.
         // Only fall back to a final single-shot reply when nothing was
         // streamed (e.g. the model produced zero non-empty turns and we'd
-        // otherwise leave the user in silence).
+        // otherwise leave the user in silence). Use replyTargetMessage so a
+        // turn that ended on interjections (drained but model produced no
+        // text in between) still anchors the fallback reply on the user's
+        // latest input rather than the turn opener.
         if (!streamedAtLeastOnce) {
-          await this.sendReply(effectiveMessage, result.assistantText || t('fresh.empty'))
+          await this.sendReply(replyTargetMessage, result.assistantText || t('fresh.empty'))
         }
         })
       } catch (error) {
