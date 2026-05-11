@@ -71,7 +71,11 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
 
       const client = createFeishuClient(config)
       const botSelf = await fetchBotSelfInfo(client, config.requireMention)
-      const parentFetcher = new ParentMessageFetcher(client)
+      const parentFetcher = new ParentMessageFetcher(client, {
+        ...(config.parentFetchTimeoutMs > 0
+          ? { fetchTimeoutMs: config.parentFetchTimeoutMs }
+          : {}),
+      })
       const sender = new FeishuSender(client, config)
 
       // Persistent pending-notice queue + drainer. Catches the >60s outage
@@ -175,6 +179,16 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
                 ...(parent.truncated ? { truncated: true } : {}),
               }
             }
+          } else {
+            // Parent fetch failed (timeout / 5xx / parent gone / scope denied
+            // / empty body). Without a sentinel here the runner would render a
+            // plain user text and the model would see no trace of the quote
+            // the user actually attached — confusing the user when the model
+            // ignores or hallucinates the quoted content. The marker tells
+            // the model "a quote existed but harness could not load it" and
+            // suggests asking the user to retry / re-send.
+            const failure = parentFetcher.getLastFailure(raw.parentId)
+            message.quoteUnavailable = failure ?? { permanent: false, reason: 'unknown' }
           }
         }
         if (pendingAttachments.length > 0) {

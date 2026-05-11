@@ -21,6 +21,7 @@ const baseConfig: FeishuChannelConfig = {
   httpTimeoutMs: 30_000,
   maxBodyBytes: 1024 * 1024,
   mediaEnabled: true,
+  parentFetchTimeoutMs: 8000,
   typingReaction: false,
   inboxAging: { enabled: false, ttlDays: 7, intervalMinutes: 60 },
   webhook: {

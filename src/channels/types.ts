@@ -51,6 +51,14 @@ export type NormalizedChannelMessage = {
   parentId?: string
   /** LLM-facing summary of the message being replied to, when available. */
   quotedMessage?: QuotedMessageContext
+  /** Set when the channel saw a `parentId` (i.e. user did reply-quote
+   *  something) but the parent-message fetch did not yield a usable
+   *  `quotedMessage` (timeout, transient network error, parent gone, scope
+   *  denied, empty body). The runner renders this into a sentinel
+   *  `<quoted-message-unavailable>` block so the model knows a quote was
+   *  attempted but its content is missing — instead of silently dropping
+   *  the cue and risking the model hallucinating what was quoted. */
+  quoteUnavailable?: { permanent: boolean; reason: string }
   /** Feishu-only sidecar used for mention gating and sender-name hints. */
   feishuMentions?: readonly FeishuMention[]
   text: string
@@ -146,6 +154,13 @@ export type FeishuChannelConfig = {
   httpTimeoutMs: number
   maxBodyBytes: number
   mediaEnabled: boolean
+  // Cap for the `im.v1.message.get` call ParentMessageFetcher makes when an
+  // inbound message carries `parent_id` (reply-quote). Default 8000ms is
+  // generous enough for slow corporate proxy chains; on timeout / network
+  // failure the runner falls back to a sentinel `<quoted-message-unavailable>`
+  // block so the model is told the quote could not be loaded instead of
+  // silently losing it. Set to 0 to disable the cap (not recommended).
+  parentFetchTimeoutMs: number
   // While a query runs, add a "Typing" emoji reaction to the user's
   // incoming message so they see a visible "we got it, working" signal
   // instead of silence. Removed when the query completes or fails. Default

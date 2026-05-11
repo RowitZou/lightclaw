@@ -18,11 +18,23 @@ export type ParentFetcherOptions = {
   fetchTimeoutMs?: number
 }
 
+export type ParentFetchFailure = {
+  permanent: boolean
+  reason: string
+}
+
 export class ParentMessageFetcher {
   private readonly client: FeishuClient
   private readonly opts: Required<ParentFetcherOptions>
   private readonly cache: TinyLru<string, ParsedParent | null>
   private readonly inFlight = new Map<string, Promise<ParsedParent | null>>()
+  // Side-channel for the most recent fetch failure per parentId. Callers
+  // check after `fetch()` returns null to distinguish "really empty" from
+  // "fetch failed" — the latter renders a `<quoted-message-unavailable>`
+  // marker into the user message so the model knows a quote was attempted
+  // but its content is missing instead of silently dropping the cue.
+  // Sized 1:1 with the parent cache so failed parentIds age out together.
+  private readonly lastFailure: TinyLru<string, ParentFetchFailure>
 
   constructor(client: FeishuClient, opts: ParentFetcherOptions = {}) {
     this.client = client
@@ -30,9 +42,18 @@ export class ParentMessageFetcher {
       cacheSize: opts.cacheSize ?? 32,
       maxTextChars: opts.maxTextChars ?? 2000,
       maxMediaKeys: opts.maxMediaKeys ?? 8,
-      fetchTimeoutMs: opts.fetchTimeoutMs ?? 3000,
+      fetchTimeoutMs: opts.fetchTimeoutMs ?? 8000,
     }
     this.cache = new TinyLru(this.opts.cacheSize)
+    this.lastFailure = new TinyLru(this.opts.cacheSize)
+  }
+
+  /** Returns the most recent `doFetch` failure for `parentId`, or null if
+   *  the last attempt succeeded or never happened. Consumed by the channel
+   *  adapter after `fetch()` returns null to decide between "no quote at
+   *  all" and "quote unavailable — tell the model". */
+  getLastFailure(parentId: string): ParentFetchFailure | null {
+    return this.lastFailure.get(parentId) ?? null
   }
 
   async fetch(parentId: string, botStripId?: string): Promise<ParsedParent | null> {
@@ -60,6 +81,7 @@ export class ParentMessageFetcher {
       if (!item) {
         process.stderr.write(`feishu parent-fetch: empty response parentId=${parentId}\n`)
         this.cache.set(parentId, null)
+        this.lastFailure.set(parentId, { permanent: true, reason: 'empty response from im.message.get' })
         return null
       }
 
@@ -82,6 +104,7 @@ export class ParentMessageFetcher {
         ...(textResult.truncated ? { truncated: true } : {}),
       }
       this.cache.set(parentId, result)
+      this.lastFailure.delete(parentId)
       return result
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -96,6 +119,7 @@ export class ParentMessageFetcher {
       if (permanent) {
         this.cache.set(parentId, null)
       }
+      this.lastFailure.set(parentId, { permanent, reason: detail })
       return null
     }
   }
@@ -142,6 +166,10 @@ class TinyLru<K, V> {
       }
       this.data.delete(oldest)
     }
+  }
+
+  delete(key: K): void {
+    this.data.delete(key)
   }
 }
 
