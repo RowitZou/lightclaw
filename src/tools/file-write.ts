@@ -12,6 +12,7 @@ function resolveInputPath(cwd: string, inputPath: string): string {
 
 export const fileWriteTool = buildTool({
   name: 'Write',
+  alwaysLoad: true,
   description: `Create or overwrite a file with the provided content.
 
 Usage:

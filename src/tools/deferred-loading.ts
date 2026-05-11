@@ -12,7 +12,7 @@ export type TurnToolCatalog = {
 
 export function buildTurnToolCatalog(input: {
   allTools: readonly Tool[]
-  discoveredTools: ReadonlySet<string>
+  discoveredTools: ReadonlyMap<string, number>
   config: LightClawConfig
 }): TurnToolCatalog {
   const { allTools, discoveredTools, config } = input
@@ -36,7 +36,7 @@ export function buildTurnToolCatalog(input: {
 
 export function getUndiscoveredDeferredTools(
   deferred: readonly Tool[],
-  discoveredTools: ReadonlySet<string>,
+  discoveredTools: ReadonlyMap<string, number>,
 ): Tool[] {
   return deferred.filter(tool => !discoveredTools.has(tool.name))
 }

@@ -1,45 +1,79 @@
 /**
- * Per-session `discoveredTools` is a bounded LRU on top of `Set<string>`.
+ * Per-session `discoveredTools` is a bounded LRU **with turn-based TTL**.
  *
- * JavaScript Set preserves insertion order, so re-inserting an existing entry
- * (delete + add) moves it to the most-recently-used position; the front of
- * the iteration is therefore the least-recently-used candidate for eviction.
- * When `maxSize` is `0` the cap is disabled and the set grows unbounded
- * (legacy V1 behavior).
+ * Map<name, lastUsedTurn> rather than Set<string>:
+ * - JavaScript Map preserves insertion order, so re-inserting an existing
+ *   entry (delete + set) moves it to the most-recently-used position; the
+ *   front of the iteration is the LRU candidate for cap eviction.
+ * - The value (`lastUsedTurn`) records which turn last touched this tool —
+ *   either via `ToolSearch` match or actual `tool_use`. The per-turn catalog
+ *   builder uses this to drop tools that have gone untouched for more than
+ *   `tools.discoveredToolsTtlTurns` turns, even when the cap is far from full.
  *
- * Why bounded: a long-running channel session (Phase 26 `feishu:dm:<chatId>`
- * lives indefinitely) used to grow `discoveredTools` monotonically every
- * time the model called `ToolSearch`. After enough turns the per-turn tools
- * array carried tens of MCP schemas the user no longer needed, defeating
- * the whole point of deferred loading. The cap keeps the working set
- * tight; if the model needs an evicted tool again, `ToolSearch` is one
- * round-trip away.
+ * Two eviction paths coexist:
+ * - **Cap (LRU)**: `set.size > maxSize` after insertion → evict the front.
+ *   Default cap 30 keeps the array bounded for repeatedly-rediscovering
+ *   workloads.
+ * - **TTL (turn-based)**: catalog builder calls `pruneStaleDiscoveredTools`
+ *   each turn; tools with `currentTurn - lastUsedTurn > ttl` drop out even
+ *   if cap is not hit. Default TTL 20 — about one /compact cycle's worth.
  *
- * Why LRU and not turn-based TTL: in V1.5 a hard cap is enough for the
- * stated concern (array size). A turn-counter / Map<name, lastTurn> shape
- * would let unused tools fade out *before* the cap is hit, but at the cost
- * of a SessionContext shape change and more frequent provider tools-array
- * churn (which costs Anthropic prompt-cache hits). Defer that to V2 if
- * dogfood shows even a tight cap holds tools the user has clearly moved on
- * from — the on-disk shape does not change between V1.5 and a future
- * Map-based variant.
+ * Why this matters: under Phase 31 default `deferredLoading: 'always'`, the
+ * model walks through deferred tools as it explores; without TTL, a power
+ * user's long DM session steady-state ends up with ALL deferred tools
+ * promoted to inline, defeating the whole point of "only the basics inline".
+ * TTL re-deferred unused tools so the inline-vs-deferred split stays honest
+ * over the session lifetime.
+ *
+ * Settings:
+ * - `tools.discoveredToolsMaxSize` (default 30, 0 disables cap)
+ * - `tools.discoveredToolsTtlTurns` (default 20, 0 disables TTL)
+ *
+ * Daemon restart / `/fresh` / fork wipe the whole Map. `turnCounter` is also
+ * session-scoped (lives on SessionContext, incremented at every query-loop
+ * turn) so it doesn't drift across daemon restarts.
  */
 export function markDiscovered(
-  set: Set<string>,
+  map: Map<string, number>,
   name: string,
+  currentTurn: number,
   maxSize: number,
 ): void {
-  // Promote to MRU regardless of cap — even with cap=0 we still want
-  // re-discovered entries at the back so a future cap-tightening behaves
-  // sanely without rebuilding state.
-  if (set.has(name)) {
-    set.delete(name)
+  // Promote to MRU regardless of cap. Map.set on an existing key keeps the
+  // original insertion order (counter-intuitive vs Set), so we explicitly
+  // delete + set to move the key to the back.
+  if (map.has(name)) {
+    map.delete(name)
   }
-  set.add(name)
-  if (maxSize > 0 && set.size > maxSize) {
-    const oldest = set.values().next().value
+  map.set(name, currentTurn)
+  if (maxSize > 0 && map.size > maxSize) {
+    const oldest = map.keys().next().value
     if (oldest !== undefined) {
-      set.delete(oldest)
+      map.delete(oldest)
+    }
+  }
+}
+
+/**
+ * Drop entries unused for more than `ttlTurns` turns. Mutates the map.
+ * No-op when ttlTurns <= 0 (TTL disabled) or map is empty.
+ *
+ * Called by the per-turn catalog builder before computing the tools array,
+ * so the next provider call sees a tools array that reflects the trim.
+ * The trim is monotone within a turn but invalidates the Anthropic
+ * prompt-cache prefix when an entry actually drops — this is the explicit
+ * trade-off vs the pure-cap V1.5: cache churn for steady-state token saving.
+ */
+export function pruneStaleDiscoveredTools(
+  map: Map<string, number>,
+  currentTurn: number,
+  ttlTurns: number,
+): void {
+  if (ttlTurns <= 0 || map.size === 0) return
+  const cutoff = currentTurn - ttlTurns
+  for (const [name, lastUsed] of map) {
+    if (lastUsed < cutoff) {
+      map.delete(name)
     }
   }
 }

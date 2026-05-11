@@ -51,6 +51,7 @@ function buildAgentToolDescription(): string {
 
 export const agentTool = buildTool({
   name: 'AgentTool',
+  shouldDefer: true,
   description: buildAgentToolDescription(),
   domain: 'host',
   riskLevel: 'execute',

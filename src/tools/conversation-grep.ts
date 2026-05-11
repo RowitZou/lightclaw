@@ -10,6 +10,7 @@ import {
 
 export const conversationGrepTool = buildTool({
   name: 'ConversationGrep',
+  shouldDefer: true,
   description: `Search this user's saved conversations across all channels (terminal + Feishu DM + groups) for plain text.
 
 Reach for this when the user references past discussions: "上次"/"之前"/"前几天聊过的 X" / "earlier you said..." / "we discussed Y last week". Full-text matches return sessionId + matching snippets; follow up with ConversationRead to fetch full context.

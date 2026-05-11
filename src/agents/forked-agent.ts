@@ -108,7 +108,8 @@ export async function runForkedAgent(
   const result = currentCtx
     ? await runWithSessionContext({
         ...currentCtx,
-        discoveredTools: new Set(),
+        discoveredTools: new Map(),
+        turnCounter: 0,
       }, run)
     : await run()
 

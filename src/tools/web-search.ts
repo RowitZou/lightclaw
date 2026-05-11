@@ -23,6 +23,7 @@ const DEFAULT_TIMEOUT_MS = 35_000
 
 export const webSearchTool = buildTool({
   name: 'WebSearch',
+  shouldDefer: true,
   description: 'Search the web from the environment runtime. Returns search findings and source URLs. Snippets are short and may be stale or partial — when they do not directly answer the question, follow up with WebFetch on the top result. Always cite sources.',
   domain: 'environment',
   // Network egress: the query string leaves the host (potentially leaking

@@ -165,6 +165,7 @@ const DESCRIPTION = [
 
 export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   name: 'Read',
+  alwaysLoad: true,
   description: DESCRIPTION,
   domain: 'environment',
   riskLevel: 'safe',

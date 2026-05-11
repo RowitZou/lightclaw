@@ -6,6 +6,7 @@ const MAX_DURATION_SECONDS = 600
 
 export const sleepTool = buildTool({
   name: 'Sleep',
+  shouldDefer: true,
   description: `Wait for a specified duration. /stop interrupts it instantly.
 
 Use this when:

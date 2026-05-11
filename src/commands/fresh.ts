@@ -55,7 +55,7 @@ export async function runFresh(args: {
     const parentCtx = getCurrentSessionContext()
     const result = parentCtx
       ? await runWithSessionContext(
-          { ...parentCtx, discoveredTools: new Set<string>() },
+          { ...parentCtx, discoveredTools: new Map<string, number>(), turnCounter: 0 },
           runQuery,
         )
       : await runQuery()

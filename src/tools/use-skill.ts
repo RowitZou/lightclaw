@@ -10,6 +10,7 @@ import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
   name: 'UseSkill',
+  shouldDefer: true,
   description: `Load a named skill and apply its instructions in the current turn. Skills carry domain knowledge and specialized procedures.
 
 BLOCKING REQUIREMENT: when a skill in the Available Skills list (in your system prompt) matches the user's request, call UseSkill BEFORE generating any other response about the task. Do not paraphrase the skill, do not describe what it would do — call UseSkill and follow the loaded instructions.
