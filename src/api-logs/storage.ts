@@ -47,6 +47,14 @@ import path from 'node:path'
  * them alongside the streamChat record kinds. Raw image bytes / audio
  * buffers are deliberately omitted from the request payload — the wrapper
  * records prompt + image_count or model + audio metadata + result text.
+ *
+ * `web-fetch-summarize` tags the sub-LLM call inside WebFetch that turns
+ * fetched markdown into a focused answer for a user prompt. Unlike raw image
+ * bytes / audio buffers, the fetched markdown body IS recorded in the request
+ * payload (truncated by MAX_MARKDOWN_LENGTH) because text is bounded and
+ * provides debugging signal for "why did the summary miss this fact". This
+ * call still flows through `streamChat`, so the logger picks it up via the
+ * apiLogContext.kind tag rather than a dedicated wrapper like describe-image.
  */
 export type ApiLogKind =
   | 'main'
@@ -56,6 +64,7 @@ export type ApiLogKind =
   | 'compact'
   | 'describe-image'
   | 'transcribe-audio'
+  | 'web-fetch-summarize'
 
 export interface ApiLogTurnRecord {
   kind: ApiLogKind

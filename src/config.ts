@@ -129,6 +129,7 @@ export type RoutingConfig = {
   compact?: string
   extract?: string
   webSearch?: string
+  webFetch?: string
 }
 
 export type MemoryRecallConfig = {
@@ -813,6 +814,10 @@ export function getConfig(): LightClawConfig {
     webSearch: validateRoutingTarget(
       process.env.LIGHTCLAW_ROUTING_WEBSEARCH ?? fileConfig.routing?.webSearch,
       'webSearch',
+    ),
+    webFetch: validateRoutingTarget(
+      process.env.LIGHTCLAW_ROUTING_WEBFETCH ?? fileConfig.routing?.webFetch,
+      'webFetch',
     ),
   }
   const autoCompact =

@@ -51,6 +51,7 @@ export type ConfigFileShape = {
     compact?: string
     extract?: string
     webSearch?: string
+    webFetch?: string
   }
   sessionsDir?: string
   autoCompact?: boolean

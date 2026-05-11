@@ -9,7 +9,7 @@ import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
 import type { Provider, Schema } from './types.js'
 
-export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch'
+export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch' | 'webFetch'
 
 /**
  * Cache of provider instances keyed by `${schema}:${endpointAlias}`. The
