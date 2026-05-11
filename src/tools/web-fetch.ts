@@ -6,6 +6,11 @@ import { summarizeWebFetch } from '../api.js'
 import { getConfig } from '../config.js'
 import { suggestWebFetchRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
+import {
+  cachedFetchAgeSeconds,
+  getCachedFetch,
+  setCachedFetch,
+} from './web-fetch-cache.js'
 import { isPreapprovedUrl } from './web-fetch-preapproved.js'
 
 const DEFAULT_MAX_BYTES = 50_000     // helper exec output cap (schema default); admin can raise via input.maxBytes up to MAX_BYTES_HARD_CAP
@@ -55,6 +60,25 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
     return suggestWebFetchRules(input.url)
   },
   async call(input, context) {
+    // Cache lookup before any expensive work (helper exec + sub-LLM). 15-min
+    // TTL handles "fetch same docs page repeatedly in the same session"
+    // without re-downloading or re-paying sub-LLM cost. Transparent return —
+    // no marker so the main model treats cached output as live fetch.
+    // Errors are not cached, so a previous failed fetch never poisons the
+    // next attempt.
+    const cached = getCachedFetch(input.url, input.prompt)
+    if (cached !== undefined) {
+      const ageSec = cachedFetchAgeSeconds(input.url, input.prompt)
+      process.stderr.write(
+        `[web-fetch] cache hit (age ${ageSec ?? '?'}s) url=${input.url}\n`,
+      )
+      return { output: cached }
+    }
+    const returnAndCache = (output: string): { output: string } => {
+      setCachedFetch(input.url, input.prompt, output)
+      return { output }
+    }
+
     const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES
     const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const helper = path.join(context.runtime.helperRoot, 'webfetch.py')
@@ -99,15 +123,14 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
     // rather than via summary).
     if (!input.prompt) {
       if (rawMarkdown.length > MAX_RAW_LENGTH) {
-        return {
-          output:
-            rawMarkdown.slice(0, MAX_RAW_LENGTH) +
+        return returnAndCache(
+          rawMarkdown.slice(0, MAX_RAW_LENGTH) +
             `\n\n[Page is ${rawMarkdown.length} chars, truncated to ${MAX_RAW_LENGTH}. ` +
             `To get a focused answer on the full page, pass \`prompt\` to use the sub-LLM summarize path. ` +
             `To raise the helper byte cap, pass \`maxBytes\` up to ${MAX_BYTES_HARD_CAP}.]`,
-        }
+        )
       }
-      return { output: rawMarkdown }
+      return returnAndCache(rawMarkdown)
     }
 
     // Short-circuit: preapproved domain + content fits unsummarized.
@@ -116,11 +139,10 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
     // per-call is fine.
     const extras = getConfig().tools.webFetch?.preapprovedDomains ?? []
     if (isPreapprovedUrl(input.url, extras) && rawMarkdown.length < MAX_MARKDOWN_LENGTH) {
-      return {
-        output:
-          `[Preapproved domain — sub-LLM summarize skipped, returning raw markdown]\n\n` +
+      return returnAndCache(
+        `[Preapproved domain — sub-LLM summarize skipped, returning raw markdown]\n\n` +
           rawMarkdown,
-      }
+      )
     }
 
     // Truncate before sub-LLM to avoid "prompt too long" errors.
@@ -139,15 +161,17 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
       if (!summary.trim()) {
         // Rare: sub-LLM produced no text events at all. Fall back to raw so
         // the main agent gets something useful instead of an empty result.
-        return {
-          output: `[WebFetch summarize returned empty — returning raw markdown]\n\n${rawMarkdown}`,
-        }
+        return returnAndCache(
+          `[WebFetch summarize returned empty — returning raw markdown]\n\n${rawMarkdown}`,
+        )
       }
-      return { output: summary }
+      return returnAndCache(summary)
     } catch (error) {
       // Sub-LLM failure: fall back to raw markdown with a note so the main
       // model knows the prompt didn't take effect. Don't swallow — surface
-      // the failure reason for admin grep.
+      // the failure reason for admin grep. Do NOT cache fallback responses —
+      // the next attempt should retry the sub-LLM rather than serve a
+      // stale "[failed]" reply.
       const reason = error instanceof Error ? error.message : String(error)
       process.stderr.write(`[web-fetch] summarize failed: ${reason}\n`)
       return {

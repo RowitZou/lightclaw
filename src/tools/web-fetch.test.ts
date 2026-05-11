@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { afterEach, describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { _setWebFetchSummarizerForTests, webFetchTool } from './web-fetch.js'
+import { _clearWebFetchCacheForTests } from './web-fetch-cache.js'
 import type { ToolCallContext } from '../tool.js'
 
 const MAX_MARKDOWN_LENGTH = 100_000  // mirror constant in web-fetch.ts
@@ -24,6 +25,9 @@ function buildCtx(stdout: string, opts?: { exitCode?: number; stderr?: string })
 }
 
 describe('WebFetch tool — prompt + summarize', () => {
+  beforeEach(() => {
+    _clearWebFetchCacheForTests()
+  })
   afterEach(() => {
     _setWebFetchSummarizerForTests(null)
   })
