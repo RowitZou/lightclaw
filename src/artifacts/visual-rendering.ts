@@ -24,7 +24,11 @@ export const MAX_PAGES_PER_READ = 20
  *  the document is shorter. */
 export const DEFAULT_RENDER_PAGES = 3
 
-/** Maximum value the LLM can request for `resize_target_mb`. Caps the
+/** Hard ceiling on per-image resize target in MB. Kept as an internal
+ *  safety cap inside resolveResizeTarget; not user-facing since the
+ *  `resize_target_mb` schema field was removed in the 2026-05-11 Read
+ *  refactor (agents couldn't tune it well — see resolveResizeTarget docs).
+ *  Caps the
  *  base64 payload sent to the vision model so a runaway prompt cannot
  *  produce unbounded uploads. */
 export const MAX_RESIZE_TARGET_MB = 16
@@ -210,16 +214,39 @@ export function buildPdfPageOutputDir(workspaceRoot: string): string {
   return path.posix.join(workspaceRoot, '.lightclaw', 'tmp', 'pdf-pages', randomUUID())
 }
 
-/** Resolve the resize target bytes for a single Read visual call. The
- *  LLM-supplied `resize_target_mb` overrides; otherwise we default to the
- *  global `attachments.imageMaxMb` from config so this stays in sync with
- *  the inline-submission resize policy across providers. */
-export function resolveResizeTarget(overrideMb: number | undefined): number {
-  if (overrideMb !== undefined) {
-    return overrideMb * 1024 * 1024
-  }
+/** Resolve the resize target bytes for a single Read visual call.
+ *
+ *  Pre-2026-05-11 Read exposed a `resize_target_mb` knob to the LLM. Dogfood
+ *  showed agents picked the value blindly (2 / 4 / 16 with no clear basis)
+ *  and got worse, not better, output — so the knob is now hidden and the
+ *  policy is internal: per-page budget scales down as page count grows so
+ *  total inline base64 doesn't blow up context.
+ *
+ *    - single image / 1-page PDF: full `attachments.imageMaxMb` budget
+ *    - PDF 2-4 pages: same budget per page
+ *    - PDF 5-9 pages: half the budget per page (avoid context explosion)
+ *    - PDF 10+ pages: quarter budget per page
+ *
+ *  Caller passes `{ pageCount: 1 }` for image and 1-page PDF, the actual
+ *  count for multi-page PDF. */
+export function resolveResizeTarget(input?: { pageCount?: number }): number {
+  const pageCount = input?.pageCount ?? 1
   const cfg = getConfig().attachments
-  return cfg.imageMaxMb * 1024 * 1024
+  const baseMb = cfg.imageMaxMb
+  let perPageMb: number
+  if (pageCount <= 1) {
+    perPageMb = baseMb
+  } else if (pageCount <= 4) {
+    perPageMb = baseMb
+  } else if (pageCount <= 9) {
+    perPageMb = baseMb / 2
+  } else {
+    perPageMb = baseMb / 4
+  }
+  // Sanity: don't drop below 0.5 MB (vision OCR breaks down) and don't
+  // exceed declared per-image cap.
+  const clampedMb = Math.max(0.5, Math.min(baseMb, perPageMb))
+  return clampedMb * 1024 * 1024
 }
 
 export const VISUAL_EXTENSIONS = new Set([

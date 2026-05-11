@@ -12,7 +12,6 @@ import {
   MAX_IMAGE_BYTES,
   MAX_PAGES_PER_READ,
   MAX_PDF_BYTES,
-  MAX_RESIZE_TARGET_MB,
   assertPdfHeader,
   buildPdfPageOutputDir,
   cleanupPdfPageDir,
@@ -28,33 +27,72 @@ import { suggestPathRules } from '../permission/suggestions.js'
 import { buildTool, type ToolCallContext } from '../tool.js'
 import type { ToolResultContentBlock, UserToolResultBlock } from '../types.js'
 
-const DEFAULT_MAX_CHARS = 20_000
+import { hasBeenRead, markRead } from './read-dedup.js'
+
+const DEFAULT_MAX_CHARS = 50_000
 const MAX_MAX_CHARS = 100_000
 const MAX_OFFICE_BYTES = 20 * 1024 * 1024
 
+/**
+ * Extensions Read should reject up-front (not a text file, no special
+ * handler). Anything not on this list AND not on the special-handler
+ * whitelist (PDF/image/Office/.ipynb) falls into the generic plain-text
+ * path. This mirrors Claude Code's `hasBinaryExtension` check.
+ *
+ * Bug C in 2026-05-10 audit motivated this: agents were Read'ing
+ * `.zip` / `.so` / `.mp3` and getting garbage utf8. Now they bounce with
+ * a tailored hint that points to the right tool.
+ */
+const BINARY_REJECT_EXTENSIONS = new Set([
+  '.zip', '.tar', '.tgz', '.gz', '.bz2', '.xz', '.7z', '.rar',
+  '.mp3', '.wav', '.flac', '.ogg', '.m4a',
+  '.mp4', '.avi', '.mov', '.mkv', '.webm',
+  '.so', '.o', '.a', '.dylib', '.dll', '.exe', '.bin',
+  '.pyc', '.pyo', '.class', '.jar', '.wasm',
+  '.iso', '.dmg', '.deb', '.rpm',
+])
+
+function binaryRejectHint(filePath: string, ext: string): string {
+  if (['.mp3', '.wav', '.flac', '.ogg', '.m4a'].includes(ext)) {
+    return (
+      `Read cannot ingest audio files (${ext}). `
+      + `Audio transcription requires a separate transcribe step (not yet wired into Read).`
+    )
+  }
+  if (['.mp4', '.avi', '.mov', '.mkv', '.webm'].includes(ext)) {
+    return (
+      `Read cannot ingest video files (${ext}). `
+      + `For specific frames, run ffmpeg via Bash to extract still images, then Read those.`
+    )
+  }
+  if (['.zip', '.tar', '.tgz', '.gz', '.bz2', '.xz', '.7z', '.rar', '.iso', '.dmg', '.deb', '.rpm'].includes(ext)) {
+    return (
+      `Read cannot ingest archive files (${ext}). `
+      + `Run Bash (unzip -l / tar -tf / 7z l) to inspect contents, then Read individual entries.`
+    )
+  }
+  return (
+    `Read cannot ingest binary file ${filePath} (extension "${ext}" is on the binary reject list). `
+    + `Use Bash with an appropriate extractor (strings / objdump / etc) and Read the extracted text.`
+  )
+}
+
 const inputSchema = z.object({
-  file_path: z.string().min(1),
-  offset: z.number().int().min(1).optional(),
-  limit: z.number().int().min(1).optional(),
-  sheet: z.string().min(1).optional(),
-  range: z.string().min(1).optional(),
-  max_rows: z.number().int().min(1).max(1000).optional(),
-  max_cols: z.number().int().min(1).max(200).optional(),
-  max_chars: z.number().int().min(1).max(MAX_MAX_CHARS).optional(),
-  encoding: z.string().min(1).optional(),
-  /** PDF only: page selector (e.g. "1", "1-5", "10-12"). Triggers visual
-   *  rendering — pages are rasterized via pdftoppm and emitted as inline
-   *  image blocks for the main model (or sub-LLM-described text on
-   *  non-vision endpoints). When omitted, PDFs default to the cheaper
-   *  pdftotext text path; specify `pages` whenever the agent needs
-   *  figures, formulas, layout, or scanned-page fidelity. Max
-   *  MAX_PAGES_PER_READ pages per call. */
-  pages: z.string().min(1).optional(),
-  /** Image / PDF visual path: override the per-image resize target in
-   *  megabytes. Defaults to `attachments.imageMaxMb` from config; raise
-   *  for fine OCR / dense diagrams when the default fidelity is too
-   *  coarse. Capped at MAX_RESIZE_TARGET_MB. */
-  resize_target_mb: z.number().min(0.5).max(MAX_RESIZE_TARGET_MB).optional(),
+  file_path: z.string().min(1).describe('Absolute path to the file to read, or a path relative to the workspace root.'),
+  offset: z.number().int().min(1).optional()
+    .describe('Plain text / code only — line number to start reading from (1-indexed).'),
+  limit: z.number().int().min(1).optional()
+    .describe('Plain text / code only — number of lines to read.'),
+  pages: z.string().min(1).optional()
+    .describe(`PDF only — page selector "1" / "1-5" / "10-12" to trigger visual rendering. Max ${MAX_PAGES_PER_READ} pages per call. Without pages, PDFs use the cheaper pdftotext text path.`),
+  xlsx: z.object({
+    sheet: z.string().min(1).optional().describe('Sheet name (defaults to first sheet).'),
+    range: z.string().min(1).optional().describe('A1:D20 style cell range.'),
+    max_rows: z.number().int().min(1).max(1000).optional().describe('Cap on rows returned (default 50).'),
+    max_cols: z.number().int().min(1).max(200).optional().describe('Cap on columns returned (default 20).'),
+  }).optional().describe('xlsx-specific options. Ignored for non-spreadsheet files.'),
+  max_chars: z.number().int().min(1).max(MAX_MAX_CHARS).optional()
+    .describe(`Cap on extracted text characters for PDF / Office / notebook text paths. Default ${DEFAULT_MAX_CHARS}. Raise only when the previous Read returned truncated:true and you genuinely need more text.`),
 })
 
 type FileReadInput = z.infer<typeof inputSchema>
@@ -62,6 +100,7 @@ type FileReadInput = z.infer<typeof inputSchema>
 export type FileReadStructuredOutput = {
   filePath: string
   format: string
+  searchHint?: string
   text: string
   truncated: boolean
   sizeBytes: number
@@ -79,7 +118,19 @@ export type FileReadVisualOutput = {
   toolResultContent: ToolResultContentBlock[]
 }
 
-export type FileReadOutput = FileReadStructuredOutput | string | FileReadVisualOutput
+/** Marker for dedup hits — returned when the file/range was already Read
+ *  earlier in this daemon's lifetime and the file hasn't been touched.
+ *  Carries no body text; the prior Read's tool_result is still in context. */
+export type FileReadUnchangedOutput = {
+  kind: 'unchanged'
+  filePath: string
+}
+
+export type FileReadOutput =
+  | FileReadStructuredOutput
+  | string
+  | FileReadVisualOutput
+  | FileReadUnchangedOutput
 
 function resolveInputPath(cwd: string, inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(cwd, inputPath)
@@ -100,15 +151,21 @@ function formatLines(content: string, offset: number, limit?: number): string {
     .join('\n')
 }
 
+const DESCRIPTION = [
+  'Read a file from the workspace. Routes by file type:',
+  '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output. Optional `offset` + `limit` (line-based) for paging.',
+  '- PDF (text path, default): returns extracted text via pdftotext layout mode, capped by `max_chars` (default 50000).',
+  '- PDF (visual path): pass `pages` ("1", "1-5", "10-12") to render via pdftoppm and emit inline image blocks for the main model (or sub-LLM-described text on non-vision endpoints). Max 20 pages per call.',
+  '- Image (.jpg/.png/.gif/.webp): returns inline image block. Resize is automatic — no knob to tune.',
+  '- Office (.xlsx/.docx/.pptx): auto-extracts via sandbox parser. For .xlsx pass `xlsx: { sheet, range, max_rows, max_cols }` to narrow the view.',
+  '- Jupyter notebook (.ipynb): cells flattened into structured text with code/markdown/output sections.',
+  '- Binary (.zip/.so/.mp3/.mp4 etc): rejected with a tool-specific hint pointing to Bash + extractor.',
+  'Channel attachments live under `.lightclaw/inbox/<chatId>/<file>`; web downloads under `.lightclaw/downloads/<file>`. To search inside an extracted PDF/Office document, look at the returned `text` field — do NOT call Grep on the binary file path.',
+].join('\n')
+
 export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   name: 'Read',
-  description:
-    'Read a file. Plain text / code / log / json / csv returns line-numbered output sliceable with offset and limit. '
-    + 'Office documents (.xlsx, .docx, .pptx) auto-extract via sandbox parser (openpyxl / python-docx / python-pptx); xlsx accepts sheet / range / max_rows / max_cols. '
-    + 'PDF returns extracted text via pdftotext layout mode by default — prefer this path when the text alone is sufficient (papers, reports, code docs); the visual path costs an extra sub-LLM describe pass per page on non-Anthropic providers. To inspect figures / formulas / scanned pages, pass `pages` (e.g. "1", "1-5", max 20) — that path renders pages with pdftoppm and emits inline image blocks for vision-capable models, or sub-LLM-described text otherwise. '
-    + 'Image files (.jpg/.png/.gif/.webp) return inline image blocks so the model sees pixels directly; on non-vision endpoints they degrade to a sub-LLM description. '
-    + 'resize_target_mb (optional, default = attachments.imageMaxMb config, max 16): raise when the default fidelity is too coarse and the model needs more detail. '
-    + 'Channel attachments live under .lightclaw/inbox/<chatId>/<file>; web downloads under .lightclaw/downloads/<file>.',
+  description: DESCRIPTION,
   domain: 'environment',
   riskLevel: 'safe',
   concurrencySafe: true,
@@ -119,12 +176,24 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   async call(input, context) {
     try {
       const filePath = resolveInputPath(context.runtime.workspaceRoot, input.file_path)
+      const ext = path.extname(filePath).toLowerCase()
+
+      // Up-front binary reject (Claude Code-style validateInput equivalent).
+      // PDF/image/.ipynb fall through to dedicated handlers; everything else
+      // on the binary reject list bounces with a tailored hint.
+      if (BINARY_REJECT_EXTENSIONS.has(ext)) {
+        return {
+          output: binaryRejectHint(filePath, ext),
+          isError: true,
+        }
+      }
+
       const probableFormat = inferArtifactFormat(filePath, undefined)
 
       // Image files: visual path. Always emit image block (finalization
       // handles non-vision endpoints by replacing with describe-text).
       if (isVisualImageExtension(filePath)) {
-        return await readImageVisual(input, filePath, context)
+        return await readImageVisual(filePath, context)
       }
 
       // PDF + pages: visual path. Without `pages` we keep pdftotext.
@@ -137,6 +206,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         || probableFormat === 'xlsx'
         || probableFormat === 'docx'
         || probableFormat === 'pptx'
+        || probableFormat === 'notebook'
       ) {
         const stat = await context.runtime.fs.stat(filePath)
         if (!stat.isFile) {
@@ -153,36 +223,50 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
             isError: true,
           }
         }
+
+        // Dedup: identical (path, mtime, xlsx-spec hash, max_chars) is a
+        // cache hit. Plain text dedup runs in its own path below.
+        const dedupVariant = buildExtractDedupVariant(input, probableFormat)
+        if (hasBeenRead({ filePath, mtimeMs: stat.mtimeMs, variant: dedupVariant })) {
+          return { output: { kind: 'unchanged' as const, filePath } }
+        }
+
         const buffer = await context.runtime.fs.readFile(filePath)
         const extraction = await extractArtifactText({
           buffer,
           filePath,
-          encoding: input.encoding,
           maxChars: input.max_chars ?? DEFAULT_MAX_CHARS,
-          sheet: input.sheet,
-          range: input.range,
-          maxRows: input.max_rows,
-          maxCols: input.max_cols,
+          xlsx: input.xlsx
+            ? {
+                sheet: input.xlsx.sheet,
+                range: input.xlsx.range,
+                maxRows: input.xlsx.max_rows,
+                maxCols: input.xlsx.max_cols,
+              }
+            : undefined,
           exec: params => context.runtime.exec(params),
         })
+        markRead({ filePath, mtimeMs: stat.mtimeMs, variant: dedupVariant })
         return {
           output: {
             filePath,
             format: extraction.format,
-            // Anti-Grep breadcrumb: PDF/Office text is extracted by an
-            // external tool (pdftotext / openpyxl / python-docx / python-pptx),
-            // not stored as plain text on disk. Without this hint, agents
-            // routinely see the extracted text, lose track of "this came from
-            // a binary container", then later try Grep on filePath to search
-            // a keyword and get an empty result (Bug 6 in 2026-05-10 audit).
-            // The hint lives on the result envelope, not the system prompt,
-            // because it's only relevant when there IS an extracted artifact
-            // in context.
+            // Anti-Grep breadcrumb: PDF/Office/notebook text is extracted by an
+            // external tool (pdftotext / openpyxl / python-docx / python-pptx /
+            // ipynb JSON.parse), not stored as plain text on disk. Without this
+            // hint, agents routinely see the extracted text, lose track of
+            // "this came from a binary container", then try Grep on filePath
+            // to search a keyword and get an empty result (Bug 6 in 2026-05-10
+            // audit). Notebook is plain JSON on disk so Grep would technically
+            // work, but the structured format expected by the agent is the
+            // extraction output, not raw JSON — still discourage Grep on path.
             searchHint:
-              `To search inside this ${extraction.format} for a keyword, ` +
-              'do NOT call Grep on the filePath above (the file is binary on disk; ripgrep skips it). ' +
-              'Look at the returned `text` field directly, or call this Read again with `pages=` ' +
-              '(PDF only) to render specific pages.',
+              `To search inside this ${extraction.format} for a keyword, `
+              + 'do NOT call Grep on the filePath above. '
+              + 'Look at the returned `text` field directly'
+              + (probableFormat === 'pdf'
+                ? ', or call this Read again with `pages=` to render specific pages.'
+                : '.'),
             text: extraction.text,
             truncated: extraction.truncated,
             sizeBytes: buffer.length,
@@ -192,7 +276,19 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         }
       }
 
+      // Plain text path. Dedup keyed on (path, mtime, offset, limit).
+      const plainStat = await context.runtime.fs.stat(filePath)
+      const plainVariant = `plain:off=${input.offset ?? 1}:lim=${input.limit ?? '*'}`
+      if (
+        plainStat.isFile
+        && hasBeenRead({ filePath, mtimeMs: plainStat.mtimeMs, variant: plainVariant })
+      ) {
+        return { output: { kind: 'unchanged' as const, filePath } }
+      }
       const content = (await context.runtime.fs.readFile(filePath)).toString('utf8')
+      if (plainStat.isFile) {
+        markRead({ filePath, mtimeMs: plainStat.mtimeMs, variant: plainVariant })
+      }
       return {
         output: formatLines(content, input.offset ?? 1, input.limit),
       }
@@ -204,12 +300,24 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
     }
   },
   formatResult(output, toolUseId, isError): UserToolResultBlock {
-    if (typeof output === 'object' && output !== null && 'kind' in output && output.kind === 'visual') {
-      return {
-        type: 'tool_result',
-        tool_use_id: toolUseId,
-        content: output.toolResultContent,
-        ...(isError ? { is_error: true } : {}),
+    if (typeof output === 'object' && output !== null && 'kind' in output) {
+      if (output.kind === 'visual') {
+        return {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: output.toolResultContent,
+          ...(isError ? { is_error: true } : {}),
+        }
+      }
+      if (output.kind === 'unchanged') {
+        return {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content:
+            `[Read] ${output.filePath} unchanged since last Read in this daemon. `
+            + 'The earlier tool_result with the actual content is still in context — refer to that instead of re-reading.',
+          ...(isError ? { is_error: true } : {}),
+        }
       }
     }
     return {
@@ -221,8 +329,22 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   },
 })
 
+/** Build the dedup variant key for the extracted-text branch. Includes
+ *  xlsx options because the extracted text depends on them (different
+ *  sheet/range = different content). max_chars is included so a smaller
+ *  scan followed by a larger one doesn't dedup. */
+function buildExtractDedupVariant(input: FileReadInput, format: string): string {
+  const parts: string[] = [`extract:${format}`, `chars=${input.max_chars ?? DEFAULT_MAX_CHARS}`]
+  if (format === 'xlsx' && input.xlsx) {
+    parts.push(`sheet=${input.xlsx.sheet ?? ''}`)
+    parts.push(`range=${input.xlsx.range ?? ''}`)
+    parts.push(`rows=${input.xlsx.max_rows ?? ''}`)
+    parts.push(`cols=${input.xlsx.max_cols ?? ''}`)
+  }
+  return parts.join(';')
+}
+
 async function readImageVisual(
-  input: FileReadInput,
   filePath: string,
   context: ToolCallContext,
 ): Promise<{ output: FileReadOutput; isError?: boolean }> {
@@ -242,7 +364,7 @@ async function readImageVisual(
     fs: context.runtime.fs,
     workspaceRoot: context.runtime.workspaceRoot,
     exec: params => context.runtime.exec(params),
-    targetBytes: resolveResizeTarget(input.resize_target_mb),
+    targetBytes: resolveResizeTarget({ pageCount: 1 }),
   })
   const inspected = inspectImageBuffer(resized.buffer, {
     mimeType: resized.mimeType,
@@ -327,6 +449,10 @@ async function readPdfVisual(
       }
     }
 
+    // Per-page resize budget scales down as page count grows (see
+    // resolveResizeTarget docstring). Compute once per Read call.
+    const targetBytes = resolveResizeTarget({ pageCount: imageFiles.length })
+
     const blocks: ToolResultContentBlock[] = []
     const warnings: string[] = [...range.warnings]
 
@@ -338,7 +464,7 @@ async function readPdfVisual(
         fs: context.runtime.fs,
         workspaceRoot: context.runtime.workspaceRoot,
         exec: params => context.runtime.exec(params),
-        targetBytes: resolveResizeTarget(input.resize_target_mb),
+        targetBytes,
       })
       if (resized.warnings.length > 0) {
         warnings.push(`page ${page}: ${resized.warnings.join('; ')}`)

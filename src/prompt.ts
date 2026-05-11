@@ -47,11 +47,24 @@ export type SystemPromptTemplate = {
  * surfacing yesterday's web snippets as today's facts (Bug 7 in 2026-05-10
  * audit). The natural-language form anchors the comparison explicitly so
  * the model has an unambiguous "anything before this is stale" prior.
+ *
+ * Bug A in 2026-05-11 audit: previous impl locked every formatter call to
+ * `timeZone: 'UTC'`, so at 06:26 HKT 5/11 = 22:26 UTC 5/10 the prompt read
+ * "Current date: 2026-05-10 (Sunday, May 2026)" and the agent confidently
+ * quoted "今天（5月10日）" back to the user. Drop the UTC lock and use the
+ * daemon's system TZ (set via `TZ=Asia/Shanghai` env in the dogfood
+ * deployment) so weekday / YMD reflect the operator's local clock.
+ * `en-CA` locale gives a sortable `YYYY-MM-DD` shape that matches the prior
+ * ISO output.
  */
 function formatCurrentDateLine(now: Date = new Date()): string {
-  const weekday = now.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
-  const monthYear = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
-  const ymd = now.toISOString().slice(0, 10)
+  const weekday = now.toLocaleDateString('en-US', { weekday: 'long' })
+  const monthYear = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const ymd = now.toLocaleDateString('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
   return (
     `Current date: ${ymd} (${weekday}, ${monthYear}). When evaluating retrieved data ` +
     `(web search snippets, document timestamps, cached pages), compare against today's date — ` +
