@@ -29,6 +29,19 @@ function context(): ToolCallContext {
   }
 }
 
+describe('Read error-recovery hints', () => {
+  it('returns Glob hint when target file does not exist', async () => {
+    const result = await fileReadTool.call(
+      { file_path: 'this-file-does-not-exist.txt' },
+      context(),
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /ENOENT|no such file/i)
+    assert.match(result.output as string, /\[Hint: file does not exist/)
+    assert.match(result.output as string, /Glob with pattern '\*\*\/this-file-does-not-exist\.txt'/)
+  })
+})
+
 describe('Read (legacy text path)', () => {
   it('returns line-numbered content for plain text files', async () => {
     await runtime.fs.writeFile('notes.txt', 'alpha\nbeta\ngamma')

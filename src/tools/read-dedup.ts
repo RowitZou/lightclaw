@@ -65,6 +65,19 @@ export function markRead(input: DedupKey): void {
   }
 }
 
+/** Returns true if ANY Read variant for this path has been cached in the
+ *  current daemon lifetime. Path-only (no mtime/variant lookup) — used by
+ *  Write to drop a soft "Read first" reminder without needing the precise
+ *  key the model would have hit. Linear over `seen` (≤ MAX_ENTRIES entries),
+ *  so this is O(256) at worst — fine for a per-Write check. */
+export function hasPathBeenRead(filePath: string): boolean {
+  const prefix = `${filePath}|`
+  for (const key of seen.keys()) {
+    if (key.startsWith(prefix)) return true
+  }
+  return false
+}
+
 /** Test hook — wipe the cache. */
 export function _clearReadDedupForTests(): void {
   seen.clear()

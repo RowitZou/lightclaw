@@ -293,8 +293,19 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         output: formatLines(content, input.offset ?? 1, input.limit),
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/ENOENT|no such file/i.test(message)) {
+        const basename = path.basename(input.file_path)
+        return {
+          output:
+            `${message}\n\n` +
+            `[Hint: file does not exist. Try Glob with pattern '**/${basename}' to find similar paths, ` +
+            `or list the parent directory via Bash (e.g. \`ls\`) if you're guessing the location.]`,
+          isError: true,
+        }
+      }
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: message,
         isError: true,
       }
     }

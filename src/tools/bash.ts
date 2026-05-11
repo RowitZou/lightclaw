@@ -78,6 +78,23 @@ Long-running work: schedule via BackgroundTask, not via Bash + \`sleep\`. Do not
     }
 
     const detail = formatCommandOutput(result.stdout, result.stderr)
+
+    if (result.exitCode === 127) {
+      // exit 127 = "command not found". Give a concrete next-step recipe so
+      // the model doesn't retry the same shell-not-found path.
+      const cmdGuess = input.command.trim().split(/\s+/)[0] ?? '<command>'
+      const hint =
+        `\n\n[Hint: exit 127 = command not found. If '${cmdGuess}' is missing:\n` +
+        `  - apt-get install <pkg> (sudo + permission required)\n` +
+        `  - pip install <pkg> (Python tools)\n` +
+        `  - pnpm add -g <pkg> (Node tools)\n` +
+        `Check availability via \`which <name>\` or \`ls /usr/bin /usr/local/bin\` before retrying.]`
+      return {
+        output: `${detail}\n\nexit_code: ${result.exitCode}${hint}`,
+        isError: true,
+      }
+    }
+
     return {
       output: `${detail}\n\nexit_code: ${result.exitCode}`,
       isError: true,
