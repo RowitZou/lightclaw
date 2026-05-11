@@ -1,3 +1,6 @@
+import { appendFile, mkdir } from 'node:fs/promises'
+import path from 'node:path'
+
 import { z } from 'zod'
 
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
@@ -7,12 +10,20 @@ import {
   type FeishuCanonicalResource,
   type FeishuResolveResourceInput,
 } from '../channels/feishu/resource-resolver.js'
-import { readDocPlainText, type FeishuDocReadResult } from '../channels/feishu/resources/doc.js'
+import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
+import {
+  createDoc,
+  readDocPlainText,
+  type FeishuDocCreateResult,
+  type FeishuDocReadResult,
+} from '../channels/feishu/resources/doc.js'
 import {
   readSheetMetadata,
   readSheetRange,
   type FeishuSheetTarget,
 } from '../channels/feishu/resources/sheet.js'
+import { lightclawHome } from '../paths.js'
+import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
 import { buildTool, type ToolCallResult } from '../tool.js'
 
 const DEFAULT_FEISHU_READ_MAX_CHARS = 100_000
@@ -52,6 +63,41 @@ export type FeishuReadOutput =
   | FeishuReadMetadataOutput
   | string
 
+const feishuCreateFileInputSchema = z.object({
+  kind: z.enum(['doc']).describe('Resource type to create. V1 only supports "doc"; future: "sheet", "bitable".'),
+  title: z.string().min(1).max(200).describe('Title for the new resource.'),
+  folder_token: z.string().min(1).optional()
+    .describe('Parent folder token. Defaults to the bot user folder.'),
+  doc: z.object({
+    content: z.string().optional().describe('Initial plain-text content for kind=doc.'),
+  }).optional().describe('Doc-specific options. Ignored for other kinds.'),
+})
+
+export type FeishuCreateFileInput = z.infer<typeof feishuCreateFileInputSchema>
+
+export type FeishuCreateFileOutput = {
+  document_id?: string
+  url?: string
+  title: string
+  rawData?: unknown
+}
+
+export type FeishuWriteOperation =
+  | 'create-doc'
+  | 'append-doc'
+  | 'append-sheet-rows'
+  | 'overwrite-sheet-range'
+
+type FeishuWriteAudit = {
+  at: string
+  userId: string | undefined
+  operation: FeishuWriteOperation
+  resource: Record<string, unknown>
+  preview: string
+  status: 'confirmed' | 'denied' | 'failed'
+  error?: string
+}
+
 type FeishuReadDeps = {
   client: FeishuClient
   resolveResource?: (
@@ -61,6 +107,11 @@ type FeishuReadDeps = {
   readDoc?: typeof readDocPlainText
   readRange?: typeof readSheetRange
   readMetadata?: typeof readSheetMetadata
+}
+
+type FeishuCreateFileDeps = {
+  client: FeishuClient
+  createDoc?: typeof createDoc
 }
 
 export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
@@ -79,6 +130,28 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
     } catch (error) {
       return {
         output: error instanceof Error ? error.message : String(error),
+        isError: true,
+      }
+    }
+  },
+})
+
+export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreateFileOutput | string>({
+  name: 'FeishuCreateFile',
+  description:
+    'Create a NEW Feishu/Lark resource. V1 supports kind="doc" - creates a docx with optional initial text. Use FeishuWriteDoc to edit an existing doc; this tool is for fresh creation. Always asks the user for explicit write confirmation before calling Feishu.',
+  domain: 'host',
+  riskLevel: 'write',
+  channelScope: ['feishu'],
+  shouldDefer: true,
+  searchHint: 'feishu lark create new doc file empty fresh initial',
+  inputSchema: feishuCreateFileInputSchema,
+  async call(input): Promise<ToolCallResult<FeishuCreateFileOutput | string>> {
+    try {
+      return await runFeishuCreateFile(input, { client: getFeishuClient() })
+    } catch (error) {
+      return {
+        output: feishuErrorMessage(error),
         isError: true,
       }
     }
@@ -173,4 +246,124 @@ export async function runFeishuRead(
   }
 
   return { output: `Unhandled canonical resource type: ${resource.resourceType}`, isError: true }
+}
+
+export async function runFeishuCreateFile(
+  input: FeishuCreateFileInput,
+  deps: FeishuCreateFileDeps,
+): Promise<ToolCallResult<FeishuCreateFileOutput>> {
+  const operation: FeishuWriteOperation = 'create-doc'
+  const preview = `Create Feishu ${input.kind} titled "${input.title}"${
+    input.doc?.content ? ` with ${input.doc.content.length} chars of initial content` : ''
+  }.`
+  const resource = {
+    kind: input.kind,
+    title: input.title,
+    ...(input.folder_token ? { folder_token: input.folder_token } : {}),
+  }
+
+  await requireFeishuWriteConfirmation({ operation, preview, resource })
+
+  try {
+    const create = deps.createDoc ?? createDoc
+    const docMeta = await create({
+      client: deps.client,
+      title: input.title,
+      content: input.doc?.content,
+      folderToken: input.folder_token,
+    })
+    return {
+      output: formatCreatedDoc(docMeta),
+    }
+  } catch (error) {
+    await auditFailed(operation, preview, resource, error)
+    throw error
+  }
+}
+
+async function requireFeishuWriteConfirmation(input: {
+  operation: FeishuWriteOperation
+  preview: string
+  resource: Record<string, unknown>
+}): Promise<void> {
+  const approver = getPermissionApprover()
+  if (!approver) {
+    throw new Error('Feishu write confirmation is unavailable in this session.')
+  }
+
+  const decision = await approver.ask({
+    toolName: 'FeishuWriteConfirm',
+    riskLevel: 'write',
+    input: { operation: input.operation, resource: input.resource, preview: input.preview },
+    inputPreview: JSON.stringify(
+      { operation: input.operation, resource: input.resource, preview: input.preview },
+      null,
+      2,
+    ),
+    mode: getPermissionMode(),
+    suggestedRules: [{ toolName: 'FeishuWriteConfirm' }],
+  })
+
+  if (decision.behavior !== 'allow') {
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: safeCurrentUserId(),
+      operation: input.operation,
+      resource: input.resource,
+      preview: input.preview,
+      status: 'denied',
+      error: decision.reason,
+    })
+    throw new Error(`Feishu write denied: ${decision.reason}`)
+  }
+
+  await recordFeishuWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeCurrentUserId(),
+    operation: input.operation,
+    resource: input.resource,
+    preview: input.preview,
+    status: 'confirmed',
+  })
+}
+
+async function recordFeishuWriteAudit(record: FeishuWriteAudit): Promise<void> {
+  const dir = path.join(lightclawHome(), 'audit', 'feishu-writes')
+  await mkdir(dir, { recursive: true })
+  const day = record.at.slice(0, 10)
+  await appendFile(path.join(dir, `${day}.jsonl`), `${JSON.stringify(record)}\n`, 'utf8')
+}
+
+async function auditFailed(
+  operation: FeishuWriteOperation,
+  preview: string,
+  resource: Record<string, unknown>,
+  error: unknown,
+): Promise<void> {
+  await recordFeishuWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeCurrentUserId(),
+    operation,
+    resource,
+    preview,
+    status: 'failed',
+    error: feishuErrorMessage(error),
+  })
+}
+
+function formatCreatedDoc(input: FeishuDocCreateResult): FeishuCreateFileOutput {
+  return {
+    ...(input.documentId ? { document_id: input.documentId } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    title: input.title,
+    ...(input.rawData !== undefined ? { rawData: input.rawData } : {}),
+  }
+}
+
+function safeCurrentUserId(): string | undefined {
+  try {
+    return getCurrentUserId()
+  } catch {
+    return undefined
+  }
 }

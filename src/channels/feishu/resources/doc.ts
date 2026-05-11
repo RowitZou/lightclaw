@@ -2,6 +2,13 @@ import type { FeishuClient } from '../client.js'
 import { callFeishu, type FeishuEnvelope } from './api.js'
 import { readNestedString, truncate } from './common.js'
 
+export type FeishuDocCreateResult = {
+  documentId?: string
+  title: string
+  url?: string
+  rawData?: unknown
+}
+
 export type FeishuDocReadResult = {
   documentId: string
   title?: string
@@ -32,6 +39,41 @@ export async function readDocPlainText(input: {
     content: clipped.value,
     truncated: clipped.truncated,
     ...(content ? {} : { rawData: raw.data }),
+  }
+}
+
+export async function createDoc(input: {
+  client: FeishuClient
+  title: string
+  content?: string
+  folderToken?: string
+}): Promise<FeishuDocCreateResult> {
+  const client = input.client as FeishuDocClient
+  const created = await callFeishu(() => client.docx.document.create({
+    data: {
+      title: input.title,
+      ...(input.folderToken ? { folder_token: input.folderToken } : {}),
+    },
+  }))
+  const documentId = readNestedString(created.data, ['document', 'document_id']) ??
+    readNestedString(created.data, ['document_id'])
+  if (documentId && input.content?.trim()) {
+    await appendDocText({
+      client: input.client,
+      documentId,
+      content: input.content,
+    })
+  }
+  const url = readNestedString(created.data, ['document', 'url']) ??
+    readNestedString(created.data, ['url'])
+  const title = readNestedString(created.data, ['document', 'title']) ??
+    readNestedString(created.data, ['title']) ??
+    input.title
+  return {
+    ...(documentId ? { documentId } : {}),
+    title,
+    ...(url ? { url } : {}),
+    rawData: created.data,
   }
 }
 
@@ -74,6 +116,7 @@ function contentToDocBlocks(content: string): Array<Record<string, unknown>> {
 type FeishuDocClient = {
   docx: {
     document: {
+      create(input: unknown): Promise<FeishuEnvelope>
       get(input: unknown): Promise<FeishuEnvelope>
       rawContent(input: unknown): Promise<FeishuEnvelope>
     }
