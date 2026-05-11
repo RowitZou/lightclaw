@@ -7,8 +7,17 @@ import { buildTool } from '../tool.js'
 
 export const memoryWriteTool = buildTool({
   name: 'MemoryWrite',
-  description:
-    'Create or update a persistent auto-memory entry with validated metadata and content.',
+  description: `Create or update a persistent auto-memory entry for this user.
+
+Use when the user explicitly says "记住" / "remember this" / "from now on", OR when the user has corrected your approach in a way that should apply to future sessions, OR when you've learned a non-obvious project fact / convention.
+
+Choose \`type\` carefully:
+- \`user\`: who the user is, their role, what they're working on long-term
+- \`feedback\`: corrections / preferences ("do X, never Y"). Always include Why: and How to apply: sections.
+- \`project\`: project-specific conventions, dates, in-progress work. Always include Why: and How to apply: sections.
+- \`reference\`: pointers to external systems (Linear projects, Slack channels, Grafana dashboards).
+
+\`filename\` should be concise kebab/snake-case. \`description\` is one line used in MEMORY.md and recall — be specific so future you can decide relevance.`,
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({

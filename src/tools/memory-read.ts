@@ -10,8 +10,9 @@ import { buildTool } from '../tool.js'
 
 export const memoryReadTool = buildTool({
   name: 'MemoryRead',
-  description:
-    'Read auto-memory files. Use action "list" to list files or "read" to inspect a specific memory file.',
+  description: `Read auto-memory files for this user. Use action 'list' to enumerate or 'read' to inspect a specific file.
+
+Reach for this when the user references stored preferences ("我之前让你..."), project conventions, or facts that should persist across sessions. The auto-memory index (MEMORY.md) is already injected at session start; use this tool only when you need to read the full content of a specific memory file pointed to by the index.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,

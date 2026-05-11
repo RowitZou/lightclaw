@@ -14,8 +14,17 @@ const inputSchema = z.object({
 
 export const sendFileTool = buildTool({
   name: 'SendFile',
-  description:
-    'Send a file from the current workspace to the active channel conversation. Only works in supported channel sessions such as Feishu.',
+  description: `Send a file from this workspace to the active channel conversation. Currently only Feishu channel.
+
+Use when:
+- The user explicitly asked for a file (a report, a generated artifact, a converted document, a screenshot they cannot see otherwise).
+- You generated a file the user needs as a follow-up step.
+
+Don't use:
+- To show file contents the user can already read in your reply — paste the text.
+- For intermediate scratch files. The user should ask for the final artifact.
+- For media you received from this user (already in their chat history).
+- In a terminal session (no channel — call will error).`,
   domain: 'host',
   riskLevel: 'write',
   // Phase 29 channel-aware catalog: SendFile depends on the runner-installed

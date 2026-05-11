@@ -7,7 +7,11 @@ import { simplifyMessage } from './_session-helpers.js'
 
 export const conversationReadTool = buildTool({
   name: 'ConversationRead',
-  description: 'Read a slice of a saved conversation that belongs to the current LightClaw user.',
+  description: `Read a slice of a saved conversation that belongs to this user.
+
+Use after ConversationGrep or ConversationList has identified a candidate sessionId. \`offset\` + \`limit\` page through long transcripts (default offset 0, limit 40, max 100).
+
+Don't use this to "browse" — read with a specific target sessionId in hand. Use ConversationList to find candidates first.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,

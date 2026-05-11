@@ -10,8 +10,13 @@ import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
   name: 'UseSkill',
-  description:
-    'Load a named skill and return its full instructions so the agent can apply it in the current turn.',
+  description: `Load a named skill and apply its instructions in the current turn. Skills carry domain knowledge and specialized procedures.
+
+BLOCKING REQUIREMENT: when a skill in the Available Skills list (in your system prompt) matches the user's request, call UseSkill BEFORE generating any other response about the task. Do not paraphrase the skill, do not describe what it would do — call UseSkill and follow the loaded instructions.
+
+If a skill's instructions have already been loaded earlier in this turn (you'll see them in your recent tool_results), do NOT call UseSkill again — apply the instructions directly.
+
+\`args\` is optional and passes free-form arguments through to the skill.`,
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({

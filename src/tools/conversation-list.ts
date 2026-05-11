@@ -6,7 +6,13 @@ import { channelFromSessionId, listOwnedSessions } from './_session-helpers.js'
 
 export const conversationListTool = buildTool({
   name: 'ConversationList',
-  description: 'List saved conversations for the current LightClaw user across channels.',
+  description: `List this user's recent saved conversations across channels.
+
+Use as the first step when the user references "我在 <channel> 都聊过什么" / "what active threads do I have" / before a ConversationGrep when you don't know which channel/session to target. Returns sessionId + channel + last-active timestamp.
+
+Filter via \`channel\` (terminal / feishu / ...) or \`daysBack\` (default no limit).
+
+Pair with ConversationGrep (content search) and ConversationRead (slice fetch).`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,

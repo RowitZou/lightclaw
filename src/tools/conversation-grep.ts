@@ -10,7 +10,13 @@ import {
 
 export const conversationGrepTool = buildTool({
   name: 'ConversationGrep',
-  description: 'Search the current LightClaw user\'s saved conversations for plain text.',
+  description: `Search this user's saved conversations across all channels (terminal + Feishu DM + groups) for plain text.
+
+Reach for this when the user references past discussions: "上次"/"之前"/"前几天聊过的 X" / "earlier you said..." / "we discussed Y last week". Full-text matches return sessionId + matching snippets; follow up with ConversationRead to fetch full context.
+
+Triage workflow: if you don't know which session to look in, run ConversationList first to enumerate active sessions; then ConversationGrep narrows by content; finally ConversationRead shows the slice you want.
+
+Scope: this user only (canonical identity). Other users' conversations are not visible.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,
