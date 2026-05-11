@@ -122,6 +122,9 @@ export type ConfigFileShape = {
     webSearch?: {
       braveApiKey?: string
     }
+    webFetch?: {
+      preapprovedDomains?: string[]
+    }
     deferredLoading?: string
     deferredLoadingThreshold?: number
     discoveredToolsMaxSize?: number

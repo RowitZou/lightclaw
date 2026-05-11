@@ -165,8 +165,16 @@ export type WebSearchToolConfig = {
   braveApiKey?: string
 }
 
+export type WebFetchToolConfig = {
+  /** Extra preapproved domains beyond the built-in baseline. Match is exact
+   *  hostname (no subdomain wildcard). Merged with the built-in list — admin
+   *  cannot remove built-in entries via config. */
+  preapprovedDomains: string[]
+}
+
 export type ToolsConfig = {
   webSearch: WebSearchToolConfig
+  webFetch: WebFetchToolConfig
   deferredLoading: 'auto' | 'always' | 'off'
   deferredLoadingThreshold: number
   /** Per-session bound on `SessionContext.discoveredTools`. When the LRU
@@ -1086,6 +1094,16 @@ export function getConfig(): LightClawConfig {
         braveApiKey:
           process.env.BRAVE_SEARCH_API_KEY ??
           fileConfig.tools?.webSearch?.braveApiKey,
+      },
+      webFetch: {
+        // file value wins (no env: domain lists don't pair well with single-string env vars). Empty
+        // array means "no admin extras"; isPreapprovedUrl still consults the built-in baseline.
+        preapprovedDomains:
+          Array.isArray(fileConfig.tools?.webFetch?.preapprovedDomains)
+            ? (fileConfig.tools.webFetch.preapprovedDomains as unknown[])
+                .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+                .map(entry => entry.trim())
+            : [],
       },
       deferredLoading:
         parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??

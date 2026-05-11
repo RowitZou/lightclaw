@@ -3,6 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { summarizeWebFetch } from '../api.js'
+import { getConfig } from '../config.js'
 import { suggestWebFetchRules } from '../permission/suggestions.js'
 import { buildTool } from '../tool.js'
 import { isPreapprovedUrl } from './web-fetch-preapproved.js'
@@ -110,7 +111,11 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
     }
 
     // Short-circuit: preapproved domain + content fits unsummarized.
-    if (isPreapprovedUrl(input.url) && rawMarkdown.length < MAX_MARKDOWN_LENGTH) {
+    // Admin extras (config.tools.webFetch.preapprovedDomains) are merged with
+    // the built-in baseline list; getConfig() is cheap (cached) so reading
+    // per-call is fine.
+    const extras = getConfig().tools.webFetch?.preapprovedDomains ?? []
+    if (isPreapprovedUrl(input.url, extras) && rawMarkdown.length < MAX_MARKDOWN_LENGTH) {
       return {
         output:
           `[Preapproved domain — sub-LLM summarize skipped, returning raw markdown]\n\n` +
