@@ -49,7 +49,7 @@ describe('WebFetch tool — prompt + summarize', () => {
     assert.equal(summarizeCalled, false, 'summarize must NOT run without prompt')
   })
 
-  it('truncates raw markdown past MAX_RAW_LENGTH and adds marker pointing to prompt/maxBytes escape hatches', async () => {
+  it('truncates raw markdown past MAX_RAW_LENGTH and adds marker pointing to maxBytes escape hatch', async () => {
     const oversize = 'x'.repeat(60_000)  // > MAX_RAW_LENGTH (50_000)
     const result = await webFetchTool.call(
       { url: 'https://example.com', maxBytes: 100_000 },
@@ -62,8 +62,11 @@ describe('WebFetch tool — prompt + summarize', () => {
       `raw should be capped near MAX_RAW_LENGTH (got ${(result.output as string).length})`,
     )
     assert.match(result.output as string, /Page is 60000 chars, truncated to 50000/)
-    assert.match(result.output as string, /pass `prompt` to use the sub-LLM summarize path/)
     assert.match(result.output as string, /pass `maxBytes` up to 100000/)
+    // The sub-LLM `prompt` path is NOT advertised here — it sees the same
+    // helper output, so suggesting it as an "escape hatch" would mislead the
+    // main agent.
+    assert.doesNotMatch(result.output as string, /pass `prompt`/)
   })
 
   it('calls summarize when prompt + non-preapproved URL', async () => {

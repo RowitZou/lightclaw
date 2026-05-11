@@ -39,9 +39,9 @@ export const webFetchTool = buildTool({
   shouldDefer: true,
   description: `Fetch content from a URL.
 
-Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — pass \`prompt\` for a focused sub-LLM summary of the full page, or raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more bytes from the helper.
+Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more bytes from the helper.
 
-With a \`prompt\` field: a sub-LLM reads the fetched markdown and answers your prompt. The sub-LLM has no tool access; it only summarizes / extracts from the page. Use for "what does this page say about X" / "extract the API endpoints from this docs page" / "is there a section on Y in this README". Saves you reading the whole page.
+With a \`prompt\` field: a sub-LLM reads the fetched markdown and answers your prompt. The sub-LLM has no tool access; it only summarizes / extracts from the page. Use for "what does this page say about X" / "extract the API endpoints from this docs page" / "is there a section on Y in this README". Caveats: the sub-LLM sees the same helper output the no-prompt path returns, so it can still miss content past the byte cap; it also will not compute, aggregate, or reconcile (e.g. derive max/min from per-hour rows). If the answer requires reasoning over raw data or anything past the byte cap matters, fetch without \`prompt\` (raise \`maxBytes\` if needed) and read it yourself.
 
 For preapproved domains (Python/Node/TS/React/Next/FastAPI/MDN/Anthropic/OpenAI/Go docs) with markdown content under ${MAX_MARKDOWN_LENGTH} chars, the prompt is ignored and raw markdown is returned — these docs are well-structured and the sub-LLM would just paraphrase.
 
@@ -116,18 +116,18 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
 
     // No prompt → return raw, but truncate past MAX_RAW_LENGTH chars to keep
     // a single fetch from dominating main-model context. The marker tells the
-    // model the two escape hatches: pass `prompt` for sub-LLM summarize of
-    // the full content, or raise `maxBytes` (up to MAX_BYTES_HARD_CAP) to
+    // model the escape hatch: raise `maxBytes` (up to MAX_BYTES_HARD_CAP) to
     // pull more bytes from the helper. Mirrors Claude Code's MAX_MARKDOWN_LENGTH
     // strategy but in the raw path (we deliberately lower the threshold from
     // sub-LLM's 100K to 50K because raw text costs the main model directly
-    // rather than via summary).
+    // rather than via summary). The sub-LLM `prompt` path is NOT suggested as
+    // an "escape hatch" here — it sees the same helper output, so the byte cap
+    // is the actual constraint to lift.
     if (!input.prompt) {
       if (rawMarkdown.length > MAX_RAW_LENGTH) {
         return returnAndCache(
           rawMarkdown.slice(0, MAX_RAW_LENGTH) +
             `\n\n[Page is ${rawMarkdown.length} chars, truncated to ${MAX_RAW_LENGTH}. ` +
-            `To get a focused answer on the full page, pass \`prompt\` to use the sub-LLM summarize path. ` +
             `To raise the helper byte cap, pass \`maxBytes\` up to ${MAX_BYTES_HARD_CAP}.]`,
         )
       }
