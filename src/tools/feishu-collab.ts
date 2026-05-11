@@ -6,21 +6,27 @@ import { z } from 'zod'
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
 import { resolveFeishuLink } from '../channels/feishu/link.js'
 import {
+  ensureCanonicalDoc,
+  ensureCanonicalSheet,
   resolveFeishuResource,
   type FeishuCanonicalResource,
   type FeishuResolveResourceInput,
 } from '../channels/feishu/resource-resolver.js'
 import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
 import {
+  appendDocText,
   createDoc,
   readDocPlainText,
   type FeishuDocCreateResult,
   type FeishuDocReadResult,
 } from '../channels/feishu/resources/doc.js'
 import {
+  formatSheetRange,
   readSheetMetadata,
   readSheetRange,
+  writeSheetValues,
   type FeishuSheetTarget,
+  type SheetValues,
 } from '../channels/feishu/resources/sheet.js'
 import { lightclawHome } from '../paths.js'
 import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
@@ -82,6 +88,51 @@ export type FeishuCreateFileOutput = {
   rawData?: unknown
 }
 
+const feishuWriteDocInputSchema = z.object({
+  url: z.string().url().optional(),
+  document_id: z.string().min(1).optional(),
+  content: z.string().min(1).describe('Plain text to write into the doc.'),
+  mode: z.enum(['append']).optional().default('append')
+    .describe('How to write: append adds at the end. V1 only supports append; future: prepend, replace_section.'),
+}).refine(input => Boolean(input.url) !== Boolean(input.document_id), {
+  message: 'Provide exactly one of url or document_id.',
+})
+
+export type FeishuWriteDocInput = z.infer<typeof feishuWriteDocInputSchema>
+
+export type FeishuWriteDocOutput = {
+  document_id: string
+  appended_chars: number
+  mode: 'append'
+  data?: unknown
+}
+
+const sheetValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()])
+
+const feishuWriteSheetInputSchema = z.object({
+  url: z.string().url().optional(),
+  spreadsheet_token: z.string().min(1).optional(),
+  range: z.string().min(1).describe('A1-style range, e.g. "Sheet1!A1:D20".'),
+  values: z.array(z.array(sheetValueSchema)).min(1)
+    .describe('2D array of cell values. Inner arrays are rows.'),
+  mode: z.enum(['append', 'overwrite'])
+    .describe('append adds rows at the END of the range; overwrite REPLACES cells in the range. Explicit choice - no default.'),
+}).refine(input => Boolean(input.url) !== Boolean(input.spreadsheet_token), {
+  message: 'Provide exactly one of url or spreadsheet_token.',
+})
+
+export type FeishuWriteSheetInput = z.infer<typeof feishuWriteSheetInputSchema>
+
+export type FeishuWriteSheetOutput = {
+  spreadsheet_token: string
+  sheet_id?: string
+  range: string
+  rows: number
+  columns: number
+  mode: 'append' | 'overwrite'
+  data?: unknown
+}
+
 export type FeishuWriteOperation =
   | 'create-doc'
   | 'append-doc'
@@ -112,6 +163,24 @@ type FeishuReadDeps = {
 type FeishuCreateFileDeps = {
   client: FeishuClient
   createDoc?: typeof createDoc
+}
+
+type FeishuWriteDocDeps = {
+  client: FeishuClient
+  resolveResource?: (
+    input: FeishuResolveResourceInput,
+    options: { client: FeishuClient },
+  ) => Promise<FeishuCanonicalResource>
+  appendDoc?: typeof appendDocText
+}
+
+type FeishuWriteSheetDeps = {
+  client: FeishuClient
+  resolveResource?: (
+    input: FeishuResolveResourceInput,
+    options: { client: FeishuClient },
+  ) => Promise<FeishuCanonicalResource>
+  writeValues?: typeof writeSheetValues
 }
 
 export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
@@ -158,6 +227,50 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
   async call(input): Promise<ToolCallResult<FeishuCreateFileOutput | string>> {
     try {
       return await runFeishuCreateFile(input, { client: getFeishuClient() })
+    } catch (error) {
+      return {
+        output: feishuErrorMessage(error),
+        isError: true,
+      }
+    }
+  },
+})
+
+export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
+  name: 'FeishuWriteDoc',
+  description:
+    'Append plain text to an existing Feishu/Lark doc/docx. Accepts a doc URL, a wiki URL whose underlying node is a doc, or a direct document_id. Use FeishuCreateFile to create a new doc. Always asks the user for explicit write confirmation before calling Feishu.',
+  domain: 'host',
+  riskLevel: 'write',
+  channelScope: ['feishu'],
+  shouldDefer: true,
+  searchHint: 'feishu lark doc docx wiki write update append edit existing',
+  inputSchema: feishuWriteDocInputSchema,
+  async call(input): Promise<ToolCallResult<FeishuWriteDocOutput | string>> {
+    try {
+      return await runFeishuWriteDoc(input, { client: getFeishuClient() })
+    } catch (error) {
+      return {
+        output: feishuErrorMessage(error),
+        isError: true,
+      }
+    }
+  },
+})
+
+export const feishuWriteSheetTool = buildTool<FeishuWriteSheetInput, FeishuWriteSheetOutput | string>({
+  name: 'FeishuWriteSheet',
+  description:
+    'Append rows to or overwrite a Feishu/Lark sheet range. Accepts a sheets URL, a wiki URL whose underlying node is a sheet, or a direct spreadsheet_token. mode is required - explicit choice between append (safe) and overwrite (destructive). Always asks the user for explicit write confirmation before calling Feishu.',
+  domain: 'host',
+  riskLevel: 'write',
+  channelScope: ['feishu'],
+  shouldDefer: true,
+  searchHint: 'feishu lark sheet wiki append overwrite rows cells write update existing',
+  inputSchema: feishuWriteSheetInputSchema,
+  async call(input): Promise<ToolCallResult<FeishuWriteSheetOutput | string>> {
+    try {
+      return await runFeishuWriteSheet(input, { client: getFeishuClient() })
     } catch (error) {
       return {
         output: feishuErrorMessage(error),
@@ -287,6 +400,128 @@ export async function runFeishuCreateFile(
   } catch (error) {
     await auditFailed(operation, preview, resource, error)
     throw error
+  }
+}
+
+export async function runFeishuWriteDoc(
+  input: FeishuWriteDocInput,
+  deps: FeishuWriteDocDeps,
+): Promise<ToolCallResult<FeishuWriteDocOutput | string>> {
+  if (Boolean(input.url) === Boolean(input.document_id)) {
+    return { output: 'Provide exactly one of url or document_id.', isError: true }
+  }
+
+  const documentId = input.document_id ?? await resolveDocIdFromUrl(input.url!, deps)
+  const mode = input.mode ?? 'append'
+  const operation: FeishuWriteOperation = 'append-doc'
+  const preview = `Append ${input.content.length} chars to Feishu doc ${documentId}.`
+  const resource = { documentId, mode }
+
+  await requireFeishuWriteConfirmation({ operation, preview, resource })
+
+  try {
+    const appendDoc = deps.appendDoc ?? appendDocText
+    const written = await appendDoc({
+      client: deps.client,
+      documentId,
+      content: input.content,
+    })
+    return {
+      output: {
+        document_id: documentId,
+        appended_chars: input.content.length,
+        mode,
+        ...(written.data !== undefined ? { data: written.data } : {}),
+      },
+    }
+  } catch (error) {
+    await auditFailed(operation, preview, resource, error)
+    throw error
+  }
+}
+
+export async function runFeishuWriteSheet(
+  input: FeishuWriteSheetInput,
+  deps: FeishuWriteSheetDeps,
+): Promise<ToolCallResult<FeishuWriteSheetOutput | string>> {
+  if (Boolean(input.url) === Boolean(input.spreadsheet_token)) {
+    return { output: 'Provide exactly one of url or spreadsheet_token.', isError: true }
+  }
+
+  const target = input.spreadsheet_token
+    ? { spreadsheetToken: input.spreadsheet_token }
+    : await resolveSheetTargetFromUrl(input.url!, deps)
+  const fullRange = formatSheetRange(target.sheetId, input.range)
+  const operation: FeishuWriteOperation = input.mode === 'append'
+    ? 'append-sheet-rows'
+    : 'overwrite-sheet-range'
+  const columns = input.values[0]?.length ?? 0
+  const preview = `${input.mode === 'append' ? 'Append' : 'Overwrite'} ${input.values.length} rows x ${columns} cols to ${fullRange} in Feishu sheet ${target.spreadsheetToken}.`
+  const resource = {
+    spreadsheetToken: target.spreadsheetToken,
+    ...(target.sheetId ? { sheetId: target.sheetId } : {}),
+    range: fullRange,
+    mode: input.mode,
+    rows: input.values.length,
+    columns,
+  }
+
+  await requireFeishuWriteConfirmation({ operation, preview, resource })
+
+  try {
+    const writeValues = deps.writeValues ?? writeSheetValues
+    const written = await writeValues({
+      client: deps.client,
+      spreadsheetToken: target.spreadsheetToken,
+      ...(target.sheetId ? { sheetId: target.sheetId } : {}),
+      range: input.range,
+      values: input.values as SheetValues,
+      mode: input.mode,
+    })
+    return {
+      output: {
+        spreadsheet_token: target.spreadsheetToken,
+        ...(target.sheetId ? { sheet_id: target.sheetId } : {}),
+        range: written.range,
+        rows: input.values.length,
+        columns,
+        mode: input.mode,
+        ...(written.data !== undefined ? { data: written.data } : {}),
+      },
+    }
+  } catch (error) {
+    await auditFailed(operation, preview, resource, error)
+    throw error
+  }
+}
+
+async function resolveDocIdFromUrl(
+  url: string,
+  deps: FeishuWriteDocDeps,
+): Promise<string> {
+  const link = resolveFeishuLink(url)
+  if (!link.ok) {
+    throw new Error(`Cannot parse Feishu URL: ${link.reason}`)
+  }
+  const resolveResource = deps.resolveResource ?? resolveFeishuResource
+  const resource = await resolveResource({ url }, { client: deps.client })
+  return ensureCanonicalDoc(resource)
+}
+
+async function resolveSheetTargetFromUrl(
+  url: string,
+  deps: FeishuWriteSheetDeps,
+): Promise<{ spreadsheetToken: string; sheetId?: string }> {
+  const link = resolveFeishuLink(url)
+  if (!link.ok) {
+    throw new Error(`Cannot parse Feishu URL: ${link.reason}`)
+  }
+  const resolveResource = deps.resolveResource ?? resolveFeishuResource
+  const resource = await resolveResource({ url }, { client: deps.client })
+  const spreadsheetToken = ensureCanonicalSheet(resource)
+  return {
+    spreadsheetToken,
+    ...(resource.sheetId ? { sheetId: resource.sheetId } : {}),
   }
 }
 
