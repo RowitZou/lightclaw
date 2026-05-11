@@ -618,8 +618,13 @@ export class RlaunchRuntime implements Runtime {
       )
     }
 
-    // Python deps. -i overrides the image's pre-configured internal mirror.
-    // http_proxy is auto-injected by NetworkBridge when network.mode=host.
+    // Python deps. Use the image's pre-configured pip mirror (typically an
+    // internal pypi inside .pjlab.org.cn): pjlab's outbound proxy black-holes
+    // pypi.org / tuna / aliyun, so an explicit `-i https://pypi.org/simple/`
+    // hangs forever (worker pip routes through the NetworkBridge http_proxy
+    // → upstream proxy → blocked). The matching `no_proxy=...,.pjlab.org.cn`
+    // injected via `buildBridgeEnv` lets pip reach the internal mirror
+    // directly without traversing the bridge.
     // lxml_html_clean is required because justext (transitive of trafilatura)
     // imports `lxml.html.clean`, which was split out in lxml >=5. The kubebrain
     // ml-base image ships a recent lxml so the import fails without this dep.
@@ -630,7 +635,6 @@ export class RlaunchRuntime implements Runtime {
       command:
         'python3 -m pip install --quiet --no-warn-script-location ' +
         '--break-system-packages ' +
-        '-i https://pypi.org/simple/ ' +
         'trafilatura==2.0.0 markdownify==1.2.2 lxml_html_clean==0.4.4 ' +
         '"Pillow>=10,<12" "openpyxl>=3.1,<4" "python-docx>=1.1,<2" "python-pptx>=1.0,<2"',
       timeoutMs: 240_000,
