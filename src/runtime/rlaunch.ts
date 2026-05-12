@@ -17,7 +17,7 @@ import type {
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { resolveDefaultHelperRoot } from './local.js'
-import { MountTablePathPolicy } from './path-policy/mount-table.js'
+import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
@@ -224,6 +224,14 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private async _startOnce(triggerReason?: string): Promise<void> {
+    // Fail fast on misconfigured host mounts before any cluster action.
+    // SharedClusterFsData / LayeredDataPlane assume daemon can reach
+    // mount.host (the gpfs host-side prefix); without this probe a
+    // permission / ENOENT misconfig would only surface as a sticky-disabled
+    // stderr line on the first tool call, silently routing all reads back
+    // through brainctl exec — exactly the Bug 1 regression path.
+    await assertMountsAccessible(this.paths, 'rlaunch')
+
     const record = lookupWorkerRecord(this.cfg.canonicalUser)
     // Reason carried through to the spawn log so admin can grep cause when
     // workers churn (Bug 3 in the 2026-05-10 audit). triggerReason wins so

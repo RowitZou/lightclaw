@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import path from 'node:path'
 
-import { MountTablePathPolicy } from './mount-table.js'
+import { assertMountsAccessible, MountTablePathPolicy } from './mount-table.js'
 
 test('MountTablePathPolicy maps worker paths to host paths and back', () => {
   const policy = new MountTablePathPolicy([
@@ -57,4 +59,85 @@ test('MountTablePathPolicy rejects overlapping mount entries', () => {
     ]),
     /Overlapping runtime mount entries/,
   )
+})
+
+test('assertMountsAccessible passes for reachable rw mount', async () => {
+  const hostRoot = mkdtempSync(path.join(tmpdir(), 'lc-mount-probe-ok-'))
+  try {
+    const policy = new MountTablePathPolicy([
+      { host: hostRoot, worker: '/workspace', mode: 'rw' },
+    ])
+    await assertMountsAccessible(policy, 'docker')
+  } finally {
+    rmSync(hostRoot, { recursive: true, force: true })
+  }
+})
+
+test('assertMountsAccessible passes for reachable ro mount with only R_OK', async () => {
+  const hostRoot = mkdtempSync(path.join(tmpdir(), 'lc-mount-probe-ro-'))
+  try {
+    // Restrict to read+execute so W_OK fails — probe should still pass because
+    // the mount is declared ro and we only require R_OK in that case.
+    chmodSync(hostRoot, 0o555)
+    const policy = new MountTablePathPolicy([
+      { host: hostRoot, worker: '/opt/ro', mode: 'ro' },
+    ])
+    await assertMountsAccessible(policy, 'docker')
+  } finally {
+    // Restore writable mode so rmSync can clean up.
+    chmodSync(hostRoot, 0o700)
+    rmSync(hostRoot, { recursive: true, force: true })
+  }
+})
+
+test('assertMountsAccessible throws on missing mount entry with admin-friendly message', async () => {
+  const missingPath = path.join(tmpdir(), `lc-mount-probe-missing-${Date.now()}`)
+  const policy = new MountTablePathPolicy([
+    { host: missingPath, worker: '/workspace', mode: 'rw' },
+  ])
+  await assert.rejects(
+    () => assertMountsAccessible(policy, 'docker'),
+    (err: unknown) => {
+      if (!(err instanceof Error)) return false
+      assert.match(err.message, /\[docker\] runtime mount \/workspace/)
+      assert.match(err.message, /ENOENT/)
+      assert.match(err.message, /mode=rw/)
+      assert.match(err.message, /runtime\.docker\.mounts/)
+      return true
+    },
+  )
+})
+
+test('assertMountsAccessible throws on rw mount that lacks W_OK', async () => {
+  // Skip when running as root (W_OK always succeeds) — covered on CI runners
+  // with unprivileged uid; locally root invocations exit early without
+  // weakening the test elsewhere.
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    return
+  }
+  const hostRoot = mkdtempSync(path.join(tmpdir(), 'lc-mount-probe-ro-as-rw-'))
+  try {
+    chmodSync(hostRoot, 0o555)
+    const policy = new MountTablePathPolicy([
+      { host: hostRoot, worker: '/workspace', mode: 'rw' },
+    ])
+    await assert.rejects(
+      () => assertMountsAccessible(policy, 'rlaunch'),
+      (err: unknown) => {
+        if (!(err instanceof Error)) return false
+        assert.match(err.message, /\[rlaunch\] runtime mount/)
+        assert.match(err.message, /mode=rw/)
+        assert.match(err.message, /EACCES|EPERM/)
+        return true
+      },
+    )
+  } finally {
+    chmodSync(hostRoot, 0o700)
+    rmSync(hostRoot, { recursive: true, force: true })
+  }
+})
+
+test('assertMountsAccessible is a no-op for empty mount table (LocalRuntime case)', async () => {
+  const policy = new MountTablePathPolicy([])
+  await assertMountsAccessible(policy, 'local')
 })

@@ -19,7 +19,7 @@ import {
 } from './image-readiness.js'
 import { BindMountData } from './data-plane/bind-mount.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
-import { MountTablePathPolicy } from './path-policy/mount-table.js'
+import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 
 export type DockerMount = {
@@ -176,6 +176,13 @@ export class DockerRuntime implements Runtime {
   }
 
   async start(): Promise<void> {
+    // Fail fast on misconfigured host mounts before any docker action.
+    // BindMountData / LayeredDataPlane assume daemon can reach mount.host;
+    // without this probe a permission / ENOENT misconfig would only surface
+    // as a sticky-disabled stderr line on the first tool call, silently
+    // routing all reads back through docker exec.
+    await assertMountsAccessible(this.paths, 'docker')
+
     const state = await this.inspectState()
     if (state === 'running') {
       return
