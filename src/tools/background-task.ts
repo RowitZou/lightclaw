@@ -15,7 +15,7 @@ import {
   type BackgroundTaskEntry,
 } from '../background-task/types.js'
 import { parseRule } from '../permission/rules.js'
-import { requireCurrentUserId } from '../state.js'
+import { getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
 function shortId(): string {
@@ -117,6 +117,13 @@ export const backgroundTaskTool = buildTool({
     }
 
     const now = new Date().toISOString()
+    // Capture origin session so notify_to:'agent' wakes land back in the chat
+    // the task was created from (Bug 15). DM origin → wake stays in DM
+    // transcript (legacy behavior); group origin → wake runs on the sender's
+    // per-group slice transcript so the wake agent inherits the conversation
+    // that motivated the task. User-facing DM markdown push stays unchanged
+    // (privacy invariant: notify_user output never leaks to group).
+    const originSessionId = getSessionId()
     const entry: BackgroundTaskEntry = {
       id: `${userId}-${shortId()}`,
       ownerCanonicalUser: userId,
@@ -130,6 +137,7 @@ export const backgroundTaskTool = buildTool({
       consecutiveFailures: 0,
       fireHistory: [],
       ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
+      originSessionId,
     }
     addBackgroundTask(userId, entry)
     notifyBackgroundTaskChanged(userId, entry.id)

@@ -363,22 +363,36 @@ export class BackgroundTaskScheduler {
 
     if (notifyTo === 'agent') {
       // Gate the wake path BEFORE dispatching, so failures degrade to the
-      // user-card path instead of vanishing. Two preconditions must hold:
+      // user-card path instead of vanishing. Three preconditions:
       //   (1) LocalRuntime is admin-only (mirrors runner.ts:56). A failure
       //       outcome from a non-admin under local backend can still reach
       //       deliverCompletion, and resolveEffectiveNotifyTo would otherwise
       //       send it through wake — which would re-acquire LocalRuntime in a
       //       new context. Block here instead.
-      //   (2) Phase 26 sessionId formula requires a real on-disk DM session;
-      //       the legacy `feishu-<canonical>` hard-code orphaned the wake
-      //       transcript and broke FIFO with the user's actual DM lock.
+      //   (2) Wake needs a real on-disk Feishu session (DM or group). Bug 15:
+      //       prefer `task.originSessionId` (the chat the BackgroundTask was
+      //       created from), so the wake agent inherits the conversation
+      //       context that motivated the task. Fall back to "most recent DM"
+      //       only when origin is missing (legacy pre-Bug-15 tasks) or its
+      //       transcript no longer exists on disk.
+      //   (3) Privacy is preserved at delivery: `deliverWakeNotification`
+      //       still pushes user markdown to DM open_id regardless of origin,
+      //       so group-origin wakes never leak notify_user text into the
+      //       group chat.
       const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
       const adminBlocksWake = adminId !== null && adminId !== canonicalUser
       const sessionsDir = this.config?.sessionsDir
       let wakeSessionId: string | null = null
       if (!adminBlocksWake && sessionsDir) {
-        const { resolveWakeSessionId } = await import('./wake.js')
-        wakeSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
+        const { resolveOriginWakeSessionId, resolveWakeSessionId } = await import('./wake.js')
+        // Prefer origin session if it parses to a Feishu DM/group session id
+        // and the transcript exists. Otherwise fall back to most-recent DM.
+        if (task.originSessionId) {
+          wakeSessionId = await resolveOriginWakeSessionId(task.originSessionId, sessionsDir)
+        }
+        if (!wakeSessionId) {
+          wakeSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
+        }
       }
       if (adminBlocksWake) {
         process.stderr.write(
@@ -390,7 +404,7 @@ export class BackgroundTaskScheduler {
         )
       } else if (!wakeSessionId) {
         process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} wake skipped: no feishu DM session for ${canonicalUser}; falling back to user card\n`,
+          `[background-task] ${task.id} fire ${fireUuid} wake skipped: no usable origin/DM session for ${canonicalUser}; falling back to user card\n`,
         )
       } else {
         const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')

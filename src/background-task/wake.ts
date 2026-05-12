@@ -29,21 +29,31 @@ import { getAllTools, getEnabledTools } from '../tools.js'
 import type { BackgroundTaskEntry, FireOutcome, WakeNotifyResult } from './types.js'
 
 /**
- * Resolve the wake-target sessionId for a canonical user — the most-recently-
- * active feishu DM session belonging to that user. Returns null when no DM
- * session is on disk; caller must fall back to the user-card path rather than
- * fabricating a session id (the pre-Phase-26 `feishu-<canonical>` format
- * silently created an orphan transcript that did not lock against the user's
- * real DM session, breaking turn-level FIFO).
+ * Resolve the FALLBACK wake-target sessionId for a canonical user — the
+ * most-recently-active feishu DM session belonging to that user. Returns null
+ * when no DM session is on disk; caller falls back to the user-card path
+ * rather than fabricating a session id (the pre-Phase-26 `feishu-<canonical>`
+ * format silently created an orphan transcript that did not lock against the
+ * user's real DM session, breaking turn-level FIFO).
  *
- * Why DM, not group:
- *   - Privacy: BackgroundTask completion is a 1-on-1 reminder; surfacing it
- *     in a group leaks task content to other group members.
- *   - Continuity: DM is where the user is most likely to read agent output;
- *     Phase 26 group sessions are sender-specific and can be silent for days.
- *   - Phase 26 sessionId formula already gives us `feishu:dm:<chatId>`; meta
- *     `userId` ties each on-disk session back to its canonical user, so no
- *     new schema is needed.
+ * This is the FALLBACK only. Bug 15 (2026-05-12) added
+ * `resolveOriginWakeSessionId` which is preferred when the task carries an
+ * `originSessionId` pointing to a still-existing transcript — that path keeps
+ * the wake agent in the chat the task was created from (group or DM) so the
+ * model inherits the conversation that motivated the task.
+ *
+ * Why DM-only for the fallback:
+ *   - When the task has no origin (legacy pre-Bug-15 entries) or the origin
+ *     transcript has been deleted, "most-recent DM" is the safest landing
+ *     because it's the user's stable channel.
+ *   - Group sessions in Phase 26 are sender-specific; without an explicit
+ *     origin link there's no principled way to pick a group, and the privacy
+ *     boundary (do not leak task content into a group transcript that other
+ *     members may share) defaults to DM.
+ *   - Privacy is preserved end-to-end at delivery: `deliverWakeNotification`
+ *     ALWAYS pushes the user markdown to the DM open_id regardless of which
+ *     transcript the wake `query()` ran on, so group-origin wakes never
+ *     surface notify_user text into the group chat.
  */
 export async function resolveWakeSessionId(
   canonicalUser: string,
@@ -78,6 +88,39 @@ export async function resolveWakeSessionId(
   return best?.sessionId ?? null
 }
 
+/**
+ * Resolve the origin-preference wake target. Returns the originSessionId iff:
+ *   - it parses to a Feishu sessionId (`feishu:dm:` or `feishu:group:` prefix)
+ *   - a transcript directory + readable meta.json exists at that path
+ *
+ * Returns null when origin is unusable, so the scheduler can fall back to the
+ * legacy `resolveWakeSessionId` (most-recent DM). We do NOT require meta.userId
+ * to match canonicalUser here: the sessionId formula already encodes ownership
+ * (DM chat_id is per-user; group session id encodes senderOpenId which the
+ * pairing pipeline ties to canonical user), and origin was captured under the
+ * task owner's ALS scope at create time. Re-validating via meta would block
+ * legitimate wakes on cosmetic meta drift (e.g. transcript moved between
+ * canonical names during identity merge).
+ *
+ * Terminal-origin tasks (e.g. admin scheduled via REPL) return null here and
+ * fall through to DM fallback — wake mode is Feishu-only because notify_user
+ * delivery requires a feishu open_id. This matches the pre-Bug-15 behavior
+ * for that subset of tasks.
+ */
+export async function resolveOriginWakeSessionId(
+  originSessionId: string,
+  sessionsDir: string,
+): Promise<string | null> {
+  if (!originSessionId.startsWith('feishu:dm:') && !originSessionId.startsWith('feishu:group:')) {
+    return null
+  }
+  const meta = await readMetaFromDir(sessionsDir, originSessionId)
+  if (!meta) {
+    return null
+  }
+  return originSessionId
+}
+
 async function readMetaFromDir(
   sessionsDir: string,
   sessionId: string,
@@ -96,9 +139,15 @@ async function readMetaFromDir(
 
 export async function wakeMainAgent(input: {
   canonicalUser: string
-  /** Resolved by caller via `resolveWakeSessionId`; must be a real on-disk
-   *  session id (Phase 26 `feishu:dm:<chatId>`). The pre-Phase-26 hard-coded
-   *  `feishu-<canonical>` form is rejected here as defense-in-depth. */
+  /** Resolved by caller via `resolveOriginWakeSessionId` (preferred) or
+   *  `resolveWakeSessionId` (fallback). Must be a real on-disk Feishu session
+   *  id (`feishu:dm:<chatId>` or `feishu:group:<chatId>[:<threadId>]:<senderOpenId>`).
+   *  Bug 15: group sessions are now accepted so notify_to:'agent' wakes land
+   *  back in the chat the task was created from, inheriting that chat's
+   *  conversation context. The pre-Phase-26 hard-coded `feishu-<canonical>`
+   *  form is rejected here as defense-in-depth. Privacy is preserved at
+   *  delivery: `deliverWakeNotification` still pushes markdown to DM regardless
+   *  of which transcript the wake `query()` ran on. */
   mainSessionId: string
   task: BackgroundTaskEntry
   outcome: FireOutcome
@@ -110,9 +159,9 @@ export async function wakeMainAgent(input: {
   priorPromptNotice?: string
 }): Promise<WakeNotifyResult> {
   const { mainSessionId } = input
-  if (!mainSessionId.startsWith('feishu:dm:')) {
+  if (!mainSessionId.startsWith('feishu:dm:') && !mainSessionId.startsWith('feishu:group:')) {
     process.stderr.write(
-      `[background-task] wake refused: mainSessionId "${mainSessionId}" is not a feishu DM session id (Phase 26 format)\n`,
+      `[background-task] wake refused: mainSessionId "${mainSessionId}" is not a Phase 26 Feishu session id (expected feishu:dm: or feishu:group: prefix)\n`,
     )
     return { kind: 'silent', reason: 'wake-refused-bad-session-id' }
   }
@@ -293,6 +342,7 @@ export function buildWakePrompt(
       '',
       'If you call stay_silent without updating allowed_tools, the task remains broken and will likely fail again.',
       'High-risk patterns such as rm/dd/sudo are routed directly to the user approval card and should not appear in this wake.',
+      'notify_user delivery: your notify_user({text}) is pushed to the user as a private DM markdown — it does NOT echo into the chat this wake is running in. So even if this wake is running in a group session for context, calling notify_user does not leak to the group; you do not need to "also reply in this chat" after notify_user.',
     ].join('\n')
   }
   return [
@@ -306,6 +356,7 @@ export function buildWakePrompt(
     'This is a wake from a scheduled BackgroundTask.',
     'Decide whether to disturb the user.',
     'Use notify_user({text}) to send a message, or stay_silent({reason}) to end without notifying.',
+    'notify_user delivery: your notify_user({text}) is pushed to the user as a private DM markdown — it does NOT echo into the chat this wake is running in. So even if this wake is running in a group session for context, calling notify_user does not leak to the group; you do not need to "also reply in this chat" after notify_user.',
   ].join('\n')
 }
 

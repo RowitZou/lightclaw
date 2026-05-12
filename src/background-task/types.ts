@@ -59,6 +59,16 @@ export type BackgroundTaskEntry = {
   // prompt update before the next fire overwrites this field; intentional
   // loss to avoid unbounded growth and noisy repeated notices.
   pendingPriorPromptNotice?: string
+  // The sessionId the BackgroundTask was created from. Used by the wake
+  // path (notify_to:'agent') so the wake agent runs against the origin
+  // chat's transcript and inherits the context that motivated the task
+  // ("watch this deploy" / "remind me in group X about Y"). Optional for
+  // backward compat with pre-2026-05-12 tasks; scheduler.deliverCompletion
+  // falls back to resolveWakeSessionId (most-recent DM) when this field
+  // is missing or the origin session no longer exists on disk. Privacy
+  // is preserved: user-facing markdown push still goes to DM open_id;
+  // only the wake query()'s transcript / context routing follows origin.
+  originSessionId?: string
 }
 
 export type PermissionDenialDetail = {
@@ -99,7 +109,7 @@ export type WakeNotifyResult =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools' | 'pendingPriorPromptNotice'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools' | 'pendingPriorPromptNotice' | 'originSessionId'>>
     }
   | {
       version: 2
@@ -125,4 +135,5 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   })).optional(),
   allowedTools: z.array(z.string().min(1)).optional(),
   pendingPriorPromptNotice: z.string().optional(),
+  originSessionId: z.string().optional(),
 })
