@@ -52,6 +52,13 @@ export type BackgroundTaskEntry = {
   consecutiveFailures: number
   fireHistory?: FireHistoryEntry[]
   allowedTools?: string[]
+  // Set by UpdateBackgroundTask when prompt is changed: holds the prior
+  // prompt so the NEXT completion card / wake prompt can surface "prompt
+  // was changed before this fire (old: ...)" once and then clear. Consumed
+  // by scheduler.deliverCompletion at delivery time. NOT a chain: a second
+  // prompt update before the next fire overwrites this field; intentional
+  // loss to avoid unbounded growth and noisy repeated notices.
+  pendingPriorPromptNotice?: string
 }
 
 export type PermissionDenialDetail = {
@@ -78,6 +85,10 @@ export type PendingCardAction = {
   outcome: FireOutcome
   firedAt: string
   autopaused?: boolean
+  // Captured + cleared from task.pendingPriorPromptNotice by the scheduler at
+  // delivery time. The completion card surfaces "prompt was updated from
+  // <old>" once on this fire and not again on subsequent fires.
+  priorPromptNotice?: string
 }
 
 export type WakeNotifyResult =
@@ -88,7 +99,7 @@ export type WakeNotifyResult =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools' | 'pendingPriorPromptNotice'>>
     }
   | {
       version: 2
@@ -113,4 +124,5 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
     success: z.boolean(),
   })).optional(),
   allowedTools: z.array(z.string().min(1)).optional(),
+  pendingPriorPromptNotice: z.string().optional(),
 })

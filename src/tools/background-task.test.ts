@@ -118,6 +118,73 @@ describe('BackgroundTask tools', () => {
     assert.deepEqual(loadBackgroundTasks('alice'), [])
   })
 
+  it('UpdateBackgroundTask changes the prompt and stores the prior prompt as a one-shot notice', async () => {
+    const created = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'remind me at 8am that the daily standup is starting',
+      schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 8, minute: 0 },
+      label: 'Daily standup',
+    }, fakeContext()))
+    assert.equal(created.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+
+    const updated = await withUser(async () => updateBackgroundTaskTool.call({
+      id: task.id,
+      prompt: 'remind me at 8am, but route the result back to the main agent so it can summarize for me',
+    }, fakeContext()))
+    assert.equal(updated.isError, undefined)
+    const reloaded = loadBackgroundTasks('alice')[0]
+    assert.match(reloaded.prompt, /summarize for me/)
+    // Prior prompt is captured as a one-shot notice; cleared at next-fire
+    // delivery (covered by scheduler integration, not this unit test).
+    assert.equal(reloaded.pendingPriorPromptNotice, 'remind me at 8am that the daily standup is starting')
+  })
+
+  it('UpdateBackgroundTask accepts prompt + allowed_tools + notify_to together in one call', async () => {
+    const created = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'check the workspace and summarize anything important',
+      schedule: { kind: 'interval', everyMinutes: 60 },
+      label: 'Workspace check',
+      notify_to: 'user',
+      allowed_tools: ['Bash(find:*)'],
+    }, fakeContext()))
+    assert.equal(created.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+
+    const updated = await withUser(async () => updateBackgroundTaskTool.call({
+      id: task.id,
+      prompt: 'check the workspace, run pytest, and surface any failing tests with a one-line summary',
+      allowed_tools: ['Bash(find:*)', 'Bash(pytest:*)'],
+      notify_to: 'agent',
+    }, fakeContext()))
+    assert.equal(updated.isError, undefined)
+    const reloaded = loadBackgroundTasks('alice')[0]
+    assert.match(reloaded.prompt, /pytest/)
+    assert.equal(reloaded.notifyTo, 'agent')
+    assert.deepEqual(reloaded.allowedTools, ['Bash(find:*)', 'Bash(pytest:*)'])
+    assert.match(reloaded.pendingPriorPromptNotice ?? '', /summarize anything important/)
+  })
+
+  it('UpdateBackgroundTask does not set the prior-prompt notice when the new prompt equals the existing one', async () => {
+    const created = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'send me a check-in message at 10am every weekday',
+      schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 10, minute: 0 },
+      label: 'Check-in',
+    }, fakeContext()))
+    assert.equal(created.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+
+    // Re-passing the same prompt string should be a no-op for the notice.
+    const updated = await withUser(async () => updateBackgroundTaskTool.call({
+      id: task.id,
+      prompt: 'send me a check-in message at 10am every weekday',
+      label: 'Renamed check-in',
+    }, fakeContext()))
+    assert.equal(updated.isError, undefined)
+    const reloaded = loadBackgroundTasks('alice')[0]
+    assert.equal(reloaded.label, 'Renamed check-in')
+    assert.equal(reloaded.pendingPriorPromptNotice, undefined)
+  })
+
   it('rejects malformed allowed_tools patterns during input validation', () => {
     const parsed = backgroundTaskTool.inputSchema?.safeParse({
       prompt: 'check the workspace and summarize anything important',

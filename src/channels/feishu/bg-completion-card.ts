@@ -9,6 +9,7 @@ export function buildBackgroundTaskSuccessCard(pending: PendingCardAction): Reco
     body: [
       `${t('bg.card.field.task')}: ${pending.task.id}`,
       `${t('bg.card.field.firedAt')}: ${pending.firedAt}`,
+      ...priorPromptNoticeLines(pending.priorPromptNotice),
       '',
       truncate(pending.outcome.kind === 'success' ? pending.outcome.summary : '', 800),
     ].join('\n'),
@@ -29,6 +30,7 @@ export function buildBackgroundTaskFailureCard(pending: PendingCardAction): Reco
       `${t('bg.card.field.task')}: ${pending.task.id}`,
       `${t('bg.card.field.firedAt')}: ${pending.firedAt}`,
       `${t('bg.card.field.attempts')}: ${attempts}`,
+      ...priorPromptNoticeLines(pending.priorPromptNotice),
       '',
       truncate(reason, 800),
     ].join('\n'),
@@ -70,6 +72,7 @@ export function buildPermissionFailureCard(pending: PendingCardAction): Record<s
     body: [
       `${t('bg.card.field.task')}: ${pending.task.id}`,
       `${t('bg.card.field.firedAt')}: ${pending.firedAt}`,
+      ...priorPromptNoticeLines(pending.priorPromptNotice),
       '',
       ...denials.flatMap(denial => [
         `❌ ${denial.toolName} — ${denial.inputPreview}`,
@@ -144,6 +147,17 @@ function buildCard(input: {
 
 function truncate(text: string, maxChars: number): string {
   return text.length <= maxChars ? text : `${text.slice(0, maxChars)}...`
+}
+
+function priorPromptNoticeLines(priorPromptNotice: string | undefined): string[] {
+  if (!priorPromptNotice) {
+    return []
+  }
+  return [
+    '',
+    `**${t('bg.card.priorPromptNotice.title')}**`,
+    t('bg.card.priorPromptNotice.body', { prior: truncate(priorPromptNotice, 500) }),
+  ]
 }
 
 function unique(values: string[]): string[] {
