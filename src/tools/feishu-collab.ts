@@ -16,10 +16,15 @@ import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
 import {
   appendDocText,
   createDoc,
+  grantChatPermission,
+  grantUserPermission,
   readDocPlainText,
   type FeishuDocCreateResult,
   type FeishuDocReadResult,
 } from '../channels/feishu/resources/doc.js'
+import { parseFeishuSessionId } from '../channels/feishu/routing.js'
+import { getIdentity } from '../identity/store.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import {
   formatSheetRange,
   readSheetMetadata,
@@ -87,10 +92,25 @@ const feishuCreateFileInputSchema = z.object({
 
 export type FeishuCreateFileInput = z.infer<typeof feishuCreateFileInputSchema>
 
+export type FeishuPermissionGrants = {
+  // Group chat-level view grant. 'view' = success (or already-exists);
+  // 'failed' = API call rejected; 'skipped-not-group' = DM session (chat
+  // grant would be redundant because the user grant covers the sole
+  // counterparty).
+  chat?: 'view' | 'failed' | 'skipped-not-group'
+  // Sender-level full_access grant. 'full_access' = success (or
+  // already-exists); 'failed' = API call rejected; 'skipped-no-binding' =
+  // could not resolve a Feishu open_id for the requester (terminal admin
+  // with no Feishu pairing, etc.).
+  user?: 'full_access' | 'failed' | 'skipped-no-binding'
+  errors?: string[]
+}
+
 export type FeishuCreateFileOutput = {
   document_id?: string
   url?: string
   title: string
+  permission_grants?: FeishuPermissionGrants
   rawData?: unknown
 }
 
@@ -153,6 +173,7 @@ type FeishuWriteAudit = {
   preview: string
   status: 'confirmed' | 'denied' | 'failed'
   error?: string
+  permissionGrants?: FeishuPermissionGrants
 }
 
 type FeishuReadDeps = {
@@ -169,6 +190,9 @@ type FeishuReadDeps = {
 type FeishuCreateFileDeps = {
   client: FeishuClient
   createDoc?: typeof createDoc
+  grantUser?: typeof grantUserPermission
+  grantChat?: typeof grantChatPermission
+  resolveOwnerOpenId?: (canonicalUser: string) => Promise<string | undefined>
 }
 
 type FeishuWriteDocDeps = {
@@ -223,7 +247,7 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
 export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreateFileOutput | string>({
   name: 'FeishuCreateFile',
   description:
-    'Create a NEW Feishu/Lark resource. V1 supports kind="doc" - creates a docx with optional initial text. Use FeishuWriteDoc to edit an existing doc; this tool is for fresh creation. Always asks the user for explicit write confirmation before calling Feishu.',
+    'Create a NEW Feishu/Lark resource. V1 supports kind="doc" - creates a docx with optional initial text. Use FeishuWriteDoc to edit an existing doc; this tool is for fresh creation. Always asks the user for explicit write confirmation before calling Feishu. After creation, the sender is granted full_access (manager) and, in group chats, the chat is additionally granted view so all members can open the link immediately. Other people who later open the link use Feishu\'s native "Request access" flow, which notifies the sender (the new manager) in IM. The returned permission_grants field reports the outcome of these grants; treat permission_grants.errors as a hint to tell the user how to share manually.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -392,7 +416,12 @@ export async function runFeishuCreateFile(
     ...(input.folder_token ? { folder_token: input.folder_token } : {}),
   }
 
-  await requireFeishuWriteConfirmation({ operation, preview, resource })
+  await requireFeishuWriteConfirmation({
+    operation,
+    preview,
+    resource,
+    deferConfirmedAudit: true,
+  })
 
   try {
     const create = deps.createDoc ?? createDoc
@@ -402,13 +431,138 @@ export async function runFeishuCreateFile(
       content: input.doc?.content,
       folderToken: input.folder_token,
     })
+    // Best-effort initial permission grant. Bot is the doc owner; without
+    // this step the link returned in tool_result is 403 for the requesting
+    // user (Bug 9 from 2026-05-12 dogfood). Failures are non-fatal: the doc
+    // is still created. Granting the sender full_access also delegates
+    // future invitations to Feishu's native permission-request flow (the
+    // sender, not the bot, becomes the human approver).
+    const grants: FeishuPermissionGrants = docMeta.documentId
+      ? await grantInitialPermissions(deps, docMeta.documentId)
+      : {}
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: safeCurrentUserId(),
+      operation,
+      resource,
+      preview,
+      status: 'confirmed',
+      ...(hasGrantContent(grants) ? { permissionGrants: grants } : {}),
+    })
     return {
-      output: formatCreatedDoc(docMeta),
+      output: formatCreatedDoc(docMeta, grants),
     }
   } catch (error) {
+    // Preserve chronology: the confirmed audit was deferred so it could be
+    // merged with permissionGrants on the happy path. When create fails
+    // before grant, write a bare confirmed record first so the audit log
+    // still shows "user approved → SDK failed" instead of jumping straight
+    // to failed.
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: safeCurrentUserId(),
+      operation,
+      resource,
+      preview,
+      status: 'confirmed',
+    })
     await auditFailed(operation, preview, resource, error)
     throw error
   }
+}
+
+function hasGrantContent(grants: FeishuPermissionGrants): boolean {
+  return Boolean(grants.chat || grants.user || grants.errors?.length)
+}
+
+// Resolves grant target from the current SessionContext and applies the
+// chat-level + user-level grants. Strategy:
+//   DM      → grant sender full_access (chat-level grant is redundant since
+//             DM has exactly two members and bot is one of them).
+//   Group   → grant chat view AND sender full_access. The chat grant means
+//             every group member sees the doc immediately; the sender
+//             additionally becomes a manager who can approve subsequent
+//             individual permission requests through Feishu's native UI.
+//   Off-channel (terminal admin, wake, bg-task) → grant the canonical
+//             user's bound open_id full_access; no chat grant.
+async function grantInitialPermissions(
+  deps: FeishuCreateFileDeps,
+  documentId: string,
+): Promise<FeishuPermissionGrants> {
+  const target = await resolveGrantTarget(deps)
+  const grants: FeishuPermissionGrants = {}
+  const errors: string[] = []
+
+  if (target.chatId) {
+    const grantChat = deps.grantChat ?? grantChatPermission
+    const result = await grantChat({
+      client: deps.client,
+      documentId,
+      chatId: target.chatId,
+      perm: 'view',
+    })
+    if (result.ok || result.alreadyExists) {
+      grants.chat = 'view'
+    } else {
+      grants.chat = 'failed'
+      errors.push(`chat-grant: ${result.error}`)
+    }
+  } else {
+    grants.chat = 'skipped-not-group'
+  }
+
+  if (target.openId) {
+    const grantUser = deps.grantUser ?? grantUserPermission
+    const result = await grantUser({
+      client: deps.client,
+      documentId,
+      openId: target.openId,
+      perm: 'full_access',
+    })
+    if (result.ok || result.alreadyExists) {
+      grants.user = 'full_access'
+    } else {
+      grants.user = 'failed'
+      errors.push(`user-grant: ${result.error}`)
+    }
+  } else {
+    grants.user = 'skipped-no-binding'
+  }
+
+  if (errors.length > 0) {
+    grants.errors = errors
+  }
+  return grants
+}
+
+async function resolveGrantTarget(
+  deps: FeishuCreateFileDeps,
+): Promise<{ chatId?: string; openId?: string }> {
+  const ctx = getCurrentSessionContext()
+  const canonicalUser = ctx?.currentUserId
+  const lookupOwner = deps.resolveOwnerOpenId ?? defaultResolveOwnerOpenId
+
+  // Resolve sender open_id. In DM the sessionId carries chat_id (NOT the
+  // sender's open_id), so the identity binding is the only source. In group
+  // sessions the senderOpenId is encoded directly in sessionId.
+  let openId: string | undefined
+  let chatId: string | undefined
+  if (ctx && ctx.channel === 'feishu') {
+    const parsed = parseFeishuSessionId(ctx.sessionId)
+    if (parsed?.kind === 'group') {
+      chatId = parsed.chatId
+      openId = parsed.senderOpenId
+    }
+  }
+  if (!openId && canonicalUser) {
+    openId = await lookupOwner(canonicalUser)
+  }
+  return { chatId, openId }
+}
+
+async function defaultResolveOwnerOpenId(canonicalUser: string): Promise<string | undefined> {
+  const identity = await getIdentity(canonicalUser).catch(() => null)
+  return identity?.channels.feishu[0]
 }
 
 export async function runFeishuWriteDoc(
@@ -537,6 +691,10 @@ async function requireFeishuWriteConfirmation(input: {
   operation: FeishuWriteOperation
   preview: string
   resource: Record<string, unknown>
+  // create-doc defers the confirmed audit so it can merge `permissionGrants`
+  // into a single record once the post-create grants are known. Write paths
+  // (append-doc / sheet) record confirmed audit inline as before.
+  deferConfirmedAudit?: boolean
 }): Promise<void> {
   const approver = getPermissionApprover()
   if (!approver) {
@@ -577,6 +735,9 @@ async function requireFeishuWriteConfirmation(input: {
     throw new Error(`Feishu write denied: ${decision.reason}`)
   }
 
+  if (input.deferConfirmedAudit) {
+    return
+  }
   await recordFeishuWriteAudit({
     at: new Date().toISOString(),
     userId: safeCurrentUserId(),
@@ -611,11 +772,15 @@ async function auditFailed(
   })
 }
 
-function formatCreatedDoc(input: FeishuDocCreateResult): FeishuCreateFileOutput {
+function formatCreatedDoc(
+  input: FeishuDocCreateResult,
+  grants: FeishuPermissionGrants,
+): FeishuCreateFileOutput {
   return {
     ...(input.documentId ? { document_id: input.documentId } : {}),
     ...(input.url ? { url: input.url } : {}),
     title: input.title,
+    ...(hasGrantContent(grants) ? { permission_grants: grants } : {}),
     ...(input.rawData !== undefined ? { rawData: input.rawData } : {}),
   }
 }
