@@ -34,7 +34,28 @@ export type GlobOptions = {
   dot?: boolean
 }
 
-export type RuntimeFs = {
+export type ControlPlaneKind = 'local-spawn' | 'docker-exec' | 'brainctl-exec'
+
+export type ControlPlane = {
+  readonly kind: ControlPlaneKind
+  readonly stdoutByteReliability: 'guaranteed' | 'best-effort' | 'unreliable-large'
+  exec(input: ExecInput): Promise<ExecResult>
+  start(): Promise<void>
+  stop(): Promise<void>
+  isRunning(): boolean
+  isAvailable(): Promise<RuntimeAvailability>
+}
+
+export type DataPlaneKind =
+  | 'host-direct'
+  | 'bind-mount'
+  | 'shared-cluster-fs'
+  | 'exec-relay'
+
+export type DataPlane = {
+  readonly kind: DataPlaneKind
+  readonly independentFromControl: boolean
+  readonly reliability: 'fs-semantic' | 'protocol-multiplex' | 'depends-on-control-plane'
   readFile(pathname: string): Promise<Buffer>
   writeFile(pathname: string, content: Buffer | string): Promise<void>
   stat(pathname: string): Promise<RuntimeStat>
@@ -81,6 +102,24 @@ export type RuntimeFs = {
   readFileViaHostMount?(pathname: string): Promise<Buffer | null>
 }
 
+export type RuntimeFs = DataPlane
+
+export type MountEntry = {
+  host: string
+  worker: string
+  mode: 'rw' | 'ro'
+}
+
+export type PathPolicy = {
+  readonly mountTable: ReadonlyArray<MountEntry>
+  toHostPath(workerPath: string): string | null
+  toWorkerPath(hostPath: string): string | null
+  isShared(workerPath: string): boolean
+  isAllowed(workerPath: string, op: 'read' | 'write' | 'stat'): boolean
+}
+
+export type SecurityProfile = 'host-trusted' | 'container-isolated' | 'cluster-isolated'
+
 export type RuntimeAvailability =
   | { ok: true }
   | {
@@ -100,6 +139,7 @@ export type RuntimeAvailability =
 
 export type Runtime = {
   readonly kind: RuntimeKind
+  /** @deprecated since Phase 33 — use securityProfile. */
   readonly isolated: boolean
   /**
    * Workspace root in the environment's own path view.
@@ -107,6 +147,10 @@ export type Runtime = {
    */
   readonly workspaceRoot: string
   readonly helperRoot: string
+  readonly securityProfile: SecurityProfile
+  readonly control: ControlPlane
+  readonly data: DataPlane
+  readonly paths: PathPolicy
 
   start(): Promise<void>
   stop(): Promise<void>
@@ -119,6 +163,8 @@ export type Runtime = {
    */
   isAvailable(): Promise<RuntimeAvailability>
 
+  /** @deprecated since Phase 33 — use runtime.control.exec. */
   exec(input: ExecInput): Promise<ExecResult>
+  /** @deprecated since Phase 33 — use runtime.data. */
   fs: RuntimeFs
 }

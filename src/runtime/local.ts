@@ -8,9 +8,12 @@ import { fileURLToPath } from 'node:url'
 import fastGlob from 'fast-glob'
 
 import type {
+  ControlPlane,
+  DataPlane,
   ExecInput,
   ExecResult,
   GlobOptions,
+  PathPolicy,
   Runtime,
   RuntimeAvailability,
   RuntimeFs,
@@ -23,8 +26,12 @@ const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 export class LocalRuntime implements Runtime {
   readonly kind = 'local' as const
   readonly isolated = false
+  readonly securityProfile = 'host-trusted' as const
   readonly workspaceRoot: string
   readonly helperRoot: string
+  readonly control: ControlPlane
+  readonly data: DataPlane
+  readonly paths: PathPolicy
   /** Proxy env injected into every spawned Bash subprocess, sourced
    *  from `runtime.network.proxy` + `runtime.network.noProxy`. Null =
    *  no injection (subprocesses see the parent process env unchanged).
@@ -41,6 +48,23 @@ export class LocalRuntime implements Runtime {
     this.workspaceRoot = path.resolve(workspaceRoot)
     this.helperRoot = resolveDefaultHelperRoot()
     this.proxyEnv = buildLocalProxyEnv(proxy, noProxy)
+    this.control = {
+      kind: 'local-spawn',
+      stdoutByteReliability: 'guaranteed',
+      exec: input => this.exec(input),
+      start: () => this.start(),
+      stop: () => this.stop(),
+      isRunning: () => this.isRunning(),
+      isAvailable: () => this.isAvailable(),
+    }
+    this.data = this.fs
+    this.paths = {
+      mountTable: [],
+      toHostPath: pathname => this.absolutize(pathname),
+      toWorkerPath: pathname => this.absolutize(pathname),
+      isShared: () => true,
+      isAllowed: () => true,
+    }
   }
 
   async start(): Promise<void> {
@@ -178,6 +202,9 @@ export class LocalRuntime implements Runtime {
   }
 
   fs: RuntimeFs = {
+    kind: 'host-direct',
+    independentFromControl: true,
+    reliability: 'fs-semantic',
     readFile: async pathname => readFile(this.absolutize(pathname)),
     writeFile: async (pathname, content) => {
       const resolved = this.absolutize(pathname)

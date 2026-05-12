@@ -436,6 +436,88 @@ describe('readFileViaExec (rlaunch single-hop readFile)', () => {
   })
 })
 
+describe('RlaunchRuntime three-plane data path', () => {
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-plane-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
+    ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+  })
+
+  it('keeps the compatibility shim as the same object as runtime.data', () => {
+    assert.equal(runtime.fs, runtime.data)
+    assert.equal(runtime.control.kind, 'brainctl-exec')
+    assert.equal(runtime.control.stdoutByteReliability, 'unreliable-large')
+    assert.equal(runtime.paths.toHostPath('/workspace/a/b.txt'), path.join(hostRoot, 'a', 'b.txt'))
+  })
+
+  it('reads large in-mount files through shared-cluster-fs instead of brainctl exec', async () => {
+    const payload = Buffer.alloc(6_177_650, 7)
+    const hostFile = path.join(hostRoot, '.lightclaw', 'inbox', 'paper.pdf')
+    mkdirSync(path.dirname(hostFile), { recursive: true })
+    writeFileSync(hostFile, payload)
+
+    let execCalled = false
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      execCalled = true
+      return { stdout: '', stderr: 'should not be called', exitCode: 1 }
+    }
+
+    const got = await runtime.fs.readFile('/workspace/.lightclaw/inbox/paper.pdf')
+    assert.equal(got.length, payload.length)
+    assert.equal(Buffer.compare(got, payload), 0)
+    assert.equal(execCalled, false)
+  })
+
+  it('keeps the legacy out-of-workspace path rejection before exec-relay', async () => {
+    let execCalled = false
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
+      execCalled = true
+      if (input.command.startsWith('stat -c %s')) {
+        return { stdout: '6177650\n', stderr: '', exitCode: 0 }
+      }
+      return {
+        stdout: Buffer.alloc(6_174_720, 1).toString('base64'),
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+
+    await assert.rejects(
+      () => runtime.fs.readFile('/etc/paper.pdf'),
+      /Path is not within RlaunchRuntime workspace/,
+    )
+    assert.equal(execCalled, false)
+  })
+})
+
 describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast path)', () => {
   let hostRoot: string
   let runtime: RlaunchRuntime
