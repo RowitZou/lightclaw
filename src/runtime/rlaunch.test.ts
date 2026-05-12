@@ -740,3 +740,89 @@ describe('RlaunchRuntime.fs.readFileViaHostMount (host-side bind-mount fast path
     assert.equal(rResult.toString('utf8'), 'ok')
   })
 })
+
+describe('RlaunchRuntime isAvailable retryable mapping', () => {
+  // Bug 12 (2026-05-12 dogfood) invariant: every non-ok branch must carry a
+  // boolean `retryable` so query.ts can decide is_error per branch instead of
+  // surfacing every transient backoff as a tool failure.
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+  let tracker: WorkerReadinessTracker
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-avail-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    tracker = new WorkerReadinessTracker('alice')
+    runtime = new RlaunchRuntime(config, tracker)
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+  })
+
+  it('worker-scheduling is retryable + body has no absolute-negation phrasing', async () => {
+    tracker.startSchedule('registry/x:tag')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-scheduling')
+    assert.equal(avail.retryable, true)
+    // Bug 12 phrasing regression guard: the old wording
+    // "我现在不能执行命令、读写文件或抓取网页" reads to the model as a hard
+    // capability claim and primes "I have no tools" behavior. The replacement
+    // must not contain that absolute negation.
+    assert.ok(!avail.userMessage.includes('不能执行命令'),
+      `worker-scheduling userMessage must drop the "不能执行命令" phrasing, got: ${avail.userMessage}`)
+    assert.ok(avail.userMessage.includes('准备'),
+      'worker-scheduling userMessage should still describe "正在准备"')
+  })
+
+  it('not-attempted (initial state) is retryable', async () => {
+    // tracker starts in 'not-attempted' — isAvailable() must treat it as
+    // retryable scheduling. This is the path the very first turn hits before
+    // any start() call has run.
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-scheduling')
+    assert.equal(avail.retryable, true)
+  })
+
+  it('worker-quota-denied is NOT retryable', async () => {
+    tracker.markQuotaDenied('quota exceeded for ailab-hs/hs_cpu')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-quota-denied')
+    assert.equal(avail.retryable, false)
+  })
+
+  it('worker-failed is NOT retryable', async () => {
+    tracker.markFailed('rlaunch detached exited 1: image pull error')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-failed')
+    assert.equal(avail.retryable, false)
+  })
+})

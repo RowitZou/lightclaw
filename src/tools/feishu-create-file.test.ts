@@ -23,6 +23,11 @@ type AuditRecord = {
   preview: string
   status: string
   error?: string
+  permissionGrants?: {
+    chat?: string
+    user?: string
+    errors?: string[]
+  }
 }
 
 beforeEach(async () => {

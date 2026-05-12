@@ -131,6 +131,19 @@ export type RuntimeAvailability =
       reason: 'image-pulling' | 'image-failed' | 'image-not-attempted' | 'autopull-disabled'
         | 'worker-scheduling' | 'worker-failed' | 'worker-quota-denied'
       /**
+       * True when the unavailability is expected to clear on its own (image
+       * still pulling, worker still scheduling): the next agent turn or a
+       * short delay can recover without admin intervention. False for fatal
+       * states (`image-failed`, `worker-failed`, `worker-quota-denied`) and
+       * for `autopull-disabled` (a config decision, not a transient).
+       *
+       * Consumed by `query.ts` so the environment-gate `tool_result` carries
+       * `is_error: true` only for fatal cases. Retryable cases ship as
+       * `is_error: false` so the LLM doesn't get the "tool call failed"
+       * mental-model trigger and instead reads the body as a soft backoff.
+       */
+      retryable: boolean
+      /**
        * Channel-user-facing message: soft, no docker stderr leakage.
        */
       userMessage: string

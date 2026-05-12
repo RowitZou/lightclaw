@@ -977,7 +977,16 @@ async function dispatchToolCall(
       const runtime = getRuntime()
       const availability = await runtime.isAvailable()
       if (!availability.ok) {
-        return reportToolResult(ctx, toolUse, availability.userMessage, true)
+        // Retryable unavailability (worker still scheduling, image still
+        // pulling) is a soft backoff, not a tool failure. Surface it as
+        // `is_error: false` so the LLM reads it as informational rather
+        // than tripping the "tool call failed" behavior (apology + don't
+        // retry). Fatal states keep `is_error: true`.
+        const isFatal = !availability.retryable
+        const body = availability.retryable
+          ? `${availability.userMessage}\n\n[runtime: ${availability.reason}, retryable]`
+          : availability.userMessage
+        return reportToolResult(ctx, toolUse, body, isFatal)
       }
     }
 
