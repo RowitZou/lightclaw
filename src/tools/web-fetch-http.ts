@@ -23,10 +23,10 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 
 import { getConfig } from '../config.js'
 
-/** Injectable axios.get for unit tests. The DI shim mirrors
- *  `_setWebFetchSummarizerForTests` in web-fetch.ts — both replace a
- *  module-level callable so tests can run against stubbed transport
- *  without touching the real network. Tests reset to null in
+/** Injectable axios.get for unit tests of the HTTP layer itself. The DI
+ *  shim mirrors `_setWebFetchSummarizerForTests` in web-fetch.ts — both
+ *  replace a module-level callable so tests can run against stubbed
+ *  transport without touching the real network. Tests reset to null in
  *  afterEach to restore the real axios. */
 type AxiosGetLike = <T = unknown>(
   url: string,
@@ -35,6 +35,20 @@ type AxiosGetLike = <T = unknown>(
 let httpGetFn: AxiosGetLike = (url, config) => axios.get(url, config)
 export function _setHttpGetForTests(fn: AxiosGetLike | null): void {
   httpGetFn = fn ?? ((url, config) => axios.get(url, config))
+}
+
+/** Higher-level injection for callers of daemonFetchUrl (e.g. web-fetch.ts'
+ *  tool tests). Skips the axios shape entirely so tests can return the
+ *  shape they care about (bytes / contentType / finalUrl) without forging
+ *  an AxiosResponse. The same null-reset pattern restores real fetch. */
+type DaemonFetchFn = (
+  url: string,
+  signal: AbortSignal,
+  timeoutMs?: number,
+) => Promise<DaemonFetchResult>
+let daemonFetchFn: DaemonFetchFn | null = null
+export function _setDaemonFetchUrlForTests(fn: DaemonFetchFn | null): void {
+  daemonFetchFn = fn
 }
 
 /** 10 MB cap on raw response body, Claude Code-aligned
@@ -122,6 +136,7 @@ export async function daemonFetchUrl(
   signal: AbortSignal,
   timeoutMs?: number,
 ): Promise<DaemonFetchResult> {
+  if (daemonFetchFn) return daemonFetchFn(url, signal, timeoutMs)
   const proxy = getConfig().runtime.network.proxy
   // Same agent on both http and https so a single proxy URL covers both;
   // matches feishu/transport-ws.ts:407. `proxy: false` disables axios's

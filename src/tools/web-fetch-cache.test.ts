@@ -11,6 +11,7 @@ import {
 } from './web-fetch-cache.js'
 
 import { _setWebFetchSummarizerForTests, webFetchTool } from './web-fetch.js'
+import { _setDaemonFetchUrlForTests } from './web-fetch-http.js'
 import type { ToolCallContext } from '../tool.js'
 
 describe('web-fetch-cache (unit)', () => {
@@ -54,16 +55,30 @@ describe('web-fetch-cache (unit)', () => {
   })
 })
 
-function buildCtx(stdout: string, execCount: { n: number }): ToolCallContext {
+/**
+ * Build a minimal ToolCallContext + arrange a daemonFetchUrl stub. The
+ * `body` is delivered as text/plain so textBodyToMarkdown's else branch
+ * does only trim (no turndown DOM walk), making the body pass through
+ * byte-for-byte. fetchCount tracks call count to verify cache short-
+ * circuits the fetch call (Phase 34: replaces the runtime.exec count
+ * the pre-migration tests used).
+ */
+function buildCtxWithFetch(body: string, fetchCount: { n: number }): ToolCallContext {
+  _setDaemonFetchUrlForTests(async () => {
+    fetchCount.n += 1
+    return {
+      status: 200,
+      finalUrl: 'https://example.com/',
+      contentType: 'text/plain; charset=utf-8',
+      bytes: Buffer.from(body, 'utf-8'),
+    }
+  })
   return {
     abortSignal: new AbortController().signal,
     runtime: {
       helperRoot: '/fake/helpers',
       workspaceRoot: '/fake/workspace',
-      async exec() {
-        execCount.n += 1
-        return { stdout, stderr: '', exitCode: 0 }
-      },
+      fs: { async writeFile() {} },
     },
   } as unknown as ToolCallContext
 }
@@ -74,52 +89,53 @@ describe('WebFetch integration with cache', () => {
   })
   afterEach(() => {
     _setWebFetchSummarizerForTests(null)
+    _setDaemonFetchUrlForTests(null)
   })
 
   it('second call to same URL+prompt skips exec AND summarize (cache hit)', async () => {
-    const execCount = { n: 0 }
+    const fetchCount = { n: 0 }
     let summarizeCount = 0
     _setWebFetchSummarizerForTests(async () => {
       summarizeCount += 1
       return 'summary text'
     })
 
-    // First call: cold cache, exec + summarize run
+    // First call: cold cache, fetch + summarize run
     const r1 = await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'what is foo?' },
-      buildCtx('Page about foo.', execCount),
+      buildCtxWithFetch('Page about foo.', fetchCount),
     )
     assert.equal(r1.output, 'summary text')
-    assert.equal(execCount.n, 1)
+    assert.equal(fetchCount.n, 1)
     assert.equal(summarizeCount, 1)
 
     // Second call: cache hit, neither exec nor summarize run
     const r2 = await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'what is foo?' },
-      buildCtx('UNUSED', execCount),
+      buildCtxWithFetch('UNUSED', fetchCount),
     )
     assert.equal(r2.output, 'summary text')
-    assert.equal(execCount.n, 1, 'exec should NOT be re-called on cache hit')
+    assert.equal(fetchCount.n, 1, 'fetch should NOT be re-called on cache hit')
     assert.equal(summarizeCount, 1, 'summarize should NOT be re-called on cache hit')
   })
 
   it('different prompts on same URL each trigger a fresh fetch', async () => {
-    const execCount = { n: 0 }
+    const fetchCount = { n: 0 }
     _setWebFetchSummarizerForTests(async (input) => `summary for "${input.prompt}"`)
 
     await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'foo' },
-      buildCtx('Body', execCount),
+      buildCtxWithFetch('Body', fetchCount),
     )
     await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'bar' },
-      buildCtx('Body', execCount),
+      buildCtxWithFetch('Body', fetchCount),
     )
-    assert.equal(execCount.n, 2, 'each new prompt should trigger fresh exec')
+    assert.equal(fetchCount.n, 2, 'each new prompt should trigger fresh fetch')
   })
 
   it('summarize failure result is NOT cached (next call retries)', async () => {
-    const execCount = { n: 0 }
+    const fetchCount = { n: 0 }
     let summarizeCount = 0
     _setWebFetchSummarizerForTests(async () => {
       summarizeCount += 1
@@ -128,21 +144,21 @@ describe('WebFetch integration with cache', () => {
 
     const r1 = await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'q' },
-      buildCtx('Body', execCount),
+      buildCtxWithFetch('Body', fetchCount),
     )
     assert.match(r1.output as string, /\[WebFetch summarize failed/)
 
     // Second call: summarize should be attempted again (failure not cached)
     const r2 = await webFetchTool.call(
       { url: 'https://example.com/blog', prompt: 'q' },
-      buildCtx('Body', execCount),
+      buildCtxWithFetch('Body', fetchCount),
     )
     assert.match(r2.output as string, /\[WebFetch summarize failed/)
     assert.equal(summarizeCount, 2, 'summarize should be retried on second call')
   })
 
   it('raw-mode (no prompt) result is cached', async () => {
-    const execCount = { n: 0 }
+    const fetchCount = { n: 0 }
     let summarizeCount = 0
     _setWebFetchSummarizerForTests(async () => {
       summarizeCount += 1
@@ -151,15 +167,20 @@ describe('WebFetch integration with cache', () => {
 
     const r1 = await webFetchTool.call(
       { url: 'https://example.com/raw' },
-      buildCtx('# raw body', execCount),
+      buildCtxWithFetch('# raw body', fetchCount),
     )
     const r2 = await webFetchTool.call(
       { url: 'https://example.com/raw' },
-      buildCtx('UNUSED', execCount),
+      buildCtxWithFetch('UNUSED', fetchCount),
     )
-    assert.equal(r1.output, '# raw body')
-    assert.equal(r2.output, '# raw body')
-    assert.equal(execCount.n, 1, 'cache hit avoids exec')
+    // Cache returns the EXACT bytes the first fetch produced, including the
+    // 5-line header (URL/Status/Content-Type/Bytes/blank) that the daemon
+    // tool layer prepends. The two outputs must be identical (byte-for-byte
+    // cache hit) and the body must include the seed text.
+    assert.equal(r1.output, r2.output)
+    assert.match(r1.output as string, /# raw body/)
+    assert.match(r1.output as string, /^URL: https:\/\/example\.com\//)
+    assert.equal(fetchCount.n, 1, 'cache hit avoids fetch')
     assert.equal(summarizeCount, 0, 'no-prompt path never calls summarize')
   })
 })
