@@ -51,7 +51,7 @@ describe('grantPermission error reporting', () => {
     }
 
     assert.equal(stderr.lines.length, 1)
-    assert.match(stderr.lines[0], /feishu permission grant failed: chatid\/oc_x on docx docxA \(perm=view\)/)
+    assert.match(stderr.lines[0], /feishu permission grant failed: openchat\/oc_x on docx docxA \(perm=view\)/)
     assert.match(stderr.lines[0], /1069902/)
   })
 
