@@ -101,10 +101,15 @@ export async function appendDocText(input: {
 //   full_access  — read + write + manage collaborators ("拥有者" badge in the
 //                  Feishu UI; can approve subsequent permission requests).
 //
-// member_type accepts openid / userid / chatid / departmentid / etc. We only
-// need 'openid' (for the triggering user) and 'chatid' (for granting the
-// entire group chat in one call). The URL query `type` is the FILE type,
-// which is always 'docx' for documents we just created via `createDoc`.
+// member_type enum (Feishu drive.v1.permissions.members.create, verified
+// 2026-05-12 via field_violations response on code=99992402):
+//   email, openid, unionid, openchat, opendepartmentid, userid, groupid,
+//   wikispaceid, appid.
+// We only need 'openid' (for the triggering user) and 'openchat' (for the
+// entire group chat). The older 'chatid' value Feishu's docs once accepted
+// is no longer in the enum and 4xx's with "field validation failed" — do
+// not regress to it. The URL query `type` is the FILE type, which is
+// always 'docx' for documents we just created via `createDoc`.
 export async function grantUserPermission(input: {
   client: FeishuClient
   documentId: string
@@ -127,14 +132,14 @@ export async function grantChatPermission(input: {
   return grantPermission({
     client: input.client,
     documentId: input.documentId,
-    data: { member_type: 'chatid', member_id: input.chatId, perm: input.perm },
+    data: { member_type: 'openchat', member_id: input.chatId, perm: input.perm },
   })
 }
 
 async function grantPermission(input: {
   client: FeishuClient
   documentId: string
-  data: { member_type: 'openid' | 'chatid'; member_id: string; perm: 'view' | 'edit' | 'full_access' }
+  data: { member_type: 'openid' | 'openchat'; member_id: string; perm: 'view' | 'edit' | 'full_access' }
 }): Promise<{ ok: true } | { ok: false; error: string; alreadyExists: boolean }> {
   const client = input.client as FeishuDrivePermissionClient
   try {
