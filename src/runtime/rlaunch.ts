@@ -3,15 +3,21 @@ import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import type {
+  ControlPlane,
+  DataPlane,
   ExecInput,
   ExecResult,
   GlobOptions,
+  PathPolicy,
   Runtime,
   RuntimeAvailability,
   RuntimeFs,
   RuntimeStat,
 } from './types.js'
+import { LayeredDataPlane } from './data-plane/layered.js'
+import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { resolveDefaultHelperRoot } from './local.js'
+import { MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
@@ -95,9 +101,14 @@ const READ_FILE_BUFFER_BYTES = 256 * 1024 * 1024
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
   readonly isolated = true
+  readonly securityProfile = 'cluster-isolated' as const
   readonly workspaceRoot: string
   readonly helperRoot: string
   readonly canonicalUser: string
+  readonly control: ControlPlane
+  readonly data: DataPlane
+  readonly paths: PathPolicy
+  readonly fs: RuntimeFs
 
   lastActivityMs = Date.now()
 
@@ -133,6 +144,57 @@ export class RlaunchRuntime implements Runtime {
     this.workspaceRoot = config.workspaceContainerPath
     this.helperRoot = config.helperContainerPath
     this.mountTable = [[path.resolve(config.workspaceHostPath), config.workspaceContainerPath]]
+    this.control = {
+      kind: 'brainctl-exec',
+      stdoutByteReliability: 'unreliable-large',
+      exec: input => this.exec(input),
+      start: () => this.start(),
+      stop: () => this.stop(),
+      isRunning: () => this.isRunning(),
+      isAvailable: () => this.isAvailable(),
+    }
+    this.paths = new MountTablePathPolicy([{
+      host: config.workspaceHostPath,
+      worker: config.workspaceContainerPath,
+      mode: 'rw',
+    }])
+    const sharedClusterFsData = new SharedClusterFsData(this.paths, () => this.workerName)
+    const guardedSharedClusterFsData: DataPlane = {
+      kind: sharedClusterFsData.kind,
+      independentFromControl: sharedClusterFsData.independentFromControl,
+      reliability: sharedClusterFsData.reliability,
+      readFile: async pathname => {
+        await this.ensureRunning()
+        return sharedClusterFsData.readFile(pathname)
+      },
+      writeFile: async (pathname, content) => {
+        await this.ensureRunning()
+        return sharedClusterFsData.writeFile(pathname, content)
+      },
+      stat: async pathname => {
+        await this.ensureRunning()
+        return sharedClusterFsData.stat(pathname)
+      },
+      glob: async (pattern, options) => {
+        await this.ensureRunning()
+        return sharedClusterFsData.glob(pattern, options)
+      },
+      readdir: async pathname => {
+        await this.ensureRunning()
+        return sharedClusterFsData.readdir(pathname)
+      },
+    }
+    this.data = new LayeredDataPlane(
+      [
+        guardedSharedClusterFsData,
+        this.execRelayFs,
+      ],
+      this.paths,
+      { maxExecRelayBytes: 4 * 1024 * 1024 },
+    )
+    this.fs = this.data
+    this.fs.writeFileViaHostMount = this.execRelayFs.writeFileViaHostMount
+    this.fs.readFileViaHostMount = this.execRelayFs.readFileViaHostMount
   }
 
   get name(): string | null {
@@ -323,7 +385,10 @@ export class RlaunchRuntime implements Runtime {
     }
   }
 
-  fs: RuntimeFs = {
+  private readonly execRelayFs: RuntimeFs = {
+    kind: 'exec-relay',
+    independentFromControl: false,
+    reliability: 'depends-on-control-plane',
     readFile: async pathname =>
       readFileViaExec(input => this.exec(input), this.toContainerPath(pathname), pathname),
     writeFile: async (pathname, content) => {

@@ -1,9 +1,12 @@
 import path from 'node:path'
 
 import type {
+  ControlPlane,
+  DataPlane,
   ExecInput,
   ExecResult,
   GlobOptions,
+  PathPolicy,
   Runtime,
   RuntimeAvailability,
   RuntimeFs,
@@ -14,6 +17,9 @@ import {
   isImageMissingError,
   formatPullError,
 } from './image-readiness.js'
+import { BindMountData } from './data-plane/bind-mount.js'
+import { LayeredDataPlane } from './data-plane/layered.js'
+import { MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 
 export type DockerMount = {
@@ -77,10 +83,15 @@ const WORKSPACE_DU_CACHE_MS = 60_000
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
   readonly isolated = true
+  readonly securityProfile = 'container-isolated' as const
   readonly workspaceRoot: string
   readonly helperRoot: string
   readonly containerName: string
   readonly image: string
+  readonly control: ControlPlane
+  readonly data: DataPlane
+  readonly paths: PathPolicy
+  readonly fs: RuntimeFs
 
   lastActivityMs = Date.now()
 
@@ -106,6 +117,62 @@ export class DockerRuntime implements Runtime {
         path.posix.normalize(mount.container),
       ] as [string, string]),
     ]
+    this.control = {
+      kind: 'docker-exec',
+      stdoutByteReliability: 'guaranteed',
+      exec: input => this.exec(input),
+      start: () => this.start(),
+      stop: () => this.stop(),
+      isRunning: () => this.isRunning(),
+      isAvailable: () => this.isAvailable(),
+    }
+    this.paths = new MountTablePathPolicy([
+      {
+        host: config.workspaceHostPath,
+        worker: config.workspaceContainerPath,
+        mode: 'rw',
+      },
+      ...config.mounts.map(mount => ({
+        host: mount.host,
+        worker: mount.container,
+        mode: mount.mode,
+      })),
+    ])
+    const bindMountData = new BindMountData(this.paths)
+    const guardedBindMountData: DataPlane = {
+      kind: bindMountData.kind,
+      independentFromControl: bindMountData.independentFromControl,
+      reliability: bindMountData.reliability,
+      readFile: async pathname => {
+        await this.ensureRunning()
+        return bindMountData.readFile(pathname)
+      },
+      writeFile: async (pathname, content) => {
+        await this.ensureRunning()
+        await this.assertWorkspaceQuota()
+        return bindMountData.writeFile(pathname, content)
+      },
+      stat: async pathname => {
+        await this.ensureRunning()
+        return bindMountData.stat(pathname)
+      },
+      glob: async (pattern, options) => {
+        await this.ensureRunning()
+        return bindMountData.glob(pattern, options)
+      },
+      readdir: async pathname => {
+        await this.ensureRunning()
+        return bindMountData.readdir(pathname)
+      },
+    }
+    this.data = new LayeredDataPlane(
+      [
+        guardedBindMountData,
+        this.execRelayFs,
+      ],
+      this.paths,
+    )
+    this.fs = this.data
   }
 
   async start(): Promise<void> {
@@ -208,7 +275,10 @@ export class DockerRuntime implements Runtime {
     return this.runDockerExec(input)
   }
 
-  fs: RuntimeFs = {
+  private readonly execRelayFs: RuntimeFs = {
+    kind: 'exec-relay',
+    independentFromControl: false,
+    reliability: 'depends-on-control-plane',
     readFile: async pathname => {
       const containerPath = this.toContainerPath(pathname)
       // base64 transit keeps binary content intact across the docker exec
