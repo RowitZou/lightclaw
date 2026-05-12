@@ -688,14 +688,12 @@ export class RlaunchRuntime implements Runtime {
 
   private async stageHelpersOnce(): Promise<void> {
     const probeCmd =
-      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'webfetch.py'))} && ` +
-      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'websearch.py'))} && ` +
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
       // pdftotext / pdftoppm gate Read('foo.pdf') text and Read('foo.pdf', pages=...) visual respectively;
       // PIL / openpyxl / docx / pptx gate the office and image-resize paths.
       `command -v pdftotext >/dev/null 2>&1 && ` +
       `command -v pdftoppm >/dev/null 2>&1 && ` +
-      `python3 -c "import httpx, markdownify, openpyxl, docx, pptx, PIL" 2>/dev/null`
+      `python3 -c "import openpyxl, docx, pptx, PIL" 2>/dev/null`
     const probe = await this.runBrainctlExec({
       command: probeCmd,
       timeoutMs: 15_000,
@@ -706,7 +704,11 @@ export class RlaunchRuntime implements Runtime {
     }
 
     const sourceDir = resolveDefaultHelperRoot()
-    const filenames = ['webfetch.py', 'websearch.py', 'glob.py']
+    // Phase 34: webfetch.py + websearch.py deleted; both tools now run
+    // daemon-side in TS (src/tools/web-fetch-*.ts + web-search-*.ts).
+    // glob.py is the only remaining helper that needs sandbox-side
+    // staging — GlobTool still runs in-worker for filesystem semantics.
+    const filenames = ['glob.py']
     for (const name of filenames) {
       const buf = readFileSync(path.join(sourceDir, name))
       await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
@@ -739,21 +741,13 @@ export class RlaunchRuntime implements Runtime {
     // directly without traversing the bridge.
     // Pillow / openpyxl / python-docx / python-pptx feed the resize gate +
     // office extractors; pin only minor floors to track upstream security
-    // fixes without bumping major API breakage.
-    // httpx (>=0.27) is the WebFetch helper's HTTP client, replacing stdlib
-    // urllib so HTTP 308 Permanent Redirects (alphaxiv / Cloudflare / Next.js
-    // trailing-slash) are followed and connect/read timeouts can be split.
-    // markdownify is the WebFetch HTML→markdown extractor — dump-everything,
-    // no main-content selection (see webfetch.py module comment for the
-    // alphaxiv dogfood that drove trafilatura out). The Docker image already
-    // bakes httpx + markdownify in (Dockerfile layer 3); this pip line is
-    // the rlaunch-only path until the kubebrain ml-base image is rebuilt
-    // with the same dep set.
+    // fixes without bumping major API breakage. Phase 34 removed httpx +
+    // markdownify here because the webfetch / websearch helpers they
+    // backed were deleted in Iter C0 (daemon-side TS now).
     const pip = await this.runBrainctlExec({
       command:
         'python3 -m pip install --quiet --no-warn-script-location ' +
         '--break-system-packages ' +
-        '"httpx>=0.27,<1" markdownify==1.2.2 ' +
         '"Pillow>=10,<12" "openpyxl>=3.1,<4" "python-docx>=1.1,<2" "python-pptx>=1.0,<2"',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,
