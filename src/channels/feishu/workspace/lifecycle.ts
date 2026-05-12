@@ -10,7 +10,6 @@ import { loadChannelConfig } from '../../config.js'
 import {
   createFolder,
   grantFolderPermission,
-  listFolder,
 } from '../resources/folder.js'
 
 export type WorkspaceRoot = {
@@ -60,15 +59,18 @@ export async function getOrCreateWorkspaceRoot(
   }
 
   if (existing?.folderToken) {
-    try {
-      await listFolder({ client, folderToken: existing.folderToken, maxItems: 1 })
-      process.stderr.write(`[feishu-workspace] root folder loaded from disk token=${existing.folderToken}\n`)
-      return existing
-    } catch (error) {
-      process.stderr.write(
-        `[feishu-workspace] root folder probe failed (${error instanceof Error ? error.message : String(error)}); recreating\n`,
-      )
-    }
+    // Trust the persisted token. Earlier versions probed via
+    // `listFolder({maxItems:1})` and treated ANY 4xx as "folder gone, recreate",
+    // which destroyed user data on a single transient 400 / rate-limit:
+    // the recreated root orphaned the original folder along with every share
+    // permission the user had granted to it. We now persist-or-warn instead:
+    // if the folder is truly deleted, the next real `listFolder` call will
+    // surface that to the agent / admin, and `/feishu-workspace status` can
+    // confirm and let admin pick the right recovery (override config or
+    // accept a new root deliberately). Auto-recreation is reserved for the
+    // cold-start case (no on-disk record).
+    process.stderr.write(`[feishu-workspace] root folder loaded from disk token=${existing.folderToken}\n`)
+    return existing
   }
 
   const created = await createFolder({ client, parentFolderToken: '', name: 'LightClaw' })
@@ -91,14 +93,12 @@ export async function getOrCreateUserWorkspace(
   const filePath = userWorkspacePath(canonical)
   const existing = await readJson<UserWorkspace | null>(filePath, null)
   if (existing?.folderToken) {
-    try {
-      await listFolder({ client, folderToken: existing.folderToken, maxItems: 1 })
-      return existing
-    } catch (error) {
-      process.stderr.write(
-        `[feishu-workspace] user folder probe failed for ${canonical} (${error instanceof Error ? error.message : String(error)}); recreating\n`,
-      )
-    }
+    // Same rationale as `getOrCreateWorkspaceRoot`: never auto-recreate a
+    // user folder on probe failure. Transient 4xx would orphan the user's
+    // private data + share grants. If the folder is truly gone, the next
+    // real listFolder will report it cleanly and admin can use
+    // `/feishu-workspace orphans` / `delete` for explicit recovery.
+    return existing
   }
 
   const created = await createFolder({

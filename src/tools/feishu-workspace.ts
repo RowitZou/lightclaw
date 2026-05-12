@@ -137,11 +137,13 @@ export async function runFeishuList(
     workspaceToken: ctx.workspace.folderToken,
     path: input.path,
   })
-  await assertWithinWorkspace({
+  await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
     token: folder.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuList',
+    canonicalUser: ctx.canonicalUser,
+    attemptedTarget: input.path ?? '/',
   })
   const tree = await listWorkspaceTree({
     client: deps.client,
@@ -164,15 +166,28 @@ export async function runFeishuCreateFolder(
     workspaceToken: ctx.workspace.folderToken,
     path: input.parent_folder,
   })
-  const ancestryChain = await assertWithinWorkspace({
+  const ancestryChain = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
     token: parent.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuCreateFolder',
-  }).catch(async error => {
-    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuCreateFolder', input.parent_folder ?? '/', error)
-    throw error
+    canonicalUser: ctx.canonicalUser,
+    attemptedTarget: input.parent_folder ?? '/',
   })
+  // Refuse to create a duplicate-named folder. Feishu allows multiple
+  // siblings with the same name, which silently pollutes the workspace:
+  // FeishuList shows ambiguous siblings and any subsequent name-based
+  // resolution (FeishuMove / FeishuDelete) errors out as "ambiguous,
+  // disambiguate by path". Pre-checking here is cheaper than cleaning up
+  // duplicates later.
+  const existing = await listFolder({ client: deps.client, folderToken: parent.token })
+  const collision = existing.items.find(child => child.name === input.name && child.type === 'folder')
+  if (collision) {
+    return {
+      output: `A folder named "${input.name}" already exists at ${parent.path === '/' ? '/' : `${parent.path}/`}. Use FeishuList to see the contents, or pick a different name.`,
+      isError: true,
+    }
+  }
   const preview = `Create folder "${input.name}" under ${parent.path}.`
   const baseResource: Record<string, unknown> = {
     kind: 'folder',
@@ -214,14 +229,13 @@ export async function runFeishuDelete(
     workspaceToken: ctx.workspace.folderToken,
     target: input.target,
   })
-  const ancestryChain = await assertWithinWorkspace({
+  const ancestryChain = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
     token: target.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuDelete',
-  }).catch(async error => {
-    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuDelete', input.target, error)
-    throw error
+    canonicalUser: ctx.canonicalUser,
+    attemptedTarget: input.target,
   })
   const descendantCount = target.type === 'folder'
     ? await countDescendants({ client: deps.client, folderToken: target.token })
@@ -271,23 +285,21 @@ export async function runFeishuMove(
     workspaceToken: ctx.workspace.folderToken,
     path: input.destination,
   })
-  const sourceAncestry = await assertWithinWorkspace({
+  const sourceAncestry = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
     token: source.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuMove',
-  }).catch(async error => {
-    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuMove', input.target, error)
-    throw error
+    canonicalUser: ctx.canonicalUser,
+    attemptedTarget: input.target,
   })
-  const destAncestry = await assertWithinWorkspace({
+  const destAncestry = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
     token: dest.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuMove',
-  }).catch(async error => {
-    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuMove', input.destination, error)
-    throw error
+    canonicalUser: ctx.canonicalUser,
+    attemptedTarget: input.destination,
   })
   if (source.type === 'folder' && destAncestry.includes(source.token)) {
     const error = new Error(`Cannot move "${source.path}" into its own subtree.`)
@@ -362,4 +374,30 @@ async function auditBoundaryViolation(
 function displayType(type: FeishuDriveItemType): string {
   if (type === 'docx' || type === 'doc') return 'doc'
   return type
+}
+
+/**
+ * `assertWithinWorkspace` is now synchronous (`ParentCache.ancestryChain` is
+ * an in-memory walk), but its boundary-violation audit is async. Wrap the
+ * pair so call sites can `await` once and stay readable.
+ */
+async function assertWithinWorkspaceOrAudit(input: {
+  ancestry: import('../channels/feishu/workspace/ancestry.js').ParentCache
+  token: string
+  workspaceToken: string
+  toolName: string
+  canonicalUser: string
+  attemptedTarget: string
+}): Promise<string[]> {
+  try {
+    return assertWithinWorkspace({
+      ancestry: input.ancestry,
+      token: input.token,
+      workspaceToken: input.workspaceToken,
+      toolName: input.toolName,
+    })
+  } catch (error) {
+    await auditBoundaryViolation(input.canonicalUser, input.toolName, input.attemptedTarget, error)
+    throw error
+  }
 }

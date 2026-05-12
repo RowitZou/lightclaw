@@ -436,12 +436,15 @@ export async function runFeishuCreateFile(
         workspaceToken: workspace.workspace.folderToken,
         path: input.parent_folder,
       })).token
-  const ancestryChain = await assertWithinWorkspace({
-    ancestry: workspace.ancestry,
-    token: parentFolderToken,
-    workspaceToken: workspace.workspace.folderToken,
-    toolName: 'FeishuCreateFile',
-  }).catch(async error => {
+  let ancestryChain: string[]
+  try {
+    ancestryChain = assertWithinWorkspace({
+      ancestry: workspace.ancestry,
+      token: parentFolderToken,
+      workspaceToken: workspace.workspace.folderToken,
+      toolName: 'FeishuCreateFile',
+    })
+  } catch (error) {
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
       userId: safeCurrentUserId(),
@@ -454,7 +457,7 @@ export async function runFeishuCreateFile(
       ancestryChain: (error as { ancestryChain?: string[] })?.ancestryChain ?? [],
     })
     throw error
-  })
+  }
   const preview = `Create Feishu ${input.kind} titled "${input.title}"${
     input.doc?.content ? ` with ${input.doc.content.length} chars of initial content` : ''
   }.`
