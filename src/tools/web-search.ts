@@ -1,9 +1,12 @@
-import path from 'node:path'
-
 import { z } from 'zod'
 
 import { getConfig } from '../config.js'
 import { buildTool } from '../tool.js'
+import {
+  fetchBraveSearch,
+  type WebSearchResult,
+} from './web-search-brave.js'
+import { fetchDuckDuckGoSearch } from './web-search-ddg.js'
 
 // Trailer appended to every WebSearch tool_result. Bug 7 in the 2026-05-10
 // audit: prior trailer was just one cite-sources line, which let codex /
@@ -19,7 +22,8 @@ const REMINDER = [
   '- Use the current year (from the system prompt\'s Current date) in search queries; last-year terms pull stale results.',
   '- MANDATORY: After answering using WebSearch results, include a "Sources:" section listing the actual URLs as Markdown hyperlinks.',
 ].join('\n')
-const DEFAULT_TIMEOUT_MS = 35_000
+
+const DEFAULT_MAX_RESULTS = 10
 
 export const webSearchTool = buildTool({
   name: 'WebSearch',
@@ -40,39 +44,95 @@ export const webSearchTool = buildTool({
     max_results: z.number().int().min(1).max(20).optional(),
   }),
   async call(input, context) {
-    const helper = path.join(context.runtime.helperRoot, 'websearch.py')
-    const braveApiKey = getConfig().tools.webSearch.braveApiKey ?? ''
-    const result = await context.runtime.exec({
-      command: `python3 ${shellQuote(helper)}`,
-      stdin: JSON.stringify({
-        query: input.query,
-        allowed_domains: input.allowed_domains ?? [],
-        blocked_domains: input.blocked_domains ?? [],
-        max_results: input.max_results ?? 10,
-      }),
-      env: {
-        LIGHTCLAW_SEARCH_API_KEY: process.env.LIGHTCLAW_SEARCH_API_KEY ?? '',
-        LIGHTCLAW_SEARCH_API_URL: process.env.LIGHTCLAW_SEARCH_API_URL ?? '',
-        BRAVE_SEARCH_API_KEY: braveApiKey,
-      },
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-      abortSignal: context.abortSignal,
-      maxBufferBytes: 512 * 1024,
-    })
+    // Phase 34: daemon-side Brave → DDG fallback chain replaces the
+    // Python helper's runtime.exec(python3 websearch.py). API key
+    // resolution still honors the helper-era env vars + config field
+    // so admin migration is zero-change.
+    const apiKey =
+      process.env.BRAVE_SEARCH_API_KEY ??
+      getConfig().tools.webSearch.braveApiKey ??
+      ''
 
-    if (result.exitCode !== 0) {
+    const max = input.max_results ?? DEFAULT_MAX_RESULTS
+    const allowed = (input.allowed_domains ?? []).map((d) => d.toLowerCase())
+    const blocked = (input.blocked_domains ?? []).map((d) => d.toLowerCase())
+
+    let results: WebSearchResult[] = []
+    try {
+      if (apiKey) {
+        results = await fetchBraveSearch(apiKey, {
+          query: input.query,
+          count: max,
+          signal: context.abortSignal,
+        })
+      }
+      // Brave returned 0 results OR no key configured → DDG fallback.
+      // Mirrors the Python helper at websearch.py:152-155.
+      if (results.length === 0) {
+        results = await fetchDuckDuckGoSearch({
+          query: input.query,
+          count: max,
+          signal: context.abortSignal,
+        })
+      }
+    } catch (err) {
       return {
-        output: `WebSearch failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim()}`,
+        output: `WebSearch failed (exit 1): ${err instanceof Error ? err.message : String(err)}`,
         isError: true,
       }
     }
 
-    return {
-      output: [result.stdout.trimEnd(), '', REMINDER].join('\n').trim(),
-    }
+    const filtered = results
+      .filter((r) => domainAllowed(r.url, allowed, blocked))
+      .slice(0, max)
+
+    const body = renderResults(input.query, filtered)
+    return { output: [body, '', REMINDER].join('\n').trim() }
   },
 })
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
+/**
+ * Apply allow/block domain filter. Matches the Python helper byte-for-byte
+ * (websearch.py:32-40): hostname match is exact OR suffix-after-dot
+ * (so `example.com` in `allowed` matches both `example.com` and
+ * `sub.example.com`). Allowed is a positive list (empty = pass all);
+ * blocked is negative.
+ */
+function domainAllowed(url: string, allowed: string[], blocked: string[]): boolean {
+  let host = ''
+  try {
+    host = new URL(url).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  if (!host) return false
+  if (allowed.length > 0) {
+    const matched = allowed.some((d) => host === d || host.endsWith('.' + d))
+    if (!matched) return false
+  }
+  if (blocked.some((d) => host === d || host.endsWith('.' + d))) return false
+  return true
+}
+
+/**
+ * Render results as the Python helper does (websearch.py:124-133): a
+ * `# Search results for: <query>` heading, numbered links, snippet
+ * indented two spaces below each link. Square brackets in titles get
+ * markdown-escaped so `[Foo]` doesn't accidentally render as a link
+ * label inside the surrounding `[title](url)` syntax.
+ */
+function renderResults(query: string, results: WebSearchResult[]): string {
+  const lines: string[] = [`# Search results for: ${query}`, '']
+  if (results.length === 0) {
+    lines.push('No search results found.')
+    return lines.join('\n')
+  }
+  results.forEach((item, i) => {
+    const title = item.title.replace(/\[/g, '\\[').replace(/\]/g, '\\]')
+    lines.push(`${i + 1}. [${title}](${item.url})`)
+    if (item.snippet) {
+      lines.push(`   ${item.snippet}`)
+    }
+  })
+  return lines.join('\n')
 }
