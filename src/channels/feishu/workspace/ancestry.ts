@@ -59,6 +59,10 @@ export function createAncestryResolver(
     const chain: AncestryChainEntry[] = []
     const seen = new Set<string>()
     let current: string | null = targetToken
+    // Parents of any file/folder in Feishu drive are always folders. After
+    // the first hop we know the next node is a folder; pass that hint so
+    // SDKs without a direct getMetadata don't iterate doc_type guesses.
+    let nextHintForParent: 'folder' | undefined
     for (let depth = 0; current && depth < maxDepth; depth += 1) {
       if (seen.has(current)) {
         process.stderr.write(`[feishu-workspace] ancestry cycle detected at token=${current}\n`)
@@ -67,7 +71,11 @@ export function createAncestryResolver(
       seen.add(current)
       let meta
       try {
-        meta = await getFileMetadata({ client, token: current })
+        meta = await getFileMetadata({
+          client,
+          token: current,
+          ...(nextHintForParent ? { docTypeHint: nextHintForParent } : {}),
+        })
       } catch (error) {
         process.stderr.write(`[feishu-workspace] ancestry metadata failed token=${current}: ${feishuErrorMessage(error)}\n`)
         return null
@@ -83,6 +91,7 @@ export function createAncestryResolver(
         ...(meta.name ? { name: meta.name } : {}),
       })
       current = parentToken
+      nextHintForParent = 'folder'
     }
     if (current) {
       process.stderr.write(`[feishu-workspace] ancestry depth exceeded token=${targetToken}\n`)

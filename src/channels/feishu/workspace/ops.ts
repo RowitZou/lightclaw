@@ -14,6 +14,29 @@ import {
   type WorkspaceRoot,
 } from './lifecycle.js'
 
+// Module-level singleton keyed by FeishuClient identity. The whole point of
+// `createAncestryResolver`'s 5-min LRU is to amortize getMetadata HTTP calls
+// across tool invocations within the same daemon process. Instantiating per
+// tool call collapses the TTL to the ~100 ms it takes one tool call to finish
+// and defeats the cache. The bot keeps one long-lived FeishuClient per Feishu
+// channel runner, so a WeakMap keyed on client is correct: when a client is
+// GC'd the resolver goes with it; live clients keep one resolver each.
+let resolverByClient: WeakMap<FeishuClient, AncestryResolver> = new WeakMap()
+
+export function getAncestryResolver(client: FeishuClient): AncestryResolver {
+  let resolver = resolverByClient.get(client)
+  if (!resolver) {
+    resolver = createAncestryResolver(client)
+    resolverByClient.set(client, resolver)
+  }
+  return resolver
+}
+
+/** Test-only: drop all cached resolvers so the next call rebuilds. */
+export function resetAncestryResolversForTest(): void {
+  resolverByClient = new WeakMap()
+}
+
 export type FeishuWorkspaceContext = {
   canonicalUser: string
   ownerOpenId: string
@@ -48,7 +71,7 @@ export async function resolveCurrentFeishuWorkspace(
     ownerOpenId,
     root,
     workspace,
-    ancestry: createAncestryResolver(client),
+    ancestry: getAncestryResolver(client),
   }
 }
 
@@ -188,17 +211,28 @@ export async function listWorkspaceTree(input: {
     const childPath = (input.prefix ?? '/') === '/' ? child.name : `${input.prefix}/${child.name}`
     const entry: WorkspaceTreeEntry = { ...child, path: childPath }
     if (child.type === 'folder') {
-      const listed = await listFolder({ client: input.client, folderToken: child.token })
-      entry.childCount = listed.items.length
       if (input.depth > 1) {
-        entry.children = await listWorkspaceTree({
+        // Recurse once and reuse the result for childCount instead of
+        // calling listFolder twice on the same folder (one for the
+        // count + one for the recurse — doubled API traffic on every
+        // multi-level FeishuList).
+        const subTree = await listWorkspaceTree({
           client: input.client,
           folderToken: child.token,
           prefix: childPath,
           depth: input.depth - 1,
         })
-      } else if (listed.items.length > 0) {
-        entry.depthCapped = true
+        entry.children = subTree
+        entry.childCount = subTree.length
+      } else {
+        // Depth-capped — still want childCount + depthCapped flag for the
+        // render. One list call per cap leaf is unavoidable since we have
+        // no other source of the count.
+        const listed = await listFolder({ client: input.client, folderToken: child.token })
+        entry.childCount = listed.items.length
+        if (listed.items.length > 0) {
+          entry.depthCapped = true
+        }
       }
     }
     entries.push(entry)
