@@ -222,7 +222,7 @@ function convertTools(tools: StreamChatParams['tools']): ChatCompletionTool[] {
   }))
 }
 
-function mapUsage(usage: unknown): UsageStats {
+export function mapUsage(usage: unknown): UsageStats {
   if (!isRecord(usage)) {
     return {}
   }
@@ -233,6 +233,16 @@ function mapUsage(usage: unknown): UsageStats {
   }
   if (typeof usage.completion_tokens === 'number') {
     result.output_tokens = usage.completion_tokens
+  }
+  // OpenAI Chat Completions reports prefix cache hits under the nested
+  // `prompt_tokens_details.cached_tokens` field. Anthropic uses
+  // `cache_read_input_tokens` as the canonical name; we surface OpenAI's
+  // nested value through the same canonical slot. OpenAI has no explicit
+  // cache-creation step (caching is automatic on prefix matches), so
+  // `cache_creation_input_tokens` stays absent.
+  const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : null
+  if (details && typeof details.cached_tokens === 'number') {
+    result.cache_read_input_tokens = details.cached_tokens
   }
   return result
 }

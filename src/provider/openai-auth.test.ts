@@ -316,6 +316,48 @@ describe('openai-auth: processResponseStream', () => {
     assert.equal(stop.content[0]?.type, 'text')
   })
 
+  it('surfaces input_tokens_details.cached_tokens as cache_read_input_tokens', async () => {
+    // Bug 10 (2026-05-12 dogfood): Codex Responses returns prefix cache hits
+    // under usage.input_tokens_details.cached_tokens; mapResponsesUsage used
+    // to drop the nested field so usage.jsonl wrote cacheRead:0 even on
+    // 50%+ cache hit rates. Assert the full path: events -> stopEvent.usage.
+    const events = [
+      { type: 'response.output_text.delta', delta: 'ok' },
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          usage: {
+            input_tokens: 5000,
+            output_tokens: 80,
+            input_tokens_details: { cached_tokens: 4200 },
+            output_tokens_details: { reasoning_tokens: 30 },
+          },
+        },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.usage.input_tokens, 5000)
+    assert.equal(stop.usage.output_tokens, 80)
+    assert.equal(stop.usage.cache_read_input_tokens, 4200)
+    // OpenAI has no explicit cache-creation step.
+    assert.equal(stop.usage.cache_creation_input_tokens, undefined)
+  })
+
+  it('leaves cache_read_input_tokens absent when nested details missing', async () => {
+    const events = [
+      { type: 'response.output_text.delta', delta: 'ok' },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 100, output_tokens: 10 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.usage.cache_read_input_tokens, undefined)
+  })
+
   it('empty function_call arguments parse as {} not throwing', async () => {
     const events = [
       {
