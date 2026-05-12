@@ -12,6 +12,14 @@ export async function fetchFeishuUserInfo(
   client: FeishuClient,
   openId: string,
 ): Promise<FeishuUserInfo | undefined> {
+  // Feishu's contact.v3.user.get with user_id_type=open_id rejects bot app_ids
+  // (`cli_xxx`) with HTTP 400 (not a structured Feishu envelope), polluting the
+  // stderr stream every time a parent message was sent by a bot. Short-circuit
+  // here so all callers (ParentMessageFetcher sender-name resolution, pairing,
+  // sender display) treat bot senders as "no contact info" cleanly.
+  if (openId.startsWith('cli_')) {
+    return undefined
+  }
   try {
     const resp = await client.contact.v3.user.get({
       path: { user_id: openId },

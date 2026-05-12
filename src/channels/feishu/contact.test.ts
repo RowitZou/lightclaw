@@ -67,6 +67,31 @@ describe('fetchFeishuUserInfo', () => {
     assert.equal(await fetchFeishuUserInfo(fakeClient({ code: 1234 }), 'ou_a'), undefined)
     assert.equal(await fetchFeishuUserInfo(fakeClient(new Error('proxy timeout')), 'ou_b'), undefined)
   })
+
+  it('short-circuits bot app_ids (cli_*) without calling the SDK', async () => {
+    let calls = 0
+    const client = {
+      contact: {
+        v3: {
+          user: {
+            async get() {
+              calls++
+              throw new Error('SDK should not be reached for cli_ ids')
+            },
+          },
+        },
+      },
+    } as unknown as FeishuClient
+
+    const writes = captureStderr()
+    try {
+      assert.equal(await fetchFeishuUserInfo(client, 'cli_a940d1e3694a1bcd'), undefined)
+    } finally {
+      writes.restore()
+    }
+    assert.equal(calls, 0)
+    assert.equal(writes.lines.length, 0)
+  })
 })
 
 function fakeClient(response: unknown): FeishuClient {

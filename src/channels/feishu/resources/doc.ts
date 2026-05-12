@@ -1,5 +1,5 @@
 import type { FeishuClient } from '../client.js'
-import { callFeishu, type FeishuEnvelope } from './api.js'
+import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
 import { readNestedString, truncate } from './common.js'
 
 export type FeishuDocCreateResult = {
@@ -145,13 +145,19 @@ async function grantPermission(input: {
     }))
     return { ok: true }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    // Feishu 1061xxx code family means "this member already has access". Pattern
-    // match across exact codes + common phrasing so repeated grant attempts
-    // (e.g. an interjection that re-fires the same FeishuCreateFile turn)
-    // are idempotent rather than surfacing a confusing failure.
+    // axios errors only carry `Request failed with status code 4xx` in
+    // error.message; the real Feishu code / msg / x-tt-logid live on
+    // error.response.data + response.headers. feishuErrorMessage unwraps
+    // that. Without it, 1061xxx idempotency below also misfires because the
+    // bare axios message never contains the Feishu code.
+    const message = feishuErrorMessage(error)
     const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
       /1061\d{3}/.test(message)
+    if (!alreadyExists) {
+      process.stderr.write(
+        `feishu permission grant failed: ${input.data.member_type}/${input.data.member_id} on docx ${input.documentId} (perm=${input.data.perm}): ${message}\n`,
+      )
+    }
     return { ok: false, error: message, alreadyExists }
   }
 }
