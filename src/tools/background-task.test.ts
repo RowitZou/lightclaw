@@ -194,6 +194,24 @@ describe('BackgroundTask tools', () => {
     })
     assert.equal(parsed?.success, false)
   })
+
+  it('captures originSessionId from the calling SessionContext at create time (Bug 15)', async () => {
+    const result = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'watch the deploy and ping me back if anything goes red',
+      schedule: { kind: 'interval', everyMinutes: 30 },
+      label: 'Watch deploy',
+      notify_to: 'agent',
+    }, fakeContext()))
+    assert.equal(result.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+    // withUser() creates the SessionContext with sessionId: 'test-session', so
+    // BackgroundTask.call reads that via getSessionId() and stamps it into the
+    // entry. In production this is `feishu:group:<chatId>:<senderOpenId>` for
+    // a group origin or `feishu:dm:<chatId>` for a DM origin — the scheduler
+    // later prefers this over "most recent DM" when waking notify_to:'agent'
+    // tasks, so the wake agent has the chat's prior context.
+    assert.equal(task.originSessionId, 'test-session')
+  })
 })
 
 async function withUser<T>(fn: () => Promise<T>): Promise<T> {

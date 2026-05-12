@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
-import { buildWakePrompt, resolveWakeSessionId, wakeMainAgent } from './wake.js'
+import { buildWakePrompt, resolveOriginWakeSessionId, resolveWakeSessionId, wakeMainAgent } from './wake.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 
 describe('buildWakePrompt', () => {
@@ -134,6 +134,45 @@ describe('resolveWakeSessionId', () => {
   })
 })
 
+describe('resolveOriginWakeSessionId (Bug 15)', () => {
+  let tmpDir: string
+  let sessionsDir: string
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(tmpdir(), 'lightclaw-wake-origin-'))
+    sessionsDir = path.join(tmpDir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+  })
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns the origin sessionId when it points at an existing feishu:group: transcript', async () => {
+    writeMeta(sessionsDir, 'feishu:group:oc_g:ou_alice', { userId: 'alice', lastActiveAt: 100 })
+    const result = await resolveOriginWakeSessionId('feishu:group:oc_g:ou_alice', sessionsDir)
+    assert.equal(result, 'feishu:group:oc_g:ou_alice')
+  })
+
+  it('returns the origin sessionId when it points at an existing feishu:dm: transcript', async () => {
+    writeMeta(sessionsDir, 'feishu:dm:oc_alice', { userId: 'alice', lastActiveAt: 100 })
+    const result = await resolveOriginWakeSessionId('feishu:dm:oc_alice', sessionsDir)
+    assert.equal(result, 'feishu:dm:oc_alice')
+  })
+
+  it('returns null when origin sessionId is not a feishu DM/group prefix (terminal / branch / fresh)', async () => {
+    assert.equal(await resolveOriginWakeSessionId('terminal-alice', sessionsDir), null)
+    assert.equal(await resolveOriginWakeSessionId('branch-alice-abc', sessionsDir), null)
+    assert.equal(await resolveOriginWakeSessionId('fresh-xyz', sessionsDir), null)
+  })
+
+  it('returns null when origin transcript has been deleted (caller falls back to DM)', async () => {
+    // Origin parses to feishu:group: but the on-disk dir does not exist
+    const result = await resolveOriginWakeSessionId('feishu:group:oc_gone:ou_alice', sessionsDir)
+    assert.equal(result, null)
+  })
+})
+
 describe('wakeMainAgent input gates', () => {
   it('refuses non-DM session ids without acquiring any runtime', async () => {
     const result = await wakeMainAgent({
@@ -145,10 +184,14 @@ describe('wakeMainAgent input gates', () => {
     assert.deepEqual(result, { kind: 'silent', reason: 'wake-refused-bad-session-id' })
   })
 
-  it('refuses group session ids — wake is DM-only by design', async () => {
+  it('refuses non-Feishu session ids (terminal, branch, fresh) without acquiring any runtime', async () => {
+    // Bug 15 relaxed the precondition to accept both feishu:dm: and feishu:group:.
+    // Non-Feishu ids (terminal sessions, branch/fresh forks) are still refused —
+    // wake needs a real Feishu transcript and the channelSessionLock keyed on
+    // a Feishu session id so the user's main turn lock semantics hold.
     const result = await wakeMainAgent({
       canonicalUser: 'alice',
-      mainSessionId: 'feishu:group:oc_g:ou_alice',
+      mainSessionId: 'terminal-alice', // not a Phase 26 Feishu shape
       task: fakeTask(),
       outcome: { kind: 'success', summary: 'ok', transcriptPath: '/tmp/x.jsonl' },
     })
