@@ -134,6 +134,23 @@ describe('background-task store', () => {
     assert.equal(updateBackgroundTask('alice', 'never', { enabled: true }), null)
   })
 
+  it('persists pendingPriorPromptNotice and round-trips it through load/save', () => {
+    const task = { ...fakeTask('alice', 'task-1'), pendingPriorPromptNotice: 'prior prompt body' }
+    addBackgroundTask('alice', task)
+    const reloaded = loadBackgroundTasks('alice')[0]
+    assert.equal(reloaded.pendingPriorPromptNotice, 'prior prompt body')
+  })
+
+  it('clears pendingPriorPromptNotice when patched with undefined (next-fire consume-once semantics)', () => {
+    addBackgroundTask('alice', {
+      ...fakeTask('alice', 'task-1'),
+      pendingPriorPromptNotice: 'soon to be cleared',
+    })
+    updateBackgroundTask('alice', 'task-1', { pendingPriorPromptNotice: undefined })
+    const reloaded = loadBackgroundTasks('alice')[0]
+    assert.equal(reloaded.pendingPriorPromptNotice, undefined)
+  })
+
   it('lists every per-user store under per-user/<canonical>/bg-tasks.json', () => {
     addBackgroundTask('alice', fakeTask('alice', 'task-1'))
     addBackgroundTask('bob', fakeTask('bob', 'task-9'))

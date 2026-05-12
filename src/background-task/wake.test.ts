@@ -40,6 +40,44 @@ describe('buildWakePrompt', () => {
     assert.match(prompt, /<outcome>all good<\/outcome>/)
     assert.doesNotMatch(prompt, /permission_denied/)
   })
+
+  it('inserts a prompt-change notice block when priorPromptNotice is provided', () => {
+    const outcome: FireOutcome = {
+      kind: 'success',
+      summary: 'all good',
+      transcriptPath: '/tmp/transcript.jsonl',
+    }
+    const prompt = buildWakePrompt(fakeTask(), outcome, 'remind me at 8am every weekday')
+    assert.match(prompt, /<prompt-change-notice>/)
+    assert.match(prompt, /<prior>remind me at 8am every weekday<\/prior>/)
+    assert.match(prompt, /<task-prompt>.*<\/task-prompt>/)
+  })
+
+  it('omits the prompt-change notice block when priorPromptNotice is undefined', () => {
+    const outcome: FireOutcome = {
+      kind: 'success',
+      summary: 'all good',
+      transcriptPath: '/tmp/transcript.jsonl',
+    }
+    const prompt = buildWakePrompt(fakeTask(), outcome)
+    assert.doesNotMatch(prompt, /prompt-change-notice/)
+  })
+
+  it('still includes the prompt-change notice on permission_denied wakes', () => {
+    const prompt = buildWakePrompt(fakeTask(), {
+      kind: 'failure',
+      reason: 'permission denied',
+      transient: false,
+      attempt: 1,
+      permissionDenials: [{
+        toolName: 'Bash',
+        inputPreview: 'Command: find /tmp -type f',
+        suggestedRules: ['Bash(find:*)'],
+      }],
+    }, 'old prompt before user edit')
+    assert.match(prompt, /<outcome-kind>permission_denied<\/outcome-kind>/)
+    assert.match(prompt, /<prior>old prompt before user edit<\/prior>/)
+  })
 })
 
 describe('resolveWakeSessionId', () => {

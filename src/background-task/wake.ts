@@ -102,6 +102,12 @@ export async function wakeMainAgent(input: {
   mainSessionId: string
   task: BackgroundTaskEntry
   outcome: FireOutcome
+  /** Read-and-cleared by scheduler.deliverCompletion from
+   *  task.pendingPriorPromptNotice. When present, the wake prompt surfaces
+   *  the prior prompt once so the wake agent can sanity-check the new prompt
+   *  before deciding whether to notify the user. Cleared on disk before this
+   *  function runs, so subsequent fires won't re-display it. */
+  priorPromptNotice?: string
 }): Promise<WakeNotifyResult> {
   const { mainSessionId } = input
   if (!mainSessionId.startsWith('feishu:dm:')) {
@@ -160,7 +166,10 @@ export async function wakeMainAgent(input: {
     return runWithSessionContext(ctx, async () => {
       const messages = await loadTranscript(mainSessionId)
       const userMessage = {
-        ...createUserMessage(buildWakePrompt(input.task, input.outcome), lastUuid(messages)),
+        ...createUserMessage(
+          buildWakePrompt(input.task, input.outcome, input.priorPromptNotice),
+          lastUuid(messages),
+        ),
         origin: 'bg-task-wake' as const,
       }
       messages.push(userMessage)
@@ -239,10 +248,25 @@ export async function deliverWakeNotification(input: {
   )
 }
 
-export function buildWakePrompt(task: BackgroundTaskEntry, outcome: FireOutcome): string {
+export function buildWakePrompt(
+  task: BackgroundTaskEntry,
+  outcome: FireOutcome,
+  priorPromptNotice?: string,
+): string {
   const resultText = outcome.kind === 'success'
     ? outcome.summary
     : `FAILED: ${outcome.reason}`
+  const promptChangeBlock = priorPromptNotice
+    ? [
+        '<prompt-change-notice>',
+        '  The user updated this task\'s prompt before this fire. Prior prompt:',
+        `  <prior>${priorPromptNotice}</prior>`,
+        '  The current (executed) prompt is shown in <task-prompt> below.',
+        `  <task-prompt>${task.prompt}</task-prompt>`,
+        '</prompt-change-notice>',
+        '',
+      ]
+    : []
   if (outcome.kind === 'failure' && outcome.permissionDenials?.length) {
     return [
       '<background-task-fire>',
@@ -260,6 +284,7 @@ export function buildWakePrompt(task: BackgroundTaskEntry, outcome: FireOutcome)
       '</denials>',
       '</background-task-fire>',
       '',
+      ...promptChangeBlock,
       'This BackgroundTask fire was denied because the listed tools are not in the task allowed_tools.',
       'Decide now:',
       `  (a) If the suggested rules fit the task purpose, call UpdateBackgroundTask({ id: '${task.id}', allowed_tools: [the merged full list] }). For a oneshot that already fired, this will trigger an immediate retry. Then call stay_silent({reason}).`,
@@ -277,6 +302,7 @@ export function buildWakePrompt(task: BackgroundTaskEntry, outcome: FireOutcome)
     `<outcome>${resultText}</outcome>`,
     '</background-task-fire>',
     '',
+    ...promptChangeBlock,
     'This is a wake from a scheduled BackgroundTask.',
     'Decide whether to disturb the user.',
     'Use notify_user({text}) to send a message, or stay_silent({reason}) to end without notifying.',

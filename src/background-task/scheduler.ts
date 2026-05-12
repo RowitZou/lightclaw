@@ -343,6 +343,22 @@ export class BackgroundTaskScheduler {
       return
     }
 
+    // Read-and-clear pendingPriorPromptNotice from the latest disk state. The
+    // captured notice is surfaced exactly once on THIS fire's card / wake
+    // notification; subsequent fires won't repeat it (clear is unconditional
+    // when the field is present). If the oneshot task was already removed by
+    // onFireComplete (success path), `latest` is null and there is nothing to
+    // surface — the notice dies with the task, which is acceptable: oneshot
+    // tasks only fire once anyway, and the user got the result.
+    const latest = getBackgroundTask(canonicalUser, task.id)
+    let priorPromptNotice: string | undefined
+    if (latest?.pendingPriorPromptNotice) {
+      priorPromptNotice = latest.pendingPriorPromptNotice
+      updateBackgroundTask(canonicalUser, task.id, {
+        pendingPriorPromptNotice: undefined,
+      })
+    }
+
     const notifyTo = resolveEffectiveNotifyTo(outcome, task.notifyTo)
 
     if (notifyTo === 'agent') {
@@ -383,6 +399,7 @@ export class BackgroundTaskScheduler {
           mainSessionId: wakeSessionId,
           task,
           outcome,
+          ...(priorPromptNotice ? { priorPromptNotice } : {}),
         })
         await deliverWakeNotification({
           ownerOpenId,
@@ -409,6 +426,7 @@ export class BackgroundTaskScheduler {
       outcome,
       firedAt,
       ...(autopaused ? { autopaused: true } : {}),
+      ...(priorPromptNotice ? { priorPromptNotice } : {}),
     })
   }
 }
