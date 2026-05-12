@@ -1,3 +1,5 @@
+import { constants as fsConstants } from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import type { MountEntry, PathPolicy } from '../types.js'
@@ -106,4 +108,51 @@ function isSameOrChildPosix(candidate: string, parent: string): boolean {
 
 function isSameOrChildHost(candidate: string, parent: string): boolean {
   return candidate === parent || candidate.startsWith(`${parent}${path.sep}`)
+}
+
+/**
+ * Startup-time probe: assert that every mount in `policy.mountTable` is
+ * reachable from the daemon side with the perms required by its `mode`.
+ *
+ * This catches misconfigured mounts before the runtime starts serving tool
+ * calls. Without this check, a `bind-mount` / `shared-cluster-fs` layer
+ * that the daemon cannot access would sticky-disable on the first op and
+ * silently fall back to exec-relay — re-introducing the Bug 1 large-read
+ * regression risk and burying the misconfig in a single stderr line nobody
+ * reads. Fail loud at start instead.
+ *
+ * Scope:
+ * - Only probes the mount **entry points** (each `MountEntry.host`), not
+ *   per-file perms inside. Runtime-time per-file perm issues stay with
+ *   the layer-level sticky-disabled flag.
+ * - For `rw` mounts, requires R_OK | W_OK; for `ro`, requires R_OK only.
+ * - Throws on first failure with a clear admin message including the
+ *   mount entry, mode, and original errno text. The exception is meant
+ *   to abort `Runtime.start()` and surface via init.ts / RuntimePool to
+ *   the admin (typically via stderr or a system notice).
+ *
+ * Use from `DockerRuntime.start()` and `RlaunchRuntime._startOnce()` only.
+ * LocalRuntime has an empty mountTable and treats every path as host, so
+ * the probe is a no-op for it.
+ */
+export async function assertMountsAccessible(
+  policy: PathPolicy,
+  runtimeKind: string,
+): Promise<void> {
+  for (const mount of policy.mountTable) {
+    const required = fsConstants.R_OK | (mount.mode === 'rw' ? fsConstants.W_OK : 0)
+    try {
+      await fsp.access(mount.host, required)
+    } catch (error) {
+      const errnoCode = error instanceof Error && 'code' in error
+        ? String((error as { code?: unknown }).code)
+        : ''
+      const msg = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `[${runtimeKind}] runtime mount ${mount.worker} (host=${mount.host}, mode=${mount.mode}) ` +
+        `is not accessible from daemon${errnoCode ? ` (${errnoCode})` : ''}: ${msg}. ` +
+        `Fix the host path / permissions, or remove the entry from runtime.${runtimeKind}.mounts.`,
+      )
+    }
+  }
 }
