@@ -27,11 +27,13 @@
     "https-proxy-agent": "^9.0.0",
     "openai": "^6.34.0",
     "proxy-chain": "^2.7.1",
+    "turndown": "^7.2.4",
     "undici": "^8.1.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/turndown": "^5.0.6",
     "tsdown": "^0.12.9",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
