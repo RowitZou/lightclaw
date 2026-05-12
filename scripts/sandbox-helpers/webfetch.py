@@ -41,8 +41,8 @@ from urllib.parse import urlparse
 # gives us split connect/read timeouts so stderr can distinguish "server
 # unreachable" from "server slow"; both are required for sensible WebFetch
 # diagnostics. The dep is staged into rlaunch workers via the same preheat
-# path as trafilatura/markdownify (rlaunch.ts:stageHelpersOnce) and baked
-# into the Docker image at layer 3.
+# path as markdownify (rlaunch.ts:stageHelpersOnce) and baked into the Docker
+# image at layer 3.
 try:
     import httpx
 except ImportError:
@@ -52,15 +52,21 @@ except ImportError:
     )
     sys.exit(2)
 
-# trafilatura extracts the article body from HTML (drops nav / footer / sidebars
-# / cookie banners). markdownify is the dump-everything fallback used when
-# extraction returns nothing — useful for short pages, JSON-rendered SPAs,
-# and stripped-down HTML where there's no "main content" to find.
-try:
-    import trafilatura
-except ImportError:
-    trafilatura = None
-
+# markdownify converts the full HTML DOM to markdown without "main content"
+# selection — equivalent to Claude Code's choice of turndown. We deliberately
+# do NOT use a smart extractor (e.g. trafilatura / readability) here: the
+# 2026-05-12 dogfood showed that on JS-rendered SPAs like alphaxiv.org, the
+# static HTML body is a tiny placeholder ("What are the most popular
+# benchmarks…") and trafilatura's main-content selection returned that
+# placeholder verbatim — never empty, so its empty-output fallback to
+# markdownify never triggered, and every URL on the same SPA returned the
+# same one-line garbage. Dump-everything is "dumb" but predictable: the
+# model sees the full static HTML (including `<script id="__NEXT_DATA__">`
+# inline JSON for Next.js apps), which is more useful than an over-confident
+# placeholder. Cost: ~10-30% more bytes per fetch on normal article pages
+# (nav / footer / sidebar markdown is dumped too). Mitigation: the WebFetch
+# tool already truncates the raw return to MAX_RAW_LENGTH chars and the
+# sub-LLM path caps at MAX_MARKDOWN_LENGTH before summarization.
 try:
     from markdownify import markdownify as html_to_markdown
 except ImportError:
@@ -202,23 +208,9 @@ def format_json(text: str) -> str:
 
 
 def html_to_body(text: str) -> str:
-    """Prefer trafilatura main-content extraction; fall back to markdownify
-    if extraction returns nothing (typical for short pages or SPAs whose
-    static HTML is just a JS bootstrap)."""
-    if trafilatura is not None:
-        try:
-            extracted = trafilatura.extract(
-                text,
-                output_format="markdown",
-                include_links=True,
-                include_tables=True,
-                include_comments=False,
-                favor_precision=True,
-            )
-            if extracted and extracted.strip():
-                return extracted.strip()
-        except Exception as exc:
-            print(f"trafilatura extraction failed: {exc}; falling back to markdownify", file=sys.stderr)
+    """Dump the full HTML DOM to markdown. See the module-level comment near
+    the markdownify import for why we do not use a smart main-content
+    extractor here."""
     return html_to_markdown(text, heading_style="ATX").strip()
 
 
@@ -246,6 +238,19 @@ def main() -> int:
 
     max_bytes = int(config.get("max_bytes", 200_000))
     timeout_total = int(config.get("timeout_seconds", 30))
+    # Internal cap for the raw fetch on text content types. The caller-facing
+    # max_bytes is the maximum *extracted body* size that comes back; the raw
+    # HTML / JSON we read off the wire can be much larger so the extractor
+    # has the full DOM to work on. Mirrors Claude Code's MAX_HTTP_CONTENT_LENGTH
+    # (10 MB) / MAX_MARKDOWN_LENGTH (100K) split. The dogfood case: alphaxiv
+    # homepage front-loads ~200 KB of `<link rel="preload">` for image
+    # thumbnails before any body markup; if raw bytes were capped at the
+    # caller's max_bytes (50K default), the dump-all output collapsed to a
+    # single placeholder line because all the human-readable markup lived
+    # past the truncation point. Binary content (PDF / image / archive) is
+    # still capped at the caller's max_bytes — those are "raw bytes off disk"
+    # semantics and re-extraction doesn't apply.
+    MAX_TEXT_RAW_BYTES = 5 * 1024 * 1024  # 5 MB
     download_dir = config.get("download_dir")
     if download_dir is not None:
         download_dir = str(download_dir)
@@ -277,18 +282,27 @@ def main() -> int:
                 status = response.status_code
                 final_url = str(response.url)
                 content_type = response.headers.get("content-type", "")
+                # raw_cap depends on content type, which we know before
+                # iter_bytes because httpx has parsed response headers by the
+                # time `with client.stream(...) as response` enters. Binary
+                # content uses the caller's max_bytes directly (download
+                # semantics); text content reads up to MAX_TEXT_RAW_BYTES so
+                # the extractor sees the full DOM, then we cap the extracted
+                # body to max_bytes after.
+                content_type_lower = content_type.lower()
+                is_binary = not is_text_content_type(content_type_lower)
+                raw_cap = max_bytes if is_binary else MAX_TEXT_RAW_BYTES
                 # iter_bytes yields content-decoded bytes (gzip/br already
-                # decompressed), so the byte count below reflects what the
-                # caller will actually see. Read max_bytes + 1 so the caller
-                # can distinguish "page is exactly max_bytes" from "page is
-                # larger, truncated"; iterate-and-break avoids buffering
-                # gigabyte responses from hostile / misconfigured servers.
+                # decompressed). Read raw_cap + 1 so we can distinguish
+                # "page is exactly raw_cap" from "page is larger, truncated";
+                # iterate-and-break avoids buffering gigabyte responses from
+                # hostile / misconfigured servers.
                 buf = bytearray()
                 for chunk in response.iter_bytes(chunk_size=64 * 1024):
                     buf.extend(chunk)
-                    if len(buf) > max_bytes:
+                    if len(buf) > raw_cap:
                         break
-                data = bytes(buf[: max_bytes + 1])
+                data = bytes(buf[: raw_cap + 1])
     except httpx.TooManyRedirects as exc:
         print(f"fetch failed: too many redirects: {exc}", file=sys.stderr)
         return 1
@@ -316,13 +330,11 @@ def main() -> int:
         print(f"unexpected: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-    truncated = len(data) > max_bytes
-    if truncated:
-        data = data[:max_bytes]
+    raw_truncated = len(data) > raw_cap
+    if raw_truncated:
+        data = data[:raw_cap]
 
-    content_type_lower = content_type.lower()
-
-    if not is_text_content_type(content_type_lower):
+    if is_binary:
         # Binary path: persist raw bytes to download_dir, report the path on
         # stdout. Truncated downloads still get persisted so partial-binary
         # cases don't silently disappear; the header line flags it.
@@ -350,17 +362,17 @@ def main() -> int:
             f"URL: {final_url}",
             f"Status: {status}",
             f"Content-Type: {content_type or 'unknown'}",
-            f"Bytes: {size}" + (" (truncated)" if truncated else ""),
+            f"Bytes: {size}" + (" (truncated)" if raw_truncated else ""),
             "",
         ]
         body = (
             f"[Binary content ({content_type or 'unknown'}, {format_size(size)})"
-            f"{' (truncated)' if truncated else ''} saved to {filepath}]"
+            f"{' (truncated)' if raw_truncated else ''} saved to {filepath}]"
         )
         sys.stdout.write("\n".join(header) + body + "\n")
         return 0
 
-    # Text path: same behavior as before — decode utf-8 and route by sub-shape.
+    # Text path: decode utf-8 and route by sub-shape.
     text = data.decode("utf-8", errors="replace")
 
     is_html_like = (
@@ -384,11 +396,25 @@ def main() -> int:
         # Plain text, markdown, javascript, form-encoded, or unknown header.
         body = text.strip()
 
+    # Cap the extracted body at the caller's max_bytes (UTF-8 measured). Done
+    # AFTER extraction so the extractor sees the full DOM even when the raw
+    # HTML is link/preload-heavy (see MAX_TEXT_RAW_BYTES comment up top).
+    # `errors='replace'` keeps the slice utf-8-safe; rstrip drops any partial
+    # whitespace/codepoint at the boundary so the body ends cleanly.
+    body_encoded = body.encode("utf-8")
+    body_truncated = len(body_encoded) > max_bytes
+    if body_truncated:
+        body = body_encoded[:max_bytes].decode("utf-8", errors="replace").rstrip()
+        reported_bytes = len(body.encode("utf-8"))
+    else:
+        reported_bytes = len(body_encoded)
+
+    truncated_flag = raw_truncated or body_truncated
     header = [
         f"URL: {final_url}",
         f"Status: {status}",
         f"Content-Type: {content_type or 'unknown'}",
-        f"Bytes: {len(data)}" + (" (truncated)" if truncated else ""),
+        f"Bytes: {reported_bytes}" + (" (truncated)" if truncated_flag else ""),
         "",
     ]
     print("\n".join(header) + body)
