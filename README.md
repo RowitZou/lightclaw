@@ -307,6 +307,30 @@ Each canonical user gets:
 
 Channels are configured in `~/.lightclaw/channels.json`. Set `enabled: true` for the channels you want the main `lightclaw` process to start.
 
+### Feishu app scopes
+
+LightClaw drives Feishu through the bot's tenant access token. On the Feishu Open Platform developer console ("Permissions & Scopes"), enable:
+
+| Scope | Why |
+|---|---|
+| `im:message` | Send and receive messages, including interactive cards. |
+| `im:message:readonly` | Fetch the parent of a reply so quoted context reaches the model. |
+| `im:resource` | Download images, audio, and files users send. |
+| `im:message.reaction:write` | Show a "thinking" reaction while a turn is in flight. |
+| `im:file` | Upload files back to chat (`SendFile`, generated artifacts). |
+| `contact:user.base:readonly` | Resolve sender names for the `[name]` group prefix and for pairing. |
+| `docs:document`, `docs:document:readonly` | Read and append to Feishu Docs (`FeishuRead`, `FeishuCreateFile`, `FeishuWriteDoc`). |
+| `sheets:spreadsheet`, `sheets:spreadsheet:readonly` | Read cells and append rows in Feishu Sheets (`FeishuRead`, `FeishuWriteSheet`). |
+| `wiki:wiki:readonly` | Resolve Wiki URLs to the underlying doc or sheet. |
+| `drive:drive` | Grant the requesting user access to docs the bot has just created. |
+
+Subscribe to these events under "Events & Callbacks":
+
+- `im.message.receive_v1`
+- `card.action.trigger` (also enable the `card.action.trigger_v1` / `interactive_card.action.trigger` aliases if your console exposes them)
+
+Re-publish the app version after toggling scopes — the changes only take effect on the next release.
+
 Feishu defaults to a long-connection (WS) transport, so you don't need a public webhook endpoint.
 
 When the assistant wants to do something that needs confirmation, it sends an interactive card with three buttons:

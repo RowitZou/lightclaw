@@ -303,6 +303,30 @@ Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin
 
 渠道配置在 `~/.lightclaw/channels.json`。需要自动启动的渠道设置 `enabled: true`。
 
+### 飞书应用所需权限
+
+LightClaw 全程使用机器人的 tenant access token。请在飞书开放平台开发者后台（"权限管理"）勾上：
+
+| 权限点 | 作用 |
+|---|---|
+| `im:message` | 收发消息（含 interactive 卡片）。 |
+| `im:message:readonly` | 读取被引用 / 被回复的父消息，把引用上下文带给模型。 |
+| `im:resource` | 下载用户发的图片、音频、文件。 |
+| `im:message.reaction:write` | 处理过程中给用户消息打一个"思考中"的表情。 |
+| `im:file` | 把生成的文件推回会话（`SendFile`、产物附件）。 |
+| `contact:user.base:readonly` | 解析发送者昵称，用于群消息 `[name]` 前缀和 pairing。 |
+| `docs:document`、`docs:document:readonly` | 读写飞书文档（`FeishuRead`、`FeishuCreateFile`、`FeishuWriteDoc`）。 |
+| `sheets:spreadsheet`、`sheets:spreadsheet:readonly` | 读写飞书表格（`FeishuRead`、`FeishuWriteSheet`）。 |
+| `wiki:wiki:readonly` | 把知识库链接解析回真正的 doc / sheet。 |
+| `drive:drive` | 新建文档时给提出请求的用户授权访问。 |
+
+在"事件与回调"里订阅这些事件：
+
+- `im.message.receive_v1`
+- `card.action.trigger`（如果后台同时显示 `card.action.trigger_v1` / `interactive_card.action.trigger`，一并勾上）
+
+权限或事件改完后必须在后台**重新发布应用版本**才会生效。
+
 飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
 
 助手想做需要确认的事时，会发一张三按钮卡片：
