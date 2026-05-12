@@ -669,9 +669,9 @@ export class RlaunchRuntime implements Runtime {
    * Idempotently stage sandbox helpers + install Python deps in the worker.
    *
    * The rlaunch path uses a generic kubebrain image (no `/opt/lightclaw/`
-   * baked in, no `markdownify` / `trafilatura` pre-installed), so the first
-   * exec into a fresh worker has to seed both. Cost is one-time per worker
-   * (~30s for pip), then memoized via `helpersStagedFor === workerName`.
+   * baked in, no `markdownify` pre-installed), so the first exec into a
+   * fresh worker has to seed both. Cost is one-time per worker (~30s for
+   * pip), then memoized via `helpersStagedFor === workerName`.
    *
    * pip is invoked with `-i https://pypi.org/simple/` to bypass the image's
    * default index (an internal mirror unreachable from the worker pod) and
@@ -695,7 +695,7 @@ export class RlaunchRuntime implements Runtime {
       // PIL / openpyxl / docx / pptx gate the office and image-resize paths.
       `command -v pdftotext >/dev/null 2>&1 && ` +
       `command -v pdftoppm >/dev/null 2>&1 && ` +
-      `python3 -c "import httpx, trafilatura, markdownify, openpyxl, docx, pptx, PIL" 2>/dev/null`
+      `python3 -c "import httpx, markdownify, openpyxl, docx, pptx, PIL" 2>/dev/null`
     const probe = await this.runBrainctlExec({
       command: probeCmd,
       timeoutMs: 15_000,
@@ -737,25 +737,23 @@ export class RlaunchRuntime implements Runtime {
     // → upstream proxy → blocked). The matching `no_proxy=...,.pjlab.org.cn`
     // injected via `buildBridgeEnv` lets pip reach the internal mirror
     // directly without traversing the bridge.
-    // lxml_html_clean is required because justext (transitive of trafilatura)
-    // imports `lxml.html.clean`, which was split out in lxml >=5. The kubebrain
-    // ml-base image ships a recent lxml so the import fails without this dep.
     // Pillow / openpyxl / python-docx / python-pptx feed the resize gate +
     // office extractors; pin only minor floors to track upstream security
     // fixes without bumping major API breakage.
     // httpx (>=0.27) is the WebFetch helper's HTTP client, replacing stdlib
     // urllib so HTTP 308 Permanent Redirects (alphaxiv / Cloudflare / Next.js
     // trailing-slash) are followed and connect/read timeouts can be split.
-    // The Docker image already bakes httpx in (Dockerfile layer 3); this line
-    // is the rlaunch-only path until the kubebrain ml-base image is rebuilt
-    // with the same dep set, at which point both webfetch helpers will work
-    // out of the box with no preheat install.
+    // markdownify is the WebFetch HTML→markdown extractor — dump-everything,
+    // no main-content selection (see webfetch.py module comment for the
+    // alphaxiv dogfood that drove trafilatura out). The Docker image already
+    // bakes httpx + markdownify in (Dockerfile layer 3); this pip line is
+    // the rlaunch-only path until the kubebrain ml-base image is rebuilt
+    // with the same dep set.
     const pip = await this.runBrainctlExec({
       command:
         'python3 -m pip install --quiet --no-warn-script-location ' +
         '--break-system-packages ' +
-        '"httpx>=0.27,<1" ' +
-        'trafilatura==2.0.0 markdownify==1.2.2 lxml_html_clean==0.4.4 ' +
+        '"httpx>=0.27,<1" markdownify==1.2.2 ' +
         '"Pillow>=10,<12" "openpyxl>=3.1,<4" "python-docx>=1.1,<2" "python-pptx>=1.0,<2"',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,

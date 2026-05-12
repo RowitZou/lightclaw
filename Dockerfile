@@ -42,8 +42,6 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir \
       tqdm pyarrow jsonlines \
       requests httpx pyyaml python-dotenv \
       markdownify==1.2.2 \
-      trafilatura==2.0.0 \
-      lxml_html_clean==0.4.4 \
       "Pillow>=10,<12" \
       "openpyxl>=3.1,<4" \
       "python-docx>=1.1,<2" \
@@ -76,7 +74,7 @@ RUN chmod +x /opt/lightclaw/sandbox-helpers/*.py
 RUN jq --version && yq --version \
     && pdftotext -v 2>&1 | head -1 \
     && pdftoppm -v 2>&1 | head -1 \
-    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, trafilatura, openpyxl, docx, pptx, PIL" \
+    && python3 -c "import numpy, pandas, scipy, matplotlib, requests, httpx, yaml, tqdm, pyarrow, jsonlines, dotenv, markdownify, openpyxl, docx, pptx, PIL" \
     && node --version && pnpm --version \
     && rg --version | head -1
 
