@@ -516,6 +516,24 @@ describe('RlaunchRuntime three-plane data path', () => {
     )
     assert.equal(execCalled, false)
   })
+
+  it('preserves the legacy traversal error message verbatim (zero behavior change)', async () => {
+    // Phase 33 contract: `..` escape must throw the pre-refactor message
+    // `Path is not within RlaunchRuntime workspace: ...`, NOT the new
+    // LayeredDataPlane `Path is not allowed for read: ...`. The legacy text
+    // comes from rlaunch.ts toContainerPath via execRelayFs.readFile.
+    let execCalled = false
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      execCalled = true
+      return { stdout: '', stderr: 'should not be called', exitCode: 1 }
+    }
+
+    await assert.rejects(
+      () => runtime.fs.readFile('/workspace/../etc/passwd'),
+      /Path is not within RlaunchRuntime workspace/,
+    )
+    assert.equal(execCalled, false)
+  })
 })
 
 describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast path)', () => {

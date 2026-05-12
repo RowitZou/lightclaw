@@ -26,9 +26,6 @@ export class LayeredDataPlane implements DataPlane {
   }
 
   async readFile(pathname: string): Promise<Buffer> {
-    if (!this.policy.isAllowed(pathname, 'read')) {
-      throw new Error(`Path is not allowed for read: ${pathname}`)
-    }
     return this.tryLayers('read', pathname, async layer => {
       if (layer.kind === 'exec-relay') {
         const stat = await layer.stat(pathname).catch(() => null)
@@ -44,31 +41,27 @@ export class LayeredDataPlane implements DataPlane {
   }
 
   async writeFile(pathname: string, content: Buffer | string): Promise<void> {
+    // Read-only mount writes must be rejected BEFORE any layer runs — host-fs
+    // layers (bind-mount / shared-cluster-fs) running daemon-side would
+    // otherwise bypass the worker-visible read-only flag. Other rejection
+    // shapes (out-of-mount, `..` traversal) are left to each layer's own
+    // path translation so the legacy "Path is not within ..." error text is
+    // preserved verbatim.
     if (!this.policy.isAllowed(pathname, 'write')) {
-      throw new Error(`Path is not allowed for write: ${pathname}`)
+      throw new Error(`Cannot write to read-only mount: ${pathname}`)
     }
     return this.tryLayers('write', pathname, layer => layer.writeFile(pathname, content))
   }
 
   async stat(pathname: string): Promise<RuntimeStat> {
-    if (!this.policy.isAllowed(pathname, 'stat')) {
-      throw new Error(`Path is not allowed for stat: ${pathname}`)
-    }
     return this.tryLayers('stat', pathname, layer => layer.stat(pathname))
   }
 
   async glob(pattern: string | string[], options?: GlobOptions): Promise<string[]> {
-    const cwd = options?.cwd
-    if (cwd && !this.policy.isAllowed(cwd, 'read')) {
-      throw new Error(`Path is not allowed for glob: ${cwd}`)
-    }
-    return this.tryLayers('glob', cwd ?? '<workspace>', layer => layer.glob(pattern, options))
+    return this.tryLayers('glob', options?.cwd ?? '<workspace>', layer => layer.glob(pattern, options))
   }
 
   async readdir(pathname: string): Promise<string[]> {
-    if (!this.policy.isAllowed(pathname, 'read')) {
-      throw new Error(`Path is not allowed for readdir: ${pathname}`)
-    }
     return this.tryLayers('readdir', pathname, layer => layer.readdir(pathname))
   }
 
