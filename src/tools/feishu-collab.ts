@@ -44,9 +44,10 @@ const feishuReadInputSchema = z.object({
   max_chars: z.number().int().min(1).max(500_000).optional()
     .describe('Doc-text cap. Defaults to 100000. Ignored for sheets and metadata_only.'),
   sheet: z.object({
-    sheet_id: z.string().min(1).optional(),
+    sheet_id: z.string().min(1).optional()
+      .describe('Feishu sheet_id (the opaque token, e.g. "ca9b8c" from the URL ?sheet=...), not the visible sheet name.'),
     range: z.string().min(1).optional()
-      .describe('A1-style range like "Sheet1!A1:D20". If omitted for sheets, returns spreadsheet metadata.'),
+      .describe('Pure A1 range like "A1:D20" - do NOT prefix with a sheet name or id; use sheet_id for that. If omitted, returns spreadsheet metadata.'),
   }).optional().describe('Sheet-specific options. Ignored for non-sheet URLs.'),
   metadata_only: z.boolean().optional()
     .describe('Resolve URL to canonical resource metadata without reading content. Useful before deciding what to read.'),

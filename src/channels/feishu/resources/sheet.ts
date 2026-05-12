@@ -102,10 +102,16 @@ export async function writeSheetValues(input: {
 }
 
 export function formatSheetRange(sheetId: string | undefined, range: string): string {
-  if (range.includes('!') || !sheetId) {
+  if (!sheetId) {
     return range
   }
-  return `${sheetId}!${range}`
+  // Feishu's sheets v2 /values/{range} endpoint only accepts `<sheetId>!<A1>`,
+  // not `<sheetName>!<A1>`. LLMs often inline the visible sheet name (e.g.
+  // "OPD验证!A1:U8") into `range` even when the structured `sheet_id` field is
+  // already correct — strip any user-supplied prefix and force the explicit id.
+  const bangIdx = range.indexOf('!')
+  const tail = bangIdx >= 0 ? range.slice(bangIdx + 1) : range
+  return `${sheetId}!${tail}`
 }
 
 type FeishuSheetClient = {
