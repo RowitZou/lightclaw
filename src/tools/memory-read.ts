@@ -13,7 +13,7 @@ export const memoryReadTool = buildTool({
   shouldDefer: true,
   description: `Read auto-memory files for this user. Use action 'list' to enumerate or 'read' to inspect a specific file.
 
-Reach for this when the user references stored preferences ("我之前让你..."), project conventions, or facts that should persist across sessions. The auto-memory index (MEMORY.md) is already injected at session start; use this tool only when you need to read the full content of a specific memory file pointed to by the index.`,
+Reach for this when the user references stored preferences ("我之前让你..." / "you used to ..." / "remember when I asked you to ..."), project conventions, or facts that should persist across sessions. The auto-memory index (MEMORY.md) is already injected at session start; use this tool only when you need to read the full content of a specific memory file pointed to by the index.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,

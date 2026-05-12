@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Glob helper for the environment runtime."""
+"""Glob helper for the environment runtime.
+
+Fallback for the Glob tool when ripgrep is not available on the runtime.
+Primary path lives in src/tools/glob.ts and uses
+`rg --files --glob <pattern> --sort=modified`.
+
+Output contract (must match the rg path):
+- Files only (no directory entries).
+- Sorted by mtime, oldest first.
+- Paths relative to cwd.
+"""
 
 from __future__ import annotations
 
@@ -51,7 +61,11 @@ def main() -> int:
     dot = bool(config.get("dot", False))
 
     seen: set[str] = set()
-    results: list[str] = []
+    # (mtime, rel_path) so we can sort by mtime ascending (oldest first) to
+    # match `rg --files --sort=modified` ordering. Stat failures (race with
+    # deletion / permission denied) fall back to mtime=0 so they sort to the
+    # very top of the list rather than crashing the whole helper.
+    results: list[tuple[float, str]] = []
     for pattern in patterns:
         for rel_path in expand(pattern, cwd, dot):
             if matches_ignore(rel_path, ignore):
@@ -62,9 +76,14 @@ def main() -> int:
             if rel_path in seen:
                 continue
             seen.add(rel_path)
-            results.append(rel_path)
+            try:
+                mtime = absolute.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            results.append((mtime, rel_path))
 
-    for rel_path in sorted(results):
+    results.sort(key=lambda item: (item[0], item[1]))
+    for _, rel_path in results:
         print(rel_path)
     return 0
 
