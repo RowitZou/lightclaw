@@ -210,9 +210,10 @@ export class DockerRuntime implements Runtime {
       return {
         ok: false,
         reason: 'image-pulling',
+        retryable: true,
         userMessage:
-          `Sandbox 镜像还在准备中（已 ${elapsed} 秒）。我现在不能执行命令、读写文件或抓取网页，` +
-          '但可以继续聊天讨论。要不你先告诉我你想做什么，我帮你想思路？',
+          `Sandbox 镜像还在准备中（已 ${elapsed} 秒）。` +
+          '如果不急，可以下一轮再发起同一个工具调用；或者继续聊别的话题，等镜像就绪后再回来。',
         adminMessage: `Sandbox 镜像 ${snap.image ?? this.cfg.image} 拉取中（已 ${elapsed} 秒）`,
       }
     }
@@ -223,6 +224,7 @@ export class DockerRuntime implements Runtime {
         return {
           ok: false,
           reason: 'autopull-disabled',
+          retryable: false,
           userMessage:
             '管理员已禁用自动镜像拉取，需要联系管理员准备 sandbox 后才能用工具。' +
             '当前我可以处理聊天类话题。',
@@ -234,6 +236,7 @@ export class DockerRuntime implements Runtime {
       return {
         ok: false,
         reason: 'image-failed',
+        retryable: false,
         userMessage:
           'Sandbox 镜像未就绪。已通知管理员，目前我只能处理聊天类话题。',
         adminMessage:
@@ -243,8 +246,9 @@ export class DockerRuntime implements Runtime {
     return {
       ok: false,
       reason: 'image-not-attempted',
+      retryable: true,
       userMessage:
-        'Sandbox 镜像还未开始准备。我现在只能处理聊天类话题。',
+        'Sandbox 镜像还未开始准备。我现在只能处理聊天类话题，过一会再试同一个工具调用即可。',
       adminMessage:
         `ImageReadinessTracker 未触发 prefetch（image=${this.cfg.image}）；` +
         '检查 init.ts 是否在 docker backend 下调用了 startPrefetch。',

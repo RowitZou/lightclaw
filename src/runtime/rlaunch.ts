@@ -319,9 +319,10 @@ export class RlaunchRuntime implements Runtime {
       return {
         ok: false,
         reason: 'worker-scheduling',
+        retryable: true,
         userMessage:
-          `集群正在准备你的工作环境（已 ${elapsed} 秒）。我现在不能执行命令、读写文件或抓取网页，` +
-          '但可以继续聊天。',
+          `集群正在准备工作环境（已 ${elapsed} 秒，通常几十秒内就绪）。` +
+          '如果不急，可以下一轮再发起同一个工具调用；或者继续聊别的话题，等环境就绪后再回来。',
         adminMessage:
           `RlaunchRuntime worker scheduling for ${this.cfg.canonicalUser} ` +
           `(image=${snap.image ?? this.cfg.image}, elapsed=${elapsed}s)`,
@@ -331,6 +332,7 @@ export class RlaunchRuntime implements Runtime {
       return {
         ok: false,
         reason: 'worker-quota-denied',
+        retryable: false,
         userMessage: '集群资源暂时不足，当前不能使用工具。已记录给管理员排查。',
         adminMessage: snap.lastError ??
           `RlaunchRuntime quota denied for ${this.cfg.canonicalUser}`,
@@ -339,6 +341,7 @@ export class RlaunchRuntime implements Runtime {
     return {
       ok: false,
       reason: 'worker-failed',
+      retryable: false,
       userMessage: '集群工作环境未就绪。已记录给管理员排查，目前我只能处理聊天类话题。',
       adminMessage: snap.lastError ?? `RlaunchRuntime worker failed for ${this.cfg.canonicalUser}`,
     }
