@@ -62,37 +62,41 @@ export type DataPlane = {
   glob(pattern: string | string[], options?: GlobOptions): Promise<string[]>
   readdir(pathname: string): Promise<string[]>
   /**
-   * Opportunistic fast path for "host already has the full buffer in memory and
-   * the target lives in a host-visible bind mount" — currently Feishu media
-   * materialize, future host-side WebFetch downloads. Implementations write
-   * directly via host fs and skip the per-32KB exec round-trips that the
-   * sandbox-safe `writeFile` uses for fairness/sandbox reasons.
+   * Opportunistic fast path for "host already has the full buffer in memory
+   * and the target lives in a host-visible bind mount" — currently Feishu
+   * media materialize, future host-side WebFetch downloads. Implementations
+   * write directly via host fs and skip the per-32KB brainctl exec
+   * round-trips that the legacy `writeFile()` exec-relay path uses.
    *
-   * **Daemon-only.** This is harness-internal plumbing for cases where the
-   * data was originated on host and needs to land in a path the runtime can
-   * see. Tool implementations MUST go through `writeFile()` so sandbox
-   * boundaries (permissions, audit, runtime ownership of effects) are
-   * preserved. See `lightclaw/CLAUDE.md` "Daemon-only fast IO" note.
+   * **Harness-internal callers only.** Phase 33 retired the "tools MUST go
+   * through writeFile()" hard rule: tools now call `writeFile()` (which
+   * routes through `LayeredDataPlane`, picking `bind-mount` /
+   * `shared-cluster-fs` automatically when the path lives in the mount
+   * table). `writeFileViaHostMount` skips that layered fall-through and is
+   * appropriate for channel encoders / media materialization where the
+   * bytes are already in the daemon Node process and the caller does not
+   * need exec-relay fallback. Sandbox boundaries are enforced by
+   * `PathPolicy` (mountTable + ro-mount write gate), not by the choice of
+   * fast-path vs `writeFile()`. See `lightclaw/CLAUDE.md` "Runtime
+   * Safety Notes" for the current contract.
    *
    * Returns `null` when the runtime cannot satisfy the request via host fs
    * (target falls outside `mountTable`, host can't write to the host-side
    * prefix, runtime backend has no shared mount, etc.). The caller MUST treat
    * `null` as "fast path unavailable" and transparently fall back to
    * `writeFile()` so the call is still safe to make even when the runtime
-   * doesn't support it. Only RlaunchRuntime implements this today; LocalRuntime
-   * has no need (its `writeFile` is already a host-side write); DockerRuntime
-   * can opt in later if a bind mount is detected.
+   * doesn't support it. Only RlaunchRuntime implements this today;
+   * LocalRuntime has no need (its `writeFile` is already a host-side write);
+   * DockerRuntime can opt in later if a bind mount is detected.
    */
   writeFileViaHostMount?(pathname: string, content: Buffer): Promise<{ ok: true } | null>
   /**
    * Symmetric counterpart to {@link writeFileViaHostMount}: read directly
    * from the host-side mount, skipping the brainctl exec + `base64 -w 0`
-   * round-trip. **Daemon-only** — only call from harness-internal code
-   * (Feishu inline encoders today, future webfetch staging) where the bytes
-   * have to flow into the daemon Node process anyway. Tool implementations
-   * MUST stay on `readFile()` so sandbox boundaries are preserved (the
-   * runtime might enforce path translation, perm narrowing, or future
-   * overlay semantics that host-side fs would skip).
+   * round-trip. **Harness-internal callers only** (Feishu inline encoders,
+   * future webfetch staging) — tools go through `readFile()` which now
+   * routes through `LayeredDataPlane` and picks the shared-cluster-fs /
+   * bind-mount layer automatically when the path is in the mount table.
    *
    * Returns `null` when the path falls outside `mountTable` or the host
    * read fails (sticky-disabled per-runtime instance after the first
