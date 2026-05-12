@@ -377,9 +377,45 @@ export class RlaunchRuntime implements Runtime {
       return result
     }
 
+    // The 5-substring isWorkerLostError detector matches several brainctl
+    // control-plane / kubelet websocket transients (`unable to upgrade
+    // connection`, `connection refused`, …) as well as legitimate worker
+    // death. 2026-05-12 dogfood confirmed a false positive: the original
+    // worker was still alive on the cluster, but a transient brainctl
+    // error tripped the detector and respawned a fresh worker, leaking
+    // the old one. Mitigation: log the original stderr (otherwise lost —
+    // `runBrainctlExec` does not write anything to daemon stderr on
+    // failure) and retry once after a 1s pause. Real worker death survives
+    // the retry; transient blips usually clear within a second.
+    process.stderr.write(
+      `[rlaunch] worker-lost-like error from ${this.workerName ?? '<unknown>'} ` +
+      `(retry in 1s before respawn): exitCode=${result.exitCode} ` +
+      `stderr=${truncateForLog(result.stderr)} stdout=${truncateForLog(result.stdout)}\n`,
+    )
+    await delay(workerLostRetryDelayMs)
+    if (input.abortSignal?.aborted) {
+      // Caller aborted while we were waiting; do not respawn behind their
+      // back. Return the original failed result so the upstream handler
+      // sees the normal cancellation flow.
+      return result
+    }
+    const firstRetry = await this.runBrainctlExec(input)
+    if (!this.isWorkerLostError(firstRetry)) {
+      process.stderr.write(
+        `[rlaunch] worker-lost retry recovered on ${this.workerName ?? '<unknown>'}; ` +
+        'first error was a transient control-plane blip, original worker preserved\n',
+      )
+      return firstRetry
+    }
+
+    process.stderr.write(
+      `[rlaunch] worker-lost retry still failed on ${this.workerName ?? '<unknown>'}; ` +
+      `respawning. retry exitCode=${firstRetry.exitCode} ` +
+      `stderr=${truncateForLog(firstRetry.stderr)}\n`,
+    )
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
-    await this.start('worker-lost on exec, retrying')
+    await this.start('worker-lost on exec after 1s retry, retrying')
     await this.waitUntilRunning()
     const retry = await this.runBrainctlExec(input)
     return {
@@ -1103,6 +1139,27 @@ function formatGcDuration(hours: number): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// In-place retry pause between the first worker-lost-like brainctl error
+// and the second attempt before deciding to respawn. 1s is empirically
+// long enough for control-plane / websocket transients to clear without
+// stalling real death-recovery noticeably (worker spawn itself takes 10s+).
+// `let` not `const` so test fixtures can drop the wait to 1ms via
+// `setWorkerLostRetryDelayMsForTests`; production code never reassigns.
+let workerLostRetryDelayMs = 1000
+export function setWorkerLostRetryDelayMsForTests(ms: number): void {
+  workerLostRetryDelayMs = ms
+}
+export function getWorkerLostRetryDelayMsForTests(): number {
+  return workerLostRetryDelayMs
+}
+
+function truncateForLog(s: string | undefined, cap = 200): string {
+  if (!s) return '<empty>'
+  const trimmed = s.trim()
+  if (trimmed.length <= cap) return trimmed
+  return `${trimmed.slice(0, cap)}…(+${trimmed.length - cap}B)`
 }
 
 type ReadFileExec = (input: ExecInput) => Promise<ExecResult>
