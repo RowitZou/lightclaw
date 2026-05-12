@@ -102,7 +102,7 @@ export function containsHighRiskRule(rules: PermissionRuleValue[]): boolean {
  * fallback. Used by approver UIs to gate the persistence option.
  */
 export function isHighRiskAsk(ask: PermissionAskInput): boolean {
-  if (ask.toolName === 'FeishuWriteConfirm') {
+  if (ask.toolName === 'FeishuWriteConfirm' || ask.toolName === 'FeishuDeleteConfirm') {
     return true
   }
   if (containsHighRiskRule(ask.suggestedRules)) {

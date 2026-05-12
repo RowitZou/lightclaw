@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -11,7 +11,7 @@ import type { PermissionApprover, PermissionAskInput } from '../permission/types
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { feishuCreateFileTool, runFeishuCreateFile } from './feishu-collab.js'
 
-const client = {} as FeishuClient
+const client = makeWorkspaceClient() as FeishuClient
 
 let tmpHome = ''
 
@@ -33,6 +33,7 @@ type AuditRecord = {
 beforeEach(async () => {
   tmpHome = await mkdtemp(path.join(tmpdir(), 'lightclaw-feishu-create-'))
   setLightclawHomeOverride(tmpHome)
+  await seedIdentity()
 })
 
 afterEach(async () => {
@@ -134,6 +135,7 @@ describe('FeishuCreateFile tool', () => {
     assert.deepEqual(records[0].resource, {
       kind: 'doc',
       title: 'Weekly update',
+      parentFolderToken: 'fld123',
       folder_token: 'fld123',
     })
     assert.match(records[0].preview, /with 12 chars/)
@@ -397,6 +399,63 @@ async function withFeishuSession<T>(input: {
     permissionApprover: input.approver,
   })
   return runWithSessionContext(ctx, input.fn)
+}
+
+async function seedIdentity(): Promise<void> {
+  const identityDir = path.join(tmpHome, 'identity')
+  await mkdir(identityDir, { recursive: true })
+  await writeFile(path.join(identityDir, 'identities.json'), `${JSON.stringify({
+    alice: {
+      createdAt: '2026-05-12T00:00:00.000Z',
+      updatedAt: '2026-05-12T00:00:00.000Z',
+      permissionCeiling: 'acceptEdits',
+      channels: { feishu: ['ou_alice'], terminal: [] },
+    },
+  }, null, 2)}\n`, 'utf8')
+}
+
+function makeWorkspaceClient(): unknown {
+  return {
+    drive: {
+      permissionMember: {
+        create: async () => ({ code: 0, data: {} }),
+      },
+      v1: {
+        file: {
+          createFolder: async (input: { data?: { folder_token?: string; name?: string } }) => ({
+            code: 0,
+            data: {
+              token: input.data?.name === 'LightClaw' ? 'rootFld' : 'userFld',
+              name: input.data?.name,
+            },
+          }),
+          list: async () => ({ code: 0, data: { files: [] } }),
+          getMetadata: async (input: { params?: { file_token?: string } }) => {
+            const token = input.params?.file_token
+            const parent: Record<string, string | null> = {
+              fld123: 'userFld',
+              userFld: 'rootFld',
+              rootFld: null,
+            }
+            return {
+              code: 0,
+              data: {
+                token,
+                type: 'folder',
+                name: token,
+                parent_token: parent[token ?? ''] ?? null,
+              },
+            }
+          },
+          delete: async () => ({ code: 0, data: {} }),
+          move: async () => ({ code: 0, data: {} }),
+        },
+        metadata: {
+          batchQuery: async () => ({ code: 0, data: { metas: [] } }),
+        },
+      },
+    },
+  }
 }
 
 async function readAuditRecords(): Promise<AuditRecord[]> {

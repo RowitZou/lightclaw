@@ -48,6 +48,7 @@ import {
 
 import { runAuthCommand } from './auth.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
+import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -424,6 +425,15 @@ function buildBuiltinCommands(): ReplCommand[] {
       const image = runtime.image || resolveDockerImage(ctx.config)
       await getRuntimePool().remove(userId)
       ctx.output.write(`${t('sandbox.reset.dockerDone', { container: containerName, image })}\n`)
+    },
+  },
+  {
+    name: '/feishu-workspace',
+    usage: '/feishu-workspace [status|list|orphans|delete <canonical>]',
+    description: 'Manage Feishu cloud workspace root and per-user folders',
+    visibleTo: 'admin',
+    async handler(args, ctx) {
+      ctx.output.write(await runFeishuWorkspaceCommand(args))
     },
   },
   {

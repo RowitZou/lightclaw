@@ -203,6 +203,22 @@ describe('isHighRiskAsk (top-level driver)', () => {
     )
   })
 
+  it('TRUE for FeishuDeleteConfirm virtual approval asks', () => {
+    assert.equal(
+      isHighRiskAsk(ask({
+        toolName: 'FeishuDeleteConfirm',
+        riskLevel: 'write',
+        input: {
+          operation: 'delete',
+          resource: { token: 'doc_123' },
+          preview: 'Delete doc.',
+        },
+        inputPreview: 'Delete doc.',
+      })),
+      true,
+    )
+  })
+
   it('TRUE when suggested rules contain a high-risk rule', () => {
     assert.equal(
       isHighRiskAsk(ask({

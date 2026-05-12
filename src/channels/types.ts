@@ -174,6 +174,9 @@ export type FeishuChannelConfig = {
     ttlDays: number
     intervalMinutes: number
   }
+  cloudSpace?: {
+    rootFolderToken?: string
+  }
   webhook: {
     host: string
     port: number

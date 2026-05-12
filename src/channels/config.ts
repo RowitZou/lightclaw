@@ -11,6 +11,7 @@ type ChannelsFileShape = {
     mediaDir?: string
     webhook?: Partial<FeishuChannelConfig['webhook']>
     inboxAging?: Partial<FeishuChannelConfig['inboxAging']>
+    cloudSpace?: Partial<FeishuChannelConfig['cloudSpace']>
   }
 }
 
@@ -82,6 +83,9 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
       ttlDays: input?.inboxAging?.ttlDays ?? DEFAULT_INBOX_AGING_CONFIG.ttlDays,
       intervalMinutes:
         input?.inboxAging?.intervalMinutes ?? DEFAULT_INBOX_AGING_CONFIG.intervalMinutes,
+    },
+    cloudSpace: {
+      ...(input?.cloudSpace?.rootFolderToken ? { rootFolderToken: input.cloudSpace.rootFolderToken } : {}),
     },
     webhook: {
       host: webhook.host ?? '0.0.0.0',

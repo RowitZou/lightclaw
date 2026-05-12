@@ -18,6 +18,12 @@ import {
   feishuWriteDocTool,
   feishuWriteSheetTool,
 } from './tools/feishu-collab.js'
+import {
+  feishuCreateFolderTool,
+  feishuDeleteTool,
+  feishuListTool,
+  feishuMoveTool,
+} from './tools/feishu-workspace.js'
 import { globTool } from './tools/glob.js'
 import { grepTool } from './tools/grep.js'
 import { memoryReadTool } from './tools/memory-read.js'
@@ -40,7 +46,11 @@ export const builtinTools = [
   conversationGrepTool,
   fileReadTool,
   feishuReadTool,
+  feishuListTool,
   feishuCreateFileTool,
+  feishuCreateFolderTool,
+  feishuMoveTool,
+  feishuDeleteTool,
   feishuWriteDocTool,
   feishuWriteSheetTool,
   fileWriteTool,

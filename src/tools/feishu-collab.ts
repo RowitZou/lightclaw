@@ -14,6 +14,11 @@ import {
 } from '../channels/feishu/resource-resolver.js'
 import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
 import {
+  assertWithinWorkspace,
+  resolveCurrentFeishuWorkspace,
+  resolveFolderPath,
+} from '../channels/feishu/workspace/ops.js'
+import {
   appendDocText,
   createDoc,
   grantChatPermission,
@@ -84,10 +89,14 @@ const feishuCreateFileInputSchema = z.object({
   kind: z.enum(['doc']).describe('Resource type to create. V1 only supports "doc"; future: "sheet", "bitable".'),
   title: z.string().min(1).max(200).describe('Title for the new resource.'),
   folder_token: z.string().min(1).optional()
-    .describe('Parent folder token. Defaults to the bot user folder.'),
+    .describe('Legacy explicit parent folder token. Must be inside the current user Feishu workspace. Prefer parent_folder.'),
+  parent_folder: z.string().optional()
+    .describe('Optional subfolder path within your Feishu workspace, e.g. "papers". Omit to create in your workspace root. Mutually exclusive with folder_token.'),
   doc: z.object({
     content: z.string().optional().describe('Initial plain-text content for kind=doc.'),
   }).optional().describe('Doc-specific options. Ignored for other kinds.'),
+}).refine(input => !(input.folder_token && input.parent_folder), {
+  message: 'Specify only one of folder_token or parent_folder.',
 })
 
 export type FeishuCreateFileInput = z.infer<typeof feishuCreateFileInputSchema>
@@ -164,16 +173,25 @@ export type FeishuWriteOperation =
   | 'append-doc'
   | 'append-sheet-rows'
   | 'overwrite-sheet-range'
+  | 'create-folder'
+  | 'move'
+  | 'delete'
+  | 'boundary-violation'
+  | 'admin-delete-workspace'
 
-type FeishuWriteAudit = {
+export type FeishuWriteAudit = {
   at: string
   userId: string | undefined
   operation: FeishuWriteOperation
-  resource: Record<string, unknown>
-  preview: string
-  status: 'confirmed' | 'denied' | 'failed'
+  resource?: Record<string, unknown>
+  preview?: string
+  status?: 'confirmed' | 'denied' | 'failed'
   error?: string
   permissionGrants?: FeishuPermissionGrants
+  ancestryChain?: string[]
+  sourceAncestry?: string[]
+  destAncestry?: string[]
+  boundaryViolation?: Record<string, unknown>
 }
 
 type FeishuReadDeps = {
@@ -405,14 +423,46 @@ export async function runFeishuRead(
 export async function runFeishuCreateFile(
   input: FeishuCreateFileInput,
   deps: FeishuCreateFileDeps,
-): Promise<ToolCallResult<FeishuCreateFileOutput>> {
+): Promise<ToolCallResult<FeishuCreateFileOutput | string>> {
   const operation: FeishuWriteOperation = 'create-doc'
+  if (input.folder_token && input.parent_folder) {
+    return { output: 'Specify only one of folder_token or parent_folder.', isError: true }
+  }
+  const workspace = await resolveCurrentFeishuWorkspace(deps.client)
+  const parentFolderToken = input.folder_token
+    ? input.folder_token
+    : (await resolveFolderPath({
+        client: deps.client,
+        workspaceToken: workspace.workspace.folderToken,
+        path: input.parent_folder,
+      })).token
+  const ancestryChain = await assertWithinWorkspace({
+    ancestry: workspace.ancestry,
+    token: parentFolderToken,
+    workspaceToken: workspace.workspace.folderToken,
+    toolName: 'FeishuCreateFile',
+  }).catch(async error => {
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: safeCurrentUserId(),
+      operation: 'boundary-violation',
+      boundaryViolation: {
+        attemptedTool: 'FeishuCreateFile',
+        attemptedTarget: parentFolderToken,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      ancestryChain: (error as { ancestryChain?: string[] })?.ancestryChain ?? [],
+    })
+    throw error
+  })
   const preview = `Create Feishu ${input.kind} titled "${input.title}"${
     input.doc?.content ? ` with ${input.doc.content.length} chars of initial content` : ''
   }.`
   const resource = {
     kind: input.kind,
     title: input.title,
+    parentFolderToken,
+    ...(input.parent_folder ? { parent_folder: input.parent_folder } : {}),
     ...(input.folder_token ? { folder_token: input.folder_token } : {}),
   }
 
@@ -429,7 +479,7 @@ export async function runFeishuCreateFile(
       client: deps.client,
       title: input.title,
       content: input.doc?.content,
-      folderToken: input.folder_token,
+      folderToken: parentFolderToken,
     })
     // Best-effort initial permission grant. Bot is the doc owner; without
     // this step the link returned in tool_result is 403 for the requesting
@@ -447,6 +497,7 @@ export async function runFeishuCreateFile(
       resource,
       preview,
       status: 'confirmed',
+      ancestryChain,
       ...(hasGrantContent(grants) ? { permissionGrants: grants } : {}),
     })
     return {
@@ -687,7 +738,7 @@ async function resolveSheetTargetFromUrl(
   }
 }
 
-async function requireFeishuWriteConfirmation(input: {
+export async function requireFeishuWriteConfirmation(input: {
   operation: FeishuWriteOperation
   preview: string
   resource: Record<string, unknown>
@@ -709,7 +760,7 @@ async function requireFeishuWriteConfirmation(input: {
   // (it walks the sessionId-keyed queue directly), so interjection cancel
   // was always wired; only the explicit abort path was missing.
   const decision = await approver.ask({
-    toolName: 'FeishuWriteConfirm',
+    toolName: input.operation === 'delete' ? 'FeishuDeleteConfirm' : 'FeishuWriteConfirm',
     riskLevel: 'write',
     input: { operation: input.operation, resource: input.resource, preview: input.preview },
     inputPreview: JSON.stringify(
@@ -719,7 +770,7 @@ async function requireFeishuWriteConfirmation(input: {
     ),
     mode: getPermissionMode(),
     signal: safeAbortSignal(),
-    suggestedRules: [{ toolName: 'FeishuWriteConfirm' }],
+    suggestedRules: [{ toolName: input.operation === 'delete' ? 'FeishuDeleteConfirm' : 'FeishuWriteConfirm' }],
   })
 
   if (decision.behavior !== 'allow') {
@@ -748,14 +799,14 @@ async function requireFeishuWriteConfirmation(input: {
   })
 }
 
-async function recordFeishuWriteAudit(record: FeishuWriteAudit): Promise<void> {
+export async function recordFeishuWriteAudit(record: FeishuWriteAudit): Promise<void> {
   const dir = path.join(lightclawHome(), 'audit', 'feishu-writes')
   await mkdir(dir, { recursive: true })
   const day = record.at.slice(0, 10)
   await appendFile(path.join(dir, `${day}.jsonl`), `${JSON.stringify(record)}\n`, 'utf8')
 }
 
-async function auditFailed(
+export async function auditFailed(
   operation: FeishuWriteOperation,
   preview: string,
   resource: Record<string, unknown>,

@@ -1574,6 +1574,12 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   if (head === '/sandbox' && (argText === '' || /^status(?:\s|$)/.test(argText))) {
     return 'read'
   }
+  if (
+    head === '/feishu-workspace' &&
+    (argText === '' || /^(status|list|orphans)(?:\s|$)/.test(argText))
+  ) {
+    return 'read'
+  }
   // /feedback writes to feedback.jsonl on disk — a completely separate
   // path from the channel session transcript. No live in-memory state,
   // no LLM call, no contention with the main session lock. (User-only
