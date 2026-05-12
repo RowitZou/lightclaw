@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { FeishuClient } from '../channels/feishu/client.js'
 import type { FeishuDocCreateResult } from '../channels/feishu/resources/doc.js'
+import {
+  getWorkspaceParentCache,
+  resetWorkspaceParentCacheForTest,
+} from '../channels/feishu/workspace/ancestry.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover, PermissionAskInput } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -34,6 +38,13 @@ beforeEach(async () => {
   tmpHome = await mkdtemp(path.join(tmpdir(), 'lightclaw-feishu-create-'))
   setLightclawHomeOverride(tmpHome)
   await seedIdentity()
+  resetWorkspaceParentCacheForTest()
+  // Legacy folder_token paths in this test point at `fld123` — historically
+  // the test mock's `getMetadata` returned fld123→userFld→rootFld so the
+  // old ancestry resolver synthesized the chain. The new design observes
+  // (child, parent) edges only via real listFolder calls; pre-seed the
+  // cache for tokens these tests pretend the model already discovered.
+  getWorkspaceParentCache().observeChild('fld123', 'userFld')
 })
 
 afterEach(async () => {

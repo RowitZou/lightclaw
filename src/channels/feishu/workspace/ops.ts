@@ -6,7 +6,7 @@ import {
   type FeishuDriveItemType,
   type FeishuFolderItem,
 } from '../resources/folder.js'
-import { createAncestryResolver, type AncestryResolver } from './ancestry.js'
+import { getWorkspaceParentCache, type ParentCache } from './ancestry.js'
 import {
   getOrCreateUserWorkspace,
   getOrCreateWorkspaceRoot,
@@ -14,35 +14,12 @@ import {
   type WorkspaceRoot,
 } from './lifecycle.js'
 
-// Module-level singleton keyed by FeishuClient identity. The whole point of
-// `createAncestryResolver`'s 5-min LRU is to amortize getMetadata HTTP calls
-// across tool invocations within the same daemon process. Instantiating per
-// tool call collapses the TTL to the ~100 ms it takes one tool call to finish
-// and defeats the cache. The bot keeps one long-lived FeishuClient per Feishu
-// channel runner, so a WeakMap keyed on client is correct: when a client is
-// GC'd the resolver goes with it; live clients keep one resolver each.
-let resolverByClient: WeakMap<FeishuClient, AncestryResolver> = new WeakMap()
-
-export function getAncestryResolver(client: FeishuClient): AncestryResolver {
-  let resolver = resolverByClient.get(client)
-  if (!resolver) {
-    resolver = createAncestryResolver(client)
-    resolverByClient.set(client, resolver)
-  }
-  return resolver
-}
-
-/** Test-only: drop all cached resolvers so the next call rebuilds. */
-export function resetAncestryResolversForTest(): void {
-  resolverByClient = new WeakMap()
-}
-
 export type FeishuWorkspaceContext = {
   canonicalUser: string
   ownerOpenId: string
   root: WorkspaceRoot
   workspace: UserWorkspace
-  ancestry: AncestryResolver
+  ancestry: ParentCache
 }
 
 export type WorkspaceTreeEntry = FeishuFolderItem & {
@@ -66,12 +43,21 @@ export async function resolveCurrentFeishuWorkspace(
   }
   const root = await getOrCreateWorkspaceRoot(client)
   const workspace = await getOrCreateUserWorkspace(client, canonicalUser, ownerOpenId, root)
+  // Seed the parent cache: root is a known top-level marker; user folder's
+  // parent is the root. Without these seeds an `assertWithinWorkspace` on
+  // a token whose listFolder hops never reached either seed would fail
+  // even when the chain is legitimate (e.g. depth-1 file under user
+  // workspace root: its parent edge gets observed by the workspace-root
+  // list, then chain walk hits user folder which we just seeded).
+  const cache = getWorkspaceParentCache()
+  cache.markRoot(root.folderToken)
+  cache.observeChild(workspace.folderToken, root.folderToken)
   return {
     canonicalUser,
     ownerOpenId,
     root,
     workspace,
-    ancestry: getAncestryResolver(client),
+    ancestry: cache,
   }
 }
 
@@ -262,21 +248,20 @@ export async function countDescendants(input: {
   return walk(input.folderToken, 1)
 }
 
-export async function assertWithinWorkspace(input: {
-  ancestry: AncestryResolver
+export function assertWithinWorkspace(input: {
+  ancestry: ParentCache
   token: string
   workspaceToken: string
   toolName: string
-}): Promise<string[]> {
-  const chain = await input.ancestry.resolve(input.token)
-  const tokens = chain?.map(entry => entry.token) ?? []
-  if (!chain || !tokens.includes(input.workspaceToken)) {
+}): string[] {
+  const chain = input.ancestry.ancestryChain(input.token)
+  if (!chain.includes(input.workspaceToken)) {
     throw Object.assign(
       new Error(`${input.toolName}: boundary-violation target is outside the current user workspace.`),
-      { ancestryChain: tokens },
+      { ancestryChain: chain },
     )
   }
-  return tokens
+  return chain
 }
 
 export function renderTree(entries: WorkspaceTreeEntry[], rootLabel: string): string {

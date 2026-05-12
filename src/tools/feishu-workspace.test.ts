@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { FeishuClient } from '../channels/feishu/client.js'
+import { resetWorkspaceParentCacheForTest } from '../channels/feishu/workspace/ancestry.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -21,6 +22,7 @@ beforeEach(async () => {
   tmpHome = await mkdtemp(path.join(tmpdir(), 'lightclaw-feishu-workspace-'))
   setLightclawHomeOverride(tmpHome)
   await seedIdentity()
+  resetWorkspaceParentCacheForTest()
 })
 
 afterEach(async () => {
@@ -267,6 +269,117 @@ describe('Feishu workspace tools', () => {
         'bob', // canonical user not in seeded identity
       ),
     )
+  })
+
+  // Regression: pre-2026-05-13 dogfood hit
+  //
+  //   "[feishu-workspace] root folder probe failed (Request failed with
+  //    status code 400); recreating"
+  //
+  // when a transient 4xx from a working folder caused the probe to
+  // silently nuke + recreate the root, orphaning the original folder
+  // along with the user's share grants. The fix removes probe-driven
+  // auto-recreate entirely; persisted tokens are trusted as canonical
+  // and only cold-start (no on-disk record) goes through createFolder.
+  it('does not auto-recreate the workspace root when a list call fails transiently', async () => {
+    const createdNames: string[] = []
+    const listAttempts: string[] = []
+    let listShouldFail = false
+    // Pre-seed the workspace files so the lazy-create branch is bypassed.
+    const home = path.join(tmpHome)
+    await mkdir(path.join(home, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(path.join(home, 'feishu-cloud-root.json'), JSON.stringify({
+      folderToken: 'rootFld',
+      createdAt: '2026-05-12T00:00:00.000Z',
+      lightclawVersion: 'test',
+    }))
+    await writeFile(path.join(home, 'identity', 'per-user', 'alice', 'feishu-workspace.json'), JSON.stringify({
+      folderToken: 'userFld',
+      parentFolderToken: 'rootFld',
+      createdAt: '2026-05-12T00:00:00.000Z',
+      ownerOpenId: 'ou_alice',
+    }))
+    const client = {
+      drive: {
+        permissionMember: { create: async () => ({ code: 0, data: {} }) },
+        v1: {
+          file: {
+            createFolder: async (input: { data?: { name?: string } }) => {
+              createdNames.push(input.data?.name ?? '')
+              return { code: 0, data: { token: `created_${input.data?.name}`, name: input.data?.name } }
+            },
+            list: async (input: { params?: { folder_token?: string } }) => {
+              const token = input.params?.folder_token ?? ''
+              listAttempts.push(token)
+              if (listShouldFail) {
+                const err = new Error('Request failed with status code 400')
+                throw err
+              }
+              return { code: 0, data: { files: [] } }
+            },
+            getMetadata: async () => ({ code: 0, data: {} }),
+            delete: async () => ({ code: 0, data: {} }),
+            move: async () => ({ code: 0, data: {} }),
+          },
+          metadata: { batchQuery: async () => ({ code: 0, data: { metas: [] } }) },
+        },
+      },
+    } as unknown as FeishuClient
+    // Simulate the dogfood scenario: first FeishuList call hits a 400 on
+    // the persisted root token.
+    listShouldFail = true
+    await assert.rejects(withFeishuSession(() => runFeishuList({ depth: 1 }, { client })))
+    // No createFolder should have fired — the persisted tokens stay put.
+    assert.deepEqual(createdNames, [])
+    // Recover (transient gone) — second FeishuList sees the same tokens.
+    listShouldFail = false
+    const result = await withFeishuSession(() => runFeishuList({ depth: 1 }, { client }))
+    assert.match(result.output, /Workspace: \/LightClaw\/alice/)
+    assert.deepEqual(createdNames, [])
+  })
+
+  // Regression: pre-2026-05-13 dogfood hit
+  //
+  //   "[feishu-workspace] ancestry metadata failed token=X: Feishu
+  //    metadata API is unavailable"
+  //
+  // because the code tried drive.v1.metadata.batchQuery (wrong path; the
+  // SDK exposes drive.v1.meta.batchQuery and that response shape has no
+  // parent_token anyway). Every write tool's `assertWithinWorkspace` then
+  // threw boundary-violation. The fix is a list-populated parent cache:
+  // listFolder responses observe (child, parent) edges, walk-up is
+  // synchronous in-memory.
+  it('refuses to write against tokens that were never observed via listFolder', async () => {
+    const client = makeClient({ userFld: [] })
+    // Force the resolver to acquire the workspace context once so root /
+    // user folder are seeded.
+    await withFeishuSession(() => runFeishuList({ depth: 1 }, { client }))
+    // Now feed the bot a token that name resolution would never produce
+    // (simulating a legacy `folder_token` typed by the model out of band).
+    await assert.rejects(
+      withFeishuSession(
+        () => runFeishuDelete({ target: 'definitely-not-listed' }, { client }),
+        { ask: async () => ({ behavior: 'allow' }) },
+      ),
+      // resolveEntryByNameOrPath fails before assertWithinWorkspace even
+      // gets the token — name-resolution gate keeps the boundary intact
+      // without depending on the broken metadata walk.
+      /Could not find "definitely-not-listed"/,
+    )
+  })
+
+  // Regression: Phase 34 plan flagged "creating a folder that already
+  // exists" as a UX bug but the original implementation silently created
+  // the duplicate. Pre-check now refuses with a friendly hint.
+  it('refuses FeishuCreateFolder when a same-named sibling already exists', async () => {
+    const client = makeClient({
+      userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuCreateFolder({ name: 'papers' }, { client }),
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output, /A folder named "papers" already exists/)
   })
 })
 

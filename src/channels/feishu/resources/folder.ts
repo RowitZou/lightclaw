@@ -1,4 +1,5 @@
 import type { FeishuClient } from '../client.js'
+import { getWorkspaceParentCache } from '../workspace/ancestry.js'
 import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
 
 export type FeishuDriveItemType = 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file' | 'unknown'
@@ -80,57 +81,18 @@ export async function listFolder(input: {
     pageToken = readNestedString(result.data, ['page_token']) ??
       readNestedString(result.data, ['next_page_token'])
   } while (pageToken)
+  // Populate workspace parent cache with every (child, parent=folderToken)
+  // edge observed here. This is the *only* way ancestry containment checks
+  // know whether a token T is inside user workspace U — Feishu's metadata
+  // API does not expose parent_token at all (`drive.v1.meta.batchQuery`
+  // returns title/owner/timestamps but no parent), so we infer the inverse
+  // direction (parent → children) from list responses opportunistically.
+  // See ancestry.ts for the full rationale.
+  const cache = getWorkspaceParentCache()
+  for (const item of items) {
+    cache.observeChild(item.token, input.folderToken)
+  }
   return { items, truncated, rawData }
-}
-
-export async function getFileMetadata(input: {
-  client: FeishuClient
-  token: string
-  /**
-   * When the SDK only exposes `metadata.batchQuery` (no direct `getMetadata`),
-   * Feishu requires `request_docs[].doc_type` alongside `doc_token`. Callers
-   * that know the type (e.g. ancestry walk after the first hop) should pass
-   * it. When unknown, this helper tries common types sequentially — slower
-   * but lets ancestry seed without a prior list call. The direct `getMetadata`
-   * branch ignores this hint since it auto-detects.
-   */
-  docTypeHint?: 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file'
-}): Promise<FeishuFolderItem | null> {
-  const client = input.client as unknown as FeishuFolderClient
-  const getter = client.drive.v1.file.getMetadata
-  if (getter) {
-    const result = await callFeishu(() => getter({
-      params: { file_token: input.token },
-    }))
-    return normalizeMetadataResult(input.token, result.data)
-  }
-  const batchQuery = client.drive.v1.metadata?.batchQuery
-  if (!batchQuery) {
-    throw new Error('Feishu metadata API is unavailable in this SDK client.')
-  }
-  const docTypes = input.docTypeHint
-    ? [input.docTypeHint]
-    : (['folder', 'docx', 'sheet', 'bitable', 'file'] as const)
-  for (const docType of docTypes) {
-    try {
-      const result = await callFeishu(() => batchQuery({
-        data: {
-          request_docs: [{ doc_token: input.token, doc_type: docType }],
-          with_url: false,
-        },
-      }))
-      const item = normalizeMetadataResult(input.token, result.data)
-      if (item) {
-        return item
-      }
-    } catch (error) {
-      // Wrong doc_type for a real token typically returns Feishu 99992402
-      // "field validation failed" or 1064xxx not-found. Swallow and try the
-      // next type; if all fail the loop ends and we return null upstream.
-      void error
-    }
-  }
-  return null
 }
 
 export async function deleteFile(input: {
@@ -192,17 +154,6 @@ export function driveType(type: FeishuDriveItemType): 'folder' | 'docx' | 'sheet
   if (type === 'bitable') return 'bitable'
   if (type === 'file') return 'file'
   return 'docx'
-}
-
-function normalizeMetadataResult(token: string, data: unknown): FeishuFolderItem | null {
-  const raw = readArray(data, ['metas'])[0] ??
-    readArray(data, ['docs'])[0] ??
-    readArray(data, ['files'])[0] ??
-    (typeof data === 'object' && data !== null ? data : undefined)
-  if (!raw) {
-    return null
-  }
-  return normalizeFolderItem(raw, token)
 }
 
 function normalizeFolderItem(raw: unknown, fallbackToken?: string): FeishuFolderItem | null {
@@ -270,15 +221,11 @@ type FeishuFolderClient = {
       create(input: unknown): Promise<FeishuEnvelope>
     }
     v1: {
-      metadata?: {
-        batchQuery(input: unknown): Promise<FeishuEnvelope>
-      }
       file: {
         createFolder(input: unknown): Promise<FeishuEnvelope>
         list(input: unknown): Promise<FeishuEnvelope>
         delete(input: unknown): Promise<FeishuEnvelope>
         move(input: unknown): Promise<FeishuEnvelope>
-        getMetadata?: (input: unknown) => Promise<FeishuEnvelope>
       }
     }
   }
