@@ -2,6 +2,7 @@ import { readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getFeishuClient } from '../channels/feishu/client.js'
+import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
 import { deleteFile, listFolder } from '../channels/feishu/resources/folder.js'
 import {
   userWorkspacePath,
@@ -107,14 +108,32 @@ async function deleteCommand(args: string[]): Promise<string> {
     pendingDeleteTokens.delete(canonical)
     return `Confirmation token for "${canonical}" is missing or expired. Run /feishu-workspace delete ${canonical} again.\n`
   }
-  await deleteFile({ client: getFeishuClient(), token: workspace.folderToken, type: 'folder' })
+  const auditResource = { folderToken: workspace.folderToken, itemCount: pending.itemCount }
+  try {
+    await deleteFile({ client: getFeishuClient(), token: workspace.folderToken, type: 'folder' })
+  } catch (error) {
+    // Feishu rejected the delete (folder gone / permission revoked / scope drift).
+    // Keep the identity binding so admin can investigate before we abandon it,
+    // and surface the failure in audit jsonl so a later /feishu-workspace orphans
+    // sweep can correlate.
+    pendingDeleteTokens.delete(canonical)
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: canonical,
+      operation: 'admin-delete-workspace',
+      resource: auditResource,
+      status: 'failed',
+      error: feishuErrorMessage(error),
+    })
+    return `Failed to delete Feishu workspace for "${canonical}": ${feishuErrorMessage(error)}\n`
+  }
   await rm(userWorkspacePath(canonical), { force: true })
   pendingDeleteTokens.delete(canonical)
   await recordFeishuWriteAudit({
     at: new Date().toISOString(),
     userId: canonical,
     operation: 'admin-delete-workspace',
-    resource: { folderToken: workspace.folderToken, itemCount: pending.itemCount },
+    resource: auditResource,
     status: 'confirmed',
   })
   return `Deleted Feishu workspace for "${canonical}" (${pending.itemCount} direct items moved to Feishu trash).\n`

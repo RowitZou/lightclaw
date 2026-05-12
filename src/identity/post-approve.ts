@@ -92,6 +92,16 @@ async function runApprovalPreheat(
     return
   }
 
+  // Eager Feishu cloud workspace create. The lazy path inside the agent
+  // tools (resolveCurrentFeishuWorkspace) probes the workspace on every
+  // tool call, so creating it once here at pairing-approval time amortizes
+  // away the first-use latency and lets admin `/feishu-workspace list`
+  // see the binding immediately. Fire-and-forget — best-effort, never
+  // blocks the welcome push. Folder name is `name` (canonical user), not
+  // the Feishu open_id, so admin and the user both see a recognizable
+  // folder name in Feishu UI.
+  void preheatFeishuWorkspace(name, openId)
+
   const tracker = backend === 'docker' ? getImageReadiness() : undefined
   const runtime = getRuntimePool().acquire(name, config, undefined, tracker)
   try {
@@ -203,4 +213,19 @@ async function runApprovalPreheat(
     const detail = error instanceof Error ? error.message : String(error)
     process.stderr.write(`[preheat-on-approval] ${name}: replay failed: ${detail}\n`)
   })
+}
+
+async function preheatFeishuWorkspace(name: string, openId: string): Promise<void> {
+  try {
+    const { getFeishuClient } = await import('../channels/feishu/client.js')
+    const { getOrCreateUserWorkspace, getOrCreateWorkspaceRoot } =
+      await import('../channels/feishu/workspace/lifecycle.js')
+    const client = getFeishuClient()
+    const root = await getOrCreateWorkspaceRoot(client)
+    await getOrCreateUserWorkspace(client, name, openId, root)
+    process.stderr.write(`[preheat-on-approval] ${name}: feishu workspace ready\n`)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[preheat-on-approval] ${name}: feishu workspace preheat failed: ${detail}\n`)
+  }
 }

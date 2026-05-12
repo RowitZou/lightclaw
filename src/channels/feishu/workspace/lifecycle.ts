@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { FeishuClient } from '../client.js'
 import { lightclawHome } from '../../../paths.js'
@@ -123,6 +125,30 @@ export async function getOrCreateUserWorkspace(
   return workspace
 }
 
+let cachedVersion: string | null = null
+
 function lightclawVersion(): string {
-  return '0.1.4'
+  if (cachedVersion !== null) {
+    return cachedVersion
+  }
+  // src/channels/feishu/workspace/lifecycle.ts → ../../../../package.json
+  // (works for both src/ tsx and dist/ bundled — dist is a single chunk so
+  // import.meta.url is the dist file, and package.json sits one level up).
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  for (const candidate of [
+    path.resolve(here, '..', '..', '..', '..', 'package.json'),
+    path.resolve(here, '..', 'package.json'),
+  ]) {
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.length > 0) {
+        cachedVersion = parsed.version
+        return cachedVersion
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  cachedVersion = 'unknown'
+  return cachedVersion
 }

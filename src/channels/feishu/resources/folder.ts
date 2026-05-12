@@ -86,6 +86,15 @@ export async function listFolder(input: {
 export async function getFileMetadata(input: {
   client: FeishuClient
   token: string
+  /**
+   * When the SDK only exposes `metadata.batchQuery` (no direct `getMetadata`),
+   * Feishu requires `request_docs[].doc_type` alongside `doc_token`. Callers
+   * that know the type (e.g. ancestry walk after the first hop) should pass
+   * it. When unknown, this helper tries common types sequentially — slower
+   * but lets ancestry seed without a prior list call. The direct `getMetadata`
+   * branch ignores this hint since it auto-detects.
+   */
+  docTypeHint?: 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file'
 }): Promise<FeishuFolderItem | null> {
   const client = input.client as unknown as FeishuFolderClient
   const getter = client.drive.v1.file.getMetadata
@@ -99,13 +108,29 @@ export async function getFileMetadata(input: {
   if (!batchQuery) {
     throw new Error('Feishu metadata API is unavailable in this SDK client.')
   }
-  const result = await callFeishu(() => batchQuery({
-    data: {
-      request_docs: [{ doc_token: input.token }],
-      with_url: false,
-    },
-  }))
-  return normalizeMetadataResult(input.token, result.data)
+  const docTypes = input.docTypeHint
+    ? [input.docTypeHint]
+    : (['folder', 'docx', 'sheet', 'bitable', 'file'] as const)
+  for (const docType of docTypes) {
+    try {
+      const result = await callFeishu(() => batchQuery({
+        data: {
+          request_docs: [{ doc_token: input.token, doc_type: docType }],
+          with_url: false,
+        },
+      }))
+      const item = normalizeMetadataResult(input.token, result.data)
+      if (item) {
+        return item
+      }
+    } catch (error) {
+      // Wrong doc_type for a real token typically returns Feishu 99992402
+      // "field validation failed" or 1064xxx not-found. Swallow and try the
+      // next type; if all fail the loop ends and we return null upstream.
+      void error
+    }
+  }
+  return null
 }
 
 export async function deleteFile(input: {

@@ -811,6 +811,11 @@ export async function auditFailed(
   preview: string,
   resource: Record<string, unknown>,
   error: unknown,
+  extras: {
+    ancestryChain?: string[]
+    sourceAncestry?: string[]
+    destAncestry?: string[]
+  } = {},
 ): Promise<void> {
   await recordFeishuWriteAudit({
     at: new Date().toISOString(),
@@ -820,6 +825,9 @@ export async function auditFailed(
     preview,
     status: 'failed',
     error: feishuErrorMessage(error),
+    ...(extras.ancestryChain ? { ancestryChain: extras.ancestryChain } : {}),
+    ...(extras.sourceAncestry ? { sourceAncestry: extras.sourceAncestry } : {}),
+    ...(extras.destAncestry ? { destAncestry: extras.destAncestry } : {}),
   })
 }
 

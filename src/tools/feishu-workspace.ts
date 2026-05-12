@@ -169,29 +169,38 @@ export async function runFeishuCreateFolder(
     token: parent.token,
     workspaceToken: ctx.workspace.folderToken,
     toolName: 'FeishuCreateFolder',
+  }).catch(async error => {
+    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuCreateFolder', input.parent_folder ?? '/', error)
+    throw error
   })
-  const created = await createFolder({
-    client: deps.client,
-    parentFolderToken: parent.token,
+  const preview = `Create folder "${input.name}" under ${parent.path}.`
+  const baseResource: Record<string, unknown> = {
+    kind: 'folder',
     name: input.name,
-  })
-  ctx.ancestry.evict(parent.token)
-  await recordFeishuWriteAudit({
-    at: new Date().toISOString(),
-    userId: ctx.canonicalUser,
-    operation: 'create-folder',
-    resource: {
-      kind: 'folder',
-      name: input.name,
-      folderToken: created.folderToken,
+    parentFolderToken: parent.token,
+  }
+  try {
+    const created = await createFolder({
+      client: deps.client,
       parentFolderToken: parent.token,
-    },
-    preview: `Create folder "${input.name}" under ${parent.path}.`,
-    status: 'confirmed',
-    ancestryChain,
-  })
-  return {
-    output: `Created folder "${input.name}" at ${parent.path === '/' ? '/' : `${parent.path}/`}${input.name}/ (token=${created.folderToken}).`,
+      name: input.name,
+    })
+    ctx.ancestry.evict(parent.token)
+    await recordFeishuWriteAudit({
+      at: new Date().toISOString(),
+      userId: ctx.canonicalUser,
+      operation: 'create-folder',
+      resource: { ...baseResource, folderToken: created.folderToken },
+      preview,
+      status: 'confirmed',
+      ancestryChain,
+    })
+    return {
+      output: `Created folder "${input.name}" at ${parent.path === '/' ? '/' : `${parent.path}/`}${input.name}/ (token=${created.folderToken}).`,
+    }
+  } catch (error) {
+    await auditFailed('create-folder', preview, baseResource, error, { ancestryChain })
+    throw error
   }
 }
 
@@ -242,7 +251,7 @@ export async function runFeishuDelete(
     })
     return { output: `Deleted ${displayType(target.type)} "${target.path}". Feishu retains it in trash for about 30 days.` }
   } catch (error) {
-    await auditFailed('delete', preview, resource, error)
+    await auditFailed('delete', preview, resource, error, { ancestryChain })
     throw error
   }
 }
@@ -325,7 +334,7 @@ export async function runFeishuMove(
     })
     return { output: `Moved "${source.path}" to "${dest.path}".` }
   } catch (error) {
-    await auditFailed('move', preview, resource, error)
+    await auditFailed('move', preview, resource, error, { sourceAncestry, destAncestry })
     throw error
   }
 }
