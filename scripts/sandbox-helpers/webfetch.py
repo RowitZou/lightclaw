@@ -31,9 +31,26 @@ import posixpath
 import re
 import secrets
 import sys
-import urllib.error
-import urllib.request
 from urllib.parse import urlparse
+
+# httpx replaces stdlib urllib because urllib's HTTPRedirectHandler in Python
+# 3.10 (Ubuntu 22.04 system Python) lacks a `http_error_308` handler — it
+# raises HTTPError on RFC 7538 Permanent Redirects instead of following them,
+# and trailing-slash Next.js sites (alphaxiv, many Cloudflare-fronted hosts)
+# answer / → /+slash with 308. httpx follows 308 by default and additionally
+# gives us split connect/read timeouts so stderr can distinguish "server
+# unreachable" from "server slow"; both are required for sensible WebFetch
+# diagnostics. The dep is staged into rlaunch workers via the same preheat
+# path as trafilatura/markdownify (rlaunch.ts:stageHelpersOnce) and baked
+# into the Docker image at layer 3.
+try:
+    import httpx
+except ImportError:
+    print(
+        "httpx is not installed. Run: python3 -m pip install --user httpx",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 # trafilatura extracts the article body from HTML (drops nav / footer / sidebars
 # / cookie banners). markdownify is the dump-everything fallback used when
@@ -228,21 +245,72 @@ def main() -> int:
         return 1
 
     max_bytes = int(config.get("max_bytes", 200_000))
-    timeout = int(config.get("timeout_seconds", 30))
+    timeout_total = int(config.get("timeout_seconds", 30))
     download_dir = config.get("download_dir")
     if download_dir is not None:
         download_dir = str(download_dir)
 
-    request = urllib.request.Request(url, headers=BROWSER_HEADERS)
+    # Split timeout: connect/write get a short fixed budget (10s, clamped to
+    # the caller's total if smaller) — a server we can't reach should fail
+    # fast. Read gets the full caller-provided budget so slow-streaming bodies
+    # (large PDFs, flaky upstreams) can still complete. The split is the whole
+    # diagnostic point: stderr separates "connect timeout" from "read timeout"
+    # so the caller can distinguish "host unreachable / DNS dead" from "server
+    # accepted us then stalled", which urllib's single-deadline model collapsed
+    # into a single "URLError: timed out" string.
+    connect_budget = min(10, timeout_total)
+    read_budget = timeout_total
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            status = getattr(response, "status", 0)
-            final_url = response.geturl()
-            content_type = response.headers.get("content-type", "")
-            data = response.read(max_bytes + 1)
-    except urllib.error.URLError as exc:
-        print(f"fetch failed: {exc}", file=sys.stderr)
+        with httpx.Client(
+            headers=BROWSER_HEADERS,
+            follow_redirects=True,
+            max_redirects=10,
+            timeout=httpx.Timeout(
+                connect=connect_budget,
+                read=read_budget,
+                write=connect_budget,
+                pool=5.0,
+            ),
+        ) as client:
+            with client.stream("GET", url) as response:
+                status = response.status_code
+                final_url = str(response.url)
+                content_type = response.headers.get("content-type", "")
+                # iter_bytes yields content-decoded bytes (gzip/br already
+                # decompressed), so the byte count below reflects what the
+                # caller will actually see. Read max_bytes + 1 so the caller
+                # can distinguish "page is exactly max_bytes" from "page is
+                # larger, truncated"; iterate-and-break avoids buffering
+                # gigabyte responses from hostile / misconfigured servers.
+                buf = bytearray()
+                for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        break
+                data = bytes(buf[: max_bytes + 1])
+    except httpx.TooManyRedirects as exc:
+        print(f"fetch failed: too many redirects: {exc}", file=sys.stderr)
+        return 1
+    except httpx.ConnectTimeout as exc:
+        print(
+            f"fetch failed: connect timeout after {connect_budget}s: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except httpx.ReadTimeout as exc:
+        print(
+            f"fetch failed: read timeout after {read_budget}s: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except httpx.RequestError as exc:
+        # Catches ConnectError / ReadError / ProtocolError / ProxyError /
+        # UnsupportedProtocol / WriteTimeout / PoolTimeout / DecodingError /
+        # InvalidURL after the more specific timeouts above. Type name is
+        # included so admin grep can tell apart "ConnectError" (network /
+        # DNS / TLS) from "RemoteProtocolError" (server hung up mid-stream).
+        print(f"fetch failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"unexpected: {type(exc).__name__}: {exc}", file=sys.stderr)
