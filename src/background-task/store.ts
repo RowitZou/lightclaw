@@ -107,6 +107,7 @@ export function removeBackgroundTask(canonicalUser: string, id: string): boolean
 export type BackgroundTaskPatch = Partial<
   Pick<
     BackgroundTaskEntry,
+    | 'prompt'
     | 'schedule'
     | 'label'
     | 'notifyOn'
@@ -116,6 +117,7 @@ export type BackgroundTaskPatch = Partial<
     | 'consecutiveFailures'
     | 'fireHistory'
     | 'allowedTools'
+    | 'pendingPriorPromptNotice'
   >
 >
 

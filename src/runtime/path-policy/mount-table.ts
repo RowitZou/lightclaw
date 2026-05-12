@@ -46,13 +46,28 @@ export class MountTablePathPolicy implements PathPolicy {
     return this.toHostPath(workerPath) !== null
   }
 
+  /**
+   * Reserved for sandbox constraints the data-plane layer cannot enforce on
+   * its own. Currently only the `op === 'write' && mount.mode === 'ro'` case:
+   * a `bind-mount` / `shared-cluster-fs` layer running daemon-side has host
+   * write permission and would otherwise bypass the worker-visible read-only
+   * flag. Returning `false` here causes LayeredDataPlane.writeFile to throw
+   * before any layer runs.
+   *
+   * Phase 33 deliberately does NOT short-circuit `..` traversal here — each
+   * backend's own path translation (`toContainerPath` in docker.ts /
+   * rlaunch.ts) already throws `Path is not within {RuntimeKind}Runtime
+   * workspace: ...` for traversal that escapes the mount. Letting that
+   * natural error propagate preserves the pre-refactor error message text
+   * verbatim (zero behavior change for the traversal-rejection path).
+   */
   isAllowed(workerPath: string, op: 'read' | 'write' | 'stat'): boolean {
-    if (hasTraversal(workerPath)) {
-      return false
+    if (op !== 'write') {
+      return true
     }
     const normalizedWorker = path.posix.normalize(workerPath)
     const mount = this.findMount(normalizedWorker)
-    if (op === 'write' && mount?.mode === 'ro') {
+    if (mount?.mode === 'ro') {
       return false
     }
     return true
@@ -83,10 +98,6 @@ function validateMountTable(entries: ReadonlyArray<MountEntry>): void {
       }
     }
   }
-}
-
-function hasTraversal(pathname: string): boolean {
-  return pathname.split(/[\\/]+/).includes('..')
 }
 
 function isSameOrChildPosix(candidate: string, parent: string): boolean {

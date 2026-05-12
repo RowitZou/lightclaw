@@ -93,3 +93,50 @@ test('LayeredDataPlane refuses large reads through exec-relay fallback', async (
   )
   assert.equal(readCalled, false)
 })
+
+test('LayeredDataPlane blocks writes to read-only mounts before any layer runs', async () => {
+  const roPolicy = new MountTablePathPolicy([
+    { host: '/host/ro', worker: '/opt/ro', mode: 'ro' },
+  ])
+  let writeCalled = false
+  const data = new LayeredDataPlane([
+    {
+      ...fakePlane({ kind: 'bind-mount' }),
+      writeFile: async () => {
+        writeCalled = true
+      },
+    },
+  ], roPolicy)
+
+  await assert.rejects(
+    () => data.writeFile('/opt/ro/foo.txt', Buffer.from('x')),
+    /Cannot write to read-only mount/,
+  )
+  assert.equal(writeCalled, false)
+})
+
+test('LayeredDataPlane lets traversal fall through to the last layer natural error', async () => {
+  // Phase 33 contract: LayeredDataPlane does NOT pre-empt `..` traversal at
+  // the policy layer — it propagates the legacy "Path is not within ..."
+  // message from each backend's path-translation step. We model that by
+  // having the exec-relay layer throw the legacy text and confirm it bubbles.
+  const data = new LayeredDataPlane([
+    fakePlane({
+      kind: 'bind-mount',
+      readFile: async () => {
+        throw new DataPlaneNotApplicableError('out of mount')
+      },
+    }),
+    fakePlane({
+      kind: 'exec-relay',
+      readFile: async () => {
+        throw new Error('Path is not within FakeRuntime workspace: /workspace/../etc/passwd')
+      },
+    }),
+  ], policy)
+
+  await assert.rejects(
+    () => data.readFile('/workspace/../etc/passwd'),
+    /Path is not within FakeRuntime workspace/,
+  )
+})

@@ -217,6 +217,8 @@ export const LOCALES = {
     'bg.card.permFail.highRiskWarn': '⚠️ 包含高危规则（rm/dd/sudo 等），仅作用于此任务的 allowedTools；不会修改全局 /rules。',
     'bg.card.permFail.scopeHint': '将批准 {count} 条规则到此任务白名单（不影响其他任务 / 主对话 / 全局规则）。',
     'bg.card.approveRetryStarted.body': '已添加到 {label} 任务白名单，立即触发新一次 fire。',
+    'bg.card.priorPromptNotice.title': '提示词已更新（仅本次显示）',
+    'bg.card.priorPromptNotice.body': '此前的提示词：\n```\n{prior}\n```',
 
     // ---- /stop ----
     'stop.requireIdentity': '/stop 需要一个有效的身份。',
@@ -661,6 +663,8 @@ export const LOCALES = {
     'bg.card.permFail.highRiskWarn': '⚠️ Includes high-risk patterns (rm/dd/sudo, etc). Added only to this task allowedTools; global /rules are unchanged.',
     'bg.card.permFail.scopeHint': 'Will approve {count} rule(s) to this task allowlist only (other tasks / main session / global rules unaffected).',
     'bg.card.approveRetryStarted.body': 'Added to {label} task allowlist and queued an immediate fire.',
+    'bg.card.priorPromptNotice.title': 'Prompt was updated (shown once)',
+    'bg.card.priorPromptNotice.body': 'Prior prompt:\n```\n{prior}\n```',
 
     // ---- /stop ----
     'stop.requireIdentity': '/stop requires an active identity.',

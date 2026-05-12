@@ -13,6 +13,7 @@ import {
   readFileViaExec,
   READ_FILE_BUFFER_BYTES_FOR_TESTS,
   RlaunchRuntime,
+  setWorkerLostRetryDelayMsForTests,
   type RlaunchRuntimeConfig,
 } from './rlaunch.js'
 import type { ExecInput, ExecResult } from './types.js'
@@ -516,6 +517,24 @@ describe('RlaunchRuntime three-plane data path', () => {
     )
     assert.equal(execCalled, false)
   })
+
+  it('preserves the legacy traversal error message verbatim (zero behavior change)', async () => {
+    // Phase 33 contract: `..` escape must throw the pre-refactor message
+    // `Path is not within RlaunchRuntime workspace: ...`, NOT the new
+    // LayeredDataPlane `Path is not allowed for read: ...`. The legacy text
+    // comes from rlaunch.ts toContainerPath via execRelayFs.readFile.
+    let execCalled = false
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      execCalled = true
+      return { stdout: '', stderr: 'should not be called', exitCode: 1 }
+    }
+
+    await assert.rejects(
+      () => runtime.fs.readFile('/workspace/../etc/passwd'),
+      /Path is not within RlaunchRuntime workspace/,
+    )
+    assert.equal(execCalled, false)
+  })
 })
 
 describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast path)', () => {
@@ -720,5 +739,242 @@ describe('RlaunchRuntime.fs.readFileViaHostMount (host-side bind-mount fast path
     const rResult = await fastRead.call(runtime.fs, containerPath)
     assert.ok(rResult, 'read flag must be independent of write flag')
     assert.equal(rResult.toString('utf8'), 'ok')
+  })
+})
+
+describe('RlaunchRuntime isAvailable retryable mapping', () => {
+  // Bug 12 (2026-05-12 dogfood) invariant: every non-ok branch must carry a
+  // boolean `retryable` so query.ts can decide is_error per branch instead of
+  // surfacing every transient backoff as a tool failure.
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+  let tracker: WorkerReadinessTracker
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-avail-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    tracker = new WorkerReadinessTracker('alice')
+    runtime = new RlaunchRuntime(config, tracker)
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+  })
+
+  it('worker-scheduling is retryable + body has no absolute-negation phrasing', async () => {
+    tracker.startSchedule('registry/x:tag')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-scheduling')
+    assert.equal(avail.retryable, true)
+    // Bug 12 phrasing regression guard: the old wording
+    // "我现在不能执行命令、读写文件或抓取网页" reads to the model as a hard
+    // capability claim and primes "I have no tools" behavior. The replacement
+    // must not contain that absolute negation.
+    assert.ok(!avail.userMessage.includes('不能执行命令'),
+      `worker-scheduling userMessage must drop the "不能执行命令" phrasing, got: ${avail.userMessage}`)
+    assert.ok(avail.userMessage.includes('准备'),
+      'worker-scheduling userMessage should still describe "正在准备"')
+  })
+
+  it('not-attempted (initial state) is retryable', async () => {
+    // tracker starts in 'not-attempted' — isAvailable() must treat it as
+    // retryable scheduling. This is the path the very first turn hits before
+    // any start() call has run.
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-scheduling')
+    assert.equal(avail.retryable, true)
+  })
+
+  it('worker-quota-denied is NOT retryable', async () => {
+    tracker.markQuotaDenied('quota exceeded for ailab-hs/hs_cpu')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-quota-denied')
+    assert.equal(avail.retryable, false)
+  })
+
+  it('worker-failed is NOT retryable', async () => {
+    tracker.markFailed('rlaunch detached exited 1: image pull error')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'worker-failed')
+    assert.equal(avail.retryable, false)
+  })
+})
+
+describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
+  // 2026-05-12 dogfood follow-up: `isWorkerLostError` keyword set is broad
+  // enough to match brainctl control-plane transients (websocket upgrade
+  // failure, kubelet endpoint hiccup, …) as well as real worker death.
+  // Add one 1s in-place retry so a transient blip never silently respawns
+  // a living worker (which then leaks until the cluster GC window kicks in).
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+
+  type ExecMock = (input: ExecInput) => Promise<ExecResult>
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-worker-lost-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
+      env: {},
+    }
+    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
+    // Stub out the heavy lifecycle calls that the retry path would otherwise
+    // hit. ensureRunning short-circuits because we pre-set workerName.
+    ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
+    ;(runtime as unknown as { waitUntilRunning: () => Promise<void> }).waitUntilRunning = async () => {}
+    ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-alpha'
+    setWorkerLostRetryDelayMsForTests(1) // 1ms keeps the suite snappy
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+    setWorkerLostRetryDelayMsForTests(1000)
+  })
+
+  function stubBrainctlExec(impls: ExecMock[]): { calls: number } {
+    let call = 0
+    const counter = { calls: 0 }
+    const fn: ExecMock = async (input) => {
+      const idx = call++
+      counter.calls = call
+      const impl = impls[idx] ?? impls[impls.length - 1]
+      return impl(input)
+    }
+    ;(runtime as unknown as { runBrainctlExec: ExecMock }).runBrainctlExec = fn
+    return counter
+  }
+
+  it('returns immediately when first brainctl exec succeeds', async () => {
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: 'hello', stderr: '', exitCode: 0 }),
+    ])
+    const result = await runtime.exec({ command: 'echo hello' })
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.stdout, 'hello')
+    assert.equal(counter.calls, 1, 'no retry should happen on success')
+  })
+
+  it('retries once and returns the retry result when the first error is a transient', async () => {
+    // First call hits `unable to upgrade connection` (control-plane websocket
+    // blip, classic false positive in dogfood). Retry succeeds.
+    const counter = stubBrainctlExec([
+      async () => ({
+        stdout: '',
+        stderr: 'Error from server: unable to upgrade connection: container not found',
+        exitCode: 1,
+      }),
+      async () => ({ stdout: 'ok after retry', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+
+    const result = await runtime.exec({ command: 'echo hi' })
+    assert.equal(counter.calls, 2, 'first call + retry')
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.stdout, 'ok after retry')
+    assert.equal(startCalls, 0, 'respawn must NOT happen when retry recovered')
+    // Worker name preserved — the whole point of the retry layer.
+    assert.equal(
+      (runtime as unknown as { workerName: string | null }).workerName,
+      'ws-test-alpha',
+    )
+  })
+
+  it('respawns when the retry still sees worker-lost-like error (real death)', async () => {
+    // Both first and retry hit `not found` consistently. Treated as real
+    // worker death: delete record, start new worker, run a third brainctl
+    // exec on the new worker.
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
+      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
+      async () => ({ stdout: 'ok on new worker', stderr: '', exitCode: 0 }),
+    ])
+    const startReasons: string[] = []
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async (reason: string) => {
+      startReasons.push(reason)
+      ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-beta'
+    }
+
+    const result = await runtime.exec({ command: 'echo hi' })
+    assert.equal(counter.calls, 3, 'first + retry + post-respawn third call')
+    assert.equal(result.exitCode, 0)
+    assert.ok(result.stderr.startsWith('[runtime] worker restarted'),
+      'respawn path prepends the legacy "worker restarted" stderr header')
+    assert.equal(startReasons.length, 1, 'exactly one respawn after retry failure')
+    assert.ok(startReasons[0]?.includes('worker-lost on exec after 1s retry'),
+      `start reason should reflect the retry-then-respawn path, got: ${startReasons[0]}`)
+  })
+
+  it('does not retry when caller aborts during the retry delay', async () => {
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: '', stderr: 'connection refused', exitCode: 1 }),
+      async () => ({ stdout: 'should NOT be called', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+    // Slow the retry down so the abort lands inside the sleep window.
+    setWorkerLostRetryDelayMsForTests(50)
+
+    const ac = new AbortController()
+    const promise = runtime.exec({ command: 'echo hi', abortSignal: ac.signal })
+    // Abort synchronously after exec() yields on the first await — the next
+    // microtask will reach `delay(50)` and then re-check `abortSignal.aborted`.
+    setTimeout(() => ac.abort(), 5)
+    const result = await promise
+
+    assert.equal(counter.calls, 1, 'aborted before retry could run')
+    assert.equal(result.exitCode, 1)
+    assert.ok(result.stderr.includes('connection refused'),
+      'original failed result is returned verbatim on abort')
+    assert.equal(startCalls, 0, 'respawn must NOT happen on abort')
   })
 })

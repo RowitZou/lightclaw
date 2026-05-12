@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import type { FeishuChannelConfig, NormalizedChannelMessage } from '../types.js'
 import {
   isMentionGateSatisfied,
+  parseFeishuSessionId,
   resolveFeishuSessionId,
 } from './routing.js'
 
@@ -82,6 +83,56 @@ describe('resolveFeishuSessionId', () => {
       ),
       'feishu:group:oc_chat_1:thr_2:ou_sender',
     )
+  })
+})
+
+describe('parseFeishuSessionId', () => {
+  it('reverses DM session ids', () => {
+    assert.deepEqual(parseFeishuSessionId('feishu:dm:oc_chat'), {
+      kind: 'dm',
+      chatId: 'oc_chat',
+    })
+  })
+
+  it('reverses group session ids without thread', () => {
+    assert.deepEqual(parseFeishuSessionId('feishu:group:oc_chat:ou_sender'), {
+      kind: 'group',
+      chatId: 'oc_chat',
+      senderOpenId: 'ou_sender',
+    })
+  })
+
+  it('reverses topic-group session ids with thread', () => {
+    assert.deepEqual(parseFeishuSessionId('feishu:group:oc_chat:thr_1:ou_sender'), {
+      kind: 'group',
+      chatId: 'oc_chat',
+      threadId: 'thr_1',
+      senderOpenId: 'ou_sender',
+    })
+  })
+
+  it('round-trips with resolveFeishuSessionId', () => {
+    const dm = resolveFeishuSessionId(msg({ chatType: 'p2p', chatId: 'oc_dm1' }), config, 'a')
+    assert.deepEqual(parseFeishuSessionId(dm), { kind: 'dm', chatId: 'oc_dm1' })
+    const group = resolveFeishuSessionId(
+      msg({ chatType: 'topic_group', threadId: 'thr_x' }),
+      config,
+      'a',
+    )
+    assert.deepEqual(parseFeishuSessionId(group), {
+      kind: 'group',
+      chatId: 'oc_chat',
+      threadId: 'thr_x',
+      senderOpenId: 'ou_sender',
+    })
+  })
+
+  it('returns null for non-feishu / malformed ids', () => {
+    assert.equal(parseFeishuSessionId('terminal-admin'), null)
+    assert.equal(parseFeishuSessionId('branch-alice-deadbeef'), null)
+    assert.equal(parseFeishuSessionId('feishu:dm'), null)
+    assert.equal(parseFeishuSessionId('feishu:group:only-chat'), null)
+    assert.equal(parseFeishuSessionId('feishu:unknown:foo:bar'), null)
   })
 })
 

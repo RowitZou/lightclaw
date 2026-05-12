@@ -1,11 +1,13 @@
-import test from 'node:test'
+import test, { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
   buildDockerCreateArgs,
+  DockerRuntime,
   type DockerRuntimeConfig,
   type DockerRuntimeSecurity,
 } from './docker.js'
+import { ImageReadinessTracker } from './image-readiness.js'
 
 const DEFAULT_SECURITY: DockerRuntimeSecurity = {
   capDrop: ['ALL'],
@@ -167,4 +169,63 @@ test('buildDockerCreateArgs preserves the workspace bind mount and image positio
   assert.equal(args[args.length - 3], 'ghcr.io/test/lightclaw-sandbox:latest')
   assert.equal(args[args.length - 2], 'sleep')
   assert.equal(args[args.length - 1], 'infinity')
+})
+
+describe('DockerRuntime isAvailable retryable mapping', () => {
+  // Bug 12 (2026-05-12 dogfood) invariant: every non-ok branch must carry
+  // a boolean `retryable`. Image pulls / not-attempted are transient
+  // backoffs (next turn or a short wait recovers); image-failed and
+  // autopull-disabled need admin intervention.
+  let runtime: DockerRuntime
+  let tracker: ImageReadinessTracker
+
+  beforeEach(() => {
+    tracker = new ImageReadinessTracker()
+    runtime = new DockerRuntime(makeConfig(), tracker)
+  })
+
+  it('image-pulling is retryable', async () => {
+    // ImageReadinessTracker has no public method to enter `pulling` without
+    // shelling out to docker, so set the private fields directly for the
+    // test snapshot. This stays inside the test surface — production code
+    // never reaches in here.
+    Object.assign(tracker as unknown as Record<string, unknown>, {
+      _state: 'pulling',
+      _image: 'ghcr.io/test/lightclaw-sandbox:latest',
+      _pullStartedAt: Date.now() - 5000,
+    })
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'image-pulling')
+    assert.equal(avail.retryable, true)
+  })
+
+  it('image-not-attempted (initial state) is retryable', async () => {
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'image-not-attempted')
+    assert.equal(avail.retryable, true)
+  })
+
+  it('image-failed is NOT retryable', async () => {
+    tracker.markFailed('Error response from daemon: manifest unknown')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'image-failed')
+    assert.equal(avail.retryable, false)
+  })
+
+  it('autopull-disabled is NOT retryable', async () => {
+    // docker.ts:221 keys autopull-disabled off the `AUTOPULL_DISABLED:` prefix
+    // in lastError. Operator decision, never recovers on its own.
+    tracker.markFailed('AUTOPULL_DISABLED: no local image and autoPull=false')
+    const avail = await runtime.isAvailable()
+    assert.equal(avail.ok, false)
+    if (avail.ok) return
+    assert.equal(avail.reason, 'autopull-disabled')
+    assert.equal(avail.retryable, false)
+  })
 })

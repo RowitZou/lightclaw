@@ -205,15 +205,16 @@ Use when the user says "取消那个提醒" / "stop the daily X" / "don't run th
 export const updateBackgroundTaskTool = buildTool({
   name: 'UpdateBackgroundTask',
   shouldDefer: true,
-  description: `Update schedule, label, enabled flag, notification settings, or allowed_tools for an existing background task.
+  description: `Update fields of an existing background task. Mutable fields: prompt, schedule, label, enabled, notify_on, notify_to, allowed_tools.
 
-Use when the user adjusts an existing task: "改成每天 9am" (update schedule), "暂停那个提醒" (set enabled: false), "把这个改成静默执行" (update notify_to to 'agent'), or to extend allowed_tools after a permission failure.
+Use when the user adjusts an existing task: "改一下提醒语" (update prompt), "改成每天 9am" (update schedule), "暂停那个提醒" (set enabled: false), "把这个改成静默执行" (update notify_to to 'agent'), or to extend allowed_tools after a permission failure.
 
-Prompt changes are NOT supported — to change the prompt, CancelBackgroundTask + BackgroundTask (new). \`allowed_tools\` is a FULL REPLACEMENT, not a diff: passing \`["Bash(npm:*)"]\` replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.`,
+Changing prompt records the prior prompt and surfaces it once on the next fire's completion card / wake notification so the user can see what changed. \`allowed_tools\` is a FULL REPLACEMENT, not a diff: passing \`["Bash(npm:*)"]\` replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.`,
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
     id: z.string().min(1),
+    prompt: z.string().min(10).optional(),
     schedule: scheduleSpecSchema.optional(),
     label: z.string().min(2).max(80).optional(),
     enabled: z.boolean().optional(),
@@ -240,7 +241,16 @@ Prompt changes are NOT supported — to change the prompt, CancelBackgroundTask 
         }
       }
     }
+    // Capture prior prompt only when the new prompt differs from the existing
+    // one — saves a no-op notice if the model re-passes the same string. The
+    // notice clears at next-fire delivery (scheduler.onFireComplete reads
+    // pendingPriorPromptNotice off the latest store entry, attaches it to the
+    // PendingCardAction / wake input, then writes the field back as undefined).
+    const promptChanged =
+      input.prompt !== undefined && existing !== null && existing.prompt !== input.prompt
     const updated = updateBackgroundTask(userId, input.id, {
+      ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+      ...(promptChanged ? { pendingPriorPromptNotice: existing.prompt } : {}),
       ...(schedule ? { schedule } : {}),
       ...(input.label ? { label: input.label } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
