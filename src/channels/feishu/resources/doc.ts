@@ -95,6 +95,67 @@ export async function appendDocText(input: {
   }))
 }
 
+// Feishu permission tiers (perm field):
+//   view         — read-only.
+//   edit         — read + write.
+//   full_access  — read + write + manage collaborators ("拥有者" badge in the
+//                  Feishu UI; can approve subsequent permission requests).
+//
+// member_type accepts openid / userid / chatid / departmentid / etc. We only
+// need 'openid' (for the triggering user) and 'chatid' (for granting the
+// entire group chat in one call). The URL query `type` is the FILE type,
+// which is always 'docx' for documents we just created via `createDoc`.
+export async function grantUserPermission(input: {
+  client: FeishuClient
+  documentId: string
+  openId: string
+  perm: 'view' | 'edit' | 'full_access'
+}): Promise<{ ok: true } | { ok: false; error: string; alreadyExists: boolean }> {
+  return grantPermission({
+    client: input.client,
+    documentId: input.documentId,
+    data: { member_type: 'openid', member_id: input.openId, perm: input.perm },
+  })
+}
+
+export async function grantChatPermission(input: {
+  client: FeishuClient
+  documentId: string
+  chatId: string
+  perm: 'view' | 'edit' | 'full_access'
+}): Promise<{ ok: true } | { ok: false; error: string; alreadyExists: boolean }> {
+  return grantPermission({
+    client: input.client,
+    documentId: input.documentId,
+    data: { member_type: 'chatid', member_id: input.chatId, perm: input.perm },
+  })
+}
+
+async function grantPermission(input: {
+  client: FeishuClient
+  documentId: string
+  data: { member_type: 'openid' | 'chatid'; member_id: string; perm: 'view' | 'edit' | 'full_access' }
+}): Promise<{ ok: true } | { ok: false; error: string; alreadyExists: boolean }> {
+  const client = input.client as FeishuDrivePermissionClient
+  try {
+    await callFeishu(() => client.drive.permissionMember.create({
+      path: { token: input.documentId },
+      params: { type: 'docx', need_notification: false },
+      data: input.data,
+    }))
+    return { ok: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // Feishu 1061xxx code family means "this member already has access". Pattern
+    // match across exact codes + common phrasing so repeated grant attempts
+    // (e.g. an interjection that re-fires the same FeishuCreateFile turn)
+    // are idempotent rather than surfacing a confusing failure.
+    const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
+      /1061\d{3}/.test(message)
+    return { ok: false, error: message, alreadyExists }
+  }
+}
+
 function contentToDocBlocks(content: string): Array<Record<string, unknown>> {
   return content
     .split(/\n{2,}/)
@@ -121,6 +182,14 @@ type FeishuDocClient = {
       rawContent(input: unknown): Promise<FeishuEnvelope>
     }
     documentBlockChildren: {
+      create(input: unknown): Promise<FeishuEnvelope>
+    }
+  }
+}
+
+type FeishuDrivePermissionClient = {
+  drive: {
+    permissionMember: {
       create(input: unknown): Promise<FeishuEnvelope>
     }
   }

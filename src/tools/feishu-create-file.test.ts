@@ -35,8 +35,32 @@ afterEach(async () => {
   await rm(tmpHome, { recursive: true, force: true })
 })
 
+// Stub that records every grant call. ok=true unless `failOpenId` /
+// `failChatId` matches the call's target.
+function makeGrantStub(input: {
+  failOpenId?: string
+  failChatId?: string
+} = {}) {
+  const userCalls: Array<{ openId: string; perm: string }> = []
+  const chatCalls: Array<{ chatId: string; perm: string }> = []
+  const grantUser = async (args: { openId: string; perm: 'view' | 'edit' | 'full_access' }) => {
+    userCalls.push({ openId: args.openId, perm: args.perm })
+    return args.openId === input.failOpenId
+      ? { ok: false as const, error: 'user-grant-rejected', alreadyExists: false }
+      : { ok: true as const }
+  }
+  const grantChat = async (args: { chatId: string; perm: 'view' | 'edit' | 'full_access' }) => {
+    chatCalls.push({ chatId: args.chatId, perm: args.perm })
+    return args.chatId === input.failChatId
+      ? { ok: false as const, error: 'chat-grant-rejected', alreadyExists: false }
+      : { ok: true as const }
+  }
+  return { userCalls, chatCalls, grantUser, grantChat }
+}
+
 describe('FeishuCreateFile tool', () => {
-  it('creates docs after write confirmation and records confirmed audit', async () => {
+  it('creates docs after write confirmation and grants sender full_access in DM (chat grant skipped)', async () => {
+    const stub = makeGrantStub()
     let askInput: PermissionAskInput | undefined
     let createArgs: unknown
     const result = await withFeishuSession({
@@ -65,6 +89,9 @@ describe('FeishuCreateFile tool', () => {
                 rawData: { document: { document_id: 'docx123' } },
               } satisfies FeishuDocCreateResult
             },
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+            resolveOwnerOpenId: async () => 'ou_alice',
           },
         ),
     })
@@ -74,6 +101,7 @@ describe('FeishuCreateFile tool', () => {
       document_id: 'docx123',
       url: 'https://example.feishu.cn/docx/docx123',
       title: 'Weekly update',
+      permission_grants: { chat: 'skipped-not-group', user: 'full_access' },
       rawData: { document: { document_id: 'docx123' } },
     })
     assert.deepEqual(createArgs, {
@@ -82,6 +110,8 @@ describe('FeishuCreateFile tool', () => {
       content: 'hello\n\nworld',
       folderToken: 'fld123',
     })
+    assert.deepEqual(stub.userCalls, [{ openId: 'ou_alice', perm: 'full_access' }])
+    assert.deepEqual(stub.chatCalls, [], 'DM session must not grant chat-level perms')
     assert.equal(askInput?.toolName, 'FeishuWriteConfirm')
     assert.equal(askInput?.riskLevel, 'write')
     assert.deepEqual(askInput?.suggestedRules, [{ toolName: 'FeishuWriteConfirm' }])
@@ -92,12 +122,165 @@ describe('FeishuCreateFile tool', () => {
     assert.equal(records[0].userId, 'alice')
     assert.equal(records[0].operation, 'create-doc')
     assert.equal(records[0].status, 'confirmed')
+    assert.deepEqual(records[0].permissionGrants, {
+      chat: 'skipped-not-group',
+      user: 'full_access',
+    })
     assert.deepEqual(records[0].resource, {
       kind: 'doc',
       title: 'Weekly update',
       folder_token: 'fld123',
     })
     assert.match(records[0].preview, /with 12 chars/)
+  })
+
+  it('grants chat view + sender full_access in group sessions', async () => {
+    const stub = makeGrantStub()
+    const result = await withFeishuSession({
+      sessionId: 'feishu:group:oc_grp:ou_alice',
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Team notes' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'docG', title: 'Team notes' }),
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+            // Group sessions read senderOpenId out of sessionId — this fallback
+            // should NOT be consulted in this path.
+            resolveOwnerOpenId: async () => {
+              throw new Error('resolveOwnerOpenId should not run in group path')
+            },
+          },
+        ),
+    })
+
+    assert.equal(result.isError, undefined)
+    const output = result.output as { permission_grants?: unknown }
+    assert.deepEqual(output.permission_grants, {
+      chat: 'view',
+      user: 'full_access',
+    })
+    assert.deepEqual(stub.chatCalls, [{ chatId: 'oc_grp', perm: 'view' }])
+    assert.deepEqual(stub.userCalls, [{ openId: 'ou_alice', perm: 'full_access' }])
+  })
+
+  it('records partial-fail grant outcome when chat succeeds and user fails', async () => {
+    const stub = makeGrantStub({ failOpenId: 'ou_alice' })
+    const result = await withFeishuSession({
+      sessionId: 'feishu:group:oc_grp:ou_alice',
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Partial' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'docP', title: 'Partial' }),
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+          },
+        ),
+    })
+
+    assert.equal(result.isError, undefined)
+    const grants = (result.output as { permission_grants?: { chat?: string; user?: string; errors?: string[] } }).permission_grants
+    assert.equal(grants?.chat, 'view')
+    assert.equal(grants?.user, 'failed')
+    assert.match(grants?.errors?.[0] ?? '', /user-grant: user-grant-rejected/)
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].permissionGrants?.user, 'failed')
+  })
+
+  it('records both-failed grant outcome without aborting doc creation', async () => {
+    const stub = makeGrantStub({ failOpenId: 'ou_alice', failChatId: 'oc_grp' })
+    const result = await withFeishuSession({
+      sessionId: 'feishu:group:oc_grp:ou_alice',
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Both fail' },
+          {
+            client,
+            createDoc: async () => ({
+              documentId: 'docF',
+              url: 'https://example.feishu.cn/docx/docF',
+              title: 'Both fail',
+            }),
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+          },
+        ),
+    })
+
+    assert.equal(result.isError, undefined)
+    const output = result.output as {
+      document_id?: string
+      url?: string
+      permission_grants?: { chat?: string; user?: string; errors?: string[] }
+    }
+    assert.equal(output.document_id, 'docF', 'doc creation must still succeed')
+    assert.equal(output.url, 'https://example.feishu.cn/docx/docF')
+    assert.equal(output.permission_grants?.chat, 'failed')
+    assert.equal(output.permission_grants?.user, 'failed')
+    assert.equal(output.permission_grants?.errors?.length, 2)
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].permissionGrants?.chat, 'failed')
+    assert.equal(records[0].permissionGrants?.user, 'failed')
+  })
+
+  it('falls back to canonical identity binding for openId when channel context is unusable', async () => {
+    const stub = makeGrantStub()
+    // sessionId here is feishu:dm:chat1, so senderOpenId is NOT carried in the
+    // sessionId and the implementation must call resolveOwnerOpenId for the
+    // user grant. (Group sessions, by contrast, take openId directly from
+    // sessionId without invoking the fallback.)
+    let resolveCalled = false
+    await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Fallback' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'docFB', title: 'Fallback' }),
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+            resolveOwnerOpenId: async user => {
+              resolveCalled = true
+              assert.equal(user, 'alice')
+              return 'ou_alice_from_binding'
+            },
+          },
+        ),
+    })
+
+    assert.equal(resolveCalled, true)
+    assert.deepEqual(stub.userCalls, [{ openId: 'ou_alice_from_binding', perm: 'full_access' }])
+  })
+
+  it('reports skipped-no-binding when no openId can be resolved', async () => {
+    const stub = makeGrantStub()
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'Orphan' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'docO', title: 'Orphan' }),
+            grantUser: stub.grantUser,
+            grantChat: stub.grantChat,
+            resolveOwnerOpenId: async () => undefined,
+          },
+        ),
+    })
+
+    const grants = (result.output as { permission_grants?: { user?: string } }).permission_grants
+    assert.equal(grants?.user, 'skipped-no-binding')
+    assert.deepEqual(stub.userCalls, [])
   })
 
   it('records denied audit and skips SDK calls when confirmation is denied', async () => {
@@ -195,9 +378,10 @@ describe('FeishuCreateFile tool', () => {
 async function withFeishuSession<T>(input: {
   approver: PermissionApprover
   fn: () => Promise<T>
+  sessionId?: string
 }): Promise<T> {
   const ctx = createSessionContext({
-    sessionId: 'feishu:dm:chat1',
+    sessionId: input.sessionId ?? 'feishu:dm:chat1',
     channel: 'feishu',
     cwd: tmpHome,
     model: 'test-model',
