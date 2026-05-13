@@ -4,10 +4,12 @@ import type {
   ModelEntry,
 } from '../config.js'
 import { createAnthropicProvider } from './anthropic.js'
-import { recordCapability } from './capability-cache.js'
+import { clearCapability, recordCapability } from './capability-cache.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
-import type { Provider, Schema } from './types.js'
+import type { AttachmentKind, Provider, Schema } from './types.js'
+
+const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
 
 export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch' | 'webFetch'
 
@@ -98,32 +100,84 @@ export function getProviderFor(
 }
 
 /** Run the provider's static-drop probe ONCE per (endpoint × upstreamModel)
- *  pair and write the resulting falses into the capability cache, so the
- *  channel-runner's `encodeAttachmentsForInline` can short-circuit on
- *  unsupported kinds without ever reading the bytes off disk. This is the
- *  proactive complement to the runtime `content_dropped` autopilot — most
- *  drops we care about (OpenAI document, audio/video) are deterministic
- *  schema-level facts that don't need a real upload to discover. */
+ *  pair and reconcile the on-disk capability cache against the result. The
+ *  probe is pure local computation on the provider's own convertMessages
+ *  translator — same code streamChat would invoke — so any kind in the
+ *  dropped set will land at the wire as 0 bytes.
+ *
+ *  Reconciliation rules:
+ *    - dropped + declared `'unknown'` or `false` → record `false` so
+ *      encodeAttachmentsForInline short-circuits before a 5+ MB read.
+ *    - dropped + declared `true` → record `false` AND emit a
+ *      `converter-gap` warning. Declared `true` is provider-author ground
+ *      truth (informed by API docs / verification); converter silently
+ *      dropping the kind is a bug, not an API limit. This is the
+ *      diagnostic that would have caught the codex/pdf converter gap a
+ *      year earlier than 2026-05-13 dogfood — flag any future ones at
+ *      startup, not at cost-observability post-mortem.
+ *    - not dropped + declared `true` → clear any stale `false` so a
+ *      newly-fixed converter immediately starts emitting. Without this,
+ *      the previous converter's verdict survives in capabilities-cache
+ *      .json across the fix and `readCachedCapability` keeps returning
+ *      `false`.
+ *    - not dropped + declared `'unknown'` → leave the cache as-is; the
+ *      reactive autopilot will flip on the first real wire 4xx if it
+ *      ever turns out the API rejects this kind anyway. */
 function precharge(provider: Provider, entry: ModelEntry): void {
   const k = `${entry.endpoint}:${entry.upstreamModel}`
   if (prechargdKeys.has(k)) return
   prechargdKeys.add(k)
 
-  const dropped = provider.detectStaticDropKinds?.()
-  if (!dropped || dropped.length === 0) return
+  const dropped = provider.detectStaticDropKinds?.() ?? []
+  const droppedSet = new Set<AttachmentKind>(dropped)
+  const declared = provider.capabilities.attachments
 
-  for (const kind of dropped) {
-    recordCapability({
-      endpoint: entry.endpoint,
-      upstreamModel: entry.upstreamModel,
-      kind,
-      value: false,
-    })
+  const recordedFalse: AttachmentKind[] = []
+  const cleared: AttachmentKind[] = []
+  const converterGaps: AttachmentKind[] = []
+
+  for (const kind of ALL_KINDS) {
+    if (droppedSet.has(kind)) {
+      recordCapability({
+        endpoint: entry.endpoint,
+        upstreamModel: entry.upstreamModel,
+        kind,
+        value: false,
+      })
+      recordedFalse.push(kind)
+      if (declared[kind] === true) {
+        converterGaps.push(kind)
+      }
+    } else if (declared[kind] === true) {
+      const removed = clearCapability({
+        endpoint: entry.endpoint,
+        upstreamModel: entry.upstreamModel,
+        kind,
+      })
+      if (removed) cleared.push(kind)
+    }
   }
-  process.stderr.write(
-    `[capability] precharged ${entry.endpoint}/${entry.upstreamModel} ` +
-    `kinds=${dropped.join(',')} verdict=false (schema_unsupported)\n`,
-  )
+
+  if (recordedFalse.length > 0) {
+    process.stderr.write(
+      `[capability] precharged ${entry.endpoint}/${entry.upstreamModel} ` +
+      `kinds=${recordedFalse.join(',')} verdict=false (schema_unsupported)\n`,
+    )
+  }
+  if (cleared.length > 0) {
+    process.stderr.write(
+      `[capability] cleared stale ${entry.endpoint}/${entry.upstreamModel} ` +
+      `kinds=${cleared.join(',')} (declared=true, converter now emits)\n`,
+    )
+  }
+  if (converterGaps.length > 0) {
+    process.stderr.write(
+      `[capability] WARNING converter-gap ${entry.endpoint}/${entry.upstreamModel} ` +
+      `kinds=${converterGaps.join(',')} — declared=true but the provider's converter ` +
+      `silently drops these blocks. Add an emit branch in convertMessages; this is ` +
+      `a converter bug, not an API limit. Caching as false until the converter is fixed.\n`,
+    )
+  }
 }
 
 /**

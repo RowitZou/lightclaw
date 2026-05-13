@@ -9,7 +9,7 @@ import {
   getProvider,
   getProviderFor,
 } from './index.js'
-import { _resetCacheForTests, readCachedCapability } from './capability-cache.js'
+import { _resetCacheForTests, readCachedCapability, recordCapability } from './capability-cache.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { LightClawConfig } from '../config.js'
 
@@ -144,6 +144,32 @@ describe('provider.detectStaticDropKinds', () => {
     // user-role images flow through. Regression guard.
     assert.equal(dropped.includes('image'), false)
   })
+
+  it('openai-auth (codex) reports only audio + video — document goes through input_file', () => {
+    const cfg: LightClawConfig = {
+      ...buildConfig(),
+      models: {
+        codex: {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+        },
+      },
+      endpoints: {
+        codex: { auth: 'codex-oauth' },
+      },
+      routing: { main: 'codex' },
+    }
+    const { provider } = getProviderFor(cfg, 'codex')
+    const dropped = (provider.detectStaticDropKinds?.() ?? []).slice().sort()
+    // PDF/document is intentionally NOT dropped here — the converter emits
+    // input_file for application/pdf, verified working against gpt-5.5 on
+    // the Codex backend (2026-05-13 dogfood). Regression guard for the
+    // converter-gap that produced pdf:false in capabilities-cache.json
+    // from 5-09 through 5-13.
+    assert.deepEqual(dropped, ['audio', 'video'])
+    assert.equal(dropped.includes('pdf'), false)
+  })
 })
 
 describe('provider precharge writes capability cache', () => {
@@ -198,6 +224,57 @@ describe('provider precharge writes capability cache', () => {
       }),
       'unknown',
     )
+  })
+
+  it('clears a stale cache entry when a fixed converter no longer drops a declared-true kind', () => {
+    // Simulate the codex/pdf history: a previous daemon run with a buggy
+    // converter wrote pdf:false to the disk cache. New daemon starts with
+    // the fixed converter (declared:true + no longer in the dropped set).
+    // precharge() must auto-clear the stale false so the next user PDF
+    // takes the inline path immediately, without manual cache deletion.
+    recordCapability({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      value: false,
+    })
+    const cfg: LightClawConfig = {
+      ...buildConfig(),
+      models: {
+        codex: {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+        },
+      },
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      routing: { main: 'codex' },
+    }
+    getProviderFor(cfg, 'codex')
+
+    // After precharge, the stale entry is gone and reads pass through to
+    // declared:true.
+    assert.equal(
+      readCachedCapability({
+        endpoint: 'codex',
+        upstreamModel: 'gpt-5.5',
+        kind: 'pdf',
+        declared: true,
+      }),
+      true,
+    )
+    // audio / video still get false because the probe drops them.
+    for (const kind of ['audio', 'video'] as const) {
+      assert.equal(
+        readCachedCapability({
+          endpoint: 'codex',
+          upstreamModel: 'gpt-5.5',
+          kind,
+          declared: false,
+        }),
+        false,
+      )
+    }
   })
 
   it('does not write any cache entry when the provider drops nothing (anthropic)', () => {
