@@ -690,9 +690,14 @@ export class RlaunchRuntime implements Runtime {
     const probeCmd =
       `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
       // pdftotext / pdftoppm gate Read('foo.pdf') text and Read('foo.pdf', pages=...) visual respectively;
+      // rg backs Grep + Glob (Glob rewrite uses `rg --files --sort=modified`);
+      // jq is not a hard harness dep but model-driven Bash hits `curl | jq` constantly, so probing it
+      // here keeps the apt step self-healing instead of leaving 127s for the model to discover;
       // PIL / openpyxl / docx / pptx gate the office and image-resize paths.
       `command -v pdftotext >/dev/null 2>&1 && ` +
       `command -v pdftoppm >/dev/null 2>&1 && ` +
+      `command -v rg >/dev/null 2>&1 && ` +
+      `command -v jq >/dev/null 2>&1 && ` +
       `python3 -c "import openpyxl, docx, pptx, PIL" 2>/dev/null`
     const probe = await this.runBrainctlExec({
       command: probeCmd,
@@ -714,21 +719,31 @@ export class RlaunchRuntime implements Runtime {
       await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
     }
 
-    // Apt deps: poppler-utils provides pdftotext + pdftoppm, used by the
-    // Read tool's text and visual paths on PDFs. apt is best-effort: the kubebrain ml-base image
-    // runs as root with a working corp mirror, but if either assumption fails
-    // we surface the error clearly and let the PDF tools degrade with their
-    // own "install poppler-utils" warnings.
+    // Apt deps for the rlaunch ml-base image (ubuntu 22.04 + ML libs, no dev tooling).
+    // Confirmed missing in 2026-05-13 dep audit on a fresh worker:
+    //   - poppler-utils → pdftotext + pdftoppm + pdfinfo (Read tool's PDF text + visual paths)
+    //   - ripgrep       → Grep + Glob (`rg --files --sort=modified`)
+    //   - jq            → not a hard harness dep, but model-driven Bash hits `curl | jq`
+    //                     and `cat foo.json | jq` constantly. ~2 MB cost, prevents per-call exit 127.
+    // Without staging here every Glob/Grep returned exit 127 (`bash: rg: command not found`)
+    // and prior to the `isWorkerLostError` exit-127 guard, the substring 'not found'
+    // tripped the worker-lost retry+respawn loop on every call.
+    // Combined apt install is ~5–6 s on the corp mirror, well under the 240 s budget.
+    // apt is best-effort: root + working corp mirror are usual on this image, but if
+    // either fails we surface the error and let the affected tools degrade with their
+    // own "install <pkg>" warnings (Grep already has a `grep -R` fallback; Glob falls
+    // back to runtime.fs.glob; jq just returns 127 to the model).
     const apt = await this.runBrainctlExec({
       command:
-        'command -v pdftotext >/dev/null 2>&1 && command -v pdftoppm >/dev/null 2>&1 || ' +
-        'apt-get update -qq && apt-get install -y -qq --no-install-recommends poppler-utils',
+        'command -v pdftotext >/dev/null 2>&1 && command -v pdftoppm >/dev/null 2>&1 ' +
+        '&& command -v rg >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || ' +
+        'apt-get update -qq && apt-get install -y -qq --no-install-recommends poppler-utils ripgrep jq',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,
     })
     if (apt.exitCode !== 0) {
       process.stderr.write(
-        `[rlaunch] poppler-utils install failed (PDF tools will degrade): ${apt.stderr.trim() || apt.stdout.trim()}\n`,
+        `[rlaunch] poppler-utils + ripgrep + jq install failed (PDF / Grep / Glob / jq tools will degrade): ${apt.stderr.trim() || apt.stdout.trim()}\n`,
       )
     }
 
@@ -940,6 +955,13 @@ export class RlaunchRuntime implements Runtime {
 
   private isWorkerLostError(result: ExecResult): boolean {
     if (result.exitCode === 0) return false
+    // POSIX shell "command not found" is exit 127. The 'not found' substring
+    // below would otherwise trip on `bash: line 1: rg: command not found`
+    // (rlaunch ml-base image ships without ripgrep, jq, yq, etc.) and
+    // respawn the worker once per Glob/Grep call. 127 is unique to in-shell
+    // command resolution; brainctl control-plane / kubelet faults surface
+    // as non-127 exits (typically 1, or 137 on SIGKILL).
+    if (result.exitCode === 127) return false
     const msg = `${result.stderr}\n${result.stdout}`.toLowerCase()
     return (
       msg.includes('not found') ||

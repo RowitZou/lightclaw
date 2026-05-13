@@ -952,6 +952,59 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
       `start reason should reflect the retry-then-respawn path, got: ${startReasons[0]}`)
   })
 
+  it('does NOT respawn on exit 127 even when stderr says "command not found"', async () => {
+    // 2026-05-13 dogfood: the rlaunch ml-base image ships without ripgrep,
+    // so every Glob/Grep call returns `bash: line 1: rg: command not found`
+    // exit 127. Pre-fix the substring 'not found' tripped isWorkerLostError
+    // and the runtime respawned the worker once per Grep. Exit 127 is unique
+    // to in-shell command resolution; brainctl control-plane / kubelet faults
+    // surface as non-127 exits, so guarding on it is safe.
+    const counter = stubBrainctlExec([
+      async () => ({
+        stdout: '',
+        stderr: 'bash: line 1: rg: command not found',
+        exitCode: 127,
+      }),
+      async () => ({ stdout: 'should NOT be called', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+
+    const result = await runtime.exec({ command: 'rg foo' })
+    assert.equal(counter.calls, 1, 'exit 127 must short-circuit before retry')
+    assert.equal(result.exitCode, 127, 'original exit code is propagated')
+    assert.ok(result.stderr.includes('command not found'),
+      'original stderr is propagated verbatim, not wrapped as "worker restarted"')
+    assert.equal(startCalls, 0, 'respawn must NOT happen on exit 127')
+    assert.equal(
+      (runtime as unknown as { workerName: string | null }).workerName,
+      'ws-test-alpha',
+      'worker name is preserved — no leaked worker',
+    )
+  })
+
+  it('still treats `process X not found` (exit 1) as worker-lost', async () => {
+    // Regression guard: the exit-127 short-circuit must not weaken the
+    // existing worker-lost detection. brainctl control-plane errors come
+    // back as exit 1 with messaging like `process X not found`; those
+    // still trigger the retry-then-recover path.
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
+      async () => ({ stdout: 'recovered', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+
+    const result = await runtime.exec({ command: 'echo hi' })
+    assert.equal(counter.calls, 2, 'exit 1 + worker-lost stderr enters retry path')
+    assert.equal(result.exitCode, 0)
+    assert.equal(startCalls, 0, 'retry recovered, no respawn')
+  })
+
   it('does not retry when caller aborts during the retry delay', async () => {
     const counter = stubBrainctlExec([
       async () => ({ stdout: '', stderr: 'connection refused', exitCode: 1 }),
