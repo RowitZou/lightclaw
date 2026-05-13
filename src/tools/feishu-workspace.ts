@@ -1,7 +1,6 @@
 import { z } from 'zod'
 
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
-import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
 import {
   createFolder,
   deleteFile,
@@ -21,6 +20,7 @@ import {
 import { buildTool, type ToolCallResult } from '../tool.js'
 import {
   auditFailed,
+  feishuToolErrorMessage,
   recordFeishuWriteAudit,
   requireFeishuWriteConfirmation,
 } from './feishu-collab.js'
@@ -65,7 +65,7 @@ export const feishuListTool = buildTool<FeishuListInput, string>({
     try {
       return await runFeishuList(input, { client: getFeishuClient() })
     } catch (error) {
-      return { output: feishuErrorMessage(error), isError: true }
+      return { output: feishuToolErrorMessage(error), isError: true }
     }
   },
 })
@@ -84,7 +84,7 @@ export const feishuCreateFolderTool = buildTool<FeishuCreateFolderInput, string>
     try {
       return await runFeishuCreateFolder(input, { client: getFeishuClient() })
     } catch (error) {
-      return { output: feishuErrorMessage(error), isError: true }
+      return { output: feishuToolErrorMessage(error), isError: true }
     }
   },
 })
@@ -103,7 +103,7 @@ export const feishuDeleteTool = buildTool<FeishuDeleteInput, string>({
     try {
       return await runFeishuDelete(input, { client: getFeishuClient() })
     } catch (error) {
-      return { output: feishuErrorMessage(error), isError: true }
+      return { output: feishuToolErrorMessage(error), isError: true }
     }
   },
 })
@@ -122,7 +122,7 @@ export const feishuMoveTool = buildTool<FeishuMoveInput, string>({
     try {
       return await runFeishuMove(input, { client: getFeishuClient() })
     } catch (error) {
-      return { output: feishuErrorMessage(error), isError: true }
+      return { output: feishuToolErrorMessage(error), isError: true }
     }
   },
 })

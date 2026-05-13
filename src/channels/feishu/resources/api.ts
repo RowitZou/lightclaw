@@ -17,7 +17,7 @@ export type FeishuEnvelope<T = unknown> = {
  * Recognize the "you forgot to enable a scope" family of Feishu errors.
  *
  * We deliberately don't pin to a single error code (Feishu cycles codes
- * occasionally — today `drive:drive` returns `99991672`, tomorrow a
+ * occasionally — today `drive:drive` has a concrete numeric code, tomorrow a
  * different module's scope-missing might land on a different code). Match
  * on the structural signal Feishu actually keeps stable:
  *

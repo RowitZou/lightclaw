@@ -104,7 +104,7 @@ export async function appendDocText(input: {
 //                  Feishu UI; can approve subsequent permission requests).
 //
 // member_type enum (Feishu drive.v1.permissions.members.create, verified
-// 2026-05-12 via field_violations response on code=99992402):
+// 2026-05-12 via a field_violations response):
 //   email, openid, unionid, openchat, opendepartmentid, userid, groupid,
 //   wikispaceid, appid.
 // We only need 'openid' (for the triggering user) and 'openchat' (for the
