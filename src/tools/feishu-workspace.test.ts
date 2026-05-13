@@ -585,7 +585,11 @@ function makeClient(
         },
       },
     },
-  } as unknown as FeishuClient & { deleted: string[]; moved: Array<{ token: string; dest: string }> }
+  } as unknown as FeishuClient & {
+    deleted: string[]
+    moved: Array<{ token: string; dest: string }>
+    grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
+  }
 }
 
 async function readAuditRecords(): Promise<Array<Record<string, unknown>>> {
