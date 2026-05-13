@@ -1,6 +1,7 @@
 import type { FeishuClient } from '../client.js'
 import { getWorkspaceParentCache } from '../workspace/ancestry.js'
-import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
+import { callFeishu, type FeishuEnvelope } from './api.js'
+import { classifyFeishuError } from './errors.js'
 
 export type FeishuDriveItemType = 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file' | 'unknown'
 
@@ -136,9 +137,9 @@ export async function grantFolderPermission(input: {
     }))
     return { ok: true }
   } catch (error) {
-    const message = feishuErrorMessage(error)
-    const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
-      /1061\d{3}/.test(message)
+    const c = classifyFeishuError(error)
+    const message = c.agentMessage
+    const alreadyExists = c.kind === 'already-exists'
     if (!alreadyExists) {
       process.stderr.write(
         `feishu-workspace user-folder grant failed: openid/${input.openId} on folder ${input.folderToken} (perm=${input.perm}): ${message}\n`,

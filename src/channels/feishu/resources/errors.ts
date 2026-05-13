@@ -75,7 +75,7 @@ export function classifyFeishuError(error: unknown): FeishuErrorClassification {
   let kind: FeishuErrorKind = 'unknown'
   if (isTransientNetworkError(error)) {
     kind = 'transient-network'
-  } else if (scopeMissing) {
+  } else if (scopeMissing || code === 99991672) {
     kind = 'scope-missing'
   } else if (code !== undefined && AUTH_FAILURE_CODES.has(code)) {
     kind = 'auth-failure'

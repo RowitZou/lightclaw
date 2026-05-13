@@ -13,8 +13,7 @@ import type {
   PendingQueueStore,
   PendingRecipient,
 } from './pending-queue.js'
-
-const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
+import { classifyFeishuError } from './resources/errors.js'
 
 // Send retry coverage: capped exponential backoff that rides out short
 // proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
@@ -622,7 +621,7 @@ function chunkText(text: string, size: number): string[] {
 }
 
 function shouldFallbackFromReply(response: SendResponse): boolean {
-  if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+  if (classifyFeishuError({ response: { status: 400, data: response } }).kind === 'withdrawn-target') {
     return true
   }
   const msg = response.msg?.toLowerCase() ?? ''
@@ -630,17 +629,7 @@ function shouldFallbackFromReply(response: SendResponse): boolean {
 }
 
 function isWithdrawnReplyError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false
-  }
-  const code = (error as { code?: unknown }).code
-  if (typeof code === 'number' && WITHDRAWN_REPLY_ERROR_CODES.has(code)) {
-    return true
-  }
-  const responseCode = (error as {
-    response?: { data?: { code?: unknown } }
-  }).response?.data?.code
-  return typeof responseCode === 'number' && WITHDRAWN_REPLY_ERROR_CODES.has(responseCode)
+  return classifyFeishuError(error).kind === 'withdrawn-target'
 }
 
 function assertOk(response: SendResponse, prefix: string): void {

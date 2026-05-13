@@ -1,6 +1,7 @@
 import type { FeishuClient } from '../client.js'
-import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
+import { callFeishu, type FeishuEnvelope } from './api.js'
 import { readNestedString, truncate } from './common.js'
+import { classifyFeishuError } from './errors.js'
 
 export type FeishuDocCreateResult = {
   documentId?: string
@@ -150,14 +151,9 @@ async function grantPermission(input: {
     }))
     return { ok: true }
   } catch (error) {
-    // axios errors only carry `Request failed with status code 4xx` in
-    // error.message; the real Feishu code / msg / x-tt-logid live on
-    // error.response.data + response.headers. feishuErrorMessage unwraps
-    // that. Without it, 1061xxx idempotency below also misfires because the
-    // bare axios message never contains the Feishu code.
-    const message = feishuErrorMessage(error)
-    const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
-      /1061\d{3}/.test(message)
+    const c = classifyFeishuError(error)
+    const message = c.agentMessage
+    const alreadyExists = c.kind === 'already-exists'
     if (!alreadyExists) {
       process.stderr.write(
         `feishu permission grant failed: ${input.data.member_type}/${input.data.member_id} on docx ${input.documentId} (perm=${input.data.perm}): ${message}\n`,
