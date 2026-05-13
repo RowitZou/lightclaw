@@ -7,6 +7,7 @@ import {
   feishuErrorMessage,
   formatFeishuScopeMissing,
 } from './api.js'
+import { FeishuApiError } from './errors.js'
 
 describe('feishuErrorMessage', () => {
   it('formats axios HTTP errors with status, body, and x-tt-logid', () => {
@@ -163,8 +164,8 @@ describe('detectFeishuScopeMissing', () => {
   })
 })
 
-describe('callFeishu (scope-missing translation)', () => {
-  it('rethrows scope-missing axios errors as a friendly admin-facing Error', async () => {
+describe('callFeishu (FeishuApiError translation)', () => {
+  it('rethrows scope-missing axios errors as FeishuApiError with friendly details', async () => {
     const axiosLike = {
       response: {
         status: 400,
@@ -179,27 +180,41 @@ describe('callFeishu (scope-missing translation)', () => {
     await assert.rejects(
       callFeishu(async () => { throw axiosLike }),
       (e: Error & { feishuScopeMissing?: { requiredScopes: string[] } }) => {
-        assert.match(e.message, /Feishu app scope missing/)
+        assert.ok(e instanceof FeishuApiError)
+        assert.equal(e.classification.kind, 'scope-missing')
+        assert.match(e.message, /Required scopes: drive:drive/)
         assert.match(e.message, /drive:drive/)
-        assert.match(e.message, /x-tt-logid=ABC123/)
+        assert.equal(e.classification.logId, 'ABC123')
         assert.deepEqual(e.feishuScopeMissing?.requiredScopes, ['drive:drive'])
         return true
       },
     )
   })
 
-  it('passes through unrelated errors unchanged', async () => {
+  it('wraps unrelated errors as FeishuApiError with unknown classification', async () => {
     const original = new Error('connection reset')
     await assert.rejects(
       callFeishu(async () => { throw original }),
-      (e: Error) => e === original,
+      (e: Error) => {
+        assert.ok(e instanceof FeishuApiError)
+        assert.equal(e.classification.kind, 'unknown')
+        assert.equal((e as { cause?: unknown }).cause, original)
+        return true
+      },
     )
   })
 
-  it('still raises envelope code != 0 errors as before', async () => {
+  it('raises envelope code != 0 errors as FeishuApiError', async () => {
     await assert.rejects(
       callFeishu(async () => ({ code: 42, msg: 'something else' })),
-      /Feishu API error 42: something else/,
+      (e: Error) => {
+        assert.ok(e instanceof FeishuApiError)
+        assert.equal(e.classification.kind, 'unknown')
+        assert.equal(e.classification.code, 42)
+        assert.match(e.message, /code=42/)
+        assert.match(e.message, /something else/)
+        return true
+      },
     )
   })
 })
