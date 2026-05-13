@@ -383,6 +383,78 @@ describe('Feishu workspace tools', () => {
     assert.equal(result.isError, true)
     assert.match(result.output, /A folder named "papers" already exists/)
   })
+
+  // 2026-05-13 dogfood: doc landed in user/论文阅读/ but Feishu UI breadcrumb
+  // showed only LightClaw → doc, skipping zouyicheng + 论文阅读 (Feishu hides
+  // ancestors the viewer can't access). Root cause: createFolder doesn't grant
+  // the sender, so the child folder is bot-only. Fix grants sender full_access
+  // on every new sub-folder. Chat grant is intentionally NOT applied even in
+  // group sessions — granting chat:view on a private workspace folder would
+  // let every group member browse the user's entire doc list via the
+  // breadcrumb. Audit records the user grant for visibility.
+  it('grants sender full_access on every sub-folder created (DM)', async () => {
+    const client = makeClient({ userFld: [] })
+    const result = await withFeishuSession(
+      () => runFeishuCreateFolder({ name: 'papers' }, { client }),
+    )
+    assert.equal(result.isError, undefined)
+    // Among grants: one for user folder during lifecycle preheat (token=userFld),
+    // one for new sub-folder (token=fld_papers). Both go to alice's open_id.
+    const subFolderGrant = client.grants.find(g => g.token === 'fld_papers')
+    assert.ok(subFolderGrant, `expected grant on new sub-folder; got grants=${JSON.stringify(client.grants)}`)
+    assert.equal(subFolderGrant!.memberType, 'openid')
+    assert.equal(subFolderGrant!.memberId, 'ou_alice')
+    assert.equal(subFolderGrant!.perm, 'full_access')
+    assert.equal(subFolderGrant!.type, 'folder')
+    const records = await readAuditRecords()
+    const createRecord = records.find(r => r.operation === 'create-folder')
+    assert.deepEqual(createRecord?.permissionGrants, { user: 'full_access' })
+  })
+
+  it('grants sender full_access without chat grant in group sessions', async () => {
+    const client = makeClient({ userFld: [] })
+    const result = await runWithSessionContext(
+      createSessionContext({
+        sessionId: 'feishu:group:oc_grp:ou_alice',
+        channel: 'feishu',
+        cwd: tmpHome,
+        model: 'test-model',
+        sessionsDir: path.join(tmpHome, 'sessions'),
+        memoryDir: path.join(tmpHome, 'memory'),
+        currentUserId: 'alice',
+        permissionMode: 'default',
+        permissionApprover: { ask: async () => ({ behavior: 'allow' }) },
+      }),
+      () => runFeishuCreateFolder({ name: 'projects' }, { client }),
+    )
+    assert.equal(result.isError, undefined)
+    const folderGrants = client.grants.filter(g => g.token === 'fld_projects')
+    // Exactly one grant — sender full_access. No chat:view grant on folder.
+    assert.equal(folderGrants.length, 1)
+    assert.equal(folderGrants[0]!.memberType, 'openid')
+    assert.equal(folderGrants[0]!.memberId, 'ou_alice')
+    assert.equal(folderGrants[0]!.perm, 'full_access')
+  })
+
+  // 2026-05-13 dogfood: zouyicheng user folder grant failed silently at
+  // first preheat (warn-only), so the user was permanently locked out of
+  // their own workspace folder. Fix re-asserts the grant on every preheat;
+  // grantFolderPermission is idempotent (already-exists → success).
+  it('re-grants owner on every lifecycle pass when user workspace already exists on disk', async () => {
+    const client = makeClient({ userFld: [] })
+    // First pass: lifecycle creates user folder + grants alice. Grant is
+    // recorded in client.grants.
+    await withFeishuSession(() => runFeishuList({ depth: 1 }, { client }))
+    const firstPassGrants = client.grants.filter(g => g.token === 'userFld').length
+    assert.ok(firstPassGrants >= 1, 'expected ≥1 grant on first preheat')
+    // Second pass: same canonical user, existing feishu-workspace.json on
+    // disk. Lifecycle should NOT short-circuit past grant — it should
+    // re-grant (idempotent self-heal).
+    const beforeSecond = client.grants.length
+    await withFeishuSession(() => runFeishuList({ depth: 1 }, { client }))
+    const secondPassGrants = client.grants.filter(g => g.token === 'userFld').length
+    assert.ok(secondPassGrants > firstPassGrants, `expected second preheat to re-grant; before=${beforeSecond} grants=${JSON.stringify(client.grants)}`)
+  })
 })
 
 async function withFeishuSession<T>(
@@ -431,9 +503,11 @@ function makeClient(
 ): FeishuClient & {
   deleted: string[]
   moved: Array<{ token: string; dest: string }>
+  grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
 } {
   const deleted: string[] = []
   const moved: Array<{ token: string; dest: string }> = []
+  const grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }> = []
   const byToken = new Map<string, Record<string, unknown>>([
     ['rootFld', item('LightClaw', 'rootFld', 'folder', null)],
     ['userFld', item('alice', 'userFld', 'folder', 'rootFld')],
@@ -446,9 +520,23 @@ function makeClient(
   return {
     deleted,
     moved,
+    grants,
     drive: {
       permissionMember: {
-        create: async () => ({ code: 0, data: {} }),
+        create: async (input: {
+          path?: { token?: string }
+          params?: { type?: string }
+          data?: { member_type?: string; member_id?: string; perm?: string }
+        }) => {
+          grants.push({
+            token: input.path?.token ?? '',
+            memberId: input.data?.member_id ?? '',
+            memberType: input.data?.member_type ?? '',
+            perm: input.data?.perm ?? '',
+            type: input.params?.type ?? '',
+          })
+          return { code: 0, data: {} }
+        },
       },
       v1: {
         file: {

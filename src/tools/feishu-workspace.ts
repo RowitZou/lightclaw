@@ -4,6 +4,7 @@ import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js
 import {
   createFolder,
   deleteFile,
+  grantFolderPermission,
   listFolder,
   moveFile,
   type FeishuDriveItemType,
@@ -23,6 +24,8 @@ import {
   feishuToolErrorMessage,
   recordFeishuWriteAudit,
   requireFeishuWriteConfirmation,
+  resolveSenderOpenIdForGrant,
+  type FeishuPermissionGrants,
 } from './feishu-collab.js'
 
 const feishuListInputSchema = z.object({
@@ -203,6 +206,16 @@ export async function runFeishuCreateFolder(
       retryCounter,
     })
     ctx.ancestry.evict(parent.token)
+    // Grant the current sender full_access on the new sub-folder. Feishu
+    // folder collaborators are not inherited from the parent at SDK create
+    // time, so a child folder created without explicit grant is bot-only —
+    // even though the user can see the parent (which has its own grant).
+    // The breadcrumb then hides the new sub-folder from the user, and any
+    // doc placed inside it appears to have no parent in Feishu UI. Chat
+    // grant is intentionally skipped on folders: a chat:view rule on a
+    // private workspace folder would let every group member browse the
+    // user's entire doc list through the breadcrumb.
+    const grants = await grantFolderToSenderBestEffort(deps.client, created.folderToken)
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
       userId: ctx.canonicalUser,
@@ -211,6 +224,7 @@ export async function runFeishuCreateFolder(
       preview,
       status: 'confirmed',
       ancestryChain,
+      ...(hasGrantContent(grants) ? { permissionGrants: grants } : {}),
       ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return {
@@ -220,6 +234,30 @@ export async function runFeishuCreateFolder(
     await auditFailed('create-folder', preview, baseResource, error, { ancestryChain, retries: retryCounter.count })
     throw error
   }
+}
+
+async function grantFolderToSenderBestEffort(
+  client: FeishuClient,
+  folderToken: string,
+): Promise<FeishuPermissionGrants> {
+  const { openId } = await resolveSenderOpenIdForGrant()
+  if (!openId) {
+    return { user: 'skipped-no-binding' }
+  }
+  const result = await grantFolderPermission({
+    client,
+    folderToken,
+    openId,
+    perm: 'full_access',
+  })
+  if (result.ok || result.alreadyExists) {
+    return { user: 'full_access' }
+  }
+  return { user: 'failed', errors: [`user-grant: ${result.error}`] }
+}
+
+function hasGrantContent(grants: FeishuPermissionGrants): boolean {
+  return Boolean(grants.chat || grants.user || grants.errors?.length)
 }
 
 export async function runFeishuDelete(

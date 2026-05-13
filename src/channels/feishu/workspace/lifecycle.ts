@@ -98,6 +98,16 @@ export async function getOrCreateUserWorkspace(
     // private data + share grants. If the folder is truly gone, the next
     // real listFolder will report it cleanly and admin can use
     // `/feishu-workspace orphans` / `delete` for explicit recovery.
+    //
+    // Re-assert the owner grant on every preheat path. The original create
+    // branch's grant is warn-only, so a single transient 4xx at user-folder
+    // birth used to leave the user permanently locked out of their own
+    // workspace folder. Feishu UI then hides the folder from breadcrumbs
+    // (it omits ancestors the viewer cannot access), so a doc lands at the
+    // right place on disk but appears to the user as if it has no parent
+    // folder. grantFolderPermission is idempotent — collaborator
+    // already-exists is treated as success.
+    await ensureUserFolderGrant(client, existing.folderToken, ownerOpenId)
     return existing
   }
 
@@ -112,17 +122,26 @@ export async function getOrCreateUserWorkspace(
     createdAt: new Date().toISOString(),
     ownerOpenId,
   }
-  const grant = await grantFolderPermission({
+  await ensureUserFolderGrant(client, workspace.folderToken, ownerOpenId)
+  await writeJsonSecure(filePath, workspace)
+  return workspace
+}
+
+async function ensureUserFolderGrant(
+  client: FeishuClient,
+  folderToken: string,
+  ownerOpenId: string,
+): Promise<void> {
+  // grantFolderPermission's catch arm already writes a stderr line on
+  // non-already-exists failure (see resources/folder.ts), so we do not
+  // double-log here. Failure is non-fatal: the daemon keeps running and
+  // the next preheat will retry.
+  await grantFolderPermission({
     client,
-    folderToken: workspace.folderToken,
+    folderToken,
     openId: ownerOpenId,
     perm: 'full_access',
   })
-  if (!grant.ok && !grant.alreadyExists) {
-    process.stderr.write(`feishu-workspace user-folder grant failed: ${grant.error}\n`)
-  }
-  await writeJsonSecure(filePath, workspace)
-  return workspace
 }
 
 let cachedVersion: string | null = null
