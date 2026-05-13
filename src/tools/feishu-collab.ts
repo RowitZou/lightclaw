@@ -145,6 +145,7 @@ export type FeishuWriteDocInput = z.infer<typeof feishuWriteDocInputSchema>
 
 export type FeishuWriteDocOutput = {
   document_id: string
+  url: string
   appended_chars: number
   mode: 'append'
   data?: unknown
@@ -169,6 +170,7 @@ export type FeishuWriteSheetInput = z.infer<typeof feishuWriteSheetInputSchema>
 export type FeishuWriteSheetOutput = {
   spreadsheet_token: string
   sheet_id?: string
+  url: string
   range: string
   rows: number
   columns: number
@@ -274,7 +276,7 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
 export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreateFileOutput | string>({
   name: 'FeishuCreateFile',
   description:
-    'Create a NEW Feishu/Lark resource. V1 supports kind="doc" - creates a docx with optional initial text. Use FeishuWriteDoc to edit an existing doc; this tool is for fresh creation. Always asks the user for explicit write confirmation before calling Feishu. After creation, the sender is granted full_access (manager) and, in group chats, the chat is additionally granted view so all members can open the link immediately. Other people who later open the link use Feishu\'s native "Request access" flow, which notifies the sender (the new manager) in IM. The returned permission_grants field reports the outcome of these grants; treat permission_grants.errors as a hint to tell the user how to share manually.',
+    'Create a NEW Feishu/Lark resource. V1 supports kind="doc" - creates a docx with optional initial text. Use FeishuWriteDoc to edit an existing doc; this tool is for fresh creation. Always asks the user for explicit write confirmation before calling Feishu. After creation, the sender is granted full_access (manager) and, in group chats, the chat is additionally granted view so all members can open the link immediately. Other people who later open the link use Feishu\'s native "Request access" flow, which notifies the sender (the new manager) in IM. The returned permission_grants field reports the outcome of these grants; treat permission_grants.errors as a hint to tell the user how to share manually. When telling the user where the doc lives, ALWAYS share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -296,7 +298,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
 export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
   name: 'FeishuWriteDoc',
   description:
-    'Append plain text to an existing Feishu/Lark doc/docx. Accepts a doc URL, a wiki URL whose underlying node is a doc, or a direct document_id. Use FeishuCreateFile to create a new doc. Always asks the user for explicit write confirmation before calling Feishu.',
+    'Append plain text to an existing Feishu/Lark doc/docx. Accepts a doc URL, a wiki URL whose underlying node is a doc, or a direct document_id. Use FeishuCreateFile to create a new doc. Always asks the user for explicit write confirmation before calling Feishu. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -318,7 +320,7 @@ export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocO
 export const feishuWriteSheetTool = buildTool<FeishuWriteSheetInput, FeishuWriteSheetOutput | string>({
   name: 'FeishuWriteSheet',
   description:
-    'Append rows to or overwrite a Feishu/Lark sheet range. Accepts a sheets URL, a wiki URL whose underlying node is a sheet, or a direct spreadsheet_token. mode is required - explicit choice between append (safe) and overwrite (destructive). Always asks the user for explicit write confirmation before calling Feishu.',
+    'Append rows to or overwrite a Feishu/Lark sheet range. Accepts a sheets URL, a wiki URL whose underlying node is a sheet, or a direct spreadsheet_token. mode is required - explicit choice between append (safe) and overwrite (destructive). Always asks the user for explicit write confirmation before calling Feishu. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/sheets/... link) — never the raw `spreadsheet_token`.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -671,6 +673,7 @@ export async function runFeishuWriteDoc(
     return {
       output: {
         document_id: documentId,
+        url: feishuShareUrl('docx', documentId),
         appended_chars: input.content.length,
         mode,
         ...(written.data !== undefined ? { data: written.data } : {}),
@@ -726,6 +729,7 @@ export async function runFeishuWriteSheet(
       output: {
         spreadsheet_token: target.spreadsheetToken,
         ...(target.sheetId ? { sheet_id: target.sheetId } : {}),
+        url: feishuShareUrl('sheets', target.spreadsheetToken, target.sheetId ? { sheetId: target.sheetId } : {}),
         range: written.range,
         rows: input.values.length,
         columns,
@@ -938,13 +942,46 @@ function formatCreatedDoc(
   input: FeishuDocCreateResult,
   grants: FeishuPermissionGrants,
 ): FeishuCreateFileOutput {
+  // Feishu's docx.document.create API does NOT return a url in the response
+  // (only document_id). Without this synthesis the tool output exposes only
+  // the raw token, and the model ends up sharing "doxcnXxxxx" to the user
+  // instead of a clickable link. https://feishu.cn is the tenant-agnostic
+  // entry point — it redirects to the correct tenant subdomain on click,
+  // so it works for both feishu.cn and larksuite.com tenants.
+  const url = input.url ?? (input.documentId ? feishuShareUrl('docx', input.documentId) : undefined)
   return {
     ...(input.documentId ? { document_id: input.documentId } : {}),
-    ...(input.url ? { url: input.url } : {}),
+    ...(url ? { url } : {}),
     title: input.title,
     ...(hasGrantContent(grants) ? { permission_grants: grants } : {}),
     ...(input.rawData !== undefined ? { rawData: input.rawData } : {}),
   }
+}
+
+// Build a Feishu open URL for the given resource. Always uses feishu.cn
+// (the global entry point); clicks redirect through accounts.feishu.cn
+// to the user's actual tenant subdomain (e.g. aicarrier.feishu.cn). The
+// extra SSO hop is fine for first-click and silent after the user is
+// signed in, so we don't bother with per-tenant config. URL paths per
+// Feishu open platform docs:
+//   docx:   /docx/<documentId>
+//   sheets: /sheets/<spreadsheetToken>[?sheet=<sheetId>]
+//   wiki:   /wiki/<nodeToken>
+//   base:   /base/<baseToken>
+//   folder: /drive/folder/<folderToken>
+export function feishuShareUrl(
+  kind: 'docx' | 'sheets' | 'wiki' | 'base' | 'folder',
+  token: string,
+  opts: { sheetId?: string } = {},
+): string {
+  if (kind === 'folder') {
+    return `https://feishu.cn/drive/folder/${token}`
+  }
+  const base = `https://feishu.cn/${kind}/${token}`
+  if (kind === 'sheets' && opts.sheetId) {
+    return `${base}?sheet=${opts.sheetId}`
+  }
+  return base
 }
 
 function safeCurrentUserId(): string | undefined {

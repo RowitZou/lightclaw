@@ -70,6 +70,7 @@ describe('FeishuWriteDoc tool', () => {
     assert.equal(result.isError, undefined)
     assert.deepEqual(result.output, {
       document_id: 'docFromWiki',
+      url: 'https://feishu.cn/docx/docFromWiki',
       appended_chars: 9,
       mode: 'append',
       data: { revision_id: 7 },

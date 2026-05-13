@@ -153,6 +153,37 @@ describe('FeishuCreateFile tool', () => {
     assert.match(records[0].preview, /with 12 chars/)
   })
 
+  // 2026-05-13 dogfood: model shared raw "doxcnXxxxx" tokens to the user
+  // instead of clickable URLs because Feishu's docx.document.create API
+  // doesn't return a url in its response (only document_id). formatCreatedDoc
+  // now synthesizes a tenant-agnostic feishu.cn URL when the SDK leaves
+  // url empty, so the model always has a clickable link to share.
+  it('synthesizes feishu.cn share URL when SDK response has no url field', async () => {
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'No URL from SDK' },
+          {
+            client,
+            // Mirror what Feishu's real SDK returns today: documentId only,
+            // no url field on the response data.
+            createDoc: async () => ({
+              documentId: 'docxSdkOmits',
+              title: 'No URL from SDK',
+            }),
+            grantUser: async () => ({ ok: true }),
+            grantChat: async () => ({ ok: true }),
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+    assert.equal(result.isError, undefined)
+    const output = result.output as { url?: string; document_id?: string }
+    assert.equal(output.url, 'https://feishu.cn/docx/docxSdkOmits')
+    assert.equal(output.document_id, 'docxSdkOmits')
+  })
+
   it('grants chat view + sender full_access in group sessions', async () => {
     const stub = makeGrantStub()
     const result = await withFeishuSession({

@@ -21,6 +21,7 @@ import {
 import { buildTool, type ToolCallResult } from '../tool.js'
 import {
   auditFailed,
+  feishuShareUrl,
   feishuToolErrorMessage,
   recordFeishuWriteAudit,
   requireFeishuWriteConfirmation,
@@ -76,7 +77,7 @@ export const feishuListTool = buildTool<FeishuListInput, string>({
 export const feishuCreateFolderTool = buildTool<FeishuCreateFolderInput, string>({
   name: 'FeishuCreateFolder',
   description:
-    'Create a folder inside the current user private Feishu cloud workspace. Use one folder per project or long-running task. 中文：在当前用户的飞书工作区里创建文件夹。',
+    'Create a folder inside the current user private Feishu cloud workspace. Use one folder per project or long-running task. The returned output includes a clickable https://feishu.cn/drive/folder/... URL — share that URL with the user when telling them where the folder is, never the raw token. 中文：在当前用户的飞书工作区里创建文件夹。',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -228,7 +229,7 @@ export async function runFeishuCreateFolder(
       ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return {
-      output: `Created folder "${input.name}" at ${parent.path === '/' ? '/' : `${parent.path}/`}${input.name}/ (token=${created.folderToken}).`,
+      output: `Created folder "${input.name}" at ${parent.path === '/' ? '/' : `${parent.path}/`}${input.name}/. URL: ${feishuShareUrl('folder', created.folderToken)} (token=${created.folderToken}).`,
     }
   } catch (error) {
     await auditFailed('create-folder', preview, baseResource, error, { ancestryChain, retries: retryCounter.count })
