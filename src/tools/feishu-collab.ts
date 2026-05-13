@@ -600,13 +600,22 @@ async function grantInitialPermissions(
 async function resolveGrantTarget(
   deps: FeishuCreateFileDeps,
 ): Promise<{ chatId?: string; openId?: string }> {
+  return resolveSenderOpenIdForGrant(deps.resolveOwnerOpenId)
+}
+
+// Shared between FeishuCreateFile (which grants doc to chat+user) and
+// FeishuCreateFolder (which grants folder to user only — chat grant on a
+// folder would let every group member browse all docs under the user's
+// private workspace via the breadcrumb). DM → identity binding. Group →
+// sessionId carries senderOpenId directly. Off-channel → identity binding
+// for the canonical user.
+export async function resolveSenderOpenIdForGrant(
+  resolveOwnerOpenId?: (canonical: string) => Promise<string | undefined>,
+): Promise<{ chatId?: string; openId?: string }> {
   const ctx = getCurrentSessionContext()
   const canonicalUser = ctx?.currentUserId
-  const lookupOwner = deps.resolveOwnerOpenId ?? defaultResolveOwnerOpenId
+  const lookupOwner = resolveOwnerOpenId ?? defaultResolveOwnerOpenId
 
-  // Resolve sender open_id. In DM the sessionId carries chat_id (NOT the
-  // sender's open_id), so the identity binding is the only source. In group
-  // sessions the senderOpenId is encoded directly in sessionId.
   let openId: string | undefined
   let chatId: string | undefined
   if (ctx && ctx.channel === 'feishu') {
@@ -619,7 +628,10 @@ async function resolveGrantTarget(
   if (!openId && canonicalUser) {
     openId = await lookupOwner(canonicalUser)
   }
-  return { chatId, openId }
+  return {
+    ...(chatId ? { chatId } : {}),
+    ...(openId ? { openId } : {}),
+  }
 }
 
 async function defaultResolveOwnerOpenId(canonicalUser: string): Promise<string | undefined> {
