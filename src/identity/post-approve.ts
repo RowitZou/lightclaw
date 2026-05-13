@@ -34,15 +34,42 @@ export type PreheatOptions = {
   applicantChatType?: string
 }
 
+// Fire-and-forget preheat promises tracked here so callers can drain on
+// shutdown (avoid mid-mkdir at process exit) and tests can await before
+// their afterEach tears down `setLightclawHomeOverride` — without the
+// drain, the floating preheat promise outlives the override and
+// `RuntimePool.acquire()` reads the *real* `~/.lightclaw/config.json`,
+// silently mkdir'ing the per-user workspace inside the production
+// `workspaceRoot` (e.g. `claw_data/workspaces/<derived-name>`).
+const pendingPreheats = new Set<Promise<void>>()
+
 export function preheatAndWelcomeOnApproval(
   name: string,
   link: SenderKey,
   opts: PreheatOptions = {},
 ): void {
-  void runApprovalPreheat(name, link, opts).catch(error => {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[preheat-on-approval] ${name}: unhandled ${detail}\n`)
-  })
+  const promise = runApprovalPreheat(name, link, opts)
+    .catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[preheat-on-approval] ${name}: unhandled ${detail}\n`)
+    })
+    .finally(() => {
+      pendingPreheats.delete(promise)
+    })
+  pendingPreheats.add(promise)
+}
+
+export async function drainPendingPreheats(timeoutMs = 60_000): Promise<void> {
+  if (pendingPreheats.size === 0) {
+    return
+  }
+  const TIMEOUT = Symbol('preheat-drain-timeout')
+  await Promise.race([
+    Promise.allSettled([...pendingPreheats]),
+    new Promise<typeof TIMEOUT>(resolve =>
+      setTimeout(() => resolve(TIMEOUT), timeoutMs).unref(),
+    ),
+  ])
 }
 
 async function runApprovalPreheat(
