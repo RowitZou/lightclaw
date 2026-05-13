@@ -66,9 +66,6 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && ln -s "${NODE_BIN}/pnpx" /usr/local/bin/pnpx \
     && npm cache clean --force
 
-COPY scripts/sandbox-helpers /opt/lightclaw/sandbox-helpers
-RUN chmod +x /opt/lightclaw/sandbox-helpers/*.py
-
 # Build-time smoke: fail the build if any expected tool is missing
 RUN jq --version && yq --version \
     && pdftotext -v 2>&1 | head -1 \
