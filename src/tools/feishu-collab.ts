@@ -969,8 +969,9 @@ function formatCreatedDoc(
 //   wiki:   /wiki/<nodeToken>
 //   base:   /base/<baseToken>
 //   folder: /drive/folder/<folderToken>
+//   file:   /file/<fileToken>   (drive uploads — PDFs / images / archives)
 export function feishuShareUrl(
-  kind: 'docx' | 'sheets' | 'wiki' | 'base' | 'folder',
+  kind: 'docx' | 'sheets' | 'wiki' | 'base' | 'folder' | 'file',
   token: string,
   opts: { sheetId?: string } = {},
 ): string {

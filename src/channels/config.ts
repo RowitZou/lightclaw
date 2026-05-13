@@ -86,6 +86,7 @@ function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelCon
     },
     cloudSpace: {
       ...(input?.cloudSpace?.rootFolderToken ? { rootFolderToken: input.cloudSpace.rootFolderToken } : {}),
+      uploadsFolderName: input?.cloudSpace?.uploadsFolderName?.trim() || 'LightClaw Uploads',
     },
     webhook: {
       host: webhook.host ?? '0.0.0.0',

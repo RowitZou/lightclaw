@@ -13,9 +13,19 @@ export type ChannelFileSendInput = {
   mimeType?: string
 }
 
+// SendFile delivery mode after the channel adapter resolves IM-vs-cloud
+// fallback. `im-attachment` means the file was sent as a native IM file
+// attachment (Feishu: ≤30 MB via `im.v1.files.create`). `cloud-link` means
+// the file overflowed that ceiling, was uploaded to the user's drive uploads
+// folder, and a share link was posted back to the chat — the LLM should
+// surface the URL in its reply text so the user can click through.
+export type ChannelFileSendOutput =
+  | { kind: 'im-attachment' }
+  | { kind: 'cloud-link'; url: string; sizeBytes: number }
+
 export type ChannelFileSender = {
   channelId: string
-  sendFile(file: ChannelFileSendInput): Promise<void>
+  sendFile(file: ChannelFileSendInput): Promise<ChannelFileSendOutput>
 }
 
 /**

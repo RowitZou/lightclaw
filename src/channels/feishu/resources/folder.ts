@@ -162,6 +162,40 @@ export async function grantFolderPermission(input: {
   }
 }
 
+// Grant access to a drive file (PDFs / images / archives uploaded via
+// `drive.v1.file.upload_*`). Same SDK call as grantFolderPermission, but
+// `params.type='file'` addresses an attachment rather than a folder. Used by
+// SendFile cloud fallback to give the IM sender (and, in groups, the
+// chat-as-collaborator) view access so the share link the bot posts back is
+// clickable for them without going through Feishu's `Request access` flow.
+export async function grantFilePermission(input: {
+  client: FeishuClient
+  fileToken: string
+  memberType: 'openid' | 'openchat'
+  memberId: string
+  perm: 'view' | 'edit' | 'full_access'
+}): Promise<{ ok: true } | { ok: false; error: string; alreadyExists: boolean }> {
+  const client = input.client as unknown as FeishuFolderClient
+  try {
+    await callFeishu(() => client.drive.permissionMember.create({
+      path: { token: input.fileToken },
+      params: { type: 'file', need_notification: false },
+      data: { member_type: input.memberType, member_id: input.memberId, perm: input.perm },
+    }))
+    return { ok: true }
+  } catch (error) {
+    const c = classifyFeishuError(error)
+    const message = c.agentMessage
+    const alreadyExists = c.kind === 'already-exists'
+    if (!alreadyExists) {
+      process.stderr.write(
+        `feishu-uploads file grant failed: ${input.memberType}/${input.memberId} on file ${input.fileToken} (perm=${input.perm}): ${message}\n`,
+      )
+    }
+    return { ok: false, error: message, alreadyExists }
+  }
+}
+
 export function driveType(type: FeishuDriveItemType): 'folder' | 'docx' | 'sheet' | 'bitable' | 'file' {
   if (type === 'folder') return 'folder'
   if (type === 'sheet') return 'sheet'

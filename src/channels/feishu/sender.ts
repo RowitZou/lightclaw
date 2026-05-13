@@ -1,10 +1,12 @@
 import path from 'node:path'
 
+import type { ChannelFileSendOutput } from '../../session-context.js'
 import type {
   FeishuChannelConfig,
   NormalizedChannelMessage,
   OutgoingChannelFile,
 } from '../types.js'
+import { feishuShareUrl } from '../../tools/feishu-collab.js'
 import type { FeishuClient } from './client.js'
 import { withFileUploadTimeout } from './client.js'
 import type {
@@ -18,7 +20,12 @@ import {
   FeishuApiError,
   logFeishuRetry,
 } from './resources/errors.js'
+import { grantFilePermission } from './resources/folder.js'
 import { withFeishuRetry } from './resources/retry.js'
+import { uploadDriveFile } from './resources/file-upload.js'
+import { isFeishuGroupChatType } from './routing.js'
+import { resolveCurrentFeishuWorkspace } from './workspace/ops.js'
+import { getOrCreateUserUploadsFolder } from './workspace/uploads.js'
 
 // Send retry coverage: capped exponential backoff that rides out short
 // proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
@@ -45,6 +52,11 @@ const SEND_RETRY_MAX_DELAY_MS = 8000
 // turn. Worst-case SendFile under a sustained outage becomes
 // 5 min + 6 * 30 s + ~24 s backoff ~= 8.4 min instead of ~35 min.
 const FILE_UPLOAD_RETRY_TIMEOUT_MS = 30 * 1000
+// IM file-attachment ceiling: Feishu hard-caps `im.v1.files.create` at
+// 30 MB on enterprise tenants (20 MB on standard tier — that surfaces as
+// a 4xx body recognized by isFileTooLargeError so the sender still falls
+// back cleanly without hard-coding the lower limit).
+const IM_ATTACHMENT_MAX_BYTES = 30 * 1024 * 1024
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -321,14 +333,96 @@ export class FeishuSender {
     }
   }
 
-  async sendFile(message: NormalizedChannelMessage, file: OutgoingChannelFile): Promise<void> {
-    const fileKey = await this.uploadFile(file)
-    await this.sendReplyOrCreate({
-      chatId: message.chatId,
-      replyToMessageId: this.replyTargetFor(message),
-      msgType: 'file',
-      content: JSON.stringify({ file_key: fileKey }),
+  async sendFile(
+    message: NormalizedChannelMessage,
+    file: OutgoingChannelFile,
+  ): Promise<ChannelFileSendOutput> {
+    // Feishu IM file attachments are hard-capped at 30 MB on the
+    // `im.v1.files.create` endpoint. SendFile dogfood (2026-05-13 bug 1)
+    // showed arxiv PDFs landing in the 40–50 MB range routinely, with the
+    // model burning a ghostscript compression detour each time. Above the
+    // ceiling, fall back to drive upload + share link so the user still
+    // gets the file in one round-trip. Below the ceiling, keep the legacy
+    // IM attachment path: a native IM file card is preferable to a link
+    // when the platform can render it inline.
+    if (file.content.byteLength <= IM_ATTACHMENT_MAX_BYTES) {
+      try {
+        const fileKey = await this.uploadFile(file)
+        await this.sendReplyOrCreate({
+          chatId: message.chatId,
+          replyToMessageId: this.replyTargetFor(message),
+          msgType: 'file',
+          content: JSON.stringify({ file_key: fileKey }),
+        })
+        return { kind: 'im-attachment' }
+      } catch (error) {
+        // Some Feishu tenants enforce a stricter cap (observed: 20 MB on
+        // standard tier vs 30 MB on enterprise). Treat a too-large 4xx as
+        // a soft signal to fall back to drive — same outcome as the
+        // explicit >30 MB branch. Other errors keep their original
+        // shape and propagate.
+        if (!isFileTooLargeError(error)) {
+          throw error
+        }
+        process.stderr.write(
+          `[feishu-uploads] IM file upload rejected as too large for "${file.name}" (${file.content.byteLength} bytes); falling back to drive upload.\n`,
+        )
+      }
+    }
+    return this.sendFileViaDrive(message, file)
+  }
+
+  // Cloud fallback: upload to the user's per-canonical uploads folder under
+  // their workspace, grant access to the chat / sender, and post a markdown
+  // reply with the share link. Same chat as the inbound message (DM stays
+  // DM, group stays group); reply-quote anchor is preserved through the
+  // shared sendMarkdownText path.
+  private async sendFileViaDrive(
+    message: NormalizedChannelMessage,
+    file: OutgoingChannelFile,
+  ): Promise<ChannelFileSendOutput> {
+    const ctx = await resolveCurrentFeishuWorkspace(this.client)
+    const uploadsFolder = await getOrCreateUserUploadsFolder(
+      this.client,
+      ctx.canonicalUser,
+      ctx.ownerOpenId,
+      ctx.workspace,
+    )
+    const uploaded = await uploadDriveFile({
+      client: this.client,
+      parentFolderToken: uploadsFolder.folderToken,
+      name: file.name,
+      content: file.content,
     })
+    process.stderr.write(
+      `[feishu-uploads] uploaded "${file.name}" canonical=${ctx.canonicalUser} fileToken=${uploaded.fileToken} sizeBytes=${uploaded.size} chunks=${uploaded.chunks}\n`,
+    )
+    // Per-file grants. DM senderOpenId == ctx.ownerOpenId == message.senderOpenId,
+    // so a single openid grant covers both. Group additionally needs the
+    // openchat grant so non-sender members of the group can open the link.
+    // grantFilePermission is idempotent (already-exists is success-equivalent).
+    await grantFilePermission({
+      client: this.client,
+      fileToken: uploaded.fileToken,
+      memberType: 'openid',
+      memberId: message.senderOpenId,
+      perm: 'view',
+    })
+    if (isFeishuGroupChatType(message.chatType)) {
+      await grantFilePermission({
+        client: this.client,
+        fileToken: uploaded.fileToken,
+        memberType: 'openchat',
+        memberId: message.chatId,
+        perm: 'view',
+      })
+    }
+    const url = feishuShareUrl('file', uploaded.fileToken)
+    const sizeMB = (uploaded.size / (1024 * 1024)).toFixed(1)
+    const safeName = file.name.replace(/[\[\]]/g, ' ')
+    const reply = `📎 [${safeName}](${url}) — uploaded to your cloud workspace (${sizeMB} MB)`
+    await this.sendMarkdownText(message, reply)
+    return { kind: 'cloud-link', url, sizeBytes: uploaded.size }
   }
 
   private async uploadFile(file: OutgoingChannelFile): Promise<string> {
@@ -655,6 +749,31 @@ function shouldFallbackFromReply(response: SendResponse): boolean {
 
 function isWithdrawnReplyError(error: unknown): boolean {
   return classifyFeishuError(error).kind === 'withdrawn-target'
+}
+
+// Feishu IM upload returns a 4xx with body code 230003 ("file size limit
+// exceeded") when the payload is past the tenant-specific cap (20 MB on
+// standard tier, 30 MB on enterprise). It also surfaces in some path
+// fallbacks as a message containing "file size" / "too large". Tolerant
+// matcher so a tenant downgrade does not turn into a hard SendFile error
+// — the caller falls back to drive upload instead.
+function isFileTooLargeError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+  const e = error as { response?: { data?: { code?: unknown; msg?: unknown } }; message?: unknown }
+  const code = e.response?.data?.code
+  if (typeof code === 'number' && code === 230003) {
+    return true
+  }
+  const bodyMsg = typeof e.response?.data?.msg === 'string' ? (e.response!.data!.msg as string).toLowerCase() : ''
+  const topMsg = typeof e.message === 'string' ? (e.message as string).toLowerCase() : ''
+  return (
+    bodyMsg.includes('file size') ||
+    bodyMsg.includes('too large') ||
+    topMsg.includes('file size limit') ||
+    topMsg.includes('too large')
+  )
 }
 
 function assertOk(response: SendResponse, prefix: string): void {
