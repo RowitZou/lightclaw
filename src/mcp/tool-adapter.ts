@@ -2,17 +2,24 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { suggestMcpRules } from '../permission/suggestions.js'
 import type { Tool } from '../tool.js'
-import type { UserToolResultBlock } from '../types.js'
+import type { ToolResultContentBlock, UserToolResultBlock } from '../types.js'
 import { buildMcpToolName } from './normalization.js'
 import { callMcpTool } from './client.js'
 import type { McpConnection, McpToolDescriptor } from './types.js'
+
+export type McpToolOutput =
+  | string
+  | {
+      kind: 'visual'
+      toolResultContent: ToolResultContentBlock[]
+    }
 
 export function mcpToolToLightClawTool(input: {
   connection: Extract<McpConnection, { type: 'connected' }>
   descriptor: McpToolDescriptor
   callTimeoutMs: number
   maxOutputBytes: number
-}): Tool<unknown, string> {
+}): Tool<unknown, McpToolOutput> {
   const { connection, descriptor } = input
   const server = connection.config.normalizedName
   const fullName = buildMcpToolName(server, descriptor.name)
@@ -39,7 +46,7 @@ export function mcpToolToLightClawTool(input: {
       })
 
       return {
-        output: stringifyCallToolResult(result, input.maxOutputBytes),
+        output: convertCallToolResult(result, input.maxOutputBytes),
         isError: result.isError,
       }
     },
@@ -47,10 +54,52 @@ export function mcpToolToLightClawTool(input: {
       return {
         type: 'tool_result',
         tool_use_id: toolUseId,
-        content: output,
+        content: typeof output === 'string' ? output : output.toolResultContent,
         ...(isError ? { is_error: true } : {}),
       }
     },
+  }
+}
+
+export function convertCallToolResult(
+  result: CallToolResult,
+  maxOutputBytes: number,
+): McpToolOutput {
+  const content = 'content' in result && Array.isArray(result.content)
+    ? result.content
+    : []
+  const hasImage = content.some(block => block.type === 'image')
+  if (!hasImage) {
+    return stringifyCallToolResult(result, maxOutputBytes)
+  }
+
+  const blocks: ToolResultContentBlock[] = []
+  let textBytes = 0
+  for (const block of content) {
+    if (block.type === 'text') {
+      const text = truncateTextBlock(block.text, maxOutputBytes - textBytes)
+      textBytes += Buffer.byteLength(text, 'utf8')
+      if (text.length > 0) blocks.push({ type: 'text', text })
+      continue
+    }
+    if (block.type === 'image') {
+      blocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          mediaType: block.mimeType,
+          data: block.data,
+        },
+      })
+      continue
+    }
+    const text = stringifyCallToolResult({ ...result, content: [block] }, maxOutputBytes - textBytes)
+    textBytes += Buffer.byteLength(text, 'utf8')
+    if (text.length > 0) blocks.push({ type: 'text', text })
+  }
+  return {
+    kind: 'visual',
+    toolResultContent: blocks.length > 0 ? blocks : [{ type: 'text', text: '[MCP tool returned no supported content]' }],
   }
 }
 
@@ -100,4 +149,11 @@ export function stringifyCallToolResult(
 function base64Bytes(data: string): number {
   const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
   return Math.floor((data.length * 3) / 4) - padding
+}
+
+function truncateTextBlock(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  const byteLength = Buffer.byteLength(text, 'utf8')
+  if (byteLength <= maxBytes) return text
+  return `${Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8')}\n\n[output truncated: ${byteLength} bytes total]`
 }

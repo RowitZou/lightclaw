@@ -179,6 +179,13 @@ export function modelFor(task: ModelTask, config: LightClawConfig): string {
   return config.routing[task] ?? config.routing.main ?? config.model
 }
 
+export function clearPrechargeForModel(input: {
+  endpoint: string
+  upstreamModel: string
+}): void {
+  prechargdKeys.delete(`${input.endpoint}:${input.upstreamModel}`)
+}
+
 /** Test-only escape hatch; production code should never need to clear. */
 export function _resetProviderCacheForTests(): void {
   cache.clear()

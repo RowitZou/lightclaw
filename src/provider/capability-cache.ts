@@ -11,6 +11,11 @@ export type CacheEntry = {
   failures: number
 }
 
+export type CapabilityMissingSignal = {
+  kind: AttachmentKind
+  positions: AttachmentPosition[]
+}
+
 type CapabilityCacheShape = {
   version: 2
   flags: Record<
@@ -249,7 +254,8 @@ export function clearCacheEntry(input: {
  *  Returns the kind to flip when matched, or `null` to leave cache as-is. */
 export function isCapabilityMissingError(
   error: unknown,
-): AttachmentKind | null {
+  requestContext?: { positions?: readonly AttachmentPosition[] },
+): CapabilityMissingSignal | null {
   if (!error || typeof error !== 'object') {
     return null
   }
@@ -271,20 +277,30 @@ export function isCapabilityMissingError(
   // content type or block name. Fall back to image when ambiguous (the
   // common case before pdf inline existed).
   if (/document|pdf/i.test(message)) {
-    return 'pdf'
+    return signal('pdf', requestContext)
   }
   if (/image|vision|multimodal/i.test(message)) {
-    return 'image'
+    return signal('image', requestContext)
   }
   if (/audio|transcrib/i.test(message)) {
-    return 'audio'
+    return signal('audio', requestContext)
   }
   if (/video/i.test(message)) {
-    return 'video'
+    return signal('video', requestContext)
   }
   // Generic "unsupported content" / "invalid request" without kind hint —
   // cannot safely attribute to a kind, so don't flip.
   return null
+}
+
+function signal(
+  kind: AttachmentKind,
+  requestContext?: { positions?: readonly AttachmentPosition[] },
+): CapabilityMissingSignal {
+  const positions = requestContext?.positions?.length
+    ? [...new Set(requestContext.positions)]
+    : [...ALL_POSITIONS]
+  return { kind, positions }
 }
 
 /** Test-only: drop the in-memory cache so subsequent reads reload from

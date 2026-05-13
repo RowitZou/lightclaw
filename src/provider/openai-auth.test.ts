@@ -44,6 +44,44 @@ describe('openai-auth: convertMessagesToResponsesInput', () => {
     assert.equal(item.output, 'result body')
   })
 
+  it('emits array output for tool_result image and PDF blocks', () => {
+    const messages: ApiMessage[] = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_mm',
+            content: [
+              { type: 'text', text: 'visual result' },
+              { type: 'image', source: { type: 'base64', mediaType: 'image/png', data: 'IMG' } },
+              { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'PDF' } },
+            ],
+          },
+        ],
+      },
+    ]
+    const dropped = new Set<'image' | 'pdf' | 'audio' | 'video'>()
+    const out = convertMessagesToResponsesInput(messages, { inToolResult: dropped })
+    assert.deepEqual([...dropped], [])
+    const item = out[0] as unknown as {
+      type: string
+      call_id: string
+      output: Array<Record<string, string>>
+    }
+    assert.equal(item.type, 'function_call_output')
+    assert.equal(item.call_id, 'call_mm')
+    assert.deepEqual(item.output, [
+      { type: 'input_text', text: 'visual result' },
+      { type: 'input_image', image_url: 'data:image/png;base64,IMG' },
+      {
+        type: 'input_file',
+        filename: 'document.pdf',
+        file_data: 'data:application/pdf;base64,PDF',
+      },
+    ])
+  })
+
   it('combines tool_results + accompanying text in one user turn', () => {
     const messages: ApiMessage[] = [
       {

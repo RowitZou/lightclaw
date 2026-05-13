@@ -1,6 +1,7 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { getProviderFor } from './provider/index.js'
-import { finalizeToolResultImageBlocks } from './provider/multimodal-finalization.js'
+import { resetAllFailureCountersFor } from './provider/capability-cache.js'
+import { finalizeToolResultBlocks } from './provider/multimodal-finalization.js'
 import type {
   DescribeImageParams,
   DescribeImageResult,
@@ -60,7 +61,7 @@ export async function* streamChat(
   let finalizedMessages = rest.messages
   try {
     const describeRoute = resolveDescribeRoute({ config })
-    finalizedMessages = await finalizeToolResultImageBlocks(rest.messages, {
+    finalizedMessages = await finalizeToolResultBlocks(rest.messages, {
       provider,
       endpoint: entry.endpoint,
       upstreamModel: entry.upstreamModel,
@@ -113,7 +114,13 @@ export async function* streamChat(
   // Fast path: no active query scope OR caller didn't tag the call. Bail
   // before touching the buffering branch so cost stays at zero.
   if (!logger || !apiLogContext) {
-    yield* provider.streamChat(wireParams)
+    for await (const event of provider.streamChat(wireParams)) {
+      yield event
+    }
+    resetAllFailureCountersFor({
+      endpoint: entry.endpoint,
+      upstreamModel: entry.upstreamModel,
+    })
     return
   }
 
@@ -131,6 +138,10 @@ export async function* streamChat(
       }
       yield event
     }
+    resetAllFailureCountersFor({
+      endpoint: entry.endpoint,
+      upstreamModel: entry.upstreamModel,
+    })
   } catch (error) {
     errorRec = {
       name: error instanceof Error ? error.name : 'Error',

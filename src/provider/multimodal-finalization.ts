@@ -6,25 +6,12 @@ import type {
   ApiMessage,
   DescribeImageInput,
   Provider,
-  Schema,
 } from './types.js'
 import type {
   ToolResultContentBlock,
   ToolResultTextBlock,
   UserToolResultBlock,
 } from '../types.js'
-
-/** Decide whether the destination provider accepts inline image blocks
- *  inside `tool_result.content`. Anthropic's Messages API natively
- *  supports text + image blocks in a tool_result content array. OpenAI
- *  Chat Completions tool messages and the Responses function_call_output
- *  shape are both string-only, so any image blocks we keep would be
- *  silently dropped or cause a 400 at request validation. For those
- *  providers we always replace image blocks via the sub-LLM describe
- *  path regardless of capability cache state. */
-function providerSupportsImageInToolResult(schema: Schema): boolean {
-  return schema === 'anthropic'
-}
 
 type FinalizationContext = {
   provider: Provider
@@ -47,17 +34,26 @@ type FinalizationContext = {
   signal?: AbortSignal
 }
 
-/** Walk every message and finalize image blocks inside `tool_result.content`
+function providerSupportsKindInToolResult(
+  ctx: FinalizationContext,
+  kind: 'image' | 'pdf',
+): boolean {
+  const entry = readCacheEntry({
+    endpoint: ctx.endpoint,
+    upstreamModel: ctx.upstreamModel,
+    kind,
+    position: 'inToolResult',
+  })
+  return entry?.enabled !== false
+}
+
+/** Walk every message and finalize binary blocks inside `tool_result.content`
  *  arrays so the destination provider can accept the request:
  *
- *    - Anthropic + image cache !== false → keep image blocks unchanged
- *      (Anthropic accepts image inside tool_result and Claude vision
- *      handles them directly).
- *    - Anthropic + image cache === false → replace via describeImagesAdaptive
- *      (sub-LLM describes, image blocks become text blocks).
- *    - OpenAI / OpenAI-auth (any cache state) → replace via
- *      describeImagesAdaptive (provider doesn't accept multimodal in tool
- *      messages).
+ *    - Cache enabled/missing for a kind -> keep structured blocks.
+ *    - Cache disabled for image -> replace via describeImagesAdaptive.
+ *    - Cache disabled for document -> replace with a plain-text marker
+ *      until the caller provides a page renderer.
  *
  *  Top-level image blocks in user messages (user-attached attachments
  *  from a channel) are NOT touched here — the channel runner's
@@ -65,11 +61,11 @@ type FinalizationContext = {
  *  finalization here is strictly tool_result.content scope.
  *
  *  Returns a NEW messages array (does not mutate the input). */
-export async function finalizeToolResultImageBlocks(
+export async function finalizeToolResultBlocks(
   messages: ApiMessage[],
   ctx: FinalizationContext,
 ): Promise<ApiMessage[]> {
-  // Fast-path: scan once to see if any image blocks exist inside any
+  // Fast-path: scan once to see if any binary blocks exist inside any
   // tool_result.content array. Skip the work otherwise.
   const hasAny = messages.some(message => {
     if (message.role !== 'user' || !Array.isArray(message.content)) return false
@@ -77,26 +73,16 @@ export async function finalizeToolResultImageBlocks(
       (block: unknown) =>
         isToolResultBlock(block)
         && Array.isArray(block.content)
-        && block.content.some(inner => isImageBlock(inner)),
+        && block.content.some(inner => isImageBlock(inner) || isDocumentBlock(inner)),
     )
   })
   if (!hasAny) {
     return messages
   }
 
-  const supportsImageInTr = providerSupportsImageInToolResult(ctx.provider.name)
-  let cacheEnabled = true
-  if (supportsImageInTr) {
-    const entry = readCacheEntry({
-      endpoint: ctx.endpoint,
-      upstreamModel: ctx.upstreamModel,
-      kind: 'image',
-      position: 'inToolResult',
-    })
-    cacheEnabled = entry?.enabled !== false
-  }
-  const shouldReplace = !supportsImageInTr || !cacheEnabled
-  if (!shouldReplace) {
+  const shouldReplaceImages = !providerSupportsKindInToolResult(ctx, 'image')
+  const shouldReplaceDocuments = !providerSupportsKindInToolResult(ctx, 'pdf')
+  if (!shouldReplaceImages && !shouldReplaceDocuments) {
     return messages
   }
 
@@ -117,16 +103,25 @@ export async function finalizeToolResultImageBlocks(
         newContent.push(block)
         continue
       }
-      const innerImages = block.content.filter(isImageBlock)
-      if (innerImages.length === 0) {
+      const needsReplace = block.content.some(inner =>
+        (shouldReplaceImages && isImageBlock(inner))
+        || (shouldReplaceDocuments && isDocumentBlock(inner)),
+      )
+      if (!needsReplace) {
         newContent.push(block)
         continue
       }
       mutated = true
-      const replacedInner = await replaceImageBlocksWithDescribeText(
-        block.content,
-        ctx,
-      )
+      let replacedInner = block.content
+      if (shouldReplaceDocuments) {
+        replacedInner = replaceDocumentBlocksWithText(replacedInner)
+      }
+      if (shouldReplaceImages) {
+        replacedInner = await replaceImageBlocksWithDescribeText(
+          replacedInner,
+          ctx,
+        )
+      }
       const newBlock: UserToolResultBlock = {
         ...block,
         content: replacedInner,
@@ -140,6 +135,20 @@ export async function finalizeToolResultImageBlocks(
     }
   }
   return out
+}
+
+export const finalizeToolResultImageBlocks = finalizeToolResultBlocks
+
+function replaceDocumentBlocksWithText(
+  blocks: ToolResultContentBlock[],
+): ToolResultContentBlock[] {
+  return blocks.map(block => {
+    if (!isDocumentBlock(block)) return block
+    return {
+      type: 'text',
+      text: `[PDF document omitted from tool_result because this provider/model has pdf@inToolResult disabled: ${block.source.mediaType}]`,
+    }
+  })
 }
 
 async function replaceImageBlocksWithDescribeText(
@@ -245,6 +254,17 @@ function isImageBlock(
   if (!block || typeof block !== 'object') return false
   const rec = block as Record<string, unknown>
   if (rec.type !== 'image') return false
+  const source = rec.source as Record<string, unknown> | undefined
+  if (!source || source.type !== 'base64') return false
+  return typeof source.mediaType === 'string' && typeof source.data === 'string'
+}
+
+function isDocumentBlock(
+  block: unknown,
+): block is ToolResultContentBlock & { type: 'document' } {
+  if (!block || typeof block !== 'object') return false
+  const rec = block as Record<string, unknown>
+  if (rec.type !== 'document') return false
   const source = rec.source as Record<string, unknown> | undefined
   if (!source || source.type !== 'base64') return false
   return typeof source.mediaType === 'string' && typeof source.data === 'string'

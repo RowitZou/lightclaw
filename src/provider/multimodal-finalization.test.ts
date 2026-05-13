@@ -193,16 +193,15 @@ describe('finalizeToolResultImageBlocks', () => {
     assert.match(String(innerContent[1].text), /described 2 images/)
   })
 
-  it('replaces image blocks for OpenAI even with image cache=true', async () => {
-    // OpenAI providers don't support image-in-tool-result regardless of
-    // capability cache state — the API itself rejects, so we always
-    // describe-replace to keep tool messages text-only.
+  it('replaces image blocks when image@inToolResult cache is false', async () => {
+    // Provider construction precharges OpenAI Chat tool-result image support
+    // to false. The finalizer keys off that cache fact, not provider name.
     writeCacheEntry({
       endpoint: 'e',
       upstreamModel: 'm',
       kind: 'image',
       position: 'inToolResult',
-      entry: { enabled: true, failures: 0 },
+      entry: { enabled: false, failures: 0 },
     })
     const messages: ApiMessage[] = [
       {

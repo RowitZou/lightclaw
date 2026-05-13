@@ -180,7 +180,7 @@ describe('provider.detectStaticDropKinds', () => {
     assert.equal(dropped.includes('pdf'), false)
     assert.deepEqual(
       (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
-      ['audio', 'image', 'pdf', 'video'],
+      ['audio', 'video'],
     )
   })
 })
@@ -282,7 +282,7 @@ describe('provider precharge writes capability cache', () => {
     )
   })
 
-  it('resets failures when a probe now drops a previously enabled entry', () => {
+  it('preserves enabled failures when an openai-auth probe now emits tool_result images', () => {
     writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
@@ -311,7 +311,7 @@ describe('provider precharge writes capability cache', () => {
         kind: 'image',
         position: 'inToolResult',
       }),
-      { enabled: false, failures: 0 },
+      { enabled: true, failures: 3 },
     )
   })
 

@@ -16,6 +16,7 @@ import {
   type AssistantToolUseBlock,
   type StreamEvent,
   type StreamStopEvent,
+  type ToolResultContentBlock,
   type UsageStats,
   type UserToolResultBlock,
 } from '../types.js'
@@ -96,6 +97,70 @@ function userToolResults(content: unknown): UserToolResultBlock[] {
   )
 }
 
+type DropCollector =
+  | Set<AttachmentKind>
+  | {
+      inUserMessage?: Set<AttachmentKind>
+      inToolResult?: Set<AttachmentKind>
+    }
+
+function addDropped(
+  dropped: DropCollector | undefined,
+  position: 'inUserMessage' | 'inToolResult',
+  kind: AttachmentKind,
+): void {
+  if (!dropped) return
+  if (dropped instanceof Set) {
+    if (position === 'inUserMessage') dropped.add(kind)
+    return
+  }
+  dropped[position]?.add(kind)
+}
+
+function toolResultOutputForResponses(
+  content: UserToolResultBlock['content'],
+  dropped?: DropCollector,
+): string | Array<Record<string, unknown>> {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  const hasBinary = content.some(block => block.type === 'image' || block.type === 'document')
+  if (!hasBinary) {
+    for (const block of content) {
+      const kind = classifyUnsupportedBlock(block.type)
+      if (kind) addDropped(dropped, 'inToolResult', kind)
+    }
+    return toolResultContentToText(content)
+  }
+
+  const parts: Array<Record<string, unknown>> = []
+  for (const block of content) {
+    if (block.type === 'text') {
+      parts.push({ type: 'input_text', text: block.text })
+      continue
+    }
+    if (block.type === 'image') {
+      parts.push({
+        type: 'input_image',
+        image_url: `data:${block.source.mediaType};base64,${block.source.data}`,
+      })
+      continue
+    }
+    if (block.type === 'document') {
+      parts.push({
+        type: 'input_file',
+        filename: filenameForDocumentMime(block.source.mediaType),
+        file_data: `data:${block.source.mediaType};base64,${block.source.data}`,
+      })
+      continue
+    }
+    const kind = classifyUnsupportedBlock((block as { type: unknown }).type)
+    if (kind) addDropped(dropped, 'inToolResult', kind)
+  }
+  return parts
+}
+
 /**
  * Convert LightClaw's API message array into Responses API input items.
  * `system` is hoisted to the top-level `instructions` field by the caller;
@@ -106,7 +171,7 @@ function userToolResults(content: unknown): UserToolResultBlock[] {
  */
 export function convertMessagesToResponsesInput(
   messages: ApiMessage[],
-  dropped?: Set<AttachmentKind>,
+  dropped?: DropCollector,
 ): ResponseInputItem[] {
   const out: ResponseInputItem[] = []
 
@@ -136,18 +201,15 @@ export function convertMessagesToResponsesInput(
         for (const block of message.content) {
           if (!isRecord(block)) continue
           const kind = classifyUnsupportedBlock(block.type)
-          if (kind) dropped.add(kind)
+          if (kind) addDropped(dropped, 'inUserMessage', kind)
         }
       }
 
       for (const block of toolResults) {
-        // OpenAI Responses function_call_output requires string output;
-        // collapse array shape (image blocks already replaced with text
-        // by the multimodal-finalization pass on this provider).
         out.push({
           type: 'function_call_output',
           call_id: block.tool_use_id,
-          output: toolResultContentToText(block.content),
+          output: toolResultOutputForResponses(block.content, dropped),
         } as ResponseInputItem.FunctionCallOutput)
       }
       if (text.length > 0 || imageBlocks.length > 0 || documentBlocks.length > 0) {
@@ -388,17 +450,27 @@ export function createOpenAIAuthProvider(
       return Array.from(dropped)
     },
     detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
-      // PR1 placeholder: the toolResults loop above stringifies everything
-      // via `toolResultContentToText`, so image / document / audio / video
-      // are all lost. PR2 will replace that stringify with an array-shape
-      // `function_call_output.output` emit (verified accepting input_text /
-      // input_image / input_file via 2026-05-13 probes), at which point
-      // this hardcoded list MUST drop to ['audio', 'video']. Keep the
-      // probe converter-derived once the converter signature threads an
-      // `inToolResult` drop set — otherwise the cache will record
-      // enabled=false for kinds the wire now supports, exactly the
-      // codex/pdf 5-09→5-13 incident shape.
-      return ['image', 'pdf', 'audio', 'video']
+      const probe: ApiMessage[] = [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'probe',
+              content: [
+                { type: 'text', text: '' },
+                { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: '' } },
+                { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: '' } },
+                { type: 'audio', source: { type: 'base64', mediaType: 'audio/mpeg', data: '' } },
+                { type: 'video', source: { type: 'base64', mediaType: 'video/mp4', data: '' } },
+              ] as unknown as ToolResultContentBlock[],
+            },
+          ],
+        },
+      ]
+      const dropped = new Set<AttachmentKind>()
+      convertMessagesToResponsesInput(probe, { inToolResult: dropped })
+      return Array.from(dropped)
     },
     async describeImage(params) {
       const images = params.images ?? (params.image ? [params.image] : [])

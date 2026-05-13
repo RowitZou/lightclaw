@@ -299,28 +299,31 @@ describe('isCapabilityMissingError', () => {
   })
 
   it('detects image rejection on 400 + image/vision/multimodal hint', () => {
-    assert.equal(
+    assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'image_url not supported on this model' }),
-      'image',
+      { kind: 'image', positions: ['inUserMessage', 'inToolResult'] },
     )
-    assert.equal(
+    assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'multimodal input rejected' }),
-      'image',
+      { kind: 'image', positions: ['inUserMessage', 'inToolResult'] },
     )
-    assert.equal(
-      isCapabilityMissingError({ status: 422, message: 'vision is not enabled' }),
-      'image',
+    assert.deepEqual(
+      isCapabilityMissingError(
+        { status: 422, message: 'vision is not enabled' },
+        { positions: ['inToolResult'] },
+      ),
+      { kind: 'image', positions: ['inToolResult'] },
     )
   })
 
   it('detects pdf rejection separately from image', () => {
-    assert.equal(
+    assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'document blocks not supported' }),
-      'pdf',
+      { kind: 'pdf', positions: ['inUserMessage', 'inToolResult'] },
     )
-    assert.equal(
+    assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'pdf input not allowed' }),
-      'pdf',
+      { kind: 'pdf', positions: ['inUserMessage', 'inToolResult'] },
     )
   })
 

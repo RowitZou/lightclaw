@@ -21,7 +21,7 @@ import {
   toApiMessages,
 } from './messages.js'
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
-import { modelFor } from './provider/index.js'
+import { getProviderFor, modelFor } from './provider/index.js'
 import { requestPermission } from './permission/index.js'
 import type { PermissionApprover } from './permission/types.js'
 import type { InterjectionEntry } from './channels/feishu/interjection-queue.js'
@@ -153,7 +153,7 @@ type QueryParams = {
   /**
    * Forked-agent label propagated to api logs (`subagentLabel` field). Set by
    * runForkedAgent when mode === 'subagent'; ignored otherwise.
-   */
+  */
   subagentLabel?: string
   wakeNotifications?: WakeNotifyResult[]
 }
@@ -173,6 +173,12 @@ type DispatchContext = {
   canUseTool?: CanUseToolFn
   signal: AbortSignal
   wakeNotifications?: WakeNotifyResult[]
+  mainTurnRouting?: {
+    provider: ReturnType<typeof getProviderFor>['provider']
+    schema: ReturnType<typeof getProviderFor>['provider']['name']
+    endpoint: string
+    upstreamModel: string
+  }
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -620,9 +626,17 @@ export async function query(params: QueryParams): Promise<{
               : rendered
           })()
       try {
+        const mainModel = modelFor('main', config)
+        const mainRoute = getProviderFor(config, mainModel)
+        dispatchCtx.mainTurnRouting = {
+          provider: mainRoute.provider,
+          schema: mainRoute.provider.name,
+          endpoint: mainRoute.entry.endpoint,
+          upstreamModel: mainRoute.entry.upstreamModel,
+        }
         for await (const event of streamChat({
           config,
-          model: modelFor('main', config),
+          model: mainModel,
           messages: toApiMessages(messages),
           system: systemPrompt,
           tools: turnCatalog.tools.map(toolToAPISchema),
@@ -1013,6 +1027,7 @@ async function dispatchToolCall(
       cwd: getCwd(),
       abortSignal: ctx.signal,
       runtime: getRuntime(),
+      mainTurnRouting: ctx.mainTurnRouting,
       canUseTool: ctx.canUseTool,
       wakeNotifications: ctx.wakeNotifications,
       deferredTools: ctx.deferredTools,

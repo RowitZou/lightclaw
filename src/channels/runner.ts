@@ -75,7 +75,7 @@ import {
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
-import { writeCacheEntry } from '../provider/capability-cache.js'
+import { incrementFailureCounter, writeCacheEntry } from '../provider/capability-cache.js'
 import {
   getPendingAttachments,
   type ChannelId,
@@ -752,22 +752,31 @@ export class ChannelRunner {
             // the offending content blocks (paths fall through to the
             // text breadcrumb so the agent uses Read),
             // and retry without consuming a transient attempt.
-            const missingKind = isCapabilityMissingError(error)
+            const missingSignal = isCapabilityMissingError(error, {
+              positions: ['inUserMessage'],
+            })
             if (
-              missingKind &&
-              !capabilityFlipped.has(missingKind) &&
+              missingSignal &&
+              !capabilityFlipped.has(missingSignal.kind) &&
               materializedAttachment.length > 0
             ) {
-              capabilityFlipped.add(missingKind)
+              capabilityFlipped.add(missingSignal.kind)
+              const counter = incrementFailureCounter({
+                endpoint: providerEntry.endpoint,
+                upstreamModel: providerEntry.upstreamModel,
+                kind: missingSignal.kind,
+                position: 'inUserMessage',
+              })
+              const keepDisabled = counter.flippedToDisabled
               writeCacheEntry({
                 endpoint: providerEntry.endpoint,
                 upstreamModel: providerEntry.upstreamModel,
-                kind: missingKind,
+                kind: missingSignal.kind,
                 position: 'inUserMessage',
-                entry: { enabled: false, failures: 0 },
+                entry: { enabled: false, failures: counter.newFailures },
               })
               process.stderr.write(
-                `${channelId}: capability flipped (${missingKind}=false) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
+                `${channelId}: capability fallback (${missingSignal.kind}@inUserMessage failures=${counter.newFailures}/${keepDisabled ? 'disabled' : '5'}) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
               )
               // Rebuild encoding with the now-cached false. Re-render text
               // (sender prefix + path breadcrumbs for ALL fallbacks) and
@@ -777,6 +786,15 @@ export class ChannelRunner {
                 config: appConfig,
                 runtime: getRuntime(),
               })
+              if (!keepDisabled) {
+                writeCacheEntry({
+                  endpoint: providerEntry.endpoint,
+                  upstreamModel: providerEntry.upstreamModel,
+                  kind: missingSignal.kind,
+                  position: 'inUserMessage',
+                  entry: { enabled: true, failures: counter.newFailures },
+                })
+              }
               const reText = await formatChannelUserText(
                 this.strategy,
                 effectiveMessage,

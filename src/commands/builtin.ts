@@ -31,6 +31,8 @@ import {
 import type { PermissionMode, PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
+import { clearAllForModel } from '../provider/capability-cache.js'
+import { clearPrechargeForModel } from '../provider/index.js'
 import {
   abortInFlightForSession,
   getCurrentUserId,
@@ -204,7 +206,10 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: t('cmd.model.usage'),
     description: t('cmd.model.desc'),
     async handler(args, ctx) {
-      const model = args.trim()
+      const rawParts = args.trim().split(/\s+/).filter(Boolean)
+      const clearCache = rawParts.includes('--clear-cache')
+      const modelParts = rawParts.filter(part => part !== '--clear-cache')
+      const model = modelParts.join(' ')
       const registered = Object.keys(ctx.config.models)
       const formatList = (): string =>
         registered
@@ -213,6 +218,26 @@ function buildBuiltinCommands(): ReplCommand[] {
             return `${name} (${entry.schema}, ${entry.endpoint} -> ${entry.upstreamModel})`
           })
           .join(', ')
+      if (clearCache && modelParts.length === 0) {
+        const current = getModel()
+        const entry = ctx.config.models[current]
+        if (!entry) {
+          ctx.output.write(`${t('common.error.prefix')}Current model "${current}" is not registered.\n`)
+          return
+        }
+        const removed = clearAllForModel({
+          endpoint: entry.endpoint,
+          upstreamModel: entry.upstreamModel,
+        })
+        clearPrechargeForModel({
+          endpoint: entry.endpoint,
+          upstreamModel: entry.upstreamModel,
+        })
+        ctx.output.write(
+          `Cleared capability cache for ${current} (${entry.endpoint} -> ${entry.upstreamModel})${removed ? '' : ' (no existing entry)'}.\n`,
+        )
+        return
+      }
       if (!model) {
         ctx.output.write(`${t('model.current', { name: getModel() })}\n`)
         ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
@@ -226,11 +251,22 @@ function buildBuiltinCommands(): ReplCommand[] {
       setModel(model)
       ctx.config.model = model
       ctx.config.routing.main = model
+      if (clearCache) {
+        const entry = ctx.config.models[model]
+        clearAllForModel({
+          endpoint: entry.endpoint,
+          upstreamModel: entry.upstreamModel,
+        })
+        clearPrechargeForModel({
+          endpoint: entry.endpoint,
+          upstreamModel: entry.upstreamModel,
+        })
+      }
       const callerId = getCurrentUserId()
       if (callerId) {
         setIdentityPreference({ canonicalUser: callerId, key: 'model', value: model })
       }
-      ctx.output.write(`${t('model.set', { name: model })}\n`)
+      ctx.output.write(`${t('model.set', { name: model })}${clearCache ? ' Capability cache cleared.' : ''}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
