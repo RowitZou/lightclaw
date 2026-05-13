@@ -12,6 +12,7 @@ import {
   setAdmin,
 } from '../identity/store.js'
 import { generateOrReusePending } from '../identity/pairing.js'
+import { drainPendingPreheats } from '../identity/post-approve.js'
 
 import { userApprove } from './builtin.js'
 
@@ -33,7 +34,15 @@ beforeEach(() => {
   )
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // userApprove fires preheatAndWelcomeOnApproval as fire-and-forget; if
+  // that promise outlives this afterEach, RuntimePool.acquire() inside
+  // the preheat would read the *real* `~/.lightclaw/config.json` after
+  // setLightclawHomeOverride(undefined) clears the override, then
+  // mkdir the per-user workspace inside production `workspaceRoot`
+  // (e.g. `claw_data/workspaces/otheruser_aabbccdd`). Drain first so
+  // the mkdir lands inside the tmp home about to be removed.
+  await drainPendingPreheats(5_000)
   setLightclawHomeOverride(undefined)
   rmSync(home, { recursive: true, force: true })
 })
