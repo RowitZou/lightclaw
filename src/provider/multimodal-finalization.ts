@@ -1,10 +1,9 @@
 import { describeImagesAdaptive, joinSegmentsForLLM } from './describe-adaptive.js'
 import { getCachedDescribe, putCachedDescribe } from './describe-cache.js'
-import { readCachedCapability } from './capability-cache.js'
+import { readCacheEntry } from './capability-cache.js'
 import type { LightClawConfig } from '../config.js'
 import type {
   ApiMessage,
-  AttachmentCapability,
   DescribeImageInput,
   Provider,
   Schema,
@@ -86,17 +85,17 @@ export async function finalizeToolResultImageBlocks(
   }
 
   const supportsImageInTr = providerSupportsImageInToolResult(ctx.provider.name)
-  let cacheVerdict: AttachmentCapability | null = null
+  let cacheEnabled = true
   if (supportsImageInTr) {
-    const declared = ctx.provider.capabilities.attachments.image
-    cacheVerdict = readCachedCapability({
+    const entry = readCacheEntry({
       endpoint: ctx.endpoint,
       upstreamModel: ctx.upstreamModel,
       kind: 'image',
-      declared,
+      position: 'inToolResult',
     })
+    cacheEnabled = entry?.enabled !== false
   }
-  const shouldReplace = !supportsImageInTr || cacheVerdict === false
+  const shouldReplace = !supportsImageInTr || !cacheEnabled
   if (!shouldReplace) {
     return messages
   }

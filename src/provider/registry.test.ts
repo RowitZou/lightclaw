@@ -9,7 +9,11 @@ import {
   getProvider,
   getProviderFor,
 } from './index.js'
-import { _resetCacheForTests, readCachedCapability, recordCapability } from './capability-cache.js'
+import {
+  _resetCacheForTests,
+  readCacheEntry,
+  writeCacheEntry,
+} from './capability-cache.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { LightClawConfig } from '../config.js'
 
@@ -129,10 +133,11 @@ describe('provider.detectStaticDropKinds', () => {
     _resetProviderCacheForTests()
   })
 
-  it('anthropic reports zero drops (it accepts every block kind we emit)', () => {
+  it('anthropic reports audio + video drops for both positions', () => {
     const cfg = buildConfig()
     const { provider } = getProviderFor(cfg, 'opus')
-    assert.deepEqual(provider.detectStaticDropKinds?.() ?? null, [])
+    assert.deepEqual((provider.detectStaticDropKinds?.() ?? []).slice().sort(), ['audio', 'video'])
+    assert.deepEqual((provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(), ['audio', 'video'])
   })
 
   it('openai reports pdf + audio + video as schema-unsupported', () => {
@@ -143,6 +148,10 @@ describe('provider.detectStaticDropKinds', () => {
     // Image is NOT in the dropped list — OpenAI image_url parts are how
     // user-role images flow through. Regression guard.
     assert.equal(dropped.includes('image'), false)
+    assert.deepEqual(
+      (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
+      ['audio', 'image', 'pdf', 'video'],
+    )
   })
 
   it('openai-auth (codex) reports only audio + video — document goes through input_file', () => {
@@ -169,6 +178,10 @@ describe('provider.detectStaticDropKinds', () => {
     // from 5-09 through 5-13.
     assert.deepEqual(dropped, ['audio', 'video'])
     assert.equal(dropped.includes('pdf'), false)
+    assert.deepEqual(
+      (provider.detectStaticDropKindsInToolResult?.() ?? []).slice().sort(),
+      ['audio', 'image', 'pdf', 'video'],
+    )
   })
 })
 
@@ -194,49 +207,55 @@ describe('provider precharge writes capability cache', () => {
     _resetCacheForTests()
   })
 
-  it('writes recordCapability(false) for every kind detectStaticDropKinds reports', () => {
+  it('writes disabled entries for every kind and position reported by probes', () => {
     const cfg = buildConfig()
     // First lookup primes the cache.
     getProviderFor(cfg, 'gpt-mini')
 
-    // The cache should now know that openai's gpt-5.4-mini does not
-    // support pdf / audio / video. Reading with declared='unknown' returns
-    // the cached false in each case.
+    // User-message probe drops pdf / audio / video.
     for (const kind of ['pdf', 'audio', 'video'] as const) {
-      assert.equal(
-        readCachedCapability({
+      assert.deepEqual(
+        readCacheEntry({
           endpoint: 'gateway',
           upstreamModel: 'gpt-5.4-mini',
           kind,
-          declared: 'unknown',
+          position: 'inUserMessage',
         }),
-        false,
+        { enabled: false, failures: 0 },
         `expected ${kind} cache=false after precharge`,
       )
     }
-    // Image stays at 'unknown' — that's the runtime-discovery path.
-    assert.equal(
-      readCachedCapability({
+    assert.deepEqual(
+      readCacheEntry({
         endpoint: 'gateway',
         upstreamModel: 'gpt-5.4-mini',
         kind: 'image',
-        declared: 'unknown',
+        position: 'inUserMessage',
       }),
-      'unknown',
+      { enabled: true, failures: 0 },
+      'image user-message path is enabled because the converter emits image_url parts',
     )
+    // Tool-result probe drops every kind for Chat Completions.
+    for (const kind of ['image', 'pdf', 'audio', 'video'] as const) {
+      assert.deepEqual(
+        readCacheEntry({
+          endpoint: 'gateway',
+          upstreamModel: 'gpt-5.4-mini',
+          kind,
+          position: 'inToolResult',
+        }),
+        { enabled: false, failures: 0 },
+      )
+    }
   })
 
-  it('clears a stale cache entry when a fixed converter no longer drops a declared-true kind', () => {
-    // Simulate the codex/pdf history: a previous daemon run with a buggy
-    // converter wrote pdf:false to the disk cache. New daemon starts with
-    // the fixed converter (declared:true + no longer in the dropped set).
-    // precharge() must auto-clear the stale false so the next user PDF
-    // takes the inline path immediately, without manual cache deletion.
-    recordCapability({
+  it('keeps a prior runtime-disabled entry when the converter now emits', () => {
+    writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
-      value: false,
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 5 },
     })
     const cfg: LightClawConfig = {
       ...buildConfig(),
@@ -252,45 +271,75 @@ describe('provider precharge writes capability cache', () => {
     }
     getProviderFor(cfg, 'codex')
 
-    // After precharge, the stale entry is gone and reads pass through to
-    // declared:true.
-    assert.equal(
-      readCachedCapability({
+    assert.deepEqual(
+      readCacheEntry({
         endpoint: 'codex',
         upstreamModel: 'gpt-5.5',
         kind: 'pdf',
-        declared: true,
+        position: 'inUserMessage',
       }),
-      true,
+      { enabled: false, failures: 5 },
     )
-    // audio / video still get false because the probe drops them.
-    for (const kind of ['audio', 'video'] as const) {
-      assert.equal(
-        readCachedCapability({
-          endpoint: 'codex',
-          upstreamModel: 'gpt-5.5',
-          kind,
-          declared: false,
-        }),
-        false,
-      )
-    }
   })
 
-  it('does not write any cache entry when the provider drops nothing (anthropic)', () => {
+  it('resets failures when a probe now drops a previously enabled entry', () => {
+    writeCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: true, failures: 3 },
+    })
+    const cfg: LightClawConfig = {
+      ...buildConfig(),
+      models: {
+        codex: {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5',
+        },
+      },
+      endpoints: { codex: { auth: 'codex-oauth' } },
+      routing: { main: 'codex' },
+    }
+    getProviderFor(cfg, 'codex')
+
+    assert.deepEqual(
+      readCacheEntry({
+        endpoint: 'codex',
+        upstreamModel: 'gpt-5.5',
+        kind: 'image',
+        position: 'inToolResult',
+      }),
+      { enabled: false, failures: 0 },
+    )
+  })
+
+  it('precharges anthropic image/pdf true and audio/video false', () => {
     const cfg = buildConfig()
     getProviderFor(cfg, 'opus')
-    // Cache reads return the declared default ('unknown') because no
-    // `false` write has occurred for this (endpoint, upstreamModel).
-    for (const kind of ['image', 'pdf', 'audio', 'video'] as const) {
-      assert.equal(
-        readCachedCapability({
+    for (const kind of ['image', 'pdf'] as const) {
+      for (const position of ['inUserMessage', 'inToolResult'] as const) {
+        assert.deepEqual(
+          readCacheEntry({
+            endpoint: 'anthropic-direct',
+            upstreamModel: 'claude-opus-4-7',
+            kind,
+            position,
+          }),
+          { enabled: true, failures: 0 },
+        )
+      }
+    }
+    for (const kind of ['audio', 'video'] as const) {
+      assert.deepEqual(
+        readCacheEntry({
           endpoint: 'anthropic-direct',
           upstreamModel: 'claude-opus-4-7',
           kind,
-          declared: 'unknown',
+          position: 'inUserMessage',
         }),
-        'unknown',
+        { enabled: false, failures: 0 },
       )
     }
   })

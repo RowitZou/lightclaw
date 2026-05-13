@@ -18,26 +18,9 @@ export type ProviderCapabilities = {
     webSearch: boolean
   }
   promptCaching: boolean
-  /** Per-attachment-kind inline support flags. Three states:
-   *    true     — provider documented to accept this kind inline; submit it
-   *    false    — provider rejects this kind inline; fall back to text path
-   *    'unknown' — never tested for this endpoint × upstream-model combo;
-   *                runner submits inline, autopilot flips on capability-
-   *                missing error, and the cache persists the verdict so
-   *                subsequent turns skip the wasted round-trip.
-   *  Defaults are 'unknown' for image/pdf (we'll discover at first use);
-   *  audio/video stay false until provider audio/video APIs are wired. */
-  attachments: {
-    image: AttachmentCapability
-    pdf: AttachmentCapability
-    audio: AttachmentCapability
-    video: AttachmentCapability
-  }
 }
 
 export type AttachmentKind = 'image' | 'pdf' | 'audio' | 'video'
-
-export type AttachmentCapability = boolean | 'unknown'
 
 export type ApiMessage = {
   role: 'user' | 'assistant'
@@ -125,7 +108,7 @@ export type Provider = {
    * Schema-static set of content kinds this provider's `convertMessages`
    * (or wire-shape translator) will unconditionally drop, regardless of
    * input combinatorics. Probed at provider construction by `getProviderFor`
-   * to pre-charge `recordCapability(false)` so the channel-runner's
+   * to pre-charge `writeCacheEntry({enabled:false})` so the channel-runner's
    * `encodeAttachmentsForInline` skips generating those kinds in the first
    * place — no waste reading the bytes from disk, no waste base64-encoding,
    * no waste landing them in transcript / api-logs.
@@ -138,7 +121,8 @@ export type Provider = {
    *
    * Returns `[]` when the provider supports every kind. Optional so legacy
    * providers keep working without modification (autopilot then waits for
-   * the runtime `content_dropped` event or the reactive 4xx catch path).
+   * the reactive 4xx catch path).
    */
   detectStaticDropKinds?(): readonly AttachmentKind[]
+  detectStaticDropKindsInToolResult?(): readonly AttachmentKind[]
 }

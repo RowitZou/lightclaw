@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
-import { _resetCacheForTests, recordCapability } from '../provider/capability-cache.js'
+import { _resetCacheForTests, writeCacheEntry } from '../provider/capability-cache.js'
 import type { Provider } from '../provider/types.js'
 import { LocalRuntime } from '../runtime/local.js'
 import {
@@ -38,19 +38,12 @@ afterEach(() => {
   _resetCacheForTests()
 })
 
-function makeProvider(overrides: Partial<Provider['capabilities']['attachments']> = {}): Provider {
+function makeProvider(): Provider {
   return {
     name: 'anthropic',
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
-      attachments: {
-        image: 'unknown',
-        pdf: 'unknown',
-        audio: false,
-        video: false,
-        ...overrides,
-      },
     },
     streamChat: async function* () {},
   } as unknown as Provider
@@ -120,11 +113,12 @@ describe('encodeAttachmentsForInline', () => {
   it('routes to fallback when capability is cached as false', async () => {
     const file = path.join(workspace, 'photo.png')
     writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47]))  // png magic
-    recordCapability({
+    writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'image',
-      value: false,
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
     })
     const result = await encodeAttachmentsForInline({
       attachments: [{ path: file, mimeType: 'image/png' }],
@@ -179,7 +173,13 @@ describe('encodeAttachmentsForInline', () => {
     writeFileSync(img, Buffer.from([0xff, 0xd8, 0xff, 0xe0]))
     writeFileSync(pdf, Buffer.from('%PDF-1.7'))
     // image = unknown (will inline), pdf = false (cached → fallback)
-    recordCapability({ endpoint: 'e', upstreamModel: 'm', kind: 'pdf', value: false })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'pdf',
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
+    })
 
     const result = await encodeAttachmentsForInline({
       attachments: [

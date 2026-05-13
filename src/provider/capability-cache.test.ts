@@ -5,10 +5,13 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import {
-  clearCapability,
+  clearAllForModel,
+  clearCacheEntry,
+  incrementFailureCounter,
   isCapabilityMissingError,
-  readCachedCapability,
-  recordCapability,
+  readCacheEntry,
+  resetAllFailureCountersFor,
+  writeCacheEntry,
   _resetCacheForTests,
 } from './capability-cache.js'
 
@@ -33,71 +36,74 @@ afterEach(() => {
 })
 
 describe('capability-cache', () => {
-  it('returns the declared flag when nothing is cached', () => {
-    const flag = readCachedCapability({
+  it('returns null when nothing is cached for a kind × position', () => {
+    const entry = readCacheEntry({
       endpoint: 'newapi',
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
-      declared: 'unknown',
+      position: 'inUserMessage',
     })
-    assert.equal(flag, 'unknown')
+    assert.equal(entry, null)
   })
 
-  it('persists a recorded false and overrides the declared flag', () => {
-    recordCapability({
+  it('persists a cache entry for one kind × position', () => {
+    writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'image',
-      value: false,
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 2 },
     })
-    const flag = readCachedCapability({
+    const entry = readCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'image',
-      declared: 'unknown',
+      position: 'inToolResult',
     })
-    assert.equal(flag, false)
+    assert.deepEqual(entry, { enabled: false, failures: 2 })
     assert.ok(existsSync(path.join(homeDir, 'auth', 'capabilities-cache.json')))
   })
 
   it('keys per endpoint × upstreamModel — flips do not bleed across', () => {
-    recordCapability({
+    writeCacheEntry({
       endpoint: 'newapi',
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
-      value: false,
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
     })
-    const otherEndpoint = readCachedCapability({
+    const otherEndpoint = readCacheEntry({
       endpoint: 'anthropic-direct',
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
-      declared: 'unknown',
+      position: 'inUserMessage',
     })
-    const otherModel = readCachedCapability({
+    const otherModel = readCacheEntry({
       endpoint: 'newapi',
       upstreamModel: 'claude-haiku-4-5',
       kind: 'image',
-      declared: 'unknown',
+      position: 'inUserMessage',
     })
-    assert.equal(otherEndpoint, 'unknown', 'different endpoint unaffected')
-    assert.equal(otherModel, 'unknown', 'different model unaffected')
+    assert.equal(otherEndpoint, null, 'different endpoint unaffected')
+    assert.equal(otherModel, null, 'different model unaffected')
   })
 
   it('round-trips through disk — second process-equivalent reload reads the verdict', () => {
-    recordCapability({
+    writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
-      value: false,
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 1 },
     })
     _resetCacheForTests()  // simulate process restart
-    const flag = readCachedCapability({
+    const entry = readCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
-      declared: 'unknown',
+      position: 'inUserMessage',
     })
-    assert.equal(flag, false)
+    assert.deepEqual(entry, { enabled: false, failures: 1 })
   })
 
   it('survives a corrupt cache file', () => {
@@ -105,62 +111,173 @@ describe('capability-cache', () => {
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, '{not json', 'utf8')
     _resetCacheForTests()
-    const flag = readCachedCapability({
+    const entry = readCacheEntry({
       endpoint: 'x',
       upstreamModel: 'y',
       kind: 'image',
-      declared: 'unknown',
+      position: 'inUserMessage',
     })
-    assert.equal(flag, 'unknown', 'corrupt cache → fall back to declared')
+    assert.equal(entry, null, 'corrupt cache -> empty cache')
   })
 
   it('writes JSON shape that is human-readable and stable', () => {
-    recordCapability({ endpoint: 'a', upstreamModel: 'b', kind: 'image', value: true })
-    recordCapability({ endpoint: 'a', upstreamModel: 'b', kind: 'pdf', value: false })
+    writeCacheEntry({
+      endpoint: 'a',
+      upstreamModel: 'b',
+      kind: 'image',
+      position: 'inUserMessage',
+      entry: { enabled: true, failures: 0 },
+    })
+    writeCacheEntry({
+      endpoint: 'a',
+      upstreamModel: 'b',
+      kind: 'pdf',
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 5 },
+    })
     const raw = readFileSync(path.join(homeDir, 'auth', 'capabilities-cache.json'), 'utf8')
     const parsed = JSON.parse(raw)
-    assert.equal(parsed.version, 1)
-    assert.deepEqual(parsed.flags['a:b'], { image: true, pdf: false })
+    assert.equal(parsed.version, 2)
+    assert.deepEqual(parsed.flags['a:b'], {
+      image: { inUserMessage: { enabled: true, failures: 0 } },
+      pdf: { inToolResult: { enabled: false, failures: 5 } },
+    })
   })
 
-  it('clearCapability removes a stale entry and lets declared pass through', () => {
-    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
-    const removed = clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
-    assert.equal(removed, true)
-    const flag = readCachedCapability({
+  it('migrates v1 flags to v2 inUserMessage entries', () => {
+    const file = path.join(homeDir, 'auth', 'capabilities-cache.json')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      flags: {
+        'codex:gpt-5.5': { pdf: false, image: true },
+      },
+    }), 'utf8')
+    _resetCacheForTests()
+    assert.deepEqual(
+      readCacheEntry({
+        endpoint: 'codex',
+        upstreamModel: 'gpt-5.5',
+        kind: 'pdf',
+        position: 'inUserMessage',
+      }),
+      { enabled: false, failures: 0 },
+    )
+    assert.equal(
+      readCacheEntry({
+        endpoint: 'codex',
+        upstreamModel: 'gpt-5.5',
+        kind: 'pdf',
+        position: 'inToolResult',
+      }),
+      null,
+      'v1 had no tool_result dimension',
+    )
+  })
+
+  it('clearCacheEntry removes one position and leaves siblings', () => {
+    writeCacheEntry({
       endpoint: 'codex',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
-      declared: true,
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
     })
-    assert.equal(flag, true, 'declared:true now passes through after clear')
+    writeCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inToolResult',
+      entry: { enabled: true, failures: 0 },
+    })
+    const removed = clearCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inUserMessage',
+    })
+    assert.equal(removed, true)
+    assert.equal(readCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inUserMessage',
+    }), null)
+    assert.deepEqual(readCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inToolResult',
+    }), { enabled: true, failures: 0 })
   })
 
-  it('clearCapability is a no-op on a missing entry', () => {
-    const removed = clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+  it('clearCacheEntry is a no-op on a missing entry', () => {
+    const removed = clearCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inUserMessage',
+    })
     assert.equal(removed, false)
   })
 
-  it('clearCapability does not disturb sibling kinds or sibling models', () => {
-    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
-    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'audio', value: false })
-    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.4-mini', kind: 'pdf', value: false })
-    clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
-    assert.equal(
-      readCachedCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'audio', declared: false }),
-      false,
-      'sibling kind on same model untouched',
-    )
-    assert.equal(
-      readCachedCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.4-mini', kind: 'pdf', declared: 'unknown' }),
-      false,
-      'same kind on sibling model untouched',
-    )
+  it('incrementFailureCounter flips enabled=false on the fifth failure', () => {
+    const key = {
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image' as const,
+      position: 'inToolResult' as const,
+    }
+    for (let i = 1; i <= 4; i += 1) {
+      const result = incrementFailureCounter(key)
+      assert.deepEqual(result, { newFailures: i, flippedToDisabled: false })
+      assert.equal(readCacheEntry(key)?.enabled, true)
+    }
+    const fifth = incrementFailureCounter(key)
+    assert.deepEqual(fifth, { newFailures: 5, flippedToDisabled: true })
+    assert.deepEqual(readCacheEntry(key), { enabled: false, failures: 5 })
   })
 
-  it('clearCapability collapses an empty per-model entry off the JSON', () => {
-    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
-    clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+  it('resetAllFailureCountersFor clears failures across one model', () => {
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inUserMessage',
+      entry: { enabled: true, failures: 3 },
+    })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'other',
+      kind: 'image',
+      position: 'inUserMessage',
+      entry: { enabled: true, failures: 3 },
+    })
+    resetAllFailureCountersFor({ endpoint: 'e', upstreamModel: 'm' })
+    assert.equal(readCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inUserMessage',
+    })?.failures, 0)
+    assert.equal(readCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'other',
+      kind: 'image',
+      position: 'inUserMessage',
+    })?.failures, 3)
+  })
+
+  it('clearAllForModel removes one model entry', () => {
+    writeCacheEntry({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
+    })
+    const removed = clearAllForModel({ endpoint: 'codex', upstreamModel: 'gpt-5.5' })
+    assert.equal(removed, true)
     const raw = readFileSync(path.join(homeDir, 'auth', 'capabilities-cache.json'), 'utf8')
     const parsed = JSON.parse(raw)
     assert.equal(parsed.flags['codex:gpt-5.5'], undefined, 'last kind cleared → drop the model key entirely')

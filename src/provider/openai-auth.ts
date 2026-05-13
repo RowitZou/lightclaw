@@ -314,18 +314,6 @@ export function createOpenAIAuthProvider(
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
-      // gpt-codex authenticated path runs against the Codex Responses API.
-      // Image and PDF are verified working against gpt-5.5 / gpt-5.4-mini:
-      // image as `input_image` (data URL), PDF as `input_file` + filename
-      // + application/pdf data URL. Audio/video — neither `input_audio`
-      // / `input_video` nor `input_file` with audio/* video/* MIME — is
-      // accepted by the schema, so those stay hard `false`.
-      attachments: {
-        image: 'unknown',
-        pdf: true,
-        audio: false,
-        video: false,
-      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)
@@ -339,8 +327,8 @@ export function createOpenAIAuthProvider(
       })
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      // Drop tracking is now surfaced ONLY through `detectStaticDropKinds()`
-      // (run once at construction by getProviderFor → recordCapability).
+      // Drop tracking is surfaced through `detectStaticDropKinds()`
+      // (run once at construction by getProviderFor → capability cache).
       // Schema-level drops are deterministic; the runtime event would just
       // re-write the same cache bit. Wire-side errors that ARE
       // context-sensitive (e.g., proxy strips an image_url) still go
@@ -398,6 +386,9 @@ export function createOpenAIAuthProvider(
       const dropped = new Set<AttachmentKind>()
       convertMessagesToResponsesInput(probe, dropped)
       return Array.from(dropped)
+    },
+    detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
+      return ['image', 'pdf', 'audio', 'video']
     },
     async describeImage(params) {
       const images = params.images ?? (params.image ? [params.image] : [])

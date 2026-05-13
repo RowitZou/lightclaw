@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import {
-  recordCapability,
+  writeCacheEntry,
   _resetCacheForTests as resetCapabilityCache,
 } from './capability-cache.js'
 import { _resetCacheForTests as resetBatchCache } from './batch-size-cache.js'
@@ -44,12 +44,6 @@ function makeProvider(name: 'anthropic' | 'openai' | 'openai-auth'): Provider {
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
-      attachments: {
-        image: 'unknown',
-        pdf: 'unknown',
-        audio: false,
-        video: false,
-      },
     },
     streamChat: async function* () {},
   } as unknown as Provider
@@ -128,7 +122,13 @@ describe('finalizeToolResultImageBlocks', () => {
     assert.equal(out, messages, 'no transform when cache is unset for anthropic')
     assert.equal(described, 0)
 
-    recordCapability({ endpoint: 'e', upstreamModel: 'm', kind: 'image', value: true })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: true, failures: 0 },
+    })
     const out2 = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
@@ -145,7 +145,13 @@ describe('finalizeToolResultImageBlocks', () => {
   })
 
   it('replaces Anthropic image blocks when image cache is false', async () => {
-    recordCapability({ endpoint: 'e', upstreamModel: 'm', kind: 'image', value: false })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 0 },
+    })
     const messages: ApiMessage[] = [
       {
         role: 'user',
@@ -191,7 +197,13 @@ describe('finalizeToolResultImageBlocks', () => {
     // OpenAI providers don't support image-in-tool-result regardless of
     // capability cache state — the API itself rejects, so we always
     // describe-replace to keep tool messages text-only.
-    recordCapability({ endpoint: 'e', upstreamModel: 'm', kind: 'image', value: true })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: true, failures: 0 },
+    })
     const messages: ApiMessage[] = [
       {
         role: 'user',
@@ -221,7 +233,13 @@ describe('finalizeToolResultImageBlocks', () => {
   })
 
   it('preserves order around mixed text + image sequences', async () => {
-    recordCapability({ endpoint: 'e', upstreamModel: 'm', kind: 'image', value: false })
+    writeCacheEntry({
+      endpoint: 'e',
+      upstreamModel: 'm',
+      kind: 'image',
+      position: 'inToolResult',
+      entry: { enabled: false, failures: 0 },
+    })
     const messages: ApiMessage[] = [
       {
         role: 'user',

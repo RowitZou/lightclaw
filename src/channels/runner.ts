@@ -75,7 +75,7 @@ import {
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
-import { recordCapability } from '../provider/capability-cache.js'
+import { writeCacheEntry } from '../provider/capability-cache.js'
 import {
   getPendingAttachments,
   type ChannelId,
@@ -759,11 +759,12 @@ export class ChannelRunner {
               materializedAttachment.length > 0
             ) {
               capabilityFlipped.add(missingKind)
-              recordCapability({
+              writeCacheEntry({
                 endpoint: providerEntry.endpoint,
                 upstreamModel: providerEntry.upstreamModel,
                 kind: missingKind,
-                value: false,
+                position: 'inUserMessage',
+                entry: { enabled: false, failures: 0 },
               })
               process.stderr.write(
                 `${channelId}: capability flipped (${missingKind}=false) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
