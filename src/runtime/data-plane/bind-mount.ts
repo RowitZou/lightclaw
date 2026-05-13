@@ -1,9 +1,7 @@
 import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
-import fastGlob from 'fast-glob'
-
-import type { DataPlane, GlobOptions, PathPolicy, RuntimeStat } from '../types.js'
+import type { DataPlane, PathPolicy, RuntimeStat } from '../types.js'
 import { DataPlaneNotApplicableError } from './layered.js'
 
 export class BindMountData implements DataPlane {
@@ -31,19 +29,6 @@ export class BindMountData implements DataPlane {
       isDirectory: result.isDirectory(),
       mtimeMs: result.mtimeMs,
     }
-  }
-
-  async glob(pattern: string | string[], options: GlobOptions = {}): Promise<string[]> {
-    const cwd = options.cwd ? this.hostPath(options.cwd) : this.policy.mountTable[0]?.host
-    if (!cwd) {
-      throw new DataPlaneNotApplicableError('bind-mount has no mount root for glob')
-    }
-    return fastGlob(pattern, {
-      cwd,
-      ignore: options.ignore,
-      onlyFiles: options.onlyFiles ?? true,
-      dot: options.dot ?? false,
-    })
   }
 
   async readdir(workerPath: string): Promise<string[]> {

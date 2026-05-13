@@ -1,18 +1,13 @@
-import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { fileURLToPath } from 'node:url'
-
-import fastGlob from 'fast-glob'
 
 import type {
   ControlPlane,
   DataPlane,
   ExecInput,
   ExecResult,
-  GlobOptions,
   PathPolicy,
   Runtime,
   RuntimeAvailability,
@@ -28,7 +23,6 @@ export class LocalRuntime implements Runtime {
   readonly isolated = false
   readonly securityProfile = 'host-trusted' as const
   readonly workspaceRoot: string
-  readonly helperRoot: string
   readonly control: ControlPlane
   readonly data: DataPlane
   readonly paths: PathPolicy
@@ -46,7 +40,6 @@ export class LocalRuntime implements Runtime {
     noProxy: readonly string[] = [],
   ) {
     this.workspaceRoot = path.resolve(workspaceRoot)
-    this.helperRoot = resolveDefaultHelperRoot()
     this.proxyEnv = buildLocalProxyEnv(proxy, noProxy)
     this.control = {
       kind: 'local-spawn',
@@ -220,15 +213,6 @@ export class LocalRuntime implements Runtime {
         mtimeMs: result.mtimeMs,
       }
     },
-    glob: async (pattern, options: GlobOptions = {}) => {
-      const cwd = this.absolutize(options.cwd, this.workspaceRoot)
-      return fastGlob(pattern, {
-        cwd,
-        ignore: options.ignore,
-        onlyFiles: options.onlyFiles ?? true,
-        dot: options.dot ?? false,
-      })
-    },
     readdir: async pathname => readdir(this.absolutize(pathname)),
   }
 }
@@ -253,12 +237,3 @@ function buildLocalProxyEnv(
   }
 }
 
-export function resolveDefaultHelperRoot(): string {
-  const dirname = fileURLToPath(new URL('.', import.meta.url))
-  const candidates = [
-    path.resolve(dirname, '../../scripts/sandbox-helpers'),
-    path.resolve(dirname, '../scripts/sandbox-helpers'),
-    path.resolve(process.cwd(), 'scripts/sandbox-helpers'),
-  ]
-  return candidates.find(candidate => existsSync(candidate)) ?? candidates[0]
-}

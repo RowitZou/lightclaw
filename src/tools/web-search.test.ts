@@ -12,7 +12,6 @@ function buildCtx(): ToolCallContext {
   return {
     abortSignal: new AbortController().signal,
     runtime: {
-      helperRoot: '/fake/helpers',
       workspaceRoot: '/fake/workspace',
     },
   } as unknown as ToolCallContext

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import type { DataPlane, GlobOptions, RuntimeStat } from '../types.js'
+import type { DataPlane, RuntimeStat } from '../types.js'
 import { MountTablePathPolicy } from '../path-policy/mount-table.js'
 import { DataPlaneNotApplicableError, LayeredDataPlane } from './layered.js'
 
@@ -22,7 +22,6 @@ function fakePlane(input: {
       isDirectory: false,
       mtimeMs: 1,
     })),
-    glob: async (_pattern: string | string[], _options?: GlobOptions) => ['a.txt'],
     readdir: async () => ['a.txt'],
   }
 }

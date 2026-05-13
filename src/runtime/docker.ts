@@ -5,7 +5,6 @@ import type {
   DataPlane,
   ExecInput,
   ExecResult,
-  GlobOptions,
   PathPolicy,
   Runtime,
   RuntimeAvailability,
@@ -47,7 +46,6 @@ export type DockerRuntimeConfig = {
   image: string
   workspaceHostPath: string
   containerName: string
-  helperContainerPath: string
   workspaceContainerPath: string
   mounts: readonly DockerMount[]
   tmpfs: readonly string[]
@@ -85,7 +83,6 @@ export class DockerRuntime implements Runtime {
   readonly isolated = true
   readonly securityProfile = 'container-isolated' as const
   readonly workspaceRoot: string
-  readonly helperRoot: string
   readonly containerName: string
   readonly image: string
   readonly control: ControlPlane
@@ -107,7 +104,6 @@ export class DockerRuntime implements Runtime {
     this.cfg = config
     this.tracker = tracker
     this.workspaceRoot = config.workspaceContainerPath
-    this.helperRoot = config.helperContainerPath
     this.containerName = config.containerName
     this.image = config.image
     this.mountTable = [
@@ -155,10 +151,6 @@ export class DockerRuntime implements Runtime {
       stat: async pathname => {
         await this.ensureRunning()
         return bindMountData.stat(pathname)
-      },
-      glob: async (pattern, options) => {
-        await this.ensureRunning()
-        return bindMountData.glob(pattern, options)
       },
       readdir: async pathname => {
         await this.ensureRunning()
@@ -336,23 +328,6 @@ export class DockerRuntime implements Runtime {
         isDirectory: kind === 'directory',
         mtimeMs: Number(mtime) * 1000,
       }
-    },
-    glob: async (pattern, options: GlobOptions = {}) => {
-      const cwd = options.cwd ? this.toContainerPath(options.cwd) : this.workspaceRoot
-      const result = await this.exec({
-        command: `python3 ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))}`,
-        stdin: JSON.stringify({
-          pattern,
-          cwd,
-          ignore: options.ignore ?? [],
-          onlyFiles: options.onlyFiles ?? true,
-          dot: options.dot ?? false,
-        }),
-      })
-      if (result.exitCode !== 0) {
-        throw new Error(`glob: ${result.stderr.trim() || result.stdout.trim()}`)
-      }
-      return result.stdout.split('\n').filter(Boolean)
     },
     readdir: async pathname => {
       const containerPath = this.toContainerPath(pathname)

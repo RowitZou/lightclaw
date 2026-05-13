@@ -129,17 +129,16 @@ export const globTool = buildTool({
       }
 
       if (isCommandNotFound(result)) {
-        // Fallback: glob.py helper via runtime.fs.glob. Sandbox images ship
-        // it; LocalRuntime may run on a host without ripgrep. The helper
-        // also sorts by mtime so output ordering matches the primary path.
-        // dot: true matches rg's `--hidden`. onlyFiles: true matches
-        // `rg --files` (no directory entries in the output).
-        const fallback = await context.runtime.fs.glob(input.pattern, {
-          cwd: searchDir,
-          onlyFiles: true,
-          dot: true,
-        })
-        return { output: formatResult(fallback, limit, input.pattern, searchDir) }
+        // Phase 35: no daemon-side fast-glob fallback (DataPlane.glob and
+        // the sandbox glob.py helper were retired alongside this tool's
+        // primary rg path). Return a self-healing message so the model
+        // falls back to `Bash` (find / ls -R) on the same workspace.
+        return {
+          output:
+            `rg not found in this runtime; Glob cannot operate. ` +
+            `Use \`Bash\` with \`find\` or \`ls -R\` under ${searchDir} instead.`,
+          isError: true,
+        }
       }
 
       return {

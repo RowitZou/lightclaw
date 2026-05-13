@@ -1,12 +1,11 @@
 /**
  * DuckDuckGo HTML scrape fallback for daemon-side WebSearch.
  *
- * Direct TS port of `scripts/sandbox-helpers/websearch.py:88-121`
- * (which Phase C Iter C0 deletes). DDG's `/html/` endpoint is a
- * server-rendered Lite HTML page — no API, no JSON, just regex
- * matching against `<a class="result__a">` and `<a class="result__snippet">`
- * blocks. Fragile but it's the only no-key search backend we have;
- * users without a Brave API key fall back to this.
+ * DDG's `/html/` endpoint is a server-rendered Lite HTML page — no API,
+ * no JSON, just regex matching against `<a class="result__a">` and
+ * `<a class="result__snippet">` blocks. Fragile but it's the only
+ * no-key search backend we have; users without a Brave API key fall
+ * back to this.
  *
  * Two subtle things from the Python helper preserved here:
  *  1. DDG's `result__a` `href` is a redirect URL like

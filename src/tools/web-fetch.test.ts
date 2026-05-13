@@ -22,7 +22,6 @@ function buildCtx(opts?: {
   return {
     abortSignal: new AbortController().signal,
     runtime: {
-      helperRoot: '/fake/helpers',
       workspaceRoot: '/fake/workspace',
       fs: {
         async writeFile(p: string, content: Buffer | string) {
