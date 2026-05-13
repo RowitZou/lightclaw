@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
+import type { Runtime } from '../runtime/types.js'
 import type { ToolCallContext } from '../tool.js'
 
 /** Pre-resize cap for image bytes — runtime read refuses files over this
@@ -112,7 +113,16 @@ export async function assertPdfHeader(
   context: ToolCallContext,
   filePath: string,
 ): Promise<void> {
-  const result = await context.runtime.exec({
+  return assertPdfHeaderViaRuntime(context.runtime, filePath)
+}
+
+/** Runtime-only counterpart for callers (e.g. multimodal-finalization) that
+ *  have a `Runtime` handle but no full `ToolCallContext`. */
+export async function assertPdfHeaderViaRuntime(
+  runtime: Runtime,
+  filePath: string,
+): Promise<void> {
+  const result = await runtime.exec({
     command: 'head -c 5 "$LIGHTCLAW_PDF_PATH"',
     env: { LIGHTCLAW_PDF_PATH: filePath },
     timeoutMs: 5_000,
@@ -130,7 +140,14 @@ export async function getPdfPageCount(
   context: ToolCallContext,
   filePath: string,
 ): Promise<number | undefined> {
-  const result = await context.runtime.exec({
+  return getPdfPageCountViaRuntime(context.runtime, filePath)
+}
+
+export async function getPdfPageCountViaRuntime(
+  runtime: Runtime,
+  filePath: string,
+): Promise<number | undefined> {
+  const result = await runtime.exec({
     command:
       'command -v pdfinfo >/dev/null 2>&1 || exit 127; pdfinfo "$LIGHTCLAW_PDF_PATH"',
     env: { LIGHTCLAW_PDF_PATH: filePath },
@@ -150,7 +167,14 @@ export async function renderPdfPages(
   context: ToolCallContext,
   input: { filePath: string; outputDir: string; firstPage: number; lastPage: number },
 ): Promise<void> {
-  const result = await context.runtime.exec({
+  return renderPdfPagesViaRuntime(context.runtime, input)
+}
+
+export async function renderPdfPagesViaRuntime(
+  runtime: Runtime,
+  input: { filePath: string; outputDir: string; firstPage: number; lastPage: number },
+): Promise<void> {
+  const result = await runtime.exec({
     command:
       'command -v pdftoppm >/dev/null 2>&1 || exit 127; '
       + 'mkdir -p "$LIGHTCLAW_PDF_OUTPUT_DIR"; '
@@ -186,7 +210,14 @@ export async function cleanupPdfPageDir(
   context: ToolCallContext,
   outputDir: string,
 ): Promise<string | undefined> {
-  const result = await context.runtime.exec({
+  return cleanupPdfPageDirViaRuntime(context.runtime, outputDir)
+}
+
+export async function cleanupPdfPageDirViaRuntime(
+  runtime: Runtime,
+  outputDir: string,
+): Promise<string | undefined> {
+  const result = await runtime.exec({
     command: 'rm -rf "$LIGHTCLAW_PDF_OUTPUT_DIR"',
     env: { LIGHTCLAW_PDF_OUTPUT_DIR: outputDir },
     timeoutMs: 10_000,

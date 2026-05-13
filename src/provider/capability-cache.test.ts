@@ -11,6 +11,7 @@ import {
   isCapabilityMissingError,
   readCacheEntry,
   resetAllFailureCountersFor,
+  scanMessagesForKindPositions,
   writeCacheEntry,
   _resetCacheForTests,
 } from './capability-cache.js'
@@ -324,6 +325,130 @@ describe('isCapabilityMissingError', () => {
     assert.deepEqual(
       isCapabilityMissingError({ status: 400, message: 'pdf input not allowed' }),
       { kind: 'pdf', positions: ['inUserMessage', 'inToolResult'] },
+    )
+  })
+
+  it('attributes positions via scanMessagesForKindPositions when messages provided', () => {
+    // user-message top-level has document → inUserMessage attributed
+    const inUserOnly = isCapabilityMissingError(
+      { status: 400, message: 'pdf input not allowed' },
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'AA' } },
+            ],
+          },
+        ],
+      },
+    )
+    assert.deepEqual(inUserOnly, { kind: 'pdf', positions: ['inUserMessage'] })
+
+    // tool_result content has document → inToolResult attributed (regression
+    // guard for plan-v2 §A fix: was hardcoded inUserMessage)
+    const inToolResultOnly = isCapabilityMissingError(
+      { status: 400, message: 'document blocks rejected' },
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: [
+                  { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'AA' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    )
+    assert.deepEqual(inToolResultOnly, { kind: 'pdf', positions: ['inToolResult'] })
+
+    // both positions carry the same kind → both attributed
+    const both = isCapabilityMissingError(
+      { status: 400, message: 'pdf not supported' },
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'AA' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: [
+                  { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'BB' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    )
+    assert.deepEqual(both, { kind: 'pdf', positions: ['inUserMessage', 'inToolResult'] })
+  })
+
+  it('falls back to legacy positions[] override when scan finds nothing', () => {
+    // Scan would return [] (no document block anywhere); legacy positions
+    // override kicks in.
+    const result = isCapabilityMissingError(
+      { status: 400, message: 'pdf input not allowed' },
+      {
+        messages: [{ role: 'user', content: 'plain text only' }],
+        positions: ['inUserMessage'],
+      },
+    )
+    assert.deepEqual(result, { kind: 'pdf', positions: ['inUserMessage'] })
+  })
+
+  it('scanMessagesForKindPositions handles strings, arrays, mixed shapes', () => {
+    assert.deepEqual(
+      scanMessagesForKindPositions([{ role: 'user', content: 'string content' }], 'pdf'),
+      [],
+    )
+    assert.deepEqual(
+      scanMessagesForKindPositions(
+        [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'hello' },
+              { type: 'image', source: { type: 'base64', mediaType: 'image/png', data: 'AA' } },
+            ],
+          },
+        ],
+        'image',
+      ),
+      ['inUserMessage'],
+    )
+    assert.deepEqual(
+      scanMessagesForKindPositions(
+        [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: [
+                  { type: 'image', source: { type: 'base64', mediaType: 'image/png', data: 'AA' } },
+                ],
+              },
+            ],
+          },
+        ],
+        'image',
+      ),
+      ['inToolResult'],
     )
   })
 

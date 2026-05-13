@@ -752,66 +752,98 @@ export class ChannelRunner {
             // the offending content blocks (paths fall through to the
             // text breadcrumb so the agent uses Read),
             // and retry without consuming a transient attempt.
-            // TODO(Phase 36 PR2 follow-up): position attribution is
-            // hardcoded to `inUserMessage`. Plan v2 §A wanted the runner
-            // to scan the outgoing request body and attribute the 4xx to
-            // whichever position(s) actually carried the offending kind
-            // (user-message top-level vs tool_result.content). Without
-            // that scan, a tool_result-side rejection (e.g. codex
-            // 4xx on a Read PDF document block) increments the
-            // inUserMessage counter while inToolResult stays
-            // enabled=true — Read keeps emitting documents and the next
-            // call repeats the 4xx-flip cycle. Today this edge case is
-            // contained because codex/anthropic precharge inToolResult
-            // as enabled=true and rarely 4xx for context-sensitive
-            // reasons; openai (Chat Completions) precharges
-            // inToolResult=false so Read already skips that path. Real
-            // dogfood incident would surface as an obvious "user message
-            // counter incrementing every turn while the actual rejected
-            // payload was in tool_result" pattern — fix by extending
-            // isCapabilityMissingError to take a request-body shape
-            // summary and return positions[] from there.
+            // Capability autopilot with **request-body position attribution**.
+            // Pass the in-memory `messages` array to isCapabilityMissingError;
+            // it scans content shape and returns the actual position(s) the
+            // offending kind appeared in. Two-position fix: inUserMessage 4xx
+            // still gets the existing re-encode-with-text-breadcrumb per-call
+            // recovery; inToolResult 4xx increments the right counter so the
+            // sticky-5-failure flip eventually triggers documentDowngrade /
+            // describeImagesAdaptive on subsequent calls (the per-call
+            // recovery for inToolResult is a future improvement — current
+            // edge case: 5 failed turns before sticky disable, all rare cases
+            // like codex proxy strip or model variant shape changes; see
+            // dev-plan v2 §A for the full per-call recovery design).
+            // Internal `Message[]` is `{type:'user'|'assistant'|'system',
+            // message:{role,content,...}}` — the scanner wants `{role,content}`
+            // (the wire-shape). Map down to that shape for the autopilot
+            // attribution. Only user-role messages can carry tool_result
+            // blocks or top-level attachments, so we filter to those.
+            const wireShape = messages
+              .filter(m => m.type === 'user')
+              .map(m => ({
+                role: m.message.role,
+                content: m.message.content,
+              }))
             const missingSignal = isCapabilityMissingError(error, {
-              positions: ['inUserMessage'],
+              messages: wireShape,
             })
+            const affectedPositions = missingSignal
+              ? missingSignal.positions.filter(
+                  p => !capabilityFlipped.has(`${missingSignal.kind}@${p}`),
+                )
+              : []
             if (
               missingSignal &&
-              !capabilityFlipped.has(missingSignal.kind) &&
+              affectedPositions.length > 0 &&
               materializedAttachment.length > 0
             ) {
-              capabilityFlipped.add(missingSignal.kind)
-              const counter = incrementFailureCounter({
-                endpoint: providerEntry.endpoint,
-                upstreamModel: providerEntry.upstreamModel,
-                kind: missingSignal.kind,
-                position: 'inUserMessage',
-              })
-              const keepDisabled = counter.flippedToDisabled
-              writeCacheEntry({
-                endpoint: providerEntry.endpoint,
-                upstreamModel: providerEntry.upstreamModel,
-                kind: missingSignal.kind,
-                position: 'inUserMessage',
-                entry: { enabled: false, failures: counter.newFailures },
-              })
+              const flipSummaries: string[] = []
+              const inUserMessageFlipped = affectedPositions.includes('inUserMessage')
+              let userMessageCounterKept = true
+              for (const position of affectedPositions) {
+                capabilityFlipped.add(`${missingSignal.kind}@${position}`)
+                const counter = incrementFailureCounter({
+                  endpoint: providerEntry.endpoint,
+                  upstreamModel: providerEntry.upstreamModel,
+                  kind: missingSignal.kind,
+                  position,
+                })
+                if (position === 'inUserMessage') {
+                  userMessageCounterKept = !counter.flippedToDisabled
+                  // Force cache to false so the immediate re-encode below
+                  // routes to text-breadcrumb fallback (existing pattern).
+                  writeCacheEntry({
+                    endpoint: providerEntry.endpoint,
+                    upstreamModel: providerEntry.upstreamModel,
+                    kind: missingSignal.kind,
+                    position,
+                    entry: { enabled: false, failures: counter.newFailures },
+                  })
+                }
+                flipSummaries.push(
+                  `${missingSignal.kind}@${position} failures=${counter.newFailures}/${counter.flippedToDisabled ? 'disabled' : '5'}`,
+                )
+              }
               process.stderr.write(
-                `${channelId}: capability fallback (${missingSignal.kind}@inUserMessage failures=${counter.newFailures}/${keepDisabled ? 'disabled' : '5'}) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}; rebuilding user message with text fallback\n`,
+                `${channelId}: capability fallback (${flipSummaries.join(', ')}) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}\n`,
               )
-              // Rebuild encoding with the now-cached false. Re-render text
-              // (sender prefix + path breadcrumbs for ALL fallbacks) and
-              // replace the in-memory + on-disk last user message.
+              // For inToolResult-side rejection: counter is now incremented;
+              // future calls see correct cache state. THIS call's retry will
+              // still hit the same wire 4xx unless the counter trip flipped
+              // enabled=false (5th consecutive). The retry path below only
+              // mutates the user message for inUserMessage attribution.
+              if (!inUserMessageFlipped) {
+                // No user-message side recovery to perform — but we still
+                // want to try one more attempt, in case the trip closed the
+                // cache for inToolResult and api.streamChat's internal
+                // finalize will downgrade on the retry.
+                attempt -= 1
+                continue
+              }
+              // Rebuild user-message encoding with the now-cached false.
               const reEncoded = await encodeAttachmentsForInlineForSession({
                 materialized: materializedAttachment,
                 config: appConfig,
                 runtime: getRuntime(),
               })
-              if (!keepDisabled) {
+              if (userMessageCounterKept) {
                 writeCacheEntry({
                   endpoint: providerEntry.endpoint,
                   upstreamModel: providerEntry.upstreamModel,
                   kind: missingSignal.kind,
                   position: 'inUserMessage',
-                  entry: { enabled: true, failures: counter.newFailures },
+                  entry: { enabled: true, failures: 0 },
                 })
               }
               const reText = await formatChannelUserText(

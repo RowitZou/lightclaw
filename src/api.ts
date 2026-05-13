@@ -15,7 +15,7 @@ import {
   type ApiLogKind,
   type ApiLogTurnRecord,
 } from './api-logs/storage.js'
-import { getCurrentUserId, getSessionId } from './state.js'
+import { getCurrentUserId, getRuntimeIfInitialized, getSessionId } from './state.js'
 
 /**
  * Tag describing which subsystem is making this streamChat call. Plumbed
@@ -92,6 +92,11 @@ export async function* streamChat(
       describeEndpoint: describeRoute.endpoint,
       describeUpstreamModel: describeRoute.upstreamModel,
       signal: rest.signal,
+      // Optional: handed to documentDowngrade so it can render PDF pages
+      // via pdftoppm when cache.{pdf,inToolResult}.enabled=false. Absent
+      // outside session-bound code paths (subagent / tests) — finalize
+      // degrades gracefully to text marker.
+      runtime: getRuntimeIfInitialized(),
     })
   } catch (error) {
     // No vision-capable describe endpoint configured (or provider doesn't

@@ -1,9 +1,24 @@
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
+
 import { describeImagesAdaptive, joinSegmentsForLLM } from './describe-adaptive.js'
 import { getCachedDescribe, putCachedDescribe } from './describe-cache.js'
 import { readCacheEntry } from './capability-cache.js'
+import {
+  cleanupPdfPageDirViaRuntime,
+  comparePdfPageImageNames,
+  getPdfPageCountViaRuntime,
+  pageNumberFromImageName,
+  renderPdfPagesViaRuntime,
+  resolveResizeTarget,
+} from '../artifacts/visual-rendering.js'
+import { inspectImageBuffer } from '../artifacts/media/image.js'
+import { resizeImageForVision } from '../artifacts/media/resize.js'
 import type { LightClawConfig } from '../config.js'
+import type { Runtime } from '../runtime/types.js'
 import type {
   ApiMessage,
+  AttachmentKind,
   DescribeImageInput,
   Provider,
 } from './types.js'
@@ -13,7 +28,7 @@ import type {
   UserToolResultBlock,
 } from '../types.js'
 
-type FinalizationContext = {
+export type FinalizationContext = {
   provider: Provider
   endpoint: string
   upstreamModel: string
@@ -32,12 +47,30 @@ type FinalizationContext = {
   describeUpstreamModel: string
   /** Optional abort signal threaded into describeImage retries. */
   signal?: AbortSignal
+  /** Optional Runtime used by `documentDowngrade` to call pdftoppm and
+   *  render PDF pages into image blocks when `cache.{pdf,inToolResult}.enabled=false`.
+   *  Absent → falls back to an actionable text marker telling the agent
+   *  to re-Read with `pages` + `visual:true`. */
+  runtime?: Runtime
+  /** Per-call override: kinds in this set are treated as if cache.enabled=false
+   *  for downgrade purposes, regardless of the on-disk cache state. Used by
+   *  the channel autopilot to force fallback for the current request after a
+   *  wire 4xx capability-missing signal — counter writes have already updated
+   *  the persistent cache (5-trip sticky-disable), this override gives the
+   *  CURRENT call its per-call recovery without race-windowed cache mutation. */
+  forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
 }
 
 function providerSupportsKindInToolResult(
   ctx: FinalizationContext,
   kind: 'image' | 'pdf',
 ): boolean {
+  // Per-call override (channel autopilot post-4xx) wins over persisted cache:
+  // force downgrade for THIS request even if the on-disk cache hasn't tripped
+  // the 5-consecutive-failure threshold yet.
+  if (ctx.forceFallbackInToolResult?.has(kind)) {
+    return false
+  }
   const entry = readCacheEntry({
     endpoint: ctx.endpoint,
     upstreamModel: ctx.upstreamModel,
@@ -128,7 +161,14 @@ export async function finalizeToolResultBlocks(
       mutated = true
       let replacedInner = block.content
       if (shouldReplaceDocuments) {
-        replacedInner = replaceDocumentBlocksWithText(replacedInner)
+        // documentDowngrade renders each PDF document block into a sequence
+        // of [text-label, image] block pairs via pdftoppm. After this step
+        // the document blocks no longer exist; the resulting image blocks
+        // then flow through the next stage (image finalization), which
+        // either passes them through (image cache enabled) or replaces
+        // them with describe-text (image cache disabled). Three-tier
+        // fallback chain: document → image pages → describe text.
+        replacedInner = await documentDowngrade(replacedInner, ctx)
       }
       if (shouldReplaceImages) {
         replacedInner = await replaceImageBlocksWithDescribeText(
@@ -153,21 +193,146 @@ export async function finalizeToolResultBlocks(
 
 export const finalizeToolResultImageBlocks = finalizeToolResultBlocks
 
-function replaceDocumentBlocksWithText(
+async function documentDowngrade(
   blocks: ToolResultContentBlock[],
-): ToolResultContentBlock[] {
-  return blocks.map(block => {
-    if (!isDocumentBlock(block)) return block
-    // Actionable breadcrumb: the original visual content is gone, but the
-    // agent has a clear next step (re-Read with visual:true → image
-    // pages, which the current provider will still accept). Without this
-    // hint the agent sees "[document omitted]" and either gives up or
-    // hallucinates the content.
-    return {
-      type: 'text',
-      text: `[PDF document (${block.source.mediaType}) cannot be inlined as a tool_result document block on this provider/model right now. Re-run \`Read\` with \`pages\` + \`visual: true\` if you need the visual content; the page-rendered image path is still available.]`,
+  ctx: FinalizationContext,
+): Promise<ToolResultContentBlock[]> {
+  // Walk the array once; for every document block render its pages via
+  // pdftoppm and splice the resulting [text-label, image, ...] sequence
+  // in-place. Non-document blocks pass through unchanged.
+  const out: ToolResultContentBlock[] = []
+  for (const block of blocks) {
+    if (!isDocumentBlock(block)) {
+      out.push(block)
+      continue
     }
-  })
+    const rendered = await renderDocumentBlockToImageBlocks(block, ctx)
+    out.push(...rendered)
+  }
+  return out
+}
+
+/** Render a single document block (PDF) into a sequence of toolResult
+ *  content blocks. Uses pdftoppm via `ctx.runtime`. On any failure
+ *  (runtime absent, pdftoppm missing, PDF corrupted, exec error) returns
+ *  an actionable text marker pointing the agent at the page-rendered
+ *  Read fallback. */
+async function renderDocumentBlockToImageBlocks(
+  block: ToolResultContentBlock & { type: 'document' },
+  ctx: FinalizationContext,
+): Promise<ToolResultContentBlock[]> {
+  const fallback = (reason?: string): ToolResultContentBlock[] => [
+    {
+      type: 'text',
+      text:
+        `[PDF document (${block.source.mediaType}) was not inlined on this `
+        + 'provider/model. Re-run `Read` with `pages` + `visual: true` if you '
+        + 'need the visual content; the page-rendered image path is still available'
+        + (reason ? `. (downgrade fallback: ${reason})` : '')
+        + ']',
+    },
+  ]
+
+  const runtime = ctx.runtime
+  if (!runtime) {
+    return fallback('no runtime available')
+  }
+
+  // application/pdf is the only document MIME LightClaw currently emits
+  // (channel attachment + Read PDF visual inline both produce this).
+  // Other MIME types would need separate render pipelines (docx via
+  // libreoffice etc.) — degrade to text marker until that lands.
+  if (block.source.mediaType !== 'application/pdf') {
+    return fallback(`unsupported MIME ${block.source.mediaType}`)
+  }
+
+  const tmpDir = path.posix.join(
+    runtime.workspaceRoot.replace(/\\/g, '/'),
+    '.lightclaw',
+    'tmp',
+    'finalize-doc',
+    randomUUID(),
+  )
+  const pdfPath = path.posix.join(tmpDir, 'source.pdf')
+  const pagesDir = path.posix.join(tmpDir, 'pages')
+
+  try {
+    const pdfBytes = Buffer.from(block.source.data, 'base64')
+    if (pdfBytes.length === 0) {
+      return fallback('empty PDF body')
+    }
+    await runtime.fs.writeFile(pdfPath, pdfBytes)
+
+    const pageCount = await getPdfPageCountViaRuntime(runtime, pdfPath)
+    const firstPage = 1
+    const lastPage = pageCount ?? 0
+    if (!pageCount || pageCount < 1) {
+      return fallback('pdfinfo returned no page count')
+    }
+
+    await renderPdfPagesViaRuntime(runtime, {
+      filePath: pdfPath,
+      outputDir: pagesDir,
+      firstPage,
+      lastPage,
+    })
+
+    const imageFiles = (await runtime.fs.readdir(pagesDir))
+      .filter(file =>
+        file.toLowerCase().endsWith('.jpg') || file.toLowerCase().endsWith('.jpeg'),
+      )
+      .sort(comparePdfPageImageNames)
+    if (imageFiles.length === 0) {
+      return fallback('pdftoppm produced no page images')
+    }
+
+    const targetBytes = resolveResizeTarget({ pageCount: imageFiles.length })
+    const result: ToolResultContentBlock[] = [
+      {
+        type: 'text',
+        text:
+          `[PDF document downgraded to ${imageFiles.length} page image${imageFiles.length === 1 ? '' : 's'} `
+          + `(pdf@inToolResult disabled for this provider/model). `
+          + `Re-Read with \`pages\` + \`visual: true\` if you need a specific range.]`,
+      },
+    ]
+    for (const [index, imageFile] of imageFiles.entries()) {
+      const imagePath = path.posix.join(pagesDir, imageFile)
+      const page = pageNumberFromImageName(imageFile) ?? firstPage + index
+      const resized = await resizeImageForVision({
+        filePath: imagePath,
+        fs: runtime.fs,
+        workspaceRoot: runtime.workspaceRoot,
+        exec: params => runtime.exec(params),
+        targetBytes,
+      })
+      const inspected = inspectImageBuffer(resized.buffer, { mimeType: resized.mimeType })
+      if (!inspected.ok) {
+        result.push({ type: 'text', text: `[page ${page}: ${inspected.reason}]` })
+        continue
+      }
+      result.push({
+        type: 'text',
+        text: `[Page ${page}, ${inspected.metadata.width ?? '?'}x${inspected.metadata.height ?? '?'}, ${inspected.metadata.sizeBytes} bytes]`,
+      })
+      result.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          mediaType: inspected.metadata.mimeType,
+          data: resized.buffer.toString('base64'),
+        },
+      })
+    }
+    return result
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return fallback(detail)
+  } finally {
+    // Best-effort cleanup; if it fails the inbox-aging sweep eventually
+    // collects it. Don't let cleanup failures mask render errors.
+    await cleanupPdfPageDirViaRuntime(runtime, tmpDir).catch(() => undefined)
+  }
 }
 
 async function replaceImageBlocksWithDescribeText(
