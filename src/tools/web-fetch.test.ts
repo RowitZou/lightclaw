@@ -252,13 +252,16 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
     assert.match(result.output as string, /\[Binary content \(application\/pdf, \d+(\.\d+)?[A-Z]*B\) saved to/)
   })
 
-  it('4xx HTTP error: surfaces axios message inside WebFetch failed envelope', async () => {
+  it('4xx HTTP error: surfaces axios message inside WebFetch failed envelope, with URL appended for forensics', async () => {
     // Daemon-side WebFetch wraps fetch failures in the same envelope the
     // Python helper used: `WebFetch failed (exit 1): fetch failed: <msg>`.
     // The model relies on the `WebFetch failed (exit 1):` prefix for
     // pattern matching, NOT on the inner error type — so even though
     // axios's message ("Request failed with status code 404") differs
     // from the Python helper's ("HTTP 404"), the model handles both.
+    // Bug 8 (2026-05-13 dogfood): axios drops `error.config.url`, so the
+    // tool must append the input URL itself; closes a forensics gap where
+    // a `403` on which URL was unknowable from tool_result alone.
     _setDaemonFetchUrlForTests(async () => {
       throw new Error('Request failed with status code 404')
     })
@@ -269,6 +272,23 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
     assert.equal(result.isError, true)
     assert.match(result.output as string, /^WebFetch failed \(exit 1\): fetch failed: /)
     assert.match(result.output as string, /404/)
+    assert.match(result.output as string, /\(url: https:\/\/example\.com\/missing\)/)
+  })
+
+  it('non-HTTP fetch failure (timeout / maxContentLength / abort): URL still appears in envelope', async () => {
+    // Bug 8 coverage: not just 4xx — same catch handles axios timeout,
+    // `maxContentLength size of N exceeded`, and CanceledError (abort).
+    // All three were observed dogfood-side losing the URL.
+    _setDaemonFetchUrlForTests(async () => {
+      throw new Error('maxContentLength size of 10485760 exceeded')
+    })
+    const result = await webFetchTool.call(
+      { url: 'https://arxiv.org/pdf/2605.10730' },
+      buildCtx(),
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /maxContentLength size of 10485760 exceeded/)
+    assert.match(result.output as string, /\(url: https:\/\/arxiv\.org\/pdf\/2605\.10730\)/)
   })
 
   it('5-line header format: URL / Status / Content-Type / Bytes / blank, byte-equivalent to Python helper', async () => {
