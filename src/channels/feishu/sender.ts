@@ -13,8 +13,12 @@ import type {
   PendingQueueStore,
   PendingRecipient,
 } from './pending-queue.js'
-
-const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003])
+import {
+  classifyFeishuError,
+  FeishuApiError,
+  logFeishuRetry,
+} from './resources/errors.js'
+import { withFeishuRetry } from './resources/retry.js'
 
 // Send retry coverage: capped exponential backoff that rides out short
 // proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
@@ -242,20 +246,21 @@ export class FeishuSender {
     ctx: SendNoticeContext = {},
   ): Promise<{ chatId?: string }> {
     try {
-      const response = await retryOnTransient(
+      const response = await this.withMessageRetry(
         'create interactive (open_id)',
-        () => this.client.im.message.create({
+        async () => {
+          const response = await this.client.im.message.create({
           params: { receive_id_type: 'open_id' },
           data: {
             receive_id: openId,
             msg_type: 'interactive',
             content: JSON.stringify(card),
           },
-        }),
-        this.retryAttempts,
-        this.retryBaseDelayMs,
+          })
+          assertOk(response, 'Feishu create message (open_id) failed')
+          return response
+        },
       )
-      assertOk(response, 'Feishu create message (open_id) failed')
       const data = (response as { data?: { chat_id?: string } }).data
       return data?.chat_id ? { chatId: data.chat_id } : {}
     } catch (err) {
@@ -280,20 +285,21 @@ export class FeishuSender {
       const chunk = chunks[i]!
       const card = buildMarkdownCard(chunk)
       try {
-        const response = await retryOnTransient(
+        const response = await this.withMessageRetry(
           'create markdown (open_id)',
-          () => this.client.im.message.create({
+          async () => {
+            const response = await this.client.im.message.create({
             params: { receive_id_type: 'open_id' },
             data: {
               receive_id: openId,
               msg_type: 'interactive',
               content: JSON.stringify(card),
             },
-          }),
-          this.retryAttempts,
-          this.retryBaseDelayMs,
+            })
+            assertOk(response, 'Feishu create markdown message (open_id) failed')
+            return response
+          },
         )
-        assertOk(response, 'Feishu create markdown message (open_id) failed')
       } catch (err) {
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: { type: 'open_id', openId },
@@ -329,7 +335,7 @@ export class FeishuSender {
     // Caller (SendFile tool) owns size + isFile validation against runtime.fs;
     // sender just hands the buffer to the SDK as a stream.
     const fileType = inferFeishuFileType(file.name)
-    const response = await retryOnTransient(
+    const response = await this.withMessageRetry(
       `upload ${fileType}`,
       attempt => {
         const call = () => this.client.im.file.create({
@@ -348,8 +354,6 @@ export class FeishuSender {
         }
         return withFileUploadTimeout(FILE_UPLOAD_RETRY_TIMEOUT_MS, call)
       },
-      this.retryAttempts,
-      this.retryBaseDelayMs,
     )
     if (!response?.file_key) {
       throw new Error('Feishu file upload failed: missing file_key')
@@ -368,17 +372,21 @@ export class FeishuSender {
     const content = input.content ?? JSON.stringify({ text: input.text ?? '' })
     if (input.replyToMessageId) {
       try {
-        const response = await retryOnTransient(
+        const response = await this.withMessageRetry(
           `reply ${msgType}`,
-          () => this.client.im.message.reply({
+          async () => {
+            const response = await this.client.im.message.reply({
             path: { message_id: input.replyToMessageId as string },
             data: {
               msg_type: msgType,
               content,
             },
-          }),
-          this.retryAttempts,
-          this.retryBaseDelayMs,
+            })
+            if (!shouldFallbackFromReply(response)) {
+              assertOk(response, 'Feishu reply failed')
+            }
+            return response
+          },
         )
         if (!shouldFallbackFromReply(response)) {
           assertOk(response, 'Feishu reply failed')
@@ -399,20 +407,21 @@ export class FeishuSender {
       }
     }
 
-    const response = await retryOnTransient(
+    const response = await this.withMessageRetry(
       `create ${msgType}`,
-      () => this.client.im.message.create({
+      async () => {
+        const response = await this.client.im.message.create({
         params: { receive_id_type: 'chat_id' },
         data: {
           receive_id: input.chatId,
           msg_type: msgType,
           content,
         },
-      }),
-      this.retryAttempts,
-      this.retryBaseDelayMs,
+        })
+        assertOk(response, 'Feishu create message failed')
+        return response
+      },
     )
-    assertOk(response, 'Feishu create message failed')
     return response
   }
 
@@ -492,20 +501,21 @@ export class FeishuSender {
     const msgType = notice.payload.kind === 'text' ? 'text' : 'interactive'
 
     if (notice.recipient.type === 'open_id') {
-      const response = await retryOnTransient(
+      const response = await this.withMessageRetry(
         'drain replay (open_id)',
-        () => this.client.im.message.create({
+        async () => {
+          const response = await this.client.im.message.create({
           params: { receive_id_type: 'open_id' },
           data: {
             receive_id: notice.recipient.type === 'open_id' ? notice.recipient.openId : '',
             msg_type: msgType,
             content,
           },
-        }),
-        this.retryAttempts,
-        this.retryBaseDelayMs,
+          })
+          assertOk(response, 'Feishu drain replay (open_id) failed')
+          return response
+        },
       )
-      assertOk(response, 'Feishu drain replay (open_id) failed')
       return
     }
     const recipient = notice.recipient
@@ -515,6 +525,20 @@ export class FeishuSender {
       msgType,
       content,
     })
+  }
+
+  private async withMessageRetry<T extends SendResponse | UploadFileResponse>(
+    label: string,
+    fn: (attempt: number) => Promise<T>,
+  ): Promise<T> {
+    return withFeishuRetry(
+      () => retryOnTransient(label, fn, this.retryAttempts, this.retryBaseDelayMs),
+      {
+        baseDelayMs: this.retryBaseDelayMs,
+        shouldRetry: c => c.kind === 'rate-limited' || c.kind === 'internal-server',
+        onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, label),
+      },
+    )
   }
 }
 
@@ -622,7 +646,7 @@ function chunkText(text: string, size: number): string[] {
 }
 
 function shouldFallbackFromReply(response: SendResponse): boolean {
-  if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+  if (classifyFeishuError({ response: { status: 400, data: response } }).kind === 'withdrawn-target') {
     return true
   }
   const msg = response.msg?.toLowerCase() ?? ''
@@ -630,21 +654,16 @@ function shouldFallbackFromReply(response: SendResponse): boolean {
 }
 
 function isWithdrawnReplyError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false
-  }
-  const code = (error as { code?: unknown }).code
-  if (typeof code === 'number' && WITHDRAWN_REPLY_ERROR_CODES.has(code)) {
-    return true
-  }
-  const responseCode = (error as {
-    response?: { data?: { code?: unknown } }
-  }).response?.data?.code
-  return typeof responseCode === 'number' && WITHDRAWN_REPLY_ERROR_CODES.has(responseCode)
+  return classifyFeishuError(error).kind === 'withdrawn-target'
 }
 
 function assertOk(response: SendResponse, prefix: string): void {
   if (response.code !== undefined && response.code !== 0) {
-    throw new Error(`${prefix}: ${response.code} ${response.msg ?? ''}`.trim())
+    const classification = classifyFeishuError({ response: { status: 400, data: response } })
+    throw new FeishuApiError({
+      ...classification,
+      agentMessage: `${prefix}: ${classification.agentMessage}`,
+      adminMessage: `${prefix}: ${classification.adminMessage}`,
+    })
   }
 }

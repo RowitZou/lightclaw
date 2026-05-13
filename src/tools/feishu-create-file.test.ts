@@ -26,7 +26,7 @@ type AuditRecord = {
   resource: Record<string, unknown>
   preview: string
   status: string
-  error?: string
+  error?: string | { kind: string; message: string; code?: number; logId?: string }
   permissionGrants?: {
     chat?: string
     user?: string
@@ -355,7 +355,9 @@ describe('FeishuCreateFile tool', () => {
     assert.equal(records.length, 2)
     assert.equal(records[0].status, 'confirmed')
     assert.equal(records[1].status, 'failed')
-    assert.equal(records[1].error, 'ScopeAccessDenied')
+    assert.equal(typeof records[1].error, 'object')
+    assert.equal((records[1].error as { kind: string }).kind, 'unknown')
+    assert.match((records[1].error as { message: string }).message, /ScopeAccessDenied/)
   })
 
   it('is scoped to Feishu and discoverable through ToolSearch hints', () => {

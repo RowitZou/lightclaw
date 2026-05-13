@@ -8,18 +8,17 @@
 // ChannelRunner.handleMessage. Failures NEVER propagate: a missing
 // reaction is purely cosmetic and must not block the agent reply.
 //
-// Backoff codes (rate-limit / quota) are detected so we can stop trying
-// without flooding stderr — same set OpenClaw uses (see typing.ts in
-// openclaw-ref). Codes 99991400 / 99991403 / HTTP 429.
+// Rate-limit / quota errors are detected so we can stop trying without
+// flooding stderr. Typing reactions are best-effort: on rate-limit we give up
+// for this turn instead of retrying and spending more quota.
 
 import type { FeishuClient } from './client.js'
+import { classifyFeishuError } from './resources/errors.js'
 
 // Builtin Feishu emoji key. From the docs:
 // https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // "Typing" renders as the typing-indicator dots animation in the IM client.
 const TYPING_EMOJI = 'Typing'
-
-const FEISHU_BACKOFF_CODES = new Set([99991400, 99991403, 429])
 
 export type TypingState = {
   messageId: string
@@ -39,9 +38,10 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
           path: { message_id: messageId },
           data: { reaction_type: { emoji_type: TYPING_EMOJI } },
         })
-        if (isBackoffCode(response?.code)) {
+        const c = classifyFeishuError({ response: { status: response?.code === 429 ? 429 : 400, data: response } })
+        if (c.kind === 'rate-limited') {
           process.stderr.write(
-            `feishu typing: add returned backoff code ${response.code}, skipping further reactions for this turn\n`,
+            `feishu typing: add returned rate-limit (${response?.code ?? 'unknown'}), skipping further reactions for this turn\n`,
           )
           return { messageId, reactionId: null }
         }
@@ -61,9 +61,10 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
         const response = await client.im.messageReaction.delete({
           path: { message_id: state.messageId, reaction_id: state.reactionId },
         })
-        if (isBackoffCode(response?.code)) {
+        const c = classifyFeishuError({ response: { status: response?.code === 429 ? 429 : 400, data: response } })
+        if (c.kind === 'rate-limited') {
           process.stderr.write(
-            `feishu typing: delete returned backoff code ${response.code} for ${state.messageId}\n`,
+            `feishu typing: delete returned rate-limit (${response?.code ?? 'unknown'}) for ${state.messageId}\n`,
           )
         }
       } catch (error) {
@@ -74,8 +75,4 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
       }
     },
   }
-}
-
-function isBackoffCode(code: unknown): code is number {
-  return typeof code === 'number' && FEISHU_BACKOFF_CODES.has(code)
 }

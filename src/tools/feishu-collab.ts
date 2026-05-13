@@ -12,7 +12,11 @@ import {
   type FeishuCanonicalResource,
   type FeishuResolveResourceInput,
 } from '../channels/feishu/resource-resolver.js'
-import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
+import {
+  classifyFeishuError,
+  FeishuApiError,
+  type FeishuErrorKind,
+} from '../channels/feishu/resources/errors.js'
 import {
   assertWithinWorkspace,
   resolveCurrentFeishuWorkspace,
@@ -186,12 +190,20 @@ export type FeishuWriteAudit = {
   resource?: Record<string, unknown>
   preview?: string
   status?: 'confirmed' | 'denied' | 'failed'
-  error?: string
+  error?: string | FeishuWriteAuditError
+  retries?: number
   permissionGrants?: FeishuPermissionGrants
   ancestryChain?: string[]
   sourceAncestry?: string[]
   destAncestry?: string[]
   boundaryViolation?: Record<string, unknown>
+}
+
+export type FeishuWriteAuditError = {
+  kind: FeishuErrorKind
+  message: string
+  code?: number
+  logId?: string
 }
 
 type FeishuReadDeps = {
@@ -247,15 +259,8 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
     try {
       return await runFeishuRead(input, { client: getFeishuClient() })
     } catch (error) {
-      // feishuErrorMessage unwraps axios `error.response` (status + body +
-      // x-tt-logid) so HTTP-level failures (ScopeAccessDenied / proxy
-      // strip / network drop) reach the LLM and stderr with enough
-      // context to act on. Plain `error.message` would only say
-      // "Request failed with status code 403". FeishuCreateFile catch
-      // (Iter 3) already wired this — close the FeishuRead gap left
-      // from Iter 2.
       return {
-        output: feishuErrorMessage(error),
+        output: feishuToolErrorMessage(error),
         isError: true,
       }
     }
@@ -277,7 +282,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
       return await runFeishuCreateFile(input, { client: getFeishuClient() })
     } catch (error) {
       return {
-        output: feishuErrorMessage(error),
+        output: feishuToolErrorMessage(error),
         isError: true,
       }
     }
@@ -299,7 +304,7 @@ export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocO
       return await runFeishuWriteDoc(input, { client: getFeishuClient() })
     } catch (error) {
       return {
-        output: feishuErrorMessage(error),
+        output: feishuToolErrorMessage(error),
         isError: true,
       }
     }
@@ -323,7 +328,7 @@ export const feishuWriteSheetTool = buildTool<FeishuWriteSheetInput, FeishuWrite
       return await runFeishuWriteSheet(input, { client: getFeishuClient() })
     } catch (error) {
       return {
-        output: feishuErrorMessage(error),
+        output: feishuToolErrorMessage(error),
         isError: true,
       }
     }
@@ -827,11 +832,26 @@ export async function auditFailed(
     resource,
     preview,
     status: 'failed',
-    error: feishuErrorMessage(error),
+    error: feishuAuditError(error),
     ...(extras.ancestryChain ? { ancestryChain: extras.ancestryChain } : {}),
     ...(extras.sourceAncestry ? { sourceAncestry: extras.sourceAncestry } : {}),
     ...(extras.destAncestry ? { destAncestry: extras.destAncestry } : {}),
   })
+}
+
+export function feishuToolErrorMessage(error: unknown): string {
+  const c = error instanceof FeishuApiError ? error.classification : classifyFeishuError(error)
+  return c.agentMessage
+}
+
+function feishuAuditError(error: unknown): FeishuWriteAuditError {
+  const c = error instanceof FeishuApiError ? error.classification : classifyFeishuError(error)
+  return {
+    kind: c.kind,
+    message: c.agentMessage,
+    ...(c.code !== undefined ? { code: c.code } : {}),
+    ...(c.logId ? { logId: c.logId } : {}),
+  }
 }
 
 function formatCreatedDoc(

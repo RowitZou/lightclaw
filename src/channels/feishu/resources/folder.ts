@@ -1,6 +1,8 @@
 import type { FeishuClient } from '../client.js'
 import { getWorkspaceParentCache } from '../workspace/ancestry.js'
-import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
+import { callFeishu, type FeishuEnvelope } from './api.js'
+import { classifyFeishuError, logFeishuRetry } from './errors.js'
+import { withFeishuRetry } from './retry.js'
 
 export type FeishuDriveItemType = 'folder' | 'docx' | 'doc' | 'sheet' | 'bitable' | 'file' | 'unknown'
 
@@ -25,12 +27,12 @@ export async function createFolder(input: {
   name: string
 }): Promise<{ folderToken: string; name: string; rawData?: unknown }> {
   const client = input.client as unknown as FeishuFolderClient
-  const result = await callFeishu(() => client.drive.v1.file.createFolder({
+  const result = await withFeishuRetry(() => callFeishu(() => client.drive.v1.file.createFolder({
     data: {
       folder_token: input.parentFolderToken,
       name: input.name,
     },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.create') })
   const folderToken = readNestedString(result.data, ['folder', 'token']) ??
     readNestedString(result.data, ['folder_token']) ??
     readNestedString(result.data, ['token'])
@@ -101,10 +103,10 @@ export async function deleteFile(input: {
   type: FeishuDriveItemType
 }): Promise<FeishuEnvelope> {
   const client = input.client as unknown as FeishuFolderClient
-  return callFeishu(() => client.drive.v1.file.delete({
+  return withFeishuRetry(() => callFeishu(() => client.drive.v1.file.delete({
     path: { file_token: input.token },
     params: { type: driveType(input.type) },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.delete') })
 }
 
 export async function moveFile(input: {
@@ -114,11 +116,11 @@ export async function moveFile(input: {
   destFolderToken: string
 }): Promise<FeishuEnvelope> {
   const client = input.client as unknown as FeishuFolderClient
-  return callFeishu(() => client.drive.v1.file.move({
+  return withFeishuRetry(() => callFeishu(() => client.drive.v1.file.move({
     path: { file_token: input.token },
     params: { type: driveType(input.type) },
     data: { folder_token: input.destFolderToken },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.move') })
 }
 
 export async function grantFolderPermission(input: {
@@ -136,9 +138,9 @@ export async function grantFolderPermission(input: {
     }))
     return { ok: true }
   } catch (error) {
-    const message = feishuErrorMessage(error)
-    const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
-      /1061\d{3}/.test(message)
+    const c = classifyFeishuError(error)
+    const message = c.agentMessage
+    const alreadyExists = c.kind === 'already-exists'
     if (!alreadyExists) {
       process.stderr.write(
         `feishu-workspace user-folder grant failed: openid/${input.openId} on folder ${input.folderToken} (perm=${input.perm}): ${message}\n`,

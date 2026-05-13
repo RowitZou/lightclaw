@@ -1,6 +1,8 @@
 import type { FeishuClient } from '../client.js'
-import { callFeishu, feishuErrorMessage, type FeishuEnvelope } from './api.js'
+import { callFeishu, type FeishuEnvelope } from './api.js'
 import { readNestedString, truncate } from './common.js'
+import { classifyFeishuError, logFeishuRetry } from './errors.js'
+import { withFeishuRetry } from './retry.js'
 
 export type FeishuDocCreateResult = {
   documentId?: string
@@ -49,12 +51,12 @@ export async function createDoc(input: {
   folderToken?: string
 }): Promise<FeishuDocCreateResult> {
   const client = input.client as FeishuDocClient
-  const created = await callFeishu(() => client.docx.document.create({
+  const created = await withFeishuRetry(() => callFeishu(() => client.docx.document.create({
     data: {
       title: input.title,
       ...(input.folderToken ? { folder_token: input.folderToken } : {}),
     },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.create') })
   const documentId = readNestedString(created.data, ['document', 'document_id']) ??
     readNestedString(created.data, ['document_id'])
   if (documentId && input.content?.trim()) {
@@ -87,12 +89,12 @@ export async function appendDocText(input: {
     return { code: 0, data: { skipped: true, reason: 'empty content' } }
   }
   const client = input.client as FeishuDocClient
-  return callFeishu(() => client.docx.documentBlockChildren.create({
+  return withFeishuRetry(() => callFeishu(() => client.docx.documentBlockChildren.create({
     path: { document_id: input.documentId, block_id: input.documentId },
     data: {
       children,
     },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.append') })
 }
 
 // Feishu permission tiers (perm field):
@@ -102,7 +104,7 @@ export async function appendDocText(input: {
 //                  Feishu UI; can approve subsequent permission requests).
 //
 // member_type enum (Feishu drive.v1.permissions.members.create, verified
-// 2026-05-12 via field_violations response on code=99992402):
+// 2026-05-12 via a field_violations response):
 //   email, openid, unionid, openchat, opendepartmentid, userid, groupid,
 //   wikispaceid, appid.
 // We only need 'openid' (for the triggering user) and 'openchat' (for the
@@ -150,14 +152,9 @@ async function grantPermission(input: {
     }))
     return { ok: true }
   } catch (error) {
-    // axios errors only carry `Request failed with status code 4xx` in
-    // error.message; the real Feishu code / msg / x-tt-logid live on
-    // error.response.data + response.headers. feishuErrorMessage unwraps
-    // that. Without it, 1061xxx idempotency below also misfires because the
-    // bare axios message never contains the Feishu code.
-    const message = feishuErrorMessage(error)
-    const alreadyExists = /already\s*(?:exist|been|added)|has\s*(?:already\s*)?been\s*added|duplicate|repeat/i.test(message) ||
-      /1061\d{3}/.test(message)
+    const c = classifyFeishuError(error)
+    const message = c.agentMessage
+    const alreadyExists = c.kind === 'already-exists'
     if (!alreadyExists) {
       process.stderr.write(
         `feishu permission grant failed: ${input.data.member_type}/${input.data.member_id} on docx ${input.documentId} (perm=${input.data.perm}): ${message}\n`,

@@ -187,7 +187,8 @@ describe('Feishu workspace tools', () => {
     const failed = records.find(r => r.status === 'failed')
     assert.ok(failed, 'expected failed audit row')
     assert.equal(failed.operation, 'delete')
-    assert.match(String(failed.error), /1064001/)
+    assert.equal(typeof failed.error, 'object')
+    assert.match((failed.error as { message: string }).message, /1064001/)
   })
 
   it('records failed audit when FeishuCreateFolder API throws', async () => {
@@ -202,7 +203,8 @@ describe('Feishu workspace tools', () => {
     const records = await readAuditRecords()
     const failed = records.find(r => r.status === 'failed' && r.operation === 'create-folder')
     assert.ok(failed, 'expected create-folder failed audit row')
-    assert.match(String(failed.error), /ScopeAccessDenied/)
+    assert.equal(typeof failed.error, 'object')
+    assert.match((failed.error as { message: string }).message, /ScopeAccessDenied/)
   })
 
   it('rejects paths containing ".." with a friendly message', async () => {

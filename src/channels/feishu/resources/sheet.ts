@@ -1,6 +1,8 @@
 import type { FeishuClient } from '../client.js'
 import { callFeishu, type FeishuEnvelope } from './api.js'
 import { truncate } from './common.js'
+import { logFeishuRetry } from './errors.js'
+import { withFeishuRetry } from './retry.js'
 
 export type SheetValues = Array<Array<string | number | boolean | null>>
 
@@ -81,7 +83,7 @@ export async function writeSheetValues(input: {
     ? `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.spreadsheetToken)}/values_append`
     : `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.spreadsheetToken)}/values`
   const client = input.client as FeishuSheetClient
-  const result = await callFeishu(() =>
+  const result = await withFeishuRetry(() => callFeishu(() =>
     client.request({
       method: input.mode === 'append' ? 'POST' : 'PUT',
       url,
@@ -92,7 +94,7 @@ export async function writeSheetValues(input: {
         },
       },
     }),
-  )
+  ), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, `sheet.${input.mode}`) })
   return {
     spreadsheetToken: input.spreadsheetToken,
     ...(input.sheetId ? { sheetId: input.sheetId } : {}),

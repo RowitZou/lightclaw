@@ -1,4 +1,5 @@
 import type { FeishuClient } from './client.js'
+import { classifyFeishuError } from './resources/errors.js'
 
 export type FeishuUserInfo = {
   name?: string
@@ -37,11 +38,11 @@ export async function fetchFeishuUserInfo(
         }
       }
     }
-    if (envelope.code === 99991672) {
-      warnNoContactScopeOnce()
-      return undefined
-    }
     if (envelope.code !== 0) {
+      const c = classifyFeishuError({ response: { status: 400, data: envelope } })
+      if (c.kind === 'scope-missing') {
+        warnNoContactScopeOnce(`${c.adminMessage} contact:contact.base:readonly scope not granted; sender names will fall back to open_id`)
+      }
       return undefined
     }
 
@@ -61,6 +62,11 @@ export async function fetchFeishuUserInfo(
       ...(userId ? { userId } : {}),
     }
   } catch (error) {
+    const c = classifyFeishuError(error)
+    if (c.kind === 'scope-missing') {
+      warnNoContactScopeOnce(`${c.adminMessage} contact:contact.base:readonly scope not granted; sender names will fall back to open_id`)
+      return undefined
+    }
     const detail = error instanceof Error ? error.message : String(error)
     process.stderr.write(`feishu pairing: contact lookup failed for ${openId}: ${detail}\n`)
     return undefined
@@ -71,12 +77,10 @@ export function resetFeishuUserInfoWarningsForTest(): void {
   warnedNoContactScope = false
 }
 
-function warnNoContactScopeOnce(): void {
+function warnNoContactScopeOnce(detail = 'feishu pairing: contact:contact.base:readonly scope not granted; sender names will fall back to open_id'): void {
   if (warnedNoContactScope) {
     return
   }
   warnedNoContactScope = true
-  process.stderr.write(
-    'feishu pairing: contact:contact.base:readonly scope not granted; sender names will fall back to open_id\n',
-  )
+  process.stderr.write(`${detail}\n`)
 }
