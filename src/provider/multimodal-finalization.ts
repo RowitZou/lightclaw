@@ -52,8 +52,22 @@ function providerSupportsKindInToolResult(
  *
  *    - Cache enabled/missing for a kind -> keep structured blocks.
  *    - Cache disabled for image -> replace via describeImagesAdaptive.
- *    - Cache disabled for document -> replace with a plain-text marker
- *      until the caller provides a page renderer.
+ *    - Cache disabled for document -> replace with an actionable text
+ *      breadcrumb pointing the agent at Read({pages, visual:true}) so the
+ *      same content can be recovered as image pages on the next turn.
+ *
+ *  KNOWN GAP (Phase 36 PR2 / PR3 follow-up): the plan v2 reference §4.2
+ *  called for `documentDowngrade` to render PDF pages via pdftoppm and
+ *  emit them as image blocks for in-place downgrade (so the chain
+ *  document → image pages → describe text completes in a single
+ *  finalize pass without losing visual content). That requires plumbing
+ *  a `Runtime` into `FinalizationContext` since pdftoppm runs in the
+ *  sandbox. PR2 / PR3 shipped without that plumbing; documents land as
+ *  a text marker instead. In current code-paths this only fires for
+ *  stale transcript replay (cache flipped between turns) — Read.readPdfVisual
+ *  checks cache before emitting documents, so same-turn first-pass never
+ *  hits this branch. The text marker tells the agent to re-Read with
+ *  `pages` + `visual:true` if it needs the visual content again.
  *
  *  Top-level image blocks in user messages (user-attached attachments
  *  from a channel) are NOT touched here — the channel runner's
@@ -144,9 +158,14 @@ function replaceDocumentBlocksWithText(
 ): ToolResultContentBlock[] {
   return blocks.map(block => {
     if (!isDocumentBlock(block)) return block
+    // Actionable breadcrumb: the original visual content is gone, but the
+    // agent has a clear next step (re-Read with visual:true → image
+    // pages, which the current provider will still accept). Without this
+    // hint the agent sees "[document omitted]" and either gives up or
+    // hallucinates the content.
     return {
       type: 'text',
-      text: `[PDF document omitted from tool_result because this provider/model has pdf@inToolResult disabled: ${block.source.mediaType}]`,
+      text: `[PDF document (${block.source.mediaType}) cannot be inlined as a tool_result document block on this provider/model right now. Re-run \`Read\` with \`pages\` + \`visual: true\` if you need the visual content; the page-rendered image path is still available.]`,
     }
   })
 }

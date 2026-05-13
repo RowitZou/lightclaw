@@ -73,16 +73,28 @@ export function convertCallToolResult(
     return stringifyCallToolResult(result, maxOutputBytes)
   }
 
+  // Combined byte budget for text AND image bytes — image base64 strings
+  // can be very large; without this cap a buggy or malicious MCP server
+  // returning gigabytes of image data would balloon the transcript and
+  // the wire request. Once exceeded, remaining blocks degrade to text
+  // placeholders (same shape as stringifyCallToolResult).
   const blocks: ToolResultContentBlock[] = []
-  let textBytes = 0
+  let usedBytes = 0
   for (const block of content) {
     if (block.type === 'text') {
-      const text = truncateTextBlock(block.text, maxOutputBytes - textBytes)
-      textBytes += Buffer.byteLength(text, 'utf8')
+      const text = truncateTextBlock(block.text, maxOutputBytes - usedBytes)
+      usedBytes += Buffer.byteLength(text, 'utf8')
       if (text.length > 0) blocks.push({ type: 'text', text })
       continue
     }
     if (block.type === 'image') {
+      const imgBytes = base64Bytes(block.data)
+      if (usedBytes + imgBytes > maxOutputBytes) {
+        const text = `[image: ${block.mimeType}, ${imgBytes} bytes, dropped: exceeds tool output cap ${maxOutputBytes} bytes]`
+        usedBytes += Buffer.byteLength(text, 'utf8')
+        blocks.push({ type: 'text', text })
+        continue
+      }
       blocks.push({
         type: 'image',
         source: {
@@ -91,10 +103,11 @@ export function convertCallToolResult(
           data: block.data,
         },
       })
+      usedBytes += imgBytes
       continue
     }
-    const text = stringifyCallToolResult({ ...result, content: [block] }, maxOutputBytes - textBytes)
-    textBytes += Buffer.byteLength(text, 'utf8')
+    const text = stringifyCallToolResult({ ...result, content: [block] }, maxOutputBytes - usedBytes)
+    usedBytes += Buffer.byteLength(text, 'utf8')
     if (text.length > 0) blocks.push({ type: 'text', text })
   }
   return {
