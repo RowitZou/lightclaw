@@ -38,12 +38,32 @@ export async function runFeishuWorkspaceCommand(rawArgs: string): Promise<string
 async function statusCommand(): Promise<string> {
   const root = await readJson<WorkspaceRoot | null>(workspaceRootPath(), null)
   const workspaces = await listWorkspaceFiles()
-  return [
+  const lines = [
     'Feishu cloud workspace:',
     `  root: ${root?.folderToken ?? '(not initialized)'}`,
     `  user folders: ${workspaces.length}`,
-    '',
-  ].join('\n')
+  ]
+  // Live drive API probe. Read-only, single listFolder with the smallest
+  // page so we get either "ok" or a friendly scope-missing message. This
+  // is the only place that proactively pings the drive API — the agent
+  // tools never probe because doing so once spawned the
+  // probe-then-recreate disaster of 2026-05-12 (see lifecycle.ts comment).
+  // Status reads only, so it can't make that mistake.
+  if (root?.folderToken) {
+    try {
+      await listFolder({ client: getFeishuClient(), folderToken: root.folderToken, maxItems: 1 })
+      lines.push('  drive API: ok')
+    } catch (error) {
+      const scope = (error as { feishuScopeMissing?: { requiredScopes: string[] } })?.feishuScopeMissing
+      if (scope) {
+        lines.push(`  drive API: scope missing — required: ${scope.requiredScopes.join(' or ') || '(see Developer Console)'} (re-publish app version)`)
+      } else {
+        lines.push(`  drive API: failed — ${feishuErrorMessage(error)}`)
+      }
+    }
+  }
+  lines.push('')
+  return lines.join('\n')
 }
 
 async function listCommand(): Promise<string> {
