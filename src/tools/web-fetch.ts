@@ -158,10 +158,14 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
       // wrapped in the WebFetch tool's `WebFetch failed (exit 1): ...`
       // shell. The error type (AxiosError / TimeoutError / DOMException
       // from abort) is included in the message so admin grep distinguishes
-      // 4xx HTTP from network-level failures.
+      // 4xx HTTP from network-level failures. URL is appended as a
+      // `(url: ...)` suffix so the prefix stays stable for any existing
+      // LLM-side parsing while forensics (which URL 403'd?) becomes trivial
+      // — axios's `error.message` is `Request failed with status code 403`
+      // alone, dropping `error.config.url`.
       const reason = err instanceof Error ? err.message : String(err)
       return {
-        output: `WebFetch failed (exit 1): fetch failed: ${reason}`,
+        output: `WebFetch failed (exit 1): fetch failed: ${reason} (url: ${input.url})`,
         isError: true,
       }
     }
