@@ -752,6 +752,25 @@ export class ChannelRunner {
             // the offending content blocks (paths fall through to the
             // text breadcrumb so the agent uses Read),
             // and retry without consuming a transient attempt.
+            // TODO(Phase 36 PR2 follow-up): position attribution is
+            // hardcoded to `inUserMessage`. Plan v2 §A wanted the runner
+            // to scan the outgoing request body and attribute the 4xx to
+            // whichever position(s) actually carried the offending kind
+            // (user-message top-level vs tool_result.content). Without
+            // that scan, a tool_result-side rejection (e.g. codex
+            // 4xx on a Read PDF document block) increments the
+            // inUserMessage counter while inToolResult stays
+            // enabled=true — Read keeps emitting documents and the next
+            // call repeats the 4xx-flip cycle. Today this edge case is
+            // contained because codex/anthropic precharge inToolResult
+            // as enabled=true and rarely 4xx for context-sensitive
+            // reasons; openai (Chat Completions) precharges
+            // inToolResult=false so Read already skips that path. Real
+            // dogfood incident would surface as an obvious "user message
+            // counter incrementing every turn while the actual rejected
+            // payload was in tool_result" pattern — fix by extending
+            // isCapabilityMissingError to take a request-body shape
+            // summary and return positions[] from there.
             const missingSignal = isCapabilityMissingError(error, {
               positions: ['inUserMessage'],
             })
