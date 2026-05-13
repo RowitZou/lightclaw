@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import {
+  appendCompletedTaskRecord,
   getBackgroundTask,
+  getCompletedTaskRecord,
   addBackgroundTask,
   loadBackgroundTasks,
   removeBackgroundTask,
@@ -191,7 +193,9 @@ export const cancelBackgroundTaskTool = buildTool({
   shouldDefer: true,
   description: `Cancel a scheduled background task by id. An already in-flight fire is allowed to finish; only future runs are stopped.
 
-Use when the user says "取消那个提醒" / "stop the daily X" / "don't run that anymore". Run ListBackgroundTasks first if you don't have the exact task id. To temporarily disable rather than delete, use UpdateBackgroundTask with \`enabled: false\` (preserves history; can be re-enabled later).`,
+Use when the user says "取消那个提醒" / "stop the daily X" / "don't run that anymore". Run ListBackgroundTasks first if you don't have the exact task id. To temporarily disable rather than delete, use UpdateBackgroundTask with \`enabled: false\` (preserves history; can be re-enabled later).
+
+Idempotent: cancelling a task that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`,
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -201,11 +205,29 @@ Use when the user says "取消那个提醒" / "stop the daily X" / "don't run th
     const userId = requireCurrentUserId()
     const removed = removeBackgroundTask(userId, input.id)
     notifyBackgroundTaskChanged(userId, input.id)
+    if (removed) {
+      // Record the cancel so a re-issue of the same id reads as
+      // "already cancelled" instead of "never existed".
+      appendCompletedTaskRecord(userId, {
+        id: input.id,
+        outcome: 'cancelled',
+        completedAt: new Date().toISOString(),
+      })
+      return { output: `Cancelled background task ${input.id}.` }
+    }
+    // Cancel is idempotent: if the task already completed or was cancelled
+    // earlier, treat it as a no-op success. Only truly unknown ids stay as
+    // is_error so a typo'd id still surfaces.
+    const prior = getCompletedTaskRecord(userId, input.id)
+    if (prior) {
+      const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
+      return {
+        output: `Background task ${input.id} already ${verb} at ${prior.completedAt}. Cancel is a no-op.`,
+      }
+    }
     return {
-      output: removed
-        ? `Cancelled background task ${input.id}.`
-        : `Background task not found: ${input.id}`,
-      ...(removed ? {} : { isError: true }),
+      output: `Background task not found: ${input.id}`,
+      isError: true,
     }
   },
 })
@@ -268,6 +290,17 @@ Changing prompt records the prior prompt and surfaces it once on the next fire's
     })
     notifyBackgroundTaskChanged(userId, input.id)
     if (!updated) {
+      // Update on a finished task is meaningful-different from cancel: the
+      // user probably wants to extend / reschedule something that is gone,
+      // so isError stays true but the message points at the right recovery.
+      const prior = getCompletedTaskRecord(userId, input.id)
+      if (prior) {
+        const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
+        return {
+          output: `Background task ${input.id} already ${verb} at ${prior.completedAt}; cannot update. Spawn a new BackgroundTask if the intent should still run.`,
+          isError: true,
+        }
+      }
       return {
         output: `Background task not found: ${input.id}`,
         isError: true,

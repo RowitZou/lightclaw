@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -189,6 +190,117 @@ export function flushLastFiredAt(): void {
       lastFiredAt: item.when,
     })
   }
+}
+
+// Completed-task index: append-only JSONL beside bg-tasks.json. Lets Cancel /
+// UpdateBackgroundTask distinguish "task is gone because it already finished"
+// from "id never existed" so cancel can be idempotent (HTTP DELETE-style).
+// Successful oneshot tasks are pruned from bg-tasks.json on completion; without
+// this index the model sees `is_error: true` on a no-op cancel and starts an
+// unnecessary recovery flow.
+
+const COMPLETED_INDEX_VERSION = 1
+
+export type CompletedTaskOutcome = 'success' | 'failure' | 'cancelled'
+
+export interface CompletedTaskRecord {
+  version: typeof COMPLETED_INDEX_VERSION
+  id: string
+  outcome: CompletedTaskOutcome
+  completedAt: string
+  summary?: string
+}
+
+export function completedTaskIndexPath(canonicalUser: string): string {
+  return path.join(
+    identityRoot(),
+    'per-user',
+    sanitizePathSegment(canonicalUser),
+    'bg-tasks-completed.jsonl',
+  )
+}
+
+export function appendCompletedTaskRecord(
+  canonicalUser: string,
+  entry: Omit<CompletedTaskRecord, 'version'>,
+): void {
+  const target = completedTaskIndexPath(canonicalUser)
+  try {
+    mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+    const line = JSON.stringify({ version: COMPLETED_INDEX_VERSION, ...entry })
+    appendFileSync(target, `${line}\n`, { mode: 0o600 })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(
+      `[background-task] failed to append completed-task record to ${target}: ${detail}\n`,
+    )
+  }
+}
+
+// Latest-wins: an id that appears once on success and again on a later
+// cancel attempt is reported as the most recent record. The file is small
+// (one short line per oneshot completion / cancel) so a linear scan is fine.
+export function getCompletedTaskRecord(
+  canonicalUser: string,
+  id: string,
+): CompletedTaskRecord | null {
+  const target = completedTaskIndexPath(canonicalUser)
+  if (!existsSync(target)) {
+    return null
+  }
+  let raw: string
+  try {
+    raw = readFileSync(target, 'utf8')
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(
+      `[background-task] failed to read completed-task index ${target}: ${detail}\n`,
+    )
+    return null
+  }
+  let latest: CompletedTaskRecord | null = null
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) {
+      continue
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (
+      !parsed
+      || typeof parsed !== 'object'
+      || (parsed as { id?: unknown }).id !== id
+    ) {
+      continue
+    }
+    const candidate = parsed as Partial<CompletedTaskRecord>
+    if (
+      candidate.version !== COMPLETED_INDEX_VERSION
+      || typeof candidate.outcome !== 'string'
+      || typeof candidate.completedAt !== 'string'
+      || typeof candidate.id !== 'string'
+    ) {
+      continue
+    }
+    if (
+      candidate.outcome !== 'success'
+      && candidate.outcome !== 'failure'
+      && candidate.outcome !== 'cancelled'
+    ) {
+      continue
+    }
+    latest = {
+      version: COMPLETED_INDEX_VERSION,
+      id: candidate.id,
+      outcome: candidate.outcome,
+      completedAt: candidate.completedAt,
+      ...(typeof candidate.summary === 'string' ? { summary: candidate.summary } : {}),
+    }
+  }
+  return latest
 }
 
 export function listAllUsersWithBackgroundTasks(): Array<{
