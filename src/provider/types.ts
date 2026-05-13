@@ -36,7 +36,21 @@ export type ToolSchema = {
 export type StreamChatParams = {
   model: string
   messages: ApiMessage[]
+  /**
+   * Stable portion of the system prompt — persona, memory, skills, permission
+   * summary, MCP catalog, tool descriptions. Providers should attach their
+   * cache anchor (Anthropic cache_control, Codex/OAI automatic prefix match)
+   * to this string so it stays a cache hit across turns where only `systemVariableSuffix`
+   * changes.
+   */
   system: string
+  /**
+   * Per-turn suffix — current TodoList, deferred-tools system-reminder.
+   * Provider concatenates onto `system` (or emits a separate uncached block
+   * on Anthropic) so the stable prefix is not invalidated when the agent
+   * flips a todo state.
+   */
+  systemVariableSuffix?: string
   tools: ToolSchema[]
   maxTokens?: number
   reasoningEffort?: ReasoningEffort

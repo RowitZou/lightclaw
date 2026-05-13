@@ -166,7 +166,12 @@ export async function* streamChat(
       ts: new Date().toISOString(),
       model: rest.model,
       request: {
-        system: rest.system,
+        // Log the combined system view so dogfood readers continue to see
+        // exactly what the model received, even after Phase 37 split the
+        // stable prefix from the per-turn variable suffix.
+        system: rest.systemVariableSuffix
+          ? `${rest.system}\n\n${rest.systemVariableSuffix}`
+          : rest.system,
         tools: rest.tools,
         // Log finalized messages — describe-text replacements are what
         // the provider actually saw, which is what dogfood readers want.
