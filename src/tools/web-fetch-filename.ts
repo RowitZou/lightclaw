@@ -1,10 +1,8 @@
 /**
  * Download filename derivation + binary-vs-text content-type classification
- * for daemon-side WebFetch. Direct TS port of
- * `scripts/sandbox-helpers/webfetch.py:75-199` (which Phase C Iter C0
- * deletes). Logic byte-equivalent so the helper-era downloads/<filename>
- * naming convention survives the daemon migration unchanged — agents that
- * cached a path-as-handle across the migration keep working.
+ * for daemon-side WebFetch. The downloads/<filename> naming convention is
+ * mime-derived so agents that cached a path-as-handle stay valid across the
+ * daemon migration that retired the sandbox helper version.
  *
  * Why mime-derived extension is authoritative: URL paths like
  * `arxiv.org/pdf/2509.25721` look like `<basename>.<ext>` to a naive

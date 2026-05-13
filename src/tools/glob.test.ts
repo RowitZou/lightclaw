@@ -6,24 +6,13 @@ import type { ToolCallContext } from '../tool.js'
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number }
 
-function buildCtx(
-  execImpl: () => Promise<ExecResult>,
-  fsImpl?: { glob?: () => Promise<string[]> },
-): ToolCallContext {
+function buildCtx(execImpl: () => Promise<ExecResult>): ToolCallContext {
   return {
     abortSignal: new AbortController().signal,
     runtime: {
       workspaceRoot: '/fake/workspace',
       async exec() {
         return execImpl()
-      },
-      fs: {
-        async glob() {
-          if (!fsImpl?.glob) {
-            throw new Error('runtime.fs.glob not mocked')
-          }
-          return fsImpl.glob()
-        },
       },
     },
   } as unknown as ToolCallContext
@@ -68,18 +57,17 @@ describe('Glob via ripgrep --files', () => {
     assert.match(result.output, /\[showing first 100 of 150 matches/)
   })
 
-  it('falls back to runtime.fs.glob when rg is not installed (exit 127)', async () => {
-    const ctx = buildCtx(
-      async () => ({
-        stdout: '',
-        stderr: 'sh: 1: rg: command not found',
-        exitCode: 127,
-      }),
-      { async glob() { return ['src/a.ts', 'src/b.ts'] } },
-    )
+  it('returns a Bash-fallback hint when rg is not installed (exit 127)', async () => {
+    const ctx = buildCtx(async () => ({
+      stdout: '',
+      stderr: 'sh: 1: rg: command not found',
+      exitCode: 127,
+    }))
     const result = await globTool.call({ pattern: '**/*.ts' }, ctx)
-    assert.equal(result.isError, undefined)
-    assert.equal(result.output, 'src/a.ts\nsrc/b.ts')
+    assert.equal(result.isError, true)
+    assert.match(result.output, /rg not found/)
+    assert.match(result.output, /Bash/)
+    assert.match(result.output, /find/)
   })
 
   it('reports rg errors with stderr as isError', async () => {

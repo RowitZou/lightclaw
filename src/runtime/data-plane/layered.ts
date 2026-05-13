@@ -1,4 +1,4 @@
-import type { DataPlane, DataPlaneKind, GlobOptions, PathPolicy, RuntimeStat } from '../types.js'
+import type { DataPlane, DataPlaneKind, PathPolicy, RuntimeStat } from '../types.js'
 
 export class DataPlaneNotApplicableError extends Error {
   constructor(message: string) {
@@ -55,10 +55,6 @@ export class LayeredDataPlane implements DataPlane {
 
   async stat(pathname: string): Promise<RuntimeStat> {
     return this.tryLayers('stat', pathname, layer => layer.stat(pathname))
-  }
-
-  async glob(pattern: string | string[], options?: GlobOptions): Promise<string[]> {
-    return this.tryLayers('glob', options?.cwd ?? '<workspace>', layer => layer.glob(pattern, options))
   }
 
   async readdir(pathname: string): Promise<string[]> {

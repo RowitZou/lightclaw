@@ -74,7 +74,7 @@ function assertContract(runtime: Runtime, expectedKind: Runtime['kind']): void {
     VALID_DATA_RELIABILITY.has(runtime.data.reliability),
     `unknown data reliability: ${runtime.data.reliability}`,
   )
-  for (const op of ['readFile', 'writeFile', 'stat', 'glob', 'readdir'] as const) {
+  for (const op of ['readFile', 'writeFile', 'stat', 'readdir'] as const) {
     assert.equal(typeof runtime.data[op], 'function', `runtime.data.${op} must be a function`)
   }
 
@@ -87,7 +87,6 @@ function assertContract(runtime: Runtime, expectedKind: Runtime['kind']): void {
 
   // Identity / metadata
   assert.equal(typeof runtime.workspaceRoot, 'string')
-  assert.equal(typeof runtime.helperRoot, 'string')
   assert.ok(
     VALID_SECURITY_PROFILES.has(runtime.securityProfile),
     `unknown securityProfile: ${runtime.securityProfile}`,
@@ -137,7 +136,6 @@ describe('Runtime plane contract — DockerRuntime', () => {
       image: 'ghcr.io/test/sandbox:latest',
       workspaceHostPath,
       containerName: 'lightclaw-contract-test',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
       workspaceContainerPath: '/workspace',
       mounts: [],
       tmpfs: ['/tmp'],
@@ -206,7 +204,6 @@ describe('Runtime plane contract — RlaunchRuntime', () => {
       workspaceHostPath,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
       env: {},
     }
   }

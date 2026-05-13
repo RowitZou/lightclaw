@@ -8,7 +8,6 @@ import type { Runtime } from './types.js'
 export type {
   ExecInput,
   ExecResult,
-  GlobOptions,
   Runtime,
   RuntimeAvailability,
   RuntimeFs,

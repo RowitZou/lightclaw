@@ -27,13 +27,6 @@ export type RuntimeStat = {
   mtimeMs: number
 }
 
-export type GlobOptions = {
-  cwd?: string
-  ignore?: string[]
-  onlyFiles?: boolean
-  dot?: boolean
-}
-
 export type ControlPlaneKind = 'local-spawn' | 'docker-exec' | 'brainctl-exec'
 
 export type ControlPlane = {
@@ -59,7 +52,6 @@ export type DataPlane = {
   readFile(pathname: string): Promise<Buffer>
   writeFile(pathname: string, content: Buffer | string): Promise<void>
   stat(pathname: string): Promise<RuntimeStat>
-  glob(pattern: string | string[], options?: GlobOptions): Promise<string[]>
   readdir(pathname: string): Promise<string[]>
   /**
    * Opportunistic fast path for "host already has the full buffer in memory
@@ -163,7 +155,6 @@ export type Runtime = {
    * LocalRuntime uses the host path; DockerRuntime will use /workspace.
    */
   readonly workspaceRoot: string
-  readonly helperRoot: string
   readonly securityProfile: SecurityProfile
   readonly control: ControlPlane
   readonly data: DataPlane

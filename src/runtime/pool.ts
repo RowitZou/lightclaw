@@ -395,7 +395,6 @@ export function buildDockerRuntimeConfig(
     image: resolveDockerImage(config),
     workspaceHostPath,
     containerName: `${SANDBOX_PREFIX}${sanitizeDockerName(userId)}-${deploymentHash}`,
-    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
     workspaceContainerPath: '/workspace',
     mounts: docker.mounts,
     tmpfs: docker.tmpfs,
@@ -439,7 +438,6 @@ export function buildRlaunchRuntimeConfig(
     predictBeforeStart: rlaunch.predictBeforeStart,
     workspaceHostPath: gpfs.hostPath || workspaceHostPath,
     workspaceGpfsMount: gpfs.mount,
-    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
     workspaceContainerPath: '/workspace',
     env,
   }

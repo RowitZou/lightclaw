@@ -26,7 +26,6 @@ function makeConfig(overrides: Partial<DockerRuntimeConfig> = {}): DockerRuntime
     image: 'ghcr.io/test/lightclaw-sandbox:latest',
     workspaceHostPath: '/host/workspace/u1',
     containerName: 'lightclaw-u1-abc',
-    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
     workspaceContainerPath: '/workspace',
     mounts: [],
     tmpfs: ['/tmp'],

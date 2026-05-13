@@ -76,7 +76,6 @@ function buildCtxWithFetch(body: string, fetchCount: { n: number }): ToolCallCon
   return {
     abortSignal: new AbortController().signal,
     runtime: {
-      helperRoot: '/fake/helpers',
       workspaceRoot: '/fake/workspace',
       fs: { async writeFile() {} },
     },

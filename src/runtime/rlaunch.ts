@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
@@ -7,7 +6,6 @@ import type {
   DataPlane,
   ExecInput,
   ExecResult,
-  GlobOptions,
   PathPolicy,
   Runtime,
   RuntimeAvailability,
@@ -16,7 +14,6 @@ import type {
 } from './types.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
-import { resolveDefaultHelperRoot } from './local.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
@@ -45,7 +42,6 @@ export type RlaunchRuntimeConfig = {
   workspaceHostPath: string
   workspaceGpfsMount: string
   workspaceContainerPath: string
-  helperContainerPath: string
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
   env: Readonly<Record<string, string>>
 }
@@ -74,8 +70,7 @@ const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // at the host before reaching the worker. base64 expansion is 4/3, so the raw
 // payload ceiling is ~42 KB. We cap at 32 KB to leave headroom for env-var
 // exports, long container paths, and any cluster-side tightening of that
-// frame limit. fs.writeFile transparently chunks above this; helper-side
-// stdin (websearch / webfetch / glob JSON) is < 1 KB so it never gets close.
+// frame limit. fs.writeFile transparently chunks above this.
 const MAX_INLINE_STDIN_BYTES = 32 * 1024
 // fs.writeFile chunk size for payloads above MAX_INLINE_STDIN_BYTES. Each
 // chunk is one exec round-trip (truncate + N appends + stat). 32 KB chunks =
@@ -103,7 +98,6 @@ export class RlaunchRuntime implements Runtime {
   readonly isolated = true
   readonly securityProfile = 'cluster-isolated' as const
   readonly workspaceRoot: string
-  readonly helperRoot: string
   readonly canonicalUser: string
   readonly control: ControlPlane
   readonly data: DataPlane
@@ -142,7 +136,6 @@ export class RlaunchRuntime implements Runtime {
     this.tracker = tracker
     this.canonicalUser = config.canonicalUser
     this.workspaceRoot = config.workspaceContainerPath
-    this.helperRoot = config.helperContainerPath
     this.mountTable = [[path.resolve(config.workspaceHostPath), config.workspaceContainerPath]]
     this.control = {
       kind: 'brainctl-exec',
@@ -174,10 +167,6 @@ export class RlaunchRuntime implements Runtime {
       stat: async pathname => {
         await this.ensureRunning()
         return sharedClusterFsData.stat(pathname)
-      },
-      glob: async (pattern, options) => {
-        await this.ensureRunning()
-        return sharedClusterFsData.glob(pattern, options)
       },
       readdir: async pathname => {
         await this.ensureRunning()
@@ -537,23 +526,6 @@ export class RlaunchRuntime implements Runtime {
         mtimeMs: Number(mtime) * 1000,
       }
     },
-    glob: async (pattern, options: GlobOptions = {}) => {
-      const cwd = options.cwd ? this.toContainerPath(options.cwd) : this.workspaceRoot
-      const result = await this.exec({
-        command: `python3 ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))}`,
-        stdin: JSON.stringify({
-          pattern,
-          cwd,
-          ignore: options.ignore ?? [],
-          onlyFiles: options.onlyFiles ?? true,
-          dot: options.dot ?? false,
-        }),
-      })
-      if (result.exitCode !== 0) {
-        throw new Error(`glob: ${result.stderr.trim() || result.stdout.trim()}`)
-      }
-      return result.stdout.split('\n').filter(Boolean)
-    },
     readdir: async pathname => {
       const containerPath = this.toContainerPath(pathname)
       const result = await this.exec({ command: `ls -A1 ${shellQuote(containerPath)}` })
@@ -688,7 +660,6 @@ export class RlaunchRuntime implements Runtime {
 
   private async stageHelpersOnce(): Promise<void> {
     const probeCmd =
-      `test -f ${shellQuote(path.posix.join(this.helperRoot, 'glob.py'))} && ` +
       // pdftotext / pdftoppm gate Read('foo.pdf') text and Read('foo.pdf', pages=...) visual respectively;
       // rg backs Grep + Glob (Glob rewrite uses `rg --files --sort=modified`);
       // jq is not a hard harness dep but model-driven Bash hits `curl | jq` constantly, so probing it
@@ -708,17 +679,6 @@ export class RlaunchRuntime implements Runtime {
       return
     }
 
-    const sourceDir = resolveDefaultHelperRoot()
-    // Phase 34: webfetch.py + websearch.py deleted; both tools now run
-    // daemon-side in TS (src/tools/web-fetch-*.ts + web-search-*.ts).
-    // glob.py is the only remaining helper that needs sandbox-side
-    // staging — GlobTool still runs in-worker for filesystem semantics.
-    const filenames = ['glob.py']
-    for (const name of filenames) {
-      const buf = readFileSync(path.join(sourceDir, name))
-      await this.stageHelperFile(path.posix.join(this.helperRoot, name), buf)
-    }
-
     // Apt deps for the rlaunch ml-base image (ubuntu 22.04 + ML libs, no dev tooling).
     // Confirmed missing in 2026-05-13 dep audit on a fresh worker:
     //   - poppler-utils → pdftotext + pdftoppm + pdfinfo (Read tool's PDF text + visual paths)
@@ -731,8 +691,9 @@ export class RlaunchRuntime implements Runtime {
     // Combined apt install is ~5–6 s on the corp mirror, well under the 240 s budget.
     // apt is best-effort: root + working corp mirror are usual on this image, but if
     // either fails we surface the error and let the affected tools degrade with their
-    // own "install <pkg>" warnings (Grep already has a `grep -R` fallback; Glob falls
-    // back to runtime.fs.glob; jq just returns 127 to the model).
+    // own "install <pkg>" warnings (Grep already has a `grep -R` fallback; Glob
+    // returns an error message telling the model to fall back to `Bash` with
+    // `find` / `ls`; jq just returns 127 to the model).
     const apt = await this.runBrainctlExec({
       command:
         'command -v pdftotext >/dev/null 2>&1 && command -v pdftoppm >/dev/null 2>&1 ' +
@@ -775,37 +736,6 @@ export class RlaunchRuntime implements Runtime {
     }
 
     this.helpersStagedFor = this.workerName
-  }
-
-  private async stageHelperFile(absPath: string, content: Buffer): Promise<void> {
-    const expectedBytes = content.length
-    // Same unified-stdin path as fs.writeFile, but routed through
-    // runBrainctlExec directly: ensureRunning() → ensureHelpersStaged() →
-    // stageHelpersOnce() → stageHelperFile(); going through this.exec() would
-    // recurse via ensureRunning and deadlock on inflightStaging.
-    const command =
-      `mkdir -p "$(dirname ${shellQuote(absPath)})" && ` +
-      `cat > ${shellQuote(absPath)} && ` +
-      `chmod +x ${shellQuote(absPath)} && ` +
-      `stat -c %s ${shellQuote(absPath)}`
-    const result = await this.runBrainctlExec({
-      command,
-      stdin: content,
-      timeoutMs: 30_000,
-      maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
-    })
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `stageHelperFile ${absPath}: ${result.stderr.trim() || result.stdout.trim()}`,
-      )
-    }
-    const actualBytes = Number(result.stdout.trim())
-    if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
-      throw new Error(
-        `stageHelperFile ${absPath}: byte mismatch (expected ${expectedBytes}, ` +
-          `wrote ${result.stdout.trim() || 'unknown'})`,
-      )
-    }
   }
 
   private async waitUntilRunning(): Promise<void> {

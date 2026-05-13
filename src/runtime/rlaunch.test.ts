@@ -155,7 +155,6 @@ describe('buildLaunchArgs', () => {
     workspaceHostPath: '/mnt/host/alice',
     workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
     workspaceContainerPath: '/workspace',
-    helperContainerPath: '/opt/lightclaw/sandbox-helpers',
     env: {},
   }
 
@@ -220,7 +219,7 @@ describe('composeExecScript', () => {
   it('folds stdin into the command body via base64 inline + brace group', () => {
     const payload = '{"query":"hello","max_results":3}'
     const script = composeExecScript({
-      command: 'python3 /opt/lightclaw/sandbox-helpers/websearch.py',
+      command: 'python3 /tmp/consume-stdin.py',
       cwd: '/workspace',
       stdin: payload,
     })
@@ -230,7 +229,7 @@ describe('composeExecScript', () => {
       `script must inline base64 payload: ${script}`,
     )
     assert.ok(
-      script.includes('| { python3 /opt/lightclaw/sandbox-helpers/websearch.py; }'),
+      script.includes('| { python3 /tmp/consume-stdin.py; }'),
       'command must be wrapped in `{ ...; }` so the pipe feeds the whole chain',
     )
     assert.equal(script.startsWith("cd '/workspace' && "), true)
@@ -461,8 +460,7 @@ describe('RlaunchRuntime three-plane data path', () => {
       workspaceHostPath: hostRoot,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
-      env: {},
+        env: {},
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
     ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
@@ -561,8 +559,7 @@ describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast pat
       workspaceHostPath: hostRoot,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
-      env: {},
+        env: {},
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
   })
@@ -667,8 +664,7 @@ describe('RlaunchRuntime.fs.readFileViaHostMount (host-side bind-mount fast path
       workspaceHostPath: hostRoot,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
-      env: {},
+        env: {},
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
   })
@@ -770,8 +766,7 @@ describe('RlaunchRuntime isAvailable retryable mapping', () => {
       workspaceHostPath: hostRoot,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
-      env: {},
+        env: {},
     }
     tracker = new WorkerReadinessTracker('alice')
     runtime = new RlaunchRuntime(config, tracker)
@@ -859,8 +854,7 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
       workspaceHostPath: hostRoot,
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
-      helperContainerPath: '/opt/lightclaw/sandbox-helpers',
-      env: {},
+        env: {},
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
     // Stub out the heavy lifecycle calls that the retry path would otherwise
