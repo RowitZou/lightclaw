@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os'
 
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
-import { loadBackgroundTasks } from '../background-task/store.js'
+import {
+  appendCompletedTaskRecord,
+  getCompletedTaskRecord,
+  loadBackgroundTasks,
+} from '../background-task/store.js'
 import { backgroundTaskTool, cancelBackgroundTaskTool, updateBackgroundTaskTool } from './background-task.js'
 
 let tmpHome: string
@@ -193,6 +197,73 @@ describe('BackgroundTask tools', () => {
       allowed_tools: ['Bash[rsync]'],
     })
     assert.equal(parsed?.success, false)
+  })
+
+  it('CancelBackgroundTask is idempotent on already-finished oneshot (Bug 7)', async () => {
+    // Simulate the scheduler having recorded a successful oneshot and pruned it
+    // from the store: store load returns empty, but the completed-tasks index
+    // remembers the id.
+    appendCompletedTaskRecord('alice', {
+      id: 'zouyicheng-3c120e85',
+      outcome: 'success',
+      completedAt: '2026-05-13T14:09:14.000Z',
+      summary: 'fetched stock price summary',
+    })
+    const cancelled = await withUser(async () => cancelBackgroundTaskTool.call({
+      id: 'zouyicheng-3c120e85',
+    }, fakeContext()))
+    assert.equal(cancelled.isError, undefined)
+    assert.match(cancelled.output, /already finished/)
+    assert.match(cancelled.output, /2026-05-13T14:09:14\.000Z/)
+  })
+
+  it('CancelBackgroundTask still surfaces is_error for a truly unknown id', async () => {
+    const result = await withUser(async () => cancelBackgroundTaskTool.call({
+      id: 'never-existed-deadbeef',
+    }, fakeContext()))
+    assert.equal(result.isError, true)
+    assert.match(result.output, /not found/)
+  })
+
+  it('CancelBackgroundTask appends a cancelled record on the live-task path so a re-cancel reads as idempotent', async () => {
+    const created = await withUser(async () => backgroundTaskTool.call({
+      prompt: 'send me a check-in message at 10am every weekday',
+      schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 10, minute: 0 },
+      label: 'Check-in',
+    }, fakeContext()))
+    assert.equal(created.isError, undefined)
+    const [task] = loadBackgroundTasks('alice')
+
+    const firstCancel = await withUser(async () => cancelBackgroundTaskTool.call({
+      id: task.id,
+    }, fakeContext()))
+    assert.equal(firstCancel.isError, undefined)
+    assert.match(firstCancel.output, /Cancelled background task/)
+    assert.deepEqual(loadBackgroundTasks('alice'), [])
+
+    const record = getCompletedTaskRecord('alice', task.id)
+    assert.equal(record?.outcome, 'cancelled')
+
+    const reCancel = await withUser(async () => cancelBackgroundTaskTool.call({
+      id: task.id,
+    }, fakeContext()))
+    assert.equal(reCancel.isError, undefined)
+    assert.match(reCancel.output, /already cancelled/)
+  })
+
+  it('UpdateBackgroundTask on a finished task surfaces is_error with the actionable hint', async () => {
+    appendCompletedTaskRecord('alice', {
+      id: 'zouyicheng-3c120e85',
+      outcome: 'success',
+      completedAt: '2026-05-13T14:09:14.000Z',
+    })
+    const result = await withUser(async () => updateBackgroundTaskTool.call({
+      id: 'zouyicheng-3c120e85',
+      enabled: false,
+    }, fakeContext()))
+    assert.equal(result.isError, true)
+    assert.match(result.output, /already finished/)
+    assert.match(result.output, /Spawn a new BackgroundTask/)
   })
 
   it('captures originSessionId from the calling SessionContext at create time (Bug 15)', async () => {

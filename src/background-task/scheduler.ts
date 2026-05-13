@@ -5,6 +5,7 @@ import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
 import { isHighRiskRulePattern } from '../permission/high-risk.js'
 import {
+  appendCompletedTaskRecord,
   appendFireHistory,
   flushLastFiredAt,
   getBackgroundTask,
@@ -281,6 +282,15 @@ export class BackgroundTaskScheduler {
     const firedAt = new Date().toISOString()
     let autopaused = false
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
+      // Record before pruning so a late CancelBackgroundTask call can tell
+      // "already finished" apart from "id never existed" (Bug 7 from
+      // 2026-05-13 dogfood).
+      appendCompletedTaskRecord(canonicalUser, {
+        id: task.id,
+        outcome: 'success',
+        completedAt: firedAt,
+        summary: outcome.summary,
+      })
       removeBackgroundTask(canonicalUser, task.id)
     } else {
       if (task.schedule.kind === 'oneshot') {

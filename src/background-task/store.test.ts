@@ -1,15 +1,26 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   addBackgroundTask,
+  appendCompletedTaskRecord,
   appendFireHistory,
   backgroundTaskStorePath,
+  completedTaskIndexPath,
   flushLastFiredAt,
+  getCompletedTaskRecord,
   listAllUsersWithBackgroundTasks,
   loadBackgroundTasks,
   removeBackgroundTask,
@@ -149,6 +160,64 @@ describe('background-task store', () => {
     updateBackgroundTask('alice', 'task-1', { pendingPriorPromptNotice: undefined })
     const reloaded = loadBackgroundTasks('alice')[0]
     assert.equal(reloaded.pendingPriorPromptNotice, undefined)
+  })
+
+  describe('completed-task index', () => {
+    it('returns null when no index file exists', () => {
+      assert.equal(getCompletedTaskRecord('alice', 'whatever'), null)
+    })
+
+    it('appends and reads back a success record', () => {
+      appendCompletedTaskRecord('alice', {
+        id: 'task-1',
+        outcome: 'success',
+        completedAt: '2026-05-13T22:09:14.000Z',
+        summary: 'analysed the deploy log',
+      })
+      const record = getCompletedTaskRecord('alice', 'task-1')
+      assert.ok(record)
+      assert.equal(record?.id, 'task-1')
+      assert.equal(record?.outcome, 'success')
+      assert.equal(record?.completedAt, '2026-05-13T22:09:14.000Z')
+      assert.equal(record?.summary, 'analysed the deploy log')
+    })
+
+    it('returns the latest record when an id appears more than once', () => {
+      appendCompletedTaskRecord('alice', {
+        id: 'task-1',
+        outcome: 'success',
+        completedAt: '2026-05-13T22:09:14.000Z',
+      })
+      appendCompletedTaskRecord('alice', {
+        id: 'task-1',
+        outcome: 'cancelled',
+        completedAt: '2026-05-13T22:18:47.000Z',
+      })
+      const record = getCompletedTaskRecord('alice', 'task-1')
+      assert.equal(record?.outcome, 'cancelled')
+      assert.equal(record?.completedAt, '2026-05-13T22:18:47.000Z')
+    })
+
+    it('skips corrupt JSON lines and unknown-shape records', () => {
+      const target = completedTaskIndexPath('alice')
+      mkdirSync(path.dirname(target), { recursive: true })
+      // mix of: corrupt, wrong version, valid; valid one should win.
+      appendFileSync(target, '{not json\n')
+      appendFileSync(target, `${JSON.stringify({ version: 999, id: 'task-1', outcome: 'success', completedAt: '2026-05-13T00:00:00.000Z' })}\n`)
+      appendFileSync(target, `${JSON.stringify({ version: 1, id: 'task-1', outcome: 'success', completedAt: '2026-05-13T22:09:14.000Z' })}\n`)
+      const record = getCompletedTaskRecord('alice', 'task-1')
+      assert.equal(record?.completedAt, '2026-05-13T22:09:14.000Z')
+    })
+
+    it('isolates records per canonical user', () => {
+      appendCompletedTaskRecord('alice', {
+        id: 'task-1',
+        outcome: 'success',
+        completedAt: '2026-05-13T22:09:14.000Z',
+      })
+      assert.ok(getCompletedTaskRecord('alice', 'task-1'))
+      assert.equal(getCompletedTaskRecord('bob', 'task-1'), null)
+    })
   })
 
   it('lists every per-user store under per-user/<canonical>/bg-tasks.json', () => {
