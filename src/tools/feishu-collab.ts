@@ -43,11 +43,15 @@ import {
   type SheetValues,
 } from '../channels/feishu/resources/sheet.js'
 import { lightclawHome } from '../paths.js'
+import { evaluatePermission } from '../permission/policy.js'
+import { loadIdentityRules } from '../permission/storage.js'
 import {
   getAbortController,
+  getAllPermissionRules,
   getCurrentUserId,
   getPermissionApprover,
   getPermissionMode,
+  setIdentityRules,
 } from '../state.js'
 import { buildTool, type ToolCallResult } from '../tool.js'
 
@@ -779,6 +783,65 @@ export async function requireFeishuWriteConfirmation(input: {
     throw new Error('Feishu write confirmation is unavailable in this session.')
   }
 
+  const virtualToolName = input.operation === 'delete' ? 'FeishuDeleteConfirm' : 'FeishuWriteConfirm'
+  const askBody = { operation: input.operation, resource: input.resource, preview: input.preview }
+  const mode = getPermissionMode()
+
+  // Honor identity-level "always allow" rules for FeishuWriteConfirm. Without
+  // this short-circuit, FeishuCreateFile / WriteDoc / WriteSheet / CreateFolder
+  // / Move always render an approval card even after the user already picked
+  // "以后都允许" on a prior ask — requireFeishuWriteConfirmation called
+  // approver.ask directly, bypassing requestPermission's evaluatePermission
+  // gate that every other write tool routes through. FeishuDeleteConfirm
+  // intentionally never short-circuits: delete is high-risk per CLAUDE.md
+  // ("FeishuDeleteConfirm is forced to once-only" — isHighRiskAsk hides the
+  // 以后都允许 button on the card, but defense-in-depth here too).
+  if (input.operation !== 'delete') {
+    const userId = getCurrentUserId()
+    if (userId) {
+      // Reload rules from disk so a card-click `allow_rules` in another ALS
+      // context (Feishu callback) is observed on the very next ask in this
+      // tool path. Mirrors requestPermission's reload pattern (line ~50 in
+      // src/permission/index.ts) — without it the next FeishuCreateFile in
+      // the same turn would still see the pre-click snapshot.
+      const fresh = loadIdentityRules(userId)
+      setIdentityRules(fresh)
+    }
+    const verdict = evaluatePermission({
+      toolName: virtualToolName,
+      input: askBody,
+      riskLevel: 'write',
+      mode,
+      rules: getAllPermissionRules(),
+    })
+    if (verdict.behavior === 'allow') {
+      if (!input.deferConfirmedAudit) {
+        await recordFeishuWriteAudit({
+          at: new Date().toISOString(),
+          userId: safeCurrentUserId(),
+          operation: input.operation,
+          resource: input.resource,
+          preview: input.preview,
+          status: 'confirmed',
+        })
+      }
+      return
+    }
+    if (verdict.behavior === 'deny') {
+      await recordFeishuWriteAudit({
+        at: new Date().toISOString(),
+        userId: safeCurrentUserId(),
+        operation: input.operation,
+        resource: input.resource,
+        preview: input.preview,
+        status: 'denied',
+        error: verdict.reason,
+      })
+      throw new Error(`Feishu write denied: ${verdict.reason}`)
+    }
+    // verdict.behavior === 'ask' falls through to approver.ask below.
+  }
+
   // Pass the per-session abort signal so `/stop` while a FeishuWriteConfirm
   // card is pending fires the coordinator's abort listener and resolves the
   // pending as deny (line ~190 in permission-card.ts). Without it, a /stop
@@ -787,17 +850,13 @@ export async function requireFeishuWriteConfirmation(input: {
   // (it walks the sessionId-keyed queue directly), so interjection cancel
   // was always wired; only the explicit abort path was missing.
   const decision = await approver.ask({
-    toolName: input.operation === 'delete' ? 'FeishuDeleteConfirm' : 'FeishuWriteConfirm',
+    toolName: virtualToolName,
     riskLevel: 'write',
-    input: { operation: input.operation, resource: input.resource, preview: input.preview },
-    inputPreview: JSON.stringify(
-      { operation: input.operation, resource: input.resource, preview: input.preview },
-      null,
-      2,
-    ),
-    mode: getPermissionMode(),
+    input: askBody,
+    inputPreview: JSON.stringify(askBody, null, 2),
+    mode,
     signal: safeAbortSignal(),
-    suggestedRules: [{ toolName: input.operation === 'delete' ? 'FeishuDeleteConfirm' : 'FeishuWriteConfirm' }],
+    suggestedRules: [{ toolName: virtualToolName }],
   })
 
   if (decision.behavior !== 'allow') {

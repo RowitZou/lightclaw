@@ -367,6 +367,54 @@ describe('FeishuCreateFile tool', () => {
     assert.match(feishuCreateFileTool.searchHint ?? '', /create/)
   })
 
+  // 2026-05-13 dogfood: user clicked "以后都允许" on a FeishuCreateFile
+  // permission card, persisted rule "FeishuWriteConfirm" landed in
+  // permissions.json, but the very next FeishuCreateFile in the same turn
+  // still rendered an approval card. Root cause: requireFeishuWriteConfirmation
+  // called approver.ask directly, bypassing requestPermission's
+  // evaluatePermission gate. Fix routes the virtual ask through
+  // evaluatePermission first; an "allow" verdict short-circuits without ever
+  // rendering a card.
+  it('short-circuits without asking when a FeishuWriteConfirm allow rule is persisted', async () => {
+    // Persist the allow rule the user would have written by clicking the
+    // 以后都允许 button on a prior ask.
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuCreateFile(
+          { kind: 'doc', title: 'PrePermitted' },
+          {
+            client,
+            createDoc: async () => ({ documentId: 'docX', title: 'PrePermitted' }),
+            grantUser: async () => ({ ok: true }),
+            grantChat: async () => ({ ok: true }),
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+    assert.equal(askCount, 0, 'approver.ask must not be called when an allow rule covers the virtual ask')
+    assert.equal(result.isError, undefined)
+    const records = await readAuditRecords()
+    // create-doc uses deferConfirmedAudit:true, so the short-circuit branch
+    // skips the bare confirmed audit and lets runFeishuCreateFile write a
+    // single merged record after grants land.
+    assert.equal(records.length, 1)
+    assert.equal(records[0].operation, 'create-doc')
+    assert.equal(records[0].status, 'confirmed')
+  })
+
   it('passes the per-session abort signal to approver.ask so /stop cancels the pending card', async () => {
     // Regression: a card waiting on confirmation while /stop fires must
     // resolve (deny) instead of hanging until expiry. The Feishu coordinator
