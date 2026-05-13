@@ -5,10 +5,9 @@ import { resizeImageForVision } from '../artifacts/media/resize.js'
 import type { LightClawConfig } from '../config.js'
 import {
   isCapabilityMissingError as _isCapabilityMissingError,  // re-exported only for callers
-  readCachedCapability,
+  readCacheEntry,
 } from '../provider/capability-cache.js'
 import type {
-  AttachmentCapability,
   AttachmentKind,
   Provider,
 } from '../provider/types.js'
@@ -111,22 +110,21 @@ export async function encodeAttachmentsForInline(input: {
       fallbackPaths.push(att)
       continue
     }
-    const declared = input.provider.capabilities.attachments[kind]
-    const flag: AttachmentCapability = readCachedCapability({
+    const entry = readCacheEntry({
       endpoint: input.endpoint,
       upstreamModel: input.upstreamModel,
       kind,
-      declared,
+      position: 'inUserMessage',
     })
 
-    if (flag === false) {
+    if (entry?.enabled === false) {
       // Provider known not to support this kind inline → straight to text.
       fallbackPaths.push(att)
       continue
     }
 
-    // flag === true | 'unknown' → attempt inline. Even on 'unknown', the
-    // reactive autopilot (next commit) catches the rejection and flips.
+    // cache miss / enabled=true → attempt inline. `getProviderFor()` normally
+    // precharges first; miss remains an optimistic fallback for direct tests.
     try {
       if (kind === 'image') {
         const block = await encodeImageInline({

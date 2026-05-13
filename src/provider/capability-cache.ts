@@ -2,34 +2,37 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { lightclawHome } from '../paths.js'
-import type { AttachmentCapability, AttachmentKind } from './types.js'
+import type { AttachmentKind } from './types.js'
 
-/** Persisted across restarts at <lightclawHome>/auth/capabilities-cache.json.
- *  Keyed by `<endpoint>:<upstreamModel>` so the same upstream model behind
- *  different endpoints (e.g. claude-sonnet-4-6 via anthropic direct vs via
- *  newapi) keeps independent flags — endpoints can rewrite payloads or
- *  reject content types differently.
- *
- *  IMPORTANT FRAMING: this is a *converter drop cache*, not a
- *  *provider-capability oracle*. A `false` entry means "the provider's
- *  convertMessages translator did not emit this kind on the wire" (caught
- *  by the static probe in provider/index.ts) OR "the wire returned a 4xx
- *  naming this kind" (caught reactively by isCapabilityMissingError +
- *  channels/runner.ts). It does NOT mean the underlying API cannot accept
- *  the kind — if the converter is missing an emit branch the cache will
- *  faithfully record `false` even though the wire schema supports it
- *  (the codex/pdf 2026-05-13 incident: converter lacked `input_file`
- *  branch so static probe marked pdf=false for a year while Responses
- *  API actually accepts PDFs). When a provider author corrects a
- *  declared:true after fixing the converter, `precharge()` clears any
- *  stale `false` automatically. */
-type CapabilityCacheShape = {
-  version: 1
-  flags: Record<string, Partial<Record<AttachmentKind, boolean>>>
+export type AttachmentPosition = 'inUserMessage' | 'inToolResult'
+
+export type CacheEntry = {
+  enabled: boolean
+  failures: number
 }
 
-const CACHE_FILE_VERSION = 1
+export type CapabilityMissingSignal = {
+  kind: AttachmentKind
+  positions: AttachmentPosition[]
+}
+
+type CapabilityCacheShape = {
+  version: 2
+  flags: Record<
+    string,
+    Partial<Record<AttachmentKind, Partial<Record<AttachmentPosition, CacheEntry>>>>
+  >
+}
+
+type LegacyCapabilityCacheShape = {
+  version?: 1
+  flags?: Record<string, Partial<Record<AttachmentKind, boolean>>>
+}
+
+const CACHE_FILE_VERSION = 2
+export const FAILURE_THRESHOLD = 5
 const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
+const ALL_POSITIONS: readonly AttachmentPosition[] = ['inUserMessage', 'inToolResult']
 
 let cached: CapabilityCacheShape | null = null
 
@@ -46,9 +49,16 @@ function load(): CapabilityCacheShape {
   }
   try {
     const raw = readFileSync(file, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<CapabilityCacheShape>
+    const parsed = JSON.parse(raw) as Partial<CapabilityCacheShape> | LegacyCapabilityCacheShape
     if (parsed && typeof parsed === 'object' && parsed.flags && typeof parsed.flags === 'object') {
-      cached = { version: CACHE_FILE_VERSION, flags: parsed.flags as CapabilityCacheShape['flags'] }
+      if (parsed.version === 2) {
+        cached = {
+          version: CACHE_FILE_VERSION,
+          flags: normalizeV2Flags(parsed.flags as CapabilityCacheShape['flags']),
+        }
+        return cached
+      }
+      cached = migrateV1Flags((parsed as LegacyCapabilityCacheShape).flags ?? {})
       return cached
     }
   } catch {
@@ -75,61 +85,163 @@ function key(endpoint: string, upstreamModel: string): string {
   return `${endpoint}:${upstreamModel}`
 }
 
-/** Returns the per-kind capability flag with the cache layer applied:
- *  cache-recorded `true`/`false` wins; otherwise the provider's declared
- *  flag passes through unchanged (commonly `'unknown'` for image/pdf). */
-export function readCachedCapability(input: {
-  endpoint: string
-  upstreamModel: string
-  kind: AttachmentKind
-  declared: AttachmentCapability
-}): AttachmentCapability {
-  const entry = load().flags[key(input.endpoint, input.upstreamModel)]
-  const recorded = entry?.[input.kind]
-  if (recorded === true || recorded === false) {
-    return recorded
-  }
-  return input.declared
+function normalizeEntry(value: unknown): CacheEntry | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as { enabled?: unknown; failures?: unknown }
+  if (typeof candidate.enabled !== 'boolean') return null
+  const failures = typeof candidate.failures === 'number' && Number.isFinite(candidate.failures)
+    ? Math.max(0, Math.floor(candidate.failures))
+    : 0
+  return { enabled: candidate.enabled, failures }
 }
 
-/** Persist a verdict from reactive autopilot. Only call with `true` /
- *  `false`; intermediate `'unknown'` is implied by absence. */
-export function recordCapability(input: {
+function normalizeV2Flags(flags: CapabilityCacheShape['flags']): CapabilityCacheShape['flags'] {
+  const out: CapabilityCacheShape['flags'] = {}
+  for (const [modelKey, perKind] of Object.entries(flags)) {
+    const nextKind: Partial<Record<AttachmentKind, Partial<Record<AttachmentPosition, CacheEntry>>>> = {}
+    for (const kind of ALL_KINDS) {
+      const rawPerPosition = perKind[kind]
+      if (!rawPerPosition || typeof rawPerPosition !== 'object') continue
+      const nextPosition: Partial<Record<AttachmentPosition, CacheEntry>> = {}
+      for (const position of ALL_POSITIONS) {
+        const entry = normalizeEntry(rawPerPosition[position])
+        if (entry) nextPosition[position] = entry
+      }
+      if (Object.keys(nextPosition).length > 0) nextKind[kind] = nextPosition
+    }
+    if (Object.keys(nextKind).length > 0) out[modelKey] = nextKind
+  }
+  return out
+}
+
+function migrateV1Flags(
+  flags: NonNullable<LegacyCapabilityCacheShape['flags']>,
+): CapabilityCacheShape {
+  const out: CapabilityCacheShape['flags'] = {}
+  for (const [modelKey, perKind] of Object.entries(flags)) {
+    const nextKind: Partial<Record<AttachmentKind, Partial<Record<AttachmentPosition, CacheEntry>>>> = {}
+    for (const kind of ALL_KINDS) {
+      const verdict = perKind[kind]
+      if (typeof verdict !== 'boolean') continue
+      nextKind[kind] = {
+        inUserMessage: { enabled: verdict, failures: 0 },
+      }
+    }
+    if (Object.keys(nextKind).length > 0) out[modelKey] = nextKind
+  }
+  return { version: CACHE_FILE_VERSION, flags: out }
+}
+
+function collapseEmptyModel(cache: CapabilityCacheShape, modelKey: string): void {
+  const perKind = cache.flags[modelKey]
+  if (!perKind) return
+  for (const kind of ALL_KINDS) {
+    const perPosition = perKind[kind]
+    if (perPosition && Object.keys(perPosition).length === 0) {
+      delete perKind[kind]
+    }
+  }
+  if (Object.keys(perKind).length === 0) {
+    delete cache.flags[modelKey]
+  }
+}
+
+export function readCacheEntry(input: {
   endpoint: string
   upstreamModel: string
   kind: AttachmentKind
-  value: boolean
+  position: AttachmentPosition
+}): CacheEntry | null {
+  const entry = load().flags[key(input.endpoint, input.upstreamModel)]
+  return entry?.[input.kind]?.[input.position] ?? null
+}
+
+export function writeCacheEntry(input: {
+  endpoint: string
+  upstreamModel: string
+  kind: AttachmentKind
+  position: AttachmentPosition
+  entry: CacheEntry
 }): void {
   const cache = load()
   const k = key(input.endpoint, input.upstreamModel)
-  if (!cache.flags[k]) {
-    cache.flags[k] = {}
+  cache.flags[k] ??= {}
+  const perKind = cache.flags[k]
+  const perPosition = perKind[input.kind] ?? {}
+  perKind[input.kind] = perPosition
+  perPosition[input.position] = {
+    enabled: input.entry.enabled,
+    failures: Math.max(0, Math.floor(input.entry.failures)),
   }
-  cache.flags[k][input.kind] = input.value
   save()
 }
 
-/** Remove a previously-recorded verdict so the provider's declared flag
- *  passes through unchanged on the next read. Called from precharge() when
- *  the converter now emits a kind the cache previously recorded as dropped
- *  — declared `true` is the provider author's ground truth, so a stale
- *  `false` from the pre-fix converter must not survive. No-op when no
- *  entry exists. */
-export function clearCapability(input: {
+export function incrementFailureCounter(input: {
   endpoint: string
   upstreamModel: string
   kind: AttachmentKind
-}): boolean {
+  position: AttachmentPosition
+}): { newFailures: number; flippedToDisabled: boolean } {
+  const prior = readCacheEntry(input)
+  const newFailures = (prior?.failures ?? 0) + 1
+  const enabled = prior?.enabled === false ? false : newFailures < FAILURE_THRESHOLD
+  writeCacheEntry({
+    ...input,
+    entry: { enabled, failures: newFailures },
+  })
+  return { newFailures, flippedToDisabled: enabled === false && prior?.enabled !== false }
+}
+
+export function resetAllFailureCountersFor(input: {
+  endpoint: string
+  upstreamModel: string
+}): void {
   const cache = load()
   const k = key(input.endpoint, input.upstreamModel)
   const entry = cache.flags[k]
-  if (!entry || !(input.kind in entry)) {
+  if (!entry) return
+  let changed = false
+  for (const kind of ALL_KINDS) {
+    const perPosition = entry[kind]
+    if (!perPosition) continue
+    for (const position of ALL_POSITIONS) {
+      const item = perPosition[position]
+      if (item && item.failures !== 0) {
+        item.failures = 0
+        changed = true
+      }
+    }
+  }
+  if (changed) save()
+}
+
+export function clearAllForModel(input: {
+  endpoint: string
+  upstreamModel: string
+}): boolean {
+  const cache = load()
+  const k = key(input.endpoint, input.upstreamModel)
+  if (!cache.flags[k]) return false
+  delete cache.flags[k]
+  save()
+  return true
+}
+
+export function clearCacheEntry(input: {
+  endpoint: string
+  upstreamModel: string
+  kind: AttachmentKind
+  position: AttachmentPosition
+}): boolean {
+  const cache = load()
+  const k = key(input.endpoint, input.upstreamModel)
+  const perKind = cache.flags[k]
+  const perPosition = perKind?.[input.kind]
+  if (!perPosition || !(input.position in perPosition)) {
     return false
   }
-  delete entry[input.kind]
-  if (Object.keys(entry).length === 0) {
-    delete cache.flags[k]
-  }
+  delete perPosition[input.position]
+  collapseEmptyModel(cache, k)
   save()
   return true
 }
@@ -142,7 +254,8 @@ export function clearCapability(input: {
  *  Returns the kind to flip when matched, or `null` to leave cache as-is. */
 export function isCapabilityMissingError(
   error: unknown,
-): AttachmentKind | null {
+  requestContext?: { positions?: readonly AttachmentPosition[] },
+): CapabilityMissingSignal | null {
   if (!error || typeof error !== 'object') {
     return null
   }
@@ -164,20 +277,30 @@ export function isCapabilityMissingError(
   // content type or block name. Fall back to image when ambiguous (the
   // common case before pdf inline existed).
   if (/document|pdf/i.test(message)) {
-    return 'pdf'
+    return signal('pdf', requestContext)
   }
   if (/image|vision|multimodal/i.test(message)) {
-    return 'image'
+    return signal('image', requestContext)
   }
   if (/audio|transcrib/i.test(message)) {
-    return 'audio'
+    return signal('audio', requestContext)
   }
   if (/video/i.test(message)) {
-    return 'video'
+    return signal('video', requestContext)
   }
   // Generic "unsupported content" / "invalid request" without kind hint —
   // cannot safely attribute to a kind, so don't flip.
   return null
+}
+
+function signal(
+  kind: AttachmentKind,
+  requestContext?: { positions?: readonly AttachmentPosition[] },
+): CapabilityMissingSignal {
+  const positions = requestContext?.positions?.length
+    ? [...new Set(requestContext.positions)]
+    : [...ALL_POSITIONS]
+  return { kind, positions }
 }
 
 /** Test-only: drop the in-memory cache so subsequent reads reload from

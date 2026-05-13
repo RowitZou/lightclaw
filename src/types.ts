@@ -42,9 +42,9 @@ export type AssistantContentBlock =
   | AssistantRedactedThinkingBlock
 
 // Inner blocks allowed inside `UserToolResultBlock.content` array shape.
-// Mirrors Anthropic's `tool_result.content` spec: only text and image
-// blocks are allowed (NOT document — Anthropic rejects document blocks
-// inside tool_result; PDF page rendering must produce image blocks).
+// Text is the common case. Image/document blocks are preserved when the
+// destination provider can accept structured tool output, and the
+// multimodal finalization pass downgrades them before send when it cannot.
 export type ToolResultTextBlock = {
   type: 'text'
   text: string
@@ -59,7 +59,19 @@ export type ToolResultImageBlock = {
   }
 }
 
-export type ToolResultContentBlock = ToolResultTextBlock | ToolResultImageBlock
+export type ToolResultDocumentBlock = {
+  type: 'document'
+  source: {
+    type: 'base64'
+    mediaType: string
+    data: string
+  }
+}
+
+export type ToolResultContentBlock =
+  | ToolResultTextBlock
+  | ToolResultImageBlock
+  | ToolResultDocumentBlock
 
 export type UserToolResultBlock = {
   type: 'tool_result'
@@ -77,8 +89,8 @@ export type UserToolResultBlock = {
 /** Collapse a tool_result.content (string or array) into plain text for
  *  consumers that only care about the textual portion (token estimator,
  *  transcript compact summarizer, session-memory exporter, idle-mc, etc.).
- *  Image blocks render as a `[Image: <mime>]` placeholder so length-based
- *  decisions stay reasonable without counting base64 bytes. */
+ *  Binary blocks render as placeholders so length-based decisions stay
+ *  reasonable without counting base64 bytes. */
 export function toolResultContentToText(
   content: UserToolResultBlock['content'],
 ): string {
@@ -89,6 +101,7 @@ export function toolResultContentToText(
     .map(block => {
       if (block.type === 'text') return block.text
       if (block.type === 'image') return `[Image: ${block.source.mediaType}]`
+      if (block.type === 'document') return `[Document: ${block.source.mediaType}]`
       return ''
     })
     .filter(Boolean)

@@ -16,6 +16,7 @@ import {
   type AssistantToolUseBlock,
   type StreamEvent,
   type StreamStopEvent,
+  type ToolResultContentBlock,
   type UsageStats,
   type UserToolResultBlock,
 } from '../types.js'
@@ -96,6 +97,70 @@ function userToolResults(content: unknown): UserToolResultBlock[] {
   )
 }
 
+type DropCollector =
+  | Set<AttachmentKind>
+  | {
+      inUserMessage?: Set<AttachmentKind>
+      inToolResult?: Set<AttachmentKind>
+    }
+
+function addDropped(
+  dropped: DropCollector | undefined,
+  position: 'inUserMessage' | 'inToolResult',
+  kind: AttachmentKind,
+): void {
+  if (!dropped) return
+  if (dropped instanceof Set) {
+    if (position === 'inUserMessage') dropped.add(kind)
+    return
+  }
+  dropped[position]?.add(kind)
+}
+
+function toolResultOutputForResponses(
+  content: UserToolResultBlock['content'],
+  dropped?: DropCollector,
+): string | Array<Record<string, unknown>> {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  const hasBinary = content.some(block => block.type === 'image' || block.type === 'document')
+  if (!hasBinary) {
+    for (const block of content) {
+      const kind = classifyUnsupportedBlock(block.type)
+      if (kind) addDropped(dropped, 'inToolResult', kind)
+    }
+    return toolResultContentToText(content)
+  }
+
+  const parts: Array<Record<string, unknown>> = []
+  for (const block of content) {
+    if (block.type === 'text') {
+      parts.push({ type: 'input_text', text: block.text })
+      continue
+    }
+    if (block.type === 'image') {
+      parts.push({
+        type: 'input_image',
+        image_url: `data:${block.source.mediaType};base64,${block.source.data}`,
+      })
+      continue
+    }
+    if (block.type === 'document') {
+      parts.push({
+        type: 'input_file',
+        filename: filenameForDocumentMime(block.source.mediaType),
+        file_data: `data:${block.source.mediaType};base64,${block.source.data}`,
+      })
+      continue
+    }
+    const kind = classifyUnsupportedBlock((block as { type: unknown }).type)
+    if (kind) addDropped(dropped, 'inToolResult', kind)
+  }
+  return parts
+}
+
 /**
  * Convert LightClaw's API message array into Responses API input items.
  * `system` is hoisted to the top-level `instructions` field by the caller;
@@ -106,7 +171,7 @@ function userToolResults(content: unknown): UserToolResultBlock[] {
  */
 export function convertMessagesToResponsesInput(
   messages: ApiMessage[],
-  dropped?: Set<AttachmentKind>,
+  dropped?: DropCollector,
 ): ResponseInputItem[] {
   const out: ResponseInputItem[] = []
 
@@ -136,18 +201,15 @@ export function convertMessagesToResponsesInput(
         for (const block of message.content) {
           if (!isRecord(block)) continue
           const kind = classifyUnsupportedBlock(block.type)
-          if (kind) dropped.add(kind)
+          if (kind) addDropped(dropped, 'inUserMessage', kind)
         }
       }
 
       for (const block of toolResults) {
-        // OpenAI Responses function_call_output requires string output;
-        // collapse array shape (image blocks already replaced with text
-        // by the multimodal-finalization pass on this provider).
         out.push({
           type: 'function_call_output',
           call_id: block.tool_use_id,
-          output: toolResultContentToText(block.content),
+          output: toolResultOutputForResponses(block.content, dropped),
         } as ResponseInputItem.FunctionCallOutput)
       }
       if (text.length > 0 || imageBlocks.length > 0 || documentBlocks.length > 0) {
@@ -314,18 +376,6 @@ export function createOpenAIAuthProvider(
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
-      // gpt-codex authenticated path runs against the Codex Responses API.
-      // Image and PDF are verified working against gpt-5.5 / gpt-5.4-mini:
-      // image as `input_image` (data URL), PDF as `input_file` + filename
-      // + application/pdf data URL. Audio/video — neither `input_audio`
-      // / `input_video` nor `input_file` with audio/* video/* MIME — is
-      // accepted by the schema, so those stay hard `false`.
-      attachments: {
-        image: 'unknown',
-        pdf: true,
-        audio: false,
-        video: false,
-      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)
@@ -339,8 +389,8 @@ export function createOpenAIAuthProvider(
       })
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      // Drop tracking is now surfaced ONLY through `detectStaticDropKinds()`
-      // (run once at construction by getProviderFor → recordCapability).
+      // Drop tracking is surfaced through `detectStaticDropKinds()`
+      // (run once at construction by getProviderFor → capability cache).
       // Schema-level drops are deterministic; the runtime event would just
       // re-write the same cache bit. Wire-side errors that ARE
       // context-sensitive (e.g., proxy strips an image_url) still go
@@ -397,6 +447,29 @@ export function createOpenAIAuthProvider(
       ]
       const dropped = new Set<AttachmentKind>()
       convertMessagesToResponsesInput(probe, dropped)
+      return Array.from(dropped)
+    },
+    detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
+      const probe: ApiMessage[] = [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'probe',
+              content: [
+                { type: 'text', text: '' },
+                { type: 'image', source: { type: 'base64', mediaType: 'image/jpeg', data: '' } },
+                { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: '' } },
+                { type: 'audio', source: { type: 'base64', mediaType: 'audio/mpeg', data: '' } },
+                { type: 'video', source: { type: 'base64', mediaType: 'video/mp4', data: '' } },
+              ] as unknown as ToolResultContentBlock[],
+            },
+          ],
+        },
+      ]
+      const dropped = new Set<AttachmentKind>()
+      convertMessagesToResponsesInput(probe, { inToolResult: dropped })
       return Array.from(dropped)
     },
     async describeImage(params) {

@@ -308,24 +308,24 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: webSearchSupported,
       },
       promptCaching: true,
-      // Anthropic Messages API supports image inline (image content block,
-      // 5MB cap) and PDF inline (document content block, 32MB / 100 pages
-      // cap, since 2024-mid). Audio / video inline are not on the chat API
-      // — only Realtime, which we do not target here.
-      attachments: {
-        image: 'unknown',
-        pdf: 'unknown',
-        audio: false,
-        video: false,
-      },
     },
-    detectStaticDropKinds(): readonly [] {
-      // Anthropic's Messages API natively accepts image and document blocks
-      // in user / tool_result content arrays — nothing is dropped during
-      // wire-shape translation. audio/video aren't expressable but we
-      // never emit those blocks to begin with (declared `false` above);
-      // returning [] here avoids muddying the cache with redundant writes.
-      return []
+    detectStaticDropKinds(): readonly ['audio', 'video'] {
+      // Messages accepts image + document blocks. LightClaw has no audio /
+      // video block translation for Anthropic chat, so precharge disables
+      // them before attachment encoding reads bytes.
+      return ['audio', 'video']
+    },
+    detectStaticDropKindsInToolResult(): readonly ['audio', 'video'] {
+      // tool_result.content accepts image + document blocks too; audio /
+      // video remain unsupported by the converter and wire target.
+      // Hardcoded because `translateBlockToAnthropicShape` doesn't yet
+      // surface drops via a set parameter (image / document pass through
+      // unchanged; audio / video also pass through but Anthropic API
+      // 400s on them — same outcome as "dropped at translation"). If
+      // PR2 threads a drop set through the recursive translator, swap
+      // this for the converter-derived equivalent so it auto-adjusts
+      // when the converter gains new emit branches.
+      return ['audio', 'video']
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const stream = await client.messages.create({

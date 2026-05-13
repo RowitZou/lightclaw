@@ -7,6 +7,11 @@ import {
   inferArtifactFormat,
 } from '../artifacts/extractors/registry.js'
 import { inspectImageBuffer } from '../artifacts/media/image.js'
+import {
+  buildPdfSliceOutputPath,
+  cleanupPdfSliceDir,
+  slicePdfPages,
+} from '../artifacts/media/pdf-slice.js'
 import { resizeImageForVision } from '../artifacts/media/resize.js'
 import {
   MAX_IMAGE_BYTES,
@@ -25,6 +30,7 @@ import {
   resolveResizeTarget,
 } from '../artifacts/visual-rendering.js'
 import { suggestPathRules } from '../permission/suggestions.js'
+import { readCacheEntry } from '../provider/capability-cache.js'
 import { buildTool, type ToolCallContext } from '../tool.js'
 import type { ToolResultContentBlock, UserToolResultBlock } from '../types.js'
 
@@ -33,6 +39,7 @@ import { hasBeenRead, markRead } from './read-dedup.js'
 const DEFAULT_MAX_CHARS = 50_000
 const MAX_MAX_CHARS = 100_000
 const MAX_OFFICE_BYTES = 20 * 1024 * 1024
+const MAX_INLINE_PDF_BYTES = 20 * 1024 * 1024
 
 /**
  * Extensions Read should reject up-front (not a text file, no special
@@ -85,9 +92,9 @@ const inputSchema = z.object({
   limit: z.number().int().min(1).optional()
     .describe('Plain text / code only — number of lines to read.'),
   pages: z.string().min(1).optional()
-    .describe(`PDF only — page selector "1" / "1-5" / "10-12" to read just those pages. Default returns the extracted text of that range via pdftotext (cheap, exact). Pass \`visual: true\` to render the same pages as inline images instead (figures / scanned PDFs / complex layouts). Max ${MAX_PAGES_PER_READ} pages per call in either mode. Without \`pages\`, PDFs return the whole document's text capped by \`max_chars\`.`),
+    .describe(`PDF only — page selector "1" / "1-5" / "10-12" to read just those pages. Default returns the extracted text of that range via pdftotext (cheap, exact). Pass \`visual: true\` to send the selected pages as inline PDF when the main model supports it, otherwise render pages as inline images via pdftoppm. Max ${MAX_PAGES_PER_READ} pages per call in either mode. Without \`pages\`, PDFs return the whole document's text capped by \`max_chars\`.`),
   visual: z.boolean().optional()
-    .describe('PDF + `pages` only — when true, render the selected pages as inline images via pdftoppm (vision endpoints get the bytes inline; non-vision endpoints get a sub-LLM description). When false / omitted, returns the page-range text via pdftotext. No effect without `pages`.'),
+    .describe('PDF + `pages` only — when true, prefer inline PDF document output if pdf@inToolResult is enabled; otherwise render selected pages as inline images via pdftoppm. When false / omitted, returns the page-range text via pdftotext. No effect without `pages`.'),
   xlsx: z.object({
     sheet: z.string().min(1).optional().describe('Sheet name (defaults to first sheet).'),
     range: z.string().min(1).optional().describe('A1:D20 style cell range.'),
@@ -159,7 +166,7 @@ const DESCRIPTION = [
   '- Text / code / log / json / csv / yaml / xml etc: returns line-numbered output. Optional `offset` + `limit` (line-based) for paging.',
   '- PDF (whole document, default): returns extracted text via pdftotext layout mode, capped by `max_chars` (default 50000). Use this for short PDFs or to skim the start of a long one.',
   '- PDF (specific pages, text — preferred for long docs): pass `pages` ("1", "1-5", "31-31") and the tool returns just those pages\' text via pdftotext `-f -l`. Lets you jump straight to a numbered section (e.g. "go read page 31") without paying full-document `max_chars`.',
-  '- PDF (specific pages, visual): pass `pages` AND `visual: true` to render those pages via pdftoppm and emit inline image blocks (figures, formulas, scanned-only PDFs, complex layouts where text extraction loses structure). Max 20 pages per call.',
+  '- PDF (specific pages, visual): pass `pages` AND `visual: true` to prefer inline PDF document output on models that support pdf@inToolResult, falling back to pdftoppm inline image blocks otherwise (figures, formulas, scanned-only PDFs, complex layouts where text extraction loses structure). Max 20 pages per call.',
   '- Image (.jpg/.png/.gif/.webp): returns inline image block. Resize is automatic — no knob to tune.',
   '- Office (.xlsx/.docx/.pptx): auto-extracts via sandbox parser. For .xlsx pass `xlsx: { sheet, range, max_rows, max_cols }` to narrow the view.',
   '- Jupyter notebook (.ipynb): cells flattened into structured text with code/markdown/output sections.',
@@ -465,6 +472,7 @@ async function readPdfVisual(
   context: ToolCallContext,
 ): Promise<{ output: FileReadOutput; isError?: boolean }> {
   let outputDirToCleanup: string | undefined
+  let sliceDirToCleanup: string | undefined
   try {
     const stat = await context.runtime.fs.stat(filePath)
     if (!stat.isFile) {
@@ -483,6 +491,17 @@ async function readPdfVisual(
     await assertPdfHeader(context, filePath)
     const pageCount = await getPdfPageCount(context, filePath)
     const range = resolvePageRange(input.pages, pageCount)
+    const inlinePdf = await maybeReadPdfVisualAsInlineDocument({
+      context,
+      filePath,
+      statSize: stat.size,
+      pageCount,
+      range,
+    })
+    if (inlinePdf) {
+      sliceDirToCleanup = inlinePdf.cleanupDir
+      return { output: inlinePdf.output }
+    }
     const outputDir = buildPdfPageOutputDir(context.runtime.workspaceRoot)
     outputDirToCleanup = outputDir
     await renderPdfPages(context, {
@@ -576,5 +595,81 @@ async function readPdfVisual(
     if (outputDirToCleanup) {
       await cleanupPdfPageDir(context, outputDirToCleanup).catch(() => undefined)
     }
+    if (sliceDirToCleanup) {
+      await cleanupPdfSliceDir(context, sliceDirToCleanup).catch(() => undefined)
+    }
+  }
+}
+
+async function maybeReadPdfVisualAsInlineDocument(input: {
+  context: ToolCallContext
+  filePath: string
+  statSize: number
+  pageCount: number | undefined
+  range: { firstPage: number; lastPage: number; warnings: string[] }
+}): Promise<{
+  output: FileReadVisualOutput
+  cleanupDir?: string
+} | null> {
+  const routing = input.context.mainTurnRouting
+  if (!routing) return null
+  const entry = readCacheEntry({
+    endpoint: routing.endpoint,
+    upstreamModel: routing.upstreamModel,
+    kind: 'pdf',
+    position: 'inToolResult',
+  })
+  if (entry?.enabled !== true) return null
+
+  let pdfBuffer: Buffer
+  let cleanupDir: string | undefined
+  if (input.range.firstPage === 1 && input.pageCount !== undefined && input.range.lastPage === input.pageCount) {
+    if (input.statSize > MAX_INLINE_PDF_BYTES) return null
+    pdfBuffer = await input.context.runtime.fs.readFile(input.filePath)
+  } else {
+    const slice = buildPdfSliceOutputPath(input.context.runtime.workspaceRoot)
+    cleanupDir = slice.outputDir
+    await slicePdfPages(input.context, {
+      filePath: input.filePath,
+      outputDir: slice.outputDir,
+      outputPath: slice.outputPath,
+      firstPage: input.range.firstPage,
+      lastPage: input.range.lastPage,
+    })
+    const sliceStat = await input.context.runtime.fs.stat(slice.outputPath)
+    if (sliceStat.size > MAX_INLINE_PDF_BYTES) {
+      await cleanupPdfSliceDir(input.context, cleanupDir).catch(() => undefined)
+      return null
+    }
+    pdfBuffer = await input.context.runtime.fs.readFile(slice.outputPath)
+  }
+
+  const header: ToolResultContentBlock = {
+    type: 'text',
+    text: [
+      `[PDF: ${path.basename(input.filePath)}]`,
+      `path: ${input.filePath}`,
+      `pages: ${input.range.firstPage}-${input.range.lastPage}${input.pageCount ? ` of ${input.pageCount}` : ''}`,
+      'mode: inline PDF document',
+      ...(input.range.warnings.length > 0 ? input.range.warnings.map(w => `note: ${w}`) : []),
+    ].join('\n'),
+  }
+  return {
+    output: {
+      kind: 'visual',
+      format: 'pdf',
+      toolResultContent: [
+        header,
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            mediaType: 'application/pdf',
+            data: pdfBuffer.toString('base64'),
+          },
+        },
+      ],
+    },
+    cleanupDir,
   }
 }

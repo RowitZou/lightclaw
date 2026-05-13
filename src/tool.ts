@@ -12,6 +12,12 @@ export type ToolCallContext = {
   cwd: string
   abortSignal: AbortSignal
   runtime: Runtime
+  mainTurnRouting?: {
+    provider: Provider
+    schema: Provider['name']
+    endpoint: string
+    upstreamModel: string
+  }
   canUseTool?: CanUseToolFn
   wakeNotifications?: WakeNotifyResult[]
   deferredTools?: readonly Tool[]

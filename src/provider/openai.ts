@@ -262,17 +262,6 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: false,
       },
       promptCaching: false,
-      // OpenAI Responses API supports image input via image_url parts. PDF
-      // input is supported on selected gpt-4o / gpt-5 generations via the
-      // file input shape, but coverage is uneven across compat layers
-      // (newapi proxy in particular may strip `file` content). Start at
-      // 'unknown' for both and let the autopilot discover.
-      attachments: {
-        image: 'unknown',
-        pdf: 'unknown',
-        audio: false,
-        video: false,
-      },
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const pendingTools = new Map<number, PendingToolCall>()
@@ -281,8 +270,8 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       let finishReason: string | null = null
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
-      // Drop tracking is now surfaced ONLY through `detectStaticDropKinds()`
-      // (run once at construction by `getProviderFor` → recordCapability).
+      // Drop tracking is surfaced through `detectStaticDropKinds()`
+      // (run once at construction by `getProviderFor` → capability cache).
       // The schema is deterministic, so a runtime event would just rewrite
       // the same cache bit the static probe already set. Wire-side errors
       // that ARE context-sensitive (e.g., proxy strips an image_url, model
@@ -396,7 +385,7 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // kind and run it through the same convertMessages this provider's
       // streamChat uses. Kinds that fall out as `dropped` are the ones the
       // wire schema cannot represent — return them so getProviderFor() can
-      // pre-charge `recordCapability(false)` before any real PDF / audio /
+      // pre-charge disabled cache entries before any real PDF / audio /
       // video upload reaches encodeAttachmentsForInline.
       const probe: ApiMessage[] = [
         {
@@ -413,6 +402,19 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       const dropped = new Set<AttachmentKind>()
       convertMessages('', probe, dropped)
       return Array.from(dropped)
+    },
+    detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
+      // Chat Completions tool messages take `content: string` — the
+      // converter `toolResultContentToText`-s any image / document /
+      // audio / video block into a placeholder text. Hardcoded for now;
+      // unlike openai-auth (Responses) this list is unlikely to change
+      // unless OpenAI rolls out a structured tool-message content shape,
+      // at which point: (1) extend the converter to emit it, (2) thread
+      // an `inToolResult` drop set through, (3) make this probe
+      // converter-derived. Until then a converter regression silently
+      // keeps the hardcoded answer correct (which is the point of the
+      // single-source-of-truth invariant — don't drift).
+      return ['image', 'pdf', 'audio', 'video']
     },
     async describeImage(params) {
       const images = params.images ?? (params.image ? [params.image] : [])
