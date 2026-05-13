@@ -8,7 +8,21 @@ import type { AttachmentCapability, AttachmentKind } from './types.js'
  *  Keyed by `<endpoint>:<upstreamModel>` so the same upstream model behind
  *  different endpoints (e.g. claude-sonnet-4-6 via anthropic direct vs via
  *  newapi) keeps independent flags — endpoints can rewrite payloads or
- *  reject content types differently. */
+ *  reject content types differently.
+ *
+ *  IMPORTANT FRAMING: this is a *converter drop cache*, not a
+ *  *provider-capability oracle*. A `false` entry means "the provider's
+ *  convertMessages translator did not emit this kind on the wire" (caught
+ *  by the static probe in provider/index.ts) OR "the wire returned a 4xx
+ *  naming this kind" (caught reactively by isCapabilityMissingError +
+ *  channels/runner.ts). It does NOT mean the underlying API cannot accept
+ *  the kind — if the converter is missing an emit branch the cache will
+ *  faithfully record `false` even though the wire schema supports it
+ *  (the codex/pdf 2026-05-13 incident: converter lacked `input_file`
+ *  branch so static probe marked pdf=false for a year while Responses
+ *  API actually accepts PDFs). When a provider author corrects a
+ *  declared:true after fixing the converter, `precharge()` clears any
+ *  stale `false` automatically. */
 type CapabilityCacheShape = {
   version: 1
   flags: Record<string, Partial<Record<AttachmentKind, boolean>>>
@@ -93,6 +107,31 @@ export function recordCapability(input: {
   }
   cache.flags[k][input.kind] = input.value
   save()
+}
+
+/** Remove a previously-recorded verdict so the provider's declared flag
+ *  passes through unchanged on the next read. Called from precharge() when
+ *  the converter now emits a kind the cache previously recorded as dropped
+ *  — declared `true` is the provider author's ground truth, so a stale
+ *  `false` from the pre-fix converter must not survive. No-op when no
+ *  entry exists. */
+export function clearCapability(input: {
+  endpoint: string
+  upstreamModel: string
+  kind: AttachmentKind
+}): boolean {
+  const cache = load()
+  const k = key(input.endpoint, input.upstreamModel)
+  const entry = cache.flags[k]
+  if (!entry || !(input.kind in entry)) {
+    return false
+  }
+  delete entry[input.kind]
+  if (Object.keys(entry).length === 0) {
+    delete cache.flags[k]
+  }
+  save()
+  return true
 }
 
 /** Pattern-match a thrown error against the most common provider responses

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import {
+  clearCapability,
   isCapabilityMissingError,
   readCachedCapability,
   recordCapability,
@@ -120,6 +121,49 @@ describe('capability-cache', () => {
     const parsed = JSON.parse(raw)
     assert.equal(parsed.version, 1)
     assert.deepEqual(parsed.flags['a:b'], { image: true, pdf: false })
+  })
+
+  it('clearCapability removes a stale entry and lets declared pass through', () => {
+    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
+    const removed = clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+    assert.equal(removed, true)
+    const flag = readCachedCapability({
+      endpoint: 'codex',
+      upstreamModel: 'gpt-5.5',
+      kind: 'pdf',
+      declared: true,
+    })
+    assert.equal(flag, true, 'declared:true now passes through after clear')
+  })
+
+  it('clearCapability is a no-op on a missing entry', () => {
+    const removed = clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+    assert.equal(removed, false)
+  })
+
+  it('clearCapability does not disturb sibling kinds or sibling models', () => {
+    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
+    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'audio', value: false })
+    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.4-mini', kind: 'pdf', value: false })
+    clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+    assert.equal(
+      readCachedCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'audio', declared: false }),
+      false,
+      'sibling kind on same model untouched',
+    )
+    assert.equal(
+      readCachedCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.4-mini', kind: 'pdf', declared: 'unknown' }),
+      false,
+      'same kind on sibling model untouched',
+    )
+  })
+
+  it('clearCapability collapses an empty per-model entry off the JSON', () => {
+    recordCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf', value: false })
+    clearCapability({ endpoint: 'codex', upstreamModel: 'gpt-5.5', kind: 'pdf' })
+    const raw = readFileSync(path.join(homeDir, 'auth', 'capabilities-cache.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    assert.equal(parsed.flags['codex:gpt-5.5'], undefined, 'last kind cleared → drop the model key entirely')
   })
 })
 

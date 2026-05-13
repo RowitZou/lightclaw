@@ -23,15 +23,27 @@ import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
-/** OpenAI Responses API has no `document` (PDF) content type and rejects
- *  audio/video on the function_call_output / message paths we use. Same
- *  classifier as openai.ts — surfaces silent drops to the streamChat
- *  wrapper so the capability cache can flip. */
+/** OpenAI Responses API rejects audio/video on the function_call_output /
+ *  message paths we use — the schema's accepted content types are
+ *  input_text / input_image / input_file / computer_screenshot only.
+ *  Document (PDF) IS supported via `input_file` + `application/pdf`,
+ *  so it is intentionally NOT in this classifier (emitted via the
+ *  document → input_file branch in convertMessagesToResponsesInput). */
 function classifyUnsupportedBlock(blockType: unknown): AttachmentKind | null {
-  if (blockType === 'document') return 'pdf'
   if (blockType === 'audio') return 'audio'
   if (blockType === 'video') return 'video'
   return null
+}
+
+/** Pick a filename hint for `input_file` parts. The Responses API requires
+ *  a filename field — content is identified by the base64 data URL's MIME
+ *  type, not the filename, but a meaningful name helps the model when it
+ *  references the attachment back in chain-of-thought. We synthesize a
+ *  generic one from the MIME subtype since `UserDocumentBlock` does not
+ *  carry the original filename through the encoder. */
+function filenameForDocumentMime(mediaType: string): string {
+  const subtype = mediaType.split('/').pop() ?? 'bin'
+  return `document.${subtype}`
 }
 
 // OpenAI Responses API provider, used with OAuth-sourced credentials. The
@@ -111,6 +123,15 @@ export function convertMessagesToResponsesInput(
               block.source.type === 'base64',
           )
         : []
+      const documentBlocks = Array.isArray(message.content)
+        ? message.content.filter(
+            (block): block is { type: 'document'; source: { type: 'base64'; mediaType: string; data: string } } =>
+              isRecord(block) &&
+              block.type === 'document' &&
+              isRecord(block.source) &&
+              block.source.type === 'base64',
+          )
+        : []
       if (dropped && Array.isArray(message.content)) {
         for (const block of message.content) {
           if (!isRecord(block)) continue
@@ -129,7 +150,7 @@ export function convertMessagesToResponsesInput(
           output: toolResultContentToText(block.content),
         } as ResponseInputItem.FunctionCallOutput)
       }
-      if (text.length > 0 || imageBlocks.length > 0) {
+      if (text.length > 0 || imageBlocks.length > 0 || documentBlocks.length > 0) {
         const parts: Array<Record<string, unknown>> = []
         if (text.length > 0) {
           parts.push({ type: 'input_text', text })
@@ -138,6 +159,19 @@ export function convertMessagesToResponsesInput(
           parts.push({
             type: 'input_image',
             image_url: `data:${block.source.mediaType};base64,${block.source.data}`,
+          })
+        }
+        for (const block of documentBlocks) {
+          // Responses API `input_file` accepts a data URL via `file_data`
+          // alongside a `filename`. application/pdf is verified working
+          // against gpt-5.5 / gpt-5.4-mini on the Codex backend; other
+          // document MIME types follow the same shape but may be rejected
+          // by the API (audio/* and video/* are — those still classify as
+          // unsupported above and never reach this branch).
+          parts.push({
+            type: 'input_file',
+            filename: filenameForDocumentMime(block.source.mediaType),
+            file_data: `data:${block.source.mediaType};base64,${block.source.data}`,
           })
         }
         out.push({
@@ -280,12 +314,15 @@ export function createOpenAIAuthProvider(
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
-      // gpt-codex authenticated path runs against the Codex Responses API
-      // with reasoning effort. Image/pdf inline support is uncertain on
-      // gpt-5.5 codex tier — let the autopilot discover and cache.
+      // gpt-codex authenticated path runs against the Codex Responses API.
+      // Image and PDF are verified working against gpt-5.5 / gpt-5.4-mini:
+      // image as `input_image` (data URL), PDF as `input_file` + filename
+      // + application/pdf data URL. Audio/video — neither `input_audio`
+      // / `input_video` nor `input_file` with audio/* video/* MIME — is
+      // accepted by the schema, so those stay hard `false`.
       attachments: {
         image: 'unknown',
-        pdf: 'unknown',
+        pdf: true,
         audio: false,
         video: false,
       },
@@ -339,10 +376,13 @@ export function createOpenAIAuthProvider(
     detectStaticDropKinds(): readonly AttachmentKind[] {
       // Probe convertMessagesToResponsesInput with one block of every
       // attachment kind. The wire schema (Responses input) accepts text +
-      // image; document / audio / video have no slot, so they show up as
-      // dropped. Caller (provider/index.ts) pre-charges the capability
-      // cache so the channel runner skips encodePdfInline / etc. on this
-      // endpoint × model entirely — no waste read+base64+transcript.
+      // image + document (as input_file with PDF MIME); audio / video have
+      // no slot, so they show up as dropped. Caller (provider/index.ts)
+      // pre-charges the capability cache so the channel runner skips
+      // encoding for unsupported kinds entirely — no waste read+base64+
+      // transcript bloat. Note this is the *converter*'s drop set, not the
+      // API's: a future converter that emits input_audio (if the API ever
+      // adds it) would also need this probe block kept here.
       const probe: ApiMessage[] = [
         {
           role: 'user',

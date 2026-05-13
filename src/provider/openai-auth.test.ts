@@ -131,6 +131,71 @@ describe('openai-auth: convertMessagesToResponsesInput', () => {
     assert.equal(call.type, 'function_call')
   })
 
+  it('emits input_image alongside input_text for an image content block', () => {
+    const messages: ApiMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what color?' },
+          { type: 'image', source: { type: 'base64', mediaType: 'image/png', data: 'AAAA' } },
+        ],
+      },
+    ]
+    const out = convertMessagesToResponsesInput(messages)
+    assert.equal(out.length, 1)
+    const msg = out[0] as { type: string; role: string; content: Array<{ type: string; text?: string; image_url?: string }> }
+    assert.equal(msg.type, 'message')
+    assert.equal(msg.role, 'user')
+    assert.equal(msg.content.length, 2)
+    assert.equal(msg.content[0].type, 'input_text')
+    assert.equal(msg.content[0].text, 'what color?')
+    assert.equal(msg.content[1].type, 'input_image')
+    assert.equal(msg.content[1].image_url, 'data:image/png;base64,AAAA')
+  })
+
+  it('emits input_file for a document (PDF) content block', () => {
+    const messages: ApiMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'summarize this' },
+          { type: 'document', source: { type: 'base64', mediaType: 'application/pdf', data: 'JVBERi0xLg==' } },
+        ],
+      },
+    ]
+    const dropped = new Set<'image' | 'pdf' | 'audio' | 'video'>()
+    const out = convertMessagesToResponsesInput(messages, dropped)
+    assert.equal(dropped.size, 0, 'document must not appear in the dropped set anymore')
+    assert.equal(out.length, 1)
+    const msg = out[0] as { content: Array<{ type: string; filename?: string; file_data?: string }> }
+    assert.equal(msg.content.length, 2)
+    assert.equal(msg.content[0].type, 'input_text')
+    assert.equal(msg.content[1].type, 'input_file')
+    assert.equal(msg.content[1].filename, 'document.pdf')
+    assert.equal(msg.content[1].file_data, 'data:application/pdf;base64,JVBERi0xLg==')
+  })
+
+  it('still drops audio and video blocks into the dropped set', () => {
+    const messages: ApiMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'transcribe' },
+          { type: 'audio' as 'document', source: { type: 'base64', mediaType: 'audio/wav', data: 'AA' } },
+          { type: 'video' as 'document', source: { type: 'base64', mediaType: 'video/mp4', data: 'BB' } },
+        ],
+      },
+    ]
+    const dropped = new Set<'image' | 'pdf' | 'audio' | 'video'>()
+    const out = convertMessagesToResponsesInput(messages, dropped)
+    assert.deepEqual([...dropped].sort(), ['audio', 'video'])
+    const msg = out[0] as { content: Array<{ type: string }> }
+    // only the input_text survives — no input_audio / input_video / input_file
+    // for these MIME families (Responses API rejects them).
+    assert.equal(msg.content.length, 1)
+    assert.equal(msg.content[0].type, 'input_text')
+  })
+
   it('round-trips a multi-turn conversation', () => {
     const messages: ApiMessage[] = [
       { role: 'user', content: 'list /tmp' },
