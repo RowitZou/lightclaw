@@ -10,6 +10,16 @@ export interface FeishuRetryOptions {
   maxDelayMs?: number
   shouldRetry?: (c: FeishuErrorClassification, attempt: number) => boolean
   onRetry?: (c: FeishuErrorClassification, attempt: number, delayMs: number) => void
+  /**
+   * Out-param incremented once per backoff sleep. After the call returns,
+   * `retryCounter.count` equals the number of retries actually performed
+   * (0 on first-try success; up to maxAttempts-1 on budget-exhausted failure).
+   * Pass a fresh `{ count: 0 }` per call and read from the same reference
+   * after the await. Helpers that compose multiple withFeishuRetry sub-calls
+   * (e.g. createDoc + appendDocText inside one operation) can share one
+   * counter so the audit captures the union of retries.
+   */
+  retryCounter?: { count: number }
 }
 
 const DEFAULT_MAX_ATTEMPTS = 3
@@ -41,6 +51,7 @@ export async function withFeishuRetry<T>(
       }
       const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs)
       opts.onRetry?.(classification, attempt, delayMs)
+      if (opts.retryCounter) opts.retryCounter.count += 1
       await delay(delayMs)
     }
   }

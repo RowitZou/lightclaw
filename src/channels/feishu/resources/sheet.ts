@@ -77,6 +77,7 @@ export async function writeSheetValues(input: {
   range: string
   values: SheetValues
   mode: 'append' | 'overwrite'
+  retryCounter?: { count: number }
 }): Promise<{ spreadsheetToken: string; sheetId?: string; range: string; data: unknown }> {
   const fullRange = formatSheetRange(input.sheetId, input.range)
   const url = input.mode === 'append'
@@ -94,7 +95,10 @@ export async function writeSheetValues(input: {
         },
       },
     }),
-  ), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, `sheet.${input.mode}`) })
+  ), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, `sheet.${input.mode}`),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
   return {
     spreadsheetToken: input.spreadsheetToken,
     ...(input.sheetId ? { sheetId: input.sheetId } : {}),

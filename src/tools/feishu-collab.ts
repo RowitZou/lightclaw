@@ -481,6 +481,7 @@ export async function runFeishuCreateFile(
     deferConfirmedAudit: true,
   })
 
+  const retryCounter = { count: 0 }
   try {
     const create = deps.createDoc ?? createDoc
     const docMeta = await create({
@@ -488,6 +489,7 @@ export async function runFeishuCreateFile(
       title: input.title,
       content: input.doc?.content,
       folderToken: parentFolderToken,
+      retryCounter,
     })
     // Best-effort initial permission grant. Bot is the doc owner; without
     // this step the link returned in tool_result is 403 for the requesting
@@ -507,6 +509,7 @@ export async function runFeishuCreateFile(
       status: 'confirmed',
       ancestryChain,
       ...(hasGrantContent(grants) ? { permissionGrants: grants } : {}),
+      ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return {
       output: formatCreatedDoc(docMeta, grants),
@@ -525,7 +528,7 @@ export async function runFeishuCreateFile(
       preview,
       status: 'confirmed',
     })
-    await auditFailed(operation, preview, resource, error)
+    await auditFailed(operation, preview, resource, error, { retries: retryCounter.count })
     throw error
   }
 }
@@ -640,12 +643,14 @@ export async function runFeishuWriteDoc(
 
   await requireFeishuWriteConfirmation({ operation, preview, resource })
 
+  const retryCounter = { count: 0 }
   try {
     const appendDoc = deps.appendDoc ?? appendDocText
     const written = await appendDoc({
       client: deps.client,
       documentId,
       content: input.content,
+      retryCounter,
     })
     return {
       output: {
@@ -656,7 +661,7 @@ export async function runFeishuWriteDoc(
       },
     }
   } catch (error) {
-    await auditFailed(operation, preview, resource, error)
+    await auditFailed(operation, preview, resource, error, { retries: retryCounter.count })
     throw error
   }
 }
@@ -689,6 +694,7 @@ export async function runFeishuWriteSheet(
 
   await requireFeishuWriteConfirmation({ operation, preview, resource })
 
+  const retryCounter = { count: 0 }
   try {
     const writeValues = deps.writeValues ?? writeSheetValues
     const written = await writeValues({
@@ -698,6 +704,7 @@ export async function runFeishuWriteSheet(
       range: input.range,
       values: input.values as SheetValues,
       mode: input.mode,
+      retryCounter,
     })
     return {
       output: {
@@ -711,7 +718,7 @@ export async function runFeishuWriteSheet(
       },
     }
   } catch (error) {
-    await auditFailed(operation, preview, resource, error)
+    await auditFailed(operation, preview, resource, error, { retries: retryCounter.count })
     throw error
   }
 }
@@ -823,6 +830,7 @@ export async function auditFailed(
     ancestryChain?: string[]
     sourceAncestry?: string[]
     destAncestry?: string[]
+    retries?: number
   } = {},
 ): Promise<void> {
   await recordFeishuWriteAudit({
@@ -833,6 +841,7 @@ export async function auditFailed(
     preview,
     status: 'failed',
     error: feishuAuditError(error),
+    ...(extras.retries && extras.retries > 0 ? { retries: extras.retries } : {}),
     ...(extras.ancestryChain ? { ancestryChain: extras.ancestryChain } : {}),
     ...(extras.sourceAncestry ? { sourceAncestry: extras.sourceAncestry } : {}),
     ...(extras.destAncestry ? { destAncestry: extras.destAncestry } : {}),

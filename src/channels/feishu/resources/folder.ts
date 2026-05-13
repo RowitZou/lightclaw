@@ -25,6 +25,7 @@ export async function createFolder(input: {
   client: FeishuClient
   parentFolderToken: string
   name: string
+  retryCounter?: { count: number }
 }): Promise<{ folderToken: string; name: string; rawData?: unknown }> {
   const client = input.client as unknown as FeishuFolderClient
   const result = await withFeishuRetry(() => callFeishu(() => client.drive.v1.file.createFolder({
@@ -32,7 +33,10 @@ export async function createFolder(input: {
       folder_token: input.parentFolderToken,
       name: input.name,
     },
-  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.create') })
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.create'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
   const folderToken = readNestedString(result.data, ['folder', 'token']) ??
     readNestedString(result.data, ['folder_token']) ??
     readNestedString(result.data, ['token'])
@@ -101,12 +105,16 @@ export async function deleteFile(input: {
   client: FeishuClient
   token: string
   type: FeishuDriveItemType
+  retryCounter?: { count: number }
 }): Promise<FeishuEnvelope> {
   const client = input.client as unknown as FeishuFolderClient
   return withFeishuRetry(() => callFeishu(() => client.drive.v1.file.delete({
     path: { file_token: input.token },
     params: { type: driveType(input.type) },
-  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.delete') })
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.delete'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
 }
 
 export async function moveFile(input: {
@@ -114,13 +122,17 @@ export async function moveFile(input: {
   token: string
   type: FeishuDriveItemType
   destFolderToken: string
+  retryCounter?: { count: number }
 }): Promise<FeishuEnvelope> {
   const client = input.client as unknown as FeishuFolderClient
   return withFeishuRetry(() => callFeishu(() => client.drive.v1.file.move({
     path: { file_token: input.token },
     params: { type: driveType(input.type) },
     data: { folder_token: input.destFolderToken },
-  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.move') })
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.move'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
 }
 
 export async function grantFolderPermission(input: {

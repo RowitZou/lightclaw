@@ -126,6 +126,7 @@ describe('FeishuCreateFile tool', () => {
       title: 'Weekly update',
       content: 'hello\n\nworld',
       folderToken: 'fld123',
+      retryCounter: { count: 0 },
     })
     assert.deepEqual(stub.userCalls, [{ openId: 'ou_alice', perm: 'full_access' }])
     assert.deepEqual(stub.chatCalls, [], 'DM session must not grant chat-level perms')

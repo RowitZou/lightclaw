@@ -90,6 +90,7 @@ describe('FeishuWriteSheet tool', () => {
       range: 'A1:B2',
       values: [['a', 'b'], ['c', 'd']],
       mode: 'append',
+      retryCounter: { count: 0 },
     })
     assert.equal(askInput?.toolName, 'FeishuWriteConfirm')
     assert.equal(askInput?.riskLevel, 'write')

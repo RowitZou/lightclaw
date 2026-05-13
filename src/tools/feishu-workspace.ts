@@ -194,11 +194,13 @@ export async function runFeishuCreateFolder(
     name: input.name,
     parentFolderToken: parent.token,
   }
+  const retryCounter = { count: 0 }
   try {
     const created = await createFolder({
       client: deps.client,
       parentFolderToken: parent.token,
       name: input.name,
+      retryCounter,
     })
     ctx.ancestry.evict(parent.token)
     await recordFeishuWriteAudit({
@@ -209,12 +211,13 @@ export async function runFeishuCreateFolder(
       preview,
       status: 'confirmed',
       ancestryChain,
+      ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return {
       output: `Created folder "${input.name}" at ${parent.path === '/' ? '/' : `${parent.path}/`}${input.name}/ (token=${created.folderToken}).`,
     }
   } catch (error) {
-    await auditFailed('create-folder', preview, baseResource, error, { ancestryChain })
+    await auditFailed('create-folder', preview, baseResource, error, { ancestryChain, retries: retryCounter.count })
     throw error
   }
 }
@@ -251,8 +254,9 @@ export async function runFeishuDelete(
     ...(target.type === 'folder' ? { descendantCount } : {}),
   }
   await requireFeishuWriteConfirmation({ operation: 'delete', preview, resource, deferConfirmedAudit: true })
+  const retryCounter = { count: 0 }
   try {
-    await deleteFile({ client: deps.client, token: target.token, type: target.type })
+    await deleteFile({ client: deps.client, token: target.token, type: target.type, retryCounter })
     ctx.ancestry.evict(target.token)
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
@@ -262,10 +266,11 @@ export async function runFeishuDelete(
       preview,
       status: 'confirmed',
       ancestryChain,
+      ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return { output: `Deleted ${displayType(target.type)} "${target.path}". Feishu retains it in trash for about 30 days.` }
   } catch (error) {
-    await auditFailed('delete', preview, resource, error, { ancestryChain })
+    await auditFailed('delete', preview, resource, error, { ancestryChain, retries: retryCounter.count })
     throw error
   }
 }
@@ -331,8 +336,9 @@ export async function runFeishuMove(
     destFolderToken: dest.token,
   }
   await requireFeishuWriteConfirmation({ operation: 'move', preview, resource, deferConfirmedAudit: true })
+  const retryCounter = { count: 0 }
   try {
-    await moveFile({ client: deps.client, token: source.token, type: source.type, destFolderToken: dest.token })
+    await moveFile({ client: deps.client, token: source.token, type: source.type, destFolderToken: dest.token, retryCounter })
     ctx.ancestry.evict(source.token)
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
@@ -343,10 +349,11 @@ export async function runFeishuMove(
       status: 'confirmed',
       sourceAncestry,
       destAncestry,
+      ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
     return { output: `Moved "${source.path}" to "${dest.path}".` }
   } catch (error) {
-    await auditFailed('move', preview, resource, error, { sourceAncestry, destAncestry })
+    await auditFailed('move', preview, resource, error, { sourceAncestry, destAncestry, retries: retryCounter.count })
     throw error
   }
 }

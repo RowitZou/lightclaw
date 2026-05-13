@@ -49,6 +49,7 @@ export async function createDoc(input: {
   title: string
   content?: string
   folderToken?: string
+  retryCounter?: { count: number }
 }): Promise<FeishuDocCreateResult> {
   const client = input.client as FeishuDocClient
   const created = await withFeishuRetry(() => callFeishu(() => client.docx.document.create({
@@ -56,7 +57,10 @@ export async function createDoc(input: {
       title: input.title,
       ...(input.folderToken ? { folder_token: input.folderToken } : {}),
     },
-  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.create') })
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.create'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
   const documentId = readNestedString(created.data, ['document', 'document_id']) ??
     readNestedString(created.data, ['document_id'])
   if (documentId && input.content?.trim()) {
@@ -64,6 +68,7 @@ export async function createDoc(input: {
       client: input.client,
       documentId,
       content: input.content,
+      ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
     })
   }
   const url = readNestedString(created.data, ['document', 'url']) ??
@@ -83,6 +88,7 @@ export async function appendDocText(input: {
   client: FeishuClient
   documentId: string
   content: string
+  retryCounter?: { count: number }
 }): Promise<FeishuEnvelope> {
   const children = contentToDocBlocks(input.content)
   if (children.length === 0) {
@@ -94,7 +100,10 @@ export async function appendDocText(input: {
     data: {
       children,
     },
-  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.append') })
+  })), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.append'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
 }
 
 // Feishu permission tiers (perm field):
