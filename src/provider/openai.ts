@@ -277,7 +277,10 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // that ARE context-sensitive (e.g., proxy strips an image_url, model
       // version difference) still go through `isCapabilityMissingError`
       // catch in `channels/runner.ts`.
-      const wireMessages = convertMessages(params.system, sanitizedMessages)
+      const fullSystem = params.systemVariableSuffix
+        ? `${params.system}\n\n${params.systemVariableSuffix}`
+        : params.system
+      const wireMessages = convertMessages(fullSystem, sanitizedMessages)
       const stream = await client.chat.completions.create({
         model: params.model,
         messages: wireMessages,

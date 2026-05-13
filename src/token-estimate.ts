@@ -13,6 +13,22 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(total))
 }
 
+/**
+ * Inline base64 media is wildly cheaper on the wire than its character count
+ * suggests — Anthropic charges vision by patch grid (≤~1600 tokens for the
+ * largest supported image) and PDFs roughly per page. The previous
+ * `base64.length / 16` heuristic over-counted by 10x on a single 8 MB PDF
+ * (515k est tokens vs 50k upstream), tripping compact long before the real
+ * context window pressure showed up. Cap per-image at 2000 and per-document
+ * at 50k, with a base64-proportional fallback for small/medium payloads.
+ */
+function estimateMediaTokens(base64Length: number, kind: 'image' | 'document'): number {
+  if (kind === 'image') {
+    return Math.min(2000, Math.ceil(base64Length / 64))
+  }
+  return Math.min(50_000, Math.ceil(base64Length / 800))
+}
+
 function estimateAssistantBlockTokens(block: AssistantContentBlock): number {
   if (block.type === 'text') {
     return estimateTokens(block.text)
@@ -38,18 +54,17 @@ export function estimateMessageTokens(message: Message): number {
       return estimateTokens(message.message.content) + 4
     }
 
+    let mediaTokens = 0
     const userBlockText = message.message.content
       .map(block => {
         if (block.type === 'tool_result') {
           if (typeof block.content === 'string') {
             return `${block.tool_use_id}\n${block.content}`
           }
-          // Array shape: text blocks contribute their text; image blocks
-          // estimated by base64 payload like top-level images.
           const inner = block.content.map(inner => {
             if (inner.type === 'text') return inner.text
             if (inner.type === 'image') {
-              return ''.padEnd(Math.floor(inner.source.data.length / 4), 'x')
+              mediaTokens += estimateMediaTokens(inner.source.data.length, 'image')
             }
             return ''
           }).join('\n')
@@ -58,17 +73,13 @@ export function estimateMessageTokens(message: Message): number {
         if (block.type === 'text') {
           return block.text
         }
-        // image / document blocks: estimate by base64 payload size, since
-        // patch-grid token cost on the provider side is roughly bounded by
-        // raw bytes / 4 for vision and ~per-page for documents. Simple
-        // heuristic — actual provider tokenization runs server-side.
         if (block.type === 'image' || block.type === 'document') {
-          return ''.padEnd(Math.floor(block.source.data.length / 4), 'x')
+          mediaTokens += estimateMediaTokens(block.source.data.length, block.type)
         }
         return ''
       })
       .join('\n')
-    return estimateTokens(userBlockText) + 4
+    return estimateTokens(userBlockText) + mediaTokens + 4
   }
 
   return (

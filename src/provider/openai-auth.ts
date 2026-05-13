@@ -398,9 +398,18 @@ export function createOpenAIAuthProvider(
       const input = convertMessagesToResponsesInput(sanitizedMessages)
       const tools = convertToolsToResponsesShape(params.tools)
 
+      // Codex has no explicit cache_control breakpoint; the Responses API's
+      // automatic prefix-match cache keys on the leading byte stream. Putting
+      // the per-turn variable suffix at the END of `instructions` keeps the
+      // stable prefix (persona + memory + tool catalog) cache-hittable across
+      // turns even when the trailing TodoList block diverges.
+      const fullSystem = params.systemVariableSuffix
+        ? `${params.system}\n\n${params.systemVariableSuffix}`
+        : params.system
+
       const body: ResponseCreateParamsStreaming = {
         model: params.model,
-        instructions: params.system,
+        instructions: fullSystem,
         input,
         ...(tools.length > 0
           ? { tools, tool_choice: 'auto', parallel_tool_calls: true }

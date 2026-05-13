@@ -20,7 +20,7 @@ import {
   getLastUuid,
   toApiMessages,
 } from './messages.js'
-import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
+import { buildSystemPromptTemplate, renderSystemPrompt, renderSystemPromptSplit } from './prompt.js'
 import { getProviderFor, modelFor } from './provider/index.js'
 import { requestPermission } from './permission/index.js'
 import type { PermissionApprover } from './permission/types.js'
@@ -613,18 +613,27 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
-      const systemPrompt = params.systemPrompt
-        ? params.systemPrompt
-        : (() => {
-            const rendered = renderSystemPrompt(systemPromptTemplate!, getTodos(), {
-              tools: turnCatalog.tools,
-              deferredTools: turnCatalog.deferred,
-              discoveredTools: sessionCtx?.discoveredTools,
-            })
-            return params.channelContext
-              ? `${params.channelContext}\n\n${rendered}`
-              : rendered
-          })()
+      // Split rendering: stable prefix (persona / memory / tool catalog) is
+      // cache-anchored; variable suffix (TodoList + deferred-tools reminder)
+      // re-tokenizes per turn. channelContext is per-session metadata and
+      // belongs in the stable prefix. Custom-systemPrompt callers (subagents)
+      // bypass the split — their prompt is already self-contained.
+      let systemStable: string
+      let systemVariableSuffix: string | undefined
+      if (params.systemPrompt) {
+        systemStable = params.systemPrompt
+        systemVariableSuffix = undefined
+      } else {
+        const rendered = renderSystemPromptSplit(systemPromptTemplate!, getTodos(), {
+          tools: turnCatalog.tools,
+          deferredTools: turnCatalog.deferred,
+          discoveredTools: sessionCtx?.discoveredTools,
+        })
+        systemStable = params.channelContext
+          ? `${params.channelContext}\n\n${rendered.stable}`
+          : rendered.stable
+        systemVariableSuffix = rendered.variable || undefined
+      }
       try {
         const mainModel = modelFor('main', config)
         const mainRoute = getProviderFor(config, mainModel)
@@ -638,7 +647,8 @@ export async function query(params: QueryParams): Promise<{
           config,
           model: mainModel,
           messages: toApiMessages(messages),
-          system: systemPrompt,
+          system: systemStable,
+          ...(systemVariableSuffix ? { systemVariableSuffix } : {}),
           tools: turnCatalog.tools.map(toolToAPISchema),
           cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
           signal: params.signal ?? getAbortController().signal,

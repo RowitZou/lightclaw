@@ -343,21 +343,55 @@ export async function buildSystemPromptTemplate(
   }
 }
 
+/**
+ * Stable prefix that is cacheable across an entire query() loop (persona,
+ * memory, skills, permission summary, MCP catalog, tool descriptions); plus
+ * a variable suffix that changes whenever the agent flips a todo state or
+ * when a new deferred tool is discovered mid-turn. Provider layer should
+ * pass these as separate cache_control-tagged blocks so the prefix stays
+ * cache-hit while only the suffix re-tokenizes (Codex / Anthropic both
+ * benefit — see investigation report 2026-05-13).
+ */
+export type RenderedSystemPrompt = {
+  stable: string
+  variable: string
+}
+
+export function renderSystemPromptSplit(
+  template: SystemPromptTemplate,
+  todos: TodoItem[],
+  options?: SystemPromptRenderOptions,
+): RenderedSystemPrompt {
+  const tools = options?.tools ?? []
+  const toolDescriptions = formatToolCatalog(tools)
+  const stable = `${template.preTodos}\n\n${template.postTodos}\n${toolDescriptions}`
+
+  const variableParts: string[] = []
+  const todoSection = formatTodoSection(todos)
+  if (todoSection) {
+    variableParts.push(todoSection)
+  }
+  const deferredReminder = buildDeferredToolsReminder(
+    options?.deferredTools ?? [],
+    options?.discoveredTools ?? new Map(),
+  )
+  if (deferredReminder) {
+    variableParts.push(deferredReminder)
+  }
+
+  return {
+    stable,
+    variable: variableParts.join('\n\n'),
+  }
+}
+
 export function renderSystemPrompt(
   template: SystemPromptTemplate,
   todos: TodoItem[],
   options?: SystemPromptRenderOptions,
 ): string {
-  const todoSection = formatTodoSection(todos)
-  const middle = todoSection ? `\n\n${todoSection}` : ''
-  const tools = options?.tools ?? []
-  const toolDescriptions = formatToolCatalog(tools)
-  const base = `${template.preTodos}${middle}\n\n${template.postTodos}\n${toolDescriptions}`
-  return appendDeferredToolsReminder(
-    base,
-    options?.deferredTools ?? [],
-    options?.discoveredTools ?? new Map(),
-  )
+  const { stable, variable } = renderSystemPromptSplit(template, todos, options)
+  return variable ? `${stable}\n\n${variable}` : stable
 }
 
 export function buildSubagentPrompt(
@@ -395,16 +429,15 @@ export function buildSubagentPrompt(
   return sections.join('\n')
 }
 
-function appendDeferredToolsReminder(
-  prompt: string,
+function buildDeferredToolsReminder(
   deferredTools: readonly Tool[],
   discoveredTools: ReadonlyMap<string, number>,
 ): string {
   const undiscovered = deferredTools.filter(tool => !discoveredTools.has(tool.name))
   if (undiscovered.length === 0) {
-    return prompt
+    return ''
   }
-  return `${prompt}\n\n<system-reminder>
+  return `<system-reminder>
 The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded. Calling them directly will fail. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:
 ${undiscovered.map(tool => tool.name).join('\n')}
 </system-reminder>`
