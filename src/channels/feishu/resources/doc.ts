@@ -1,7 +1,8 @@
 import type { FeishuClient } from '../client.js'
 import { callFeishu, type FeishuEnvelope } from './api.js'
 import { readNestedString, truncate } from './common.js'
-import { classifyFeishuError } from './errors.js'
+import { classifyFeishuError, logFeishuRetry } from './errors.js'
+import { withFeishuRetry } from './retry.js'
 
 export type FeishuDocCreateResult = {
   documentId?: string
@@ -50,12 +51,12 @@ export async function createDoc(input: {
   folderToken?: string
 }): Promise<FeishuDocCreateResult> {
   const client = input.client as FeishuDocClient
-  const created = await callFeishu(() => client.docx.document.create({
+  const created = await withFeishuRetry(() => callFeishu(() => client.docx.document.create({
     data: {
       title: input.title,
       ...(input.folderToken ? { folder_token: input.folderToken } : {}),
     },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.create') })
   const documentId = readNestedString(created.data, ['document', 'document_id']) ??
     readNestedString(created.data, ['document_id'])
   if (documentId && input.content?.trim()) {
@@ -88,12 +89,12 @@ export async function appendDocText(input: {
     return { code: 0, data: { skipped: true, reason: 'empty content' } }
   }
   const client = input.client as FeishuDocClient
-  return callFeishu(() => client.docx.documentBlockChildren.create({
+  return withFeishuRetry(() => callFeishu(() => client.docx.documentBlockChildren.create({
     path: { document_id: input.documentId, block_id: input.documentId },
     data: {
       children,
     },
-  }))
+  })), { onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'docx.append') })
 }
 
 // Feishu permission tiers (perm field):

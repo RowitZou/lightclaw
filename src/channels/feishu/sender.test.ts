@@ -103,6 +103,32 @@ test('FeishuSender does not fall back to create message for non-transient reply 
   assert.equal(createCalls, 0)
 })
 
+test('FeishuSender retries Feishu rate-limit envelopes on create message', async () => {
+  let createCalls = 0
+  const client = {
+    im: {
+      message: {
+        reply: async () => {
+          throw new Error('synthetic message should skip reply')
+        },
+        create: async () => {
+          createCalls += 1
+          if (createCalls === 1) {
+            return { code: 11232, msg: 'message creation rate limited' }
+          }
+          return { code: 0, data: { message_id: 'om_created_after_retry' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendInteractiveCard({ ...baseMessage, synthetic: true }, { elements: [] })
+
+  assert.equal(createCalls, 2)
+})
+
 test('attached pending store enqueues on transient retry exhaustion instead of throwing', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-sender-pending-test-'))
   try {
