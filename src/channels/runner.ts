@@ -65,6 +65,7 @@ import {
   createEmptySessionContext,
   createSessionContext,
   runWithSessionContext,
+  type ChannelFileSendOutput,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta, UserContentBlock } from '../types.js'
@@ -127,7 +128,7 @@ export type ChannelRunnerStrategy = {
   sendFile?(
     message: NormalizedChannelMessage,
     file: OutgoingChannelFile,
-  ): Promise<void>
+  ): Promise<ChannelFileSendOutput>
   materializeAttachment?(input: {
     pending: PendingAttachment
     runtime: Runtime

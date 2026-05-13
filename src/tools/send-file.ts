@@ -5,8 +5,6 @@ import { z } from 'zod'
 import { getChannelFileSender } from '../state.js'
 import { buildTool } from '../tool.js'
 
-const MAX_CHANNEL_FILE_BYTES = 30 * 1024 * 1024
-
 const inputSchema = z.object({
   file_path: z.string().min(1),
   name: z.string().min(1).optional(),
@@ -16,6 +14,10 @@ export const sendFileTool = buildTool({
   name: 'SendFile',
   shouldDefer: true,
   description: `Send a file from this workspace to the active channel conversation. Currently only Feishu channel.
+
+Delivery mode is picked automatically by file size:
+- Up to 30 MB rides the native IM file attachment (renders inline in the chat).
+- Larger files (typical arxiv PDFs, datasets, archives) are uploaded to the user's cloud workspace and a clickable share link is posted back to the same chat. SendFile returns the URL — repeat it in your reply text so the user can click through. Single-file cap is ~800 MB.
 
 Use when:
 - The user explicitly asked for a file (a report, a generated artifact, a converted document, a screenshot they cannot see otherwise).
@@ -50,8 +52,9 @@ Don't use:
 
     try {
       // runtime.fs owns the workspace boundary: each backend's path
-      // translation throws on out-of-sandbox paths. The 30 MB ceiling stays
-      // here because it's a Feishu API constraint, not a runtime one.
+      // translation throws on out-of-sandbox paths. Size routing (IM vs
+      // cloud) belongs to the channel adapter — the tool only filters
+      // out non-regular and empty inputs.
       const info = await context.runtime.fs.stat(input.file_path)
       if (!info.isFile) {
         return { output: `SendFile expected a regular file: ${input.file_path}`, isError: true }
@@ -59,16 +62,16 @@ Don't use:
       if (info.size <= 0) {
         return { output: `SendFile refused to send an empty file: ${input.file_path}`, isError: true }
       }
-      if (info.size > MAX_CHANNEL_FILE_BYTES) {
-        return {
-          output: `SendFile refused to send a file larger than 30 MB: ${input.file_path}`,
-          isError: true,
-        }
-      }
 
       const content = await context.runtime.fs.readFile(input.file_path)
       const displayName = input.name?.trim() || path.basename(input.file_path)
-      await sender.sendFile({ content, name: displayName })
+      const result = await sender.sendFile({ content, name: displayName })
+      if (result.kind === 'cloud-link') {
+        const sizeMB = (result.sizeBytes / (1024 * 1024)).toFixed(1)
+        return {
+          output: `Uploaded ${displayName} (${sizeMB} MB) to the user's cloud workspace and posted the share link to ${sender.channelId}. URL: ${result.url}`,
+        }
+      }
       return {
         output: `Sent ${displayName} to ${sender.channelId}.`,
       }
