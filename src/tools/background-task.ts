@@ -83,6 +83,8 @@ export const backgroundTaskTool = buildTool({
     'Built-in safe tools are already allowed for background fires: Read, Glob, Grep, TodoWrite, MemoryRead, ListBackgroundTasks.',
     'Any Bash/WebFetch/Edit/Write/MCP operation the task needs should be listed precisely, e.g. Bash(rsync:*), Bash(find:*), WebFetch(api.example.com), Edit(/tmp/**).',
     'Be conservative; if you miss a needed rule, the task will fail with permission details and the user/main agent can expand allowed_tools later.',
+    '',
+    'Disambiguating the user\'s intended time: User time expressions like "10:00" are often ambiguous between AM and PM, and relative phrases ("tonight", "this morning") depend on when the user is speaking. When the intended `at` is not explicit, ask the user to confirm before scheduling rather than guessing.',
   ].join('\n'),
   domain: 'host',
   riskLevel: 'execute',
@@ -111,8 +113,15 @@ export const backgroundTaskTool = buildTool({
         return { output: 'Invalid oneshot schedule time.', isError: true }
       }
       if (at.getTime() <= Date.now()) {
+        const serverNow = new Date().toISOString()
+        const tomorrowSame = new Date(at.getTime() + 24 * 60 * 60 * 1000).toISOString()
         return {
-          output: 'BackgroundTask oneshot time must be in the future. Use AgentTool for immediate work.',
+          output: [
+            `Requested time \`${at.toISOString()}\` is in the past (server now = \`${serverNow}\`).`,
+            `- If you meant the next occurrence of that wall-clock time, set \`at\` to \`${tomorrowSame}\`.`,
+            "- If you meant a short relative offset, use `schedule.kind='after'` with `afterMinutes=<N>`.",
+            "- If the user's intent is ambiguous (e.g. \"10 点\" could be AM or PM), ask them to confirm before retrying.",
+          ].join('\n'),
           isError: true,
         }
       }

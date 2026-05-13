@@ -30,14 +30,22 @@ afterEach(() => {
 })
 
 describe('BackgroundTask tools', () => {
-  it('rejects oneshot schedules in the past', async () => {
+  it('rejects oneshot schedules in the past with an actionable hint (Bug 3)', async () => {
     const result = await withUser(async () => backgroundTaskTool.call({
       prompt: 'check the workspace and summarize anything important',
       schedule: { kind: 'oneshot', at: '2020-01-01T00:00:00.000Z' },
       label: 'Old task',
     }, fakeContext()))
     assert.equal(result.isError, true)
-    assert.match(result.output, /future/)
+    // Error body must carry: the rejected time, the server-side now, a
+    // concrete tomorrow-same suggestion, and an 'after' shorthand pointer.
+    assert.match(result.output, /is in the past/)
+    assert.match(result.output, /server now = `/)
+    assert.match(result.output, /next occurrence of that wall-clock time/)
+    assert.match(result.output, /schedule\.kind='after'/)
+    // Regression guard: the old text steered the model to AgentTool when the
+    // user's actual intent was "tomorrow", not "now". Never reintroduce.
+    assert.doesNotMatch(result.output, /AgentTool/)
   })
 
   it("normalizes { kind: 'after', afterMinutes } to { kind: 'oneshot', at } at spawn time", async () => {
