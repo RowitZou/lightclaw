@@ -55,6 +55,10 @@ describe('Feishu workspace tools', () => {
       runFeishuCreateFolder({ name: '2026', parent_folder: 'papers' }, { client }),
     )
     assert.match(result.output, /Created folder "2026"/)
+    // 2026-05-13: model used to share raw folder tokens; tool output now
+    // embeds a clickable feishu.cn folder URL so the model has something
+    // shareable. Token is also kept for ancestry/debug.
+    assert.match(result.output, /https:\/\/feishu\.cn\/drive\/folder\/fld_2026/)
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'create-folder')
     assert.equal(records[0].status, 'confirmed')

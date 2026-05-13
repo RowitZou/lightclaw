@@ -77,6 +77,7 @@ describe('FeishuWriteSheet tool', () => {
     assert.deepEqual(result.output, {
       spreadsheet_token: 'sheetCanonical',
       sheet_id: 'tab1',
+      url: 'https://feishu.cn/sheets/sheetCanonical?sheet=tab1',
       range: 'tab1!A1:B2',
       rows: 2,
       columns: 2,
@@ -138,6 +139,7 @@ describe('FeishuWriteSheet tool', () => {
     assert.equal(result.isError, undefined)
     assert.deepEqual(result.output, {
       spreadsheet_token: 'sheetDirect',
+      url: 'https://feishu.cn/sheets/sheetDirect',
       range: 'Sheet1!C3:D3',
       rows: 1,
       columns: 2,
