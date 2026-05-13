@@ -78,6 +78,7 @@ describe('FeishuWriteDoc tool', () => {
       client,
       documentId: 'docFromWiki',
       content: 'hello doc',
+      retryCounter: { count: 0 },
     })
     assert.equal(askInput?.toolName, 'FeishuWriteConfirm')
     assert.equal(askInput?.riskLevel, 'write')

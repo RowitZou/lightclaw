@@ -69,6 +69,30 @@ describe('withFeishuRetry', () => {
     assert.equal(result, 'ok')
     assert.equal(calls, 2)
   })
+
+  it('increments retryCounter once per backoff', async () => {
+    const retryCounter = { count: 0 }
+    let calls = 0
+    const result = await withFeishuRetry(async () => {
+      calls += 1
+      if (calls < 3) throw new FeishuApiError(classification('rate-limited', true))
+      return 'ok'
+    }, { baseDelayMs: 1, retryCounter })
+    assert.equal(result, 'ok')
+    assert.equal(retryCounter.count, 2)
+  })
+
+  it('retryCounter reflects budget-exhausted failure', async () => {
+    const retryCounter = { count: 0 }
+    await assert.rejects(
+      withFeishuRetry(async () => {
+        throw new FeishuApiError(classification('rate-limited', true))
+      }, { baseDelayMs: 1, retryCounter }),
+      FeishuApiError,
+    )
+    // 3 attempts, 2 backoffs slept through (the 3rd attempt's failure throws without sleeping).
+    assert.equal(retryCounter.count, 2)
+  })
 })
 
 function classification(kind: FeishuErrorClassification['kind'], retryable: boolean): FeishuErrorClassification {
