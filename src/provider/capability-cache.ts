@@ -246,15 +246,71 @@ export function clearCacheEntry(input: {
   return true
 }
 
+/** Walk a wire-bound message array and report which positions
+ *  (`inUserMessage` top-level vs `inToolResult.content`) currently carry a
+ *  block of the given `AttachmentKind`. Used by the channel autopilot to
+ *  attribute a wire 4xx capability-missing signal to the correct counter
+ *  (was: hardcoded `inUserMessage`, which led to inToolResult-side 4xx
+ *  silently incrementing the wrong position's counter and never tripping
+ *  the sticky-disable that would have downgraded subsequent calls).
+ *
+ *  Content-shape based, not converter-derived: walks the `ApiMessage[]`
+ *  the caller is about to send and checks block.type, not what the
+ *  provider's convertMessages turned it into. That's deliberate — a 4xx
+ *  capability-missing tells us "kind K wasn't accepted at SOME
+ *  position", and the only positions where K could have been are those
+ *  the caller actually included in the request. */
+export function scanMessagesForKindPositions(
+  messages: ReadonlyArray<{ role: string; content: unknown }>,
+  kind: AttachmentKind,
+): AttachmentPosition[] {
+  const blockType = kind === 'pdf' ? 'document' : kind
+  const positions = new Set<AttachmentPosition>()
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (!block || typeof block !== 'object') continue
+      const b = block as Record<string, unknown>
+      if (b.type === blockType) {
+        positions.add('inUserMessage')
+        continue
+      }
+      if (b.type === 'tool_result' && Array.isArray(b.content)) {
+        for (const inner of b.content as unknown[]) {
+          if (!inner || typeof inner !== 'object') continue
+          if ((inner as Record<string, unknown>).type === blockType) {
+            positions.add('inToolResult')
+            break
+          }
+        }
+      }
+    }
+  }
+  return [...positions]
+}
+
 /** Pattern-match a thrown error against the most common provider responses
  *  for "I don't accept this attachment kind". Conservative: returns `null`
  *  (i.e. "don't flip the cache") for transport errors / 5xx / 401 / 429 /
  *  network — those are not capability signals.
  *
- *  Returns the kind to flip when matched, or `null` to leave cache as-is. */
+ *  Returns the kind to flip when matched, or `null` to leave cache as-is.
+ *
+ *  When `requestContext.messages` is supplied, the signal's positions
+ *  field is derived from `scanMessagesForKindPositions(messages, kind)`
+ *  — this is the precise attribution path used by the channel autopilot
+ *  (so a 4xx on a tool_result-side PDF block correctly increments the
+ *  inToolResult counter instead of misattributing to inUserMessage).
+ *  When only `positions` is supplied, it is used verbatim (legacy
+ *  callers + tests that build a synthetic signal without a request body).
+ *  When neither is supplied, falls back to ALL_POSITIONS (caller doesn't
+ *  know which position the kind lived in). */
 export function isCapabilityMissingError(
   error: unknown,
-  requestContext?: { positions?: readonly AttachmentPosition[] },
+  requestContext?: {
+    positions?: readonly AttachmentPosition[]
+    messages?: ReadonlyArray<{ role: string; content: unknown }>
+  },
 ): CapabilityMissingSignal | null {
   if (!error || typeof error !== 'object') {
     return null
@@ -295,8 +351,20 @@ export function isCapabilityMissingError(
 
 function signal(
   kind: AttachmentKind,
-  requestContext?: { positions?: readonly AttachmentPosition[] },
+  requestContext?: {
+    positions?: readonly AttachmentPosition[]
+    messages?: ReadonlyArray<{ role: string; content: unknown }>
+  },
 ): CapabilityMissingSignal {
+  // Precise attribution: if caller passed the request body, scan it for
+  // where this kind actually appeared. Falls through to explicit positions
+  // override (legacy), then to ALL_POSITIONS (conservative).
+  const scanned = requestContext?.messages
+    ? scanMessagesForKindPositions(requestContext.messages, kind)
+    : null
+  if (scanned && scanned.length > 0) {
+    return { kind, positions: scanned }
+  }
   const positions = requestContext?.positions?.length
     ? [...new Set(requestContext.positions)]
     : [...ALL_POSITIONS]
