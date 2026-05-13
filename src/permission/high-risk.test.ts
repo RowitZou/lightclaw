@@ -187,20 +187,30 @@ describe('commandContainsHighRiskBash (raw-command fallback)', () => {
 })
 
 describe('isHighRiskAsk (top-level driver)', () => {
-  it('TRUE for FeishuWriteConfirm virtual approval asks', () => {
-    assert.equal(
-      isHighRiskAsk(ask({
-        toolName: 'FeishuWriteConfirm',
-        riskLevel: 'write',
-        input: {
-          operation: 'append-doc',
-          resource: { documentId: 'doc_123' },
-          preview: 'Append 20 chars to a Feishu doc.',
-        },
-        inputPreview: 'Append 20 chars to a Feishu doc.',
-      })),
-      true,
-    )
+  it('FALSE for FeishuWriteConfirm virtual approval asks — only delete stays high-risk', () => {
+    // create-doc / create-folder / append-doc / sheet append+overwrite / move
+    // are all scoped to the user's own workspace and recoverable; they should
+    // be grantable as "以后都允许" just like any other Tool(write) ask.
+    for (const operation of [
+      'create-doc',
+      'create-folder',
+      'append-doc',
+      'append-sheet-rows',
+      'overwrite-sheet-range',
+      'move',
+    ] as const) {
+      assert.equal(
+        isHighRiskAsk(ask({
+          toolName: 'FeishuWriteConfirm',
+          riskLevel: 'write',
+          input: { operation, resource: { token: 't' }, preview: `op=${operation}` },
+          inputPreview: `op=${operation}`,
+          suggestedRules: [{ toolName: 'FeishuWriteConfirm' }],
+        })),
+        false,
+        `${operation} should not be high-risk`,
+      )
+    }
   })
 
   it('TRUE for FeishuDeleteConfirm virtual approval asks', () => {
