@@ -318,6 +318,13 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
     detectStaticDropKindsInToolResult(): readonly ['audio', 'video'] {
       // tool_result.content accepts image + document blocks too; audio /
       // video remain unsupported by the converter and wire target.
+      // Hardcoded because `translateBlockToAnthropicShape` doesn't yet
+      // surface drops via a set parameter (image / document pass through
+      // unchanged; audio / video also pass through but Anthropic API
+      // 400s on them — same outcome as "dropped at translation"). If
+      // PR2 threads a drop set through the recursive translator, swap
+      // this for the converter-derived equivalent so it auto-adjusts
+      // when the converter gains new emit branches.
       return ['audio', 'video']
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {

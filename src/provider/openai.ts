@@ -404,6 +404,16 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       return Array.from(dropped)
     },
     detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
+      // Chat Completions tool messages take `content: string` — the
+      // converter `toolResultContentToText`-s any image / document /
+      // audio / video block into a placeholder text. Hardcoded for now;
+      // unlike openai-auth (Responses) this list is unlikely to change
+      // unless OpenAI rolls out a structured tool-message content shape,
+      // at which point: (1) extend the converter to emit it, (2) thread
+      // an `inToolResult` drop set through, (3) make this probe
+      // converter-derived. Until then a converter regression silently
+      // keeps the hardcoded answer correct (which is the point of the
+      // single-source-of-truth invariant — don't drift).
       return ['image', 'pdf', 'audio', 'video']
     },
     async describeImage(params) {

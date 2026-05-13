@@ -124,5 +124,27 @@ export type Provider = {
    * the reactive 4xx catch path).
    */
   detectStaticDropKinds?(): readonly AttachmentKind[]
+
+  /**
+   * Same single-source-of-truth contract as `detectStaticDropKinds`, but
+   * for kinds dropped when the block lives inside `tool_result.content`
+   * rather than the top-level user-message content array. Two positions
+   * because providers can differ: Anthropic accepts image + document in
+   * both positions; OpenAI Chat Completions tool messages are string-only
+   * (everything inside tool_result drops); OpenAI Responses today
+   * stringifies `function_call_output.output` (same), but the wire
+   * schema actually accepts an array of `input_text` / `input_image` /
+   * `input_file` — so the right answer changes when the converter is
+   * extended to emit that array shape.
+   *
+   * Phase 36 PR1 leaves the implementations as hardcoded constants that
+   * mirror the current converter's pure-text behavior (since the
+   * converter signature doesn't yet thread an `inToolResult` drop set
+   * through `tool_result.content`). PR2 must update these probes to be
+   * converter-derived alongside the converter rewrite that emits the
+   * array shape — without that, the cache will keep recording
+   * `enabled=false` for kinds the converter already supports, exactly
+   * the codex/pdf incident shape.
+   */
   detectStaticDropKindsInToolResult?(): readonly AttachmentKind[]
 }

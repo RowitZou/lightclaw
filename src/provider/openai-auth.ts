@@ -388,6 +388,16 @@ export function createOpenAIAuthProvider(
       return Array.from(dropped)
     },
     detectStaticDropKindsInToolResult(): readonly AttachmentKind[] {
+      // PR1 placeholder: the toolResults loop above stringifies everything
+      // via `toolResultContentToText`, so image / document / audio / video
+      // are all lost. PR2 will replace that stringify with an array-shape
+      // `function_call_output.output` emit (verified accepting input_text /
+      // input_image / input_file via 2026-05-13 probes), at which point
+      // this hardcoded list MUST drop to ['audio', 'video']. Keep the
+      // probe converter-derived once the converter signature threads an
+      // `inToolResult` drop set — otherwise the cache will record
+      // enabled=false for kinds the wire now supports, exactly the
+      // codex/pdf 5-09→5-13 incident shape.
       return ['image', 'pdf', 'audio', 'video']
     },
     async describeImage(params) {
