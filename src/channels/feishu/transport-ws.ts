@@ -20,6 +20,28 @@ export type WsHandle = {
 
 export type { FeishuRawMessage }
 
+/**
+ * Normalized im.message.recalled_v1 event. Feishu only ships message_id +
+ * chat_id on a recall (no sender open_id, no original text), which is why the
+ * recall handler maps messageId -> sessionId through the in-flight opener
+ * registry instead of recomputing the Phase 26 sessionId formula.
+ */
+export type FeishuRecallEvent = {
+  eventId: string
+  messageId: string
+  chatId: string
+}
+
+// Shape of the data the Lark SDK hands the im.message.recalled_v1 handler.
+// Mirrors the SDK's event body; only the fields we read are typed.
+type RecalledV1Data = {
+  event_id?: string
+  message_id?: string
+  chat_id?: string
+  recall_time?: string
+  recall_type?: string
+}
+
 // Shape of the data passed to the im.message.receive_v1 handler by the
 // Lark SDK. Mirrors the SDK's IHandles type but only the fields we read.
 type ReceiveV1Data = {
@@ -71,6 +93,12 @@ export async function startFeishuWsClient(input: {
    */
   botOpenId?: string
   onMessage(message: FeishuRawMessage): void | Promise<void>
+  /**
+   * Invoked when a user recalls a message. Optional so older callers keep
+   * compiling; when wired, the runner aborts the in-flight turn the recalled
+   * message opened (or drops it from the interjection queue).
+   */
+  onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
     action: FeishuCardAction | BackgroundTaskCardAction | PairingCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
@@ -132,6 +160,26 @@ export async function startFeishuWsClient(input: {
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error)
         process.stderr.write(`feishu ws: message handler failed: ${text}\n`)
+      }
+    },
+    'im.message.recalled_v1': async (data: RecalledV1Data) => {
+      const recall = normalizeRecalledV1(data)
+      if (!recall) {
+        process.stderr.write('feishu ws: dropped unsupported recalled_v1 event\n')
+        return
+      }
+      // Dedup recall events the same way receive_v1 is deduped — Lark may
+      // redeliver across reconnect. Abort itself is idempotent, but a
+      // double recall would also fire a second "已中断" notice.
+      if (!await input.dedup.claim(recall.eventId)) {
+        process.stderr.write(`feishu ws: dedup dropped recall event ${recall.eventId}\n`)
+        return
+      }
+      try {
+        await input.onRecall?.(recall)
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`feishu ws: recall handler failed: ${text}\n`)
       }
     },
     // Feishu card callbacks have changed shape across SDK/API generations.
@@ -367,6 +415,22 @@ export function normalizeReceiveV1(
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }
+}
+
+// Exported for unit-test access. Production code goes through the WS handler
+// registered above. The eventId fallback is prefixed `recall:` so that, in
+// the (defensive) case Feishu ships no event_id, the dedup key can never
+// collide with a receive_v1 claim that also fell back to a bare message_id.
+export function normalizeRecalledV1(
+  data: RecalledV1Data,
+): FeishuRecallEvent | null {
+  const messageId = data.message_id
+  const chatId = data.chat_id
+  if (!messageId || !chatId) {
+    return null
+  }
+  const eventId = data.event_id || `recall:${messageId}`
+  return { eventId, messageId, chatId }
 }
 
 function parseCreateTime(value: string | undefined): number | undefined {

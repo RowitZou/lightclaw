@@ -26,9 +26,20 @@ export type InterjectionEntry = {
 export class InterjectionQueue {
   private readonly queueBySession = new Map<string, InterjectionEntry[]>()
   private readonly inFlightSessions = new Set<string>()
+  // sessionId -> the messageId that opened the in-flight turn. Populated by
+  // markInFlight, cleared by unmarkInFlight. The recall handler walks this
+  // map (it only ever holds one entry per concurrently in-flight session, so
+  // a linear scan is trivially cheap) to map a recalled messageId back to its
+  // sessionId WITHOUT depending on the recall event carrying a sender
+  // open_id — Feishu's im.message.recalled_v1 only ships message_id +
+  // chat_id, but the Phase 26 group sessionId formula needs the sender.
+  private readonly openerMessageBySession = new Map<string, string>()
 
-  markInFlight(sessionId: string): void {
+  markInFlight(sessionId: string, openerMessageId?: string): void {
     this.inFlightSessions.add(sessionId)
+    if (openerMessageId) {
+      this.openerMessageBySession.set(sessionId, openerMessageId)
+    }
   }
 
   /**
@@ -44,6 +55,7 @@ export class InterjectionQueue {
    */
   unmarkInFlight(sessionId: string): InterjectionEntry[] {
     this.inFlightSessions.delete(sessionId)
+    this.openerMessageBySession.delete(sessionId)
     const leftover = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
     return leftover
@@ -51,6 +63,40 @@ export class InterjectionQueue {
 
   hasInflightFor(sessionId: string): boolean {
     return this.inFlightSessions.has(sessionId)
+  }
+
+  /**
+   * Map a messageId back to the sessionId whose in-flight turn it opened, or
+   * undefined if it is not the opener of any current in-flight turn. Used by
+   * the recall handler: when a user recalls the message that kicked off a
+   * still-running turn, this is how we find the turn to abort.
+   */
+  sessionIdForOpenerMessage(messageId: string): string | undefined {
+    for (const [sessionId, openerMessageId] of this.openerMessageBySession) {
+      if (openerMessageId === messageId) {
+        return sessionId
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Remove a not-yet-drained queued interjection by its messageId. Returns
+   * the sessionId it was queued under, or undefined if no queued entry
+   * matched (already drained into the model, or never queued). Used by the
+   * recall handler so a recalled mid-flight follow-up never reaches the
+   * model. An already-drained interjection cannot be un-injected — that is
+   * an accepted limitation, the recall just becomes a no-op there.
+   */
+  removeQueuedByMessageId(messageId: string): string | undefined {
+    for (const [sessionId, entries] of this.queueBySession) {
+      const index = entries.findIndex(entry => entry.messageId === messageId)
+      if (index !== -1) {
+        entries.splice(index, 1)
+        return sessionId
+      }
+    }
+    return undefined
   }
 
   push(sessionId: string, entry: InterjectionEntry): void {

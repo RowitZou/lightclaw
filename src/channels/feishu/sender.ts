@@ -375,6 +375,35 @@ export class FeishuSender {
     }
   }
 
+  // Proactive interactive-card push to a chat_id when there is no inbound
+  // message to reply against. Used by the recall handler: the message that
+  // opened the aborted turn has been withdrawn, so the "turn interrupted"
+  // system notice cannot reply-quote it — it goes straight to the chat via
+  // im.message.create with receive_id_type=chat_id (no reply target, so no
+  // withdrawn-target 400 + create fallback noise).
+  async sendInteractiveCardToChatId(
+    chatId: string,
+    card: InteractiveCard,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
+    try {
+      await this.sendReplyOrCreate({
+        chatId,
+        msgType: 'interactive',
+        content: JSON.stringify(card),
+      })
+    } catch (err) {
+      if (await this.maybeEnqueueOnTransient(err, {
+        recipient: { type: 'create', chatId },
+        payload: { kind: 'card', card: card as Record<string, unknown> },
+        ctx,
+      })) {
+        return
+      }
+      throw err
+    }
+  }
+
   async sendFile(
     message: NormalizedChannelMessage,
     file: OutgoingChannelFile,

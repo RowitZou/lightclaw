@@ -324,6 +324,7 @@ LightClaw drives Feishu through the bot's tenant access token. On the Feishu Ope
 Subscribe to these events under "Events & Callbacks":
 
 - `im.message.receive_v1`
+- `im.message.recalled_v1` (so recalling a message interrupts the turn it started)
 - `card.action.trigger` (also enable the `card.action.trigger_v1` / `interactive_card.action.trigger` aliases if your console exposes them)
 
 Re-publish the app version after toggling scopes — the changes only take effect on the next release.
