@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -53,9 +54,22 @@ import {
   getPermissionMode,
   setIdentityRules,
 } from '../state.js'
-import { buildTool, type ToolCallResult } from '../tool.js'
+import { buildTool, type ToolCallContext, type ToolCallResult } from '../tool.js'
 
 const DEFAULT_FEISHU_READ_MAX_CHARS = 100_000
+
+// Inline byte budget for a FeishuRead doc result. query.ts's snipContent
+// middle-truncates any tool_result above maxToolOutputBytes (default 50 KB) —
+// and middle-snipping a JSON object yields invalid, unparseable JSON. So when
+// the serialized doc result would exceed this cap (most often include_blocks
+// on a structurally rich doc — a 2026-05-14 dogfood hit ~320 KB), the result
+// is spilled to a workspace file and a bounded summary is returned instead.
+// Sized well under the 50 KB tool cap so the summary plus the rest of the
+// turn's tool_results still fit.
+const FEISHU_DOC_RESULT_INLINE_BYTE_CAP = 40_000
+// When spilling, the inline `content` is cut to this many chars so the agent
+// still sees the doc-text gist without Reading the spilled file.
+const FEISHU_DOC_SPILL_CONTENT_PREVIEW_CHARS = 8_000
 
 const feishuReadInputSchema = z.object({
   url: z.string().url().describe('Feishu/Lark URL (docs / docx / wiki / sheets / bitable / file).'),
@@ -254,7 +268,7 @@ type FeishuWriteSheetDeps = {
 export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
   name: 'FeishuRead',
   description:
-    'Read a Feishu/Lark resource by URL. Auto-routes by canonical type: doc/docx -> plain text plus block statistics; pass include_blocks:true to include raw doc blocks for tables/images/files. sheet -> cell values or metadata; wiki -> resolves to the underlying doc/sheet then reads. Pass metadata_only:true to peek at the resource type without fetching content. Returns a v1-not-supported hint for bitable/file types.',
+    'Read a Feishu/Lark resource by URL. Auto-routes by canonical type: doc/docx -> plain text plus block statistics; pass include_blocks:true to include raw doc blocks for tables/images/files. sheet -> cell values or metadata; wiki -> resolves to the underlying doc/sheet then reads. Pass metadata_only:true to peek at the resource type without fetching content. Returns a v1-not-supported hint for bitable/file types. If a doc result is too large to inline (typically include_blocks on a structurally rich doc), the complete result is written to a workspace JSON file and the response carries full_result_file (a path to Read) plus a preview of content — Read that path for the full structure.',
   domain: 'host',
   riskLevel: 'safe',
   channelScope: ['feishu'],
@@ -263,9 +277,10 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
   // duplicates of read/open and the `metadata_only` field name).
   searchHint: 'feishu lark doc docx wiki sheet bitable url read open',
   inputSchema: feishuReadInputSchema,
-  async call(input): Promise<ToolCallResult<FeishuReadOutput>> {
+  async call(input, context): Promise<ToolCallResult<FeishuReadOutput>> {
     try {
-      return await runFeishuRead(input, { client: getFeishuClient() })
+      const result = await runFeishuRead(input, { client: getFeishuClient() })
+      return await maybeSpillFeishuDocResult(result, context)
     } catch (error) {
       return {
         output: feishuToolErrorMessage(error),
@@ -274,6 +289,90 @@ export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
     }
   },
 })
+
+/**
+ * If a FeishuRead doc result is too large to inline (the include_blocks raw
+ * block JSON is the usual culprit), write the COMPLETE result to a JSON file
+ * under the agent's workspace and return a bounded summary carrying
+ * `full_result_file` instead. Mirrors the WebFetch binary-download pattern:
+ * oversized payloads become a path the agent Reads, never a middle-snipped
+ * fragment (query.ts's snipContent would corrupt the JSON structure).
+ * Best-effort — if the spill write fails, the original (oversized) result is
+ * returned unchanged rather than throwing a tool error.
+ */
+export async function maybeSpillFeishuDocResult(
+  result: ToolCallResult<FeishuReadOutput>,
+  context: ToolCallContext,
+): Promise<ToolCallResult<FeishuReadOutput>> {
+  const output = result.output
+  // Only doc-read results have this shape. Sheet reads return strings and
+  // metadata returns a different object — both are already bounded.
+  if (
+    result.isError ||
+    typeof output !== 'object' ||
+    output === null ||
+    !('documentId' in output) ||
+    !('content' in output)
+  ) {
+    return result
+  }
+  const doc = output as FeishuDocReadResult
+  const serializedBytes = Buffer.byteLength(JSON.stringify(doc), 'utf8')
+  if (serializedBytes <= FEISHU_DOC_RESULT_INLINE_BYTE_CAP) {
+    return result
+  }
+  const spillDir = path.posix.join(
+    context.runtime.workspaceRoot.replace(/\\/g, '/'),
+    '.lightclaw',
+    'downloads',
+  )
+  const safeDocId = doc.documentId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)
+  const filePath = path.posix.join(
+    spillDir,
+    `feishu-doc-${safeDocId}-${randomUUID().slice(0, 8)}.json`,
+  )
+  try {
+    await context.runtime.fs.writeFile(
+      filePath,
+      Buffer.from(JSON.stringify(doc, null, 2), 'utf8'),
+    )
+  } catch (error) {
+    // Spill write failed — return the oversized result rather than throwing.
+    // query.ts will middle-snip it (degraded), but a tool error here would
+    // be strictly worse.
+    process.stderr.write(
+      `[feishu] doc-result spill write failed for ${doc.documentId}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return result
+  }
+  const summary: FeishuDocReadResult = {
+    documentId: doc.documentId,
+    ...(doc.title ? { title: doc.title } : {}),
+    content: doc.content.slice(0, FEISHU_DOC_SPILL_CONTENT_PREVIEW_CHARS),
+    truncated: true,
+    content_preview: true,
+    ...(doc.revision_id ? { revision_id: doc.revision_id } : {}),
+    ...(doc.block_count !== undefined ? { block_count: doc.block_count } : {}),
+    ...(doc.block_types ? { block_types: doc.block_types } : {}),
+    ...(doc.blocks_truncated ? { blocks_truncated: true } : {}),
+    full_result_file: filePath,
+    hint: [
+      doc.hint,
+      `The full result (~${Math.round(serializedBytes / 1024)} KB: complete content${
+        doc.blocks ? ` + ${doc.blocks.length} raw blocks` : ''
+      }) exceeded the inline tool-output cap and was written to ${filePath}.`,
+      `\`content\` above is the first ${FEISHU_DOC_SPILL_CONTENT_PREVIEW_CHARS} chars only — Read ${filePath} (optionally with Bash + jq) for the complete document.`,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  }
+  process.stderr.write(
+    `[feishu] doc result ${doc.documentId} spilled to ${filePath} (${serializedBytes} bytes > ${FEISHU_DOC_RESULT_INLINE_BYTE_CAP} cap)\n`,
+  )
+  return { output: summary }
+}
 
 export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreateFileOutput | string>({
   name: 'FeishuCreateFile',
