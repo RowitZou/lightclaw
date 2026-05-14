@@ -187,17 +187,19 @@ describe('commandContainsHighRiskBash (raw-command fallback)', () => {
 })
 
 describe('isHighRiskAsk (top-level driver)', () => {
-  it('FALSE for FeishuWriteConfirm virtual approval asks — only delete stays high-risk', () => {
-    // create-doc / create-folder / append-doc / sheet append+overwrite / move
-    // are all scoped to the user's own workspace and recoverable; they should
+  it('FALSE for FeishuWriteConfirm virtual approval asks — destructive doc ops use dedicated high-risk tools', () => {
+    // create/append/add operations are scoped to the user's own workspace and
+    // non-destructive; they should
     // be grantable as "以后都允许" just like any other Tool(write) ask.
     for (const operation of [
       'create-doc',
+      'create-sheet',
       'create-folder',
       'append-doc',
       'append-sheet-rows',
-      'overwrite-sheet-range',
-      'move',
+      'add-sheet',
+      'create-doc-table',
+      'write-doc-table-cells',
     ] as const) {
       assert.equal(
         isHighRiskAsk(ask({
@@ -227,6 +229,43 @@ describe('isHighRiskAsk (top-level driver)', () => {
       })),
       true,
     )
+  })
+
+  it('TRUE for FeishuReplaceDocConfirm virtual approval asks', () => {
+    assert.equal(
+      isHighRiskAsk(ask({
+        toolName: 'FeishuReplaceDocConfirm',
+        riskLevel: 'write',
+        input: {
+          operation: 'replace-doc',
+          resource: { token: 'doc_123' },
+          preview: 'Replace doc.',
+        },
+        inputPreview: 'Replace doc.',
+      })),
+      true,
+    )
+  })
+
+  it('TRUE for Feishu table/sheet/move/upload one-shot approval asks', () => {
+    for (const toolName of [
+      'FeishuTableStructureConfirm',
+      'FeishuSheetDestructiveConfirm',
+      'FeishuMoveConfirm',
+      'FeishuUploadConfirm',
+    ]) {
+      assert.equal(
+        isHighRiskAsk(ask({
+          toolName,
+          riskLevel: 'write',
+          input: { operation: 'op', resource: { token: 't' }, preview: toolName },
+          inputPreview: toolName,
+          suggestedRules: [{ toolName }],
+        })),
+        true,
+        `${toolName} should be high-risk`,
+      )
+    }
   })
 
   it('TRUE when suggested rules contain a high-risk rule', () => {

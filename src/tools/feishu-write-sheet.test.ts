@@ -79,6 +79,7 @@ describe('FeishuWriteSheet tool', () => {
       sheet_id: 'tab1',
       url: 'https://feishu.cn/sheets/sheetCanonical?sheet=tab1',
       range: 'tab1!A1:B2',
+      action: 'write_values',
       rows: 2,
       columns: 2,
       mode: 'append',
@@ -106,6 +107,7 @@ describe('FeishuWriteSheet tool', () => {
       spreadsheetToken: 'sheetCanonical',
       sheetId: 'tab1',
       range: 'tab1!A1:B2',
+      action: 'write_values',
       mode: 'append',
       rows: 2,
       columns: 2,
@@ -113,9 +115,13 @@ describe('FeishuWriteSheet tool', () => {
   })
 
   it('overwrites direct spreadsheet ranges after confirmation', async () => {
+    let askInput: PermissionAskInput | undefined
     const result = await withFeishuSession({
       approver: {
-        ask: async () => ({ behavior: 'allow' }),
+        ask: async input => {
+          askInput = input
+          return { behavior: 'allow' }
+        },
       },
       fn: () =>
         runFeishuWriteSheet(
@@ -141,13 +147,118 @@ describe('FeishuWriteSheet tool', () => {
       spreadsheet_token: 'sheetDirect',
       url: 'https://feishu.cn/sheets/sheetDirect',
       range: 'Sheet1!C3:D3',
+      action: 'write_values',
       rows: 1,
       columns: 2,
       mode: 'overwrite',
       data: { overwritten: true },
     })
+    assert.equal(askInput?.toolName, 'FeishuSheetDestructiveConfirm')
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'overwrite-sheet-range')
+  })
+
+  it('clears ranges and adds/deletes sheets through structured actions', async () => {
+    let clearAsk: PermissionAskInput | undefined
+    const cleared = await withFeishuSession({
+      approver: {
+        ask: async input => {
+          clearAsk = input
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteSheet(
+          {
+            spreadsheet_token: 'sheetDirect',
+            sheet_id: 'tab1',
+            action: 'clear_range',
+            range: 'A1:B2',
+          },
+          {
+            client,
+            clearRange: async input => ({
+              spreadsheetToken: input.spreadsheetToken,
+              sheetId: input.sheetId,
+              range: `${input.sheetId}!${input.range}`,
+              action: 'clear_range',
+            }),
+          },
+        ),
+    })
+    assert.deepEqual(cleared.output, {
+      spreadsheet_token: 'sheetDirect',
+      sheet_id: 'tab1',
+      url: 'https://feishu.cn/sheets/sheetDirect?sheet=tab1',
+      range: 'tab1!A1:B2',
+      action: 'clear_range',
+    })
+    assert.equal(clearAsk?.toolName, 'FeishuSheetDestructiveConfirm')
+
+    const added = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuWriteSheet(
+          {
+            spreadsheet_token: 'sheetDirect',
+            action: 'add_sheet',
+            title: 'Data',
+          },
+          {
+            client,
+            addSheet: async input => ({
+              spreadsheetToken: input.spreadsheetToken,
+              sheetId: 'newTab',
+              action: 'add_sheet',
+              data: { title: input.title },
+            }),
+          },
+        ),
+    })
+    assert.deepEqual(added.output, {
+      spreadsheet_token: 'sheetDirect',
+      sheet_id: 'newTab',
+      url: 'https://feishu.cn/sheets/sheetDirect?sheet=newTab',
+      action: 'add_sheet',
+      data: { title: 'Data' },
+    })
+
+    let deleteAsk: PermissionAskInput | undefined
+    const deleted = await withFeishuSession({
+      approver: {
+        ask: async input => {
+          deleteAsk = input
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteSheet(
+          {
+            spreadsheet_token: 'sheetDirect',
+            action: 'delete_sheet',
+            sheet_id: 'newTab',
+          },
+          {
+            client,
+            deleteSheet: async input => ({
+              spreadsheetToken: input.spreadsheetToken,
+              sheetId: input.sheetId,
+              action: 'delete_sheet',
+            }),
+          },
+        ),
+    })
+    assert.deepEqual(deleted.output, {
+      spreadsheet_token: 'sheetDirect',
+      sheet_id: 'newTab',
+      url: 'https://feishu.cn/sheets/sheetDirect?sheet=newTab',
+      action: 'delete_sheet',
+    })
+    assert.equal(deleteAsk?.toolName, 'FeishuSheetDestructiveConfirm')
+
+    const records = await readAuditRecords()
+    assert.equal(records[0].operation, 'clear-sheet-range')
+    assert.equal(records.at(-1)?.operation, 'delete-sheet')
   })
 
   it('records denied audit and skips SDK calls when confirmation is denied', async () => {
@@ -235,6 +346,13 @@ describe('FeishuWriteSheet tool', () => {
         range: 'A1:A1',
         values: [['x']],
         mode: 'append',
+      }).success,
+      false,
+    )
+    assert.equal(
+      feishuWriteSheetTool.inputSchema?.safeParse({
+        spreadsheet_token: 'sheet1',
+        action: 'clear_range',
       }).success,
       false,
     )

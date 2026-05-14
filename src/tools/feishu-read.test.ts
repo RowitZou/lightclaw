@@ -6,6 +6,7 @@ import type {
   FeishuCanonicalResource,
 } from '../channels/feishu/resource-resolver.js'
 import { readDocPlainText, type FeishuDocReadResult } from '../channels/feishu/resources/doc.js'
+import { readSheetRange } from '../channels/feishu/resources/sheet.js'
 import { feishuReadTool, runFeishuRead } from './feishu-collab.js'
 
 const client = {} as FeishuClient
@@ -53,6 +54,9 @@ describe('FeishuRead tool', () => {
       {
         url: 'https://example.feishu.cn/docx/docToken',
         include_blocks: true,
+        block_page_size: 25,
+        max_blocks: 50,
+        block_page_token: 'next-page',
       },
       {
         client,
@@ -85,6 +89,9 @@ describe('FeishuRead tool', () => {
       documentId: 'docCanonical',
       maxChars: 100_000,
       includeBlocks: true,
+      blockPageSize: 25,
+      maxBlocks: 50,
+      blockPageToken: 'next-page',
     })
   })
 
@@ -183,6 +190,8 @@ describe('FeishuRead tool', () => {
         Table: 2,
         Image: 1,
       },
+      block_page_size: 500,
+      max_blocks: 1000,
       hint: 'This document contains Table, Image which are NOT included in the plain text above. Re-run FeishuRead with include_blocks:true to return the raw document blocks.',
     })
   })
@@ -229,6 +238,8 @@ describe('FeishuRead tool', () => {
         Text: 1,
         Table: 1,
       },
+      block_page_size: 500,
+      max_blocks: 1000,
       blocks: [
         { block_type: 2, text: { elements: [{ text_run: { content: 'hello' } }] } },
         { block_type: 31, table: { row_size: 1, column_size: 2 } },
@@ -285,6 +296,51 @@ describe('FeishuRead tool', () => {
     assert.equal(result.hint, undefined)
   })
 
+  it('stops block reads at max_blocks and returns next_page_token', async () => {
+    const listCalls: unknown[] = []
+    const result = await readDocPlainText({
+      client: {
+        docx: {
+          document: {
+            get: async () => ({ code: 0, data: { document: { title: 'Long doc' } } }),
+            rawContent: async () => ({ code: 0, data: { content: 'body' } }),
+          },
+          documentBlock: {
+            list: async (input: unknown) => {
+              listCalls.push(input)
+              return {
+                code: 0,
+                data: {
+                  items: [{ block_type: 2 }, { block_type: 2 }],
+                  has_more: true,
+                  page_token: 'page-2',
+                },
+              }
+            },
+          },
+        },
+      } as unknown as FeishuClient,
+      documentId: 'docCanonical',
+      maxChars: 1000,
+      includeBlocks: true,
+      blockPageSize: 10,
+      maxBlocks: 2,
+    })
+
+    assert.equal(listCalls.length, 1)
+    assert.deepEqual(listCalls[0], {
+      path: { document_id: 'docCanonical' },
+      params: { page_size: 2 },
+    })
+    assert.equal(result.block_count, 2)
+    assert.equal(result.block_page_size, 10)
+    assert.equal(result.max_blocks, 2)
+    assert.deepEqual(result.blocks, [{ block_type: 2 }, { block_type: 2 }])
+    assert.equal(result.blocks_truncated, true)
+    assert.equal(result.next_page_token, 'page-2')
+    assert.match(result.hint ?? '', /next_page_token/)
+  })
+
   it('still returns plain text when the block listing fails', async () => {
     const result = await readDocPlainText({
       client: {
@@ -308,7 +364,37 @@ describe('FeishuRead tool', () => {
     assert.equal(result.content, 'doc body')
     assert.equal(result.block_count, undefined)
     assert.equal(result.block_types, undefined)
+    assert.match(result.block_listing_error ?? '', /boom/)
+    assert.equal(result.block_page_size, 500)
+    assert.equal(result.max_blocks, 1000)
     assert.match(result.hint ?? '', /Could not list document blocks/)
+  })
+
+  it('marks include_blocks reads as errors when block listing fails', async () => {
+    const result = await runFeishuRead(
+      {
+        url: 'https://example.feishu.cn/docx/docToken',
+        include_blocks: true,
+      },
+      {
+        client,
+        resolveResource: async () => canonical('docx', 'docCanonical'),
+        readDoc: async input => ({
+          documentId: input.documentId,
+          content: 'plain fallback',
+          truncated: false,
+          block_listing_error: 'ScopeAccessDenied',
+        }),
+      },
+    )
+
+    assert.equal(result.isError, true)
+    assert.deepEqual(result.output, {
+      documentId: 'docCanonical',
+      content: 'plain fallback',
+      truncated: false,
+      block_listing_error: 'ScopeAccessDenied',
+    })
   })
 
   it('reads sheet ranges when a range is provided', async () => {
@@ -316,7 +402,8 @@ describe('FeishuRead tool', () => {
     const result = await runFeishuRead(
       {
         url: 'https://example.feishu.cn/sheets/sheetToken?sheet=tab1',
-        sheet: { range: 'A1:B2' },
+        max_chars: 1234,
+        sheet: { range: 'A1:B2', max_cells: 2 },
       },
       {
         client,
@@ -341,6 +428,8 @@ describe('FeishuRead tool', () => {
       spreadsheetToken: 'sheetCanonical',
       sheetId: 'tabFromUrl',
       range: 'A1:B2',
+      maxChars: 1234,
+      maxCells: 2,
     })
     assert.deepEqual(result.output, {
       spreadsheetToken: 'sheetCanonical',
@@ -350,6 +439,43 @@ describe('FeishuRead tool', () => {
       text: '[["a","b"]]',
       truncated: false,
     })
+  })
+
+  it('limits raw sheet range data by max_cells', async () => {
+    const result = await readSheetRange({
+      client: {
+        request: async () => ({
+          code: 0,
+          data: {
+            valueRange: {
+              range: 'tab1!A1:C2',
+              values: [
+                [1, 2, 3],
+                [4, 5, 6],
+              ],
+            },
+          },
+        }),
+      } as unknown as FeishuClient,
+      spreadsheetToken: 'sheetCanonical',
+      sheetId: 'tab1',
+      range: 'A1:C2',
+      maxCells: 4,
+    })
+
+    assert.deepEqual(result.data, {
+      valueRange: {
+        range: 'tab1!A1:C2',
+        values: [
+          [1, 2, 3],
+          [4],
+        ],
+      },
+    })
+    assert.equal(result.values_truncated, true)
+    assert.equal(result.cells_returned, 4)
+    assert.equal(result.cell_limit, 4)
+    assert.doesNotMatch(result.text, /\b5\b/)
   })
 
   it('reads sheet metadata when no range is provided', async () => {
@@ -451,6 +577,30 @@ describe('FeishuRead tool', () => {
     assert.equal(resolved, false)
     assert.equal(result.isError, true)
     assert.match(String(result.output), /Cannot parse Feishu URL/)
+  })
+
+  it('rejects fake Feishu-looking suffix domains', async () => {
+    for (const url of [
+      'https://evilfeishu.cn/docx/docToken',
+      'https://feishu.cn.evil.example/docx/docToken',
+      'https://notlarksuite.com/docx/docToken',
+    ]) {
+      let resolved = false
+      const result = await runFeishuRead(
+        { url },
+        {
+          client,
+          resolveResource: async () => {
+            resolved = true
+            return canonical('docx', 'docToken')
+          },
+        },
+      )
+
+      assert.equal(resolved, false)
+      assert.equal(result.isError, true)
+      assert.match(String(result.output), /Cannot parse Feishu URL/)
+    }
   })
 
   it('is scoped to Feishu and discoverable through ToolSearch hints', () => {

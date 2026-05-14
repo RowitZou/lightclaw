@@ -102,13 +102,18 @@ export function containsHighRiskRule(rules: PermissionRuleValue[]): boolean {
  * fallback. Used by approver UIs to gate the persistence option.
  */
 export function isHighRiskAsk(ask: PermissionAskInput): boolean {
-  // FeishuDelete is the only Feishu write that stays high-risk: even with
-  // Feishu's trash bin, a model-initiated bulk delete is a UX disaster. All
-  // other Feishu writes (create-doc / create-folder / append-doc / sheet
-  // append+overwrite / move) are scoped to the user's own workspace and
-  // either purely incremental or recoverable from version history, so they
-  // can be granted "以后都允许" like any other write tool.
-  if (ask.toolName === 'FeishuDeleteConfirm') {
+  // Destructive Feishu writes stay one-shot: delete, move, whole-document
+  // replace, and table structure mutations have a wider blast radius than
+  // append/create writes, so the UI must hide the "always allow" path for
+  // these virtual approval tools.
+  if (
+    ask.toolName === 'FeishuDeleteConfirm' ||
+    ask.toolName === 'FeishuReplaceDocConfirm' ||
+    ask.toolName === 'FeishuTableStructureConfirm' ||
+    ask.toolName === 'FeishuMoveConfirm' ||
+    ask.toolName === 'FeishuSheetDestructiveConfirm' ||
+    ask.toolName === 'FeishuUploadConfirm'
+  ) {
     return true
   }
   if (containsHighRiskRule(ask.suggestedRules)) {
