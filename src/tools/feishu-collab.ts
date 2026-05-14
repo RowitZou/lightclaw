@@ -61,6 +61,8 @@ const feishuReadInputSchema = z.object({
   url: z.string().url().describe('Feishu/Lark URL (docs / docx / wiki / sheets / bitable / file).'),
   max_chars: z.number().int().min(1).max(500_000).optional()
     .describe('Doc-text cap. Defaults to 100000. Ignored for sheets and metadata_only.'),
+  include_blocks: z.boolean().optional()
+    .describe('For doc/docx/wiki-doc reads, include raw Feishu document blocks (tables/images/files/etc.) in the response. Defaults to false.'),
   sheet: z.object({
     sheet_id: z.string().min(1).optional()
       .describe('Feishu sheet_id (the opaque token, e.g. "ca9b8c" from the URL ?sheet=...), not the visible sheet name.'),
@@ -252,7 +254,7 @@ type FeishuWriteSheetDeps = {
 export const feishuReadTool = buildTool<FeishuReadInput, FeishuReadOutput>({
   name: 'FeishuRead',
   description:
-    'Read a Feishu/Lark resource by URL. Auto-routes by canonical type: doc/docx -> plain text; sheet -> cell values or metadata; wiki -> resolves to the underlying doc/sheet then reads. Pass metadata_only:true to peek at the resource type without fetching content. Returns a v1-not-supported hint for bitable/file types.',
+    'Read a Feishu/Lark resource by URL. Auto-routes by canonical type: doc/docx -> plain text plus block statistics; pass include_blocks:true to include raw doc blocks for tables/images/files. sheet -> cell values or metadata; wiki -> resolves to the underlying doc/sheet then reads. Pass metadata_only:true to peek at the resource type without fetching content. Returns a v1-not-supported hint for bitable/file types.',
   domain: 'host',
   riskLevel: 'safe',
   channelScope: ['feishu'],
@@ -394,6 +396,7 @@ export async function runFeishuRead(
         client: deps.client,
         documentId,
         maxChars: input.max_chars ?? DEFAULT_FEISHU_READ_MAX_CHARS,
+        includeBlocks: input.include_blocks ?? false,
       }),
     }
   }

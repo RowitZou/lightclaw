@@ -16,32 +16,98 @@ export type FeishuDocReadResult = {
   title?: string
   content: string
   truncated: boolean
+  revision_id?: string
+  block_count: number
+  block_types: Record<string, number>
+  blocks?: Array<Record<string, unknown>>
+  hint?: string
   rawData?: unknown
+}
+
+const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32])
+
+const BLOCK_TYPE_NAMES: Record<number, string> = {
+  1: 'Page',
+  2: 'Text',
+  3: 'Heading1',
+  4: 'Heading2',
+  5: 'Heading3',
+  12: 'Bullet',
+  13: 'Ordered',
+  14: 'Code',
+  15: 'Quote',
+  17: 'Todo',
+  18: 'Bitable',
+  21: 'Diagram',
+  22: 'Divider',
+  23: 'File',
+  27: 'Image',
+  30: 'Sheet',
+  31: 'Table',
+  32: 'TableCell',
 }
 
 export async function readDocPlainText(input: {
   client: FeishuClient
   documentId: string
   maxChars: number
+  includeBlocks?: boolean
 }): Promise<FeishuDocReadResult> {
   const client = input.client as FeishuDocClient
-  const [info, raw] = await Promise.all([
+  const [info, raw, blocks] = await Promise.all([
     callFeishu(() => client.docx.document.get({ path: { document_id: input.documentId } })),
     callFeishu(() => client.docx.document.rawContent({ path: { document_id: input.documentId } })),
+    callFeishu(() => client.docx.documentBlock.list({ path: { document_id: input.documentId } })),
   ])
   const title = readNestedString(info.data, ['document', 'title']) ??
     readNestedString(info.data, ['title'])
+  const revisionId = readNestedString(info.data, ['document', 'revision_id']) ??
+    readNestedString(info.data, ['revision_id'])
   const content = readNestedString(raw.data, ['content']) ??
     readNestedString(raw.data, ['document', 'content']) ??
     ''
   const clipped = truncate(content, input.maxChars)
+  const blockItems = readBlockItems(blocks.data)
+  const blockTypes: Record<string, number> = {}
+  const structuredTypes: string[] = []
+  for (const block of blockItems) {
+    const blockType = typeof block.block_type === 'number' ? block.block_type : 0
+    const name = BLOCK_TYPE_NAMES[blockType] ?? `type_${blockType}`
+    blockTypes[name] = (blockTypes[name] ?? 0) + 1
+    if (STRUCTURED_BLOCK_TYPES.has(blockType) && !structuredTypes.includes(name)) {
+      structuredTypes.push(name)
+    }
+  }
+  const hint = structuredTypes.length > 0
+    ? input.includeBlocks
+      ? `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Structured block details are included in the blocks field.`
+      : `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Re-run FeishuRead with include_blocks:true to return the raw document blocks.`
+    : undefined
+
   return {
     documentId: input.documentId,
     ...(title ? { title } : {}),
     content: clipped.value,
     truncated: clipped.truncated,
+    ...(revisionId ? { revision_id: revisionId } : {}),
+    block_count: blockItems.length,
+    block_types: blockTypes,
+    ...(input.includeBlocks ? { blocks: blockItems } : {}),
+    ...(hint ? { hint } : {}),
     ...(content ? {} : { rawData: raw.data }),
   }
+}
+
+function readBlockItems(input: unknown): Array<Record<string, unknown>> {
+  if (!input || typeof input !== 'object') {
+    return []
+  }
+  const items = (input as Record<string, unknown>).items
+  if (!Array.isArray(items)) {
+    return []
+  }
+  return items.filter((item): item is Record<string, unknown> =>
+    Boolean(item) && typeof item === 'object')
 }
 
 export async function createDoc(input: {
@@ -197,6 +263,9 @@ type FeishuDocClient = {
       create(input: unknown): Promise<FeishuEnvelope>
       get(input: unknown): Promise<FeishuEnvelope>
       rawContent(input: unknown): Promise<FeishuEnvelope>
+    }
+    documentBlock: {
+      list(input: unknown): Promise<FeishuEnvelope>
     }
     documentBlockChildren: {
       create(input: unknown): Promise<FeishuEnvelope>
