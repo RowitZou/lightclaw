@@ -25,12 +25,9 @@ pnpm dev                 # tsx src/cli.ts — fastest iteration, no build needed
 pnpm build && pnpm start # build to dist/cli.js then run with node
 ```
 
-Requires Node 22+, pnpm 10+, and Python 3. `WebFetch` in LocalRuntime uses the
-environment helper script and requires `markdownify`:
-
-```bash
-python3 -m pip install --user markdownify
-```
+Requires Node 22+, pnpm 10+, and Python 3 (used by `Read` for Office document
+and PDF text extraction in LocalRuntime). `WebFetch` / `WebSearch` are
+daemon-side TypeScript and need no Python helper.
 
 Drop a minimal `~/.lightclaw/config.json` to get started — see [Configuration](#configuration) below for the full template:
 
@@ -361,7 +358,7 @@ The Docker image ships with the daily-driver toolkit:
 
 - **Shell / data**: jq, yq, sqlite, ripgrep, fd, Node 22
 - **Python data-science**: numpy / pandas / scipy / matplotlib / pyarrow / jsonlines / dotenv / requests / httpx
-- **Multimodal helpers** (used by `Read` and the WebFetch helper): `poppler-utils` (`pdftotext` + `pdftoppm` for PDF text + page rasterization), `Pillow` (image resize for vision sub-LLM), `openpyxl` / `python-docx` / `python-pptx` (Office docs), `markdownify` / `trafilatura` (HTML → Markdown)
+- **Multimodal helpers** (used by `Read`): `poppler-utils` (`pdftotext` + `pdftoppm` for PDF text + page rasterization), `Pillow` (image resize for vision sub-LLM), `openpyxl` / `python-docx` / `python-pptx` (Office docs). HTML → Markdown for `WebFetch` is daemon-side TypeScript (`turndown`), not a sandbox dependency.
 
 At startup LightClaw pulls the image in the background; tool calls degrade to chat-only until it's ready, so the first conversation never hangs. The image is published as `ghcr.io/rowitzou/lightclaw-sandbox:<version>` — the tag matches the `package.json` version of the daemon you're running, plus the `:latest` floating tag.
 

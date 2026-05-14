@@ -89,18 +89,16 @@ function providerSupportsKindInToolResult(
  *      breadcrumb pointing the agent at Read({pages, visual:true}) so the
  *      same content can be recovered as image pages on the next turn.
  *
- *  KNOWN GAP (Phase 36 PR2 / PR3 follow-up): the plan v2 reference §4.2
- *  called for `documentDowngrade` to render PDF pages via pdftoppm and
- *  emit them as image blocks for in-place downgrade (so the chain
- *  document → image pages → describe text completes in a single
- *  finalize pass without losing visual content). That requires plumbing
- *  a `Runtime` into `FinalizationContext` since pdftoppm runs in the
- *  sandbox. PR2 / PR3 shipped without that plumbing; documents land as
- *  a text marker instead. In current code-paths this only fires for
- *  stale transcript replay (cache flipped between turns) — Read.readPdfVisual
- *  checks cache before emitting documents, so same-turn first-pass never
- *  hits this branch. The text marker tells the agent to re-Read with
- *  `pages` + `visual:true` if it needs the visual content again.
+ *  `documentDowngrade` renders PDF pages via pdftoppm and emits them as
+ *  image blocks for in-place downgrade, so the chain document → image
+ *  pages → describe text completes in a single finalize pass without
+ *  losing visual content. It needs a `Runtime` on `FinalizationContext`
+ *  (pdftoppm runs in the sandbox); when that `Runtime` is absent the
+ *  document falls back to an actionable text marker telling the agent to
+ *  re-Read with `pages` + `visual:true`. In practice this whole branch
+ *  only fires for stale transcript replay (cache flipped between turns) —
+ *  Read.readPdfVisual checks the cache before emitting documents, so a
+ *  same-turn first pass never reaches it.
  *
  *  Top-level image blocks in user messages (user-attached attachments
  *  from a channel) are NOT touched here — the channel runner's
