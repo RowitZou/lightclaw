@@ -333,6 +333,48 @@ export class FeishuSender {
     }
   }
 
+  // Proactive markdown push to a chat_id (group or DM) when there is no
+  // inbound message to reply against. Used by BackgroundTask wake delivery:
+  // a notify_to:'agent' wake that ran on a group-origin transcript delivers
+  // its notify_user output back to that origin group via this method, so the
+  // result rejoins the conversation that motivated the task. Goes through
+  // im.message.create with receive_id_type=chat_id (no reply target).
+  async sendMarkdownTextToChatId(
+    chatId: string,
+    text: string,
+    ctx: SendNoticeContext = {},
+  ): Promise<void> {
+    const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i]!
+      const card = buildMarkdownCard(chunk)
+      try {
+        await this.sendReplyOrCreate({
+          chatId,
+          msgType: 'interactive',
+          content: JSON.stringify(card),
+        })
+      } catch (err) {
+        if (await this.maybeEnqueueOnTransient(err, {
+          recipient: { type: 'create', chatId },
+          payload: { kind: 'card', card },
+          ctx,
+        })) {
+          for (let j = i + 1; j < chunks.length; j += 1) {
+            await this.enqueue({
+              recipient: { type: 'create', chatId },
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              ctx,
+              lastError: 'follow-up chunk enqueued after preceding chunk failed',
+            })
+          }
+          return
+        }
+        throw err
+      }
+    }
+  }
+
   async sendFile(
     message: NormalizedChannelMessage,
     file: OutgoingChannelFile,

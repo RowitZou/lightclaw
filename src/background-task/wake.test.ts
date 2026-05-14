@@ -6,7 +6,15 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
-import { buildWakePrompt, resolveOriginWakeSessionId, resolveWakeSessionId, wakeMainAgent } from './wake.js'
+import { clearFeishuSender, registerFeishuSender } from '../channels/feishu/sender-registry.js'
+import type { FeishuSender } from '../channels/feishu/sender.js'
+import {
+  buildWakePrompt,
+  deliverWakeNotification,
+  resolveOriginWakeSessionId,
+  resolveWakeSessionId,
+  wakeMainAgent,
+} from './wake.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 
 describe('buildWakePrompt', () => {
@@ -222,6 +230,86 @@ describe('wakeMainAgent input gates', () => {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }
+  })
+})
+
+describe('deliverWakeNotification origin routing', () => {
+  let calls: Array<{ chatId?: string; openId?: string; text: string }>
+  let fakeSender: Pick<FeishuSender, 'sendMarkdownTextToChatId' | 'sendMarkdownTextToOpenId'>
+
+  beforeEach(() => {
+    calls = []
+    fakeSender = {
+      async sendMarkdownTextToChatId(chatId: string, text: string) {
+        calls.push({ chatId, text })
+      },
+      async sendMarkdownTextToOpenId(openId: string, text: string) {
+        calls.push({ openId, text })
+      },
+    }
+    registerFeishuSender(fakeSender as unknown as FeishuSender)
+  })
+
+  afterEach(() => {
+    clearFeishuSender(fakeSender as unknown as FeishuSender)
+  })
+
+  it('group-origin wake delivers notify_user output to the origin group chat_id', async () => {
+    await deliverWakeNotification({
+      wakeSessionId: 'feishu:group:oc_grp:ou_alice',
+      ownerOpenId: 'ou_alice',
+      taskLabel: 'NVDA watch',
+      result: { kind: 'notify', text: 'NVDA up 3%' },
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.chatId, 'oc_grp')
+    assert.equal(calls[0]?.openId, undefined)
+    assert.match(calls[0]?.text ?? '', /NVDA watch/)
+    assert.match(calls[0]?.text ?? '', /NVDA up 3%/)
+  })
+
+  it('topic-group origin delivers to the parent group chat_id (threadId not separately addressed)', async () => {
+    await deliverWakeNotification({
+      wakeSessionId: 'feishu:group:oc_grp:omt_thread:ou_alice',
+      ownerOpenId: 'ou_alice',
+      taskLabel: 'X',
+      result: { kind: 'notify', text: 'y' },
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.chatId, 'oc_grp')
+  })
+
+  it('DM-origin wake delivers to the owner DM open_id', async () => {
+    await deliverWakeNotification({
+      wakeSessionId: 'feishu:dm:oc_dm',
+      ownerOpenId: 'ou_alice',
+      taskLabel: 'X',
+      result: { kind: 'notify', text: 'y' },
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.openId, 'ou_alice')
+    assert.equal(calls[0]?.chatId, undefined)
+  })
+
+  it('non-Feishu wakeSessionId (fallback) delivers to the owner DM open_id', async () => {
+    await deliverWakeNotification({
+      wakeSessionId: 'terminal-alice',
+      ownerOpenId: 'ou_alice',
+      taskLabel: 'X',
+      result: { kind: 'notify', text: 'y' },
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.openId, 'ou_alice')
+  })
+
+  it('delivers nothing when the wake decision is not notify', async () => {
+    await deliverWakeNotification({
+      wakeSessionId: 'feishu:group:oc_grp:ou_alice',
+      ownerOpenId: 'ou_alice',
+      taskLabel: 'X',
+      result: { kind: 'silent', reason: 'nothing to report' },
+    })
+    assert.equal(calls.length, 0)
   })
 })
 

@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { channelSessionLock } from '../channels/session-lock.js'
+import { parseFeishuSessionId } from '../channels/feishu/routing.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { getConfig } from '../config.js'
 import { getAdmin } from '../identity/store.js'
@@ -50,10 +51,10 @@ import type { BackgroundTaskEntry, FireOutcome, WakeNotifyResult } from './types
  *     origin link there's no principled way to pick a group, and the privacy
  *     boundary (do not leak task content into a group transcript that other
  *     members may share) defaults to DM.
- *   - Privacy is preserved end-to-end at delivery: `deliverWakeNotification`
- *     ALWAYS pushes the user markdown to the DM open_id regardless of which
- *     transcript the wake `query()` ran on, so group-origin wakes never
- *     surface notify_user text into the group chat.
+ *   - This fallback only ever resolves to a DM session, so its
+ *     `deliverWakeNotification` always lands in DM anyway. Origin-aware
+ *     group delivery only happens when `resolveOriginWakeSessionId`
+ *     supplied a group `wakeSessionId`.
  */
 export async function resolveWakeSessionId(
   canonicalUser: string,
@@ -145,9 +146,10 @@ export async function wakeMainAgent(input: {
    *  Bug 15: group sessions are now accepted so notify_to:'agent' wakes land
    *  back in the chat the task was created from, inheriting that chat's
    *  conversation context. The pre-Phase-26 hard-coded `feishu-<canonical>`
-   *  form is rejected here as defense-in-depth. Privacy is preserved at
-   *  delivery: `deliverWakeNotification` still pushes markdown to DM regardless
-   *  of which transcript the wake `query()` ran on. */
+   *  form is rejected here as defense-in-depth. `deliverWakeNotification`
+   *  routes the user-facing notify_user output to the same chat this
+   *  sessionId names — group-origin lands in the origin group, DM-origin
+   *  lands in DM. */
   mainSessionId: string
   task: BackgroundTaskEntry
   outcome: FireOutcome
@@ -278,7 +280,28 @@ export async function wakeMainAgent(input: {
   })
 }
 
+/**
+ * Deliver a wake-mode `notify_user` decision back to the chat the
+ * BackgroundTask was created from.
+ *
+ * Routing follows `wakeSessionId` — the session the wake `query()` actually
+ * ran on (origin-preferred via `resolveOriginWakeSessionId`, else the
+ * most-recent-DM fallback):
+ *   - group-origin → push to the origin group's chat_id, so the result
+ *     rejoins the conversation that motivated the task. `notify_to:'user'`
+ *     tasks never reach the wake path (they go through the completion-card
+ *     coordinator), so a group landing here is always a BackgroundTask the
+ *     user explicitly scheduled in that group — delivering back to it is the
+ *     expected behavior, not a privacy leak.
+ *   - DM-origin, or `wakeSessionId` that does not parse to a Feishu session
+ *     (terminal-origin task, or a deleted origin transcript that fell back to
+ *     most-recent DM) → push to the owner's DM open_id.
+ *
+ * `notify_to:'user'` is the path that stays DM-only; that contract is
+ * unchanged and lives in the completion-card coordinator, not here.
+ */
 export async function deliverWakeNotification(input: {
+  wakeSessionId: string
   ownerOpenId: string
   taskLabel: string
   result: WakeNotifyResult
@@ -291,10 +314,16 @@ export async function deliverWakeNotification(input: {
     process.stderr.write('[background-task] no Feishu sender registered; wake notification skipped\n')
     return
   }
-  await sender.sendMarkdownTextToOpenId(
-    input.ownerOpenId,
-    `🔔 ${input.taskLabel}\n\n${input.result.text}`,
-  )
+  const text = `🔔 ${input.taskLabel}\n\n${input.result.text}`
+  const parsed = parseFeishuSessionId(input.wakeSessionId)
+  if (parsed?.kind === 'group') {
+    // topic-group threadId is intentionally not addressed separately —
+    // im.message.create cannot target a thread without a reply anchor, so
+    // the notification lands in the parent group chat.
+    await sender.sendMarkdownTextToChatId(parsed.chatId, text)
+    return
+  }
+  await sender.sendMarkdownTextToOpenId(input.ownerOpenId, text)
 }
 
 export function buildWakePrompt(
@@ -342,7 +371,7 @@ export function buildWakePrompt(
       '',
       'If you call stay_silent without updating allowed_tools, the task remains broken and will likely fail again.',
       'High-risk patterns such as rm/dd/sudo are routed directly to the user approval card and should not appear in this wake.',
-      'notify_user delivery: your notify_user({text}) is pushed to the user as a private DM markdown — it does NOT echo into the chat this wake is running in. So even if this wake is running in a group session for context, calling notify_user does not leak to the group; you do not need to "also reply in this chat" after notify_user.',
+      'notify_user delivery: your notify_user({text}) is delivered by the framework back to the chat this BackgroundTask was created from — the DM if it was scheduled in a DM, or the origin group if it was scheduled there. It is sent exactly once; do not also reply in this chat yourself after calling notify_user.',
     ].join('\n')
   }
   return [
