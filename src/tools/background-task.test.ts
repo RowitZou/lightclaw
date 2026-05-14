@@ -12,6 +12,7 @@ import {
   loadBackgroundTasks,
 } from '../background-task/store.js'
 import { backgroundTaskTool, cancelBackgroundTaskTool, updateBackgroundTaskTool } from './background-task.js'
+import { agentTool } from './agent.js'
 
 let tmpHome: string
 
@@ -27,6 +28,25 @@ beforeEach(() => {
 afterEach(() => {
   setLightclawHomeOverride(undefined)
   rmSync(tmpHome, { recursive: true, force: true })
+})
+
+describe('tool description guidance', () => {
+  it('notify_to guidance frames the choice as "does the main agent handle the result"', () => {
+    const desc = backgroundTaskTool.description
+    // New framing: the deciding factor is whether the main agent must
+    // process the fire result, not whether the user is notified every time.
+    assert.match(desc, /does the main agent need to handle this fire's result/)
+    assert.match(desc, /Litmus test: can the background task's raw output be sent to the user untouched/)
+    assert.match(desc, /Needing the agent in the loop is the deciding factor/)
+    // Old framing must not regress back in.
+    assert.doesNotMatch(desc, /pick by what the user expects/)
+  })
+
+  it('AgentTool description cross-references BackgroundTask on the sync/async boundary', () => {
+    const desc = agentTool.description
+    assert.match(desc, /AgentTool vs BackgroundTask/)
+    assert.match(desc, /the turn blocks until every forked agent returns/)
+  })
 })
 
 describe('BackgroundTask tools', () => {
