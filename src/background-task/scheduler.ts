@@ -385,10 +385,11 @@ export class BackgroundTaskScheduler {
       //       context that motivated the task. Fall back to "most recent DM"
       //       only when origin is missing (legacy pre-Bug-15 tasks) or its
       //       transcript no longer exists on disk.
-      //   (3) Privacy is preserved at delivery: `deliverWakeNotification`
-      //       still pushes user markdown to DM open_id regardless of origin,
-      //       so group-origin wakes never leak notify_user text into the
-      //       group chat.
+      //   (3) Delivery follows origin: `deliverWakeNotification` routes the
+      //       notify_user output back to the chat the task was created from
+      //       (group-origin → origin group, DM-origin / unparseable → DM).
+      //       notify_to:'user' is the DM-only contract and never reaches the
+      //       wake path; a group landing here is an explicit in-group task.
       const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
       const adminBlocksWake = adminId !== null && adminId !== canonicalUser
       const sessionsDir = this.config?.sessionsDir
@@ -426,6 +427,7 @@ export class BackgroundTaskScheduler {
           ...(priorPromptNotice ? { priorPromptNotice } : {}),
         })
         await deliverWakeNotification({
+          wakeSessionId,
           ownerOpenId,
           taskLabel: task.label,
           result,
