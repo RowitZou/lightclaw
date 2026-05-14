@@ -5,6 +5,7 @@ import { URL } from 'node:url'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
+import type { FeishuRecallEvent } from './transport-ws.js'
 
 export type WebhookServer = {
   close(): Promise<void>
@@ -12,7 +13,7 @@ export type WebhookServer = {
 
 export type { FeishuRawMessage }
 
-export async function startFeishuWebhookServer(input: {
+type WebhookHandlerInput = {
   config: FeishuChannelConfig
   dedup: FeishuDedup
   /**
@@ -23,7 +24,14 @@ export async function startFeishuWebhookServer(input: {
    */
   botOpenId?: string
   onMessage(message: FeishuRawMessage): void | Promise<void>
-}): Promise<WebhookServer> {
+  /**
+   * Invoked when a user recalls a message. Optional so older callers keep
+   * compiling; mirrors startFeishuWsClient's onRecall.
+   */
+  onRecall?(recall: FeishuRecallEvent): void | Promise<void>
+}
+
+export async function startFeishuWebhookServer(input: WebhookHandlerInput): Promise<WebhookServer> {
   const server = http.createServer((req, res) => {
     void handleRequest(req, res, input)
   })
@@ -44,12 +52,7 @@ export async function startFeishuWebhookServer(input: {
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  input: {
-    config: FeishuChannelConfig
-    dedup: FeishuDedup
-    botOpenId?: string
-    onMessage(message: FeishuRawMessage): void | Promise<void>
-  },
+  input: WebhookHandlerInput,
 ): Promise<void> {
   if (req.method !== 'POST' || !matchesPath(req.url ?? '/', input.config.webhook.path)) {
     respond(res, 404, 'Not Found')
@@ -109,21 +112,34 @@ async function handleRequest(
   }
 
   const message = normalizeEvent(body, input.botOpenId)
-  if (!message) {
+  if (message) {
+    if (!await input.dedup.claim(message.eventId)) {
+      respondJson(res, 200, {})
+      return
+    }
     respondJson(res, 200, {})
+    void Promise.resolve(input.onMessage(message)).catch(error => {
+      const text = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`feishu: message handler failed: ${text}\n`)
+    })
     return
   }
 
-  if (!await input.dedup.claim(message.eventId)) {
+  const recall = normalizeRecallEvent(body)
+  if (recall) {
+    if (!await input.dedup.claim(recall.eventId)) {
+      respondJson(res, 200, {})
+      return
+    }
     respondJson(res, 200, {})
+    void Promise.resolve(input.onRecall?.(recall)).catch(error => {
+      const text = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`feishu: recall handler failed: ${text}\n`)
+    })
     return
   }
 
   respondJson(res, 200, {})
-  void Promise.resolve(input.onMessage(message)).catch(error => {
-    const text = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`feishu: message handler failed: ${text}\n`)
-  })
 }
 
 function matchesPath(rawUrl: string, expectedPath: string): boolean {
@@ -248,6 +264,27 @@ export function normalizeEvent(
     text: parsed.text,
     mediaKeys: parsed.mediaKeys,
   }
+}
+
+// Exported for unit-test access. Recognizes the im.message.recalled_v1
+// webhook envelope; returns null for every other event type so it composes
+// cleanly after normalizeEvent in the request handler. The eventId fallback
+// is prefixed `recall:` for the same anti-collision reason as the WS path.
+export function normalizeRecallEvent(
+  body: Record<string, unknown>,
+): FeishuRecallEvent | null {
+  const headerValue = asRecord(body.header)
+  if (headerValue?.event_type !== 'im.message.recalled_v1') {
+    return null
+  }
+  const event = asRecord(body.event)
+  const messageId = stringValue(event?.message_id)
+  const chatId = stringValue(event?.chat_id)
+  if (!messageId || !chatId) {
+    return null
+  }
+  const eventId = stringValue(headerValue?.event_id) ?? `recall:${messageId}`
+  return { eventId, messageId, chatId }
 }
 
 function parseMentions(value: unknown): Array<{ key?: string; name?: string; openId?: string }> {

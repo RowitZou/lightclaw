@@ -323,6 +323,7 @@ LightClaw 全程使用机器人的 tenant access token。请在飞书开放平�
 在"事件与回调"里订阅这些事件：
 
 - `im.message.receive_v1`
+- `im.message.recalled_v1`（撤回消息时中断它所触发的对话轮次）
 - `card.action.trigger`（如果后台同时显示 `card.action.trigger_v1` / `interactive_card.action.trigger`，一并勾上）
 
 权限或事件改完后必须在后台**重新发布应用版本**才会生效。

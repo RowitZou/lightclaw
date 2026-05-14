@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { normalizeReceiveV1 } from './transport-ws.js'
-import { normalizeEvent } from './transport-webhook.js'
+import { normalizeReceiveV1, normalizeRecalledV1 } from './transport-ws.js'
+import { normalizeEvent, normalizeRecallEvent } from './transport-webhook.js'
 
 const BOT_ID = 'ou_bot'
 
@@ -141,6 +141,55 @@ describe('normalizeEvent (webhook) strip-empty escape', () => {
 
   it('still drops empty messages without any bot mention', () => {
     const result = normalizeEvent(buildBody({ text: '' }), BOT_ID)
+    assert.equal(result, null)
+  })
+})
+
+describe('recall event normalization', () => {
+  it('normalizeRecalledV1 extracts messageId + chatId from a ws recall event', () => {
+    const recall = normalizeRecalledV1({
+      event_id: 'evt-recall-1',
+      message_id: 'om_recalled',
+      chat_id: 'oc_test',
+      recall_time: '1700000000',
+      recall_type: 'message_owner',
+    })
+    assert.ok(recall)
+    assert.equal(recall.eventId, 'evt-recall-1')
+    assert.equal(recall.messageId, 'om_recalled')
+    assert.equal(recall.chatId, 'oc_test')
+  })
+
+  it('normalizeRecalledV1 falls back to a recall:-prefixed eventId when event_id is absent', () => {
+    const recall = normalizeRecalledV1({ message_id: 'om_x', chat_id: 'oc_y' })
+    assert.ok(recall)
+    // The recall: prefix keeps this dedup key from colliding with a
+    // receive_v1 claim that also fell back to a bare message_id.
+    assert.equal(recall.eventId, 'recall:om_x')
+  })
+
+  it('normalizeRecalledV1 returns null without message_id or chat_id', () => {
+    assert.equal(normalizeRecalledV1({ message_id: 'om_x' }), null)
+    assert.equal(normalizeRecalledV1({ chat_id: 'oc_y' }), null)
+    assert.equal(normalizeRecalledV1({}), null)
+  })
+
+  it('normalizeRecallEvent reads the im.message.recalled_v1 webhook envelope', () => {
+    const recall = normalizeRecallEvent({
+      header: { event_type: 'im.message.recalled_v1', event_id: 'evt-w-1' },
+      event: { message_id: 'om_w', chat_id: 'oc_w', recall_type: 'message_owner' },
+    })
+    assert.ok(recall)
+    assert.equal(recall.eventId, 'evt-w-1')
+    assert.equal(recall.messageId, 'om_w')
+    assert.equal(recall.chatId, 'oc_w')
+  })
+
+  it('normalizeRecallEvent returns null for non-recall webhook envelopes', () => {
+    const result = normalizeRecallEvent({
+      header: { event_type: 'im.message.receive_v1' },
+      event: { message: { message_id: 'm', chat_id: 'c' } },
+    })
     assert.equal(result, null)
   })
 })

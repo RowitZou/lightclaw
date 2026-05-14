@@ -10,6 +10,11 @@ export type FakeStrategy = ChannelRunnerStrategy & {
     text: string
     bodyFormat?: 'lark_md' | 'plain_text'
   }>
+  chatNotices: Array<{
+    chatId: string
+    kind: SystemNoticeKind
+    text: string
+  }>
 }
 
 export async function runConcurrent<T>(
@@ -48,12 +53,14 @@ export function installFakeStrategy(
 ): FakeStrategy {
   const replies: FakeStrategy['replies'] = []
   const notices: FakeStrategy['notices'] = []
+  const chatNotices: FakeStrategy['chatNotices'] = []
   return {
     channelId,
     cwd: opts?.cwd ?? process.cwd(),
     permissionMode: opts?.permissionMode ?? 'default',
     replies,
     notices,
+    chatNotices,
     isMessageAllowed: () => opts?.allowed ?? true,
     resolveSessionId: (message, userId) =>
       message.chatId || `${channelId}-${userId}`,
@@ -63,6 +70,9 @@ export function installFakeStrategy(
     },
     async sendNotice(message, kind, text, bodyFormat) {
       notices.push({ messageId: message.messageId, kind, text, bodyFormat })
+    },
+    async sendNoticeToChatId(chatId, kind, text) {
+      chatNotices.push({ chatId, kind, text })
     },
   }
 }
