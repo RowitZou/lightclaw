@@ -252,6 +252,37 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
     assert.match(result.output as string, /\[Binary content \(application\/pdf, \d+(\.\d+)?[A-Z]*B\) saved to/)
   })
 
+  it('binary download is saved in full even when maxBytes is small (no byte-truncation)', async () => {
+    // 2026-05-14 dogfood regression: maxBytes used to slice the binary byte
+    // stream, producing a structurally-dead PDF (xref/trailer chopped off →
+    // `pdftotext: Couldn't find trailer dictionary`, Read returned empty
+    // text). maxBytes must not touch the binary path — the file is bounded
+    // by the HTTP layer's 10 MB cap, not by the text-context budget, and it
+    // never enters model context anyway (only its path does).
+    const bigPdf = Buffer.alloc(250_000, 0x41) // 250 KB, far over any maxBytes
+    bigPdf.write('%PDF-1.7', 0)
+    _setDaemonFetchUrlForTests(async () => ({
+      status: 200,
+      finalUrl: 'https://arxiv.org/pdf/2604.28181',
+      contentType: 'application/pdf',
+      bytes: bigPdf,
+    }))
+    const writes = new Map<string, Buffer>()
+    const result = await webFetchTool.call(
+      { url: 'https://arxiv.org/pdf/2604.28181', maxBytes: 1024 },
+      buildCtx({ fsWrites: writes }),
+    )
+    assert.equal(result.isError, undefined)
+    assert.equal(writes.size, 1)
+    const [savedPath, savedBytes] = [...writes.entries()][0]
+    // The FULL 250 KB landed on disk — not sliced to maxBytes (1024).
+    assert.equal(savedBytes.length, 250_000)
+    assert.match(savedPath, /\.pdf$/)
+    // Header reports the true byte count with no "(truncated)" flag.
+    assert.match(result.output as string, /Bytes: 250000/)
+    assert.doesNotMatch(result.output as string, /truncated/)
+  })
+
   it('4xx HTTP error: surfaces axios message inside WebFetch failed envelope, with URL appended for forensics', async () => {
     // Daemon-side WebFetch wraps fetch failures in the same envelope the
     // Python helper used: `WebFetch failed (exit 1): fetch failed: <msg>`.

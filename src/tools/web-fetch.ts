@@ -42,7 +42,7 @@ export const webFetchTool = buildTool({
   shouldDefer: true,
   description: `Fetch content from a URL.
 
-Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office). For pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more bytes from the helper.
+Without a \`prompt\` field: returns the page as Markdown (HTML/text shaped responses) or downloads binary to .lightclaw/downloads/ (PDF/image/archive/office) — binary files are always saved in full; Read them by the returned path. For text pages longer than ${MAX_RAW_LENGTH} chars the raw output is truncated with a marker — raise \`maxBytes\` (up to ${MAX_BYTES_HARD_CAP}) to pull more text. \`maxBytes\` caps only the text path; it has no effect on binary downloads.
 
 With a \`prompt\` field: a sub-LLM reads the fetched markdown and answers your prompt. The sub-LLM has no tool access; it only summarizes / extracts from the page. Use for "what does this page say about X" / "extract the API endpoints from this docs page" / "is there a section on Y in this README". Caveat: the sub-LLM sees the same helper output the no-prompt path returns, so it can still miss content past the byte cap — if anything past the cap matters, fetch without \`prompt\` (raise \`maxBytes\` if needed) and read it yourself.
 
@@ -105,27 +105,34 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
         timeoutMs,
       )
       if (isBinaryContentType(fetched.contentType)) {
-        // Binary path: persist raw bytes to download dir via daemon ↔ worker
-        // fs bridge; report the path on stdout so the agent can Read it.
-        // maxBytes is the cap on the persisted file size; oversized
-        // downloads are written truncated with a flag in the header
-        // (mirrors the Python helper's behavior post-PR #2).
-        const truncated = fetched.bytes.length > maxBytes
-        const bytesOut = truncated
-          ? fetched.bytes.subarray(0, maxBytes)
-          : fetched.bytes
+        // Binary path: persist the FULL raw bytes to the download dir via the
+        // daemon ↔ worker fs bridge; report the path on stdout so the agent
+        // can Read it. `maxBytes` is deliberately NOT applied here.
+        //
+        // 2026-05-14 dogfood: a model passed `maxBytes: 100000` on an
+        // arxiv PDF fetch; the old code did `fetched.bytes.subarray(0,
+        // maxBytes)` and wrote a 100000-byte file. A PDF's xref table +
+        // trailer live at the END of the file — chop the tail and the file
+        // is structurally dead (`pdftotext: Couldn't find trailer
+        // dictionary`), so the subsequent Read returned empty text. Byte-
+        // truncating a binary produces a file no downstream tool can open,
+        // and the file never enters model context anyway (only its path
+        // does), so there is no context-budget reason to cap it. `maxBytes`
+        // stays a cap on the *text* extraction path below, where a
+        // truncated string is still usable. The real size guard is the
+        // HTTP layer's MAX_HTTP_CONTENT_LENGTH (10 MB) — axios hard-fails
+        // above it with a clean error instead of silent corruption.
         const filename = deriveFilename(
           fetched.finalUrl,
           fetched.contentType.toLowerCase(),
         )
         const filepath = path.posix.join(downloadDir, filename)
-        await context.runtime.fs.writeFile(filepath, bytesOut)
+        await context.runtime.fs.writeFile(filepath, fetched.bytes)
         rawMarkdown = formatBinaryResponse({
           url: fetched.finalUrl,
           status: fetched.status,
           contentType: fetched.contentType,
-          bytes: bytesOut.length,
-          truncated,
+          bytes: fetched.bytes.length,
           filepath,
         })
       } else {
@@ -263,15 +270,16 @@ function formatTextResponse(opts: {
   return header + '\n' + opts.body
 }
 
-/** 5-line header + binary-body line, byte-identical to webfetch.py:347-352.
- *  `Bytes:` here IS the raw byte count (binary doesn't go through an
- *  extractor, so "what the model sees" === "what landed on disk"). */
+/** 5-line header + binary-body line, byte-identical to webfetch.py:347-352
+ *  minus the truncation flag (binary downloads are always persisted in
+ *  full now — see the binary branch in `call()`). `Bytes:` IS the raw byte
+ *  count: binary doesn't go through an extractor, so "what landed on disk"
+ *  === the full response body. */
 function formatBinaryResponse(opts: {
   url: string
   status: number
   contentType: string
   bytes: number
-  truncated: boolean
   filepath: string
 }): string {
   const ctLabel = opts.contentType || 'unknown'
@@ -279,14 +287,13 @@ function formatBinaryResponse(opts: {
     `URL: ${opts.url}`,
     `Status: ${opts.status}`,
     `Content-Type: ${ctLabel}`,
-    `Bytes: ${opts.bytes}${opts.truncated ? ' (truncated)' : ''}`,
+    `Bytes: ${opts.bytes}`,
     '',
   ].join('\n')
-  const truncatedLabel = opts.truncated ? ' (truncated)' : ''
   return (
     header +
     '\n' +
-    `[Binary content (${ctLabel}, ${formatSize(opts.bytes)})${truncatedLabel} saved to ${opts.filepath}]`
+    `[Binary content (${ctLabel}, ${formatSize(opts.bytes)}) saved to ${opts.filepath}]`
   )
 }
 
