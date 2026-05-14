@@ -17,14 +17,30 @@ export type FeishuDocReadResult = {
   content: string
   truncated: boolean
   revision_id?: string
-  block_count: number
-  block_types: Record<string, number>
+  // block_count / block_types are omitted when the block listing call failed —
+  // reporting a fake 0 would be indistinguishable from a genuinely empty doc.
+  block_count?: number
+  block_types?: Record<string, number>
   blocks?: Array<Record<string, unknown>>
+  blocks_truncated?: boolean
   hint?: string
   rawData?: unknown
 }
 
-const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32])
+// Block types whose content does NOT appear in docx rawContent plain text, so
+// the model needs include_blocks:true (or at least a heads-up) to see them.
+// Code (14) is intentionally excluded — code text IS present in rawContent.
+// TableCell (32) is excluded because Table (31) already signals "has a table".
+const STRUCTURED_BLOCK_TYPES = new Set([18, 21, 23, 27, 30, 31])
+
+const FEISHU_DOC_BLOCK_PAGE_SIZE = 500
+// Hard ceiling on pagination so a pathological doc cannot fan out unbounded
+// API calls; ~10k blocks is well past any real document.
+const FEISHU_DOC_BLOCK_MAX_PAGES = 20
+// Cap on raw blocks echoed back when include_blocks:true — the blocks field is
+// otherwise uncapped (unlike content, which has max_chars) and a large doc's
+// raw block JSON can blow up the tool_result.
+const FEISHU_DOC_BLOCKS_RETURN_CAP = 1000
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
   1: 'Page',
@@ -54,10 +70,18 @@ export async function readDocPlainText(input: {
   includeBlocks?: boolean
 }): Promise<FeishuDocReadResult> {
   const client = input.client as FeishuDocClient
-  const [info, raw, blocks] = await Promise.all([
+  // The block listing is best-effort: a doc read must still return its plain
+  // text even if the (third, paginated) block API call fails — otherwise this
+  // feature turns a 2-call read into a strictly more fragile 3-call read.
+  const [info, raw, blockListing] = await Promise.all([
     callFeishu(() => client.docx.document.get({ path: { document_id: input.documentId } })),
     callFeishu(() => client.docx.document.rawContent({ path: { document_id: input.documentId } })),
-    callFeishu(() => client.docx.documentBlock.list({ path: { document_id: input.documentId } })),
+    listAllDocBlocks(client, input.documentId).catch((error: unknown) => {
+      process.stderr.write(
+        `[feishu] doc block list failed for ${input.documentId}: ${formatBlockListError(error)}\n`,
+      )
+      return null
+    }),
   ])
   const title = readNestedString(info.data, ['document', 'title']) ??
     readNestedString(info.data, ['title'])
@@ -67,7 +91,20 @@ export async function readDocPlainText(input: {
     readNestedString(raw.data, ['document', 'content']) ??
     ''
   const clipped = truncate(content, input.maxChars)
-  const blockItems = readBlockItems(blocks.data)
+
+  if (blockListing === null) {
+    return {
+      documentId: input.documentId,
+      ...(title ? { title } : {}),
+      content: clipped.value,
+      truncated: clipped.truncated,
+      ...(revisionId ? { revision_id: revisionId } : {}),
+      hint: 'Could not list document blocks (the block API call failed). Block statistics are unavailable; the plain text above still covers all non-structured content.',
+      ...(content ? {} : { rawData: raw.data }),
+    }
+  }
+
+  const blockItems = blockListing.items
   const blockTypes: Record<string, number> = {}
   const structuredTypes: string[] = []
   for (const block of blockItems) {
@@ -78,11 +115,30 @@ export async function readDocPlainText(input: {
       structuredTypes.push(name)
     }
   }
-  const hint = structuredTypes.length > 0
-    ? input.includeBlocks
-      ? `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Structured block details are included in the blocks field.`
-      : `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Re-run FeishuRead with include_blocks:true to return the raw document blocks.`
-    : undefined
+  const cappedBlocks = blockItems.slice(0, FEISHU_DOC_BLOCKS_RETURN_CAP)
+  const blocksReturnTruncated = input.includeBlocks &&
+    blockItems.length > FEISHU_DOC_BLOCKS_RETURN_CAP
+  const blocksTruncated = blockListing.pagesTruncated || blocksReturnTruncated
+
+  const hintParts: string[] = []
+  if (structuredTypes.length > 0) {
+    hintParts.push(
+      input.includeBlocks
+        ? `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Structured block details are included in the blocks field.`
+        : `This document contains ${structuredTypes.join(', ')} which are NOT included in the plain text above. Re-run FeishuRead with include_blocks:true to return the raw document blocks.`,
+    )
+  }
+  if (blockListing.pagesTruncated) {
+    hintParts.push(
+      `The block listing hit the ${FEISHU_DOC_BLOCK_MAX_PAGES}-page cap; block_count and block_types reflect only the first ${blockItems.length} blocks.`,
+    )
+  }
+  if (blocksReturnTruncated) {
+    hintParts.push(
+      `Only the first ${FEISHU_DOC_BLOCKS_RETURN_CAP} of ${blockItems.length} blocks are included in the blocks field.`,
+    )
+  }
+  const hint = hintParts.length > 0 ? hintParts.join(' ') : undefined
 
   return {
     documentId: input.documentId,
@@ -92,10 +148,57 @@ export async function readDocPlainText(input: {
     ...(revisionId ? { revision_id: revisionId } : {}),
     block_count: blockItems.length,
     block_types: blockTypes,
-    ...(input.includeBlocks ? { blocks: blockItems } : {}),
+    ...(input.includeBlocks ? { blocks: cappedBlocks } : {}),
+    ...(blocksTruncated ? { blocks_truncated: true } : {}),
     ...(hint ? { hint } : {}),
     ...(content ? {} : { rawData: raw.data }),
   }
+}
+
+type DocBlockListing = {
+  items: Array<Record<string, unknown>>
+  // true when pagination stopped at FEISHU_DOC_BLOCK_MAX_PAGES with more pages
+  // still available — block_count is then a lower bound, not exact.
+  pagesTruncated: boolean
+}
+
+// docx.documentBlock.list is paginated (page_size <= 500); a single call only
+// ever sees the first page. Walk page_token until has_more clears, bounded by
+// FEISHU_DOC_BLOCK_MAX_PAGES.
+async function listAllDocBlocks(
+  client: FeishuDocClient,
+  documentId: string,
+): Promise<DocBlockListing> {
+  const items: Array<Record<string, unknown>> = []
+  let pageToken: string | undefined
+  let pagesTruncated = false
+  for (let page = 0; page < FEISHU_DOC_BLOCK_MAX_PAGES; page++) {
+    const resp = await callFeishu(() => client.docx.documentBlock.list({
+      path: { document_id: documentId },
+      params: {
+        page_size: FEISHU_DOC_BLOCK_PAGE_SIZE,
+        ...(pageToken ? { page_token: pageToken } : {}),
+      },
+    }))
+    items.push(...readBlockItems(resp.data))
+    const data = resp.data && typeof resp.data === 'object'
+      ? resp.data as Record<string, unknown>
+      : {}
+    const nextToken = typeof data.page_token === 'string' ? data.page_token : ''
+    if (data.has_more === true && nextToken) {
+      pageToken = nextToken
+      if (page === FEISHU_DOC_BLOCK_MAX_PAGES - 1) {
+        pagesTruncated = true
+      }
+    } else {
+      break
+    }
+  }
+  return { items, pagesTruncated }
+}
+
+function formatBlockListError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function readBlockItems(input: unknown): Array<Record<string, unknown>> {

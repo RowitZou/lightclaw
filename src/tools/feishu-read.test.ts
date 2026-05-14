@@ -148,7 +148,10 @@ describe('FeishuRead tool', () => {
           },
           documentBlock: {
             list: async (input: unknown) => {
-              assert.deepEqual(input, { path: { document_id: 'docCanonical' } })
+              assert.deepEqual(input, {
+                path: { document_id: 'docCanonical' },
+                params: { page_size: 500 },
+              })
               return {
                 code: 0,
                 data: {
@@ -232,6 +235,80 @@ describe('FeishuRead tool', () => {
       ],
       hint: 'This document contains Table which are NOT included in the plain text above. Structured block details are included in the blocks field.',
     })
+  })
+
+  it('paginates documentBlock.list until has_more clears', async () => {
+    const listCalls: unknown[] = []
+    const result = await readDocPlainText({
+      client: {
+        docx: {
+          document: {
+            get: async () => ({ code: 0, data: { document: { title: 'Long doc' } } }),
+            rawContent: async () => ({ code: 0, data: { content: 'body' } }),
+          },
+          documentBlock: {
+            list: async (input: unknown) => {
+              listCalls.push(input)
+              if (listCalls.length === 1) {
+                return {
+                  code: 0,
+                  data: {
+                    items: [{ block_type: 2 }, { block_type: 2 }],
+                    has_more: true,
+                    page_token: 'page-2',
+                  },
+                }
+              }
+              return {
+                code: 0,
+                data: { items: [{ block_type: 2 }], has_more: false },
+              }
+            },
+          },
+        },
+      } as unknown as FeishuClient,
+      documentId: 'docCanonical',
+      maxChars: 1000,
+    })
+
+    assert.equal(listCalls.length, 2)
+    assert.deepEqual(listCalls[0], {
+      path: { document_id: 'docCanonical' },
+      params: { page_size: 500 },
+    })
+    assert.deepEqual(listCalls[1], {
+      path: { document_id: 'docCanonical' },
+      params: { page_size: 500, page_token: 'page-2' },
+    })
+    assert.equal(result.block_count, 3)
+    assert.deepEqual(result.block_types, { Text: 3 })
+    assert.equal(result.hint, undefined)
+  })
+
+  it('still returns plain text when the block listing fails', async () => {
+    const result = await readDocPlainText({
+      client: {
+        docx: {
+          document: {
+            get: async () => ({ code: 0, data: { document: { title: 'Doc title' } } }),
+            rawContent: async () => ({ code: 0, data: { content: 'doc body' } }),
+          },
+          documentBlock: {
+            list: async () => {
+              throw new Error('boom')
+            },
+          },
+        },
+      } as unknown as FeishuClient,
+      documentId: 'docCanonical',
+      maxChars: 1000,
+    })
+
+    assert.equal(result.documentId, 'docCanonical')
+    assert.equal(result.content, 'doc body')
+    assert.equal(result.block_count, undefined)
+    assert.equal(result.block_types, undefined)
+    assert.match(result.hint ?? '', /Could not list document blocks/)
   })
 
   it('reads sheet ranges when a range is provided', async () => {
