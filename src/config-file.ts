@@ -106,6 +106,10 @@ export type ConfigFileShape = {
     updateTokenThreshold?: number
     updateToolCallThreshold?: number
   }
+  memoryNudge?: {
+    enabled?: boolean
+    everyTurns?: number
+  }
   preCompactFlush?: {
     enabled?: boolean
     timeoutMs?: number

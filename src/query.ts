@@ -9,6 +9,7 @@ import {
 import { runHook } from './hooks/index.js'
 import { executeAutoDream } from './memory/dream/dream.js'
 import { extractMemories, flushBeforeCompact } from './memory/extract.js'
+import { buildMemoryNudgeBlock, isMemoryNudgeDue } from './memory/nudge.js'
 import {
   updateSessionMemory,
   type SessionMemoryUpdateInput,
@@ -886,6 +887,31 @@ export async function query(params: QueryParams): Promise<{
         })
         process.stderr.write(
           `query: injected ${interjections.length} interjection${interjections.length === 1 ? '' : 's'} into next user message\n`,
+        )
+      }
+      // Memory Nudge: every `memoryNudge.everyTurns` agent-loop turns, ride a
+      // passive reminder onto this tool-boundary user message so the live
+      // agent can persist a finding — with the "why" — via MemoryWrite while
+      // it still has the full context. Costs no extra API turn. Gated off for
+      // subagents / custom-prompt callers / ephemeral (/fresh) / no-memory.
+      if (
+        sessionCtx
+        && mode !== 'subagent'
+        && !params.systemPrompt
+        && !params.ephemeral
+        && !params.noAutoMemory
+        && config.autoMemory
+        && config.memoryNudge.enabled
+        && isMemoryNudgeDue(
+          sessionCtx.turnCounter,
+          sessionCtx.lastMemoryNudgeTurn,
+          config.memoryNudge.everyTurns,
+        )
+      ) {
+        content.push({ type: 'text', text: buildMemoryNudgeBlock() })
+        sessionCtx.lastMemoryNudgeTurn = sessionCtx.turnCounter
+        process.stderr.write(
+          `query: injected memory nudge at turn ${sessionCtx.turnCounter}\n`,
         )
       }
       const nextUserMessage = createUserMessage(content, getLastUuid(messages))

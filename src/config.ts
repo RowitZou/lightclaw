@@ -143,6 +143,17 @@ export type SessionMemoryConfig = {
   updateToolCallThreshold: number
 }
 
+/** Memory Nudge — a passive, turn-based reminder injected into the live
+ *  agent's context (at a tool boundary) every `everyTurns` agent-loop turns,
+ *  prompting it to consider persisting a finding via the existing MemoryWrite
+ *  path while it still has the full context. See `src/memory/nudge.ts`. */
+export type MemoryNudgeConfig = {
+  enabled: boolean
+  /** Inject a nudge every N agent-loop turns. `0` disables (same as
+   *  `enabled: false`). */
+  everyTurns: number
+}
+
 export type PreCompactFlushConfig = {
   enabled: boolean
   timeoutMs: number
@@ -284,6 +295,7 @@ export type LightClawConfig = {
   }
   memoryRecall: MemoryRecallConfig
   sessionMemory: SessionMemoryConfig
+  memoryNudge: MemoryNudgeConfig
   preCompactFlush: PreCompactFlushConfig
   microCompact: MicroCompactConfig
   tools: ToolsConfig
@@ -359,6 +371,16 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
   recurringAutoDisableThreshold: 3,
+}
+
+// Memory Nudge defaults ON (dark launch, mirroring autoDream's rollout
+// shape). The nudge rides along on a tool-boundary user message, so it
+// costs no extra API turn; `everyTurns: 20` is the conservative cadence —
+// a tool-heavy session reaches it in a few exchanges, a light one may
+// never trigger (and post-session auto-extract covers those anyway).
+const DEFAULT_MEMORY_NUDGE: MemoryNudgeConfig = {
+  enabled: true,
+  everyTurns: 20,
 }
 
 // Defaults track OpenClaw's minimal hardening profile. capDrop=ALL plus the
@@ -998,6 +1020,18 @@ export function getConfig(): LightClawConfig {
         5,
     ),
   )
+  const memoryNudgeEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MEMORY_NUDGE_ENABLED) ??
+    fileConfig.memoryNudge?.enabled ??
+    DEFAULT_MEMORY_NUDGE.enabled
+  const memoryNudgeEveryTurns = Math.max(
+    0,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MEMORY_NUDGE_EVERY_TURNS) ??
+        fileConfig.memoryNudge?.everyTurns ??
+        DEFAULT_MEMORY_NUDGE.everyTurns,
+    ),
+  )
   const preCompactFlushEnabled =
     parseBoolean(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED) ??
     fileConfig.preCompactFlush?.enabled ??
@@ -1084,6 +1118,10 @@ export function getConfig(): LightClawConfig {
       enabled: sessionMemoryEnabled,
       updateTokenThreshold: sessionMemoryUpdateTokenThreshold,
       updateToolCallThreshold: sessionMemoryUpdateToolCallThreshold,
+    },
+    memoryNudge: {
+      enabled: memoryNudgeEnabled,
+      everyTurns: memoryNudgeEveryTurns,
     },
     preCompactFlush: {
       enabled: preCompactFlushEnabled,

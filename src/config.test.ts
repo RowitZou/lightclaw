@@ -419,6 +419,35 @@ describe('config: endpoints + models registry', () => {
     })
   })
 
+  it('defaults memoryNudge on with a 20-turn cadence', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.memoryNudge, {
+      enabled: true,
+      everyTurns: 20,
+    })
+  })
+
+  it('parses memoryNudge overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      memoryNudge: { enabled: false, everyTurns: 8 },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.memoryNudge, {
+      enabled: false,
+      everyTurns: 8,
+    })
+  })
+
   it('defaults deferred tool loading to always with TTL 20 + cap 30', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
