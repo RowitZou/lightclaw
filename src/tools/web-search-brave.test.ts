@@ -5,6 +5,7 @@ import {
   _setBraveHttpGetForTests,
   fetchBraveSearch,
 } from './web-search-brave.js'
+import { _setWebRetryDelaysForTests } from './web-retry.js'
 
 function buildBraveResponse(opts: {
   status?: number
@@ -23,6 +24,7 @@ function buildBraveResponse(opts: {
 describe('web-search-brave (unit, stubbed axios)', () => {
   afterEach(() => {
     _setBraveHttpGetForTests(null)
+    _setWebRetryDelaysForTests(null)
   })
 
   it('200 + web.results[]: maps to {title, url, snippet}', async () => {
@@ -113,5 +115,83 @@ describe('web-search-brave (unit, stubbed axios)', () => {
       () => fetchBraveSearch('bad', { query: 'q', count: 5, signal: ctrl.signal }),
       /Brave Search API error 401 Unauthorized.*Invalid API key/,
     )
+  })
+
+  it('transient socket error then 200: withWebRetry re-sends and recovers', async () => {
+    // The 2026-05-14 dogfood failure mode — a socket reset on the proxy
+    // hop. Pre-retry this surfaced as a hard `WebSearch failed (exit 1)`;
+    // the first re-send now recovers.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _setBraveHttpGetForTests((async () => {
+      calls += 1
+      if (calls === 1) {
+        throw new Error(
+          'Client network socket disconnected before secure TLS connection was established',
+        )
+      }
+      return buildBraveResponse({
+        data: { web: { results: [{ title: 't', url: 'https://x.com', description: 's' }] } },
+      })
+    }) as any)
+    const ctrl = new AbortController()
+    const results = await fetchBraveSearch('test-key', {
+      query: 'q',
+      count: 5,
+      signal: ctrl.signal,
+    })
+    assert.equal(calls, 2)
+    assert.equal(results.length, 1)
+  })
+
+  it('503 Service Unavailable: retried via WebRetryableHttpError, then succeeds', async () => {
+    // validateStatus:() => true swallows the 503 from axios, so the inner
+    // retry fn re-raises it as WebRetryableHttpError for the predicate.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _setBraveHttpGetForTests((async () => {
+      calls += 1
+      if (calls < 3) {
+        return buildBraveResponse({
+          status: 503,
+          statusText: 'Service Unavailable',
+          data: 'upstream blip',
+        })
+      }
+      return buildBraveResponse({ data: { web: { results: [] } } })
+    }) as any)
+    const ctrl = new AbortController()
+    const results = await fetchBraveSearch('test-key', {
+      query: 'q',
+      count: 5,
+      signal: ctrl.signal,
+    })
+    assert.equal(calls, 3)
+    assert.equal(results.length, 0)
+  })
+
+  it('429 QUOTA_EXCEEDED: NOT retried — fast-fail with body, fn called once', async () => {
+    // 429 must stay fast-fail: a monthly-quota miss is not transient and a
+    // re-send loop just wastes the user's time. Regression guard that the
+    // retry wiring did not accidentally widen the retryable-status set.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _setBraveHttpGetForTests((async () => {
+      calls += 1
+      return buildBraveResponse({
+        status: 429,
+        statusText: 'Too Many Requests',
+        data: { error: { code: 'QUOTA_EXCEEDED' } },
+      })
+    }) as any)
+    const ctrl = new AbortController()
+    await assert.rejects(
+      () => fetchBraveSearch('k', { query: 'q', count: 5, signal: ctrl.signal }),
+      /Brave Search API error 429/,
+    )
+    assert.equal(calls, 1)
   })
 })

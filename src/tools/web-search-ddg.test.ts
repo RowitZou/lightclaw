@@ -5,6 +5,7 @@ import {
   _setDdgHttpGetForTests,
   fetchDuckDuckGoSearch,
 } from './web-search-ddg.js'
+import { _setWebRetryDelaysForTests } from './web-retry.js'
 
 function buildDdgResponse(html: string): unknown {
   return {
@@ -43,6 +44,7 @@ const DDG_SAMPLE = `
 describe('web-search-ddg (unit, stubbed axios)', () => {
   afterEach(() => {
     _setDdgHttpGetForTests(null)
+    _setWebRetryDelaysForTests(null)
   })
 
   it('parses DDG Lite HTML: extracts uddg= target URL, decodes entities, strips <b> tags', async () => {
@@ -105,5 +107,34 @@ describe('web-search-ddg (unit, stubbed axios)', () => {
     assert.equal(results.length, 2)
     assert.equal(results[0].url, 'https://example.com/0')
     assert.equal(results[1].url, 'https://example.com/1')
+  })
+
+  it('transient socket error then HTML: withWebRetry re-sends and recovers', async () => {
+    // DDG's Lite endpoint always 200s, so the only failure to retry is a
+    // socket-level proxy blip (2026-05-14 dogfood) — same class that hit
+    // the Brave path in the same windows.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _setDdgHttpGetForTests((async () => {
+      calls += 1
+      if (calls === 1) {
+        throw new Error(
+          'Client network socket disconnected before secure TLS connection was established',
+        )
+      }
+      return buildDdgResponse(
+        '<a rel="nofollow" class="result__a" href="https://example.com/ok">ok</a>',
+      )
+    }) as any)
+    const ctrl = new AbortController()
+    const results = await fetchDuckDuckGoSearch({
+      query: 'q',
+      count: 5,
+      signal: ctrl.signal,
+    })
+    assert.equal(calls, 2)
+    assert.equal(results.length, 1)
+    assert.equal(results[0].url, 'https://example.com/ok')
   })
 })

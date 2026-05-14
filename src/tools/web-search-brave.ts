@@ -28,6 +28,11 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 
 import { getConfig } from '../config.js'
+import {
+  isRetryableHttpStatus,
+  WebRetryableHttpError,
+  withWebRetry,
+} from './web-retry.js'
 
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
 
@@ -87,31 +92,44 @@ export async function fetchBraveSearch(
   const proxy = getConfig().runtime.network.proxy
   const agent = proxy ? new HttpsProxyAgent(proxy) : undefined
 
-  const response = await httpGetFn(BRAVE_ENDPOINT, {
-    signal: input.signal,
-    timeout: BRAVE_TIMEOUT_MS,
-    httpAgent: agent,
-    httpsAgent: agent,
-    proxy: false,
-    headers: {
-      Accept: 'application/json',
-      'X-Subscription-Token': apiKey,
-      'User-Agent': 'LightClaw-WebSearch/0.1',
+  // Retry the round-trip + status check together. A transient proxy blip
+  // (the 2026-05-14 socket-disconnect dogfood) throws from axios and is
+  // re-sent; a 502/503/504 from Brave is re-sent via WebRetryableHttpError.
+  // 401 BAD_KEY / 429 QUOTA_EXCEEDED throw a plain Error the retry
+  // predicate ignores, so they stay fast-fail with the body for admin
+  // grep. Response *parsing* below is deterministic and stays outside the
+  // retry so a re-send never re-runs it.
+  const response = await withWebRetry(
+    async () => {
+      const res = await httpGetFn(BRAVE_ENDPOINT, {
+        signal: input.signal,
+        timeout: BRAVE_TIMEOUT_MS,
+        httpAgent: agent,
+        httpsAgent: agent,
+        proxy: false,
+        headers: {
+          Accept: 'application/json',
+          'X-Subscription-Token': apiKey,
+          'User-Agent': 'LightClaw-WebSearch/0.1',
+        },
+        params: { q: input.query, count: input.count },
+        validateStatus: () => true,
+      })
+      if (res.status !== 200) {
+        const bodyStr =
+          typeof res.data === 'string' ? res.data : JSON.stringify(res.data)
+        const message =
+          `Brave Search API error ${res.status} ${res.statusText}; ` +
+          `body=${bodyStr.slice(0, 400)}`
+        if (isRetryableHttpStatus(res.status)) {
+          throw new WebRetryableHttpError(res.status, message)
+        }
+        throw new Error(message)
+      }
+      return res
     },
-    params: { q: input.query, count: input.count },
-    validateStatus: () => true,
-  })
-
-  if (response.status !== 200) {
-    const bodyStr =
-      typeof response.data === 'string'
-        ? response.data
-        : JSON.stringify(response.data)
-    throw new Error(
-      `Brave Search API error ${response.status} ${response.statusText}; ` +
-        `body=${bodyStr.slice(0, 400)}`,
-    )
-  }
+    { label: 'WebSearch/brave', signal: input.signal },
+  )
 
   // Brave's response shape (as of 2026-05): `{web: {results: [...]}, ...}`.
   // Older / alternate self-hosted proxies sometimes return a flat `results`

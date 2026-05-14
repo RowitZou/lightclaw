@@ -22,6 +22,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 
 import { getConfig } from '../config.js'
 import type { WebSearchResult } from './web-search-brave.js'
+import { withWebRetry } from './web-retry.js'
 
 const DDG_ENDPOINT = 'https://duckduckgo.com/html/'
 
@@ -82,16 +83,24 @@ export async function fetchDuckDuckGoSearch(input: {
   const proxy = getConfig().runtime.network.proxy
   const agent = proxy ? new HttpsProxyAgent(proxy) : undefined
 
-  const response = await httpGetFn(DDG_ENDPOINT, {
-    signal: input.signal,
-    timeout: DDG_TIMEOUT_MS,
-    httpAgent: agent,
-    httpsAgent: agent,
-    proxy: false,
-    headers: DDG_HEADERS,
-    params: { q: input.query },
-    responseType: 'text',
-  })
+  // Retry only the scrape round-trip — DDG's Lite endpoint always 200s, so
+  // there is no status-code branch here; the retry covers socket-level
+  // proxy blips (2026-05-14 dogfood). HTML parsing below is deterministic
+  // and stays outside the retry.
+  const response = await withWebRetry(
+    () =>
+      httpGetFn(DDG_ENDPOINT, {
+        signal: input.signal,
+        timeout: DDG_TIMEOUT_MS,
+        httpAgent: agent,
+        httpsAgent: agent,
+        proxy: false,
+        headers: DDG_HEADERS,
+        params: { q: input.query },
+        responseType: 'text',
+      }),
+    { label: 'WebSearch/ddg', signal: input.signal },
+  )
   const text = typeof response.data === 'string' ? response.data : String(response.data ?? '')
 
   // result__a href + title (s flag = DOTALL because titles can span lines)
