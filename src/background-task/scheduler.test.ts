@@ -44,8 +44,10 @@ describe('resolveEffectiveNotifyTo', () => {
         suggestedRules: ['Bash(rsync:*)'],
       }, {
         toolName: 'Bash',
-        inputPreview: 'Command: find /tmp -mtime +7',
-        suggestedRules: ['Bash(find:*)'],
+        inputPreview: 'Command: grep -r TODO src/',
+        // NB: `find` is NOT a low-risk head — `Bash(find:*)` is high-risk
+        // because `find -exec` runs an arbitrary command (high-risk.ts §1.5).
+        suggestedRules: ['Bash(grep:*)'],
       }],
     }
     assert.equal(resolveEffectiveNotifyTo(lowRiskFail, 'agent'), 'agent')
