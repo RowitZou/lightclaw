@@ -7,6 +7,7 @@ import {
   _setHttpGetForTests,
   daemonFetchUrl,
 } from './web-fetch-http.js'
+import { _setWebRetryDelaysForTests } from './web-retry.js'
 
 function buildResponse(opts: {
   status?: number
@@ -41,6 +42,7 @@ function buildResponse(opts: {
 describe('web-fetch-http (unit, stubbed axios)', () => {
   afterEach(() => {
     _setHttpGetForTests(null)
+    _setWebRetryDelaysForTests(null)
   })
 
   it('200 OK → returns status / finalUrl / contentType / bytes correctly', async () => {
@@ -131,5 +133,73 @@ describe('web-fetch-http (unit, stubbed axios)', () => {
       () => daemonFetchUrl('https://example.com/slow', ctrl.signal),
       /timeout of 60000ms exceeded/,
     )
+  })
+
+  it('transient socket error then 200: withWebRetry re-sends and recovers', async () => {
+    // The 2026-05-14 dogfood error: a socket reset on the proxy hop. Same
+    // failure class that hit WebSearch in the same windows — both tools
+    // share this HTTP layer's egress, so both get the retry.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    _setHttpGetForTests((async () => {
+      calls += 1
+      if (calls === 1) {
+        const err = new Error(
+          'Client network socket disconnected before secure TLS connection was established',
+        )
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(err as any).code = 'ECONNRESET'
+        throw err
+      }
+      return buildResponse({
+        data: Buffer.from('<html>ok</html>'),
+        finalUrl: 'https://example.com/page',
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
+    const ctrl = new AbortController()
+    const result = await daemonFetchUrl('https://example.com/page', ctrl.signal)
+    assert.equal(calls, 2)
+    assert.equal(result.bytes.toString('utf-8'), '<html>ok</html>')
+  })
+
+  it('503 Service Unavailable: retried via AxiosError.response.status, then succeeds', async () => {
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    _setHttpGetForTests((async () => {
+      calls += 1
+      if (calls < 3) {
+        const err = new AxiosError('Request failed with status code 503')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        err.response = { status: 503, statusText: 'Service Unavailable' } as any
+        throw err
+      }
+      return buildResponse({ data: Buffer.from('<html>up</html>') })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
+    const ctrl = new AbortController()
+    const result = await daemonFetchUrl('https://example.com/', ctrl.signal)
+    assert.equal(calls, 3)
+    assert.equal(result.bytes.toString('utf-8'), '<html>up</html>')
+  })
+
+  it('4xx is NOT retried: fn called exactly once', async () => {
+    // Regression guard: a 404 is deterministic — a re-send returns the same
+    // answer. The retry wiring must not widen the retryable set to 4xx.
+    _setWebRetryDelaysForTests({ baseDelayMs: 1, maxDelayMs: 2 })
+    let calls = 0
+    _setHttpGetForTests(async () => {
+      calls += 1
+      const err = new AxiosError('Request failed with status code 404')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      err.response = { status: 404, statusText: 'Not Found' } as any
+      throw err
+    })
+    const ctrl = new AbortController()
+    await assert.rejects(
+      () => daemonFetchUrl('https://example.com/missing', ctrl.signal),
+      /404/,
+    )
+    assert.equal(calls, 1)
   })
 })

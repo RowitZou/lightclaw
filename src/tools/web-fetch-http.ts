@@ -22,6 +22,7 @@ import axios, { type AxiosResponse, type AxiosRequestConfig } from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 
 import { getConfig } from '../config.js'
+import { withWebRetry } from './web-retry.js'
 
 /** Injectable axios.get for unit tests of the HTTP layer itself. The DI
  *  shim mirrors `_setWebFetchSummarizerForTests` in web-fetch.ts — both
@@ -144,23 +145,33 @@ export async function daemonFetchUrl(
   // env never leaks into outbound HTTP, only the explicit config knob.
   const agent = proxy ? new HttpsProxyAgent(proxy) : undefined
 
-  const response = await httpGetFn<ArrayBuffer>(url, {
-    signal,
-    timeout: timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
-    maxRedirects: MAX_REDIRECTS,
-    maxContentLength: MAX_HTTP_CONTENT_LENGTH,
-    responseType: 'arraybuffer',
-    headers: BROWSER_HEADERS,
-    httpAgent: agent,
-    httpsAgent: agent,
-    proxy: false,
-    decompress: true,
-    // We want to surface every non-2xx as a thrown error with a clean
-    // `HTTP <status>` message — `validateStatus: () => true` would force
-    // us to test the response ourselves, but axios's default
-    // (`status >= 200 && status < 300`) already does the right thing
-    // with a more informative AxiosError. Stick with default.
-  })
+  // Retry transient network failures (socket reset / TLS-handshake abort —
+  // the 2026-05-14 proxy-blip dogfood — plus upstream 502/503/504, which
+  // axios's default validateStatus surfaces as AxiosError with
+  // `.response.status`). 4xx, axios timeout (ECONNABORTED), and abort are
+  // NOT retried; see web-retry.ts. The redirect / status / size handling
+  // below is unchanged — withWebRetry only re-sends the GET.
+  const response = await withWebRetry(
+    () =>
+      httpGetFn<ArrayBuffer>(url, {
+        signal,
+        timeout: timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+        maxRedirects: MAX_REDIRECTS,
+        maxContentLength: MAX_HTTP_CONTENT_LENGTH,
+        responseType: 'arraybuffer',
+        headers: BROWSER_HEADERS,
+        httpAgent: agent,
+        httpsAgent: agent,
+        proxy: false,
+        decompress: true,
+        // We want to surface every non-2xx as a thrown error with a clean
+        // `HTTP <status>` message — `validateStatus: () => true` would force
+        // us to test the response ourselves, but axios's default
+        // (`status >= 200 && status < 300`) already does the right thing
+        // with a more informative AxiosError. Stick with default.
+      }),
+    { label: 'WebFetch', signal },
+  )
 
   const contentTypeHeader = response.headers['content-type']
   const contentType =
