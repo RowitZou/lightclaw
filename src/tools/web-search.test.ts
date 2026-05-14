@@ -79,6 +79,11 @@ describe('WebSearch tool — Brave + DDG fallback chain', () => {
     // REMINDER trailer must be the last block, verbatim
     assert.match(out, /REMINDERS:\n- Search snippets are short/)
     assert.match(out, /MANDATORY: After answering using WebSearch results/)
+    // Absence / off-target guidance: a search miss is not proof the thing
+    // doesn't exist, and a look-alike result must not be substituted
+    // (2026-05-13 RowitZou/lightclaw dogfood).
+    assert.match(out, /are NOT proof it does not exist/)
+    assert.match(out, /do not substitute a similarly-named but different result/)
   })
 
   it('Brave returns empty → automatic DDG fallback', async () => {
@@ -172,5 +177,8 @@ describe('WebSearch tool — Brave + DDG fallback chain', () => {
     const out = result.output as string
     assert.match(out, /^# Search results for: q\n\nNo search results found\./)
     assert.match(out, /REMINDERS:/)
+    // The absence bullet matters most on a zero-result body: the model must
+    // not read "No search results found." as proof the target doesn't exist.
+    assert.match(out, /are NOT proof it does not exist/)
   })
 })

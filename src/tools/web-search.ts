@@ -15,10 +15,17 @@ import { fetchDuckDuckGoSearch } from './web-search-ddg.js'
 // guidance pushes the model toward a follow-up WebFetch when snippets are
 // thin, anchors year terms to the system-prompt's Current date, and forces
 // a Sources section so the user can audit upstream.
+//
+// 2026-05-13 dogfood: a `RowitZou LightClaw` search returned only same-name
+// repos from other owners; the model treated the miss as proof the repo did
+// not exist and cloned the wrong one. The absence / off-target bullet tells
+// the model that a search miss is not proof, not to substitute a look-alike,
+// and to hit the authoritative source (here the GitHub API) directly.
 const REMINDER = [
   'REMINDERS:',
   '- Search snippets are short and may be stale, partial, or contain only headlines.',
   '- If a snippet does not directly answer the user\'s question (e.g. the user asked for a specific value but the snippet only shows headlines, or the snippet timestamp is older than today), follow up with WebFetch on the most authoritative link to retrieve the actual page content. Do NOT fabricate answers from partial snippets.',
+  '- Zero results, or results that do not include the specific thing you were asked to find, are NOT proof it does not exist — search indexes lag on new or niche pages. Do not conclude "not found" and do not substitute a similarly-named but different result. Reformulate the query, or go to the authoritative source directly with WebFetch (e.g. a project\'s GitHub API, the official docs domain) even when no search result links to it.',
   '- Use the current year (from the system prompt\'s Current date) in search queries; last-year terms pull stale results.',
   '- MANDATORY: After answering using WebSearch results, include a "Sources:" section listing the actual URLs as Markdown hyperlinks.',
 ].join('\n')
