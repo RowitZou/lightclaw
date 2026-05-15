@@ -118,7 +118,7 @@ async function executeAutoDreamInner(params: {
       // tools array containing only MemoryWrite / MemoryRead / Read / Grep /
       // Glob / Bash. Runtime gate stays as createAutoMemCanUseTool for
       // defense-in-depth (restricts Bash to read-only heads).
-      await runSubagentImpl({
+      const result = await runSubagentImpl({
         agentType: 'auto_dream',
         prompt: buildDreamPrompt({
           memoryDir: params.memoryDir,
@@ -129,6 +129,20 @@ async function executeAutoDreamInner(params: {
         canonicalUserOverride: params.userId,
         maxTurnsOverride: params.config.autoDream.maxTurns,
       })
+      // WorkerFailure (PR1.6): runSubagent now returns failures as
+      // {kind:'failure', envelope} instead of throwing. For autoDream the
+      // distinction matters: if the subagent didn't actually consolidate
+      // (max-turns / aborted / tool-unavailable), do NOT mark the
+      // consolidation as succeeded — that would burn the 24h throttle window
+      // even though nothing was committed. Roll back the lock so the next
+      // eligible turn can try again, and surface the failure so a calling
+      // drain can log it.
+      if (result.kind === 'failure') {
+        await rollbackConsolidationLock(params.memoryDir, priorMtime)
+        const { reason, message } = result.envelope
+        console.error(`[auto-dream] subagent failed (${reason}): ${message}`)
+        return
+      }
       await markConsolidationSucceeded(params.memoryDir)
     } catch (error) {
       await rollbackConsolidationLock(params.memoryDir, priorMtime)

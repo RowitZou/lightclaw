@@ -190,12 +190,27 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   // MemoryWrite / MemoryRead / Read / Grep / Glob. Runtime gate stays as
   // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
   // AgentDefinition (20 — see bundled/index.ts).
-  await runSubagent({
+  const result = await runSubagent({
     agentType: 'extract_memories',
     prompt,
     canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
     canonicalUserOverride: ctx.canonicalUser,
   })
+
+  // WorkerFailure (PR1.6): runSubagent now returns structured failures
+  // instead of throwing. For extraction, if the subagent didn't actually run
+  // (max-turns / aborted / tool-unavailable), do NOT bump lastExtractedAt —
+  // bumping the watermark would prevent retry until new user messages
+  // arrive. Log the failure reason and leave the watermark at its prior
+  // value so the next eligible turn re-attempts the same window.
+  if (result.kind === 'failure') {
+    const { reason, message } = result.envelope
+    console.error(`[memory] extraction subagent failed (${reason}): ${message}`)
+    return {
+      saved: [],
+      lastExtractedAt: ctx.lastExtractedAt,
+    }
+  }
 
   const after = await scanMemoryFiles(ctx.memoryDir)
   const saved = after.filter(entry => !beforeFiles.has(entry.filename))

@@ -316,6 +316,51 @@ describe('autoDream runner', () => {
     assert.equal(readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8'), '')
   })
 
+  it('rolls back the lock when the fork returns a WorkerFailure envelope', async () => {
+    // PR1.6 regression guard: runSubagent now returns failures as
+    // {kind:'failure', envelope} instead of throwing. autoDream must treat
+    // the structured failure equivalently to a thrown error — roll back the
+    // lock so the 24h throttle window isn't burned on an unsuccessful run.
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
+
+    await tryAcquireConsolidationLock(tmpMemoryDir)
+    const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
+    await utimes(
+      consolidationLockPath(tmpMemoryDir),
+      olderTimestampSec,
+      olderTimestampSec,
+    )
+    const priorMtime = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
+
+    setRunSubagentForTest(async () => ({
+      kind: 'failure',
+      envelope: {
+        status: 'failed',
+        reason: 'max-turns-exceeded',
+        message: 'subagent hit turn cap',
+      },
+    }))
+
+    // executeAutoDream must NOT throw on structured failure — but must
+    // restore the prior lock mtime instead of marking consolidation
+    // succeeded.
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+
+    const afterRollback = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
+    assert.ok(
+      Math.abs(afterRollback - priorMtime) < 5,
+      `expected rollback mtime ~${priorMtime}, got ${afterRollback}`,
+    )
+    assert.equal(readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8'), '')
+  })
+
   it('does not run a second fork while one is in progress for the same user', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
