@@ -61,11 +61,20 @@ import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
 
-export function createBuiltinReplRegistry(): ReplCommandRegistry {
+export function createBuiltinReplRegistry(
+  opts?: { includeChannelOnly?: boolean },
+): ReplCommandRegistry {
+  // includeChannelOnly defaults to true so the channel dispatcher and any
+  // other caller keep the full command set; the terminal admin console
+  // passes false to drop the agent-loop commands (/branch /b /fresh /stop).
+  const includeChannelOnly = opts?.includeChannelOnly ?? true
   const registry = new ReplCommandRegistry()
   // Built inside the function so command descriptions / usage strings pick
   // up the current locale (init.ts setLang runs before any dispatch).
   for (const command of buildBuiltinCommands()) {
+    if (command.channelOnly && !includeChannelOnly) {
+      continue
+    }
     registry.register(command)
   }
   return registry
@@ -98,6 +107,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/stop',
     usage: '/stop',
     description: t('cmd.stop.desc'),
+    channelOnly: true,
     async handler(_args, ctx) {
       // Phase 32: /stop aborts the in-flight turn for THIS session only.
       // ctx.sessionId is the terminal session id in REPL and the Feishu
@@ -148,6 +158,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/fresh',
     usage: t('cmd.fresh.usage'),
     description: t('cmd.fresh.desc'),
+    channelOnly: true,
     async handler(args, ctx) {
       const prompt = args.trim()
       if (!prompt) {
@@ -177,6 +188,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/branch',
     usage: t('cmd.branch.usage'),
     description: t('cmd.branch.desc'),
+    channelOnly: true,
     async handler(args, ctx) {
       if (!args.trim()) {
         ctx.output.write(`${t('common.error.prefix')}${t('branch.usage')}\n`)
@@ -196,6 +208,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/b',
     usage: '/b <prompt>',
     description: t('cmd.branch.desc'),
+    channelOnly: true,
     async handler(args, ctx) {
       const command = buildBuiltinCommands().find(item => item.name === '/branch')
       await command?.handler(args, ctx)
@@ -611,7 +624,8 @@ async function formatCeilingList(): Promise<string> {
 }
 
 async function formatHelp(ctx: ReplContext): Promise<string> {
-  const registry = createBuiltinReplRegistry()
+  // The terminal console hides the agent-loop commands, so /help must too.
+  const registry = createBuiltinReplRegistry({ includeChannelOnly: ctx.isChannel })
   const all = registry.list(true)
   const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
   const adminCmds = all.filter(c => c.visibleTo === 'admin')

@@ -76,9 +76,6 @@ export async function dispatchChannelSlash(
     isChannel: true,
     getActiveTools: input.getActiveTools,
     setActiveTools: input.setActiveTools,
-    async runPrompt() {
-      output.push('error> command cannot start an interactive prompt from channel mode.\n')
-    },
     persistMeta: input.persistMeta,
     setSlashBodyFormat(format: SlashBodyFormat) {
       bodyFormat = format
