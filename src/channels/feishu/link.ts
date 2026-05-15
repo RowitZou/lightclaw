@@ -57,7 +57,10 @@ export function resolveFeishuLink(rawUrl: string): FeishuResolveLinkResult {
 
 function isFeishuHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
-  return host.endsWith('feishu.cn') || host.endsWith('larksuite.com')
+  return host === 'feishu.cn' ||
+    host.endsWith('.feishu.cn') ||
+    host === 'larksuite.com' ||
+    host.endsWith('.larksuite.com')
 }
 
 const KNOWN_SEGMENTS = new Set([

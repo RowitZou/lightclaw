@@ -153,6 +153,115 @@ describe('FeishuCreateFile tool', () => {
     assert.match(records[0].preview, /with 12 chars/)
   })
 
+  it('creates spreadsheets with optional initial values and sheet permissions', async () => {
+    const stub = makeGrantStub()
+    let writeArgs: unknown
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          {
+            kind: 'sheet',
+            title: 'Numbers',
+            folder_token: 'fld123',
+            sheet: { values: [['a', 1]], range: 'A1:B1' },
+          },
+          {
+            client,
+            createSheet: async input => ({
+              spreadsheetToken: 'sht123',
+              url: 'https://example.feishu.cn/sheets/sht123',
+              title: input.title,
+              rawData: { spreadsheet: { spreadsheet_token: 'sht123' } },
+            }),
+            writeSheetValues: async input => {
+              writeArgs = input
+              return {
+                spreadsheetToken: input.spreadsheetToken,
+                range: input.range,
+                data: { written: true },
+              }
+            },
+            grantSheetUser: stub.grantUser,
+            grantSheetChat: stub.grantChat,
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+
+    assert.deepEqual(result.output, {
+      spreadsheet_token: 'sht123',
+      url: 'https://example.feishu.cn/sheets/sht123',
+      title: 'Numbers',
+      permission_grants: { chat: 'skipped-not-group', user: 'full_access' },
+      rawData: { spreadsheet: { spreadsheet_token: 'sht123' } },
+    })
+    assert.deepEqual(writeArgs, {
+      client,
+      spreadsheetToken: 'sht123',
+      range: 'A1:B1',
+      values: [['a', 1]],
+      mode: 'overwrite',
+      retryCounter: { count: 0 },
+    })
+    const records = await readAuditRecords()
+    assert.equal(records[0].operation, 'create-sheet')
+  })
+
+  it('uploads local files with dedicated upload confirmation and drive grants', async () => {
+    const grantCalls: Array<{ memberType: string; memberId: string; perm: string }> = []
+    let askInput: PermissionAskInput | undefined
+    const result = await withFeishuSession({
+      approver: {
+        ask: async input => {
+          askInput = input
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuCreateFile(
+          {
+            kind: 'file',
+            title: 'Report',
+            folder_token: 'fld123',
+            file: { path: 'report.pdf', name: 'report.pdf' },
+          },
+          {
+            client,
+            readLocalFile: async () => ({ content: Buffer.from('pdf'), name: 'report.pdf' }),
+            uploadFile: async input => ({
+              fileToken: 'file123',
+              size: input.content.byteLength,
+              chunks: 1,
+            }),
+            grantDriveFile: async input => {
+              grantCalls.push({
+                memberType: input.memberType,
+                memberId: input.memberId,
+                perm: input.perm,
+              })
+              return { ok: true }
+            },
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+
+    assert.deepEqual(result.output, {
+      file_token: 'file123',
+      url: 'https://feishu.cn/file/file123',
+      title: 'report.pdf',
+      size: 3,
+      chunks: 1,
+      permission_grants: { chat: 'skipped-not-group', user: 'full_access' },
+    })
+    assert.equal(askInput?.toolName, 'FeishuUploadConfirm')
+    assert.deepEqual(grantCalls, [{ memberType: 'openid', memberId: 'ou_alice', perm: 'full_access' }])
+    const records = await readAuditRecords()
+    assert.equal(records[0].operation, 'upload-file')
+    assert.equal(records[0].resource.fileToken, 'file123')
+  })
+
   // 2026-05-13 dogfood: model shared raw "doxcnXxxxx" tokens to the user
   // instead of clickable URLs because Feishu's docx.document.create API
   // doesn't return a url in its response (only document_id). formatCreatedDoc
@@ -182,6 +291,41 @@ describe('FeishuCreateFile tool', () => {
     const output = result.output as { url?: string; document_id?: string }
     assert.equal(output.url, 'https://feishu.cn/docx/docxSdkOmits')
     assert.equal(output.document_id, 'docxSdkOmits')
+  })
+
+  it('passes markdown initial content format through to createDoc', async () => {
+    let createArgs: unknown
+    const result = await withFeishuSession({
+      approver: { ask: async () => ({ behavior: 'allow' }) },
+      fn: () =>
+        runFeishuCreateFile(
+          {
+            kind: 'doc',
+            title: 'Markdown doc',
+            doc: { content: '# Heading', format: 'markdown' },
+          },
+          {
+            client,
+            createDoc: async input => {
+              createArgs = input
+              return { documentId: 'docMd', title: input.title }
+            },
+            grantUser: async () => ({ ok: true }),
+            grantChat: async () => ({ ok: true }),
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+
+    assert.equal(result.isError, undefined)
+    assert.deepEqual(createArgs, {
+      client,
+      title: 'Markdown doc',
+      content: '# Heading',
+      contentFormat: 'markdown',
+      folderToken: 'userFld',
+      retryCounter: { count: 0 },
+    })
   })
 
   it('grants chat view + sender full_access in group sessions', async () => {
@@ -443,6 +587,57 @@ describe('FeishuCreateFile tool', () => {
     // single merged record after grants land.
     assert.equal(records.length, 1)
     assert.equal(records[0].operation, 'create-doc')
+    assert.equal(records[0].status, 'confirmed')
+  })
+
+  it('short-circuits file upload when a FeishuUploadConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuCreateFile(
+          {
+            kind: 'file',
+            title: 'report.pdf',
+            file: { path: '/workspace/report.pdf' },
+          },
+          {
+            client,
+            readLocalFile: async () => ({ content: Buffer.from('pdf'), name: 'report.pdf' }),
+            uploadFile: async input => ({
+              fileToken: 'fileAllowed',
+              size: input.content.byteLength,
+              chunks: 1,
+            }),
+            grantDriveFile: async () => ({ ok: true }),
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when upload is covered by FeishuUploadConfirm')
+    assert.deepEqual(result.output, {
+      file_token: 'fileAllowed',
+      url: 'https://feishu.cn/file/fileAllowed',
+      title: 'report.pdf',
+      size: 3,
+      chunks: 1,
+      permission_grants: { chat: 'skipped-not-group', user: 'full_access' },
+    })
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].operation, 'upload-file')
     assert.equal(records[0].status, 'confirmed')
   })
 
