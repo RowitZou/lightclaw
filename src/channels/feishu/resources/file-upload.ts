@@ -60,9 +60,9 @@ async function uploadSingleShot(input: UploadDriveFileInput, size: number): Prom
       file: input.content,
     },
   })))
-  const fileToken = readNestedString(response.data, ['file_token'])
+  const fileToken = readUploadString(response, 'file_token')
   if (!fileToken) {
-    throw new Error('Feishu file.uploadAll response did not include file_token.')
+    throw new Error(`Feishu file.uploadAll response did not include file_token (got ${formatUploadResponse(response)}).`)
   }
   return fileToken
 }
@@ -77,12 +77,12 @@ async function uploadChunked(input: UploadDriveFileInput, size: number): Promise
       size,
     },
   })))
-  const uploadId = readNestedString(prepared.data, ['upload_id'])
-  const blockSize = readNumber(prepared.data, ['block_size'])
-  const blockNum = readNumber(prepared.data, ['block_num'])
+  const uploadId = readUploadString(prepared, 'upload_id')
+  const blockSize = readUploadNumber(prepared, 'block_size')
+  const blockNum = readUploadNumber(prepared, 'block_num')
   if (!uploadId || !blockSize || !blockNum) {
     throw new Error(
-      `Feishu file.uploadPrepare response missing upload_id/block_size/block_num (got ${JSON.stringify(prepared.data)}).`,
+      `Feishu file.uploadPrepare response missing upload_id/block_size/block_num (got ${formatUploadResponse(prepared)}).`,
     )
   }
   // Sanity: blockNum * blockSize covers size, last chunk can be short.
@@ -105,9 +105,9 @@ async function uploadChunked(input: UploadDriveFileInput, size: number): Promise
       block_num: blockNum,
     },
   })))
-  const fileToken = readNestedString(finished.data, ['file_token'])
+  const fileToken = readUploadString(finished, 'file_token')
   if (!fileToken) {
-    throw new Error('Feishu file.uploadFinish response did not include file_token.')
+    throw new Error(`Feishu file.uploadFinish response did not include file_token (got ${formatUploadResponse(finished)}).`)
   }
   return { fileToken, size, chunks: blockNum }
 }
@@ -140,6 +140,18 @@ function readNestedString(input: unknown, path: string[]): string | undefined {
   return typeof cur === 'string' && cur.length > 0 ? cur : undefined
 }
 
+function readUploadString(input: unknown, key: string): string | undefined {
+  return readNestedString(input, [key]) ??
+    readNestedString(input, ['data', key]) ??
+    readNestedString(input, ['data', 'data', key])
+}
+
+function readUploadNumber(input: unknown, key: string): number | undefined {
+  return readNumber(input, [key]) ??
+    readNumber(input, ['data', key]) ??
+    readNumber(input, ['data', 'data', key])
+}
+
 function readNumber(input: unknown, path: string[]): number | undefined {
   let cur = input
   for (const key of path) {
@@ -154,6 +166,14 @@ function readNumber(input: unknown, path: string[]): number | undefined {
     return Number.isFinite(n) ? n : undefined
   }
   return undefined
+}
+
+function formatUploadResponse(input: unknown): string {
+  try {
+    return JSON.stringify(input)
+  } catch {
+    return String(input)
+  }
 }
 
 type FeishuFileClient = {
