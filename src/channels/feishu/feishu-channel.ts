@@ -34,7 +34,7 @@ import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
-import { startFeishuWsClient } from './transport-ws.js'
+import { startFeishuWsClient, type FeishuRecallEvent } from './transport-ws.js'
 
 export function createFeishuChannel(config: FeishuChannelConfig): Channel {
   return {
@@ -197,12 +197,25 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         await runner.handleMessage(message)
       }
 
+      // A user recalling a message Feishu only tells us the message_id +
+      // chat_id about — no sender open_id, so the runner maps it back to a
+      // sessionId through the in-flight opener registry. If it opened a
+      // still-running turn, that turn is aborted; if it is a queued
+      // interjection, it is dropped before reaching the model.
+      const onRecall = async (recall: FeishuRecallEvent): Promise<void> => {
+        process.stderr.write(
+          `feishu: recall event=${recall.eventId} message=${recall.messageId}\n`,
+        )
+        await runner.handleRecall(recall)
+      }
+
       if (config.transport === 'ws') {
         const handle = await startFeishuWsClient({
           config,
           dedup,
           botOpenId: botSelf.openId,
           onMessage,
+          onRecall,
           onCardAction: action => {
             if ('kind' in action && action.kind === 'background_task') {
               return bgCardCoordinator.handleCardAction(action)
@@ -231,6 +244,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         dedup,
         botOpenId: botSelf.openId,
         onMessage,
+        onRecall,
       })
       const { host, port, path: webhookPath } = config.webhook
       process.stderr.write(`feishu: webhook listening on ${host}:${port}${webhookPath}\n`)

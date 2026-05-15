@@ -5,7 +5,7 @@ import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './backg
 import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
-import { initializeMcp } from './mcp/index.js'
+import { cleanupMcp, initializeMcp } from './mcp/index.js'
 import { drainPendingDream } from './memory/dream/dream.js'
 import { drainPendingExtraction } from './memory/extract.js'
 import { setLightclawHomeOverride } from './paths.js'
@@ -13,18 +13,12 @@ import {
   acquireProcessLock,
   LightClawAlreadyRunningError,
 } from './process-lock.js'
-import { getProvider } from './provider/index.js'
 import { startRepl } from './repl.js'
-import { getLatestSessionId } from './session/listing.js'
-import { loadMeta } from './session/storage.js'
 import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
-import { getAllTools, getEnabledTools } from './tools.js'
 
 type CliArgs = {
   help: boolean
-  prompt?: string
-  resume?: string | true
   home?: string
   error?: string
 }
@@ -76,27 +70,6 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
-    if (arg === '--prompt' || arg === '-p') {
-      const value = argv[index + 1]
-      if (!value) {
-        return { ...args, error: '--prompt requires a value' }
-      }
-      args.prompt = value
-      index += 1
-      continue
-    }
-
-    if (arg === '--resume') {
-      const nextArg = argv[index + 1]
-      if (nextArg && !nextArg.startsWith('-')) {
-        args.resume = nextArg
-        index += 1
-      } else {
-        args.resume = true
-      }
-      continue
-    }
-
     if (arg === '--home') {
       const value = argv[index + 1]
       if (!value) {
@@ -121,14 +94,14 @@ function printHelp(): void {
 
 Usage:
   lightclaw
-  lightclaw --prompt "Help me plan today"
-  lightclaw --resume
-  lightclaw --resume <session-id>
+  lightclaw --home <dir>
+
+Starts the LightClaw daemon: the enabled channels (Feishu) plus a
+slash-only terminal admin console. The agent is reached through the
+channels — the terminal no longer runs an interactive agent session.
 
 Options:
   -h, --help      Show help
-  -p, --prompt    Run a single prompt and exit
-      --resume    Resume the latest or a specific saved session
       --home      Override LightClaw home directory (default ~/.lightclaw)
 
 Environment:
@@ -168,52 +141,32 @@ async function main(): Promise<void> {
   // subscription, all of which assume a single owner.
   acquireProcessLock()
 
-  await ensureAdminInitialized({ interactive: !args.prompt })
+  await ensureAdminInitialized({ interactive: true })
   const currentUserId = await resolveTerminalUserId()
-
-  let resumeSessionId: string | undefined
-  let resumeMeta = null
-  if (args.resume) {
-    resumeSessionId =
-      args.resume === true ? await getLatestSessionId(currentUserId) ?? undefined : args.resume
-    if (!resumeSessionId) {
-      console.error('No previous session found.')
-      process.exitCode = 1
-      return
-    }
-    resumeMeta = await loadMeta(resumeSessionId)
-  } else if (!args.prompt) {
-    resumeSessionId = await getLatestSessionId(currentUserId) ?? undefined
-    resumeMeta = resumeSessionId ? await loadMeta(resumeSessionId) : null
-  }
 
   // Order matters: initializeApp must run BEFORE startEnabledChannels so the
   // channel runner doesn't try to bootstrap the app itself (without a
   // currentUserId, which would acquire a ghost "__terminal__" runtime).
+  // The terminal is a slash-only admin console with no transcript, so it
+  // takes a fixed, readable session id and no resumed session state.
   const { config, sessionContext } = await initializeApp({
-    model: resumeMeta?.model,
-    sessionId: resumeSessionId,
-    resumedFrom: resumeSessionId ?? null,
-    compactionCount: resumeMeta?.compactionCount,
-    lastExtractedAt: resumeMeta?.lastExtractedAt,
-    todos: resumeMeta?.todos,
-    permissionMode: resumeMeta?.permissionMode,
-    currentUserId: resumeMeta?.userId ?? currentUserId,
+    sessionId: 'terminal-console',
+    currentUserId,
     channel: 'terminal',
   })
   await runWithSessionContext(sessionContext, async () => {
     await initializeHooks(config)
     await initializeMcp(config)
-    const channelHandles = args.prompt ? [] : await startEnabledChannels()
+    const channelHandles = await startEnabledChannels()
     try {
-      const provider = getProvider(config)
-      await startRepl({
-        config,
-        tools: getEnabledTools(provider, getAllTools('terminal')),
-        initialPrompt: args.prompt,
-        resumeSessionId,
-      })
+      await startRepl({ config })
     } finally {
+      // Ctrl-D exits the admin console and unwinds here. (Ctrl-C / SIGTERM
+      // go through gracefulShutdown / installSignalHandlers instead, which
+      // own their own runtime release + process.exit.) This is the daemon's
+      // clean-exit path: drain background work, stop the scheduler and
+      // channels, then tear down MCP servers and the runtime pool — the
+      // last two used to live in repl.ts before it became a plain console.
       await drainPendingExtraction(60_000)
       await drainPendingDream(60_000)
       await drainPendingBackgroundTasks(60_000)
@@ -223,6 +176,12 @@ async function main(): Promise<void> {
           process.stderr.write(`channel stop failed: ${String(error)}\n`)
         })
       }
+      await cleanupMcp().catch(error => {
+        process.stderr.write(`mcp cleanup failed: ${String(error)}\n`)
+      })
+      await getRuntimePool().releaseAll().catch(error => {
+        process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
+      })
     }
   })
 }

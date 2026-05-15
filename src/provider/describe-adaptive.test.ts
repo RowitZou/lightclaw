@@ -49,6 +49,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async () => ({ text: 'should not be called' }),
     })
@@ -61,6 +62,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2), fakeImage(3)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async ({ images }) => {
         calls += 1
@@ -79,7 +81,7 @@ describe('describeImagesAdaptive', () => {
     // where two adjacent image groups would otherwise contaminate each
     // other.
     assert.equal(
-      readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }),
+      readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }),
       null,
     )
   })
@@ -91,6 +93,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2), fakeImage(3), fakeImage(4)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async ({ images }) => {
         attemptCount += 1
@@ -108,7 +111,7 @@ describe('describeImagesAdaptive', () => {
     )
     assert.ok(result.trace.some(line => /halve/.test(line)))
     assert.equal(
-      readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }),
+      readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }),
       2,
     )
   })
@@ -119,6 +122,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2), fakeImage(3), fakeImage(4)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async ({ images }) => {
         attemptCount += 1
@@ -135,7 +139,7 @@ describe('describeImagesAdaptive', () => {
       true,
     )
     assert.equal(
-      readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }),
+      readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }),
       1,
     )
   })
@@ -146,6 +150,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async ({ images }) => {
         if (images.length === 2) throw new BatchTooBigError('full fail')
@@ -169,6 +174,7 @@ describe('describeImagesAdaptive', () => {
     await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2), fakeImage(3), fakeImage(4)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async ({ images }) => {
         firstAttempts += 1
@@ -178,7 +184,7 @@ describe('describeImagesAdaptive', () => {
     })
     assert.equal(firstAttempts, 3)
     assert.equal(
-      readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }),
+      readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }),
       2,
     )
 
@@ -188,6 +194,7 @@ describe('describeImagesAdaptive', () => {
     const result = await describeImagesAdaptive({
       images: [fakeImage(1), fakeImage(2), fakeImage(3), fakeImage(4)],
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       call: async () => {
         secondAttempts += 1
@@ -203,6 +210,7 @@ describe('describeImagesAdaptive', () => {
       describeImagesAdaptive({
         images: [fakeImage(1)],
         endpoint: 'e',
+        baseUrl: undefined,
         upstreamModel: 'm',
         call: async () => {
           const e = new Error('upstream timeout') as Error & { status: number }

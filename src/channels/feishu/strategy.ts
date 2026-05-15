@@ -111,6 +111,14 @@ export function createFeishuStrategy(
         buildSystemNoticeCard({ kind, content }),
       )
     },
+    sendNoticeToChatId: (chatId: string, kind: SystemNoticeKind, content: string) =>
+      // Recall-abort notice. No inbound message to reply against (the opener
+      // was withdrawn), so this pushes straight to the chat via
+      // im.message.create. kind='info' renders the wathet card, not red.
+      sender.sendInteractiveCardToChatId(
+        chatId,
+        buildSystemNoticeCard({ kind, content }),
+      ),
     ...(typing
       ? {
           startTyping: (message: NormalizedChannelMessage) => {

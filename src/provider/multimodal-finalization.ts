@@ -31,6 +31,11 @@ import type {
 export type FinalizationContext = {
   provider: Provider
   endpoint: string
+  /** baseUrl of the main endpoint, used as part of the capability-cache key
+   *  (alias alone is not enough — repointing an existing alias to a new
+   *  baseUrl needs a fresh cache slot). `undefined` for endpoints that
+   *  rely on the provider SDK's default URL. */
+  endpointBaseUrl: string | undefined
   upstreamModel: string
   config: LightClawConfig
   /** describeImage adapter — closure over (provider, endpoint, upstreamModel)
@@ -41,9 +46,10 @@ export type FinalizationContext = {
   describeAdapter: (params: {
     images: DescribeImageInput[]
   }) => Promise<{ text: string; model?: string }>
-  /** Endpoint × upstreamModel of the SUB-LLM (describe) call, for batch-size
-   *  cache keying. NOT the main endpoint. */
+  /** Endpoint × baseUrl × upstreamModel of the SUB-LLM (describe) call,
+   *  for batch-size cache keying. NOT the main endpoint. */
   describeEndpoint: string
+  describeEndpointBaseUrl: string | undefined
   describeUpstreamModel: string
   /** Optional abort signal threaded into describeImage retries. */
   signal?: AbortSignal
@@ -73,6 +79,7 @@ function providerSupportsKindInToolResult(
   }
   const entry = readCacheEntry({
     endpoint: ctx.endpoint,
+    baseUrl: ctx.endpointBaseUrl,
     upstreamModel: ctx.upstreamModel,
     kind,
     position: 'inToolResult',
@@ -373,6 +380,7 @@ async function replaceImageBlocksWithDescribeText(
       const result = await describeImagesAdaptive({
         images,
         endpoint: ctx.describeEndpoint,
+        baseUrl: ctx.describeEndpointBaseUrl,
         upstreamModel: ctx.describeUpstreamModel,
         call: ({ images: batch }) =>
           ctx.describeAdapter({ images: batch }),

@@ -207,6 +207,20 @@ export type ChannelRunnerStrategy = {
     kind: SystemNoticeKind
     content: string
   }): Promise<void>
+  /**
+   * Push a system notice to a chat by id, with no inbound message to reply
+   * against. Used by the recall handler: when a user recalls the message
+   * that opened an in-flight turn, that message is gone, so the
+   * "turn interrupted" notice cannot reply-quote it — it goes straight to
+   * the chat via im.message.create. Channels without a "send to chat
+   * without an inbound" surface omit this; the recall handler then aborts
+   * silently (stderr only).
+   */
+  sendNoticeToChatId?(
+    chatId: string,
+    kind: SystemNoticeKind,
+    content: string,
+  ): Promise<void>
 }
 
 /**
@@ -367,7 +381,9 @@ export class ChannelRunner {
     // so they never need this mark.
     const shouldMarkInFlight = !branchRequest && !freshSessionId
     if (shouldMarkInFlight) {
-      channelInterjectionQueue.markInFlight(mainSessionId)
+      // Pass the opener messageId so a later recall of THIS message can be
+      // mapped back to mainSessionId and abort the turn it kicked off.
+      channelInterjectionQueue.markInFlight(mainSessionId, message.messageId)
     }
     try {
     await this.locks.runExclusive(sessionId, async () => {
@@ -607,6 +623,7 @@ export class ChannelRunner {
           appConfig,
           appConfig.routing.main ?? appConfig.model,
         )
+        const providerBaseUrl = appConfig.endpoints[providerEntry.endpoint]?.baseUrl
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
@@ -796,6 +813,7 @@ export class ChannelRunner {
                 capabilityFlipped.add(`${missingSignal.kind}@${position}`)
                 const counter = incrementFailureCounter({
                   endpoint: providerEntry.endpoint,
+                  baseUrl: providerBaseUrl,
                   upstreamModel: providerEntry.upstreamModel,
                   kind: missingSignal.kind,
                   position,
@@ -806,6 +824,7 @@ export class ChannelRunner {
                   // routes to text-breadcrumb fallback (existing pattern).
                   writeCacheEntry({
                     endpoint: providerEntry.endpoint,
+                    baseUrl: providerBaseUrl,
                     upstreamModel: providerEntry.upstreamModel,
                     kind: missingSignal.kind,
                     position,
@@ -841,6 +860,7 @@ export class ChannelRunner {
               if (userMessageCounterKept) {
                 writeCacheEntry({
                   endpoint: providerEntry.endpoint,
+                  baseUrl: providerBaseUrl,
                   upstreamModel: providerEntry.upstreamModel,
                   kind: missingSignal.kind,
                   position: 'inUserMessage',
@@ -1095,6 +1115,69 @@ export class ChannelRunner {
           `${this.strategy.channelId}: replay handleMessage failed for ${entry.messageId}: ${detail}\n`,
         )
       }
+    }
+  }
+
+  /**
+   * Handle a user recalling a message. Feishu's im.message.recalled_v1 only
+   * carries message_id + chat_id, so we map the recalled messageId back to a
+   * sessionId via the in-flight opener registry rather than recomputing the
+   * Phase 26 sessionId formula (which would need the sender open_id the
+   * recall event does not include).
+   *
+   *  - Recalled message opened a still-running turn → abort that turn (an
+   *    implicit /stop for it) and post a non-error "interrupted" notice to
+   *    the chat so the user sees the recall was honored.
+   *  - Recalled message is a not-yet-drained queued interjection → drop it
+   *    so it never reaches the model. No notice — nothing was running for
+   *    it, and an already-drained interjection cannot be un-injected.
+   *  - Neither (turn already finished, or never tracked) → no-op.
+   */
+  async handleRecall(recall: { messageId: string; chatId: string }): Promise<void> {
+    const openerSessionId = channelInterjectionQueue.sessionIdForOpenerMessage(
+      recall.messageId,
+    )
+    if (openerSessionId) {
+      const aborted = abortInFlightForSession(openerSessionId)
+      process.stderr.write(
+        `${this.strategy.channelId}: recall ${recall.messageId} -> abort session ${openerSessionId} (aborted=${aborted})\n`,
+      )
+      if (aborted) {
+        await this.sendRecallNotice(recall.chatId)
+      }
+      return
+    }
+    const queuedSessionId = channelInterjectionQueue.removeQueuedByMessageId(
+      recall.messageId,
+    )
+    if (queuedSessionId) {
+      process.stderr.write(
+        `${this.strategy.channelId}: recall ${recall.messageId} -> dropped queued interjection for ${queuedSessionId}\n`,
+      )
+      return
+    }
+    process.stderr.write(
+      `${this.strategy.channelId}: recall ${recall.messageId} -> no in-flight turn or queued interjection; ignored\n`,
+    )
+  }
+
+  /**
+   * Post the "recalled message's turn was interrupted" notice. Uses the
+   * 'info' kind so Feishu renders the wathet (light-blue) card, never the
+   * red error card — a user-initiated recall is routine, not a failure.
+   * Best-effort: a channel without `sendNoticeToChatId` aborts silently.
+   */
+  private async sendRecallNotice(chatId: string): Promise<void> {
+    if (!this.strategy.sendNoticeToChatId) {
+      return
+    }
+    try {
+      await this.strategy.sendNoticeToChatId(chatId, 'info', t('channel.recall.aborted'))
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: recall notice failed for chat ${chatId}: ${detail}\n`,
+      )
     }
   }
 
@@ -1566,6 +1649,7 @@ async function encodeAttachmentsForInlineForSession(input: {
     attachments: input.materialized,
     provider,
     endpoint: entry.endpoint,
+    endpointBaseUrl: input.config.endpoints[entry.endpoint]?.baseUrl,
     upstreamModel: entry.upstreamModel,
     runtime: input.runtime,
     config: input.config,

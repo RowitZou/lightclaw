@@ -68,6 +68,19 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
           )
         }
       } catch (error) {
+        // A recalled / deleted message takes its reactions with it, so the
+        // delete then 4xxs with a withdrawn-target or not-found code. That is
+        // expected cleanup noise, not a failure — log it as a benign skip so
+        // it does not read like something broke (2026-05-14 dogfood: a
+        // recalled message left one of these alongside the handled reply /
+        // sendFile 400s).
+        const kind = classifyFeishuError(error).kind
+        if (kind === 'withdrawn-target' || kind === 'not-found') {
+          process.stderr.write(
+            `feishu typing: delete skipped for ${state.messageId} (message gone: ${kind})\n`,
+          )
+          return
+        }
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
           `feishu typing: delete failed for ${state.messageId}/${state.reactionId}: ${detail}\n`,

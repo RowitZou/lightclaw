@@ -146,13 +146,24 @@ const MULTI_COMMAND_TOOLS = new Set([
 
 const SUBCOMMAND_SHAPE = /^[A-Za-z][A-Za-z0-9_-]*$/
 
-export function extractSegmentHead(segment: string): string | null {
+/**
+ * Split a single (already chain-split) segment into command tokens, dropping
+ * the leading `VAR=value ` env-assignment prefix (`DEBUG=1 npm test` → `['npm',
+ * 'test']`). Returns `[]` for an empty / assignment-only segment.
+ *
+ * Exported so the high-risk classifier can scan a segment's argument tokens
+ * (wrapper unwrapping) without re-implementing the env-assignment strip.
+ */
+export function tokenizeBashSegment(segment: string): string[] {
   const trimmed = segment.trim()
-  if (!trimmed) return null
-
+  if (!trimmed) return []
   // Strip leading "VAR=value " env assignments (e.g. `DEBUG=1 npm test`).
   const stripped = trimmed.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, '')
-  const tokens = stripped.split(/\s+/).filter(Boolean)
+  return stripped.split(/\s+/).filter(Boolean)
+}
+
+export function extractSegmentHead(segment: string): string | null {
+  const tokens = tokenizeBashSegment(segment)
   if (tokens.length === 0) return null
 
   const head1 = tokens[0]!

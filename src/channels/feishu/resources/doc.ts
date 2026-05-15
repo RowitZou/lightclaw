@@ -74,6 +74,16 @@ export type FeishuDocReadResult = {
   block_page_size?: number
   max_blocks?: number
   next_page_token?: string
+  // Set by maybeSpillFeishuDocResult (feishu-collab.ts) when the serialized
+  // result would blow past the tool-output byte cap: the COMPLETE result
+  // (full content + full blocks) is written to this workspace path and the
+  // inline `content` is replaced with a bounded preview. The agent Reads
+  // this path (optionally with Bash + jq) to get the full structure.
+  full_result_file?: string
+  // True when `content` above is a truncated preview because the result was
+  // spilled to `full_result_file`. Distinct from `truncated`, which is the
+  // pre-existing max_chars head-truncation flag from the raw doc read.
+  content_preview?: boolean
   hint?: string
   rawData?: unknown
 }

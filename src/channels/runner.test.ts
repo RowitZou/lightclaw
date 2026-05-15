@@ -11,7 +11,9 @@ import {
 import { createUser, addLink } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setLang } from '../i18n/index.js'
+import { setAbortControllerForSession } from '../state.js'
 import type { Runtime } from '../runtime/types.js'
+import { channelInterjectionQueue } from './feishu/interjection-queue.js'
 
 import {
   applyAttachmentMaterialization,
@@ -1246,5 +1248,57 @@ describe('ChannelRunner pairing branch', () => {
     assert.equal(harness.notices.length, 0)
     assert.equal(harness.dmNotices.length, 1, 'DM route still wins')
     assert.equal(harness.dmNotices[0].applicantOpenId, 'ou_user')
+  })
+})
+
+describe('ChannelRunner recall handling', () => {
+  it('aborts the in-flight turn whose opener was recalled and posts a non-error notice', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:group:oc_recall_abort:ou_alice'
+    // Simulate a turn in flight: opener registered + an abort controller
+    // installed for the sessionId (mirrors markInFlight + beginQuery).
+    channelInterjectionQueue.markInFlight(sessionId, 'om_opener')
+    const controller = new AbortController()
+    setAbortControllerForSession(sessionId, controller)
+    try {
+      await runner.handleRecall({ messageId: 'om_opener', chatId: 'oc_recall_abort' })
+      assert.equal(controller.signal.aborted, true, 'in-flight turn must be aborted')
+      assert.equal(strategy.chatNotices.length, 1)
+      // 'info' kind => wathet card, never the red error card.
+      assert.equal(strategy.chatNotices[0]!.kind, 'info')
+      assert.equal(strategy.chatNotices[0]!.chatId, 'oc_recall_abort')
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(sessionId)
+    }
+  })
+
+  it('drops a recalled queued interjection without aborting or notifying', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const sessionId = 'feishu:dm:oc_recall_interjection'
+    channelInterjectionQueue.push(sessionId, {
+      messageId: 'om_interjection',
+      senderOpenId: 'ou_alice',
+      text: 'mid-flight follow-up',
+      arrivedAt: Date.now(),
+    })
+    try {
+      await runner.handleRecall({
+        messageId: 'om_interjection',
+        chatId: 'oc_recall_interjection',
+      })
+      assert.equal(channelInterjectionQueue.size(sessionId), 0, 'queued interjection dropped')
+      assert.equal(strategy.chatNotices.length, 0, 'no notice for a not-yet-running interjection')
+    } finally {
+      channelInterjectionQueue.drain(sessionId)
+    }
+  })
+
+  it('is a no-op when the recalled message is not tracked', async () => {
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    await runner.handleRecall({ messageId: 'om_unknown', chatId: 'oc_x' })
+    assert.equal(strategy.chatNotices.length, 0)
   })
 })

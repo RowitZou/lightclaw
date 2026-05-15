@@ -7,7 +7,8 @@ import type {
 } from '../channels/feishu/resource-resolver.js'
 import { readDocPlainText, type FeishuDocReadResult } from '../channels/feishu/resources/doc.js'
 import { readSheetRange } from '../channels/feishu/resources/sheet.js'
-import { feishuReadTool, runFeishuRead } from './feishu-collab.js'
+import type { ToolCallContext } from '../tool.js'
+import { feishuReadTool, maybeSpillFeishuDocResult, runFeishuRead } from './feishu-collab.js'
 
 const client = {} as FeishuClient
 
@@ -609,6 +610,116 @@ describe('FeishuRead tool', () => {
     assert.match(feishuReadTool.searchHint ?? '', /wiki/)
   })
 })
+
+describe('maybeSpillFeishuDocResult', () => {
+  it('returns small doc results unchanged — inline, no spill', async () => {
+    const writes: Array<{ path: string; bytes: Buffer }> = []
+    const ctx = fakeContext(writes)
+    const small: FeishuDocReadResult = {
+      documentId: 'docSmall',
+      content: 'short body',
+      truncated: false,
+      block_count: 1,
+      block_types: { Text: 1 },
+    }
+    const result = await maybeSpillFeishuDocResult({ output: small }, ctx)
+    assert.equal(result.output, small, 'small result returned untouched')
+    assert.equal(writes.length, 0, 'no spill file written')
+  })
+
+  it('spills an oversized doc result to a workspace file and returns a bounded summary', async () => {
+    const writes: Array<{ path: string; bytes: Buffer }> = []
+    const ctx = fakeContext(writes)
+    // A result whose JSON serialization is comfortably over the 40 KB inline
+    // cap — the include_blocks ~320 KB dogfood scenario in miniature.
+    const blocks = Array.from({ length: 400 }, (_, i) => ({
+      block_type: 2,
+      text: { elements: [{ text_run: { content: 'x'.repeat(200) } }] },
+      id: `block-${i}`,
+    }))
+    const big: FeishuDocReadResult = {
+      documentId: 'docBig',
+      title: 'Big Doc',
+      content: 'C'.repeat(20_000),
+      truncated: false,
+      revision_id: 'rev-9',
+      block_count: blocks.length,
+      block_types: { Text: blocks.length },
+      blocks,
+      blocks_truncated: true,
+    }
+    const result = await maybeSpillFeishuDocResult({ output: big }, ctx)
+    const out = result.output as FeishuDocReadResult
+
+    // The COMPLETE result was written under the workspace downloads dir.
+    assert.equal(writes.length, 1)
+    assert.match(
+      writes[0]!.path,
+      /\/workspace\/\.lightclaw\/downloads\/feishu-doc-docBig-[0-9a-f]{8}\.json$/,
+    )
+    const spilled = JSON.parse(writes[0]!.bytes.toString('utf8'))
+    assert.equal(spilled.content.length, 20_000, 'full content spilled')
+    assert.equal(spilled.blocks.length, 400, 'all raw blocks spilled')
+
+    // The inline summary is bounded, valid JSON, and points at the file.
+    assert.equal(out.full_result_file, writes[0]!.path)
+    assert.equal(out.content_preview, true)
+    assert.equal(out.truncated, true)
+    assert.equal(out.content.length, 8_000, 'content cut to the preview cap')
+    assert.equal(out.blocks, undefined, 'raw blocks are NOT inlined')
+    assert.equal(out.block_count, 400, 'structure stats kept inline')
+    assert.equal(out.blocks_truncated, true)
+    assert.match(out.hint ?? '', /written to|full_result_file|Read /)
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(out), 'utf8') < 40_000,
+      'summary is under the inline cap',
+    )
+  })
+
+  it('returns the oversized result unchanged when the spill write fails', async () => {
+    const ctx = fakeContext([], { writeFileThrows: true })
+    const big: FeishuDocReadResult = {
+      documentId: 'docFail',
+      content: 'C'.repeat(50_000),
+      truncated: false,
+    }
+    const result = await maybeSpillFeishuDocResult({ output: big }, ctx)
+    // Spill failed -> return the original (degraded, but better than a tool error).
+    assert.equal(result.output, big)
+  })
+
+  it('leaves sheet-read string output and error results untouched', async () => {
+    const ctx = fakeContext([])
+    const sheetResult = { output: 'X'.repeat(60_000) }
+    assert.equal(
+      (await maybeSpillFeishuDocResult(sheetResult, ctx)).output,
+      sheetResult.output,
+    )
+    const errorResult = { output: 'boom', isError: true }
+    assert.equal((await maybeSpillFeishuDocResult(errorResult, ctx)).output, 'boom')
+  })
+})
+
+function fakeContext(
+  writes: Array<{ path: string; bytes: Buffer }>,
+  opts: { writeFileThrows?: boolean } = {},
+): ToolCallContext {
+  return {
+    cwd: '/workspace',
+    abortSignal: new AbortController().signal,
+    runtime: {
+      workspaceRoot: '/workspace',
+      fs: {
+        async writeFile(p: string, bytes: Buffer): Promise<void> {
+          if (opts.writeFileThrows) {
+            throw new Error('disk full')
+          }
+          writes.push({ path: p, bytes })
+        },
+      },
+    },
+  } as unknown as ToolCallContext
+}
 
 function canonical(
   resourceType: FeishuCanonicalResource['resourceType'],

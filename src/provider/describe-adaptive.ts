@@ -54,10 +54,11 @@ type Adapter = (params: {
 export async function describeImagesAdaptive(input: {
   images: DescribeImageInput[]
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   call: (params: { images: DescribeImageInput[] }) => Promise<DescribeImageResult>
 }): Promise<DescribeAdaptiveResult> {
-  const { images, endpoint, upstreamModel } = input
+  const { images, endpoint, baseUrl, upstreamModel } = input
   if (images.length === 0) {
     return { segments: [], trace: [] }
   }
@@ -67,6 +68,7 @@ export async function describeImagesAdaptive(input: {
 
   const cachedCeiling = readBatchCeiling({
     endpoint,
+    baseUrl,
     upstreamModel,
     kind: 'image',
   })
@@ -115,6 +117,7 @@ export async function describeImagesAdaptive(input: {
     if (maxSuccessfulSpan > 0) {
       recordBatchCeiling({
         endpoint,
+        baseUrl,
         upstreamModel,
         kind: 'image',
         size: maxSuccessfulSpan,

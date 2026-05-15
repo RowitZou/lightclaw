@@ -67,6 +67,12 @@ export type SessionContext = {
    *  channel runner shares the SessionContext, so the counter accumulates).
    *  Used by `markDiscovered` / `pruneStaleDiscoveredTools` for TTL eviction. */
   turnCounter: number
+  /** `turnCounter` value at the last Memory Nudge injection. The next nudge
+   *  is due once `turnCounter - lastMemoryNudgeTurn >= memoryNudge.everyTurns`.
+   *  Session-scoped like `turnCounter`; survives across `query()` calls so a
+   *  nudge missed on an `end_turn` boundary carries over. See
+   *  `src/memory/nudge.ts`. */
+  lastMemoryNudgeTurn: number
   runtime?: Runtime
   isBackgroundTask?: boolean
   taskAllowedTools?: string[]
@@ -159,6 +165,7 @@ export function createSessionContext(input: {
     backgroundTasks: new Set(),
     discoveredTools: new Map(),
     turnCounter: 0,
+    lastMemoryNudgeTurn: 0,
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
     taskAllowedTools: input.taskAllowedTools,
@@ -201,6 +208,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     backgroundTasks: new Set(),
     discoveredTools: new Map(),
     turnCounter: 0,
+    lastMemoryNudgeTurn: 0,
     runtime: undefined,
     ...input,
   }

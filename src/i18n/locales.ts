@@ -21,6 +21,7 @@ export const LOCALES = {
     'banner.greet': '你好，{name}。我在。',
     'banner.greetAnonymous': 'LightClaw 已就绪。',
     'banner.commands': '命令：{list}',
+    'banner.slashOnly': '终端是 slash 命令控制台，不接受自由对话；与 agent 对话请走飞书。输入 /help 查看可用命令。',
 
     // ---- /help ----
     'help.title': 'LightClaw 命令：',
@@ -372,6 +373,7 @@ export const LOCALES = {
     'channel.pairing.review.resolvedElsewhere': '该申请已通过其他渠道处理',
     'channel.pairing.review.error': '审批失败：{reason}',
     'channel.interjection.acked': '已记下，会在当前任务上下文里处理。',
+    'channel.recall.aborted': '检测到消息撤回，已中断该消息正在进行的处理。',
     'channel.fresh.justNow': '刚刚',
     'channel.fresh.minutes': '{n} 分钟前',
     'channel.fresh.hours': '{n} 小时前',
@@ -465,6 +467,7 @@ export const LOCALES = {
     'banner.greet': 'Hi {name}. I\'m here.',
     'banner.greetAnonymous': 'LightClaw is ready.',
     'banner.commands': 'Commands: {list}',
+    'banner.slashOnly': 'The terminal is a slash-command console — it does not take freeform chat; reach the agent through Feishu. Type /help for the command list.',
 
     // ---- /help ----
     'help.title': 'LightClaw commands:',
@@ -818,6 +821,7 @@ export const LOCALES = {
     'channel.pairing.review.resolvedElsewhere': 'Application already handled elsewhere',
     'channel.pairing.review.error': 'Approval failed: {reason}',
     'channel.interjection.acked': 'Got it; will fold into the current task context.',
+    'channel.recall.aborted': 'Message recall detected — the in-progress turn for that message has been interrupted.',
     'channel.fresh.justNow': 'just now',
     'channel.fresh.minutes': '{n} minutes ago',
     'channel.fresh.hours': '{n} hours ago',

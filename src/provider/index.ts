@@ -99,16 +99,23 @@ export function getProviderFor(
     provider = buildProvider(entry.schema, endpoint)
     cache.set(key, provider)
   }
-  precharge(provider, entry)
+  precharge(provider, entry, endpoint.baseUrl)
   return { provider, entry }
 }
 
-/** Run static-drop probes ONCE per (endpoint × upstreamModel) pair and
- *  reconcile the on-disk capability cache against the converter result.
- *  Probe answers are local converter facts; runtime 4xx counters are
- *  preserved unless the converter now drops a kind deterministically. */
-function precharge(provider: Provider, entry: ModelEntry): void {
-  const k = `${entry.endpoint}:${entry.upstreamModel}`
+function prechargeMemoKey(endpoint: string, baseUrl: string | undefined, upstreamModel: string): string {
+  // Same shape as the on-disk cache key. Repointing an existing alias to
+  // a new baseUrl yields a fresh memo slot so precharge actually re-runs
+  // against the new endpoint's converter.
+  return `${endpoint}|${baseUrl ?? ''}|${upstreamModel}`
+}
+
+/** Run static-drop probes ONCE per (endpoint × upstreamModel × baseUrl)
+ *  tuple and reconcile the on-disk capability cache against the converter
+ *  result. Probe answers are local converter facts; runtime 4xx counters
+ *  are preserved unless the converter now drops a kind deterministically. */
+function precharge(provider: Provider, entry: ModelEntry, baseUrl: string | undefined): void {
+  const k = prechargeMemoKey(entry.endpoint, baseUrl, entry.upstreamModel)
   if (prechargdKeys.has(k)) return
   prechargdKeys.add(k)
 
@@ -123,6 +130,7 @@ function precharge(provider: Provider, entry: ModelEntry): void {
         : droppedToolResult.has(kind)
       const prior = readCacheEntry({
         endpoint: entry.endpoint,
+        baseUrl,
         upstreamModel: entry.upstreamModel,
         kind,
         position,
@@ -130,6 +138,7 @@ function precharge(provider: Provider, entry: ModelEntry): void {
       if (dropped) {
         writeCacheEntry({
           endpoint: entry.endpoint,
+          baseUrl,
           upstreamModel: entry.upstreamModel,
           kind,
           position,
@@ -147,6 +156,7 @@ function precharge(provider: Provider, entry: ModelEntry): void {
       }
       writeCacheEntry({
         endpoint: entry.endpoint,
+        baseUrl,
         upstreamModel: entry.upstreamModel,
         kind,
         position,
@@ -181,9 +191,10 @@ export function modelFor(task: ModelTask, config: LightClawConfig): string {
 
 export function clearPrechargeForModel(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
 }): void {
-  prechargdKeys.delete(`${input.endpoint}:${input.upstreamModel}`)
+  prechargdKeys.delete(prechargeMemoKey(input.endpoint, input.baseUrl, input.upstreamModel))
 }
 
 /** Test-only escape hatch; production code should never need to clear. */

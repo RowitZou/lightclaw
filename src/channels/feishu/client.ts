@@ -48,8 +48,109 @@ export function createFeishuClient(config: FeishuChannelConfig): FeishuClient {
     appType: Lark.AppType.SelfBuild,
     domain: resolveDomain(config.domain),
     loggerLevel: Lark.LoggerLevel.warn,
+    logger: feishuSdkLogger,
     httpInstance: createHttpInstance(config) as Lark.HttpInstance,
   })
+}
+
+// The Lark SDK logs every failed HTTP call at error level with the full
+// AxiosError dumped through its default logger (`formatErrors(e)` →
+// `console.log('[error]:', [ { message, config, request, response }, ... ])`).
+// For the 4xx LightClaw catches and handles — withdrawn-target reply → create
+// fallback, transient → withFeishuRetry, rate-limit, etc. — every catch site
+// already emits its own structured `feishu …` stderr line, so the raw
+// multi-line object dump is redundant noise that reads like an unhandled
+// crash (2026-05-14 dogfood: a recalled message produced three of these for
+// reply / sendFile / stopTyping, all handled). Route the SDK through a
+// compact logger: error / warn collapse to a one-line `feishu sdk:`
+// breadcrumb (status / code / msg / url — never the request body, which can
+// be a multi-MB upload payload), info / debug / trace are dropped. LightClaw's
+// own catch-site logs remain the structured source of truth. `loggerLevel`
+// stays `warn`, so `LoggerProxy` never even invokes info/debug/trace here.
+const feishuSdkLogger = {
+  error: (...args: unknown[]) => emitFeishuSdkLog('error', args),
+  warn: (...args: unknown[]) => emitFeishuSdkLog('warn', args),
+  info: () => {},
+  debug: () => {},
+  trace: () => {},
+}
+
+function emitFeishuSdkLog(level: 'error' | 'warn', args: unknown[]): void {
+  let summary: string
+  try {
+    summary = summarizeFeishuSdkLog(args)
+  } catch {
+    // A logger must never throw — LoggerProxy does not wrap the call.
+    summary = '(unparsed sdk log)'
+  }
+  process.stderr.write(`feishu sdk: ${level} ${summary}\n`)
+}
+
+/**
+ * Collapse whatever the Lark SDK handed its logger into a single grep-friendly
+ * line. `LoggerProxy` forwards its varargs as one array arg, and
+ * `formatErrors` itself returns an array, so the payload is nested a few deep;
+ * walk it (bounded) pulling only `status` / `code` / `msg` / `url` and ignore
+ * request/response bodies. Exported for unit-test access.
+ */
+export function summarizeFeishuSdkLog(args: unknown[]): string {
+  const fields: string[] = []
+  const seen = new Set<object>()
+  const pushField = (value: string): void => {
+    if (!fields.includes(value)) {
+      fields.push(value)
+    }
+  }
+  const visit = (value: unknown, depth: number): void => {
+    if (value == null || depth > 6 || fields.length >= 8) {
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item, depth + 1)
+      }
+      return
+    }
+    if (typeof value === 'object') {
+      if (seen.has(value as object)) {
+        return
+      }
+      seen.add(value as object)
+      const o = value as Record<string, unknown>
+      const status =
+        scalar((o.response as Record<string, unknown> | undefined)?.status) ?? scalar(o.status)
+      const code = scalar(o.code)
+      const msg = scalar(o.msg) ?? scalar(o.message)
+      const url = scalar((o.config as Record<string, unknown> | undefined)?.url)
+      if (status !== undefined) pushField(`status=${status}`)
+      if (code !== undefined) pushField(`code=${code}`)
+      if (msg !== undefined) pushField(`msg=${truncateSdkLog(String(msg))}`)
+      if (url !== undefined) pushField(`url=${url}`)
+      // Recurse into the nested envelope containers only — never `config.data`
+      // / `request`, which can carry a multi-MB upload body.
+      for (const key of ['response', 'data', 'error']) {
+        const nested = o[key]
+        if (nested && typeof nested === 'object') {
+          visit(nested, depth + 1)
+        }
+      }
+      return
+    }
+    // Primitive at the top level — `formatErrors` returns `[e]` for any
+    // non-Axios error, so `e` may stringify to a plain message.
+    pushField(truncateSdkLog(String(value)))
+  }
+  visit(args, 0)
+  return fields.length > 0 ? fields.join(' ') : '(no detail)'
+}
+
+function scalar(value: unknown): string | number | undefined {
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined
+}
+
+function truncateSdkLog(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 160 ? `${oneLine.slice(0, 160)}…` : oneLine
 }
 
 // File upload (im/v1/files, drive/v1/files, ...) carries multi-MB payloads

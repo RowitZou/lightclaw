@@ -86,6 +86,10 @@ export async function encodeAttachmentsForInline(input: {
   attachments: MaterializedAttachment[]
   provider: Provider
   endpoint: string
+  /** baseUrl of `endpoint`, used as part of the capability-cache key.
+   *  Pass `undefined` for endpoints that rely on the provider SDK default
+   *  URL. See `capability-cache.key()` for why baseUrl is in the key. */
+  endpointBaseUrl: string | undefined
   upstreamModel: string
   runtime: Runtime
   config: LightClawConfig
@@ -112,6 +116,7 @@ export async function encodeAttachmentsForInline(input: {
     }
     const entry = readCacheEntry({
       endpoint: input.endpoint,
+      baseUrl: input.endpointBaseUrl,
       upstreamModel: input.upstreamModel,
       kind,
       position: 'inUserMessage',
