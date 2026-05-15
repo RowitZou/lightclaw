@@ -42,7 +42,6 @@ function tool(name: string): Tool {
 test('cache-safe params save/get round-trip per user', () => {
   _resetCacheSafeParamsForTest()
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools: [tool('Read')],
     messages: [createUserMessage('hello', null, 1)],
     config: dummyConfig,
@@ -57,13 +56,11 @@ test('cache-safe params save/get round-trip per user', () => {
 test('cache-safe params keep users isolated (Phase 28 §1.7.4 regression)', () => {
   _resetCacheSafeParamsForTest()
   const aliceParams = createCacheSafeParams({
-    systemPrompt: 'alice-system',
     tools: [tool('Read')],
     messages: [createUserMessage('alice', null, 1)],
     config: dummyConfig,
   })
   const bobParams = createCacheSafeParams({
-    systemPrompt: 'bob-system',
     tools: [tool('Read')],
     messages: [createUserMessage('bob', null, 2)],
     config: dummyConfig,
@@ -85,7 +82,6 @@ test('cache-safe params keep users isolated (Phase 28 §1.7.4 regression)', () =
 test('cache-safe params no-op on undefined canonical user', () => {
   _resetCacheSafeParamsForTest()
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools: [tool('Read')],
     messages: [createUserMessage('hello', null, 1)],
     config: dummyConfig,
@@ -101,7 +97,6 @@ test('cache-safe params snapshots message and tool arrays', () => {
   const tools = [tool('Read')]
   const messages = [createUserMessage('hello', null, 1)]
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools,
     messages,
     config: dummyConfig,

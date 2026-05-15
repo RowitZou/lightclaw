@@ -15,7 +15,6 @@ export const saveCacheSafeParamsHook: Hook = {
     saveCacheSafeParams(
       getCurrentUserId(),
       createCacheSafeParams({
-        systemPrompt: ctx.systemPrompt.renderEffective(),
         tools: ctx.turnCatalog.tools,
         messages: [...ctx.messages],
         config: ctx.config,

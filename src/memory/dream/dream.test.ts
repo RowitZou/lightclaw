@@ -476,7 +476,6 @@ function writeSession(sessionId: string, userId: string, lastActiveAt: number): 
 
 function fakeCacheSafeParams(): CacheSafeParams {
   return {
-    systemPrompt: 'sys',
     tools: [],
     forkContextMessages: [],
     config: {} as LightClawConfig,

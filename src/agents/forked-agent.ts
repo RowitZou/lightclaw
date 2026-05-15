@@ -5,13 +5,15 @@
  * extraction.
  *
  * Future consumers can reuse the same runner for autoDream, prompt coaching,
- * confidence rating, or skill self-authoring by supplying a task-specific
- * prompt and canUseTool gate.
+ * confidence rating, or skill self-authoring by supplying a Role plus a
+ * task-specific prompt.
  */
 
 import { createUserMessage, getLastUuid } from '../messages.js'
+import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
 import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
+import { getRuntime } from '../state.js'
 import type { CanUseToolFn } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
 import type {
@@ -25,6 +27,7 @@ import type {
 } from '../types.js'
 import type { CacheSafeParams } from './cache-safe-params.js'
 import type { Role } from './types.js'
+import { deriveCanUseTool } from './role-tool-gate.js'
 
 // Byte-identical across all sibling forks so parallel AgentTool dispatches
 // cache the parent prefix + assistant tool_use turn together. Mirrors Claude
@@ -42,7 +45,7 @@ export type ForkedAgentParams = {
   promptText: string
   cacheSafeParams: CacheSafeParams
   role: Role
-  canUseTool: CanUseToolFn
+  canUseToolOverride?: CanUseToolFn
   // Optional cap on tool-use turns for this fork. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
   // it undefined so query() falls back to config.maxTurns / no cap.
@@ -93,12 +96,17 @@ export async function runForkedAgent(
   const prefix = cacheSafeParams.forkContextMessages
   const promptMessage = buildPromptMessage(prefix, params.promptText)
   const messages = [...prefix, promptMessage]
+  const systemPrompt = buildPromptForRole(params.role, {
+    tools: cacheSafeParams.tools,
+    environmentRoot: getRuntime().workspaceRoot,
+  })
+  const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)
 
   const run = () => query({
     role: params.role,
     invocation: forkInvocationContext({
-      systemPrompt: cacheSafeParams.systemPrompt,
-      canUseTool: params.canUseTool,
+      systemPrompt,
+      canUseTool,
       cacheBreakpointMessageIndex:
         prefix.length > 0 ? prefix.length - 1 : undefined,
       signal: params.signal,

@@ -1,7 +1,6 @@
 import { getConfig } from '../config.js'
-import { buildSubagentPrompt } from '../prompt.js'
 import { getProvider } from '../provider/index.js'
-import { getCurrentUserId, getRuntime } from '../state.js'
+import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import type { AgentDefinition, AgentType, WorkerFailure, WorkerFailureReason } from './types.js'
@@ -91,7 +90,6 @@ export async function runSubagent(params: {
   const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
   const existingCache = getLastCacheSafeParams(cacheUserKey)
   const cacheSafeParams = createCacheSafeParams({
-    systemPrompt: buildSubagentPrompt(tools, getRuntime().workspaceRoot, agent),
     tools,
     messages: existingCache?.forkContextMessages ?? [],
     config,
@@ -108,7 +106,7 @@ export async function runSubagent(params: {
       promptText: params.prompt,
       cacheSafeParams,
       role: agent,
-      canUseTool: params.canUseToolOverride ?? deriveCanUseTool(agent),
+      canUseToolOverride: params.canUseToolOverride,
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
       label:
         agent.kind === 'internal'
