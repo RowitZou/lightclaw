@@ -15,15 +15,26 @@
 // belt-and-suspenders safeguard for the rare fallback case where the
 // suggester returns nothing precise, we re-scan the raw tool input.
 //
-// §1.5 (2026-05-14): a head-only scan against a small fixed set missed a
+// §1.4 (2026-05-14): a head-only scan against a small fixed set missed a
 // large family of arbitrary-code-execution / privilege-escalation vectors —
-// language interpreters (`python -c`), ephemeral package runners (`npx`,
-// `pnpm dlx`), `source <(curl …)`, command wrappers that hide the real head
-// in their arguments (`xargs sh -c`, `timeout 10 bash -c`, `find -exec`),
-// path / quote evasion (`/bin/rm`, `\rm`, `'rm'`) and command substitution
-// used as the command itself (`$(curl …)`). The classifier now normalizes
-// heads, unwraps wrapper commands, and treats interpreters / package runners
-// as high-risk. See `isHighRiskBashSegment` below.
+// ephemeral package runners (`npx`, `pnpm dlx` — fetch-and-run remote code,
+// the `curl … | sh` family), `source <(curl …)`, command wrappers that hide
+// the real head in their arguments (`xargs sh -c`, `timeout 10 bash -c`,
+// `find -exec`), path / quote evasion (`/bin/rm`, `\rm`, `'rm'`) and command
+// substitution used as the command itself (`$(curl …)`). The classifier now
+// normalizes heads, unwraps wrapper commands, and treats package runners as
+// high-risk. See `isHighRiskBashSegment` below.
+//
+// Deliberately NOT high-risk: language interpreters (`python`, `node`,
+// `perl`, `ruby`, …). They are general-purpose, not inherently destructive,
+// and an everyday command for this workload — a hidden "always allow" button
+// on every `python …` invocation is pure friction. The "soundness hole"
+// argument (a broad `Bash(python:*)` rule also covers `python -c <evil>`)
+// does not actually buy security: anyone who can run `python` can run `sh`,
+// and `sh` is already high-risk — flagging the interpreter only relocates
+// the friction, it does not close the path. Shells (`bash`/`sh`/…) stay
+// high-risk because `curl … | sh` is the specific install-from-internet
+// attack the original list was built around.
 
 import { splitBashCommand, tokenizeBashSegment } from './bash-parse.js'
 import { parseRule } from './rules.js'
@@ -60,33 +71,6 @@ const HIGH_RISK_BASH_HEADS = new Set<string>([
   'source',
   '.',
 ])
-
-// Language interpreters. A persisted `Bash(python:*)` rule — or any bare
-// `python …` invocation that would let the user grant one — is high-risk:
-// `-c` / `-e` / a piped-in script body / a `-` stdin flag all turn the
-// interpreter into an arbitrary-code-execution vector, and a broad rule
-// cannot distinguish `python -c <evil>` from `python train.py`. This is the
-// same posture the shells above already have (`bash deploy.sh` is high-risk
-// today); carving `python train.py` back out would re-open the soundness
-// hole, because the only rule the approver could offer is the broad
-// `Bash(python:*)`.
-const INTERPRETER_HEADS = new Set<string>([
-  'python',
-  'python2',
-  'python3',
-  'node',
-  'nodejs',
-  'perl',
-  'ruby',
-  'php',
-  'deno',
-  'lua',
-  'rscript',
-])
-
-// Versioned interpreter binaries (`python3.11`, `python2.7`) — match by shape
-// so we don't have to enumerate every minor version.
-const VERSIONED_INTERPRETER = /^python[0-9.]+$/
 
 // Ephemeral package runners — download and execute arbitrary remote packages.
 // From a static command string they are indistinguishable from running a
@@ -253,21 +237,16 @@ function normalizeBashHead(token: string): string {
   return t
 }
 
-function isInterpreterHead(head: string): boolean {
-  return INTERPRETER_HEADS.has(head) || VERSIONED_INTERPRETER.test(head)
-}
-
 /**
  * True when a single (normalized) token names a head that is high-risk on its
- * own — destructive / privilege-escalating heads, interpreters, single-token
- * package runners, or a command substitution used as the command itself.
+ * own — destructive / privilege-escalating heads, single-token package
+ * runners, or a command substitution used as the command itself.
  */
 function isHighRiskHeadToken(token: string): boolean {
   const h = normalizeBashHead(token)
   if (!h) return false
   if (HIGH_RISK_BASH_HEADS.has(h)) return true
   if (h.startsWith('mkfs.')) return true
-  if (isInterpreterHead(h)) return true
   if (PKG_RUNNER_HEADS_1.has(h)) return true
   // command substitution used as the command itself: `$(curl url)` / backtick
   if (h.startsWith('$(') || h.startsWith('`')) return true
