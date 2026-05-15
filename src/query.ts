@@ -7,15 +7,10 @@ import {
   type InvocationContext,
 } from './agents/invocation-context.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
-import type { Role, RoleKind } from './agents/types.js'
-import {
-  createCacheSafeParams,
-  saveCacheSafeParams,
-} from './agents/cache-safe-params.js'
+import type { Role } from './agents/types.js'
+import { resolveHooks } from './agents/hook-registry.js'
+import type { HookContext, RenderedPrompt } from './agents/hooks/types.js'
 import { runHook } from './hooks/index.js'
-import { executeAutoDream } from './memory/dream/dream.js'
-import { extractMemories, flushBeforeCompact } from './memory/extract.js'
-import { buildMemoryNudgeBlock, isMemoryNudgeDue } from './memory/nudge.js'
 import {
   updateSessionMemory,
   type SessionMemoryUpdateInput,
@@ -27,9 +22,8 @@ import {
   getLastUuid,
   toApiMessages,
 } from './messages.js'
-import { buildSystemPromptTemplate, renderSystemPrompt, renderSystemPromptSplit } from './prompt.js'
+import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { getProviderFor, modelFor } from './provider/index.js'
-import { requestPermission } from './permission/index.js'
 import {
   addSessionMemoryToolCall,
   addSessionMemoryTokens,
@@ -37,54 +31,42 @@ import {
   getAbortController,
   getCurrentUserId,
   getCwd,
-  getLastExtractedAt,
-  getMemoryDir,
   getRuntime,
   getSessionId,
   getSessionMemoryToolCallsSinceUpdate,
   getSessionMemoryTokensSinceUpdate,
   getTodos,
-  incrementCompactionCount,
   incrementSessionMemoryUpdateCount,
-  registerBackgroundTask,
   resetSessionMemoryCounters,
-  setLastExtractedAt,
 } from './state.js'
-import { compactConversation } from './session/compact.js'
-import { compactFallbackTruncate } from './session/compact-fallback.js'
-import { maybeIdleMicroCompact } from './session/idle-mc.js'
 import {
   loadMeta,
-  updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
 import { getCurrentSessionContext } from './session-context.js'
 import {
   buildTurnToolCatalog,
-  findDeferredTool,
+  type TurnToolCatalog,
 } from './tools/deferred-loading.js'
-import { markDiscovered, pruneStaleDiscoveredTools } from './tools/discovered-tools.js'
-import { isDeferredTool } from './tools/is-deferred.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
-  type CanUseToolFn,
   type Tool,
 } from './tool.js'
-import { estimateMessagesTokens } from './token-estimate.js'
+import {
+  dispatchToolCall,
+  type DispatchContext,
+  type ToolUseBlock,
+} from './query-tool-dispatch.js'
 import type {
-  AssistantContentBlock,
   AssistantToolUseBlock,
   Message,
-  ToolExecutionEvent,
   UsageStats,
   UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
-import { toolResultContentToText } from './types.js'
-import type { WakeNotifyResult } from './background-task/types.js'
 
 type QueryParams = {
   role: Role
@@ -93,29 +75,6 @@ type QueryParams = {
   tools: Tool[]
   config?: LightClawConfig
   maxTurns?: number
-}
-
-type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
-
-type DispatchContext = {
-  tools: Tool[]
-  allTools: Tool[]
-  deferredTools: Tool[]
-  roleKind: RoleKind
-  permissionApprover?: InvocationContext['permissionApprover']
-  onToolResult?(event: ToolExecutionEvent): void
-  maxToolOutputBytes: number
-  config: LightClawConfig
-  canUseTool?: CanUseToolFn
-  signal: AbortSignal
-  wakeNotifications?: WakeNotifyResult[]
-  mainTurnRouting?: {
-    provider: ReturnType<typeof getProviderFor>['provider']
-    schema: ReturnType<typeof getProviderFor>['provider']['name']
-    endpoint: string
-    endpointBaseUrl: string | undefined
-    upstreamModel: string
-  }
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -129,39 +88,6 @@ function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
       (base.cache_read_input_tokens ?? 0)
       + (next.cache_read_input_tokens ?? 0),
   }
-}
-
-function snipContent(content: string, maxBytes: number): string {
-  const total = Buffer.byteLength(content, 'utf8')
-  if (total <= maxBytes) {
-    return content
-  }
-  const marker = `\n\n... [snipped ${total - maxBytes} bytes from middle of ${total} total] ...\n\n`
-  const markerBytes = Buffer.byteLength(marker, 'utf8')
-  const usable = Math.max(0, maxBytes - markerBytes)
-  if (usable === 0) {
-    return marker.trim()
-  }
-  const head = Math.floor(usable / 2)
-  const tail = usable - head
-  const buf = Buffer.from(content, 'utf8')
-  return `${buf.subarray(0, head).toString('utf8')}${marker}${buf.subarray(buf.length - tail).toString('utf8')}`
-}
-
-function isPromptTooLongError(err: unknown): boolean {
-  if (!err) {
-    return false
-  }
-  const message = err instanceof Error ? err.message : String(err)
-  const lower = message.toLowerCase()
-  return (
-    lower.includes('prompt is too long')
-    || lower.includes('input is too long')
-    || lower.includes('input length')
-    || lower.includes('context length')
-    || lower.includes('exceeds maximum context')
-    || lower.includes('maximum context length')
-  )
 }
 
 function renderInterjectionContent(
@@ -252,6 +178,7 @@ export async function query(params: QueryParams): Promise<{
   const invocation = params.invocation ?? emptyInvocationContext()
   const rolePolicy = resolveRolePolicy(params.role)
   const contextPolicy = rolePolicy.contextPolicy
+  const lifecycleHooks = resolveHooks(params.role)
   const systemPromptOverride = invocation.systemPromptOverride
   const hasSystemPromptOverride = systemPromptOverride !== undefined
   const signal = invocation.signal ?? getAbortController().signal
@@ -339,160 +266,6 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
-  const scheduleMemoryExtraction = (snapshot: Message[]) => {
-    if (!contextPolicy.autoMemoryExtract || !config.autoMemory || stopReason !== 'end_turn') {
-      return
-    }
-
-    const lastExtractedAt = getLastExtractedAt()
-    const task = extractMemories({
-      messages: snapshot,
-      lastExtractedAt,
-      memoryDir: getMemoryDir(),
-      canonicalUser: getCurrentUserId(),
-      config,
-    })
-      .then(async result => {
-        if (result.lastExtractedAt <= lastExtractedAt) {
-          return
-        }
-
-        setLastExtractedAt(result.lastExtractedAt)
-        await updateMetaLastExtractedAt(getSessionId(), result.lastExtractedAt)
-      })
-      .catch(error => {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error(`[memory] ${message}`)
-      })
-
-    registerBackgroundTask(task)
-  }
-
-  const scheduleAutoDream = () => {
-    if (
-      !contextPolicy.autoMemoryExtract ||
-      stopReason !== 'end_turn' ||
-      !config.autoMemory ||
-      !config.autoDream.enabled
-    ) {
-      return
-    }
-
-    const userId = getCurrentUserId()
-    if (!userId) {
-      return
-    }
-
-    const task = executeAutoDream({
-      userId,
-      memoryDir: getMemoryDir(),
-      config,
-      currentSessionId: getSessionId(),
-    }).catch(error => {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[auto-dream] ${message}`)
-    })
-
-    registerBackgroundTask(task)
-  }
-
-  /**
-   * Run conversation compaction and splice the result into `messages` in
-   * place. When `force=false`, only runs if estimated tokens exceed the
-   * configured threshold. When `force=true`, runs unconditionally — used
-   * by the prompt-too-long reactive recovery path. Returns true iff
-   * messages were actually replaced.
-   */
-  const runCompaction = async (force: boolean): Promise<boolean> => {
-    if (!contextPolicy.autoCompact || !config.autoCompact) {
-      return false
-    }
-
-    if (!force) {
-      const totalTokens = estimateMessagesTokens(messages)
-      const threshold = config.contextWindow * config.compactThresholdRatio
-      if (totalTokens <= threshold) {
-        return false
-      }
-    }
-
-    // P2: pre-compact flush — persist hard facts to auto-memory before the
-    // summarizer collapses the prefix. Failures are logged inside
-    // flushBeforeCompact and never abort compaction.
-    if (config.autoMemory && config.preCompactFlush.enabled) {
-      const flushed = await flushBeforeCompact({
-        messages: [...messages],
-        lastExtractedAt: getLastExtractedAt(),
-        memoryDir: getMemoryDir(),
-        canonicalUser: getCurrentUserId(),
-        config,
-        timeoutMs: config.preCompactFlush.timeoutMs,
-      })
-      if (flushed.lastExtractedAt > getLastExtractedAt()) {
-        setLastExtractedAt(flushed.lastExtractedAt)
-        await updateMetaLastExtractedAt(getSessionId(), flushed.lastExtractedAt)
-      }
-    }
-
-    invocation.onCompactStart?.()
-    try {
-      const result = await compactConversation({
-        messages,
-        keepRecent: config.compactKeepRecent,
-        config,
-        sessionId: getSessionId(),
-      })
-
-      if (result.removedCount === 0) {
-        return false
-      }
-
-      messages.splice(0, messages.length, ...result.messages)
-      addUsage(result.usage)
-      totalUsage = mergeUsage(totalUsage, result.usage)
-      incrementCompactionCount()
-      didCompact = true
-      invocation.onCompactEnd?.({
-        removedCount: result.removedCount,
-        summaryTokens: result.summaryTokens,
-      })
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      // Always log: proactive compaction failures used to be completely
-      // silent, so a session could quietly accumulate context until the
-      // next turn 400s. One stderr line per failure lets admin grep.
-      process.stderr.write(`[compact] LLM compaction failed (force=${force}): ${message}\n`)
-      invocation.onCompactError?.(message)
-
-      // Reactive recovery only: the caller (prompt-too-long handler) has
-      // nowhere else to go if we return false here. Fall back to a hard
-      // truncation so the user is never stuck on "compact failed".
-      // Background passes (force=false) skip this — the next turn's
-      // proactive compact has another shot.
-      if (force) {
-        const fallback = compactFallbackTruncate(messages, {
-          keepRecent: Math.max(2, config.compactKeepRecent * 2),
-          reason: message,
-        })
-        if (fallback.removedCount > 0) {
-          messages.splice(0, messages.length, ...fallback.messages)
-          incrementCompactionCount()
-          didCompact = true
-          process.stderr.write(
-            `[compact] hard-truncate fallback elided ${fallback.removedCount} messages after LLM failure\n`,
-          )
-          invocation.onCompactEnd?.({
-            removedCount: fallback.removedCount,
-            summaryTokens: 0,
-          })
-          return true
-        }
-      }
-      return false
-    }
-  }
-
   const systemPromptTemplate = hasSystemPromptOverride
     ? null
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
@@ -521,6 +294,41 @@ export async function query(params: QueryParams): Promise<{
       ? `${invocation.channelContext}\n\n${rendered}`
       : rendered
   }
+
+  let turnCatalog: TurnToolCatalog = {
+    tools: params.tools,
+    deferred: [],
+    deferredEnabled: false,
+  }
+
+  const makeHookContext = (messagesSnapshot?: Message[]): HookContext => ({
+    role: params.role,
+    rolePolicy,
+    config,
+    invocation,
+    messages,
+    messagesSnapshot,
+    allTools: params.tools,
+    systemPrompt: {
+      hasOverride: hasSystemPromptOverride,
+      override: systemPromptOverride,
+      template: systemPromptTemplate ?? undefined,
+      renderEffective: renderEffectiveSystemPrompt,
+    },
+    get turnCatalog() {
+      return turnCatalog
+    },
+    setTurnCatalog(catalog) {
+      turnCatalog = catalog
+    },
+    mergeUsage(usage) {
+      totalUsage = mergeUsage(totalUsage, usage)
+    },
+    markDidCompact() {
+      didCompact = true
+    },
+    stopReason: () => stopReason,
+  })
 
   const beforeQueryResult = await runHook('beforeQuery', {
     sessionId: getSessionId(),
@@ -566,54 +374,15 @@ export async function query(params: QueryParams): Promise<{
   >
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    // Iter 3: idle MC. Clear stale tool_results before sending this turn's
-    // request, so the shrunk prompt is what actually goes out. Idempotent on
-    // re-run. Subagent mode is excluded — short lifetimes never reach the
-    // gap threshold and there is no point spending a transcript rewrite on
-    // them.
-    if (contextPolicy.autoCompact) {
-      try {
-        const mc = await maybeIdleMicroCompact(messages, config)
-        if (mc.cleared > 0) {
-          console.log(
-            `[micro-compact:idle] cleared ${mc.cleared} tool_result(s), `
-            + `~${mc.tokensSaved} tokens saved `
-            + `(gap > ${config.microCompact.idle.gapThresholdMinutes}min, `
-            + `kept last ${config.microCompact.idle.keepRecent})`,
-          )
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.error(`[micro-compact:idle] failed: ${msg}`)
-      }
-    }
-
     let stopEvent: StopEvent | undefined
-    const sessionCtx = getCurrentSessionContext()
-    // Session-scoped turn counter drives discoveredTools TTL eviction.
-    // Bump BEFORE prune so the cutoff is current; subagent mode skips
-    // (forked agents get fresh empty Map per `runForkedAgent` and don't
-    // need TTL within their short lifetime). systemPrompt-override callers
-    // (custom prompt) also skip — they don't use the deferred path.
-    if (
-      sessionCtx
-      && contextPolicy.deferredToolDiscovery
-      && !hasSystemPromptOverride
-    ) {
-      sessionCtx.turnCounter += 1
-      pruneStaleDiscoveredTools(
-        sessionCtx.discoveredTools,
-        sessionCtx.turnCounter,
-        config.tools.discoveredToolsTtlTurns,
-      )
+    turnCatalog = {
+      tools: params.tools,
+      deferred: [],
+      deferredEnabled: false,
     }
-    const turnCatalog = !contextPolicy.cacheStable || hasSystemPromptOverride
-      ? { tools: params.tools, deferred: [], deferredEnabled: false }
-      : buildTurnToolCatalog({
-          allTools: params.tools,
-          discoveredTools: sessionCtx?.discoveredTools ?? new Map(),
-          config,
-        })
+    for (const hook of lifecycleHooks) {
+      await hook.beforeTurn?.(makeHookContext())
+    }
     dispatchCtx.tools = turnCatalog.tools
     dispatchCtx.allTools = params.tools
     dispatchCtx.deferredTools = turnCatalog.deferred
@@ -625,28 +394,17 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
-      // Split rendering: stable prefix (persona / memory / tool catalog) is
-      // cache-anchored; variable suffix (TodoList + deferred-tools reminder)
-      // re-tokenizes per turn. channelContext is per-session metadata and
-      // belongs in the stable prefix. Custom-systemPrompt callers (subagents)
-      // bypass the split — their prompt is already self-contained.
-      let systemStable: string
-      let systemVariableSuffix: string | undefined
-      if (!contextPolicy.cacheStable || hasSystemPromptOverride) {
-        systemStable = hasSystemPromptOverride
+      let renderedPrompt: RenderedPrompt = {
+        system: hasSystemPromptOverride
           ? (systemPromptOverride ?? '')
-          : renderEffectiveSystemPrompt()
-        systemVariableSuffix = undefined
-      } else {
-        const rendered = renderSystemPromptSplit(systemPromptTemplate!, getTodos(), {
-          tools: turnCatalog.tools,
-          deferredTools: turnCatalog.deferred,
-          discoveredTools: sessionCtx?.discoveredTools,
-        })
-        systemStable = invocation.channelContext
-          ? `${invocation.channelContext}\n\n${rendered.stable}`
-          : rendered.stable
-        systemVariableSuffix = rendered.variable || undefined
+          : renderEffectiveSystemPrompt(),
+        systemVariableSuffix: undefined as string | undefined,
+      }
+      for (const hook of lifecycleHooks) {
+        const rendered = await hook.beforeStream?.(makeHookContext())
+        if (rendered) {
+          renderedPrompt = rendered
+        }
       }
       try {
         const mainModel = modelFor('main', config)
@@ -662,8 +420,10 @@ export async function query(params: QueryParams): Promise<{
           config,
           model: mainModel,
           messages: toApiMessages(messages),
-          system: systemStable,
-          ...(systemVariableSuffix ? { systemVariableSuffix } : {}),
+          system: renderedPrompt.system,
+          ...(renderedPrompt.systemVariableSuffix
+            ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
+            : {}),
           tools: turnCatalog.tools.map(toolToAPISchema),
           cacheBreakpointMessageIndex: invocation.cacheBreakpointMessageIndex,
           signal,
@@ -690,9 +450,16 @@ export async function query(params: QueryParams): Promise<{
         }
         break
       } catch (error) {
-        if (attempt === 0 && isPromptTooLongError(error)) {
-          const compacted = await runCompaction(true)
-          if (compacted) {
+        if (attempt === 0) {
+          let shouldRetry = false
+          for (const hook of lifecycleHooks) {
+            const action = await hook.onStreamError?.(error, makeHookContext())
+            if (action?.kind === 'retry') {
+              shouldRetry = true
+              break
+            }
+          }
+          if (shouldRetry) {
             continue
           }
         }
@@ -751,32 +518,8 @@ export async function query(params: QueryParams): Promise<{
       (block): block is ToolUseBlock => block.type === 'tool_use',
     )
 
-    // Snapshot cacheSafeParams after every assistant push for the main
-    // orchestrator turn — forks (AgentTool / memory extraction) read
-    // forkContextMessages and synthesize placeholder tool_results for any
-    // pending tool_use blocks at construction time (see runForkedAgent), so a
-    // "dirty" snapshot ending in an assistant turn with pending tool_uses is
-    // fine. Snapshotting keeps the parent prefix (history bytes) cache-aligned
-    // across all forks dispatched in the same turn.
-    //
-    // Ephemeral (`/fresh`) sessions are excluded: they share the parent's
-    // canonical user but run a synthetic single-message conversation that has
-    // no relation to the real main transcript. Saving here would overwrite
-    // the parent's cacheSafeParams with the fresh session's tiny prefix, so
-    // the *next* main turn's AgentTool fork would inherit fresh's messages as
-    // forkContextMessages until the next assistant push overwrote them.
-    // fresh.ts has documented this exclusion as intentional since Phase 18;
-    // the gate enforces what the comment promised.
-    if (rolePolicy.kind === 'orchestrator' && !invocation.ephemeral) {
-      saveCacheSafeParams(
-        getCurrentUserId(),
-        createCacheSafeParams({
-          systemPrompt: renderEffectiveSystemPrompt(),
-          tools: turnCatalog.tools,
-          messages: [...messages],
-          config,
-        }),
-      )
+    for (const hook of lifecycleHooks) {
+      await hook.afterAssistantMessage?.(makeHookContext())
     }
 
     if (toolUses.length === 0) {
@@ -821,9 +564,9 @@ export async function query(params: QueryParams): Promise<{
       const extractionSnapshot = [...messages]
       if (!invocation.ephemeral) {
         await maybeUpdateSessionMemory(extractionSnapshot)
-        await runCompaction(false)
-        scheduleMemoryExtraction(extractionSnapshot)
-        scheduleAutoDream()
+        for (const hook of lifecycleHooks) {
+          await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
+        }
       }
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
@@ -904,30 +647,11 @@ export async function query(params: QueryParams): Promise<{
           `query: injected ${interjections.length} interjection${interjections.length === 1 ? '' : 's'} into next user message\n`,
         )
       }
-      // Memory Nudge: every `memoryNudge.everyTurns` agent-loop turns, ride a
-      // passive reminder onto this tool-boundary user message so the live
-      // agent can persist a finding — with the "why" — via MemoryWrite while
-      // it still has the full context. Costs no extra API turn. Gated off for
-      // subagents / custom-prompt callers / ephemeral (/fresh) / no-memory.
-      if (
-        sessionCtx
-        && contextPolicy.autoMemoryExtract
-        && !hasSystemPromptOverride
-        && !invocation.ephemeral
-        && !invocation.noAutoMemory
-        && config.autoMemory
-        && config.memoryNudge.enabled
-        && isMemoryNudgeDue(
-          sessionCtx.turnCounter,
-          sessionCtx.lastMemoryNudgeTurn,
-          config.memoryNudge.everyTurns,
-        )
-      ) {
-        content.push({ type: 'text', text: buildMemoryNudgeBlock() })
-        sessionCtx.lastMemoryNudgeTurn = sessionCtx.turnCounter
-        process.stderr.write(
-          `query: injected memory nudge at turn ${sessionCtx.turnCounter}\n`,
-        )
+      for (const hook of lifecycleHooks) {
+        const extraContent = await hook.atToolBoundary?.(makeHookContext())
+        if (extraContent?.length) {
+          content.push(...extraContent)
+        }
       }
       const nextUserMessage = createUserMessage(content, getLastUuid(messages))
       if (interjections.length > 0) {
@@ -946,221 +670,14 @@ export async function query(params: QueryParams): Promise<{
 
     if (!invocation.ephemeral) {
       await maybeUpdateSessionMemory([...messages])
-      await runCompaction(false)
+      for (const hook of lifecycleHooks) {
+        await hook.afterEndTurn?.(makeHookContext(), stopEvent.usage)
+      }
     }
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
   }  // end queryInner
-}
-
-async function dispatchToolCall(
-  toolUse: ToolUseBlock,
-  ctx: DispatchContext,
-): Promise<UserToolResultBlock> {
-  const tool = findToolByName(ctx.tools, toolUse.name)
-  if (!tool) {
-    const deferredTool = findDeferredTool(ctx.allTools, toolUse.name)
-    if (deferredTool) {
-      return reportToolResult(
-        ctx,
-        toolUse,
-        `Tool '${toolUse.name}' is deferred and not yet loaded. Call ToolSearch({query: "select:${toolUse.name}"}) to load its schema, then re-issue this tool call on your next turn.`,
-        true,
-      )
-    }
-    return reportToolResult(ctx, toolUse, `Unknown tool: ${toolUse.name}`, true)
-  }
-
-  const parsedInput = parseToolInput(tool, toolUse.input)
-  if (!parsedInput.ok) {
-    return reportToolResult(
-      ctx,
-      toolUse,
-      `Invalid input for ${toolUse.name}: ${parsedInput.error}`,
-      true,
-    )
-  }
-
-  let effectiveInput = parsedInput.data
-  const callId = toolUse.id
-
-  try {
-    const hookDecision = await runHook('beforeToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-    })
-
-    if (hookDecision?.replacementInput !== undefined) {
-      effectiveInput = hookDecision.replacementInput
-    }
-
-    // decision: 'deny' takes precedence over replacementResult.
-    // A deny + replacementResult combination is treated as deny (is_error: true)
-    // so a hook cannot silently convert a deny into a non-error result.
-    if (hookDecision?.decision === 'deny') {
-      const content = hookDecision.reason ?? `Tool denied by hook: ${tool.name}`
-      return reportToolResult(ctx, toolUse, content, true)
-    }
-
-    if (hookDecision?.replacementResult !== undefined) {
-      return reportToolResult(ctx, toolUse, hookDecision.replacementResult, false)
-    }
-
-    if (ctx.canUseTool) {
-      const gate = await ctx.canUseTool(tool, effectiveInput)
-      if (gate.behavior === 'deny') {
-        return reportToolResult(ctx, toolUse, gate.reason, true)
-      }
-    }
-
-    const sessionCtx = getCurrentSessionContext()
-    const decision = await requestPermission({
-      tool,
-      toolInput: effectiveInput,
-      ctx: {
-        isSubagent: ctx.roleKind !== 'orchestrator',
-        signal: ctx.signal,
-        permissionApprover: ctx.permissionApprover,
-        isBackgroundTask: sessionCtx?.isBackgroundTask,
-        taskAllowedTools: sessionCtx?.taskAllowedTools,
-        onPermissionDenial: sessionCtx?.onPermissionDenial,
-      },
-    })
-
-    if (decision.behavior === 'deny') {
-      return reportToolResult(ctx, toolUse, decision.reason, true)
-    }
-
-    if (tool.domain === 'environment') {
-      const runtime = getRuntime()
-      const availability = await runtime.isAvailable()
-      if (!availability.ok) {
-        // Retryable unavailability (worker still scheduling, image still
-        // pulling) is a soft backoff, not a tool failure. Surface it as
-        // `is_error: false` so the LLM reads it as informational rather
-        // than tripping the "tool call failed" behavior (apology + don't
-        // retry). Fatal states keep `is_error: true`.
-        const isFatal = !availability.retryable
-        const body = availability.retryable
-          ? `${availability.userMessage}\n\n[runtime: ${availability.reason}, retryable]`
-          : availability.userMessage
-        return reportToolResult(ctx, toolUse, body, isFatal)
-      }
-    }
-
-    // Refresh LRU position for deferred tools that were promoted on a prior
-    // turn. Without this, a tool the user actively invokes would slide
-    // toward eviction purely because newer ToolSearch hits keep landing at
-    // the back of the set. Touching only deferred-eligible tools avoids
-    // marking always-loaded builtins as "discovered" (they aren't tracked
-    // in `discoveredTools` at all).
-    if (isDeferredTool(tool)) {
-      const current = getCurrentSessionContext()
-      if (current && current.discoveredTools.has(tool.name)) {
-        markDiscovered(
-          current.discoveredTools,
-          tool.name,
-          current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
-        )
-      }
-    }
-
-    const start = Date.now()
-    const result = await tool.call(effectiveInput, {
-      cwd: getCwd(),
-      abortSignal: ctx.signal,
-      runtime: getRuntime(),
-      mainTurnRouting: ctx.mainTurnRouting,
-      canUseTool: ctx.canUseTool,
-      wakeNotifications: ctx.wakeNotifications,
-      deferredTools: ctx.deferredTools,
-      discoverTool(name) {
-        const current = getCurrentSessionContext()
-        if (!current) return
-        markDiscovered(
-          current.discoveredTools,
-          name,
-          current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
-        )
-      },
-    })
-    const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
-
-    // Hooks / snip / summarize are string-shape contracts; multimodal
-    // tool_result.content arrays (image blocks from Read on image / pdf-pages)
-    // bypass these post-processing steps. The text-collapsed view goes to
-    // hooks for observability so afterToolCall can still inspect / log.
-    const formattedTextView = toolResultContentToText(formatted.content)
-    const afterTool = await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: formattedTextView,
-      durationMs: Date.now() - start,
-      ...(formatted.is_error ? { error: formattedTextView } : {}),
-    })
-    if (afterTool?.replacementResult !== undefined) {
-      // Hook replacement collapses multimodal output back to plain text,
-      // since hooks contract on `string`. Hooks that need to preserve
-      // images should not return replacementResult.
-      formatted.content = afterTool.replacementResult
-    }
-
-    if (typeof formatted.content === 'string') {
-      formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
-    }
-
-    ctx.onToolResult?.({
-      toolName: toolUse.name,
-      isError: Boolean(formatted.is_error),
-      content: toolResultContentToText(formatted.content),
-    })
-    return formatted
-  } catch (error) {
-    const content = error instanceof Error ? error.message : String(error)
-    await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: content,
-      durationMs: 0,
-      error: content,
-    })
-    return reportToolResult(ctx, toolUse, content, true)
-  }
-}
-
-function reportToolResult(
-  ctx: DispatchContext,
-  toolUse: ToolUseBlock,
-  content: string,
-  isError: boolean,
-): UserToolResultBlock {
-  const snipped = snipContent(content, ctx.maxToolOutputBytes)
-  ctx.onToolResult?.({
-    toolName: toolUse.name,
-    isError,
-    content: snipped,
-  })
-  return {
-    type: 'tool_result',
-    tool_use_id: toolUse.id,
-    content: snipped,
-    ...(isError ? { is_error: true } : {}),
-  }
 }
 
 function getLastUserText(messages: Message[]): string {
@@ -1182,24 +699,4 @@ function replaceLastUserText(messages: Message[], next: string): void {
       return
     }
   }
-}
-
-function parseToolInput(
-  tool: Tool,
-  rawInput: Record<string, unknown>,
-): { ok: true; data: unknown } | { ok: false; error: string } {
-  if (tool.source === 'mcp') {
-    return { ok: true, data: rawInput }
-  }
-
-  if (!tool.inputSchema) {
-    return { ok: false, error: 'Tool has no input schema.' }
-  }
-
-  const parsed = tool.inputSchema.safeParse(rawInput)
-  if (!parsed.success) {
-    return { ok: false, error: parsed.error.message }
-  }
-
-  return { ok: true, data: parsed.data }
 }
