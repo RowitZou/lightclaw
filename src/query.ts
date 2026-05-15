@@ -394,16 +394,25 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
-      let renderedPrompt: RenderedPrompt = {
-        system: hasSystemPromptOverride
-          ? (systemPromptOverride ?? '')
-          : renderEffectiveSystemPrompt(),
-        systemVariableSuffix: undefined as string | undefined,
-      }
+      // Lazy-init: avoid eagerly calling renderEffectiveSystemPrompt() when a
+      // beforeStream hook (split-render) is going to overwrite the result.
+      // For orchestrator roles split-render always wins, so eager init meant
+      // two full prompt renders + two catalog builds per attempt — wasted work
+      // that doubles on prompt-too-long retry. Fall back to the default render
+      // only when no beforeStream hook produces a RenderedPrompt (workers with
+      // the default `hooks: ['prompt-too-long-retry']` policy hit this path).
+      let renderedPrompt: RenderedPrompt | null = null
       for (const hook of lifecycleHooks) {
         const rendered = await hook.beforeStream?.(makeHookContext())
         if (rendered) {
           renderedPrompt = rendered
+        }
+      }
+      if (!renderedPrompt) {
+        renderedPrompt = {
+          system: hasSystemPromptOverride
+            ? (systemPromptOverride ?? '')
+            : renderEffectiveSystemPrompt(),
         }
       }
       try {
