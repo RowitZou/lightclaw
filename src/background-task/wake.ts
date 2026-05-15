@@ -3,6 +3,8 @@ import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
+import { channelInvocationContext } from '../agents/invocation-context.js'
+import { getMainRole } from '../agents/registry.js'
 import { channelSessionLock } from '../channels/session-lock.js'
 import { parseFeishuSessionId } from '../channels/feishu/routing.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
@@ -229,6 +231,11 @@ export async function wakeMainAgent(input: {
       const wakeNotifications: WakeNotifyResult[] = []
       const { notifyUserTool, staySilentTool } = await import('../tools/background-task.js')
       const result = await query({
+        role: getMainRole(),
+        invocation: channelInvocationContext({
+          canUseTool: createMainAgentCanUseTool('wake'),
+          wakeNotifications,
+        }),
         config: {
           ...config,
           model,
@@ -240,9 +247,6 @@ export async function wakeMainAgent(input: {
           notifyUserTool,
           staySilentTool,
         ],
-        mode: 'channel',
-        canUseTool: createMainAgentCanUseTool('wake'),
-        wakeNotifications,
       })
       const newMessages = result.messages.slice(messages.length)
       for (const item of newMessages) {

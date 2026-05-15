@@ -3,8 +3,40 @@ import { autoDreamPrompt } from './auto-dream.js'
 import { explorePrompt } from './explore.js'
 import { extractMemoriesPrompt } from './extract-memories.js'
 import { generalPurposePrompt } from './general-purpose.js'
+import { mainPrompt } from './main.js'
 
 export const BUNDLED_AGENTS: Role[] = [
+  {
+    agentType: 'main',
+    name: 'main',
+    whenToUse:
+      'Primary user-facing orchestrator. Not dispatchable through AgentTool.',
+    tools: ['*'],
+    skills: ['*'],
+    mcpServers: ['*'],
+    reachableRoles: ['general-purpose', 'explore'],
+    hooks: ['*'],
+    systemPrompt: mainPrompt,
+    kind: 'orchestrator',
+    outputContract: 'report',
+    contextPolicy: {
+      environmentInfo: true,
+      projectMemory: true,
+      autoMemoryIndex: true,
+      memoryRecall: {},
+      sessionWorkingMemory: true,
+      skillCatalog: true,
+      permissionSection: true,
+      mcpSection: true,
+      todos: true,
+      channelContext: true,
+      transcriptInheritance: 'full',
+      autoCompact: true,
+      autoMemoryExtract: true,
+      deferredToolDiscovery: true,
+      cacheStable: true,
+    },
+  },
   {
     agentType: 'general-purpose',
     whenToUse:

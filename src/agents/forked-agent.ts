@@ -13,6 +13,7 @@ import { createUserMessage, getLastUuid } from '../messages.js'
 import { query } from '../query.js'
 import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
 import type { CanUseToolFn } from '../tool.js'
+import { forkInvocationContext } from './invocation-context.js'
 import type {
   AssistantMessage,
   AssistantToolUseBlock,
@@ -23,6 +24,7 @@ import type {
   UserToolResultBlock,
 } from '../types.js'
 import type { CacheSafeParams } from './cache-safe-params.js'
+import type { Role } from './types.js'
 
 // Byte-identical across all sibling forks so parallel AgentTool dispatches
 // cache the parent prefix + assistant tool_use turn together. Mirrors Claude
@@ -39,6 +41,7 @@ export type ForkedAgentParams = {
    */
   promptText: string
   cacheSafeParams: CacheSafeParams
+  role: Role
   canUseTool: CanUseToolFn
   // Optional cap on tool-use turns for this fork. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
@@ -92,17 +95,19 @@ export async function runForkedAgent(
   const messages = [...prefix, promptMessage]
 
   const run = () => query({
+    role: params.role,
+    invocation: forkInvocationContext({
+      systemPrompt: cacheSafeParams.systemPrompt,
+      canUseTool: params.canUseTool,
+      cacheBreakpointMessageIndex:
+        prefix.length > 0 ? prefix.length - 1 : undefined,
+      signal: params.signal,
+      subagentLabel: params.label,
+    }),
     messages,
     tools: cacheSafeParams.tools,
     config: cacheSafeParams.config,
     maxTurns: params.maxTurns,
-    systemPrompt: cacheSafeParams.systemPrompt,
-    mode: 'subagent',
-    canUseTool: params.canUseTool,
-    cacheBreakpointMessageIndex:
-      prefix.length > 0 ? prefix.length - 1 : undefined,
-    signal: params.signal,
-    subagentLabel: params.label,
   })
   const currentCtx = getCurrentSessionContext()
   const result = currentCtx

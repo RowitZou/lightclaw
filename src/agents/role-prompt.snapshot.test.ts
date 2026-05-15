@@ -59,6 +59,9 @@ test('main and bundled role prompts match the Phase 1 baseline snapshot', async 
     assert.equal(promptHash(mainPrompt), SNAPSHOT_HASHES.main)
 
     for (const agent of BUNDLED_AGENTS) {
+      if (agent.kind === 'orchestrator') {
+        continue
+      }
       const prompt = buildSubagentPrompt(toolsForRole(agent), '/workspace', agent)
       assert.equal(promptHash(prompt), SNAPSHOT_HASHES[agent.agentType])
     }

@@ -1,4 +1,6 @@
 import type { LightClawConfig } from '../config.js'
+import { freshInvocationContext } from '../agents/invocation-context.js'
+import { getMainRole } from '../agents/registry.js'
 import { beginQuery } from '../init.js'
 import { createUserMessage } from '../messages.js'
 import { getProvider } from '../provider/index.js'
@@ -19,9 +21,8 @@ import type { Message, UserContentBlock } from '../types.js'
  * with the noAutoMemory + ephemeral flags.
  *
  * `/fresh` itself is marked `channelOnly` since Phase 37, so this runner
- * always executes in channel context — the previous terminal branch
- * (`mode: 'interactive'`, `getAllTools('terminal')`) was unreachable and
- * removed.
+ * always executes in channel context; the previous terminal branch was
+ * unreachable and removed.
  *
  * Permission mode is inherited from the caller's current state. Auto-memory
  * and auto-compact paths are skipped at the query.ts gates that read these
@@ -54,12 +55,11 @@ export async function runFresh(args: {
   // composition). Mirrors `runForkedAgent`'s shape so the contract is
   // consistent across all fork-like entry points.
   const runQuery = () => query({
+    role: getMainRole(),
+    invocation: freshInvocationContext(),
     config,
     messages,
     tools,
-    mode: 'channel',
-    noAutoMemory: true,
-    ephemeral: true,
   })
   try {
     const parentCtx = getCurrentSessionContext()

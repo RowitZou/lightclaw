@@ -1,5 +1,5 @@
 import { BUNDLED_AGENTS } from './bundled/index.js'
-import type { AgentDefinition, AgentType } from './types.js'
+import type { AgentDefinition, AgentType, Role } from './types.js'
 
 const registry = new Map<AgentType, AgentDefinition>()
 
@@ -20,6 +20,14 @@ export function initializeAgents(): void {
 export function getAgent(type: AgentType): AgentDefinition | undefined {
   initializeAgents()
   return registry.get(type)
+}
+
+export function getMainRole(): Role {
+  const role = getAgent('main')
+  if (!role) {
+    throw new Error('Main role is not registered.')
+  }
+  return role
 }
 
 export function getAllAgents(): AgentDefinition[] {

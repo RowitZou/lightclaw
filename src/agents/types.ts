@@ -1,6 +1,7 @@
 import type { MemoryType } from '../memory/types.js'
 
 export const BUNDLED_AGENT_TYPES = [
+  'main',
   'general-purpose',
   'explore',
   'extract_memories',

@@ -136,6 +136,7 @@ export async function runSubagent(params: {
     const result = await runForkedAgent({
       promptText: params.prompt,
       cacheSafeParams,
+      role: agent,
       canUseTool:
         params.canUseToolOverride ?? createSubagentCanUseTool(agent.tools),
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
