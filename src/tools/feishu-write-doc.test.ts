@@ -397,9 +397,58 @@ describe('FeishuWriteDoc tool', () => {
       table_block_id: 'tbl2',
       rows_deleted: 2,
     })
-    assert.equal(askInput?.toolName, 'FeishuTableStructureConfirm')
+    assert.equal(askInput?.toolName, 'FeishuTableEditConfirm')
     records = await readAuditRecords()
     assert.equal(records.at(-1)?.operation, 'delete-doc-table-rows')
+  })
+
+  it('short-circuits doc table content edits when a FeishuTableEditConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuTableEditConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteDoc(
+          {
+            document_id: 'docTableAllowed',
+            action: 'delete_table_columns',
+            table_block_id: 'tblAllowed',
+            column_start: 0,
+            column_count: 1,
+          },
+          {
+            client,
+            deleteTableColumns: async input => ({
+              documentId: input.documentId,
+              action: 'delete_table_columns',
+              tableBlockId: input.tableBlockId,
+              columnsDeleted: input.columnCount,
+            }),
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when covered by FeishuTableEditConfirm')
+    assert.deepEqual(result.output, {
+      document_id: 'docTableAllowed',
+      url: 'https://feishu.cn/docx/docTableAllowed',
+      action: 'delete_table_columns',
+      table_block_id: 'tblAllowed',
+      columns_deleted: 1,
+    })
+    const records = await readAuditRecords()
+    assert.equal(records.at(-1)?.operation, 'delete-doc-table-columns')
+    assert.equal(records.at(-1)?.status, 'confirmed')
   })
 
   it('uploads doc images and files with dedicated upload confirmation', async () => {

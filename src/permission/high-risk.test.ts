@@ -247,7 +247,7 @@ describe('isHighRiskAsk (top-level driver)', () => {
     )
   })
 
-  it('TRUE for Feishu table/sheet/move one-shot approval asks', () => {
+  it('TRUE for Feishu resource-destructive one-shot approval asks', () => {
     for (const toolName of [
       'FeishuTableStructureConfirm',
       'FeishuSheetDestructiveConfirm',
@@ -282,6 +282,25 @@ describe('isHighRiskAsk (top-level driver)', () => {
       })),
       false,
     )
+  })
+
+  it('FALSE for Feishu content-level table/sheet edit approval asks', () => {
+    for (const toolName of [
+      'FeishuSheetEditConfirm',
+      'FeishuTableEditConfirm',
+    ]) {
+      assert.equal(
+        isHighRiskAsk(ask({
+          toolName,
+          riskLevel: 'write',
+          input: { operation: 'content-edit', resource: { token: 't' }, preview: toolName },
+          inputPreview: toolName,
+          suggestedRules: [{ toolName }],
+        })),
+        false,
+        `${toolName} should be grantable as "always allow"`,
+      )
+    }
   })
 
   it('TRUE when suggested rules contain a high-risk rule', () => {

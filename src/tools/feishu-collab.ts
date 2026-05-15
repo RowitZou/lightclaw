@@ -650,7 +650,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
 export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
   name: 'FeishuWriteDoc',
   description:
-    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. replace/delete/destructive table structure actions use stricter one-shot confirmation. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
+    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. replace/delete block use stricter one-shot confirmation; table row/column/merge edits use a dedicated grantable FeishuTableEditConfirm. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -694,7 +694,7 @@ export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocO
 export const feishuWriteSheetTool = buildTool<FeishuWriteSheetInput, FeishuWriteSheetOutput | string>({
   name: 'FeishuWriteSheet',
   description:
-    'Mutate a Feishu/Lark spreadsheet. Accepts a sheets URL, a wiki URL whose underlying node is a sheet, or a direct spreadsheet_token. Actions: write_values (legacy append/overwrite), clear_range, add_sheet, delete_sheet. overwrite/clear/delete use stricter one-shot confirmation. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/sheets/... link) — never the raw `spreadsheet_token`.',
+    'Mutate a Feishu/Lark spreadsheet. Accepts a sheets URL, a wiki URL whose underlying node is a sheet, or a direct spreadsheet_token. Actions: write_values (legacy append/overwrite), clear_range, add_sheet, delete_sheet. overwrite/clear cell edits use a dedicated grantable FeishuSheetEditConfirm; deleting a whole sheet/tab uses stricter one-shot confirmation. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/sheets/... link) — never the raw `spreadsheet_token`.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -1835,13 +1835,13 @@ export async function requireFeishuWriteConfirmation(input: {
 
   // Honor identity-level "always allow" rules for grantable Feishu virtual
   // confirms. Without this short-circuit, FeishuCreateFile / WriteDoc /
-  // WriteSheet / CreateFolder / Upload always render an approval card even
-  // after the user already picked "以后都允许" on a prior ask —
+  // WriteSheet / CreateFolder / Upload / table-edit always render an approval
+  // card even after the user already picked "以后都允许" on a prior ask —
   // requireFeishuWriteConfirmation called approver.ask directly, bypassing
   // requestPermission's evaluatePermission gate that every other write tool
   // routes through. Destructive one-shot confirms intentionally never
-  // short-circuit: delete / whole-doc replace / move / table-structure /
-  // sheet destructive operations are high-risk per CLAUDE.md; isHighRiskAsk
+  // short-circuit: delete / whole-doc replace / move / whole-sheet-delete
+  // operations are high-risk per CLAUDE.md; isHighRiskAsk
   // hides the 以后都允许 button on the card, and this is defense-in-depth.
   if (!isOneShotFeishuOperation(input.operation)) {
     const userId = getCurrentUserId()
@@ -1941,10 +1941,19 @@ function feishuConfirmToolName(operation: FeishuWriteOperation): string {
   }
   if (
     operation === 'overwrite-sheet-range' ||
-    operation === 'clear-sheet-range' ||
-    operation === 'delete-sheet'
+    operation === 'clear-sheet-range'
   ) {
+    return 'FeishuSheetEditConfirm'
+  }
+  if (operation === 'delete-sheet') {
     return 'FeishuSheetDestructiveConfirm'
+  }
+  if (
+    operation === 'delete-doc-table-rows' ||
+    operation === 'delete-doc-table-columns' ||
+    operation === 'merge-doc-table-cells'
+  ) {
+    return 'FeishuTableEditConfirm'
   }
   if (
     operation === 'upload-file' ||
@@ -1952,13 +1961,6 @@ function feishuConfirmToolName(operation: FeishuWriteOperation): string {
     operation === 'upload-doc-file'
   ) {
     return 'FeishuUploadConfirm'
-  }
-  if (
-    operation === 'delete-doc-table-rows' ||
-    operation === 'delete-doc-table-columns' ||
-    operation === 'merge-doc-table-cells'
-  ) {
-    return 'FeishuTableStructureConfirm'
   }
   if (operation === 'move') {
     return 'FeishuMoveConfirm'
@@ -1970,12 +1972,7 @@ function isOneShotFeishuOperation(operation: FeishuWriteOperation): boolean {
   return operation === 'delete' ||
     operation === 'delete-doc-block' ||
     operation === 'replace-doc' ||
-    operation === 'overwrite-sheet-range' ||
-    operation === 'clear-sheet-range' ||
     operation === 'delete-sheet' ||
-    operation === 'delete-doc-table-rows' ||
-    operation === 'delete-doc-table-columns' ||
-    operation === 'merge-doc-table-cells' ||
     operation === 'move'
 }
 

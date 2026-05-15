@@ -170,10 +170,11 @@ export function containsHighRiskRule(rules: PermissionRuleValue[]): boolean {
  * fallback. Used by approver UIs to gate the persistence option.
  */
 export function isHighRiskAsk(ask: PermissionAskInput): boolean {
-  // Destructive Feishu writes stay one-shot: delete, move, whole-document
-  // replace, and table/sheet structure mutations have a wider blast radius
-  // than append/create/upload writes, so the UI must hide the "always allow"
-  // path for these virtual approval tools.
+  // Resource-level destructive Feishu writes stay one-shot: delete, move,
+  // whole-document replace, whole-sheet deletion, and the legacy table-
+  // structure virtual confirm have a wider blast radius than append/create/
+  // upload/content-edit writes, so the UI must hide the "always allow" path
+  // for these virtual approval tools.
   if (
     ask.toolName === 'FeishuDeleteConfirm' ||
     ask.toolName === 'FeishuReplaceDocConfirm' ||

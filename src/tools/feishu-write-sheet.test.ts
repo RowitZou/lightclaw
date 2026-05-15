@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -153,9 +153,54 @@ describe('FeishuWriteSheet tool', () => {
       mode: 'overwrite',
       data: { overwritten: true },
     })
-    assert.equal(askInput?.toolName, 'FeishuSheetDestructiveConfirm')
+    assert.equal(askInput?.toolName, 'FeishuSheetEditConfirm')
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'overwrite-sheet-range')
+  })
+
+  it('short-circuits sheet content edits when a FeishuSheetEditConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuSheetEditConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteSheet(
+          {
+            spreadsheet_token: 'sheetDirect',
+            action: 'clear_range',
+            range: 'A1:B2',
+          },
+          {
+            client,
+            clearRange: async input => ({
+              spreadsheetToken: input.spreadsheetToken,
+              range: input.range,
+              action: 'clear_range',
+            }),
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when covered by FeishuSheetEditConfirm')
+    assert.deepEqual(result.output, {
+      spreadsheet_token: 'sheetDirect',
+      url: 'https://feishu.cn/sheets/sheetDirect',
+      range: 'A1:B2',
+      action: 'clear_range',
+    })
+    const records = await readAuditRecords()
+    assert.equal(records[0].operation, 'clear-sheet-range')
+    assert.equal(records[0].status, 'confirmed')
   })
 
   it('clears ranges and adds/deletes sheets through structured actions', async () => {
@@ -193,7 +238,7 @@ describe('FeishuWriteSheet tool', () => {
       range: 'tab1!A1:B2',
       action: 'clear_range',
     })
-    assert.equal(clearAsk?.toolName, 'FeishuSheetDestructiveConfirm')
+    assert.equal(clearAsk?.toolName, 'FeishuSheetEditConfirm')
 
     const added = await withFeishuSession({
       approver: { ask: async () => ({ behavior: 'allow' }) },
