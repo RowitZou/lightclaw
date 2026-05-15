@@ -32,6 +32,7 @@ import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider, getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
+import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { getMainRole } from '../agents/registry.js'
 import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
@@ -672,12 +673,14 @@ export class ChannelRunner {
           // again corresponds to effectiveMessage only.
           replyTargetMessage = effectiveMessage
           try {
+            const mainRole = getMainRole()
             result = await query({
               config: appConfig,
-              role: getMainRole(),
+              role: mainRole,
               invocation: channelInvocationContext({
                 channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
                 permissionApprover: approver,
+                canUseTool: createMainAgentCanUseTool('normal', mainRole),
                 onToolUse(event) {
                   process.stderr.write(`${channelId}: tool ${event.name}\n`)
                 },

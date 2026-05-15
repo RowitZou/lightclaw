@@ -3,21 +3,40 @@ import { describe, it } from 'node:test'
 
 import type { Tool } from '../tool.js'
 import { createMainAgentCanUseTool } from './main-agent-can-use-tool.js'
+import type { Role } from './types.js'
 
 describe('createMainAgentCanUseTool', () => {
   it('blocks wake-only tools in normal mode', async () => {
-    const gate = createMainAgentCanUseTool('normal')
+    const gate = createMainAgentCanUseTool('normal', mainRole())
     assert.equal((await gate(fakeTool('notify_user'), {})).behavior, 'deny')
     assert.equal((await gate(fakeTool('stay_silent'), {})).behavior, 'deny')
   })
 
   it('allows wake-only tools in wake mode', async () => {
-    const gate = createMainAgentCanUseTool('wake')
+    const gate = createMainAgentCanUseTool('wake', mainRole())
     assert.deepEqual(await gate(fakeTool('notify_user'), {}), { behavior: 'allow' })
     assert.deepEqual(await gate(fakeTool('stay_silent'), {}), { behavior: 'allow' })
     assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })
   })
+
+  it('applies the main role tool gate to non-wake tools', async () => {
+    const gate = createMainAgentCanUseTool('wake', mainRole({ tools: ['Read'] }))
+    assert.equal((await gate(fakeTool('Read'), {})).behavior, 'allow')
+    assert.equal((await gate(fakeTool('Write'), {})).behavior, 'deny')
+    assert.equal((await gate(fakeTool('notify_user'), {})).behavior, 'allow')
+  })
 })
+
+function mainRole(overrides: Partial<Role> = {}): Role {
+  return {
+    agentType: 'main',
+    kind: 'orchestrator',
+    whenToUse: 'Primary user-facing orchestrator.',
+    systemPrompt: '',
+    tools: ['*'],
+    ...overrides,
+  }
+}
 
 function fakeTool(name: string): Tool {
   return {

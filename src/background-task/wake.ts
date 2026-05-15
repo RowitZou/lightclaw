@@ -233,7 +233,7 @@ export async function wakeMainAgent(input: {
       const result = await query({
         role: getMainRole(),
         invocation: channelInvocationContext({
-          canUseTool: createMainAgentCanUseTool('wake'),
+          canUseTool: createMainAgentCanUseTool('wake', getMainRole()),
           wakeNotifications,
         }),
         config: {
