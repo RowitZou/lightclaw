@@ -249,7 +249,6 @@ describe('isHighRiskAsk (top-level driver)', () => {
 
   it('TRUE for Feishu resource-destructive one-shot approval asks', () => {
     for (const toolName of [
-      'FeishuTableStructureConfirm',
       'FeishuSheetDestructiveConfirm',
       'FeishuMoveConfirm',
     ]) {
