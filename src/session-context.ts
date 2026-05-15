@@ -28,6 +28,11 @@ export type ChannelFileSender = {
   sendFile(file: ChannelFileSendInput): Promise<ChannelFileSendOutput>
 }
 
+export type ResourceGrantTarget = {
+  chatId?: string
+  senderOpenId?: string
+}
+
 /**
  * Per-query / per-REPL-loop session context. Every field that can differ
  * between concurrent users lives here. Process-wide services such as the
@@ -54,6 +59,7 @@ export type SessionContext = {
   activeSkillAllowedTools?: string[]
   permissionApprover: PermissionApprover | null
   channelFileSender: ChannelFileSender | null
+  resourceGrantTarget?: ResourceGrantTarget
   abortController: AbortController
   backgroundTasks: Set<Promise<unknown>>
   /** name → turn index of last use (ToolSearch match OR actual tool_use).
@@ -135,6 +141,7 @@ export function createSessionContext(input: {
   activeSkillAllowedTools?: string[]
   permissionApprover?: PermissionApprover | null
   channelFileSender?: ChannelFileSender | null
+  resourceGrantTarget?: ResourceGrantTarget
   runtime?: Runtime
   isBackgroundTask?: boolean
   taskAllowedTools?: string[]
@@ -161,6 +168,7 @@ export function createSessionContext(input: {
     activeSkillAllowedTools: input.activeSkillAllowedTools,
     permissionApprover: input.permissionApprover ?? null,
     channelFileSender: input.channelFileSender ?? null,
+    resourceGrantTarget: input.resourceGrantTarget,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     discoveredTools: new Map(),
@@ -204,6 +212,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     activeSkillAllowedTools: undefined,
     permissionApprover: null,
     channelFileSender: null,
+    resourceGrantTarget: undefined,
     abortController: new AbortController(),
     backgroundTasks: new Set(),
     discoveredTools: new Map(),

@@ -113,7 +113,7 @@ async function executeAutoDreamInner(params: {
     }
 
     try {
-      // Run through the AgentDefinition pathway (kind='internal'). The fork
+      // Run through the Role pathway (kind='internal'). The fork
       // gets a focused systemPrompt (no Available Skills section) and a
       // tools array containing only MemoryWrite / MemoryRead / Read / Grep /
       // Glob / Bash. Runtime gate stays as createAutoMemCanUseTool for

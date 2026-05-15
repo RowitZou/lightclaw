@@ -10,10 +10,10 @@ import {
   type UserWorkspace,
   type WorkspaceRoot,
 } from '../channels/feishu/workspace/lifecycle.js'
+import { recordFeishuWriteAudit } from '../audit/feishu-writes.js'
 import { lightclawHome } from '../paths.js'
 import { readJson } from '../identity/store.js'
 import { sanitizePathSegment } from '../identity/paths.js'
-import { recordFeishuWriteAudit } from '../tools/feishu-collab.js'
 
 const DELETE_TOKEN_TTL_MS = 5 * 60 * 1000
 const pendingDeleteTokens = new Map<string, { token: string; expiresAt: number; folderToken: string; itemCount: number }>()

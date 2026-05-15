@@ -3,33 +3,20 @@ import { getProvider } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import type { AgentDefinition, AgentType, WorkerFailure, WorkerFailureReason } from './types.js'
+import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
 import { getAgent } from './registry.js'
 import {
   createCacheSafeParams,
   getLastCacheSafeParams,
 } from './cache-safe-params.js'
 import { runForkedAgent } from './forked-agent.js'
-import { deriveCanUseTool, isToolVisibleToRole } from './role-tool-gate.js'
+import { isToolVisibleToRole } from './role-tool-gate.js'
 
 function filterTools(
-  agent: AgentDefinition,
+  agent: Role,
   enabledTools: Tool[],
 ): Tool[] {
   return enabledTools.filter(tool => isToolVisibleToRole(agent, tool.name))
-}
-
-/** @deprecated Use deriveCanUseTool(role) for new Role-aware call sites. */
-export function createSubagentCanUseTool(
-  definitionTools: string[] | ['*'],
-): CanUseToolFn {
-  return deriveCanUseTool({
-    agentType: 'legacy-subagent',
-    kind: 'worker',
-    whenToUse: 'Legacy subagent tool gate compatibility shim.',
-    systemPrompt: '',
-    tools: definitionTools,
-  })
 }
 
 export async function runSubagent(params: {
@@ -50,7 +37,7 @@ export async function runSubagent(params: {
   canonicalUserOverride?: string
   // Optional override for the per-subagent turn cap. Internal subagents
   // (autoDream) source their cap from a user-tunable config knob, so they
-  // pass it explicitly rather than baking it into the AgentDefinition.
+  // pass it explicitly rather than baking it into the Role.
   maxTurnsOverride?: number
 }): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)

@@ -14,8 +14,8 @@ function role(overrides: Partial<Role> = {}): Role {
   }
 }
 
-test('resolveRolePolicy defaults legacy user-facing roles to worker policy', () => {
-  const resolved = resolveRolePolicy(role({ kind: 'user-facing' }))
+test('resolveRolePolicy defaults roles without kind to worker policy', () => {
+  const resolved = resolveRolePolicy(role())
 
   assert.equal(resolved.name, 'test-role')
   assert.equal(resolved.kind, 'worker')

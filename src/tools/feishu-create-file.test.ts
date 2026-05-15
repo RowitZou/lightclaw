@@ -332,6 +332,7 @@ describe('FeishuCreateFile tool', () => {
     const stub = makeGrantStub()
     const result = await withFeishuSession({
       sessionId: 'feishu:group:oc_grp:ou_alice',
+      resourceGrantTarget: { chatId: 'oc_grp', senderOpenId: 'ou_alice' },
       approver: { ask: async () => ({ behavior: 'allow' }) },
       fn: () =>
         runFeishuCreateFile(
@@ -341,8 +342,8 @@ describe('FeishuCreateFile tool', () => {
             createDoc: async () => ({ documentId: 'docG', title: 'Team notes' }),
             grantUser: stub.grantUser,
             grantChat: stub.grantChat,
-            // Group sessions read senderOpenId out of sessionId — this fallback
-            // should NOT be consulted in this path.
+            // Group sessions receive senderOpenId from the channel runner -
+            // this fallback should NOT be consulted in this path.
             resolveOwnerOpenId: async () => {
               throw new Error('resolveOwnerOpenId should not run in group path')
             },
@@ -364,6 +365,7 @@ describe('FeishuCreateFile tool', () => {
     const stub = makeGrantStub({ failOpenId: 'ou_alice' })
     const result = await withFeishuSession({
       sessionId: 'feishu:group:oc_grp:ou_alice',
+      resourceGrantTarget: { chatId: 'oc_grp', senderOpenId: 'ou_alice' },
       approver: { ask: async () => ({ behavior: 'allow' }) },
       fn: () =>
         runFeishuCreateFile(
@@ -391,6 +393,7 @@ describe('FeishuCreateFile tool', () => {
     const stub = makeGrantStub({ failOpenId: 'ou_alice', failChatId: 'oc_grp' })
     const result = await withFeishuSession({
       sessionId: 'feishu:group:oc_grp:ou_alice',
+      resourceGrantTarget: { chatId: 'oc_grp', senderOpenId: 'ou_alice' },
       approver: { ask: async () => ({ behavior: 'allow' }) },
       fn: () =>
         runFeishuCreateFile(
@@ -674,6 +677,7 @@ async function withFeishuSession<T>(input: {
   approver: PermissionApprover
   fn: () => Promise<T>
   sessionId?: string
+  resourceGrantTarget?: { chatId?: string; senderOpenId?: string }
 }): Promise<T> {
   const ctx = createSessionContext({
     sessionId: input.sessionId ?? 'feishu:dm:chat1',
@@ -685,6 +689,7 @@ async function withFeishuSession<T>(input: {
     currentUserId: 'alice',
     permissionMode: 'default',
     permissionApprover: input.approver,
+    resourceGrantTarget: input.resourceGrantTarget,
   })
   return runWithSessionContext(ctx, input.fn)
 }

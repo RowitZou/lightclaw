@@ -184,12 +184,12 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
   const prompt = buildExtractPrompt(newMessages, existingMemories)
-  // Run through the AgentDefinition pathway (kind='internal'). The subagent
+  // Run through the Role pathway (kind='internal'). The subagent
   // gets a focused systemPrompt (no Available Skills section, no UseSkill
   // induction toward the `remember` skill) and a tools array containing only
   // MemoryWrite / MemoryRead / Read / Grep / Glob. Runtime gate stays as
   // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
-  // AgentDefinition (20 — see bundled/index.ts).
+  // Role (20 - see bundled/index.ts).
   const result = await runSubagent({
     agentType: 'extract_memories',
     prompt,

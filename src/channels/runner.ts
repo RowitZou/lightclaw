@@ -143,6 +143,10 @@ export type ChannelRunnerStrategy = {
     sessionId: string,
     userId: string,
   ): PermissionApprover
+  resolveResourceGrantTarget?(message: NormalizedChannelMessage): {
+    chatId?: string
+    senderOpenId?: string
+  } | undefined
   tryAutoDenyForInterjection?(sessionId: string): Promise<boolean>
   /**
    * Best-effort lookup of a human-readable display name for a sender (for
@@ -411,6 +415,7 @@ export class ChannelRunner {
           sessionId,
           currentUserId: userId,
           channel: 'feishu',
+          resourceGrantTarget: this.strategy.resolveResourceGrantTarget?.(effectiveMessage),
         })
         const approver = this.strategy.createPermissionApprover?.(
             effectiveMessage,

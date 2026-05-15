@@ -1,7 +1,7 @@
 import { platform } from 'node:process'
 
 import { resolveRolePolicy } from './agents/role-presets.js'
-import type { AgentDefinition, Role } from './agents/types.js'
+import type { Role } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
@@ -228,7 +228,7 @@ export async function buildPromptForRole(
   context: OrchestratorPromptContext,
 ): Promise<SystemPromptTemplate>
 export function buildPromptForRole(
-  role: AgentDefinition,
+  role: Role,
   context: SubagentPromptContext,
 ): string
 export function buildPromptForRole(
@@ -467,7 +467,7 @@ export function renderSystemPrompt(
 export function buildSubagentPrompt(
   tools: Tool[],
   environmentRoot: string,
-  agent: AgentDefinition,
+  agent: Role,
 ): string {
   return buildPromptForRole(agent, { tools, environmentRoot })
 }
@@ -475,7 +475,7 @@ export function buildSubagentPrompt(
 function buildSubagentPromptContent(
   tools: Tool[],
   environmentRoot: string,
-  agent: AgentDefinition,
+  agent: Role,
 ): string {
   const toolDescriptions = formatToolCatalog(tools)
 

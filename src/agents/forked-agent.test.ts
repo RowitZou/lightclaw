@@ -10,7 +10,8 @@ import {
   getLastCacheSafeParams,
   saveCacheSafeParams,
 } from './cache-safe-params.js'
-import { createSubagentCanUseTool } from './run-subagent.js'
+import { deriveCanUseTool } from './role-tool-gate.js'
+import type { Role, RoleResourceAllowlist } from './types.js'
 import { getCwd } from '../state.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 
@@ -36,6 +37,16 @@ function tool(name: string): Tool {
         content: String(output),
       }
     },
+  }
+}
+
+function roleWithTools(tools: RoleResourceAllowlist): Role {
+  return {
+    agentType: 'test-worker',
+    kind: 'worker',
+    whenToUse: 'test',
+    systemPrompt: '',
+    tools,
   }
 }
 
@@ -110,7 +121,7 @@ test('cache-safe params snapshots message and tool arrays', () => {
 })
 
 test('subagent tool gate denies globally blocked tools', async () => {
-  const gate = createSubagentCanUseTool(['*'])
+  const gate = deriveCanUseTool(roleWithTools(['*']))
   assert.deepEqual(await gate(tool('AgentTool'), {}), {
     behavior: 'deny',
     reason: 'AgentTool is not available to subagents.',
@@ -118,13 +129,13 @@ test('subagent tool gate denies globally blocked tools', async () => {
 })
 
 test('subagent tool gate denies tools outside an explicit allowlist', async () => {
-  const gate = createSubagentCanUseTool(['Read'])
+  const gate = deriveCanUseTool(roleWithTools(['Read']))
   const decision = await gate(tool('Write'), {})
   assert.equal(decision.behavior, 'deny')
 })
 
 test('subagent tool gate allows listed tools', async () => {
-  const gate = createSubagentCanUseTool(['Read'])
+  const gate = deriveCanUseTool(roleWithTools(['Read']))
   assert.deepEqual(await gate(tool('Read'), {}), { behavior: 'allow' })
 })
 

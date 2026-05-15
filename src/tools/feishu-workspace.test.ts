@@ -428,6 +428,7 @@ describe('Feishu workspace tools', () => {
         currentUserId: 'alice',
         permissionMode: 'default',
         permissionApprover: { ask: async () => ({ behavior: 'allow' }) },
+        resourceGrantTarget: { chatId: 'oc_grp', senderOpenId: 'ou_alice' },
       }),
       () => runFeishuCreateFolder({ name: 'projects' }, { client }),
     )

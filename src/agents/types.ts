@@ -16,11 +16,6 @@ export type AgentType = BundledAgentType | (string & {})
 
 export type RoleKind = 'orchestrator' | 'worker' | 'internal'
 
-// Back-compat for pre-Role bundled definitions. Iter 1.3 migrates existing
-// 'user-facing' entries to 'worker'; keep accepting it until cleanup.
-export type LegacyAgentKind = 'user-facing'
-export type AgentKind = RoleKind | LegacyAgentKind
-
 export type OutputContract = 'report' | 'side-effect'
 
 export type RoleResourceAllowlist = string[] | ['*']
@@ -67,7 +62,7 @@ export type Role = {
   // bundled definitions are migrated; `name` is the terminal Role spelling.
   agentType: AgentType
   name?: AgentType
-  kind?: AgentKind
+  kind?: RoleKind
   whenToUse: string
   description?: string
 
@@ -93,6 +88,3 @@ export type Role = {
     maxCost?: number
   }
 }
-
-/** @deprecated use Role */
-export type AgentDefinition = Role

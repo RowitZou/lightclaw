@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
 
+import {
+  auditFailed,
+  recordFeishuWriteAudit,
+  type FeishuPermissionGrants,
+  type FeishuWriteOperation,
+} from '../audit/feishu-writes.js'
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
 import { resolveFeishuLink } from '../channels/feishu/link.js'
 import {
@@ -16,7 +21,6 @@ import {
 import {
   classifyFeishuError,
   FeishuApiError,
-  type FeishuErrorKind,
 } from '../channels/feishu/resources/errors.js'
 import { uploadDriveFile, type UploadDriveFileResult } from '../channels/feishu/resources/file-upload.js'
 import { grantFilePermission } from '../channels/feishu/resources/folder.js'
@@ -53,7 +57,7 @@ import {
   type FeishuDocReadResult,
   type FeishuDocTableMutationResult,
 } from '../channels/feishu/resources/doc.js'
-import { parseFeishuSessionId } from '../channels/feishu/routing.js'
+import { feishuShareUrl } from '../channels/feishu/url.js'
 import { getIdentity } from '../identity/store.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import {
@@ -72,7 +76,6 @@ import {
   type FeishuSheetTarget,
   type SheetValues,
 } from '../channels/feishu/resources/sheet.js'
-import { lightclawHome } from '../paths.js'
 import { evaluatePermission } from '../permission/policy.js'
 import { loadIdentityRules } from '../permission/storage.js'
 import {
@@ -178,20 +181,6 @@ const feishuCreateFileInputSchema = z.object({
 })
 
 export type FeishuCreateFileInput = z.infer<typeof feishuCreateFileInputSchema>
-
-export type FeishuPermissionGrants = {
-  // Group chat-level view grant. 'view' = success (or already-exists);
-  // 'failed' = API call rejected; 'skipped-not-group' = DM session (chat
-  // grant would be redundant because the user grant covers the sole
-  // counterparty).
-  chat?: 'view' | 'failed' | 'skipped-not-group'
-  // Sender-level full_access grant. 'full_access' = success (or
-  // already-exists); 'failed' = API call rejected; 'skipped-no-binding' =
-  // could not resolve a Feishu open_id for the requester (terminal admin
-  // with no Feishu pairing, etc.).
-  user?: 'full_access' | 'failed' | 'skipped-no-binding'
-  errors?: string[]
-}
 
 export type FeishuCreateFileOutput = {
   document_id?: string
@@ -377,60 +366,6 @@ export type FeishuWriteSheetOutput = {
   mode?: 'append' | 'overwrite'
   action?: z.infer<typeof feishuWriteSheetActionSchema>
   data?: unknown
-}
-
-export type FeishuWriteOperation =
-  | 'create-doc'
-  | 'create-sheet'
-  | 'upload-file'
-  | 'append-doc'
-  | 'append-doc-markdown'
-  | 'insert-doc-markdown'
-  | 'replace-doc'
-  | 'update-doc-block'
-  | 'delete-doc-block'
-  | 'create-doc-table'
-  | 'write-doc-table-cells'
-  | 'create-doc-table-with-values'
-  | 'insert-doc-table-row'
-  | 'insert-doc-table-column'
-  | 'delete-doc-table-rows'
-  | 'delete-doc-table-columns'
-  | 'merge-doc-table-cells'
-  | 'upload-doc-image'
-  | 'upload-doc-file'
-  | 'append-sheet-rows'
-  | 'overwrite-sheet-range'
-  | 'clear-sheet-range'
-  | 'add-sheet'
-  | 'delete-sheet'
-  | 'create-folder'
-  | 'move'
-  | 'delete'
-  | 'boundary-violation'
-  | 'admin-delete-workspace'
-
-export type FeishuWriteAudit = {
-  at: string
-  userId: string | undefined
-  operation: FeishuWriteOperation
-  resource?: Record<string, unknown>
-  preview?: string
-  status?: 'confirmed' | 'denied' | 'failed'
-  error?: string | FeishuWriteAuditError
-  retries?: number
-  permissionGrants?: FeishuPermissionGrants
-  ancestryChain?: string[]
-  sourceAncestry?: string[]
-  destAncestry?: string[]
-  boundaryViolation?: Record<string, unknown>
-}
-
-export type FeishuWriteAuditError = {
-  kind: FeishuErrorKind
-  message: string
-  code?: number
-  logId?: string
 }
 
 type FeishuReadDeps = {
@@ -1170,11 +1105,11 @@ async function resolveGrantTarget(
 }
 
 // Shared between FeishuCreateFile (which grants doc to chat+user) and
-// FeishuCreateFolder (which grants folder to user only — chat grant on a
+// FeishuCreateFolder (which grants folder to user only - chat grant on a
 // folder would let every group member browse all docs under the user's
-// private workspace via the breadcrumb). DM → identity binding. Group →
-// sessionId carries senderOpenId directly. Off-channel → identity binding
-// for the canonical user.
+// private workspace via the breadcrumb). DM -> identity binding. Group ->
+// channel runner supplies senderOpenId directly. Off-channel -> identity
+// binding for the canonical user.
 export async function resolveSenderOpenIdForGrant(
   resolveOwnerOpenId?: (canonical: string) => Promise<string | undefined>,
 ): Promise<{ chatId?: string; openId?: string }> {
@@ -1183,14 +1118,8 @@ export async function resolveSenderOpenIdForGrant(
   const lookupOwner = resolveOwnerOpenId ?? defaultResolveOwnerOpenId
 
   let openId: string | undefined
-  let chatId: string | undefined
-  if (ctx && ctx.channel === 'feishu') {
-    const parsed = parseFeishuSessionId(ctx.sessionId)
-    if (parsed?.kind === 'group') {
-      chatId = parsed.chatId
-      openId = parsed.senderOpenId
-    }
-  }
+  const chatId = ctx?.resourceGrantTarget?.chatId
+  openId = ctx?.resourceGrantTarget?.senderOpenId
   if (!openId && canonicalUser) {
     openId = await lookupOwner(canonicalUser)
   }
@@ -1976,53 +1905,9 @@ function isOneShotFeishuOperation(operation: FeishuWriteOperation): boolean {
     operation === 'move'
 }
 
-export async function recordFeishuWriteAudit(record: FeishuWriteAudit): Promise<void> {
-  const dir = path.join(lightclawHome(), 'audit', 'feishu-writes')
-  await mkdir(dir, { recursive: true })
-  const day = record.at.slice(0, 10)
-  await appendFile(path.join(dir, `${day}.jsonl`), `${JSON.stringify(record)}\n`, 'utf8')
-}
-
-export async function auditFailed(
-  operation: FeishuWriteOperation,
-  preview: string,
-  resource: Record<string, unknown>,
-  error: unknown,
-  extras: {
-    ancestryChain?: string[]
-    sourceAncestry?: string[]
-    destAncestry?: string[]
-    retries?: number
-  } = {},
-): Promise<void> {
-  await recordFeishuWriteAudit({
-    at: new Date().toISOString(),
-    userId: safeCurrentUserId(),
-    operation,
-    resource,
-    preview,
-    status: 'failed',
-    error: feishuAuditError(error),
-    ...(extras.retries && extras.retries > 0 ? { retries: extras.retries } : {}),
-    ...(extras.ancestryChain ? { ancestryChain: extras.ancestryChain } : {}),
-    ...(extras.sourceAncestry ? { sourceAncestry: extras.sourceAncestry } : {}),
-    ...(extras.destAncestry ? { destAncestry: extras.destAncestry } : {}),
-  })
-}
-
 export function feishuToolErrorMessage(error: unknown): string {
   const c = error instanceof FeishuApiError ? error.classification : classifyFeishuError(error)
   return c.agentMessage
-}
-
-function feishuAuditError(error: unknown): FeishuWriteAuditError {
-  const c = error instanceof FeishuApiError ? error.classification : classifyFeishuError(error)
-  return {
-    kind: c.kind,
-    message: c.agentMessage,
-    ...(c.code !== undefined ? { code: c.code } : {}),
-    ...(c.logId ? { logId: c.logId } : {}),
-  }
 }
 
 function formatCreatedDoc(
@@ -2072,33 +1957,6 @@ function formatUploadedFile(
     chunks: uploaded.chunks,
     ...(hasGrantContent(grants) ? { permission_grants: grants } : {}),
   }
-}
-
-// Build a Feishu open URL for the given resource. Always uses feishu.cn
-// (the global entry point); clicks redirect through accounts.feishu.cn
-// to the user's actual tenant subdomain (e.g. aicarrier.feishu.cn). The
-// extra SSO hop is fine for first-click and silent after the user is
-// signed in, so we don't bother with per-tenant config. URL paths per
-// Feishu open platform docs:
-//   docx:   /docx/<documentId>
-//   sheets: /sheets/<spreadsheetToken>[?sheet=<sheetId>]
-//   wiki:   /wiki/<nodeToken>
-//   base:   /base/<baseToken>
-//   folder: /drive/folder/<folderToken>
-//   file:   /file/<fileToken>   (drive uploads — PDFs / images / archives)
-export function feishuShareUrl(
-  kind: 'docx' | 'sheets' | 'wiki' | 'base' | 'folder' | 'file',
-  token: string,
-  opts: { sheetId?: string } = {},
-): string {
-  if (kind === 'folder') {
-    return `https://feishu.cn/drive/folder/${token}`
-  }
-  const base = `https://feishu.cn/${kind}/${token}`
-  if (kind === 'sheets' && opts.sheetId) {
-    return `${base}?sheet=${opts.sheetId}`
-  }
-  return base
 }
 
 function safeCurrentUserId(): string | undefined {

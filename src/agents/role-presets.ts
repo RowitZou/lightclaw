@@ -60,10 +60,7 @@ const INTERNAL_CONTEXT: ContextPolicy = {
 }
 
 function roleKind(role: Role): RoleKind {
-  if (role.kind === 'orchestrator' || role.kind === 'internal') {
-    return role.kind
-  }
-  return 'worker'
+  return role.kind ?? 'worker'
 }
 
 function baseContextFor(kind: RoleKind): ContextPolicy {
