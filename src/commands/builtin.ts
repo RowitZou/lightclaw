@@ -170,12 +170,11 @@ function buildBuiltinCommands(): ReplCommand[] {
       // typical reply-quote + attachment case), forward it verbatim so the
       // fresh sub-session sees the same `<quoted-message>` + `[媒体附件]`
       // breadcrumb the main turn would have seen. Fall through to plain
-      // `prompt` covers terminal mode and the no-quote / no-attachment
-      // case where the prebuilt content would just be the bare text.
+      // `prompt` covers the no-quote / no-attachment case where the
+      // prebuilt content would just be the bare text.
       const result = await runFresh({
         config: ctx.config,
         prompt,
-        isChannel: Boolean(ctx.isChannel),
         channelUserMessageContent: ctx.channelUserMessageContent,
       })
       // /fresh body is LLM markdown — render it through the channel's

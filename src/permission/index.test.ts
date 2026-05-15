@@ -31,7 +31,6 @@ describe('requestPermission background-task allowlist fallback', () => {
       tool: fakeTool('Bash', 'execute'),
       toolInput: { command: 'rsync -av a b' },
       ctx: {
-        isInteractive: false,
         isSubagent: true,
         isBackgroundTask: true,
         taskAllowedTools: ['Bash(rsync:*)'],
@@ -46,7 +45,6 @@ describe('requestPermission background-task allowlist fallback', () => {
       tool: fakeTool('Bash', 'execute'),
       toolInput: { command: 'rm -rf x' },
       ctx: {
-        isInteractive: false,
         isSubagent: true,
         isBackgroundTask: true,
         taskAllowedTools: ['Bash(rsync:*)'],
@@ -89,7 +87,6 @@ describe('requestPermission background-task allowlist fallback', () => {
       tool: fakeTool('Bash', 'execute'),
       toolInput: { command: 'rm -rf x' },
       ctx: {
-        isInteractive: false,
         isSubagent: true,
         isBackgroundTask: true,
         taskAllowedTools: [],
@@ -138,7 +135,7 @@ describe('requestPermission disk-fresh identity rules reload', () => {
       const decision = await requestPermission({
         tool: fakeTool('WebSearch', 'execute'),
         toolInput: { query: 'lightclaw architecture' },
-        ctx: { isInteractive: false, isSubagent: false },
+        ctx: { isSubagent: false },
       })
       assert.equal(
         decision.behavior,

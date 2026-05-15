@@ -33,11 +33,12 @@ import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js
 
 const MAX_PREVIEW_CHARS = 900
 
-// Aligned with terminal askUserApproval (src/permission/prompt.ts) and
-// faithful to Claude Code's bashToolUseOptions.tsx — three options total,
+// Faithful to Claude Code's bashToolUseOptions.tsx — three options total,
 // regardless of how many rules the suggester produced. The middle option
 // installs *all* of pending.suggestedRules in one go (mirrors Claude Code's
-// generateShellSuggestionsLabel + collected rules pattern).
+// generateShellSuggestionsLabel + collected rules pattern). The historical
+// terminal readline ASK (src/permission/prompt.ts) used the same shape but
+// was removed in Phase 37 along with the terminal agent loop.
 //
 //   allow         = allow once (no session rule)
 //   allow_rules   = install every rule in pending.suggestedRules; if the

@@ -1,5 +1,3 @@
-import type { Interface } from 'node:readline/promises'
-
 import { getConfig } from '../config.js'
 import {
   getAllPermissionRules,
@@ -10,9 +8,7 @@ import {
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
-import { isHighRiskAsk } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
-import { askUserApproval } from './prompt.js'
 import { formatRule } from './rules.js'
 import { loadIdentityRules } from './storage.js'
 import type {
@@ -26,9 +22,8 @@ export async function requestPermission(input: {
   tool: Tool
   toolInput: unknown
   ctx: PermissionContext
-  rl?: Interface
 }): Promise<PermissionDecision> {
-  const { tool, toolInput, ctx, rl } = input
+  const { tool, toolInput, ctx } = input
   const config = getConfig()
   const mode = getPermissionMode()
   // Identity rules are persisted per-canonical-user but cached as an
@@ -66,18 +61,20 @@ export async function requestPermission(input: {
   // ctx field still wins when explicitly provided (test injection / future
   // per-call override). State approver is shared by main agent and subagents
   // so a forked subagent's permission ask routes to the same Feishu card UX
-  // — no longer auto-denied. Subagents without an approver (terminal forks)
-  // fall through to the readline path or the final deny branch.
+  // — no longer auto-denied. After Phase 37 there is no terminal agent loop
+  // and no terminal readline ASK fallback; subagents without an approver
+  // (test or unattended off-channel paths) fall through to the
+  // BackgroundTask allowlist or the final deny branch.
   const approver = ctx.permissionApprover ?? getPermissionApprover()
 
   let decision: PermissionDecision
   if (verdict.behavior === 'ask') {
     const inputPreview = previewInput(tool.name, toolInput)
     const suggestedRules = computeSuggestedRules(tool, toolInput)
-    // High-risk verdict drives the "hide ‘以后都允许’" UX in both approvers.
-    // Computed once here so the policy decision is consistent across the
-    // approver call (Feishu card render) and the terminal prompt; the
-    // Feishu coordinator caches its own copy from PermissionAskInput.
+    // The Feishu approver re-computes `isHighRiskAsk(askInput)` from this
+    // payload to drive the "hide ‘以后都允许’" UX; no local copy is needed
+    // here since Phase 37 removed the terminal readline ASK that used to
+    // share the value.
     const askInput = {
       toolName: tool.name,
       riskLevel: tool.riskLevel,
@@ -87,18 +84,8 @@ export async function requestPermission(input: {
       signal: ctx.signal,
       suggestedRules,
     }
-    const highRisk = isHighRiskAsk(askInput)
     if (approver) {
       decision = await approver.ask(askInput)
-    } else if (ctx.isInteractive && rl) {
-      decision = await askUserApproval({
-        rl,
-        toolName: tool.name,
-        riskLevel: tool.riskLevel,
-        inputPreview,
-        suggestedRules,
-        highRisk,
-      })
     } else if (ctx.isBackgroundTask) {
       if (matchesUnattendedAllowlist(tool, toolInput, ctx.taskAllowedTools)) {
         decision = { behavior: 'allow' }
@@ -129,8 +116,8 @@ export async function requestPermission(input: {
         reason: [
           `Permission denied: ${tool.name} requires confirmation in ${mode} mode.`,
           ctx.isSubagent
-            ? 'No approver is wired for this subagent (terminal fork).'
-            : 'No interactive prompt is available.',
+            ? 'No approver is wired for this subagent.'
+            : 'No approver is attached to this session.',
           'Add an explicit allow rule or switch permission mode before retrying.',
         ].join(' '),
       }
