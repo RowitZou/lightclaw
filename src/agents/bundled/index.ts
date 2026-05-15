@@ -29,6 +29,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: extractMemoriesPrompt,
     maxTurns: 20,
     kind: 'internal',
+    outputContract: 'side-effect',
   },
   {
     agentType: 'auto_dream',
@@ -37,5 +38,6 @@ export const BUNDLED_AGENTS: Role[] = [
     tools: ['MemoryWrite', 'MemoryRead', 'Read', 'Grep', 'Glob', 'Bash'],
     systemPrompt: autoDreamPrompt,
     kind: 'internal',
+    outputContract: 'side-effect',
   },
 ]
