@@ -2,13 +2,15 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
 import {
-  createCacheSafeParams,
-  saveCacheSafeParams,
-} from './agents/cache-safe-params.js'
+  emptyInvocationContext,
+  type InterjectionEntry,
+  type InvocationContext,
+} from './agents/invocation-context.js'
+import { resolveRolePolicy } from './agents/role-presets.js'
+import type { Role } from './agents/types.js'
+import { resolveHooks } from './agents/hook-registry.js'
+import type { HookContext, RenderedPrompt } from './agents/hooks/types.js'
 import { runHook } from './hooks/index.js'
-import { executeAutoDream } from './memory/dream/dream.js'
-import { extractMemories, flushBeforeCompact } from './memory/extract.js'
-import { buildMemoryNudgeBlock, isMemoryNudgeDue } from './memory/nudge.js'
 import {
   updateSessionMemory,
   type SessionMemoryUpdateInput,
@@ -20,16 +22,8 @@ import {
   getLastUuid,
   toApiMessages,
 } from './messages.js'
-import { buildSystemPromptTemplate, renderSystemPrompt, renderSystemPromptSplit } from './prompt.js'
+import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { getProviderFor, modelFor } from './provider/index.js'
-import { requestPermission } from './permission/index.js'
-import type { PermissionApprover } from './permission/types.js'
-import type { InterjectionEntry } from './channels/feishu/interjection-queue.js'
-import {
-  buildInterjectionBlock,
-  extractCompletedToolUses,
-  extractOriginalUserText,
-} from './channels/feishu/interjection-prompt.js'
 import {
   addSessionMemoryToolCall,
   addSessionMemoryTokens,
@@ -37,151 +31,50 @@ import {
   getAbortController,
   getCurrentUserId,
   getCwd,
-  getLastExtractedAt,
-  getMemoryDir,
   getRuntime,
   getSessionId,
   getSessionMemoryToolCallsSinceUpdate,
   getSessionMemoryTokensSinceUpdate,
   getTodos,
-  incrementCompactionCount,
   incrementSessionMemoryUpdateCount,
-  registerBackgroundTask,
   resetSessionMemoryCounters,
-  setLastExtractedAt,
 } from './state.js'
-import { compactConversation } from './session/compact.js'
-import { compactFallbackTruncate } from './session/compact-fallback.js'
-import { maybeIdleMicroCompact } from './session/idle-mc.js'
 import {
   loadMeta,
-  updateMetaLastExtractedAt,
   updateMetaSessionMemoryAt,
 } from './session/storage.js'
 import { getCurrentSessionContext } from './session-context.js'
 import {
   buildTurnToolCatalog,
-  findDeferredTool,
+  type TurnToolCatalog,
 } from './tools/deferred-loading.js'
-import { markDiscovered, pruneStaleDiscoveredTools } from './tools/discovered-tools.js'
-import { isDeferredTool } from './tools/is-deferred.js'
 import { appendUsage } from './usage/storage.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
   findToolByName,
   toolToAPISchema,
-  type CanUseToolFn,
   type Tool,
 } from './tool.js'
-import { estimateMessagesTokens } from './token-estimate.js'
+import {
+  dispatchToolCall,
+  type DispatchContext,
+  type ToolUseBlock,
+} from './query-tool-dispatch.js'
 import type {
-  AssistantContentBlock,
+  AssistantToolUseBlock,
   Message,
-  ToolExecutionEvent,
   UsageStats,
   UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
-import { toolResultContentToText } from './types.js'
-import type { WakeNotifyResult } from './background-task/types.js'
-
-/**
- * QueryMode selects orchestration behavior that differs between AgentTool
- * subagents (subagent) and channel daemons like Feishu (channel). It drives
- * whether auto-compact / auto-memory run.
- *
- * | mode     | autoCompact | autoMemory |
- * |----------|:-----------:|:----------:|
- * | subagent |      ✗      |     ✗      |
- * | channel  |      ✓      |     ✓      |
- *
- * After Phase 37 the terminal no longer runs `query()` — the old
- * `'interactive'` mode that wired the readline ASK was removed alongside
- * the terminal agent loop, and every caller of `query()` now passes `mode`
- * explicitly. No default is provided so a future caller cannot silently
- * inherit the wrong orchestration profile.
- */
-export type QueryMode = 'subagent' | 'channel'
 
 type QueryParams = {
+  role: Role
+  invocation: InvocationContext
   messages: Message[]
   tools: Tool[]
   config?: LightClawConfig
   maxTurns?: number
-  onTextDelta?(text: string): void
-  onToolUse?(event: { name: string; input: Record<string, unknown> }): void
-  onToolResult?(event: ToolExecutionEvent): void
-  /**
-   * Fires once per assistant turn that emitted a non-empty text body, with
-   * the turn's full text. Channels (notably feishu) use this to deliver
-   * intermediate narration progressively — the model often drops a long
-   * research output mid-loop alongside a closing tool_use rather than at
-   * the very end of the query, and waiting for end-of-query to send a
-   * single reply leaves the user staring at silence for minutes. Fires
-   * before tool dispatch for the same turn, so the receiver can surface
-   * model intent before the next round of tool calls runs.
-   *
-   * Empty turns are skipped (no callback invocation). Failures are
-   * caught + logged so a flaky channel send never aborts the agent loop.
-   */
-  onAssistantTurn?(text: string): Promise<void> | void
-  onCompactStart?(): void
-  onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
-  onCompactError?(message: string): void
-  /** Required. Every caller passes one of the two QueryMode values explicitly. */
-  mode: QueryMode
-  /** Replaces the default system prompt entirely (used by subagents). */
-  systemPrompt?: string
-  /** Prepended to the default system prompt when provided (used by channels). */
-  channelContext?: string
-  /** Drains mid-flight channel interjections at the next tool boundary. */
-  interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
-  /** Async permission UI for channels such as Feishu cards. */
-  permissionApprover?: PermissionApprover
-  /** Function-based tool gate used by forked agents before permission policy. */
-  canUseTool?: CanUseToolFn
-  /** Message index to mark as the fork prefix cache breakpoint. */
-  cacheBreakpointMessageIndex?: number
-  signal?: AbortSignal
-  /**
-   * Skip auto-memory recall + memory index injection. Used by /fresh so the
-   * ephemeral one-shot session starts with a clean slate.
-   */
-  noAutoMemory?: boolean
-  /**
-   * Skip auto-compact + auto-extract + session-memory updates. Used by /fresh
-   * since there's no persisted transcript for those subsystems to reason about.
-   */
-  ephemeral?: boolean
-  /**
-   * Forked-agent label propagated to api logs (`subagentLabel` field). Set by
-   * runForkedAgent when mode === 'subagent'; ignored otherwise.
-  */
-  subagentLabel?: string
-  wakeNotifications?: WakeNotifyResult[]
-}
-
-type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
-
-type DispatchContext = {
-  tools: Tool[]
-  allTools: Tool[]
-  deferredTools: Tool[]
-  mode: QueryMode
-  permissionApprover?: PermissionApprover
-  onToolResult?(event: ToolExecutionEvent): void
-  maxToolOutputBytes: number
-  config: LightClawConfig
-  canUseTool?: CanUseToolFn
-  signal: AbortSignal
-  wakeNotifications?: WakeNotifyResult[]
-  mainTurnRouting?: {
-    provider: ReturnType<typeof getProviderFor>['provider']
-    schema: ReturnType<typeof getProviderFor>['provider']['name']
-    endpoint: string
-    endpointBaseUrl: string | undefined
-    upstreamModel: string
-  }
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -197,37 +90,70 @@ function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
   }
 }
 
-function snipContent(content: string, maxBytes: number): string {
-  const total = Buffer.byteLength(content, 'utf8')
-  if (total <= maxBytes) {
-    return content
-  }
-  const marker = `\n\n... [snipped ${total - maxBytes} bytes from middle of ${total} total] ...\n\n`
-  const markerBytes = Buffer.byteLength(marker, 'utf8')
-  const usable = Math.max(0, maxBytes - markerBytes)
-  if (usable === 0) {
-    return marker.trim()
-  }
-  const head = Math.floor(usable / 2)
-  const tail = usable - head
-  const buf = Buffer.from(content, 'utf8')
-  return `${buf.subarray(0, head).toString('utf8')}${marker}${buf.subarray(buf.length - tail).toString('utf8')}`
+function renderInterjectionContent(
+  invocation: InvocationContext,
+  interjections: InterjectionEntry[],
+  messages: Message[],
+): UserContentBlock[] {
+  return invocation.interjectionRenderer?.(interjections, {
+    originalUserText: extractOriginalUserText(messages),
+    completedToolUses: extractCompletedToolUses(messages),
+  }) ?? []
 }
 
-function isPromptTooLongError(err: unknown): boolean {
-  if (!err) {
-    return false
+function extractOriginalUserText(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (message.type !== 'user') continue
+    const text = userContentToText(message.message.content)
+    if (!text) continue
+    if (text.startsWith('<user-interjection>')) continue
+    return text
   }
-  const message = err instanceof Error ? err.message : String(err)
-  const lower = message.toLowerCase()
-  return (
-    lower.includes('prompt is too long')
-    || lower.includes('input is too long')
-    || lower.includes('input length')
-    || lower.includes('context length')
-    || lower.includes('exceeds maximum context')
-    || lower.includes('maximum context length')
-  )
+  return ''
+}
+
+function extractCompletedToolUses(
+  messages: Message[],
+): Array<{ name: string; brief: string }> {
+  const completed = new Set<string>()
+  for (const message of messages) {
+    if (message.type !== 'user' || !Array.isArray(message.message.content)) continue
+    for (const block of message.message.content) {
+      if (block.type === 'tool_result') {
+        completed.add(block.tool_use_id)
+      }
+    }
+  }
+
+  const out: Array<{ name: string; brief: string }> = []
+  for (const message of messages) {
+    if (message.type !== 'assistant') continue
+    for (const block of message.message.content) {
+      if (block.type !== 'tool_use' || !completed.has(block.id)) continue
+      out.push({
+        name: block.name,
+        brief: summarizeToolInput(block),
+      })
+    }
+  }
+  return out
+}
+
+function userContentToText(content: string | UserContentBlock[]): string {
+  if (typeof content === 'string') return content
+  return content
+    .filter((block): block is { type: 'text'; text: string } =>
+      block.type === 'text' && typeof block.text === 'string',
+    )
+    .map(block => block.text)
+    .join('\n')
+}
+
+function summarizeToolInput(block: AssistantToolUseBlock): string {
+  const raw = JSON.stringify(block.input)
+  if (raw.length <= 120) return raw
+  return `${raw.slice(0, 117)}...`
 }
 
 export async function query(params: QueryParams): Promise<{
@@ -249,13 +175,20 @@ export async function query(params: QueryParams): Promise<{
   usage: UsageStats
 }> {
   const config = params.config ?? getConfig()
+  const invocation = params.invocation ?? emptyInvocationContext()
+  const rolePolicy = resolveRolePolicy(params.role)
+  const contextPolicy = rolePolicy.contextPolicy
+  const lifecycleHooks = resolveHooks(params.role)
+  const systemPromptOverride = invocation.systemPromptOverride
+  const hasSystemPromptOverride = systemPromptOverride !== undefined
+  const signal = invocation.signal ?? getAbortController().signal
+  const apiLogKind = rolePolicy.kind === 'orchestrator' ? 'main' : 'subagent'
   // Mirror Claude Code CLI: no default cap on tool-use turns; loop runs until
   // the model emits end_turn (or until abort / context exhaustion). Callers
   // that need a hard ceiling pass it explicitly (e.g. memory extraction);
   // operators can opt into a global ceiling via config.maxTurns.
   const maxTurns =
     params.maxTurns ?? config.maxTurns ?? Number.POSITIVE_INFINITY
-  const mode: QueryMode = params.mode
   const messages = [...params.messages]
   const assistantTexts: string[] = []
   let stopReason: string | null = null
@@ -287,7 +220,7 @@ export async function query(params: QueryParams): Promise<{
   // sees the freshly written file. Failures are logged, never raised.
   const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
     if (
-      mode === 'subagent'
+      !contextPolicy.sessionWorkingMemory
       || !config.autoMemory
       || !config.sessionMemory.enabled
     ) {
@@ -333,172 +266,18 @@ export async function query(params: QueryParams): Promise<{
     }
   }
 
-  const scheduleMemoryExtraction = (snapshot: Message[]) => {
-    if (mode === 'subagent' || !config.autoMemory || stopReason !== 'end_turn') {
-      return
-    }
-
-    const lastExtractedAt = getLastExtractedAt()
-    const task = extractMemories({
-      messages: snapshot,
-      lastExtractedAt,
-      memoryDir: getMemoryDir(),
-      canonicalUser: getCurrentUserId(),
-      config,
-    })
-      .then(async result => {
-        if (result.lastExtractedAt <= lastExtractedAt) {
-          return
-        }
-
-        setLastExtractedAt(result.lastExtractedAt)
-        await updateMetaLastExtractedAt(getSessionId(), result.lastExtractedAt)
-      })
-      .catch(error => {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error(`[memory] ${message}`)
-      })
-
-    registerBackgroundTask(task)
-  }
-
-  const scheduleAutoDream = () => {
-    if (
-      mode === 'subagent' ||
-      stopReason !== 'end_turn' ||
-      !config.autoMemory ||
-      !config.autoDream.enabled
-    ) {
-      return
-    }
-
-    const userId = getCurrentUserId()
-    if (!userId) {
-      return
-    }
-
-    const task = executeAutoDream({
-      userId,
-      memoryDir: getMemoryDir(),
-      config,
-      currentSessionId: getSessionId(),
-    }).catch(error => {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[auto-dream] ${message}`)
-    })
-
-    registerBackgroundTask(task)
-  }
-
-  /**
-   * Run conversation compaction and splice the result into `messages` in
-   * place. When `force=false`, only runs if estimated tokens exceed the
-   * configured threshold. When `force=true`, runs unconditionally — used
-   * by the prompt-too-long reactive recovery path. Returns true iff
-   * messages were actually replaced.
-   */
-  const runCompaction = async (force: boolean): Promise<boolean> => {
-    if (mode === 'subagent' || !config.autoCompact) {
-      return false
-    }
-
-    if (!force) {
-      const totalTokens = estimateMessagesTokens(messages)
-      const threshold = config.contextWindow * config.compactThresholdRatio
-      if (totalTokens <= threshold) {
-        return false
-      }
-    }
-
-    // P2: pre-compact flush — persist hard facts to auto-memory before the
-    // summarizer collapses the prefix. Failures are logged inside
-    // flushBeforeCompact and never abort compaction.
-    if (config.autoMemory && config.preCompactFlush.enabled) {
-      const flushed = await flushBeforeCompact({
-        messages: [...messages],
-        lastExtractedAt: getLastExtractedAt(),
-        memoryDir: getMemoryDir(),
-        canonicalUser: getCurrentUserId(),
-        config,
-        timeoutMs: config.preCompactFlush.timeoutMs,
-      })
-      if (flushed.lastExtractedAt > getLastExtractedAt()) {
-        setLastExtractedAt(flushed.lastExtractedAt)
-        await updateMetaLastExtractedAt(getSessionId(), flushed.lastExtractedAt)
-      }
-    }
-
-    params.onCompactStart?.()
-    try {
-      const result = await compactConversation({
-        messages,
-        keepRecent: config.compactKeepRecent,
-        config,
-        sessionId: getSessionId(),
-      })
-
-      if (result.removedCount === 0) {
-        return false
-      }
-
-      messages.splice(0, messages.length, ...result.messages)
-      addUsage(result.usage)
-      totalUsage = mergeUsage(totalUsage, result.usage)
-      incrementCompactionCount()
-      didCompact = true
-      params.onCompactEnd?.({
-        removedCount: result.removedCount,
-        summaryTokens: result.summaryTokens,
-      })
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      // Always log: proactive compaction failures used to be completely
-      // silent, so a session could quietly accumulate context until the
-      // next turn 400s. One stderr line per failure lets admin grep.
-      process.stderr.write(`[compact] LLM compaction failed (force=${force}): ${message}\n`)
-      params.onCompactError?.(message)
-
-      // Reactive recovery only: the caller (prompt-too-long handler) has
-      // nowhere else to go if we return false here. Fall back to a hard
-      // truncation so the user is never stuck on "compact failed".
-      // Background passes (force=false) skip this — the next turn's
-      // proactive compact has another shot.
-      if (force) {
-        const fallback = compactFallbackTruncate(messages, {
-          keepRecent: Math.max(2, config.compactKeepRecent * 2),
-          reason: message,
-        })
-        if (fallback.removedCount > 0) {
-          messages.splice(0, messages.length, ...fallback.messages)
-          incrementCompactionCount()
-          didCompact = true
-          process.stderr.write(
-            `[compact] hard-truncate fallback elided ${fallback.removedCount} messages after LLM failure\n`,
-          )
-          params.onCompactEnd?.({
-            removedCount: fallback.removedCount,
-            summaryTokens: 0,
-          })
-          return true
-        }
-      }
-      return false
-    }
-  }
-
-  const systemPromptTemplate = params.systemPrompt
+  const systemPromptTemplate = hasSystemPromptOverride
     ? null
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
-        autoMemory: !params.noAutoMemory && config.autoMemory,
+        autoMemory: !invocation.noAutoMemory && config.autoMemory,
         config,
         queryText: getLastUserText(messages),
         sessionId: getSessionId(),
       })
 
   const renderEffectiveSystemPrompt = (): string => {
-    if (params.systemPrompt) {
-      return params.systemPrompt
+    if (hasSystemPromptOverride) {
+      return systemPromptOverride ?? ''
     }
     const sessionCtx = getCurrentSessionContext()
     const catalog = buildTurnToolCatalog({
@@ -511,10 +290,45 @@ export async function query(params: QueryParams): Promise<{
       deferredTools: catalog.deferred,
       discoveredTools: sessionCtx?.discoveredTools,
     })
-    return params.channelContext
-      ? `${params.channelContext}\n\n${rendered}`
+    return invocation.channelContext
+      ? `${invocation.channelContext}\n\n${rendered}`
       : rendered
   }
+
+  let turnCatalog: TurnToolCatalog = {
+    tools: params.tools,
+    deferred: [],
+    deferredEnabled: false,
+  }
+
+  const makeHookContext = (messagesSnapshot?: Message[]): HookContext => ({
+    role: params.role,
+    rolePolicy,
+    config,
+    invocation,
+    messages,
+    messagesSnapshot,
+    allTools: params.tools,
+    systemPrompt: {
+      hasOverride: hasSystemPromptOverride,
+      override: systemPromptOverride,
+      template: systemPromptTemplate ?? undefined,
+      renderEffective: renderEffectiveSystemPrompt,
+    },
+    get turnCatalog() {
+      return turnCatalog
+    },
+    setTurnCatalog(catalog) {
+      turnCatalog = catalog
+    },
+    mergeUsage(usage) {
+      totalUsage = mergeUsage(totalUsage, usage)
+    },
+    markDidCompact() {
+      didCompact = true
+    },
+    stopReason: () => stopReason,
+  })
 
   const beforeQueryResult = await runHook('beforeQuery', {
     sessionId: getSessionId(),
@@ -544,14 +358,14 @@ export async function query(params: QueryParams): Promise<{
     tools: params.tools,
     allTools: params.tools,
     deferredTools: [],
-    mode,
-    permissionApprover: params.permissionApprover,
-    onToolResult: params.onToolResult,
+    roleKind: rolePolicy.kind,
+    permissionApprover: invocation.permissionApprover,
+    onToolResult: invocation.onToolResult,
     maxToolOutputBytes: config.maxToolOutputBytes,
     config,
-    canUseTool: params.canUseTool,
-    signal: params.signal ?? getAbortController().signal,
-    wakeNotifications: params.wakeNotifications,
+    canUseTool: invocation.canUseTool,
+    signal,
+    wakeNotifications: invocation.wakeNotifications,
   }
 
   type StopEvent = Extract<
@@ -560,50 +374,15 @@ export async function query(params: QueryParams): Promise<{
   >
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    // Iter 3: idle MC. Clear stale tool_results before sending this turn's
-    // request, so the shrunk prompt is what actually goes out. Idempotent on
-    // re-run. Subagent mode is excluded — short lifetimes never reach the
-    // gap threshold and there is no point spending a transcript rewrite on
-    // them.
-    if (mode !== 'subagent') {
-      try {
-        const mc = await maybeIdleMicroCompact(messages, config)
-        if (mc.cleared > 0) {
-          console.log(
-            `[micro-compact:idle] cleared ${mc.cleared} tool_result(s), `
-            + `~${mc.tokensSaved} tokens saved `
-            + `(gap > ${config.microCompact.idle.gapThresholdMinutes}min, `
-            + `kept last ${config.microCompact.idle.keepRecent})`,
-          )
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.error(`[micro-compact:idle] failed: ${msg}`)
-      }
-    }
-
     let stopEvent: StopEvent | undefined
-    const sessionCtx = getCurrentSessionContext()
-    // Session-scoped turn counter drives discoveredTools TTL eviction.
-    // Bump BEFORE prune so the cutoff is current; subagent mode skips
-    // (forked agents get fresh empty Map per `runForkedAgent` and don't
-    // need TTL within their short lifetime). systemPrompt-override callers
-    // (custom prompt) also skip — they don't use the deferred path.
-    if (sessionCtx && mode !== 'subagent' && !params.systemPrompt) {
-      sessionCtx.turnCounter += 1
-      pruneStaleDiscoveredTools(
-        sessionCtx.discoveredTools,
-        sessionCtx.turnCounter,
-        config.tools.discoveredToolsTtlTurns,
-      )
+    turnCatalog = {
+      tools: params.tools,
+      deferred: [],
+      deferredEnabled: false,
     }
-    const turnCatalog = params.systemPrompt
-      ? { tools: params.tools, deferred: [], deferredEnabled: false }
-      : buildTurnToolCatalog({
-          allTools: params.tools,
-          discoveredTools: sessionCtx?.discoveredTools ?? new Map(),
-          config,
-        })
+    for (const hook of lifecycleHooks) {
+      await hook.beforeTurn?.(makeHookContext())
+    }
     dispatchCtx.tools = turnCatalog.tools
     dispatchCtx.allTools = params.tools
     dispatchCtx.deferredTools = turnCatalog.deferred
@@ -615,26 +394,26 @@ export async function query(params: QueryParams): Promise<{
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       stopEvent = undefined
-      // Split rendering: stable prefix (persona / memory / tool catalog) is
-      // cache-anchored; variable suffix (TodoList + deferred-tools reminder)
-      // re-tokenizes per turn. channelContext is per-session metadata and
-      // belongs in the stable prefix. Custom-systemPrompt callers (subagents)
-      // bypass the split — their prompt is already self-contained.
-      let systemStable: string
-      let systemVariableSuffix: string | undefined
-      if (params.systemPrompt) {
-        systemStable = params.systemPrompt
-        systemVariableSuffix = undefined
-      } else {
-        const rendered = renderSystemPromptSplit(systemPromptTemplate!, getTodos(), {
-          tools: turnCatalog.tools,
-          deferredTools: turnCatalog.deferred,
-          discoveredTools: sessionCtx?.discoveredTools,
-        })
-        systemStable = params.channelContext
-          ? `${params.channelContext}\n\n${rendered.stable}`
-          : rendered.stable
-        systemVariableSuffix = rendered.variable || undefined
+      // Lazy-init: avoid eagerly calling renderEffectiveSystemPrompt() when a
+      // beforeStream hook (split-render) is going to overwrite the result.
+      // For orchestrator roles split-render always wins, so eager init meant
+      // two full prompt renders + two catalog builds per attempt — wasted work
+      // that doubles on prompt-too-long retry. Fall back to the default render
+      // only when no beforeStream hook produces a RenderedPrompt (workers with
+      // the default `hooks: ['prompt-too-long-retry']` policy hit this path).
+      let renderedPrompt: RenderedPrompt | null = null
+      for (const hook of lifecycleHooks) {
+        const rendered = await hook.beforeStream?.(makeHookContext())
+        if (rendered) {
+          renderedPrompt = rendered
+        }
+      }
+      if (!renderedPrompt) {
+        renderedPrompt = {
+          system: hasSystemPromptOverride
+            ? (systemPromptOverride ?? '')
+            : renderEffectiveSystemPrompt(),
+        }
       }
       try {
         const mainModel = modelFor('main', config)
@@ -650,27 +429,29 @@ export async function query(params: QueryParams): Promise<{
           config,
           model: mainModel,
           messages: toApiMessages(messages),
-          system: systemStable,
-          ...(systemVariableSuffix ? { systemVariableSuffix } : {}),
+          system: renderedPrompt.system,
+          ...(renderedPrompt.systemVariableSuffix
+            ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
+            : {}),
           tools: turnCatalog.tools.map(toolToAPISchema),
-          cacheBreakpointMessageIndex: params.cacheBreakpointMessageIndex,
-          signal: params.signal ?? getAbortController().signal,
+          cacheBreakpointMessageIndex: invocation.cacheBreakpointMessageIndex,
+          signal,
           apiLogContext: {
-            kind: mode === 'subagent' ? 'subagent' : 'main',
-            ...(mode === 'subagent' && params.subagentLabel
-              ? { subagentLabel: params.subagentLabel }
+            kind: apiLogKind,
+            ...(apiLogKind === 'subagent' && invocation.subagentLabel
+              ? { subagentLabel: invocation.subagentLabel }
               : {}),
             turn,
             attempt,
           },
         })) {
           if (event.type === 'text') {
-            params.onTextDelta?.(event.text)
+            invocation.onTextDelta?.(event.text)
             continue
           }
 
           if (event.type === 'tool_use') {
-            params.onToolUse?.({ name: event.name, input: event.input })
+            invocation.onToolUse?.({ name: event.name, input: event.input })
             continue
           }
 
@@ -678,9 +459,16 @@ export async function query(params: QueryParams): Promise<{
         }
         break
       } catch (error) {
-        if (attempt === 0 && isPromptTooLongError(error)) {
-          const compacted = await runCompaction(true)
-          if (compacted) {
+        if (attempt === 0) {
+          let shouldRetry = false
+          for (const hook of lifecycleHooks) {
+            const action = await hook.onStreamError?.(error, makeHookContext())
+            if (action?.kind === 'retry') {
+              shouldRetry = true
+              break
+            }
+          }
+          if (shouldRetry) {
             continue
           }
         }
@@ -698,7 +486,7 @@ export async function query(params: QueryParams): Promise<{
       ts: new Date().toISOString(),
       user: getCurrentUserId() ?? '__terminal__',
       model: config.model,
-      kind: params.ephemeral ? 'fresh' : (mode === 'subagent' ? 'subagent' : 'main'),
+      kind: invocation.ephemeral ? 'fresh' : apiLogKind,
       input: stopEvent.usage.input_tokens ?? 0,
       output: stopEvent.usage.output_tokens ?? 0,
       cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
@@ -716,9 +504,9 @@ export async function query(params: QueryParams): Promise<{
     const turnText = collectAssistantText(stopEvent.content)
     if (turnText.length > 0) {
       assistantTexts.push(turnText)
-      if (params.onAssistantTurn) {
+      if (invocation.onAssistantTurn) {
         try {
-          await params.onAssistantTurn(turnText)
+          await invocation.onAssistantTurn(turnText)
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
           process.stderr.write(
@@ -739,23 +527,8 @@ export async function query(params: QueryParams): Promise<{
       (block): block is ToolUseBlock => block.type === 'tool_use',
     )
 
-    // Snapshot cacheSafeParams unconditionally after every assistant push —
-    // forks (AgentTool / memory extraction) read forkContextMessages and
-    // synthesize placeholder tool_results for any pending tool_use blocks at
-    // construction time (see runForkedAgent), so a "dirty" snapshot ending
-    // in an assistant turn with pending tool_uses is fine. Always snapshotting
-    // keeps the parent prefix (history bytes) cache-aligned across all forks
-    // dispatched in the same turn.
-    if (mode !== 'subagent') {
-      saveCacheSafeParams(
-        getCurrentUserId(),
-        createCacheSafeParams({
-          systemPrompt: renderEffectiveSystemPrompt(),
-          tools: turnCatalog.tools,
-          messages: [...messages],
-          config,
-        }),
-      )
+    for (const hook of lifecycleHooks) {
+      await hook.afterAssistantMessage?.(makeHookContext())
     }
 
     if (toolUses.length === 0) {
@@ -771,39 +544,38 @@ export async function query(params: QueryParams): Promise<{
       // standalone user message, and continue the loop so the LLM gets
       // another turn to react. Same `<user-interjection>` framing as the
       // tool-boundary path.
-      const lateInterjections = (await params.interjectionDrain?.()) ?? []
+      const lateInterjections = (await invocation.interjectionDrain?.()) ?? []
       if (lateInterjections.length > 0) {
-        const lateContent: UserContentBlock[] = [{
-          type: 'text',
-          text: buildInterjectionBlock({
-            interjections: lateInterjections,
-            originalUserText: extractOriginalUserText(messages),
-            completedToolUses: extractCompletedToolUses(messages),
-          }),
-        }]
-        const lateUserMessage = createUserMessage(lateContent, getLastUuid(messages))
-        lateUserMessage.metadata = {
-          ...(lateUserMessage.metadata ?? {}),
-          interjectionEntries: lateInterjections.map(entry => ({
-            messageId: entry.messageId,
-            senderOpenId: entry.senderOpenId,
-            arrivedAt: entry.arrivedAt,
-            text: entry.text,
-          })),
-        }
-        messages.push(lateUserMessage)
-        process.stderr.write(
-          `query: injected ${lateInterjections.length} late interjection${lateInterjections.length === 1 ? '' : 's'} after end_turn\n`,
+        const lateContent = renderInterjectionContent(
+          invocation,
+          lateInterjections,
+          messages,
         )
-        // Loop back to send the new user message to the LLM.
-        continue
+        if (lateContent.length > 0) {
+          const lateUserMessage = createUserMessage(lateContent, getLastUuid(messages))
+          lateUserMessage.metadata = {
+            ...(lateUserMessage.metadata ?? {}),
+            interjectionEntries: lateInterjections.map(entry => ({
+              messageId: entry.messageId,
+              senderOpenId: entry.senderOpenId,
+              arrivedAt: entry.arrivedAt,
+              text: entry.text,
+            })),
+          }
+          messages.push(lateUserMessage)
+          process.stderr.write(
+            `query: injected ${lateInterjections.length} late interjection${lateInterjections.length === 1 ? '' : 's'} after end_turn\n`,
+          )
+          // Loop back to send the new user message to the LLM.
+          continue
+        }
       }
       const extractionSnapshot = [...messages]
-      if (!params.ephemeral) {
+      if (!invocation.ephemeral) {
         await maybeUpdateSessionMemory(extractionSnapshot)
-        await runCompaction(false)
-        scheduleMemoryExtraction(extractionSnapshot)
-        scheduleAutoDream()
+        for (const hook of lifecycleHooks) {
+          await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
+        }
       }
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
@@ -876,45 +648,19 @@ export async function query(params: QueryParams): Promise<{
           })
         }
       }
-      const interjections = (await params.interjectionDrain?.()) ?? []
+      const interjections = (await invocation.interjectionDrain?.()) ?? []
       const content: UserContentBlock[] = [...toolResults]
       if (interjections.length > 0) {
-        content.push({
-          type: 'text',
-          text: buildInterjectionBlock({
-            interjections,
-            originalUserText: extractOriginalUserText(messages),
-            completedToolUses: extractCompletedToolUses(messages),
-          }),
-        })
+        content.push(...renderInterjectionContent(invocation, interjections, messages))
         process.stderr.write(
           `query: injected ${interjections.length} interjection${interjections.length === 1 ? '' : 's'} into next user message\n`,
         )
       }
-      // Memory Nudge: every `memoryNudge.everyTurns` agent-loop turns, ride a
-      // passive reminder onto this tool-boundary user message so the live
-      // agent can persist a finding — with the "why" — via MemoryWrite while
-      // it still has the full context. Costs no extra API turn. Gated off for
-      // subagents / custom-prompt callers / ephemeral (/fresh) / no-memory.
-      if (
-        sessionCtx
-        && mode !== 'subagent'
-        && !params.systemPrompt
-        && !params.ephemeral
-        && !params.noAutoMemory
-        && config.autoMemory
-        && config.memoryNudge.enabled
-        && isMemoryNudgeDue(
-          sessionCtx.turnCounter,
-          sessionCtx.lastMemoryNudgeTurn,
-          config.memoryNudge.everyTurns,
-        )
-      ) {
-        content.push({ type: 'text', text: buildMemoryNudgeBlock() })
-        sessionCtx.lastMemoryNudgeTurn = sessionCtx.turnCounter
-        process.stderr.write(
-          `query: injected memory nudge at turn ${sessionCtx.turnCounter}\n`,
-        )
+      for (const hook of lifecycleHooks) {
+        const extraContent = await hook.atToolBoundary?.(makeHookContext())
+        if (extraContent?.length) {
+          content.push(...extraContent)
+        }
       }
       const nextUserMessage = createUserMessage(content, getLastUuid(messages))
       if (interjections.length > 0) {
@@ -931,223 +677,16 @@ export async function query(params: QueryParams): Promise<{
       messages.push(nextUserMessage)
     }
 
-    if (!params.ephemeral) {
+    if (!invocation.ephemeral) {
       await maybeUpdateSessionMemory([...messages])
-      await runCompaction(false)
+      for (const hook of lifecycleHooks) {
+        await hook.afterEndTurn?.(makeHookContext(), stopEvent.usage)
+      }
     }
   }
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
   }  // end queryInner
-}
-
-async function dispatchToolCall(
-  toolUse: ToolUseBlock,
-  ctx: DispatchContext,
-): Promise<UserToolResultBlock> {
-  const tool = findToolByName(ctx.tools, toolUse.name)
-  if (!tool) {
-    const deferredTool = findDeferredTool(ctx.allTools, toolUse.name)
-    if (deferredTool) {
-      return reportToolResult(
-        ctx,
-        toolUse,
-        `Tool '${toolUse.name}' is deferred and not yet loaded. Call ToolSearch({query: "select:${toolUse.name}"}) to load its schema, then re-issue this tool call on your next turn.`,
-        true,
-      )
-    }
-    return reportToolResult(ctx, toolUse, `Unknown tool: ${toolUse.name}`, true)
-  }
-
-  const parsedInput = parseToolInput(tool, toolUse.input)
-  if (!parsedInput.ok) {
-    return reportToolResult(
-      ctx,
-      toolUse,
-      `Invalid input for ${toolUse.name}: ${parsedInput.error}`,
-      true,
-    )
-  }
-
-  let effectiveInput = parsedInput.data
-  const callId = toolUse.id
-
-  try {
-    const hookDecision = await runHook('beforeToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-    })
-
-    if (hookDecision?.replacementInput !== undefined) {
-      effectiveInput = hookDecision.replacementInput
-    }
-
-    // decision: 'deny' takes precedence over replacementResult.
-    // A deny + replacementResult combination is treated as deny (is_error: true)
-    // so a hook cannot silently convert a deny into a non-error result.
-    if (hookDecision?.decision === 'deny') {
-      const content = hookDecision.reason ?? `Tool denied by hook: ${tool.name}`
-      return reportToolResult(ctx, toolUse, content, true)
-    }
-
-    if (hookDecision?.replacementResult !== undefined) {
-      return reportToolResult(ctx, toolUse, hookDecision.replacementResult, false)
-    }
-
-    if (ctx.canUseTool) {
-      const gate = await ctx.canUseTool(tool, effectiveInput)
-      if (gate.behavior === 'deny') {
-        return reportToolResult(ctx, toolUse, gate.reason, true)
-      }
-    }
-
-    const sessionCtx = getCurrentSessionContext()
-    const decision = await requestPermission({
-      tool,
-      toolInput: effectiveInput,
-      ctx: {
-        isSubagent: ctx.mode === 'subagent',
-        signal: ctx.signal,
-        permissionApprover: ctx.permissionApprover,
-        isBackgroundTask: sessionCtx?.isBackgroundTask,
-        taskAllowedTools: sessionCtx?.taskAllowedTools,
-        onPermissionDenial: sessionCtx?.onPermissionDenial,
-      },
-    })
-
-    if (decision.behavior === 'deny') {
-      return reportToolResult(ctx, toolUse, decision.reason, true)
-    }
-
-    if (tool.domain === 'environment') {
-      const runtime = getRuntime()
-      const availability = await runtime.isAvailable()
-      if (!availability.ok) {
-        // Retryable unavailability (worker still scheduling, image still
-        // pulling) is a soft backoff, not a tool failure. Surface it as
-        // `is_error: false` so the LLM reads it as informational rather
-        // than tripping the "tool call failed" behavior (apology + don't
-        // retry). Fatal states keep `is_error: true`.
-        const isFatal = !availability.retryable
-        const body = availability.retryable
-          ? `${availability.userMessage}\n\n[runtime: ${availability.reason}, retryable]`
-          : availability.userMessage
-        return reportToolResult(ctx, toolUse, body, isFatal)
-      }
-    }
-
-    // Refresh LRU position for deferred tools that were promoted on a prior
-    // turn. Without this, a tool the user actively invokes would slide
-    // toward eviction purely because newer ToolSearch hits keep landing at
-    // the back of the set. Touching only deferred-eligible tools avoids
-    // marking always-loaded builtins as "discovered" (they aren't tracked
-    // in `discoveredTools` at all).
-    if (isDeferredTool(tool)) {
-      const current = getCurrentSessionContext()
-      if (current && current.discoveredTools.has(tool.name)) {
-        markDiscovered(
-          current.discoveredTools,
-          tool.name,
-          current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
-        )
-      }
-    }
-
-    const start = Date.now()
-    const result = await tool.call(effectiveInput, {
-      cwd: getCwd(),
-      abortSignal: ctx.signal,
-      runtime: getRuntime(),
-      mainTurnRouting: ctx.mainTurnRouting,
-      canUseTool: ctx.canUseTool,
-      wakeNotifications: ctx.wakeNotifications,
-      deferredTools: ctx.deferredTools,
-      discoverTool(name) {
-        const current = getCurrentSessionContext()
-        if (!current) return
-        markDiscovered(
-          current.discoveredTools,
-          name,
-          current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
-        )
-      },
-    })
-    const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
-
-    // Hooks / snip / summarize are string-shape contracts; multimodal
-    // tool_result.content arrays (image blocks from Read on image / pdf-pages)
-    // bypass these post-processing steps. The text-collapsed view goes to
-    // hooks for observability so afterToolCall can still inspect / log.
-    const formattedTextView = toolResultContentToText(formatted.content)
-    const afterTool = await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: formattedTextView,
-      durationMs: Date.now() - start,
-      ...(formatted.is_error ? { error: formattedTextView } : {}),
-    })
-    if (afterTool?.replacementResult !== undefined) {
-      // Hook replacement collapses multimodal output back to plain text,
-      // since hooks contract on `string`. Hooks that need to preserve
-      // images should not return replacementResult.
-      formatted.content = afterTool.replacementResult
-    }
-
-    if (typeof formatted.content === 'string') {
-      formatted.content = snipContent(formatted.content, ctx.maxToolOutputBytes)
-    }
-
-    ctx.onToolResult?.({
-      toolName: toolUse.name,
-      isError: Boolean(formatted.is_error),
-      content: toolResultContentToText(formatted.content),
-    })
-    return formatted
-  } catch (error) {
-    const content = error instanceof Error ? error.message : String(error)
-    await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: content,
-      durationMs: 0,
-      error: content,
-    })
-    return reportToolResult(ctx, toolUse, content, true)
-  }
-}
-
-function reportToolResult(
-  ctx: DispatchContext,
-  toolUse: ToolUseBlock,
-  content: string,
-  isError: boolean,
-): UserToolResultBlock {
-  const snipped = snipContent(content, ctx.maxToolOutputBytes)
-  ctx.onToolResult?.({
-    toolName: toolUse.name,
-    isError,
-    content: snipped,
-  })
-  return {
-    type: 'tool_result',
-    tool_use_id: toolUse.id,
-    content: snipped,
-    ...(isError ? { is_error: true } : {}),
-  }
 }
 
 function getLastUserText(messages: Message[]): string {
@@ -1169,24 +708,4 @@ function replaceLastUserText(messages: Message[], next: string): void {
       return
     }
   }
-}
-
-function parseToolInput(
-  tool: Tool,
-  rawInput: Record<string, unknown>,
-): { ok: true; data: unknown } | { ok: false; error: string } {
-  if (tool.source === 'mcp') {
-    return { ok: true, data: rawInput }
-  }
-
-  if (!tool.inputSchema) {
-    return { ok: false, error: 'Tool has no input schema.' }
-  }
-
-  const parsed = tool.inputSchema.safeParse(rawInput)
-  if (!parsed.success) {
-    return { ok: false, error: parsed.error.message }
-  }
-
-  return { ok: true, data: parsed.data }
 }

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { getAllAgents } from '../agents/registry.js'
-import { runSubagent } from '../agents/run-subagent.js'
+import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
 import type { AgentType } from '../agents/types.js'
 import { buildTool } from '../tool.js'
 
@@ -12,11 +12,11 @@ function buildAgentToolDescription(): string {
     'Available subagent types:',
   ]
 
-  // Only surface user-facing agents to the main agent. Internal agents
-  // (extract_memories, auto_dream) are framework-managed and not dispatchable
-  // via AgentTool; including them would let the model invoke them by name.
+  // Only surface worker agents to the main agent. Internal agents are
+  // framework-managed, and the main orchestrator is not dispatchable through
+  // AgentTool.
   for (const agent of getAllAgents()) {
-    if (agent.kind === 'internal') {
+    if (agent.kind !== 'worker') {
       continue
     }
     lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
@@ -75,6 +75,12 @@ export const agentTool = buildTool({
       prompt: input.prompt,
       signal: context.abortSignal,
     })
+
+    if (result.kind === 'failure') {
+      return {
+        output: formatWorkerFailureForToolResult(result.envelope),
+      }
+    }
 
     return {
       output: result.finalText || '(subagent returned empty text)',

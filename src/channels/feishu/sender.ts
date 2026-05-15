@@ -6,7 +6,7 @@ import type {
   NormalizedChannelMessage,
   OutgoingChannelFile,
 } from '../types.js'
-import { feishuShareUrl } from '../../tools/feishu-collab.js'
+import { feishuShareUrl } from './url.js'
 import type { FeishuClient } from './client.js'
 import { withFileUploadTimeout } from './client.js'
 import type {

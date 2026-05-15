@@ -1,6 +1,7 @@
 import { platform } from 'node:process'
 
-import type { AgentDefinition } from './agents/types.js'
+import { resolveRolePolicy } from './agents/role-presets.js'
+import type { Role } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
@@ -37,6 +38,27 @@ type PromptOptions = {
 export type SystemPromptTemplate = {
   preTodos: string
   postTodos: string
+}
+
+export type OrchestratorPromptContext = {
+  tools: Tool[]
+  cwd: string
+  environmentRoot: string
+  options: PromptOptions
+}
+
+export type SubagentPromptContext = {
+  tools: Tool[]
+  environmentRoot: string
+}
+
+const MAIN_PROMPT_ROLE: Role = {
+  agentType: 'main',
+  name: 'main',
+  kind: 'orchestrator',
+  whenToUse: 'Primary user-facing orchestrator.',
+  systemPrompt: '',
+  tools: ['*'],
 }
 
 /**
@@ -188,6 +210,54 @@ function formatMcpSection(): string {
 }
 
 export async function buildSystemPromptTemplate(
+  tools: Tool[],
+  cwd: string,
+  environmentRoot: string,
+  options: PromptOptions,
+): Promise<SystemPromptTemplate> {
+  return await buildPromptForRole(MAIN_PROMPT_ROLE, {
+    tools,
+    cwd,
+    environmentRoot,
+    options,
+  })
+}
+
+export async function buildPromptForRole(
+  role: Role,
+  context: OrchestratorPromptContext,
+): Promise<SystemPromptTemplate>
+export function buildPromptForRole(
+  role: Role,
+  context: SubagentPromptContext,
+): string
+export function buildPromptForRole(
+  role: Role,
+  context: OrchestratorPromptContext | SubagentPromptContext,
+): Promise<SystemPromptTemplate> | string {
+  const policy = resolveRolePolicy(role)
+  if (policy.kind === 'orchestrator') {
+    if (!isOrchestratorPromptContext(context)) {
+      throw new Error(`Role "${policy.name}" requires orchestrator prompt context.`)
+    }
+    return buildOrchestratorPromptTemplate(
+      context.tools,
+      context.cwd,
+      context.environmentRoot,
+      context.options,
+    )
+  }
+
+  return buildSubagentPromptContent(context.tools, context.environmentRoot, role)
+}
+
+function isOrchestratorPromptContext(
+  context: OrchestratorPromptContext | SubagentPromptContext,
+): context is OrchestratorPromptContext {
+  return 'cwd' in context && 'options' in context
+}
+
+async function buildOrchestratorPromptTemplate(
   tools: Tool[],
   cwd: string,
   environmentRoot: string,
@@ -397,7 +467,15 @@ export function renderSystemPrompt(
 export function buildSubagentPrompt(
   tools: Tool[],
   environmentRoot: string,
-  agent: AgentDefinition,
+  agent: Role,
+): string {
+  return buildPromptForRole(agent, { tools, environmentRoot })
+}
+
+function buildSubagentPromptContent(
+  tools: Tool[],
+  environmentRoot: string,
+  agent: Role,
 ): string {
   const toolDescriptions = formatToolCatalog(tools)
 

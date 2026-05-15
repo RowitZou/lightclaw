@@ -32,6 +32,9 @@ import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { getProvider, getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
+import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
+import { getMainRole } from '../agents/registry.js'
+import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
   appendBranchSpawnPair,
@@ -75,6 +78,7 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
+import { buildInterjectionBlock } from './feishu/interjection-prompt.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
 import { incrementFailureCounter, writeCacheEntry } from '../provider/capability-cache.js'
 import {
@@ -139,6 +143,10 @@ export type ChannelRunnerStrategy = {
     sessionId: string,
     userId: string,
   ): PermissionApprover
+  resolveResourceGrantTarget?(message: NormalizedChannelMessage): {
+    chatId?: string
+    senderOpenId?: string
+  } | undefined
   tryAutoDenyForInterjection?(sessionId: string): Promise<boolean>
   /**
    * Best-effort lookup of a human-readable display name for a sender (for
@@ -225,8 +233,8 @@ export type ChannelRunnerStrategy = {
 
 /**
  * Generic, channel-agnostic message runner. Holds the per-session serial
- * lock, wires a message through resetSessionContext() + query({ mode:
- * 'channel' }), persists the transcript, and delegates the reply back to
+ * lock, wires a message through resetSessionContext() + query({ role,
+ * invocation }), persists the transcript, and delegates the reply back to
  * the strategy's sender.
  */
 export class ChannelRunner {
@@ -407,6 +415,7 @@ export class ChannelRunner {
           sessionId,
           currentUserId: userId,
           channel: 'feishu',
+          resourceGrantTarget: this.strategy.resolveResourceGrantTarget?.(effectiveMessage),
         })
         const approver = this.strategy.createPermissionApprover?.(
             effectiveMessage,
@@ -669,97 +678,109 @@ export class ChannelRunner {
           // again corresponds to effectiveMessage only.
           replyTargetMessage = effectiveMessage
           try {
+            const mainRole = getMainRole()
             result = await query({
               config: appConfig,
+              role: mainRole,
+              invocation: channelInvocationContext({
+                channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
+                permissionApprover: approver,
+                canUseTool: createMainAgentCanUseTool('normal', mainRole),
+                onToolUse(event) {
+                  process.stderr.write(`${channelId}: tool ${event.name}\n`)
+                },
+                // Stream each non-empty assistant turn back to the channel as
+                // soon as it lands. The user sees progress instead of waiting
+                // for the whole tool loop to finish; the final reply at
+                // end-of-query is suppressed when this fired at least once
+                // (see streamedAtLeastOnce below).
+                onAssistantTurn: async (text: string) => {
+                  streamedAtLeastOnce = true
+                  await this.sendReply(replyTargetMessage, text)
+                },
+                interjectionRenderer: (entries, context) => [{
+                  type: 'text',
+                  text: buildInterjectionBlock({
+                    interjections: entries,
+                    originalUserText: context.originalUserText,
+                    completedToolUses: context.completedToolUses,
+                  }),
+                }],
+                interjectionDrain: async () => {
+                  // Branch and fresh sessions run on independent sessionIds
+                  // (branch-<canonical>-<uuid> / fresh-<uuid>) off the main
+                  // session. Interjections queued under mainSessionId belong
+                  // to the main session's next turn — they must NOT be
+                  // drained by a fork. Without this guard, a branch query
+                  // running concurrently with a busy main DM steals the
+                  // main's queued interjections and silently injects them
+                  // into the branch's prompt (observed 2026-05-11 dogfood:
+                  // a "/b 查一下上海的天气" turn pulled the DM's
+                  // "这个图你能看见吗" interjection and the branch model
+                  // started talking about images the user never sent it).
+                  if (branchRequest || freshSessionId) {
+                    return []
+                  }
+                  // Drain returns the queued entries; we then materialize any
+                  // attached media so the interjection prompt block can render
+                  // path breadcrumbs the model can Read. Materialization is
+                  // deferred to here (inside the in-flight turn's lock) so we
+                  // can reuse the same runtime + strategy hook the main user
+                  // message path already uses, without acquiring a separate
+                  // runtime from the queue handler. Failures are best-effort:
+                  // a download error reverts the entry to text-only and emits
+                  // a stderr breadcrumb; the interjection still goes to the
+                  // model so the user's typed words aren't lost.
+                  const drained = channelInterjectionQueue.drain(mainSessionId)
+                  if (drained.length === 0) {
+                    return drained
+                  }
+                  const materialized: InterjectionEntry[] = []
+                  for (const entry of drained) {
+                    if (!entry.pendingAttachments?.length) {
+                      materialized.push(entry)
+                      continue
+                    }
+                    const synthetic: NormalizedChannelMessage = {
+                      channel: this.strategy.channelId,
+                      eventId: entry.messageId,
+                      chatId: effectiveMessage.chatId,
+                      chatType: effectiveMessage.chatType,
+                      senderOpenId: entry.senderOpenId,
+                      messageId: entry.messageId,
+                      text: '',
+                      pendingAttachments: entry.pendingAttachments as PendingAttachment[],
+                    }
+                    try {
+                      const attachments = await applyAttachmentMaterialization(
+                        this.strategy,
+                        synthetic,
+                        getRuntime(),
+                        sessionId,
+                      )
+                      if (attachments.length > 0) {
+                        entry.attachmentPaths = attachments.map(m => m.path)
+                      }
+                    } catch (error) {
+                      process.stderr.write(
+                        `${this.strategy.channelId}: interjection materialize failed for ${entry.messageId}: ${error instanceof Error ? error.message : String(error)}\n`,
+                      )
+                    }
+                    materialized.push(entry)
+                  }
+                  if (materialized.length > 0) {
+                    const latest = materialized[materialized.length - 1]
+                    replyTargetMessage = {
+                      ...effectiveMessage,
+                      messageId: latest.messageId,
+                      senderOpenId: latest.senderOpenId,
+                    }
+                  }
+                  return materialized
+                },
+              }),
               messages,
               tools: getEnabledTools(provider, getAllTools('feishu')),
-              mode: 'channel',
-              channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
-              permissionApprover: approver,
-              onToolUse(event) {
-                process.stderr.write(`${channelId}: tool ${event.name}\n`)
-              },
-              // Stream each non-empty assistant turn back to the channel as
-              // soon as it lands. The user sees progress instead of waiting
-              // for the whole tool loop to finish; the final reply at
-              // end-of-query is suppressed when this fired at least once
-              // (see streamedAtLeastOnce below).
-              onAssistantTurn: async (text: string) => {
-                streamedAtLeastOnce = true
-                await this.sendReply(replyTargetMessage, text)
-              },
-              interjectionDrain: async () => {
-                // Branch and fresh sessions run on independent sessionIds
-                // (branch-<canonical>-<uuid> / fresh-<uuid>) off the main
-                // session. Interjections queued under mainSessionId belong
-                // to the main session's next turn — they must NOT be
-                // drained by a fork. Without this guard, a branch query
-                // running concurrently with a busy main DM steals the
-                // main's queued interjections and silently injects them
-                // into the branch's prompt (observed 2026-05-11 dogfood:
-                // a "/b 查一下上海的天气" turn pulled the DM's
-                // "这个图你能看见吗" interjection and the branch model
-                // started talking about images the user never sent it).
-                if (branchRequest || freshSessionId) {
-                  return []
-                }
-                // Drain returns the queued entries; we then materialize any
-                // attached media so the interjection prompt block can render
-                // path breadcrumbs the model can Read. Materialization is
-                // deferred to here (inside the in-flight turn's lock) so we
-                // can reuse the same runtime + strategy hook the main user
-                // message path already uses, without acquiring a separate
-                // runtime from the queue handler. Failures are best-effort:
-                // a download error reverts the entry to text-only and emits
-                // a stderr breadcrumb; the interjection still goes to the
-                // model so the user's typed words aren't lost.
-                const entries = channelInterjectionQueue.drain(mainSessionId)
-                for (const entry of entries) {
-                  if (!entry.pendingAttachments?.length) continue
-                  const synthetic: NormalizedChannelMessage = {
-                    channel: this.strategy.channelId,
-                    eventId: entry.messageId,
-                    chatId: effectiveMessage.chatId,
-                    chatType: effectiveMessage.chatType,
-                    senderOpenId: entry.senderOpenId,
-                    messageId: entry.messageId,
-                    text: '',
-                    pendingAttachments: entry.pendingAttachments,
-                  }
-                  try {
-                    const materialized = await applyAttachmentMaterialization(
-                      this.strategy,
-                      synthetic,
-                      getRuntime(),
-                      sessionId,
-                    )
-                    if (materialized.length > 0) {
-                      entry.attachmentPaths = materialized.map(m => m.path)
-                    }
-                  } catch (error) {
-                    process.stderr.write(
-                      `${this.strategy.channelId}: interjection materialize failed for ${entry.messageId}: ${error instanceof Error ? error.message : String(error)}\n`,
-                    )
-                  }
-                }
-                // Advance the reply anchor to the most recent interjection
-                // (last in FIFO order). The next assistant turn fired by
-                // query.ts will reply-quote that message in Feishu UI, so
-                // the user reads the bot's response as the next beat after
-                // their latest input rather than after the turn opener.
-                // Severally interjections drained together collapse to the
-                // single most-recent anchor — see Phase 27 notes for the
-                // "timeline anchor, not strict semantic mapping" rationale.
-                if (entries.length > 0) {
-                  const latest = entries[entries.length - 1]!
-                  replyTargetMessage = {
-                    ...effectiveMessage,
-                    messageId: latest.messageId,
-                    senderOpenId: latest.senderOpenId,
-                  }
-                }
-                return entries
-              },
             })
             break
           } catch (error) {
@@ -1099,7 +1120,7 @@ export class ChannelRunner {
         senderOpenId: entry.senderOpenId,
         text: entry.text,
         ...(entry.pendingAttachments?.length
-          ? { pendingAttachments: entry.pendingAttachments }
+          ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
           : {}),
         // Drop the original quotedMessage — the leftover entry has its own
         // quotedSummary that came from the interjection enqueue path. If

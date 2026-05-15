@@ -3,7 +3,6 @@ import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 
 export type CacheSafeParams = {
-  systemPrompt: string
   tools: Tool[]
   forkContextMessages: Message[]
   config: LightClawConfig
@@ -47,13 +46,11 @@ export function getLastCacheSafeParams(
 }
 
 export function createCacheSafeParams(args: {
-  systemPrompt: string
   tools: Tool[]
   messages: Message[]
   config: LightClawConfig
 }): CacheSafeParams {
   return {
-    systemPrompt: args.systemPrompt,
     tools: [...args.tools],
     forkContextMessages: [...args.messages],
     config: args.config,

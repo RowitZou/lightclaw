@@ -10,6 +10,8 @@ import { getAdmin } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
+import { emptyInvocationContext } from '../agents/invocation-context.js'
+import { getMainRole } from '../agents/registry.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
   createSessionContext,
@@ -102,6 +104,26 @@ export async function runBackgroundTaskFire(input: {
 
     const result = await runWithSessionContext(ctx, async () => {
       const output = await queryImpl({
+        role: {
+          ...getMainRole(),
+          agentType: 'background_task',
+          name: 'background_task',
+          kind: 'worker',
+          contextPolicy: {
+            ...getMainRole().contextPolicy,
+            autoCompact: false,
+            autoMemoryExtract: false,
+            deferredToolDiscovery: false,
+            sessionWorkingMemory: false,
+            cacheStable: true,
+          },
+        },
+        invocation: {
+          ...emptyInvocationContext(),
+          canUseTool: createBackgroundTaskCanUseTool(),
+          signal: input.signal,
+          subagentLabel: 'background_task',
+        },
         messages: [userMessage],
         tools,
         config: {
@@ -112,10 +134,6 @@ export async function runBackgroundTaskFire(input: {
             main: model,
           },
         },
-        mode: 'subagent',
-        canUseTool: createBackgroundTaskCanUseTool(),
-        signal: input.signal,
-        subagentLabel: 'background_task',
       })
       await rewriteTranscript(sessionId, output.messages)
       await touchMeta(sessionId, output.messages.length)

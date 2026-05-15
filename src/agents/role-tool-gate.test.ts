@@ -1,0 +1,89 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import type { Tool } from '../tool.js'
+import { deriveCanUseTool, isToolVisibleToRole } from './role-tool-gate.js'
+import type { Role } from './types.js'
+
+test('worker roles apply allowlist plus worker-only blocked tools', async () => {
+  const gate = deriveCanUseTool(role({ kind: 'worker', tools: ['*'] }))
+
+  assert.equal((await gate(tool('Read'), {})).behavior, 'allow')
+  assert.deepEqual(await gate(tool('AgentTool'), {}), {
+    behavior: 'deny',
+    reason: 'AgentTool is not available to subagents.',
+  })
+  assert.deepEqual(await gate(tool('MemoryWrite'), {}), {
+    behavior: 'deny',
+    reason: 'MemoryWrite is not available to subagents.',
+  })
+})
+
+test('worker roles deny tools outside explicit role.tools', async () => {
+  const gate = deriveCanUseTool(role({ kind: 'worker', tools: ['Read'] }))
+
+  assert.equal((await gate(tool('Read'), {})).behavior, 'allow')
+  assert.deepEqual(await gate(tool('Write'), {}), {
+    behavior: 'deny',
+    reason: "Write is not in this role's allowed tool set.",
+  })
+})
+
+test('internal roles use only role.tools allowlist', async () => {
+  const internal = role({
+    kind: 'internal',
+    tools: ['MemoryWrite', 'Bash'],
+  })
+  const gate = deriveCanUseTool(internal)
+
+  assert.equal((await gate(tool('MemoryWrite'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('Bash'), { command: 'rm -rf /tmp/x' })).behavior, 'allow')
+  assert.equal((await gate(tool('Read'), {})).behavior, 'deny')
+})
+
+test('orchestrator roles with wildcard tools do not restrict tool presence', async () => {
+  const gate = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
+
+  assert.equal((await gate(tool('AgentTool'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('notify_user'), {})).behavior, 'allow')
+})
+
+test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () => {
+  const worker = role({ kind: 'worker', tools: ['Read', 'Write'] })
+  const internal = role({ kind: 'internal', tools: ['MemoryWrite'] })
+
+  assert.equal(isToolVisibleToRole(worker, 'Read'), true)
+  assert.equal(isToolVisibleToRole(worker, 'MemoryWrite'), false)
+  assert.equal(isToolVisibleToRole(internal, 'MemoryWrite'), true)
+  assert.equal(isToolVisibleToRole(internal, 'Read'), false)
+})
+
+function role(overrides: Partial<Role> = {}): Role {
+  return {
+    agentType: 'test-role',
+    whenToUse: 'when useful',
+    tools: ['Read'],
+    systemPrompt: 'system',
+    ...overrides,
+  }
+}
+
+function tool(name: string): Tool {
+  return {
+    name,
+    description: name,
+    source: 'builtin',
+    domain: 'host',
+    riskLevel: 'safe',
+    async call() {
+      return { output: 'ok' }
+    },
+    formatResult(output, toolUseId) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: String(output),
+      }
+    },
+  }
+}

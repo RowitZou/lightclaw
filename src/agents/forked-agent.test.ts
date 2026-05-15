@@ -10,7 +10,8 @@ import {
   getLastCacheSafeParams,
   saveCacheSafeParams,
 } from './cache-safe-params.js'
-import { createSubagentCanUseTool } from './run-subagent.js'
+import { deriveCanUseTool } from './role-tool-gate.js'
+import type { Role, RoleResourceAllowlist } from './types.js'
 import { getCwd } from '../state.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 
@@ -39,10 +40,19 @@ function tool(name: string): Tool {
   }
 }
 
+function roleWithTools(tools: RoleResourceAllowlist): Role {
+  return {
+    agentType: 'test-worker',
+    kind: 'worker',
+    whenToUse: 'test',
+    systemPrompt: '',
+    tools,
+  }
+}
+
 test('cache-safe params save/get round-trip per user', () => {
   _resetCacheSafeParamsForTest()
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools: [tool('Read')],
     messages: [createUserMessage('hello', null, 1)],
     config: dummyConfig,
@@ -57,13 +67,11 @@ test('cache-safe params save/get round-trip per user', () => {
 test('cache-safe params keep users isolated (Phase 28 §1.7.4 regression)', () => {
   _resetCacheSafeParamsForTest()
   const aliceParams = createCacheSafeParams({
-    systemPrompt: 'alice-system',
     tools: [tool('Read')],
     messages: [createUserMessage('alice', null, 1)],
     config: dummyConfig,
   })
   const bobParams = createCacheSafeParams({
-    systemPrompt: 'bob-system',
     tools: [tool('Read')],
     messages: [createUserMessage('bob', null, 2)],
     config: dummyConfig,
@@ -85,7 +93,6 @@ test('cache-safe params keep users isolated (Phase 28 §1.7.4 regression)', () =
 test('cache-safe params no-op on undefined canonical user', () => {
   _resetCacheSafeParamsForTest()
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools: [tool('Read')],
     messages: [createUserMessage('hello', null, 1)],
     config: dummyConfig,
@@ -101,7 +108,6 @@ test('cache-safe params snapshots message and tool arrays', () => {
   const tools = [tool('Read')]
   const messages = [createUserMessage('hello', null, 1)]
   const params = createCacheSafeParams({
-    systemPrompt: 'system',
     tools,
     messages,
     config: dummyConfig,
@@ -115,7 +121,7 @@ test('cache-safe params snapshots message and tool arrays', () => {
 })
 
 test('subagent tool gate denies globally blocked tools', async () => {
-  const gate = createSubagentCanUseTool(['*'])
+  const gate = deriveCanUseTool(roleWithTools(['*']))
   assert.deepEqual(await gate(tool('AgentTool'), {}), {
     behavior: 'deny',
     reason: 'AgentTool is not available to subagents.',
@@ -123,13 +129,13 @@ test('subagent tool gate denies globally blocked tools', async () => {
 })
 
 test('subagent tool gate denies tools outside an explicit allowlist', async () => {
-  const gate = createSubagentCanUseTool(['Read'])
+  const gate = deriveCanUseTool(roleWithTools(['Read']))
   const decision = await gate(tool('Write'), {})
   assert.equal(decision.behavior, 'deny')
 })
 
 test('subagent tool gate allows listed tools', async () => {
-  const gate = createSubagentCanUseTool(['Read'])
+  const gate = deriveCanUseTool(roleWithTools(['Read']))
   assert.deepEqual(await gate(tool('Read'), {}), { behavior: 'allow' })
 })
 

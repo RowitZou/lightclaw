@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+import {
+  auditFailed,
+  recordFeishuWriteAudit,
+  type FeishuPermissionGrants,
+} from '../audit/feishu-writes.js'
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
 import {
   createFolder,
@@ -18,15 +23,12 @@ import {
   resolveEntryByNameOrPath,
   resolveFolderPath,
 } from '../channels/feishu/workspace/ops.js'
+import { feishuShareUrl } from '../channels/feishu/url.js'
 import { buildTool, type ToolCallResult } from '../tool.js'
 import {
-  auditFailed,
-  feishuShareUrl,
   feishuToolErrorMessage,
-  recordFeishuWriteAudit,
   requireFeishuWriteConfirmation,
   resolveSenderOpenIdForGrant,
-  type FeishuPermissionGrants,
 } from './feishu-collab.js'
 
 const feishuListInputSchema = z.object({

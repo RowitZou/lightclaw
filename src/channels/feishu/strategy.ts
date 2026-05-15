@@ -7,6 +7,7 @@ import type { PairingCardCoordinator } from './pairing-card.js'
 import type { FeishuPermissionCoordinator } from './permission-card.js'
 import {
   isFeishuMessageAllowed,
+  isFeishuGroupChatType,
   isMentionGateSatisfied,
   resolveFeishuSessionId,
 } from './routing.js'
@@ -53,6 +54,15 @@ export function createFeishuStrategy(
     },
     isMessageAllowed: message => isFeishuMessageAllowed(message, config),
     resolveSessionId: (message, userId) => resolveFeishuSessionId(message, config, userId),
+    resolveResourceGrantTarget: message => {
+      if (!isFeishuGroupChatType(message.chatType)) {
+        return undefined
+      }
+      return {
+        chatId: message.chatId,
+        senderOpenId: message.senderOpenId,
+      }
+    },
     buildChannelPrompt: message => buildFeishuChannelPrompt(message),
     fetchSenderInfo: openId => fetchFeishuUserInfo(client, openId),
     resolveSenderName: (openId, mentionNames) =>
