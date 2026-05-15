@@ -1,17 +1,17 @@
-import type { AgentDefinition } from '../types.js'
+import type { Role } from '../types.js'
 import { autoDreamPrompt } from './auto-dream.js'
 import { explorePrompt } from './explore.js'
 import { extractMemoriesPrompt } from './extract-memories.js'
 import { generalPurposePrompt } from './general-purpose.js'
 
-export const BUNDLED_AGENTS: AgentDefinition[] = [
+export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'general-purpose',
     whenToUse:
       'Multi-step research, ambiguous searches, or tasks that may span many files.',
     tools: ['*'],
     systemPrompt: generalPurposePrompt,
-    kind: 'user-facing',
+    kind: 'worker',
   },
   {
     agentType: 'explore',
@@ -19,7 +19,7 @@ export const BUNDLED_AGENTS: AgentDefinition[] = [
       'Fast read-only codebase exploration: find files, grep symbols, understand structure.',
     tools: ['Bash', 'Read', 'Grep', 'Glob'],
     systemPrompt: explorePrompt,
-    kind: 'user-facing',
+    kind: 'worker',
   },
   {
     agentType: 'extract_memories',
