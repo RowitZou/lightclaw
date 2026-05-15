@@ -1010,12 +1010,16 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
   })
 
   it('respawns when the retry still sees worker-lost-like error (real death)', async () => {
-    // Both first and retry hit `not found` consistently. Treated as real
-    // worker death: delete record, start new worker, run a third brainctl
-    // exec on the new worker.
+    // Both first and retry hit the realistic brainctl NotFound envelope
+    // (worker deleted on the cluster side). Treated as real worker death:
+    // delete record, start new worker, run a third brainctl exec on the
+    // new worker. `Error from server (NotFound): ...` is the exact line
+    // shape brainctl emits — see the 2026-05-15 live-probe write-up.
+    const notFoundStderr =
+      'Error from server (NotFound): processes.workspace.brainpp.cn "ws-test-alpha" not found'
     const counter = stubBrainctlExec([
-      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
-      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
+      async () => ({ stdout: '', stderr: notFoundStderr, exitCode: 1 }),
+      async () => ({ stdout: '', stderr: notFoundStderr, exitCode: 1 }),
       async () => ({ stdout: 'ok on new worker', stderr: '', exitCode: 0 }),
     ])
     const startReasons: string[] = []
@@ -1067,13 +1071,15 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     )
   })
 
-  it('still treats `process X not found` (exit 1) as worker-lost', async () => {
+  it('still treats `Error from server (NotFound): ...` (exit 1) as worker-lost', async () => {
     // Regression guard: the exit-127 short-circuit must not weaken the
-    // existing worker-lost detection. brainctl control-plane errors come
-    // back as exit 1 with messaging like `process X not found`; those
-    // still trigger the retry-then-recover path.
+    // existing worker-lost detection. brainctl emits this exact envelope
+    // when the cluster has deleted the process; the retry-then-recover
+    // path must still trigger for it.
+    const notFoundStderr =
+      'Error from server (NotFound): processes.workspace.brainpp.cn "ws-test-alpha" not found'
     const counter = stubBrainctlExec([
-      async () => ({ stdout: '', stderr: 'process ws-test-alpha not found', exitCode: 1 }),
+      async () => ({ stdout: '', stderr: notFoundStderr, exitCode: 1 }),
       async () => ({ stdout: 'recovered', stderr: '', exitCode: 0 }),
     ])
     let startCalls = 0
@@ -1087,9 +1093,103 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     assert.equal(startCalls, 0, 'retry recovered, no respawn')
   })
 
-  it('does not retry when caller aborts during the retry delay', async () => {
+  it('treats Stopped-worker envelope (`error: cannot exec ...`) as worker-lost', async () => {
+    // 2026-05-15 live probe: a Stopped worker (cluster-evicted but not
+    // deleted) returns `error: cannot exec into a container in an
+    // unavailable process: Stopped` on exec. That stderr hits two of the
+    // envelope substrings (`cannot exec into a container` +
+    // `unavailable process`) so the line-anchored detector must still
+    // surface it as worker-lost.
+    const stoppedStderr =
+      'error: cannot exec into a container in an unavailable process: Stopped'
     const counter = stubBrainctlExec([
-      async () => ({ stdout: '', stderr: 'connection refused', exitCode: 1 }),
+      async () => ({ stdout: '', stderr: stoppedStderr, exitCode: 1 }),
+      async () => ({ stdout: 'recovered', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+
+    const result = await runtime.exec({ command: 'echo hi' })
+    assert.equal(counter.calls, 2, 'Stopped worker stderr enters retry path')
+    assert.equal(result.exitCode, 0)
+    assert.equal(startCalls, 0, 'retry recovered, no respawn')
+  })
+
+  it('does NOT respawn when a user program prints "not found" to stderr (regression)', async () => {
+    // 2026-05-15 dogfood: a Python heredoc raised
+    //   raise SystemExit('runner query block start not found')
+    // then shell `&&`-fell through to `pnpm typecheck` which exited 2 with
+    // real TypeScript errors. The combined stderr carried the substring
+    // 'not found' but neither line started with `error:` or `Error from
+    // server`, so it must NOT trip the detector. Pre-fix the worker was
+    // respawned twice (retry also hit the same Python stderr) and the
+    // running TS-checker session lost its container-local `/tmp`.
+    const userStderr = [
+      'runner query block start not found',
+      'command terminated with exit code 2',
+    ].join('\n')
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: '', stderr: userStderr, exitCode: 2 }),
+      async () => ({ stdout: 'should NOT be called', stderr: '', exitCode: 0 }),
+    ])
+    let startCalls = 0
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      startCalls++
+    }
+
+    const result = await runtime.exec({ command: 'python3 - <<PY\nraise SystemExit(...)\nPY' })
+    assert.equal(counter.calls, 1, 'user "not found" must short-circuit before retry')
+    assert.equal(result.exitCode, 2, 'original exit code is propagated')
+    assert.ok(result.stderr.includes('runner query block start not found'),
+      'original stderr is propagated verbatim, not wrapped as "worker restarted"')
+    assert.equal(startCalls, 0, 'respawn must NOT happen for user-emitted "not found"')
+    assert.equal(
+      (runtime as unknown as { workerName: string | null }).workerName,
+      'ws-test-alpha',
+      'worker name is preserved — no leaked worker',
+    )
+  })
+
+  it('does NOT respawn when user output mentions worker-lost substrings without brainctl prefix', async () => {
+    // Belt-and-braces: a user program could plausibly print any of the 5
+    // detector substrings as part of its own output. None of them should
+    // trip the detector unless they appear on an `error:` / `Error from
+    // server` stderr line.
+    const samples = [
+      'connection refused while curling localhost',
+      'kubelet says: unable to upgrade connection (but the worker is fine)',
+      'log: unavailable process detected upstream',
+      'cannot exec into a container — debug message from my script',
+    ]
+    for (const stderr of samples) {
+      const counter = stubBrainctlExec([
+        async () => ({ stdout: '', stderr, exitCode: 1 }),
+        async () => ({ stdout: 'should NOT be called', stderr: '', exitCode: 0 }),
+      ])
+      let startCalls = 0
+      ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+        startCalls++
+      }
+
+      const result = await runtime.exec({ command: 'echo hi' })
+      assert.equal(counter.calls, 1, `no retry for non-envelope stderr: ${stderr}`)
+      assert.equal(result.exitCode, 1, 'original exit code is propagated')
+      assert.equal(startCalls, 0, `respawn must NOT happen for non-envelope stderr: ${stderr}`)
+    }
+  })
+
+  it('does not retry when caller aborts during the retry delay', async () => {
+    // Real brainctl `connection refused` arrives wrapped in the
+    // `Error from server: error dialing backend: ...` envelope — that's
+    // the envelope shape the line-anchored detector recognises. The
+    // older "bare connection refused" stub would no longer trigger the
+    // retry path, which is the correct new behaviour.
+    const refusedStderr =
+      'Error from server: error dialing backend: dial tcp 100.96.225.185:10250: connect: connection refused'
+    const counter = stubBrainctlExec([
+      async () => ({ stdout: '', stderr: refusedStderr, exitCode: 1 }),
       async () => ({ stdout: 'should NOT be called', stderr: '', exitCode: 0 }),
     ])
     let startCalls = 0

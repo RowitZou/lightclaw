@@ -973,13 +973,29 @@ export class RlaunchRuntime implements Runtime {
     // command resolution; brainctl control-plane / kubelet faults surface
     // as non-127 exits (typically 1, or 137 on SIGKILL).
     if (result.exitCode === 127) return false
-    const msg = `${result.stderr}\n${result.stdout}`.toLowerCase()
+    // 2026-05-15 dogfood: scope the substring scan to brainctl/k8s error
+    // envelopes only. The earlier whole-output scan covered both stderr and
+    // stdout and tripped on any user-program output containing 'not found'
+    // — e.g. a Python heredoc that `raise SystemExit('runner query block
+    // start not found')` then exited non-zero — and respawned a perfectly
+    // healthy worker. Real brainctl/k8s failures always start an stderr
+    // line with `error:` (Stopped worker: `error: cannot exec into a
+    // container in an unavailable process: Stopped`) or `Error from server`
+    // (NotFound / kubelet ws faults: `Error from server (NotFound): ...`).
+    // User programs almost never use those exact line prefixes, so
+    // requiring them as line anchors removes the false-positive surface
+    // without weakening real worker-death detection.
+    const envelopeLines = result.stderr
+      .split('\n')
+      .filter(line => /^(error:|Error from server)/i.test(line))
+      .join('\n')
+      .toLowerCase()
     return (
-      msg.includes('not found') ||
-      msg.includes('connection refused') ||
-      msg.includes('unable to upgrade connection') ||
-      msg.includes('unavailable process') ||
-      msg.includes('cannot exec into a container')
+      envelopeLines.includes('not found') ||
+      envelopeLines.includes('connection refused') ||
+      envelopeLines.includes('unable to upgrade connection') ||
+      envelopeLines.includes('unavailable process') ||
+      envelopeLines.includes('cannot exec into a container')
     )
   }
 
