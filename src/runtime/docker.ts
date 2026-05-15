@@ -424,6 +424,7 @@ export class DockerRuntime implements Runtime {
       }
     }
 
+    // Host-side absolute paths under a configured mount → translated.
     const resolved = path.resolve(pathname)
     for (const [hostPrefix, containerPrefix] of this.mountTable) {
       if (resolved === hostPrefix || resolved.startsWith(`${hostPrefix}${path.sep}`)) {
@@ -431,7 +432,14 @@ export class DockerRuntime implements Runtime {
       }
     }
 
-    throw new Error(`Path is not within any DockerRuntime mount: ${pathname}`)
+    // Container-local absolute paths (`/tmp`, `/var/log`, `/proc/...`) pass
+    // through to docker exec; container isolation + permission system are the
+    // safety boundary. Mirrors rlaunch's same fix; finishes the 18ff987 sweep.
+    if (path.posix.isAbsolute(normalizedContainerPath)) {
+      return normalizedContainerPath
+    }
+
+    throw new Error(`Path is not absolute: ${pathname}`)
   }
 
   private async createContainer(): Promise<void> {

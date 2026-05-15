@@ -440,6 +440,8 @@ export function buildRlaunchRuntimeConfig(
     workspaceGpfsMount: gpfs.mount,
     workspaceContainerPath: '/workspace',
     env,
+    daemonUid: process.getuid?.() ?? 0,
+    daemonGid: process.getgid?.() ?? 0,
   }
 }
 

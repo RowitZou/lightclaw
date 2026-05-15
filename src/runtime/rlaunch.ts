@@ -44,6 +44,18 @@ export type RlaunchRuntimeConfig = {
   workspaceContainerPath: string
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
   env: Readonly<Record<string, string>>
+  /**
+   * The uid/gid to drop privileges to when dispatching unprivileged exec
+   * calls. The kubebrain ml-base image starts as root; we keep root for the
+   * worker PID 1 and for bootstrap steps (apt, chown), but every tool-side
+   * exec is wrapped in `setpriv --reuid=<daemonUid> --regid=<daemonGid>` so
+   * files it creates in the gpfs-backed workspace are owned by the daemon
+   * (host uid). Defaults to `process.getuid()` / `process.getgid()` at
+   * `buildRlaunchRuntimeConfig` time; tests / multi-host deployments can
+   * override.
+   */
+  daemonUid: number
+  daemonGid: number
 }
 
 type ProcessState =
@@ -117,6 +129,13 @@ export class RlaunchRuntime implements Runtime {
    *  re-stages into the fresh container. */
   private helpersStagedFor: string | null = null
   private inflightStaging: Promise<void> | null = null
+  /** Memoizes successful workspace chown per worker. Same lifecycle as
+   *  `helpersStagedFor` — resets when the workerName changes. The chown is
+   *  idempotent (already-correct entries are no-ops) so a re-run on a
+   *  respawn is cheap; we still memoize to skip the brainctl round-trip
+   *  entirely on the hot path. */
+  private workspaceChownedFor: string | null = null
+  private inflightChown: Promise<void> | null = null
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -634,7 +653,63 @@ export class RlaunchRuntime implements Runtime {
       await this.start()
     }
     await this.waitUntilRunning()
+    // chown BEFORE staging: stageHelpersOnce runs apt which itself drops a
+    // few files under /var/cache/apt etc. inside the container, but those
+    // are container-local (not gpfs-backed) and unaffected by the chown.
+    // The chown only targets the workspace mount, which is exactly the
+    // surface the daemon's shared-cluster-fs reads/writes.
+    await this.ensureWorkspaceChowned()
     await this.ensureHelpersStaged()
+  }
+
+  /**
+   * Idempotently chown the worker-visible workspace mount to the daemon's
+   * uid/gid so the daemon's host-side DataPlane (shared-cluster-fs) can
+   * read and write files there without EACCES. Worker PID 1 is root (image
+   * default), so this is the only entity with `CAP_CHOWN` over the gpfs
+   * mount; tool-side exec runs setpriv-wrapped after this bootstrap.
+   *
+   * Cost: one brainctl exec round-trip; idempotent (already-correct entries
+   * are no-ops) so re-runs on a respawn are cheap. Memoized via
+   * `workspaceChownedFor === workerName`. Failures are loud but non-fatal —
+   * we keep going so the layered DataPlane's exec-relay fallback path still
+   * works for in-container reads, and the operator gets a stderr line to
+   * diagnose.
+   */
+  private async ensureWorkspaceChowned(): Promise<void> {
+    if (this.workspaceChownedFor === this.workerName) return
+    if (this.inflightChown) return this.inflightChown
+    this.inflightChown = this.chownWorkspaceOnce().finally(() => {
+      this.inflightChown = null
+    })
+    return this.inflightChown
+  }
+
+  private async chownWorkspaceOnce(): Promise<void> {
+    const root = this.workspaceRoot
+    const uid = this.cfg.daemonUid
+    const gid = this.cfg.daemonGid
+    // mkdir first so a fresh workspace (no per-user dir yet) doesn't trip
+    // chown's ENOENT. -R covers the recursive sweep; bash's `|| true` keeps
+    // partial-chown failures (e.g. fs-immutable bit on a stray subtree) from
+    // killing worker startup — admin sees the stderr below.
+    const result = await this.runBrainctlExec({
+      command:
+        `mkdir -p ${shellQuote(root)} && ` +
+        `chown -R ${uid}:${gid} ${shellQuote(root)} || true`,
+      timeoutMs: 60_000,
+      privileged: true,
+    })
+    if (result.exitCode !== 0) {
+      process.stderr.write(
+        `[rlaunch] workspace chown (${root} → ${uid}:${gid}) ` +
+        `failed for worker ${this.workerName ?? '<unbound>'}; ` +
+        `daemon writes will hit EACCES on root-owned files: ` +
+        `${result.stderr.trim() || result.stdout.trim()}\n`,
+      )
+      // Still memoize so we don't retry every tool call; admin must investigate.
+    }
+    this.workspaceChownedFor = this.workerName
   }
 
   /**
@@ -673,6 +748,7 @@ export class RlaunchRuntime implements Runtime {
     const probe = await this.runBrainctlExec({
       command: probeCmd,
       timeoutMs: 15_000,
+      privileged: true,
     })
     if (probe.exitCode === 0) {
       this.helpersStagedFor = this.workerName
@@ -701,6 +777,7 @@ export class RlaunchRuntime implements Runtime {
         'apt-get update -qq && apt-get install -y -qq --no-install-recommends poppler-utils ripgrep jq',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,
+      privileged: true,
     })
     if (apt.exitCode !== 0) {
       process.stderr.write(
@@ -727,6 +804,7 @@ export class RlaunchRuntime implements Runtime {
         '"Pillow>=10,<12" "openpyxl>=3.1,<4" "python-docx>=1.1,<2" "python-pptx>=1.0,<2"',
       timeoutMs: 240_000,
       maxBufferBytes: 4 * 1024 * 1024,
+      privileged: true,
     })
     if (pip.exitCode !== 0) {
       throw new Error(
@@ -796,6 +874,9 @@ export class RlaunchRuntime implements Runtime {
       env: input.env,
       cwd,
       stdin: input.stdin,
+      dropPrivileges: input.privileged
+        ? undefined
+        : { uid: this.cfg.daemonUid, gid: this.cfg.daemonGid },
     })
   }
 
@@ -916,6 +997,8 @@ export class RlaunchRuntime implements Runtime {
       return normalizedContainerPath
     }
 
+    // Host-side absolute paths mapped to a configured mount get translated to
+    // the matching container prefix.
     const resolved = path.resolve(pathname)
     for (const [hostPrefix, containerPrefix] of this.mountTable) {
       if (resolved === hostPrefix || resolved.startsWith(`${hostPrefix}${path.sep}`)) {
@@ -923,7 +1006,18 @@ export class RlaunchRuntime implements Runtime {
       }
     }
 
-    throw new Error(`Path is not within RlaunchRuntime workspace: ${pathname}`)
+    // Other absolute paths (`/tmp`, `/var/log`, `/proc/...`, ...) are
+    // container-local. Pass through to the exec-relay layer, which runs in the
+    // container via brainctl and sees the worker's own filesystem. shared-
+    // cluster-fs self-filters via `PathPolicy.isShared` so it never gets these
+    // paths. Container isolation + the Phase 5 permission system are the
+    // actual safety boundary; this finishes the sweep started in 18ff987 that
+    // removed path-string guards from tools / permission policy.
+    if (path.posix.isAbsolute(normalizedContainerPath)) {
+      return normalizedContainerPath
+    }
+
+    throw new Error(`Path is not absolute: ${pathname}`)
   }
 
   /** Reverse of {@link toContainerPath}. Container path → host path via
@@ -957,42 +1051,68 @@ export class RlaunchRuntime implements Runtime {
  * Pure: no class state, no side effects. The dispatcher (RlaunchRuntime.exec)
  * resolves cwd against the mount table and hands us an environment-side path.
  *
- * Output shape:
+ * Output shape (no drop):
  *   <env exports> cd '<cwd>' && <body>
- * where <body> is either the raw command (no stdin) or a base64 inline pipe:
+ * Output shape (drop to daemon uid):
+ *   <env exports> cd '<cwd>' && setpriv --reuid=<uid> --regid=<gid>
+ *     --clear-groups --inh-caps=-all -- bash -c <bash-quoted body>
+ *
+ * `<body>` is either the raw command (no stdin) or a base64 inline pipe:
  *   { printf %s '<b64>' | base64 -d; } | { <command>; }
  *
  * The brace group around <command> is load-bearing: bash precedence makes `|`
  * bind tighter than `&&`, so `{b64} | mkdir && cat` would attach stdin to
  * mkdir only and leave `cat` reading EOF. Wrapping the user command in
  * `{ ...; }` makes the entire chain inherit the pipe.
+ *
+ * When `dropPrivileges` is set, the body is re-quoted into a second
+ * `bash -c` invocation that runs under `setpriv` — every agent-dispatched
+ * tool call lands as uid `<daemonUid>`, so files it writes to the gpfs-
+ * backed workspace are daemon-owned and the daemon's host-side DataPlane
+ * (shared-cluster-fs) can read/write them without EACCES. `env` exports
+ * happen BEFORE the setpriv wrap so the inherited shell environment
+ * crosses the boundary; `cwd` is set BEFORE setpriv too (setpriv doesn't
+ * have a `--chdir` flag on all builds) and the inner shell inherits it.
  */
 export function composeExecScript(input: {
   command: string
   env?: Record<string, string>
   cwd: string
   stdin?: string | Buffer
+  dropPrivileges?: { uid: number; gid: number }
 }): string {
   const envPart = input.env && Object.keys(input.env).length > 0
     ? `${Object.entries(input.env)
       .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
       .join(' ')} `
     : ''
+  let body: string
   if (input.stdin === undefined) {
-    return `${envPart}cd ${shellQuote(input.cwd)} && ${input.command}`
+    body = input.command
+  } else {
+    const buffer = typeof input.stdin === 'string' ? Buffer.from(input.stdin) : input.stdin
+    if (buffer.length > MAX_INLINE_STDIN_BYTES) {
+      throw new Error(
+        `RlaunchRuntime exec: stdin payload ${buffer.length} B exceeds inline limit ` +
+          `(${MAX_INLINE_STDIN_BYTES} B). Stage via fs.writeFile + read from disk, ` +
+          'or split the call into smaller chunks.',
+      )
+    }
+    const b64 = buffer.toString('base64')
+    body = `{ printf %s ${shellQuote(b64)} | base64 -d; } | { ${input.command}; }`
   }
-  const buffer = typeof input.stdin === 'string' ? Buffer.from(input.stdin) : input.stdin
-  if (buffer.length > MAX_INLINE_STDIN_BYTES) {
-    throw new Error(
-      `RlaunchRuntime exec: stdin payload ${buffer.length} B exceeds inline limit ` +
-        `(${MAX_INLINE_STDIN_BYTES} B). Stage via fs.writeFile + read from disk, ` +
-        'or split the call into smaller chunks.',
-    )
+  const cwdCd = `cd ${shellQuote(input.cwd)} && `
+  if (!input.dropPrivileges) {
+    return `${envPart}${cwdCd}${body}`
   }
-  const b64 = buffer.toString('base64')
+  const { uid, gid } = input.dropPrivileges
+  // Re-quote the body for the inner bash -c so quoting rules nest cleanly.
+  // --clear-groups drops supplementary groups; --inh-caps=-all drops every
+  // inheritable capability so child processes can't re-acquire privilege.
   return (
-    `${envPart}cd ${shellQuote(input.cwd)} && ` +
-    `{ printf %s ${shellQuote(b64)} | base64 -d; } | { ${input.command}; }`
+    `${envPart}${cwdCd}setpriv ` +
+    `--reuid=${uid} --regid=${gid} --clear-groups --inh-caps=-all ` +
+    `-- bash -c ${shellQuote(body)}`
   )
 }
 

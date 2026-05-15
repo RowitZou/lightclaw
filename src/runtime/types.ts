@@ -12,6 +12,18 @@ export type ExecInput = {
   abortSignal?: AbortSignal
   maxBufferBytes?: number
   stdin?: string | Buffer
+  /**
+   * Run the command as the container's default user (typically root) instead
+   * of dropping privileges to the daemon's uid. Default `false` — every agent-
+   * dispatched tool call runs unprivileged so files it creates in the shared
+   * workspace are owned by the daemon and the daemon's host-side DataPlane
+   * (shared-cluster-fs / bind-mount) can read/write them without EACCES.
+   *
+   * Set to `true` for backend-internal bootstrap that genuinely needs root:
+   * apt staging (`stageHelpersOnce`), ownership bootstrap (`chownWorkspaceOnce`),
+   * future NetworkBridge iptables. Never set this from tool code.
+   */
+  privileged?: boolean
 }
 
 export type ExecResult = {

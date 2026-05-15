@@ -156,6 +156,8 @@ describe('buildLaunchArgs', () => {
     workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
     workspaceContainerPath: '/workspace',
     env: {},
+    daemonUid: 1000,
+    daemonGid: 1000,
   }
 
   it('emits --set-env=KEY=VAL for every env entry on detached spawn', () => {
@@ -295,6 +297,52 @@ describe('composeExecScript', () => {
       ),
       'whole && chain must be inside the brace group',
     )
+  })
+
+  it('wraps the body in `setpriv --reuid=<uid> --regid=<gid> -- bash -c …` when dropPrivileges is set', () => {
+    const script = composeExecScript({
+      command: 'whoami',
+      cwd: '/workspace',
+      dropPrivileges: { uid: 10250, gid: 10250 },
+    })
+    // env/cwd happen BEFORE setpriv (outer shell), then we re-enter bash via
+    // setpriv with the original body shell-quoted. Container PID 1 is root
+    // (rlaunch image USER directive), so the demote happens here at exec time.
+    assert.match(
+      script,
+      /^cd '\/workspace' && setpriv --reuid=10250 --regid=10250 --clear-groups --inh-caps=-all -- bash -c 'whoami'$/,
+    )
+  })
+
+  it('keeps body shell-safe when dropPrivileges + stdin are both used', () => {
+    // The base64 pipe + brace group has single quotes inside; the outer
+    // shellQuote must escape them so the inner `bash -c '...'` is valid.
+    const script = composeExecScript({
+      command: "cat > '/workspace/x'",
+      cwd: '/workspace',
+      stdin: 'payload',
+      dropPrivileges: { uid: 10250, gid: 10250 },
+    })
+    assert.ok(script.startsWith("cd '/workspace' && setpriv --reuid=10250 --regid=10250 "),
+      `must start with the setpriv prefix: ${script}`)
+    assert.ok(script.includes('--inh-caps=-all -- bash -c '),
+      'must drop inheritable caps and re-enter bash')
+    // Inner body decodes to the expected base64 pipeline.
+    const innerQuoted = script.slice(script.indexOf("-- bash -c '") + "-- bash -c '".length, -1)
+    const inner = innerQuoted.replace(/'\\''/g, "'")
+    assert.ok(inner.includes('base64 -d'),
+      `inner bash body should still contain the base64 stdin trick: ${inner}`)
+    assert.ok(inner.includes("| { cat > '/workspace/x'; }"),
+      'inner bash body must keep the brace group around the user command')
+  })
+
+  it('omits setpriv when dropPrivileges is undefined (privileged path)', () => {
+    // Bootstrap callers (chownWorkspaceOnce, stageHelpersOnce) need root inside
+    // the container; they pass `privileged: true` which translates to no
+    // dropPrivileges on the composeExecScript input.
+    const script = composeExecScript({ command: 'apt-get update', cwd: '/workspace' })
+    assert.equal(script, "cd '/workspace' && apt-get update")
+    assert.equal(script.includes('setpriv'), false)
   })
 })
 
@@ -461,6 +509,8 @@ describe('RlaunchRuntime three-plane data path', () => {
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
         env: {},
+        daemonUid: 1000,
+        daemonGid: 1000,
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
     ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
@@ -495,41 +545,71 @@ describe('RlaunchRuntime three-plane data path', () => {
     assert.equal(execCalled, false)
   })
 
-  it('keeps the legacy out-of-workspace path rejection before exec-relay', async () => {
-    let execCalled = false
+  it('routes container-local absolute paths (/tmp, /etc, …) through exec-relay', async () => {
+    // Workspace gate dropped: paths outside the gpfs mount are container-
+    // local. shared-cluster-fs filters via PathPolicy.isShared, exec-relay
+    // accepts everything. Container isolation + permission system are the
+    // safety boundary, not a path-string guard.
+    const captured: string[] = []
     ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
-      execCalled = true
-      if (input.command.startsWith('stat -c %s')) {
-        return { stdout: '6177650\n', stderr: '', exitCode: 0 }
+      captured.push(input.command)
+      if (input.command.startsWith('stat -c %s ')) {
+        return { stdout: '11\n', stderr: '', exitCode: 0 }
       }
-      return {
-        stdout: Buffer.alloc(6_174_720, 1).toString('base64'),
-        stderr: '',
-        exitCode: 0,
+      if (input.command.startsWith('base64 -w 0 ')) {
+        return { stdout: Buffer.from('hello /tmp\n').toString('base64'), stderr: '', exitCode: 0 }
       }
+      return { stdout: '', stderr: `unexpected: ${input.command}`, exitCode: 1 }
     }
 
-    await assert.rejects(
-      () => runtime.fs.readFile('/etc/paper.pdf'),
-      /Path is not within RlaunchRuntime workspace/,
-    )
-    assert.equal(execCalled, false)
+    const got = await runtime.fs.readFile('/tmp/lightclaw-test.log')
+    assert.equal(got.toString('utf8'), 'hello /tmp\n')
+    // Both hops landed at the literal `/tmp/...` container path — no rewrite.
+    assert.ok(captured[0].endsWith("'/tmp/lightclaw-test.log'"),
+      `stat hop should target /tmp directly: ${captured[0]}`)
+    assert.ok(captured[1].endsWith("'/tmp/lightclaw-test.log'"),
+      `base64 hop should target /tmp directly: ${captured[1]}`)
   })
 
-  it('preserves the legacy traversal error message verbatim (zero behavior change)', async () => {
-    // Phase 33 contract: `..` escape must throw the pre-refactor message
-    // `Path is not within RlaunchRuntime workspace: ...`, NOT the new
-    // LayeredDataPlane `Path is not allowed for read: ...`. The legacy text
-    // comes from rlaunch.ts toContainerPath via execRelayFs.readFile.
+  it('folds `..` traversal via normalize and lets the resulting path through', async () => {
+    // path.posix.normalize('/workspace/../etc/passwd') === '/etc/passwd'.
+    // After 18ff987's "trust runtime isolation" policy was extended to
+    // toContainerPath, the resulting absolute path is no longer string-
+    // guarded; the container reads its own /etc/passwd (image default
+    // contents), not the host's. Permission system / high-risk classifier
+    // still gate Edit/Write on sensitive paths separately.
+    const captured: string[] = []
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
+      captured.push(input.command)
+      if (input.command.startsWith('stat -c %s ')) {
+        return { stdout: '4\n', stderr: '', exitCode: 0 }
+      }
+      if (input.command.startsWith('base64 -w 0 ')) {
+        return { stdout: Buffer.from('root').toString('base64'), stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: 'unexpected', exitCode: 1 }
+    }
+
+    const got = await runtime.fs.readFile('/workspace/../etc/passwd')
+    assert.equal(got.toString('utf8'), 'root')
+    // After normalize, the hop targets /etc/passwd (no `..` left in the path).
+    assert.ok(captured[0].includes("'/etc/passwd'"),
+      `traversal should be normalized away: ${captured[0]}`)
+  })
+
+  it('rejects relative paths with a clear non-absolute error', async () => {
+    // Tools normalize against workspaceRoot before calling runtime.fs, so the
+    // backend only legitimately sees absolute paths. A relative leak past
+    // that resolution is a real caller bug — surface it instead of silently
+    // running it inside the container at an arbitrary cwd.
     let execCalled = false
     ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async () => {
       execCalled = true
-      return { stdout: '', stderr: 'should not be called', exitCode: 1 }
+      return { stdout: '', stderr: '', exitCode: 1 }
     }
-
     await assert.rejects(
-      () => runtime.fs.readFile('/workspace/../etc/passwd'),
-      /Path is not within RlaunchRuntime workspace/,
+      () => runtime.fs.readFile('relative/path.txt'),
+      /Path is not absolute/,
     )
     assert.equal(execCalled, false)
   })
@@ -560,6 +640,8 @@ describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast pat
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
         env: {},
+        daemonUid: 1000,
+        daemonGid: 1000,
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
   })
@@ -665,6 +747,8 @@ describe('RlaunchRuntime.fs.readFileViaHostMount (host-side bind-mount fast path
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
         env: {},
+        daemonUid: 1000,
+        daemonGid: 1000,
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
   })
@@ -767,6 +851,8 @@ describe('RlaunchRuntime isAvailable retryable mapping', () => {
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
         env: {},
+        daemonUid: 1000,
+        daemonGid: 1000,
     }
     tracker = new WorkerReadinessTracker('alice')
     runtime = new RlaunchRuntime(config, tracker)
@@ -855,6 +941,8 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
         env: {},
+        daemonUid: 1000,
+        daemonGid: 1000,
     }
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
     // Stub out the heavy lifecycle calls that the retry path would otherwise
