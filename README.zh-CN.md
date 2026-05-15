@@ -372,10 +372,10 @@ LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级�
 
 ## 助手能用的能力
 
-- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`。`Read` 原生处理纯文本/代码、PDF（默认走 `pdftotext` 文本路径；带 `pages` 参数时走 `pdftoppm` 渲染图给视觉 sub-LLM 看）、Office 文档（xlsx / docx / pptx）——不需要单独的 `Extract*` 工具。
-- **Web** —— `WebFetch`（URL → 可读 Markdown，可选 sub-LLM 摘要 + 15 分钟自清理缓存）、`WebSearch`（Brave 或 DDG 降级）
-- **飞书云文档** —— 直接贴飞书 / Lark 链接：`FeishuRead` 按 canonical 类型自动路由（doc / docx / wiki → doc-or-sheet / sheet → cells 或 metadata）、`FeishuCreateFile` 新建 doc、`FeishuWriteDoc` 在已有 doc 末尾追加、`FeishuWriteSheet` 给 range append 行或 overwrite。所有写动作都弹飞书审批卡 + 落 `<LIGHTCLAW_HOME>/audit/feishu-writes/` 每日 jsonl 审计。`bitable` / `file` 类型 URL 解析但 v1 不支持读写。
-- **记忆** —— `MemoryRead` / `MemoryWrite` 做长期 per-user 笔记。自动抽取（`extract_memories`）和归并（`auto_dream`）作为后台 subagent 运行；`MemoryWrite` 是模型主动想记一条事实时的手动入口。
+- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`。`Read` 原生处理纯文本/代码、PDF（默认走 `pdftotext` 文本路径；带 `pages` + `visual:true` 时如 provider 支持就直接把选中页作为原生 document 块塞给模型，否则降级到 `pdftoppm` 逐页渲染图）、Office 文档（xlsx / docx / pptx）——不需要单独的 `Extract*` 工具。
+- **Web** —— `WebFetch`（URL → 可读 Markdown，可选 sub-LLM 摘要 + 15 分钟自清理缓存；瞬时网络失败带指数退避重试；二进制下载保留全量字节）、`WebSearch`（Brave 或 DDG 降级；瞬时错误重试；"搜不到"会被翻译成"未必不存在"告知模型）
+- **飞书云文档** —— 直接贴飞书 / Lark 链接：`FeishuRead` 按 canonical 类型自动路由（doc / docx / wiki → doc-or-sheet / sheet → cells 或 metadata），可返回结构化 doc blocks 供下游精细编辑;超大文档返回 spill 到 workspace 文件,不污染 tool result。`FeishuCreateFile` 新建 doc；`FeishuWriteDoc` 在已有 doc 末尾追加并支持针对性结构编辑(表格行/块);`FeishuWriteSheet` 给 range append 行或 overwrite。所有写动作都弹飞书审批卡 + 落 `<LIGHTCLAW_HOME>/audit/feishu-writes/` 每日 jsonl 审计。Bot 也处理飞书消息撤回(被撤回的消息所触发的对话轮次会被干净中止)。`bitable` / `file` 类型 URL 解析但 v1 不支持读写。
+- **记忆** —— `MemoryRead` / `MemoryWrite` 做长期 per-user 笔记。自动抽取（`extract_memories`）和归并（`auto_dream`）作为后台 subagent 运行；`MemoryWrite` 是模型主动想记一条事实时的手动入口。**Memory Nudge** 每 ~20 轮往 prompt 里塞一条 system reminder 提示模型主动落盘,免得长对话里的临时发现被 context 滚没——零额外 API turn、零开销。
 - **会话历史** —— `ConversationList` / `ConversationRead` / `ConversationGrep` 跨 channel 查历史 session（terminal + 飞书 DM + 群 + topic thread）。
 - **后台任务** —— `BackgroundTask` 安排循环或一次性的任务在隔离 session 里晚些时候 fire；`ListBackgroundTasks` / `CancelBackgroundTask` / `UpdateBackgroundTask` 管理队列。完成结果走飞书 DM 卡片（`notifyTo: 'user'`）或唤醒主 agent 一轮 turn（`notifyTo: 'agent'`）。
 - **任务跟踪** —— `TodoWrite`，做多步规划
@@ -383,7 +383,7 @@ LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级�
 - **发文件到 channel** —— `SendFile` 把 workspace 里的文件（图片 / 卡片 / doc）推到当前飞书会话
 - **Harness 等待** —— `Sleep` 短等待，不占 Bash 槽位，`/stop` 一秒打断
 - **Skill** —— 内置若干小能力（`verify`、`remember`…），任务匹配时模型自动用，不需要手动调
-- **MCP server** —— admin 配置的外部工具，模型以 `mcp__<server>__<tool>` 调用
+- **MCP server** —— admin 配置的外部工具，模型以 `mcp__<server>__<tool>` 调用；MCP 工具返回的 image content 会作为原生 image 块直传给模型(而不是被降级成占位符),所以截图 / 图表 / vision-server 输出真能被模型看到
 
 大部分工具（Memory、Web、Conversation、BackgroundTask、AgentTool、Sleep、SendFile、UseSkill、4 个飞书云文档工具）默认 **deferred**：冷启动时只有名字进 prompt 不进 schema 目录，模型用 `ToolSearch` 按需把它们 promote 出来。8 个 inline 工具是 `Bash` / `Read` / `Write` / `Edit` / `Grep` / `Glob` / `TodoWrite` / `ToolSearch`。这样每轮 prompt cache 尽可能保持紧凑；promote 出来的工具进 session-scoped LRU + turn-based TTL，长 session 也不会让 catalog 越积越多。
 
@@ -398,6 +398,8 @@ LightClaw 帮你记三件事：
 - **你的项目。** 把 `LIGHTCLAW.md` 放到仓库根，助手每次 session 都会读。`LIGHTCLAW.local.md` 用来放你不想 commit 的内容。
 - **你这个人。** 它会逐渐攒起你的角色、偏好、纠正过的事——跨 session、跨渠道。下次开新对话时最相关的几条会自动回到上下文里，你不用反复自我介绍。
 - **当前任务。** 长 session 内部维护一份"工作笔记"（在做什么、改了哪些文件、做过哪些决定、下一步是什么）。对话变长被自动压缩时，这些硬事实会先落盘——thread 不会被一压就断。
+
+长对话还会每 ~20 轮收一次 **Memory Nudge** 静默提示，让模型在 context 把任务中段的小发现冲走前主动落到 memory ——这样话越多的 session 也不会丢掉中途学到的东西。
 
 `LIGHTCLAW_NO_MEMORY=1` 全关。更细粒度开关见下方。
 

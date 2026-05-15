@@ -375,10 +375,10 @@ For datasets / model checkpoints, mount them with `mode: "ro"` — the assistant
 
 ## What the assistant can use
 
-- **Files & shell** — `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`. `Read` natively handles plain text/code, PDFs (text via `pdftotext`, page rendering via `pdftoppm` for visual inspection), and Office documents (xlsx / docx / pptx) — no extra `Extract*` tools needed.
-- **Web** — `WebFetch` (URL → readable Markdown, with optional sub-LLM summarization and a 15-minute self-cleaning cache), `WebSearch` (Brave or DDG fallback)
-- **Feishu cloud docs** — paste a Feishu / Lark URL and the assistant works with it directly: `FeishuRead` auto-routes by canonical type (doc / docx / wiki → doc-or-sheet / sheet → cells or metadata), `FeishuCreateFile` creates a new doc, `FeishuWriteDoc` appends to an existing doc, `FeishuWriteSheet` appends rows or overwrites a range. Writes always pop a Feishu approval card and append to a per-day audit jsonl at `<LIGHTCLAW_HOME>/audit/feishu-writes/`. `bitable` / `file` URLs are parsed but read/write isn't supported in v1.
-- **Memory** — `MemoryRead` / `MemoryWrite` for durable per-user notes. Auto-extraction (`extract_memories`) and consolidation (`auto_dream`) run as background subagents; `MemoryWrite` is the manual escape hatch when the model wants to commit a fact mid-turn.
+- **Files & shell** — `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`. `Read` natively handles plain text/code, PDFs (text via `pdftotext`; with `pages` + `visual:true` it hands the requested pages to the model as a native document block when the provider supports it, falling back to per-page image rendering via `pdftoppm`), and Office documents (xlsx / docx / pptx) — no extra `Extract*` tools needed.
+- **Web** — `WebFetch` (URL → readable Markdown, with optional sub-LLM summarization and a 15-minute self-cleaning cache; transient network failures retry with exponential backoff; binary downloads keep full bytes), `WebSearch` (Brave or DDG fallback; transient errors retry; a search miss is communicated as "not proof of absence")
+- **Feishu cloud docs** — paste a Feishu / Lark URL and the assistant works with it directly: `FeishuRead` auto-routes by canonical type (doc / docx / wiki → doc-or-sheet / sheet → cells or metadata) and can return parsed doc blocks for richer downstream editing; oversized doc responses spill to a workspace file instead of bloating the tool result. `FeishuCreateFile` creates a new doc; `FeishuWriteDoc` appends to an existing doc and supports targeted structural edits (table rows, blocks); `FeishuWriteSheet` appends rows or overwrites a range. Writes always pop a Feishu approval card and append to a per-day audit jsonl at `<LIGHTCLAW_HOME>/audit/feishu-writes/`. Bot also handles inbound Feishu message recall (the turn it triggered aborts cleanly). `bitable` / `file` URLs are parsed but read/write isn't supported in v1.
+- **Memory** — `MemoryRead` / `MemoryWrite` for durable per-user notes. Auto-extraction (`extract_memories`) and consolidation (`auto_dream`) run as background subagents; `MemoryWrite` is the manual escape hatch when the model wants to commit a fact mid-turn. **Memory Nudge** drops a periodic system reminder into the prompt every ~20 turns so the model proactively persists findings before they roll off — no extra API turn, zero overhead.
 - **Conversation history** — `ConversationList` / `ConversationRead` / `ConversationGrep` to find past sessions across channels (terminal + Feishu DM + groups + topic threads).
 - **Scheduled work** — `BackgroundTask` schedules recurring or one-shot work that fires later in an isolated session; `ListBackgroundTasks` / `CancelBackgroundTask` / `UpdateBackgroundTask` manage the queue. Completions land back via Feishu DM card (`notifyTo: 'user'`) or as a model wake-up turn (`notifyTo: 'agent'`).
 - **Task tracking** — `TodoWrite` for multi-step plans
@@ -386,7 +386,7 @@ For datasets / model checkpoints, mount them with `mode: "ro"` — the assistant
 - **Files to channel** — `SendFile` pushes a workspace file out to the active Feishu chat (cards / images / docs)
 - **Harness-side wait** — `Sleep` for short waits without occupying a Bash slot (`/stop` cancels it instantly)
 - **Skills** — small bundles of focused capability (`verify`, `remember`, …); the model picks them up automatically when relevant, no manual invocation
-- **MCP servers** — admin-configured external tools, available to the model as `mcp__<server>__<tool>`
+- **MCP servers** — admin-configured external tools, available to the model as `mcp__<server>__<tool>`; image content returned by MCP tools is passed through to the model as a native image block (instead of being elided to a placeholder), so screenshot / chart / vision-server outputs are actually visible
 
 Most tools (Memory, Web, Conversation, BackgroundTask, AgentTool, Sleep, SendFile, UseSkill, and the four Feishu cloud-doc tools) are **deferred**: their full schemas are not in the cold-start tool catalog, and the model promotes them on demand via `ToolSearch`. The eight always-loaded inline tools are `Bash` / `Read` / `Write` / `Edit` / `Grep` / `Glob` / `TodoWrite` / `ToolSearch`. This keeps the per-turn prompt cache tight; promoted tools live in a session-scoped LRU with a turn-based TTL so the catalog stays trim across long sessions.
 
@@ -401,6 +401,8 @@ LightClaw remembers three things:
 - **Your project.** Drop a `LIGHTCLAW.md` into your repo and the assistant reads it every session, the same way Claude Code does. Add `LIGHTCLAW.local.md` for things you don't want to commit.
 - **You.** It builds a profile of your role, preferences, and corrections you've made — across sessions and channels. When you start a new conversation, the most relevant pieces come back automatically; you don't re-explain who you are.
 - **The current task.** Inside a long session it keeps a working notebook (what you're doing, files touched, decisions made, what's next). When the conversation gets too long and auto-compacts, those hard facts survive — the thread doesn't reset.
+
+Long conversations also get a quiet **Memory Nudge** every ~20 turns reminding the model to commit anything durable to memory before context pressure rolls it off — so even chatty sessions don't lose the lessons that came up mid-task.
 
 Disable everything with `LIGHTCLAW_NO_MEMORY=1`. Finer toggles are listed below.
 
