@@ -751,14 +751,23 @@ export async function query(params: QueryParams): Promise<{
       (block): block is ToolUseBlock => block.type === 'tool_use',
     )
 
-    // Snapshot cacheSafeParams unconditionally after every assistant push —
-    // forks (AgentTool / memory extraction) read forkContextMessages and
-    // synthesize placeholder tool_results for any pending tool_use blocks at
-    // construction time (see runForkedAgent), so a "dirty" snapshot ending
-    // in an assistant turn with pending tool_uses is fine. Always snapshotting
-    // keeps the parent prefix (history bytes) cache-aligned across all forks
-    // dispatched in the same turn.
-    if (rolePolicy.kind === 'orchestrator') {
+    // Snapshot cacheSafeParams after every assistant push for the main
+    // orchestrator turn — forks (AgentTool / memory extraction) read
+    // forkContextMessages and synthesize placeholder tool_results for any
+    // pending tool_use blocks at construction time (see runForkedAgent), so a
+    // "dirty" snapshot ending in an assistant turn with pending tool_uses is
+    // fine. Snapshotting keeps the parent prefix (history bytes) cache-aligned
+    // across all forks dispatched in the same turn.
+    //
+    // Ephemeral (`/fresh`) sessions are excluded: they share the parent's
+    // canonical user but run a synthetic single-message conversation that has
+    // no relation to the real main transcript. Saving here would overwrite
+    // the parent's cacheSafeParams with the fresh session's tiny prefix, so
+    // the *next* main turn's AgentTool fork would inherit fresh's messages as
+    // forkContextMessages until the next assistant push overwrote them.
+    // fresh.ts has documented this exclusion as intentional since Phase 18;
+    // the gate enforces what the comment promised.
+    if (rolePolicy.kind === 'orchestrator' && !invocation.ephemeral) {
       saveCacheSafeParams(
         getCurrentUserId(),
         createCacheSafeParams({
