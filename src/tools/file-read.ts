@@ -615,6 +615,7 @@ async function maybeReadPdfVisualAsInlineDocument(input: {
   if (!routing) return null
   const entry = readCacheEntry({
     endpoint: routing.endpoint,
+    baseUrl: routing.endpointBaseUrl,
     upstreamModel: routing.upstreamModel,
     kind: 'pdf',
     position: 'inToolResult',

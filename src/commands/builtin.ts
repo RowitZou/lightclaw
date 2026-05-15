@@ -237,12 +237,15 @@ function buildBuiltinCommands(): ReplCommand[] {
           ctx.output.write(`${t('common.error.prefix')}Current model "${current}" is not registered.\n`)
           return
         }
+        const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
         const removed = clearAllForModel({
           endpoint: entry.endpoint,
+          baseUrl,
           upstreamModel: entry.upstreamModel,
         })
         clearPrechargeForModel({
           endpoint: entry.endpoint,
+          baseUrl,
           upstreamModel: entry.upstreamModel,
         })
         ctx.output.write(
@@ -265,12 +268,15 @@ function buildBuiltinCommands(): ReplCommand[] {
       ctx.config.routing.main = model
       if (clearCache) {
         const entry = ctx.config.models[model]
+        const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
         clearAllForModel({
           endpoint: entry.endpoint,
+          baseUrl,
           upstreamModel: entry.upstreamModel,
         })
         clearPrechargeForModel({
           endpoint: entry.endpoint,
+          baseUrl,
           upstreamModel: entry.upstreamModel,
         })
       }

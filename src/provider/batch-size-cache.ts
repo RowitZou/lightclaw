@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 
@@ -5,10 +6,14 @@ import { lightclawHome } from '../paths.js'
 import type { AttachmentKind } from './types.js'
 
 /** Persisted across restarts at <lightclawHome>/auth/batch-size-cache.json.
- *  Keyed by `<endpoint>:<upstreamModel>` so the same upstream model behind
- *  different endpoints (e.g. claude-sonnet-4-6 via anthropic direct vs via
- *  newapi) keeps independent ceilings — endpoints can apply their own
- *  payload / token / per-message-image limits.
+ *  Keyed by `${alias}|${fp(baseUrl)}|${upstreamModel}` so:
+ *    - the same upstream model behind two different aliases (e.g.
+ *      `claude-sonnet-4-6` via `anthropic` direct vs `newapi` gateway)
+ *      keeps independent ceilings — endpoints can apply their own
+ *      payload / token / per-message-image limits;
+ *    - the same alias repointed at a new baseUrl in `config.json` (e.g.
+ *      `newapi` flipped from one gateway to another) gets a fresh
+ *      ceiling instead of silently inheriting the old gateway's cap.
  *
  *  Stored value semantics: "highest known successful batch size in a
  *  single describeImage(images=[...]) call for this endpoint". Updated
@@ -44,10 +49,14 @@ function load(): BatchSizeCacheShape {
       && parsed.ceilings
       && typeof parsed.ceilings === 'object'
     ) {
-      cached = {
-        version: CACHE_FILE_VERSION,
-        ceilings: parsed.ceilings as BatchSizeCacheShape['ceilings'],
+      // Drop legacy keys (old `${alias}:${model}` shape, no `|`). They
+      // never match the new `key()` output, so leaving them on disk just
+      // wastes bytes and clutters the JSON file.
+      const ceilings: BatchSizeCacheShape['ceilings'] = {}
+      for (const [k, v] of Object.entries(parsed.ceilings as BatchSizeCacheShape['ceilings'])) {
+        if (k.includes('|')) ceilings[k] = v
       }
+      cached = { version: CACHE_FILE_VERSION, ceilings }
       return cached
     }
   } catch {
@@ -70,8 +79,12 @@ function save(): void {
   }
 }
 
-function key(endpoint: string, upstreamModel: string): string {
-  return `${endpoint}:${upstreamModel}`
+function endpointFingerprint(baseUrl: string | undefined): string {
+  return createHash('sha256').update(baseUrl ?? '').digest('hex').slice(0, 8)
+}
+
+function key(endpoint: string, baseUrl: string | undefined, upstreamModel: string): string {
+  return `${endpoint}|${endpointFingerprint(baseUrl)}|${upstreamModel}`
 }
 
 /** Read the recorded ceiling for this endpoint × model × kind, or `null`
@@ -80,10 +93,11 @@ function key(endpoint: string, upstreamModel: string): string {
  *  the full batch and halves on failure. */
 export function readBatchCeiling(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
 }): number | null {
-  const entry = load().ceilings[key(input.endpoint, input.upstreamModel)]
+  const entry = load().ceilings[key(input.endpoint, input.baseUrl, input.upstreamModel)]
   const recorded = entry?.[input.kind]
   return typeof recorded === 'number' && recorded > 0 ? recorded : null
 }
@@ -94,13 +108,14 @@ export function readBatchCeiling(input: {
  *  to be safe inside the adaptive call). */
 export function recordBatchCeiling(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
   size: number
 }): void {
   if (!Number.isFinite(input.size) || input.size <= 0) return
   const cache = load()
-  const k = key(input.endpoint, input.upstreamModel)
+  const k = key(input.endpoint, input.baseUrl, input.upstreamModel)
   if (!cache.ceilings[k]) {
     cache.ceilings[k] = {}
   }

@@ -179,6 +179,7 @@ type DispatchContext = {
     provider: ReturnType<typeof getProviderFor>['provider']
     schema: ReturnType<typeof getProviderFor>['provider']['name']
     endpoint: string
+    endpointBaseUrl: string | undefined
     upstreamModel: string
   }
 }
@@ -642,6 +643,7 @@ export async function query(params: QueryParams): Promise<{
           provider: mainRoute.provider,
           schema: mainRoute.provider.name,
           endpoint: mainRoute.entry.endpoint,
+          endpointBaseUrl: config.endpoints[mainRoute.entry.endpoint]?.baseUrl,
           upstreamModel: mainRoute.entry.upstreamModel,
         }
         for await (const event of streamChat({

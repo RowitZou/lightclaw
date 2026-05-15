@@ -13,6 +13,7 @@ import {
   resetAllFailureCountersFor,
   scanMessagesForKindPositions,
   writeCacheEntry,
+  _internalForTests,
   _resetCacheForTests,
 } from './capability-cache.js'
 
@@ -40,6 +41,7 @@ describe('capability-cache', () => {
   it('returns null when nothing is cached for a kind × position', () => {
     const entry = readCacheEntry({
       endpoint: 'newapi',
+      baseUrl: undefined,
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
       position: 'inUserMessage',
@@ -50,6 +52,7 @@ describe('capability-cache', () => {
   it('persists a cache entry for one kind × position', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'image',
       position: 'inToolResult',
@@ -57,6 +60,7 @@ describe('capability-cache', () => {
     })
     const entry = readCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'image',
       position: 'inToolResult',
@@ -68,6 +72,7 @@ describe('capability-cache', () => {
   it('keys per endpoint × upstreamModel — flips do not bleed across', () => {
     writeCacheEntry({
       endpoint: 'newapi',
+      baseUrl: undefined,
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
       position: 'inUserMessage',
@@ -75,12 +80,14 @@ describe('capability-cache', () => {
     })
     const otherEndpoint = readCacheEntry({
       endpoint: 'anthropic-direct',
+      baseUrl: undefined,
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
       position: 'inUserMessage',
     })
     const otherModel = readCacheEntry({
       endpoint: 'newapi',
+      baseUrl: undefined,
       upstreamModel: 'claude-haiku-4-5',
       kind: 'image',
       position: 'inUserMessage',
@@ -89,9 +96,41 @@ describe('capability-cache', () => {
     assert.equal(otherModel, null, 'different model unaffected')
   })
 
+  it('keys per baseUrl — repointing the same alias yields a fresh entry', () => {
+    // The core fix: admin flips `newapi`'s baseUrl from a non-vision gateway
+    // to OpenAI direct. The old `enabled:false` row must NOT silently shadow
+    // the new endpoint's lookup; same alias + new baseUrl = new key.
+    writeCacheEntry({
+      endpoint: 'newapi',
+      baseUrl: 'https://oldgw.example.com',
+      upstreamModel: 'claude-sonnet-4-6',
+      kind: 'image',
+      position: 'inUserMessage',
+      entry: { enabled: false, failures: 0 },
+    })
+    const repointed = readCacheEntry({
+      endpoint: 'newapi',
+      baseUrl: 'https://api.anthropic.com',
+      upstreamModel: 'claude-sonnet-4-6',
+      kind: 'image',
+      position: 'inUserMessage',
+    })
+    assert.equal(repointed, null, 'new baseUrl gets a fresh cache slot')
+
+    const original = readCacheEntry({
+      endpoint: 'newapi',
+      baseUrl: 'https://oldgw.example.com',
+      upstreamModel: 'claude-sonnet-4-6',
+      kind: 'image',
+      position: 'inUserMessage',
+    })
+    assert.deepEqual(original, { enabled: false, failures: 0 }, 'old baseUrl entry still readable by same baseUrl')
+  })
+
   it('round-trips through disk — second process-equivalent reload reads the verdict', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: 'https://chatgpt.com/backend-api',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -100,6 +139,7 @@ describe('capability-cache', () => {
     _resetCacheForTests()  // simulate process restart
     const entry = readCacheEntry({
       endpoint: 'codex',
+      baseUrl: 'https://chatgpt.com/backend-api',
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -114,6 +154,7 @@ describe('capability-cache', () => {
     _resetCacheForTests()
     const entry = readCacheEntry({
       endpoint: 'x',
+      baseUrl: undefined,
       upstreamModel: 'y',
       kind: 'image',
       position: 'inUserMessage',
@@ -124,6 +165,7 @@ describe('capability-cache', () => {
   it('writes JSON shape that is human-readable and stable', () => {
     writeCacheEntry({
       endpoint: 'a',
+      baseUrl: undefined,
       upstreamModel: 'b',
       kind: 'image',
       position: 'inUserMessage',
@@ -131,6 +173,7 @@ describe('capability-cache', () => {
     })
     writeCacheEntry({
       endpoint: 'a',
+      baseUrl: undefined,
       upstreamModel: 'b',
       kind: 'pdf',
       position: 'inToolResult',
@@ -139,13 +182,17 @@ describe('capability-cache', () => {
     const raw = readFileSync(path.join(homeDir, 'auth', 'capabilities-cache.json'), 'utf8')
     const parsed = JSON.parse(raw)
     assert.equal(parsed.version, 2)
-    assert.deepEqual(parsed.flags['a:b'], {
+    const fp = _internalForTests.endpointFingerprint(undefined)
+    assert.deepEqual(parsed.flags[`a|${fp}|b`], {
       image: { inUserMessage: { enabled: true, failures: 0 } },
       pdf: { inToolResult: { enabled: false, failures: 5 } },
     })
   })
 
-  it('migrates v1 flags to v2 inUserMessage entries', () => {
+  it('drops v1 flags entirely (no fingerprint available for migration)', () => {
+    // v1 keys are `${alias}:${model}` with no baseUrl — there is no safe
+    // way to bridge them into the new key shape, so the load path drops
+    // them and lets precharge re-fill on the next provider lookup.
     const file = path.join(homeDir, 'auth', 'capabilities-cache.json')
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, JSON.stringify({
@@ -155,30 +202,48 @@ describe('capability-cache', () => {
       },
     }), 'utf8')
     _resetCacheForTests()
-    assert.deepEqual(
+    assert.equal(
       readCacheEntry({
         endpoint: 'codex',
+        baseUrl: undefined,
         upstreamModel: 'gpt-5.5',
         kind: 'pdf',
         position: 'inUserMessage',
       }),
-      { enabled: false, failures: 0 },
-    )
-    assert.equal(
-      readCacheEntry({
-        endpoint: 'codex',
-        upstreamModel: 'gpt-5.5',
-        kind: 'pdf',
-        position: 'inToolResult',
-      }),
       null,
-      'v1 had no tool_result dimension',
+      'v1 migrations drop on load — precharge will re-fill',
     )
+  })
+
+  it('drops legacy v2 keys (old alias:model shape) on load', () => {
+    // Pre-baseUrl-fix v2 files used `${alias}:${model}` keys. After the
+    // key shape change those rows can never hit the new key(), so the
+    // load path drops them to keep capabilities-cache.json tidy.
+    const file = path.join(homeDir, 'auth', 'capabilities-cache.json')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({
+      version: 2,
+      flags: {
+        'newapi:claude-sonnet-4-6': {
+          image: { inUserMessage: { enabled: false, failures: 0 } },
+        },
+      },
+    }), 'utf8')
+    _resetCacheForTests()
+    const entry = readCacheEntry({
+      endpoint: 'newapi',
+      baseUrl: undefined,
+      upstreamModel: 'claude-sonnet-4-6',
+      kind: 'image',
+      position: 'inUserMessage',
+    })
+    assert.equal(entry, null, 'legacy key dropped on load')
   })
 
   it('clearCacheEntry removes one position and leaves siblings', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -186,6 +251,7 @@ describe('capability-cache', () => {
     })
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inToolResult',
@@ -193,6 +259,7 @@ describe('capability-cache', () => {
     })
     const removed = clearCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -200,12 +267,14 @@ describe('capability-cache', () => {
     assert.equal(removed, true)
     assert.equal(readCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
     }), null)
     assert.deepEqual(readCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inToolResult',
@@ -215,6 +284,7 @@ describe('capability-cache', () => {
   it('clearCacheEntry is a no-op on a missing entry', () => {
     const removed = clearCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -225,6 +295,7 @@ describe('capability-cache', () => {
   it('incrementFailureCounter flips enabled=false on the fifth failure', () => {
     const key = {
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image' as const,
       position: 'inToolResult' as const,
@@ -242,6 +313,7 @@ describe('capability-cache', () => {
   it('resetAllFailureCountersFor clears failures across one model', () => {
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inUserMessage',
@@ -249,20 +321,23 @@ describe('capability-cache', () => {
     })
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'other',
       kind: 'image',
       position: 'inUserMessage',
       entry: { enabled: true, failures: 3 },
     })
-    resetAllFailureCountersFor({ endpoint: 'e', upstreamModel: 'm' })
+    resetAllFailureCountersFor({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm' })
     assert.equal(readCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inUserMessage',
     })?.failures, 0)
     assert.equal(readCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'other',
       kind: 'image',
       position: 'inUserMessage',
@@ -272,16 +347,18 @@ describe('capability-cache', () => {
   it('clearAllForModel removes one model entry', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
       entry: { enabled: false, failures: 0 },
     })
-    const removed = clearAllForModel({ endpoint: 'codex', upstreamModel: 'gpt-5.5' })
+    const removed = clearAllForModel({ endpoint: 'codex', baseUrl: undefined, upstreamModel: 'gpt-5.5' })
     assert.equal(removed, true)
     const raw = readFileSync(path.join(homeDir, 'auth', 'capabilities-cache.json'), 'utf8')
     const parsed = JSON.parse(raw)
-    assert.equal(parsed.flags['codex:gpt-5.5'], undefined, 'last kind cleared → drop the model key entirely')
+    const fp = _internalForTests.endpointFingerprint(undefined)
+    assert.equal(parsed.flags[`codex|${fp}|gpt-5.5`], undefined, 'last kind cleared → drop the model key entirely')
   })
 })
 

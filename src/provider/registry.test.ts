@@ -217,6 +217,7 @@ describe('provider precharge writes capability cache', () => {
       assert.deepEqual(
         readCacheEntry({
           endpoint: 'gateway',
+          baseUrl: 'http://gw.example/',
           upstreamModel: 'gpt-5.4-mini',
           kind,
           position: 'inUserMessage',
@@ -228,6 +229,7 @@ describe('provider precharge writes capability cache', () => {
     assert.deepEqual(
       readCacheEntry({
         endpoint: 'gateway',
+        baseUrl: 'http://gw.example/',
         upstreamModel: 'gpt-5.4-mini',
         kind: 'image',
         position: 'inUserMessage',
@@ -240,6 +242,7 @@ describe('provider precharge writes capability cache', () => {
       assert.deepEqual(
         readCacheEntry({
           endpoint: 'gateway',
+          baseUrl: 'http://gw.example/',
           upstreamModel: 'gpt-5.4-mini',
           kind,
           position: 'inToolResult',
@@ -252,6 +255,7 @@ describe('provider precharge writes capability cache', () => {
   it('keeps a prior runtime-disabled entry when the converter now emits', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'pdf',
       position: 'inUserMessage',
@@ -274,6 +278,7 @@ describe('provider precharge writes capability cache', () => {
     assert.deepEqual(
       readCacheEntry({
         endpoint: 'codex',
+        baseUrl: undefined,
         upstreamModel: 'gpt-5.5',
         kind: 'pdf',
         position: 'inUserMessage',
@@ -285,6 +290,7 @@ describe('provider precharge writes capability cache', () => {
   it('preserves enabled failures when an openai-auth probe now emits tool_result images', () => {
     writeCacheEntry({
       endpoint: 'codex',
+      baseUrl: undefined,
       upstreamModel: 'gpt-5.5',
       kind: 'image',
       position: 'inToolResult',
@@ -307,6 +313,7 @@ describe('provider precharge writes capability cache', () => {
     assert.deepEqual(
       readCacheEntry({
         endpoint: 'codex',
+        baseUrl: undefined,
         upstreamModel: 'gpt-5.5',
         kind: 'image',
         position: 'inToolResult',
@@ -323,6 +330,7 @@ describe('provider precharge writes capability cache', () => {
         assert.deepEqual(
           readCacheEntry({
             endpoint: 'anthropic-direct',
+            baseUrl: undefined,
             upstreamModel: 'claude-opus-4-7',
             kind,
             position,
@@ -335,6 +343,7 @@ describe('provider precharge writes capability cache', () => {
       assert.deepEqual(
         readCacheEntry({
           endpoint: 'anthropic-direct',
+          baseUrl: undefined,
           upstreamModel: 'claude-opus-4-7',
           kind,
           position: 'inUserMessage',

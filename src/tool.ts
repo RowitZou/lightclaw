@@ -16,6 +16,10 @@ export type ToolCallContext = {
     provider: Provider
     schema: Provider['name']
     endpoint: string
+    /** baseUrl of `endpoint`, populated alongside the endpoint alias so
+     *  tools that read the capability cache can build a complete key.
+     *  `undefined` when the endpoint relies on the provider SDK default. */
+    endpointBaseUrl: string | undefined
     upstreamModel: string
   }
   canUseTool?: CanUseToolFn
