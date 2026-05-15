@@ -21,6 +21,7 @@ export const LOCALES = {
     'banner.greet': '你好，{name}。我在。',
     'banner.greetAnonymous': 'LightClaw 已就绪。',
     'banner.commands': '命令：{list}',
+    'banner.slashOnly': '终端是 slash 命令控制台，不接受自由对话；与 agent 对话请走飞书。输入 /help 查看可用命令。',
 
     // ---- /help ----
     'help.title': 'LightClaw 命令：',
@@ -466,6 +467,7 @@ export const LOCALES = {
     'banner.greet': 'Hi {name}. I\'m here.',
     'banner.greetAnonymous': 'LightClaw is ready.',
     'banner.commands': 'Commands: {list}',
+    'banner.slashOnly': 'The terminal is a slash-command console — it does not take freeform chat; reach the agent through Feishu. Type /help for the command list.',
 
     // ---- /help ----
     'help.title': 'LightClaw commands:',

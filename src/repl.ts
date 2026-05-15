@@ -7,70 +7,28 @@ import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './commands/builtin.
 import { t } from './i18n/index.js'
 import type { ReplContext } from './commands/registry.js'
 import { type LightClawConfig } from './config.js'
-import { runHook } from './hooks/index.js'
 import { isAdmin as checkIsAdmin } from './identity/store.js'
-import { beginQuery } from './init.js'
-import { createUserMessage, getLastUuid } from './messages.js'
-import { cleanupMcp } from './mcp/index.js'
-import { drainPendingDream } from './memory/dream/dream.js'
-import { drainPendingExtraction } from './memory/extract.js'
-import { query } from './query.js'
-import {
-  appendMessage,
-  loadMeta,
-  loadTranscript,
-  rewriteTranscript,
-  saveMeta,
-  touchMeta,
-} from './session/storage.js'
-import { refreshSkillRegistry } from './skill/registry.js'
-import {
-  awaitBackgroundTasks,
-  getCompactionCount,
-  getCurrentUserId,
-  getCwd,
-  getLastExtractedAt,
-  getModel,
-  getPermissionMode,
-  getRuntimePool,
-  getSessionId,
-  getTodos,
-  getUsageTotals,
-} from './state.js'
-import type { Message, SessionMeta } from './types.js'
-import type { Tool } from './tool.js'
+import { getCurrentUserId, getSessionId } from './state.js'
+import type { Message } from './types.js'
 
 type ReplParams = {
   config: LightClawConfig
-  tools: Tool[]
-  initialPrompt?: string
-  resumeSessionId?: string
 }
 
+/**
+ * Terminal admin console.
+ *
+ * The terminal no longer drives the agent loop — it is a slash-only control
+ * surface for the daemon's admin (pairing, ceiling, sandbox, auth, cost,
+ * rules, model/mode preferences). The agent itself is reached exclusively
+ * through channels (Feishu); the admin talks to the bot there like any other
+ * paired identity. This loop's second job is simply to keep the daemon
+ * process in the foreground — cli.ts owns channel startup and the shutdown
+ * drains that run when this loop exits.
+ */
 export async function startRepl(params: ReplParams): Promise<void> {
-  const messages: Message[] = []
   const sessionId = getSessionId()
-  let createdAt = Date.now()
-  let activeTools = params.tools
-
-  if (params.resumeSessionId) {
-    const loadedMessages = await loadTranscript(params.resumeSessionId)
-    messages.push(...loadedMessages)
-  }
-
-  const existingMeta = await loadMeta(sessionId)
-  createdAt = existingMeta?.createdAt ?? createdAt
-  await refreshSkillRegistry(getCwd())
-  await persistMeta(sessionId, createdAt, messages.length)
-  await runHook('onSessionStart', {
-    sessionId,
-    cwd: getCwd(),
-    trigger: params.resumeSessionId
-      ? 'resume'
-      : params.initialPrompt
-        ? 'single'
-        : 'repl',
-  })
+  const createdAt = Date.now()
 
   const rl = createInterface({
     input,
@@ -79,89 +37,15 @@ export async function startRepl(params: ReplParams): Promise<void> {
     historySize: 200,
   })
 
-  const runPrompt = async (prompt: string, permissionInteractive = true) => {
-    const trimmedPrompt = prompt.trim()
-    if (trimmedPrompt.length === 0) {
-      return
-    }
-
-    beginQuery()
-    const userMessage = createUserMessage(trimmedPrompt, getLastUuid(messages))
-    messages.push(userMessage)
-    await appendMessage(sessionId, userMessage)
-    await touchMeta(sessionId, messages.length)
-    const messageCountBeforeQuery = messages.length
-
-    let assistantLineOpen = false
-    const openAssistantLine = () => {
-      if (!assistantLineOpen) {
-        output.write(chalk.green('assistant> '))
-        assistantLineOpen = true
-      }
-    }
-
-    try {
-      const result = await query({
-        config: params.config,
-        messages,
-        tools: activeTools,
-        mode: 'interactive',
-        rl: permissionInteractive ? rl : undefined,
-        onTextDelta(text) {
-          openAssistantLine()
-          output.write(text)
-        },
-        onToolUse(event) {
-          if (assistantLineOpen) {
-            output.write('\n')
-            assistantLineOpen = false
-          }
-          output.write(
-            chalk.yellow(
-              `[tool] ${event.name} ${JSON.stringify(event.input)}\n`,
-            ),
-          )
-        },
-        onToolResult(event) {
-          output.write(
-            chalk.gray(
-              `[tool-result] ${event.toolName}${event.isError ? ' error' : ''}\n`,
-            ),
-          )
-        },
-      })
-
-      const previousTail = messages[messageCountBeforeQuery - 1]
-      const nextTail = result.messages[messageCountBeforeQuery - 1]
-      const didMutateExistingHistory =
-        JSON.stringify(previousTail) !== JSON.stringify(nextTail)
-      const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
-      messages.splice(0, messages.length, ...result.messages)
-      if (result.didCompact || didMutateExistingHistory) {
-        await rewriteTranscript(sessionId, messages)
-      } else {
-        for (const message of newlyAddedMessages) {
-          await appendMessage(sessionId, message)
-        }
-      }
-      await persistMeta(sessionId, createdAt, messages.length)
-
-      if (assistantLineOpen) {
-        output.write('\n')
-      }
-    } catch (error) {
-      if (assistantLineOpen) {
-        output.write('\n')
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      output.write(chalk.red(`error> ${message}\n`))
-      await persistMeta(sessionId, createdAt, messages.length)
-    }
-  }
-
-  const registry = createBuiltinReplRegistry()
+  // includeChannelOnly: false drops /branch /b /fresh /stop — those are
+  // agent-loop / in-flight-turn commands with no meaning in a console that
+  // never runs a query.
+  const registry = createBuiltinReplRegistry({ includeChannelOnly: false })
   const currentUserId = getCurrentUserId()
   const currentUserIsAdmin = currentUserId ? await checkIsAdmin(currentUserId) : false
+  // The console has no transcript; `messages` stays empty and is only here
+  // because the shared slash handlers (with the channel) read ctx.messages.
+  const messages: Message[] = []
   const ctx: ReplContext = {
     config: params.config,
     sessionId,
@@ -172,10 +56,12 @@ export async function startRepl(params: ReplParams): Promise<void> {
     userId: currentUserId,
     isAdmin: currentUserIsAdmin,
     isChannel: false,
-    getActiveTools: () => activeTools,
-    setActiveTools: tools => { activeTools = tools },
-    runPrompt,
-    persistMeta: count => persistMeta(sessionId, createdAt, count),
+    getActiveTools: () => [],
+    setActiveTools: () => {},
+    // No transcript / session meta to persist — /model and /mode already
+    // write their durable state through setIdentityPreference. Kept on the
+    // context only because the shared slash handlers expect the hook.
+    persistMeta: async () => {},
   }
 
   output.write(chalk.cyan(
@@ -185,24 +71,10 @@ export async function startRepl(params: ReplParams): Promise<void> {
     `${t('banner.commands', { list: registry.bannerLine(currentUserIsAdmin) })}\n\n`,
   ))
 
-  if (params.initialPrompt) {
-    await runPrompt(params.initialPrompt, false)
-    await drainPendingExtraction(60_000)
-    await drainPendingDream(60_000)
-    await awaitBackgroundTasks()
-    rl.close()
-    await persistMeta(sessionId, createdAt, messages.length)
-    await runHook('onSessionEnd', { sessionId, reason: 'exit' })
-    await cleanupMcp()
-    await getRuntimePool().releaseAll()
-    printUsageSummary()
-    return
-  }
-
   while (true) {
     let line: string
     try {
-      line = await rl.question(chalk.blue('you> '))
+      line = await rl.question(chalk.blue('console> '))
     } catch (error) {
       if (error instanceof Error && error.message === 'readline was closed') {
         break
@@ -215,52 +87,13 @@ export async function startRepl(params: ReplParams): Promise<void> {
       continue
     }
 
-    const dispatched = await registry.dispatch(command, ctx, RENAMED_COMMANDS)
-    if (dispatched === 'continue') {
+    if (!command.startsWith('/')) {
+      output.write(chalk.gray(`${t('banner.slashOnly')}\n`))
       continue
     }
 
-    await runPrompt(line)
+    await registry.dispatch(command, ctx, RENAMED_COMMANDS)
   }
 
   rl.close()
-  await drainPendingExtraction(60_000)
-  await drainPendingDream(60_000)
-  await awaitBackgroundTasks()
-  await persistMeta(sessionId, createdAt, messages.length)
-  await runHook('onSessionEnd', { sessionId, reason: 'exit' })
-  await cleanupMcp()
-  await getRuntimePool().releaseAll()
-  printUsageSummary()
-}
-
-async function persistMeta(
-  sessionId: string,
-  createdAt: number,
-  messageCount: number,
-): Promise<void> {
-  const existingMeta = await loadMeta(sessionId)
-  const meta: SessionMeta = {
-    sessionId,
-    model: getModel(),
-    cwd: getCwd(),
-    createdAt: existingMeta?.createdAt ?? createdAt,
-    lastActiveAt: Date.now(),
-    messageCount,
-    compactionCount: getCompactionCount(),
-    lastExtractedAt: getLastExtractedAt(),
-    todos: getTodos(),
-    permissionMode: getPermissionMode(),
-    userId: existingMeta?.userId ?? getCurrentUserId(),
-  }
-  await saveMeta(sessionId, meta)
-}
-
-function printUsageSummary(): void {
-  const totals = getUsageTotals()
-  output.write(
-    chalk.gray(
-      `\nusage: input_tokens=${totals.inputTokens}, output_tokens=${totals.outputTokens}\n`,
-    ),
-  )
 }

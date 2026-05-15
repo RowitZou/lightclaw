@@ -2,11 +2,11 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个自托管的个人 AI 助手。它住在你的终端里，能在飞书上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
+LightClaw 是一个自托管的个人 AI 助手。它作为 daemon 跑在你自己的机器上，能在飞书上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
 
 ### 它能为你做什么
 
-- **同一个助手，到处都能用。** 终端里和飞书里是同一段对话、同一份记忆，不用切换工具。
+- **在飞书上对话，在终端里管理。** Agent 活在 channel 里——在飞书私聊、群、话题里给它发消息。终端是 daemon 的 admin 控制台（配对、沙箱、用量、规则），不是 agent 对话窗口。
 - **让它真正动手做事。** 它会读写文件、跑 shell、抓网页、调你配的 MCP 工具——全在沙箱里，碰不到主机的其他部分。
 - **危险操作用人话和你确认。** 模型想做不可逆的事时给你一个明确的"是 / 否"——也可以一次"批准这一类"，之后不用再问。
 - **长任务不会越聊越糊涂。** 它记得你的项目惯例、纠正过的事、正在跑的任务；该用到的笔记会自动塞回上下文里——哪怕对话已经被自动压缩过几次。
@@ -49,7 +49,7 @@ python3 -m pip install --user markdownify
 }
 ```
 
-首次交互式启动会创建 v1 单 admin 身份。之后终端启动会自动恢复当前用户最近一次 session。
+首次启动会创建 v1 单 admin 身份，绑定到终端用户。之后每次启动都是为该 admin 拉起 daemon（channel + admin 控制台）。
 
 如果不希望状态落在 `~/.lightclaw`（比如集群开发机销毁会一并丢掉 sessions / memory / identity），把 `LIGHTCLAW_HOME` 指到共享存储后再启动：
 
@@ -218,13 +218,13 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
 
 ```bash
 lightclaw
-lightclaw --prompt "帮我规划今天"
-lightclaw --resume
-lightclaw --resume <session-id>
+lightclaw --home <dir>
 lightclaw --help
 ```
 
-Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
+`lightclaw` 拉起 daemon：启用的 channel + 一个纯 slash 的终端 admin 控制台。终端不再跑交互式 agent session——和 agent 对话请走飞书。
+
+旧 CLI flag / 子命令已经收口到配置和 slash：
 
 - 模型：`~/.lightclaw/config.json`（`endpoints` + `models` registry，`defaultModel`）；`LIGHTCLAW_MODEL` 按 display 名覆盖默认值
 - 功能开关：`LIGHTCLAW_NO_MEMORY=1`、`LIGHTCLAW_NO_MCP=1`、`LIGHTCLAW_NO_HOOKS=1`
@@ -245,9 +245,9 @@ Phase 9 的旧 CLI flag / 子命令已经收口到配置和 slash：
 | `/model <name>` | 切换当前 session 的模型。 |
 | `/mode <mode>` | 切换权限严格度。 |
 | `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
-| `/fresh <prompt>` | 临时一次性会话 — 不读 memory、不写 transcript。 |
-| `/branch <prompt>`（别名 `/b`）| 在当前 session 上分叉出并行 branch；主 turn 继续跑，branch 结果完成后合并回来。 |
-| `/stop` | 中断当前 sessionId 的 in-flight turn；branch / fresh 各自独立 sessionId，不会被一并中断。 |
+| `/fresh <prompt>`（仅飞书）| 临时一次性会话 — 不读 memory、不写 transcript。 |
+| `/branch <prompt>`（别名 `/b`，仅飞书）| 在当前 session 上分叉出并行 branch；主 turn 继续跑，branch 结果完成后合并回来。 |
+| `/stop`（仅飞书）| 中断当前 sessionId 的 in-flight turn；branch / fresh 各自独立 sessionId，不会被一并中断。 |
 | `/feedback <text>`（channel 用户专属）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
 | `/auth import codex` | 注册 Codex OAuth token，让 OpenAI-Auth 模型不依赖 API key 就能跑。 |
 
@@ -260,7 +260,7 @@ Admin 专属：
 | `/sandbox [status|prefetch|reset]` | 查看 / 重新拉取 / 重置 runtime 沙箱镜像与容器。 |
 | `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
 
-Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。
+Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。终端 admin 控制台跑的是同一套命令，但不含 agent-loop 那几个（`/fresh`、`/branch` / `/b`、`/stop`）——它们只有在真正跑 query 的地方（即飞书）才有意义。
 
 ### 权限模式与 ceiling
 
@@ -426,10 +426,10 @@ LightClaw 帮你记三件事：
 
 ```text
 src/
-├── cli.ts              # 极简 CLI、auto-resume、channel auto-start
+├── cli.ts              # 极简 CLI、channel auto-start、admin 控制台
 ├── init.ts             # config + workspace-scoped state 初始化
 ├── init-wizard.ts      # 首次启动 admin 创建、终端 user 解析
-├── repl.ts             # readline REPL + slash dispatch
+├── repl.ts             # 纯 slash 的终端 admin 控制台
 ├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
 ├── prompt.ts           # system prompt 构造
 ├── state.ts            # 进程级 session state 单例

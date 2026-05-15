@@ -21,7 +21,6 @@ export type ReplContext = {
   isChannel?: boolean
   getActiveTools(): Tool[]
   setActiveTools(tools: Tool[]): void
-  runPrompt(prompt: string, permissionInteractive?: boolean): Promise<void>
   persistMeta(messageCount: number): Promise<void>
   // Channel-only: lets a slash handler request a different body renderer for
   // its output. Default is plain_text (structured help/status with angle
@@ -48,6 +47,10 @@ export type ReplCommand = {
   usage: string                // e.g. "/mode <default|plan|acceptEdits|bypassPermissions>"
   description: string
   visibleTo?: CommandVisibility
+  // Commands tied to the agent loop / in-flight turn (/branch, /b, /fresh,
+  // /stop). They are meaningful only where a query actually runs — the
+  // channel — and are dropped from the terminal admin console's registry.
+  channelOnly?: boolean
   handler(args: string, ctx: ReplContext): Promise<ReplCommandResult | void>
 }
 

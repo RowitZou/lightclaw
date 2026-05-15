@@ -2,11 +2,11 @@
 
 [中文说明](./README.zh-CN.md) · English
 
-LightClaw is a self-hosted personal AI assistant. It runs in your terminal, talks to you on Feishu, and remembers what you tell it across sessions. One install, your own machine, no SaaS account.
+LightClaw is a self-hosted personal AI assistant. It runs as a daemon on your own machine, talks to you on Feishu, and remembers what you tell it across sessions. One install, your own machine, no SaaS account.
 
 ### What you can do with it
 
-- **One assistant, every channel.** Same conversation, same memory, whether you open the terminal or message it from Feishu.
+- **Talk to it on Feishu; run it from your terminal.** The agent lives in the channels — message it from a Feishu DM, group, or topic thread. The terminal is the admin console for the daemon (pairing, sandbox, cost, rules), not an agent chat.
 - **Let it actually do things.** It writes and edits files, runs shell commands, fetches web pages, and calls your MCP servers — inside a sandbox so it can't touch the rest of your machine.
 - **Approve risky actions in plain language.** When the model wants to do something irreversible, you see a clear yes/no — or pick "approve everything like this" once and move on.
 - **Keep long work coherent.** It remembers project conventions, things you've corrected, ongoing tasks, and pulls the right notes back into context when they matter — even after the conversation has been auto-compacted.
@@ -47,7 +47,7 @@ Drop a minimal `~/.lightclaw/config.json` to get started — see [Configuration]
 }
 ```
 
-On first interactive launch, LightClaw creates the single v1 admin identity. Later terminal launches auto-resume the latest session for that user.
+On first launch, LightClaw creates the single v1 admin identity bound to the terminal user. Every later launch starts the daemon (channels + the admin console) for that admin.
 
 To put state on shared storage instead of `~/.lightclaw` (e.g. so a cluster dev box reset doesn't wipe your sessions / memory / identities), point `LIGHTCLAW_HOME` at a network mount before starting:
 
@@ -219,13 +219,15 @@ Sibling files in the same directory:
 
 ```bash
 lightclaw
-lightclaw --prompt "Help me plan today"
-lightclaw --resume
-lightclaw --resume <session-id>
+lightclaw --home <dir>
 lightclaw --help
 ```
 
-Removed Phase 9 CLI flags are now config/env driven:
+`lightclaw` starts the daemon: the enabled channels plus a slash-only
+terminal admin console. The terminal does not run an interactive agent
+session — reach the agent through Feishu.
+
+Removed CLI flags are now config/env driven:
 
 - Models: `~/.lightclaw/config.json` (`endpoints` + `models` registry, `defaultModel`); `LIGHTCLAW_MODEL` overrides defaultModel by display name
 - Feature toggles: `LIGHTCLAW_NO_MEMORY=1`, `LIGHTCLAW_NO_MCP=1`, `LIGHTCLAW_NO_HOOKS=1`
@@ -246,9 +248,9 @@ User-visible commands:
 | `/model <name>` | Switch the model the assistant is using. |
 | `/mode <mode>` | Switch how strict permission checks are. |
 | `/rules` | List numbered rules, revoke by index, or register an ASK rule (see below). |
-| `/fresh <prompt>` | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
-| `/branch <prompt>` (alias `/b`) | Spawn a parallel branch off the current session; the main turn keeps running, branch result merges back. |
-| `/stop` | Abort the in-flight turn for the current session only. Branches and fresh runs are independent and not cancelled. |
+| `/fresh <prompt>` (Feishu only) | Run an ephemeral one-shot session — no memory recall, no transcript persistence. |
+| `/branch <prompt>` (alias `/b`, Feishu only) | Spawn a parallel branch off the current session; the main turn keeps running, branch result merges back. |
+| `/stop` (Feishu only) | Abort the in-flight turn for the current session only. Branches and fresh runs are independent and not cancelled. |
 | `/feedback <text>` (user-only on channels) | Send feedback to admin; admin reads via `/user feedback`. |
 | `/auth import codex` | Register a Codex OAuth token so OpenAI-Auth models can use it without an API key. |
 
@@ -261,7 +263,7 @@ Admin-only commands:
 | `/sandbox [status|prefetch|reset]` | Inspect / re-pull / reset the runtime sandbox image and container. |
 | `/cost` | This-month token usage by-model + by-user (with cache hit / fresh subset). |
 
-Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account.
+Channel messages that begin with `/` are dispatched locally too, so the admin can approve a pairing code from their own Feishu account. The terminal admin console runs the same commands except the agent-loop ones (`/fresh`, `/branch` / `/b`, `/stop`) — those only make sense where a query actually runs, i.e. on Feishu.
 
 ### Permission Modes And Ceiling
 
@@ -427,10 +429,10 @@ Selected environment variables (override the matching `config.json` keys):
 
 ```text
 src/
-├── cli.ts              # tiny CLI surface, auto-resume, channel auto-start
+├── cli.ts              # tiny CLI surface, channel auto-start, admin console
 ├── init.ts             # config + workspace-scoped state initialization
 ├── init-wizard.ts      # first-run admin setup, terminal user resolution
-├── repl.ts             # readline REPL + slash dispatch
+├── repl.ts             # slash-only terminal admin console
 ├── query.ts            # main agent loop (tool dispatch, auto-compact)
 ├── prompt.ts           # system prompt builder
 ├── state.ts            # process-level session state singleton
