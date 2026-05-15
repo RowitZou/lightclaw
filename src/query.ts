@@ -1,4 +1,3 @@
-import type { Interface } from 'node:readline/promises'
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat } from './api.js'
@@ -87,18 +86,22 @@ import { toolResultContentToText } from './types.js'
 import type { WakeNotifyResult } from './background-task/types.js'
 
 /**
- * QueryMode selects orchestration behavior that differs between the REPL
- * (interactive), AgentTool subagents (subagent), and channel daemons like
- * feishu (channel). It drives whether auto-compact / auto-memory run and
- * whether the permission layer may invoke an interactive REPL prompt.
+ * QueryMode selects orchestration behavior that differs between AgentTool
+ * subagents (subagent) and channel daemons like Feishu (channel). It drives
+ * whether auto-compact / auto-memory run.
  *
- * | mode        | autoCompact | autoMemory | REPL prompt |
- * |-------------|:-----------:|:----------:|:-----------:|
- * | interactive |      ✓      |     ✓      |  ✓ (if rl)  |
- * | subagent    |      ✗      |     ✗      |      ✗      |
- * | channel     |      ✓      |     ✓      |      ✗      |
+ * | mode     | autoCompact | autoMemory |
+ * |----------|:-----------:|:----------:|
+ * | subagent |      ✗      |     ✗      |
+ * | channel  |      ✓      |     ✓      |
+ *
+ * After Phase 37 the terminal no longer runs `query()` — the old
+ * `'interactive'` mode that wired the readline ASK was removed alongside
+ * the terminal agent loop, and every caller of `query()` now passes `mode`
+ * explicitly. No default is provided so a future caller cannot silently
+ * inherit the wrong orchestration profile.
  */
-export type QueryMode = 'interactive' | 'subagent' | 'channel'
+export type QueryMode = 'subagent' | 'channel'
 
 type QueryParams = {
   messages: Message[]
@@ -125,16 +128,15 @@ type QueryParams = {
   onCompactStart?(): void
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
-  /** Defaults to 'interactive'. */
-  mode?: QueryMode
-  rl?: Interface
+  /** Required. Every caller passes one of the two QueryMode values explicitly. */
+  mode: QueryMode
   /** Replaces the default system prompt entirely (used by subagents). */
   systemPrompt?: string
   /** Prepended to the default system prompt when provided (used by channels). */
   channelContext?: string
   /** Drains mid-flight channel interjections at the next tool boundary. */
   interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
-  /** Async permission UI for non-REPL channels such as Feishu cards. */
+  /** Async permission UI for channels such as Feishu cards. */
   permissionApprover?: PermissionApprover
   /** Function-based tool gate used by forked agents before permission policy. */
   canUseTool?: CanUseToolFn
@@ -166,7 +168,6 @@ type DispatchContext = {
   allTools: Tool[]
   deferredTools: Tool[]
   mode: QueryMode
-  rl?: Interface
   permissionApprover?: PermissionApprover
   onToolResult?(event: ToolExecutionEvent): void
   maxToolOutputBytes: number
@@ -253,7 +254,7 @@ export async function query(params: QueryParams): Promise<{
   // operators can opt into a global ceiling via config.maxTurns.
   const maxTurns =
     params.maxTurns ?? config.maxTurns ?? Number.POSITIVE_INFINITY
-  const mode: QueryMode = params.mode ?? 'interactive'
+  const mode: QueryMode = params.mode
   const messages = [...params.messages]
   const assistantTexts: string[] = []
   let stopReason: string | null = null
@@ -543,7 +544,6 @@ export async function query(params: QueryParams): Promise<{
     allTools: params.tools,
     deferredTools: [],
     mode,
-    rl: params.rl,
     permissionApprover: params.permissionApprover,
     onToolResult: params.onToolResult,
     maxToolOutputBytes: config.maxToolOutputBytes,
@@ -1008,7 +1008,6 @@ async function dispatchToolCall(
       tool,
       toolInput: effectiveInput,
       ctx: {
-        isInteractive: ctx.mode === 'interactive' && ctx.rl !== undefined,
         isSubagent: ctx.mode === 'subagent',
         signal: ctx.signal,
         permissionApprover: ctx.permissionApprover,
@@ -1016,7 +1015,6 @@ async function dispatchToolCall(
         taskAllowedTools: sessionCtx?.taskAllowedTools,
         onPermissionDenial: sessionCtx?.onPermissionDenial,
       },
-      rl: ctx.rl,
     })
 
     if (decision.behavior === 'deny') {

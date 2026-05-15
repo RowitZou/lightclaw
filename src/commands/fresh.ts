@@ -18,6 +18,11 @@ import type { Message, UserContentBlock } from '../types.js'
  * cacheSafeParams snapshotting and runs through the regular query() path
  * with the noAutoMemory + ephemeral flags.
  *
+ * `/fresh` itself is marked `channelOnly` since Phase 37, so this runner
+ * always executes in channel context — the previous terminal branch
+ * (`mode: 'interactive'`, `getAllTools('terminal')`) was unreachable and
+ * removed.
+ *
  * Permission mode is inherited from the caller's current state. Auto-memory
  * and auto-compact paths are skipped at the query.ts gates that read these
  * flags. The transcript built up inside this fresh turn lives only in the
@@ -27,25 +32,21 @@ import type { Message, UserContentBlock } from '../types.js'
 export async function runFresh(args: {
   config: LightClawConfig
   prompt: string
-  isChannel: boolean
   /** Fully-shaped user message content built by the channel runner — text
    *  with sender prefix + `<quoted-message>` (or `<quoted-message-unavailable>`)
    *  + `[媒体附件]` path breadcrumb, plus any inline content blocks. When
    *  supplied, used verbatim as the synthetic user message so the fresh
    *  sub-session inherits the original reply-quote + attachment context.
-   *  When undefined (terminal mode or no channel pre-formatting), we fall
-   *  back to the plain `prompt` string. */
+   *  When undefined (no channel pre-formatting available), falls back to the
+   *  plain `prompt` string. */
   channelUserMessageContent?: string | UserContentBlock[]
 }): Promise<string> {
-  const { config, prompt, isChannel, channelUserMessageContent } = args
+  const { config, prompt, channelUserMessageContent } = args
   beginQuery()
   const userContent: string | UserContentBlock[] =
     channelUserMessageContent ?? prompt
   const messages: Message[] = [createUserMessage(userContent, null)]
-  const tools = getEnabledTools(
-    getProvider(config),
-    getAllTools(isChannel ? 'feishu' : 'terminal'),
-  )
+  const tools = getEnabledTools(getProvider(config), getAllTools('feishu'))
   // Phase 29 isolation: /fresh is an independent ephemeral session and must
   // not inherit the parent main session's `discoveredTools`. Without this
   // wrap, the fresh turn would see the parent's promoted MCP tools as
@@ -56,7 +57,7 @@ export async function runFresh(args: {
     config,
     messages,
     tools,
-    mode: isChannel ? 'channel' : 'interactive',
+    mode: 'channel',
     noAutoMemory: true,
     ephemeral: true,
   })

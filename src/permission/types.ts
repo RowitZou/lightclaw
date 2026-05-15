@@ -52,7 +52,6 @@ export type PermissionApprover = {
 }
 
 export type PermissionContext = {
-  isInteractive: boolean
   isSubagent: boolean
   signal?: AbortSignal
   permissionApprover?: PermissionApprover
