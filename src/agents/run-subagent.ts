@@ -4,7 +4,7 @@ import { getProvider } from '../provider/index.js'
 import { getCurrentUserId, getRuntime } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import type { AgentDefinition, AgentType } from './types.js'
+import type { AgentDefinition, AgentType, WorkerFailure, WorkerFailureReason } from './types.js'
 import { getAgent } from './registry.js'
 import {
   createCacheSafeParams,
@@ -82,14 +82,18 @@ export async function runSubagent(params: {
   // (autoDream) source their cap from a user-tunable config knob, so they
   // pass it explicitly rather than baking it into the AgentDefinition.
   maxTurnsOverride?: number
-}): Promise<{ finalText: string; stopReason: string | null }> {
+}): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)
   if (!agent) {
-    throw new Error(`Unknown agent: ${params.agentType}`)
+    return subagentFailure('tool-unavailable', `Unknown agent: ${params.agentType}`, {
+      kind: 'give-up',
+      detail: 'Pick one of the available subagent types.',
+    })
   }
   if (agent.kind === 'internal' && !params.canUseToolOverride) {
-    throw new Error(
+    return subagentFailure('tool-unavailable',
       `Internal subagent "${params.agentType}" requires canUseToolOverride; default user-facing gate would deny MemoryWrite.`,
+      { kind: 'give-up' },
     )
   }
 
@@ -128,21 +132,95 @@ export async function runSubagent(params: {
   // with Claude Code, which has no documented default for Task subagents).
   const subagentMaxTurns =
     params.maxTurnsOverride ?? agent.maxTurns ?? config.subagentMaxTurns
-  const result = await runForkedAgent({
-    promptText: params.prompt,
-    cacheSafeParams,
-    canUseTool:
-      params.canUseToolOverride ?? createSubagentCanUseTool(agent.tools),
-    ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
-    label:
-      agent.kind === 'internal'
-        ? params.agentType
-        : `subagent_${params.agentType}`,
-    signal: params.signal,
-  })
+  try {
+    const result = await runForkedAgent({
+      promptText: params.prompt,
+      cacheSafeParams,
+      canUseTool:
+        params.canUseToolOverride ?? createSubagentCanUseTool(agent.tools),
+      ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
+      label:
+        agent.kind === 'internal'
+          ? params.agentType
+          : `subagent_${params.agentType}`,
+      signal: params.signal,
+    })
 
-  return {
-    finalText: result.finalText,
-    stopReason: result.stopReason,
+    return {
+      kind: 'success',
+      finalText: result.finalText,
+      stopReason: result.stopReason,
+    }
+  } catch (error) {
+    return subagentFailureForError(error, params.signal)
   }
+}
+
+export type RunSubagentResult =
+  | { kind: 'success'; finalText: string; stopReason: string | null }
+  | { kind: 'failure'; envelope: WorkerFailure }
+
+function subagentFailure(
+  reason: WorkerFailureReason,
+  message: string,
+  suggestedAction?: WorkerFailure['suggested_action'],
+  partialResult?: string,
+): RunSubagentResult {
+  return {
+    kind: 'failure',
+    envelope: {
+      status: 'failed',
+      reason,
+      message,
+      ...(partialResult ? { partial_result: partialResult } : {}),
+      ...(suggestedAction ? { suggested_action: suggestedAction } : {}),
+    },
+  }
+}
+
+function subagentFailureForError(
+  error: unknown,
+  signal?: AbortSignal,
+): RunSubagentResult {
+  const message = error instanceof Error ? error.message : String(error)
+  if (signal?.aborted || isAbortLikeError(error)) {
+    return subagentFailure('aborted', message || 'Subagent was aborted.', {
+      kind: 'retry-with-narrower-scope',
+      detail: 'The caller may retry if the task is still needed.',
+    })
+  }
+  if (/Exceeded maximum tool turns/i.test(message)) {
+    return subagentFailure('max-turns-exceeded', message, {
+      kind: 'retry-with-narrower-scope',
+      detail: 'Reduce scope or increase the subagent turn cap.',
+    })
+  }
+  return subagentFailure('other', message, { kind: 'ask-user' })
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return error.name === 'AbortError' || /aborted|abort/i.test(error.message)
+}
+
+export function formatWorkerFailureForToolResult(envelope: WorkerFailure): string {
+  const lines = [
+    `**Failed**: ${envelope.reason}`,
+    `Message: ${envelope.message}`,
+  ]
+  if (envelope.partial_result) {
+    lines.push('', 'Partial result:', envelope.partial_result)
+  }
+  if (envelope.suggested_action) {
+    lines.push(
+      '',
+      `Suggested action: ${envelope.suggested_action.kind}` +
+        (envelope.suggested_action.detail
+          ? ` — ${envelope.suggested_action.detail}`
+          : ''),
+    )
+  }
+  return lines.join('\n')
 }

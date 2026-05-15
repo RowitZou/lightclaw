@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { getAllAgents } from '../agents/registry.js'
-import { runSubagent } from '../agents/run-subagent.js'
+import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
 import type { AgentType } from '../agents/types.js'
 import { buildTool } from '../tool.js'
 
@@ -75,6 +75,12 @@ export const agentTool = buildTool({
       prompt: input.prompt,
       signal: context.abortSignal,
     })
+
+    if (result.kind === 'failure') {
+      return {
+        output: formatWorkerFailureForToolResult(result.envelope),
+      }
+    }
 
     return {
       output: result.finalText || '(subagent returned empty text)',

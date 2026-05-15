@@ -17,7 +17,8 @@ import {
   saveCacheSafeParams,
   type CacheSafeParams,
 } from '../../agents/cache-safe-params.js'
-type SubagentResult = { finalText: string; stopReason: string | null }
+import type { RunSubagentResult } from '../../agents/run-subagent.js'
+type SubagentResult = RunSubagentResult
 import type { LightClawConfig } from '../../config.js'
 import { setExtractionInProgressForTest } from '../extract.js'
 import { consolidationLockPath, tryAcquireConsolidationLock } from './lock.js'
@@ -439,6 +440,7 @@ function fakeCacheSafeParams(): CacheSafeParams {
 
 function fakeForkResult(): SubagentResult {
   return {
+    kind: 'success',
     finalText: '',
     stopReason: 'end_turn',
   }
