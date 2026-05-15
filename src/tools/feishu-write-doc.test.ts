@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -402,7 +402,7 @@ describe('FeishuWriteDoc tool', () => {
     assert.equal(records.at(-1)?.operation, 'delete-doc-table-rows')
   })
 
-  it('uploads doc images and files with one-shot upload confirmation', async () => {
+  it('uploads doc images and files with dedicated upload confirmation', async () => {
     let askInput: PermissionAskInput | undefined
     let readArgs: unknown
     let uploadArgs: unknown
@@ -507,6 +507,60 @@ describe('FeishuWriteDoc tool', () => {
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'upload-doc-image')
     assert.equal(records[1].operation, 'upload-doc-file')
+  })
+
+  it('short-circuits doc media upload when a FeishuUploadConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteDoc(
+          {
+            document_id: 'docMediaAllowed',
+            action: 'upload_image',
+            file_path: '/workspace/chart.png',
+            filename: 'chart.png',
+          },
+          {
+            client,
+            readLocalMedia: async () => ({ content: Buffer.from('image-bytes'), name: 'chart.png' }),
+            uploadImage: async input => ({
+              documentId: input.documentId,
+              action: 'upload_image',
+              blockId: 'imgAllowed',
+              fileToken: 'tok_allowed',
+              fileName: input.fileName,
+              size: input.content.byteLength,
+            }),
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when upload is covered by FeishuUploadConfirm')
+    assert.deepEqual(result.output, {
+      document_id: 'docMediaAllowed',
+      url: 'https://feishu.cn/docx/docMediaAllowed',
+      action: 'upload_image',
+      block_id: 'imgAllowed',
+      file_token: 'tok_allowed',
+      file_name: 'chart.png',
+      size: 11,
+    })
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].operation, 'upload-doc-image')
+    assert.equal(records[0].status, 'confirmed')
   })
 
   it('enforces input invariant and Feishu tool metadata', () => {

@@ -650,7 +650,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
 export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
   name: 'FeishuWriteDoc',
   description:
-    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted. Omitting action keeps legacy plain-text append. replace/delete/destructive table structure/upload actions use stricter one-shot confirmation. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
+    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. replace/delete/destructive table structure actions use stricter one-shot confirmation. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -1833,15 +1833,16 @@ export async function requireFeishuWriteConfirmation(input: {
   const askBody = { operation: input.operation, resource: input.resource, preview: input.preview }
   const mode = getPermissionMode()
 
-  // Honor identity-level "always allow" rules for FeishuWriteConfirm. Without
-  // this short-circuit, FeishuCreateFile / WriteDoc / WriteSheet / CreateFolder
-  // / Move always render an approval card even after the user already picked
-  // "以后都允许" on a prior ask — requireFeishuWriteConfirmation called
-  // approver.ask directly, bypassing requestPermission's evaluatePermission
-  // gate that every other write tool routes through. FeishuDeleteConfirm
-  // intentionally never short-circuits: delete is high-risk per CLAUDE.md
-  // ("FeishuDeleteConfirm is forced to once-only" — isHighRiskAsk hides the
-  // 以后都允许 button on the card, but defense-in-depth here too).
+  // Honor identity-level "always allow" rules for grantable Feishu virtual
+  // confirms. Without this short-circuit, FeishuCreateFile / WriteDoc /
+  // WriteSheet / CreateFolder / Upload always render an approval card even
+  // after the user already picked "以后都允许" on a prior ask —
+  // requireFeishuWriteConfirmation called approver.ask directly, bypassing
+  // requestPermission's evaluatePermission gate that every other write tool
+  // routes through. Destructive one-shot confirms intentionally never
+  // short-circuit: delete / whole-doc replace / move / table-structure /
+  // sheet destructive operations are high-risk per CLAUDE.md; isHighRiskAsk
+  // hides the 以后都允许 button on the card, and this is defense-in-depth.
   if (!isOneShotFeishuOperation(input.operation)) {
     const userId = getCurrentUserId()
     if (userId) {
@@ -1972,9 +1973,6 @@ function isOneShotFeishuOperation(operation: FeishuWriteOperation): boolean {
     operation === 'overwrite-sheet-range' ||
     operation === 'clear-sheet-range' ||
     operation === 'delete-sheet' ||
-    operation === 'upload-file' ||
-    operation === 'upload-doc-image' ||
-    operation === 'upload-doc-file' ||
     operation === 'delete-doc-table-rows' ||
     operation === 'delete-doc-table-columns' ||
     operation === 'merge-doc-table-cells' ||

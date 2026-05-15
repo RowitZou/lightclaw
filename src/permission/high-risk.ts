@@ -171,16 +171,15 @@ export function containsHighRiskRule(rules: PermissionRuleValue[]): boolean {
  */
 export function isHighRiskAsk(ask: PermissionAskInput): boolean {
   // Destructive Feishu writes stay one-shot: delete, move, whole-document
-  // replace, and table structure mutations have a wider blast radius than
-  // append/create writes, so the UI must hide the "always allow" path for
-  // these virtual approval tools.
+  // replace, and table/sheet structure mutations have a wider blast radius
+  // than append/create/upload writes, so the UI must hide the "always allow"
+  // path for these virtual approval tools.
   if (
     ask.toolName === 'FeishuDeleteConfirm' ||
     ask.toolName === 'FeishuReplaceDocConfirm' ||
     ask.toolName === 'FeishuTableStructureConfirm' ||
     ask.toolName === 'FeishuMoveConfirm' ||
-    ask.toolName === 'FeishuSheetDestructiveConfirm' ||
-    ask.toolName === 'FeishuUploadConfirm'
+    ask.toolName === 'FeishuSheetDestructiveConfirm'
   ) {
     return true
   }

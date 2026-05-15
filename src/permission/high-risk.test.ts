@@ -247,12 +247,11 @@ describe('isHighRiskAsk (top-level driver)', () => {
     )
   })
 
-  it('TRUE for Feishu table/sheet/move/upload one-shot approval asks', () => {
+  it('TRUE for Feishu table/sheet/move one-shot approval asks', () => {
     for (const toolName of [
       'FeishuTableStructureConfirm',
       'FeishuSheetDestructiveConfirm',
       'FeishuMoveConfirm',
-      'FeishuUploadConfirm',
     ]) {
       assert.equal(
         isHighRiskAsk(ask({
@@ -266,6 +265,23 @@ describe('isHighRiskAsk (top-level driver)', () => {
         `${toolName} should be high-risk`,
       )
     }
+  })
+
+  it('FALSE for FeishuUploadConfirm virtual approval asks', () => {
+    assert.equal(
+      isHighRiskAsk(ask({
+        toolName: 'FeishuUploadConfirm',
+        riskLevel: 'write',
+        input: {
+          operation: 'upload-file',
+          resource: { file_path: '/workspace/report.pdf' },
+          preview: 'Upload file.',
+        },
+        inputPreview: 'Upload file.',
+        suggestedRules: [{ toolName: 'FeishuUploadConfirm' }],
+      })),
+      false,
+    )
   })
 
   it('TRUE when suggested rules contain a high-risk rule', () => {

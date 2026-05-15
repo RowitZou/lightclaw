@@ -208,7 +208,7 @@ describe('FeishuCreateFile tool', () => {
     assert.equal(records[0].operation, 'create-sheet')
   })
 
-  it('uploads local files with one-shot upload confirmation and drive grants', async () => {
+  it('uploads local files with dedicated upload confirmation and drive grants', async () => {
     const grantCalls: Array<{ memberType: string; memberId: string; perm: string }> = []
     let askInput: PermissionAskInput | undefined
     const result = await withFeishuSession({
@@ -587,6 +587,57 @@ describe('FeishuCreateFile tool', () => {
     // single merged record after grants land.
     assert.equal(records.length, 1)
     assert.equal(records[0].operation, 'create-doc')
+    assert.equal(records[0].status, 'confirmed')
+  })
+
+  it('short-circuits file upload when a FeishuUploadConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
+      'utf8',
+    )
+    let askCount = 0
+    const result = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuCreateFile(
+          {
+            kind: 'file',
+            title: 'report.pdf',
+            file: { path: '/workspace/report.pdf' },
+          },
+          {
+            client,
+            readLocalFile: async () => ({ content: Buffer.from('pdf'), name: 'report.pdf' }),
+            uploadFile: async input => ({
+              fileToken: 'fileAllowed',
+              size: input.content.byteLength,
+              chunks: 1,
+            }),
+            grantDriveFile: async () => ({ ok: true }),
+            resolveOwnerOpenId: async () => 'ou_alice',
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when upload is covered by FeishuUploadConfirm')
+    assert.deepEqual(result.output, {
+      file_token: 'fileAllowed',
+      url: 'https://feishu.cn/file/fileAllowed',
+      title: 'report.pdf',
+      size: 3,
+      chunks: 1,
+      permission_grants: { chat: 'skipped-not-group', user: 'full_access' },
+    })
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].operation, 'upload-file')
     assert.equal(records[0].status, 'confirmed')
   })
 
