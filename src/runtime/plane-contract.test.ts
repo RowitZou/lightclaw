@@ -177,6 +177,9 @@ describe('Runtime plane contract — DockerRuntime', () => {
       // (let backend's toContainerPath natural error reject those).
       assert.equal(runtime.paths.isAllowed('/workspace/foo.txt', 'write'), true)
       assert.equal(runtime.paths.isAllowed('/etc/passwd', 'read'), true)
+      // Out-of-mount paths still flow through the layered DataPlane: bind-mount
+      // self-filters, exec-relay accepts them and runs the command inside the
+      // container. PathPolicy is only the ro-mount write gate.
       assert.equal(runtime.paths.isAllowed('/workspace/../etc/passwd', 'read'), true)
     } finally {
       rmSync(hostRoot, { recursive: true, force: true })
@@ -205,6 +208,8 @@ describe('Runtime plane contract — RlaunchRuntime', () => {
       workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
       workspaceContainerPath: '/workspace',
       env: {},
+      daemonUid: 1000,
+      daemonGid: 1000,
     }
   }
 
@@ -236,8 +241,10 @@ describe('Runtime plane contract — RlaunchRuntime', () => {
       assert.equal(runtime.paths.isShared('/etc/passwd'), false)
       assert.equal(runtime.paths.isAllowed('/workspace/x.pdf', 'write'), true)
       assert.equal(runtime.paths.isAllowed('/etc/passwd', 'read'), true)
-      // Traversal is NOT pre-empted at the policy layer (Phase 33 zero
-      // behavior change contract — let toContainerPath natural error fire).
+      // PathPolicy is only the ro-mount write gate; out-of-mount and
+      // post-normalize absolute paths flow through to exec-relay inside the
+      // container. Sandbox isolation + permission system are the actual safety
+      // boundary (CLAUDE.md "Runtime Safety Notes").
       assert.equal(runtime.paths.isAllowed('/workspace/../etc/passwd', 'read'), true)
     } finally {
       rmSync(hostRoot, { recursive: true, force: true })

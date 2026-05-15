@@ -114,11 +114,13 @@ test('LayeredDataPlane blocks writes to read-only mounts before any layer runs',
   assert.equal(writeCalled, false)
 })
 
-test('LayeredDataPlane lets traversal fall through to the last layer natural error', async () => {
-  // Phase 33 contract: LayeredDataPlane does NOT pre-empt `..` traversal at
-  // the policy layer — it propagates the legacy "Path is not within ..."
-  // message from each backend's path-translation step. We model that by
-  // having the exec-relay layer throw the legacy text and confirm it bubbles.
+test('LayeredDataPlane propagates the last layer fatal error after earlier layers opt out', async () => {
+  // When bind-mount (or shared-cluster-fs) signals "not applicable" and the
+  // exec-relay layer hits a real fatal error (ENOENT, EACCES, …), the layered
+  // wrapper must surface the fatal text verbatim — no swallowing, no
+  // re-wrapping. Pre-Phase-33 this also covered the workspace-guard reject
+  // text; that guard is now gone (toContainerPath accepts /tmp, /etc, …) but
+  // the bubbling contract still matters for legitimate filesystem errors.
   const data = new LayeredDataPlane([
     fakePlane({
       kind: 'bind-mount',
@@ -129,13 +131,15 @@ test('LayeredDataPlane lets traversal fall through to the last layer natural err
     fakePlane({
       kind: 'exec-relay',
       readFile: async () => {
-        throw new Error('Path is not within FakeRuntime workspace: /workspace/../etc/passwd')
+        const err = new Error('readFile /tmp/missing: ENOENT') as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
       },
     }),
   ], policy)
 
   await assert.rejects(
-    () => data.readFile('/workspace/../etc/passwd'),
-    /Path is not within FakeRuntime workspace/,
+    () => data.readFile('/tmp/missing'),
+    /ENOENT/,
   )
 })
