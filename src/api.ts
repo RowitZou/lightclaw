@@ -51,6 +51,7 @@ export async function* streamChat(
   // continues to record the display name on the log record so traces stay
   // aligned with what the user sees in `/model` and routing config.
   const { provider, entry } = getProviderFor(config, rest.model)
+  const baseUrl = config.endpoints[entry.endpoint]?.baseUrl
 
   // Finalize tool_result image blocks: providers that don't accept image
   // inside tool_result (OpenAI Chat / Responses) get image→describe-text
@@ -64,6 +65,7 @@ export async function* streamChat(
     finalizedMessages = await finalizeToolResultBlocks(rest.messages, {
       provider,
       endpoint: entry.endpoint,
+      endpointBaseUrl: baseUrl,
       upstreamModel: entry.upstreamModel,
       config,
       describeAdapter: ({ images }) =>
@@ -90,6 +92,7 @@ export async function* streamChat(
           },
         }),
       describeEndpoint: describeRoute.endpoint,
+      describeEndpointBaseUrl: describeRoute.baseUrl,
       describeUpstreamModel: describeRoute.upstreamModel,
       signal: rest.signal,
       // Optional: handed to documentDowngrade so it can render PDF pages
@@ -124,6 +127,7 @@ export async function* streamChat(
     }
     resetAllFailureCountersFor({
       endpoint: entry.endpoint,
+      baseUrl,
       upstreamModel: entry.upstreamModel,
     })
     return
@@ -145,6 +149,7 @@ export async function* streamChat(
     }
     resetAllFailureCountersFor({
       endpoint: entry.endpoint,
+      baseUrl,
       upstreamModel: entry.upstreamModel,
     })
   } catch (error) {
@@ -311,6 +316,7 @@ export function resolveDescribeRoute(input?: {
   config?: LightClawConfig
 }): {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   describeImage: NonNullable<
     ReturnType<typeof getProviderFor>['provider']['describeImage']
@@ -331,6 +337,7 @@ export function resolveDescribeRoute(input?: {
   }
   return {
     endpoint: entry.endpoint,
+    baseUrl: config.endpoints[entry.endpoint]?.baseUrl,
     upstreamModel: entry.upstreamModel,
     describeImage: provider.describeImage.bind(provider),
     provider,
@@ -437,6 +444,7 @@ export function resolveWebFetchSummarizeRoute(input?: {
   config?: LightClawConfig
 }): {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   displayModel: string
   provider: ReturnType<typeof getProviderFor>['provider']
@@ -452,6 +460,7 @@ export function resolveWebFetchSummarizeRoute(input?: {
   const { provider, entry } = getProviderFor(config, displayModel)
   return {
     endpoint: entry.endpoint,
+    baseUrl: config.endpoints[entry.endpoint]?.baseUrl,
     upstreamModel: entry.upstreamModel,
     displayModel,
     provider,

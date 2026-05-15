@@ -623,6 +623,7 @@ export class ChannelRunner {
           appConfig,
           appConfig.routing.main ?? appConfig.model,
         )
+        const providerBaseUrl = appConfig.endpoints[providerEntry.endpoint]?.baseUrl
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
@@ -812,6 +813,7 @@ export class ChannelRunner {
                 capabilityFlipped.add(`${missingSignal.kind}@${position}`)
                 const counter = incrementFailureCounter({
                   endpoint: providerEntry.endpoint,
+                  baseUrl: providerBaseUrl,
                   upstreamModel: providerEntry.upstreamModel,
                   kind: missingSignal.kind,
                   position,
@@ -822,6 +824,7 @@ export class ChannelRunner {
                   // routes to text-breadcrumb fallback (existing pattern).
                   writeCacheEntry({
                     endpoint: providerEntry.endpoint,
+                    baseUrl: providerBaseUrl,
                     upstreamModel: providerEntry.upstreamModel,
                     kind: missingSignal.kind,
                     position,
@@ -857,6 +860,7 @@ export class ChannelRunner {
               if (userMessageCounterKept) {
                 writeCacheEntry({
                   endpoint: providerEntry.endpoint,
+                  baseUrl: providerBaseUrl,
                   upstreamModel: providerEntry.upstreamModel,
                   kind: missingSignal.kind,
                   position: 'inUserMessage',
@@ -1645,6 +1649,7 @@ async function encodeAttachmentsForInlineForSession(input: {
     attachments: input.materialized,
     provider,
     endpoint: entry.endpoint,
+    endpointBaseUrl: input.config.endpoints[entry.endpoint]?.baseUrl,
     upstreamModel: entry.upstreamModel,
     runtime: input.runtime,
     config: input.config,

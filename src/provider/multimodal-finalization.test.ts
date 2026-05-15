@@ -88,6 +88,7 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => {
@@ -95,6 +96,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: 'should not run' }
       },
       describeEndpoint: 'e',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'm',
     })
     assert.equal(out, messages, 'identity passthrough')
@@ -121,6 +123,7 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => {
@@ -128,6 +131,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: 'never' }
       },
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
     })
     assert.equal(out, messages, 'no transform when cache is unset for anthropic')
@@ -135,6 +139,7 @@ describe('finalizeToolResultImageBlocks', () => {
 
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inToolResult',
@@ -143,6 +148,7 @@ describe('finalizeToolResultImageBlocks', () => {
     const out2 = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => {
@@ -150,6 +156,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: 'never' }
       },
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
     })
     assert.equal(out2, messages)
@@ -158,6 +165,7 @@ describe('finalizeToolResultImageBlocks', () => {
   it('replaces Anthropic image blocks when image cache is false', async () => {
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inToolResult',
@@ -183,6 +191,7 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async ({ images }) => {
@@ -190,6 +199,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: `described ${images.length} images` }
       },
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
     })
     assert.equal(described, 1, 'batch describe call once for two consecutive image blocks')
@@ -209,6 +219,7 @@ describe('finalizeToolResultImageBlocks', () => {
     // to false. The finalizer keys off that cache fact, not provider name.
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inToolResult',
@@ -230,6 +241,7 @@ describe('finalizeToolResultImageBlocks', () => {
     await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('openai'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => {
@@ -237,6 +249,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: 'descr' }
       },
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
     })
     assert.equal(described, 1)
@@ -249,6 +262,7 @@ describe('finalizeToolResultImageBlocks', () => {
     // pages + visual:true to recover the visual content as image pages.
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'pdf',
       position: 'inToolResult',
@@ -279,10 +293,12 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('openai'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => ({ text: 'never' }),
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
       // No runtime → documentDowngrade falls back to text marker.
     })
@@ -301,6 +317,7 @@ describe('finalizeToolResultImageBlocks', () => {
   it('downgrades document blocks via pdftoppm to image blocks when runtime is provided', async () => {
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'pdf',
       position: 'inToolResult',
@@ -366,10 +383,12 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('openai'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => ({ text: 'never' }),
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
       runtime: fakeRuntime,
     })
@@ -392,6 +411,7 @@ describe('finalizeToolResultImageBlocks', () => {
     // per-call override.
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'pdf',
       position: 'inToolResult',
@@ -417,10 +437,12 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async () => ({ text: 'never' }),
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
       forceFallbackInToolResult: new Set<import('./types.js').AttachmentKind>(['pdf']),
       // No runtime → text marker fallback (still proves the override
@@ -436,6 +458,7 @@ describe('finalizeToolResultImageBlocks', () => {
   it('preserves order around mixed text + image sequences', async () => {
     writeCacheEntry({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       position: 'inToolResult',
@@ -464,6 +487,7 @@ describe('finalizeToolResultImageBlocks', () => {
     const out = await finalizeToolResultImageBlocks(messages, {
       provider: makeProvider('anthropic'),
       endpoint: 'e',
+      endpointBaseUrl: undefined,
       upstreamModel: 'm',
       config: dummyConfig,
       describeAdapter: async ({ images }) => {
@@ -471,6 +495,7 @@ describe('finalizeToolResultImageBlocks', () => {
         return { text: `desc-${images.length}` }
       },
       describeEndpoint: 'd',
+      describeEndpointBaseUrl: undefined,
       describeUpstreamModel: 'd',
     })
     // Two consecutive image segments → two batched describe calls

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 
@@ -81,8 +82,40 @@ function save(): void {
   }
 }
 
-function key(endpoint: string, upstreamModel: string): string {
-  return `${endpoint}:${upstreamModel}`
+/** 8-char SHA-256 prefix of the endpoint's `baseUrl` string. An empty /
+ *  undefined baseUrl (default endpoint) hashes the empty string so cache
+ *  hits across runs remain deterministic. */
+function endpointFingerprint(baseUrl: string | undefined): string {
+  return createHash('sha256').update(baseUrl ?? '').digest('hex').slice(0, 8)
+}
+
+/** Cache key shape: `${alias}|${fp(baseUrl)}|${upstreamModel}`.
+ *
+ *  Why baseUrl is in the key: an admin who repoints an existing alias in
+ *  `config.json` (same name, different baseUrl — e.g. flipping `newapi`
+ *  from a non-vision gateway to OpenAI direct) used to silently keep the
+ *  old `enabled:false` cache entry, so the new endpoint never got its
+ *  multimodal pre-charge re-run and the main loop quietly fell back to
+ *  text. Adding the fingerprint produces a fresh key on repoint; the old
+ *  entry orphans on disk (harmless) until `/model --clear-cache` or
+ *  the legacy-shape drop on load.
+ *
+ *  Why the alias is still in the key: same upstream model behind two
+ *  different aliases (`anthropic` direct vs `newapi` gateway) is
+ *  intentionally an independent cache row — endpoints can apply their
+ *  own per-message limits / vision support / etc. The alias keeps that
+ *  separation even when both point at the same baseUrl. */
+function key(endpoint: string, baseUrl: string | undefined, upstreamModel: string): string {
+  return `${endpoint}|${endpointFingerprint(baseUrl)}|${upstreamModel}`
+}
+
+/** Legacy keys were `${alias}:${upstreamModel}` (no fingerprint segment,
+ *  `:` separator). Drop them on load — they orphan after the cache-key
+ *  shape change since `key()` no longer produces a matching string.
+ *  precharge re-fills them on the next provider lookup, so the only
+ *  visible effect is one extra static-probe round-trip per model. */
+function isLegacyKey(modelKey: string): boolean {
+  return !modelKey.includes('|')
 }
 
 function normalizeEntry(value: unknown): CacheEntry | null {
@@ -98,6 +131,7 @@ function normalizeEntry(value: unknown): CacheEntry | null {
 function normalizeV2Flags(flags: CapabilityCacheShape['flags']): CapabilityCacheShape['flags'] {
   const out: CapabilityCacheShape['flags'] = {}
   for (const [modelKey, perKind] of Object.entries(flags)) {
+    if (isLegacyKey(modelKey)) continue
     const nextKind: Partial<Record<AttachmentKind, Partial<Record<AttachmentPosition, CacheEntry>>>> = {}
     for (const kind of ALL_KINDS) {
       const rawPerPosition = perKind[kind]
@@ -115,21 +149,13 @@ function normalizeV2Flags(flags: CapabilityCacheShape['flags']): CapabilityCache
 }
 
 function migrateV1Flags(
-  flags: NonNullable<LegacyCapabilityCacheShape['flags']>,
+  _flags: NonNullable<LegacyCapabilityCacheShape['flags']>,
 ): CapabilityCacheShape {
-  const out: CapabilityCacheShape['flags'] = {}
-  for (const [modelKey, perKind] of Object.entries(flags)) {
-    const nextKind: Partial<Record<AttachmentKind, Partial<Record<AttachmentPosition, CacheEntry>>>> = {}
-    for (const kind of ALL_KINDS) {
-      const verdict = perKind[kind]
-      if (typeof verdict !== 'boolean') continue
-      nextKind[kind] = {
-        inUserMessage: { enabled: verdict, failures: 0 },
-      }
-    }
-    if (Object.keys(nextKind).length > 0) out[modelKey] = nextKind
-  }
-  return { version: CACHE_FILE_VERSION, flags: out }
+  // v1 keys were `${alias}:${upstreamModel}` with no fingerprint segment —
+  // we can't bridge them into the new shape without the endpoint baseUrl,
+  // which v1 callers didn't pass. Drop everything; precharge re-fills on
+  // the next provider lookup. v1 files in the wild are rare at this point.
+  return { version: CACHE_FILE_VERSION, flags: {} }
 }
 
 function collapseEmptyModel(cache: CapabilityCacheShape, modelKey: string): void {
@@ -148,23 +174,25 @@ function collapseEmptyModel(cache: CapabilityCacheShape, modelKey: string): void
 
 export function readCacheEntry(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
   position: AttachmentPosition
 }): CacheEntry | null {
-  const entry = load().flags[key(input.endpoint, input.upstreamModel)]
+  const entry = load().flags[key(input.endpoint, input.baseUrl, input.upstreamModel)]
   return entry?.[input.kind]?.[input.position] ?? null
 }
 
 export function writeCacheEntry(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
   position: AttachmentPosition
   entry: CacheEntry
 }): void {
   const cache = load()
-  const k = key(input.endpoint, input.upstreamModel)
+  const k = key(input.endpoint, input.baseUrl, input.upstreamModel)
   cache.flags[k] ??= {}
   const perKind = cache.flags[k]
   const perPosition = perKind[input.kind] ?? {}
@@ -178,6 +206,7 @@ export function writeCacheEntry(input: {
 
 export function incrementFailureCounter(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
   position: AttachmentPosition
@@ -194,10 +223,11 @@ export function incrementFailureCounter(input: {
 
 export function resetAllFailureCountersFor(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
 }): void {
   const cache = load()
-  const k = key(input.endpoint, input.upstreamModel)
+  const k = key(input.endpoint, input.baseUrl, input.upstreamModel)
   const entry = cache.flags[k]
   if (!entry) return
   let changed = false
@@ -217,10 +247,11 @@ export function resetAllFailureCountersFor(input: {
 
 export function clearAllForModel(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
 }): boolean {
   const cache = load()
-  const k = key(input.endpoint, input.upstreamModel)
+  const k = key(input.endpoint, input.baseUrl, input.upstreamModel)
   if (!cache.flags[k]) return false
   delete cache.flags[k]
   save()
@@ -229,12 +260,13 @@ export function clearAllForModel(input: {
 
 export function clearCacheEntry(input: {
   endpoint: string
+  baseUrl: string | undefined
   upstreamModel: string
   kind: AttachmentKind
   position: AttachmentPosition
 }): boolean {
   const cache = load()
-  const k = key(input.endpoint, input.upstreamModel)
+  const k = key(input.endpoint, input.baseUrl, input.upstreamModel)
   const perKind = cache.flags[k]
   const perPosition = perKind?.[input.kind]
   if (!perPosition || !(input.position in perPosition)) {
@@ -380,4 +412,6 @@ export function _resetCacheForTests(): void {
 export const _internalForTests = {
   ALL_KINDS,
   cachePath,
+  endpointFingerprint,
+  isLegacyKey,
 }

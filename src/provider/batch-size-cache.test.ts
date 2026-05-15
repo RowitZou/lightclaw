@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -35,6 +35,7 @@ describe('readBatchCeiling / recordBatchCeiling', () => {
   it('returns null when nothing is cached', () => {
     const value = readBatchCeiling({
       endpoint: 'newapi',
+      baseUrl: undefined,
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
     })
@@ -44,6 +45,7 @@ describe('readBatchCeiling / recordBatchCeiling', () => {
   it('records and reads back a ceiling', () => {
     recordBatchCeiling({
       endpoint: 'newapi',
+      baseUrl: undefined,
       upstreamModel: 'claude-sonnet-4-6',
       kind: 'image',
       size: 5,
@@ -51,6 +53,7 @@ describe('readBatchCeiling / recordBatchCeiling', () => {
     assert.equal(
       readBatchCeiling({
         endpoint: 'newapi',
+        baseUrl: undefined,
         upstreamModel: 'claude-sonnet-4-6',
         kind: 'image',
       }),
@@ -61,48 +64,89 @@ describe('readBatchCeiling / recordBatchCeiling', () => {
   it('keeps separate ceilings per endpoint × upstreamModel × kind', () => {
     recordBatchCeiling({
       endpoint: 'a',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       size: 10,
     })
     recordBatchCeiling({
       endpoint: 'b',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       size: 3,
     })
     recordBatchCeiling({
       endpoint: 'a',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'pdf',
       size: 7,
     })
-    assert.equal(readBatchCeiling({ endpoint: 'a', upstreamModel: 'm', kind: 'image' }), 10)
-    assert.equal(readBatchCeiling({ endpoint: 'b', upstreamModel: 'm', kind: 'image' }), 3)
-    assert.equal(readBatchCeiling({ endpoint: 'a', upstreamModel: 'm', kind: 'pdf' }), 7)
+    assert.equal(readBatchCeiling({ endpoint: 'a', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }), 10)
+    assert.equal(readBatchCeiling({ endpoint: 'b', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }), 3)
+    assert.equal(readBatchCeiling({ endpoint: 'a', baseUrl: undefined, upstreamModel: 'm', kind: 'pdf' }), 7)
+  })
+
+  it('keeps separate ceilings per baseUrl — repointing the same alias yields a fresh row', () => {
+    recordBatchCeiling({
+      endpoint: 'newapi',
+      baseUrl: 'https://oldgw.example.com',
+      upstreamModel: 'm',
+      kind: 'image',
+      size: 5,
+    })
+    const repointed = readBatchCeiling({
+      endpoint: 'newapi',
+      baseUrl: 'https://api.openai.com',
+      upstreamModel: 'm',
+      kind: 'image',
+    })
+    assert.equal(repointed, null, 'new baseUrl gets a fresh ceiling slot')
   })
 
   it('only updates monotonically — smaller sizes do not overwrite larger', () => {
     recordBatchCeiling({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       size: 12,
     })
     recordBatchCeiling({
       endpoint: 'e',
+      baseUrl: undefined,
       upstreamModel: 'm',
       kind: 'image',
       size: 4,
     })
-    assert.equal(readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }), 12)
+    assert.equal(readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }), 12)
   })
 
   it('ignores non-positive / non-finite sizes', () => {
-    recordBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image', size: 0 })
-    recordBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image', size: -3 })
-    recordBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image', size: NaN })
-    assert.equal(readBatchCeiling({ endpoint: 'e', upstreamModel: 'm', kind: 'image' }), null)
+    recordBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', size: 0 })
+    recordBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', size: -3 })
+    recordBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image', size: NaN })
+    assert.equal(readBatchCeiling({ endpoint: 'e', baseUrl: undefined, upstreamModel: 'm', kind: 'image' }), null)
+  })
+
+  it('drops legacy keys (old `${alias}:${model}` shape) on load', () => {
+    const file = path.join(homeDir, 'auth', 'batch-size-cache.json')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      ceilings: {
+        'newapi:m': { image: 8 },
+      },
+    }), 'utf8')
+    _resetCacheForTests()
+    const value = readBatchCeiling({
+      endpoint: 'newapi',
+      baseUrl: undefined,
+      upstreamModel: 'm',
+      kind: 'image',
+    })
+    assert.equal(value, null, 'legacy ceiling dropped on load')
   })
 })
 
