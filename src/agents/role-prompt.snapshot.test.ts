@@ -19,11 +19,11 @@ import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '11b8d07d1eea7acfec2c0cbf9c047124844f55428527def7c76adca0b687b06a',
-  'general-purpose': '8d9db5fc7e6a1511e57087c9f39c47fae2ed16dea9aadf464cb78e52597beaa9',
-  explore: '215701318f8b02d85b535e6ca9f6da05a6460e003e1d1108dbce59f80ac5bb32',
-  web: '990338754f1aa2e58a4ebf5ed2007dcd8d88d2de721ccbed81c4c1bb9e33d2d0',
-  extract_memories: 'ff86bc82b4ddd3e9e40620ad002da05dd7304611f8ad517d56e59fadfd8d7408',
-  auto_dream: 'ac1884eb964ca0740a8dabaf967cb10f8fec3d926addde18cee2a0bb46224d44',
+  'general-purpose': '082315893aafde27fbca17d9f0d0462f9924b476a8fcce420695f1505ba837aa',
+  explore: '1651ab19f795b3e9202f1691038179e5f3ec8a6382caf7ab3cdd3cbea592f847',
+  web: 'bc25787cc0c47b7e86236af9342b28938d7fae0f5fcac47a7bd377d68546497e',
+  extract_memories: 'e6e4caaf76530c8546377d5ea317d093acbf9739b16c1cffe341e232e66da9b3',
+  auto_dream: '214f131f44983c955f9794327ad5b154d62fe293eee8fc3da8f3d0ad1daa0eb6',
 }
 
 let tmpRoot: string
