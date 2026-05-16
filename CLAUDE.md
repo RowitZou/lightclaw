@@ -173,6 +173,16 @@
 - Forked agents receive `role` directly. `runForkedAgent` builds a fresh role prompt with `buildPromptForRole(role, ...)` and derives the default runtime tool gate with `deriveCanUseTool(role)`. Callers only pass `canUseToolOverride` for input-sensitive defense-in-depth gates.
 - `cacheSafeParams` stores only the inherited fork context, tool catalog, and config. It must not store a parent-rendered `systemPrompt`; internal roles need their own prompt so they do not inherit main-agent skills or user-facing guidance.
 
+# LightClaw Prompt Design Principle (Phase 2 PR6, 2026-05-16)
+
+**Minimum + complete context.** Every prompt is written from the agent's own first-person perspective with the minimum information that agent needs to do its job — never from a system / overview perspective that enumerates surrounding architecture.
+- **Do not** enumerate sibling agents, blocked tools, channel infrastructure, scheduling layers, or "the parent has X". That is 此地无银三百两 — listing what the agent does NOT have tells the model what the framework HAS, leaking attack surface and inviting the model to reason about hierarchy it should not see.
+- **Do** name the agent's role + its own tools + its own delivery target. Refer to the consumer as "the requester" or "the reader", not "the parent" / "main agent" / "orchestrator".
+- The framework wrapper (`buildSubagentPromptContent` in `src/prompt.ts`) currently still uses "subagent" / "parent agent" terminology. This is structural leakage in the wrapper itself and is **out of scope for per-role prompt edits** — touching it would force re-pinning every worker / internal hash and constitutes its own discussion-first PR. Per-role `systemPrompt` bodies should pick terminology that is at least no leakier than the wrapper, and ideally use the requester/reader frame even when the wrapper still says "parent".
+- After Phase 2 ships, do a single sweep of every `src/agents/bundled/*.ts` prompt against this principle as one dedicated prompt-audit PR (per the prompt-edit-must-discuss rule). The web role (PR6) is already written under this principle and is the reference shape.
+
+# LightClaw Memory Extraction Notes
+
 # LightClaw Memory Extraction Notes
 
 - Auto-memory extraction goes through `runSubagent({agentType:'extract_memories', ...})` - a kind='internal' Role (`src/agents/bundled/extract-memories.ts`) registered with its own focused system prompt and explicit tool list (MemoryWrite / MemoryRead / Read / Grep / Glob). Internal subagents bypass the user-facing `BLOCKED_SUBAGENT_TOOLS` filter (which would deny MemoryWrite) and ship their own canUseTool override (`createAutoMemCanUseTool`). The systemPrompt explicitly tells the model it has no skills and must not call UseSkill - closing the 2026-05-11 audit Bug D where extraction kept calling `UseSkill({name:"remember"})` after inheriting the main agent's `## Available Skills` section. Do not regress to passing the parent's rendered system prompt verbatim.

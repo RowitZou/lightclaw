@@ -4,6 +4,7 @@ export const BUNDLED_AGENT_TYPES = [
   'main',
   'general-purpose',
   'explore',
+  'web',
   'extract_memories',
   'auto_dream',
 ] as const

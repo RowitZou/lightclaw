@@ -4,6 +4,7 @@ import { explorePrompt } from './explore.js'
 import { extractMemoriesPrompt } from './extract-memories.js'
 import { generalPurposePrompt } from './general-purpose.js'
 import { mainPrompt } from './main.js'
+import { webPrompt } from './web.js'
 
 export const BUNDLED_AGENTS: Role[] = [
   {
@@ -14,7 +15,7 @@ export const BUNDLED_AGENTS: Role[] = [
     tools: ['*'],
     skills: ['*'],
     mcpServers: ['*'],
-    reachableRoles: ['general-purpose', 'explore'],
+    reachableRoles: ['general-purpose', 'explore', 'web'],
     hooks: ['*'],
     systemPrompt: mainPrompt,
     kind: 'orchestrator',
@@ -52,6 +53,18 @@ export const BUNDLED_AGENTS: Role[] = [
     tools: ['Bash', 'Read', 'Grep', 'Glob'],
     systemPrompt: explorePrompt,
     kind: 'worker',
+  },
+  {
+    agentType: 'web',
+    whenToUse:
+      'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. The subagent digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
+    tools: ['WebFetch', 'WebSearch', 'Read', 'MemoryWrite', 'MemoryRead'],
+    systemPrompt: webPrompt,
+    kind: 'worker',
+    contextPolicy: {
+      memoryScopes: ['self', 'shared'],
+    },
+    outputContract: 'report',
   },
   {
     agentType: 'extract_memories',

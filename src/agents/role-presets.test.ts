@@ -56,7 +56,7 @@ test('resolveRolePolicy fills orchestrator defaults', () => {
   assert.equal(resolved.contextPolicy.cacheStable, true)
   assert.deepEqual(resolved.skills, ['*'])
   assert.deepEqual(resolved.mcpServers, ['*'])
-  assert.deepEqual(resolved.reachableRoles, ['general-purpose', 'explore'])
+  assert.deepEqual(resolved.reachableRoles, ['general-purpose', 'explore', 'web'])
   assert.deepEqual(resolved.hooks, ['*'])
   assert.equal(resolved.outputContract, 'report')
 })
