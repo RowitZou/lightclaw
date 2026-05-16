@@ -334,11 +334,10 @@ export class FeishuSender {
   }
 
   // Proactive markdown push to a chat_id (group or DM) when there is no
-  // inbound message to reply against. Used by BackgroundTask wake delivery:
-  // a notify_to:'agent' wake that ran on a group-origin transcript delivers
-  // its notify_user output back to that origin group via this method, so the
-  // result rejoins the conversation that motivated the task. Goes through
-  // im.message.create with receive_id_type=chat_id (no reply target).
+  // inbound message to reply against. Used by channel notices and proactive
+  // delivery paths that need to rejoin the conversation that motivated them.
+  // Goes through im.message.create with receive_id_type=chat_id (no reply
+  // target).
   async sendMarkdownTextToChatId(
     chatId: string,
     text: string,

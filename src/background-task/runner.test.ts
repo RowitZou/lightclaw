@@ -28,16 +28,6 @@ describe('background-task runner tool gate', () => {
     })
   })
 
-  it('blocks wake-only tools inside background task agents', async () => {
-    const gate = createBackgroundTaskCanUseTool()
-    const decision = await gate(fakeTool('notify_user'), {})
-    assert.equal(decision.behavior, 'deny')
-    assert.match(
-      decision.behavior === 'deny' ? decision.reason : '',
-      /wake-mode only/,
-    )
-  })
-
   it('allows normal tools so scheduled jobs can do real work', async () => {
     const gate = createBackgroundTaskCanUseTool()
     assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })

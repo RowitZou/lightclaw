@@ -1,8 +1,11 @@
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
-import { setTodos } from '../state.js'
+import { getSessionId, getTodos, setTodos } from '../state.js'
 import { persistTodos, validateTodos } from '../todos/store.js'
+import { getSignalRouter } from '../signal-bus/router.js'
+
+const lastProgressEmitBySession = new Map<string, number>()
 
 const todoItemSchema = z.object({
   content: z.string().min(1),
@@ -53,6 +56,7 @@ export const todoWriteTool = buildTool({
       }
     }
 
+    const previous = getTodos()
     const next =
       input.todos.length > 0 &&
       input.todos.every(todo => todo.status === 'completed')
@@ -60,9 +64,42 @@ export const todoWriteTool = buildTool({
         : input.todos
     setTodos(next)
     await persistTodos(next)
+    await maybeEmitProgress(previous, input.todos)
 
     return {
       output: 'Todo list updated. Continue using the todo list to track progress.',
     }
   },
 })
+
+async function maybeEmitProgress(
+  previous: Array<{ content: string; status: string }>,
+  current: Array<{ content: string; status: string }>,
+): Promise<void> {
+  const previousByContent = new Map(previous.map(todo => [todo.content, todo.status]))
+  const completed = current.filter(todo =>
+    todo.status === 'completed' && previousByContent.get(todo.content) !== 'completed',
+  )
+  if (completed.length === 0) {
+    return
+  }
+  const sessionId = getSessionId()
+  const now = Date.now()
+  const last = lastProgressEmitBySession.get(sessionId) ?? 0
+  if (now - last < 5000) {
+    return
+  }
+  lastProgressEmitBySession.set(sessionId, now)
+  await getSignalRouter().publish({
+    kind: 'progress',
+    from: { kind: 'role', id: 'main', sessionId },
+    to: { kind: 'role', id: 'main', sessionId },
+    payload: {
+      milestoneLabel: completed[completed.length - 1].content,
+      completedCount: current.filter(todo => todo.status === 'completed').length,
+      totalCount: current.length,
+    },
+    timing: { emittedAt: now },
+    chainId: sessionId,
+  })
+}

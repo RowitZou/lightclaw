@@ -1,36 +1,10 @@
-import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import {
-  appendCompletedTaskRecord,
-  getBackgroundTask,
-  getCompletedTaskRecord,
-  addBackgroundTask,
-  loadBackgroundTasks,
-  removeBackgroundTask,
-  updateBackgroundTask,
-} from '../background-task/store.js'
-import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
-import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
-import {
   scheduleSpecSchema,
-  type BackgroundTaskEntry,
 } from '../background-task/types.js'
 import { parseRule } from '../permission/rules.js'
-import { getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
-
-function shortId(): string {
-  return randomUUID().slice(0, 8)
-}
-
-function normalizeNotifyOn(value: 'success' | 'failure' | 'always' | undefined): 'success' | 'failure' | 'always' {
-  return value ?? 'always'
-}
-
-function normalizeNotifyTo(value: 'user' | 'agent' | undefined): 'user' | 'agent' {
-  return value ?? 'user'
-}
 
 const allowedToolsSchema = z.array(
   z.string().min(1).refine(isValidPermissionRulePattern, {
@@ -98,69 +72,16 @@ export const backgroundTaskTool = buildTool({
     notify_to: z.enum(['user', 'agent']).optional(),
     allowed_tools: allowedToolsSchema,
   }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    // Normalize 'after' shorthand to 'oneshot' so the on-disk store shape
-    // and downstream schedule-calc only ever see {oneshot, recurring,
-    // interval}. Computed at spawn time = "now + afterMinutes", baked
-    // into ISO8601, never re-evaluated.
-    let schedule: typeof input.schedule = input.schedule
-    if (schedule.kind === 'after') {
-      const at = new Date(Date.now() + schedule.afterMinutes * 60_000).toISOString()
-      schedule = { kind: 'oneshot', at }
-    }
-    if (schedule.kind === 'oneshot') {
-      const at = new Date(schedule.at)
-      if (!Number.isFinite(at.getTime())) {
-        return { output: 'Invalid oneshot schedule time.', isError: true }
-      }
-      if (at.getTime() <= Date.now()) {
-        const serverNow = new Date().toISOString()
-        const tomorrowSame = new Date(at.getTime() + 24 * 60 * 60 * 1000).toISOString()
-        return {
-          output: [
-            `Requested time \`${at.toISOString()}\` is in the past (server now = \`${serverNow}\`).`,
-            `- If you meant the next occurrence of that wall-clock time, set \`at\` to \`${tomorrowSame}\`.`,
-            "- If you meant a short relative offset, use `schedule.kind='after'` with `afterMinutes=<N>`.",
-            "- If the user's intent is ambiguous (e.g. \"10 点\" could be AM or PM), ask them to confirm before retrying.",
-          ].join('\n'),
-          isError: true,
-        }
-      }
-    }
-
-    const now = new Date().toISOString()
-    // Capture origin session so notify_to:'agent' wakes land back in the chat
-    // the task was created from (Bug 15). DM origin → wake stays in DM
-    // transcript (legacy behavior); group origin → wake runs on the sender's
-    // per-group slice transcript so the wake agent inherits the conversation
-    // that motivated the task. User-facing DM markdown push stays unchanged
-    // (privacy invariant: notify_user output never leaks to group).
-    const originSessionId = getSessionId()
-    const entry: BackgroundTaskEntry = {
-      id: `${userId}-${shortId()}`,
-      ownerCanonicalUser: userId,
+  async call(input, context) {
+    const { executeDispatch } = await import('./dispatch.js')
+    return executeDispatch({
+      role: 'general',
       prompt: input.prompt,
-      schedule,
+      schedule: input.schedule,
+      mode: 'background',
       label: input.label,
-      notifyOn: normalizeNotifyOn(input.notify_on),
-      notifyTo: normalizeNotifyTo(input.notify_to),
-      enabled: true,
-      createdAt: now,
-      consecutiveFailures: 0,
-      fireHistory: [],
-      ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
-      originSessionId,
-    }
-    addBackgroundTask(userId, entry)
-    notifyBackgroundTaskChanged(userId, entry.id)
-    return {
-      output: [
-        `Background task scheduled: ${entry.id} (${entry.label})`,
-        `Next run: ${describeNextRun(computeTaskNextRunAt(entry))}`,
-        `Notify: ${entry.notifyTo} / ${entry.notifyOn}`,
-      ].join('\n'),
-    }
+      allowed_tools: input.allowed_tools,
+    }, context)
   },
 })
 
@@ -176,26 +97,9 @@ Use when the user asks "what reminders / scheduled tasks do I have", or before C
   inputSchema: z.object({
     include_history: z.boolean().optional(),
   }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    const tasks = loadBackgroundTasks(userId).map(task => ({
-      id: task.id,
-      label: task.label,
-      schedule: task.schedule,
-      enabled: task.enabled,
-      nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
-      lastFiredAt: task.lastFiredAt ?? null,
-      notifyOn: task.notifyOn,
-      notifyTo: task.notifyTo,
-      consecutiveFailures: task.consecutiveFailures,
-      allowedTools: task.allowedTools ?? [],
-      ...(input.include_history ? { fireHistory: task.fireHistory ?? [] } : {}),
-    }))
-    return {
-      output: tasks.length === 0
-        ? 'No background tasks.'
-        : JSON.stringify(tasks, null, 2),
-    }
+  async call(input, context) {
+    const { listDispatchesTool } = await import('./dispatch.js')
+    return listDispatchesTool.call(input, context)
   },
 })
 
@@ -212,33 +116,14 @@ Idempotent: cancelling a task that already finished (oneshot success was pruned)
   inputSchema: z.object({
     id: z.string().min(1),
   }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    const removed = removeBackgroundTask(userId, input.id)
-    notifyBackgroundTaskChanged(userId, input.id)
-    if (removed) {
-      // Record the cancel so a re-issue of the same id reads as
-      // "already cancelled" instead of "never existed".
-      appendCompletedTaskRecord(userId, {
-        id: input.id,
-        outcome: 'cancelled',
-        completedAt: new Date().toISOString(),
-      })
-      return { output: `Cancelled background task ${input.id}.` }
-    }
-    // Cancel is idempotent: if the task already completed or was cancelled
-    // earlier, treat it as a no-op success. Only truly unknown ids stay as
-    // is_error so a typo'd id still surfaces.
-    const prior = getCompletedTaskRecord(userId, input.id)
-    if (prior) {
-      const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
-      return {
-        output: `Background task ${input.id} already ${verb} at ${prior.completedAt}. Cancel is a no-op.`,
-      }
-    }
+  async call(input, context) {
+    const { cancelDispatchTool } = await import('./dispatch.js')
+    const result = await cancelDispatchTool.call(input, context)
     return {
-      output: `Background task not found: ${input.id}`,
-      isError: true,
+      ...result,
+      output: result.output
+        .replace(/^Cancelled dispatch /, 'Cancelled background task ')
+        .replace(/^Dispatch /, 'Background task '),
     }
   },
 })
@@ -263,118 +148,22 @@ Changing prompt records the prior prompt and surfaces it once on the next fire's
     notify_to: z.enum(['user', 'agent']).optional(),
     allowed_tools: allowedToolsSchema,
   }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    const existing = getBackgroundTask(userId, input.id)
-    // Normalize 'after' shorthand to 'oneshot' on update too — same reason
-    // as in BackgroundTask spawn: store stays at oneshot/recurring/interval.
-    let schedule = input.schedule
-    if (schedule?.kind === 'after') {
-      const at = new Date(Date.now() + schedule.afterMinutes * 60_000).toISOString()
-      schedule = { kind: 'oneshot', at }
-    }
-    if (schedule?.kind === 'oneshot') {
-      const at = new Date(schedule.at)
-      if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) {
-        return {
-          output: 'BackgroundTask oneshot time must be in the future.',
-          isError: true,
-        }
-      }
-    }
-    // Capture prior prompt only when the new prompt differs from the existing
-    // one — saves a no-op notice if the model re-passes the same string. The
-    // notice clears at next-fire delivery (scheduler.onFireComplete reads
-    // pendingPriorPromptNotice off the latest store entry, attaches it to the
-    // PendingCardAction / wake input, then writes the field back as undefined).
-    const promptChanged =
-      input.prompt !== undefined && existing !== null && existing.prompt !== input.prompt
-    const updated = updateBackgroundTask(userId, input.id, {
+  async call(input, context) {
+    const { updateDispatchTool } = await import('./dispatch.js')
+    const result = await updateDispatchTool.call({
+      id: input.id,
       ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-      ...(promptChanged ? { pendingPriorPromptNotice: existing.prompt } : {}),
-      ...(schedule ? { schedule } : {}),
-      ...(input.label ? { label: input.label } : {}),
+      ...(input.schedule !== undefined ? { schedule: input.schedule } : {}),
+      ...(input.label !== undefined ? { label: input.label } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.notify_on ? { notifyOn: input.notify_on } : {}),
-      ...(input.notify_to ? { notifyTo: input.notify_to } : {}),
-      ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
-    })
-    notifyBackgroundTaskChanged(userId, input.id)
-    if (!updated) {
-      // Update on a finished task is meaningful-different from cancel: the
-      // user probably wants to extend / reschedule something that is gone,
-      // so isError stays true but the message points at the right recovery.
-      const prior = getCompletedTaskRecord(userId, input.id)
-      if (prior) {
-        const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
-        return {
-          output: `Background task ${input.id} already ${verb} at ${prior.completedAt}; cannot update. Spawn a new BackgroundTask if the intent should still run.`,
-          isError: true,
-        }
-      }
-      return {
-        output: `Background task not found: ${input.id}`,
-        isError: true,
-      }
-    }
-    const shouldRetryOneshot =
-      input.allowed_tools !== undefined &&
-      existing?.schedule.kind === 'oneshot' &&
-      existing.lastFiredAt !== undefined
-    if (shouldRetryOneshot) {
-      getBackgroundTaskScheduler().fireImmediate(userId, input.id)
-    }
+      ...(input.allowed_tools !== undefined ? { allowed_tools: input.allowed_tools } : {}),
+    }, context)
     return {
-      output: [
-        `Updated background task ${updated.id} (${updated.label}).`,
-        `Next run: ${describeNextRun(computeTaskNextRunAt(updated))}`,
-        ...(shouldRetryOneshot
-          ? ['Triggered immediate retry because this oneshot task already fired.']
-          : []),
-      ].join('\n'),
-    }
-  },
-})
-
-export const notifyUserTool = buildTool({
-  name: 'notify_user',
-  description: 'Wake-mode only: send a message to the user.',
-  domain: 'host',
-  riskLevel: 'write',
-  inputSchema: z.object({
-    text: z.string().min(1),
-  }),
-  async call(input, context) {
-    if (context.wakeNotifications) {
-      context.wakeNotifications.push({ kind: 'notify', text: input.text })
-      return { output: 'Notification recorded for delivery.' }
-    }
-    return {
-      output: 'notify_user is wake-mode only and is not available in normal turns yet.',
-      isError: true,
-    }
-  },
-})
-
-export const staySilentTool = buildTool({
-  name: 'stay_silent',
-  description: 'Wake-mode only: end a background-task wake without disturbing the user.',
-  domain: 'host',
-  riskLevel: 'safe',
-  inputSchema: z.object({
-    reason: z.string().optional(),
-  }),
-  async call(input, context) {
-    if (context.wakeNotifications) {
-      context.wakeNotifications.push({
-        kind: 'silent',
-        ...(input.reason ? { reason: input.reason } : {}),
-      })
-      return { output: 'Silent decision recorded.' }
-    }
-    return {
-      output: 'stay_silent is wake-mode only and is not available in normal turns yet.',
-      isError: true,
+      ...result,
+      output: result.output
+        .replace(/^Updated dispatch /, 'Updated background task ')
+        .replace(/^Dispatch /, 'Background task ')
+        .replace(/Create a new Dispatch/, 'Spawn a new BackgroundTask'),
     }
   },
 })

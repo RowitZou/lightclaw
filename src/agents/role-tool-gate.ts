@@ -5,8 +5,7 @@ import type { Role } from './types.js'
 const BLOCKED_WORKER_TOOLS = new Set([
   'AgentTool',
   'BackgroundTask',
-  'notify_user',
-  'stay_silent',
+  'Dispatch',
   'TodoWrite',
   'MemoryWrite',
 ])

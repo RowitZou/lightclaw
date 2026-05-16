@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+
+import { SignalRouter } from './router.js'
+import type { AgentSignal } from './types.js'
+
+describe('SignalRouter', () => {
+  it('publishes to an exact receiver', async () => {
+    const router = new SignalRouter()
+    const seen: AgentSignal[] = []
+    router.subscribe({ kind: 'role', id: 'main', sessionId: 's1' }, signal => {
+      seen.push(signal)
+    })
+    await router.publish(signal({ kind: 'role', id: 'main', sessionId: 's1' }))
+    assert.equal(seen.length, 1)
+  })
+
+  it('isolates handler errors and still runs the rest', async () => {
+    const router = new SignalRouter()
+    let called = false
+    router.subscribe({ kind: 'user', id: 'u1' }, () => {
+      throw new Error('boom')
+    })
+    router.subscribe({ kind: 'user', id: 'u1' }, () => {
+      called = true
+    })
+    await router.publish(signal({ kind: 'user', id: 'u1' }))
+    assert.equal(called, true)
+  })
+
+  it('supports role wildcard subscriptions', async () => {
+    const router = new SignalRouter()
+    let count = 0
+    router.subscribe({ kind: 'role', id: '*' }, () => {
+      count += 1
+    })
+    await router.publish(signal({ kind: 'role', id: 'web', sessionId: 's1' }))
+    assert.equal(count, 1)
+  })
+
+  it('tracks chain session ids for abort broadcast', () => {
+    const router = new SignalRouter()
+    router.registerChainSession('c1', 's1')
+    router.registerChainSession('c1', 's2')
+    assert.deepEqual(router.sessionIdsForChain('c1').sort(), ['s1', 's2'])
+    router.unregisterChainSession('c1', 's1')
+    assert.deepEqual(router.sessionIdsForChain('c1'), ['s2'])
+  })
+})
+
+function signal(to: AgentSignal['to']): AgentSignal<'notification'> {
+  return {
+    kind: 'notification',
+    from: { kind: 'scheduler' },
+    to,
+    payload: { kind: 'system-notice', text: 'hello', severity: 'info' },
+    timing: { emittedAt: Date.now() },
+  }
+}
+

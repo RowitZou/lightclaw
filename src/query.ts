@@ -369,7 +369,6 @@ export async function query(params: QueryParams): Promise<{
     config,
     canUseTool: invocation.canUseTool,
     signal,
-    wakeNotifications: invocation.wakeNotifications,
   }
 
   type StopEvent = Extract<

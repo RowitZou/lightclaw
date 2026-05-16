@@ -189,12 +189,6 @@ export function createBackgroundTaskCanUseTool(): CanUseToolFn {
         reason: 'BackgroundTask cannot be invoked from inside a background task.',
       }
     }
-    if (tool.name === 'notify_user' || tool.name === 'stay_silent') {
-      return {
-        behavior: 'deny',
-        reason: `${tool.name} is wake-mode only; not available to background task agents.`,
-      }
-    }
     return { behavior: 'allow' }
   }
 }
@@ -213,8 +207,8 @@ export function buildBackgroundTaskSessionId(
 // prompts phrased as "when the time comes do X" / "到时间后 X" leak the
 // scheduling tense into the executor and the agent reads them as a request to
 // schedule a future event — producing a clarifying question instead of doing
-// the work. Same shape as buildWakePrompt; stays English on purpose because
-// it is an LLM system instruction, not user-visible display.
+// the work. Stays English on purpose because it is an LLM system
+// instruction, not user-visible display.
 export function buildBackgroundTaskFirePrompt(task: BackgroundTaskEntry): string {
   return [
     '<background-task-fire>',

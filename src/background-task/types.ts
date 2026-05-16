@@ -53,21 +53,19 @@ export type BackgroundTaskEntry = {
   fireHistory?: FireHistoryEntry[]
   allowedTools?: string[]
   // Set by UpdateBackgroundTask when prompt is changed: holds the prior
-  // prompt so the NEXT completion card / wake prompt can surface "prompt
-  // was changed before this fire (old: ...)" once and then clear. Consumed
-  // by scheduler.deliverCompletion at delivery time. NOT a chain: a second
+  // prompt so the NEXT completion delivery can surface "prompt was changed
+  // before this fire (old: ...)" once and then clear. Consumed by
+  // scheduler.deliverCompletion at delivery time. NOT a chain: a second
   // prompt update before the next fire overwrites this field; intentional
   // loss to avoid unbounded growth and noisy repeated notices.
   pendingPriorPromptNotice?: string
-  // The sessionId the BackgroundTask was created from. Used by the wake
-  // path (notify_to:'agent') so the wake agent runs against the origin
-  // chat's transcript and inherits the context that motivated the task
-  // ("watch this deploy" / "remind me in group X about Y"). Optional for
-  // backward compat with pre-2026-05-12 tasks; scheduler.deliverCompletion
+  // The sessionId the BackgroundTask was created from. Used by
+  // notify_to:'agent' so the main agent receives the result against the
+  // origin chat's transcript and inherits the context that motivated the
+  // task ("watch this deploy" / "remind me in group X about Y"). Optional
+  // for backward compat with pre-2026-05-12 tasks; scheduler.deliverCompletion
   // falls back to resolveWakeSessionId (most-recent DM) when this field
-  // is missing or the origin session no longer exists on disk. Privacy
-  // is preserved: user-facing markdown push still goes to DM open_id;
-  // only the wake query()'s transcript / context routing follows origin.
+  // is missing or the origin session no longer exists on disk.
   originSessionId?: string
 }
 
@@ -100,11 +98,6 @@ export type PendingCardAction = {
   // <old>" once on this fire and not again on subsequent fires.
   priorPromptNotice?: string
 }
-
-export type WakeNotifyResult =
-  | { kind: 'notify'; text: string }
-  | { kind: 'silent'; reason?: string }
-  | { kind: 'no-decision' }
 
 export type BackgroundTaskStoreFile =
   | {

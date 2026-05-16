@@ -1,4 +1,3 @@
-import type { WakeNotifyResult } from '../background-task/types.js'
 import type { PermissionApprover } from '../permission/types.js'
 import type { CanUseToolFn } from '../tool.js'
 import type { Role } from './types.js'
@@ -25,6 +24,7 @@ export type InterjectionEntry = {
   quotedSummary?: string
   pendingAttachments?: InterjectionPendingAttachment[]
   attachmentPaths?: string[]
+  source?: 'user' | 'background-task'
 }
 
 export type InvocationContext = {
@@ -51,7 +51,6 @@ export type InvocationContext = {
   noAutoMemory?: boolean
   ephemeral?: boolean
   subagentLabel?: string
-  wakeNotifications?: WakeNotifyResult[]
   systemPromptOverride?: string
   currentRoleOverride?: Role
 }

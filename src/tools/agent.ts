@@ -1,8 +1,6 @@
 import { z } from 'zod'
 
 import { getAllAgents } from '../agents/registry.js'
-import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
-import type { AgentType } from '../agents/types.js'
 import { buildTool } from '../tool.js'
 
 function buildAgentToolDescription(): string {
@@ -71,20 +69,13 @@ export const agentTool = buildTool({
     prompt: z.string().min(10),
   }),
   async call(input, context) {
-    const result = await runSubagent({
-      agentType: input.subagent_type as AgentType,
+    const { executeDispatch } = await import('./dispatch.js')
+    return executeDispatch({
+      role: input.subagent_type === 'general-purpose' ? 'general' : input.subagent_type,
       prompt: input.prompt,
-      signal: context.abortSignal,
-    })
-
-    if (result.kind === 'failure') {
-      return {
-        output: formatWorkerFailureForToolResult(result.envelope),
-      }
-    }
-
-    return {
-      output: result.finalText || '(subagent returned empty text)',
-    }
+      schedule: 'now',
+      mode: 'blocking',
+      label: input.description,
+    }, context)
   },
 })

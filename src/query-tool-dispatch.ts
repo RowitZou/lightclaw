@@ -24,7 +24,6 @@ import type {
 import { toolResultContentToText } from './types.js'
 import type { LightClawConfig } from './config.js'
 import type { RoleKind } from './agents/types.js'
-import type { WakeNotifyResult } from './background-task/types.js'
 
 export type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
 
@@ -39,7 +38,6 @@ export type DispatchContext = {
   config: LightClawConfig
   canUseTool?: CanUseToolFn
   signal: AbortSignal
-  wakeNotifications?: WakeNotifyResult[]
   mainTurnRouting?: ToolCallContext['mainTurnRouting']
 }
 
@@ -153,7 +151,6 @@ export async function dispatchToolCall(
       runtime: getRuntime(),
       mainTurnRouting: ctx.mainTurnRouting,
       canUseTool: ctx.canUseTool,
-      wakeNotifications: ctx.wakeNotifications,
       deferredTools: ctx.deferredTools,
       discoverTool(name) {
         const current = getCurrentSessionContext()
