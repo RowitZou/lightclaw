@@ -49,8 +49,12 @@ export async function appendMessage(
 }
 
 export async function loadTranscript(sessionId: string): Promise<Message[]> {
+  return loadTranscriptFile(getTranscriptPath(sessionId))
+}
+
+export async function loadTranscriptFile(filePath: string): Promise<Message[]> {
   try {
-    const raw = await readFile(getTranscriptPath(sessionId), 'utf8')
+    const raw = await readFile(filePath, 'utf8')
     const messages: Message[] = []
     for (const line of raw.split('\n')) {
       const trimmed = line.trim()
