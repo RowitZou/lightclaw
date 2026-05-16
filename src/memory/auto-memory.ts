@@ -1,8 +1,13 @@
 import { readdir, readFile, rm, mkdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import type { Role } from '../agents/types.js'
 import type { LightClawConfig } from '../config.js'
 import { lightclawHome } from '../paths.js'
+import {
+  relativeMemoryFilename,
+  resolveReadableMemoryDirsForRole,
+} from './scope.js'
 import type { MemoryEntry } from './types.js'
 import { isMemoryType } from './types.js'
 
@@ -199,6 +204,24 @@ export async function scanMemoryFiles(memoryDir: string): Promise<MemoryEntry[]>
   }
 }
 
+export async function scanMemoryFilesInDirs(
+  memoryDir: string,
+  dirs: string[],
+): Promise<MemoryEntry[]> {
+  const chunks = await Promise.all(
+    dirs.map(async dir => {
+      const entries = await scanMemoryFiles(dir)
+      return entries.map(entry => ({
+        ...entry,
+        filename: relativeMemoryFilename(memoryDir, dir, entry.filename),
+      }))
+    }),
+  )
+  return chunks
+    .flat()
+    .sort((left, right) => left.filename.localeCompare(right.filename))
+}
+
 export async function readMemoryFile(
   memoryDir: string,
   filename: string,
@@ -245,7 +268,23 @@ export async function deleteMemoryFile(memoryDir: string, filename: string): Pro
   }
 }
 
-export async function loadMemoryIndex(memoryDir: string): Promise<string> {
+export async function loadMemoryIndex(memoryDir: string, role?: Role): Promise<string> {
+  if (role) {
+    const resolved = await resolveReadableMemoryDirsForRole(role, memoryDir)
+    const chunks = await Promise.all(
+      resolved.readableDirs.map(async dir => {
+        const raw = await loadSingleMemoryIndex(dir)
+        const rel = path.relative(path.resolve(memoryDir), path.resolve(dir))
+        return prefixMemoryIndex(raw, rel)
+      }),
+    )
+    return chunks.filter(chunk => chunk.trim().length > 0).join('\n').trim()
+  }
+
+  return loadSingleMemoryIndex(memoryDir)
+}
+
+async function loadSingleMemoryIndex(memoryDir: string): Promise<string> {
   try {
     const raw = await readFile(path.join(memoryDir, MEMORY_INDEX_FILE), 'utf8')
     const trimmedLines = raw.split(/\r?\n/).slice(0, MAX_INDEX_LINES)
@@ -262,6 +301,22 @@ export async function loadMemoryIndex(memoryDir: string): Promise<string> {
 
     throw error
   }
+}
+
+function prefixMemoryIndex(raw: string, relativeDir: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.length === 0 || relativeDir.length === 0) {
+    return trimmed
+  }
+
+  return trimmed
+    .split(/\r?\n/)
+    .map(line => line.replace(
+      /^(- \[[^\]]+\] )(.+?)(:.*)$/,
+      (_match, prefix: string, filename: string, suffix: string) =>
+        `${prefix}${path.join(relativeDir, filename)}${suffix}`,
+    ))
+    .join('\n')
 }
 
 export async function rebuildMemoryIndex(memoryDir: string): Promise<void> {

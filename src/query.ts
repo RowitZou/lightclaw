@@ -177,6 +177,10 @@ export async function query(params: QueryParams): Promise<{
   const config = params.config ?? getConfig()
   const invocation = params.invocation ?? emptyInvocationContext()
   const rolePolicy = resolveRolePolicy(params.role)
+  const currentSessionContext = getCurrentSessionContext()
+  if (currentSessionContext) {
+    currentSessionContext.currentRole = params.role
+  }
   const contextPolicy = rolePolicy.contextPolicy
   const lifecycleHooks = resolveHooks(params.role)
   const systemPromptOverride = invocation.systemPromptOverride

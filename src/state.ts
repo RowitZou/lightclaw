@@ -7,6 +7,7 @@ import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
+import type { Role } from './agents/types.js'
 import {
   getCurrentSessionContext,
   requireSessionContext,
@@ -94,6 +95,10 @@ export function getSessionsDir(): string {
 
 export function getMemoryDir(): string {
   return currentState().memoryDir
+}
+
+export function getCurrentRole(): Role | undefined {
+  return currentState().currentRole
 }
 
 export function getCurrentUserId(): string | undefined {

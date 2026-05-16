@@ -30,6 +30,7 @@ const ORCHESTRATOR_CONTEXT: ContextPolicy = {
   todos: true,
   channelContext: true,
   transcriptInheritance: 'full',
+  memoryScopes: ['self', 'shared'],
   autoCompact: true,
   autoMemoryExtract: true,
   deferredToolDiscovery: true,
@@ -48,6 +49,7 @@ const WORKER_CONTEXT: ContextPolicy = {
   todos: false,
   channelContext: false,
   transcriptInheritance: 'fork-prefix',
+  memoryScopes: [],
   autoCompact: false,
   autoMemoryExtract: false,
   deferredToolDiscovery: false,
@@ -57,6 +59,7 @@ const WORKER_CONTEXT: ContextPolicy = {
 const INTERNAL_CONTEXT: ContextPolicy = {
   ...WORKER_CONTEXT,
   autoMemoryIndex: true,
+  memoryScopes: ['self', 'shared'],
 }
 
 function roleKind(role: Role): RoleKind {

@@ -241,6 +241,7 @@ export function buildPromptForRole(
       throw new Error(`Role "${policy.name}" requires orchestrator prompt context.`)
     }
     return buildOrchestratorPromptTemplate(
+      role,
       context.tools,
       context.cwd,
       context.environmentRoot,
@@ -258,6 +259,7 @@ function isOrchestratorPromptContext(
 }
 
 async function buildOrchestratorPromptTemplate(
+  role: Role,
   tools: Tool[],
   cwd: string,
   environmentRoot: string,
@@ -273,11 +275,17 @@ async function buildOrchestratorPromptTemplate(
     options.config.sessionMemory.enabled && Boolean(options.sessionId)
   const [projectMemory, autoMemoryIndex, recalledMemories, sessionMemory] = await Promise.all([
     loadProjectMemory(cwd),
-    options.autoMemory ? loadMemoryIndex(memoryDir) : Promise.resolve(''),
+    options.autoMemory ? loadMemoryIndex(memoryDir, role) : Promise.resolve(''),
     recallEnabled
-      ? selectRelevantMemories(options.queryText!, memoryDir, options.config, {
-          topN: options.config.memoryRecall.topN,
-        })
+      ? selectRelevantMemories(
+          options.queryText!,
+          memoryDir,
+          options.config,
+          {
+            topN: options.config.memoryRecall.topN,
+          },
+          role,
+        )
       : Promise.resolve([] as MemoryEntry[]),
     sessionMemoryEnabled
       ? readSessionMemory(options.sessionId!, options.config.sessionsDir)
