@@ -63,6 +63,7 @@ export const BUNDLED_AGENTS: Role[] = [
     kind: 'worker',
     contextPolicy: {
       memoryScopes: ['self', 'shared'],
+      autoMemoryExtract: true,
     },
     outputContract: 'report',
   },
