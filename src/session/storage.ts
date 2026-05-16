@@ -64,6 +64,23 @@ export async function loadTranscriptFile(filePath: string): Promise<Message[]> {
 
       try {
         const message = JSON.parse(trimmed) as Message
+        // Skip non-Message JSONL lines (e.g. fork transcript meta markers
+        // written by fork-transcript.ts:persistForkTranscript). The marker
+        // shape is `{kind:'fork-transcript-meta',...}` and has no `type`
+        // field, so it would otherwise leak into the messages array as a
+        // malformed entry and crash downstream consumers (messageToText,
+        // compact, etc.). loadTranscriptFile is shared between fork
+        // transcripts (parseForkTranscriptFile honors the marker) and main
+        // transcripts (no marker), so the guard is defense-in-depth.
+        if (
+          message === null ||
+          typeof message !== 'object' ||
+          (message.type !== 'user' &&
+            message.type !== 'assistant' &&
+            message.type !== 'system')
+        ) {
+          continue
+        }
         // Skip degenerate empty-content assistant messages persisted by an
         // older build (or a future provider hiccup that slipped through):
         // Anthropic 400s when the conversation history contains an assistant

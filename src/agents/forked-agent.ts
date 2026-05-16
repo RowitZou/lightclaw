@@ -134,6 +134,12 @@ export async function runForkedAgent(
     config: cacheSafeParams.config,
     maxTurns: params.maxTurns,
   })
+  // forkContextEndIndex marks where the inherited parent prefix
+  // (cacheSafeParams.forkContextMessages + buildPromptMessage) ends and the
+  // fork's own loop messages begin. Persisted on the meta line so per-role
+  // extract can slice fork-own vs context cleanly without re-analyzing
+  // unrelated parent DM content. See fork-transcript.ts header comment.
+  const forkContextEndIndex = messages.length
   let messagesToPersist = messages
   let persistTask: Promise<string | null> | null = null
   try {
@@ -147,7 +153,11 @@ export async function runForkedAgent(
       : await run()
     messagesToPersist = result.messages
     if (forkTranscriptPath) {
-      persistTask = persistForkTranscript(forkTranscriptPath, messagesToPersist)
+      persistTask = persistForkTranscript(
+        forkTranscriptPath,
+        messagesToPersist,
+        forkContextEndIndex,
+      )
         .then(() => forkTranscriptPath)
         .catch(error => {
           const message = error instanceof Error ? error.message : String(error)
@@ -165,7 +175,11 @@ export async function runForkedAgent(
     }
   } finally {
     if (!persistTask && forkTranscriptPath) {
-      persistTask = persistForkTranscript(forkTranscriptPath, messagesToPersist)
+      persistTask = persistForkTranscript(
+        forkTranscriptPath,
+        messagesToPersist,
+        forkContextEndIndex,
+      )
         .then(() => forkTranscriptPath)
         .catch(error => {
           const message = error instanceof Error ? error.message : String(error)
