@@ -1,8 +1,18 @@
 import type { CanUseToolFn, Tool } from '../tool.js'
 
-const ALLOWED_TOOLS = new Set([
+const AUTO_MEMORY_ALLOWED_TOOLS = new Set([
   'MemoryWrite',
   'MemoryRead',
+  'Read',
+  'Grep',
+  'Glob',
+])
+
+const AUTO_DREAM_ALLOWED_TOOLS = new Set([
+  'MemoryRead',
+  'MemoryWriteAt',
+  'MemoryMove',
+  'MemoryDelete',
   'Read',
   'Grep',
   'Glob',
@@ -45,7 +55,7 @@ export function isReadOnlyBash(input: unknown): boolean {
 
 export function createAutoMemCanUseTool(_memoryDir: string): CanUseToolFn {
   return async (tool: Tool, input: unknown) => {
-    if (ALLOWED_TOOLS.has(tool.name)) {
+    if (AUTO_MEMORY_ALLOWED_TOOLS.has(tool.name)) {
       return { behavior: 'allow' }
     }
     if (tool.name === 'Bash' && isReadOnlyBash(input)) {
@@ -60,6 +70,24 @@ export function createAutoMemCanUseTool(_memoryDir: string): CanUseToolFn {
     return {
       behavior: 'deny',
       reason: `Memory extraction subagent cannot use ${tool.name}.`,
+    }
+  }
+}
+
+export function createAutoDreamCanUseTool(_memoryDir: string): CanUseToolFn {
+  return async (tool: Tool) => {
+    if (AUTO_DREAM_ALLOWED_TOOLS.has(tool.name)) {
+      return { behavior: 'allow' }
+    }
+    if (tool.name === 'Bash') {
+      return {
+        behavior: 'deny',
+        reason: 'autoDream may not run shell commands.',
+      }
+    }
+    return {
+      behavior: 'deny',
+      reason: `autoDream cannot use ${tool.name}.`,
     }
   }
 }

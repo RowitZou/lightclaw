@@ -67,7 +67,7 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'auto_dream',
     whenToUse:
       'Internal: framework-managed memory consolidation (autoDream). Not dispatchable via AgentTool.',
-    tools: ['MemoryWrite', 'MemoryRead', 'Read', 'Grep', 'Glob', 'Bash'],
+    tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],
     systemPrompt: autoDreamPrompt,
     kind: 'internal',
     outputContract: 'side-effect',

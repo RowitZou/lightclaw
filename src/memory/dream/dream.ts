@@ -1,7 +1,7 @@
 import { getLastCacheSafeParams } from '../../agents/cache-safe-params.js'
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
-import { createAutoMemCanUseTool } from '../auto-mem-can-use-tool.js'
+import { createAutoDreamCanUseTool } from '../auto-mem-can-use-tool.js'
 import { ensureMemoryDir } from '../auto-memory.js'
 import { isExtractionInProgressFor } from '../extract.js'
 import {
@@ -115,9 +115,9 @@ async function executeAutoDreamInner(params: {
     try {
       // Run through the Role pathway (kind='internal'). The fork
       // gets a focused systemPrompt (no Available Skills section) and a
-      // tools array containing only MemoryWrite / MemoryRead / Read / Grep /
-      // Glob / Bash. Runtime gate stays as createAutoMemCanUseTool for
-      // defense-in-depth (restricts Bash to read-only heads).
+      // tools array containing only MemoryRead / MemoryWriteAt / MemoryMove /
+      // MemoryDelete / Read / Grep / Glob. Runtime gate stays as
+      // createAutoDreamCanUseTool for defense-in-depth.
       const result = await runSubagentImpl({
         agentType: 'auto_dream',
         prompt: buildDreamPrompt({
@@ -125,7 +125,7 @@ async function executeAutoDreamInner(params: {
           transcriptDir: params.config.sessionsDir,
           sessionIds,
         }),
-        canUseToolOverride: createAutoMemCanUseTool(params.memoryDir),
+        canUseToolOverride: createAutoDreamCanUseTool(params.memoryDir),
         canonicalUserOverride: params.userId,
         maxTurnsOverride: params.config.autoDream.maxTurns,
       })

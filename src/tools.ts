@@ -27,6 +27,9 @@ import {
 import { globTool } from './tools/glob.js'
 import { grepTool } from './tools/grep.js'
 import { memoryReadTool } from './tools/memory-read.js'
+import { memoryDeleteTool } from './tools/memory-delete.js'
+import { memoryMoveTool } from './tools/memory-move.js'
+import { memoryWriteAtTool } from './tools/memory-write-at.js'
 import { memoryWriteTool } from './tools/memory-write.js'
 import { sendFileTool } from './tools/send-file.js'
 import { sleepTool } from './tools/sleep.js'
@@ -58,6 +61,9 @@ export const builtinTools = [
   grepTool,
   globTool,
   memoryReadTool,
+  memoryWriteAtTool,
+  memoryMoveTool,
+  memoryDeleteTool,
   memoryWriteTool,
   sendFileTool,
   sleepTool,
@@ -72,12 +78,15 @@ export const builtinTools = [
   updateBackgroundTaskTool,
 ]
 
-export function getAllTools(channel?: ChannelKey): Tool[] {
+export function getAllTools(
+  channel?: ChannelKey,
+  options?: { includeInternal?: boolean },
+): Tool[] {
   const all = [...builtinTools, ...getMcpTools()]
-  if (!channel) {
-    return all
-  }
-  return all.filter(tool => isToolVisibleInChannel(tool, channel))
+  return all.filter(tool =>
+    (options?.includeInternal || !tool.internalOnly) &&
+    (!channel || isToolVisibleInChannel(tool, channel)),
+  )
 }
 
 export function isToolVisibleInChannel(tool: Tool, channel: ChannelKey): boolean {

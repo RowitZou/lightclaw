@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { Tool } from '../tool.js'
+import { BUNDLED_AGENTS } from './bundled/index.js'
 import { deriveCanUseTool, isToolVisibleToRole } from './role-tool-gate.js'
 import type { Role } from './types.js'
 
@@ -56,6 +57,23 @@ test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () =
   assert.equal(isToolVisibleToRole(worker, 'MemoryWrite'), false)
   assert.equal(isToolVisibleToRole(internal, 'MemoryWrite'), true)
   assert.equal(isToolVisibleToRole(internal, 'Read'), false)
+})
+
+test('auto_dream role exposes only memory curation tools and reads', () => {
+  const autoDream = BUNDLED_AGENTS.find(agent => agent.agentType === 'auto_dream')
+  assert.ok(autoDream)
+  assert.deepEqual(autoDream.tools, [
+    'MemoryRead',
+    'MemoryWriteAt',
+    'MemoryMove',
+    'MemoryDelete',
+    'Read',
+    'Grep',
+    'Glob',
+  ])
+  assert.equal(isToolVisibleToRole(autoDream, 'Bash'), false)
+  assert.equal(isToolVisibleToRole(autoDream, 'MemoryWrite'), false)
+  assert.equal(isToolVisibleToRole(autoDream, 'MemoryWriteAt'), true)
 })
 
 function role(overrides: Partial<Role> = {}): Role {

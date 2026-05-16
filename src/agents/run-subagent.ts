@@ -64,7 +64,12 @@ export async function runSubagent(params: {
   const { getAllTools, getEnabledTools } = await import('../tools.js')
   const tools = filterTools(
     agent,
-    getEnabledTools(provider, getAllTools(getCurrentSessionContext()?.channel)),
+    getEnabledTools(
+      provider,
+      getAllTools(getCurrentSessionContext()?.channel, {
+        includeInternal: agent.kind === 'internal',
+      }),
+    ),
   )
   // Inherit the parent's recent fork-context messages (so the subagent sees
   // the conversation history it should reason over) but build a fresh

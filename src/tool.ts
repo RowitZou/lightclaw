@@ -64,6 +64,11 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   concurrencySafe?: boolean
   /** Omitted means visible in every channel. */
   channelScope?: readonly ChannelKey[]
+  /**
+   * Internal-only tools are excluded from user-facing catalogs and ToolSearch.
+   * They may be included explicitly for framework-managed internal roles.
+   */
+  internalOnly?: boolean
   /** Force this tool into the always-loaded set. */
   alwaysLoad?: boolean
   /** Force this tool into the deferred set; wins over alwaysLoad. */
@@ -97,6 +102,7 @@ export function buildTool<TInput, TOutput>(input: {
   riskLevel: RiskLevel
   concurrencySafe?: boolean
   channelScope?: readonly ChannelKey[]
+  internalOnly?: boolean
   alwaysLoad?: boolean
   shouldDefer?: boolean
   searchHint?: string

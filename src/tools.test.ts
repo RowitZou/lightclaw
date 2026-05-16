@@ -29,6 +29,16 @@ describe('channel-aware tool visibility', () => {
     assert.equal(terminal.includes('SendFile'), false)
     assert.equal(feishu.includes('SendFile'), true)
   })
+
+  it('hides internal-only tools unless explicitly requested', () => {
+    const visible = getAllTools().map(tool => tool.name)
+    const internal = getAllTools(undefined, { includeInternal: true }).map(tool => tool.name)
+
+    for (const name of ['MemoryWriteAt', 'MemoryMove', 'MemoryDelete']) {
+      assert.equal(visible.includes(name), false)
+      assert.equal(internal.includes(name), true)
+    }
+  })
 })
 
 function fakeTool(input: Partial<Tool> & { name: string }): Tool {
