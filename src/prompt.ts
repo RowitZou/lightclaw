@@ -489,7 +489,7 @@ function buildSubagentPromptContent(
 
   const permissionSection = formatPermissionSection(true)
   const sections: string[] = [
-    'You are LightClaw running as an isolated subagent.',
+    'You are a focused LightClaw worker. You take a single task, complete it, return a concise report.',
     `Working directory: ${environmentRoot}`,
     formatCurrentDateLine(),
     `Platform: ${platform}`,
@@ -506,7 +506,7 @@ function buildSubagentPromptContent(
     'Tool usage rules:',
     '- Prefer direct answers when no tool is needed.',
     '- Use tools when the answer depends on filesystem or shell state.',
-    '- Report concise findings to the parent agent.',
+    '- Report concise findings back to the requester.',
     '',
     'Available tools (full schemas / usage live in the tools API description field):',
     toolDescriptions,
