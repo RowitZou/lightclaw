@@ -13,6 +13,7 @@ import {
   _resetExtractionStateForTest,
   _setRunSubagentForTest,
   buildExtractPrompt,
+  collectExistingMemoriesForRole,
   executeExtraction,
   hasMemoryWritesSince,
   isExtractionInProgressFor,
@@ -26,6 +27,7 @@ import {
   getBashHead,
   isReadOnlyBash,
 } from './auto-mem-can-use-tool.js'
+import { writeMemoryFile } from './auto-memory.js'
 import type { Tool } from '../tool.js'
 
 const dummyConfig = {
@@ -253,4 +255,42 @@ test('isExtractionInProgressFor keeps per-user dream mutex semantics across role
   setExtractionInProgressForTest(memoryDir, false)
   assert.equal(isExtractionInProgressFor(memoryDir), false)
   assert.equal(getMainRole().agentType, 'main')
+})
+
+test('collectExistingMemoriesForRole gives main root plus shared, excluding role-private dirs', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  try {
+    await writeMemoryFile(tempDir, memory('root-note.md'))
+    await writeMemoryFile(path.join(tempDir, '_shared'), memory('shared-note.md'))
+    await writeMemoryFile(path.join(tempDir, 'web'), memory('web-note.md'))
+
+    const entries = await collectExistingMemoriesForRole(getMainRole(), tempDir)
+
+    assert.deepEqual(entries.map(entry => entry.filename), [
+      '_shared/shared-note.md',
+      'root-note.md',
+    ])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('collectExistingMemoriesForRole gives web private plus shared, excluding root', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  const webRole = getAgent('web')
+  assert.ok(webRole)
+  try {
+    await writeMemoryFile(tempDir, memory('root-note.md'))
+    await writeMemoryFile(path.join(tempDir, '_shared'), memory('same-name.md'))
+    await writeMemoryFile(path.join(tempDir, 'web'), memory('same-name.md'))
+
+    const entries = await collectExistingMemoriesForRole(webRole, tempDir)
+
+    assert.deepEqual(entries.map(entry => entry.filename), [
+      '_shared/same-name.md',
+      'web/same-name.md',
+    ])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 })
