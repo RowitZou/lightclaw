@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { rebuildMemoryIndex, scanMemoryFiles } from './auto-memory.js'
@@ -46,8 +46,15 @@ export type AgingEvictionResult = {
 
 /**
  * Run a single eviction pass unconditionally. Returns the count + names of
- * files that moved to the archive subdir. Does not consult the stamp file —
- * see {@link maybeEvictAgedMemories} for the throttled wrapper.
+ * files that moved to per-tier archive subdirs. Does not consult the stamp
+ * file — see {@link maybeEvictAgedMemories} for the throttled wrapper.
+ *
+ * Tier enumeration (PR3 follow-up: aging must recurse across all tiers, not
+ * just memoryDir root). Tiers covered: memoryDir root (L1), `_shared/` (L2)
+ * if it exists, and every other top-level role subdir like `<role>/` (L3),
+ * except the `archive/` subdir itself. Each tier gets its own
+ * `<tier>/archive/<filename>` destination + its own MEMORY.md rebuild so
+ * the per-tier index stays in sync after eviction.
  */
 export async function evictAgedMemories(
   memoryDir: string,
@@ -56,42 +63,77 @@ export async function evictAgedMemories(
 ): Promise<AgingEvictionResult> {
   const opts = { ...DEFAULT_AGING_EVICTION_OPTIONS, ...options }
   const cutoffMs = now - opts.archiveDays * DAY_MS
-  const entries = await scanMemoryFiles(memoryDir)
-  const stale = entries.filter(entry => entry.mtimeMs < cutoffMs)
-  if (stale.length === 0) {
-    await writeStamp(memoryDir, now)
-    return { archivedCount: 0, archivedFilenames: [] }
-  }
+  const tierDirs = await listMemoryTiers(memoryDir)
+  const archivedFilenames: string[] = []
 
-  const archiveDir = path.join(memoryDir, ARCHIVE_DIR)
-  await mkdir(archiveDir, { recursive: true })
+  for (const tierDir of tierDirs) {
+    const entries = await scanMemoryFiles(tierDir)
+    const stale = entries.filter(entry => entry.mtimeMs < cutoffMs)
+    if (stale.length === 0) {
+      continue
+    }
 
-  const archived: string[] = []
-  for (const entry of stale) {
-    const src = path.join(memoryDir, entry.filename)
-    const dest = await pickUniqueArchivePath(archiveDir, entry.filename)
-    try {
-      await rename(src, dest)
-      archived.push(entry.filename)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+    const archiveDir = path.join(tierDir, ARCHIVE_DIR)
+    await mkdir(archiveDir, { recursive: true })
+
+    let tierArchivedCount = 0
+    const tierRel = path.relative(memoryDir, tierDir)
+    for (const entry of stale) {
+      const src = path.join(tierDir, entry.filename)
+      const dest = await pickUniqueArchivePath(archiveDir, entry.filename)
+      try {
+        await rename(src, dest)
+        // Track with tier-relative path so callers can see which tier the
+        // archived entry came from (e.g. `_shared/foo.md`, `web/bar.md`,
+        // or bare `baz.md` for L1 root).
+        archivedFilenames.push(
+          tierRel.length === 0 ? entry.filename : path.join(tierRel, entry.filename),
+        )
+        tierArchivedCount += 1
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        process.stderr.write(
+          `[memory aging] failed to archive ${entry.filename} in ${tierDir}: ${message}\n`,
+        )
+      }
+    }
+
+    if (tierArchivedCount > 0) {
+      // rebuildMemoryIndex re-scans this tier dir (top-level .md only) so
+      // the just-archived files vanish from the per-tier MEMORY.md index.
+      await rebuildMemoryIndex(tierDir)
       process.stderr.write(
-        `[memory aging] failed to archive ${entry.filename}: ${message}\n`,
+        `[memory aging] archived ${tierArchivedCount} stale memor${tierArchivedCount === 1 ? 'y' : 'ies'} (>${opts.archiveDays}d) from ${tierDir}\n`,
       )
     }
   }
 
-  if (archived.length > 0) {
-    // rebuildMemoryIndex re-scans the (now smaller) directory and excludes
-    // the archive subdir because scanMemoryFiles only takes top-level
-    // entries (`entry.isFile()` filter skips the archive directory).
-    await rebuildMemoryIndex(memoryDir)
-    process.stderr.write(
-      `[memory aging] archived ${archived.length} stale memor${archived.length === 1 ? 'y' : 'ies'} (>${opts.archiveDays}d) from ${memoryDir}\n`,
-    )
-  }
+  // Single per-user stamp at root; throttle is a per-user concern, not a
+  // per-tier one. Written even on no-op runs so the next check sees a
+  // recent stamp.
   await writeStamp(memoryDir, now)
-  return { archivedCount: archived.length, archivedFilenames: archived }
+  return { archivedCount: archivedFilenames.length, archivedFilenames }
+}
+
+// Enumerate tier directories under `memoryDir` that should be aged:
+// the root itself (L1), plus every top-level subdir EXCEPT `archive/`
+// (eviction destination). `_shared/` and `<role>/` subdirs are caught
+// here without special-casing — they are just "other top-level dirs".
+async function listMemoryTiers(memoryDir: string): Promise<string[]> {
+  const tiers: string[] = [memoryDir]
+  try {
+    const entries = await readdir(memoryDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === ARCHIVE_DIR) continue
+      tiers.push(path.join(memoryDir, entry.name))
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err
+    }
+  }
+  return tiers
 }
 
 /**

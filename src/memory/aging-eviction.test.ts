@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync, readFileSync, utimesSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -144,5 +152,79 @@ test('archive subdir is not re-scanned by scanMemoryFiles', async () => {
 
     const second = await evictAgedMemories(dir, { archiveDays: 180 }, NOW + 30 * DAY)
     assert.equal(second.archivedCount, 0)
+  })
+})
+
+test('evictAgedMemories archives stale L2 shared and L3 role-private files independently', async () => {
+  await withTmpDir(async dir => {
+    const sharedDir = path.join(dir, '_shared')
+    const webDir = path.join(dir, 'web')
+    mkdirSync(sharedDir, { recursive: true })
+    mkdirSync(webDir, { recursive: true })
+
+    // L1: one stale, one fresh
+    writeMemoryFile(dir, 'l1-stale.md', 'l1 old', NOW - 365 * DAY)
+    writeMemoryFile(dir, 'l1-fresh.md', 'l1 fresh', NOW - 5 * DAY)
+    // L2 (_shared): stale only
+    writeMemoryFile(sharedDir, 'shared-stale.md', 'shared old', NOW - 365 * DAY)
+    // L3 (web/): stale + fresh
+    writeMemoryFile(webDir, 'web-stale.md', 'web old', NOW - 200 * DAY)
+    writeMemoryFile(webDir, 'web-fresh.md', 'web fresh', NOW - 10 * DAY)
+
+    const result = await evictAgedMemories(dir, { archiveDays: 180 }, NOW)
+
+    assert.equal(result.archivedCount, 3)
+    assert.deepEqual(result.archivedFilenames.sort(), [
+      '_shared/shared-stale.md',
+      'l1-stale.md',
+      'web/web-stale.md',
+    ])
+
+    // L1 archive holds the L1 stale
+    assert.ok(statSync(path.join(dir, 'archive', 'l1-stale.md')).isFile())
+    assert.throws(() => statSync(path.join(dir, 'l1-stale.md')))
+    assert.ok(statSync(path.join(dir, 'l1-fresh.md')).isFile())
+
+    // L2 per-tier archive co-located inside _shared/
+    assert.ok(statSync(path.join(sharedDir, 'archive', 'shared-stale.md')).isFile())
+    assert.throws(() => statSync(path.join(sharedDir, 'shared-stale.md')))
+
+    // L3 per-tier archive co-located inside web/
+    assert.ok(statSync(path.join(webDir, 'archive', 'web-stale.md')).isFile())
+    assert.throws(() => statSync(path.join(webDir, 'web-stale.md')))
+    assert.ok(statSync(path.join(webDir, 'web-fresh.md')).isFile())
+
+    // Each tier's MEMORY.md is rebuilt independently — fresh entries kept,
+    // stale entries dropped.
+    const l1Index = readFileSync(path.join(dir, 'MEMORY.md'), 'utf8')
+    assert.match(l1Index, /l1-fresh\.md/)
+    assert.doesNotMatch(l1Index, /l1-stale\.md/)
+
+    const sharedIndex = readFileSync(path.join(sharedDir, 'MEMORY.md'), 'utf8')
+    assert.equal(sharedIndex.trim(), '')
+
+    const webIndex = readFileSync(path.join(webDir, 'MEMORY.md'), 'utf8')
+    assert.match(webIndex, /web-fresh\.md/)
+    assert.doesNotMatch(webIndex, /web-stale\.md/)
+
+    // L1's archive subdir is NOT itself enumerated as a tier — files inside
+    // it must not be re-archived on a subsequent run.
+    const second = await evictAgedMemories(dir, { archiveDays: 180 }, NOW + 30 * DAY)
+    assert.equal(second.archivedCount, 0)
+  })
+})
+
+test('evictAgedMemories writes the root stamp even when only sub-tiers had stale files', async () => {
+  await withTmpDir(async dir => {
+    const sharedDir = path.join(dir, '_shared')
+    mkdirSync(sharedDir, { recursive: true })
+    writeMemoryFile(sharedDir, 'shared-only.md', 'old', NOW - 365 * DAY)
+
+    const result = await evictAgedMemories(dir, { archiveDays: 180 }, NOW)
+    assert.equal(result.archivedCount, 1)
+
+    // Root stamp present so the next throttle check honors this run, even
+    // though L1 root had nothing stale to archive.
+    assert.ok(statSync(path.join(dir, '.last-eviction')).isFile())
   })
 })
