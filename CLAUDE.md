@@ -181,7 +181,33 @@
 - The framework wrapper (`buildSubagentPromptContent` in `src/prompt.ts`) currently still uses "subagent" / "parent agent" terminology. This is structural leakage in the wrapper itself and is **out of scope for per-role prompt edits** — touching it would force re-pinning every worker / internal hash and constitutes its own discussion-first PR. Per-role `systemPrompt` bodies should pick terminology that is at least no leakier than the wrapper, and ideally use the requester/reader frame even when the wrapper still says "parent".
 - After Phase 2 ships, do a single sweep of every `src/agents/bundled/*.ts` prompt against this principle as one dedicated prompt-audit PR (per the prompt-edit-must-discuss rule). The web role (PR6) is already written under this principle and is the reference shape.
 
-# LightClaw Memory Extraction Notes
+# LightClaw Memory Layers Notes (Phase 2, 2026-05-16)
+
+- **Three-tier dir layout under `<memoryDir>/`**:
+  - **L1 (user root)** — `<memoryDir>/*.md` + `<memoryDir>/MEMORY.md`. Written by `main` (orchestrator), `extract_memories`, and `auto_dream` (all kind ∈ `{orchestrator, internal}`). Pre-Phase-2 layout is byte-identical here, so old user memory dirs need no migration.
+  - **L2 (cross-role workboard)** — `<memoryDir>/_shared/*.md` + `<memoryDir>/_shared/MEMORY.md`. **`auto_dream` is the only writer** (enforced physically — no other Role's tool list contains `MemoryWriteAt` / `MemoryMove` / `MemoryDelete`). Filename convention `<YYYY-MM-DD>-<topic-kebab>-by-<source-role>.md` is enforced by the autoDream prompt, not the filesystem. Read scope `'shared'` is what makes an entry visible from another Role.
+  - **L3 (role-private)** — `<memoryDir>/<agentType>/*.md` + `<memoryDir>/<agentType>/MEMORY.md`. Written by a worker Role when `getCurrentRole()` is that worker; only `web` currently has L3 (PR6). `resolveMemoryDirsForRole` (`src/memory/scope.ts`) puts worker `selfWriteDir` at `<root>/<agentType>`; orchestrator + internal `selfWriteDir` stay at `<root>`.
+  - All three tiers are **lazy mkdir**: `auto-memory.writeMemoryFile` (`src/memory/auto-memory.ts`) `mkdir -p`s before the first write. An old user with only L1 files sees no new directories until a worker actually writes or autoDream promotes.
+
+- **`memoryScopes` is the READ visibility list, not a write declaration.** `Role.contextPolicy.memoryScopes: ('self' | 'shared')[]` (`src/agents/types.ts`) controls which dirs feed `MemoryRead`, the auto-memory `MEMORY.md` index loader, and recall:
+  - `'self'` → adds `selfWriteDir` to `readableDirs`.
+  - `'shared'` → adds `<root>/_shared/` to `readableDirs`.
+  - Defaults via `role-presets.ts`: orchestrator `['self', 'shared']`, worker `[]`, internal `['self', 'shared']` + (for kind=internal only) `resolveReadableMemoryDirsForRole` extends `readableDirs` with every existing top-level role-private dir so curators see the full tree.
+  - `web` is the one bundled worker that explicitly overrides to `['self', 'shared']` (PR6 entry in `BUNDLED_AGENTS`).
+  - Writing is independent of `memoryScopes` — see next bullet.
+
+- **`MemoryWrite` is path-bound by `SessionContext.currentRole`, not by tool input.** `src/tools/memory-write.ts:call()` reads `getCurrentRole() ?? getMainRole()`, computes `selfWriteDir` via `resolveMemoryDirsForRole(role, memoryDir)`, and writes there. The tool schema has **no `scope`, no `path`** parameter — agent has no language to ask for any other location.
+  - Path-scoping enforcement: `memoryPathWithinDir(targetPath, selfWriteDir)` rejects any filename that resolves outside `selfWriteDir` (filename injection like `../foo` denies on every call).
+  - Every call writes `<lightclawHome>/audit/memory-writes/<YYYY-MM-DD>.jsonl`. Schema: `{at, userId, role, filename, targetPath, status: 'written'|'denied', deniedReason?, operation?: 'write'|'read'}` (`src/audit/memory-writes.ts`).
+  - `currentRole` is populated by `query.ts` for main turns and by `runForkedAgent` (Phase 2 PR4) for forked subagents, so each fork writes into its own L3 (or the user root for orchestrator / internal kinds). Do not bypass — manually constructing a `SessionContext` without `currentRole` falls back to `getMainRole()`, which lands writes in L1 even if the caller is logically a worker.
+
+- **`MemoryWriteAt` / `MemoryMove` / `MemoryDelete` are `auto_dream`-Role-only.** Tagged `internalOnly: true`, hidden from `getAllTools()` / ToolSearch, and present **only** in `auto_dream.tools`. Never add them to any other Role's `tools` list without admin discussion — that would let extract / a worker / a future role write into another role's L3 or into `_shared/`, breaking the "autoDream is the sole curator" invariant.
+  - All three paths must resolve under `<memoryDir>` via `joinAndAssertWithinMemoryDir` (`src/memory/tool-path.ts`) — absolute paths or `..`-escapes throw `MemoryToolPathError` and don't write.
+  - All three **reject `basename === 'MEMORY.md'`** via `assertNotMemoryIndex`. `MEMORY.md` is framework-owned: every successful op calls `rebuildMemoryIndex(<affectedDir>)` (`src/memory/auto-memory.ts:322`) to regenerate the per-tier index from the surrounding `*.md` files. An agent-authored index would be silently overwritten on the next op, and a deleted index would reappear; refusing at the tool boundary is the clean failure mode.
+
+- **autoDream is per-canonical-user single instance — never split by role.** Promotion is inherently a cross-role decision; per-role splits would lose the very signal autoDream exists to consume. `<memoryDir>/.consolidate-lock` + the per-user scan throttle + the extract/dream mutual-exclusion (`isExtractionInProgressFor(memoryDir)`) all run per canonical user. Phase 3 will not split this either.
+
+- **Do NOT introduce a per-(user × role) extract pipeline in Phase 2.** Auto-extract still forks `extract_memories` (kind=internal) once per main turn, runs against the main transcript only, and lands in L1. Per-role extract — including web's L3 auto-curation — is Phase 3's deliverable. The Phase 2 contract is: web's L3 only fills in via web's own in-flight `MemoryWrite` calls. Don't paper over the gap with prompt nudges that ask web to "actively record everything"; that pattern was deliberately not added.
 
 # LightClaw Memory Extraction Notes
 
