@@ -58,6 +58,7 @@ export const agentTool = buildTool({
   name: 'AgentTool',
   shouldDefer: true,
   description: buildAgentToolDescription(),
+  searchHint: 'web search browse fetch url 查资料 查证 取网页 找链接 检索 fact-check verify research explore codebase',
   domain: 'host',
   riskLevel: 'execute',
   // Multiple AgentTool tool_use blocks emitted in the same assistant message
@@ -65,7 +66,7 @@ export const agentTool = buildTool({
   // the dispatching model's responsibility — see the description above.
   concurrencySafe: true,
   inputSchema: z.object({
-    subagent_type: z.enum(['general-purpose', 'explore']),
+    subagent_type: z.enum(['general-purpose', 'explore', 'web']),
     description: z.string().min(3).max(80),
     prompt: z.string().min(10),
   }),
