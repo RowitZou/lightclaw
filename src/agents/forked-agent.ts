@@ -48,6 +48,7 @@ export type ForkedAgentParams = {
   promptText: string
   cacheSafeParams: CacheSafeParams
   role: Role
+  currentRoleOverride?: Role
   canUseToolOverride?: CanUseToolFn
   // Optional cap on tool-use turns for this fork. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
@@ -61,6 +62,8 @@ export type ForkedAgentResult = {
   finalText: string
   stopReason: string | null
   usage: UsageStats
+  forkTranscriptPath: string | null
+  forkTranscriptPersisted: Promise<string | null>
 }
 
 function pendingToolUseBlocks(message: AssistantMessage): AssistantToolUseBlock[] {
@@ -124,6 +127,7 @@ export async function runForkedAgent(
         prefix.length > 0 ? prefix.length - 1 : undefined,
       signal: params.signal,
       subagentLabel: params.label,
+      currentRoleOverride: params.currentRoleOverride,
     }),
     messages,
     tools: cacheSafeParams.tools,
@@ -131,6 +135,7 @@ export async function runForkedAgent(
     maxTurns: params.maxTurns,
   })
   let messagesToPersist = messages
+  let persistTask: Promise<string | null> | null = null
   try {
     const result = currentCtx
         ? await runWithSessionContext({
@@ -141,18 +146,32 @@ export async function runForkedAgent(
         }, run)
       : await run()
     messagesToPersist = result.messages
+    if (forkTranscriptPath) {
+      persistTask = persistForkTranscript(forkTranscriptPath, messagesToPersist)
+        .then(() => forkTranscriptPath)
+        .catch(error => {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
+          return null
+        })
+    }
 
     return {
       finalText: result.assistantText,
       stopReason: result.stopReason,
       usage: result.usage,
+      forkTranscriptPath,
+      forkTranscriptPersisted: persistTask ?? Promise.resolve(null),
     }
   } finally {
-    if (forkTranscriptPath) {
-      void persistForkTranscript(forkTranscriptPath, messagesToPersist).catch(error => {
-        const message = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
-      })
+    if (!persistTask && forkTranscriptPath) {
+      persistTask = persistForkTranscript(forkTranscriptPath, messagesToPersist)
+        .then(() => forkTranscriptPath)
+        .catch(error => {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
+          return null
+        })
     }
   }
 }

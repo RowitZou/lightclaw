@@ -64,6 +64,7 @@ export async function runCompaction(
       memoryDir: getMemoryDir(),
       canonicalUser: getCurrentUserId(),
       config: ctx.config,
+      ownerRole: ctx.role,
       timeoutMs: ctx.config.preCompactFlush.timeoutMs,
     })
     if (flushed.lastExtractedAt > getLastExtractedAt()) {

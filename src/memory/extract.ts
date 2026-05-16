@@ -1,7 +1,10 @@
 import type { LightClawConfig } from '../config.js'
 import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runSubagent } from '../agents/run-subagent.js'
+import { getMainRole } from '../agents/registry.js'
+import type { Role } from '../agents/types.js'
 import { collectAssistantText } from '../messages.js'
+import { loadTranscriptFile } from '../session/storage.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
@@ -19,11 +22,14 @@ export type ExtractCtx = {
    *  undefined and the fork is skipped via the no-cacheSafeParams branch). */
   canonicalUser: string | undefined
   config: LightClawConfig
+  ownerRole?: Role
+  forkTranscriptPath?: string
+  forkContextMessages?: Message[]
 }
 
 type ExtractState = {
-  inProgressByDir: Set<string>
-  pendingContextByDir: Map<string, ExtractCtx>
+  inProgressByRoleDir: Set<string>
+  pendingContextByRoleDir: Map<string, ExtractCtx>
   inFlight: Set<Promise<ExtractResult>>
 }
 
@@ -33,24 +39,55 @@ type ExtractResult = {
 }
 
 const state: ExtractState = {
-  inProgressByDir: new Set(),
-  pendingContextByDir: new Map(),
+  inProgressByRoleDir: new Set(),
+  pendingContextByRoleDir: new Map(),
   inFlight: new Set(),
 }
 
+function extractCoalesceKey(memoryDir: string, roleAgentType: string): string {
+  return `${memoryDir}|${roleAgentType}`
+}
+
+function keyPrefixForMemoryDir(memoryDir: string): string {
+  return `${memoryDir}|`
+}
+
 export function isExtractionInProgressFor(memoryDir: string): boolean {
-  return state.inProgressByDir.has(memoryDir)
+  const prefix = keyPrefixForMemoryDir(memoryDir)
+  for (const key of state.inProgressByRoleDir.keys()) {
+    if (key.startsWith(prefix)) return true
+  }
+  return false
 }
 
 export function setExtractionInProgressForTest(
   memoryDir: string,
   value: boolean,
 ): void {
+  const key = extractCoalesceKey(memoryDir, getMainRole().agentType)
   if (value) {
-    state.inProgressByDir.add(memoryDir)
+    state.inProgressByRoleDir.add(key)
   } else {
-    state.inProgressByDir.delete(memoryDir)
+    const prefix = keyPrefixForMemoryDir(memoryDir)
+    for (const existing of [...state.inProgressByRoleDir.keys()]) {
+      if (existing.startsWith(prefix)) {
+        state.inProgressByRoleDir.delete(existing)
+      }
+    }
   }
+}
+
+export function _resetExtractionStateForTest(): void {
+  state.inProgressByRoleDir.clear()
+  state.pendingContextByRoleDir.clear()
+  state.inFlight.clear()
+}
+
+type RunSubagentFn = typeof runSubagent
+let runSubagentImpl: RunSubagentFn = runSubagent
+
+export function _setRunSubagentForTest(impl?: RunSubagentFn): void {
+  runSubagentImpl = impl ?? runSubagent
 }
 
 export function messageToText(message: Message): string {
@@ -147,6 +184,7 @@ export function buildExtractPrompt(
 }
 
 async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
+  const ownerRole = ctx.ownerRole ?? getMainRole()
   const newMessages = ctx.messages.filter(
     message =>
       message.type !== 'system' && message.timestamp > ctx.lastExtractedAt,
@@ -174,7 +212,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   // nothing to look at and would just no-op. ctx.canonicalUser keying is
   // still required for per-user isolation (Phase 28 audit §1.7.4).
   const cacheSafeParams = getLastCacheSafeParams(ctx.canonicalUser)
-  if (!cacheSafeParams) {
+  if (!cacheSafeParams && !ctx.forkContextMessages) {
     console.error('[memory] no cacheSafeParams available, skipping extraction')
     return {
       saved: [],
@@ -190,11 +228,13 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   // MemoryWrite / MemoryRead / Read / Grep / Glob. Runtime gate stays as
   // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
   // Role (20 - see bundled/index.ts).
-  const result = await runSubagent({
+  const result = await runSubagentImpl({
     agentType: 'extract_memories',
     prompt,
     canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
     canonicalUserOverride: ctx.canonicalUser,
+    currentRoleOverride: ownerRole,
+    forkContextMessagesOverride: ctx.forkContextMessages,
   })
 
   // WorkerFailure (PR1.6): runSubagent now returns structured failures
@@ -222,6 +262,10 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
 async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult> {
   let current = initial
+  const key = extractCoalesceKey(
+    current.memoryDir,
+    (current.ownerRole ?? getMainRole()).agentType,
+  )
   let finalResult: ExtractResult = {
     saved: [],
     lastExtractedAt: initial.lastExtractedAt,
@@ -233,7 +277,7 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       saved: [...finalResult.saved, ...result.saved],
       lastExtractedAt: Math.max(finalResult.lastExtractedAt, result.lastExtractedAt),
     }
-    const pending = state.pendingContextByDir.get(current.memoryDir)
+    const pending = state.pendingContextByRoleDir.get(key)
     if (!pending) {
       // Run aging eviction on the way out of the pipeline. The throttle
       // file inside `<memoryDir>/.last-eviction` caps this to ~once a day
@@ -248,7 +292,7 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       }
       return finalResult
     }
-    state.pendingContextByDir.delete(current.memoryDir)
+    state.pendingContextByRoleDir.delete(key)
     current = {
       ...pending,
       lastExtractedAt: finalResult.lastExtractedAt,
@@ -257,15 +301,19 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
 }
 
 export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult> {
-  if (state.inProgressByDir.has(ctx.memoryDir)) {
-    state.pendingContextByDir.set(ctx.memoryDir, ctx)
+  const key = extractCoalesceKey(
+    ctx.memoryDir,
+    (ctx.ownerRole ?? getMainRole()).agentType,
+  )
+  if (state.inProgressByRoleDir.has(key)) {
+    state.pendingContextByRoleDir.set(key, ctx)
     return {
       saved: [],
       lastExtractedAt: ctx.lastExtractedAt,
     }
   }
 
-  state.inProgressByDir.add(ctx.memoryDir)
+  state.inProgressByRoleDir.add(key)
   const task = runExtractionPipeline(ctx)
     .catch(error => {
       const message = error instanceof Error ? error.message : String(error)
@@ -276,7 +324,7 @@ export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult>
       }
     })
     .finally(() => {
-      state.inProgressByDir.delete(ctx.memoryDir)
+      state.inProgressByRoleDir.delete(key)
     })
 
   state.inFlight.add(task)
@@ -284,6 +332,26 @@ export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult>
     state.inFlight.delete(task)
   })
   return task
+}
+
+export async function triggerForkExtract(params: {
+  canonicalUser: string | undefined
+  ownerRole: Role
+  forkTranscriptPath: string
+  memoryDir: string
+  config: LightClawConfig
+}): Promise<ExtractResult> {
+  const messages = await loadTranscriptFile(params.forkTranscriptPath)
+  return executeExtraction({
+    messages,
+    lastExtractedAt: 0,
+    memoryDir: params.memoryDir,
+    canonicalUser: params.canonicalUser,
+    config: params.config,
+    ownerRole: params.ownerRole,
+    forkTranscriptPath: params.forkTranscriptPath,
+    forkContextMessages: messages,
+  })
 }
 
 export async function drainPendingExtraction(timeoutMs = 60_000): Promise<void> {
@@ -305,6 +373,7 @@ export async function flushBeforeCompact(params: {
   memoryDir: string
   canonicalUser: string | undefined
   config: LightClawConfig
+  ownerRole?: Role
   timeoutMs: number
 }): Promise<ExtractResult> {
   const TIMEOUT = Symbol('flush-timeout')
@@ -315,6 +384,7 @@ export async function flushBeforeCompact(params: {
       memoryDir: params.memoryDir,
       canonicalUser: params.canonicalUser,
       config: params.config,
+      ownerRole: params.ownerRole,
     }),
     new Promise<typeof TIMEOUT>(resolve =>
       setTimeout(() => resolve(TIMEOUT), params.timeoutMs).unref(),

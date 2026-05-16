@@ -3,6 +3,7 @@ import { getProvider } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
+import type { Message } from '../types.js'
 import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
 import { getAgent } from './registry.js'
 import {
@@ -39,6 +40,12 @@ export async function runSubagent(params: {
   // (autoDream) source their cap from a user-tunable config knob, so they
   // pass it explicitly rather than baking it into the Role.
   maxTurnsOverride?: number
+  // Used by Phase 3 per-role extract: prompt/tools/gate still come from the
+  // child agent Role, but MemoryWrite's physical binding sees this owner Role.
+  currentRoleOverride?: Role
+  // Used by Phase 3 fork extraction so extract_memories sees the worker fork
+  // transcript, not the parent's most recent main-turn cache context.
+  forkContextMessagesOverride?: Message[]
 }): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)
   if (!agent) {
@@ -83,7 +90,7 @@ export async function runSubagent(params: {
   const existingCache = getLastCacheSafeParams(cacheUserKey)
   const cacheSafeParams = createCacheSafeParams({
     tools,
-    messages: existingCache?.forkContextMessages ?? [],
+    messages: params.forkContextMessagesOverride ?? existingCache?.forkContextMessages ?? [],
     config,
   })
 
@@ -98,6 +105,7 @@ export async function runSubagent(params: {
       promptText: params.prompt,
       cacheSafeParams,
       role: agent,
+      currentRoleOverride: params.currentRoleOverride,
       canUseToolOverride: params.canUseToolOverride,
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
       label:
@@ -105,6 +113,12 @@ export async function runSubagent(params: {
           ? params.agentType
           : `subagent_${params.agentType}`,
       signal: params.signal,
+    })
+    maybeTriggerForkExtract({
+      agent,
+      result,
+      canonicalUser: cacheUserKey,
+      config,
     })
 
     return {
@@ -115,6 +129,44 @@ export async function runSubagent(params: {
   } catch (error) {
     return subagentFailureForError(error, params.signal)
   }
+}
+
+function maybeTriggerForkExtract(input: {
+  agent: Role
+  result: Awaited<ReturnType<typeof runForkedAgent>>
+  canonicalUser: string | undefined
+  config: ReturnType<typeof getConfig>
+}): void {
+  const parentCtx = getCurrentSessionContext()
+  if (
+    !parentCtx
+    || !input.canonicalUser
+    || !input.result.forkTranscriptPath
+    || !input.config.autoMemory
+  ) {
+    return
+  }
+  const policy = input.agent.contextPolicy
+  if (policy?.autoMemoryExtract !== true) {
+    return
+  }
+
+  void input.result.forkTranscriptPersisted
+    .then(async persistedPath => {
+      if (!persistedPath) return
+      const { triggerForkExtract } = await import('../memory/extract.js')
+      await triggerForkExtract({
+        canonicalUser: input.canonicalUser,
+        ownerRole: input.agent,
+        forkTranscriptPath: persistedPath,
+        memoryDir: parentCtx.memoryDir,
+        config: input.config,
+      })
+    })
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[memory] fork extraction failed: ${message}\n`)
+    })
 }
 
 export type RunSubagentResult =

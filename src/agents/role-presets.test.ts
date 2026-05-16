@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { resolveRolePolicy } from './role-presets.js'
+import { getAgent } from './registry.js'
 import type { Role } from './types.js'
 
 function role(overrides: Partial<Role> = {}): Role {
@@ -105,4 +106,14 @@ test('resolveRolePolicy lets role fields override presets', () => {
   assert.deepEqual(resolved.reachableRoles, ['explore'])
   assert.deepEqual(resolved.hooks, [])
   assert.equal(resolved.outputContract, 'side-effect')
+})
+
+test('web worker opts into per-fork memory extraction while other workers stay off', () => {
+  const web = getAgent('web')
+  const explore = getAgent('explore')
+  assert.ok(web)
+  assert.ok(explore)
+
+  assert.equal(resolveRolePolicy(web).contextPolicy.autoMemoryExtract, true)
+  assert.equal(resolveRolePolicy(explore).contextPolicy.autoMemoryExtract, false)
 })

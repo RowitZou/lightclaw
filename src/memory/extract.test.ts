@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
+import type { LightClawConfig } from '../config.js'
+import { getAgent, getMainRole } from '../agents/registry.js'
+import { persistForkTranscript } from '../agents/fork-transcript.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
 import type { MemoryEntry } from './types.js'
 import {
+  _resetExtractionStateForTest,
+  _setRunSubagentForTest,
   buildExtractPrompt,
+  executeExtraction,
   hasMemoryWritesSince,
+  isExtractionInProgressFor,
   messageToText,
+  setExtractionInProgressForTest,
+  triggerForkExtract,
 } from './extract.js'
 import {
   createAutoDreamCanUseTool,
@@ -15,6 +27,12 @@ import {
   isReadOnlyBash,
 } from './auto-mem-can-use-tool.js'
 import type { Tool } from '../tool.js'
+
+const dummyConfig = {
+  model: 'claude-sonnet-4-6',
+  routing: { main: 'claude-sonnet-4-6' },
+  autoMemory: true,
+} as LightClawConfig
 
 function memory(filename: string): MemoryEntry {
   return {
@@ -150,4 +168,89 @@ test('autoDream tool gate allows only explicit memory curation tools and reads',
     reason: 'autoDream cannot use MemoryWrite.',
   })
   assert.equal((await gate(tool('Edit'), {})).behavior, 'deny')
+})
+
+test('per-role extraction passes currentRoleOverride and fork transcript context to extract_memories', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  const webRole = getAgent('web')
+  assert.ok(webRole)
+  const messages = [createUserMessage('remember this web result', null, 10)]
+  const calls: Array<Parameters<typeof executeExtraction>[0]> = []
+  try {
+    _resetExtractionStateForTest()
+    _setRunSubagentForTest(async params => {
+      calls.push({
+        messages,
+        lastExtractedAt: 0,
+        memoryDir: tempDir,
+        canonicalUser: 'alice',
+        config: dummyConfig,
+        ownerRole: params.currentRoleOverride,
+        forkContextMessages: params.forkContextMessagesOverride,
+      })
+      return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
+    })
+
+    await executeExtraction({
+      messages,
+      lastExtractedAt: 0,
+      memoryDir: tempDir,
+      canonicalUser: 'alice',
+      config: dummyConfig,
+      ownerRole: webRole,
+      forkContextMessages: messages,
+    })
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.ownerRole?.agentType, 'web')
+    assert.deepEqual(calls[0]?.forkContextMessages, messages)
+  } finally {
+    _setRunSubagentForTest()
+    _resetExtractionStateForTest()
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('triggerForkExtract reads the persisted fork transcript before running extraction', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  const webRole = getAgent('web')
+  assert.ok(webRole)
+  const messages = [createUserMessage('web transcript input', null, 10)]
+  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'web-test.jsonl')
+  const seen: { messages?: unknown; role?: string } = {}
+  try {
+    await persistForkTranscript(forkTranscriptPath, messages)
+    _resetExtractionStateForTest()
+    _setRunSubagentForTest(async params => {
+      seen.messages = params.forkContextMessagesOverride
+      seen.role = params.currentRoleOverride?.agentType
+      return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
+    })
+
+    await triggerForkExtract({
+      canonicalUser: 'alice',
+      ownerRole: webRole,
+      forkTranscriptPath,
+      memoryDir: tempDir,
+      config: dummyConfig,
+    })
+
+    assert.deepEqual(seen.messages, messages)
+    assert.equal(seen.role, 'web')
+  } finally {
+    _setRunSubagentForTest()
+    _resetExtractionStateForTest()
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('isExtractionInProgressFor keeps per-user dream mutex semantics across role keys', () => {
+  const memoryDir = '/tmp/lightclaw-memory'
+  _resetExtractionStateForTest()
+  assert.equal(isExtractionInProgressFor(memoryDir), false)
+  setExtractionInProgressForTest(memoryDir, true)
+  assert.equal(isExtractionInProgressFor(memoryDir), true)
+  setExtractionInProgressForTest(memoryDir, false)
+  assert.equal(isExtractionInProgressFor(memoryDir), false)
+  assert.equal(getMainRole().agentType, 'main')
 })

@@ -179,7 +179,7 @@ export async function query(params: QueryParams): Promise<{
   const rolePolicy = resolveRolePolicy(params.role)
   const currentSessionContext = getCurrentSessionContext()
   if (currentSessionContext) {
-    currentSessionContext.currentRole = params.role
+    currentSessionContext.currentRole = invocation.currentRoleOverride ?? params.role
   }
   const contextPolicy = rolePolicy.contextPolicy
   const lifecycleHooks = resolveHooks(params.role)

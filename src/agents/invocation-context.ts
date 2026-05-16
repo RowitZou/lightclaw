@@ -1,6 +1,7 @@
 import type { WakeNotifyResult } from '../background-task/types.js'
 import type { PermissionApprover } from '../permission/types.js'
 import type { CanUseToolFn } from '../tool.js'
+import type { Role } from './types.js'
 import type {
   ToolExecutionEvent,
   UserContentBlock,
@@ -52,6 +53,7 @@ export type InvocationContext = {
   subagentLabel?: string
   wakeNotifications?: WakeNotifyResult[]
   systemPromptOverride?: string
+  currentRoleOverride?: Role
 }
 
 export function emptyInvocationContext(): InvocationContext {
@@ -70,6 +72,7 @@ export function forkInvocationContext(input: {
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
   subagentLabel?: string
+  currentRoleOverride?: Role
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -77,6 +80,7 @@ export function forkInvocationContext(input: {
     cacheBreakpointMessageIndex: input.cacheBreakpointMessageIndex,
     signal: input.signal,
     subagentLabel: input.subagentLabel,
+    currentRoleOverride: input.currentRoleOverride,
   }
 }
 

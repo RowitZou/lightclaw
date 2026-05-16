@@ -31,6 +31,7 @@ export const autoMemoryHook: Hook = {
       memoryDir: getMemoryDir(),
       canonicalUser: getCurrentUserId(),
       config: ctx.config,
+      ownerRole: ctx.role,
     })
       .then(async result => {
         if (result.lastExtractedAt <= lastExtractedAt) {
