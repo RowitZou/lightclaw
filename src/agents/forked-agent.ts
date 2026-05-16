@@ -119,8 +119,9 @@ export async function runForkedAgent(
   })
   const currentCtx = getCurrentSessionContext()
   const result = currentCtx
-    ? await runWithSessionContext({
+      ? await runWithSessionContext({
         ...currentCtx,
+        currentRole: params.role,
         discoveredTools: new Map(),
         turnCounter: 0,
       }, run)

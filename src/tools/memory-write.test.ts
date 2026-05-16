@@ -76,6 +76,34 @@ describe('MemoryWrite currentRole binding', () => {
     assert.equal(result.isError, undefined)
     await readFile(path.join(memoryDir, 'fallback-note.md'), 'utf8')
   })
+
+  it('lets fork-like nested contexts override a parent worker role', async () => {
+    const parent = createSessionContext({
+      cwd: tmpRoot,
+      model: 'claude-sonnet-4-6',
+      sessionsDir: path.join(tmpRoot, 'sessions'),
+      memoryDir,
+      currentUserId: 'alice',
+      currentRole: workerRole('web'),
+      sessionId: 'memory-write-parent',
+    })
+    const child = {
+      ...parent,
+      currentRole: internalRole('extract_memories'),
+      sessionId: 'memory-write-child',
+    }
+
+    const result = await runWithSessionContext(parent, () =>
+      runWithSessionContext(child, () => writeMemory('fork-extract-note')),
+    )
+
+    assert.equal(result.isError, undefined)
+    await readFile(path.join(memoryDir, 'fork-extract-note.md'), 'utf8')
+    await assert.rejects(
+      () => readFile(path.join(memoryDir, 'web', 'fork-extract-note.md'), 'utf8'),
+      { code: 'ENOENT' },
+    )
+  })
 })
 
 function writeMemory(filename: string) {
