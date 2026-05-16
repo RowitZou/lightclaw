@@ -22,7 +22,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   'general-purpose': '8d9db5fc7e6a1511e57087c9f39c47fae2ed16dea9aadf464cb78e52597beaa9',
   explore: '215701318f8b02d85b535e6ca9f6da05a6460e003e1d1108dbce59f80ac5bb32',
   extract_memories: 'bdab95f5137788deebd1d0f801bc4aff5b27b7c989b7b1551ba7433089be09ea',
-  auto_dream: '764297a7de477c068a94deaafe6c2353024fb6fbb02525fa9ab7fbf8b9a1d870',
+  auto_dream: '6d1774193e980d9fc584805cd2454a4e858df9a4dd07ebd5fa218ff03577dd2d',
 }
 
 let tmpRoot: string
