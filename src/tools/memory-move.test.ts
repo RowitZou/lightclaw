@@ -92,6 +92,25 @@ describe('MemoryMove', () => {
     assert.equal(result.isError, true)
     assert.equal(result.output, 'destination already exists')
   })
+
+  it('rejects moving MEMORY.md as source', async () => {
+    await writeFile(path.join(memoryDir, 'web', 'MEMORY.md'), 'index', 'utf8')
+    const result = await withMemorySession(() =>
+      memoryMoveTool.call({ from: 'web/MEMORY.md', to: 'web/saved.md' }, undefined as never),
+    )
+
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /MEMORY\.md is framework-managed/)
+  })
+
+  it('rejects moving onto MEMORY.md as destination', async () => {
+    const result = await withMemorySession(() =>
+      memoryMoveTool.call({ from: 'web/a.md', to: 'web/MEMORY.md' }, undefined as never),
+    )
+
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /MEMORY\.md is framework-managed/)
+  })
 })
 
 function withMemorySession<T>(fn: () => Promise<T>): Promise<T> {

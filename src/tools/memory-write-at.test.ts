@@ -96,6 +96,20 @@ describe('MemoryWriteAt', () => {
     assert.equal(result.isError, true)
     assert.equal(result.output, 'path resolves outside memoryDir')
   })
+
+  it('rejects writing MEMORY.md directly', async () => {
+    const result = await withMemorySession(() =>
+      memoryWriteAtTool.call({
+        path: '_shared/MEMORY.md',
+        type: 'project',
+        description: 'Manual index attempt',
+        content: 'This should not be written.',
+      }, undefined as never),
+    )
+
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /MEMORY\.md is framework-managed/)
+  })
 })
 
 function withMemorySession<T>(fn: () => Promise<T>): Promise<T> {
