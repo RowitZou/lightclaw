@@ -6,16 +6,13 @@ import { createMainAgentCanUseTool } from './main-agent-can-use-tool.js'
 import type { Role } from './types.js'
 
 describe('createMainAgentCanUseTool', () => {
-  it('blocks wake-only tools in normal mode', async () => {
+  it('applies the main role gate in normal mode', async () => {
     const gate = createMainAgentCanUseTool('normal', mainRole())
-    assert.equal((await gate(fakeTool('notify_user'), {})).behavior, 'deny')
-    assert.equal((await gate(fakeTool('stay_silent'), {})).behavior, 'deny')
+    assert.equal((await gate(fakeTool('Notify'), {})).behavior, 'allow')
   })
 
-  it('allows wake-only tools in wake mode', async () => {
+  it('wake mode no longer grants special wake-only tools', async () => {
     const gate = createMainAgentCanUseTool('wake', mainRole())
-    assert.deepEqual(await gate(fakeTool('notify_user'), {}), { behavior: 'allow' })
-    assert.deepEqual(await gate(fakeTool('stay_silent'), {}), { behavior: 'allow' })
     assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })
   })
 
@@ -23,7 +20,7 @@ describe('createMainAgentCanUseTool', () => {
     const gate = createMainAgentCanUseTool('wake', mainRole({ tools: ['Read'] }))
     assert.equal((await gate(fakeTool('Read'), {})).behavior, 'allow')
     assert.equal((await gate(fakeTool('Write'), {})).behavior, 'deny')
-    assert.equal((await gate(fakeTool('notify_user'), {})).behavior, 'allow')
+    assert.equal((await gate(fakeTool('Notify'), {})).behavior, 'deny')
   })
 })
 

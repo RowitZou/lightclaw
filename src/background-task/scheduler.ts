@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto'
 
 import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { getChannelRunner } from '../channels/feishu/runner-registry.js'
+import { parseFeishuSessionId } from '../channels/feishu/routing.js'
+import type { NormalizedChannelMessage } from '../channels/types.js'
 import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
 import { isHighRiskRulePattern } from '../permission/high-risk.js'
+import { formatBackgroundTaskResultBlock } from '../signal-bus/background-result-block.js'
+import { getSignalRouter } from '../signal-bus/router.js'
 import {
   appendCompletedTaskRecord,
   appendFireHistory,
@@ -369,92 +375,154 @@ export class BackgroundTaskScheduler {
       })
     }
 
-    const notifyTo = resolveEffectiveNotifyTo(outcome, task.notifyTo)
-
-    if (notifyTo === 'agent') {
-      // Gate the wake path BEFORE dispatching, so failures degrade to the
-      // user-card path instead of vanishing. Three preconditions:
-      //   (1) LocalRuntime is admin-only (mirrors runner.ts:56). A failure
-      //       outcome from a non-admin under local backend can still reach
-      //       deliverCompletion, and resolveEffectiveNotifyTo would otherwise
-      //       send it through wake — which would re-acquire LocalRuntime in a
-      //       new context. Block here instead.
-      //   (2) Wake needs a real on-disk Feishu session (DM or group). Bug 15:
-      //       prefer `task.originSessionId` (the chat the BackgroundTask was
-      //       created from), so the wake agent inherits the conversation
-      //       context that motivated the task. Fall back to "most recent DM"
-      //       only when origin is missing (legacy pre-Bug-15 tasks) or its
-      //       transcript no longer exists on disk.
-      //   (3) Delivery follows origin: `deliverWakeNotification` routes the
-      //       notify_user output back to the chat the task was created from
-      //       (group-origin → origin group, DM-origin / unparseable → DM).
-      //       notify_to:'user' is the DM-only contract and never reaches the
-      //       wake path; a group landing here is an explicit in-group task.
-      const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
-      const adminBlocksWake = adminId !== null && adminId !== canonicalUser
-      const sessionsDir = this.config?.sessionsDir
-      let wakeSessionId: string | null = null
-      if (!adminBlocksWake && sessionsDir) {
-        const { resolveOriginWakeSessionId, resolveWakeSessionId } = await import('./wake.js')
-        // Prefer origin session if it parses to a Feishu DM/group session id
-        // and the transcript exists. Otherwise fall back to most-recent DM.
-        if (task.originSessionId) {
-          wakeSessionId = await resolveOriginWakeSessionId(task.originSessionId, sessionsDir)
-        }
-        if (!wakeSessionId) {
-          wakeSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
-        }
-      }
-      if (adminBlocksWake) {
+    if (outcome.kind === 'failure' && hasHighRiskPermissionDenial(outcome)) {
+      const coordinator = getBackgroundTaskCardCoordinator()
+      if (!coordinator) {
         process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} wake skipped: LocalRuntime admin-only; user "${canonicalUser}" is not admin; falling back to user card\n`,
+          `[background-task] ${task.id} fire ${fireUuid} high-risk permission failure but no Feishu card coordinator is registered\n`,
         )
-      } else if (!sessionsDir) {
-        process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} wake skipped: scheduler has no config bound; falling back to user card\n`,
-        )
-      } else if (!wakeSessionId) {
-        process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} wake skipped: no usable origin/DM session for ${canonicalUser}; falling back to user card\n`,
-        )
-      } else {
-        const { deliverWakeNotification, wakeMainAgent } = await import('./wake.js')
-        const result = await wakeMainAgent({
-          canonicalUser,
-          mainSessionId: wakeSessionId,
-          task,
-          outcome,
-          ...(priorPromptNotice ? { priorPromptNotice } : {}),
-        })
-        await deliverWakeNotification({
-          wakeSessionId,
-          ownerOpenId,
-          taskLabel: task.label,
-          result,
-        })
         return
       }
-      // fall through to coordinator card path below
+      await coordinator.sendCompletionCard({
+        fireUuid,
+        task,
+        ownerCanonicalUser: canonicalUser,
+        ownerOpenId,
+        outcome,
+        firedAt,
+        ...(autopaused ? { autopaused: true } : {}),
+        ...(priorPromptNotice ? { priorPromptNotice } : {}),
+      })
+      return
     }
 
-    const coordinator = getBackgroundTaskCardCoordinator()
-    if (!coordinator) {
+    const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
+    if (adminId !== null && adminId !== canonicalUser) {
       process.stderr.write(
-        `[background-task] ${task.id} fire ${fireUuid} completed but no Feishu card coordinator is registered\n`,
+        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: LocalRuntime admin-only; user "${canonicalUser}" is not admin\n`,
       )
       return
     }
-    await coordinator.sendCompletionCard({
-      fireUuid,
-      task,
-      ownerCanonicalUser: canonicalUser,
+    const sessionsDir = this.config?.sessionsDir
+    if (!sessionsDir) {
+      process.stderr.write(
+        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: scheduler has no config bound\n`,
+      )
+      return
+    }
+    const { resolveOriginWakeSessionId, resolveWakeSessionId } = await import('./session-resolve.js')
+    let mainSessionId: string | null = null
+    if (task.originSessionId) {
+      mainSessionId = await resolveOriginWakeSessionId(task.originSessionId, sessionsDir)
+    }
+    if (!mainSessionId) {
+      mainSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
+    }
+    if (!mainSessionId) {
+      process.stderr.write(
+        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: no usable origin/DM session for ${canonicalUser}\n`,
+      )
+      return
+    }
+
+    const outcomeLabel = outcomeKindForBackgroundResult(outcome)
+    const resultText = outcome.kind === 'success'
+      ? outcome.summary
+      : [
+          outcome.reason,
+          ...(outcome.permissionDenials?.length
+            ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
+            : []),
+        ].join('\n')
+    await getSignalRouter().publish({
+      kind: 'notification',
+      from: { kind: 'scheduler' },
+      to: { kind: 'role', id: 'main', sessionId: mainSessionId },
+      payload: {
+        kind: 'background-result',
+        dispatchId: task.id,
+        label: task.label,
+        outcome: outcomeLabel,
+        result: resultText,
+        ...(priorPromptNotice ? { priorPromptNotice } : {}),
+      },
+      timing: { emittedAt: Date.now() },
+      chainId: mainSessionId,
+    })
+    await deliverBackgroundResultToMain({
+      mainSessionId,
       ownerOpenId,
-      outcome,
-      firedAt,
-      ...(autopaused ? { autopaused: true } : {}),
-      ...(priorPromptNotice ? { priorPromptNotice } : {}),
+      dispatchId: task.id,
+      label: task.label,
+      outcome: outcomeLabel,
+      result: resultText,
     })
   }
+}
+
+function hasHighRiskPermissionDenial(outcome: FireOutcome): boolean {
+  if (outcome.kind !== 'failure') return false
+  return (outcome.permissionDenials ?? []).some(denial =>
+    denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
+  )
+}
+
+function outcomeKindForBackgroundResult(
+  outcome: FireOutcome,
+): 'success' | 'failed' | 'permission-denied' | 'aborted' {
+  if (outcome.kind === 'success') return 'success'
+  if (/abort/i.test(outcome.reason)) return 'aborted'
+  if ((outcome.permissionDenials ?? []).length > 0) return 'permission-denied'
+  return 'failed'
+}
+
+async function deliverBackgroundResultToMain(input: {
+  mainSessionId: string
+  ownerOpenId: string
+  dispatchId: string
+  label: string
+  outcome: 'success' | 'failed' | 'permission-denied' | 'aborted'
+  result: string
+}): Promise<void> {
+  const block = formatBackgroundTaskResultBlock(input)
+  const messageId = `bg-${input.dispatchId}-${Date.now()}`
+  if (channelInterjectionQueue.hasInflightFor(input.mainSessionId)) {
+    channelInterjectionQueue.push(input.mainSessionId, {
+      text: block,
+      messageId,
+      senderOpenId: input.ownerOpenId,
+      arrivedAt: Date.now(),
+      source: 'background-task',
+    })
+    return
+  }
+  const parsed = parseFeishuSessionId(input.mainSessionId)
+  const runner = getChannelRunner()
+  if (!parsed || !runner) {
+    channelInterjectionQueue.push(input.mainSessionId, {
+      text: block,
+      messageId,
+      senderOpenId: input.ownerOpenId,
+      arrivedAt: Date.now(),
+      source: 'background-task',
+    })
+    process.stderr.write(
+      `[background-task] queued background-result for ${input.mainSessionId}; synthetic turn unavailable\n`,
+    )
+    return
+  }
+  const synthetic: NormalizedChannelMessage = {
+    channel: 'feishu',
+    eventId: messageId,
+    messageId,
+    chatId: parsed.chatId,
+    chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
+    ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
+    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : input.ownerOpenId,
+    text: block,
+    synthetic: true,
+  }
+  await runner.handleMessage(synthetic)
 }
 
 const scheduler = new BackgroundTaskScheduler()

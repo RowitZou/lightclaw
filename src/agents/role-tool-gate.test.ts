@@ -46,7 +46,7 @@ test('orchestrator roles with wildcard tools do not restrict tool presence', asy
   const gate = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
 
   assert.equal((await gate(tool('AgentTool'), {})).behavior, 'allow')
-  assert.equal((await gate(tool('notify_user'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('Notify'), {})).behavior, 'allow')
 })
 
 test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () => {

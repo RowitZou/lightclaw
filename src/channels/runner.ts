@@ -72,6 +72,7 @@ import {
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { SessionMeta, UserContentBlock } from '../types.js'
+import { getSignalRouter } from '../signal-bus/router.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
 import {
@@ -307,6 +308,14 @@ export class ChannelRunner {
       // stoppable from a parent-chat /stop — both are designed as
       // fire-and-forget / one-shot work.
       const targetSessionId = this.strategy.resolveSessionId(message, userId)
+      await getSignalRouter().publish({
+        kind: 'notification',
+        from: { kind: 'user', id: message.senderOpenId },
+        to: { kind: 'role', id: 'main', sessionId: targetSessionId, broadcast: 'chain' },
+        payload: { kind: 'abort', abortReason: '/stop' },
+        timing: { emittedAt: Date.now() },
+        chainId: targetSessionId,
+      })
       const aborted = abortInFlightForSession(targetSessionId)
       await this.sendNotice(
         message,
@@ -700,11 +709,18 @@ export class ChannelRunner {
                 },
                 interjectionRenderer: (entries, context) => [{
                   type: 'text',
-                  text: buildInterjectionBlock({
-                    interjections: entries,
-                    originalUserText: context.originalUserText,
-                    completedToolUses: context.completedToolUses,
-                  }),
+                  text: [
+                    ...entries
+                      .filter(entry => entry.source === 'background-task')
+                      .map(entry => entry.text),
+                    ...(entries.some(entry => entry.source !== 'background-task')
+                      ? [buildInterjectionBlock({
+                          interjections: entries.filter(entry => entry.source !== 'background-task'),
+                          originalUserText: context.originalUserText,
+                          completedToolUses: context.completedToolUses,
+                        })]
+                      : []),
+                  ].join('\n\n'),
                 }],
                 interjectionDrain: async () => {
                   // Branch and fresh sessions run on independent sessionIds

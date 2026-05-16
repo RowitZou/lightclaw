@@ -4,7 +4,6 @@ import { toJSONSchema } from 'zod/v4'
 import type { Provider } from './provider/types.js'
 import type { PermissionRuleValue, RiskLevel } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
-import type { WakeNotifyResult } from './background-task/types.js'
 import type { UserToolResultBlock } from './types.js'
 import type { ChannelKey } from './channel-types.js'
 
@@ -23,7 +22,6 @@ export type ToolCallContext = {
     upstreamModel: string
   }
   canUseTool?: CanUseToolFn
-  wakeNotifications?: WakeNotifyResult[]
   deferredTools?: readonly Tool[]
   discoverTool?(name: string): void
 }

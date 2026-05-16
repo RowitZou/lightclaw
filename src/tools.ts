@@ -5,6 +5,13 @@ import {
   listBackgroundTasksTool,
   updateBackgroundTaskTool,
 } from './tools/background-task.js'
+import {
+  cancelDispatchTool,
+  dispatchTool,
+  listDispatchesTool,
+  updateDispatchTool,
+} from './tools/dispatch.js'
+import { notifyTool } from './tools/notify.js'
 import { bashTool } from './tools/bash.js'
 import { conversationGrepTool } from './tools/conversation-grep.js'
 import { conversationListTool } from './tools/conversation-list.js'
@@ -71,6 +78,11 @@ export const builtinTools = [
   todoWriteTool,
   webFetchTool,
   webSearchTool,
+  dispatchTool,
+  listDispatchesTool,
+  cancelDispatchTool,
+  updateDispatchTool,
+  notifyTool,
   agentTool,
   backgroundTaskTool,
   listBackgroundTasksTool,
