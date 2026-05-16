@@ -9,6 +9,8 @@
  * task-specific prompt.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { createUserMessage, getLastUuid } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -28,6 +30,7 @@ import type {
 import type { CacheSafeParams } from './cache-safe-params.js'
 import type { Role } from './types.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
+import { getForkTranscriptPath, persistForkTranscript } from './fork-transcript.js'
 
 // Byte-identical across all sibling forks so parallel AgentTool dispatches
 // cache the parent prefix + assistant tool_use turn together. Mirrors Claude
@@ -101,6 +104,16 @@ export async function runForkedAgent(
     environmentRoot: getRuntime().workspaceRoot,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)
+  const currentCtx = getCurrentSessionContext()
+  const forkId = randomUUID().slice(0, 8)
+  const forkTranscriptPath = currentCtx
+    ? getForkTranscriptPath({
+        sessionsDir: currentCtx.sessionsDir,
+        parentSessionId: currentCtx.sessionId,
+        roleAgentType: params.role.agentType,
+        forkId,
+      })
+    : null
 
   const run = () => query({
     role: params.role,
@@ -117,19 +130,29 @@ export async function runForkedAgent(
     config: cacheSafeParams.config,
     maxTurns: params.maxTurns,
   })
-  const currentCtx = getCurrentSessionContext()
-  const result = currentCtx
-      ? await runWithSessionContext({
-        ...currentCtx,
-        currentRole: params.role,
-        discoveredTools: new Map(),
-        turnCounter: 0,
-      }, run)
-    : await run()
+  let messagesToPersist = messages
+  try {
+    const result = currentCtx
+        ? await runWithSessionContext({
+          ...currentCtx,
+          currentRole: params.role,
+          discoveredTools: new Map(),
+          turnCounter: 0,
+        }, run)
+      : await run()
+    messagesToPersist = result.messages
 
-  return {
-    finalText: result.assistantText,
-    stopReason: result.stopReason,
-    usage: result.usage,
+    return {
+      finalText: result.assistantText,
+      stopReason: result.stopReason,
+      usage: result.usage,
+    }
+  } finally {
+    if (forkTranscriptPath) {
+      void persistForkTranscript(forkTranscriptPath, messagesToPersist).catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
+      })
+    }
   }
 }
