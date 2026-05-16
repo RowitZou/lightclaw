@@ -1,7 +1,9 @@
 import { streamChat } from '../api.js'
+import type { Role } from '../agents/types.js'
 import type { LightClawConfig } from '../config.js'
 import { modelFor } from '../provider/index.js'
-import { loadMemoryIndex, scanMemoryFiles } from './auto-memory.js'
+import { loadMemoryIndex, scanMemoryFilesInDirs } from './auto-memory.js'
+import { resolveReadableMemoryDirsForRole } from './scope.js'
 import type { MemoryEntry } from './types.js'
 
 export type RecallOptions = {
@@ -86,6 +88,7 @@ export async function selectRelevantMemories(
   memoryDir: string,
   config: LightClawConfig,
   options: RecallOptions,
+  role?: Role,
 ): Promise<MemoryEntry[]> {
   const trimmed = query.trim()
   if (trimmed.length === 0) {
@@ -96,7 +99,14 @@ export async function selectRelevantMemories(
   // recalled memories" so the system prompt build (Promise.all in prompt.ts)
   // is not aborted by a transient permission error or model hiccup.
   try {
-    const manifest = await loadMemoryIndex(memoryDir)
+    if (role) {
+      const resolved = await resolveReadableMemoryDirsForRole(role, memoryDir)
+      if (resolved.readableDirs.length === 0) {
+        return []
+      }
+    }
+
+    const manifest = await loadMemoryIndex(memoryDir, role)
     if (manifest.trim().length === 0) {
       return []
     }
@@ -111,7 +121,12 @@ export async function selectRelevantMemories(
       return []
     }
 
-    const entries = await scanMemoryFiles(memoryDir)
+    const entries = role
+      ? await scanMemoryFilesInDirs(
+          memoryDir,
+          (await resolveReadableMemoryDirsForRole(role, memoryDir)).readableDirs,
+        )
+      : await scanMemoryFilesInDirs(memoryDir, [memoryDir])
     const byFilename = new Map(entries.map(entry => [entry.filename, entry]))
     const seen = new Set<string>()
     const result: MemoryEntry[] = []

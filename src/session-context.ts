@@ -6,6 +6,7 @@ import type { Runtime } from './runtime/index.js'
 import type { PermissionDenialDetail } from './background-task/types.js'
 import type { TodoItem, UsageStats } from './types.js'
 import type { ChannelKey } from './channel-types.js'
+import type { Role } from './agents/types.js'
 
 export type ChannelFileSendInput = {
   content: Buffer
@@ -45,6 +46,7 @@ export type SessionContext = {
   model: string
   sessionsDir: string
   memoryDir: string
+  currentRole?: Role
   currentUserId?: string
   resumedFrom: string | null
   compactionCount: number
@@ -128,6 +130,7 @@ export function createSessionContext(input: {
   sessionsDir: string
   memoryDir: string
   currentUserId?: string
+  currentRole?: Role
   sessionId?: string
   channel?: ChannelKey
   resumedFrom?: string | null
@@ -154,6 +157,7 @@ export function createSessionContext(input: {
     model: input.model,
     sessionsDir: input.sessionsDir,
     memoryDir: input.memoryDir,
+    currentRole: input.currentRole,
     currentUserId: input.currentUserId,
     resumedFrom: input.resumedFrom ?? null,
     compactionCount: input.compactionCount ?? 0,
@@ -199,6 +203,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     model: '',
     sessionsDir: '',
     memoryDir: '',
+    currentRole: undefined,
     resumedFrom: null,
     compactionCount: 0,
     lastExtractedAt: 0,

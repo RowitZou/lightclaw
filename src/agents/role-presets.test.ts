@@ -22,6 +22,7 @@ test('resolveRolePolicy defaults roles without kind to worker policy', () => {
   assert.equal(resolved.contextPolicy.environmentInfo, true)
   assert.equal(resolved.contextPolicy.projectMemory, false)
   assert.equal(resolved.contextPolicy.memoryRecall, false)
+  assert.deepEqual(resolved.contextPolicy.memoryScopes, [])
   assert.equal(resolved.contextPolicy.transcriptInheritance, 'fork-prefix')
   assert.equal(resolved.contextPolicy.permissionSection, true)
   assert.equal(resolved.contextPolicy.autoCompact, false)
@@ -41,6 +42,7 @@ test('resolveRolePolicy fills orchestrator defaults', () => {
 
   assert.equal(resolved.kind, 'orchestrator')
   assert.deepEqual(resolved.contextPolicy.memoryRecall, {})
+  assert.deepEqual(resolved.contextPolicy.memoryScopes, ['self', 'shared'])
   assert.equal(resolved.contextPolicy.projectMemory, true)
   assert.equal(resolved.contextPolicy.sessionWorkingMemory, true)
   assert.equal(resolved.contextPolicy.skillCatalog, true)
@@ -67,6 +69,7 @@ test('resolveRolePolicy fills internal defaults', () => {
   assert.equal(resolved.contextPolicy.projectMemory, false)
   assert.equal(resolved.contextPolicy.autoMemoryIndex, true)
   assert.equal(resolved.contextPolicy.memoryRecall, false)
+  assert.deepEqual(resolved.contextPolicy.memoryScopes, ['self', 'shared'])
   assert.equal(resolved.contextPolicy.sessionWorkingMemory, false)
   assert.equal(resolved.contextPolicy.transcriptInheritance, 'fork-prefix')
   assert.equal(resolved.contextPolicy.autoCompact, false)
@@ -84,6 +87,7 @@ test('resolveRolePolicy lets role fields override presets', () => {
     contextPolicy: {
       projectMemory: true,
       memoryRecall: { types: ['project'], topN: 3 },
+      memoryScopes: ['self', 'shared'],
     },
     skills: ['docs'],
     mcpServers: ['browser'],
@@ -95,6 +99,7 @@ test('resolveRolePolicy lets role fields override presets', () => {
   assert.equal(resolved.name, 'custom-worker')
   assert.equal(resolved.contextPolicy.projectMemory, true)
   assert.deepEqual(resolved.contextPolicy.memoryRecall, { types: ['project'], topN: 3 })
+  assert.deepEqual(resolved.contextPolicy.memoryScopes, ['self', 'shared'])
   assert.deepEqual(resolved.skills, ['docs'])
   assert.deepEqual(resolved.mcpServers, ['browser'])
   assert.deepEqual(resolved.reachableRoles, ['explore'])

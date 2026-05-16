@@ -20,6 +20,8 @@ export type OutputContract = 'report' | 'side-effect'
 
 export type RoleResourceAllowlist = string[] | ['*']
 
+export type MemoryScope = 'self' | 'shared'
+
 export type ContextPolicy = {
   environmentInfo: boolean
   projectMemory: boolean
@@ -32,6 +34,7 @@ export type ContextPolicy = {
   todos: boolean
   channelContext: boolean
   transcriptInheritance: 'none' | 'fork-prefix' | 'full'
+  memoryScopes: MemoryScope[]
   autoCompact: boolean
   autoMemoryExtract: boolean
   deferredToolDiscovery: boolean

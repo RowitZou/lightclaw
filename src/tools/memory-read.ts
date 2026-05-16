@@ -1,11 +1,19 @@
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
 
+import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
+import { getMainRole } from '../agents/registry.js'
+import type { Role } from '../agents/types.js'
 import { memoryFreshnessText } from '../memory/aging.js'
-import { normalizeMemoryFilename, readMemoryFile, scanMemoryFiles } from '../memory/auto-memory.js'
-import { getMemoryDir } from '../state.js'
+import { normalizeMemoryFilename, scanMemoryFilesInDirs } from '../memory/auto-memory.js'
+import {
+  memoryPathWithinDir,
+  relativeMemoryFilename,
+  resolveReadableMemoryDirsForRole,
+} from '../memory/scope.js'
+import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
 
 export const memoryReadTool = buildTool({
@@ -24,9 +32,11 @@ Reach for this when the user references stored preferences ("我之前让你..."
   async call(input) {
     try {
       const memoryDir = getMemoryDir()
+      const role = getCurrentRole() ?? getMainRole()
+      const resolved = await resolveReadableMemoryDirsForRole(role, memoryDir)
 
       if (input.action === 'list') {
-        const entries = await scanMemoryFiles(memoryDir)
+        const entries = await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs)
         return {
           output:
             entries.length > 0
@@ -47,16 +57,25 @@ Reach for this when the user references stored preferences ("我之前让你..."
         }
       }
 
-      const content = await readMemoryFile(memoryDir, input.filename)
+      const target = await resolveReadableMemoryFile(memoryDir, resolved.readableDirs, input.filename)
+      if (!target) {
+        await auditMemoryReadDenied(role, input.filename, memoryDir, 'Memory file is outside this role memory scope.')
+        return {
+          output: `Memory file is outside this role memory scope: ${input.filename}`,
+          isError: true,
+        }
+      }
+
+      const content = await readFile(target, 'utf8').catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null
+        }
+        throw error
+      })
       if (content) {
         let staleness = ''
         try {
-          // Use the same normalized filename as readMemoryFile — otherwise
-          // a caller passing "foo" (no .md) would load content via
-          // normalize-on-read but stat the wrong path, silently dropping
-          // the staleness reminder.
-          const normalized = normalizeMemoryFilename(input.filename)
-          const stats = await stat(path.join(memoryDir, normalized))
+          const stats = await stat(target)
           staleness = memoryFreshnessText(stats.mtimeMs)
         } catch {
           // mtime unavailable — fall through to plain content
@@ -78,3 +97,59 @@ Reach for this when the user references stored preferences ("我之前让你..."
     }
   },
 })
+
+async function resolveReadableMemoryFile(
+  memoryDir: string,
+  readableDirs: string[],
+  filename: string,
+): Promise<string | null> {
+  const raw = filename.trim()
+  if (raw.length === 0 || path.isAbsolute(raw) || raw.includes('\\')) {
+    return null
+  }
+  const parts = raw.split('/').filter(Boolean)
+  if (parts.length === 0 || parts.some(part => part === '..' || part === '.')) {
+    return null
+  }
+
+  const basename = normalizeMemoryFilename(parts.at(-1) ?? '')
+  const scopedParts = [...parts.slice(0, -1), basename]
+  if (scopedParts.length > 1) {
+    const target = path.resolve(memoryDir, ...scopedParts)
+    return readableDirs.some(dir => memoryPathWithinDir(target, dir))
+      ? target
+      : null
+  }
+
+  for (const dir of readableDirs) {
+    const candidate = path.join(dir, basename)
+    try {
+      await stat(candidate)
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+    }
+  }
+
+  return readableDirs[0] ? path.join(readableDirs[0], basename) : null
+}
+
+async function auditMemoryReadDenied(
+  role: Role,
+  filename: string,
+  memoryDir: string,
+  reason: string,
+): Promise<void> {
+  await recordMemoryWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeMemoryAuditUserId(),
+    role: role.agentType,
+    filename,
+    targetPath: relativeMemoryFilename(memoryDir, memoryDir, filename),
+    status: 'denied',
+    deniedReason: reason,
+    operation: 'read',
+  })
+}
