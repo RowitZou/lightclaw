@@ -3,6 +3,7 @@ import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runSubagent } from '../agents/run-subagent.js'
 import { getMainRole } from '../agents/registry.js'
 import type { Role } from '../agents/types.js'
+import { maybeSweepForkTranscripts } from '../agents/fork-transcript-retention.js'
 import { collectAssistantText } from '../messages.js'
 import { loadTranscriptFile } from '../session/storage.js'
 import { toolResultContentToText, type Message } from '../types.js'
@@ -304,6 +305,12 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[memory aging] eviction failed: ${message}`)
+      }
+      try {
+        await maybeSweepForkTranscripts(current.config.sessionsDir)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[fork-transcript] retention sweep failed: ${message}`)
       }
       return finalResult
     }

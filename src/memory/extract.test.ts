@@ -14,6 +14,7 @@ import {
   _setRunSubagentForTest,
   buildExtractPrompt,
   collectExistingMemoriesForRole,
+  drainPendingExtraction,
   executeExtraction,
   hasMemoryWritesSince,
   isExtractionInProgressFor,
@@ -34,6 +35,7 @@ const dummyConfig = {
   model: 'claude-sonnet-4-6',
   routing: { main: 'claude-sonnet-4-6' },
   autoMemory: true,
+  sessionsDir: path.join(os.tmpdir(), 'lightclaw-test-sessions'),
 } as LightClawConfig
 
 function memory(filename: string): MemoryEntry {
@@ -294,3 +296,69 @@ test('collectExistingMemoriesForRole gives web private plus shared, excluding ro
     await rm(tempDir, { recursive: true, force: true })
   }
 })
+
+test('drainPendingExtraction waits for multiple active role instances', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  const webRole = getAgent('web')
+  assert.ok(webRole)
+  const mainRole = getMainRole()
+  const messages = [createUserMessage('drain me', null, 10)]
+  const releaseFns: Array<() => void> = []
+  try {
+    _resetExtractionStateForTest()
+    _setRunSubagentForTest(async () => {
+      await new Promise<void>(resolve => {
+        releaseFns.push(resolve)
+      })
+      return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
+    })
+    const config = {
+      ...dummyConfig,
+      sessionsDir: path.join(tempDir, 'sessions'),
+    } as LightClawConfig
+
+    const mainTask = executeExtraction({
+      messages,
+      lastExtractedAt: 0,
+      memoryDir: tempDir,
+      canonicalUser: 'alice',
+      config,
+      ownerRole: mainRole,
+      forkContextMessages: messages,
+    })
+    const webTask = executeExtraction({
+      messages,
+      lastExtractedAt: 0,
+      memoryDir: tempDir,
+      canonicalUser: 'alice',
+      config,
+      ownerRole: webRole,
+      forkContextMessages: messages,
+    })
+    await waitFor(() => releaseFns.length === 2)
+    assert.equal(releaseFns.length, 2)
+
+    let drained = false
+    const drainTask = drainPendingExtraction(1_000).then(() => {
+      drained = true
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(drained, false)
+
+    for (const release of releaseFns) release()
+    await Promise.all([mainTask, webTask, drainTask])
+    assert.equal(drained, true)
+  } finally {
+    _setRunSubagentForTest()
+    _resetExtractionStateForTest()
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.equal(predicate(), true)
+}
