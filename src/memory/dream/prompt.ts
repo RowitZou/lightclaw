@@ -1,61 +1,146 @@
+import { readdir, stat } from 'node:fs/promises'
+import path from 'node:path'
+
+import { scanMemoryFiles } from '../auto-memory.js'
+import type { MemoryEntry } from '../types.js'
+
+export type DreamMemoryTreeSection = {
+  label: string
+  relativeDir: string
+  entries: MemoryEntry[]
+}
+
+export type DreamMemoryTree = {
+  root: DreamMemoryTreeSection
+  shared: DreamMemoryTreeSection | null
+  roleDirs: DreamMemoryTreeSection[]
+}
+
+export async function gatherDreamMemoryTree(memoryDir: string): Promise<DreamMemoryTree> {
+  const roleDirs = await listRoleDirs(memoryDir)
+  const sharedDir = path.join(memoryDir, '_shared')
+  const hasSharedDir = await directoryExists(sharedDir)
+  const sharedEntries = await scanMemoryFiles(sharedDir)
+
+  return {
+    root: {
+      label: 'user-level root',
+      relativeDir: '.',
+      entries: await scanMemoryFiles(memoryDir),
+    },
+    shared:
+      hasSharedDir
+        ? {
+            label: 'shared workboard',
+            relativeDir: '_shared',
+            entries: sharedEntries,
+          }
+        : null,
+    roleDirs: await Promise.all(
+      roleDirs.map(async dirName => ({
+        label: `role-private: ${dirName}`,
+        relativeDir: dirName,
+        entries: await scanMemoryFiles(path.join(memoryDir, dirName)),
+      })),
+    ),
+  }
+}
+
+async function directoryExists(dir: string): Promise<boolean> {
+  try {
+    return (await stat(dir)).isDirectory()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false
+    }
+    throw error
+  }
+}
+
 export function buildDreamPrompt(params: {
   memoryDir: string
   transcriptDir: string
   sessionIds: string[]
+  memoryTree: DreamMemoryTree
 }): string {
   const sessionList = params.sessionIds.length > 0
     ? params.sessionIds.map(sessionId => `- ${sessionId}`).join('\n')
     : '- [none]'
+  const treeText = formatDreamMemoryTree(params.memoryTree)
 
-  return `# Dream: Memory Consolidation
+  return `# Dream: User Memory Consolidation
 
-You are performing a dream: a reflective pass over durable memory files. Synthesize recent learning into organized memories so future sessions can orient quickly.
+You are performing a dream: a reflective pass over this user's durable memory tree. Synthesize recent learning into organized memory files so future sessions and roles can orient quickly.
 
 Memory directory: \`${params.memoryDir}\`
-Memory index file: \`MEMORY.md\` (entrypoint; keep under ~200 lines and ~25 KB; one-line entries only)
-Session transcripts root: \`${params.transcriptDir}\` (large JSONL files; grep narrowly, do not read whole files)
+Session transcripts root: \`${params.transcriptDir}\` (large JSONL files; search narrowly, do not read whole files)
+
+## Current Memory Tree
+
+${treeText}
 
 Sessions touched since last consolidation (${params.sessionIds.length}):
 ${sessionList}
 
-## Phase 1 - Orient
+## Workflow
 
-- List the memory directory to see what already exists.
-- Read \`MEMORY.md\` to understand the current index.
-- Skim existing topic files so you improve them instead of creating duplicates.
+1. Survey the tree above. Use MemoryRead / Read / Grep / Glob only when the manifest shows a specific file or topic worth inspecting.
+2. Consolidate duplicates within the same directory by merging into the best file and deleting superseded files.
+3. Promote broadly useful cross-role or role-agnostic findings into \`_shared/\` using MemoryMove or MemoryWriteAt, then delete obsolete source files.
+4. Keep role-specific operational notes inside that role's private directory.
+5. Fix contradicted facts at the source when newer evidence clearly disproves them. Convert relative dates to absolute dates.
 
-## Phase 2 - Gather Recent Signal
-
-Look for information worth preserving. Use sources in this order:
-
-1. Existing memories that drifted or contradict newer observations.
-2. Narrow transcript search when you need specific context:
-   \`grep -n "<narrow term>" ${params.transcriptDir}/<sessionId>/transcript.jsonl | tail -50\`
-
-Do not exhaustively read transcripts. Search only for things you already suspect matter.
-
-## Phase 3 - Consolidate
-
-For each durable fact, write or update a memory file at the top level of the memory directory using the auto-memory format described in your system prompt.
-
-Focus on:
-
-- Merging new signal into existing topic files rather than creating near-duplicates.
-- Converting relative dates like "yesterday" or "last week" into absolute dates.
-- Fixing contradicted facts at the source when newer evidence clearly disproves them.
-
-## Phase 4 - Prune And Index
-
-Update \`MEMORY.md\` so it stays under 200 lines and under ~25 KB. It is an index, not a dump. Each entry should be one short line:
-
-\`- [Title](file.md) - one-line hook\`
-
-- Remove pointers to memories that are stale, wrong, or superseded.
-- Shorten verbose index entries and move detail into topic files.
-- Add pointers to newly important memories.
-- Resolve contradictions by fixing the wrong file.
-
-Tool constraints for this run: Bash is restricted to read-only commands such as \`ls\`, \`find\`, \`grep\`, \`cat\`, \`stat\`, \`wc\`, \`head\`, and \`tail\`. Anything that writes, redirects to a file, or modifies state will be denied.
+\`MEMORY.md\` files are framework-managed. Do not write, move, or delete any path whose basename is \`MEMORY.md\`; MemoryWriteAt / MemoryMove / MemoryDelete will rebuild indexes automatically after content-file changes.
 
 Return a brief summary of what you consolidated, updated, or pruned. If nothing changed, say so.`
+}
+
+async function listRoleDirs(memoryDir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(memoryDir, { withFileTypes: true })
+    return entries
+      .filter(entry =>
+        entry.isDirectory()
+        && entry.name !== '_shared'
+        && !entry.name.startsWith('.'),
+      )
+      .map(entry => entry.name)
+      .sort((left, right) => left.localeCompare(right))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return []
+    }
+    throw error
+  }
+}
+
+function formatDreamMemoryTree(tree: DreamMemoryTree): string {
+  const sections = [formatSection(tree.root)]
+  if (tree.shared) {
+    sections.push(formatSection(tree.shared))
+  } else {
+    sections.push('### shared workboard (_shared/)\n- [not present]')
+  }
+
+  if (tree.roleDirs.length === 0) {
+    sections.push('### role-private directories\n- [none]')
+  } else {
+    sections.push(...tree.roleDirs.map(formatSection))
+  }
+
+  return sections.join('\n\n')
+}
+
+function formatSection(section: DreamMemoryTreeSection): string {
+  const entries = section.entries.length > 0
+    ? section.entries
+        .map(entry => `- [${entry.type}] ${pathForSection(section.relativeDir, entry.filename)}: ${entry.description}`)
+        .join('\n')
+    : '- [empty]'
+
+  return `### ${section.label} (${section.relativeDir}/)\n${entries}`
+}
+
+function pathForSection(relativeDir: string, filename: string): string {
+  return relativeDir === '.' ? filename : path.join(relativeDir, filename)
 }
