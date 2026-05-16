@@ -215,19 +215,27 @@ test('per-role extraction passes currentRoleOverride and fork transcript context
   }
 })
 
-test('triggerForkExtract reads the persisted fork transcript before running extraction', async () => {
+test('triggerForkExtract treats a marker-less transcript as fully fork-own', async () => {
+  // No explicit forkContextEndIndex → defaults to 0 → forkContextSlice is
+  // empty, forkOwnSlice is the full message list. Verifies the Option C
+  // legacy / zero-context path.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
   const webRole = getAgent('web')
   assert.ok(webRole)
   const messages = [createUserMessage('web transcript input', null, 10)]
   const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'web-test.jsonl')
-  const seen: { messages?: unknown; role?: string } = {}
+  const seen: {
+    contextOverride?: unknown
+    role?: string
+    promptIncludesText?: boolean
+  } = {}
   try {
     await persistForkTranscript(forkTranscriptPath, messages)
     _resetExtractionStateForTest()
     _setRunSubagentForTest(async params => {
-      seen.messages = params.forkContextMessagesOverride
+      seen.contextOverride = params.forkContextMessagesOverride
       seen.role = params.currentRoleOverride?.agentType
+      seen.promptIncludesText = params.prompt.includes('web transcript input')
       return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
     })
 
@@ -239,8 +247,79 @@ test('triggerForkExtract reads the persisted fork transcript before running extr
       config: dummyConfig,
     })
 
-    assert.deepEqual(seen.messages, messages)
+    // forkContextSlice should be empty (no parent prefix in this fork)
+    assert.deepEqual(seen.contextOverride, [])
+    // owning role is web (currentRole physical binding)
     assert.equal(seen.role, 'web')
+    // fork-own messages still drive the extract prompt body
+    assert.equal(seen.promptIncludesText, true)
+  } finally {
+    _setRunSubagentForTest()
+    _resetExtractionStateForTest()
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('triggerForkExtract slices fork-own vs parent prefix using the marker', async () => {
+  // The marker (forkContextEndIndex=2) tells extract that the first 2
+  // messages came from the parent's cacheSafeParams forkContextMessages
+  // (parent DM context the worker inherited) and the last 2 are the worker's
+  // own user prompt + assistant turn. Extract analyzes only the fork-own
+  // slice; the parent prefix is passed through as `forkContextMessagesOverride`
+  // so the extract subagent keeps the worker's worldview.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
+  const webRole = getAgent('web')
+  assert.ok(webRole)
+  const parentContext = [
+    createUserMessage('parent DM line one', null, 1),
+    createUserMessage('parent DM line two', null, 2),
+  ]
+  const forkOwn = [
+    createUserMessage('web fork prompt: query X', null, 10),
+    createAssistantMessage({
+      content: [{ type: 'text', text: 'web answer about X' }],
+      stopReason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+      parentUuid: null,
+      timestamp: 11,
+    }),
+  ]
+  const allMessages = [...parentContext, ...forkOwn]
+  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'web-slice.jsonl')
+  const seen: {
+    contextOverride?: unknown
+    promptHasParent?: boolean
+    promptHasOwn?: boolean
+  } = {}
+  try {
+    await persistForkTranscript(
+      forkTranscriptPath,
+      allMessages,
+      parentContext.length,
+    )
+    _resetExtractionStateForTest()
+    _setRunSubagentForTest(async params => {
+      seen.contextOverride = params.forkContextMessagesOverride
+      seen.promptHasParent = params.prompt.includes('parent DM line one')
+      seen.promptHasOwn = params.prompt.includes('web fork prompt: query X')
+      return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
+    })
+
+    await triggerForkExtract({
+      canonicalUser: 'alice',
+      ownerRole: webRole,
+      forkTranscriptPath,
+      memoryDir: tempDir,
+      config: dummyConfig,
+    })
+
+    // forkContextMessagesOverride carries parent prefix as the worker's
+    // inherited worldview (extract subagent cache prefix)
+    assert.deepEqual(seen.contextOverride, parentContext)
+    // Extract prompt body should NOT see the parent context (it would
+    // dilute / mis-attribute signal); only fork-own messages are rendered
+    assert.equal(seen.promptHasParent, false)
+    assert.equal(seen.promptHasOwn, true)
   } finally {
     _setRunSubagentForTest()
     _resetExtractionStateForTest()

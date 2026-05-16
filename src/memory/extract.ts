@@ -4,8 +4,8 @@ import { runSubagent } from '../agents/run-subagent.js'
 import { getMainRole } from '../agents/registry.js'
 import type { Role } from '../agents/types.js'
 import { maybeSweepForkTranscripts } from '../agents/fork-transcript-retention.js'
+import { parseForkTranscriptFile } from '../agents/fork-transcript.js'
 import { collectAssistantText } from '../messages.js'
-import { loadTranscriptFile } from '../session/storage.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
@@ -363,16 +363,27 @@ export async function triggerForkExtract(params: {
   memoryDir: string
   config: LightClawConfig
 }): Promise<ExtractResult> {
-  const messages = await loadTranscriptFile(params.forkTranscriptPath)
+  // Option C slicing (Phase 3 review fix, 2026-05-16): use the meta marker
+  // written by persistForkTranscript to split fork-own messages from the
+  // inherited parent prefix. Extraction analyzes only the fork-own slice
+  // (so a web fork's L3 doesn't absorb content from the parent DM the
+  // worker happened to inherit as cache context), but still passes the
+  // parent prefix as `forkContextMessages` so the extract subagent sees
+  // the same "worldview" the fork had when it produced that output.
+  const { messages, forkContextEndIndex } = await parseForkTranscriptFile(
+    params.forkTranscriptPath,
+  )
+  const forkContextSlice = messages.slice(0, forkContextEndIndex)
+  const forkOwnSlice = messages.slice(forkContextEndIndex)
   return executeExtraction({
-    messages,
+    messages: forkOwnSlice,
     lastExtractedAt: 0,
     memoryDir: params.memoryDir,
     canonicalUser: params.canonicalUser,
     config: params.config,
     ownerRole: params.ownerRole,
     forkTranscriptPath: params.forkTranscriptPath,
-    forkContextMessages: messages,
+    forkContextMessages: forkContextSlice,
   })
 }
 
