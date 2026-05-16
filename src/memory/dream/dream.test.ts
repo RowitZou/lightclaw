@@ -66,7 +66,7 @@ afterEach(() => {
 })
 
 describe('autoDream runner', () => {
-  it('builds a full memory-tree consolidation prompt without PR2 legacy shell wording', () => {
+  it('builds a runtime-context consolidation prompt that defers workflow to the system prompt', () => {
     const prompt = buildDreamPrompt({
       memoryDir: '/memory/alice',
       transcriptDir: '/sessions',
@@ -96,10 +96,39 @@ describe('autoDream runner', () => {
     assert.match(prompt, /root-note\.md: Root note/)
     assert.match(prompt, /_shared\/shared-note\.md: Shared note/)
     assert.match(prompt, /web\/finding\.md: Web finding/)
-    assert.match(prompt, /MemoryWriteAt \/ MemoryMove \/ MemoryDelete will rebuild indexes/)
+    assert.match(prompt, /s1/)
+    // No competing workflow or duplicate MEMORY.md hard rule — both live in
+    // the auto_dream system prompt (Phase 2 PR2 v3). User message provides
+    // runtime context only.
+    assert.doesNotMatch(prompt, /## Workflow/)
+    assert.doesNotMatch(prompt, /MEMORY\.md.*framework-managed/i)
     assert.doesNotMatch(prompt, /Bash/)
     assert.doesNotMatch(prompt, /grep -n/)
-    assert.match(prompt, /s1/)
+  })
+
+  it('excludes the archive subdirectory from the role-private listing', async () => {
+    // aging-eviction creates `<memoryDir>/archive/` at L1 (and `<tier>/archive/`
+    // at L2/L3) to hold evicted memory files. autoDream must NOT see archive
+    // as a role-private tier, otherwise it would try to consolidate / promote
+    // already-archived entries.
+    await writeMemoryFile(tmpMemoryDir, memoryEntry('root-only.md', 'Root only'))
+    mkdirSync(path.join(tmpMemoryDir, 'archive'), { recursive: true })
+    writeFileSync(
+      path.join(tmpMemoryDir, 'archive', 'aged-out.md'),
+      '---\nname: aged-out.md\ndescription: archived\ntype: project\n---\n\nbody\n',
+      'utf8',
+    )
+
+    const tree = await gatherDreamMemoryTree(tmpMemoryDir)
+    assert.deepEqual(tree.roleDirs, [])
+    const prompt = buildDreamPrompt({
+      memoryDir: tmpMemoryDir,
+      transcriptDir: tmpSessionsDir,
+      sessionIds: [],
+      memoryTree: tree,
+    })
+    assert.doesNotMatch(prompt, /archive\//)
+    assert.doesNotMatch(prompt, /aged-out\.md/)
   })
 
   it('does nothing when autoDream is disabled', async () => {
