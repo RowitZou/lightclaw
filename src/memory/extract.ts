@@ -6,9 +6,10 @@ import type { Role } from '../agents/types.js'
 import { collectAssistantText } from '../messages.js'
 import { loadTranscriptFile } from '../session/storage.js'
 import { toolResultContentToText, type Message } from '../types.js'
-import { ensureMemoryDir, scanMemoryFiles } from './auto-memory.js'
+import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
 import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
 import { maybeEvictAgedMemories } from './aging-eviction.js'
+import { resolveMemoryDirsForRole } from './scope.js'
 import type { MemoryEntry } from './types.js'
 
 export type ExtractCtx = {
@@ -183,6 +184,20 @@ export function buildExtractPrompt(
   ].join('\n')
 }
 
+export async function collectExistingMemoriesForRole(
+  role: Role,
+  memoryDir: string,
+): Promise<MemoryEntry[]> {
+  const { readableDirs } = resolveMemoryDirsForRole(role, memoryDir)
+  const entries = await scanMemoryFilesInDirs(memoryDir, readableDirs)
+  const byFilename = new Map<string, MemoryEntry>()
+  for (const entry of entries) {
+    byFilename.set(entry.filename, entry)
+  }
+  return [...byFilename.values()]
+    .sort((left, right) => left.filename.localeCompare(right.filename))
+}
+
 async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   const ownerRole = ctx.ownerRole ?? getMainRole()
   const newMessages = ctx.messages.filter(
@@ -205,7 +220,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   }
 
   await ensureMemoryDir(ctx.memoryDir)
-  const existingMemories = await scanMemoryFiles(ctx.memoryDir)
+  const existingMemories = await collectExistingMemoriesForRole(ownerRole, ctx.memoryDir)
   // Gate on parent cacheSafeParams being present: runSubagent inherits the
   // recent fork-context messages from it (so the subagent sees the
   // conversation history to reason over). Without those, extraction has
@@ -252,7 +267,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
     }
   }
 
-  const after = await scanMemoryFiles(ctx.memoryDir)
+  const after = await collectExistingMemoriesForRole(ownerRole, ctx.memoryDir)
   const saved = after.filter(entry => !beforeFiles.has(entry.filename))
   return {
     saved,
