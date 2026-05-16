@@ -70,7 +70,7 @@ export function buildDreamPrompt(params: {
 
   return `# Dream: User Memory Consolidation
 
-You are performing a dream: a reflective pass over this user's durable memory tree. Synthesize recent learning into organized memory files so future sessions and roles can orient quickly.
+This run's runtime context. Apply the workflow and conventions from your system prompt to the tree below.
 
 Memory directory: \`${params.memoryDir}\`
 Session transcripts root: \`${params.transcriptDir}\` (large JSONL files; search narrowly, do not read whole files)
@@ -80,19 +80,7 @@ Session transcripts root: \`${params.transcriptDir}\` (large JSONL files; search
 ${treeText}
 
 Sessions touched since last consolidation (${params.sessionIds.length}):
-${sessionList}
-
-## Workflow
-
-1. Survey the tree above. Use MemoryRead / Read / Grep / Glob only when the manifest shows a specific file or topic worth inspecting.
-2. Consolidate duplicates within the same directory by merging into the best file and deleting superseded files.
-3. Promote broadly useful cross-role or role-agnostic findings into \`_shared/\` using MemoryMove or MemoryWriteAt, then delete obsolete source files.
-4. Keep role-specific operational notes inside that role's private directory.
-5. Fix contradicted facts at the source when newer evidence clearly disproves them. Convert relative dates to absolute dates.
-
-\`MEMORY.md\` files are framework-managed. Do not write, move, or delete any path whose basename is \`MEMORY.md\`; MemoryWriteAt / MemoryMove / MemoryDelete will rebuild indexes automatically after content-file changes.
-
-Return a brief summary of what you consolidated, updated, or pruned. If nothing changed, say so.`
+${sessionList}`
 }
 
 async function listRoleDirs(memoryDir: string): Promise<string[]> {
@@ -102,6 +90,10 @@ async function listRoleDirs(memoryDir: string): Promise<string[]> {
       .filter(entry =>
         entry.isDirectory()
         && entry.name !== '_shared'
+        // `archive/` is the aging-eviction destination; including it as a
+        // "role-private" tier would surface evicted entries to autoDream as
+        // active memory and tempt it to consolidate / promote archived files.
+        && entry.name !== 'archive'
         && !entry.name.startsWith('.'),
       )
       .map(entry => entry.name)
