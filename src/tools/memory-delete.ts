@@ -4,7 +4,11 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { rebuildMemoryIndex } from '../memory/auto-memory.js'
-import { joinAndAssertWithinMemoryDir, MemoryToolPathError } from '../memory/tool-path.js'
+import {
+  assertNotMemoryIndex,
+  joinAndAssertWithinMemoryDir,
+  MemoryToolPathError,
+} from '../memory/tool-path.js'
 import { getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -22,6 +26,7 @@ export const memoryDeleteTool = buildTool({
     try {
       const memoryDir = getMemoryDir()
       const target = joinAndAssertWithinMemoryDir(memoryDir, input.path)
+      assertNotMemoryIndex(target)
       let stats
       try {
         stats = await stat(target)

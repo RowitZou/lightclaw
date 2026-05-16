@@ -58,6 +58,16 @@ describe('MemoryDelete', () => {
     assert.equal(result.isError, true)
     assert.equal(result.output, 'cannot delete a directory; this tool only deletes files')
   })
+
+  it('rejects deleting MEMORY.md', async () => {
+    await writeFile(path.join(memoryDir, 'web', 'MEMORY.md'), 'index', 'utf8')
+    const result = await withMemorySession(() =>
+      memoryDeleteTool.call({ path: 'web/MEMORY.md' }, undefined as never),
+    )
+
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /MEMORY\.md is framework-managed/)
+  })
 })
 
 function withMemorySession<T>(fn: () => Promise<T>): Promise<T> {

@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import { rebuildMemoryIndex } from '../memory/auto-memory.js'
 import {
+  assertNotMemoryIndex,
   joinAndAssertWithinMemoryDir,
   MemoryToolConflictError,
   MemoryToolNotFoundError,
@@ -29,6 +30,8 @@ export const memoryMoveTool = buildTool({
       const memoryDir = getMemoryDir()
       const from = joinAndAssertWithinMemoryDir(memoryDir, input.from)
       const to = joinAndAssertWithinMemoryDir(memoryDir, input.to)
+      assertNotMemoryIndex(from)
+      assertNotMemoryIndex(to)
       const fromDir = path.dirname(from)
       const toDir = path.dirname(to)
       let fromStats

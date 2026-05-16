@@ -8,7 +8,7 @@ import {
   rebuildMemoryIndex,
   serializeFrontmatter,
 } from '../memory/auto-memory.js'
-import { joinAndAssertWithinMemoryDir } from '../memory/tool-path.js'
+import { assertNotMemoryIndex, joinAndAssertWithinMemoryDir } from '../memory/tool-path.js'
 import { isMemoryType } from '../memory/types.js'
 import { getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -40,9 +40,11 @@ export const memoryWriteAtTool = buildTool({
 
       const memoryDir = getMemoryDir()
       const rawTarget = joinAndAssertWithinMemoryDir(memoryDir, input.path)
+      assertNotMemoryIndex(rawTarget)
       const targetDir = path.dirname(rawTarget)
       const target = path.join(targetDir, normalizeMemoryFilename(path.basename(rawTarget)))
       joinAndAssertWithinMemoryDir(memoryDir, path.relative(memoryDir, target))
+      assertNotMemoryIndex(target)
 
       await mkdir(targetDir, { recursive: true })
       await writeFile(
