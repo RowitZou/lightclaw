@@ -334,7 +334,7 @@ async function buildOrchestratorPromptTemplate(
     formatSkillsSection(),
     'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding. The user does not need to invoke skills explicitly.',
     'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
-    'To save durable notes for later sessions, use the MemoryWrite tool.',
+    'To save durable notes for later sessions, use the MemoryWrite tool. A background curator periodically reviews these notes and may promote broadly-useful ones to a pool other roles can read.',
     'Memory and Conversation tools are scoped to the current LightClaw user. File tools and Bash are hard-limited to the current user workspace, even in bypassPermissions mode.',
   )
 

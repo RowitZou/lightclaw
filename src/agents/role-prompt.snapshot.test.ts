@@ -18,11 +18,11 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '4c0f0f3621b3c0f1be90fd1288f6003cf67f8c0d8ac2d6af2bb54cff400492ff',
+  main: '11b8d07d1eea7acfec2c0cbf9c047124844f55428527def7c76adca0b687b06a',
   'general-purpose': '8d9db5fc7e6a1511e57087c9f39c47fae2ed16dea9aadf464cb78e52597beaa9',
   explore: '215701318f8b02d85b535e6ca9f6da05a6460e003e1d1108dbce59f80ac5bb32',
-  extract_memories: 'bdab95f5137788deebd1d0f801bc4aff5b27b7c989b7b1551ba7433089be09ea',
-  auto_dream: '6d1774193e980d9fc584805cd2454a4e858df9a4dd07ebd5fa218ff03577dd2d',
+  extract_memories: 'ff86bc82b4ddd3e9e40620ad002da05dd7304611f8ad517d56e59fadfd8d7408',
+  auto_dream: 'ac1884eb964ca0740a8dabaf967cb10f8fec3d926addde18cee2a0bb46224d44',
 }
 
 let tmpRoot: string
