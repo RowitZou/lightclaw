@@ -21,6 +21,13 @@ afterEach(async () => {
 })
 
 describe('role-scoped memory indexes', () => {
+  it('treats missing role-private directories as empty', async () => {
+    assert.deepEqual(
+      await scanMemoryFilesInDirs(memoryDir, [path.join(memoryDir, 'web')]),
+      [],
+    )
+  })
+
   it('prefixes shared and role-private index entries for orchestrator and worker views', async () => {
     await seed()
 

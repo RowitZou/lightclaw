@@ -13,6 +13,7 @@ import { utimes } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
+import type { Role } from '../../agents/types.js'
 import {
   saveCacheSafeParams,
   type CacheSafeParams,
@@ -20,9 +21,14 @@ import {
 import type { RunSubagentResult } from '../../agents/run-subagent.js'
 type SubagentResult = RunSubagentResult
 import type { LightClawConfig } from '../../config.js'
+import { createSessionContext, runWithSessionContext } from '../../session-context.js'
+import { memoryDeleteTool } from '../../tools/memory-delete.js'
+import { memoryMoveTool } from '../../tools/memory-move.js'
+import { memoryWriteAtTool } from '../../tools/memory-write-at.js'
+import { writeMemoryFile } from '../auto-memory.js'
 import { setExtractionInProgressForTest } from '../extract.js'
 import { consolidationLockPath, tryAcquireConsolidationLock } from './lock.js'
-import { buildDreamPrompt } from './prompt.js'
+import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
 import {
   drainPendingDream,
   executeAutoDream,
@@ -60,16 +66,39 @@ afterEach(() => {
 })
 
 describe('autoDream runner', () => {
-  it('builds the four-phase consolidation prompt', () => {
+  it('builds a full memory-tree consolidation prompt without PR2 legacy shell wording', () => {
     const prompt = buildDreamPrompt({
       memoryDir: '/memory/alice',
       transcriptDir: '/sessions',
       sessionIds: ['s1', 's2'],
+      memoryTree: {
+        root: {
+          label: 'user-level root',
+          relativeDir: '.',
+          entries: [memoryEntry('root-note.md', 'Root note')],
+        },
+        shared: {
+          label: 'shared workboard',
+          relativeDir: '_shared',
+          entries: [memoryEntry('shared-note.md', 'Shared note')],
+        },
+        roleDirs: [
+          {
+            label: 'role-private: web',
+            relativeDir: 'web',
+            entries: [memoryEntry('finding.md', 'Web finding')],
+          },
+        ],
+      },
     })
-    assert.match(prompt, /Dream: Memory Consolidation/)
-    assert.match(prompt, /Phase 1 - Orient/)
-    assert.match(prompt, /Phase 4 - Prune And Index/)
-    assert.match(prompt, /grep -n/)
+    assert.match(prompt, /Dream: User Memory Consolidation/)
+    assert.match(prompt, /## Current Memory Tree/)
+    assert.match(prompt, /root-note\.md: Root note/)
+    assert.match(prompt, /_shared\/shared-note\.md: Shared note/)
+    assert.match(prompt, /web\/finding\.md: Web finding/)
+    assert.match(prompt, /MemoryWriteAt \/ MemoryMove \/ MemoryDelete will rebuild indexes/)
+    assert.doesNotMatch(prompt, /Bash/)
+    assert.doesNotMatch(prompt, /grep -n/)
     assert.match(prompt, /s1/)
   })
 
@@ -280,6 +309,107 @@ describe('autoDream runner', () => {
     )
   })
 
+  it('passes a full user memory tree manifest to a single autoDream fork', async () => {
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    saveCacheSafeParams('alice', fakeCacheSafeParams())
+    await seedMemoryTree()
+
+    let forkInvocations = 0
+    let prompt = ''
+    setRunSubagentForTest(async input => {
+      forkInvocations += 1
+      prompt = input.prompt
+      return fakeForkResult()
+    })
+
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+
+    assert.equal(forkInvocations, 1)
+    assert.match(prompt, /root-note\.md: root-note description/)
+    assert.match(prompt, /_shared\/shared-note\.md: shared-note description/)
+    assert.match(prompt, /web\/web-note\.md: web-note description/)
+  })
+
+  it('lists only existing shared and role-private sections in the memory tree', async () => {
+    await writeMemoryFile(tmpMemoryDir, memoryEntry('root-only.md', 'Root only'))
+
+    const tree = await gatherDreamMemoryTree(tmpMemoryDir)
+    const prompt = buildDreamPrompt({
+      memoryDir: tmpMemoryDir,
+      transcriptDir: tmpSessionsDir,
+      sessionIds: [],
+      memoryTree: tree,
+    })
+
+    assert.match(prompt, /root-only\.md: Root only/)
+    assert.match(prompt, /shared workboard \(_shared\/\)\n- \[not present\]/)
+    assert.match(prompt, /role-private directories\n- \[none\]/)
+  })
+
+  it('promotes role-private memories through the autoDream tool family and rebuilds indexes', async () => {
+    await writeMemoryFile(path.join(tmpMemoryDir, 'web'), memoryEntry('finding-x.md', 'Web finding'))
+
+    const moved = await withAutoDreamSession(() =>
+      memoryMoveTool.call({
+        from: 'web/finding-x.md',
+        to: '_shared/2026-05-16-finding-x-by-web.md',
+      }, undefined as never),
+    )
+    assert.equal(moved.isError, undefined)
+    assert.equal(existsSync(path.join(tmpMemoryDir, 'web', 'finding-x.md')), false)
+    assert.equal(existsSync(path.join(tmpMemoryDir, '_shared', '2026-05-16-finding-x-by-web.md')), true)
+    assert.match(
+      readFileSync(path.join(tmpMemoryDir, '_shared', 'MEMORY.md'), 'utf8'),
+      /2026-05-16-finding-x-by-web\.md/,
+    )
+    assert.doesNotMatch(
+      readFileSync(path.join(tmpMemoryDir, 'web', 'MEMORY.md'), 'utf8'),
+      /finding-x\.md/,
+    )
+
+    const written = await withAutoDreamSession(() =>
+      memoryWriteAtTool.call({
+        path: '_shared/merged-finding.md',
+        type: 'project',
+        description: 'Merged cross-role finding',
+        content: 'Why: useful for every role\nHow to apply: read it before research.',
+      }, undefined as never),
+    )
+    assert.equal(written.isError, undefined)
+    assert.match(
+      readFileSync(path.join(tmpMemoryDir, '_shared', 'MEMORY.md'), 'utf8'),
+      /merged-finding\.md/,
+    )
+
+    const deleted = await withAutoDreamSession(() =>
+      memoryDeleteTool.call({
+        path: '_shared/merged-finding.md',
+      }, undefined as never),
+    )
+    assert.equal(deleted.isError, undefined)
+    assert.doesNotMatch(
+      readFileSync(path.join(tmpMemoryDir, '_shared', 'MEMORY.md'), 'utf8'),
+      /merged-finding\.md/,
+    )
+
+    const escaped = await withAutoDreamSession(() =>
+      memoryWriteAtTool.call({
+        path: '/etc/passwd',
+        type: 'project',
+        description: 'Escape attempt',
+        content: 'Why: should fail\nHow to apply: do not write outside memory.',
+      }, undefined as never),
+    )
+    assert.equal(escaped.isError, true)
+    assert.match(escaped.output as string, /path resolves outside memoryDir/)
+  })
+
   it('rolls back the lock when the fork throws', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
@@ -487,5 +617,44 @@ function fakeForkResult(): SubagentResult {
     kind: 'success',
     finalText: '',
     stopReason: 'end_turn',
+  }
+}
+
+async function seedMemoryTree(): Promise<void> {
+  await writeMemoryFile(tmpMemoryDir, memoryEntry('root-note.md', 'root-note description'))
+  await writeMemoryFile(path.join(tmpMemoryDir, '_shared'), memoryEntry('shared-note.md', 'shared-note description'))
+  await writeMemoryFile(path.join(tmpMemoryDir, 'web'), memoryEntry('web-note.md', 'web-note description'))
+}
+
+function memoryEntry(filename: string, description: string) {
+  return {
+    filename,
+    type: 'project' as const,
+    description,
+    content: `Why: ${description}\nHow to apply: keep this available.`,
+    mtimeMs: Date.now(),
+  }
+}
+
+function withAutoDreamSession<T>(fn: () => Promise<T>): Promise<T> {
+  const ctx = createSessionContext({
+    cwd: tmpRoot,
+    model: 'claude-sonnet-4-6',
+    sessionsDir: tmpSessionsDir,
+    memoryDir: tmpMemoryDir,
+    currentUserId: 'alice',
+    currentRole: autoDreamRole(),
+    sessionId: 'auto-dream-tool-test',
+  })
+  return runWithSessionContext(ctx, fn)
+}
+
+function autoDreamRole(): Role {
+  return {
+    agentType: 'auto_dream',
+    kind: 'internal',
+    whenToUse: 'internal',
+    tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],
+    systemPrompt: 'system',
   }
 }

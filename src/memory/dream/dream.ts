@@ -10,7 +10,7 @@ import {
   rollbackConsolidationLock,
   tryAcquireConsolidationLock,
 } from './lock.js'
-import { buildDreamPrompt } from './prompt.js'
+import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
 import { gatherDreamSessions } from './sessions.js'
 
 type DreamState = {
@@ -124,6 +124,7 @@ async function executeAutoDreamInner(params: {
           memoryDir: params.memoryDir,
           transcriptDir: params.config.sessionsDir,
           sessionIds,
+          memoryTree: await gatherDreamMemoryTree(params.memoryDir),
         }),
         canUseToolOverride: createAutoDreamCanUseTool(params.memoryDir),
         canonicalUserOverride: params.userId,
