@@ -1,4 +1,3 @@
-import { getLastCacheSafeParams } from '../../agents/cache-safe-params.js'
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
 import { createAutoDreamCanUseTool } from '../auto-mem-can-use-tool.js'
@@ -95,15 +94,6 @@ async function executeAutoDreamInner(params: {
       excludeSessionId: params.currentSessionId,
     })
     if (sessionIds.length < params.config.autoDream.minSessions) {
-      return
-    }
-
-    // Gate on parent cacheSafeParams being present: runSubagent inherits the
-    // recent fork-context messages from it. Without those, dream has no
-    // baseline to reason over.
-    const cacheSafeParams = getLastCacheSafeParams(params.userId)
-    if (!cacheSafeParams) {
-      console.error('[auto-dream] no cacheSafeParams available, skipping')
       return
     }
 

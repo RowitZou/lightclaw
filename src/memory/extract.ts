@@ -1,5 +1,4 @@
 import type { LightClawConfig } from '../config.js'
-import { getLastCacheSafeParams } from '../agents/cache-safe-params.js'
 import { runSubagent } from '../agents/run-subagent.js'
 import { getMainRole } from '../agents/registry.js'
 import type { Role } from '../agents/types.js'
@@ -17,16 +16,11 @@ export type ExtractCtx = {
   messages: Message[]
   lastExtractedAt: number
   memoryDir: string
-  /** Canonical user keyed under per-user `cacheSafeParams` storage. Without
-   *  this the extraction fork would read whichever main turn last finished
-   *  process-wide — see Phase 28 audit §1.7.4 (cross-user MEMORY.md
-   *  contamination). Optional (terminal admin without identity returns
-   *  undefined and the fork is skipped via the no-cacheSafeParams branch). */
+  /** Canonical user used for per-user isolation in async extraction tasks. */
   canonicalUser: string | undefined
   config: LightClawConfig
   ownerRole?: Role
   forkTranscriptPath?: string
-  forkContextMessages?: Message[]
 }
 
 type ExtractState = {
@@ -222,19 +216,6 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   await ensureMemoryDir(ctx.memoryDir)
   const existingMemories = await collectExistingMemoriesForRole(ownerRole, ctx.memoryDir)
-  // Gate on parent cacheSafeParams being present: runSubagent inherits the
-  // recent fork-context messages from it (so the subagent sees the
-  // conversation history to reason over). Without those, extraction has
-  // nothing to look at and would just no-op. ctx.canonicalUser keying is
-  // still required for per-user isolation (Phase 28 audit §1.7.4).
-  const cacheSafeParams = getLastCacheSafeParams(ctx.canonicalUser)
-  if (!cacheSafeParams && !ctx.forkContextMessages) {
-    console.error('[memory] no cacheSafeParams available, skipping extraction')
-    return {
-      saved: [],
-      lastExtractedAt: ctx.lastExtractedAt,
-    }
-  }
 
   const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
   const prompt = buildExtractPrompt(newMessages, existingMemories)
@@ -250,7 +231,6 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
     canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
     canonicalUserOverride: ctx.canonicalUser,
     currentRoleOverride: ownerRole,
-    forkContextMessagesOverride: ctx.forkContextMessages,
   })
 
   // WorkerFailure (PR1.6): runSubagent now returns structured failures
@@ -363,17 +343,13 @@ export async function triggerForkExtract(params: {
   memoryDir: string
   config: LightClawConfig
 }): Promise<ExtractResult> {
-  // Option C slicing (Phase 3 review fix, 2026-05-16): use the meta marker
-  // written by persistForkTranscript to split fork-own messages from the
-  // inherited parent prefix. Extraction analyzes only the fork-own slice
-  // (so a web fork's L3 doesn't absorb content from the parent DM the
-  // worker happened to inherit as cache context), but still passes the
-  // parent prefix as `forkContextMessages` so the extract subagent sees
-  // the same "worldview" the fork had when it produced that output.
+  // Legacy fork transcripts may contain an inherited parent prefix before the
+  // marker. New dispatched-agent transcripts use marker 0, so the full file is
+  // dispatch-owned work. Either way, extraction analyzes only the worker-owned
+  // slice and no longer injects a hidden parent prefix.
   const { messages, forkContextEndIndex } = await parseForkTranscriptFile(
     params.forkTranscriptPath,
   )
-  const forkContextSlice = messages.slice(0, forkContextEndIndex)
   const forkOwnSlice = messages.slice(forkContextEndIndex)
   return executeExtraction({
     messages: forkOwnSlice,
@@ -383,7 +359,6 @@ export async function triggerForkExtract(params: {
     config: params.config,
     ownerRole: params.ownerRole,
     forkTranscriptPath: params.forkTranscriptPath,
-    forkContextMessages: forkContextSlice,
   })
 }
 

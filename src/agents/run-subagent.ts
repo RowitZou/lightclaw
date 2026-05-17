@@ -4,14 +4,9 @@ import { getProviderFor } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import type { Message } from '../types.js'
 import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
 import { getAgent } from './registry.js'
-import {
-  createCacheSafeParams,
-  getLastCacheSafeParams,
-} from './cache-safe-params.js'
-import { runForkedAgent } from './forked-agent.js'
+import { runDispatchedAgent } from './dispatched-agent.js'
 import { isToolVisibleToRole } from './role-tool-gate.js'
 
 function filterTools(
@@ -30,12 +25,10 @@ export async function runSubagent(params: {
   // as role.tools presence alone, such as "Bash is allowed only for read-only
   // heads" in createAutoMemCanUseTool(memoryDir).
   canUseToolOverride?: CanUseToolFn
-  // Optional explicit canonical user for cacheSafeParams lookup. AgentTool
-  // dispatch falls back to getCurrentUserId() (it runs synchronously inside
-  // the main turn's ALS scope); internal subagents (extract / dream) fire
-  // asynchronously after the main turn ends and can outlive the ALS scope,
-  // so they pass their stashed canonicalUser explicitly to guarantee the
-  // fork sees the right user's forkContextMessages.
+  // Optional explicit canonical user for post-dispatch memory extraction.
+  // AgentTool dispatch falls back to getCurrentUserId() (it runs synchronously
+  // inside the main turn's ALS scope); internal subagents (extract / dream)
+  // can fire asynchronously after the main turn ends.
   canonicalUserOverride?: string
   // Optional override for the per-subagent turn cap. Internal subagents
   // (autoDream) source their cap from a user-tunable config knob, so they
@@ -44,9 +37,6 @@ export async function runSubagent(params: {
   // Used by Phase 3 per-role extract: prompt/tools/gate still come from the
   // child agent Role, but MemoryWrite's physical binding sees this owner Role.
   currentRoleOverride?: Role
-  // Used by Phase 3 fork extraction so extract_memories sees the worker fork
-  // transcript, not the parent's most recent main-turn cache context.
-  forkContextMessagesOverride?: Message[]
 }): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)
   if (!agent) {
@@ -80,21 +70,10 @@ export async function runSubagent(params: {
       }),
     ),
   )
-  // Inherit the parent's recent fork-context messages (so the subagent sees
-  // the conversation history it should reason over) but build a fresh
-  // systemPrompt + tools array specific to this agent — buildSubagentPrompt
-  // strips the main agent's "## Available Skills" section that previously
-  // misled extract_memories / auto_dream into calling UseSkill instead of
-  // MemoryWrite. Role model selection stays config-driven (cache key alignment is
-  // governed by systemPrompt + tools + messages; the model itself is one of
-  // those keys).
+  // Dispatch semantics: the worker starts from exactly one caller-authored
+  // prompt. The runner does not inherit the parent transcript; callers that
+  // want context (extract / autoDream) must include it in params.prompt.
   const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
-  const existingCache = getLastCacheSafeParams(cacheUserKey)
-  const cacheSafeParams = createCacheSafeParams({
-    tools,
-    messages: params.forkContextMessagesOverride ?? existingCache?.forkContextMessages ?? [],
-    config,
-  })
 
   // Resolve the subagent turn cap: caller override wins (autoDream pulls
   // from config.autoDream.maxTurns), then per-role config/default, then the
@@ -105,9 +84,10 @@ export async function runSubagent(params: {
     ?? resolveRoleMaxTurns(agent, config)
     ?? config.subagentMaxTurns
   try {
-    const result = await runForkedAgent({
-      promptText: params.prompt,
-      cacheSafeParams,
+    const result = await runDispatchedAgent({
+      dispatchPrompt: params.prompt,
+      tools,
+      config,
       role: agent,
       currentRoleOverride: params.currentRoleOverride,
       canUseToolOverride: params.canUseToolOverride,
@@ -137,7 +117,7 @@ export async function runSubagent(params: {
 
 function maybeTriggerForkExtract(input: {
   agent: Role
-  result: Awaited<ReturnType<typeof runForkedAgent>>
+  result: Awaited<ReturnType<typeof runDispatchedAgent>>
   canonicalUser: string | undefined
   config: ReturnType<typeof getConfig>
 }): void {

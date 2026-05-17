@@ -29,7 +29,7 @@ import { getCurrentUserId, getRuntimeIfInitialized, getSessionId } from './state
  */
 export interface ApiLogContext {
   kind: ApiLogKind
-  /** Set by forked-agent when kind === 'subagent'. */
+  /** Set by dispatched-agent when kind === 'subagent'. */
   subagentLabel?: string
   /** Main-loop turn index. Defaults to 0 when omitted (one-shot kinds). */
   turn?: number

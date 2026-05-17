@@ -15,9 +15,9 @@ import type { Message, UserContentBlock } from '../types.js'
 /**
  * /fresh runs an ephemeral one-shot session: a synthetic message list, no
  * memory recall, no transcript persistence, no auto-compact, no extraction.
- * It does NOT go through the forked-agent runner — fresh is an *independent*
- * session, not a fork of the parent conversation, so it deliberately skips
- * cacheSafeParams snapshotting and runs through the regular query() path
+ * It does NOT go through the dispatched-agent runner — fresh is an
+ * independent session, not a dispatch from the parent conversation, so it
+ * deliberately runs through the regular query() path
  * with the noAutoMemory + ephemeral flags.
  *
  * `/fresh` itself is marked `channelOnly` since Phase 37, so this runner
@@ -52,7 +52,7 @@ export async function runFresh(args: {
   // not inherit the parent main session's `discoveredTools`. Without this
   // wrap, the fresh turn would see the parent's promoted MCP tools as
   // already-loaded (skewing the system-reminder list and the tools-array
-  // composition). Mirrors `runForkedAgent`'s shape so the contract is
+  // composition). Mirrors `runDispatchedAgent`'s shape so the contract is
   // consistent across all fork-like entry points.
   const runQuery = () => query({
     role: getMainRole(),

@@ -13,9 +13,8 @@ export type ForkTranscriptPathInput = {
 /**
  * In-line marker written as the first JSONL line of a fork transcript. Splits
  * the messages array into:
- *   - prefix `[0, forkContextEndIndex)` — what the fork inherited from the
- *     parent's `cacheSafeParams.forkContextMessages` (the parent context the
- *     fork had to ground its answer in)
+ *   - prefix `[0, forkContextEndIndex)` — legacy inherited parent context
+ *     from pre-dispatch semantics
  *   - suffix `[forkContextEndIndex, ...]` — the fork's own user prompt +
  *     loop messages (fork-own work)
  *

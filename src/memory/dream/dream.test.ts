@@ -14,10 +14,6 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { Role } from '../../agents/types.js'
-import {
-  saveCacheSafeParams,
-  type CacheSafeParams,
-} from '../../agents/cache-safe-params.js'
 import type { RunSubagentResult } from '../../agents/run-subagent.js'
 type SubagentResult = RunSubagentResult
 import type { LightClawConfig } from '../../config.js'
@@ -48,7 +44,6 @@ beforeEach(() => {
   tmpMemoryDir = path.join(tmpRoot, 'memory', 'alice')
   savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
   process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
-  saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
   setRunSubagentForTest(null)
 })
@@ -59,7 +54,6 @@ afterEach(() => {
   } else {
     process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
   }
-  saveCacheSafeParams('alice', null)
   resetAutoDreamStateForTest()
   setRunSubagentForTest(null)
   rmSync(tmpRoot, { recursive: true, force: true })
@@ -151,27 +145,9 @@ describe('autoDream runner', () => {
     })
     assert.equal(existsSync(tmpMemoryDir), false)
   })
-
-  it('skips before lock acquisition when cacheSafeParams is unavailable', async () => {
-    writeSession('old-1', 'alice', Date.now())
-    writeSession('old-2', 'alice', Date.now() + 1)
-
-    await executeAutoDream({
-      userId: 'alice',
-      memoryDir: tmpMemoryDir,
-      currentSessionId: 'current',
-      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
-    })
-
-    assert.equal(existsSync(tmpMemoryDir), true)
-    assert.equal(existsSync(consolidationLockPath(tmpMemoryDir)), false)
-    assert.equal(getAutoDreamInFlightCountForTest(), 0)
-  })
-
   it('does not count the current session toward the session gate', async () => {
     writeSession('current', 'alice', Date.now())
     writeSession('old-1', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvoked = false
     setRunSubagentForTest(async () => {
@@ -194,7 +170,6 @@ describe('autoDream runner', () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
     writeSession('s3', 'alice', Date.now() + 2)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     mkdirSync(tmpMemoryDir, { recursive: true })
     writeFileSync(consolidationLockPath(tmpMemoryDir), `${process.pid}\n`)
@@ -216,7 +191,6 @@ describe('autoDream runner', () => {
   })
 
   it('skips when scan throttle is active', async () => {
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
     setRunSubagentForTest(async () => fakeForkResult())
 
     writeSession('s1', 'alice', Date.now())
@@ -263,7 +237,6 @@ describe('autoDream runner', () => {
       writeSession('s1', 'alice', Date.now())
       writeSession('s2', 'alice', Date.now() + 1)
       writeSession('s3', 'alice', Date.now() + 2)
-      saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
       setRunSubagentForTest(async () => {
@@ -291,7 +264,6 @@ describe('autoDream runner', () => {
     try {
       writeSession('s1', 'alice', Date.now())
       writeSession('s2', 'alice', Date.now() + 1)
-      saveCacheSafeParams('alice', fakeCacheSafeParams())
 
       let forkInvoked = false
       setRunSubagentForTest(async () => {
@@ -315,7 +287,6 @@ describe('autoDream runner', () => {
   it('runs the fork and marks consolidation succeeded when all gates pass', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvocations = 0
     setRunSubagentForTest(async () => {
@@ -341,7 +312,6 @@ describe('autoDream runner', () => {
   it('passes a full user memory tree manifest to a single autoDream fork', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
     await seedMemoryTree()
 
     let forkInvocations = 0
@@ -442,7 +412,6 @@ describe('autoDream runner', () => {
   it('rolls back the lock when the fork throws', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     await tryAcquireConsolidationLock(tmpMemoryDir)
     const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
@@ -482,7 +451,6 @@ describe('autoDream runner', () => {
     // lock so the 24h throttle window isn't burned on an unsuccessful run.
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     await tryAcquireConsolidationLock(tmpMemoryDir)
     const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
@@ -523,7 +491,6 @@ describe('autoDream runner', () => {
   it('does not run a second fork while one is in progress for the same user', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let forkInvocations = 0
     let signalForkEntered: () => void = () => {}
@@ -558,7 +525,6 @@ describe('autoDream runner', () => {
   it('drainPendingDream waits for in-flight runs', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
-    saveCacheSafeParams('alice', fakeCacheSafeParams())
 
     let signalForkEntered: () => void = () => {}
     const forkEntered = new Promise<void>(resolve => {
@@ -631,14 +597,6 @@ function writeSession(sessionId: string, userId: string, lastActiveAt: number): 
       permissionMode: 'default',
     }),
   )
-}
-
-function fakeCacheSafeParams(): CacheSafeParams {
-  return {
-    tools: [],
-    forkContextMessages: [],
-    config: {} as LightClawConfig,
-  }
 }
 
 function fakeForkResult(): SubagentResult {
