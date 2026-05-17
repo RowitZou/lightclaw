@@ -130,7 +130,7 @@ function maybeTriggerForkExtract(input: {
   ) {
     return
   }
-  if (input.agent.agentType !== 'web') {
+  if (input.agent.kind !== 'worker') {
     return
   }
 
