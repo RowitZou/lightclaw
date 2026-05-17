@@ -14,10 +14,10 @@ import type { LightClawConfig } from '../config.js'
 import type { AuthCredentials, AuthProvider } from './types.js'
 
 function makeConfig(over: Partial<LightClawConfig> = {}): LightClawConfig {
-  // Minimal LightClawConfig shape — we only mutate models / routing / model.
+  // Minimal LightClawConfig shape — we only mutate models / defaultModel.
   return {
     lang: 'cn',
-    model: 'sonnet',
+    defaultModel: 'sonnet',
     models: {
       sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' },
       'gpt-5-mini': { endpoint: 'gw', schema: 'openai', upstreamModel: 'gpt-5-mini' },
@@ -26,10 +26,6 @@ function makeConfig(over: Partial<LightClawConfig> = {}): LightClawConfig {
     endpoints: {
       gw: { apiKey: 'sk-x' },
       codex: { auth: 'codex-oauth' },
-    },
-    routing: {
-      main: 'sonnet',
-      extract: 'gpt-5-codex',
     },
     ...over,
   } as LightClawConfig
@@ -98,8 +94,6 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
       models: {
         sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' },
       },
-      routing: { main: 'sonnet' },
-      model: 'sonnet',
     })
     const stderr = new FakeStderr()
     await ensureOAuthModelsUsable(config, stderr)
@@ -116,7 +110,7 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
     await ensureOAuthModelsUsable(config, stderr)
     assert.equal(stderr.output, '')
     assert.ok(config.models['gpt-5-codex'])
-    assert.equal(config.routing.extract, 'gpt-5-codex')
+    assert.equal(config.defaultModel, 'sonnet')
   })
 
   it('disables openai-auth models when refresh fails', async () => {
@@ -135,15 +129,12 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
     // sonnet + gpt-5-mini stay
     assert.ok(config.models.sonnet)
     assert.ok(config.models['gpt-5-mini'])
-    // routing.extract was gpt-5-codex -> rewritten to first remaining (sonnet)
-    assert.equal(config.routing.extract, 'sonnet')
-    // routing.main was sonnet -> unchanged
-    assert.equal(config.routing.main, 'sonnet')
+    assert.equal(config.defaultModel, 'sonnet')
     // stderr warning emitted
     assert.match(stderr.output, /Codex OAuth credentials unavailable/)
     assert.match(stderr.output, /rotated by codex CLI/)
     assert.match(stderr.output, /Disabled models.*gpt-5-codex/)
-    assert.match(stderr.output, /routing\.extract rewritten: gpt-5-codex -> sonnet/)
+    assert.doesNotMatch(stderr.output, /routing\./)
   })
 
   it('falls back to import() when token store is missing', async () => {
@@ -182,16 +173,14 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
       }),
     }))
     const config = makeConfig({
-      model: 'gpt-5-codex',
-      routing: { main: 'gpt-5-codex' },
+      defaultModel: 'gpt-5-codex',
     })
     const stderr = new FakeStderr()
     await ensureOAuthModelsUsable(config, stderr)
-    // model field rewritten to first remaining (sonnet)
-    assert.equal(config.model, 'sonnet')
-    assert.equal(config.routing.main, 'sonnet')
+    // defaultModel rewritten to first remaining (sonnet)
+    assert.equal(config.defaultModel, 'sonnet')
     assert.match(stderr.output, /defaultModel rewritten: gpt-5-codex -> sonnet/)
-    assert.match(stderr.output, /routing\.main rewritten: gpt-5-codex -> sonnet/)
+    assert.doesNotMatch(stderr.output, /routing\./)
   })
 
   it('throws "No models configured" when every model was OAuth and auth fails', async () => {
@@ -207,8 +196,7 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
         'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
         'gpt-5.4': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.4' },
       },
-      routing: { main: 'gpt-5-codex' },
-      model: 'gpt-5-codex',
+      defaultModel: 'gpt-5-codex',
     })
     const stderr = new FakeStderr()
     await assert.rejects(
@@ -242,48 +230,38 @@ describe('codex/startup: ensureOAuthModelsUsable', () => {
         sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude' },
         'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
       },
-      routing: { main: 'gpt-5-codex' },
-      model: 'gpt-5-codex',
+      defaultModel: 'gpt-5-codex',
     })
     const stderr = new FakeStderr()
     await ensureOAuthModelsUsable(config, stderr)
     // First-key fallback = gpt-5-mini (not sonnet, not alphabetical)
-    assert.equal(config.model, 'gpt-5-mini')
-    assert.equal(config.routing.main, 'gpt-5-mini')
+    assert.equal(config.defaultModel, 'gpt-5-mini')
   })
 })
 
 describe('codex/startup: degradeOAuthModels (pure)', () => {
-  it('preserves non-routing-related routing keys when none are oauth', () => {
+  it('preserves defaultModel when it does not point at a disabled model', () => {
     const config = makeConfig({
-      routing: { main: 'sonnet', compact: 'sonnet', extract: 'gpt-5-codex' },
+      defaultModel: 'sonnet',
     })
     const out = _internal.degradeOAuthModels(config, ['gpt-5-codex'], 'reason')
-    // Only extract should change
-    assert.equal(out.routingChanges.length, 1)
-    assert.equal(out.routingChanges[0]!.key, 'extract')
-    assert.equal(config.routing.compact, 'sonnet')
+    assert.equal(out.defaultModelChanged, undefined)
+    assert.equal(config.defaultModel, 'sonnet')
   })
 
-  it('rewrites every routing.* key that pointed at a disabled model', () => {
+  it('rewrites defaultModel when it pointed at a disabled model', () => {
     const config = makeConfig({
       models: {
         sonnet: { endpoint: 'gw', schema: 'anthropic', upstreamModel: 'claude' },
         'gpt-5-codex': { endpoint: 'codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' },
       },
-      routing: {
-        main: 'gpt-5-codex',
-        compact: 'gpt-5-codex',
-        extract: 'gpt-5-codex',
-        webSearch: 'gpt-5-codex',
-      },
-      model: 'gpt-5-codex',
+      defaultModel: 'gpt-5-codex',
     })
     const out = _internal.degradeOAuthModels(config, ['gpt-5-codex'], 'r')
-    assert.equal(out.routingChanges.length, 4)
-    assert.equal(config.routing.main, 'sonnet')
-    assert.equal(config.routing.compact, 'sonnet')
-    assert.equal(config.routing.extract, 'sonnet')
-    assert.equal(config.routing.webSearch, 'sonnet')
+    assert.deepEqual(out.defaultModelChanged, {
+      from: 'gpt-5-codex',
+      to: 'sonnet',
+    })
+    assert.equal(config.defaultModel, 'sonnet')
   })
 })

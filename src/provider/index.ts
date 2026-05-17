@@ -176,11 +176,11 @@ function precharge(provider: Provider, entry: ModelEntry, baseUrl: string | unde
 /**
  * Default provider used when the call site does not name a model — typically
  * tool-list filtering and other startup paths. Resolves through the current
- * `routing.main` (or `config.model` if main is absent), so swapping the
- * selected model also swaps which capabilities the tool list sees.
+ * `defaultModel`, so swapping the selected model also swaps which capabilities
+ * the tool list sees.
  */
 export function getProvider(config: LightClawConfig): Provider {
-  return getProviderFor(config, config.routing.main ?? config.model).provider
+  return getProviderFor(config, config.defaultModel).provider
 }
 
 export function clearPrechargeForModel(input: {

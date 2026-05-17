@@ -125,14 +125,6 @@ export type NetworkBridgeSettings = {
   acl: string[]
 }
 
-export type RoutingConfig = {
-  main: string
-  compact?: string
-  extract?: string
-  webSearch?: string
-  webFetch?: string
-}
-
 export type MemoryRecallConfig = {
   enabled: boolean
   topN: number
@@ -264,8 +256,6 @@ export type LightClawConfig = {
   /** Phase 5 canonical model selector. `/model` writes here; every role and
    *  tool module falls back to this value. */
   defaultModel: string
-  /** Currently selected display name. Always a key of `models`. */
-  model: string
   /** Display-name -> { endpoint, schema, upstreamModel }. Source of truth
    *  for which models the user can pick via `/model`. */
   models: Record<string, ModelEntry>
@@ -273,7 +263,6 @@ export type LightClawConfig = {
    *  alias. */
   endpoints: Record<string, EndpointConfig>
   roles?: Record<string, RoleConfig>
-  routing: RoutingConfig
   sessionsDir: string
   autoCompact: boolean
   autoMemory: boolean
@@ -947,8 +936,7 @@ export function getConfig(): LightClawConfig {
   }
   const requestedModel =
     process.env.LIGHTCLAW_DEFAULT_MODEL ??
-    fileConfig.defaultModel ??
-    fileConfig.model
+    fileConfig.defaultModel
   if (requestedModel === undefined) {
     throw new Error(
       '`defaultModel` is required (set it as a top-level field or via LIGHTCLAW_DEFAULT_MODEL env).',
@@ -960,45 +948,7 @@ export function getConfig(): LightClawConfig {
     )
   }
   const defaultModel = requestedModel
-  const model = defaultModel
   const roles = resolveRoleConfigs(fileConfig.roles, modelNames)
-  const validateRoutingTarget = (
-    target: string | undefined,
-    field: string,
-  ): string | undefined => {
-    if (target === undefined) {
-      return undefined
-    }
-    if (!models[target]) {
-      throw new Error(
-        `routing.${field} = "${target}" is not in models. Available: ${modelNames.join(', ')}.`,
-      )
-    }
-    return target
-  }
-  const routing: RoutingConfig = {
-    main:
-      validateRoutingTarget(
-        process.env.LIGHTCLAW_ROUTING_MAIN,
-        'main',
-      ) ?? defaultModel,
-    compact: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_COMPACT,
-      'compact',
-    ),
-    extract: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_EXTRACT,
-      'extract',
-    ),
-    webSearch: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_WEBSEARCH,
-      'webSearch',
-    ),
-    webFetch: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_WEBFETCH,
-      'webFetch',
-    ),
-  }
   const autoCompact =
     parseBoolean(process.env.LIGHTCLAW_AUTO_COMPACT) ??
     fileConfig.autoCompact ??
@@ -1219,11 +1169,9 @@ export function getConfig(): LightClawConfig {
 
   return {
     defaultModel,
-    model,
     models,
     endpoints,
     ...(roles ? { roles } : {}),
-    routing,
     sessionsDir: resolveSessionsDir(),
     autoCompact,
     autoMemory,

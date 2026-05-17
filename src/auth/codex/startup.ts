@@ -16,9 +16,9 @@ import type { LightClawConfig, ModelEntry } from '../../config.js'
 //   a working LightClaw token store, since refresh-token rotation
 //   between LightClaw and the official Codex CLI causes silent breakage.
 // - On failure, disable every openai-auth model in the in-memory
-//   config. defaultModel / routing.* that pointed at a disabled model
-//   get rewritten to the first remaining model (Object.keys insertion
-//   order — admin's intended priority from config.json).
+//   config. defaultModel that pointed at a disabled model gets rewritten to
+//   the first remaining model (Object.keys insertion order — admin's intended
+//   priority from config.json).
 // - If every model was openai-auth and credentials failed, throw with
 //   the same message shape as `getConfig()`'s "No models configured"
 //   so the caller surfaces it identically.
@@ -94,7 +94,6 @@ type DegradeOutcome = {
   disabledModels: string[]
   remainingModels: string[]
   fallbackModel: string
-  routingChanges: Array<{ key: 'main' | 'compact' | 'extract' | 'webSearch'; from: string; to: string }>
   defaultModelChanged: { from: string; to: string } | undefined
   reason: string
 }
@@ -124,33 +123,15 @@ function degradeOAuthModels(
   }
 
   let defaultModelChanged: DegradeOutcome['defaultModelChanged']
-  if (disabledSet.has(config.model)) {
-    defaultModelChanged = { from: config.model, to: fallback }
-    config.model = fallback
-  }
-
-  const routingChanges: DegradeOutcome['routingChanges'] = []
-  const routingKeys = ['main', 'compact', 'extract', 'webSearch'] as const
-  for (const k of routingKeys) {
-    const current = config.routing[k]
-    if (typeof current === 'string' && disabledSet.has(current)) {
-      routingChanges.push({ key: k, from: current, to: fallback })
-      // routing.main is required (string); the others are optional —
-      // we still rewrite to the fallback rather than dropping, so a
-      // disabled extract / compact / webSearch never silently falls
-      // back to main (which would mask the issue).
-      ;(config.routing as Record<string, string | undefined>)[k] = fallback
-    }
-  }
-  if (!config.routing.main) {
-    config.routing.main = fallback
+  if (disabledSet.has(config.defaultModel)) {
+    defaultModelChanged = { from: config.defaultModel, to: fallback }
+    config.defaultModel = fallback
   }
 
   return {
     disabledModels: oauthModels,
     remainingModels: remaining,
     fallbackModel: fallback,
-    routingChanges,
     defaultModelChanged,
     reason,
   }
@@ -167,9 +148,6 @@ function formatStderrWarning(outcome: DegradeOutcome): string {
     lines.push(
       `[startup] defaultModel rewritten: ${outcome.defaultModelChanged.from} -> ${outcome.defaultModelChanged.to}`,
     )
-  }
-  for (const r of outcome.routingChanges) {
-    lines.push(`[startup] routing.${r.key} rewritten: ${r.from} -> ${r.to}`)
   }
   lines.push(
     `[startup] Fix: \`codex login\` then \`/auth import codex\`, ` +

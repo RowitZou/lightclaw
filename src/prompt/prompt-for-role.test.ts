@@ -125,7 +125,6 @@ function fakeTool(name: string): Tool {
 
 function snapshotConfig(): LightClawConfig {
   return {
-    model: 'claude-sonnet-4-6',
     defaultModel: 'claude-sonnet-4-6',
     models: {
       'claude-sonnet-4-6': {
@@ -137,7 +136,6 @@ function snapshotConfig(): LightClawConfig {
     endpoints: {
       newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' },
     },
-    routing: { main: 'claude-sonnet-4-6' },
     memoryRecall: { enabled: false, topN: 3 },
     sessionMemory: { enabled: false },
   } as unknown as LightClawConfig

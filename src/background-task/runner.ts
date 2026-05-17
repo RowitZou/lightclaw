@@ -4,7 +4,7 @@ import path from 'node:path'
 import { getConfig } from '../config.js'
 import { createUserMessage } from '../messages.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
-import { getProvider } from '../provider/index.js'
+import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import { getAdmin } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
@@ -50,7 +50,7 @@ export async function runBackgroundTaskFire(input: {
 
     const config = getConfig()
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
-    const model = prefs.model ?? config.model
+    const model = prefs.model ?? config.defaultModel
     const permissionMode = prefs.permissionMode ?? config.permissionMode
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))
     await mkdir(cwd, { recursive: true, mode: 0o700 })
@@ -67,7 +67,7 @@ export async function runBackgroundTaskFire(input: {
       }
     }
 
-    const provider = getProvider(config)
+    const provider = getProviderFor(config, model).provider
     const { getAllTools, getEnabledTools } = await import('../tools.js')
     const tools = getEnabledTools(provider, getAllTools('feishu'))
     // Docker backend requires the tracker; local / rlaunch ignore it. Pass it
@@ -128,11 +128,7 @@ export async function runBackgroundTaskFire(input: {
         tools,
         config: {
           ...config,
-          model,
-          routing: {
-            ...config.routing,
-            main: model,
-          },
+          defaultModel: model,
         },
       })
       await rewriteTranscript(sessionId, output.messages)

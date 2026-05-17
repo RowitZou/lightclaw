@@ -89,14 +89,14 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   // Auth providers must be registered before the OAuth model usability
   // check below: ensureOAuthModelsUsable looks up `getAuthProvider('codex')`.
   // Moved up from its previous spot below initializeAgents() because the
-  // usability check may degrade `config.models` / `routing` / `model`
+  // usability check may degrade `config.models` / `defaultModel`
   // before createResolvedSessionContext reads them into the session meta.
   registerCodexAuthProvider(resolvedConfig)
   // If any registered model uses schema = 'openai-auth', ensure Codex
   // credentials work (read stored token + auto-refresh; fall back to
   // import from ~/.codex/auth.json only when the LightClaw store is
   // empty). On failure, disable the OAuth models in-memory and rewrite
-  // defaultModel / routing.* away from them. Throws same-shape as
+  // defaultModel away from them. Throws same-shape as
   // 'No models configured' if every model was OAuth and login failed.
   await ensureOAuthModelsUsable(resolvedConfig)
   // NetworkBridge must come up BEFORE pool/preheat — when network.mode=host,
@@ -283,16 +283,12 @@ function resolveConfig(
   config: LightClawConfig,
   input: InitializeAppInput | undefined,
 ): LightClawConfig {
-  const resolvedModel = input?.model ?? config.model
+  const resolvedModel = input?.model ?? config.defaultModel
   return {
     ...config,
     ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
     ...(input?.hooksEnabled === false ? { hooksEnabled: false } : {}),
-    model: resolvedModel,
-    routing: {
-      ...config.routing,
-      main: input?.model ?? config.routing.main,
-    },
+    defaultModel: resolvedModel,
   }
 }
 
@@ -326,7 +322,7 @@ async function createResolvedSessionContext(
   return createSessionContext({
     cwd: resolvedCwd,
     channel: input?.channel,
-    model: resolvedConfig.model,
+    model: resolvedConfig.defaultModel,
     sessionsDir: resolvedConfig.sessionsDir,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,

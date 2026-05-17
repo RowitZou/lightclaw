@@ -91,7 +91,7 @@ describe('runBackgroundTaskFire', () => {
     writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
       endpoints: { a: { apiKey: 'sk-fake' } },
       models: { 'm': { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-fake' } },
-      model: 'm',
+      defaultModel: 'm',
       runtime: { backend: 'local' },
     }))
     mkdirSync(path.join(tmpHome, 'workspaces', 'alice'), { recursive: true })

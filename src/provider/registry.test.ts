@@ -18,12 +18,12 @@ import { setLightclawHomeOverride } from '../paths.js'
 import type { LightClawConfig } from '../config.js'
 
 // Build a minimal LightClawConfig stub. The provider layer only reads
-// `models`, `endpoints`, `routing`, and `model`; everything else is left
+// `models`, `endpoints`, and `defaultModel`; everything else is left
 // as a typed-cast empty object so the test stays focused on the
 // registry resolution path.
 function buildConfig(overrides?: Partial<LightClawConfig>): LightClawConfig {
   const base: Partial<LightClawConfig> = {
-    model: 'opus',
+    defaultModel: 'opus',
     models: {
       opus: {
         endpoint: 'anthropic-direct',
@@ -45,7 +45,6 @@ function buildConfig(overrides?: Partial<LightClawConfig>): LightClawConfig {
       'anthropic-direct': { apiKey: 'sk-ant-x' },
       gateway: { apiKey: 'sk-gw-x', baseUrl: 'http://gw.example/' },
     },
-    routing: { main: 'opus' },
   }
   return { ...(base as LightClawConfig), ...overrides }
 }
@@ -113,9 +112,9 @@ describe('provider registry', () => {
     )
   })
 
-  it('getProvider() defaults to routing.main', () => {
+  it('getProvider() defaults to defaultModel', () => {
     const cfg = buildConfig({
-      routing: { main: 'opus-via-gw' },
+      defaultModel: 'opus-via-gw',
     })
     const provider = getProvider(cfg)
     assert.equal(provider.name, 'anthropic')
@@ -167,7 +166,7 @@ describe('provider.detectStaticDropKinds', () => {
       endpoints: {
         codex: { auth: 'codex-oauth' },
       },
-      routing: { main: 'codex' },
+      defaultModel: 'codex',
     }
     const { provider } = getProviderFor(cfg, 'codex')
     const dropped = (provider.detectStaticDropKinds?.() ?? []).slice().sort()
@@ -271,7 +270,7 @@ describe('provider precharge writes capability cache', () => {
         },
       },
       endpoints: { codex: { auth: 'codex-oauth' } },
-      routing: { main: 'codex' },
+      defaultModel: 'codex',
     }
     getProviderFor(cfg, 'codex')
 
@@ -306,7 +305,7 @@ describe('provider precharge writes capability cache', () => {
         },
       },
       endpoints: { codex: { auth: 'codex-oauth' } },
-      routing: { main: 'codex' },
+      defaultModel: 'codex',
     }
     getProviderFor(cfg, 'codex')
 

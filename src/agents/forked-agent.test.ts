@@ -16,9 +16,8 @@ import { getCwd } from '../state.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 
 const dummyConfig = {
-  model: 'claude-sonnet-4-6',
-  routing: { main: 'claude-sonnet-4-6' },
-} as LightClawConfig
+  defaultModel: 'claude-sonnet-4-6',
+} as unknown as LightClawConfig
 
 function tool(name: string): Tool {
   return {

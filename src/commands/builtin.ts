@@ -264,8 +264,7 @@ function buildBuiltinCommands(): ReplCommand[] {
         return
       }
       setModel(model)
-      ctx.config.model = model
-      ctx.config.routing.main = model
+      ctx.config.defaultModel = model
       if (clearCache) {
         const entry = ctx.config.models[model]
         const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl

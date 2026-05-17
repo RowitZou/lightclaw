@@ -41,14 +41,11 @@ export type ConfigFileShape = {
    *  schema lives on each model entry, not here. */
   endpoints?: Record<string, ConfigFileEndpoint>
   /** Display-name -> { endpoint alias, schema, upstreamModel }. The keys
-   *  are what users see in `/model` and write into routing. */
+   *  are what users see in `/model`. */
   models?: Record<string, ConfigFileModel>
   /** Display name picked at startup when no env / per-identity preference
    *  overrides. Must exist in `models`. */
   defaultModel?: string
-  /** Legacy pre-Phase 5 field. Commit 1 reads it as a one-time fallback;
-   *  later cleanup removes the fallback after callers have migrated. */
-  model?: string
   roles?: Record<string, {
     model?: unknown
     maxTurns?: unknown
@@ -57,13 +54,6 @@ export type ConfigFileShape = {
       maxCost?: unknown
     }
   }>
-  routing?: {
-    main?: string
-    compact?: string
-    extract?: string
-    webSearch?: string
-    webFetch?: string
-  }
   sessionsDir?: string
   autoCompact?: boolean
   autoMemory?: boolean

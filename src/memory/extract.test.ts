@@ -32,11 +32,10 @@ import { writeMemoryFile } from './auto-memory.js'
 import type { Tool } from '../tool.js'
 
 const dummyConfig = {
-  model: 'claude-sonnet-4-6',
-  routing: { main: 'claude-sonnet-4-6' },
+  defaultModel: 'claude-sonnet-4-6',
   autoMemory: true,
   sessionsDir: path.join(os.tmpdir(), 'lightclaw-test-sessions'),
-} as LightClawConfig
+} as unknown as LightClawConfig
 
 function memory(filename: string): MemoryEntry {
   return {

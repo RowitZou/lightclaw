@@ -12,7 +12,6 @@ let tmpHome: string
 function withDefaultModelForTest(body: object): object {
   if (
     'defaultModel' in body ||
-    'model' in body ||
     !('models' in body) ||
     body.models === null ||
     typeof body.models !== 'object' ||
@@ -34,11 +33,6 @@ function writeConfigRaw(body: object): void {
 
 const ENV_KEYS = [
   'LIGHTCLAW_DEFAULT_MODEL',
-  'LIGHTCLAW_ROUTING_MAIN',
-  'LIGHTCLAW_ROUTING_COMPACT',
-  'LIGHTCLAW_ROUTING_EXTRACT',
-  'LIGHTCLAW_ROUTING_WEBSEARCH',
-  'LIGHTCLAW_ROUTING_WEBFETCH',
   'LIGHTCLAW_DEFERRED_LOADING',
   'LIGHTCLAW_DEFERRED_LOADING_THRESHOLD',
 ] as const
@@ -88,8 +82,6 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.equal(cfg.defaultModel, 'opus')
-    assert.equal(cfg.model, 'opus')
-    assert.equal(cfg.routing.main, 'opus')
     assert.deepEqual(cfg.endpoints.a, { apiKey: 'sk-a', baseUrl: 'http://a/' })
     assert.equal(cfg.models.opus.upstreamModel, 'claude-opus-4-7')
     assert.equal(cfg.models.opus.schema, 'anthropic')
@@ -129,21 +121,7 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /reasoningEffort must be one of/)
   })
 
-  it('falls back to legacy config.model when defaultModel is omitted', () => {
-    writeConfigRaw({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-        secondary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
-      },
-      model: 'secondary',
-    })
-    const cfg = getConfig()
-    assert.equal(cfg.defaultModel, 'secondary')
-    assert.equal(cfg.model, 'secondary')
-  })
-
-  it('throws when neither defaultModel nor legacy config.model is configured', () => {
+  it('throws when defaultModel is not configured', () => {
     writeConfigRaw({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -165,7 +143,6 @@ describe('config: endpoints + models registry', () => {
     process.env.LIGHTCLAW_DEFAULT_MODEL = 'sonnet'
     const cfg = getConfig()
     assert.equal(cfg.defaultModel, 'sonnet')
-    assert.equal(cfg.model, 'sonnet')
   })
 
   it('rejects defaultModel not present in models', () => {
@@ -237,8 +214,7 @@ describe('config: endpoints + models registry', () => {
       routing: { main: 'opus', extract: 'phantom' },
     })
     const cfg = getConfig()
-    assert.equal(cfg.routing.main, 'opus')
-    assert.equal(cfg.routing.extract, undefined)
+    assert.equal(cfg.defaultModel, 'opus')
   })
 
   it('parses worker and internal role config', () => {
@@ -462,8 +438,7 @@ describe('config: endpoints + models registry', () => {
       routing: { main: 'sonnet', extract: 'gpt-5-codex' },
     })
     const cfg = getConfig()
-    assert.equal(cfg.routing.main, 'sonnet')
-    assert.equal(cfg.routing.extract, undefined)
+    assert.equal(cfg.defaultModel, 'sonnet')
     assert.deepEqual(cfg.endpoints.newapi, {
       apiKey: 'sk-a',
       baseUrl: 'http://gw/',
@@ -472,7 +447,7 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
   })
 
-  it('supports heterogeneous routing across schemas', () => {
+  it('supports heterogeneous module models across schemas', () => {
     writeConfig({
       endpoints: {
         anth: { apiKey: 'sk-ant' },
@@ -491,12 +466,11 @@ describe('config: endpoints + models registry', () => {
         },
       },
       defaultModel: 'sonnet',
-      routing: { main: 'sonnet', extract: 'ignored-file-value' },
+      tools: { compact: { model: 'gpt-mini' } },
     })
-    process.env.LIGHTCLAW_ROUTING_EXTRACT = 'gpt-mini'
     const cfg = getConfig()
-    assert.equal(cfg.routing.main, 'sonnet')
-    assert.equal(cfg.routing.extract, 'gpt-mini')
+    assert.equal(cfg.defaultModel, 'sonnet')
+    assert.equal(cfg.tools.compact.model, 'gpt-mini')
     assert.equal(cfg.models.sonnet.schema, 'anthropic')
     assert.equal(cfg.models['gpt-mini'].schema, 'openai')
   })
