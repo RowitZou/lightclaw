@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 
+import { BUNDLED_AGENTS } from '../agents/bundled/index.js'
 import type { Role } from '../agents/types.js'
 import type { SkillMeta } from './types.js'
 import {
@@ -24,6 +25,69 @@ test('wildcard role skills allow compatible skills', () => {
     ),
     true,
   )
+})
+
+test('skills without allowedTools are compatible with any named role skill', () => {
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'plain' }),
+      role({ tools: ['Read'], skills: ['plain'] }),
+    ),
+    true,
+  )
+})
+
+test('skills with an empty allowedTools list are compatible with any named role skill', () => {
+  assert.equal(
+    isSkillCompatibleWithRole(
+      skill({ name: 'plain', allowedTools: [] }),
+      role({ tools: ['Read'], skills: ['plain'] }),
+    ),
+    true,
+  )
+})
+
+test('roles with wildcard tools can load all named skills', () => {
+  const filtered = filterSkillsForRole(
+    [
+      skill({ name: 'read-skill', allowedTools: ['Read'] }),
+      skill({ name: 'write-skill', allowedTools: ['Write'] }),
+      skill({ name: 'bash-skill', allowedTools: ['Bash'] }),
+    ],
+    role({ tools: ['*'], skills: ['read-skill', 'write-skill', 'bash-skill'] }),
+  )
+
+  assert.deepEqual(filtered.map(item => item.name), ['read-skill', 'write-skill', 'bash-skill'])
+})
+
+test('skills requiring tools outside the role allowlist are filtered with a warning', () => {
+  const writes: string[] = []
+  const originalWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    writes.push(String(chunk))
+    return true
+  }) as typeof process.stderr.write
+  restoreStderr = () => {
+    process.stderr.write = originalWrite
+  }
+
+  const filtered = filterSkillsForRole(
+    [skill({ name: 'verify', allowedTools: ['Bash'] })],
+    role({ tools: ['Read'], skills: ['verify'] }),
+  )
+
+  assert.deepEqual(filtered, [])
+  assert.equal(writes.length, 1)
+  assert.match(writes[0] ?? '', /requires tools \[Bash\] outside role tools/)
+})
+
+test('skills requiring a visible tool are loaded', () => {
+  const filtered = filterSkillsForRole(
+    [skill({ name: 'reader', allowedTools: ['Read'] })],
+    role({ tools: ['Read', 'Grep'], skills: ['reader'] }),
+  )
+
+  assert.deepEqual(filtered.map(item => item.name), ['reader'])
 })
 
 test('missing role.skills hides the skill even when tools are present', () => {
@@ -76,6 +140,17 @@ test('filterSkillsForRole drops incompatible skills and warns once per drop', ()
   assert.deepEqual(filtered.map(item => item.name), ['verify'])
   assert.equal(writes.length, 1)
   assert.match(writes[0] ?? '', /skipped "delegate" for role "test-role"/)
+})
+
+test('coder and reviewer can load the verify skill', () => {
+  const verify = skill({ name: 'verify', allowedTools: ['Bash', 'Read'] })
+  const coder = BUNDLED_AGENTS.find(agent => agent.agentType === 'coder')
+  const reviewer = BUNDLED_AGENTS.find(agent => agent.agentType === 'reviewer')
+
+  assert.ok(coder)
+  assert.ok(reviewer)
+  assert.deepEqual(filterSkillsForRole([verify], coder).map(item => item.name), ['verify'])
+  assert.deepEqual(filterSkillsForRole([verify], reviewer).map(item => item.name), ['verify'])
 })
 
 function role(overrides: Partial<Role>): Role {
