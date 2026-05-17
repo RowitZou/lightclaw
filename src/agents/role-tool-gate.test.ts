@@ -10,13 +10,19 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
   const gate = deriveCanUseTool(role({ kind: 'worker', tools: ['*'] }))
 
   assert.equal((await gate(tool('Read'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('MemoryWrite'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('TodoWrite'), {})).behavior, 'allow')
   assert.deepEqual(await gate(tool('AgentTool'), {}), {
     behavior: 'deny',
     reason: 'AgentTool is not available to subagents.',
   })
-  assert.deepEqual(await gate(tool('MemoryWrite'), {}), {
+  assert.deepEqual(await gate(tool('BackgroundTask'), {}), {
     behavior: 'deny',
-    reason: 'MemoryWrite is not available to subagents.',
+    reason: 'BackgroundTask is not available to subagents.',
+  })
+  assert.deepEqual(await gate(tool('Dispatch'), {}), {
+    behavior: 'deny',
+    reason: 'Dispatch is not available to subagents.',
   })
 })
 
@@ -50,11 +56,13 @@ test('orchestrator roles with wildcard tools do not restrict tool presence', asy
 })
 
 test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () => {
-  const worker = role({ kind: 'worker', tools: ['Read', 'Write'] })
+  const worker = role({ kind: 'worker', tools: ['Read', 'MemoryWrite', 'TodoWrite'] })
   const internal = role({ kind: 'internal', tools: ['MemoryWrite'] })
 
   assert.equal(isToolVisibleToRole(worker, 'Read'), true)
-  assert.equal(isToolVisibleToRole(worker, 'MemoryWrite'), false)
+  assert.equal(isToolVisibleToRole(worker, 'MemoryWrite'), true)
+  assert.equal(isToolVisibleToRole(worker, 'TodoWrite'), true)
+  assert.equal(isToolVisibleToRole(worker, 'Dispatch'), false)
   assert.equal(isToolVisibleToRole(internal, 'MemoryWrite'), true)
   assert.equal(isToolVisibleToRole(internal, 'Read'), false)
 })

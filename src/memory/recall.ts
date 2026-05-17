@@ -90,6 +90,13 @@ export async function selectRelevantMemories(
   options: RecallOptions,
   role?: Role,
 ): Promise<MemoryEntry[]> {
+  // Invariant: internal roles are memory maintenance workers. They should not
+  // spend an extra LLM call recalling memories, and extractors must not recurse
+  // into memory recall while producing memories.
+  if (role?.kind === 'internal') {
+    return []
+  }
+
   const trimmed = query.trim()
   if (trimmed.length === 0) {
     return []

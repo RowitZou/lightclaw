@@ -6,8 +6,6 @@ const BLOCKED_WORKER_TOOLS = new Set([
   'AgentTool',
   'BackgroundTask',
   'Dispatch',
-  'TodoWrite',
-  'MemoryWrite',
 ])
 
 export function deriveCanUseTool(role: Role): CanUseToolFn {
