@@ -31,14 +31,16 @@ export function resolveRolePolicy(role: Role): ResolvedRolePolicy {
     mcpServers: role.mcpServers ?? (kind === 'orchestrator' ? ['*'] : []),
     reachableRoles:
       role.reachableRoles ??
-      (kind === 'orchestrator' ? ['generalist', 'localExplorer', 'webSearcher'] : []),
+      (kind === 'orchestrator'
+        ? ['generalist', 'localExplorer', 'webSearcher', 'feishuSecretary', 'coder', 'archivist', 'reviewer']
+        : []),
     hooks:
       role.hooks ??
       (kind === 'orchestrator'
         ? ['*']
         : kind === 'worker'
-          ? ['prompt-too-long-retry']
-          : []),
+          ? ['*']
+          : ['auto-compact', 'split-render', 'prompt-too-long-retry']),
     outputContract:
       role.outputContract ?? (kind === 'internal' ? 'side-effect' : 'report'),
   }

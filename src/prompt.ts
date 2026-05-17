@@ -1,5 +1,6 @@
 import { platform } from 'node:process'
 
+import { getAllAgents } from './agents/registry.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
 import type { Role } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
@@ -380,24 +381,23 @@ async function buildRolePromptParts(
     preTodoSections.push(permissionSection)
   }
 
+  if (policy.kind === 'orchestrator') {
+    preTodoSections.push(formatChannelContextSection())
+  }
+
   const skillsSection = formatRoleSkillsSection(policy.skills, role)
   if (skillsSection) {
     preTodoSections.push(skillsSection)
   }
 
-  const mcpSection = formatMcpSection()
-  if (mcpSection && policy.mcpServers.length > 0) {
-    preTodoSections.push(mcpSection)
+  const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools)
+  if (reachableRolesSection) {
+    preTodoSections.push(reachableRolesSection)
   }
-
-  const postTodoSections =
-    policy.kind === 'orchestrator'
-      ? ['## Channel Context\n(inbound channel message context will wrap here per turn)']
-      : []
 
   return {
     preTodoSections,
-    postTodoSections,
+    postTodoSections: [],
     includeTodos: hasTool(policy.tools, 'TodoWrite'),
   }
 }
@@ -436,8 +436,41 @@ function formatRoleSkillsSection(skills: readonly string[], role: Role): string 
   ].join('\n')
 }
 
+function formatChannelContextSection(): string {
+  return [
+    '## Channel Context',
+    '',
+    'This session runs in the Feishu channel. Each user message starts with a `## Channel: Feishu` block carrying per-turn context (chat type, group sender prefix, attachment paths) — read it first before the user text.',
+    '',
+    'You have a private Feishu cloud-space folder dedicated to this user. For any read / write / organize operations on it, dispatch feishuSecretary; do not call FeishuRead / FeishuList / FeishuCreateFile / ... yourself (you no longer have those tools).',
+  ].join('\n')
+}
+
+function formatReachableRolesSection(reachableRoles: readonly string[], tools: readonly Tool[]): string {
+  if (!hasLoadedTool(tools, 'Dispatch') && !hasLoadedTool(tools, 'AgentTool')) {
+    return ''
+  }
+  const agents = new Map(getAllAgents().map(agent => [agent.agentType, agent]))
+  const lines = [
+    '## Reachable Workers',
+    'You can dispatch the following workers via Dispatch / AgentTool:',
+  ]
+  for (const roleName of reachableRoles) {
+    const agent = agents.get(roleName)
+    if (!agent || agent.kind !== 'worker') {
+      continue
+    }
+    lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+  }
+  return lines.length > 2 ? lines.join('\n') : ''
+}
+
 function hasTool(tools: readonly string[], name: string): boolean {
   return tools.includes('*') || tools.includes(name)
+}
+
+function hasLoadedTool(tools: readonly Tool[], name: string): boolean {
+  return tools.some(tool => tool.name === name)
 }
 
 export function renderSystemPromptSplit(
@@ -448,6 +481,7 @@ export function renderSystemPromptSplit(
   const tools = options?.tools ?? []
   const toolDescriptions = formatToolCatalog(tools)
   const toolSection = [
+    '## Tool Catalog',
     'Available tools (full schemas / usage live in the tools API description field):',
     toolDescriptions,
   ].join('\n')
@@ -481,6 +515,7 @@ export function renderSystemPrompt(
 ): string {
   const tools = options?.tools ?? []
   const toolSection = [
+    '## Tool Catalog',
     'Available tools (full schemas / usage live in the tools API description field):',
     formatToolCatalog(tools),
   ].join('\n')
@@ -490,9 +525,9 @@ export function renderSystemPrompt(
   )
   const sections = [
     template.preTodos,
-    formatOptionalTodoSection(todos, template.includeTodos),
     toolSection,
     template.postTodos,
+    formatOptionalTodoSection(todos, template.includeTodos),
     deferredReminder,
   ].filter(section => section.trim().length > 0)
   return sections.join('\n\n')

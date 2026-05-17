@@ -8,6 +8,17 @@ const BLOCKED_WORKER_TOOLS = new Set([
   'Dispatch',
 ])
 
+const FEISHU_RESERVED_TOOLS = new Set([
+  'FeishuRead',
+  'FeishuWriteDoc',
+  'FeishuWriteSheet',
+  'FeishuCreateFile',
+  'FeishuList',
+  'FeishuCreateFolder',
+  'FeishuMove',
+  'FeishuDelete',
+])
+
 export function deriveCanUseTool(role: Role): CanUseToolFn {
   return async tool => {
     const visibility = checkRoleToolVisibility(role, tool.name)
@@ -39,6 +50,13 @@ function checkRoleToolVisibility(
   }
 
   const tools = policy.tools as readonly string[]
+  if (FEISHU_RESERVED_TOOLS.has(toolName) && !tools.includes(toolName)) {
+    return {
+      allowed: false,
+      reason: `${toolName} is reserved for Feishu-specialized roles.`,
+    }
+  }
+
   if (!tools.includes('*') && !tools.includes(toolName)) {
     return {
       allowed: false,

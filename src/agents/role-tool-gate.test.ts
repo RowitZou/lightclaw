@@ -12,6 +12,10 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
   assert.equal((await gate(tool('Read'), {})).behavior, 'allow')
   assert.equal((await gate(tool('MemoryWrite'), {})).behavior, 'allow')
   assert.equal((await gate(tool('TodoWrite'), {})).behavior, 'allow')
+  assert.deepEqual(await gate(tool('FeishuRead'), {}), {
+    behavior: 'deny',
+    reason: 'FeishuRead is reserved for Feishu-specialized roles.',
+  })
   assert.deepEqual(await gate(tool('AgentTool'), {}), {
     behavior: 'deny',
     reason: 'AgentTool is not available to subagents.',
@@ -23,6 +27,26 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
   assert.deepEqual(await gate(tool('Dispatch'), {}), {
     behavior: 'deny',
     reason: 'Dispatch is not available to subagents.',
+  })
+})
+
+test('Feishu reserved tools require an explicit role allowlist entry', async () => {
+  const feishuGate = deriveCanUseTool(role({
+    kind: 'worker',
+    tools: ['FeishuRead', 'FeishuList', 'Read'],
+  }))
+  const wildcardGate = deriveCanUseTool(role({ kind: 'worker', tools: ['*'] }))
+
+  assert.equal((await feishuGate(tool('FeishuRead'), {})).behavior, 'allow')
+  assert.equal((await feishuGate(tool('FeishuList'), {})).behavior, 'allow')
+  assert.equal((await feishuGate(tool('Read'), {})).behavior, 'allow')
+  assert.deepEqual(await feishuGate(tool('FeishuDelete'), {}), {
+    behavior: 'deny',
+    reason: 'FeishuDelete is reserved for Feishu-specialized roles.',
+  })
+  assert.deepEqual(await wildcardGate(tool('FeishuCreateFile'), {}), {
+    behavior: 'deny',
+    reason: 'FeishuCreateFile is reserved for Feishu-specialized roles.',
   })
 })
 

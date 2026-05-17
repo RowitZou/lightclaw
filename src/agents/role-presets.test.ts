@@ -23,7 +23,7 @@ test('resolveRolePolicy defaults roles without kind to worker policy', () => {
   assert.deepEqual(resolved.skills, [])
   assert.deepEqual(resolved.mcpServers, [])
   assert.deepEqual(resolved.reachableRoles, [])
-  assert.deepEqual(resolved.hooks, ['prompt-too-long-retry'])
+  assert.deepEqual(resolved.hooks, ['*'])
   assert.equal(resolved.outputContract, 'report')
 })
 
@@ -37,7 +37,15 @@ test('resolveRolePolicy fills orchestrator defaults', () => {
   assert.equal(resolved.kind, 'orchestrator')
   assert.deepEqual(resolved.skills, ['*'])
   assert.deepEqual(resolved.mcpServers, ['*'])
-  assert.deepEqual(resolved.reachableRoles, ['generalist', 'localExplorer', 'webSearcher'])
+  assert.deepEqual(resolved.reachableRoles, [
+    'generalist',
+    'localExplorer',
+    'webSearcher',
+    'feishuSecretary',
+    'coder',
+    'archivist',
+    'reviewer',
+  ])
   assert.deepEqual(resolved.hooks, ['*'])
   assert.equal(resolved.outputContract, 'report')
 })
@@ -49,7 +57,7 @@ test('resolveRolePolicy fills internal defaults', () => {
   assert.deepEqual(resolved.skills, [])
   assert.deepEqual(resolved.mcpServers, [])
   assert.deepEqual(resolved.reachableRoles, [])
-  assert.deepEqual(resolved.hooks, [])
+  assert.deepEqual(resolved.hooks, ['auto-compact', 'split-render', 'prompt-too-long-retry'])
   assert.equal(resolved.outputContract, 'side-effect')
 })
 
