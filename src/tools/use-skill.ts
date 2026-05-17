@@ -5,6 +5,8 @@ import {
   getRegisteredSkill,
   refreshSkillRegistry,
 } from '../skill/registry.js'
+import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import { setActiveSkillAllowedTools } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -27,6 +29,14 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
   async call(input, context) {
     try {
       await refreshSkillRegistry(context.cwd)
+      const role = getCurrentSessionContext()?.currentRole
+      const skill = getRegisteredSkill(input.name)
+      if (role && skill && !isSkillCompatibleWithRole(skill, role)) {
+        return {
+          output: `Unknown skill: ${input.name}`,
+          isError: true,
+        }
+      }
       const content = await buildRegisteredSkillInvocation(input.name, input.args)
       if (!content) {
         return {
@@ -34,7 +44,6 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           isError: true,
         }
       }
-      const skill = getRegisteredSkill(input.name)
       setActiveSkillAllowedTools(skill?.allowedTools)
 
       return {

@@ -22,6 +22,7 @@ import {
   listRegisteredSkills,
   refreshSkillRegistry,
 } from './skill/registry.js'
+import { filterSkillsForRole } from './skill/role-validation.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -105,8 +106,8 @@ export type SystemPromptRenderOptions = {
   discoveredTools?: ReadonlyMap<string, number>
 }
 
-function formatSkillsSection(): string {
-  const skills = listRegisteredSkills()
+function formatSkillsSection(role: Role): string {
+  const skills = filterSkillsForRole(listRegisteredSkills(), role)
   if (skills.length === 0) {
     return 'None.'
   }
@@ -379,7 +380,7 @@ async function buildRolePromptParts(
     preTodoSections.push(permissionSection)
   }
 
-  const skillsSection = formatRoleSkillsSection(policy.skills)
+  const skillsSection = formatRoleSkillsSection(policy.skills, role)
   if (skillsSection) {
     preTodoSections.push(skillsSection)
   }
@@ -417,12 +418,12 @@ function formatEnvironmentSection(
   ].join('\n')
 }
 
-function formatRoleSkillsSection(skills: readonly string[]): string {
+function formatRoleSkillsSection(skills: readonly string[], role: Role): string {
   if (skills.length === 0) {
     return ''
   }
 
-  const body = formatSkillsSection()
+  const body = formatSkillsSection({ ...role, skills: [...skills] })
   if (body === 'None.') {
     return ''
   }
