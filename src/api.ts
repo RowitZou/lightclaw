@@ -1,4 +1,5 @@
 import { getConfig, type LightClawConfig } from './config.js'
+import { resolveToolModuleModel } from './model-resolution.js'
 import { getProviderFor } from './provider/index.js'
 import { resetAllFailureCountersFor } from './provider/capability-cache.js'
 import { finalizeToolResultBlocks } from './provider/multimodal-finalization.js'
@@ -71,8 +72,7 @@ export async function* streamChat(
       describeAdapter: ({ images }) =>
         loggedDescribeImage({
           provider: describeRoute.provider,
-          displayModel:
-            config.routing.extract ?? config.routing.main ?? config.model,
+          displayModel: describeRoute.displayModel,
           params: {
             model: describeRoute.upstreamModel,
             prompt:
@@ -211,7 +211,7 @@ export async function describeImage(
 ): Promise<DescribeImageResult> {
   const { config: paramConfig, model: requestedModel, ...rest } = params
   const config = paramConfig ?? getConfig()
-  const model = requestedModel ?? config.routing.extract ?? config.routing.main ?? config.model
+  const model = requestedModel ?? resolveToolModuleModel('imageRead', config)
   const { provider, entry } = getProviderFor(config, model)
   if (!provider.describeImage) {
     throw new Error(`Model provider "${provider.name}" does not support image inspection yet.`)
@@ -306,11 +306,10 @@ async function loggedDescribeImage(input: {
 }
 
 /** Resolve the (provider, endpoint, upstreamModel) tuple used for sub-LLM
- *  describe calls, given an optional override model. Defaults to
- *  `config.routing.extract ?? config.routing.main ?? config.model` so
- *  admins can route describe traffic to a vision-capable secondary
- *  endpoint when the main model isn't vision-capable. Throws when the
- *  resolved provider does not declare describeImage support. */
+ *  describe calls, given an optional override model. Defaults to the
+ *  imageRead module model, so admins can route describe traffic to a
+ *  vision-capable secondary endpoint when the main model isn't vision-capable.
+ *  Throws when the resolved provider does not declare describeImage support. */
 export function resolveDescribeRoute(input?: {
   model?: string
   config?: LightClawConfig
@@ -318,6 +317,7 @@ export function resolveDescribeRoute(input?: {
   endpoint: string
   baseUrl: string | undefined
   upstreamModel: string
+  displayModel: string
   describeImage: NonNullable<
     ReturnType<typeof getProviderFor>['provider']['describeImage']
   >
@@ -325,10 +325,7 @@ export function resolveDescribeRoute(input?: {
   entry: ReturnType<typeof getProviderFor>['entry']
 } {
   const config = input?.config ?? getConfig()
-  const model = input?.model
-    ?? config.routing.extract
-    ?? config.routing.main
-    ?? config.model
+  const model = input?.model ?? resolveToolModuleModel('imageRead', config)
   const { provider, entry } = getProviderFor(config, model)
   if (!provider.describeImage) {
     throw new Error(
@@ -339,6 +336,7 @@ export function resolveDescribeRoute(input?: {
     endpoint: entry.endpoint,
     baseUrl: config.endpoints[entry.endpoint]?.baseUrl,
     upstreamModel: entry.upstreamModel,
+    displayModel: model,
     describeImage: provider.describeImage.bind(provider),
     provider,
     entry,
@@ -353,7 +351,7 @@ export async function transcribeAudio(
 ): Promise<TranscribeAudioResult> {
   const { config: paramConfig, model: requestedModel, ...rest } = params
   const config = paramConfig ?? getConfig()
-  const model = requestedModel ?? config.routing.extract ?? config.routing.main ?? config.model
+  const model = requestedModel ?? resolveToolModuleModel('imageRead', config)
   const { provider } = getProviderFor(config, model)
   if (!provider.transcribeAudio) {
     throw new Error(`Model provider "${provider.name}" does not support audio transcription yet.`)
@@ -435,10 +433,8 @@ async function loggedTranscribeAudio(input: {
 }
 
 /** Resolve the (provider, endpoint, upstreamModel, displayModel) tuple used
- *  for WebFetch summarize calls. Default routing: `webFetch ?? extract ?? main`.
- *  The "summarize a fetched markdown" job is the same role extract already
- *  plays (cheap small model), so falling through to extract is sane until
- *  admin specifically wants a different one. */
+ *  for WebFetch summarize calls. WebSearch and WebFetch share the same module
+ *  model because both are "web information synthesis" helpers. */
 export function resolveWebFetchSummarizeRoute(input?: {
   model?: string
   config?: LightClawConfig
@@ -452,11 +448,7 @@ export function resolveWebFetchSummarizeRoute(input?: {
 } {
   const config = input?.config ?? getConfig()
   const displayModel =
-    input?.model
-    ?? config.routing.webFetch
-    ?? config.routing.extract
-    ?? config.routing.main
-    ?? config.model
+    input?.model ?? resolveToolModuleModel('webSearch', config)
   const { provider, entry } = getProviderFor(config, displayModel)
   return {
     endpoint: entry.endpoint,

@@ -1,7 +1,7 @@
 import { streamChat } from '../api.js'
 import type { Role } from '../agents/types.js'
 import type { LightClawConfig } from '../config.js'
-import { modelFor } from '../provider/index.js'
+import { resolveToolModuleModel } from '../model-resolution.js'
 import { loadMemoryIndex, scanMemoryFilesInDirs } from './auto-memory.js'
 import { resolveReadableMemoryDirsForRole } from './scope.js'
 import type { MemoryEntry } from './types.js'
@@ -52,7 +52,7 @@ export async function requestRecall(
 
   for await (const event of streamChat({
     config,
-    model: modelFor('extract', config),
+    model: resolveToolModuleModel('compact', config),
     messages: [{ role: 'user', content: prompt }],
     system:
       'You are a memory recall agent. Return only a JSON object {"filenames": [...]} listing the most relevant memory files for the query.',

@@ -15,8 +15,6 @@ import type { AttachmentKind, Provider, Schema } from './types.js'
 
 const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
 
-export type ModelTask = 'main' | 'compact' | 'extract' | 'webSearch' | 'webFetch'
-
 /**
  * Cache of provider instances keyed by `${schema}:${endpointAlias}`. The
  * same endpoint can host both anthropic and openai protocols (typical of
@@ -183,10 +181,6 @@ function precharge(provider: Provider, entry: ModelEntry, baseUrl: string | unde
  */
 export function getProvider(config: LightClawConfig): Provider {
   return getProviderFor(config, config.routing.main ?? config.model).provider
-}
-
-export function modelFor(task: ModelTask, config: LightClawConfig): string {
-  return config.routing[task] ?? config.routing.main ?? config.model
 }
 
 export function clearPrechargeForModel(input: {

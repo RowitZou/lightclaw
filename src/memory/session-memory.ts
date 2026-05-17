@@ -4,7 +4,7 @@ import path from 'node:path'
 import { streamChat } from '../api.js'
 import type { LightClawConfig } from '../config.js'
 import { collectAssistantText } from '../messages.js'
-import { modelFor } from '../provider/index.js'
+import { resolveToolModuleModel } from '../model-resolution.js'
 import { toolResultContentToText, type Message } from '../types.js'
 
 export const SESSION_MEMORY_FILENAME = 'session-memory.md'
@@ -145,7 +145,7 @@ async function requestSessionMemoryUpdate(
 
   for await (const event of streamChat({
     config,
-    model: modelFor('extract', config),
+    model: resolveToolModuleModel('compact', config),
     messages: [{ role: 'user', content: prompt }],
     system:
       'You are a session working memory writer. Output a fenced-section Markdown document only. Do not call tools.',

@@ -5,7 +5,7 @@ import {
   createSystemCompactMessage,
   getLastUuid,
 } from '../messages.js'
-import { modelFor } from '../provider/index.js'
+import { resolveToolModuleModel } from '../model-resolution.js'
 import { estimateTokens } from '../token-estimate.js'
 import {
   toolResultContentToText,
@@ -359,7 +359,7 @@ async function requestSummary(
 
   for await (const event of streamChat({
     config,
-    model: modelFor('compact', config),
+    model: resolveToolModuleModel('compact', config),
     maxTokens: 4096,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
