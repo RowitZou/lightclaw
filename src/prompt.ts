@@ -7,13 +7,11 @@ import type { LightClawConfig } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
-import { selectRelevantMemories } from './memory/recall.js'
 import { readSessionMemory } from './memory/session-memory.js'
 import type { MemoryEntry } from './memory/types.js'
 import { getMcpRegistrySnapshot } from './mcp/index.js'
 import { resolveRoleModel } from './model-resolution.js'
 import {
-  getAllPermissionRules,
   getCwd,
   getCurrentUserId,
   getMemoryDir,
@@ -174,15 +172,12 @@ function formatPermissionSection(isSubagent = false): string {
     return ''
   }
 
-  const rules = getAllPermissionRules()
-  const allowCount = rules.filter(rule => rule.behavior === 'allow').length
-  const denyCount = rules.filter(rule => rule.behavior === 'deny').length
   const lines = [
     '## Permission Mode',
     `Current mode: ${mode}`,
-    isSubagent
-      ? 'Subagent permission checks are non-interactive; confirmation requests are denied automatically.'
-      : `Rule summary: ${allowCount} allow, ${denyCount} deny across all sources.`,
+    ...(isSubagent
+      ? ['Subagent permission checks are non-interactive; confirmation requests are denied automatically.']
+      : []),
     `In this mode: ${MODE_BLURBS[mode]}`,
     'If a tool returns "Permission denied:", do not retry the same call. Choose a read-only alternative, explain the limitation, or ask the user to add an explicit allow rule/switch mode.',
   ]
@@ -431,7 +426,7 @@ function formatRoleSkillsSection(skills: readonly string[], role: Role): string 
   return [
     '## Available Skills',
     body,
-    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding. The user does not need to invoke skills explicitly.',
+    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding.',
     'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
   ].join('\n')
 }
