@@ -72,7 +72,6 @@ export type Role = {
 
   // B. Brain.
   systemPrompt: string
-  model?: string
 
   // C. Context assembly policy.
   contextPolicy?: Partial<ContextPolicy>

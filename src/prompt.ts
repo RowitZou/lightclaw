@@ -10,7 +10,7 @@ import { selectRelevantMemories } from './memory/recall.js'
 import { readSessionMemory } from './memory/session-memory.js'
 import type { MemoryEntry } from './memory/types.js'
 import { getMcpRegistrySnapshot } from './mcp/index.js'
-import { modelFor } from './provider/index.js'
+import { resolveRoleModel } from './model-resolution.js'
 import {
   getAllPermissionRules,
   getCurrentUserId,
@@ -300,7 +300,7 @@ async function buildOrchestratorPromptTemplate(
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     formatCurrentDateLine(),
     `Platform: ${platform}`,
-    `Model: ${modelFor('main', options.config)}`,
+    `Model: ${resolveRoleModel(role, options.config)}`,
   ]
 
   if (projectMemory.trim().length > 0) {

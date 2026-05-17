@@ -23,7 +23,11 @@ import {
   toApiMessages,
 } from './messages.js'
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
-import { getProviderFor, modelFor } from './provider/index.js'
+import { getProviderFor } from './provider/index.js'
+import {
+  resolveRoleMaxTurns,
+  resolveRoleModel,
+} from './model-resolution.js'
 import {
   addSessionMemoryToolCall,
   addSessionMemoryTokens,
@@ -177,6 +181,7 @@ export async function query(params: QueryParams): Promise<{
   const config = params.config ?? getConfig()
   const invocation = params.invocation ?? emptyInvocationContext()
   const rolePolicy = resolveRolePolicy(params.role)
+  const roleModel = resolveRoleModel(params.role, config)
   const currentSessionContext = getCurrentSessionContext()
   if (currentSessionContext) {
     currentSessionContext.currentRole = invocation.currentRoleOverride ?? params.role
@@ -192,7 +197,10 @@ export async function query(params: QueryParams): Promise<{
   // that need a hard ceiling pass it explicitly (e.g. memory extraction);
   // operators can opt into a global ceiling via config.maxTurns.
   const maxTurns =
-    params.maxTurns ?? config.maxTurns ?? Number.POSITIVE_INFINITY
+    params.maxTurns
+    ?? resolveRoleMaxTurns(params.role, config)
+    ?? config.maxTurns
+    ?? Number.POSITIVE_INFINITY
   const messages = [...params.messages]
   const assistantTexts: string[] = []
   let stopReason: string | null = null
@@ -419,8 +427,7 @@ export async function query(params: QueryParams): Promise<{
         }
       }
       try {
-        const mainModel = modelFor('main', config)
-        const mainRoute = getProviderFor(config, mainModel)
+        const mainRoute = getProviderFor(config, roleModel)
         dispatchCtx.mainTurnRouting = {
           provider: mainRoute.provider,
           schema: mainRoute.provider.name,
@@ -430,7 +437,7 @@ export async function query(params: QueryParams): Promise<{
         }
         for await (const event of streamChat({
           config,
-          model: mainModel,
+          model: roleModel,
           messages: toApiMessages(messages),
           system: renderedPrompt.system,
           ...(renderedPrompt.systemVariableSuffix
@@ -488,7 +495,7 @@ export async function query(params: QueryParams): Promise<{
     void appendUsage({
       ts: new Date().toISOString(),
       user: getCurrentUserId() ?? '__terminal__',
-      model: config.model,
+      model: roleModel,
       kind: invocation.ephemeral ? 'fresh' : apiLogKind,
       input: stopEvent.usage.input_tokens ?? 0,
       output: stopEvent.usage.output_tokens ?? 0,

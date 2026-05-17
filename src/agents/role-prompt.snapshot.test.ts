@@ -107,6 +107,7 @@ function fakeTool(name: string): Tool {
 function snapshotConfig(): LightClawConfig {
   return {
     model: 'claude-sonnet-4-6',
+    defaultModel: 'claude-sonnet-4-6',
     models: {
       'claude-sonnet-4-6': {
         endpoint: 'newapi',

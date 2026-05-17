@@ -30,7 +30,8 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
-import { getProvider, getProviderFor } from '../provider/index.js'
+import { resolveRoleModel } from '../model-resolution.js'
+import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { getMainRole } from '../agents/registry.js'
@@ -91,6 +92,10 @@ import {
   type PendingAttachment,
   type QuotedMessageContext,
 } from './types.js'
+
+function getMainRoleRoute(config: ReturnType<typeof getConfig>) {
+  return getProviderFor(config, resolveRoleModel(getMainRole(), config))
+}
 
 /**
  * Per-channel strategy: everything that varies between feishu /
@@ -588,7 +593,8 @@ export class ChannelRunner {
           messages,
           userId,
           isAdmin: await isAdmin(userId),
-          getActiveTools: () => getEnabledTools(getProvider(appConfig), getAllTools('feishu')),
+          getActiveTools: () =>
+            getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools('feishu')),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
           channelUserMessageContent: prebuiltUserMessageContent,
@@ -637,10 +643,7 @@ export class ChannelRunner {
         const messageCountBeforeQuery = messages.length
         // Resolve provider via the same resolver the encoder used so endpoint
         // / upstreamModel match the cache key for any capability flips.
-        const { provider, entry: providerEntry } = getProviderFor(
-          appConfig,
-          appConfig.routing.main ?? appConfig.model,
-        )
+        const { provider, entry: providerEntry } = getMainRoleRoute(appConfig)
         const providerBaseUrl = appConfig.endpoints[providerEntry.endpoint]?.baseUrl
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
@@ -1275,7 +1278,7 @@ export class ChannelRunner {
     const ctx = createSessionContext({
       cwd,
       channel: 'feishu',
-      model: prefs.model ?? config.model,
+      model: prefs.model ?? resolveRoleModel(getMainRole(), config),
       sessionsDir: config.sessionsDir,
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
@@ -1291,7 +1294,7 @@ export class ChannelRunner {
       runtime: sandboxRuntime,
     })
 
-    const provider = getProvider(config)
+    const provider = getMainRoleRoute(config).provider
     const tools = getEnabledTools(provider, getAllTools('feishu'))
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
@@ -1680,8 +1683,7 @@ async function encodeAttachmentsForInlineForSession(input: {
   if (input.materialized.length === 0) {
     return { inlineBlocks: [], fallbackPaths: [], warnings: [] }
   }
-  const displayModel = input.config.routing.main ?? input.config.model
-  const { provider, entry } = getProviderFor(input.config, displayModel)
+  const { provider, entry } = getMainRoleRoute(input.config)
   return encodeAttachmentsForInline({
     attachments: input.materialized,
     provider,

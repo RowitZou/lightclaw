@@ -1,5 +1,6 @@
 import { getConfig } from '../config.js'
-import { getProvider } from '../provider/index.js'
+import { resolveRoleMaxTurns, resolveRoleModel } from '../model-resolution.js'
+import { getProviderFor } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
@@ -62,7 +63,8 @@ export async function runSubagent(params: {
   }
 
   const config = getConfig()
-  const provider = getProvider(config)
+  const roleModel = resolveRoleModel(agent, config)
+  const provider = getProviderFor(config, roleModel).provider
   // Dynamic import: tools.ts → tools/background-task.ts → background-task/
   // runner.ts → query.ts → memory/extract.ts → agents/run-subagent.ts forms
   // a module-load cycle. Loading it lazily here (when the subagent actually
@@ -83,7 +85,7 @@ export async function runSubagent(params: {
   // systemPrompt + tools array specific to this agent — buildSubagentPrompt
   // strips the main agent's "## Available Skills" section that previously
   // misled extract_memories / auto_dream into calling UseSkill instead of
-  // MemoryWrite. The model is also kept identical (cache key alignment is
+  // MemoryWrite. Role model selection stays config-driven (cache key alignment is
   // governed by systemPrompt + tools + messages; the model itself is one of
   // those keys).
   const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
@@ -95,11 +97,13 @@ export async function runSubagent(params: {
   })
 
   // Resolve the subagent turn cap: caller override wins (autoDream pulls
-  // from config.autoDream.maxTurns), then per-agent definition default, then
-  // the operator-supplied config.subagentMaxTurns, otherwise no cap (parity
-  // with Claude Code, which has no documented default for Task subagents).
+  // from config.autoDream.maxTurns), then per-role config/default, then the
+  // operator-supplied config.subagentMaxTurns, otherwise no cap (parity with
+  // Claude Code, which has no documented default for Task subagents).
   const subagentMaxTurns =
-    params.maxTurnsOverride ?? agent.maxTurns ?? config.subagentMaxTurns
+    params.maxTurnsOverride
+    ?? resolveRoleMaxTurns(agent, config)
+    ?? config.subagentMaxTurns
   try {
     const result = await runForkedAgent({
       promptText: params.prompt,
