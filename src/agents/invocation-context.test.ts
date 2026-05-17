@@ -36,14 +36,14 @@ describe('InvocationContext factories', () => {
       canUseTool,
       cacheBreakpointMessageIndex: 3,
       signal,
-      subagentLabel: 'subagent_general-purpose',
+      subagentLabel: 'subagent_generalist',
     })
 
     assert.equal(context.systemPromptOverride, 'worker prompt')
     assert.equal(context.canUseTool, canUseTool)
     assert.equal(context.cacheBreakpointMessageIndex, 3)
     assert.equal(context.signal, signal)
-    assert.equal(context.subagentLabel, 'subagent_general-purpose')
+    assert.equal(context.subagentLabel, 'subagent_generalist')
   })
 
   it('marks fresh invocations as ephemeral and memory-free', () => {

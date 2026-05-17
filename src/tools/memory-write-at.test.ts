@@ -43,16 +43,16 @@ describe('MemoryWriteAt', () => {
   it('writes under a role-private directory', async () => {
     const result = await withMemorySession(() =>
       memoryWriteAtTool.call({
-        path: 'web/research-note',
+        path: 'webSearcher/research-note',
         type: 'reference',
-        description: 'A web note',
-        content: 'A durable web research detail.',
+        description: 'A webSearcher note',
+        content: 'A durable webSearcher research detail.',
       }, undefined as never),
     )
 
     assert.equal(result.isError, undefined)
-    assert.equal(result.output, 'Wrote to web/research-note.md')
-    await readFile(path.join(memoryDir, 'web', 'research-note.md'), 'utf8')
+    assert.equal(result.output, 'Wrote to webSearcher/research-note.md')
+    await readFile(path.join(memoryDir, 'webSearcher', 'research-note.md'), 'utf8')
   })
 
   it('rejects traversal outside memoryDir', async () => {

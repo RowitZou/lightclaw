@@ -226,7 +226,7 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
   // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
   // Role (20 - see bundled/index.ts).
   const result = await runSubagentImpl({
-    agentType: 'extract_memories',
+    agentType: 'memoryExtractor',
     prompt,
     canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
     canonicalUserOverride: ctx.canonicalUser,

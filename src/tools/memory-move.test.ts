@@ -13,8 +13,8 @@ let memoryDir = ''
 beforeEach(async () => {
   tmpRoot = await mkdtemp(path.join(tmpdir(), 'lightclaw-memory-move-'))
   memoryDir = path.join(tmpRoot, 'memory', 'alice')
-  await mkdir(path.join(memoryDir, 'web'), { recursive: true })
-  await writeFile(path.join(memoryDir, 'web', 'a.md'), 'a', 'utf8')
+  await mkdir(path.join(memoryDir, 'webSearcher'), { recursive: true })
+  await writeFile(path.join(memoryDir, 'webSearcher', 'a.md'), 'a', 'utf8')
 })
 
 afterEach(async () => {
@@ -24,32 +24,32 @@ afterEach(async () => {
 describe('MemoryMove', () => {
   it('renames within the same directory', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/a.md', to: 'web/b.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/a.md', to: 'webSearcher/b.md' }, undefined as never),
     )
 
     assert.equal(result.isError, undefined)
-    assert.equal(result.output, 'Moved web/a.md to web/b.md')
-    assert.equal(await readFile(path.join(memoryDir, 'web', 'b.md'), 'utf8'), 'a')
+    assert.equal(result.output, 'Moved webSearcher/a.md to webSearcher/b.md')
+    assert.equal(await readFile(path.join(memoryDir, 'webSearcher', 'b.md'), 'utf8'), 'a')
   })
 
   it('moves across directories and creates destination parent lazily', async () => {
     const result = await withMemorySession(() =>
       memoryMoveTool.call({
-        from: 'web/a.md',
-        to: '_shared/2026-05-16-a-by-web.md',
+        from: 'webSearcher/a.md',
+        to: '_shared/2026-05-16-a-by-webSearcher.md',
       }, undefined as never),
     )
 
     assert.equal(result.isError, undefined)
     assert.equal(
-      await readFile(path.join(memoryDir, '_shared', '2026-05-16-a-by-web.md'), 'utf8'),
+      await readFile(path.join(memoryDir, '_shared', '2026-05-16-a-by-webSearcher.md'), 'utf8'),
       'a',
     )
   })
 
   it('rejects traversal in source', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: '../a.md', to: 'web/b.md' }, undefined as never),
+      memoryMoveTool.call({ from: '../a.md', to: 'webSearcher/b.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -58,7 +58,7 @@ describe('MemoryMove', () => {
 
   it('rejects traversal in destination', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/a.md', to: '../b.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/a.md', to: '../b.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -67,7 +67,7 @@ describe('MemoryMove', () => {
 
   it('reports missing source', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/missing.md', to: 'web/b.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/missing.md', to: 'webSearcher/b.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -76,7 +76,7 @@ describe('MemoryMove', () => {
 
   it('rejects moving directories', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web', to: '_shared/web' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher', to: '_shared/webSearcher' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -84,9 +84,9 @@ describe('MemoryMove', () => {
   })
 
   it('reports destination conflict', async () => {
-    await writeFile(path.join(memoryDir, 'web', 'b.md'), 'b', 'utf8')
+    await writeFile(path.join(memoryDir, 'webSearcher', 'b.md'), 'b', 'utf8')
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/a.md', to: 'web/b.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/a.md', to: 'webSearcher/b.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -94,9 +94,9 @@ describe('MemoryMove', () => {
   })
 
   it('rejects moving MEMORY.md as source', async () => {
-    await writeFile(path.join(memoryDir, 'web', 'MEMORY.md'), 'index', 'utf8')
+    await writeFile(path.join(memoryDir, 'webSearcher', 'MEMORY.md'), 'index', 'utf8')
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/MEMORY.md', to: 'web/saved.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/MEMORY.md', to: 'webSearcher/saved.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -105,7 +105,7 @@ describe('MemoryMove', () => {
 
   it('rejects moving onto MEMORY.md as destination', async () => {
     const result = await withMemorySession(() =>
-      memoryMoveTool.call({ from: 'web/a.md', to: 'web/MEMORY.md' }, undefined as never),
+      memoryMoveTool.call({ from: 'webSearcher/a.md', to: 'webSearcher/MEMORY.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)

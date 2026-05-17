@@ -35,7 +35,7 @@ describe('MemoryRead readableDirs filtering', () => {
     assert.equal(result.isError, undefined)
     assert.match(result.output as string, /root-note\.md/)
     assert.match(result.output as string, /_shared\/shared-note\.md/)
-    assert.doesNotMatch(result.output as string, /web-note\.md/)
+    assert.doesNotMatch(result.output as string, /webSearcher-note\.md/)
   })
 
   it('allows worker roles to read root, shared, and own role-private paths', async () => {
@@ -44,7 +44,7 @@ describe('MemoryRead readableDirs filtering', () => {
     const list = await withMemorySession(webRole(), () =>
       memoryReadTool.call({ action: 'list' }, undefined as never),
     )
-    assert.match(list.output as string, /web\/web-note\.md/)
+    assert.match(list.output as string, /webSearcher\/webSearcher-note\.md/)
     assert.match(list.output as string, /_shared\/shared-note\.md/)
     assert.match(list.output as string, /root-note\.md/)
 
@@ -58,8 +58,8 @@ describe('MemoryRead readableDirs filtering', () => {
   it('denies worker roles from reading other role-private dirs', async () => {
     await seed()
 
-    const result = await withMemorySession(workerRole('explore'), () =>
-      memoryReadTool.call({ action: 'read', filename: 'web/web-note' }, undefined as never),
+    const result = await withMemorySession(workerRole('localExplorer'), () =>
+      memoryReadTool.call({ action: 'read', filename: 'webSearcher/webSearcher-note' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -69,20 +69,20 @@ describe('MemoryRead readableDirs filtering', () => {
   it('lets internal roles read existing role directories', async () => {
     await seed()
 
-    const result = await withMemorySession(internalRole('extract_memories'), () =>
+    const result = await withMemorySession(internalRole('memoryExtractor'), () =>
       memoryReadTool.call({ action: 'list' }, undefined as never),
     )
 
     assert.match(result.output as string, /root-note\.md/)
     assert.match(result.output as string, /_shared\/shared-note\.md/)
-    assert.match(result.output as string, /web\/web-note\.md/)
+    assert.match(result.output as string, /webSearcher\/webSearcher-note\.md/)
   })
 })
 
 async function seed(): Promise<void> {
   await writeMemoryFile(memoryDir, memory('root-note', 'root detail'))
   await writeMemoryFile(path.join(memoryDir, '_shared'), memory('shared-note', 'shared detail'))
-  await writeMemoryFile(path.join(memoryDir, 'web'), memory('web-note', 'web detail'))
+  await writeMemoryFile(path.join(memoryDir, 'webSearcher'), memory('webSearcher-note', 'webSearcher detail'))
 }
 
 function memory(filename: string, content: string) {
@@ -129,7 +129,7 @@ function workerRole(agentType: string): Role {
 }
 
 function webRole(): Role {
-  return workerRole('web')
+  return workerRole('webSearcher')
 }
 
 function internalRole(agentType: string): Role {

@@ -20,11 +20,11 @@ import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '664977c7d7690f5e94ecb8bbabaf3113ca0d66f14542981aa59a312dcaa620e0',
-  'general-purpose': '5d3ad5efed6409035cdf0d8e8407bbc79cb1fcc65aec2b3538aefc00d09de7ba',
-  explore: '3deffcc65d343f2aca8f2d19c7a7d3449b5b9580b4d4c8c47eac517cc54eec3c',
-  web: '767cf05dc119f4606897b9d8e488b3998f93651fbe052252509418fa5d121a58',
-  extract_memories: '33e508136d9713e9d4058891094603e22ff84219a67cf40cd98ae5cd0a699966',
-  auto_dream: 'b1af1fae586892e040cc07bd758e0f70ef60e4f7d3d8012ea52f5304850ca383',
+  'generalist': '5d3ad5efed6409035cdf0d8e8407bbc79cb1fcc65aec2b3538aefc00d09de7ba',
+  localExplorer: '3deffcc65d343f2aca8f2d19c7a7d3449b5b9580b4d4c8c47eac517cc54eec3c',
+  webSearcher: '767cf05dc119f4606897b9d8e488b3998f93651fbe052252509418fa5d121a58',
+  memoryExtractor: '33e508136d9713e9d4058891094603e22ff84219a67cf40cd98ae5cd0a699966',
+  memoryCurator: 'b1af1fae586892e040cc07bd758e0f70ef60e4f7d3d8012ea52f5304850ca383',
 }
 
 let tmpRoot: string

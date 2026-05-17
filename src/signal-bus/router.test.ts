@@ -34,7 +34,7 @@ describe('SignalRouter', () => {
     router.subscribe({ kind: 'role', id: '*' }, () => {
       count += 1
     })
-    await router.publish(signal({ kind: 'role', id: 'web', sessionId: 's1' }))
+    await router.publish(signal({ kind: 'role', id: 'webSearcher', sessionId: 's1' }))
     assert.equal(count, 1)
   })
 

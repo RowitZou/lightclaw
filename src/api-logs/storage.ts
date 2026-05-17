@@ -34,8 +34,8 @@ import path from 'node:path'
 /**
  * Which subsystem made this streamChat call. Readers consult this to filter
  * the log: `main` is the primary agent loop, `subagent` is a forked agent
- * (`subagentLabel` carries the role — `extract_memories`, `general-purpose`,
- * `explore`), and the four one-shot kinds tag helper LLM calls that fire
+ * (`subagentLabel` carries the role — `memoryExtractor`, `generalist`,
+ * `localExplorer`), and the four one-shot kinds tag helper LLM calls that fire
  * inside the main query lifecycle.
  *
  * `describe-image` and `transcribe-audio` tag sub-LLM helper calls that

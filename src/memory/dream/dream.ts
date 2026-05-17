@@ -109,7 +109,7 @@ async function executeAutoDreamInner(params: {
       // MemoryDelete / Read / Grep / Glob. Runtime gate stays as
       // createAutoDreamCanUseTool for defense-in-depth.
       const result = await runSubagentImpl({
-        agentType: 'auto_dream',
+        agentType: 'memoryCurator',
         prompt: buildDreamPrompt({
           memoryDir: params.memoryDir,
           transcriptDir: params.config.sessionsDir,

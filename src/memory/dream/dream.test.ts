@@ -78,8 +78,8 @@ describe('autoDream runner', () => {
         },
         roleDirs: [
           {
-            label: 'role-private: web',
-            relativeDir: 'web',
+            label: 'role-private: webSearcher',
+            relativeDir: 'webSearcher',
             entries: [memoryEntry('finding.md', 'Web finding')],
           },
         ],
@@ -89,10 +89,10 @@ describe('autoDream runner', () => {
     assert.match(prompt, /## Current Memory Tree/)
     assert.match(prompt, /root-note\.md: Root note/)
     assert.match(prompt, /_shared\/shared-note\.md: Shared note/)
-    assert.match(prompt, /web\/finding\.md: Web finding/)
+    assert.match(prompt, /webSearcher\/finding\.md: Web finding/)
     assert.match(prompt, /s1/)
     // No competing workflow or duplicate MEMORY.md hard rule — both live in
-    // the auto_dream system prompt (Phase 2 PR2 v3). User message provides
+    // the memoryCurator system prompt (Phase 2 PR2 v3). User message provides
     // runtime context only.
     assert.doesNotMatch(prompt, /## Workflow/)
     assert.doesNotMatch(prompt, /MEMORY\.md.*framework-managed/i)
@@ -332,7 +332,7 @@ describe('autoDream runner', () => {
     assert.equal(forkInvocations, 1)
     assert.match(prompt, /root-note\.md: root-note description/)
     assert.match(prompt, /_shared\/shared-note\.md: shared-note description/)
-    assert.match(prompt, /web\/web-note\.md: web-note description/)
+    assert.match(prompt, /webSearcher\/webSearcher-note\.md: webSearcher-note description/)
   })
 
   it('lists only existing shared and role-private sections in the memory tree', async () => {
@@ -352,23 +352,23 @@ describe('autoDream runner', () => {
   })
 
   it('promotes role-private memories through the autoDream tool family and rebuilds indexes', async () => {
-    await writeMemoryFile(path.join(tmpMemoryDir, 'web'), memoryEntry('finding-x.md', 'Web finding'))
+    await writeMemoryFile(path.join(tmpMemoryDir, 'webSearcher'), memoryEntry('finding-x.md', 'Web finding'))
 
     const moved = await withAutoDreamSession(() =>
       memoryMoveTool.call({
-        from: 'web/finding-x.md',
-        to: '_shared/2026-05-16-finding-x-by-web.md',
+        from: 'webSearcher/finding-x.md',
+        to: '_shared/2026-05-16-finding-x-by-webSearcher.md',
       }, undefined as never),
     )
     assert.equal(moved.isError, undefined)
-    assert.equal(existsSync(path.join(tmpMemoryDir, 'web', 'finding-x.md')), false)
-    assert.equal(existsSync(path.join(tmpMemoryDir, '_shared', '2026-05-16-finding-x-by-web.md')), true)
+    assert.equal(existsSync(path.join(tmpMemoryDir, 'webSearcher', 'finding-x.md')), false)
+    assert.equal(existsSync(path.join(tmpMemoryDir, '_shared', '2026-05-16-finding-x-by-webSearcher.md')), true)
     assert.match(
       readFileSync(path.join(tmpMemoryDir, '_shared', 'MEMORY.md'), 'utf8'),
-      /2026-05-16-finding-x-by-web\.md/,
+      /2026-05-16-finding-x-by-webSearcher\.md/,
     )
     assert.doesNotMatch(
-      readFileSync(path.join(tmpMemoryDir, 'web', 'MEMORY.md'), 'utf8'),
+      readFileSync(path.join(tmpMemoryDir, 'webSearcher', 'MEMORY.md'), 'utf8'),
       /finding-x\.md/,
     )
 
@@ -610,7 +610,7 @@ function fakeForkResult(): SubagentResult {
 async function seedMemoryTree(): Promise<void> {
   await writeMemoryFile(tmpMemoryDir, memoryEntry('root-note.md', 'root-note description'))
   await writeMemoryFile(path.join(tmpMemoryDir, '_shared'), memoryEntry('shared-note.md', 'shared-note description'))
-  await writeMemoryFile(path.join(tmpMemoryDir, 'web'), memoryEntry('web-note.md', 'web-note description'))
+  await writeMemoryFile(path.join(tmpMemoryDir, 'webSearcher'), memoryEntry('webSearcher-note.md', 'webSearcher-note description'))
 }
 
 function memoryEntry(filename: string, description: string) {
@@ -638,7 +638,7 @@ function withAutoDreamSession<T>(fn: () => Promise<T>): Promise<T> {
 
 function autoDreamRole(): Role {
   return {
-    agentType: 'auto_dream',
+    agentType: 'memoryCurator',
     kind: 'internal',
     whenToUse: 'internal',
     tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],

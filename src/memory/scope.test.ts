@@ -34,40 +34,40 @@ describe('resolveMemoryDirsForRole', () => {
   })
 
   it('uses role-private self and three-layer readable dirs for worker defaults', () => {
-    const resolved = resolveMemoryDirsForRole(role({ agentType: 'explore', kind: 'worker' }), memoryDir)
+    const resolved = resolveMemoryDirsForRole(role({ agentType: 'localExplorer', kind: 'worker' }), memoryDir)
 
-    assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'explore'))
+    assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'localExplorer'))
     assert.deepEqual(resolved.readableDirs, [
       memoryDir,
       path.join(memoryDir, '_shared'),
-      path.join(memoryDir, 'explore'),
+      path.join(memoryDir, 'localExplorer'),
     ])
   })
 
   it('keeps directory resolution lazy', async () => {
-    const resolved = resolveMemoryDirsForRole(role({ agentType: 'web', kind: 'worker' }), memoryDir)
+    const resolved = resolveMemoryDirsForRole(role({ agentType: 'webSearcher', kind: 'worker' }), memoryDir)
 
-    assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'web'))
-    await assert.rejects(() => mkdir(path.join(memoryDir, 'web'), { recursive: false }), {
+    assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'webSearcher'))
+    await assert.rejects(() => mkdir(path.join(memoryDir, 'webSearcher'), { recursive: false }), {
       code: 'ENOENT',
     })
   })
 
   it('adds top-level role directories for internal roles', async () => {
-    await mkdir(path.join(memoryDir, 'web'), { recursive: true })
-    await mkdir(path.join(memoryDir, 'explore'), { recursive: true })
+    await mkdir(path.join(memoryDir, 'webSearcher'), { recursive: true })
+    await mkdir(path.join(memoryDir, 'localExplorer'), { recursive: true })
     await mkdir(path.join(memoryDir, '_shared'), { recursive: true })
 
     const resolved = await resolveReadableMemoryDirsForRole(role({
-      agentType: 'extract_memories',
+      agentType: 'memoryExtractor',
       kind: 'internal',
     }), memoryDir)
 
     assert.deepEqual(new Set(resolved.readableDirs), new Set([
       memoryDir,
       path.join(memoryDir, '_shared'),
-      path.join(memoryDir, 'web'),
-      path.join(memoryDir, 'explore'),
+      path.join(memoryDir, 'webSearcher'),
+      path.join(memoryDir, 'localExplorer'),
     ]))
   })
 })

@@ -362,7 +362,7 @@ const DEFAULT_COMPACT_KEEP_RECENT = 6
 // autoDream defaults ON: every gate it consults (lock file, time / scan-
 // throttle / session-count thresholds, in-progress extraction check) is per
 // canonical user under that user's memory dir, so one user's consolidate
-// run never blocks another's. dream forks run as `subagentLabel: 'auto_dream'`
+// run never blocks another's. dream forks run as `subagentLabel: 'memoryCurator'`
 // fire-and-forget after end_turn, never on the critical reply path.
 // Operators wanting to turn it off can still set autoDream.enabled=false in
 // config.json or pass LIGHTCLAW_NO_MEMORY=1 (which disables both extract

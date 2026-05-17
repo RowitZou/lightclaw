@@ -1,10 +1,14 @@
 export const BUNDLED_AGENT_TYPES = [
   'main',
-  'general-purpose',
-  'explore',
-  'web',
-  'extract_memories',
-  'auto_dream',
+  'generalist',
+  'localExplorer',
+  'webSearcher',
+  'memoryExtractor',
+  'memoryCurator',
+  'feishuSecretary',
+  'coder',
+  'archivist',
+  'reviewer',
 ] as const
 
 export type BundledAgentType = (typeof BUNDLED_AGENT_TYPES)[number]

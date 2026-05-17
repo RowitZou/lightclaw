@@ -16,13 +16,13 @@ test('fork transcript path lives under parent session forks dir', () => {
   const filePath = getForkTranscriptPath({
     sessionsDir: '/tmp/lightclaw-sessions',
     parentSessionId: 'feishu:dm:chat',
-    roleAgentType: 'web',
+    roleAgentType: 'webSearcher',
     forkId: 'abc12345',
   })
 
   assert.equal(
     filePath,
-    path.join('/tmp/lightclaw-sessions', 'feishu:dm:chat', 'forks', 'web-abc12345.jsonl'),
+    path.join('/tmp/lightclaw-sessions', 'feishu:dm:chat', 'forks', 'webSearcher-abc12345.jsonl'),
   )
 })
 
@@ -32,7 +32,7 @@ test('persistForkTranscript writes JSONL that the transcript parser can round-tr
     const filePath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent-session',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'fork1',
     })
     const messages = [
@@ -61,7 +61,7 @@ test('persistForkTranscript writes a meta marker that parseForkTranscriptFile ro
     const filePath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'marker',
     })
     const parentPrefix = [
@@ -105,7 +105,7 @@ test('parseForkTranscriptFile defaults forkContextEndIndex to 0 when marker is m
     const filePath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'no-marker',
     })
     const messages = [createUserMessage('lone fork message', null, 1)]
@@ -132,23 +132,23 @@ test('concurrent fork transcript writes to different role/fork files do not coll
     const webPath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent-session',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'same',
     })
     const explorePath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent-session',
-      roleAgentType: 'explore',
+      roleAgentType: 'localExplorer',
       forkId: 'same',
     })
 
     await Promise.all([
-      persistForkTranscript(webPath, [createUserMessage('web', null, 1)]),
-      persistForkTranscript(explorePath, [createUserMessage('explore', null, 2)]),
+      persistForkTranscript(webPath, [createUserMessage('webSearcher', null, 1)]),
+      persistForkTranscript(explorePath, [createUserMessage('localExplorer', null, 2)]),
     ])
 
-    assert.equal((await loadTranscriptFile(webPath))[0]?.message.content, 'web')
-    assert.equal((await loadTranscriptFile(explorePath))[0]?.message.content, 'explore')
+    assert.equal((await loadTranscriptFile(webPath))[0]?.message.content, 'webSearcher')
+    assert.equal((await loadTranscriptFile(explorePath))[0]?.message.content, 'localExplorer')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

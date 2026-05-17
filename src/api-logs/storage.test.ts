@@ -135,7 +135,7 @@ describe('api-logs storage', () => {
     await logger.appendTurn(
       rec({
         kind: 'subagent',
-        subagentLabel: 'extract_memories',
+        subagentLabel: 'memoryExtractor',
         sessionId: 'feishu-bob',
         user: 'bob',
       }),
@@ -144,7 +144,7 @@ describe('api-logs storage', () => {
       fs.readFileSync(logger.filePath(), 'utf8').trim(),
     ) as ApiLogTurnRecord
     assert.equal(parsed.kind, 'subagent')
-    assert.equal(parsed.subagentLabel, 'extract_memories')
+    assert.equal(parsed.subagentLabel, 'memoryExtractor')
     assert.equal(parsed.sessionId, 'feishu-bob')
     assert.equal(parsed.user, 'bob')
   })

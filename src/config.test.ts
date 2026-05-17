@@ -226,7 +226,7 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'sonnet',
       roles: {
-        web: {
+        webSearcher: {
           model: 'haiku',
           maxTurns: 30,
           budget: { maxTokens: 1000, maxCost: 0.5 },
@@ -237,7 +237,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.roles?.web, {
+    assert.deepEqual(cfg.roles?.webSearcher, {
       model: 'haiku',
       maxTurns: 30,
       budget: { maxTokens: 1000, maxCost: 0.5 },
@@ -267,7 +267,7 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'sonnet',
       roles: {
-        extract_memories: { model: 'sonnet' },
+        memoryExtractor: { model: 'sonnet' },
       },
     })
     assert.throws(() => getConfig(), /kind='internal'.*roles\.internal/)
@@ -281,10 +281,10 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'sonnet',
       roles: {
-        web: { model: 'missing' },
+        webSearcher: { model: 'missing' },
       },
     })
-    assert.throws(() => getConfig(), /roles\.web\.model = "missing" is not in models/)
+    assert.throws(() => getConfig(), /roles\.webSearcher\.model = "missing" is not in models/)
 
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
@@ -293,10 +293,10 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'sonnet',
       roles: {
-        web: { maxTurns: -1 },
+        webSearcher: { maxTurns: -1 },
       },
     })
-    assert.throws(() => getConfig(), /roles\.web\.maxTurns must be a positive integer/)
+    assert.throws(() => getConfig(), /roles\.webSearcher\.maxTurns must be a positive integer/)
   })
 
   it('parses tool module model pins', () => {

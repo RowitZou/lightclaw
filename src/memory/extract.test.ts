@@ -173,11 +173,11 @@ test('autoDream tool gate allows only explicit memory curation tools and reads',
   assert.equal((await gate(tool('Edit'), {})).behavior, 'deny')
 })
 
-test('per-role extraction passes currentRoleOverride to extract_memories', async () => {
+test('per-role extraction passes currentRoleOverride to memoryExtractor', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
-  const webRole = getAgent('web')
+  const webRole = getAgent('webSearcher')
   assert.ok(webRole)
-  const messages = [createUserMessage('remember this web result', null, 10)]
+  const messages = [createUserMessage('remember this webSearcher result', null, 10)]
   const calls: Array<Parameters<typeof executeExtraction>[0]> = []
   try {
     _resetExtractionStateForTest()
@@ -203,7 +203,7 @@ test('per-role extraction passes currentRoleOverride to extract_memories', async
     })
 
     assert.equal(calls.length, 1)
-    assert.equal(calls[0]?.ownerRole?.agentType, 'web')
+    assert.equal(calls[0]?.ownerRole?.agentType, 'webSearcher')
   } finally {
     _setRunSubagentForTest()
     _resetExtractionStateForTest()
@@ -216,10 +216,10 @@ test('triggerForkExtract treats a marker-less transcript as fully fork-own', asy
   // empty, forkOwnSlice is the full message list. Verifies the Option C
   // legacy / zero-context path.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
-  const webRole = getAgent('web')
+  const webRole = getAgent('webSearcher')
   assert.ok(webRole)
-  const messages = [createUserMessage('web transcript input', null, 10)]
-  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'web-test.jsonl')
+  const messages = [createUserMessage('webSearcher transcript input', null, 10)]
+  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'webSearcher-test.jsonl')
   const seen: {
     role?: string
     promptIncludesText?: boolean
@@ -229,7 +229,7 @@ test('triggerForkExtract treats a marker-less transcript as fully fork-own', asy
     _resetExtractionStateForTest()
     _setRunSubagentForTest(async params => {
       seen.role = params.currentRoleOverride?.agentType
-      seen.promptIncludesText = params.prompt.includes('web transcript input')
+      seen.promptIncludesText = params.prompt.includes('webSearcher transcript input')
       return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
     })
 
@@ -241,8 +241,8 @@ test('triggerForkExtract treats a marker-less transcript as fully fork-own', asy
       config: dummyConfig,
     })
 
-    // owning role is web (currentRole physical binding)
-    assert.equal(seen.role, 'web')
+    // owning role is webSearcher (currentRole physical binding)
+    assert.equal(seen.role, 'webSearcher')
     // fork-own messages still drive the extract prompt body
     assert.equal(seen.promptIncludesText, true)
   } finally {
@@ -258,16 +258,16 @@ test('triggerForkExtract slices fork-own vs parent prefix using the marker', asy
   // the worker's own user prompt + assistant turn. Extract analyzes only the
   // worker-owned slice and no longer injects the hidden parent prefix.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
-  const webRole = getAgent('web')
+  const webRole = getAgent('webSearcher')
   assert.ok(webRole)
   const parentContext = [
     createUserMessage('parent DM line one', null, 1),
     createUserMessage('parent DM line two', null, 2),
   ]
   const forkOwn = [
-    createUserMessage('web fork prompt: query X', null, 10),
+    createUserMessage('webSearcher fork prompt: query X', null, 10),
     createAssistantMessage({
-      content: [{ type: 'text', text: 'web answer about X' }],
+      content: [{ type: 'text', text: 'webSearcher answer about X' }],
       stopReason: 'end_turn',
       usage: { input_tokens: 1, output_tokens: 1 },
       parentUuid: null,
@@ -275,7 +275,7 @@ test('triggerForkExtract slices fork-own vs parent prefix using the marker', asy
     }),
   ]
   const allMessages = [...parentContext, ...forkOwn]
-  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'web-slice.jsonl')
+  const forkTranscriptPath = path.join(tempDir, 'parent', 'forks', 'webSearcher-slice.jsonl')
   const seen: {
     promptHasParent?: boolean
     promptHasOwn?: boolean
@@ -289,7 +289,7 @@ test('triggerForkExtract slices fork-own vs parent prefix using the marker', asy
     _resetExtractionStateForTest()
     _setRunSubagentForTest(async params => {
       seen.promptHasParent = params.prompt.includes('parent DM line one')
-      seen.promptHasOwn = params.prompt.includes('web fork prompt: query X')
+      seen.promptHasOwn = params.prompt.includes('webSearcher fork prompt: query X')
       return { kind: 'success', finalText: 'ok', stopReason: 'end_turn' }
     })
 
@@ -328,7 +328,7 @@ test('collectExistingMemoriesForRole gives main root plus shared, excluding role
   try {
     await writeMemoryFile(tempDir, memory('root-note.md'))
     await writeMemoryFile(path.join(tempDir, '_shared'), memory('shared-note.md'))
-    await writeMemoryFile(path.join(tempDir, 'web'), memory('web-note.md'))
+    await writeMemoryFile(path.join(tempDir, 'webSearcher'), memory('webSearcher-note.md'))
 
     const entries = await collectExistingMemoriesForRole(getMainRole(), tempDir)
 
@@ -341,21 +341,21 @@ test('collectExistingMemoriesForRole gives main root plus shared, excluding role
   }
 })
 
-test('collectExistingMemoriesForRole gives web root plus shared plus private memory', async () => {
+test('collectExistingMemoriesForRole gives webSearcher root plus shared plus private memory', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
-  const webRole = getAgent('web')
+  const webRole = getAgent('webSearcher')
   assert.ok(webRole)
   try {
     await writeMemoryFile(tempDir, memory('root-note.md'))
     await writeMemoryFile(path.join(tempDir, '_shared'), memory('same-name.md'))
-    await writeMemoryFile(path.join(tempDir, 'web'), memory('same-name.md'))
+    await writeMemoryFile(path.join(tempDir, 'webSearcher'), memory('same-name.md'))
 
     const entries = await collectExistingMemoriesForRole(webRole, tempDir)
 
     assert.deepEqual(entries.map(entry => entry.filename), [
       '_shared/same-name.md',
       'root-note.md',
-      'web/same-name.md',
+      'webSearcher/same-name.md',
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -364,7 +364,7 @@ test('collectExistingMemoriesForRole gives web root plus shared plus private mem
 
 test('drainPendingExtraction waits for multiple active role instances', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
-  const webRole = getAgent('web')
+  const webRole = getAgent('webSearcher')
   assert.ok(webRole)
   const mainRole = getMainRole()
   const messages = [createUserMessage('drain me', null, 10)]

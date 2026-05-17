@@ -13,8 +13,8 @@ let memoryDir = ''
 beforeEach(async () => {
   tmpRoot = await mkdtemp(path.join(tmpdir(), 'lightclaw-memory-delete-'))
   memoryDir = path.join(tmpRoot, 'memory', 'alice')
-  await mkdir(path.join(memoryDir, 'web'), { recursive: true })
-  await writeFile(path.join(memoryDir, 'web', 'a.md'), 'a', 'utf8')
+  await mkdir(path.join(memoryDir, 'webSearcher'), { recursive: true })
+  await writeFile(path.join(memoryDir, 'webSearcher', 'a.md'), 'a', 'utf8')
 })
 
 afterEach(async () => {
@@ -24,17 +24,17 @@ afterEach(async () => {
 describe('MemoryDelete', () => {
   it('deletes an existing file', async () => {
     const result = await withMemorySession(() =>
-      memoryDeleteTool.call({ path: 'web/a.md' }, undefined as never),
+      memoryDeleteTool.call({ path: 'webSearcher/a.md' }, undefined as never),
     )
 
     assert.equal(result.isError, undefined)
-    assert.equal(result.output, 'Deleted web/a.md')
-    await assert.rejects(stat(path.join(memoryDir, 'web', 'a.md')), { code: 'ENOENT' })
+    assert.equal(result.output, 'Deleted webSearcher/a.md')
+    await assert.rejects(stat(path.join(memoryDir, 'webSearcher', 'a.md')), { code: 'ENOENT' })
   })
 
   it('is idempotent for missing files', async () => {
     const result = await withMemorySession(() =>
-      memoryDeleteTool.call({ path: 'web/missing.md' }, undefined as never),
+      memoryDeleteTool.call({ path: 'webSearcher/missing.md' }, undefined as never),
     )
 
     assert.equal(result.isError, undefined)
@@ -52,7 +52,7 @@ describe('MemoryDelete', () => {
 
   it('rejects directory deletion', async () => {
     const result = await withMemorySession(() =>
-      memoryDeleteTool.call({ path: 'web' }, undefined as never),
+      memoryDeleteTool.call({ path: 'webSearcher' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -60,9 +60,9 @@ describe('MemoryDelete', () => {
   })
 
   it('rejects deleting MEMORY.md', async () => {
-    await writeFile(path.join(memoryDir, 'web', 'MEMORY.md'), 'index', 'utf8')
+    await writeFile(path.join(memoryDir, 'webSearcher', 'MEMORY.md'), 'index', 'utf8')
     const result = await withMemorySession(() =>
-      memoryDeleteTool.call({ path: 'web/MEMORY.md' }, undefined as never),
+      memoryDeleteTool.call({ path: 'webSearcher/MEMORY.md' }, undefined as never),
     )
 
     assert.equal(result.isError, true)

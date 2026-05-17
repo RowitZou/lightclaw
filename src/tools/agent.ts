@@ -3,6 +3,12 @@ import { z } from 'zod'
 import { getAllAgents } from '../agents/registry.js'
 import { buildTool } from '../tool.js'
 
+const LEGACY_AGENT_TOOL_DISPLAY_NAMES: Record<string, string> = {
+  generalist: 'general-purpose',
+  localExplorer: 'explore',
+  webSearcher: 'web',
+}
+
 function buildAgentToolDescription(): string {
   const lines = [
     'Launch a subagent to handle a focused task with an isolated context.',
@@ -17,7 +23,8 @@ function buildAgentToolDescription(): string {
     if (agent.kind !== 'worker') {
       continue
     }
-    lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+    const displayName = LEGACY_AGENT_TOOL_DISPLAY_NAMES[agent.agentType] ?? agent.agentType
+    lines.push(`- ${displayName}: ${agent.whenToUse}`)
   }
 
   lines.push(

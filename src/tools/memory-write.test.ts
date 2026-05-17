@@ -37,25 +37,25 @@ describe('MemoryWrite currentRole binding', () => {
   })
 
   it('writes worker memories to the role-private directory lazily', async () => {
-    const result = await withMemorySession(workerRole('web'), () => writeMemory('finding'))
+    const result = await withMemorySession(workerRole('webSearcher'), () => writeMemory('finding'))
 
     assert.equal(result.isError, undefined)
-    await readFile(path.join(memoryDir, 'web', 'finding.md'), 'utf8')
-    await readFile(path.join(memoryDir, 'web', 'MEMORY.md'), 'utf8')
+    await readFile(path.join(memoryDir, 'webSearcher', 'finding.md'), 'utf8')
+    await readFile(path.join(memoryDir, 'webSearcher', 'MEMORY.md'), 'utf8')
   })
 
   it('denies traversal filenames and records audit', async () => {
-    const result = await withMemorySession(workerRole('web'), () => writeMemory('../escape'))
+    const result = await withMemorySession(workerRole('webSearcher'), () => writeMemory('../escape'))
 
     assert.equal(result.isError, true)
     assert.match(result.output as string, /within the memory directory/)
     const audit = await readAudit()
-    assert.match(audit, /"role":"web"/)
+    assert.match(audit, /"role":"webSearcher"/)
     assert.match(audit, /"status":"denied"/)
   })
 
   it('writes internal memories to the user memory root', async () => {
-    const result = await withMemorySession(internalRole('extract_memories'), () => writeMemory('extract-note'))
+    const result = await withMemorySession(internalRole('memoryExtractor'), () => writeMemory('extract-note'))
 
     assert.equal(result.isError, undefined)
     await readFile(path.join(memoryDir, 'extract-note.md'), 'utf8')
@@ -84,12 +84,12 @@ describe('MemoryWrite currentRole binding', () => {
       sessionsDir: path.join(tmpRoot, 'sessions'),
       memoryDir,
       currentUserId: 'alice',
-      currentRole: workerRole('web'),
+      currentRole: workerRole('webSearcher'),
       sessionId: 'memory-write-parent',
     })
     const child = {
       ...parent,
-      currentRole: internalRole('extract_memories'),
+      currentRole: internalRole('memoryExtractor'),
       sessionId: 'memory-write-child',
     }
 
@@ -100,7 +100,7 @@ describe('MemoryWrite currentRole binding', () => {
     assert.equal(result.isError, undefined)
     await readFile(path.join(memoryDir, 'fork-extract-note.md'), 'utf8')
     await assert.rejects(
-      () => readFile(path.join(memoryDir, 'web', 'fork-extract-note.md'), 'utf8'),
+      () => readFile(path.join(memoryDir, 'webSearcher', 'fork-extract-note.md'), 'utf8'),
       { code: 'ENOENT' },
     )
   })

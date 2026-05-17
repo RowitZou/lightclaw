@@ -31,7 +31,7 @@ export function resolveRolePolicy(role: Role): ResolvedRolePolicy {
     mcpServers: role.mcpServers ?? (kind === 'orchestrator' ? ['*'] : []),
     reachableRoles:
       role.reachableRoles ??
-      (kind === 'orchestrator' ? ['general-purpose', 'explore', 'web'] : []),
+      (kind === 'orchestrator' ? ['generalist', 'localExplorer', 'webSearcher'] : []),
     hooks:
       role.hooks ??
       (kind === 'orchestrator'

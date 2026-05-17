@@ -67,8 +67,8 @@ test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () =
   assert.equal(isToolVisibleToRole(internal, 'Read'), false)
 })
 
-test('auto_dream role exposes only memory curation tools and reads', () => {
-  const autoDream = BUNDLED_AGENTS.find(agent => agent.agentType === 'auto_dream')
+test('memoryCurator role exposes only memory curation tools and reads', () => {
+  const autoDream = BUNDLED_AGENTS.find(agent => agent.agentType === 'memoryCurator')
   assert.ok(autoDream)
   assert.deepEqual(autoDream.tools, [
     'MemoryRead',

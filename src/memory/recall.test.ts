@@ -11,7 +11,7 @@ test('selectRelevantMemories hard-blocks internal roles', async () => {
     '/tmp/lightclaw-memory',
     {} as LightClawConfig,
     { topN: 3 },
-    role({ agentType: 'extract_memories', kind: 'internal' }),
+    role({ agentType: 'memoryExtractor', kind: 'internal' }),
   )
 
   assert.deepEqual(result, [])

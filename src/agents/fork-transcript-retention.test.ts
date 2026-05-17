@@ -18,13 +18,13 @@ test('sweepStaleForkTranscripts deletes fork JSONL older than ttl and keeps fres
     const oldPath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent-a',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'old',
     })
     const freshPath = getForkTranscriptPath({
       sessionsDir: tempDir,
       parentSessionId: 'parent-b',
-      roleAgentType: 'web',
+      roleAgentType: 'webSearcher',
       forkId: 'fresh',
     })
     await persistForkTranscript(oldPath, [createUserMessage('old', null, 1)])

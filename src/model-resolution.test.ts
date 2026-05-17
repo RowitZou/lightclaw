@@ -12,10 +12,10 @@ import {
 } from './model-resolution.js'
 
 const mainRole = role('main')
-const webRole = role('web')
-const exploreRole = role('explore')
-const extractRole = role('extract_memories')
-const autoDreamRole = role('auto_dream')
+const webRole = role('webSearcher')
+const exploreRole = role('localExplorer')
+const extractRole = role('memoryExtractor')
+const autoDreamRole = role('memoryCurator')
 
 describe('resolveRoleModel', () => {
   it('binds main directly to defaultModel', () => {
@@ -27,7 +27,7 @@ describe('resolveRoleModel', () => {
 
   it('uses per-worker model pins before defaultModel', () => {
     assert.equal(
-      resolveRoleModel(webRole, config({ roles: { web: { model: 'haiku' } } })),
+      resolveRoleModel(webRole, config({ roles: { webSearcher: { model: 'haiku' } } })),
       'haiku',
     )
     assert.equal(
@@ -38,7 +38,7 @@ describe('resolveRoleModel', () => {
 
   it('falls worker roles back to defaultModel when no pin exists', () => {
     assert.equal(resolveRoleModel(webRole, config()), 'sonnet')
-    assert.equal(resolveRoleModel(webRole, config({ roles: { web: {} } })), 'sonnet')
+    assert.equal(resolveRoleModel(webRole, config({ roles: { webSearcher: {} } })), 'sonnet')
   })
 
   it('uses roles.internal for all internal roles', () => {
@@ -93,7 +93,7 @@ describe('resolveRoleMaxTurns', () => {
       50,
     )
     assert.equal(
-      resolveRoleMaxTurns(webRole, config({ roles: { web: { maxTurns: 30 } } })),
+      resolveRoleMaxTurns(webRole, config({ roles: { webSearcher: { maxTurns: 30 } } })),
       30,
     )
   })
@@ -115,7 +115,7 @@ describe('resolveRoleBudget', () => {
   it('uses configured budgets before source role budgets', () => {
     const webBudget = { maxTokens: 1000, maxCost: 0.5 }
     assert.deepEqual(
-      resolveRoleBudget(webRole, config({ roles: { web: { budget: webBudget } } })),
+      resolveRoleBudget(webRole, config({ roles: { webSearcher: { budget: webBudget } } })),
       webBudget,
     )
 

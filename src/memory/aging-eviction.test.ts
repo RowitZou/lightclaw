@@ -158,7 +158,7 @@ test('archive subdir is not re-scanned by scanMemoryFiles', async () => {
 test('evictAgedMemories archives stale L2 shared and L3 role-private files independently', async () => {
   await withTmpDir(async dir => {
     const sharedDir = path.join(dir, '_shared')
-    const webDir = path.join(dir, 'web')
+    const webDir = path.join(dir, 'webSearcher')
     mkdirSync(sharedDir, { recursive: true })
     mkdirSync(webDir, { recursive: true })
 
@@ -167,9 +167,9 @@ test('evictAgedMemories archives stale L2 shared and L3 role-private files indep
     writeMemoryFile(dir, 'l1-fresh.md', 'l1 fresh', NOW - 5 * DAY)
     // L2 (_shared): stale only
     writeMemoryFile(sharedDir, 'shared-stale.md', 'shared old', NOW - 365 * DAY)
-    // L3 (web/): stale + fresh
-    writeMemoryFile(webDir, 'web-stale.md', 'web old', NOW - 200 * DAY)
-    writeMemoryFile(webDir, 'web-fresh.md', 'web fresh', NOW - 10 * DAY)
+    // L3 (webSearcher/): stale + fresh
+    writeMemoryFile(webDir, 'webSearcher-stale.md', 'webSearcher old', NOW - 200 * DAY)
+    writeMemoryFile(webDir, 'webSearcher-fresh.md', 'webSearcher fresh', NOW - 10 * DAY)
 
     const result = await evictAgedMemories(dir, { archiveDays: 180 }, NOW)
 
@@ -177,7 +177,7 @@ test('evictAgedMemories archives stale L2 shared and L3 role-private files indep
     assert.deepEqual(result.archivedFilenames.sort(), [
       '_shared/shared-stale.md',
       'l1-stale.md',
-      'web/web-stale.md',
+      'webSearcher/webSearcher-stale.md',
     ])
 
     // L1 archive holds the L1 stale
@@ -189,10 +189,10 @@ test('evictAgedMemories archives stale L2 shared and L3 role-private files indep
     assert.ok(statSync(path.join(sharedDir, 'archive', 'shared-stale.md')).isFile())
     assert.throws(() => statSync(path.join(sharedDir, 'shared-stale.md')))
 
-    // L3 per-tier archive co-located inside web/
-    assert.ok(statSync(path.join(webDir, 'archive', 'web-stale.md')).isFile())
-    assert.throws(() => statSync(path.join(webDir, 'web-stale.md')))
-    assert.ok(statSync(path.join(webDir, 'web-fresh.md')).isFile())
+    // L3 per-tier archive co-located inside webSearcher/
+    assert.ok(statSync(path.join(webDir, 'archive', 'webSearcher-stale.md')).isFile())
+    assert.throws(() => statSync(path.join(webDir, 'webSearcher-stale.md')))
+    assert.ok(statSync(path.join(webDir, 'webSearcher-fresh.md')).isFile())
 
     // Each tier's MEMORY.md is rebuilt independently — fresh entries kept,
     // stale entries dropped.
@@ -204,8 +204,8 @@ test('evictAgedMemories archives stale L2 shared and L3 role-private files indep
     assert.equal(sharedIndex.trim(), '')
 
     const webIndex = readFileSync(path.join(webDir, 'MEMORY.md'), 'utf8')
-    assert.match(webIndex, /web-fresh\.md/)
-    assert.doesNotMatch(webIndex, /web-stale\.md/)
+    assert.match(webIndex, /webSearcher-fresh\.md/)
+    assert.doesNotMatch(webIndex, /webSearcher-stale\.md/)
 
     // L1's archive subdir is NOT itself enumerated as a tier — files inside
     // it must not be re-archived on a subsequent run.

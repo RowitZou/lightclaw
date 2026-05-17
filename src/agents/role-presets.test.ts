@@ -37,7 +37,7 @@ test('resolveRolePolicy fills orchestrator defaults', () => {
   assert.equal(resolved.kind, 'orchestrator')
   assert.deepEqual(resolved.skills, ['*'])
   assert.deepEqual(resolved.mcpServers, ['*'])
-  assert.deepEqual(resolved.reachableRoles, ['general-purpose', 'explore', 'web'])
+  assert.deepEqual(resolved.reachableRoles, ['generalist', 'localExplorer', 'webSearcher'])
   assert.deepEqual(resolved.hooks, ['*'])
   assert.equal(resolved.outputContract, 'report')
 })
@@ -59,7 +59,7 @@ test('resolveRolePolicy lets role fields override defaults', () => {
     name: 'custom-worker',
     skills: ['docs'],
     mcpServers: ['browser'],
-    reachableRoles: ['explore'],
+    reachableRoles: ['localExplorer'],
     hooks: [],
     outputContract: 'side-effect',
   }))
@@ -67,7 +67,7 @@ test('resolveRolePolicy lets role fields override defaults', () => {
   assert.equal(resolved.name, 'custom-worker')
   assert.deepEqual(resolved.skills, ['docs'])
   assert.deepEqual(resolved.mcpServers, ['browser'])
-  assert.deepEqual(resolved.reachableRoles, ['explore'])
+  assert.deepEqual(resolved.reachableRoles, ['localExplorer'])
   assert.deepEqual(resolved.hooks, [])
   assert.equal(resolved.outputContract, 'side-effect')
 })
