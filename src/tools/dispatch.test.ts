@@ -15,7 +15,7 @@ describe('Dispatch tool family', () => {
 
   it('requires mode and restricts role enum', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
-      role: 'general',
+      role: 'generalist',
       prompt: 'Do a focused task for me.',
     }).success, false)
     assert.equal(dispatchTool.inputSchema?.safeParse({
@@ -27,13 +27,13 @@ describe('Dispatch tool family', () => {
 
   it('accepts now-blocking and scheduled-background shapes', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
-      role: 'web',
+      role: 'webSearcher',
       prompt: 'Research one current fact and report briefly.',
       schedule: 'now',
       mode: 'blocking',
     }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
-      role: 'general',
+      role: 'generalist',
       prompt: 'Check this later and report back.',
       schedule: { kind: 'after', afterMinutes: 5 },
       mode: 'background',
@@ -47,4 +47,3 @@ describe('Dispatch tool family', () => {
     assert.equal(listDispatchesTool.description.includes('notify_to'), false)
   })
 })
-

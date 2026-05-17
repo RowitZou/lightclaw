@@ -36,12 +36,12 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
 })
 
 const EXPECTED = {
-  AgentTool: 'ea52ab4722477401f5761db01e582568821f27075cdb65f0298dd6648386995c',
+  AgentTool: '64b7051bcfdecc7c74e9768f1d8c8c5babcc4fe0c52b32d8e92509f8baa00fdf',
   BackgroundTask: 'acee40d7058663ef05dd710645bb5660af2c579e0d8890aa523dc04450e382b7',
   ListBackgroundTasks: 'f804d5264e2f9673e1ea1b1813bf30ba13c071fe006e550eb722b6b3c665bbe6',
   CancelBackgroundTask: 'fedc336c6b7b755df1b7d397836425b779bac30ce3a24834ee83cc8178e791e2',
   UpdateBackgroundTask: 'c51dc968e1a89d894a3b272485455c4826eebf48c4819aac21feecf19c80e2b5',
-  Dispatch: '503c5723ec4b831d21059a7315c3d7cbe60980d910fd0b4b5f6ef9fcac857291',
+  Dispatch: '099e2c61e2551f9992a0f21adb488d23989d1c1450ea7746735b388a4df2cdcf',
   ListDispatches: 'da49c1dd13f59696253688581ff42eed5469adbf9cf6d82b18f6a8eb0e9bba58',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: 'a823f127ab8b773f1cf94217bdb80b5f75037e7ad83462881f6cf996b405fa3b',

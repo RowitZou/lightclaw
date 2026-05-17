@@ -2,7 +2,14 @@ import type { AgentType } from '../agents/types.js'
 import type { ScheduleSpec } from '../background-task/types.js'
 import type { PendingAttachment } from '../channels/types.js'
 
-export type DispatchRole = 'general' | 'explore' | 'web'
+export type DispatchRole =
+  | 'generalist'
+  | 'localExplorer'
+  | 'webSearcher'
+  | 'feishuSecretary'
+  | 'coder'
+  | 'archivist'
+  | 'reviewer'
 export type DispatchMode = 'blocking' | 'background'
 export type DispatchSchedule = 'now' | ScheduleSpec
 
@@ -90,4 +97,3 @@ export type AgentSignal<K extends AgentSignalKind = AgentSignalKind> = {
   chainId?: string
   parentDispatchId?: string
 }
-

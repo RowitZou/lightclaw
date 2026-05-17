@@ -75,7 +75,7 @@ export const backgroundTaskTool = buildTool({
   async call(input, context) {
     const { executeDispatch } = await import('./dispatch.js')
     return executeDispatch({
-      role: 'general',
+      role: 'generalist',
       prompt: input.prompt,
       schedule: input.schedule,
       mode: 'background',
