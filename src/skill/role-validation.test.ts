@@ -153,6 +153,15 @@ test('coder and reviewer can load the verify skill', () => {
   assert.deepEqual(filterSkillsForRole([verify], reviewer).map(item => item.name), ['verify'])
 })
 
+test('main role exposes remember but not verify', () => {
+  const remember = skill({ name: 'remember', allowedTools: ['MemoryWrite'] })
+  const verify = skill({ name: 'verify', allowedTools: ['Bash', 'Read'] })
+  const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
+
+  assert.ok(main)
+  assert.deepEqual(filterSkillsForRole([remember, verify], main).map(item => item.name), ['remember'])
+})
+
 function role(overrides: Partial<Role>): Role {
   return {
     agentType: 'test-role',

@@ -17,7 +17,7 @@ export const BUNDLED_AGENTS: Role[] = [
     whenToUse:
       'Primary user-facing orchestrator. Not dispatchable through AgentTool.',
     tools: ['*'],
-    skills: ['*'],
+    skills: ['remember'],
     mcpServers: ['*'],
     reachableRoles: [
       'generalist',
