@@ -15,7 +15,7 @@ export const autoMemoryHook: Hook = {
   name: 'auto-memory-extract',
   afterEndTurn(ctx) {
     if (
-      !ctx.rolePolicy.contextPolicy.autoMemoryExtract
+      ctx.rolePolicy.kind === 'internal'
       || ctx.stopReason() !== 'end_turn'
       || ctx.invocation.ephemeral
       || !ctx.config.autoMemory

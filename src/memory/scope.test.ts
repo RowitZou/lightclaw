@@ -33,24 +33,14 @@ describe('resolveMemoryDirsForRole', () => {
     ])
   })
 
-  it('uses role-private self and no readable dirs for worker defaults', () => {
+  it('uses role-private self and three-layer readable dirs for worker defaults', () => {
     const resolved = resolveMemoryDirsForRole(role({ agentType: 'explore', kind: 'worker' }), memoryDir)
 
     assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'explore'))
-    assert.deepEqual(resolved.readableDirs, [])
-  })
-
-  it('allows worker roles to opt into self and shared visibility', () => {
-    const resolved = resolveMemoryDirsForRole(role({
-      agentType: 'web',
-      kind: 'worker',
-      contextPolicy: { memoryScopes: ['self', 'shared'] },
-    }), memoryDir)
-
-    assert.equal(resolved.selfWriteDir, path.join(memoryDir, 'web'))
     assert.deepEqual(resolved.readableDirs, [
-      path.join(memoryDir, 'web'),
+      memoryDir,
       path.join(memoryDir, '_shared'),
+      path.join(memoryDir, 'explore'),
     ])
   })
 

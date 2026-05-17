@@ -39,16 +39,26 @@ describe('role-scoped memory indexes', () => {
     const webIndex = await loadMemoryIndex(memoryDir, webRole())
     assert.match(webIndex, /web\/web-note\.md/)
     assert.match(webIndex, /_shared\/shared-note\.md/)
-    assert.doesNotMatch(webIndex, /root-note\.md/)
+    assert.match(webIndex, /root-note\.md/)
   })
 
-  it('returns no readable memories for default worker roles', async () => {
+  it('returns three-layer readable memories for default worker roles', async () => {
     await seed()
     const resolved = await resolveReadableMemoryDirsForRole(workerRole('explore'), memoryDir)
 
-    assert.deepEqual(resolved.readableDirs, [])
-    assert.equal(await loadMemoryIndex(memoryDir, workerRole('explore')), '')
-    assert.deepEqual(await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs), [])
+    assert.deepEqual(resolved.readableDirs, [
+      memoryDir,
+      path.join(memoryDir, '_shared'),
+      path.join(memoryDir, 'explore'),
+    ])
+    const index = await loadMemoryIndex(memoryDir, workerRole('explore'))
+    assert.match(index, /root-note\.md/)
+    assert.match(index, /_shared\/shared-note\.md/)
+    assert.doesNotMatch(index, /web\/web-note\.md/)
+    assert.deepEqual(
+      new Set((await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs)).map(entry => entry.filename)),
+      new Set(['root-note.md', '_shared/shared-note.md']),
+    )
   })
 })
 
@@ -89,8 +99,5 @@ function workerRole(agentType: string): Role {
 }
 
 function webRole(): Role {
-  return {
-    ...workerRole('web'),
-    contextPolicy: { memoryScopes: ['self', 'shared'] },
-  }
+  return workerRole('web')
 }

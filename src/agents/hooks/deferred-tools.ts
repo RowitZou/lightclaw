@@ -7,11 +7,7 @@ export const deferredToolsHook: Hook = {
   name: 'deferred-tools-discovery',
   beforeTurn(ctx) {
     const sessionCtx = getCurrentSessionContext()
-    if (
-      sessionCtx
-      && ctx.rolePolicy.contextPolicy.deferredToolDiscovery
-      && !ctx.systemPrompt.hasOverride
-    ) {
+    if (sessionCtx && !ctx.systemPrompt.hasOverride) {
       sessionCtx.turnCounter += 1
       pruneStaleDiscoveredTools(
         sessionCtx.discoveredTools,
@@ -20,7 +16,7 @@ export const deferredToolsHook: Hook = {
       )
     }
 
-    if (!ctx.rolePolicy.contextPolicy.cacheStable || ctx.systemPrompt.hasOverride) {
+    if (ctx.systemPrompt.hasOverride) {
       ctx.setTurnCatalog({
         tools: ctx.allTools,
         deferred: [],

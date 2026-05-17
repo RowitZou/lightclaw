@@ -42,13 +42,14 @@ describe('renderSystemPromptSplit — cache anchoring', () => {
   }
 
   it('keeps stable prefix byte-identical when only the TodoList changes', () => {
+    const templateWithTodos = { ...template, includeTodos: true }
     const a = renderSystemPromptSplit(
-      template,
+      templateWithTodos,
       [{ content: 'task A', activeForm: 'doing A', status: 'in_progress' }],
       { tools: [fakeTool('Read')] },
     )
     const b = renderSystemPromptSplit(
-      template,
+      templateWithTodos,
       [{ content: 'task A', activeForm: 'doing A', status: 'completed' }],
       { tools: [fakeTool('Read')] },
     )

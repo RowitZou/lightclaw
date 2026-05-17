@@ -13,6 +13,7 @@ import { getMcpRegistrySnapshot } from './mcp/index.js'
 import { resolveRoleModel } from './model-resolution.js'
 import {
   getAllPermissionRules,
+  getCwd,
   getCurrentUserId,
   getMemoryDir,
   getPermissionMode,
@@ -38,6 +39,7 @@ type PromptOptions = {
 export type SystemPromptTemplate = {
   preTodos: string
   postTodos: string
+  includeTodos?: boolean
 }
 
 export type OrchestratorPromptContext = {
@@ -49,6 +51,9 @@ export type OrchestratorPromptContext = {
 
 export type SubagentPromptContext = {
   tools: Tool[]
+  config: LightClawConfig
+  cwd?: string
+  sessionId?: string
   environmentRoot: string
 }
 
@@ -126,7 +131,11 @@ function formatToolCatalog(tools: Tool[]): string {
 
 function formatTodoSection(todos: TodoItem[]): string {
   if (todos.length === 0) {
-    return ''
+    return [
+      '## Current Todo List',
+      '(no todos yet)',
+      'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
+    ].join('\n')
   }
 
   return [
@@ -134,6 +143,17 @@ function formatTodoSection(todos: TodoItem[]): string {
     formatTodosForPrompt(todos),
     'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
   ].join('\n')
+}
+
+function formatOptionalTodoSection(todos: TodoItem[], includeTodos: boolean | undefined): string {
+  if (!includeTodos) {
+    return ''
+  }
+  if (todos.length === 0) {
+    return formatTodoSection(todos)
+  }
+
+  return formatTodoSection(todos)
 }
 
 const MODE_BLURBS: Record<PermissionMode, string> = {
@@ -227,14 +247,14 @@ export async function buildPromptForRole(
   role: Role,
   context: OrchestratorPromptContext,
 ): Promise<SystemPromptTemplate>
-export function buildPromptForRole(
+export async function buildPromptForRole(
   role: Role,
   context: SubagentPromptContext,
-): string
-export function buildPromptForRole(
+): Promise<string>
+export async function buildPromptForRole(
   role: Role,
   context: OrchestratorPromptContext | SubagentPromptContext,
-): Promise<SystemPromptTemplate> | string {
+): Promise<SystemPromptTemplate | string> {
   const policy = resolveRolePolicy(role)
   if (policy.kind === 'orchestrator') {
     if (!isOrchestratorPromptContext(context)) {
@@ -249,7 +269,17 @@ export function buildPromptForRole(
     )
   }
 
-  return buildSubagentPromptContent(context.tools, context.environmentRoot, role)
+  if (isOrchestratorPromptContext(context)) {
+    return await buildSubagentPromptContent(role, {
+      tools: context.tools,
+      config: context.options.config,
+      cwd: context.cwd,
+      sessionId: context.options.sessionId,
+      environmentRoot: context.environmentRoot,
+    })
+  }
+
+  return await buildSubagentPromptContent(role, context)
 }
 
 function isOrchestratorPromptContext(
@@ -266,158 +296,19 @@ async function buildOrchestratorPromptTemplate(
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
   await refreshSkillRegistry(cwd)
-  const memoryDir = getMemoryDir()
-  const recallEnabled =
-    options.autoMemory
-    && options.config.memoryRecall.enabled
-    && Boolean(options.queryText && options.queryText.trim().length > 0)
-  const sessionMemoryEnabled =
-    options.config.sessionMemory.enabled && Boolean(options.sessionId)
-  const [projectMemory, autoMemoryIndex, recalledMemories, sessionMemory] = await Promise.all([
-    loadProjectMemory(cwd),
-    options.autoMemory ? loadMemoryIndex(memoryDir, role) : Promise.resolve(''),
-    recallEnabled
-      ? selectRelevantMemories(
-          options.queryText!,
-          memoryDir,
-          options.config,
-          {
-            topN: options.config.memoryRecall.topN,
-          },
-          role,
-        )
-      : Promise.resolve([] as MemoryEntry[]),
-    sessionMemoryEnabled
-      ? readSessionMemory(options.sessionId!, options.config.sessionsDir)
-      : Promise.resolve(''),
-  ])
-
-  const preTodoSections: string[] = [
-    'You are LightClaw, a personal assistant running across terminal and chat channels.',
-    'You help the current user inside their private LightClaw workspace. Do not frame yourself as a project-directory coding console unless the user asks for code work.',
-    '',
-    `Workspace directory: ${environmentRoot}`,
-    `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
-    formatCurrentDateLine(),
-    `Platform: ${platform}`,
-    `Model: ${resolveRoleModel(role, options.config)}`,
-  ]
-
-  if (projectMemory.trim().length > 0) {
-    preTodoSections.push('', '## Project Memory', projectMemory)
-  }
-
-  if (options.autoMemory && autoMemoryIndex.trim().length > 0) {
-    preTodoSections.push('', '## Auto Memory Index', autoMemoryIndex)
-  }
-
-  if (recalledMemories.length > 0) {
-    const trimmedQuery = (options.queryText ?? '').replace(/\s+/g, ' ').slice(0, 80)
-    preTodoSections.push(
-      '',
-      '## Relevant Memories',
-      `<!-- selected by recall on query "${trimmedQuery}" -->`,
-    )
-    for (const memory of recalledMemories) {
-      const age = memoryAge(memory.mtimeMs)
-      const heading =
-        age === 'today'
-          ? `### ${memory.filename}`
-          : `### ${memory.filename} (saved ${age})`
-      preTodoSections.push('', heading, memory.content)
-      const staleness = memoryFreshnessText(memory.mtimeMs)
-      if (staleness) {
-        preTodoSections.push('', `<system-reminder>${staleness}</system-reminder>`)
-      }
-    }
-  }
-
-  if (sessionMemory.trim().length > 0) {
-    preTodoSections.push('', '## Session Working Memory', sessionMemory.trim())
-  }
-
-  preTodoSections.push(
-    '',
-    '## Available Skills',
-    formatSkillsSection(),
-    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding. The user does not need to invoke skills explicitly.',
-    'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
-    'To save durable notes for later sessions, use the MemoryWrite tool. A background curator periodically reviews these notes and may promote broadly-useful ones to a pool other roles can read.',
-    'Memory and Conversation tools are scoped to the current LightClaw user. File tools and Bash are hard-limited to the current user workspace, even in bypassPermissions mode.',
-  )
-
-  const permissionSection = formatPermissionSection()
-  if (permissionSection) {
-    preTodoSections.push('', permissionSection)
-  }
-
-  const mcpSection = formatMcpSection()
-  if (mcpSection) {
-    preTodoSections.push('', mcpSection)
-  }
-
-  const postTodoSections: string[] = [
-    'Working style:',
-    '- For exploratory questions ("how should we approach X?", "what do you think?"), respond in 2-3 sentences with a recommendation and the main tradeoff. Don\'t implement until the user agrees.',
-    '- Don\'t add features, refactor, or introduce abstractions beyond what the task requires. A bug fix doesn\'t need surrounding cleanup. Three similar lines is better than a premature abstraction.',
-    '- Don\'t add error handling, fallbacks, or validation for scenarios that can\'t happen. Trust internal code and framework guarantees. Only validate at system boundaries (user input, external APIs).',
-    '- Default to writing no comments. Add one only when the WHY is non-obvious (a hidden constraint, a workaround, surprising behavior). Don\'t explain WHAT the code does — well-named identifiers do that.',
-    '- Prefer editing existing files to creating new ones. Don\'t create *.md / README / CHANGELOG files unless the user explicitly asks.',
-    '- Avoid backwards-compatibility shims and "// removed" placeholder comments. If something is unused, delete it.',
-    '',
-    'Tone:',
-    '- Keep responses short and concise. Match length to the task — a one-line question gets a one-line answer.',
-    '- Reference code with file_path:line_number for navigability.',
-    '- Before the first tool call, state in one sentence what you\'re about to do. Give short progress updates at key moments (a decision, a surprise, a phase boundary) — silent is worse than brief.',
-    '- Don\'t narrate internal deliberation. User-facing text should be useful communication, not commentary on your thought process.',
-    '- End-of-turn summary: one or two sentences. What changed and what\'s next. Nothing else.',
-    '- Do not put a colon before tool calls — tool calls may not render in output, leaving a dangling colon.',
-    '',
-    'Action safety:',
-    '- Local reversible actions (edits, tests, reads) — proceed freely.',
-    '- Hard-to-reverse or shared-state actions (git push, force-push, package upgrades, channel messages outside the agent reply, dropping tables) — confirm with the user first unless explicitly authorized.',
-    '- When you hit an obstacle, do not use destructive actions (like --no-verify, --force) as a shortcut. Identify the root cause.',
-    '',
-    'Parallelism:',
-    '- You can call multiple tools in one response. When tool calls are independent, send them as parallel tool_use blocks in a single message — never serially.',
-    '- Independent reads (multiple Reads, Glob + Grep) should always run in parallel.',
-    '- Subagent forks for independent research questions should also fan out in parallel.',
-    '',
-    'Tool usage rules:',
-    '- Prefer direct answers when no tool is needed.',
-    '- Use tools when the answer depends on workspace filesystem or shell state.',
-    '- Prefer dedicated tools over Bash when one fits — they are permission-scoped, sandbox-aware, and produce structured results the user and channel UI can review more easily than raw Bash stdout:',
-    '    To read files use Read instead of cat / head / tail / sed. To edit files use Edit instead of sed / awk. To create files use Write instead of echo > / heredoc.',
-    '    To find files by name use Glob instead of find / ls. To search file contents use Grep instead of grep / rg. To communicate with the user, output text in your reply instead of echo / printf.',
-    '    Reserve Bash for shell-only operations not covered by a dedicated tool — git, package managers, build / test commands, system diagnostics, sandbox-internal scripts. When unsure and a dedicated tool exists, default to the dedicated tool.',
-    '- When editing files, be precise and avoid unrelated changes.',
-    '- If a tool fails, explain the failure and recover with a narrower step.',
-    '- Memory may be stale; verify remembered details before acting on them.',
-    // Bug 10 in 2026-05-10 audit: visual content rendered to text by Read on
-    // images / PDF page renders is transcribed by a smaller vision model.
-    // Treat its output as a hint, not as ground truth, for any precise token
-    // — main agent was copying "Suhiln Cao" / "Unslo th" verbatim into
-    // answers because the OCR string was indistinguishable from a tool's
-    // exact return value.
-    '- Visual content described by Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, identifiers, and other precise tokens in such transcriptions may have OCR errors. When the user is asking for an exact name / value / spelling, treat sub-LLM transcription as a hint rather than ground truth — re-render at higher fidelity (Read with `pages=` / different page range) or ask the user to confirm before committing the value to a final answer. Tokens flagged as `[unclear: ...]` MUST be re-rendered or confirmed before citing.',
-    '',
-    'Asynchronous capabilities (deferred tools — load via ToolSearch when relevant):',
-    '- User wants a result LATER ("remind me in 5 min" / "提醒我", "daily 9am report" / "每天 9 点报告", "in 30 seconds" / "30 秒后") → BackgroundTask. Pick `notify_to:\'user\'` when the result IS the deliverable; pick `notify_to:\'agent\'` when the result is a signal you need to interpret before deciding to interrupt the user.',
-    '- User wants parallel work THIS TURN ("draft three versions in parallel" / "帮我并行起草三版", open-ended research) → AgentTool with multiple parallel tool_use blocks in one assistant message.',
-    '- You need to wait inside the current turn (short delay / 短延迟, retry backoff) → Sleep — not `Bash(sleep N)`. /stop interrupts it; durations > 5 min should go through BackgroundTask instead (prompt cache TTL).',
-    '- Do NOT schedule BackgroundTask for "right now" work; it does not return into the current turn.',
-    '',
-    'Sandbox availability:',
-    '- If an environment-domain tool (Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch) returns an error mentioning "Sandbox image" / "Sandbox 镜像" being not ready / pulling / failed / autoPull disabled, do not retry that tool.',
-    '- Acknowledge the situation to the user (sandbox is being prepared, or has failed and admin has been notified) and offer to continue with chat-only assistance — discussion, planning, explaining concepts.',
-    '- Do not attempt environment-domain tools again until the user explicitly asks you to retry.',
-    '',
-    'Available tools (full schemas / usage live in the tools API description field):',
-  ]
+  const prompt = await buildRolePromptParts(role, {
+    tools,
+    config: options.config,
+    cwd,
+    environmentRoot,
+    sessionId: options.sessionId,
+    isSubagent: false,
+  })
 
   return {
-    preTodos: preTodoSections.join('\n'),
-    postTodos: postTodoSections.join('\n'),
+    preTodos: prompt.preTodoSections.join('\n\n'),
+    postTodos: prompt.postTodoSections.join('\n\n'),
+    includeTodos: prompt.includeTodos,
   }
 }
 
@@ -435,6 +326,119 @@ export type RenderedSystemPrompt = {
   variable: string
 }
 
+type RolePromptPartsInput = {
+  tools: Tool[]
+  config: LightClawConfig
+  cwd: string
+  environmentRoot: string
+  sessionId?: string
+  isSubagent: boolean
+}
+
+type RolePromptParts = {
+  preTodoSections: string[]
+  postTodoSections: string[]
+  includeTodos: boolean
+}
+
+async function buildRolePromptParts(
+  role: Role,
+  input: RolePromptPartsInput,
+): Promise<RolePromptParts> {
+  const policy = resolveRolePolicy(role)
+  const memoryDir = getMemoryDir()
+  const [projectMemory, autoMemoryIndex, sessionMemory] = await Promise.all([
+    loadProjectMemory(input.cwd),
+    loadMemoryIndex(memoryDir, role),
+    input.sessionId && input.config.sessionsDir
+      ? readSessionMemory(input.sessionId, input.config.sessionsDir)
+      : Promise.resolve(''),
+  ])
+  const preTodoSections: string[] = []
+
+  if (role.systemPrompt.trim().length > 0) {
+    preTodoSections.push(role.systemPrompt)
+  }
+
+  preTodoSections.push(formatEnvironmentSection(role, input.environmentRoot, input.config))
+
+  if (projectMemory.trim().length > 0) {
+    preTodoSections.push(['## Project Memory', projectMemory].join('\n\n'))
+  }
+
+  if (autoMemoryIndex.trim().length > 0) {
+    preTodoSections.push(['## Auto Memory Index', autoMemoryIndex].join('\n\n'))
+  }
+
+  if (sessionMemory.trim().length > 0) {
+    preTodoSections.push(['## Session Working Memory', sessionMemory.trim()].join('\n\n'))
+  }
+
+  const permissionSection = formatPermissionSection(input.isSubagent)
+  if (permissionSection) {
+    preTodoSections.push(permissionSection)
+  }
+
+  const skillsSection = formatRoleSkillsSection(policy.skills)
+  if (skillsSection) {
+    preTodoSections.push(skillsSection)
+  }
+
+  const mcpSection = formatMcpSection()
+  if (mcpSection && policy.mcpServers.length > 0) {
+    preTodoSections.push(mcpSection)
+  }
+
+  const postTodoSections =
+    policy.kind === 'orchestrator'
+      ? ['## Channel Context\n(inbound channel message context will wrap here per turn)']
+      : []
+
+  return {
+    preTodoSections,
+    postTodoSections,
+    includeTodos: hasTool(policy.tools, 'TodoWrite'),
+  }
+}
+
+function formatEnvironmentSection(
+  role: Role,
+  environmentRoot: string,
+  config: LightClawConfig,
+): string {
+  return [
+    '# Environment Info',
+    '',
+    `Workspace directory: ${environmentRoot}`,
+    `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
+    formatCurrentDateLine(),
+    `Platform: ${platform}`,
+    `Model: ${resolveRoleModel(role, config)}`,
+  ].join('\n')
+}
+
+function formatRoleSkillsSection(skills: readonly string[]): string {
+  if (skills.length === 0) {
+    return ''
+  }
+
+  const body = formatSkillsSection()
+  if (body === 'None.') {
+    return ''
+  }
+
+  return [
+    '## Available Skills',
+    body,
+    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding. The user does not need to invoke skills explicitly.',
+    'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
+  ].join('\n')
+}
+
+function hasTool(tools: readonly string[], name: string): boolean {
+  return tools.includes('*') || tools.includes(name)
+}
+
 export function renderSystemPromptSplit(
   template: SystemPromptTemplate,
   todos: TodoItem[],
@@ -442,10 +446,16 @@ export function renderSystemPromptSplit(
 ): RenderedSystemPrompt {
   const tools = options?.tools ?? []
   const toolDescriptions = formatToolCatalog(tools)
-  const stable = `${template.preTodos}\n\n${template.postTodos}\n${toolDescriptions}`
+  const toolSection = [
+    'Available tools (full schemas / usage live in the tools API description field):',
+    toolDescriptions,
+  ].join('\n')
+  const stable = [template.preTodos, toolSection, template.postTodos]
+    .filter(section => section.trim().length > 0)
+    .join('\n\n')
 
   const variableParts: string[] = []
-  const todoSection = formatTodoSection(todos)
+  const todoSection = formatOptionalTodoSection(todos, template.includeTodos)
   if (todoSection) {
     variableParts.push(todoSection)
   }
@@ -468,51 +478,54 @@ export function renderSystemPrompt(
   todos: TodoItem[],
   options?: SystemPromptRenderOptions,
 ): string {
-  const { stable, variable } = renderSystemPromptSplit(template, todos, options)
-  return variable ? `${stable}\n\n${variable}` : stable
-}
-
-export function buildSubagentPrompt(
-  tools: Tool[],
-  environmentRoot: string,
-  agent: Role,
-): string {
-  return buildPromptForRole(agent, { tools, environmentRoot })
-}
-
-function buildSubagentPromptContent(
-  tools: Tool[],
-  environmentRoot: string,
-  agent: Role,
-): string {
-  const toolDescriptions = formatToolCatalog(tools)
-
-  const permissionSection = formatPermissionSection(true)
-  const sections: string[] = [
-    'You are a focused LightClaw worker. You take a single task, complete it, return a concise report.',
-    `Working directory: ${environmentRoot}`,
-    formatCurrentDateLine(),
-    `Platform: ${platform}`,
-    '',
-    agent.systemPrompt,
-  ]
-
-  if (permissionSection) {
-    sections.push('', permissionSection)
-  }
-
-  sections.push(
-    '',
-    'Tool usage rules:',
-    '- Prefer direct answers when no tool is needed.',
-    '- Use tools when the answer depends on filesystem or shell state.',
-    '- Report concise findings back to the requester.',
-    '',
+  const tools = options?.tools ?? []
+  const toolSection = [
     'Available tools (full schemas / usage live in the tools API description field):',
-    toolDescriptions,
+    formatToolCatalog(tools),
+  ].join('\n')
+  const deferredReminder = buildDeferredToolsReminder(
+    options?.deferredTools ?? [],
+    options?.discoveredTools ?? new Map(),
   )
+  const sections = [
+    template.preTodos,
+    formatOptionalTodoSection(todos, template.includeTodos),
+    toolSection,
+    template.postTodos,
+    deferredReminder,
+  ].filter(section => section.trim().length > 0)
+  return sections.join('\n\n')
+}
 
-  return sections.join('\n')
+export async function buildSubagentPrompt(
+  tools: Tool[],
+  config: LightClawConfig,
+  environmentRoot: string,
+  agent: Role,
+  cwd = getCwd(),
+  sessionId?: string,
+): Promise<string> {
+  return await buildPromptForRole(agent, { tools, config, cwd, sessionId, environmentRoot })
+}
+
+async function buildSubagentPromptContent(
+  role: Role,
+  context: SubagentPromptContext,
+): Promise<string> {
+  const prompt = await buildRolePromptParts(role, {
+    tools: context.tools,
+    config: context.config,
+    cwd: context.cwd ?? getCwd(),
+    sessionId: context.sessionId,
+    environmentRoot: context.environmentRoot,
+    isSubagent: true,
+  })
+  const template: SystemPromptTemplate = {
+    preTodos: prompt.preTodoSections.join('\n\n'),
+    postTodos: prompt.postTodoSections.join('\n\n'),
+    includeTodos: prompt.includeTodos,
+  }
+  return renderSystemPrompt(template, [], { tools: context.tools })
 }
 
 function buildDeferredToolsReminder(

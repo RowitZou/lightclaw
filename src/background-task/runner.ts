@@ -109,14 +109,6 @@ export async function runBackgroundTaskFire(input: {
           agentType: 'background_task',
           name: 'background_task',
           kind: 'worker',
-          contextPolicy: {
-            ...getMainRole().contextPolicy,
-            autoCompact: false,
-            autoMemoryExtract: false,
-            deferredToolDiscovery: false,
-            sessionWorkingMemory: false,
-            cacheStable: true,
-          },
         },
         invocation: {
           ...emptyInvocationContext(),

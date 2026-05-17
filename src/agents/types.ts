@@ -1,5 +1,3 @@
-import type { MemoryType } from '../memory/types.js'
-
 export const BUNDLED_AGENT_TYPES = [
   'main',
   'general-purpose',
@@ -20,27 +18,6 @@ export type RoleKind = 'orchestrator' | 'worker' | 'internal'
 export type OutputContract = 'report' | 'side-effect'
 
 export type RoleResourceAllowlist = string[] | ['*']
-
-export type MemoryScope = 'self' | 'shared'
-
-export type ContextPolicy = {
-  environmentInfo: boolean
-  projectMemory: boolean
-  autoMemoryIndex: boolean
-  memoryRecall: false | { types?: MemoryType[]; topN?: number }
-  sessionWorkingMemory: boolean
-  skillCatalog: boolean
-  permissionSection: boolean
-  mcpSection: boolean
-  todos: boolean
-  channelContext: boolean
-  transcriptInheritance: 'none' | 'fork-prefix' | 'full'
-  memoryScopes: MemoryScope[]
-  autoCompact: boolean
-  autoMemoryExtract: boolean
-  deferredToolDiscovery: boolean
-  cacheStable: boolean
-}
 
 export type WorkerFailureReason =
   | 'permission-deny'
@@ -73,17 +50,14 @@ export type Role = {
   // B. Brain.
   systemPrompt: string
 
-  // C. Context assembly policy.
-  contextPolicy?: Partial<ContextPolicy>
-
-  // D. Resource visibility allowlists.
+  // C. Resource visibility allowlists.
   tools: RoleResourceAllowlist
   skills?: RoleResourceAllowlist
   mcpServers?: RoleResourceAllowlist
   reachableRoles?: string[]
   hooks?: RoleResourceAllowlist
 
-  // E. Lifecycle and output contract.
+  // D. Lifecycle and output contract.
   outputContract?: OutputContract
   maxTurns?: number
   budget?: {

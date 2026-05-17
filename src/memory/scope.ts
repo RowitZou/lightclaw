@@ -1,7 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 
-import { resolveRolePolicy } from '../agents/role-presets.js'
 import type { Role } from '../agents/types.js'
 
 export type ResolvedMemoryDirs = {
@@ -14,19 +13,16 @@ export function resolveMemoryDirsForRole(
   memoryDir: string,
 ): ResolvedMemoryDirs {
   const root = path.resolve(memoryDir)
-  const policy = resolveRolePolicy(role)
+  const kind = role.kind ?? 'worker'
   const selfWriteDir =
-    policy.kind === 'worker'
+    kind === 'worker'
       ? path.join(root, role.agentType)
       : root
 
-  const readableDirs: string[] = []
-  if (policy.contextPolicy.memoryScopes.includes('self')) {
-    readableDirs.push(selfWriteDir)
-  }
-  if (policy.contextPolicy.memoryScopes.includes('shared')) {
-    readableDirs.push(path.join(root, '_shared'))
-  }
+  const readableDirs =
+    kind === 'orchestrator' || kind === 'internal'
+      ? [root, path.join(root, '_shared')]
+      : [root, path.join(root, '_shared'), selfWriteDir]
 
   return {
     selfWriteDir,
@@ -40,9 +36,9 @@ export async function resolveReadableMemoryDirsForRole(
 ): Promise<ResolvedMemoryDirs> {
   const root = path.resolve(memoryDir)
   const resolved = resolveMemoryDirsForRole(role, root)
-  const policy = resolveRolePolicy(role)
+  const kind = role.kind ?? 'worker'
 
-  if (policy.kind !== 'internal') {
+  if (kind !== 'internal') {
     return resolved
   }
 

@@ -38,7 +38,7 @@ describe('MemoryRead readableDirs filtering', () => {
     assert.doesNotMatch(result.output as string, /web-note\.md/)
   })
 
-  it('allows worker roles with memoryScopes to read self and shared paths', async () => {
+  it('allows worker roles to read root, shared, and own role-private paths', async () => {
     await seed()
 
     const list = await withMemorySession(webRole(), () =>
@@ -46,7 +46,7 @@ describe('MemoryRead readableDirs filtering', () => {
     )
     assert.match(list.output as string, /web\/web-note\.md/)
     assert.match(list.output as string, /_shared\/shared-note\.md/)
-    assert.doesNotMatch(list.output as string, /root-note\.md/)
+    assert.match(list.output as string, /root-note\.md/)
 
     const read = await withMemorySession(webRole(), () =>
       memoryReadTool.call({ action: 'read', filename: '_shared/shared-note' }, undefined as never),
@@ -55,11 +55,11 @@ describe('MemoryRead readableDirs filtering', () => {
     assert.match(read.output as string, /shared detail/)
   })
 
-  it('denies worker roles without readable dirs', async () => {
+  it('denies worker roles from reading other role-private dirs', async () => {
     await seed()
 
     const result = await withMemorySession(workerRole('explore'), () =>
-      memoryReadTool.call({ action: 'read', filename: 'root-note' }, undefined as never),
+      memoryReadTool.call({ action: 'read', filename: 'web/web-note' }, undefined as never),
     )
 
     assert.equal(result.isError, true)
@@ -129,10 +129,7 @@ function workerRole(agentType: string): Role {
 }
 
 function webRole(): Role {
-  return {
-    ...workerRole('web'),
-    contextPolicy: { memoryScopes: ['self', 'shared'] },
-  }
+  return workerRole('web')
 }
 
 function internalRole(agentType: string): Role {

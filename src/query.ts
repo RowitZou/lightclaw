@@ -186,7 +186,6 @@ export async function query(params: QueryParams): Promise<{
   if (currentSessionContext) {
     currentSessionContext.currentRole = invocation.currentRoleOverride ?? params.role
   }
-  const contextPolicy = rolePolicy.contextPolicy
   const lifecycleHooks = resolveHooks(params.role)
   const systemPromptOverride = invocation.systemPromptOverride
   const hasSystemPromptOverride = systemPromptOverride !== undefined
@@ -232,8 +231,7 @@ export async function query(params: QueryParams): Promise<{
   // sees the freshly written file. Failures are logged, never raised.
   const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
     if (
-      !contextPolicy.sessionWorkingMemory
-      || !config.autoMemory
+      !config.autoMemory
       || !config.sessionMemory.enabled
     ) {
       return

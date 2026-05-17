@@ -102,8 +102,11 @@ export async function runForkedAgent(
   const prefix = cacheSafeParams.forkContextMessages
   const promptMessage = buildPromptMessage(prefix, params.promptText)
   const messages = [...prefix, promptMessage]
-  const systemPrompt = buildPromptForRole(params.role, {
+  const systemPrompt = await buildPromptForRole(params.role, {
     tools: cacheSafeParams.tools,
+    config: cacheSafeParams.config,
+    cwd: getCurrentSessionContext()?.cwd,
+    sessionId: getCurrentSessionContext()?.sessionId,
     environmentRoot: getRuntime().workspaceRoot,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)

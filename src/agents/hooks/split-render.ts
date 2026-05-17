@@ -6,7 +6,7 @@ import type { Hook } from './types.js'
 export const splitRenderHook: Hook = {
   name: 'split-render',
   beforeStream(ctx) {
-    if (!ctx.rolePolicy.contextPolicy.cacheStable || ctx.systemPrompt.hasOverride) {
+    if (ctx.systemPrompt.hasOverride) {
       return {
         system: ctx.systemPrompt.hasOverride
           ? (ctx.systemPrompt.override ?? '')

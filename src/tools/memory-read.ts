@@ -116,7 +116,14 @@ async function resolveReadableMemoryFile(
   const scopedParts = [...parts.slice(0, -1), basename]
   if (scopedParts.length > 1) {
     const target = path.resolve(memoryDir, ...scopedParts)
-    return readableDirs.some(dir => memoryPathWithinDir(target, dir))
+    const root = path.resolve(memoryDir)
+    return readableDirs.some(dir => {
+      const resolvedDir = path.resolve(dir)
+      if (resolvedDir === root) {
+        return false
+      }
+      return memoryPathWithinDir(target, resolvedDir)
+    })
       ? target
       : null
   }

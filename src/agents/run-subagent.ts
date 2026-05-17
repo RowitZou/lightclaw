@@ -150,8 +150,7 @@ function maybeTriggerForkExtract(input: {
   ) {
     return
   }
-  const policy = input.agent.contextPolicy
-  if (policy?.autoMemoryExtract !== true) {
+  if (input.agent.agentType !== 'web') {
     return
   }
 

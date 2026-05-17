@@ -9,7 +9,7 @@ export const memoryNudgeHook: Hook = {
     const sessionCtx = getCurrentSessionContext()
     if (
       !sessionCtx
-      || !ctx.rolePolicy.contextPolicy.autoMemoryExtract
+      || ctx.rolePolicy.kind === 'internal'
       || ctx.systemPrompt.hasOverride
       || ctx.invocation.ephemeral
       || ctx.invocation.noAutoMemory

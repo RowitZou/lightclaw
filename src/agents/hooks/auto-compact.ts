@@ -18,9 +18,6 @@ import type { Hook, HookContext } from './types.js'
 export const autoCompactHook: Hook = {
   name: 'auto-compact',
   async beforeTurn(ctx) {
-    if (!ctx.rolePolicy.contextPolicy.autoCompact) {
-      return
-    }
     try {
       const mc = await maybeIdleMicroCompact(ctx.messages, ctx.config)
       if (mc.cleared > 0) {
@@ -45,7 +42,7 @@ export async function runCompaction(
   ctx: HookContext,
   force: boolean,
 ): Promise<boolean> {
-  if (!ctx.rolePolicy.contextPolicy.autoCompact || !ctx.config.autoCompact) {
+  if (!ctx.config.autoCompact) {
     return false
   }
 

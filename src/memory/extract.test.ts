@@ -355,7 +355,7 @@ test('collectExistingMemoriesForRole gives main root plus shared, excluding role
   }
 })
 
-test('collectExistingMemoriesForRole gives web private plus shared, excluding root', async () => {
+test('collectExistingMemoriesForRole gives web root plus shared plus private memory', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-extract-'))
   const webRole = getAgent('web')
   assert.ok(webRole)
@@ -368,6 +368,7 @@ test('collectExistingMemoriesForRole gives web private plus shared, excluding ro
 
     assert.deepEqual(entries.map(entry => entry.filename), [
       '_shared/same-name.md',
+      'root-note.md',
       'web/same-name.md',
     ])
   } finally {
