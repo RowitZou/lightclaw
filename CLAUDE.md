@@ -176,13 +176,30 @@
 - Worker roles may use `MemoryWrite` and `TodoWrite`. Recursive delegation tools (`AgentTool`, `BackgroundTask`, `Dispatch`) remain blocked for workers until a later recursive-dispatch phase opens a narrower contract.
 - Skills are part of role policy: `src/skill/role-validation.ts` filters both prompt rendering and `UseSkill` runtime access so a role can load only named/wildcard skills whose `allowedTools` are visible to that role.
 
+# LightClaw Worker Roles Notes (Phase 6.5, 2026-05-17)
+
+- Bundled roles now use ten stable ids: `main`, seven user-dispatchable workers (`generalist`, `localExplorer`, `webSearcher`, `feishuSecretary`, `coder`, `archivist`, `reviewer`), and two framework-internal roles (`memoryExtractor`, `memoryCurator`). The old ids (`general-purpose`, `explore`, `web`, `extract_memories`, `auto_dream`) were replaced; do not reintroduce them in prompts, tests, docs, or config.
+- `main` is the user-facing orchestrator and reaches exactly the seven workers above through `Dispatch` / `AgentTool`. Its Feishu channel context tells it to delegate Feishu cloud-space operations rather than calling Feishu tools directly.
+- Worker selection is intentionally narrow:
+  - `generalist`: broad multi-step work with wildcard non-Feishu tools, `TodoWrite`, and `MemoryWrite`.
+  - `localExplorer`: fast read-only local / environment exploration plus memory and todos.
+  - `webSearcher`: `WebFetch` / `WebSearch` retrieval plus local reads over downloaded artifacts.
+  - `feishuSecretary`: Feishu cloud doc and cloud-space content lifecycle, including create/write/read and workspace-scoped structure operations.
+  - `coder`: bounded repo implementation with `Read` / `Write` / `Edit` / `Bash`, `TodoWrite`, memory, and the `verify` skill.
+  - `archivist`: organize existing local resources, runtime environments, and Feishu workspace structure; not new content authoring.
+  - `reviewer`: read-only pre-delivery review with cheap static verification through the `verify` skill; it reports issues and verdicts, but does not fix or re-dispatch.
+- `FEISHU_RESERVED_TOOLS` in `src/agents/role-tool-gate.ts` is a hard visibility contract. `FeishuRead`, `FeishuWriteDoc`, `FeishuWriteSheet`, `FeishuCreateFile`, `FeishuList`, `FeishuCreateFolder`, `FeishuMove`, and `FeishuDelete` require an explicit role tool entry; wildcard `tools: ['*']` alone is not enough. This keeps `main` and `generalist` from seeing Feishu tools while allowing `feishuSecretary`, `archivist`, and read-only `reviewer` coverage.
+- Role policy defaults changed with the Phase 6.5 framework: orchestrators default to the seven worker ids; workers default to `hooks: ['*']`; internal roles default only to `auto-compact`, `split-render`, and `prompt-too-long-retry`. If a worker must intentionally narrow hook behavior, set `role.hooks` explicitly.
+- Prompt rendering now has explicit `## Channel Context`, `## Reachable Workers`, and `## Tool Catalog` sections. The tool catalog is rendered before todos, so prompt-cache stable context stays separate from the variable todo block.
+- `UseSkill` guidance is conditional. `## Available Skills` appears only when a role's resolved skill allowlist and `allowedTools` compatibility expose at least one skill, and runtime `UseSkill` access is filtered by the same `src/skill/role-validation.ts` contract. Do not add prompt text that claims a role has skills unless its `tools` include `UseSkill` and its `skills` allowlist can actually load the skill.
+
 # LightClaw Prompt Design Principle (Phase 2 PR6, 2026-05-16)
 
 **Minimum + complete context.** Every prompt is written from the agent's own first-person perspective with the minimum information that agent needs to do its job — never from a system / overview perspective that enumerates surrounding architecture.
 - **Do not** enumerate sibling agents, blocked tools, channel infrastructure, scheduling layers, or "the parent has X". That is 此地无银三百两 — listing what the agent does NOT have tells the model what the framework HAS, leaking attack surface and inviting the model to reason about hierarchy it should not see.
 - **Do** name the agent's role + its own tools + its own delivery target. Refer to the consumer as "the requester" or "the reader", not "the parent" / "main agent" / "orchestrator".
-- The framework wrapper (`buildSubagentPromptContent` in `src/prompt.ts`) was cleaned in the 2026-05-16 prompt-sweep PR: opener is now "You are a focused LightClaw worker" and the tool-usage rule says "Report concise findings back to the requester". Per-role bodies and wrapper are consistent — both use the requester/reader frame. Do not regress to "subagent" / "parent agent" without re-opening this audit.
-- The 2026-05-16 sweep also rewrote `general-purpose.ts` / `explore.ts` / `extract-memories.ts` / `auto-dream.ts` / `web.ts` to drop the "subagent" / "parent" / "user's message" hierarchy words and the `extract` / `auto-dream` negative-enumeration capability lines ("you have no shell / no skills / do NOT call UseSkill"). The no-skills / no-UseSkill constraints are still enforced by Role tools allowlists and `createAutoMemCanUseTool` / `createAutoDreamCanUseTool` runtime gates — prompt belt-and-suspenders was redundant with the runtime gate AND leaked framework structure. All 5 worker / internal hashes were re-pinned in that PR.
+- The framework wrapper (`buildSubagentPromptContent` in `src/prompt.ts`) no longer adds a generic opener such as "You are a focused LightClaw worker". It renders the role-owned prompt plus framework-derived sections only. Per-role bodies and wrapper are consistent — both use the requester/reader frame. Do not regress to "subagent" / "parent agent" without re-opening this audit.
+- The 2026-05-16 sweep also rewrote the then-named `general-purpose.ts` / `explore.ts` / `extract-memories.ts` / `auto-dream.ts` / `web.ts` prompts to drop the "subagent" / "parent" / "user's message" hierarchy words and the `extract` / `auto-dream` negative-enumeration capability lines ("you have no shell / no skills / do NOT call UseSkill"). The no-skills / no-UseSkill constraints are still enforced by Role tools allowlists and internal runtime gates — prompt belt-and-suspenders was redundant with the runtime gate AND leaked framework structure. The Phase 6.5 ids for these roles are now `generalist`, `localExplorer`, `memoryExtractor`, `memoryCurator`, and `webSearcher`.
 
 # LightClaw Memory Layers Notes (Phase 2, 2026-05-16)
 
