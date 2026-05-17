@@ -7,6 +7,7 @@ import { parseLang } from './i18n/index.js'
 import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
 import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
+import { BUNDLED_AGENTS } from './agents/bundled/index.js'
 
 export type DockerMountConfig = {
   host: string
@@ -176,6 +177,19 @@ export type WebSearchToolConfig = {
   braveApiKey?: string
 }
 
+export type RoleConfig = {
+  model?: string
+  maxTurns?: number
+  budget?: {
+    maxTokens?: number
+    maxCost?: number
+  }
+}
+
+export type ToolModuleConfig = {
+  model?: string
+}
+
 export type WebFetchToolConfig = {
   /** Extra preapproved domains beyond the built-in baseline. Match is exact
    *  hostname (no subdomain wildcard). Merged with the built-in list — admin
@@ -184,8 +198,10 @@ export type WebFetchToolConfig = {
 }
 
 export type ToolsConfig = {
-  webSearch: WebSearchToolConfig
+  webSearch: WebSearchToolConfig & ToolModuleConfig
   webFetch: WebFetchToolConfig
+  imageRead: ToolModuleConfig
+  compact: ToolModuleConfig
   deferredLoading: 'auto' | 'always' | 'off'
   deferredLoadingThreshold: number
   /** Per-session bound on `SessionContext.discoveredTools`. When the LRU
@@ -245,6 +261,9 @@ export type LightClawConfig = {
   /** User-facing language for slash output, feishu cards, banners, error
    *  notices. Stderr logging stays English regardless. Default: cn. */
   lang: 'cn' | 'en'
+  /** Phase 5 canonical model selector. `/model` writes here; every role and
+   *  tool module falls back to this value. */
+  defaultModel: string
   /** Currently selected display name. Always a key of `models`. */
   model: string
   /** Display-name -> { endpoint, schema, upstreamModel }. Source of truth
@@ -253,6 +272,7 @@ export type LightClawConfig = {
   /** Named endpoint pool (apiKey + baseUrl). Models reference these by
    *  alias. */
   endpoints: Record<string, EndpointConfig>
+  roles?: Record<string, RoleConfig>
   routing: RoutingConfig
   sessionsDir: string
   autoCompact: boolean
@@ -801,6 +821,120 @@ export function resolveSessionsDir(): string {
   return path.resolve(expandHomePath(configuredPath))
 }
 
+function assertModelName(
+  value: unknown,
+  field: string,
+  modelNames: string[],
+): string | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${field} must be a non-empty string.`)
+  }
+  if (!modelNames.includes(value)) {
+    throw new Error(
+      `${field} = "${value}" is not in models. Available: ${modelNames.join(', ')}.`,
+    )
+  }
+  return value
+}
+
+function assertPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 1
+  ) {
+    throw new Error(`${field} must be a positive integer.`)
+  }
+  return value
+}
+
+function assertPositiveNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${field} must be a positive number.`)
+  }
+  return value
+}
+
+function resolveRoleConfigs(
+  input: ConfigFileShape['roles'],
+  modelNames: string[],
+): Record<string, RoleConfig> | undefined {
+  if (input === undefined) {
+    return undefined
+  }
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('roles must be an object keyed by agentType.')
+  }
+  const roles: Record<string, RoleConfig> = {}
+  for (const [agentType, raw] of Object.entries(input)) {
+    if (agentType === 'main') {
+      throw new Error(
+        '`roles.main` is not allowed; main is bound to `defaultModel`. Use `/model X` or set `defaultModel` to change main\'s model.',
+      )
+    }
+    const bundledRole = BUNDLED_AGENTS.find(role => role.agentType === agentType)
+    if (bundledRole?.kind === 'internal') {
+      throw new Error(
+        `\`roles.${agentType}\` is not allowed; \`${agentType}\` is kind='internal' and configured via \`roles.internal\` (which covers all internal roles as a group).`,
+      )
+    }
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`roles.${agentType} must be an object.`)
+    }
+    const roleConfig: RoleConfig = {}
+    const model = assertModelName(raw.model, `roles.${agentType}.model`, modelNames)
+    if (model !== undefined) {
+      roleConfig.model = model
+    }
+    const maxTurns = assertPositiveInteger(raw.maxTurns, `roles.${agentType}.maxTurns`)
+    if (maxTurns !== undefined) {
+      roleConfig.maxTurns = maxTurns
+    }
+    if (raw.budget !== undefined) {
+      if (raw.budget === null || typeof raw.budget !== 'object' || Array.isArray(raw.budget)) {
+        throw new Error(`roles.${agentType}.budget must be an object.`)
+      }
+      const budget: NonNullable<RoleConfig['budget']> = {}
+      const maxTokens = assertPositiveInteger(
+        raw.budget.maxTokens,
+        `roles.${agentType}.budget.maxTokens`,
+      )
+      if (maxTokens !== undefined) {
+        budget.maxTokens = maxTokens
+      }
+      const maxCost = assertPositiveNumber(
+        raw.budget.maxCost,
+        `roles.${agentType}.budget.maxCost`,
+      )
+      if (maxCost !== undefined) {
+        budget.maxCost = maxCost
+      }
+      roleConfig.budget = budget
+    }
+    roles[agentType] = roleConfig
+  }
+  return roles
+}
+
+function resolveToolModuleConfig(
+  input: { model?: string } | undefined,
+  field: 'tools.webSearch' | 'tools.imageRead' | 'tools.compact',
+  modelNames: string[],
+): ToolModuleConfig {
+  const model = assertModelName(input?.model, `${field}.model`, modelNames)
+  return model === undefined ? {} : { model }
+}
+
 export function getConfig(): LightClawConfig {
   const fileConfig = loadConfigFile()
   const endpoints = resolveEndpoints(fileConfig.endpoints)
@@ -812,15 +946,22 @@ export function getConfig(): LightClawConfig {
     )
   }
   const requestedModel =
-    process.env.LIGHTCLAW_MODEL ??
+    process.env.LIGHTCLAW_DEFAULT_MODEL ??
     fileConfig.defaultModel ??
-    modelNames[0]
-  if (!models[requestedModel]) {
+    fileConfig.model
+  if (requestedModel === undefined) {
     throw new Error(
-      `Selected model "${requestedModel}" is not in models. Available: ${modelNames.join(', ')}.`,
+      '`defaultModel` is required (set it as a top-level field or via LIGHTCLAW_DEFAULT_MODEL env).',
     )
   }
-  const model = requestedModel
+  if (!models[requestedModel]) {
+    throw new Error(
+      `defaultModel = "${requestedModel}" is not in models. Available: ${modelNames.join(', ')}.`,
+    )
+  }
+  const defaultModel = requestedModel
+  const model = defaultModel
+  const roles = resolveRoleConfigs(fileConfig.roles, modelNames)
   const validateRoutingTarget = (
     target: string | undefined,
     field: string,
@@ -838,23 +979,23 @@ export function getConfig(): LightClawConfig {
   const routing: RoutingConfig = {
     main:
       validateRoutingTarget(
-        process.env.LIGHTCLAW_ROUTING_MAIN ?? fileConfig.routing?.main,
+        process.env.LIGHTCLAW_ROUTING_MAIN,
         'main',
-      ) ?? model,
+      ) ?? defaultModel,
     compact: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_COMPACT ?? fileConfig.routing?.compact,
+      process.env.LIGHTCLAW_ROUTING_COMPACT,
       'compact',
     ),
     extract: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_EXTRACT ?? fileConfig.routing?.extract,
+      process.env.LIGHTCLAW_ROUTING_EXTRACT,
       'extract',
     ),
     webSearch: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_WEBSEARCH ?? fileConfig.routing?.webSearch,
+      process.env.LIGHTCLAW_ROUTING_WEBSEARCH,
       'webSearch',
     ),
     webFetch: validateRoutingTarget(
-      process.env.LIGHTCLAW_ROUTING_WEBFETCH ?? fileConfig.routing?.webFetch,
+      process.env.LIGHTCLAW_ROUTING_WEBFETCH,
       'webFetch',
     ),
   }
@@ -1077,9 +1218,11 @@ export function getConfig(): LightClawConfig {
   warnDeprecatedDiscoveryConfig(fileConfig)
 
   return {
+    defaultModel,
     model,
     models,
     endpoints,
+    ...(roles ? { roles } : {}),
     routing,
     sessionsDir: resolveSessionsDir(),
     autoCompact,
@@ -1137,6 +1280,7 @@ export function getConfig(): LightClawConfig {
     },
     tools: {
       webSearch: {
+        ...resolveToolModuleConfig(fileConfig.tools?.webSearch, 'tools.webSearch', modelNames),
         braveApiKey:
           process.env.BRAVE_SEARCH_API_KEY ??
           fileConfig.tools?.webSearch?.braveApiKey,
@@ -1151,6 +1295,8 @@ export function getConfig(): LightClawConfig {
                 .map(entry => entry.trim())
             : [],
       },
+      imageRead: resolveToolModuleConfig(fileConfig.tools?.imageRead, 'tools.imageRead', modelNames),
+      compact: resolveToolModuleConfig(fileConfig.tools?.compact, 'tools.compact', modelNames),
       deferredLoading:
         parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??
         parseDeferredLoadingMode(fileConfig.tools?.deferredLoading) ??

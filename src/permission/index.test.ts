@@ -17,6 +17,7 @@ beforeEach(() => {
   writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
     endpoints: { a: { apiKey: 'sk-a' } },
     models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    defaultModel: 'm',
   }))
 })
 

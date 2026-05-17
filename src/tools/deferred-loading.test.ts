@@ -12,7 +12,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Map(),
-      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, deferredLoading: 'off', deferredLoadingThreshold: 1, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
+      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, imageRead: {}, compact: {}, deferredLoading: 'off', deferredLoadingThreshold: 1, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
     })
     assert.deepEqual(result.tools.map(tool => tool.name), ['Read', 'mcp__github__read_file'])
     assert.equal(result.deferredEnabled, false)
@@ -23,7 +23,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Map(),
-      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, deferredLoading: 'auto', deferredLoadingThreshold: 2, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
+      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, imageRead: {}, compact: {}, deferredLoading: 'auto', deferredLoadingThreshold: 2, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
     })
     assert.equal(result.deferredEnabled, true)
     assert.deepEqual(result.tools.map(tool => tool.name), ['Read', toolSearchTool.name])
@@ -35,7 +35,7 @@ describe('deferred loading policy', () => {
     const result = buildTurnToolCatalog({
       allTools: tools,
       discoveredTools: new Map([['mcp__github__read_file', 1]]),
-      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, deferredLoading: 'always', deferredLoadingThreshold: 30, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
+      config: fakeConfig({ webSearch: {}, webFetch: { preapprovedDomains: [] }, imageRead: {}, compact: {}, deferredLoading: 'always', deferredLoadingThreshold: 30, discoveredToolsMaxSize: 30, discoveredToolsTtlTurns: 20 }),
     })
     assert.deepEqual(result.tools.map(tool => tool.name), [
       'Read',

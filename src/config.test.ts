@@ -9,16 +9,36 @@ import { setLightclawHomeOverride } from './paths.js'
 
 let tmpHome: string
 
+function withDefaultModelForTest(body: object): object {
+  if (
+    'defaultModel' in body ||
+    'model' in body ||
+    !('models' in body) ||
+    body.models === null ||
+    typeof body.models !== 'object' ||
+    Array.isArray(body.models)
+  ) {
+    return body
+  }
+  const [firstModel] = Object.keys(body.models)
+  return firstModel === undefined ? body : { ...body, defaultModel: firstModel }
+}
+
 function writeConfig(body: object): void {
+  writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify(withDefaultModelForTest(body)))
+}
+
+function writeConfigRaw(body: object): void {
   writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify(body))
 }
 
 const ENV_KEYS = [
-  'LIGHTCLAW_MODEL',
+  'LIGHTCLAW_DEFAULT_MODEL',
   'LIGHTCLAW_ROUTING_MAIN',
   'LIGHTCLAW_ROUTING_COMPACT',
   'LIGHTCLAW_ROUTING_EXTRACT',
   'LIGHTCLAW_ROUTING_WEBSEARCH',
+  'LIGHTCLAW_ROUTING_WEBFETCH',
   'LIGHTCLAW_DEFERRED_LOADING',
   'LIGHTCLAW_DEFERRED_LOADING_THRESHOLD',
 ] as const
@@ -67,6 +87,7 @@ describe('config: endpoints + models registry', () => {
       defaultModel: 'opus',
     })
     const cfg = getConfig()
+    assert.equal(cfg.defaultModel, 'opus')
     assert.equal(cfg.model, 'opus')
     assert.equal(cfg.routing.main, 'opus')
     assert.deepEqual(cfg.endpoints.a, { apiKey: 'sk-a', baseUrl: 'http://a/' })
@@ -108,19 +129,31 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /reasoningEffort must be one of/)
   })
 
-  it('falls back to the first model name when defaultModel is omitted', () => {
-    writeConfig({
+  it('falls back to legacy config.model when defaultModel is omitted', () => {
+    writeConfigRaw({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
         primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
         secondary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
       },
+      model: 'secondary',
     })
     const cfg = getConfig()
-    assert.equal(cfg.model, 'primary')
+    assert.equal(cfg.defaultModel, 'secondary')
+    assert.equal(cfg.model, 'secondary')
   })
 
-  it('LIGHTCLAW_MODEL overrides defaultModel', () => {
+  it('throws when neither defaultModel nor legacy config.model is configured', () => {
+    writeConfigRaw({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    assert.throws(() => getConfig(), /`defaultModel` is required/)
+  })
+
+  it('LIGHTCLAW_DEFAULT_MODEL overrides file defaultModel', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -129,8 +162,9 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'opus',
     })
-    process.env.LIGHTCLAW_MODEL = 'sonnet'
+    process.env.LIGHTCLAW_DEFAULT_MODEL = 'sonnet'
     const cfg = getConfig()
+    assert.equal(cfg.defaultModel, 'sonnet')
     assert.equal(cfg.model, 'sonnet')
   })
 
@@ -142,7 +176,7 @@ describe('config: endpoints + models registry', () => {
       },
       defaultModel: 'sonnet',
     })
-    assert.throws(() => getConfig(), /Selected model "sonnet" is not in models/)
+    assert.throws(() => getConfig(), /defaultModel = "sonnet" is not in models/)
   })
 
   it('rejects models referencing an unknown endpoint', () => {
@@ -193,18 +227,134 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /endpoints\["a"\]\.apiKey is required/)
   })
 
-  it('rejects routing targets not present in models', () => {
+  it('silently ignores legacy file routing targets', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
+      defaultModel: 'opus',
       routing: { main: 'opus', extract: 'phantom' },
     })
-    assert.throws(
-      () => getConfig(),
-      /routing\.extract = "phantom" is not in models/,
-    )
+    const cfg = getConfig()
+    assert.equal(cfg.routing.main, 'opus')
+    assert.equal(cfg.routing.extract, undefined)
+  })
+
+  it('parses worker and internal role config', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+        haiku: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
+      },
+      defaultModel: 'sonnet',
+      roles: {
+        web: {
+          model: 'haiku',
+          maxTurns: 30,
+          budget: { maxTokens: 1000, maxCost: 0.5 },
+        },
+        internal: {
+          model: 'haiku',
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.roles?.web, {
+      model: 'haiku',
+      maxTurns: 30,
+      budget: { maxTokens: 1000, maxCost: 0.5 },
+    })
+    assert.deepEqual(cfg.roles?.internal, { model: 'haiku' })
+  })
+
+  it('rejects roles.main because main is bound to defaultModel', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'sonnet',
+      roles: {
+        main: { model: 'sonnet' },
+      },
+    })
+    assert.throws(() => getConfig(), /main is bound to `defaultModel`/)
+  })
+
+  it('rejects per-internal-role config in favor of roles.internal', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'sonnet',
+      roles: {
+        extract_memories: { model: 'sonnet' },
+      },
+    })
+    assert.throws(() => getConfig(), /kind='internal'.*roles\.internal/)
+  })
+
+  it('rejects invalid role model and maxTurns values', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'sonnet',
+      roles: {
+        web: { model: 'missing' },
+      },
+    })
+    assert.throws(() => getConfig(), /roles\.web\.model = "missing" is not in models/)
+
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'sonnet',
+      roles: {
+        web: { maxTurns: -1 },
+      },
+    })
+    assert.throws(() => getConfig(), /roles\.web\.maxTurns must be a positive integer/)
+  })
+
+  it('parses tool module model pins', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+        haiku: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
+      },
+      defaultModel: 'sonnet',
+      tools: {
+        webSearch: { braveApiKey: 'brave', model: 'haiku' },
+        imageRead: { model: 'haiku' },
+        compact: { model: 'haiku' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.tools.webSearch, { braveApiKey: 'brave', model: 'haiku' })
+    assert.deepEqual(cfg.tools.imageRead, { model: 'haiku' })
+    assert.deepEqual(cfg.tools.compact, { model: 'haiku' })
+  })
+
+  it('rejects tool module models not present in models', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'sonnet',
+      tools: {
+        imageRead: { model: 'missing' },
+      },
+    })
+    assert.throws(() => getConfig(), /tools\.imageRead\.model = "missing" is not in models/)
   })
 
   it('parses an OAuth endpoint without apiKey', () => {
@@ -313,7 +463,7 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.equal(cfg.routing.main, 'sonnet')
-    assert.equal(cfg.routing.extract, 'gpt-5-codex')
+    assert.equal(cfg.routing.extract, undefined)
     assert.deepEqual(cfg.endpoints.newapi, {
       apiKey: 'sk-a',
       baseUrl: 'http://gw/',
@@ -341,8 +491,9 @@ describe('config: endpoints + models registry', () => {
         },
       },
       defaultModel: 'sonnet',
-      routing: { main: 'sonnet', extract: 'gpt-mini' },
+      routing: { main: 'sonnet', extract: 'ignored-file-value' },
     })
+    process.env.LIGHTCLAW_ROUTING_EXTRACT = 'gpt-mini'
     const cfg = getConfig()
     assert.equal(cfg.routing.main, 'sonnet')
     assert.equal(cfg.routing.extract, 'gpt-mini')

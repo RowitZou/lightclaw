@@ -46,6 +46,17 @@ export type ConfigFileShape = {
   /** Display name picked at startup when no env / per-identity preference
    *  overrides. Must exist in `models`. */
   defaultModel?: string
+  /** Legacy pre-Phase 5 field. Commit 1 reads it as a one-time fallback;
+   *  later cleanup removes the fallback after callers have migrated. */
+  model?: string
+  roles?: Record<string, {
+    model?: unknown
+    maxTurns?: unknown
+    budget?: {
+      maxTokens?: unknown
+      maxCost?: unknown
+    }
+  }>
   routing?: {
     main?: string
     compact?: string
@@ -125,9 +136,16 @@ export type ConfigFileShape = {
   tools?: {
     webSearch?: {
       braveApiKey?: string
+      model?: string
     }
     webFetch?: {
       preapprovedDomains?: string[]
+    }
+    imageRead?: {
+      model?: string
+    }
+    compact?: {
+      model?: string
     }
     deferredLoading?: string
     deferredLoadingThreshold?: number

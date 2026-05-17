@@ -30,6 +30,7 @@ beforeEach(() => {
     JSON.stringify({
       endpoints: { a: { apiKey: 'sk-x' } },
       models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      defaultModel: 'm',
     }),
   )
   resetCapabilityCache()
