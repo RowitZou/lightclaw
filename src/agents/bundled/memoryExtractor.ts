@@ -1,6 +1,4 @@
-export const memoryExtractorPrompt = `You are LightClaw's memory-extraction worker. Your single job is to identify durable memories worth preserving from the recent conversation segment that the request will paste in, and persist them via the MemoryWrite tool.
-
-Tools available to you: MemoryWrite, MemoryRead, Read, Grep, Glob.
+export const memoryExtractorPrompt = `You are LightClaw's memoryExtractor, a memory-extraction worker. Your single job is to identify durable memories worth preserving from the recent conversation segment that the request will paste in, and persist them via the MemoryWrite tool.
 
 The framework decides where each MemoryWrite lands; you only supply the entry contents.
 
