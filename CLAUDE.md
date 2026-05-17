@@ -253,6 +253,15 @@
 - High-risk permission failures are the one user-direct exception. If a background fire hits permission denials whose suggested rules include high-risk patterns, `BackgroundTaskCardCoordinator` still sends the permission-failure card with `[Approve & Retry]`; the main agent cannot approve user-scoped high-risk capability on the user's behalf.
 - `TodoWrite` emits a transparent `progress` signal when a todo flips to `completed`, rate-limited per session. The tool description is unchanged; progress emission is framework behavior, not prompt-visible motivation.
 
+# LightClaw Model Resolution Notes (Phase 5, 2026-05-17)
+
+- Phase 5 retired `config.routing` and `config.model`. `config.defaultModel` is now the required top-level global default; `/model X` writes only this field, and the main role binds directly to it. `roles.main` is rejected at config load time.
+- Worker role pins live under `config.roles.<agentType>`, with optional `{ model, maxTurns, budget }`. Missing values fall back to the bundled role defaults and then `defaultModel`.
+- Internal roles share `config.roles.internal`. Per-internal-role keys such as `roles.extract_memories` are rejected because `extract_memories`, `auto_dream`, and future `kind:'internal'` roles should move as one internal lane unless the config model is deliberately widened later.
+- Tool/framework sub-LLM pins live under `config.tools.<module>.model`: `webSearch` covers WebSearch and WebFetch synthesis; `imageRead` covers multimodal describe / describeImage; `compact` covers session compaction, memory recall, and session-memory updates.
+- Model selection must go through `src/model-resolution.ts`: `resolveRoleModel(role, config)`, `resolveToolModuleModel('compact'|'imageRead'|'webSearch', config)`, `resolveRoleMaxTurns(role, config)`, and `resolveRoleBudget(role, config)`.
+- Do not reintroduce `modelFor`, `ModelTask`, `RoutingConfig`, `Role.model`, `config.model`, or `config.routing`. The only env override for model selection is `LIGHTCLAW_DEFAULT_MODEL`.
+
 # LightClaw BackgroundTask Notes
 
 - BackgroundTask vs AgentTool is now implemented through Dispatch compatibility shims: AgentTool is immediate and returns a tool_result to the current turn; BackgroundTask is scheduled future work that returns immediately and runs later in an isolated `bg-<canonical>-<task>-<fire>` session. The LLM-visible BackgroundTask description remains byte-identical for prompt-cache continuity, but new code should use Dispatch as the shared primitive.

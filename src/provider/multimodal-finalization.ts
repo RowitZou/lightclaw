@@ -39,8 +39,8 @@ export type FinalizationContext = {
   upstreamModel: string
   config: LightClawConfig
   /** describeImage adapter — closure over (provider, endpoint, upstreamModel)
-   *  for the SUB-LLM endpoint (typically `routing.extract`), which may be
-   *  different from the main endpoint. Caller resolves this via api.ts
+   *  for the imageRead module endpoint, which may be different from the main
+   *  endpoint. Caller resolves this via api.ts
    *  `resolveDescribeRoute` and threads it in so multimodal-finalization
    *  doesn't reach back into config / provider resolution. */
   describeAdapter: (params: {

@@ -49,8 +49,8 @@ export async function runAuthCommand(
  * still see the pre-import model list.
  *
  * We mutate `endpoints` and `models` in place to preserve object identity
- * (other modules cache references to ctx.config). routing / defaultModel
- * are intentionally left alone — admin owns those.
+ * (other modules cache references to ctx.config). defaultModel is
+ * intentionally left alone — admin owns it.
  */
 function refreshConfigAfterDiskWrite(liveConfig: LightClawConfig | undefined): void {
   if (!liveConfig) return

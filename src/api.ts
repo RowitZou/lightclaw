@@ -50,7 +50,7 @@ export async function* streamChat(
   // Resolve it once here to (a) pick the right provider instance, and
   // (b) substitute the real upstream id for the wire request. Logging
   // continues to record the display name on the log record so traces stay
-  // aligned with what the user sees in `/model` and routing config.
+  // aligned with what the user sees in `/model` and module config.
   const { provider, entry } = getProviderFor(config, rest.model)
   const baseUrl = config.endpoints[entry.endpoint]?.baseUrl
 

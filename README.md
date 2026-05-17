@@ -80,8 +80,8 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
   },
 
   // --- Models: display name -> { endpoint alias, schema, upstreamModel } ---
-  // The display name is what shows up in `/model` and routing config; it can
-  // be anything memorable. `upstreamModel` is the real id sent on the wire.
+  // The display name is what shows up in `/model`; it can be anything
+  // memorable. `upstreamModel` is the real id sent on the wire.
   "models": {
     "claude-sonnet-4-6": {
       "endpoint": "anthropic-direct",
@@ -100,18 +100,15 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
     }
   },
 
-  // The display name picked at startup; `/model <name>` switches at runtime.
-  // Falls back to the first registered model if omitted.
+  // Required global default. Main binds directly to this value, and
+  // `/model <name>` updates it at runtime.
   "defaultModel": "claude-sonnet-4-6",
 
-  // Optional per-role routing — each value is a display name from `models`.
-  // Missing values fall back to defaultModel. Mixing schemas across tasks
-  // (heterogeneous routing) is supported — e.g. main on Claude, extract on GPT.
-  "routing": {
-    "main":      "claude-sonnet-4-6",
-    "compact":   "claude-haiku-4-5",
-    "extract":   "gpt-5-mini",
-    "webSearch": "claude-haiku-4-5"
+  // Optional per-role model pins. Main cannot be pinned here; use
+  // defaultModel. Internal roles share the special `internal` key.
+  "roles": {
+    "web": { "model": "claude-haiku-4-5", "maxTurns": 12 },
+    "internal": { "model": "gpt-5-mini" }
   },
 
   // --- User-facing language (slash output, feishu cards, banners, error notices) ---
@@ -122,8 +119,11 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
   // --- Tool-specific config ---
   "tools": {
     "webSearch": {
-      "braveApiKey": "<your-brave-search-api-key>"   // optional; falls back to DDG HTML
-    }
+      "braveApiKey": "<your-brave-search-api-key>",  // optional; falls back to DDG HTML
+      "model": "claude-haiku-4-5"                    // WebSearch + WebFetch sub-LLM
+    },
+    "imageRead": { "model": "gpt-5-mini" },          // multimodal describe sub-LLM
+    "compact": { "model": "claude-haiku-4-5" }       // compact + memory sub-LLM
   },
 
   // --- Per-call API logging (admin debug / training-data trail) ---
@@ -199,7 +199,7 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
 }
 ```
 
-All keys outside of `endpoints` and `models` are optional — drop the sections you don't use. `endpoints` + `models` are required (LightClaw refuses to start with no models registered). Environment variables (`LIGHTCLAW_MODEL`, `LIGHTCLAW_RUNTIME_BACKEND`, …) override the file. The full env-var reference is at [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md).
+All keys outside of `endpoints`, `models`, and `defaultModel` are optional — drop the sections you don't use. `endpoints` + `models` + `defaultModel` are required (LightClaw refuses to start with no models registered or no default selected). Environment variables (`LIGHTCLAW_DEFAULT_MODEL`, `LIGHTCLAW_RUNTIME_BACKEND`, …) override the file. The full env-var reference is at [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md).
 
 Sibling files in the same directory:
 
@@ -229,7 +229,7 @@ session — reach the agent through Feishu.
 
 Removed CLI flags are now config/env driven:
 
-- Models: `~/.lightclaw/config.json` (`endpoints` + `models` registry, `defaultModel`); `LIGHTCLAW_MODEL` overrides defaultModel by display name
+- Models: `~/.lightclaw/config.json` (`endpoints` + `models` registry, `defaultModel`, optional `roles` / `tools.<module>.model`); `LIGHTCLAW_DEFAULT_MODEL` overrides defaultModel by display name
 - Feature toggles: `LIGHTCLAW_NO_MEMORY=1`, `LIGHTCLAW_NO_MCP=1`, `LIGHTCLAW_NO_HOOKS=1`
 - Permission rules: edit `~/.lightclaw/permissions.json`
 - Identity management: `/user ...` slash command
@@ -416,8 +416,7 @@ Selected environment variables (override the matching `config.json` keys):
 |---|---|
 | `LIGHTCLAW_HOME` | Root of all LightClaw state (default `~/.lightclaw`). Move it to shared storage for cluster deployments. |
 | `LIGHTCLAW_SESSIONS_DIR` / `LIGHTCLAW_MEMORY_DIR` / `LIGHTCLAW_WORKSPACE_ROOT` | Override individual subdirectories independently of `LIGHTCLAW_HOME`. |
-| `LIGHTCLAW_MODEL` | Override `defaultModel` (must be a display name registered in `models`) |
-| `LIGHTCLAW_ROUTING_MAIN` / `_COMPACT` / `_EXTRACT` / `_WEBSEARCH` | Per-task routing override (each must be a display name in `models`) |
+| `LIGHTCLAW_DEFAULT_MODEL` | Override `defaultModel` (must be a display name registered in `models`) |
 | `BRAVE_SEARCH_API_KEY` | WebSearch Brave key (overrides `tools.webSearch.braveApiKey`); falls back to DDG HTML when unset. |
 | `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | Disable a subsystem entirely |
 | `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | Fine-grained memory toggles and thresholds (see [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)) |
