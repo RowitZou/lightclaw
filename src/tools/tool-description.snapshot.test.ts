@@ -41,12 +41,12 @@ const EXPECTED = {
   ListBackgroundTasks: 'f804d5264e2f9673e1ea1b1813bf30ba13c071fe006e550eb722b6b3c665bbe6',
   CancelBackgroundTask: 'fedc336c6b7b755df1b7d397836425b779bac30ce3a24834ee83cc8178e791e2',
   UpdateBackgroundTask: 'c51dc968e1a89d894a3b272485455c4826eebf48c4819aac21feecf19c80e2b5',
-  Dispatch: 'd5449f012bda19d51d4d6fba8bd1ae2fa3d1cdbe3d7656a2f9dbfd3adb2dcc54',
-  ListDispatches: '442465ddaa35dd08c00ad063412dbc2383e19fde65f9f3d58286095c9da9210c',
-  CancelDispatch: '58a940232cdd12fab82126a20ddc2329b4dfb03254cfff87052402edf12aa5d9',
-  UpdateDispatch: '31a41fd131dcbbd41cb11f399ebed77a42bb9b357721f1bea8e33ded6a3c2a4f',
-  Notify: 'f3baeefeedb248bebd7c235e69be52da6c2485d80373cdcc0498ffb51fac7dca',
-  BackgroundTaskResultBlock: '8ce383297121ca94a8139e6b9998ab1341309da38845cb3d7ce31369971ea99b',
+  Dispatch: '503c5723ec4b831d21059a7315c3d7cbe60980d910fd0b4b5f6ef9fcac857291',
+  ListDispatches: 'da49c1dd13f59696253688581ff42eed5469adbf9cf6d82b18f6a8eb0e9bba58',
+  CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
+  UpdateDispatch: 'a823f127ab8b773f1cf94217bdb80b5f75037e7ad83462881f6cf996b405fa3b',
+  Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
+  BackgroundTaskResultBlock: '5e7c00f274656c36eab17ab59b6dc61f7b945b5b86386ff659e2dbed9ae99a18',
 }
 
 function hash(value: string): string {

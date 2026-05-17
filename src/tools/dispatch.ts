@@ -26,31 +26,31 @@ import { getSignalRouter } from '../signal-bus/router.js'
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role. You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
 Available roles:
-- general: tool-rich general agent - use for any task that needs broad tool access (read, search, web, bash, edit, memory, etc.). Most non-specialized work fits here.
-- explore: fast read-only codebase exploration - find files, grep symbols, understand structure. Read tools only.
+- general: tool-rich general agent — use for any task that needs broad tool access (read, search, web, bash, edit, memory, etc.). Most non-specialized work fits here.
+- explore: fast read-only codebase exploration — find files, grep symbols, understand structure. Read tools only.
 - web: web retrieval using WebFetch + WebSearch. Digs as deep as needed to fully answer one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths). For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).
 
-## schedule x mode - the two-step decision
+## schedule × mode — the two-step decision
 
-Step 1: WHEN do I need this work to happen? -> schedule
-Step 2: Given the WHEN, do I block this turn waiting, or fire-and-forget? -> mode
+Step 1: WHEN do I need this work to happen? → schedule
+Step 2: Given the WHEN, do I block this turn waiting, or fire-and-forget? → mode
 
 schedule (default 'now'):
-- 'now' - fire immediately.
-- { kind: 'after', afterMinutes: <number> } - fire ONCE after N minutes from now. Use for short tests / reminders like "1 minute test" or "remind me in 5 minutes". This is NOT recurring. afterMinutes accepts fractional values (0.5 = 30 seconds).
-- { kind: 'oneshot', at: <ISO8601 absolute time> } - fire once at a specific time.
-- { kind: 'recurring', daysOfWeek: [0..6], hour, minute } - weekly schedule.
-- { kind: 'interval', everyMinutes: <integer >= 1>, anchorAt? } - repeats every N minutes.
+- 'now' — fire immediately.
+- { kind: 'after', afterMinutes: <number> } — fire ONCE after N minutes from now. Use for short tests / reminders like "1 minute test" or "remind me in 5 minutes". This is NOT recurring. afterMinutes accepts fractional values (0.5 = 30 seconds).
+- { kind: 'oneshot', at: <ISO8601 absolute time> } — fire once at a specific time.
+- { kind: 'recurring', daysOfWeek: [0..6], hour, minute } — weekly schedule.
+- { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.
 
 mode (required, pick one):
-- 'blocking' - your current turn waits for the dispatched role to finish; you get its final-text summary as the tool result and can use it in your reply. ONLY valid when schedule='now'.
-- 'background' - Dispatch returns immediately with a dispatch id; the actual work happens later (or now, but asynchronously). When the work finishes, the result lands back in your context as a <background-task-result> block (drained at the next tool boundary if you're in-flight; delivered via a fresh continuation turn if you're idle) - you can then decide whether and how to surface it to the user. REQUIRED for any schedule other than 'now', and also valid for schedule='now' when you want to fire-and-forget.
+- 'blocking' — your current turn waits for the dispatched role to finish; you get its final-text summary as the tool result and can use it in your reply. ONLY valid when schedule='now'.
+- 'background' — Dispatch returns immediately with a dispatch id; the actual work happens later (or now, but asynchronously). When the work finishes, the result lands back in your context as a \`<background-task-result>\` block (drained at the next tool boundary if you're in-flight; delivered via a fresh continuation turn if you're idle) — you can then decide whether and how to surface it to the user. REQUIRED for any schedule other than 'now', and also valid for schedule='now' when you want to fire-and-forget.
 
 Mode choice when schedule='now':
-- blocking is the common case - you need the answer in this reply (parallel research before answering, code exploration before suggesting an edit, etc.).
-- background is rarer but useful: fire web research now, but keep writing your reply without waiting; the result can come back later as a background-task-result for you to process. Use when the dispatched work is genuinely independent of the current reply.
+- blocking is the common case — you need the answer in this reply (parallel research before answering, code exploration before suggesting an edit, etc.).
+- background is rarer but useful: "fire web research now, but I want to keep writing my reply without waiting; the result can come back later as a background-task-result for me to process." Use when the dispatched work is genuinely independent of the current reply.
 
-Mode choice when schedule!='now': mode MUST be 'background'. A blocking dispatch cannot wait for tomorrow's fire to finish.
+Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatch cannot wait for tomorrow's fire to finish.
 
 ## When NOT to use Dispatch
 
@@ -61,7 +61,7 @@ Mode choice when schedule!='now': mode MUST be 'background'. A blocking dispatch
 
 ## Parallelism (blocking mode only)
 
-- Launch independent dispatches as multiple Dispatch tool_use blocks in a SINGLE assistant message - they run concurrently.
+- Launch independent dispatches as multiple Dispatch tool_use blocks in a SINGLE assistant message — they run concurrently.
 - Only parallelize tasks that touch disjoint files / branches / resources. The runtime does not isolate fork file systems; concurrent writes to the same path will race.
 
 ## Writing the prompt
@@ -71,12 +71,12 @@ The dispatched role starts with a fresh context. It has NOT seen this conversati
 - Describe what you've already learned or ruled out.
 - Give enough context that the role can make judgment calls, not just follow a narrow instruction.
 - If you need a short response, say so ("report in under 200 words").
-- Lookups: hand over the exact pattern / path. Investigations: hand over the question - prescribed steps become dead weight when the premise is wrong.
+- Lookups: hand over the exact pattern / path. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
 - NEVER write "based on your findings, fix the bug" or "based on the research, implement it". That pushes synthesis onto the dispatched role instead of you. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
 
-For schedule!='now' (background) dispatches, additional rules:
+For schedule≠'now' (background) dispatches, additional rules:
 - The prompt is fed to a fresh agent at FIRE TIME, with no chat history. Write it as an imperative to be executed AT the scheduled fire moment.
-- Do NOT include timing in the prompt - the schedule field already controls when. Phrases like "when the time comes", "after N minutes", "到时间后", "一分钟后" leak scheduling tense into the executor and make it ask the user for clarification instead of doing the work.
+- Do NOT include timing in the prompt — the schedule field already controls when. Phrases like "when the time comes", "after N minutes", "到时间后", "一分钟后" leak scheduling tense into the executor and make it ask the user for clarification instead of doing the work.
   Good: "Get the current Asia/Shanghai time and send the result to me as '现在是 YYYY-MM-DD HH:mm:ss。'"
   Bad:  "After 1 minute, get the current Beijing time and send it to me." / "到时间后获取北京时间发给我。"
 
@@ -89,10 +89,10 @@ Grants this dispatch permission to use specific tools without user approval, usi
 
 ## resumeFrom (optional)
 
-resumeFrom: 'last' | <dispatchId> - continue a previous dispatch instead of starting a fresh fork. The previous dispatch's transcript and worldview are restored so the new fire picks up exactly where it left off.
+resumeFrom: 'last' | <dispatchId> — continue a previous dispatch instead of starting a fresh fork. The previous dispatch's transcript and worldview are restored so the new fire picks up exactly where it left off.
 - Use when multi-hop work spans dispatches: round 1 did initial research, round 2 needs to build on round 1's findings without re-fetching.
 - 'last' = resume the most recent dispatch of the same role for the same user. Pass a specific dispatchId (from ListDispatches) when you need a particular one.
-- Do NOT use resumeFrom when the prior dispatch is irrelevant - fresh forks have cleaner cache behavior.
+- Do NOT use resumeFrom when the prior dispatch is irrelevant — fresh forks have cleaner cache behavior.
 
 ## Disambiguating user-intended time
 
@@ -102,17 +102,17 @@ User time expressions like "10:00" are often ambiguous between AM and PM; relati
 
 Dispatched roles return a single final-text summary. Tool results from inside them are NOT visible to you. If the role reports writing code, check the actual changes before reporting the task as done.`
 
-const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed). Blocking dispatches are not included - those return synchronously and you already have their result.
+const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed). Blocking dispatches are not included — those return synchronously and you already have their result.
 
 Use to monitor what's running before deciding to dispatch new work that might overlap, before CancelDispatch / UpdateDispatch when you know what to target, or when answering a user question that requires reasoning over current delegated state.
 
-Returns each dispatch's id, label, role, schedule shape, next run time, current enabled state, and recent fire history (if include_history: true). The history lets you trace "did this fire? when? with what outcome?" for debugging dispatched work.`
+Returns each dispatch's id, label, role, schedule shape, next run time, current enabled state, and recent fire history (if \`include_history: true\`). The history lets you trace "did this fire? when? with what outcome?" for debugging dispatched work.`
 
 const CANCEL_DISPATCH_DESCRIPTION = `Cancel a scheduled background dispatch by id. An already in-flight fire is allowed to finish; only future runs are stopped.
 
-Use when you decide a previously-dispatched run is no longer needed - the user explicitly says "stop that one", the plan has changed and the work is moot, or you're reassessing scope and want to free the slot. Run ListDispatches first if you don't have the exact id.
+Use when you decide a previously-dispatched run is no longer needed — the user explicitly says "stop that one", the plan has changed and the work is moot, or you're reassessing scope and want to free the slot. Run ListDispatches first if you don't have the exact id.
 
-To temporarily disable rather than delete, use UpdateDispatch with enabled: false (preserves history; can be re-enabled later).
+To temporarily disable rather than delete, use UpdateDispatch with \`enabled: false\` (preserves history; can be re-enabled later).
 
 Idempotent: cancelling a dispatch that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`
 
@@ -120,11 +120,11 @@ const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dis
 
 Use when you adjust delegated work as the situation evolves: refine the prompt as you learn more, change schedule to fit the user's new ask, pause with enabled=false, or extend allowed_tools after a permission denial surfaces in a background-task-result.
 
-Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. The role field is NOT mutable - a different role means a different task; cancel and re-dispatch instead.
+Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead.
 
-allowed_tools is a FULL REPLACEMENT, not a diff: passing ["Bash(npm:*)"] replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.
+\`allowed_tools\` is a FULL REPLACEMENT, not a diff: passing \`["Bash(npm:*)"]\` replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.
 
-If the dispatch is a oneshot that already fired (failed and waiting for retry) and you pass allowed_tools, an immediate retry is triggered automatically.`
+If the dispatch is a oneshot that already fired (failed and waiting for retry) and you pass \`allowed_tools\`, an immediate retry is triggered automatically.`
 
 const allowedToolsSchema = z.array(
   z.string().min(1).refine(isValidPermissionRulePattern, {
