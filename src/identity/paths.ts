@@ -1,7 +1,7 @@
 import path from 'node:path'
 
 import { loadConfigFile } from '../config-file.js'
-import type { RlaunchRuntimeSettings } from '../config.js'
+import { pickWithLegacy, type RlaunchRuntimeSettings } from '../config.js'
 import { expandHomePath, lightclawHome } from '../paths.js'
 
 export function identityRoot(): string {
@@ -42,9 +42,20 @@ export function identityPermissionsPath(canonicalUser: string): string {
 
 export function workspaceRoot(): string {
   const fileConfig = loadConfigFile()
+  // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new
+  // `paths.workspace` > legacy top-level `workspaceRoot` > default. Pre-fix
+  // this only read the legacy key, so 0.2.x configs that migrated to the
+  // `paths.*` namespace silently fell back to `<home>/workspaces` and the
+  // rlaunch gpfs guard threw at first runtime acquire.
+  const fromFile = pickWithLegacy(
+    'workspaceRoot',
+    'paths.workspace',
+    fileConfig.workspaceRoot,
+    fileConfig.paths?.workspace,
+  )
   const configured =
     process.env.LIGHTCLAW_WORKSPACE_ROOT ??
-    fileConfig.workspaceRoot ??
+    fromFile ??
     path.join(lightclawHome(), 'workspaces')
   return path.resolve(expandHomePath(configured))
 }

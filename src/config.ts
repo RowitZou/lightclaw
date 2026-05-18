@@ -501,7 +501,7 @@ function warnDeadConfigField(field: string, message: string): void {
   process.stderr.write(`config: \`${field}\` ${message}\n`)
 }
 
-function pickWithLegacy<T>(
+export function pickWithLegacy<T>(
   legacyField: string,
   newField: string,
   legacyValue: T | undefined,
