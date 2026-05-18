@@ -43,7 +43,7 @@ export function buildMemoryNudgeBlock(): string {
     '  - a non-obvious project fact, decision, or convention — and the reasoning behind it',
     '  - a stable pointer to an external system (dashboard, ticket, channel)',
     '',
-    'If yes: load the memory tool with ToolSearch({query: "select:MemoryWrite"}), then call MemoryWrite to save it now — while you still have the full context and, especially, the "why". Capturing the reasoning is the whole point of saving it here: the post-session auto-extraction sees the "what" but loses the "why".',
+    'If yes: load the memory tool with ToolSearch({query: "select:MemoryWrite"}), then call MemoryWrite to save it now — while you still have the full context and, especially, the "why". Capturing the reasoning is the whole point of saving it here: what happened is in the transcript already; why it happened lives only in your working context.',
     '',
     'If nothing meaningfully new has come up since you last saved, or nothing is worth saving: ignore this and continue. Do not save trivia, and do not restate what is already in memory.',
     '</memory-nudge>',
