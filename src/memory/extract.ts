@@ -158,24 +158,13 @@ export function buildExtractPrompt(
     .slice(0, 100_000)
 
   return [
-    'Extract durable memories from the following conversation segment by calling the MemoryWrite tool.',
+    'Extract durable memories from the conversation segment below by calling the MemoryWrite tool. Follow the workflow and conventions from your system prompt.',
     '',
     '## Existing memories (do not duplicate)',
     existingSummary,
     '',
     '## New conversation to analyze',
     conversationText || '[empty]',
-    '',
-    '## Instructions',
-    '- Call MemoryWrite 0 to 3 times to save durable memories.',
-    '- Each MemoryWrite call must include filename, type, description, and content.',
-    '- Allowed types: user, feedback, project, reference.',
-    '- Do not save code snippets, file structure details, git history, or temporary task context.',
-    '- Do save user preferences, project conventions, technical decisions, feedback, corrections, and ongoing work status.',
-    '- For feedback or project entries, include Why: and How to apply: sections in the content.',
-    '- Convert relative dates to absolute dates.',
-    '- Do not output JSON in text. Use the MemoryWrite tool for saves.',
-    '- If nothing is worth saving, reply with "no new memories".',
   ].join('\n')
 }
 

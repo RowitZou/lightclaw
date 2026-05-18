@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
+import { memoryExtractorPrompt } from '../agents/bundled/memoryExtractor.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { persistForkTranscript } from '../agents/fork-transcript.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
@@ -84,14 +85,22 @@ test('messageToText renders assistant text and tool_use', () => {
   assert.match(messageToText(message), /Tool use: Read/)
 })
 
-test('buildExtractPrompt instructs tool-use and not JSON output', () => {
+test('buildExtractPrompt invokes MemoryWrite and renders existing memories', () => {
   const prompt = buildExtractPrompt(
     [createUserMessage('remember my preference', null, 10)],
     [memory('project-style.md')],
   )
   assert.match(prompt, /MemoryWrite/)
-  assert.match(prompt, /Do not output JSON/)
   assert.match(prompt, /project-style\.md/)
+})
+
+test('memoryExtractor system prompt bans JSON-text output (regression guard)', () => {
+  // Output discipline lives in the role's system prompt, not in the
+  // per-call user message (which previously duplicated this rule). The
+  // historical bug was extraction agents emitting JSON in text instead
+  // of calling MemoryWrite; this assertion pins the discipline at its
+  // current source of truth.
+  assert.match(memoryExtractorPrompt, /Do NOT emit memory contents as JSON/)
 })
 
 test('hasMemoryWritesSince detects assistant MemoryWrite tool_use', () => {
