@@ -7,11 +7,13 @@ import type { Runtime } from './runtime/index.js'
 import type { UserToolResultBlock } from './types.js'
 import type { ChannelKey } from './channel-types.js'
 import type { ChainState } from './signal-bus/chain-state.js'
+import type { LightClawConfig } from './config.js'
 
 export type ToolCallContext = {
   cwd: string
   abortSignal: AbortSignal
   runtime: Runtime
+  config?: LightClawConfig
   mainTurnRouting?: {
     provider: Provider
     schema: Provider['name']

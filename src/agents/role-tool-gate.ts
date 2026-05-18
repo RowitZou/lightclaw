@@ -1,5 +1,6 @@
 import type { CanUseToolFn } from '../tool.js'
 import { resolveRolePolicy } from './role-presets.js'
+import type { ResolvedRolePolicy } from './role-presets.js'
 import type { Role } from './types.js'
 
 const BLOCKED_WORKER_TOOLS = new Set([
@@ -36,20 +37,37 @@ export function isToolVisibleToRole(role: Role, toolName: string): boolean {
   return checkRoleToolVisibility(role, toolName).allowed
 }
 
+export function isDispatchTargetReachable(
+  callerPolicy: ResolvedRolePolicy,
+  calleeAgentType: string,
+): boolean {
+  return callerPolicy.reachableRoles.includes('*') ||
+    callerPolicy.reachableRoles.includes(calleeAgentType)
+}
+
 function checkRoleToolVisibility(
   role: Role,
   toolName: string,
 ): { allowed: true } | { allowed: false; reason: string } {
   const policy = resolveRolePolicy(role)
 
-  if (policy.kind === 'worker' && BLOCKED_WORKER_TOOLS.has(toolName)) {
+  const tools = policy.tools as readonly string[]
+  const explicitlyReachableDispatch =
+    toolName === 'Dispatch' &&
+    tools.includes('Dispatch') &&
+    policy.reachableRoles.length > 0
+
+  if (
+    policy.kind === 'worker' &&
+    BLOCKED_WORKER_TOOLS.has(toolName) &&
+    !explicitlyReachableDispatch
+  ) {
     return {
       allowed: false,
       reason: `${toolName} is not available to subagents.`,
     }
   }
 
-  const tools = policy.tools as readonly string[]
   if (FEISHU_RESERVED_TOOLS.has(toolName) && !tools.includes(toolName)) {
     return {
       allowed: false,

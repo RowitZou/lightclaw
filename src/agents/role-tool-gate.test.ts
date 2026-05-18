@@ -3,7 +3,11 @@ import test from 'node:test'
 
 import type { Tool } from '../tool.js'
 import { BUNDLED_AGENTS } from './bundled/index.js'
-import { deriveCanUseTool, isToolVisibleToRole } from './role-tool-gate.js'
+import {
+  deriveCanUseTool,
+  isDispatchTargetReachable,
+  isToolVisibleToRole,
+} from './role-tool-gate.js'
 import type { Role } from './types.js'
 
 test('worker roles apply allowlist plus worker-only blocked tools', async () => {
@@ -58,6 +62,38 @@ test('worker roles deny tools outside explicit role.tools', async () => {
     behavior: 'deny',
     reason: "Write is not in this role's allowed tool set.",
   })
+})
+
+test('worker Dispatch visibility requires explicit tool and reachable roles', async () => {
+  const reviewer = role({
+    kind: 'worker',
+    tools: ['Read', 'Dispatch'],
+    reachableRoles: ['coder'],
+  })
+  const noTargets = role({
+    kind: 'worker',
+    tools: ['Read', 'Dispatch'],
+    reachableRoles: [],
+  })
+
+  assert.equal(isToolVisibleToRole(reviewer, 'Dispatch'), true)
+  assert.equal(isToolVisibleToRole(noTargets, 'Dispatch'), false)
+})
+
+test('isDispatchTargetReachable supports wildcard and explicit targets', () => {
+  const base = {
+    name: 'caller',
+    kind: 'worker' as const,
+    tools: ['Dispatch'],
+    skills: [],
+    mcpServers: [],
+    hooks: ['*'],
+    outputContract: 'report' as const,
+  }
+
+  assert.equal(isDispatchTargetReachable({ ...base, reachableRoles: ['*'] }, 'coder'), true)
+  assert.equal(isDispatchTargetReachable({ ...base, reachableRoles: ['coder'] }, 'coder'), true)
+  assert.equal(isDispatchTargetReachable({ ...base, reachableRoles: ['coder'] }, 'generalist'), false)
 })
 
 test('internal roles use only role.tools allowlist', async () => {

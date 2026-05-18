@@ -383,7 +383,7 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
   recurringAutoDisableThreshold: 3,
 }
 
-const DEFAULT_DISPATCH: DispatchConfig = {
+export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   maxChainDepth: 3,
   maxChainDepthCeiling: 5,
 }
@@ -1399,11 +1399,11 @@ function resolveDispatchConfig(
   const ceilingRaw = Number(fileConfig.maxChainDepthCeiling)
   const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw >= 1
     ? Math.floor(ceilingRaw)
-    : DEFAULT_DISPATCH.maxChainDepthCeiling
+    : DEFAULT_DISPATCH_CONFIG.maxChainDepthCeiling
   const depthRaw = Number(fileConfig.maxChainDepth)
   const declared = Number.isFinite(depthRaw) && depthRaw >= 1
     ? Math.floor(depthRaw)
-    : DEFAULT_DISPATCH.maxChainDepth
+    : DEFAULT_DISPATCH_CONFIG.maxChainDepth
   return {
     maxChainDepth: Math.min(declared, ceiling),
     maxChainDepthCeiling: ceiling,

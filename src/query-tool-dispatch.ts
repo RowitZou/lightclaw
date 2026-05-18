@@ -151,6 +151,7 @@ export async function dispatchToolCall(
       cwd: getCwd(),
       abortSignal: ctx.signal,
       runtime: getRuntime(),
+      config: ctx.config,
       mainTurnRouting: ctx.mainTurnRouting,
       canUseTool: ctx.canUseTool,
       chainState: ctx.chainState,

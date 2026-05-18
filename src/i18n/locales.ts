@@ -100,6 +100,10 @@ export const LOCALES = {
     'status.identitiesTitle': '所有身份：',
     'status.identitiesAdmin': ' *admin',
     'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
+    'chain.error.too_deep': 'Dispatch 链深度已达上限({depth}/{maxDepth}),无法再向下委派。请减少嵌套层级或将子任务直接归并到当前 hop。',
+    'chain.error.cycle': 'Dispatch 链中已有同名 role({role}),不允许同 role 重入(防止循环委派)。请改用其他 role 或在当前 hop 完成任务。',
+    'chain.error.monotonic_violation': 'Dispatch 子工具集 {child} 不是父工具集 {parent} 的子集,违反 privilege monotonic 约束。这通常是 framework bug,请报告 admin。',
+    'chain.error.role_not_reachable': '当前 role({caller})不能 dispatch {callee}。允许的 reachable roles:{reachable}。',
 
     // ---- /mode ----
     'mode.menuTitle': '权限模式：',
@@ -548,6 +552,10 @@ export const LOCALES = {
     'status.identitiesTitle': 'Identities:',
     'status.identitiesAdmin': ' *admin',
     'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
+    'chain.error.too_deep': 'Dispatch chain depth limit reached ({depth}/{maxDepth}). Cannot delegate further. Reduce nesting or merge the sub-task into the current hop.',
+    'chain.error.cycle': 'Role {role} already in dispatch chain — same-role re-entry is rejected (cycle prevention). Use a different role or finish the work in the current hop.',
+    'chain.error.monotonic_violation': 'Dispatched allowedTools {child} is not a subset of parent {parent}, violating privilege monotonic constraint. This is likely a framework bug — please report to admin.',
+    'chain.error.role_not_reachable': 'Role {caller} cannot dispatch {callee}. Reachable roles: {reachable}.',
 
     // ---- /mode ----
     'mode.menuTitle': 'Modes:',

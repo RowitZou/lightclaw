@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
+import { DEFAULT_DISPATCH_CONFIG } from '../config.js'
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
-import type { AgentType } from '../agents/types.js'
+import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
+import { resolveRolePolicy } from '../agents/role-presets.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
 import {
   addBackgroundTask,
@@ -23,11 +25,15 @@ import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
 import type { DispatchMode, DispatchRole, DispatchSchedule } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { ChainGuardError, assertChainGuards } from '../signal-bus/chain-guard.js'
 import {
   createRootChainState,
   deriveChildChainState,
+  intersectToolPatterns,
   type ChainState,
+  withInheritedAllowedTools,
 } from '../signal-bus/chain-state.js'
+import { t } from '../i18n/index.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role. You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
@@ -243,6 +249,7 @@ export async function executeDispatch(
   const sessionId = getSessionId()
   const internalRole = internalRoleFor(input.role, input.mode)
   const dispatchId = `${userId}-${shortId()}`
+  const startedAt = Date.now()
   const callerRole = getCurrentRole() ?? getAgent('main')
   const calleeRole = getAgent(input.role)
   if (!callerRole || !calleeRole) {
@@ -260,7 +267,44 @@ export async function executeDispatch(
     childSessionId,
     dispatchId,
   )
-  const startedAt = Date.now()
+  const effectiveChildChainState = input.allowed_tools
+    ? withInheritedAllowedTools(
+        childChainState,
+        intersectToolPatterns(childChainState.inheritedAllowedTools, input.allowed_tools),
+      )
+    : childChainState
+  const callerPolicy = resolveRolePolicy(callerRole)
+  try {
+    assertChainGuards({
+      parent: parentChainState,
+      child: effectiveChildChainState,
+      callerPolicy,
+      callee: calleeRole,
+      config: { dispatch: context.config?.dispatch ?? DEFAULT_DISPATCH_CONFIG },
+    })
+  } catch (error) {
+    if (error instanceof ChainGuardError) {
+      await appendDispatchAudit({
+        at: new Date().toISOString(),
+        chainId: effectiveChildChainState.chainId,
+        parentDispatchId: effectiveChildChainState.parentDispatchId,
+        caller: { role: callerRole.agentType, sessionId },
+        callee: { role: input.role, internalRole, sessionId: childSessionId },
+        schedule,
+        mode: input.mode,
+        outcome: 'rejected-by-guard',
+        durationMs: Date.now() - startedAt,
+        finalTextPreview: error.message,
+        chainState: effectiveChildChainState,
+        guardReason: error.reason,
+      }).catch(() => {})
+      return {
+        output: formatWorkerFailureForToolResult(chainGuardFailure(error, callerPolicy.reachableRoles)),
+        isError: true,
+      }
+    }
+    throw error
+  }
   await getSignalRouter().publish({
     kind: 'dispatch',
     from: { kind: 'role', id: callerRole.agentType, sessionId },
@@ -274,11 +318,11 @@ export async function executeDispatch(
       ...(input.resumeFrom ? { resumeFrom: input.resumeFrom } : {}),
       ...(input.allowed_tools ? { allowed_tools: input.allowed_tools } : {}),
       ...(input.label ? { label: input.label } : {}),
-      chainState: childChainState,
+      chainState: effectiveChildChainState,
     },
     timing: { emittedAt: Date.now() },
-    chainId: childChainState.chainId,
-    parentDispatchId: childChainState.parentDispatchId,
+    chainId: effectiveChildChainState.chainId,
+    parentDispatchId: effectiveChildChainState.parentDispatchId,
   })
 
   if (input.mode === 'blocking') {
@@ -287,13 +331,13 @@ export async function executeDispatch(
       prompt: input.prompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
-      chainState: childChainState,
+      chainState: effectiveChildChainState,
     })
     if (result.kind === 'failure') {
       await appendDispatchAudit({
         at: new Date().toISOString(),
-        chainId: childChainState.chainId,
-        parentDispatchId: childChainState.parentDispatchId,
+        chainId: effectiveChildChainState.chainId,
+        parentDispatchId: effectiveChildChainState.parentDispatchId,
         caller: { role: callerRole.agentType, sessionId },
         callee: { role: input.role, internalRole, sessionId: childSessionId },
         schedule,
@@ -301,14 +345,14 @@ export async function executeDispatch(
         outcome: 'failed',
         durationMs: Date.now() - startedAt,
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
-        chainState: childChainState,
+        chainState: effectiveChildChainState,
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
     await appendDispatchAudit({
       at: new Date().toISOString(),
-      chainId: childChainState.chainId,
-      parentDispatchId: childChainState.parentDispatchId,
+      chainId: effectiveChildChainState.chainId,
+      parentDispatchId: effectiveChildChainState.parentDispatchId,
       caller: { role: callerRole.agentType, sessionId },
       callee: { role: input.role, internalRole, sessionId: childSessionId },
       schedule,
@@ -316,7 +360,7 @@ export async function executeDispatch(
       outcome: 'success',
       durationMs: Date.now() - startedAt,
       finalTextPreview: (result.finalText || '').slice(0, 200),
-      chainState: childChainState,
+      chainState: effectiveChildChainState,
     }).catch(() => {})
     return { output: result.finalText || '(dispatched role returned empty text)' }
   }
@@ -341,7 +385,7 @@ export async function executeDispatch(
     fireHistory: [],
     ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
     originSessionId: sessionId,
-    chainState: childChainState,
+    chainState: effectiveChildChainState,
   }
   addBackgroundTask(userId, entry)
   notifyBackgroundTaskChanged(userId, entry.id)
@@ -350,8 +394,8 @@ export async function executeDispatch(
   }
   await appendDispatchAudit({
     at: new Date().toISOString(),
-    chainId: childChainState.chainId,
-    parentDispatchId: childChainState.parentDispatchId,
+    chainId: effectiveChildChainState.chainId,
+    parentDispatchId: effectiveChildChainState.parentDispatchId,
     caller: { role: callerRole.agentType, sessionId },
     callee: { role: input.role, internalRole, sessionId: entry.id },
     schedule,
@@ -359,7 +403,7 @@ export async function executeDispatch(
     outcome: 'success',
     durationMs: Date.now() - startedAt,
     finalTextPreview: `scheduled ${entry.id}`,
-    chainState: childChainState,
+    chainState: effectiveChildChainState,
   }).catch(() => {})
   return {
     output: [
@@ -368,6 +412,44 @@ export async function executeDispatch(
       `Mode: ${input.mode}`,
       `Next run: ${describeNextRun(computeTaskNextRunAt(entry))}`,
     ].join('\n'),
+  }
+}
+
+function chainGuardFailure(
+  error: ChainGuardError,
+  reachableRoles: readonly string[],
+): WorkerFailure {
+  return {
+    status: 'failed',
+    reason: 'aborted',
+    message: chainGuardMessage(error, reachableRoles),
+    suggested_action: {
+      kind: 'give-up',
+      detail: error.reason,
+    },
+  }
+}
+
+function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly string[]): string {
+  switch (error.reason) {
+    case 'chain-too-deep':
+      return t('chain.error.too_deep', {
+        depth: error.chainState.depth,
+        maxDepth: error.details.maxDepth ?? '?',
+      })
+    case 'chain-cycle':
+      return t('chain.error.cycle', { role: error.callee.agentType })
+    case 'chain-monotonic-violation':
+      return t('chain.error.monotonic_violation', {
+        child: error.chainState.inheritedAllowedTools.join(',') || '(none)',
+        parent: 'parent chain',
+      })
+    case 'role-not-reachable':
+      return t('chain.error.role_not_reachable', {
+        caller: error.chainState.path.at(-2)?.role ?? 'current role',
+        callee: error.callee.agentType,
+        reachable: reachableRoles.join(', ') || '(none)',
+      })
   }
 }
 

@@ -68,6 +68,16 @@ export function deriveChildChainState(
   }
 }
 
+export function withInheritedAllowedTools(
+  state: ChainState,
+  inheritedAllowedTools: readonly ToolPattern[],
+): ChainState {
+  return {
+    ...state,
+    inheritedAllowedTools: [...inheritedAllowedTools],
+  }
+}
+
 export function intersectToolPatterns(
   left: readonly ToolPattern[],
   right: readonly ToolPattern[],

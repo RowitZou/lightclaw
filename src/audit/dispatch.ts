@@ -2,6 +2,7 @@ import { mkdir, appendFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { lightclawHome } from '../paths.js'
+import type { ChainGuardReason } from '../signal-bus/chain-guard.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 
 export type DispatchAuditRecord = {
@@ -16,7 +17,7 @@ export type DispatchAuditRecord = {
   durationMs: number
   finalTextPreview?: string
   chainState?: ChainState
-  guardReason?: string
+  guardReason?: ChainGuardReason
 }
 
 export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<void> {
