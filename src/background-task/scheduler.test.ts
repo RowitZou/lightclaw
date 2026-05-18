@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { resolveEffectiveNotifyTo } from './scheduler.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
+import { resolveEffectiveNotifyTo, resolveLiveWorkerSpawner } from './scheduler.js'
 import type { FireOutcome } from './types.js'
 
 // resolveEffectiveNotifyTo is the Phase 23 safety boundary: high-risk
@@ -110,5 +111,71 @@ describe('resolveEffectiveNotifyTo', () => {
       permissionDenials: [],
     }
     assert.equal(resolveEffectiveNotifyTo(undefDenial, 'agent'), 'agent')
+  })
+})
+
+describe('resolveLiveWorkerSpawner', () => {
+  function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
+    return {
+      chainId: 'chain-1',
+      depth: roles.length - 1,
+      path: roles.map((node, idx) => ({
+        role: node.role,
+        sessionId: node.sessionId,
+        dispatchId: `dispatch-${idx}`,
+        at: idx,
+      })),
+      inheritedAllowedTools: [],
+      chainStartedAt: 0,
+    }
+  }
+
+  it('returns null when only main spawned the dispatch (path length 2, spawner is main at index 0)', () => {
+    const state = chain([
+      { role: 'main', sessionId: 'feishu:dm:oc_x' },
+      { role: 'generalist', sessionId: 'bg-task-1' },
+    ])
+    assert.equal(resolveLiveWorkerSpawner(state, new Set(['feishu:dm:oc_x'])), null)
+  })
+
+  it('returns spawner worker when it is still alive in the chain registry', () => {
+    const state = chain([
+      { role: 'main', sessionId: 'feishu:dm:oc_x' },
+      { role: 'reviewer', sessionId: 'dispatched-reviewer-1' },
+      { role: 'webSearcher', sessionId: 'bg-task-1' },
+    ])
+    assert.deepEqual(
+      resolveLiveWorkerSpawner(state, new Set(['dispatched-reviewer-1'])),
+      { role: 'reviewer', sessionId: 'dispatched-reviewer-1' },
+    )
+  })
+
+  it('walks up to a higher live ancestor when the direct spawner has already exited', () => {
+    const state = chain([
+      { role: 'main', sessionId: 'feishu:dm:oc_x' },
+      { role: 'reviewer', sessionId: 'dispatched-reviewer-1' },
+      { role: 'coder', sessionId: 'dispatched-coder-1' },
+      { role: 'webSearcher', sessionId: 'bg-task-1' },
+    ])
+    // coder (path[2], direct spawner) is dead; reviewer (path[1]) is alive
+    const liveSessions = new Set(['dispatched-reviewer-1'])
+    assert.deepEqual(
+      resolveLiveWorkerSpawner(state, liveSessions),
+      { role: 'reviewer', sessionId: 'dispatched-reviewer-1' },
+    )
+  })
+
+  it('returns null and defers to main delivery when no worker ancestor is alive', () => {
+    const state = chain([
+      { role: 'main', sessionId: 'feishu:dm:oc_x' },
+      { role: 'reviewer', sessionId: 'dispatched-reviewer-1' },
+      { role: 'webSearcher', sessionId: 'bg-task-1' },
+    ])
+    assert.equal(resolveLiveWorkerSpawner(state, new Set()), null)
+  })
+
+  it('returns null for a path of length 1 (defensive — should not happen in practice)', () => {
+    const state = chain([{ role: 'main', sessionId: 'feishu:dm:oc_x' }])
+    assert.equal(resolveLiveWorkerSpawner(state, new Set(['feishu:dm:oc_x'])), null)
   })
 })

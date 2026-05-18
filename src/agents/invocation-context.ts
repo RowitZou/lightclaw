@@ -75,6 +75,11 @@ export function forkInvocationContext(input: {
   subagentLabel?: string
   currentRoleOverride?: Role
   chainState?: ChainState
+  // Optional drain callback. When set, query.ts pulls pending interjections
+  // at tool boundaries the same way the channel runner does. Used by
+  // workers that want to receive bg-dispatch results spawned by themselves
+  // (see scheduler spawner-aware delivery).
+  interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -84,6 +89,7 @@ export function forkInvocationContext(input: {
     subagentLabel: input.subagentLabel,
     currentRoleOverride: input.currentRoleOverride,
     chainState: input.chainState,
+    ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
   }
 }
 

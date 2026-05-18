@@ -55,6 +55,37 @@ test('background-result-to-interjection injects an idle synthetic Feishu turn', 
   }
 })
 
+test('background-result-to-interjection queues into a worker spawner under its chain sessionId', async () => {
+  // Simulates a worker (e.g. reviewer) that spawned a bg dispatch and is
+  // still alive; scheduler publishes to {role:'reviewer', sessionId:
+  // 'dispatched-...'}, hook must push to interjection queue under that
+  // sessionId so the worker's query loop drains it at its next tool
+  // boundary.
+  const workerSessionId = 'dispatched-spawner-reviewer'
+  ensureBackgroundResultToInterjectionSubscription()
+  await getSignalRouter().publish({
+    kind: 'notification',
+    from: { kind: 'scheduler' },
+    to: { kind: 'role', id: 'reviewer', sessionId: workerSessionId },
+    payload: {
+      kind: 'background-result',
+      ownerOpenId: 'ou_owner',
+      dispatchId: 'dispatch-worker-spawned',
+      label: 'Background fix',
+      outcome: 'success',
+      result: 'patch applied',
+    },
+    timing: { emittedAt: 30_000 },
+    chainId: 'chain-deep-dispatch',
+  })
+
+  const drained = channelInterjectionQueue.drain(workerSessionId)
+  assert.equal(drained.length, 1)
+  assert.equal(drained[0]?.source, 'background-task')
+  assert.match(drained[0]?.text ?? '', /<background-task-result/)
+  assert.match(drained[0]?.text ?? '', /dispatchId="dispatch-worker-spawned"/)
+})
+
 async function publishBackgroundResult(sessionId: string, emittedAt: number): Promise<void> {
   await getSignalRouter().publish({
     kind: 'notification',

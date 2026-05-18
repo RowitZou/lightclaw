@@ -20,8 +20,13 @@ export function ensureBackgroundResultToInterjectionSubscription(): void {
   if (unsubscribeBackgroundResult) {
     return
   }
+  // Broad subscription: scheduler routes by spawner role. main → existing
+  // origin/DM path; worker role → push interjection under the worker's
+  // chain sessionId so the still-alive spawner worker drains it at its
+  // next tool boundary. Subscribing on id:'main' only would miss every
+  // worker-spawned bg result.
   unsubscribeBackgroundResult = getSignalRouter().subscribe(
-    { kind: 'role', id: 'main' },
+    { kind: 'role', id: '*' },
     signal => handleBackgroundResultSignal(signal),
   )
 }
@@ -41,16 +46,35 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
   if (notification.payload.kind !== 'background-result') {
     return
   }
-  if (signal.to.kind !== 'role' || signal.to.id !== 'main' || !signal.to.sessionId) {
+  if (signal.to.kind !== 'role' || !signal.to.sessionId) {
     return
   }
-  const mainSessionId = signal.to.sessionId
+  const receiverRole = signal.to.id
+  const receiverSessionId = signal.to.sessionId
   const payload = notification.payload as Extract<
     AgentSignal<'notification'>['payload'],
     { kind: 'background-result' }
   >
   const block = formatBackgroundTaskResultBlock(payload)
   const messageId = `bg-${payload.dispatchId}-${signal.timing.emittedAt}`
+
+  // Worker receiver (deep dispatch): the spawner is in the chain registry
+  // and its query loop drains the interjection queue under its chain
+  // sessionId at the next tool boundary. No synthetic-turn / channel-runner
+  // fallback applies — workers are not channel-driven.
+  if (receiverRole !== 'main') {
+    channelInterjectionQueue.push(receiverSessionId, {
+      text: block,
+      messageId,
+      senderOpenId: payload.ownerOpenId,
+      arrivedAt: signal.timing.emittedAt,
+      source: 'background-task',
+    })
+    return
+  }
+
+  // Main receiver: legacy path.
+  const mainSessionId = receiverSessionId
 
   if (channelInterjectionQueue.hasInflightFor(mainSessionId)) {
     channelInterjectionQueue.push(mainSessionId, {

@@ -12,6 +12,7 @@ import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
 import { SESSION_MEMORY_FILENAME } from '../memory/session-memory.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -127,6 +128,11 @@ export async function runDispatchedAgent(
       })
     : null
 
+  // Worker chain sessionId = the last node in this worker's chain path.
+  // Scheduler routes bg-dispatch results spawned by this worker back to
+  // that sessionId in the interjection queue; drain at every tool boundary
+  // so receipt happens at the same cadence as user-driven interjections.
+  const chainSessionId = params.chainState?.path.at(-1)?.sessionId
   const run = () => (params.queryImpl ?? query)({
     role: params.role,
     invocation: forkInvocationContext({
@@ -137,6 +143,9 @@ export async function runDispatchedAgent(
       subagentLabel: params.label,
       currentRoleOverride: params.currentRoleOverride,
       chainState: params.chainState,
+      ...(chainSessionId
+        ? { interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId) }
+        : {}),
     }),
     messages,
     tools: params.tools,

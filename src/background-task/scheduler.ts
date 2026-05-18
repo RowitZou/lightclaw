@@ -18,6 +18,7 @@ import {
 } from './store.js'
 import { computeTaskNextRunAt } from './schedule-calc.js'
 import { runBackgroundTaskFire } from './runner.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 
 type HeapItem = {
@@ -56,6 +57,34 @@ export function resolveEffectiveNotifyTo(
     denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
   )
   return hasHighRisk ? 'user' : taskNotifyTo
+}
+
+/**
+ * Pick the receiver for a bg-dispatch result, preferring the closest live
+ * worker spawner in the chain over the legacy "always main" route. Walks
+ * path[length-2] (the direct spawner) up to path[1] (the deepest worker
+ * before main), returning the first node whose sessionId is still alive
+ * in the SignalRouter chain registry. Path index 0 is main, which is
+ * intentionally skipped — main never registers itself in the chain
+ * registry, and main delivery flows through the legacy origin/DM
+ * resolution path in deliverCompletion.
+ *
+ * Returns null when no worker ancestor is alive, signaling the caller to
+ * fall back to main resolution.
+ */
+export function resolveLiveWorkerSpawner(
+  chainState: ChainState,
+  liveSessions: Set<string>,
+): { role: string; sessionId: string } | null {
+  if (chainState.path.length < 2) return null
+  for (let i = chainState.path.length - 2; i >= 1; i--) {
+    const node = chainState.path[i]
+    if (!node) continue
+    if (liveSessions.has(node.sessionId)) {
+      return { role: node.role, sessionId: node.sessionId }
+    }
+  }
+  return null
 }
 
 export class BackgroundTaskScheduler {
@@ -391,6 +420,48 @@ export class BackgroundTaskScheduler {
       return
     }
 
+    const outcomeLabel = outcomeKindForBackgroundResult(outcome)
+    const resultText = outcome.kind === 'success'
+      ? outcome.summary
+      : [
+          outcome.reason,
+          ...(outcome.permissionDenials?.length
+            ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
+            : []),
+        ].join('\n')
+    const payload = {
+      kind: 'background-result' as const,
+      ownerOpenId,
+      dispatchId: task.id,
+      label: task.label,
+      outcome: outcomeLabel,
+      result: resultText,
+      ...(priorPromptNotice ? { priorPromptNotice } : {}),
+    }
+
+    // Spawner-aware delivery: if a still-alive worker ancestor spawned this
+    // bg dispatch, return the result to that worker instead of main. See
+    // `resolveLiveWorkerSpawner` for the walk-up semantics.
+    if (task.chainState) {
+      const liveSessions = new Set(
+        getSignalRouter().sessionIdsForChain(task.chainState.chainId),
+      )
+      const workerReceiver = resolveLiveWorkerSpawner(task.chainState, liveSessions)
+      if (workerReceiver) {
+        await getSignalRouter().publish({
+          kind: 'notification',
+          from: { kind: 'scheduler' },
+          to: { kind: 'role', id: workerReceiver.role, sessionId: workerReceiver.sessionId },
+          payload,
+          timing: { emittedAt: Date.now() },
+          chainId: task.chainState.chainId,
+        })
+        return
+      }
+    }
+
+    // No live worker ancestor → main is the receiver. Existing path: admin
+    // gate (LocalRuntime carve-out), origin/DM resolution, deliver to main.
     const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
     if (adminId !== null && adminId !== canonicalUser) {
       process.stderr.write(
@@ -420,28 +491,11 @@ export class BackgroundTaskScheduler {
       return
     }
 
-    const outcomeLabel = outcomeKindForBackgroundResult(outcome)
-    const resultText = outcome.kind === 'success'
-      ? outcome.summary
-      : [
-          outcome.reason,
-          ...(outcome.permissionDenials?.length
-            ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
-            : []),
-        ].join('\n')
     await getSignalRouter().publish({
       kind: 'notification',
       from: { kind: 'scheduler' },
       to: { kind: 'role', id: 'main', sessionId: mainSessionId },
-      payload: {
-        kind: 'background-result',
-        ownerOpenId,
-        dispatchId: task.id,
-        label: task.label,
-        outcome: outcomeLabel,
-        result: resultText,
-        ...(priorPromptNotice ? { priorPromptNotice } : {}),
-      },
+      payload,
       timing: { emittedAt: Date.now() },
       chainId: mainSessionId,
     })
