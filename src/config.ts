@@ -247,6 +247,7 @@ export type PathsConfig = {
   workspace: string
   memory: string
   apiLogs: string
+  audit: string
   hooks?: string
   mcpConfig?: string
   permissionAudit?: string
@@ -934,6 +935,24 @@ export function resolveSessionsDir(): string {
   return path.resolve(expandHomePath(configuredPath))
 }
 
+// Audit root for the three JSONL audit trees (dispatch / memory-writes /
+// feishu-writes). Mirrors `resolveSessionsDir()` shape — env override first,
+// then `paths.audit` from config.json, then `<lightclawHome>/audit` default
+// (backward compatible). Audit modules call this on each write rather than
+// reading a cached value, matching the no-cache pattern in lightclawHome()
+// so tests that flip `setLightclawHomeOverride` mid-process pick up the
+// new default without re-loading config.
+export function resolveAuditDir(): string {
+  const fileConfig = loadConfigFile()
+  const fromFile = fileConfig.paths?.audit
+  const configuredPath =
+    process.env.LIGHTCLAW_AUDIT_DIR ??
+    fromFile ??
+    path.join(lightclawHome(), 'audit')
+
+  return path.resolve(expandHomePath(configuredPath))
+}
+
 function assertModelName(
   value: unknown,
   field: string,
@@ -1511,6 +1530,7 @@ export function getConfig(): LightClawConfig {
       workspace: resolveWorkspaceRoot(),
       memory: memoryDir,
       apiLogs: apiLogsDirRaw,
+      audit: resolveAuditDir(),
       ...(hooksUserPath ? { hooks: expandOptionalPath(hooksUserPath)! } : {}),
       ...(mcpConfigUserPath ? { mcpConfig: expandOptionalPath(mcpConfigUserPath)! } : {}),
       ...(permissionAuditPath ? { permissionAudit: permissionAuditPath } : {}),

@@ -1,7 +1,7 @@
 import { mkdir, appendFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { lightclawHome } from '../paths.js'
+import { resolveAuditDir } from '../config.js'
 import type { ChainGuardReason } from '../signal-bus/chain-guard.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 
@@ -31,7 +31,7 @@ export type DispatchAuditRecord = {
 
 export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<void> {
   const day = record.at.slice(0, 10)
-  const dir = path.join(lightclawHome(), 'audit', 'dispatch', day)
+  const dir = path.join(resolveAuditDir(), 'dispatch', day)
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const file = path.join(dir, `${sanitize(record.chainId)}.jsonl`)
   await appendFile(file, `${JSON.stringify(enrichDispatchAuditRecord(record))}\n`, { mode: 0o600 })

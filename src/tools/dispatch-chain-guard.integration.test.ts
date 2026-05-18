@@ -7,6 +7,7 @@ import test, { afterEach, beforeEach } from 'node:test'
 import { registerAgent, resetAgentRegistryForTest } from '../agents/registry.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { LightClawConfig } from '../config.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { executeDispatch } from './dispatch.js'
@@ -15,9 +16,16 @@ let tmpRoot: string
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-guard-'))
+  // executeDispatch writes an `audit/dispatch/<date>/<chainId>.jsonl` row on
+  // every call (success and rejection paths both). Pin lightclawHome inside
+  // tmpRoot so those rows land under the per-test tmp dir and get cleaned up
+  // in afterEach instead of polluting the operator's real home with
+  // `chain-alice-*.jsonl` fixtures.
+  setLightclawHomeOverride(tmpRoot)
 })
 
 afterEach(() => {
+  setLightclawHomeOverride(undefined)
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
@@ -76,6 +84,7 @@ test('main with reachableRoles ["*"] reaches a registered user-defined worker', 
   })
 
   let output
+  let downstreamError: unknown
   try {
     output = await runWithSessionContext(session('main', ['*']), () =>
       executeDispatch({
@@ -85,6 +94,8 @@ test('main with reachableRoles ["*"] reaches a registered user-defined worker', 
         mode: 'blocking',
       }, toolContext()),
     )
+  } catch (err) {
+    downstreamError = err
   } finally {
     resetAgentRegistryForTest()
   }
@@ -97,6 +108,11 @@ test('main with reachableRoles ["*"] reaches a registered user-defined worker', 
   // both prove the role passed the reachability check.
   if (output) {
     assert.doesNotMatch(output.output, /role-not-reachable/i)
+  } else {
+    const message = downstreamError instanceof Error
+      ? downstreamError.message
+      : String(downstreamError)
+    assert.doesNotMatch(message, /role-not-reachable/i)
   }
 })
 

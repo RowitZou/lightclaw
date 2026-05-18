@@ -6,7 +6,7 @@ import {
   FeishuApiError,
   type FeishuErrorKind,
 } from '../channels/feishu/resources/errors.js'
-import { lightclawHome } from '../paths.js'
+import { resolveAuditDir } from '../config.js'
 import { getCurrentUserId } from '../state.js'
 
 export type FeishuPermissionGrants = {
@@ -78,7 +78,7 @@ export type FeishuWriteAuditError = {
 }
 
 export async function recordFeishuWriteAudit(record: FeishuWriteAudit): Promise<void> {
-  const dir = path.join(lightclawHome(), 'audit', 'feishu-writes')
+  const dir = path.join(resolveAuditDir(), 'feishu-writes')
   await mkdir(dir, { recursive: true })
   const day = record.at.slice(0, 10)
   await appendFile(path.join(dir, `${day}.jsonl`), `${JSON.stringify(record)}\n`, 'utf8')

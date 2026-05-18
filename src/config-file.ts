@@ -45,6 +45,10 @@ export type ConfigFilePathsSection = {
   memory?: string
   /** Directory under which apiLogs JSONL files are written. */
   apiLogs?: string
+  /** Root for audit JSONL trees (`audit/dispatch/<date>/<chainId>.jsonl`,
+   *  `audit/memory-writes/<date>.jsonl`, `audit/feishu-writes/<date>.jsonl`).
+   *  Env override: LIGHTCLAW_AUDIT_DIR. */
+  audit?: string
   /** Admin hooks discovery directory (single admin-owned tree). */
   hooks?: string
   /** Admin MCP config file path. */
