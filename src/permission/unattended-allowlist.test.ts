@@ -7,7 +7,7 @@ import { matchesUnattendedAllowlist } from './unattended-allowlist.js'
 describe('matchesUnattendedAllowlist', () => {
   it('allows the built-in background safe tool set without task rules', () => {
     assert.equal(matchesUnattendedAllowlist(fakeTool('Read'), { file_path: '/tmp/a' }, []), true)
-    assert.equal(matchesUnattendedAllowlist(fakeTool('ListBackgroundTasks'), {}, undefined), true)
+    assert.equal(matchesUnattendedAllowlist(fakeTool('ListDispatches'), {}, undefined), true)
   })
 
   it('does not treat Bash as built-in safe', () => {

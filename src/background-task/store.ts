@@ -193,7 +193,7 @@ export function flushLastFiredAt(): void {
 }
 
 // Completed-task index: append-only JSONL beside bg-tasks.json. Lets Cancel /
-// UpdateBackgroundTask distinguish "task is gone because it already finished"
+// UpdateDispatch distinguish "task is gone because it already finished"
 // from "id never existed" so cancel can be idempotent (HTTP DELETE-style).
 // Successful oneshot tasks are pruned from bg-tasks.json on completion; without
 // this index the model sees `is_error: true` on a no-op cancel and starts an

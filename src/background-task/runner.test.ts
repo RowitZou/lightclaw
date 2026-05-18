@@ -31,7 +31,7 @@ describe('background-task runner tool gate', () => {
   it('allows normal tools so scheduled jobs can do real work', async () => {
     const gate = createBackgroundTaskCanUseTool()
     assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })
-    assert.deepEqual(await gate(fakeTool('AgentTool'), {}), { behavior: 'allow' })
+    assert.deepEqual(await gate(fakeTool('Dispatch'), {}), { behavior: 'allow' })
   })
 })
 

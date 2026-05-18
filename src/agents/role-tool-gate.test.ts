@@ -21,14 +21,6 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
     behavior: 'deny',
     reason: 'FeishuRead is reserved for Feishu-specialized roles.',
   })
-  assert.deepEqual(await gate(tool('AgentTool'), {}), {
-    behavior: 'deny',
-    reason: 'AgentTool is not available to subagents.',
-  })
-  assert.deepEqual(await gate(tool('BackgroundTask'), {}), {
-    behavior: 'deny',
-    reason: 'BackgroundTask is not available to subagents.',
-  })
   assert.deepEqual(await gate(tool('Dispatch'), {}), {
     behavior: 'deny',
     reason: 'Dispatch is not available to subagents.',
@@ -86,7 +78,6 @@ test('bundled reviewer can dispatch only to coder', () => {
   assert.ok(reviewer)
 
   assert.equal(isToolVisibleToRole(reviewer, 'Dispatch'), true)
-  assert.equal(isToolVisibleToRole(reviewer, 'AgentTool'), false)
   assert.deepEqual(reviewer.reachableRoles, ['coder'])
   assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'coder'), true)
   assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'generalist'), false)
@@ -123,7 +114,7 @@ test('internal roles use only role.tools allowlist', async () => {
 test('orchestrator roles with wildcard tools do not restrict tool presence', async () => {
   const gate = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
 
-  assert.equal((await gate(tool('AgentTool'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('Dispatch'), {})).behavior, 'allow')
   assert.equal((await gate(tool('Notify'), {})).behavior, 'allow')
 })
 

@@ -4,8 +4,6 @@ import type { ResolvedRolePolicy } from './role-presets.js'
 import type { Role } from './types.js'
 
 const BLOCKED_WORKER_TOOLS = new Set([
-  'AgentTool',
-  'BackgroundTask',
   'Dispatch',
 ])
 

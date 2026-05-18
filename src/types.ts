@@ -112,11 +112,11 @@ export function toolResultContentToText(
 // `tool_result` blocks so that one user message can carry both placeholder
 // tool_results (synthesized when forking from a parent assistant turn that
 // still has pending tool_use blocks) and the fork's own directive text.
-// Without this, AgentTool subagents POST a prefix that ends in an assistant
+// Without this, dispatched subagents POST a prefix that ends in an assistant
 // tool_use whose tool_result must come from the fork itself — which it can't,
 // because the fork's own user prompt is a fresh text — and Anthropic rejects
 // the request with `messages.<n>: tool_use ids were found without tool_result`.
-// Mirrors Claude Code's `buildForkedMessages` (src/tools/AgentTool/forkSubagent.ts)
+// Mirrors Claude Code's `buildForkedMessages` fork-subagent helper
 // which puts placeholder tool_results + the directive in a single user message.
 export type UserTextBlock = {
   type: 'text'

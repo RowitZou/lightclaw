@@ -1,10 +1,3 @@
-import { agentTool } from './tools/agent.js'
-import {
-  backgroundTaskTool,
-  cancelBackgroundTaskTool,
-  listBackgroundTasksTool,
-  updateBackgroundTaskTool,
-} from './tools/background-task.js'
 import {
   cancelDispatchTool,
   dispatchTool,
@@ -83,11 +76,6 @@ export const builtinTools = [
   cancelDispatchTool,
   updateDispatchTool,
   notifyTool,
-  agentTool,
-  backgroundTaskTool,
-  listBackgroundTasksTool,
-  cancelBackgroundTaskTool,
-  updateBackgroundTaskTool,
 ]
 
 export function getAllTools(

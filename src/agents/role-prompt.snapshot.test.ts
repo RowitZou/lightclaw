@@ -18,14 +18,14 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '185b876badfe075a31305dd774987fdb78c5d0a1a98c7e35c1d19f86b83d102f',
-  generalist: 'da054e0cd0fe141953f47d487d4f4a75dfd49e5115d0d9129b389e6725dcbd62',
+  main: '1a10171561c866dabf7b3d630ee56213eee055cb7c938fc511d665aae9cc91ef',
+  generalist: 'f9e8a3fa4f4ed3f3a2492bd5575b836d3d472f5ccc19e928a08d604a3da955a4',
   localExplorer: 'f8c082f993d45d1e8391e44abed260e4eed97f9d51a1461ab44852e8d81035f3',
   webSearcher: 'a44e86ebaa9e8b19eee3d145deacee3b886e139ccee5100aa346ad06f992daf1',
   feishuSecretary: '7db64c9f0739b56278f77735f04b6233c04f2bfa2d3a187e977837d61877a1a5',
   coder: '646630cad063aec89c575f4020e3cf62c9cd62f8c151ee318bff16ed02eda73e',
   archivist: '485696093535597c79277c939327f37fba9c31a669621e1aecbd4814c7d11018',
-  reviewer: '90043301cacc1398453a6a52888dc81f048e758ce71c0276687c70fd01598c7f',
+  reviewer: '7e6129f2f890e51b2adac2fddb4d1308305f8988bfeb42fe328f62642e463b53',
   memoryExtractor: '15ad65436a62ca507821dac8e4e94df8b8ad1aa49306d2615caabfa2ff8f618a',
   memoryCurator: '22c073df9e2148ade8570e758402a5066ff2e785a866d182a46f21ac1350f4e1',
 }
@@ -53,7 +53,7 @@ test('main and bundled role prompts match the Phase 1 baseline snapshot', async 
   })
 
   await runWithSessionContext(ctx, async () => {
-    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'AgentTool', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
+    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
     const template = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', {
       autoMemory: false,
       config: snapshotConfig(),
@@ -82,7 +82,7 @@ test('main and bundled role prompts match the Phase 1 baseline snapshot', async 
 
 function toolsForRole(role: Role): Tool[] {
   const names = role.tools.includes('*')
-    ? ['Read', 'Write', 'Edit', 'Bash', 'AgentTool', 'MemoryWrite', 'TodoWrite', 'ToolSearch']
+    ? ['Read', 'Write', 'Edit', 'Bash', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch']
     : role.tools
   return names.map(fakeTool)
 }

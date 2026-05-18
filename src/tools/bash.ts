@@ -51,7 +51,7 @@ Git rules:
 - Never force-push to \`main\` / \`master\`. Warn the user if they request it.
 - Stage by named file, not \`git add -A\` / \`git add .\` — risk of including secrets, build artifacts, or unrelated work.
 
-Long-running work: schedule via BackgroundTask, not via Bash + \`sleep\`. Do not use \`sleep\` to poll a condition — diagnose the root cause or restructure.`,
+Long-running work: schedule via Dispatch background mode, not via Bash + \`sleep\`. Do not use \`sleep\` to poll a condition — diagnose the root cause or restructure.`,
   domain: 'environment',
   riskLevel: 'execute',
   inputSchema: z.object({

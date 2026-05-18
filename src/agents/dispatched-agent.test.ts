@@ -49,9 +49,9 @@ test('dispatched initial messages contain only the caller-authored prompt', () =
 
 test('subagent tool gate denies globally blocked tools', async () => {
   const gate = deriveCanUseTool(roleWithTools(['*']))
-  assert.deepEqual(await gate(tool('AgentTool'), {}), {
+  assert.deepEqual(await gate(tool('Dispatch'), {}), {
     behavior: 'deny',
-    reason: 'AgentTool is not available to subagents.',
+    reason: 'Dispatch is not available to subagents.',
   })
 })
 

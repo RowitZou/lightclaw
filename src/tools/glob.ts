@@ -65,7 +65,7 @@ export const globTool = buildTool({
   description: `- Fast file pattern matching tool that works with any codebase size.
 - Supports glob patterns like "**/*.js" or "src/**/test-*.py".
 - Returns matching file paths sorted by modification time (oldest first; most recently changed files appear at the end of the list — handy for "what just changed?").
-- Use this tool when you need to find files by name pattern. For content search use Grep; for open-ended exploration ("anything about authentication?") dispatch an AgentTool subagent instead.
+- Use this tool when you need to find files by name pattern. For content search use Grep; for open-ended exploration ("anything about authentication?") use Dispatch with a focused worker role instead.
 - NEVER run \`find\` or \`ls\` via Bash for this — Glob is permission-scoped, sandbox-aware, and handles globstar consistently across LocalRuntime / DockerRuntime / RlaunchRuntime.`,
   domain: 'environment',
   riskLevel: 'safe',

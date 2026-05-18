@@ -15,7 +15,7 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'main',
     name: 'main',
     whenToUse:
-      'Primary user-facing orchestrator. Not dispatchable through AgentTool.',
+      'Primary user-facing orchestrator. Not dispatchable through Dispatch.',
     tools: ['*'],
     skills: ['remember'],
     mcpServers: ['*'],
@@ -140,7 +140,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'memoryExtractor',
     whenToUse:
-      'Internal: framework-managed memory extraction after each main turn. Not dispatchable via AgentTool.',
+      'Internal: framework-managed memory extraction after each main turn. Not dispatchable via Dispatch.',
     tools: ['MemoryWrite', 'MemoryRead', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryExtractorPrompt,
     kind: 'internal',
@@ -149,7 +149,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'memoryCurator',
     whenToUse:
-      'Internal: framework-managed memory consolidation (autoDream). Not dispatchable via AgentTool.',
+      'Internal: framework-managed memory consolidation (autoDream). Not dispatchable via Dispatch.',
     tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryCuratorPrompt,
     kind: 'internal',

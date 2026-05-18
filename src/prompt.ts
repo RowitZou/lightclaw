@@ -442,13 +442,13 @@ function formatChannelContextSection(): string {
 }
 
 function formatReachableRolesSection(reachableRoles: readonly string[], tools: readonly Tool[]): string {
-  if (!hasLoadedTool(tools, 'Dispatch') && !hasLoadedTool(tools, 'AgentTool')) {
+  if (!hasLoadedTool(tools, 'Dispatch')) {
     return ''
   }
   const agents = new Map(getAllAgents().map(agent => [agent.agentType, agent]))
   const lines = [
     '## Reachable Workers',
-    'You can dispatch the following workers via Dispatch / AgentTool:',
+    'You can dispatch the following workers via Dispatch:',
   ]
   for (const roleName of reachableRoles) {
     const agent = agents.get(roleName)

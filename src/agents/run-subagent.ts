@@ -27,7 +27,7 @@ export async function runSubagent(params: {
   // heads" in createAutoMemCanUseTool(memoryDir).
   canUseToolOverride?: CanUseToolFn
   // Optional explicit canonical user for post-dispatch memory extraction.
-  // AgentTool dispatch falls back to getCurrentUserId() (it runs synchronously
+  // Blocking Dispatch falls back to getCurrentUserId() (it runs synchronously
   // inside the main turn's ALS scope); internal subagents (extract / dream)
   // can fire asynchronously after the main turn ends.
   canonicalUserOverride?: string

@@ -125,7 +125,7 @@ Pattern syntax: ripgrep regex. Literal \`{}\` needs escaping (\`interface\\{\\}\
 
 For binary files (PDF / image / audio / video / Office / archives), Grep is empty — Read instead. Grep short-circuits when \`path\` directly points at a known-binary file.
 
-For open-ended exploration ("anything about authentication?"), dispatch an AgentTool subagent.`,
+For open-ended exploration ("anything about authentication?"), use Dispatch with a focused worker role.`,
   domain: 'environment',
   riskLevel: 'safe',
   concurrencySafe: true,

@@ -168,7 +168,7 @@ export async function query(params: QueryParams): Promise<{
    * a turn that *also* emits a tool_use (e.g. final research output + a
    * closing TodoWrite to mark done), then ends turn empty after the
    * tool_result. Channels that send a single reply at end-of-query (feishu)
-   * and AgentTool callers that bundle the subagent's response into a parent
+   * and Dispatch callers that bundle the subagent's response into a parent
    * tool_result both want to see *all* of the model's narration, not just
    * the literal last turn — otherwise the closing empty end_turn produces
    * "(no response)" while the long body block-above gets dropped.
@@ -507,7 +507,7 @@ export async function query(params: QueryParams): Promise<{
     stopReason = stopEvent.stopReason
     // Skip empty turns (model often ends a turn with no text after a closing
     // tool_use's tool_result is processed). Accumulating only non-empty text
-    // ensures the channel reply / AgentTool tool_result preserve everything
+    // ensures the channel reply / Dispatch tool_result preserve everything
     // the model actually said, not just whatever the final turn happened to
     // emit.
     const turnText = collectAssistantText(stopEvent.content)

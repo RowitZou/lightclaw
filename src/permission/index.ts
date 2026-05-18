@@ -176,10 +176,6 @@ function previewInput(toolName: string, input: unknown): string {
     return `Path: ${record.file_path}`
   }
 
-  if (toolName === 'AgentTool' && typeof record.subagent_type === 'string') {
-    return `Subagent: ${record.subagent_type}`
-  }
-
   if (toolName.startsWith('mcp__')) {
     return `MCP input: ${truncate(JSON.stringify(record), 200)}`
   }

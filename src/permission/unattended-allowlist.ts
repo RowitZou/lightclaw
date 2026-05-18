@@ -8,7 +8,7 @@ const BG_BUILTIN_SAFE_TOOLS = new Set([
   'Grep',
   'TodoWrite',
   'MemoryRead',
-  'ListBackgroundTasks',
+  'ListDispatches',
 ])
 
 export function matchesUnattendedAllowlist(

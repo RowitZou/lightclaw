@@ -15,9 +15,9 @@ Use this when:
 - You need a delay before checking a condition.
 
 Do NOT use this:
-- To poll for a condition — diagnose the root cause or use BackgroundTask for monitoring.
+- To poll for a condition — diagnose the root cause or use Dispatch background mode for monitoring.
 - To pad the response — silence costs nothing, fake work costs an API round-trip.
-- For durations > 5 minutes — prompt cache TTL is 5 min, longer waits should go through BackgroundTask instead. The runtime cap is 600 s (10 min) but use sparingly.
+- For durations > 5 minutes — prompt cache TTL is 5 min, longer waits should go through Dispatch background mode instead. The runtime cap is 600 s (10 min) but use sparingly.
 
 Prefer this over \`Bash(sleep N)\` — Sleep is harness-side and does not hold a sandbox shell process, so concurrent tools keep working. /stop interrupts it instantly.
 

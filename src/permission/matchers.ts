@@ -121,8 +121,6 @@ export function matchToolContent(
       return typeof record.file_path === 'string'
         ? matchPath(ruleContent, record.file_path)
         : false
-    case 'AgentTool':
-      return record.subagent_type === ruleContent
     default:
       return typeof record.content === 'string'
         ? matchString(ruleContent, record.content)

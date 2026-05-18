@@ -288,7 +288,7 @@ export class BackgroundTaskScheduler {
     const firedAt = new Date().toISOString()
     let autopaused = false
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
-      // Record before pruning so a late CancelBackgroundTask call can tell
+      // Record before pruning so a late CancelDispatch call can tell
       // "already finished" apart from "id never existed" (Bug 7 from
       // 2026-05-13 dogfood).
       appendCompletedTaskRecord(canonicalUser, {

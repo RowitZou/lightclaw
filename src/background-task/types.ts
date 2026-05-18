@@ -54,7 +54,7 @@ export type BackgroundTaskEntry = {
   consecutiveFailures: number
   fireHistory?: FireHistoryEntry[]
   allowedTools?: string[]
-  // Set by UpdateBackgroundTask when prompt is changed: holds the prior
+  // Set by UpdateDispatch when prompt is changed: holds the prior
   // prompt so the NEXT completion delivery can surface "prompt was changed
   // before this fire (old: ...)" once and then clear. Consumed by
   // scheduler.deliverCompletion at delivery time. NOT a chain: a second
