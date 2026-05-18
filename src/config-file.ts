@@ -73,6 +73,7 @@ export type ConfigFileShape = {
   dispatch?: {
     maxChainDepth?: number
     maxChainDepthCeiling?: number
+    historyTtlMs?: number
   }
   memoryDir?: string
   workspaceRoot?: string

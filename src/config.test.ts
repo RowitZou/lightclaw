@@ -539,6 +539,11 @@ describe('config: endpoints + models registry', () => {
       fireRetryMaxAttempts: 3,
       recurringAutoDisableThreshold: 3,
     })
+    assert.deepEqual(cfg.dispatch, {
+      maxChainDepth: 3,
+      maxChainDepthCeiling: 5,
+      historyTtlMs: 24 * 60 * 60 * 1000,
+    })
   })
 
   it('defaults memoryNudge on with a 20-turn cadence', () => {
@@ -619,6 +624,26 @@ describe('config: endpoints + models registry', () => {
       startupCatchupIntervalMs: 5000,
       fireRetryMaxAttempts: 5,
       recurringAutoDisableThreshold: 4,
+    })
+  })
+
+  it('parses dispatch history ttl overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      dispatch: {
+        maxChainDepth: 4,
+        maxChainDepthCeiling: 6,
+        historyTtlMs: 12_345,
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.dispatch, {
+      maxChainDepth: 4,
+      maxChainDepthCeiling: 6,
+      historyTtlMs: 12_345,
     })
   })
 })

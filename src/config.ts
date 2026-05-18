@@ -345,6 +345,7 @@ export type BackgroundTaskConfig = {
 export type DispatchConfig = {
   maxChainDepth: number
   maxChainDepthCeiling: number
+  historyTtlMs: number
 }
 
 export type ApiLogsConfig = {
@@ -386,6 +387,7 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   maxChainDepth: 3,
   maxChainDepthCeiling: 5,
+  historyTtlMs: 24 * 60 * 60 * 1000,
 }
 
 // Memory Nudge defaults ON (dark launch, mirroring autoDream's rollout
@@ -1404,9 +1406,14 @@ function resolveDispatchConfig(
   const declared = Number.isFinite(depthRaw) && depthRaw >= 1
     ? Math.floor(depthRaw)
     : DEFAULT_DISPATCH_CONFIG.maxChainDepth
+  const historyTtlRaw = Number(fileConfig.historyTtlMs)
+  const historyTtlMs = Number.isFinite(historyTtlRaw) && historyTtlRaw >= 0
+    ? Math.floor(historyTtlRaw)
+    : DEFAULT_DISPATCH_CONFIG.historyTtlMs
   return {
     maxChainDepth: Math.min(declared, ceiling),
     maxChainDepthCeiling: ceiling,
+    historyTtlMs,
   }
 }
 
