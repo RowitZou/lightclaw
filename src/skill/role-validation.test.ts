@@ -162,6 +162,24 @@ test('main role exposes remember but not verify', () => {
   assert.deepEqual(filterSkillsForRole([remember, verify], main).map(item => item.name), ['remember'])
 })
 
+test('Phase 7.5 workers expose remember where requested', () => {
+  const remember = skill({ name: 'remember', allowedTools: ['MemoryWrite'] })
+  const roleNames = ['generalist', 'coder', 'reviewer', 'archivist']
+  for (const roleName of roleNames) {
+    const agent = BUNDLED_AGENTS.find(candidate => candidate.agentType === roleName)
+    assert.ok(agent, `missing role ${roleName}`)
+    assert.deepEqual(filterSkillsForRole([remember], agent).map(item => item.name), ['remember'])
+  }
+})
+
+test('archivist exposes verify-env and it stays Bash-scoped', () => {
+  const verifyEnv = skill({ name: 'verify-env', allowedTools: ['Bash'] })
+  const archivist = BUNDLED_AGENTS.find(agent => agent.agentType === 'archivist')
+
+  assert.ok(archivist)
+  assert.deepEqual(filterSkillsForRole([verifyEnv], archivist).map(item => item.name), ['verify-env'])
+})
+
 function role(overrides: Partial<Role>): Role {
   return {
     agentType: 'test-role',

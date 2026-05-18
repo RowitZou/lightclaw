@@ -100,8 +100,87 @@ describe('Feishu workspace tools', () => {
     const records = await readAuditRecords()
     assert.equal(records[0].operation, 'move')
     assert.equal(records[0].status, 'confirmed')
+    assert.equal((records[0].resource as Record<string, unknown>).mode, 'move')
+    assert.equal((records[0].resource as Record<string, unknown>).moved, true)
+    assert.equal((records[0].resource as Record<string, unknown>).renamed, false)
     assert.deepEqual(records[0].sourceAncestry, ['docNotes', 'userFld', 'rootFld'])
     assert.deepEqual(records[0].destAncestry, ['fldPapers', 'userFld', 'rootFld'])
+  })
+
+  it('renames workspace docs in place after confirmation', async () => {
+    const client = makeClient({
+      userFld: [item('notes.docx', 'docNotes', 'docx', 'userFld')],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuMove({ target: 'notes.docx', new_name: 'archive.docx' }, { client }),
+      { ask: async () => ({ behavior: 'allow' }) },
+    )
+    assert.match(result.output, /Renamed "notes\.docx" to "archive\.docx"/)
+    assert.deepEqual(client.renamed, [{ token: 'docNotes', name: 'archive.docx' }])
+    const records = await readAuditRecords()
+    assert.equal(records[0].operation, 'move')
+    assert.equal(records[0].status, 'confirmed')
+    const resource = records[0].resource as Record<string, unknown>
+    assert.equal(resource.mode, 'rename')
+    assert.equal(resource.oldTitle, 'notes.docx')
+    assert.equal(resource.newTitle, 'archive.docx')
+    assert.equal(resource.moved, false)
+    assert.equal(resource.renamed, true)
+  })
+
+  it('moves then renames workspace docs when both fields are set', async () => {
+    const client = makeClient({
+      userFld: [
+        item('papers', 'fldPapers', 'folder', 'userFld'),
+        item('notes.docx', 'docNotes', 'docx', 'userFld'),
+      ],
+      fldPapers: [],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuMove({ target: 'notes.docx', destination: 'papers', new_name: 'archive.docx' }, { client }),
+      { ask: async () => ({ behavior: 'allow' }) },
+    )
+    assert.match(result.output, /Moved "notes\.docx" to "papers" and renamed it to "archive\.docx"/)
+    assert.deepEqual(client.moved, [{ token: 'docNotes', dest: 'fldPapers' }])
+    assert.deepEqual(client.renamed, [{ token: 'docNotes', name: 'archive.docx' }])
+    const records = await readAuditRecords()
+    const resource = records[0].resource as Record<string, unknown>
+    assert.equal(resource.mode, 'move-and-rename')
+    assert.equal(resource.moved, true)
+    assert.equal(resource.renamed, true)
+  })
+
+  it('returns partial WorkerFailure when move succeeds but rename fails', async () => {
+    const client = makeClient({
+      userFld: [
+        item('papers', 'fldPapers', 'folder', 'userFld'),
+        item('notes.docx', 'docNotes', 'docx', 'userFld'),
+      ],
+      fldPapers: [],
+    }, {
+      renameError: new Error('rename rejected'),
+    })
+    const result = await withFeishuSession(
+      () => runFeishuMove({ target: 'notes.docx', destination: 'papers', new_name: 'archive.docx' }, { client }),
+      { ask: async () => ({ behavior: 'allow' }) },
+    )
+    assert.equal(result.isError, true)
+    const envelope = JSON.parse(result.output) as {
+      reason: string
+      partial_result: Record<string, unknown>
+    }
+    assert.equal(envelope.reason, 'feishu-partial-update')
+    assert.deepEqual(envelope.partial_result, {
+      moved: true,
+      renamed: false,
+      oldTitle: 'notes.docx',
+      newName: 'archive.docx',
+      oldParentPath: '/',
+      newParentPath: 'papers',
+    })
+    const records = await readAuditRecords()
+    assert.equal(records[0].status, 'partial')
+    assert.equal((records[0].resource as Record<string, unknown>).mode, 'move-and-rename')
   })
 
   it('refuses to move a folder into its own subtree (cycle)', async () => {
@@ -140,6 +219,22 @@ describe('Feishu workspace tools', () => {
     assert.equal(result.isError, true)
     assert.match(result.output, /already contains an entry named "notes\.docx"/)
     assert.deepEqual(client.moved, [])
+  })
+
+  it('rejects rename when effective destination already has the new name', async () => {
+    const client = makeClient({
+      userFld: [
+        item('notes.docx', 'docNotes', 'docx', 'userFld'),
+        item('archive.docx', 'docArchive', 'docx', 'userFld'),
+      ],
+    })
+    const result = await withFeishuSession(
+      () => runFeishuMove({ target: 'notes.docx', new_name: 'archive.docx' }, { client }),
+      { ask: async () => ({ behavior: 'allow' }) },
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output, /already contains an entry named "archive\.docx"/)
+    assert.deepEqual(client.renamed, [])
   })
 
   it('returns idempotent message when source is already inside destination', async () => {
@@ -504,14 +599,17 @@ function makeClient(
     createFolderError?: Error
     deleteError?: Error
     moveError?: Error
+    renameError?: Error
   } = {},
 ): FeishuClient & {
   deleted: string[]
   moved: Array<{ token: string; dest: string }>
+  renamed: Array<{ token: string; name: string }>
   grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
 } {
   const deleted: string[] = []
   const moved: Array<{ token: string; dest: string }> = []
+  const renamed: Array<{ token: string; name: string }> = []
   const grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }> = []
   const byToken = new Map<string, Record<string, unknown>>([
     ['rootFld', item('LightClaw', 'rootFld', 'folder', null)],
@@ -525,6 +623,7 @@ function makeClient(
   return {
     deleted,
     moved,
+    renamed,
     grants,
     drive: {
       permissionMember: {
@@ -584,6 +683,23 @@ function makeClient(
             moved.push({ token: input.path?.file_token ?? '', dest: input.data?.folder_token ?? '' })
             return { code: 0, data: {} }
           },
+          update: async (input: {
+            path?: { file_token?: string }
+            data?: { name?: string; title?: string }
+            request_body?: { title?: string }
+          }) => {
+            if (errors.renameError) {
+              throw errors.renameError
+            }
+            const token = input.path?.file_token ?? ''
+            const name = input.data?.name ?? input.data?.title ?? input.request_body?.title ?? ''
+            renamed.push({ token, name })
+            const entry = byToken.get(token)
+            if (entry) {
+              entry.name = name
+            }
+            return { code: 0, data: {} }
+          },
         },
         metadata: {
           batchQuery: async () => ({ code: 0, data: { metas: [] } }),
@@ -593,6 +709,7 @@ function makeClient(
   } as unknown as FeishuClient & {
     deleted: string[]
     moved: Array<{ token: string; dest: string }>
+    renamed: Array<{ token: string; name: string }>
     grants: Array<{ token: string; memberId: string; memberType: string; perm: string; type: string }>
   }
 }

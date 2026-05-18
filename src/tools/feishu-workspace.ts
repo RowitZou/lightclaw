@@ -12,6 +12,7 @@ import {
   grantFolderPermission,
   listFolder,
   moveFile,
+  renameFile,
   type FeishuDriveItemType,
 } from '../channels/feishu/resources/folder.js'
 import {
@@ -48,9 +49,15 @@ const feishuDeleteInputSchema = z.object({
 })
 
 const feishuMoveInputSchema = z.object({
-  target: z.string().min(1).describe('Name or path of the doc/folder to move within your workspace.'),
-  destination: z.string().describe('Destination folder path within your workspace. Use "/" or "." for workspace root.'),
-})
+  target: z.string().min(1).describe('Name or path of the doc/folder to move and/or rename within your workspace.'),
+  destination: z.string().optional().describe('Destination folder path within your workspace. Use "/" or "." for workspace root. Omit when only renaming in place.'),
+  new_name: z.string().min(1).max(80).regex(/^[^/\\:]+$/, {
+    message: 'New name cannot contain / \\ or :',
+  }).optional().describe('New basename for the doc/folder. Omit when only moving without renaming.'),
+}).refine(
+  data => data.destination !== undefined || data.new_name !== undefined,
+  { message: 'at least one of destination / new_name must be set' },
+)
 
 export type FeishuListInput = z.infer<typeof feishuListInputSchema>
 export type FeishuCreateFolderInput = z.infer<typeof feishuCreateFolderInputSchema>
@@ -117,7 +124,7 @@ export const feishuDeleteTool = buildTool<FeishuDeleteInput, string>({
 export const feishuMoveTool = buildTool<FeishuMoveInput, string>({
   name: 'FeishuMove',
   description:
-    'Move a file or folder within the current user private Feishu cloud workspace. Source and destination must both stay inside this workspace. 中文：在当前用户的飞书工作区内部移动文件或文件夹。',
+    'Move and / or rename a file or folder within the current user private Feishu cloud workspace — Unix `mv` semantics. Provide `destination` to relocate, `new_name` to rename, or both to do both atomically (move runs first, then rename). At least one of `destination` / `new_name` is required. Source and destination must both stay inside this workspace. When both fields are set and only the rename leg fails, the tool returns `WorkerFailure` with `partial_result` so the caller can retry the rename alone. 中文：在当前用户的飞书工作区内部移动 (`destination`) 和 / 或重命名 (`new_name`) 文件或文件夹（Unix `mv` 同款），两个字段至少给一个。',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -321,15 +328,12 @@ export async function runFeishuMove(
   deps: { client: FeishuClient },
 ): Promise<ToolCallResult<string>> {
   const ctx = await resolveCurrentFeishuWorkspace(deps.client)
+  const shouldMove = input.destination !== undefined
+  const shouldRename = input.new_name !== undefined
   const source = await resolveEntryByNameOrPath({
     client: deps.client,
     workspaceToken: ctx.workspace.folderToken,
     target: input.target,
-  })
-  const dest = await resolveFolderPath({
-    client: deps.client,
-    workspaceToken: ctx.workspace.folderToken,
-    path: input.destination,
   })
   const sourceAncestry = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
@@ -339,64 +343,174 @@ export async function runFeishuMove(
     canonicalUser: ctx.canonicalUser,
     attemptedTarget: input.target,
   })
-  const destAncestry = await assertWithinWorkspaceOrAudit({
-    ancestry: ctx.ancestry,
-    token: dest.token,
-    workspaceToken: ctx.workspace.folderToken,
-    toolName: 'FeishuMove',
-    canonicalUser: ctx.canonicalUser,
-    attemptedTarget: input.destination,
-  })
-  if (source.type === 'folder' && destAncestry.includes(source.token)) {
+  const currentParentToken = sourceAncestry[1]
+  if (!currentParentToken) {
+    throw new Error(`Cannot move or rename "${source.path}" because its parent folder is unknown.`)
+  }
+  const dest = shouldMove
+    ? await resolveFolderPath({
+        client: deps.client,
+        workspaceToken: ctx.workspace.folderToken,
+        path: input.destination,
+      })
+    : { token: currentParentToken, path: parentPath(source.path) }
+  const destAncestry = shouldMove
+    ? await assertWithinWorkspaceOrAudit({
+        ancestry: ctx.ancestry,
+        token: dest.token,
+        workspaceToken: ctx.workspace.folderToken,
+        toolName: 'FeishuMove',
+        canonicalUser: ctx.canonicalUser,
+        attemptedTarget: input.destination ?? '/',
+      })
+    : ctx.ancestry.ancestryChain(dest.token)
+  if (shouldMove && source.type === 'folder' && destAncestry.includes(source.token)) {
     const error = new Error(`Cannot move "${source.path}" into its own subtree.`)
-    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuMove', input.destination, error, destAncestry)
+    await auditBoundaryViolation(ctx.canonicalUser, 'FeishuMove', input.destination ?? '/', error, destAncestry)
     throw error
   }
-  if (sourceAncestry[1] === dest.token) {
+  if (shouldMove && !shouldRename && currentParentToken === dest.token) {
     return { output: `"${source.path}" is already in "${dest.path}". No move needed.` }
   }
   const existingInDest = await listFolder({ client: deps.client, folderToken: dest.token })
-  if (existingInDest.items.some(item => item.name === source.name && item.token !== source.token)) {
+  const effectiveName = input.new_name ?? source.name
+  if (existingInDest.items.some(item => item.name === effectiveName && item.token !== source.token)) {
     return {
-      output: `Destination "${dest.path}" already contains an entry named "${source.name}". Delete or rename the existing entry first.`,
+      output: `Destination "${dest.path}" already contains an entry named "${effectiveName}". Delete or rename the existing entry first.`,
       isError: true,
     }
   }
   const descendantCount = source.type === 'folder'
     ? await countDescendants({ client: deps.client, folderToken: source.token })
     : 0
-  const preview = source.type === 'folder'
-    ? `Move folder "${source.path}" and ${descendantCount} contained item(s) to "${dest.path}".`
-    : `Move ${displayType(source.type)} "${source.path}" to "${dest.path}".`
+  const mode = shouldMove && shouldRename
+    ? 'move-and-rename'
+    : shouldRename
+      ? 'rename'
+      : 'move'
+  const preview = formatMovePreview({
+    type: source.type,
+    sourcePath: source.path,
+    destPath: dest.path,
+    newName: input.new_name,
+    descendantCount,
+    mode,
+  })
   const resource = {
     kind: source.type,
     name: source.name,
     token: source.token,
     sourcePath: source.path,
-    destPath: dest.path,
-    destFolderToken: dest.token,
+    oldTitle: source.name,
+    mode,
+    moved: shouldMove,
+    renamed: shouldRename,
+    ...(shouldMove ? { destPath: dest.path, destFolderToken: dest.token } : {}),
+    ...(shouldRename ? { newTitle: input.new_name } : {}),
   }
   await requireFeishuWriteConfirmation({ operation: 'move', preview, resource, deferConfirmedAudit: true })
   const retryCounter = { count: 0 }
+  let moved = false
+  let renamed = false
   try {
-    await moveFile({ client: deps.client, token: source.token, type: source.type, destFolderToken: dest.token, retryCounter })
+    if (shouldMove) {
+      await moveFile({ client: deps.client, token: source.token, type: source.type, destFolderToken: dest.token, retryCounter })
+      moved = true
+    }
+    if (shouldRename) {
+      await renameFile({ client: deps.client, token: source.token, type: source.type, name: input.new_name!, retryCounter })
+      renamed = true
+    }
     ctx.ancestry.evict(source.token)
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
       userId: ctx.canonicalUser,
       operation: 'move',
-      resource,
+      resource: { ...resource, moved, renamed },
       preview,
       status: 'confirmed',
       sourceAncestry,
       destAncestry,
       ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
     })
-    return { output: `Moved "${source.path}" to "${dest.path}".` }
+    return { output: formatMoveSuccess({ sourcePath: source.path, destPath: dest.path, newName: input.new_name, mode }) }
   } catch (error) {
+    ctx.ancestry.evict(source.token)
+    if (shouldMove && shouldRename && moved && !renamed) {
+      await recordFeishuWriteAudit({
+        at: new Date().toISOString(),
+        userId: ctx.canonicalUser,
+        operation: 'move',
+        resource: { ...resource, moved: true, renamed: false },
+        preview,
+        status: 'partial',
+        sourceAncestry,
+        destAncestry,
+        error: error instanceof Error ? error.message : String(error),
+        ...(retryCounter.count > 0 ? { retries: retryCounter.count } : {}),
+      })
+      return {
+        output: JSON.stringify({
+          status: 'failed',
+          reason: 'feishu-partial-update',
+          partial_result: {
+            moved: true,
+            renamed: false,
+            oldTitle: source.name,
+            newName: input.new_name,
+            oldParentPath: parentPath(source.path),
+            newParentPath: dest.path,
+          },
+          message: `move succeeded but rename failed: ${feishuToolErrorMessage(error)}`,
+        }, null, 2),
+        isError: true,
+      }
+    }
     await auditFailed('move', preview, resource, error, { sourceAncestry, destAncestry, retries: retryCounter.count })
     throw error
   }
+}
+
+function parentPath(workspacePath: string): string {
+  if (workspacePath === '/' || !workspacePath.includes('/')) {
+    return '/'
+  }
+  return workspacePath.slice(0, workspacePath.lastIndexOf('/')) || '/'
+}
+
+function formatMovePreview(input: {
+  type: FeishuDriveItemType
+  sourcePath: string
+  destPath: string
+  newName?: string
+  descendantCount: number
+  mode: 'move' | 'rename' | 'move-and-rename'
+}): string {
+  const label = input.type === 'folder'
+    ? `folder "${input.sourcePath}" and ${input.descendantCount} contained item(s)`
+    : `${displayType(input.type)} "${input.sourcePath}"`
+  if (input.mode === 'rename') {
+    return `Rename ${label} to "${input.newName}".`
+  }
+  if (input.mode === 'move-and-rename') {
+    return `Move ${label} to "${input.destPath}" and rename it to "${input.newName}".`
+  }
+  return `Move ${label} to "${input.destPath}".`
+}
+
+function formatMoveSuccess(input: {
+  sourcePath: string
+  destPath: string
+  newName?: string
+  mode: 'move' | 'rename' | 'move-and-rename'
+}): string {
+  if (input.mode === 'rename') {
+    return `Renamed "${input.sourcePath}" to "${input.newName}".`
+  }
+  if (input.mode === 'move-and-rename') {
+    return `Moved "${input.sourcePath}" to "${input.destPath}" and renamed it to "${input.newName}".`
+  }
+  return `Moved "${input.sourcePath}" to "${input.destPath}".`
 }
 
 async function auditBoundaryViolation(

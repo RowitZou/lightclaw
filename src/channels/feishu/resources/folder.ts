@@ -135,6 +135,37 @@ export async function moveFile(input: {
   })
 }
 
+export async function renameFile(input: {
+  client: FeishuClient
+  token: string
+  type: FeishuDriveItemType
+  name: string
+  retryCounter?: { count: number }
+}): Promise<FeishuEnvelope> {
+  const client = input.client as unknown as FeishuFolderClient
+  const type = driveType(input.type)
+  return withFeishuRetry(() => callFeishu(() => {
+    if (client.drive.v1.file.update) {
+      return client.drive.v1.file.update({
+        path: { file_token: input.token },
+        params: { type },
+        data: { name: input.name, title: input.name },
+      })
+    }
+    if (client.request) {
+      return client.request({
+        method: 'PATCH',
+        url: `/open-apis/drive/v1/files/${encodeURIComponent(input.token)}`,
+        data: { type, name: input.name, title: input.name },
+      })
+    }
+    throw new Error('Feishu file rename API is unavailable in this SDK client.')
+  }), {
+    onRetry: (c, attempt, delayMs) => logFeishuRetry(c, attempt, delayMs, 'folder.rename'),
+    ...(input.retryCounter ? { retryCounter: input.retryCounter } : {}),
+  })
+}
+
 export async function grantFolderPermission(input: {
   client: FeishuClient
   folderToken: string
@@ -274,6 +305,7 @@ type FeishuFolderClient = {
         list(input: unknown): Promise<FeishuEnvelope>
         delete(input: unknown): Promise<FeishuEnvelope>
         move(input: unknown): Promise<FeishuEnvelope>
+        update?(input: unknown): Promise<FeishuEnvelope>
       }
     }
   }

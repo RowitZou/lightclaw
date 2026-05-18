@@ -1,0 +1,37 @@
+import type { LoadedSkill } from '../types.js'
+
+export const verifyEnvSkill: LoadedSkill = {
+  name: 'verify-env',
+  description: [
+    'Check the health of language runtimes and container engines the user / requester depends on.',
+    'TRIGGER when the request mentions conda / pip / docker setup, environment broken, package conflict, container daemon down, or when validating that an env is ready before a heavy build / training run.',
+    'SKIP when the request is purely code-level (use `verify` instead) or when no env / runtime is in scope.',
+  ].join('\n'),
+  whenToUse: 'The requester needs to know whether a conda / pip / docker setup is healthy before relying on it.',
+  userInvocable: true,
+  allowedTools: ['Bash'],
+  source: 'builtin',
+  filePath: 'builtin:verify-env',
+  body: [
+    '# Verify Env',
+    '',
+    'Check the health of language runtimes and container engines in the current shell environment.',
+    '',
+    '## Process',
+    '1. Pick the runtimes relevant to the request — usually conda, pip, and / or docker; broaden only if the user asks.',
+    '2. Run a narrow, fast probe for each:',
+    '   - conda: `conda env list` to enumerate envs; `conda list -n <env>` only when a specific env is named in the request.',
+    '   - pip: `pip check` (resolves dependency conflicts in the active env) and / or `pip list --outdated` if the request mentions stale packages.',
+    '   - docker: `docker info` (daemon reachable + storage driver healthy); `docker ps` only if a specific container is referenced.',
+    '3. Classify each result as healthy / unhealthy / unknown:',
+    '   - healthy: probe returned 0 with no warnings.',
+    '   - unhealthy: probe returned non-zero, or output names a concrete problem (broken dependency, daemon unreachable, missing env).',
+    '   - unknown: probe could not run (binary absent, permission denied, timeout).',
+    '4. Report one section per runtime — name, status, and the one-line evidence from the probe. Recommend the narrowest fix only when status is unhealthy and the fix is obvious; otherwise hand the diagnosis back without prescribing.',
+    '',
+    '## Guidance',
+    '- Stay shallow — one probe per runtime, not an audit. Deep dives belong in a separate task.',
+    '- Do not modify env state from inside this skill (no `conda install` / `pip install` / `docker pull`). Report and let the requester or a follow-up task act.',
+    '- If a runtime is genuinely not in scope of the request, say so and skip it rather than running a probe to be thorough.',
+  ].join('\n'),
+}

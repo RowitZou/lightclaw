@@ -38,6 +38,7 @@ export const BUNDLED_AGENTS: Role[] = [
     whenToUse:
       'Multi-step research, ambiguous searches, or tasks that may span many files. Self-tracks progress via TodoWrite for complex chains; saves durable findings via MemoryWrite.',
     tools: ['*'],
+    skills: ['remember'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
   },
@@ -93,7 +94,7 @@ export const BUNDLED_AGENTS: Role[] = [
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + verify skill + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill'],
-    skills: ['verify'],
+    skills: ['verify', 'remember'],
     systemPrompt: coderPrompt,
     kind: 'worker',
     outputContract: 'report',
@@ -120,6 +121,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'MemoryRead',
       'TodoWrite',
     ],
+    skills: ['verify-env', 'remember'],
     systemPrompt: archivistPrompt,
     kind: 'worker',
     outputContract: 'report',
@@ -131,7 +133,7 @@ export const BUNDLED_AGENTS: Role[] = [
     description:
       'Pre-delivery review specialist (read-only artifact survey; verify skill + memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch'],
-    skills: ['verify'],
+    skills: ['verify', 'remember'],
     reachableRoles: ['coder'],
     systemPrompt: reviewerPrompt,
     kind: 'worker',

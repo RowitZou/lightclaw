@@ -8,7 +8,8 @@ import { loadChannelConfig } from './channels/config.js'
 import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
-import { initializeAgents } from './agents/registry.js'
+import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
+import { lightclawHome } from './paths.js'
 import { workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
 import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
@@ -111,6 +112,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   startImagePrefetchIfNeeded(resolvedConfig)
   const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   initializeAgents()
+  await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   await recoverOrphanedBranchPlaceholders(resolvedConfig.sessionsDir)
     .then(count => {
       if (count > 0) {

@@ -60,7 +60,7 @@ export type FeishuWriteAudit = {
   operation: FeishuWriteOperation
   resource?: Record<string, unknown>
   preview?: string
-  status?: 'confirmed' | 'denied' | 'failed'
+  status?: 'confirmed' | 'denied' | 'failed' | 'partial'
   error?: string | FeishuWriteAuditError
   retries?: number
   permissionGrants?: FeishuPermissionGrants
