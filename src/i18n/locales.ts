@@ -43,10 +43,6 @@ export const LOCALES = {
     'cmd.ceiling.desc': '查看所有 identity 的 ceiling，或为某个用户设置 ceiling。不带参数列出全部。',
     'cmd.user.usage': '/user list|pending|approve|reject|unlink|remove|feedback',
     'cmd.user.desc': '管理身份与配对请求',
-    'cmd.fresh.usage': '/fresh <prompt>',
-    'cmd.fresh.desc': '运行临时一次性会话（不读 memory、不留 transcript、强制 mode=default）',
-    'cmd.branch.usage': '/branch <prompt>',
-    'cmd.branch.desc': '从主对话分一条独立线运行，完成后结果回写主对话',
     'cmd.stop.usage': '/stop',
     'cmd.stop.desc': '中断进行中的 turn（已写入的文件不会回滚）',
     'cmd.feedback.usage': '/feedback <text>',
@@ -192,21 +188,6 @@ export const LOCALES = {
     'user.feedback.pageOutOfRange': '页码 {page} 超出范围（1..{total}）。',
     'user.feedback.title': '反馈（第 {page}/{total} 页，共 {count} 条）：',
     'user.localOnlyReject': 'LocalRuntime 单用户模式；不能将发送方绑定为 "{name}"。\n本机 LightClaw 只能绑定 admin 用户 "{admin}"。\n请把 ~/.lightclaw/config.json 的 runtime.backend 改成 "docker" 启用多用户模式，或仅将 admin 的飞书账号绑定到本机实例。',
-
-    // ---- /fresh ----
-    'fresh.usage': '用法：/fresh <prompt>',
-    'fresh.prefix': '[fresh]',
-    'fresh.empty': '(无回复)',
-    'fresh.error': '[fresh] 错误：{detail}',
-
-    // ---- /branch ----
-    'branch.usage': '用法：/branch <prompt>',
-    'branch.channelOnly': '/branch 当前只在 channel 会话中可用。',
-    'branch.runnerOnly': 'branch runner 未接管这条命令；请重发 /branch <prompt>。',
-    'branch.placeholder.running': '[分支 #{id} 进行中…]',
-    'branch.placeholder.completed': '[分支 #{id} 已完成]',
-    'branch.placeholder.failed': '[分支 #{id} 失败：{reason}]',
-    'branch.placeholder.interrupted': '[分支 #{id} 中断未完成]',
 
     // ---- BackgroundTask 完成卡 ----
     'bg.card.success.title': '✅ 后台任务完成：{label}',
@@ -411,7 +392,6 @@ export const LOCALES = {
     'channel.welcome.admin.cmdHeader': '**管理员命令**',
     'channel.welcome.cmd.help': '`/help` — 查看完整命令列表',
     'channel.welcome.cmd.status': '`/status` — 查看当前会话与沙箱状态',
-    'channel.welcome.cmd.fresh': '`/fresh <prompt>` — 临时一次性会话（不计入历史）',
     'channel.welcome.cmd.feedback': '`/feedback <内容>` — 给管理员留反馈',
     'channel.welcome.cmd.stop': '`/stop` — 中止本轮回复',
     'channel.welcome.admin.cmd.user': '`/user list|pending|approve|reject|unlink|remove` — 用户与配对管理',
@@ -497,10 +477,6 @@ export const LOCALES = {
     'cmd.ceiling.desc': 'Show every identity\'s ceiling, or set one user\'s ceiling. Bare /ceiling lists all.',
     'cmd.user.usage': '/user list|pending|approve|reject|unlink|remove|feedback',
     'cmd.user.desc': 'Manage identities and pairing requests',
-    'cmd.fresh.usage': '/fresh <prompt>',
-    'cmd.fresh.desc': 'Run an ephemeral one-shot session (no memory, no transcript, mode=default)',
-    'cmd.branch.usage': '/branch <prompt>',
-    'cmd.branch.desc': 'Run an independent branch and merge the result back into the main conversation',
     'cmd.stop.usage': '/stop',
     'cmd.stop.desc': 'Abort the in-flight turn (already-written files are not rolled back)',
     'cmd.feedback.usage': '/feedback <text>',
@@ -649,21 +625,6 @@ export const LOCALES = {
     'user.feedback.pageOutOfRange': 'Page {page} out of range (1..{total}).',
     'user.feedback.title': 'Feedback (page {page}/{total}, total {count}):',
     'user.localOnlyReject': 'LocalRuntime is single-user; cannot bind sender as "{name}".\nOnly the admin user "{admin}" can be bound on this LightClaw instance.\nSwitch runtime.backend to "docker" in ~/.lightclaw/config.json to enable multi-user mode, or bind only the admin Feishu account to this local instance.',
-
-    // ---- /fresh ----
-    'fresh.usage': 'Usage: /fresh <prompt>',
-    'fresh.prefix': '[fresh]',
-    'fresh.empty': '(no response)',
-    'fresh.error': '[fresh] error: {detail}',
-
-    // ---- /branch ----
-    'branch.usage': 'Usage: /branch <prompt>',
-    'branch.channelOnly': '/branch is currently only available in channel sessions.',
-    'branch.runnerOnly': 'The branch runner did not intercept this command; please resend /branch <prompt>.',
-    'branch.placeholder.running': '[branch #{id} running…]',
-    'branch.placeholder.completed': '[branch #{id} completed]',
-    'branch.placeholder.failed': '[branch #{id} failed: {reason}]',
-    'branch.placeholder.interrupted': '[branch #{id} interrupted before completion]',
 
     // ---- BackgroundTask completion cards ----
     'bg.card.success.title': '✅ BackgroundTask completed: {label}',
@@ -868,7 +829,6 @@ export const LOCALES = {
     'channel.welcome.admin.cmdHeader': '**Admin commands**',
     'channel.welcome.cmd.help': '`/help` — show the full command list',
     'channel.welcome.cmd.status': '`/status` — current session and sandbox status',
-    'channel.welcome.cmd.fresh': '`/fresh <prompt>` — one-shot ephemeral session (not persisted)',
     'channel.welcome.cmd.feedback': '`/feedback <text>` — leave feedback for admin',
     'channel.welcome.cmd.stop': '`/stop` — abort the current reply',
     'channel.welcome.admin.cmd.user': '`/user list|pending|approve|reject|unlink|remove` — manage users and pairings',
