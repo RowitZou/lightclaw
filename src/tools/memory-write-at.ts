@@ -17,7 +17,7 @@ export const memoryWriteAtTool = buildTool({
   name: 'MemoryWriteAt',
   internalOnly: true,
   description:
-    'Internal autoDream tool: write a memory markdown file at an explicit path under the current user memory directory.',
+    'Internal memoryCurator tool: write a memory markdown file at an explicit path under the current user memory directory.',
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({

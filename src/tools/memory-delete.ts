@@ -16,7 +16,7 @@ export const memoryDeleteTool = buildTool({
   name: 'MemoryDelete',
   internalOnly: true,
   description:
-    'Internal autoDream tool: delete one memory markdown file under the current user memory directory.',
+    'Internal memoryCurator tool: delete one memory markdown file under the current user memory directory.',
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({

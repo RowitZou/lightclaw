@@ -18,7 +18,7 @@ export const memoryMoveTool = buildTool({
   name: 'MemoryMove',
   internalOnly: true,
   description:
-    'Internal autoDream tool: move one memory markdown file to another path under the current user memory directory.',
+    'Internal memoryCurator tool: move one memory markdown file to another path under the current user memory directory.',
   domain: 'host',
   riskLevel: 'safe',
   inputSchema: z.object({
