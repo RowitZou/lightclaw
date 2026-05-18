@@ -44,6 +44,13 @@ export type BackgroundTaskEntry = {
   id: string
   ownerCanonicalUser: string
   prompt: string
+  /** AgentType of the dispatched worker role (e.g. 'generalist',
+   *  'webSearcher', or a user-defined role). Surfaced by ListDispatches
+   *  so the LLM can tell which role each scheduled / background task
+   *  runs as. Pre-Phase-8 stored tasks lack this field; the loader
+   *  injects 'generalist' as the legacy default before zod parse so
+   *  old on-disk entries continue to parse cleanly. */
+  role: string
   schedule: ScheduleSpec
   label: string
   notifyOn: 'success' | 'failure' | 'always'
@@ -116,6 +123,7 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   id: z.string().min(1),
   ownerCanonicalUser: z.string().min(1),
   prompt: z.string().min(1),
+  role: z.string().min(1),
   schedule: scheduleSpecSchema,
   label: z.string().min(1),
   notifyOn: z.enum(['success', 'failure', 'always']),

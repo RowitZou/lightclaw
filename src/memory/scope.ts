@@ -49,6 +49,30 @@ export async function resolveReadableMemoryDirsForRole(
   }
 }
 
+/** Classify a target path relative to the memory root into the L1/L2/L3
+ *  tier system documented in `# LightClaw Memory Layers Notes`:
+ *  - **L1** — file at the user root (`<memoryDir>/foo.md`).
+ *  - **L2** — file under the cross-role shared workboard (`<memoryDir>/_shared/...`).
+ *  - **L3** — file under a worker's role-private dir (`<memoryDir>/<agentType>/...`).
+ *  Returns null when the target sits outside the memory root (boundary
+ *  violation; caller treats as denied). Used by `MemoryWrite` audit row
+ *  `sourceTier` field so post-hoc audit can attribute writes per tier
+ *  without re-deriving from path strings. */
+export function resolveSourceTier(targetPath: string, memoryDir: string): 'L1' | 'L2' | 'L3' | null {
+  const rel = path.relative(path.resolve(memoryDir), path.resolve(targetPath))
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return null
+  }
+  const segments = rel.split(path.sep).filter(Boolean)
+  if (segments.length === 1) {
+    return 'L1'
+  }
+  if (segments[0] === '_shared') {
+    return 'L2'
+  }
+  return 'L3'
+}
+
 export function memoryPathWithinDir(child: string, parent: string): boolean {
   const relative = path.relative(path.resolve(parent), path.resolve(child))
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))

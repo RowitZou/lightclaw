@@ -8,6 +8,7 @@ import type { Role } from '../agents/types.js'
 import {
   resolveMemoryDirsForRole,
   resolveReadableMemoryDirsForRole,
+  resolveSourceTier,
 } from './scope.js'
 
 let tmpRoot = ''
@@ -69,6 +70,22 @@ describe('resolveMemoryDirsForRole', () => {
       path.join(memoryDir, 'webSearcher'),
       path.join(memoryDir, 'localExplorer'),
     ]))
+  })
+})
+
+describe('resolveSourceTier', () => {
+  it('classifies L1 / L2 / L3 paths under memory root', () => {
+    assert.equal(resolveSourceTier(path.join(memoryDir, 'note.md'), memoryDir), 'L1')
+    assert.equal(resolveSourceTier(path.join(memoryDir, '_shared', 'shared-note.md'), memoryDir), 'L2')
+    assert.equal(resolveSourceTier(path.join(memoryDir, '_shared', 'sub', 'deep.md'), memoryDir), 'L2')
+    assert.equal(resolveSourceTier(path.join(memoryDir, 'webSearcher', 'note.md'), memoryDir), 'L3')
+    assert.equal(resolveSourceTier(path.join(memoryDir, 'coder', 'sub', 'deep.md'), memoryDir), 'L3')
+  })
+
+  it('returns null for paths outside the memory root', () => {
+    assert.equal(resolveSourceTier(path.join(tmpRoot, 'outside.md'), memoryDir), null)
+    assert.equal(resolveSourceTier(path.join(memoryDir, '..', 'sibling.md'), memoryDir), null)
+    assert.equal(resolveSourceTier(memoryDir, memoryDir), null)
   })
 })
 

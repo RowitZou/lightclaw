@@ -336,6 +336,7 @@ function fakeTask(overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskE
     id: 'alice-task',
     ownerCanonicalUser: 'alice',
     prompt: 'check the workspace and summarize anything important',
+    role: 'generalist',
     schedule: { kind: 'interval', everyMinutes: 60 },
     label: 'Workspace check',
     notifyOn: 'always',

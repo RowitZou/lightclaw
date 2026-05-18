@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
 import { getMainRole } from '../agents/registry.js'
 import { normalizeMemoryFilename, writeMemoryFile } from '../memory/auto-memory.js'
-import { memoryPathWithinDir, resolveMemoryDirsForRole } from '../memory/scope.js'
+import { memoryPathWithinDir, resolveMemoryDirsForRole, resolveSourceTier } from '../memory/scope.js'
 import { isMemoryType } from '../memory/types.js'
 import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -49,6 +49,7 @@ Choose \`type\` carefully:
     const memoryDir = getMemoryDir()
     const resolved = resolveMemoryDirsForRole(role, memoryDir)
     const targetPath = safeTargetPath(resolved.selfWriteDir, input.filename)
+    const sourceTier = resolveSourceTier(targetPath, memoryDir) ?? undefined
     try {
       if (!memoryPathWithinDir(targetPath, resolved.selfWriteDir)) {
         throw new Error('Memory filename must stay within the role memory directory.')
@@ -61,6 +62,7 @@ Choose \`type\` carefully:
           targetPath,
           status: 'denied',
           deniedReason: `Unsupported memory type: ${input.type}`,
+          sourceTier,
         })
         return {
           output: `Unsupported memory type: ${input.type}`,
@@ -80,6 +82,7 @@ Choose \`type\` carefully:
         filename: input.filename,
         targetPath,
         status: 'written',
+        sourceTier,
       })
 
       return {
@@ -92,6 +95,7 @@ Choose \`type\` carefully:
         targetPath,
         status: 'denied',
         deniedReason: error instanceof Error ? error.message : String(error),
+        sourceTier,
       })
       return {
         output: error instanceof Error ? error.message : String(error),
@@ -107,6 +111,7 @@ async function auditMemoryWrite(input: {
   targetPath: string
   status: 'written' | 'denied'
   deniedReason?: string
+  sourceTier?: 'L1' | 'L2' | 'L3'
 }): Promise<void> {
   await recordMemoryWriteAudit({
     at: new Date().toISOString(),
@@ -116,6 +121,7 @@ async function auditMemoryWrite(input: {
     targetPath: input.targetPath,
     status: input.status,
     operation: 'write',
+    ...(input.sourceTier ? { sourceTier: input.sourceTier } : {}),
     ...(input.deniedReason ? { deniedReason: input.deniedReason } : {}),
   })
 }

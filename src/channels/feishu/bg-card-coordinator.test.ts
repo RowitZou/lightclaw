@@ -131,6 +131,7 @@ function fakePending(outcome: PendingCardAction['outcome']): PendingCardAction {
       id: 'task-1',
       ownerCanonicalUser: 'alice',
       prompt: 'check',
+      role: 'generalist',
       schedule: { kind: 'interval', everyMinutes: 60 },
       label: 'Check',
       notifyOn: 'always',

@@ -79,6 +79,19 @@ describe('background-task store', () => {
     assert.deepEqual(raw.tasks[0].allowedTools, ['Bash(find:*)'])
   })
 
+  it("backfills role='generalist' for legacy entries persisted before Phase 8 PR5", () => {
+    const target = backgroundTaskStorePath('alice')
+    mkdirSync(path.dirname(target), { recursive: true })
+    // Pre-PR5 v2 entries lacked `role`; loader must inject 'generalist'
+    // so the zod schema (which now requires role) parses cleanly.
+    const legacy = { ...fakeTask('alice', 'task-1') } as Record<string, unknown>
+    delete legacy.role
+    writeFileSync(target, JSON.stringify({ version: 2, tasks: [legacy] }), 'utf8')
+    const loaded = loadBackgroundTasks('alice')
+    assert.equal(loaded.length, 1)
+    assert.equal(loaded[0].role, 'generalist')
+  })
+
   it('adds multiple tasks without replacing unrelated entries', () => {
     addBackgroundTask('alice', fakeTask('alice', 'task-1'))
     addBackgroundTask('alice', fakeTask('alice', 'task-2'))
@@ -235,6 +248,7 @@ function fakeTask(user: string, id: string): BackgroundTaskEntry {
     id,
     ownerCanonicalUser: user,
     prompt: 'check the workspace and summarize anything important',
+    role: 'generalist',
     schedule: { kind: 'interval', everyMinutes: 60 },
     label: 'Workspace check',
     notifyOn: 'always',

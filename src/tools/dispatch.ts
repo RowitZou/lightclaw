@@ -417,6 +417,7 @@ export async function executeDispatch(
     id: dispatchId,
     ownerCanonicalUser: userId,
     prompt: input.prompt,
+    role: input.role,
     schedule: normalizedSchedule,
     label: input.label ?? `${input.role} dispatch`,
     notifyOn: 'always' as const,
@@ -511,7 +512,7 @@ export const listDispatchesTool = buildTool({
     const tasks = loadBackgroundTasks(userId).map(task => ({
       id: task.id,
       label: task.label,
-      role: 'generalist',
+      role: task.role,
       schedule: task.schedule,
       enabled: task.enabled,
       nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,

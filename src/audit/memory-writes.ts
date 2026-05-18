@@ -13,6 +13,11 @@ export type MemoryWriteAudit = {
   status: 'written' | 'denied'
   deniedReason?: string
   operation?: 'write' | 'read'
+  /** L1 = user root, L2 = `_shared`, L3 = role-private. Set when the
+   *  target falls within the memory dir; omitted on boundary violations
+   *  (path resolves outside memoryDir). Resolved via
+   *  `resolveSourceTier` in `src/memory/scope.ts`. */
+  sourceTier?: 'L1' | 'L2' | 'L3'
 }
 
 export async function recordMemoryWriteAudit(record: MemoryWriteAudit): Promise<void> {

@@ -55,11 +55,17 @@ export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[
     }
     const tasks: BackgroundTaskEntry[] = []
     for (const candidate of raw.tasks) {
-      const candidateWithMigration =
+      const baseCandidate =
         raw.version === 1
           ? { ...(candidate as object), allowedTools: undefined }
-          : candidate
-      const result = backgroundTaskEntrySchema.safeParse(candidateWithMigration)
+          : { ...(candidate as object) }
+      // Phase 8 PR5: backfill role for entries persisted before the field
+      // existed. 'generalist' matches the legacy ListDispatches hardcoded
+      // default so old entries keep their pre-PR5 displayed role.
+      if (typeof (baseCandidate as { role?: unknown }).role !== 'string') {
+        ;(baseCandidate as { role: string }).role = 'generalist'
+      }
+      const result = backgroundTaskEntrySchema.safeParse(baseCandidate)
       if (result.success) {
         tasks.push(result.data)
       }
