@@ -94,6 +94,7 @@ The dispatched role starts with a fresh context. It has NOT seen this conversati
 - If you need a short response, say so ("report in under 200 words").
 - Lookups: hand over the exact pattern / path. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
 - NEVER write "based on your findings, fix the bug" or "based on the research, implement it". That pushes synthesis onto the dispatched role instead of you. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+- When the work hinges on bytes already in your context (an image the user just sent, a downloaded PDF), pass the workspace path via the \`attachments\` field instead of describing the file in prose — the worker then sees the bytes inline and does not have to Read them again.
 
 For schedule≠'now' (background) dispatches, additional rules:
 - The prompt is fed to a fresh agent at FIRE TIME, with no chat history. Write it as an imperative to be executed AT the scheduled fire moment.
@@ -114,6 +115,17 @@ resumeFrom: 'last' | <dispatchId> — continue a previous dispatch instead of st
 - Use when multi-hop work spans dispatches: round 1 did initial research, round 2 needs to build on round 1's findings without re-fetching.
 - 'last' = resume the most recent dispatch of the same role for the same user. Pass a specific dispatchId (from ListDispatches) when you need a particular one.
 - Do NOT use resumeFrom when the prior dispatch is irrelevant — fresh forks have cleaner cache behavior.
+
+## attachments (optional)
+
+attachments: <absolute workspace path>[] — image / pdf files provided inline to the dispatched role's first user message, so the worker sees the bytes natively without having to Read them again.
+
+- Every path must be absolute and resolve inside the current workspace. Non-existent paths and directories are rejected.
+- Supported inline kinds: jpg / png / gif / webp / pdf. Other types stay path-only and the worker will need to Read them.
+- Oversize files (caps in attachments config) and providers without matching capability fall back to path-only with no error — the path still appears in the worker's prompt so it can decide to Read.
+- Only valid with mode='blocking'. Background dispatches must include the path in the prompt and let the worker Read it at fire time.
+
+Use when the work hinges on bytes you already have (an image the user just sent, a downloaded PDF). Skip when the worker would walk the file anyway as part of broader exploration.
 
 ## Disambiguating user-intended time
 
