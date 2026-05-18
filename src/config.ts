@@ -331,7 +331,7 @@ export type AutoDreamConfig = {
   minHours: number
   minSessions: number
   scanThrottleMs: number
-  maxTurns: number
+  maxTurns?: number
 }
 
 export type BackgroundTaskConfig = {
@@ -368,7 +368,6 @@ const DEFAULT_AUTO_DREAM: AutoDreamConfig = {
   minHours: 24,
   minSessions: 3,
   scanThrottleMs: 10 * 60 * 1000,
-  maxTurns: 30,
 }
 
 const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
@@ -1319,7 +1318,7 @@ function resolveAutoDreamConfig(
   const minSessionsRaw = Number(fileConfig.minSessions)
   const scanThrottleRaw = Number(fileConfig.scanThrottleMs)
   const maxTurnsRaw = Number(fileConfig.maxTurns)
-  return {
+  const resolved: AutoDreamConfig = {
     enabled: fileConfig.enabled ?? DEFAULT_AUTO_DREAM.enabled,
     minHours: Math.max(
       0,
@@ -1339,11 +1338,11 @@ function resolveAutoDreamConfig(
         ? scanThrottleRaw
         : DEFAULT_AUTO_DREAM.scanThrottleMs),
     ),
-    maxTurns: Math.max(
-      1,
-      Math.floor(Number.isFinite(maxTurnsRaw) ? maxTurnsRaw : DEFAULT_AUTO_DREAM.maxTurns),
-    ),
   }
+  if (Number.isFinite(maxTurnsRaw) && maxTurnsRaw >= 1) {
+    resolved.maxTurns = Math.floor(maxTurnsRaw)
+  }
+  return resolved
 }
 
 function resolveBackgroundTaskConfig(

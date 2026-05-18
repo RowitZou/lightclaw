@@ -486,7 +486,6 @@ describe('config: endpoints + models registry', () => {
       minHours: 24,
       minSessions: 3,
       scanThrottleMs: 600_000,
-      maxTurns: 30,
     })
   })
 

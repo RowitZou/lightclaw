@@ -572,7 +572,6 @@ function dreamConfig(
       minHours: 24,
       minSessions: 3,
       scanThrottleMs: 600_000,
-      maxTurns: 30,
       ...autoDream,
     },
     sessionsDir: tmpSessionsDir,
