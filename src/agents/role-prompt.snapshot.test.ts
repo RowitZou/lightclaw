@@ -18,7 +18,7 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '74e91612f5c20b6b6a0d8f72eaaf440467468b00037878d2dfbed070d4ca54ef',
+  main: '75ad7198e7b4690afbfb97a6599e523472fb5daa894cdc132928dfc21bc72e88',
   generalist: 'a00e65aec6229d38fa7b1cdc4e8d37f315b1dd9ef38c8a4796423b9241f1c91c',
   localExplorer: '376db19eef850b81e5c4a961bd77b16a86df2904ef182b8d9efbfc1e5c88150a',
   webSearcher: 'c39b46cb0c0056620774951519996d7957ccfc6b9484b7721d7fe8620a66ef69',

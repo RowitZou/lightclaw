@@ -14,8 +14,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'main',
     name: 'main',
-    whenToUse:
-      'Primary user-facing orchestrator. Not dispatchable through Dispatch.',
+    whenToUse: 'Primary user-facing orchestrator.',
     tools: ['*'],
     skills: ['remember'],
     mcpServers: ['*'],
@@ -144,7 +143,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'reviewer',
     whenToUse:
-      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks via the verify skill (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict. May dispatch `coder` ONCE per pass for a small in-line fix the reviewer can describe precisely, then re-read the patch and finalize the report; larger blockers are returned to the requester for decision.',
+      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks via the verify skill (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; verify skill + memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
@@ -156,8 +155,7 @@ export const BUNDLED_AGENTS: Role[] = [
   },
   {
     agentType: 'memoryExtractor',
-    whenToUse:
-      'Internal: framework-managed memory extraction after each main turn. Not dispatchable via Dispatch.',
+    whenToUse: 'Internal: framework-managed memory extraction after each main turn.',
     tools: ['MemoryWrite', 'MemoryRead', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryExtractorPrompt,
     kind: 'internal',
@@ -165,8 +163,7 @@ export const BUNDLED_AGENTS: Role[] = [
   },
   {
     agentType: 'memoryCurator',
-    whenToUse:
-      'Internal: framework-managed memory consolidation (autoDream). Not dispatchable via Dispatch.',
+    whenToUse: 'Internal: framework-managed memory consolidation.',
     tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryCuratorPrompt,
     kind: 'internal',
