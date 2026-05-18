@@ -29,6 +29,7 @@ export type WorkerFailureReason =
   | 'max-turns-exceeded'
   | 'wall-clock-exceeded'
   | 'aborted'
+  | 'resume-snapshot-not-found'
   | 'other'
 
 export type WorkerFailure = {

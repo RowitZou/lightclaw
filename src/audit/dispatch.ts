@@ -26,6 +26,7 @@ export type DispatchAuditRecord = {
   finalTextPreview?: string
   chainState?: ChainState
   guardReason?: ChainGuardReason
+  resumeFromDispatchId?: string
 }
 
 export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<void> {

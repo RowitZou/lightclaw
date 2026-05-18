@@ -58,8 +58,9 @@ export function getDispatchSnapshotPath(
 
 export async function persistDispatchSnapshot(
   snapshot: ResumableSessionSnapshot,
+  principalOverride?: string,
 ): Promise<void> {
-  const principal = getCurrentUserId()
+  const principal = principalOverride ?? getCurrentUserId()
   if (!principal) {
     throw new Error('Cannot persist dispatch snapshot without an active LightClaw identity.')
   }
@@ -81,17 +82,7 @@ export async function loadDispatchSnapshot(
 ): Promise<ResumableSessionSnapshot | null> {
   const snapshot = await loadSnapshotFile(getDispatchSnapshotPath(input))
   if (!snapshot) return null
-  if (snapshot.transcriptPath.length > 0) {
-    try {
-      await stat(snapshot.transcriptPath)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null
-      }
-      throw error
-    }
-  }
-  return snapshot
+  return await snapshotWithExistingTranscript(snapshot)
 }
 
 export async function loadLatestDispatchSnapshot(
@@ -119,9 +110,9 @@ export async function loadLatestDispatchSnapshot(
 
   for (const candidate of candidates) {
     const snapshot = await loadSnapshotFile(candidate.filePath)
-    if (snapshot) {
-      return snapshot
-    }
+    if (!snapshot) continue
+    const existing = await snapshotWithExistingTranscript(snapshot)
+    if (existing) return existing
   }
   return null
 }
@@ -229,6 +220,21 @@ async function loadSnapshotFile(filePath: string): Promise<ResumableSessionSnaps
     return null
   }
   return parsed
+}
+
+async function snapshotWithExistingTranscript(
+  snapshot: ResumableSessionSnapshot,
+): Promise<ResumableSessionSnapshot | null> {
+  if (snapshot.transcriptPath.length === 0) return snapshot
+  try {
+    await stat(snapshot.transcriptPath)
+    return snapshot
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+    throw error
+  }
 }
 
 function isResumableSessionSnapshot(value: unknown): value is ResumableSessionSnapshot {

@@ -8,12 +8,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
+import { SESSION_MEMORY_FILENAME } from '../memory/session-memory.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
-import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
+import { getCurrentSessionContext, runWithSessionContext, type SessionContext } from '../session-context.js'
 import { getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
@@ -22,9 +24,15 @@ import type {
   Message,
   UsageStats,
 } from '../types.js'
-import type { Role } from './types.js'
+import type { AgentType, Role } from './types.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
-import { getForkTranscriptPath, persistForkTranscript } from './fork-transcript.js'
+import { getForkTranscriptPath, parseForkTranscriptFile, persistForkTranscript } from './fork-transcript.js'
+import {
+  loadDispatchSnapshot,
+  loadLatestDispatchSnapshot,
+  persistDispatchSnapshot,
+  type ResumableSessionSnapshot,
+} from './resumable-snapshot.js'
 
 export type DispatchedAgentParams = {
   /** Caller-authored task brief. This is the dispatched agent's first user message. */
@@ -33,8 +41,12 @@ export type DispatchedAgentParams = {
   tools: Tool[]
   config: LightClawConfig
   currentRoleOverride?: Role
+  callerAgentType?: AgentType
+  canonicalUser?: string
+  resumeFrom?: string
   chainState?: ChainState
   canUseToolOverride?: CanUseToolFn
+  queryImpl?: typeof query
   // Optional cap on tool-use turns for this dispatch. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
   // it undefined so query() falls back to config.maxTurns / no cap.
@@ -49,6 +61,7 @@ export type DispatchedAgentResult = {
   usage: UsageStats
   forkTranscriptPath: string | null
   forkTranscriptPersisted: Promise<string | null>
+  resumedFromDispatchId?: string
 }
 
 export function buildDispatchedInitialMessages(dispatchPrompt: string) {
@@ -58,16 +71,32 @@ export function buildDispatchedInitialMessages(dispatchPrompt: string) {
 export async function runDispatchedAgent(
   params: DispatchedAgentParams,
 ): Promise<DispatchedAgentResult> {
-  const messages = buildDispatchedInitialMessages(params.dispatchPrompt)
+  const currentCtx = getCurrentSessionContext()
+  const principal = params.canonicalUser ?? currentCtx?.currentUserId
+  const callerAgentType =
+    params.callerAgentType
+    ?? currentCtx?.currentRole?.agentType
+    ?? params.currentRoleOverride?.agentType
+    ?? 'main'
+  const resume = await resolveResumeSnapshot({
+    resumeFrom: params.resumeFrom,
+    principal,
+    callerAgentType,
+    calleeAgentType: params.role.agentType,
+  })
+  const inheritedMessages = resume?.messages ?? []
+  const messages = [
+    ...inheritedMessages,
+    ...buildDispatchedInitialMessages(params.dispatchPrompt),
+  ]
   const systemPrompt = await buildPromptForRole(params.role, {
     tools: params.tools,
     config: params.config,
-    cwd: getCurrentSessionContext()?.cwd,
-    sessionId: getCurrentSessionContext()?.sessionId,
+    cwd: currentCtx?.cwd,
+    sessionId: currentCtx?.sessionId,
     environmentRoot: getRuntime().workspaceRoot,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)
-  const currentCtx = getCurrentSessionContext()
   const forkId = randomUUID().slice(0, 8)
   const forkTranscriptPath = currentCtx
     ? getForkTranscriptPath({
@@ -78,7 +107,7 @@ export async function runDispatchedAgent(
       })
     : null
 
-  const run = () => query({
+  const run = () => (params.queryImpl ?? query)({
     role: params.role,
     invocation: forkInvocationContext({
       systemPrompt,
@@ -94,19 +123,27 @@ export async function runDispatchedAgent(
     config: params.config,
     maxTurns: params.maxTurns,
   })
-  // There is no inherited parent prefix in dispatch semantics. A zero marker
-  // means the whole transcript is the dispatched agent's own work.
-  const forkContextEndIndex = 0
+  // Fresh dispatch has no inherited prefix. Resumed dispatch prefixes the
+  // previous worker transcript and marks the new prompt boundary so extraction
+  // still analyzes only this fire's own work.
+  const forkContextEndIndex = inheritedMessages.length
   let messagesToPersist: Message[] = messages
   let persistTask: Promise<string | null> | null = null
+  const childCtx = currentCtx
+    ? {
+        ...currentCtx,
+        currentRole: params.role,
+        ...(resume?.snapshot.todos ? { todos: [...resume.snapshot.todos] } : {}),
+        ...(resume?.snapshot.compactionCount !== undefined
+          ? { compactionCount: resume.snapshot.compactionCount }
+          : {}),
+        discoveredTools: new Map(resume?.snapshot.discoveredTools ?? []),
+        turnCounter: 0,
+      }
+    : null
   try {
-    const result = currentCtx
-        ? await runWithSessionContext({
-          ...currentCtx,
-          currentRole: params.role,
-          discoveredTools: new Map(),
-          turnCounter: 0,
-        }, run)
+    const result = childCtx
+      ? await runWithSessionContext(childCtx, run)
       : await run()
     messagesToPersist = result.messages
     if (forkTranscriptPath) {
@@ -115,7 +152,17 @@ export async function runDispatchedAgent(
         messagesToPersist,
         forkContextEndIndex,
       )
-        .then(() => forkTranscriptPath)
+        .then(async () => {
+          await maybePersistDispatchSnapshot({
+            params,
+            principal,
+            callerAgentType,
+            forkTranscriptPath,
+            forkContextEndIndex,
+            childCtx,
+          })
+          return forkTranscriptPath
+        })
         .catch(error => {
           const message = error instanceof Error ? error.message : String(error)
           process.stderr.write(`[fork-transcript] persist failed: ${message}\n`)
@@ -129,6 +176,7 @@ export async function runDispatchedAgent(
       usage: result.usage,
       forkTranscriptPath,
       forkTranscriptPersisted: persistTask ?? Promise.resolve(null),
+      ...(resume ? { resumedFromDispatchId: resume.snapshot.dispatchId } : {}),
     }
   } finally {
     if (!persistTask && forkTranscriptPath) {
@@ -145,4 +193,104 @@ export async function runDispatchedAgent(
         })
     }
   }
+}
+
+type ResolvedResumeSnapshot = {
+  snapshot: ResumableSessionSnapshot
+  messages: Message[]
+}
+
+export class ResumeSnapshotNotFoundError extends Error {
+  constructor(
+    public readonly callerAgentType: AgentType,
+    public readonly calleeAgentType: AgentType,
+    public readonly resumeFrom: string,
+  ) {
+    super(formatResumeSnapshotNotFound(callerAgentType, calleeAgentType, resumeFrom))
+    this.name = 'ResumeSnapshotNotFoundError'
+  }
+}
+
+async function resolveResumeSnapshot(input: {
+  resumeFrom?: string
+  principal?: string
+  callerAgentType: AgentType
+  calleeAgentType: AgentType
+}): Promise<ResolvedResumeSnapshot | null> {
+  if (!input.resumeFrom) return null
+  if (!input.principal) {
+    throw new ResumeSnapshotNotFoundError(
+      input.callerAgentType,
+      input.calleeAgentType,
+      input.resumeFrom,
+    )
+  }
+
+  const snapshot = input.resumeFrom === 'last'
+    ? await loadLatestDispatchSnapshot({
+        principal: input.principal,
+        callerAgentType: input.callerAgentType,
+        calleeAgentType: input.calleeAgentType,
+      })
+    : await loadDispatchSnapshot({
+        principal: input.principal,
+        callerAgentType: input.callerAgentType,
+        calleeAgentType: input.calleeAgentType,
+        dispatchId: input.resumeFrom,
+      })
+  if (!snapshot) {
+    throw new ResumeSnapshotNotFoundError(
+      input.callerAgentType,
+      input.calleeAgentType,
+      input.resumeFrom,
+    )
+  }
+
+  const parsed = await parseForkTranscriptFile(snapshot.transcriptPath)
+  return { snapshot, messages: parsed.messages }
+}
+
+function formatResumeSnapshotNotFound(
+  callerAgentType: AgentType,
+  calleeAgentType: AgentType,
+  resumeFrom: string,
+): string {
+  const suffix = resumeFrom === 'last' ? '' : `/${resumeFrom}`
+  return `No dispatch-history entry for ${callerAgentType}-${calleeAgentType}${suffix}. Snapshot may have expired (24h TTL) or never persisted. Retry without resumeFrom for a fresh dispatch.`
+}
+
+async function maybePersistDispatchSnapshot(input: {
+  params: DispatchedAgentParams
+  principal?: string
+  callerAgentType: AgentType
+  forkTranscriptPath: string
+  forkContextEndIndex: number
+  childCtx: SessionContext | null
+}): Promise<void> {
+  if (!input.principal || input.params.role.kind !== 'worker') return
+  const dispatchId = input.params.chainState?.path.at(-1)?.dispatchId ?? randomUUID().slice(0, 8)
+  const childCtx = input.childCtx
+  const snapshot: ResumableSessionSnapshot = {
+    schemaVersion: 1,
+    chainId: input.params.chainState?.chainId ?? dispatchId,
+    dispatchId,
+    callerSessionId: childCtx?.sessionId ?? '',
+    callerAgentType: input.callerAgentType,
+    calleeAgentType: input.params.role.agentType,
+    transcriptPath: input.forkTranscriptPath,
+    forkContextEndIndex: input.forkContextEndIndex,
+    ...(childCtx ? { todos: [...childCtx.todos] } : {}),
+    ...(childCtx ? { discoveredTools: [...childCtx.discoveredTools.entries()] } : {}),
+    ...(childCtx
+      ? { sessionMemoryPath: path.join(childCtx.sessionsDir, childCtx.sessionId, SESSION_MEMORY_FILENAME) }
+      : {}),
+    ...(childCtx ? { compactionCount: childCtx.compactionCount } : {}),
+    snapshotAt: new Date().toISOString(),
+  }
+
+  await persistDispatchSnapshot(snapshot, input.principal)
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[dispatch-history] snapshot persist failed: ${message}\n`)
+    })
 }

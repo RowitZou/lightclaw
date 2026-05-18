@@ -142,6 +142,22 @@ test('executeDispatch rejects dispatches beyond max chain depth', async () => {
   assert.match(output.output, /chain-too-deep|depth limit/i)
 })
 
+test('executeDispatch rejects background resumeFrom instead of silently starting fresh', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'webSearcher',
+      prompt: 'Continue the prior research in the background.',
+      schedule: 'now',
+      mode: 'background',
+      resumeFrom: 'last',
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /supported only for blocking Dispatch/)
+  assert.match(output.output, /silently start a fresh fork/)
+})
+
 function session(agentType: string, reachableRoles: string[]) {
   return createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),

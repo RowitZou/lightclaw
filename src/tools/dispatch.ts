@@ -306,6 +306,18 @@ export async function executeDispatch(
     }
     throw error
   }
+
+  if (input.mode === 'background' && input.resumeFrom) {
+    return {
+      output: [
+        'resumeFrom is currently supported only for blocking Dispatch.',
+        'Background dispatch fires through the scheduler path, so accepting resumeFrom here would silently start a fresh fork.',
+        'Use mode="blocking" to resume, or omit resumeFrom for a background dispatch.',
+      ].join('\n'),
+      isError: true,
+    }
+  }
+
   await getSignalRouter().publish({
     kind: 'dispatch',
     from: { kind: 'role', id: callerRole.agentType, sessionId },
@@ -339,6 +351,8 @@ export async function executeDispatch(
       prompt: input.prompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
+      callerAgentType: callerRole.agentType,
+      resumeFrom: input.resumeFrom,
       chainState: effectiveChildChainState,
     }).finally(() => {
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
@@ -356,6 +370,7 @@ export async function executeDispatch(
         durationMs: Date.now() - startedAt,
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
         chainState: effectiveChildChainState,
+        ...(input.resumeFrom ? { resumeFromDispatchId: input.resumeFrom } : {}),
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
@@ -371,6 +386,7 @@ export async function executeDispatch(
       durationMs: Date.now() - startedAt,
       finalTextPreview: (result.finalText || '').slice(0, 200),
       chainState: effectiveChildChainState,
+      ...(result.resumedFromDispatchId ? { resumeFromDispatchId: result.resumedFromDispatchId } : {}),
     }).catch(() => {})
     return { output: result.finalText || '(dispatched role returned empty text)' }
   }
