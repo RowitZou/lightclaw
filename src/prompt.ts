@@ -442,7 +442,7 @@ function formatChannelContextSection(): string {
   return [
     '## Channel Context',
     '',
-    'This session runs in the Feishu channel. Each user message starts with a `## Channel: Feishu` block carrying per-turn context (chat type, group sender prefix, attachment paths) — read it first before the user text.',
+    'This session runs in the Feishu channel. User messages may include channel-specific framing around the text: a `[<senderName>]` prefix in group chats, a `<quoted-message>` block when the user reply-quotes a previous message, and an attachment list below the text with local paths. Read all of it before deciding what the user is asking.',
     '',
     'You have a private Feishu cloud-space folder dedicated to this user. For multi-step or specialized Feishu work (cloud-doc lifecycle, workspace organization), lean on delegation — the Reachable Workers section lists who has the relevant capability.',
   ].join('\n')
