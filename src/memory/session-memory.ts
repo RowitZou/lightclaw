@@ -115,27 +115,30 @@ export function buildSessionMemoryPrompt(
       : '[empty]'
   const existing = existingSm.trim().length > 0 ? existingSm.trim() : '[empty]'
   return [
-    'You maintain a per-session working memory note that survives compaction.',
-    '',
     '## Existing session memory',
     existing,
     '',
     '## New conversation segment',
     conversationText,
-    '',
-    '## Instructions',
-    '- Output ONE complete Markdown document covering all sections below.',
-    '- Keep total under 4000 tokens. Drop low-value items if needed.',
-    '- For "Files Touched", include exact paths and what was done.',
-    '- For "Errors & Blockers", include error messages and resolution status.',
-    '- For "Next Step", be concrete and actionable.',
-    '- If a section has no content yet, write "—" (em dash) on a single line.',
-    '- Do NOT call tools. Output Markdown only.',
-    '',
-    '## Required template',
-    SESSION_MEMORY_TEMPLATE,
   ].join('\n')
 }
+
+export const SESSION_MEMORY_SYSTEM_PROMPT = [
+  'You are a session working memory writer. You take (a) the existing session memory and (b) a new conversation segment, and produce a single updated Markdown document. The note survives session compaction — it is the durable summary the resumed agent reads after the live transcript is summarized away, so keep it tight and concrete.',
+  '',
+  '## Required template',
+  '',
+  SESSION_MEMORY_TEMPLATE,
+  '## Output conventions',
+  '',
+  '- Output ONE complete Markdown document covering all sections above, in order.',
+  '- Keep total under 4000 tokens. Drop low-value items if needed.',
+  '- For "Files Touched", include exact paths and what was done.',
+  '- For "Errors & Blockers", include error messages and resolution status.',
+  '- For "Next Step", be concrete and actionable.',
+  '- If a section has no content yet, write "—" (em dash) on a single line.',
+  '- Do not call tools. Output Markdown only.',
+].join('\n')
 
 async function requestSessionMemoryUpdate(
   prompt: string,
@@ -147,8 +150,7 @@ async function requestSessionMemoryUpdate(
     config,
     model: resolveToolModuleModel('compact', config),
     messages: [{ role: 'user', content: prompt }],
-    system:
-      'You are a session working memory writer. Output a fenced-section Markdown document only. Do not call tools.',
+    system: SESSION_MEMORY_SYSTEM_PROMPT,
     tools: [],
     maxTokens: 4096,
     apiLogContext: { kind: 'session-memory' },
