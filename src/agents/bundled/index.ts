@@ -129,6 +129,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'MemoryWrite',
       'MemoryRead',
       'TodoWrite',
+      'UseSkill',
       'Dispatch',
       'ListDispatches',
       'CancelDispatch',
