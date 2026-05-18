@@ -23,6 +23,7 @@ import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
   Message,
   UsageStats,
+  UserContentBlock,
 } from '../types.js'
 import type { AgentType, Role } from './types.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
@@ -37,6 +38,11 @@ import {
 export type DispatchedAgentParams = {
   /** Caller-authored task brief. This is the dispatched agent's first user message. */
   dispatchPrompt: string
+  /** Optional inline content blocks (image / pdf, already base64-encoded by
+   *  the caller) appended after the prompt text in the same user message.
+   *  Use prepareDispatchAttachments() to build these from paths so the
+   *  worker sees attachments natively instead of re-Reading bytes. */
+  dispatchAttachmentBlocks?: UserContentBlock[]
   role: Role
   tools: Tool[]
   config: LightClawConfig
@@ -64,7 +70,18 @@ export type DispatchedAgentResult = {
   resumedFromDispatchId?: string
 }
 
-export function buildDispatchedInitialMessages(dispatchPrompt: string) {
+export function buildDispatchedInitialMessages(
+  dispatchPrompt: string,
+  attachmentBlocks?: UserContentBlock[],
+) {
+  if (attachmentBlocks && attachmentBlocks.length > 0) {
+    return [
+      createUserMessage([
+        { type: 'text' as const, text: dispatchPrompt },
+        ...attachmentBlocks,
+      ]),
+    ]
+  }
   return [createUserMessage(dispatchPrompt)]
 }
 
@@ -87,7 +104,10 @@ export async function runDispatchedAgent(
   const inheritedMessages = resume?.messages ?? []
   const messages = [
     ...inheritedMessages,
-    ...buildDispatchedInitialMessages(params.dispatchPrompt),
+    ...buildDispatchedInitialMessages(
+      params.dispatchPrompt,
+      params.dispatchAttachmentBlocks,
+    ),
   ]
   const systemPrompt = await buildPromptForRole(params.role, {
     tools: params.tools,

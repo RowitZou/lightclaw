@@ -158,6 +158,22 @@ test('executeDispatch rejects background resumeFrom instead of silently starting
   assert.match(output.output, /silently start a fresh fork/)
 })
 
+test('executeDispatch rejects background attachments instead of dropping them at fire time', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'webSearcher',
+      prompt: 'Look at the attached image in the background.',
+      schedule: 'now',
+      mode: 'background',
+      attachments: ['/tmp/will-not-be-read.jpg'],
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /supported only for blocking Dispatch/)
+  assert.match(output.output, /inline bytes cannot follow/)
+})
+
 function session(agentType: string, reachableRoles: string[]) {
   return createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),

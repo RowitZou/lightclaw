@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
-import { DEFAULT_DISPATCH_CONFIG } from '../config.js'
+import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
 import type { AgentType, Role, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
@@ -20,9 +20,14 @@ import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedu
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type ScheduleSpec } from '../background-task/types.js'
 import { parseRule } from '../permission/rules.js'
-import { getCurrentRole, getSessionId, requireCurrentUserId } from '../state.js'
+import { getCurrentRole, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
+import {
+  DispatchAttachmentError,
+  prepareDispatchAttachments,
+  type DispatchAttachmentResult,
+} from './dispatch-attachments.js'
 import type { DispatchMode, DispatchRole, DispatchSchedule } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { ChainGuardError, assertChainGuards } from '../signal-bus/chain-guard.js'
@@ -229,6 +234,7 @@ export const dispatchTool = buildTool({
     label: z.string().min(2).max(80).optional(),
     allowed_tools: allowedToolsSchema,
     resumeFrom: z.string().min(1).optional(),
+    attachments: z.array(z.string().min(1)).optional(),
   }),
   async call(input, context) {
     return executeDispatch(input, context)
@@ -244,6 +250,7 @@ export async function executeDispatch(
     label?: string
     allowed_tools?: string[]
     resumeFrom?: string
+    attachments?: string[]
   },
   context: ToolCallContext,
 ) {
@@ -334,6 +341,36 @@ export async function executeDispatch(
     }
   }
 
+  if (input.mode === 'background' && input.attachments && input.attachments.length > 0) {
+    return {
+      output: [
+        'attachments are currently supported only for blocking Dispatch.',
+        'Background dispatch fires through the scheduler path; inline bytes cannot follow the task into a future fresh fork.',
+        'Use mode="blocking", or include the workspace paths in the prompt and let the worker open them with Read at fire time.',
+      ].join('\n'),
+      isError: true,
+    }
+  }
+
+  let attachments: DispatchAttachmentResult = { inlineBlocks: [], breadcrumb: '' }
+  if (input.attachments && input.attachments.length > 0) {
+    try {
+      attachments = await prepareDispatchAttachments({
+        attachments: input.attachments,
+        runtime: getRuntime(),
+        config: getConfig(),
+        calleeRole,
+      })
+    } catch (error) {
+      if (error instanceof DispatchAttachmentError) {
+        return { output: error.message, isError: true }
+      }
+      throw error
+    }
+  }
+
+  const finalDispatchPrompt = input.prompt + attachments.breadcrumb
+
   await getSignalRouter().publish({
     kind: 'dispatch',
     from: { kind: 'role', id: callerRole.agentType, sessionId },
@@ -341,7 +378,7 @@ export async function executeDispatch(
     payload: {
       role: input.role,
       internalRole,
-      prompt: input.prompt,
+      prompt: finalDispatchPrompt,
       schedule,
       mode: input.mode,
       ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
@@ -364,12 +401,15 @@ export async function executeDispatch(
     )
     const result = await runSubagent({
       agentType: internalRole,
-      prompt: input.prompt,
+      prompt: finalDispatchPrompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
       callerAgentType: callerRole.agentType,
       resumeFrom: effectiveResumeFrom,
       chainState: effectiveChildChainState,
+      ...(attachments.inlineBlocks.length > 0
+        ? { dispatchAttachmentBlocks: attachments.inlineBlocks }
+        : {}),
     }).finally(() => {
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
     })

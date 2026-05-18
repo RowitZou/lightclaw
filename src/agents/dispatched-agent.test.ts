@@ -63,6 +63,28 @@ test('dispatched initial messages contain only the caller-authored prompt', () =
   assert.equal(messages[0]?.message.content, 'investigate this ticket')
 })
 
+test('dispatched initial messages append inline attachment blocks alongside the prompt text', () => {
+  const messages = buildDispatchedInitialMessages('look at the image', [
+    {
+      type: 'image',
+      source: { type: 'base64', mediaType: 'image/jpeg', data: 'aGVsbG8=' },
+    },
+  ])
+
+  assert.equal(messages.length, 1)
+  const content = messages[0]?.message.content
+  assert.ok(Array.isArray(content), 'expected multi-block content')
+  assert.equal(content.length, 2)
+  assert.deepEqual(content[0], { type: 'text', text: 'look at the image' })
+  assert.equal(content[1]?.type, 'image')
+})
+
+test('empty attachment-blocks array still produces single-block user message', () => {
+  const messages = buildDispatchedInitialMessages('plain prompt', [])
+
+  assert.equal(messages[0]?.message.content, 'plain prompt')
+})
+
 test('subagent tool gate denies globally blocked tools', async () => {
   const gate = deriveCanUseTool(roleWithTools(['*']))
   assert.deepEqual(await gate(tool('Dispatch'), {}), {

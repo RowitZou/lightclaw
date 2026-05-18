@@ -50,6 +50,29 @@ describe('Dispatch tool family', () => {
     }).success, true)
   })
 
+  it('accepts an optional attachments array of absolute paths', () => {
+    assert.equal(dispatchTool.inputSchema?.safeParse({
+      role: 'webSearcher',
+      prompt: 'Translate this PDF excerpt.',
+      schedule: 'now',
+      mode: 'blocking',
+      attachments: ['/tmp/ws/.lightclaw/inbox/c/foo.pdf'],
+    }).success, true)
+    assert.equal(dispatchTool.inputSchema?.safeParse({
+      role: 'webSearcher',
+      prompt: 'No attachments here.',
+      schedule: 'now',
+      mode: 'blocking',
+    }).success, true)
+    assert.equal(dispatchTool.inputSchema?.safeParse({
+      role: 'webSearcher',
+      prompt: 'Empty string entries are rejected.',
+      schedule: 'now',
+      mode: 'blocking',
+      attachments: [''],
+    }).success, false)
+  })
+
   it('keeps notify fields out of Dispatch and UpdateDispatch schemas', () => {
     assert.equal(dispatchTool.description.includes('notify_to'), false)
     assert.equal(updateDispatchTool.description.includes('notify_to'), false)
