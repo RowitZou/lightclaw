@@ -49,10 +49,33 @@ function buildConfig(overrides?: Partial<LightClawConfig>): LightClawConfig {
   return { ...(base as LightClawConfig), ...overrides }
 }
 
+// Every test in this file calls getProviderFor() at least once, and the
+// first lookup per (endpoint, upstreamModel) triggers runStaticProbeOnce
+// which persists to `<lightclawHome>/auth/capabilities-cache.json`. Without
+// a file-level sandbox the fixture endpoint/model entries leak into the
+// operator's real home — observed in 2026-05-18 dogfood where 4 fake
+// entries (`anthropic-direct|e3b0c442|claude-opus-4-7`, `gateway|...|gpt-5.4-mini`,
+// `codex|...|gpt-5.5`, etc.) appeared in `~/.lightclaw/auth/capabilities-cache.json`
+// despite the operator never running the daemon.
+let tmpHome: string
+
+beforeEach(() => {
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-registry-test-'))
+  setLightclawHomeOverride(tmpHome)
+  // Drop the module-level capability-cache `cached` ref too — without this
+  // the next test reads stale entries from the previous home before its
+  // first write reseats the path.
+  _resetCacheForTests()
+})
+
+afterEach(() => {
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
+  _resetProviderCacheForTests()
+  _resetCacheForTests()
+})
+
 describe('provider registry', () => {
-  afterEach(() => {
-    _resetProviderCacheForTests()
-  })
 
   it('resolves a known display name to its provider + entry', () => {
     const cfg = buildConfig()
@@ -128,10 +151,6 @@ describe('provider registry', () => {
 })
 
 describe('provider.detectStaticDropKinds', () => {
-  afterEach(() => {
-    _resetProviderCacheForTests()
-  })
-
   it('anthropic reports audio + video drops for both positions', () => {
     const cfg = buildConfig()
     const { provider } = getProviderFor(cfg, 'opus')
@@ -185,27 +204,6 @@ describe('provider.detectStaticDropKinds', () => {
 })
 
 describe('provider precharge writes capability cache', () => {
-  let home: string
-
-  beforeEach(() => {
-    home = mkdtempSync(path.join(tmpdir(), 'lightclaw-precharge-test-'))
-    setLightclawHomeOverride(home)
-    _resetProviderCacheForTests()
-    // Drop the capability-cache in-memory state too — without this, the
-    // `cached` module-level variable from a prior test (potentially under
-    // a different lightclaw home) leaks across tests and reads return
-    // stale flags. This pair (provider cache + capability cache) needs to
-    // reset together for any test that depends on a fresh precharge.
-    _resetCacheForTests()
-  })
-
-  afterEach(() => {
-    setLightclawHomeOverride(undefined)
-    rmSync(home, { recursive: true, force: true })
-    _resetProviderCacheForTests()
-    _resetCacheForTests()
-  })
-
   it('writes disabled entries for every kind and position reported by probes', () => {
     const cfg = buildConfig()
     // First lookup primes the cache.
