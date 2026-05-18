@@ -113,8 +113,6 @@ export const grepTool = buildTool({
   alwaysLoad: true,
   description: `Search file contents with ripgrep.
 
-ALWAYS use Grep for content search. NEVER run \`grep\` or \`rg\` via Bash — Grep is permission-scoped, sandbox-aware, and returns structured results that survive prompt compaction.
-
 Output modes (\`output_mode\`):
 - \`content\` (default): full matching lines as \`file:line:text\` — use when you need context.
 - \`files_with_matches\`: just paths — fastest, use when you need to know which files contain X.

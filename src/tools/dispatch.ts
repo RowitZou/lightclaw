@@ -73,8 +73,7 @@ Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatc
 
 ## Parallelism (blocking mode only)
 
-- Launch independent dispatches as multiple Dispatch tool_use blocks in a SINGLE assistant message — they run concurrently.
-- Only parallelize tasks that touch disjoint files / branches / resources. The runtime does not isolate fork file systems; concurrent writes to the same path will race.
+When parallelizing blocking dispatches across an assistant message, only do so for tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
 
 ## Writing the prompt
 
