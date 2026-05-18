@@ -7,7 +7,7 @@ import { parseFrontmatter } from '../memory/auto-memory.js'
 import { lightclawHome } from '../paths.js'
 import { getBundledSkillByName } from '../skill/bundled/index.js'
 import { BUNDLED_AGENTS } from './bundled/index.js'
-import type { OutputContract, Role, RoleKind, RoleResourceAllowlist } from './types.js'
+import type { OutputContract, ResumePolicy, Role, RoleKind, RoleResourceAllowlist } from './types.js'
 
 export type UserDefinedRoleErrorReason =
   | 'yaml-parse-failed'
@@ -110,6 +110,7 @@ export async function parseUserDefinedRole(filePath: string): Promise<Role> {
 
   const kind = parseKind(optionalString(parsed.frontmatter, 'kind') ?? 'worker', filePath)
   const outputContract = parseOutputContract(optionalString(parsed.frontmatter, 'outputContract'))
+  const defaultResumePolicy = parseDefaultResumePolicy(optionalString(parsed.frontmatter, 'defaultResumePolicy'))
   const maxTurns = parseMaxTurns(optionalString(parsed.frontmatter, 'maxTurns'), filePath)
   return {
     agentType: name,
@@ -123,6 +124,7 @@ export async function parseUserDefinedRole(filePath: string): Promise<Role> {
     ...(optionalList(parsed.frontmatter, 'hooks').length > 0 ? { hooks: optionalList(parsed.frontmatter, 'hooks') } : {}),
     ...(optionalList(parsed.frontmatter, 'reachableRoles').length > 0 ? { reachableRoles: optionalList(parsed.frontmatter, 'reachableRoles') } : {}),
     ...(outputContract ? { outputContract } : {}),
+    ...(defaultResumePolicy ? { defaultResumePolicy } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     systemPrompt: body,
   }
@@ -312,6 +314,13 @@ function parseOutputContract(value: string | undefined): OutputContract | undefi
   return undefined
 }
 
+function parseDefaultResumePolicy(value: string | undefined): ResumePolicy | undefined {
+  if (value === 'always' || value === 'never' || value === 'auto') {
+    return value
+  }
+  return undefined
+}
+
 function parseMaxTurns(value: string | undefined, filePath: string): number | undefined {
   if (value === undefined) {
     return undefined
@@ -349,6 +358,7 @@ kind: worker                      # 'orchestrator' | 'worker' | 'internal'; defa
 hooks:                            # optional; defaults to worker policy
   - auto-compact
   - split-render
+defaultResumePolicy: never        # optional; always | never | auto
 maxTurns: 20                      # optional
 ---
 

@@ -21,6 +21,8 @@ export type RoleKind = 'orchestrator' | 'worker' | 'internal'
 
 export type OutputContract = 'report' | 'side-effect'
 
+export type ResumePolicy = 'always' | 'never' | 'auto'
+
 export type RoleResourceAllowlist = string[] | ['*']
 
 export type WorkerFailureReason =
@@ -65,4 +67,5 @@ export type Role = {
   // D. Lifecycle and output contract.
   outputContract?: OutputContract
   maxTurns?: number
+  defaultResumePolicy?: ResumePolicy
 }

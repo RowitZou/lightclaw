@@ -70,6 +70,7 @@ test('resolveRolePolicy lets role fields override defaults', () => {
     reachableRoles: ['localExplorer'],
     hooks: [],
     outputContract: 'side-effect',
+    defaultResumePolicy: 'always',
   }))
 
   assert.equal(resolved.name, 'custom-worker')
@@ -78,4 +79,5 @@ test('resolveRolePolicy lets role fields override defaults', () => {
   assert.deepEqual(resolved.reachableRoles, ['localExplorer'])
   assert.deepEqual(resolved.hooks, [])
   assert.equal(resolved.outputContract, 'side-effect')
+  assert.equal(resolved.defaultResumePolicy, 'always')
 })

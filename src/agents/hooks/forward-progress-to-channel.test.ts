@@ -1,0 +1,132 @@
+import assert from 'node:assert/strict'
+import test, { afterEach } from 'node:test'
+
+import { resolveRolePolicy } from '../role-presets.js'
+import type { Role } from '../types.js'
+import { createSessionContext, runWithSessionContext } from '../../session-context.js'
+import { getSignalRouter } from '../../signal-bus/router.js'
+import type { HookContext } from './types.js'
+import {
+  forwardProgressToChannelHook,
+  resetForwardProgressToChannelForTest,
+} from './forward-progress-to-channel.js'
+
+afterEach(() => {
+  resetForwardProgressToChannelForTest()
+})
+
+test('forward-progress-to-channel forwards progress signals through the channel reply callback', async () => {
+  const replies: string[] = []
+  await runWithSessionContext(session('s-progress'), async () => {
+    const ctx = hookContext(text => {
+      replies.push(text)
+    })
+    await forwardProgressToChannelHook.beforeTurn?.(ctx)
+
+    await publishProgress('s-progress', {
+      milestoneLabel: 'Run tests',
+      completedCount: 1,
+      totalCount: 3,
+    }, 10_000)
+  })
+
+  assert.deepEqual(replies, ['Progress: 1/3 completed - Run tests'])
+})
+
+test('forward-progress-to-channel rate-limits progress per session', async () => {
+  const replies: string[] = []
+  await runWithSessionContext(session('s-rate'), async () => {
+    const ctx = hookContext(text => {
+      replies.push(text)
+    })
+    await forwardProgressToChannelHook.beforeTurn?.(ctx)
+
+    await publishProgress('s-rate', { milestoneLabel: 'A', completedCount: 1, totalCount: 3 }, 10_000)
+    await publishProgress('s-rate', { milestoneLabel: 'B', completedCount: 2, totalCount: 3 }, 12_000)
+    await publishProgress('s-rate', { milestoneLabel: 'C', completedCount: 3, totalCount: 3 }, 15_001)
+  })
+
+  assert.deepEqual(replies, [
+    'Progress: 1/3 completed - A',
+    'Progress: 3/3 completed - C',
+  ])
+})
+
+test('forward-progress-to-channel unregisters active context after end turn', async () => {
+  const replies: string[] = []
+  await runWithSessionContext(session('s-done'), async () => {
+    const ctx = hookContext(text => {
+      replies.push(text)
+    })
+    await forwardProgressToChannelHook.beforeTurn?.(ctx)
+    await forwardProgressToChannelHook.afterEndTurn?.(ctx, {})
+
+    await publishProgress('s-done', {
+      milestoneLabel: 'Hidden',
+      completedCount: 1,
+      totalCount: 1,
+    }, 10_000)
+  })
+
+  assert.deepEqual(replies, [])
+})
+
+function session(sessionId: string) {
+  return createSessionContext({
+    cwd: '/tmp/lightclaw-progress-hook',
+    model: 'fake-model',
+    sessionsDir: '/tmp/lightclaw-progress-hook/sessions',
+    memoryDir: '/tmp/lightclaw-progress-hook/memory',
+    currentUserId: 'alice',
+    currentRole: mainRole(),
+    sessionId,
+  })
+}
+
+function hookContext(onAssistantTurn: (text: string) => void): HookContext {
+  const role = mainRole()
+  return {
+    role,
+    rolePolicy: resolveRolePolicy(role),
+    config: {} as HookContext['config'],
+    invocation: { onAssistantTurn },
+    messages: [],
+    allTools: [],
+    systemPrompt: {
+      hasOverride: false,
+      renderEffective: () => '',
+    },
+    turnCatalog: { tools: [], deferred: [], deferredEnabled: false },
+    setTurnCatalog() {},
+    mergeUsage() {},
+    markDidCompact() {},
+    stopReason: () => null,
+  }
+}
+
+function mainRole(): Role {
+  return {
+    agentType: 'main',
+    name: 'main',
+    kind: 'orchestrator',
+    whenToUse: 'test',
+    systemPrompt: '',
+    tools: ['*'],
+    hooks: ['*'],
+  }
+}
+
+async function publishProgress(
+  sessionId: string,
+  payload: { milestoneLabel: string; completedCount: number; totalCount: number },
+  emittedAt: number,
+): Promise<void> {
+  await getSignalRouter().publish({
+    kind: 'progress',
+    from: { kind: 'role', id: 'main', sessionId },
+    to: { kind: 'role', id: 'main', sessionId },
+    payload,
+    timing: { emittedAt },
+    chainId: sessionId,
+  })
+}

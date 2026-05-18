@@ -40,6 +40,7 @@ test('loads a valid user-defined ROLE.md', async () => {
   assert.equal(role.kind, 'worker')
   assert.deepEqual(role.tools, ['Read', 'Grep', 'MemoryWrite'])
   assert.deepEqual(role.skills, ['remember'])
+  assert.equal(role.defaultResumePolicy, 'always')
   assert.match(role.systemPrompt, /focused reader/)
 })
 
@@ -123,11 +124,13 @@ function validRole(overrides: {
   description?: string
   tools?: string[]
   skills?: string[]
+  defaultResumePolicy?: string
 } = {}): string {
   const name = overrides.name ?? 'paper-coordinator'
   const description = overrides.description ?? 'Coordinates paper-reading tasks.'
   const tools = overrides.tools ?? ['Read', 'Grep', 'MemoryWrite']
   const skills = overrides.skills ?? ['remember']
+  const defaultResumePolicy = overrides.defaultResumePolicy ?? 'always'
   return [
     '---',
     `name: ${name}`,
@@ -138,6 +141,7 @@ function validRole(overrides: {
     'skills:',
     ...skills.map(skill => `  - ${skill}`),
     'kind: worker',
+    `defaultResumePolicy: ${defaultResumePolicy}`,
     'maxTurns: 20',
     '---',
     '',

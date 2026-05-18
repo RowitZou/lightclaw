@@ -3,6 +3,7 @@ import type {
   Role,
   RoleKind,
   RoleResourceAllowlist,
+  ResumePolicy,
 } from './types.js'
 
 export type ResolvedRolePolicy = {
@@ -14,6 +15,7 @@ export type ResolvedRolePolicy = {
   reachableRoles: string[]
   hooks: RoleResourceAllowlist
   outputContract: OutputContract
+  defaultResumePolicy?: ResumePolicy
 }
 
 function roleKind(role: Role): RoleKind {
@@ -43,5 +45,6 @@ export function resolveRolePolicy(role: Role): ResolvedRolePolicy {
           : ['auto-compact', 'split-render', 'prompt-too-long-retry']),
     outputContract:
       role.outputContract ?? (kind === 'internal' ? 'side-effect' : 'report'),
+    ...(role.defaultResumePolicy ? { defaultResumePolicy: role.defaultResumePolicy } : {}),
   }
 }

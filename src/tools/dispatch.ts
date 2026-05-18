@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 import { DEFAULT_DISPATCH_CONFIG } from '../config.js'
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
-import type { AgentType, WorkerFailure } from '../agents/types.js'
+import type { AgentType, Role, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
@@ -170,6 +170,21 @@ function internalRoleFor(role: DispatchRole, mode: DispatchMode): AgentType {
   return role
 }
 
+export function resolveEffectiveResumeFrom(
+  calleeRole: Pick<Role, 'defaultResumePolicy'>,
+  callerProvided: string | undefined,
+): string | undefined {
+  switch (calleeRole.defaultResumePolicy) {
+    case 'always':
+      return callerProvided ?? 'last'
+    case 'never':
+    case 'auto':
+      return undefined
+    default:
+      return callerProvided
+  }
+}
+
 function normalizeSchedule(schedule: DispatchSchedule): ScheduleSpec {
   if (schedule === 'now') {
     return { kind: 'oneshot', at: new Date(Date.now() + 1000).toISOString() }
@@ -257,6 +272,7 @@ export async function executeDispatch(
     }
   }
   const internalRole = internalRoleFor(input.role, input.mode)
+  const effectiveResumeFrom = resolveEffectiveResumeFrom(calleeRole, input.resumeFrom)
   const dispatchId = `${userId}-${shortId()}`
   const startedAt = Date.now()
   const parentChainState = context.chainState ??
@@ -307,7 +323,7 @@ export async function executeDispatch(
     throw error
   }
 
-  if (input.mode === 'background' && input.resumeFrom) {
+  if (input.mode === 'background' && effectiveResumeFrom) {
     return {
       output: [
         'resumeFrom is currently supported only for blocking Dispatch.',
@@ -328,7 +344,7 @@ export async function executeDispatch(
       prompt: input.prompt,
       schedule,
       mode: input.mode,
-      ...(input.resumeFrom ? { resumeFrom: input.resumeFrom } : {}),
+      ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
       ...(input.allowed_tools ? { allowed_tools: input.allowed_tools } : {}),
       ...(input.label ? { label: input.label } : {}),
       chainState: effectiveChildChainState,
@@ -352,7 +368,7 @@ export async function executeDispatch(
       signal: context.abortSignal,
       canonicalUserOverride: userId,
       callerAgentType: callerRole.agentType,
-      resumeFrom: input.resumeFrom,
+      resumeFrom: effectiveResumeFrom,
       chainState: effectiveChildChainState,
     }).finally(() => {
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
@@ -370,7 +386,7 @@ export async function executeDispatch(
         durationMs: Date.now() - startedAt,
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
         chainState: effectiveChildChainState,
-        ...(input.resumeFrom ? { resumeFromDispatchId: input.resumeFrom } : {}),
+        ...(effectiveResumeFrom ? { resumeFromDispatchId: effectiveResumeFrom } : {}),
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
