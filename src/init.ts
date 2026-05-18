@@ -9,6 +9,7 @@ import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
+import { initializePhase8SignalSubscribers } from './agents/hooks/phase8-signal-subscribers.js'
 import { maybeSweepDispatchHistory } from './agents/resumable-snapshot.js'
 import { lightclawHome } from './paths.js'
 import { workspaceFor } from './identity/paths.js'
@@ -114,6 +115,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   initializeAgents()
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
+  initializePhase8SignalSubscribers()
   await recoverOrphanedBranchPlaceholders(resolvedConfig.sessionsDir)
     .then(count => {
       if (count > 0) {

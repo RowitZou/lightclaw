@@ -1,14 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
 import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
-import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
-import { getChannelRunner } from '../channels/feishu/runner-registry.js'
-import { parseFeishuSessionId } from '../channels/feishu/routing.js'
-import type { NormalizedChannelMessage } from '../channels/types.js'
 import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
 import { isHighRiskRulePattern } from '../permission/high-risk.js'
-import { formatBackgroundTaskResultBlock } from '../signal-bus/background-result-block.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import {
   appendCompletedTaskRecord,
@@ -440,6 +435,7 @@ export class BackgroundTaskScheduler {
       to: { kind: 'role', id: 'main', sessionId: mainSessionId },
       payload: {
         kind: 'background-result',
+        ownerOpenId,
         dispatchId: task.id,
         label: task.label,
         outcome: outcomeLabel,
@@ -448,14 +444,6 @@ export class BackgroundTaskScheduler {
       },
       timing: { emittedAt: Date.now() },
       chainId: mainSessionId,
-    })
-    await deliverBackgroundResultToMain({
-      mainSessionId,
-      ownerOpenId,
-      dispatchId: task.id,
-      label: task.label,
-      outcome: outcomeLabel,
-      result: resultText,
     })
   }
 }
@@ -474,55 +462,6 @@ function outcomeKindForBackgroundResult(
   if (/abort/i.test(outcome.reason)) return 'aborted'
   if ((outcome.permissionDenials ?? []).length > 0) return 'permission-denied'
   return 'failed'
-}
-
-async function deliverBackgroundResultToMain(input: {
-  mainSessionId: string
-  ownerOpenId: string
-  dispatchId: string
-  label: string
-  outcome: 'success' | 'failed' | 'permission-denied' | 'aborted'
-  result: string
-}): Promise<void> {
-  const block = formatBackgroundTaskResultBlock(input)
-  const messageId = `bg-${input.dispatchId}-${Date.now()}`
-  if (channelInterjectionQueue.hasInflightFor(input.mainSessionId)) {
-    channelInterjectionQueue.push(input.mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: input.ownerOpenId,
-      arrivedAt: Date.now(),
-      source: 'background-task',
-    })
-    return
-  }
-  const parsed = parseFeishuSessionId(input.mainSessionId)
-  const runner = getChannelRunner()
-  if (!parsed || !runner) {
-    channelInterjectionQueue.push(input.mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: input.ownerOpenId,
-      arrivedAt: Date.now(),
-      source: 'background-task',
-    })
-    process.stderr.write(
-      `[background-task] queued background-result for ${input.mainSessionId}; synthetic turn unavailable\n`,
-    )
-    return
-  }
-  const synthetic: NormalizedChannelMessage = {
-    channel: 'feishu',
-    eventId: messageId,
-    messageId,
-    chatId: parsed.chatId,
-    chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
-    ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
-    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : input.ownerOpenId,
-    text: block,
-    synthetic: true,
-  }
-  await runner.handleMessage(synthetic)
 }
 
 const scheduler = new BackgroundTaskScheduler()

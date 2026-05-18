@@ -117,6 +117,9 @@ export class SignalRouter {
     if (endpoint.kind === 'role') {
       if (endpoint.id !== '*') keys.add(endpointKey({ kind: 'role', id: '*' }))
       if (endpoint.sessionId) keys.add(endpointKey({ kind: 'role', id: endpoint.id }))
+      if (endpoint.broadcast === 'chain' && endpoint.sessionId) {
+        keys.add(endpointKey({ kind: 'role', id: endpoint.id, broadcast: 'chain' }))
+      }
     }
     const out: SignalHandler[] = []
     for (const key of keys) {

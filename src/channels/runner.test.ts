@@ -12,6 +12,9 @@ import { createUser, addLink } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setLang } from '../i18n/index.js'
 import { setAbortControllerForSession } from '../state.js'
+import { ensureChainAbortPropagationSubscription, resetChainAbortPropagationForTest } from '../agents/hooks/chain-abort-propagation.js'
+import { getSignalRouter } from '../signal-bus/router.js'
+import type { AgentSignal } from '../signal-bus/types.js'
 import type { Runtime } from '../runtime/types.js'
 import { channelInterjectionQueue } from './feishu/interjection-queue.js'
 
@@ -83,6 +86,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetChainAbortPropagationForTest()
   setLightclawHomeOverride(undefined)
   rmSync(tmpHome, { recursive: true, force: true })
   for (const key of ENV_KEYS) {
@@ -231,6 +235,8 @@ describe('ChannelRunner pre-lock fast path', () => {
     const { channelSessionLock } = await import('./session-lock.js')
     const strategy = installFakeStrategy('feishu')
     const runner = new ChannelRunner(strategy)
+    ensureChainAbortPropagationSubscription()
+    strategy.resolveSessionId = () => 'feishu-alice'
 
     // Hold the main session lock externally for 3 seconds — simulating an
     // in-flight long query that would otherwise queue /stop behind itself.
@@ -247,6 +253,8 @@ describe('ChannelRunner pre-lock fast path', () => {
       text: '/stop',
       sessionId: 'feishu-alice',
     })
+    const ctrl = new AbortController()
+    setAbortControllerForSession('feishu-alice', ctrl)
     const startedAt = Date.now()
     await runner.handleMessage(stopMessage)
     const elapsed = Date.now() - startedAt
@@ -259,6 +267,7 @@ describe('ChannelRunner pre-lock fast path', () => {
       strategy.notices.some(item => item.messageId === stopMessage.messageId),
       '/stop should produce a notice even when the main lock is held',
     )
+    assert.equal(ctrl.signal.aborted, true, '/stop aborts through the chain-abort subscriber')
 
     releaseHold?.()
     await heldLock
@@ -517,6 +526,13 @@ describe('ChannelRunner in-flight slash routing', () => {
     const runner = new ChannelRunner(strategy)
     const mainSessionId = 'feishu-alice-chat-only'
     strategy.resolveSessionId = () => mainSessionId
+    const seenSignals: AgentSignal[] = []
+    const unsubscribe = getSignalRouter().subscribe(
+      { kind: 'role', id: 'main', sessionId: mainSessionId },
+      signal => {
+        seenSignals.push(signal)
+      },
+    )
 
     channelInterjectionQueue.markInFlight(mainSessionId)
     let releaseHold: (() => void) | undefined
@@ -532,12 +548,23 @@ describe('ChannelRunner in-flight slash routing', () => {
       text: '顺便帮我查一下天气',
       chatId: mainSessionId,
     })
-    await runner.handleMessage(chatMessage)
+    try {
+      await runner.handleMessage(chatMessage)
+    } finally {
+      unsubscribe()
+    }
 
     assert.equal(
       channelInterjectionQueue.size(mainSessionId),
       1,
       'bare chat must still be pushed into the interjection queue',
+    )
+    assert.ok(
+      seenSignals.some(signal =>
+        signal.kind === 'interjection' &&
+        (signal as AgentSignal<'interjection'>).payload.text === '顺便帮我查一下天气',
+      ),
+      'bare in-flight chat should also emit an interjection signal',
     )
 
     channelInterjectionQueue.unmarkInFlight(mainSessionId)

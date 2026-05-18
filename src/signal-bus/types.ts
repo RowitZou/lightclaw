@@ -63,13 +63,14 @@ export type SignalPayload = {
       }
     | {
         kind: 'background-result'
+        ownerOpenId: string
         dispatchId: string
         label: string
         outcome: 'success' | 'failed' | 'permission-denied' | 'aborted'
         result: string
         priorPromptNotice?: string
       }
-    | { kind: 'abort'; abortReason?: string }
+    | { kind: 'abort'; abortReason?: string; canonicalUser?: string }
     | { kind: 'system-notice'; text: string; severity: 'info' | 'warning' | 'error' }
   turn: {
     text: string

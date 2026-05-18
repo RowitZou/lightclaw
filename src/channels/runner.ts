@@ -313,15 +313,14 @@ export class ChannelRunner {
       // stoppable from a parent-chat /stop — both are designed as
       // fire-and-forget / one-shot work.
       const targetSessionId = this.strategy.resolveSessionId(message, userId)
-      await getSignalRouter().publish({
+      const aborted = (await getSignalRouter().publish({
         kind: 'notification',
         from: { kind: 'user', id: message.senderOpenId },
         to: { kind: 'role', id: 'main', sessionId: targetSessionId, broadcast: 'chain' },
-        payload: { kind: 'abort', abortReason: '/stop' },
+        payload: { kind: 'abort', abortReason: '/stop', canonicalUser: userId },
         timing: { emittedAt: Date.now() },
         chainId: targetSessionId,
-      })
-      const aborted = abortInFlightForSession(targetSessionId)
+      })).some(value => typeof value === 'number' ? value > 0 : Boolean(value))
       await this.sendNotice(
         message,
         'info',
@@ -378,6 +377,23 @@ export class ChannelRunner {
             ? { quotedSummary: renderQuoteUnavailableBlock(message.quoteUnavailable) }
             : {}),
       }
+      await getSignalRouter().publish({
+        kind: 'interjection',
+        from: { kind: 'channel', id: this.strategy.channelId as 'feishu' | 'terminal' },
+        to: { kind: 'role', id: 'main', sessionId: mainSessionId },
+        payload: {
+          text: entry.text,
+          senderOpenId: entry.senderOpenId,
+          ...(entry.senderName ? { senderName: entry.senderName } : {}),
+          messageId: entry.messageId,
+          attachments: pendingForInterjection,
+          ...(entry.quotedSummary ? { quotedSummary: entry.quotedSummary } : {}),
+          arrivedAt: entry.arrivedAt,
+          source: 'user',
+        },
+        timing: { emittedAt: entry.arrivedAt },
+        chainId: mainSessionId,
+      })
       channelInterjectionQueue.push(mainSessionId, entry)
       const denied = await this.strategy.tryAutoDenyForInterjection?.(mainSessionId)
       if (denied) {
@@ -403,6 +419,24 @@ export class ChannelRunner {
     // so they never need this mark.
     const shouldMarkInFlight = !branchRequest && !freshSessionId
     if (shouldMarkInFlight) {
+      if (!looksLikeSlash) {
+        const pendingForTurn = getPendingAttachments(effectiveMessage)
+        const senderName = await this.resolveSenderNameForInterjection(effectiveMessage)
+        await getSignalRouter().publish({
+          kind: 'turn',
+          from: { kind: 'channel', id: this.strategy.channelId as 'feishu' | 'terminal' },
+          to: { kind: 'role', id: 'main', sessionId: mainSessionId },
+          payload: {
+            text: effectiveMessage.text,
+            ...(pendingForTurn.length > 0 ? { attachments: pendingForTurn } : {}),
+            senderOpenId: effectiveMessage.senderOpenId,
+            ...(senderName ? { senderName } : {}),
+            messageId: effectiveMessage.messageId,
+          },
+          timing: { emittedAt: Date.now() },
+          chainId: mainSessionId,
+        })
+      }
       // Pass the opener messageId so a later recall of THIS message can be
       // mapped back to mainSessionId and abort the turn it kicked off.
       channelInterjectionQueue.markInFlight(mainSessionId, message.messageId)

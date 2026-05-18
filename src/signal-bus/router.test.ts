@@ -38,6 +38,18 @@ describe('SignalRouter', () => {
     assert.equal(count, 1)
   })
 
+  it('routes chain broadcasts to role-level chain subscribers', async () => {
+    const router = new SignalRouter()
+    const seen: AgentSignal[] = []
+    router.subscribe({ kind: 'role', id: 'main', broadcast: 'chain' }, item => {
+      seen.push(item)
+    })
+
+    await router.publish(signal({ kind: 'role', id: 'main', sessionId: 's-main', broadcast: 'chain' }))
+
+    assert.equal(seen.length, 1)
+  })
+
   it('tracks chain session ids for abort broadcast', () => {
     const router = new SignalRouter()
     router.registerChainSession('c1', 's1')

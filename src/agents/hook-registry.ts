@@ -2,6 +2,8 @@ import { resolveRolePolicy } from './role-presets.js'
 import type { Role } from './types.js'
 import { autoCompactHook } from './hooks/auto-compact.js'
 import { autoMemoryHook } from './hooks/auto-memory.js'
+import { backgroundResultToInterjectionHook } from './hooks/background-result-to-interjection.js'
+import { chainAbortPropagationHook } from './hooks/chain-abort-propagation.js'
 import { deferredToolsHook } from './hooks/deferred-tools.js'
 import { forwardProgressToChannelHook } from './hooks/forward-progress-to-channel.js'
 import { memoryNudgeHook } from './hooks/memory-nudge.js'
@@ -17,6 +19,8 @@ export const BUNDLED_HOOKS: Record<string, Hook> = {
   'memory-nudge': memoryNudgeHook,
   'auto-memory-extract': autoMemoryHook,
   'forward-progress-to-channel': forwardProgressToChannelHook,
+  'background-result-to-interjection': backgroundResultToInterjectionHook,
+  'chain-abort-propagation': chainAbortPropagationHook,
 }
 
 export function resolveHooks(role: Role): Hook[] {
