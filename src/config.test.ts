@@ -229,7 +229,6 @@ describe('config: endpoints + models registry', () => {
         webSearcher: {
           model: 'haiku',
           maxTurns: 30,
-          budget: { maxTokens: 1000, maxCost: 0.5 },
         },
         internal: {
           model: 'haiku',
@@ -240,7 +239,6 @@ describe('config: endpoints + models registry', () => {
     assert.deepEqual(cfg.roles?.webSearcher, {
       model: 'haiku',
       maxTurns: 30,
-      budget: { maxTokens: 1000, maxCost: 0.5 },
     })
     assert.deepEqual(cfg.roles?.internal, { model: 'haiku' })
   })

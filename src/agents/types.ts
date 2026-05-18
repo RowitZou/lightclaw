@@ -64,8 +64,4 @@ export type Role = {
   // D. Lifecycle and output contract.
   outputContract?: OutputContract
   maxTurns?: number
-  budget?: {
-    maxTokens?: number
-    maxCost?: number
-  }
 }

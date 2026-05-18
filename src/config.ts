@@ -172,10 +172,6 @@ export type WebSearchToolConfig = {
 export type RoleConfig = {
   model?: string
   maxTurns?: number
-  budget?: {
-    maxTokens?: number
-    maxCost?: number
-  }
 }
 
 export type ToolModuleConfig = {
@@ -844,16 +840,6 @@ function assertPositiveInteger(value: unknown, field: string): number | undefine
   return value
 }
 
-function assertPositiveNumber(value: unknown, field: string): number | undefined {
-  if (value === undefined) {
-    return undefined
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${field} must be a positive number.`)
-  }
-  return value
-}
-
 function resolveRoleConfigs(
   input: ConfigFileShape['roles'],
   modelNames: string[],
@@ -888,27 +874,6 @@ function resolveRoleConfigs(
     const maxTurns = assertPositiveInteger(raw.maxTurns, `roles.${agentType}.maxTurns`)
     if (maxTurns !== undefined) {
       roleConfig.maxTurns = maxTurns
-    }
-    if (raw.budget !== undefined) {
-      if (raw.budget === null || typeof raw.budget !== 'object' || Array.isArray(raw.budget)) {
-        throw new Error(`roles.${agentType}.budget must be an object.`)
-      }
-      const budget: NonNullable<RoleConfig['budget']> = {}
-      const maxTokens = assertPositiveInteger(
-        raw.budget.maxTokens,
-        `roles.${agentType}.budget.maxTokens`,
-      )
-      if (maxTokens !== undefined) {
-        budget.maxTokens = maxTokens
-      }
-      const maxCost = assertPositiveNumber(
-        raw.budget.maxCost,
-        `roles.${agentType}.budget.maxCost`,
-      )
-      if (maxCost !== undefined) {
-        budget.maxCost = maxCost
-      }
-      roleConfig.budget = budget
     }
     roles[agentType] = roleConfig
   }

@@ -30,14 +30,3 @@ export function resolveRoleMaxTurns(
   const cfgKey = role.kind === 'internal' ? 'internal' : role.agentType
   return config.roles?.[cfgKey]?.maxTurns ?? role.maxTurns
 }
-
-export function resolveRoleBudget(
-  role: Role,
-  config: LightClawConfig,
-): Role['budget'] {
-  if (role.agentType === 'main') {
-    return undefined
-  }
-  const cfgKey = role.kind === 'internal' ? 'internal' : role.agentType
-  return config.roles?.[cfgKey]?.budget ?? role.budget
-}

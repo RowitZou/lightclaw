@@ -142,7 +142,6 @@ export const BUNDLED_AGENTS: Role[] = [
       'Internal: framework-managed memory extraction after each main turn. Not dispatchable via AgentTool.',
     tools: ['MemoryWrite', 'MemoryRead', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryExtractorPrompt,
-    maxTurns: 20,
     kind: 'internal',
     outputContract: 'side-effect',
   },

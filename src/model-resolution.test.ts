@@ -5,7 +5,6 @@ import type { LightClawConfig } from './config.js'
 import { BUNDLED_AGENTS } from './agents/bundled/index.js'
 import type { Role } from './agents/types.js'
 import {
-  resolveRoleBudget,
   resolveRoleMaxTurns,
   resolveRoleModel,
   resolveToolModuleModel,
@@ -99,28 +98,8 @@ describe('resolveRoleMaxTurns', () => {
   })
 
   it('falls back to source role maxTurns, then undefined', () => {
-    assert.equal(resolveRoleMaxTurns(extractRole, config()), 20)
+    assert.equal(resolveRoleMaxTurns(extractRole, config()), undefined)
     assert.equal(resolveRoleMaxTurns(webRole, config()), undefined)
-  })
-})
-
-describe('resolveRoleBudget', () => {
-  it('keeps main uncapped', () => {
-    assert.equal(
-      resolveRoleBudget(mainRole, config({ roles: { main: { budget: { maxTokens: 1 } } } })),
-      undefined,
-    )
-  })
-
-  it('uses configured budgets before source role budgets', () => {
-    const webBudget = { maxTokens: 1000, maxCost: 0.5 }
-    assert.deepEqual(
-      resolveRoleBudget(webRole, config({ roles: { webSearcher: { budget: webBudget } } })),
-      webBudget,
-    )
-
-    const sourceBudgetRole: Role = { ...webRole, budget: { maxTokens: 2000 } }
-    assert.deepEqual(resolveRoleBudget(sourceBudgetRole, config()), { maxTokens: 2000 })
   })
 })
 
