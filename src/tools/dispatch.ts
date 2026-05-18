@@ -78,7 +78,7 @@ Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatc
 
 ## Writing the prompt
 
-The dispatched role starts with a fresh context. It has NOT seen this conversation. Write the prompt as a self-contained imperative:
+The dispatched role starts with a fresh context (unless \`resumeFrom\` is used — see below). It has NOT seen this conversation. Write the prompt as a self-contained imperative:
 - Explain what you're trying to accomplish and why.
 - Describe what you've already learned or ruled out.
 - Give enough context that the role can make judgment calls, not just follow a narrow instruction.
@@ -105,6 +105,7 @@ Grants this dispatch permission to use specific tools without user approval, usi
 resumeFrom: 'last' | <dispatchId> — continue a previous dispatch instead of starting a fresh fork. The previous dispatch's transcript and worldview are restored so the new fire picks up exactly where it left off.
 - Use when multi-hop work spans dispatches: round 1 did initial research, round 2 needs to build on round 1's findings without re-fetching.
 - 'last' = resume the most recent dispatch of the same role for the same user. Pass a specific dispatchId (from ListDispatches) when you need a particular one.
+- With resumeFrom the prompt is the NEXT incremental instruction to that ongoing dispatch, NOT a fresh self-contained brief — write it as a delta ("now also do X" / "based on round 1 findings, do Y") and skip the "explain what you're trying to accomplish" framing that fresh prompts need.
 - Do NOT use resumeFrom when the prior dispatch is irrelevant — fresh forks have cleaner cache behavior.
 
 ## attachments (optional)
