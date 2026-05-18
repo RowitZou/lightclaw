@@ -12,6 +12,7 @@ import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
 import { emptyInvocationContext } from '../agents/invocation-context.js'
 import { getMainRole } from '../agents/registry.js'
+import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
   createSessionContext,
@@ -102,6 +103,16 @@ export async function runBackgroundTaskFire(input: {
       },
     })
 
+    const router = getSignalRouter()
+    const chainSessionId = input.task.chainState?.path.at(-1)?.sessionId ?? sessionId
+    if (input.task.chainState) {
+      router.registerChainSession(
+        input.task.chainState.chainId,
+        chainSessionId,
+        input.task.chainState,
+        input.task.ownerCanonicalUser,
+      )
+    }
     const result = await runWithSessionContext(ctx, async () => {
       const output = await queryImpl({
         role: {
@@ -127,6 +138,10 @@ export async function runBackgroundTaskFire(input: {
       await rewriteTranscript(sessionId, output.messages)
       await touchMeta(sessionId, output.messages.length)
       return output
+    }).finally(() => {
+      if (input.task.chainState) {
+        router.unregisterChainSession(input.task.chainState.chainId, chainSessionId)
+      }
     })
 
     if (permissionDenials.length > 0) {

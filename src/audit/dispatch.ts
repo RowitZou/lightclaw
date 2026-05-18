@@ -9,6 +9,14 @@ export type DispatchAuditRecord = {
   at: string
   chainId: string
   parentDispatchId?: string | null
+  dispatchId?: string
+  from?: { role: string; sessionId?: string }
+  to?: { role: string; internalRole?: string; sessionId?: string }
+  depth?: number
+  status?: 'start' | 'complete' | 'failed' | 'rejected-by-guard' | 'aborted'
+  chainStatePath?: ChainState['path']
+  inheritedAllowedTools?: string[]
+  chainStartedAt?: number
   caller: { role: string; sessionId?: string }
   callee: { role: string; internalRole?: string; sessionId?: string }
   schedule: unknown
@@ -25,7 +33,29 @@ export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<
   const dir = path.join(lightclawHome(), 'audit', 'dispatch', day)
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const file = path.join(dir, `${sanitize(record.chainId)}.jsonl`)
-  await appendFile(file, `${JSON.stringify(record)}\n`, { mode: 0o600 })
+  await appendFile(file, `${JSON.stringify(enrichDispatchAuditRecord(record))}\n`, { mode: 0o600 })
+}
+
+function enrichDispatchAuditRecord(record: DispatchAuditRecord): DispatchAuditRecord {
+  const leaf = record.chainState?.path.at(-1)
+  return {
+    ...record,
+    dispatchId: record.dispatchId ?? leaf?.dispatchId,
+    from: record.from ?? record.caller,
+    to: record.to ?? record.callee,
+    depth: record.depth ?? record.chainState?.depth,
+    status: record.status ?? statusFromOutcome(record.outcome),
+    chainStatePath: record.chainStatePath ?? record.chainState?.path,
+    inheritedAllowedTools: record.inheritedAllowedTools ?? record.chainState?.inheritedAllowedTools,
+    chainStartedAt: record.chainStartedAt ?? record.chainState?.chainStartedAt,
+  }
+}
+
+function statusFromOutcome(
+  outcome: DispatchAuditRecord['outcome'],
+): NonNullable<DispatchAuditRecord['status']> {
+  if (outcome === 'success') return 'complete'
+  return outcome
 }
 
 function sanitize(value: string): string {

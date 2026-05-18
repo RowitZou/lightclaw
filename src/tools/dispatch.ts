@@ -326,12 +326,21 @@ export async function executeDispatch(
   })
 
   if (input.mode === 'blocking') {
+    const router = getSignalRouter()
+    router.registerChainSession(
+      effectiveChildChainState.chainId,
+      childSessionId,
+      effectiveChildChainState,
+      userId,
+    )
     const result = await runSubagent({
       agentType: internalRole,
       prompt: input.prompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
       chainState: effectiveChildChainState,
+    }).finally(() => {
+      router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
     })
     if (result.kind === 'failure') {
       await appendDispatchAudit({

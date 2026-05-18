@@ -46,6 +46,34 @@ describe('SignalRouter', () => {
     router.unregisterChainSession('c1', 's1')
     assert.deepEqual(router.sessionIdsForChain('c1'), ['s2'])
   })
+
+  it('derives active chain tree views per canonical user', () => {
+    const router = new SignalRouter()
+    const now = 10_000
+    const chainState = {
+      chainId: 'chain-alice-test',
+      depth: 2,
+      path: [
+        { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1_000 },
+        { role: 'reviewer', sessionId: 's-reviewer', dispatchId: 'd1', at: 2_000 },
+        { role: 'coder', sessionId: 's-coder', dispatchId: 'd2', at: 3_000 },
+      ],
+      inheritedAllowedTools: ['Read'],
+      parentDispatchId: 'd1',
+      chainStartedAt: 1_000,
+    }
+    router.registerChainSession('chain-alice-test', 's-coder', chainState, 'alice')
+
+    const [view] = router.getActiveChainsForUser('alice', now)
+    assert.ok(view)
+    assert.equal(view.chainId, 'chain-alice-test')
+    assert.deepEqual(view.tree.map(node => [node.depth, node.role, node.status]), [
+      [0, 'main', 'done'],
+      [1, 'reviewer', 'done'],
+      [2, 'coder', 'running'],
+    ])
+    assert.equal(router.getActiveChainsForUser('bob', now).length, 0)
+  })
 })
 
 function signal(to: AgentSignal['to']): AgentSignal<'notification'> {
@@ -57,4 +85,3 @@ function signal(to: AgentSignal['to']): AgentSignal<'notification'> {
     timing: { emittedAt: Date.now() },
   }
 }
-

@@ -57,6 +57,7 @@ import {
   parseMode,
 } from './mode-aliases.js'
 import { t } from '../i18n/index.js'
+import { getSignalRouter, type ChainTreeNode, type ChainView } from '../signal-bus/router.js'
 import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
@@ -684,8 +685,56 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
       }
     }
   }
+  if (userId) {
+    lines.push('', ...formatDispatchChainStatus(getSignalRouter().getActiveChainsForUser(userId)))
+  }
   lines.push('')
   return color(ctx, lines.join('\n'))
+}
+
+function formatDispatchChainStatus(chains: ChainView[]): string[] {
+  const lines = [t('status.dispatch.heading')]
+  if (chains.length === 0) {
+    lines.push(t('status.dispatch.empty'))
+    return lines
+  }
+  for (const chain of chains) {
+    lines.push(`Chain ${chain.chainId} (${Math.max(0, Date.now() - chain.root.startedAt)}ms)`)
+    lines.push(...formatDispatchChainNodes(chain.tree))
+  }
+  return lines
+}
+
+function formatDispatchChainNodes(nodes: ChainTreeNode[]): string[] {
+  const children = new Map<string, ChainTreeNode[]>()
+  for (const node of nodes) {
+    const parent = node.parentDispatchId ?? ''
+    const list = children.get(parent) ?? []
+    list.push(node)
+    children.set(parent, list)
+  }
+  for (const list of children.values()) {
+    list.sort((a, b) => a.dispatchId.localeCompare(b.dispatchId))
+  }
+  const lines: string[] = []
+  const visit = (node: ChainTreeNode, prefix: string, isLast: boolean) => {
+    const branch = node.depth === 0 ? '' : `${prefix}${isLast ? '└─ ' : '├─ '}`
+    const key = node.status === 'running'
+      ? 'status.dispatch.tree_node_running'
+      : 'status.dispatch.tree_node_done'
+    lines.push(`${branch}${t(key, {
+      depth: node.depth,
+      role: node.role,
+      sessionId: node.sessionId,
+      elapsed: node.elapsed,
+    })}`)
+    const nextPrefix = node.depth === 0 ? '' : `${prefix}${isLast ? '   ' : '│  '}`
+    const childList = children.get(node.dispatchId) ?? []
+    childList.forEach((child, index) => visit(child, nextPrefix, index === childList.length - 1))
+  }
+  const roots = children.get('') ?? []
+  roots.forEach((root, index) => visit(root, '', index === roots.length - 1))
+  return lines
 }
 
 async function runUserCommand(rawArgs: string): Promise<string> {
