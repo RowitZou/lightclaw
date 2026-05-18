@@ -166,6 +166,15 @@ export type FeishuChannelConfig = {
   // instead of silence. Removed when the query completes or fails. Default
   // on; admins can disable via channels.json or LIGHTCLAW_FEISHU_TYPING_REACTION=false.
   typingReaction: boolean
+  // Read-only observability stream: when a dispatched worker emits an
+  // assistant text turn, forward it to the chat that triggered the chain
+  // (resolved from `chainState.path[0].sessionId`) with a chain breadcrumb
+  // prefix (`[main → reviewer → coder] <text>`). One-way — user replies in
+  // that chat go to main via the normal inbound path; workers cannot
+  // receive them. Best-effort: send failures log to stderr and never block
+  // the worker. Default on in early 0.2.x for dogfood visibility; admins
+  // can disable when group noise becomes a concern.
+  streamWorkerActivity: boolean
   // Hourly mtime sweep over <workspaceRoot>/<canonical>/.lightclaw/inbox/
   // that deletes attachment files older than ttlDays. Hermes-style — no
   // archive, no soft-delete. Disable via inboxAging.enabled = false.

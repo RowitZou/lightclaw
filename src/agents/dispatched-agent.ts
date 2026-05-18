@@ -12,7 +12,9 @@ import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
 import { SESSION_MEMORY_FILENAME } from '../memory/session-memory.js'
+import { loadChannelConfig } from '../channels/config.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { buildWorkerActivityForwarder } from '../channels/feishu/worker-activity-stream.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -133,6 +135,18 @@ export async function runDispatchedAgent(
   // that sessionId in the interjection queue; drain at every tool boundary
   // so receipt happens at the same cadence as user-driven interjections.
   const chainSessionId = params.chainState?.path.at(-1)?.sessionId
+  // Read-only Feishu observability stream: forward each worker assistant
+  // turn to the chat that initiated the chain. Returns undefined when the
+  // config flag is off, the chain root sessionId is not a Feishu session,
+  // or when there's no Feishu sender registered (terminal-only sessions).
+  // loadChannelConfig() is called once per worker construction (not per
+  // turn), which is acceptable given dispatch frequency.
+  const activityForwarder = params.chainState
+    ? buildWorkerActivityForwarder({
+        chainState: params.chainState,
+        enabled: loadChannelConfig().feishu.streamWorkerActivity,
+      })
+    : undefined
   const run = () => (params.queryImpl ?? query)({
     role: params.role,
     invocation: forkInvocationContext({
@@ -146,6 +160,7 @@ export async function runDispatchedAgent(
       ...(chainSessionId
         ? { interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId) }
         : {}),
+      ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
     }),
     messages,
     tools: params.tools,

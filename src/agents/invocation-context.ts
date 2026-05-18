@@ -80,6 +80,11 @@ export function forkInvocationContext(input: {
   // workers that want to receive bg-dispatch results spawned by themselves
   // (see scheduler spawner-aware delivery).
   interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
+  // Optional per-assistant-turn callback. query.ts invokes it with the
+  // worker's full collected text after each turn. Used by the read-only
+  // observability stream that forwards worker activity to the chat that
+  // initiated the chain (see channels/feishu/worker-activity-stream.ts).
+  onAssistantTurn?: InvocationContext['onAssistantTurn']
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -90,6 +95,7 @@ export function forkInvocationContext(input: {
     currentRoleOverride: input.currentRoleOverride,
     chainState: input.chainState,
     ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
+    ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
   }
 }
 

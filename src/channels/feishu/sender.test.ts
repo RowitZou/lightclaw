@@ -23,6 +23,7 @@ const baseConfig: FeishuChannelConfig = {
   mediaEnabled: true,
   parentFetchTimeoutMs: 8000,
   typingReaction: false,
+  streamWorkerActivity: false,
   inboxAging: { enabled: false, ttlDays: 7, intervalMinutes: 60 },
   webhook: {
     host: '0.0.0.0',
