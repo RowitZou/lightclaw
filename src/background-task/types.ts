@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import type { ChainState } from '../signal-bus/chain-state.js'
+
 export const scheduleSpecSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('oneshot'),
@@ -67,6 +69,7 @@ export type BackgroundTaskEntry = {
   // falls back to resolveWakeSessionId (most-recent DM) when this field
   // is missing or the origin session no longer exists on disk.
   originSessionId?: string
+  chainState?: ChainState
 }
 
 export type PermissionDenialDetail = {
@@ -102,7 +105,7 @@ export type PendingCardAction = {
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools' | 'pendingPriorPromptNotice' | 'originSessionId'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'allowedTools' | 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState'>>
     }
   | {
       version: 2
@@ -129,4 +132,5 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   allowedTools: z.array(z.string().min(1)).optional(),
   pendingPriorPromptNotice: z.string().optional(),
   originSessionId: z.string().optional(),
+  chainState: z.any().optional(),
 })

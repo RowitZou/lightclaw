@@ -70,6 +70,10 @@ export type ConfigFileShape = {
     fireRetryMaxAttempts?: number
     recurringAutoDisableThreshold?: number
   }
+  dispatch?: {
+    maxChainDepth?: number
+    maxChainDepthCeiling?: number
+  }
   memoryDir?: string
   workspaceRoot?: string
   contextWindow?: number

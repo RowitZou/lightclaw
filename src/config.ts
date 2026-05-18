@@ -264,6 +264,7 @@ export type LightClawConfig = {
   autoMemory: boolean
   autoDream: AutoDreamConfig
   backgroundTask: BackgroundTaskConfig
+  dispatch: DispatchConfig
   memoryDir: string
   workspaceRoot: string
   contextWindow: number
@@ -341,6 +342,11 @@ export type BackgroundTaskConfig = {
   recurringAutoDisableThreshold: number
 }
 
+export type DispatchConfig = {
+  maxChainDepth: number
+  maxChainDepthCeiling: number
+}
+
 export type ApiLogsConfig = {
   /** Persist every streamChat request + response to <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl. */
   enabled: boolean
@@ -375,6 +381,11 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
   recurringAutoDisableThreshold: 3,
+}
+
+const DEFAULT_DISPATCH: DispatchConfig = {
+  maxChainDepth: 3,
+  maxChainDepthCeiling: 5,
 }
 
 // Memory Nudge defaults ON (dark launch, mirroring autoDream's rollout
@@ -957,6 +968,7 @@ export function getConfig(): LightClawConfig {
       true
   const autoDream = resolveAutoDreamConfig(fileConfig.autoDream ?? {})
   const backgroundTask = resolveBackgroundTaskConfig(fileConfig.backgroundTask ?? {})
+  const dispatch = resolveDispatchConfig(fileConfig.dispatch ?? {})
   const memoryDir = path.resolve(
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
@@ -1141,6 +1153,7 @@ export function getConfig(): LightClawConfig {
     autoMemory,
     autoDream,
     backgroundTask,
+    dispatch,
     memoryDir,
     workspaceRoot: resolveWorkspaceRoot(),
     contextWindow,
@@ -1377,6 +1390,23 @@ function resolveBackgroundTaskConfig(
         ? disableRaw
         : DEFAULT_BACKGROUND_TASK.recurringAutoDisableThreshold),
     ),
+  }
+}
+
+function resolveDispatchConfig(
+  fileConfig: NonNullable<ConfigFileShape['dispatch']>,
+): DispatchConfig {
+  const ceilingRaw = Number(fileConfig.maxChainDepthCeiling)
+  const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw >= 1
+    ? Math.floor(ceilingRaw)
+    : DEFAULT_DISPATCH.maxChainDepthCeiling
+  const depthRaw = Number(fileConfig.maxChainDepth)
+  const declared = Number.isFinite(depthRaw) && depthRaw >= 1
+    ? Math.floor(depthRaw)
+    : DEFAULT_DISPATCH.maxChainDepth
+  return {
+    maxChainDepth: Math.min(declared, ceiling),
+    maxChainDepthCeiling: ceiling,
   }
 }
 

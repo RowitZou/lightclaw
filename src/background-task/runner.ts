@@ -115,6 +115,7 @@ export async function runBackgroundTaskFire(input: {
           canUseTool: createBackgroundTaskCanUseTool(),
           signal: input.signal,
           subagentLabel: 'background_task',
+          chainState: input.task.chainState,
         },
         messages: [userMessage],
         tools,

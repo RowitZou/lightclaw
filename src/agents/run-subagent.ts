@@ -5,6 +5,7 @@ import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 import { getAgent } from './registry.js'
 import { runDispatchedAgent } from './dispatched-agent.js'
 import { isToolVisibleToRole } from './role-tool-gate.js'
@@ -37,6 +38,7 @@ export async function runSubagent(params: {
   // Used by Phase 3 per-role extract: prompt/tools/gate still come from the
   // child agent Role, but MemoryWrite's physical binding sees this owner Role.
   currentRoleOverride?: Role
+  chainState?: ChainState
 }): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)
   if (!agent) {
@@ -90,6 +92,7 @@ export async function runSubagent(params: {
       config,
       role: agent,
       currentRoleOverride: params.currentRoleOverride,
+      chainState: params.chainState,
       canUseToolOverride: params.canUseToolOverride,
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
       label:

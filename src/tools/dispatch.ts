@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
 import type { AgentType } from '../agents/types.js'
+import { getAgent } from '../agents/registry.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
 import {
   addBackgroundTask,
@@ -17,11 +18,16 @@ import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedu
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type ScheduleSpec } from '../background-task/types.js'
 import { parseRule } from '../permission/rules.js'
-import { getSessionId, requireCurrentUserId } from '../state.js'
+import { getCurrentRole, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
 import type { DispatchMode, DispatchRole, DispatchSchedule } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import {
+  createRootChainState,
+  deriveChildChainState,
+  type ChainState,
+} from '../signal-bus/chain-state.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role. You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
@@ -234,13 +240,31 @@ export async function executeDispatch(
   }
 
   const userId = requireCurrentUserId()
-  const chainId = getSessionId()
+  const sessionId = getSessionId()
   const internalRole = internalRoleFor(input.role, input.mode)
+  const dispatchId = `${userId}-${shortId()}`
+  const callerRole = getCurrentRole() ?? getAgent('main')
+  const calleeRole = getAgent(input.role)
+  if (!callerRole || !calleeRole) {
+    return {
+      output: `Unknown dispatch role: ${input.role}`,
+      isError: true,
+    }
+  }
+  const parentChainState = context.chainState ??
+    createRootChainState(userId, callerRole, sessionId)
+  const childSessionId = input.mode === 'blocking' ? `dispatched-${dispatchId}` : dispatchId
+  const childChainState = deriveChildChainState(
+    parentChainState,
+    calleeRole,
+    childSessionId,
+    dispatchId,
+  )
   const startedAt = Date.now()
   await getSignalRouter().publish({
     kind: 'dispatch',
-    from: { kind: 'role', id: 'main', sessionId: chainId },
-    to: { kind: 'role', id: internalRole, sessionId: chainId },
+    from: { kind: 'role', id: callerRole.agentType, sessionId },
+    to: { kind: 'role', id: internalRole, sessionId: childSessionId },
     payload: {
       role: input.role,
       internalRole,
@@ -250,9 +274,11 @@ export async function executeDispatch(
       ...(input.resumeFrom ? { resumeFrom: input.resumeFrom } : {}),
       ...(input.allowed_tools ? { allowed_tools: input.allowed_tools } : {}),
       ...(input.label ? { label: input.label } : {}),
+      chainState: childChainState,
     },
     timing: { emittedAt: Date.now() },
-    chainId,
+    chainId: childChainState.chainId,
+    parentDispatchId: childChainState.parentDispatchId,
   })
 
   if (input.mode === 'blocking') {
@@ -261,31 +287,36 @@ export async function executeDispatch(
       prompt: input.prompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
+      chainState: childChainState,
     })
     if (result.kind === 'failure') {
       await appendDispatchAudit({
         at: new Date().toISOString(),
-        chainId,
-        caller: { role: 'main', sessionId: chainId },
-        callee: { role: input.role, internalRole },
+        chainId: childChainState.chainId,
+        parentDispatchId: childChainState.parentDispatchId,
+        caller: { role: callerRole.agentType, sessionId },
+        callee: { role: input.role, internalRole, sessionId: childSessionId },
         schedule,
         mode: input.mode,
         outcome: 'failed',
         durationMs: Date.now() - startedAt,
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
+        chainState: childChainState,
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
     await appendDispatchAudit({
       at: new Date().toISOString(),
-      chainId,
-      caller: { role: 'main', sessionId: chainId },
-      callee: { role: input.role, internalRole },
+      chainId: childChainState.chainId,
+      parentDispatchId: childChainState.parentDispatchId,
+      caller: { role: callerRole.agentType, sessionId },
+      callee: { role: input.role, internalRole, sessionId: childSessionId },
       schedule,
       mode: input.mode,
       outcome: 'success',
       durationMs: Date.now() - startedAt,
       finalTextPreview: (result.finalText || '').slice(0, 200),
+      chainState: childChainState,
     }).catch(() => {})
     return { output: result.finalText || '(dispatched role returned empty text)' }
   }
@@ -297,7 +328,7 @@ export async function executeDispatch(
   }
   const now = new Date().toISOString()
   const entry = {
-    id: `${userId}-${shortId()}`,
+    id: dispatchId,
     ownerCanonicalUser: userId,
     prompt: input.prompt,
     schedule: normalizedSchedule,
@@ -309,7 +340,8 @@ export async function executeDispatch(
     consecutiveFailures: 0,
     fireHistory: [],
     ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
-    originSessionId: chainId,
+    originSessionId: sessionId,
+    chainState: childChainState,
   }
   addBackgroundTask(userId, entry)
   notifyBackgroundTaskChanged(userId, entry.id)
@@ -318,14 +350,16 @@ export async function executeDispatch(
   }
   await appendDispatchAudit({
     at: new Date().toISOString(),
-    chainId,
-    caller: { role: 'main', sessionId: chainId },
+    chainId: childChainState.chainId,
+    parentDispatchId: childChainState.parentDispatchId,
+    caller: { role: callerRole.agentType, sessionId },
     callee: { role: input.role, internalRole, sessionId: entry.id },
     schedule,
     mode: input.mode,
     outcome: 'success',
     durationMs: Date.now() - startedAt,
     finalTextPreview: `scheduled ${entry.id}`,
+    chainState: childChainState,
   }).catch(() => {})
   return {
     output: [

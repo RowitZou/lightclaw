@@ -1,6 +1,7 @@
 import type { PermissionApprover } from '../permission/types.js'
 import type { CanUseToolFn } from '../tool.js'
 import type { Role } from './types.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
   ToolExecutionEvent,
   UserContentBlock,
@@ -53,6 +54,7 @@ export type InvocationContext = {
   subagentLabel?: string
   systemPromptOverride?: string
   currentRoleOverride?: Role
+  chainState?: ChainState
 }
 
 export function emptyInvocationContext(): InvocationContext {
@@ -72,6 +74,7 @@ export function forkInvocationContext(input: {
   signal?: AbortSignal
   subagentLabel?: string
   currentRoleOverride?: Role
+  chainState?: ChainState
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -80,6 +83,7 @@ export function forkInvocationContext(input: {
     signal: input.signal,
     subagentLabel: input.subagentLabel,
     currentRoleOverride: input.currentRoleOverride,
+    chainState: input.chainState,
   }
 }
 

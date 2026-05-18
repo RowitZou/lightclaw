@@ -1,6 +1,7 @@
 import type { AgentType } from '../agents/types.js'
 import type { ScheduleSpec } from '../background-task/types.js'
 import type { PendingAttachment } from '../channels/types.js'
+import type { ChainState } from './chain-state.js'
 
 export type DispatchRole =
   | 'generalist'
@@ -37,6 +38,7 @@ export type SignalPayload = {
     resumeFrom?: string
     allowed_tools?: string[]
     label?: string
+    chainState?: ChainState
   }
   interjection: {
     text: string
@@ -96,4 +98,8 @@ export type AgentSignal<K extends AgentSignalKind = AgentSignalKind> = {
   }
   chainId?: string
   parentDispatchId?: string
+}
+
+export function getChainState(signal: AgentSignal<'dispatch'>): ChainState | undefined {
+  return signal.payload.chainState
 }

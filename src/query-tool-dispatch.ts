@@ -24,6 +24,7 @@ import type {
 import { toolResultContentToText } from './types.js'
 import type { LightClawConfig } from './config.js'
 import type { RoleKind } from './agents/types.js'
+import type { ChainState } from './signal-bus/chain-state.js'
 
 export type ToolUseBlock = Extract<AssistantContentBlock, { type: 'tool_use' }>
 
@@ -37,6 +38,7 @@ export type DispatchContext = {
   maxToolOutputBytes: number
   config: LightClawConfig
   canUseTool?: CanUseToolFn
+  chainState?: ChainState
   signal: AbortSignal
   mainTurnRouting?: ToolCallContext['mainTurnRouting']
 }
@@ -151,6 +153,7 @@ export async function dispatchToolCall(
       runtime: getRuntime(),
       mainTurnRouting: ctx.mainTurnRouting,
       canUseTool: ctx.canUseTool,
+      chainState: ctx.chainState,
       deferredTools: ctx.deferredTools,
       discoverTool(name) {
         const current = getCurrentSessionContext()

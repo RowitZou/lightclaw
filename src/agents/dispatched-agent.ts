@@ -17,6 +17,7 @@ import { getCurrentSessionContext, runWithSessionContext } from '../session-cont
 import { getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
   Message,
   UsageStats,
@@ -32,6 +33,7 @@ export type DispatchedAgentParams = {
   tools: Tool[]
   config: LightClawConfig
   currentRoleOverride?: Role
+  chainState?: ChainState
   canUseToolOverride?: CanUseToolFn
   // Optional cap on tool-use turns for this dispatch. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
@@ -85,6 +87,7 @@ export async function runDispatchedAgent(
       signal: params.signal,
       subagentLabel: params.label,
       currentRoleOverride: params.currentRoleOverride,
+      chainState: params.chainState,
     }),
     messages,
     tools: params.tools,

@@ -374,6 +374,7 @@ export async function query(params: QueryParams): Promise<{
     maxToolOutputBytes: config.maxToolOutputBytes,
     config,
     canUseTool: invocation.canUseTool,
+    chainState: invocation.chainState,
     signal,
   }
 

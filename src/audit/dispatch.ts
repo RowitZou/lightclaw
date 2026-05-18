@@ -2,6 +2,7 @@ import { mkdir, appendFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { lightclawHome } from '../paths.js'
+import type { ChainState } from '../signal-bus/chain-state.js'
 
 export type DispatchAuditRecord = {
   at: string
@@ -11,9 +12,11 @@ export type DispatchAuditRecord = {
   callee: { role: string; internalRole?: string; sessionId?: string }
   schedule: unknown
   mode: 'blocking' | 'background'
-  outcome: 'success' | 'failed' | 'aborted'
+  outcome: 'success' | 'failed' | 'aborted' | 'rejected-by-guard'
   durationMs: number
   finalTextPreview?: string
+  chainState?: ChainState
+  guardReason?: string
 }
 
 export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<void> {
@@ -27,4 +30,3 @@ export async function appendDispatchAudit(record: DispatchAuditRecord): Promise<
 function sanitize(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 160) || 'root'
 }
-

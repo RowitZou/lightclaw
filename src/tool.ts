@@ -6,6 +6,7 @@ import type { PermissionRuleValue, RiskLevel } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
 import type { UserToolResultBlock } from './types.js'
 import type { ChannelKey } from './channel-types.js'
+import type { ChainState } from './signal-bus/chain-state.js'
 
 export type ToolCallContext = {
   cwd: string
@@ -22,6 +23,7 @@ export type ToolCallContext = {
     upstreamModel: string
   }
   canUseTool?: CanUseToolFn
+  chainState?: ChainState
   deferredTools?: readonly Tool[]
   discoverTool?(name: string): void
 }
