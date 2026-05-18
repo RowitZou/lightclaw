@@ -27,6 +27,9 @@ test('background-result-to-interjection queues background result when the main s
     assert.equal(drained[0]?.source, 'background-task')
     assert.match(drained[0]?.text ?? '', /<background-task-result/)
     assert.match(drained[0]?.text ?? '', /dispatchId="dispatch-1"/)
+    // main-flavored block: "the manager" framing, Notify is option 4.
+    assert.match(drained[0]?.text ?? '', /you, the manager/)
+    assert.match(drained[0]?.text ?? '', /Send a Notify card/)
   } finally {
     channelInterjectionQueue.unmarkInFlight(sessionId)
   }
@@ -84,6 +87,12 @@ test('background-result-to-interjection queues into a worker spawner under its c
   assert.equal(drained[0]?.source, 'background-task')
   assert.match(drained[0]?.text ?? '', /<background-task-result/)
   assert.match(drained[0]?.text ?? '', /dispatchId="dispatch-worker-spawned"/)
+  // worker-flavored block: requester framing + final-text summary; no
+  // main-only "the manager" / Notify language.
+  assert.match(drained[0]?.text ?? '', /your requester/)
+  assert.match(drained[0]?.text ?? '', /final-text summary/)
+  assert.doesNotMatch(drained[0]?.text ?? '', /you, the manager/)
+  assert.doesNotMatch(drained[0]?.text ?? '', /Send a Notify card/)
 })
 
 async function publishBackgroundResult(sessionId: string, emittedAt: number): Promise<void> {

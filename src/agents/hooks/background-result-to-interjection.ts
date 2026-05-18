@@ -55,7 +55,7 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
     AgentSignal<'notification'>['payload'],
     { kind: 'background-result' }
   >
-  const block = formatBackgroundTaskResultBlock(payload)
+  const block = formatBackgroundTaskResultBlock({ ...payload, receiverRole })
   const messageId = `bg-${payload.dispatchId}-${signal.timing.emittedAt}`
 
   // Worker receiver (deep dispatch): the spawner is in the chain registry
