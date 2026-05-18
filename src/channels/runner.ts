@@ -1850,7 +1850,7 @@ export async function formatChannelUserText(
       ? t('channel.media.statusPending')
       : t('channel.media.statusInline')
     const suffix = att.quotedFromMessageId
-      ? t('channel.quote.attachedSuffix')
+      ? ' (via quoted message)'
       : ''
     lines.push(`- ${status}, path: ${att.path}${suffix}`)
   }
@@ -1860,10 +1860,10 @@ export async function formatChannelUserText(
 export function renderQuotedMessageBlock(quoted: QuotedMessageContext): string {
   const author = quoted.authorIsBot
     ? 'LightClaw'
-    : quoted.author ?? t('channel.quote.author.unknown')
+    : quoted.author ?? 'unknown sender'
   const lines = [`<quoted-message author="${escapeAttr(author)}">`]
   if (quoted.text) {
-    const suffix = quoted.truncated ? t('channel.quote.truncated') : ''
+    const suffix = quoted.truncated ? '...(truncated)' : ''
     lines.push(`<text>${escapeText(`${quoted.text}${suffix}`)}</text>`)
   }
   for (const fileName of quoted.attachedFileNames ?? []) {
@@ -1885,8 +1885,8 @@ export function renderQuoteUnavailableBlock(
 ): string {
   return [
     `<quoted-message-unavailable permanent="${failure.permanent ? 'true' : 'false'}" reason="${escapeAttr(failure.reason)}">`,
-    t('channel.quote.unavailable.body'),
-    t('channel.quote.unavailable.guidance'),
+    'The user replied to / quoted a previous message, but its content could not be loaded by the harness.',
+    'Do not guess what the quoted message contained. If the answer depends on it, briefly tell the user the quoted message could not be loaded and ask them to re-send the content (or retry the reply).',
     '</quoted-message-unavailable>',
   ].join('\n')
 }

@@ -271,7 +271,7 @@ function resolveQuotedAuthorLabel(parent: ParsedParent, botSelf: BotSelfInfo): s
     return botSelf.name ?? 'LightClaw'
   }
   return parent.senderName
-    ?? (parent.senderOpenId ? `@user_${parent.senderOpenId.slice(-4)}` : t('channel.quote.author.unknown'))
+    ?? (parent.senderOpenId ? `@user_${parent.senderOpenId.slice(-4)}` : 'unknown sender')
 }
 
 async function fetchBotSelfInfo(
