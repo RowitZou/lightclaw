@@ -28,6 +28,7 @@ function formatCommandOutput(stdout: string, stderr: string): string {
 
 export const bashTool = buildTool({
   name: 'Bash',
+  whenToUse: `Shell command in the sandbox (git, package managers, build / test, system diagnostics, scripts not covered by a dedicated tool).`,
   alwaysLoad: true,
   description: `Execute a shell command in the sandbox runtime. The working directory persists between calls; shell state (env vars, functions, aliases) does not.
 

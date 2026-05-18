@@ -24,6 +24,7 @@ function countOccurrences(content: string, needle: string): number {
 
 export const fileEditTool = buildTool({
   name: 'Edit',
+  whenToUse: `In-place string replacement in a file already Read this session.`,
   alwaysLoad: true,
   description: `Performs exact string replacements in a file. Edit is the right tool for almost all in-place changes; reach for Write only for new files or full rewrites.
 

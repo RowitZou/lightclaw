@@ -15,6 +15,7 @@ const todoItemSchema = z.object({
 
 export const todoWriteTool = buildTool({
   name: 'TodoWrite',
+  whenToUse: `Track a multi-step task plan in real time (≥3 sequential steps; one item in_progress at a time).`,
   alwaysLoad: true,
   description: [
     'Maintain a structured task list for the current session. The user reads this in real time to track progress.',

@@ -126,7 +126,9 @@ function formatSkillsSection(role: Role): string {
 // breaks the prefix cache on any description tweak and offers the model
 // nothing it doesn't already see in the tools array.
 function formatToolCatalog(tools: Tool[]): string {
-  return tools.map(tool => `- ${tool.name}`).join('\n')
+  return tools
+    .map(tool => (tool.whenToUse ? `- ${tool.name}: ${tool.whenToUse}` : `- ${tool.name}`))
+    .join('\n')
 }
 
 function formatTodoSection(todos: TodoItem[]): string {
@@ -630,6 +632,8 @@ function buildDeferredToolsReminder(
   }
   return `<system-reminder>
 The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded. Calling them directly will fail. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:
-${undiscovered.map(tool => tool.name).join('\n')}
+${undiscovered
+  .map(tool => (tool.whenToUse ? `${tool.name} — ${tool.whenToUse}` : tool.name))
+  .join('\n')}
 </system-reminder>`
 }

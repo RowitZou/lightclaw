@@ -23,6 +23,7 @@ export type ToolSearchOutput = {
 
 export const toolSearchTool: Tool<ToolSearchInput, ToolSearchOutput> = {
   name: 'ToolSearch',
+  whenToUse: 'Load the schemas of deferred tools by exact name or keyword search.',
   description:
     'Search for deferred tool schemas by exact name or keyword. Tools listed only in deferred-tool reminders must be loaded with ToolSearch before they can be called.',
   source: 'builtin',

@@ -34,6 +34,7 @@ const DEFAULT_MAX_RESULTS = 10
 
 export const webSearchTool = buildTool({
   name: 'WebSearch',
+  whenToUse: `Search the web for current information you don't have in your context.`,
   shouldDefer: true,
   description: 'Search the web from the environment runtime. Returns search findings and source URLs. Snippets are short and may be stale or partial — when they do not directly answer the question, follow up with WebFetch on the top result. Always cite sources.',
   domain: 'environment',

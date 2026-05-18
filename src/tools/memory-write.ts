@@ -12,6 +12,7 @@ import { buildTool } from '../tool.js'
 
 export const memoryWriteTool = buildTool({
   name: 'MemoryWrite',
+  whenToUse: `User says 记住 / remember this, or you've learned a non-obvious project fact / user preference worth carrying across sessions.`,
   shouldDefer: true,
   description: `Create or update a persistent auto-memory entry for this user. The framework decides where the entry lands based on your role; you do not pass a path.
 

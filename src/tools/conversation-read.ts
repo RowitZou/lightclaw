@@ -7,6 +7,7 @@ import { simplifyMessage } from './_session-helpers.js'
 
 export const conversationReadTool = buildTool({
   name: 'ConversationRead',
+  whenToUse: `Read a slice of a known sessionId (after ConversationList / Grep identifies it).`,
   shouldDefer: true,
   description: `Read a slice of a saved conversation that belongs to this user.
 

@@ -39,6 +39,7 @@ export function _setWebFetchSummarizerForTests(fn: SummarizeFn | null): void {
 
 export const webFetchTool = buildTool({
   name: 'WebFetch',
+  whenToUse: `Fetch a specific URL's content (markdown for HTML / text, binary download for PDF / image / Office).`,
   shouldDefer: true,
   description: `Fetch content from a URL.
 

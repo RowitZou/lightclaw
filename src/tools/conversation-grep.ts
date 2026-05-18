@@ -10,6 +10,7 @@ import {
 
 export const conversationGrepTool = buildTool({
   name: 'ConversationGrep',
+  whenToUse: `User references past discussions (上次 / 之前聊的 X / earlier you said / we discussed Y last week).`,
   shouldDefer: true,
   description: `Search this user's saved conversations across all channels (terminal + Feishu DM + groups) for plain text.
 

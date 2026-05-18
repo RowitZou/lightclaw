@@ -39,6 +39,7 @@ When in doubt, default to plain reply or silence. Notify is the manager-to-stake
 
 export const notifyTool = buildTool({
   name: 'Notify',
+  whenToUse: `Event the user truly cannot miss (security alert, deploy failed, scheduled task fatal failure, user-set condition fired). NOT for routine progress.`,
   shouldDefer: true,
   description: NOTIFY_DESCRIPTION,
   searchHint: 'alert notification notify urgent warning important card 通知 提醒 重要 告警',

@@ -80,6 +80,13 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
    * on synonyms the model may query that are not obvious from the tool name.
    */
   searchHint?: string
+  /**
+   * One-line trigger summary rendered by the framework alongside the tool name
+   * in `## Tool Catalog` (inline) and the deferred-tool `<system-reminder>`
+   * (deferred). Symmetric with `Skill.whenToUse`. Lets the model decide when to
+   * ToolSearch a deferred tool without first loading its full description.
+   */
+  whenToUse?: string
   isEnabled?(provider: Provider): boolean
   /**
    * Called when permission policy decides to ASK; the returned rules become
@@ -108,6 +115,7 @@ export function buildTool<TInput, TOutput>(input: {
   alwaysLoad?: boolean
   shouldDefer?: boolean
   searchHint?: string
+  whenToUse?: string
   isEnabled?(provider: Provider): boolean
   suggestPermissionRules?(input: TInput): PermissionRuleValue[]
   call(input: TInput, context: ToolCallContext): Promise<ToolCallResult<TOutput>>

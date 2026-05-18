@@ -220,6 +220,7 @@ function validateFutureOneshot(schedule: ScheduleSpec): string | null {
 
 export const dispatchTool = buildTool({
   name: 'Dispatch',
+  whenToUse: `Delegate a focused task to a worker; optionally on a schedule (5 分钟后 / tonight at 9 / 每周一早上报告).`,
   shouldDefer: true,
   description: DISPATCH_DESCRIPTION,
   searchHint: 'delegate dispatch agent subagent background schedule reminder worker research explore web 并行 派发 后台 定时',
@@ -541,6 +542,7 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
 
 export const listDispatchesTool = buildTool({
   name: 'ListDispatches',
+  whenToUse: `See active background dispatches before deciding to launch more, cancel, or update.`,
   shouldDefer: true,
   description: LIST_DISPATCHES_DESCRIPTION,
   searchHint: 'list dispatches background tasks scheduled delegated state history 列出 后台 定时',
@@ -570,6 +572,7 @@ export const listDispatchesTool = buildTool({
 
 export const cancelDispatchTool = buildTool({
   name: 'CancelDispatch',
+  whenToUse: `User says stop that one, or the plan changed and a scheduled dispatch is moot.`,
   shouldDefer: true,
   description: CANCEL_DISPATCH_DESCRIPTION,
   searchHint: 'cancel stop dispatch background scheduled delegated 取消 停止 后台 定时',
@@ -601,6 +604,7 @@ export const cancelDispatchTool = buildTool({
 
 export const updateDispatchTool = buildTool({
   name: 'UpdateDispatch',
+  whenToUse: `Modify an active dispatch's prompt / schedule / enabled / allowed_tools as the situation evolves.`,
   shouldDefer: true,
   description: UPDATE_DISPATCH_DESCRIPTION,
   searchHint: 'update dispatch edit schedule prompt allowed tools pause resume 修改 后台 定时',

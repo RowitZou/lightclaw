@@ -61,6 +61,7 @@ function formatResult(
 
 export const globTool = buildTool({
   name: 'Glob',
+  whenToUse: `Find files by name pattern (\`**/*.ts\`, \`src/**/test-*.py\`).`,
   alwaysLoad: true,
   description: `- Fast file pattern matching tool that works with any codebase size.
 - Supports glob patterns like "**/*.js" or "src/**/test-*.py".

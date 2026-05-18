@@ -18,6 +18,7 @@ import { buildTool } from '../tool.js'
 
 export const memoryReadTool = buildTool({
   name: 'MemoryRead',
+  whenToUse: `Read the full content of a memory file pointed to by the auto-memory index.`,
   shouldDefer: true,
   description: `Read auto-memory files for this user. Use action 'list' to enumerate or 'read' to inspect a specific file.
 

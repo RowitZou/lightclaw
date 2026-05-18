@@ -12,6 +12,7 @@ import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
   name: 'UseSkill',
+  whenToUse: `Load a named skill from the Available Skills list and apply its instructions inline.`,
   shouldDefer: true,
   description: `Load a named skill and apply its instructions in the current turn. Skills carry domain knowledge and specialized procedures.
 

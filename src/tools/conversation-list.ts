@@ -6,6 +6,7 @@ import { channelFromSessionId, listOwnedSessions } from './_session-helpers.js'
 
 export const conversationListTool = buildTool({
   name: 'ConversationList',
+  whenToUse: `Enumerate recent conversations across channels when you don't know which sessionId to target.`,
   shouldDefer: true,
   description: `List this user's recent saved conversations across channels.
 

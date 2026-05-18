@@ -109,6 +109,7 @@ function isCommandNotFound(result: { stderr: string; exitCode: number }): boolea
 
 export const grepTool = buildTool({
   name: 'Grep',
+  whenToUse: `Search file contents for a pattern (literal or regex), one or many files.`,
   alwaysLoad: true,
   description: `Search file contents with ripgrep.
 

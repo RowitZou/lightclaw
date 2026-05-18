@@ -176,6 +176,7 @@ const DESCRIPTION = [
 
 export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
   name: 'Read',
+  whenToUse: `Read a known file path; routes by type (text / PDF / image / Office / Jupyter notebook).`,
   alwaysLoad: true,
   description: DESCRIPTION,
   domain: 'environment',
