@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import type { Tool } from '../tool.js'
 import { BUNDLED_AGENTS } from './bundled/index.js'
+import { resolveRolePolicy } from './role-presets.js'
 import {
   deriveCanUseTool,
   isDispatchTargetReachable,
@@ -78,6 +79,17 @@ test('worker Dispatch visibility requires explicit tool and reachable roles', as
 
   assert.equal(isToolVisibleToRole(reviewer, 'Dispatch'), true)
   assert.equal(isToolVisibleToRole(noTargets, 'Dispatch'), false)
+})
+
+test('bundled reviewer can dispatch only to coder', () => {
+  const reviewer = BUNDLED_AGENTS.find(agent => agent.agentType === 'reviewer')
+  assert.ok(reviewer)
+
+  assert.equal(isToolVisibleToRole(reviewer, 'Dispatch'), true)
+  assert.equal(isToolVisibleToRole(reviewer, 'AgentTool'), false)
+  assert.deepEqual(reviewer.reachableRoles, ['coder'])
+  assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'coder'), true)
+  assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'generalist'), false)
 })
 
 test('isDispatchTargetReachable supports wildcard and explicit targets', () => {
