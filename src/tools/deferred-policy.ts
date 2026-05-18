@@ -7,8 +7,8 @@ export function shouldEnableDeferredLoading(
   config: LightClawConfig,
   toolsInChannel: readonly Tool[],
 ): boolean {
-  const mode = config.tools.deferredLoading
+  const mode = config.tools.catalog.deferredLoading
   if (mode === 'off') return false
   if (mode === 'always') return true
-  return toolsInChannel.length >= config.tools.deferredLoadingThreshold
+  return toolsInChannel.length >= config.tools.catalog.deferredLoadingThreshold
 }

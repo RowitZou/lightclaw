@@ -24,7 +24,7 @@ import path from 'node:path'
  * subagent file rather than the parent file.
  *
  * **Default off**: enabled only when admin explicitly turns it on via
- * `config.apiLogs.enabled` or `LIGHTCLAW_API_LOGS_ENABLED=1`. Multi-user
+ * `config.apiLogsEnabled` or `LIGHTCLAW_API_LOGS_ENABLED=1`. Multi-user
  * deployments don't burn disk recording every model call by default.
  *
  * Errors are caught and logged to stderr. Logger failures must never

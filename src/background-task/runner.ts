@@ -82,7 +82,7 @@ export async function runBackgroundTaskFire(input: {
     const ctx = createSessionContext({
       cwd,
       model,
-      sessionsDir: config.sessionsDir,
+      sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
       sessionId,
@@ -91,9 +91,9 @@ export async function runBackgroundTaskFire(input: {
       runtime,
       fileRules: loadFileRules({
         cwd,
-        userPath: config.permissionRuleFiles.user,
-        projectPath: config.permissionRuleFiles.project,
-        localPath: config.permissionRuleFiles.local,
+        userPath: config.paths.permissionRules.user,
+        projectPath: config.paths.permissionRules.project,
+        localPath: config.paths.permissionRules.local,
       }),
       identityRules: loadIdentityRules(input.task.ownerCanonicalUser),
       isBackgroundTask: true,

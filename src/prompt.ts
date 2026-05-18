@@ -347,8 +347,8 @@ async function buildRolePromptParts(
   const [projectMemory, autoMemoryIndex, sessionMemory] = await Promise.all([
     loadProjectMemory(input.cwd),
     loadMemoryIndex(memoryDir, role),
-    input.sessionId && input.config.sessionsDir
-      ? readSessionMemory(input.sessionId, input.config.sessionsDir)
+    input.sessionId && input.config.paths.sessions
+      ? readSessionMemory(input.sessionId, input.config.paths.sessions)
       : Promise.resolve(''),
   ])
   const preTodoSections: string[] = []

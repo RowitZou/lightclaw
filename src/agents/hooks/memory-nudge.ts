@@ -13,12 +13,12 @@ export const memoryNudgeHook: Hook = {
       || ctx.systemPrompt.hasOverride
       || ctx.invocation.ephemeral
       || ctx.invocation.noAutoMemory
-      || !ctx.config.autoMemory
-      || !ctx.config.memoryNudge.enabled
+      || !ctx.config.memory.extractor.enabled
+      || !ctx.config.memory.nudge.enabled
       || !isMemoryNudgeDue(
         sessionCtx.turnCounter,
         sessionCtx.lastMemoryNudgeTurn,
-        ctx.config.memoryNudge.everyTurns,
+        ctx.config.memory.nudge.everyTurns,
       )
     ) {
       return []

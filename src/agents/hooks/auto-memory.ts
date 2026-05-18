@@ -18,7 +18,7 @@ export const autoMemoryHook: Hook = {
       ctx.rolePolicy.kind === 'internal'
       || ctx.stopReason() !== 'end_turn'
       || ctx.invocation.ephemeral
-      || !ctx.config.autoMemory
+      || !ctx.config.memory.extractor.enabled
     ) {
       return
     }
@@ -48,7 +48,7 @@ export const autoMemoryHook: Hook = {
 
     registerBackgroundTask(task)
 
-    if (!ctx.config.autoDream.enabled) {
+    if (!ctx.config.memory.curator.enabled) {
       return
     }
     const userId = getCurrentUserId()

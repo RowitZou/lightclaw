@@ -21,21 +21,21 @@ export async function initializeMcp(
   lastSignal = signal
   installCleanupHandlers()
 
-  if (!config.mcpEnabled) {
+  if (!config.mcp.enabled) {
     await connectMcpServers({
       configs: [],
       enabled: false,
-      concurrency: config.mcpConnectConcurrency,
-      timeoutMs: config.mcpConnectTimeout,
-      maxOutputBytes: config.mcpMaxToolOutputBytes,
+      concurrency: config.mcp.connectConcurrency,
+      timeoutMs: config.mcp.connectTimeout,
+      maxOutputBytes: config.mcp.maxToolOutputBytes,
       signal,
     })
     return
   }
 
-  const overrides = Object.fromEntries(
-    Object.entries(config.mcpConfigFiles).filter(([, value]) => Boolean(value)),
-  )
+  const overrides = config.paths.mcpConfig
+    ? { user: config.paths.mcpConfig }
+    : {}
   const paths = {
     ...defaultMcpConfigPaths(),
     ...overrides,
@@ -44,9 +44,9 @@ export async function initializeMcp(
   await connectMcpServers({
     configs,
     enabled: true,
-    concurrency: config.mcpConnectConcurrency,
-    timeoutMs: config.mcpConnectTimeout,
-    maxOutputBytes: config.mcpMaxToolOutputBytes,
+    concurrency: config.mcp.connectConcurrency,
+    timeoutMs: config.mcp.connectTimeout,
+    maxOutputBytes: config.mcp.maxToolOutputBytes,
     signal,
   })
 }

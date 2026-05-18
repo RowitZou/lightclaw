@@ -80,13 +80,13 @@ export async function runSubagent(params: {
   const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
 
   // Resolve the subagent turn cap: caller override wins (autoDream pulls
-  // from config.autoDream.maxTurns), then per-role config/default, then the
-  // operator-supplied config.subagentMaxTurns, otherwise no cap (parity with
+  // from config.memory.curator.maxTurns), then per-role config/default, then the
+  // operator-supplied config.turns.subagentDefault, otherwise no cap (parity with
   // Claude Code, which has no documented default for Task subagents).
   const subagentMaxTurns =
     params.maxTurnsOverride
     ?? resolveRoleMaxTurns(agent, config)
-    ?? config.subagentMaxTurns
+    ?? config.turns.subagentDefault
   try {
     const result = await runDispatchedAgent({
       dispatchPrompt: params.prompt,
@@ -135,7 +135,7 @@ function maybeTriggerForkExtract(input: {
     !parentCtx
     || !input.canonicalUser
     || !input.result.forkTranscriptPath
-    || !input.config.autoMemory
+    || !input.config.memory.extractor.enabled
   ) {
     return
   }

@@ -47,14 +47,14 @@ export async function maybeIdleMicroCompact(
   messages: Message[],
   config: LightClawConfig,
 ): Promise<IdleMcResult> {
-  if (!config.microCompact.enabled) return { cleared: 0, tokensSaved: 0 }
-  if (!config.microCompact.idle.enabled) return { cleared: 0, tokensSaved: 0 }
+  if (!config.compact.micro.enabled) return { cleared: 0, tokensSaved: 0 }
+  if (!config.compact.micro.idle.enabled) return { cleared: 0, tokensSaved: 0 }
 
   const lastAssistant = findLast(messages, m => m.type === 'assistant')
   if (!lastAssistant) return { cleared: 0, tokensSaved: 0 }
 
   const gapMs = Date.now() - lastAssistant.timestamp
-  const thresholdMs = config.microCompact.idle.gapThresholdMinutes * 60_000
+  const thresholdMs = config.compact.micro.idle.gapThresholdMinutes * 60_000
   if (!Number.isFinite(gapMs) || gapMs < thresholdMs) {
     return { cleared: 0, tokensSaved: 0 }
   }
@@ -71,7 +71,7 @@ export async function maybeIdleMicroCompact(
     }
   }
 
-  const keepRecent = Math.max(1, config.microCompact.idle.keepRecent)
+  const keepRecent = Math.max(1, config.compact.micro.idle.keepRecent)
   const keepSet = new Set(compactableIds.slice(-keepRecent))
   const clearSet = new Set(compactableIds.filter(id => !keepSet.has(id)))
 

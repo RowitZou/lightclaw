@@ -118,7 +118,7 @@ export class BackgroundTaskScheduler {
     this.heapByUser.clear()
     const now = Date.now()
     let stagger = 0
-    const catchupInterval = this.config?.backgroundTask.startupCatchupIntervalMs ?? 60_000
+    const catchupInterval = this.config?.dispatch.scheduler.startupCatchupIntervalMs ?? 60_000
     for (const { canonicalUser, tasks } of listAllUsersWithBackgroundTasks()) {
       this.rebuildUserFromTasks(canonicalUser, tasks)
       for (const task of tasks) {
@@ -200,7 +200,7 @@ export class BackgroundTaskScheduler {
   }
 
   private canFireNow(canonicalUser: string): boolean {
-    const max = this.config?.backgroundTask.maxConcurrentRunsPerUser ?? 3
+    const max = this.config?.dispatch.scheduler.maxConcurrentRunsPerUser ?? 3
     return (this.runningCountByUser.get(canonicalUser) ?? 0) < max
   }
 
@@ -267,7 +267,7 @@ export class BackgroundTaskScheduler {
     outcome: FireOutcome,
     attempt: number,
   ): Promise<void> {
-    const retryMax = this.config?.backgroundTask.fireRetryMaxAttempts ?? 3
+    const retryMax = this.config?.dispatch.scheduler.fireRetryMaxAttempts ?? 3
     if (outcome.kind === 'failure' && outcome.transient && attempt < retryMax) {
       const delayMs = RETRY_BASE_MS * 2 ** (attempt - 1)
       setTimeout(() => {
@@ -319,7 +319,7 @@ export class BackgroundTaskScheduler {
       } else {
         const latest = getBackgroundTask(canonicalUser, task.id) ?? task
         const failures = latest.consecutiveFailures + 1
-        const threshold = this.config?.backgroundTask.recurringAutoDisableThreshold ?? 3
+        const threshold = this.config?.dispatch.scheduler.recurringAutoDisableThreshold ?? 3
         updateBackgroundTask(canonicalUser, task.id, {
           consecutiveFailures: failures,
           ...(failures >= threshold ? { enabled: false } : {}),
@@ -398,7 +398,7 @@ export class BackgroundTaskScheduler {
       )
       return
     }
-    const sessionsDir = this.config?.sessionsDir
+    const sessionsDir = this.config?.paths.sessions
     if (!sessionsDir) {
       process.stderr.write(
         `[background-task] ${task.id} fire ${fireUuid} background-result skipped: scheduler has no config bound\n`,

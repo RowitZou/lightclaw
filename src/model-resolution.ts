@@ -17,7 +17,7 @@ export function resolveToolModuleModel(
   moduleName: ToolModuleName,
   config: LightClawConfig,
 ): string {
-  return config.tools[moduleName].model ?? config.defaultModel
+  return config.subLLM[moduleName] ?? config.defaultModel
 }
 
 export function resolveRoleMaxTurns(

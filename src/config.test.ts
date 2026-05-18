@@ -312,9 +312,13 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.tools.webSearch, { braveApiKey: 'brave', model: 'haiku' })
-    assert.deepEqual(cfg.tools.imageRead, { model: 'haiku' })
-    assert.deepEqual(cfg.tools.compact, { model: 'haiku' })
+    // tools.webSearch keeps the actual tool config (braveApiKey); the sub-LLM
+    // model pin moved to subLLM.webSearch (string). Same shape for imageRead
+    // / compact: their per-module model lives under subLLM.<X>.
+    assert.deepEqual(cfg.tools.webSearch, { braveApiKey: 'brave' })
+    assert.equal(cfg.subLLM.webSearch, 'haiku')
+    assert.equal(cfg.subLLM.imageRead, 'haiku')
+    assert.equal(cfg.subLLM.compact, 'haiku')
   })
 
   it('rejects tool module models not present in models', () => {
@@ -328,7 +332,9 @@ describe('config: endpoints + models registry', () => {
         imageRead: { model: 'missing' },
       },
     })
-    assert.throws(() => getConfig(), /tools\.imageRead\.model = "missing" is not in models/)
+    // Legacy `tools.imageRead.model` is mapped to `subLLM.imageRead`; the
+    // unknown-model validator reports the new path the value will live at.
+    assert.throws(() => getConfig(), /subLLM\.imageRead = "missing" is not in models/)
   })
 
   it('parses an OAuth endpoint without apiKey', () => {
@@ -468,7 +474,7 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.equal(cfg.defaultModel, 'sonnet')
-    assert.equal(cfg.tools.compact.model, 'gpt-mini')
+    assert.equal(cfg.subLLM.compact, 'gpt-mini')
     assert.equal(cfg.models.sonnet.schema, 'anthropic')
     assert.equal(cfg.models['gpt-mini'].schema, 'openai')
   })
@@ -481,7 +487,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.autoDream, {
+    assert.deepEqual(cfg.memory.curator, {
       enabled: true,
       minHours: 24,
       minSessions: 3,
@@ -498,7 +504,7 @@ describe('config: endpoints + models registry', () => {
       autoDream: { enabled: false },
     })
     const cfg = getConfig()
-    assert.equal(cfg.autoDream.enabled, false)
+    assert.equal(cfg.memory.curator.enabled, false)
   })
 
   it('parses autoDream overrides', () => {
@@ -516,7 +522,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.autoDream, {
+    assert.deepEqual(cfg.memory.curator, {
       enabled: true,
       minHours: 0.5,
       minSessions: 2,
@@ -525,7 +531,7 @@ describe('config: endpoints + models registry', () => {
     })
   })
 
-  it('defaults backgroundTask governance config', () => {
+  it('defaults dispatch scheduler governance config', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -533,7 +539,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.backgroundTask, {
+    assert.deepEqual(cfg.dispatch.scheduler, {
       maxConcurrentRunsPerUser: 3,
       startupCatchupIntervalMs: 60_000,
       fireRetryMaxAttempts: 3,
@@ -543,6 +549,12 @@ describe('config: endpoints + models registry', () => {
       maxChainDepth: 3,
       maxChainDepthCeiling: 5,
       historyTtlMs: 24 * 60 * 60 * 1000,
+      scheduler: {
+        maxConcurrentRunsPerUser: 3,
+        startupCatchupIntervalMs: 60_000,
+        fireRetryMaxAttempts: 3,
+        recurringAutoDisableThreshold: 3,
+      },
     })
   })
 
@@ -554,7 +566,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.memoryNudge, {
+    assert.deepEqual(cfg.memory.nudge, {
       enabled: true,
       everyTurns: 20,
     })
@@ -569,7 +581,7 @@ describe('config: endpoints + models registry', () => {
       memoryNudge: { enabled: false, everyTurns: 8 },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.memoryNudge, {
+    assert.deepEqual(cfg.memory.nudge, {
       enabled: false,
       everyTurns: 8,
     })
@@ -585,10 +597,10 @@ describe('config: endpoints + models registry', () => {
     // tight (only alwaysLoad-tagged tools inline) regardless of total tool
     // count. The threshold field still exists for operators who switch
     // back to 'auto'.
-    assert.equal(cfg.tools.deferredLoading, 'always')
-    assert.equal(cfg.tools.deferredLoadingThreshold, 30)
-    assert.equal(cfg.tools.discoveredToolsMaxSize, 30)
-    assert.equal(cfg.tools.discoveredToolsTtlTurns, 20)
+    assert.equal(cfg.tools.catalog.deferredLoading, 'always')
+    assert.equal(cfg.tools.catalog.deferredLoadingThreshold, 30)
+    assert.equal(cfg.tools.catalog.discoveredToolsMaxSize, 30)
+    assert.equal(cfg.tools.catalog.discoveredToolsTtlTurns, 20)
   })
 
   it('parses deferred tool loading overrides from config', () => {
@@ -601,8 +613,8 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.equal(cfg.tools.deferredLoading, 'always')
-    assert.equal(cfg.tools.deferredLoadingThreshold, 7)
+    assert.equal(cfg.tools.catalog.deferredLoading, 'always')
+    assert.equal(cfg.tools.catalog.deferredLoadingThreshold, 7)
   })
 
   it('parses backgroundTask overrides', () => {
@@ -619,7 +631,7 @@ describe('config: endpoints + models registry', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.backgroundTask, {
+    assert.deepEqual(cfg.dispatch.scheduler, {
       maxConcurrentRunsPerUser: 2,
       startupCatchupIntervalMs: 5000,
       fireRetryMaxAttempts: 5,
@@ -644,6 +656,12 @@ describe('config: endpoints + models registry', () => {
       maxChainDepth: 4,
       maxChainDepthCeiling: 6,
       historyTtlMs: 12_345,
+      scheduler: {
+        maxConcurrentRunsPerUser: 3,
+        startupCatchupIntervalMs: 60_000,
+        fireRetryMaxAttempts: 3,
+        recurringAutoDisableThreshold: 3,
+      },
     })
   })
 })

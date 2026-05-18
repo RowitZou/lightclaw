@@ -1313,7 +1313,7 @@ export class ChannelRunner {
       cwd,
       channel: 'feishu',
       model: prefs.model ?? resolveRoleModel(getMainRole(), config),
-      sessionsDir: config.sessionsDir,
+      sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
       sessionId,
@@ -1321,9 +1321,9 @@ export class ChannelRunner {
       identityRules: loadIdentityRules(userId),
       fileRules: loadFileRules({
         cwd,
-        userPath: config.permissionRuleFiles.user,
-        projectPath: config.permissionRuleFiles.project,
-        localPath: config.permissionRuleFiles.local,
+        userPath: config.paths.permissionRules.user,
+        projectPath: config.paths.permissionRules.project,
+        localPath: config.paths.permissionRules.local,
       }),
       runtime: sandboxRuntime,
     })

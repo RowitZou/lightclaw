@@ -287,7 +287,7 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
         console.error(`[memory aging] eviction failed: ${message}`)
       }
       try {
-        await maybeSweepForkTranscripts(current.config.sessionsDir)
+        await maybeSweepForkTranscripts(current.config.paths.sessions)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[fork-transcript] retention sweep failed: ${message}`)

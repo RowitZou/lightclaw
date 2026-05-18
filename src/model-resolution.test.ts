@@ -54,15 +54,10 @@ describe('resolveRoleModel', () => {
 describe('resolveToolModuleModel', () => {
   it('uses per-module model pins before defaultModel', () => {
     const cfg = config({
-      tools: {
-        webSearch: { model: 'gpt-mini' },
-        webFetch: { preapprovedDomains: [] },
-        imageRead: { model: 'haiku' },
-        compact: { model: 'haiku' },
-        deferredLoading: 'always',
-        deferredLoadingThreshold: 30,
-        discoveredToolsMaxSize: 30,
-        discoveredToolsTtlTurns: 20,
+      subLLM: {
+        webSearch: 'gpt-mini',
+        imageRead: 'haiku',
+        compact: 'haiku',
       },
     })
     assert.equal(resolveToolModuleModel('webSearch', cfg), 'gpt-mini')
@@ -116,13 +111,15 @@ function config(overrides: Partial<LightClawConfig> = {}): LightClawConfig {
     tools: {
       webSearch: {},
       webFetch: { preapprovedDomains: [] },
-      imageRead: {},
-      compact: {},
-      deferredLoading: 'always',
-      deferredLoadingThreshold: 30,
-      discoveredToolsMaxSize: 30,
-      discoveredToolsTtlTurns: 20,
+      maxOutputBytes: 51_200,
+      catalog: {
+        deferredLoading: 'always',
+        deferredLoadingThreshold: 30,
+        discoveredToolsMaxSize: 30,
+        discoveredToolsTtlTurns: 20,
+      },
     },
+    subLLM: {},
     ...overrides,
   } as LightClawConfig
 }

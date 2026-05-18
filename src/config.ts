@@ -174,10 +174,6 @@ export type RoleConfig = {
   maxTurns?: number
 }
 
-export type ToolModuleConfig = {
-  model?: string
-}
-
 export type WebFetchToolConfig = {
   /** Extra preapproved domains beyond the built-in baseline. Match is exact
    *  hostname (no subdomain wildcard). Merged with the built-in list — admin
@@ -185,11 +181,7 @@ export type WebFetchToolConfig = {
   preapprovedDomains: string[]
 }
 
-export type ToolsConfig = {
-  webSearch: WebSearchToolConfig & ToolModuleConfig
-  webFetch: WebFetchToolConfig
-  imageRead: ToolModuleConfig
-  compact: ToolModuleConfig
+export type ToolCatalogConfig = {
   deferredLoading: 'auto' | 'always' | 'off'
   deferredLoadingThreshold: number
   /** Per-session bound on `SessionContext.discoveredTools`. When the LRU
@@ -207,6 +199,78 @@ export type ToolsConfig = {
    *  prevents the steady state from collapsing back to "all tools inline"
    *  once the model has touched everything once. */
   discoveredToolsTtlTurns: number
+}
+
+export type ToolsConfig = {
+  webSearch: WebSearchToolConfig
+  webFetch: WebFetchToolConfig
+  /** General tool output byte cap (per-call, post-channel-encoding). */
+  maxOutputBytes: number
+  catalog: ToolCatalogConfig
+}
+
+/** Sub-LLM model pins for framework-internal LLM operations. Each value
+ *  is the display name of a model in `models`, or `undefined` to fall
+ *  back to `defaultModel`. */
+export type SubLLMConfig = {
+  /** Sub-LLM that summarizes / rewrites compaction prefixes. */
+  compact?: string
+  /** Sub-LLM that produces text descriptions of inline images. */
+  imageRead?: string
+  /** Sub-LLM that summarizes WebSearch / WebFetch results. */
+  webSearch?: string
+}
+
+export type McpConfig = {
+  enabled: boolean
+  connectTimeout: number
+  connectConcurrency: number
+  maxToolOutputBytes: number
+}
+
+export type HooksConfig = {
+  enabled: boolean
+  timeoutBlocking: number
+  timeoutNonBlocking: number
+}
+
+export type TurnsConfig = {
+  /** Main agent loop hard cap. `undefined` = no cap. */
+  main?: number
+  /** Default cap for subagents whose role does not pin its own `maxTurns`.
+   *  `undefined` = no fallback cap. */
+  subagentDefault?: number
+}
+
+export type PathsConfig = {
+  sessions: string
+  workspace: string
+  memory: string
+  apiLogs: string
+  hooks?: string
+  mcpConfig?: string
+  permissionAudit?: string
+  permissionRules: {
+    user?: string
+    project?: string
+    local?: string
+  }
+}
+
+export type MemoryConfig = {
+  extractor: { enabled: boolean }
+  curator: CuratorConfig
+  recall: MemoryRecallConfig
+  session: SessionMemoryConfig
+  nudge: MemoryNudgeConfig
+}
+
+export type CompactConfig = {
+  auto: boolean
+  thresholdRatio: number
+  keepRecent: number
+  preFlush: PreCompactFlushConfig
+  micro: MicroCompactConfig
 }
 
 /** Endpoint backed by a static API key sent as Bearer auth. */
@@ -259,53 +323,28 @@ export type LightClawConfig = {
    *  alias. */
   endpoints: Record<string, EndpointConfig>
   roles?: Record<string, RoleConfig>
-  sessionsDir: string
-  autoCompact: boolean
-  autoMemory: boolean
-  autoDream: AutoDreamConfig
-  backgroundTask: BackgroundTaskConfig
-  dispatch: DispatchConfig
-  memoryDir: string
-  workspaceRoot: string
   contextWindow: number
-  compactThresholdRatio: number
-  compactKeepRecent: number
-  maxTurns?: number
-  subagentMaxTurns?: number
+  /** Permission policy mode. Flat top-level field — the permission concept
+   *  has only this single knob (rule files / audit log live under paths). */
   permissionMode: PermissionMode
-  permissionRuleFiles: {
-    user?: string
-    project?: string
-    local?: string
-  }
-  permissionAuditLog?: string
-  mcpEnabled: boolean
-  mcpConnectTimeout: number
-  mcpConnectConcurrency: number
-  mcpConfigFiles: {
-    user?: string
-  }
-  mcpMaxToolOutputBytes: number
-  maxToolOutputBytes: number
-  hooksEnabled: boolean
-  hookTimeoutBlocking: number
-  hookTimeoutNonBlocking: number
-  hookDirs: {
-    user?: string
-  }
+  /** Master switch for the apiLogs JSONL persistence feature. Directory
+   *  lives under `paths.apiLogs`. */
+  apiLogsEnabled: boolean
+  paths: PathsConfig
+  turns: TurnsConfig
+  memory: MemoryConfig
+  compact: CompactConfig
+  dispatch: DispatchConfig
+  subLLM: SubLLMConfig
+  mcp: McpConfig
+  hooks: HooksConfig
+  tools: ToolsConfig
   runtime: {
     backend: RuntimeKind
     docker: DockerRuntimeSettings
     rlaunch: RlaunchRuntimeSettings
     network: NetworkBridgeSettings
   }
-  memoryRecall: MemoryRecallConfig
-  sessionMemory: SessionMemoryConfig
-  memoryNudge: MemoryNudgeConfig
-  preCompactFlush: PreCompactFlushConfig
-  microCompact: MicroCompactConfig
-  tools: ToolsConfig
-  apiLogs: ApiLogsConfig
   attachments: AttachmentsConfig
 }
 
@@ -327,7 +366,7 @@ export type AttachmentsConfig = {
   maxInlinePerTurn: number
 }
 
-export type AutoDreamConfig = {
+export type CuratorConfig = {
   enabled: boolean
   minHours: number
   minSessions: number
@@ -335,7 +374,7 @@ export type AutoDreamConfig = {
   maxTurns?: number
 }
 
-export type BackgroundTaskConfig = {
+export type DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: number
   startupCatchupIntervalMs: number
   fireRetryMaxAttempts: number
@@ -346,13 +385,7 @@ export type DispatchConfig = {
   maxChainDepth: number
   maxChainDepthCeiling: number
   historyTtlMs: number
-}
-
-export type ApiLogsConfig = {
-  /** Persist every streamChat request + response to <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl. */
-  enabled: boolean
-  /** Defaults to <lightclawHome>/api-logs. */
-  dir: string
+  scheduler: DispatchSchedulerConfig
 }
 
 type ConfigFileDockerMount = NonNullable<
@@ -362,22 +395,23 @@ type ConfigFileDockerMount = NonNullable<
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
-// autoDream defaults ON: every gate it consults (lock file, time / scan-
-// throttle / session-count thresholds, in-progress extraction check) is per
-// canonical user under that user's memory dir, so one user's consolidate
-// run never blocks another's. dream forks run as `subagentLabel: 'memoryCurator'`
-// fire-and-forget after end_turn, never on the critical reply path.
-// Operators wanting to turn it off can still set autoDream.enabled=false in
-// config.json or pass LIGHTCLAW_NO_MEMORY=1 (which disables both extract
-// and dream as a unit).
-const DEFAULT_AUTO_DREAM: AutoDreamConfig = {
+const DEFAULT_DISPATCH_HISTORY_TTL_MS = 24 * 60 * 60 * 1000
+// memory.curator (formerly autoDream) defaults ON: every gate it consults
+// (lock file, time / scan-throttle / session-count thresholds, in-progress
+// extraction check) is per canonical user under that user's memory dir, so
+// one user's consolidate run never blocks another's. curator forks run as
+// `subagentLabel: 'memoryCurator'` fire-and-forget after end_turn, never on
+// the critical reply path. Operators wanting to turn it off can still set
+// memory.curator.enabled=false in config.json or pass LIGHTCLAW_NO_MEMORY=1
+// (which disables both extract and curator as a unit).
+const DEFAULT_CURATOR: CuratorConfig = {
   enabled: true,
   minHours: 24,
   minSessions: 3,
   scanThrottleMs: 10 * 60 * 1000,
 }
 
-const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
+const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: 3,
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
@@ -387,10 +421,11 @@ const DEFAULT_BACKGROUND_TASK: BackgroundTaskConfig = {
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   maxChainDepth: 3,
   maxChainDepthCeiling: 5,
-  historyTtlMs: 24 * 60 * 60 * 1000,
+  historyTtlMs: DEFAULT_DISPATCH_HISTORY_TTL_MS,
+  scheduler: DEFAULT_DISPATCH_SCHEDULER,
 }
 
-// Memory Nudge defaults ON (dark launch, mirroring autoDream's rollout
+// Memory Nudge defaults ON (dark launch, mirroring memory.curator's rollout
 // shape). The nudge rides along on a tool-boundary user message, so it
 // costs no extra API turn; `everyTurns: 20` is the conservative cadence —
 // a tool-heavy session reaches it in a few exchanges, a light one may
@@ -424,6 +459,59 @@ const DEFAULT_DOCKER_SECURITY: DockerSecuritySettings = {
   // (models, datasets, intermediate artifacts) on a hefty backing volume.
   // Hosts with smaller / larger volumes should override.
   workspaceQuotaMb: 524288,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Legacy config migration
+//
+// Each renamed / moved field warns once per process when it appears in the
+// loaded file but the new field is absent. When both are present, the new
+// value wins and the legacy presence is also warned. Routing fields and
+// roles.<X>.budget have no compat fallback — they are pure dead-weight and
+// only warn.
+// ──────────────────────────────────────────────────────────────────────────
+
+const warnedLegacyFields = new Set<string>()
+
+function warnLegacyConfigField(legacyField: string, migrateTo: string): void {
+  if (warnedLegacyFields.has(legacyField)) return
+  warnedLegacyFields.add(legacyField)
+  process.stderr.write(
+    `config: \`${legacyField}\` is deprecated. Migrate to \`${migrateTo}\`.\n`,
+  )
+}
+
+function warnLegacyConfigBoth(legacyField: string, newField: string): void {
+  const key = `${legacyField}+${newField}`
+  if (warnedLegacyFields.has(key)) return
+  warnedLegacyFields.add(key)
+  process.stderr.write(
+    `config: both \`${legacyField}\` (deprecated) and \`${newField}\` are set. Using \`${newField}\`; please remove \`${legacyField}\`.\n`,
+  )
+}
+
+function warnDeadConfigField(field: string, message: string): void {
+  if (warnedLegacyFields.has(field)) return
+  warnedLegacyFields.add(field)
+  process.stderr.write(`config: \`${field}\` ${message}\n`)
+}
+
+function pickWithLegacy<T>(
+  legacyField: string,
+  newField: string,
+  legacyValue: T | undefined,
+  newValue: T | undefined,
+): T | undefined {
+  if (newValue !== undefined && legacyValue !== undefined) {
+    warnLegacyConfigBoth(legacyField, newField)
+    return newValue
+  }
+  if (newValue !== undefined) return newValue
+  if (legacyValue !== undefined) {
+    warnLegacyConfigField(legacyField, newField)
+    return legacyValue
+  }
+  return undefined
 }
 
 function parseBoolean(value: string | undefined): boolean | undefined {
@@ -496,7 +584,7 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
   )
 }
 
-function parseDeferredLoadingMode(value: string | undefined): ToolsConfig['deferredLoading'] | undefined {
+function parseDeferredLoadingMode(value: string | undefined): ToolCatalogConfig['deferredLoading'] | undefined {
   if (value === undefined) {
     return undefined
   }
@@ -505,7 +593,7 @@ function parseDeferredLoadingMode(value: string | undefined): ToolsConfig['defer
     return normalized
   }
   throw new Error(
-    `tools.deferredLoading must be one of: "auto", "always", "off".`,
+    `tools.catalog.deferredLoading must be one of: "auto", "always", "off".`,
   )
 }
 
@@ -636,15 +724,6 @@ function parseImagePullPolicy(value: string | undefined): RlaunchRuntimeSettings
   return undefined
 }
 
-function parseStringList(value: string | undefined): string[] | undefined {
-  if (!value) {
-    return undefined
-  }
-
-  const items = value.split(',').map(item => item.trim()).filter(Boolean)
-  return items.length > 0 ? items : undefined
-}
-
 function validateDockerMounts(
   mounts: ConfigFileDockerMount[] | undefined,
 ): DockerMountConfig[] {
@@ -771,8 +850,6 @@ function resolveDockerSecurity(
   }
 }
 
-const warnedDeprecatedDiscoveryConfig = new Set<string>()
-
 function warnDeprecatedDiscoveryConfig(fileConfig: ConfigFileShape): void {
   const mcpConfigFiles = fileConfig.mcpConfigFiles as
     | { project?: unknown; local?: unknown }
@@ -784,12 +861,44 @@ function warnDeprecatedDiscoveryConfig(fileConfig: ConfigFileShape): void {
     ['hookDirs.project', hookDirs?.project],
   ]
   for (const [key, value] of deprecated) {
-    if (value === undefined || warnedDeprecatedDiscoveryConfig.has(key)) {
-      continue
-    }
-    warnedDeprecatedDiscoveryConfig.add(key)
-    process.stderr.write(
-      `config: ${key} is deprecated and ignored; use admin-owned LightClaw home discovery paths instead.\n`,
+    if (value === undefined) continue
+    warnDeadConfigField(
+      key,
+      'is unsupported and ignored; admin-owned LightClaw home discovery only.',
+    )
+  }
+}
+
+/** Routing-style fields removed in Phase 5 are silently parsed by JSON.parse
+ *  but never consumed by any code path. Warn once with the migration target
+ *  so admins know where to put the values. */
+function warnDeadRoutingConfig(fileConfig: ConfigFileShape): void {
+  const routing = (fileConfig as unknown as {
+    routing?: { main?: unknown; extract?: unknown; compact?: unknown; webSearch?: unknown }
+  }).routing
+  if (!routing || typeof routing !== 'object') return
+  if (routing.main !== undefined) {
+    warnDeadConfigField(
+      'routing.main',
+      'is deprecated since Phase 5 and ignored. Set `defaultModel` instead.',
+    )
+  }
+  if (routing.extract !== undefined) {
+    warnDeadConfigField(
+      'routing.extract',
+      'is deprecated since Phase 5 and ignored. Use `roles.memoryExtractor.model` (and `roles.memoryCurator.model` for autoDream).',
+    )
+  }
+  if (routing.compact !== undefined) {
+    warnDeadConfigField(
+      'routing.compact',
+      'is deprecated since Phase 5 and ignored. Use `subLLM.compact` instead.',
+    )
+  }
+  if (routing.webSearch !== undefined) {
+    warnDeadConfigField(
+      'routing.webSearch',
+      'is deprecated since Phase 5 and ignored. Use `subLLM.webSearch` instead.',
     )
   }
 }
@@ -810,9 +919,12 @@ export function parsePermissionMode(value: string | undefined): PermissionMode |
 
 export function resolveSessionsDir(): string {
   const fileConfig = loadConfigFile()
+  const newValue = fileConfig.paths?.sessions
+  const legacyValue = fileConfig.sessionsDir
+  const fromFile = pickWithLegacy('sessionsDir', 'paths.sessions', legacyValue, newValue)
   const configuredPath =
     process.env.LIGHTCLAW_SESSIONS_DIR ??
-    fileConfig.sessionsDir ??
+    fromFile ??
     path.join(lightclawHome(), 'sessions')
 
   return path.resolve(expandHomePath(configuredPath))
@@ -852,6 +964,18 @@ function assertPositiveInteger(value: unknown, field: string): number | undefine
   return value
 }
 
+/** Build the set of role agentTypes the config file is allowed to pin.
+ *  `internal` covers extractor + curator as a group. User-defined roles
+ *  are loaded after getConfig() runs, so they cannot appear here; that's
+ *  an intentional limitation — per-user role authoring is out of scope
+ *  for v0.2.x. */
+function getValidRoleConfigKeys(): string[] {
+  const workerNames = BUNDLED_AGENTS
+    .filter(role => role.kind === 'worker')
+    .map(role => role.agentType)
+  return [...workerNames, 'internal']
+}
+
 function resolveRoleConfigs(
   input: ConfigFileShape['roles'],
   modelNames: string[],
@@ -862,6 +986,7 @@ function resolveRoleConfigs(
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('roles must be an object keyed by agentType.')
   }
+  const validKeys = getValidRoleConfigKeys()
   const roles: Record<string, RoleConfig> = {}
   for (const [agentType, raw] of Object.entries(input)) {
     if (agentType === 'main') {
@@ -873,6 +998,11 @@ function resolveRoleConfigs(
     if (bundledRole?.kind === 'internal') {
       throw new Error(
         `\`roles.${agentType}\` is not allowed; \`${agentType}\` is kind='internal' and configured via \`roles.internal\` (which covers all internal roles as a group).`,
+      )
+    }
+    if (!validKeys.includes(agentType)) {
+      throw new Error(
+        `\`roles.${agentType}\` is not a valid worker / internal role key. Allowed: ${validKeys.join(', ')}.`,
       )
     }
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -887,22 +1017,49 @@ function resolveRoleConfigs(
     if (maxTurns !== undefined) {
       roleConfig.maxTurns = maxTurns
     }
+    // Detect and warn the dead `budget` field at the leaf level (Role.budget
+    // was deleted 2026-05-18; ConfigFileShape no longer declares it but
+    // operators may still have the JSON around from the old shape).
+    const rawWithLegacy = raw as Record<string, unknown>
+    if (rawWithLegacy.budget !== undefined) {
+      warnDeadConfigField(
+        `roles.${agentType}.budget`,
+        'is deprecated and ignored. Per-role budget was never enforced; remove the field.',
+      )
+    }
     roles[agentType] = roleConfig
   }
   return roles
 }
 
-function resolveToolModuleConfig(
-  input: { model?: string } | undefined,
-  field: 'tools.webSearch' | 'tools.imageRead' | 'tools.compact',
+function resolveSubLLMConfig(
+  fileConfig: ConfigFileShape,
   modelNames: string[],
-): ToolModuleConfig {
-  const model = assertModelName(input?.model, `${field}.model`, modelNames)
-  return model === undefined ? {} : { model }
+): SubLLMConfig {
+  const sub: SubLLMConfig = {}
+  const toolsSection = fileConfig.tools ?? {}
+  for (const key of ['compact', 'imageRead', 'webSearch'] as const) {
+    const legacyEntry = toolsSection[key]
+    const legacyModel = legacyEntry?.model
+    const newValue = fileConfig.subLLM?.[key]
+    const value = pickWithLegacy(
+      `tools.${key}.model`,
+      `subLLM.${key}`,
+      legacyModel,
+      newValue,
+    )
+    if (value !== undefined) {
+      sub[key] = assertModelName(value, `subLLM.${key}`, modelNames) ?? undefined
+    }
+  }
+  return sub
 }
 
 export function getConfig(): LightClawConfig {
   const fileConfig = loadConfigFile()
+  warnDeprecatedDiscoveryConfig(fileConfig)
+  warnDeadRoutingConfig(fileConfig)
+
   const endpoints = resolveEndpoints(fileConfig.endpoints)
   const models = resolveModels(fileConfig.models, endpoints)
   const modelNames = Object.keys(models)
@@ -926,10 +1083,6 @@ export function getConfig(): LightClawConfig {
   }
   const defaultModel = requestedModel
   const roles = resolveRoleConfigs(fileConfig.roles, modelNames)
-  const autoCompact =
-    parseBoolean(process.env.LIGHTCLAW_AUTO_COMPACT) ??
-    fileConfig.autoCompact ??
-    true
   const contextWindow = Math.max(
     1000,
     Math.floor(
@@ -938,9 +1091,20 @@ export function getConfig(): LightClawConfig {
         DEFAULT_CONTEXT_WINDOW,
     ),
   )
+
+  // — compact —
+  const autoCompact =
+    parseBoolean(process.env.LIGHTCLAW_AUTO_COMPACT) ??
+    pickWithLegacy('autoCompact', 'compact.auto', fileConfig.autoCompact, fileConfig.compact?.auto) ??
+    true
   const compactThresholdRatio = clampNumber(
     parseNumber(process.env.LIGHTCLAW_COMPACT_THRESHOLD_RATIO) ??
-      fileConfig.compactThresholdRatio ??
+      pickWithLegacy(
+        'compactThresholdRatio',
+        'compact.thresholdRatio',
+        fileConfig.compactThresholdRatio,
+        fileConfig.compact?.thresholdRatio,
+      ) ??
       DEFAULT_COMPACT_THRESHOLD_RATIO,
     0.1,
     0.95,
@@ -949,52 +1113,243 @@ export function getConfig(): LightClawConfig {
     0,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_COMPACT_KEEP_RECENT) ??
-        fileConfig.compactKeepRecent ??
+        pickWithLegacy(
+          'compactKeepRecent',
+          'compact.keepRecent',
+          fileConfig.compactKeepRecent,
+          fileConfig.compact?.keepRecent,
+        ) ??
         DEFAULT_COMPACT_KEEP_RECENT,
     ),
   )
-  // No default cap on agent loop turns: matches Claude Code's CLI behavior
-  // (loop runs until the model stops on its own). Users can opt into a hard
-  // cap via env or config when running unattended channel sessions.
-  const maxTurns = resolveOptionalTurnCap(
-    parseNumber(process.env.LIGHTCLAW_MAX_TURNS) ?? fileConfig.maxTurns,
+  const preCompactFlushEnabled =
+    parseBoolean(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED) ??
+    pickWithLegacy(
+      'preCompactFlush.enabled',
+      'compact.preFlush.enabled',
+      fileConfig.preCompactFlush?.enabled,
+      fileConfig.compact?.preFlush?.enabled,
+    ) ??
+    true
+  const preCompactFlushTimeoutMs = Math.max(
+    1000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS) ??
+        pickWithLegacy(
+          'preCompactFlush.timeoutMs',
+          'compact.preFlush.timeoutMs',
+          fileConfig.preCompactFlush?.timeoutMs,
+          fileConfig.compact?.preFlush?.timeoutMs,
+        ) ??
+        8000,
+    ),
   )
-  const subagentMaxTurns = resolveOptionalTurnCap(
+  const microCompactEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MICRO_COMPACT_ENABLED) ??
+    pickWithLegacy(
+      'microCompact.enabled',
+      'compact.micro.enabled',
+      fileConfig.microCompact?.enabled,
+      fileConfig.compact?.micro?.enabled,
+    ) ??
+    true
+  const microCompactIdleEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MC_IDLE_ENABLED) ??
+    pickWithLegacy(
+      'microCompact.idle.enabled',
+      'compact.micro.idle.enabled',
+      fileConfig.microCompact?.idle?.enabled,
+      fileConfig.compact?.micro?.idle?.enabled,
+    ) ??
+    true
+  const microCompactIdleGapThresholdMinutes = Math.max(
+    0,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MC_IDLE_GAP_THRESHOLD_MINUTES) ??
+        pickWithLegacy(
+          'microCompact.idle.gapThresholdMinutes',
+          'compact.micro.idle.gapThresholdMinutes',
+          fileConfig.microCompact?.idle?.gapThresholdMinutes,
+          fileConfig.compact?.micro?.idle?.gapThresholdMinutes,
+        ) ??
+        60,
+    ),
+  )
+  const microCompactIdleKeepRecent = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MC_IDLE_KEEP_RECENT) ??
+        pickWithLegacy(
+          'microCompact.idle.keepRecent',
+          'compact.micro.idle.keepRecent',
+          fileConfig.microCompact?.idle?.keepRecent,
+          fileConfig.compact?.micro?.idle?.keepRecent,
+        ) ??
+        5,
+    ),
+  )
+
+  // — turns —
+  const mainTurns = resolveOptionalTurnCap(
+    parseNumber(process.env.LIGHTCLAW_MAX_TURNS) ??
+      pickWithLegacy('maxTurns', 'turns.main', fileConfig.maxTurns, fileConfig.turns?.main),
+  )
+  const subagentDefaultTurns = resolveOptionalTurnCap(
     parseNumber(process.env.LIGHTCLAW_SUBAGENT_MAX_TURNS) ??
-      fileConfig.subagentMaxTurns,
+      pickWithLegacy(
+        'subagentMaxTurns',
+        'turns.subagentDefault',
+        fileConfig.subagentMaxTurns,
+        fileConfig.turns?.subagentDefault,
+      ),
   )
+
+  // — memory —
   const autoMemory = parseBoolean(process.env.LIGHTCLAW_NO_MEMORY) === true
     ? false
     : parseBoolean(process.env.LIGHTCLAW_AUTO_MEMORY) ??
-      fileConfig.autoMemory ??
+      pickWithLegacy(
+        'autoMemory',
+        'memory.extractor.enabled',
+        fileConfig.autoMemory,
+        fileConfig.memory?.extractor?.enabled,
+      ) ??
       true
-  const autoDream = resolveAutoDreamConfig(fileConfig.autoDream ?? {})
-  const backgroundTask = resolveBackgroundTaskConfig(fileConfig.backgroundTask ?? {})
-  const dispatch = resolveDispatchConfig(fileConfig.dispatch ?? {})
+  const curatorRaw = pickWithLegacy(
+    'autoDream',
+    'memory.curator',
+    fileConfig.autoDream,
+    fileConfig.memory?.curator,
+  ) ?? {}
+  const curator = resolveCuratorConfig(curatorRaw)
   const memoryDir = path.resolve(
     expandHomePath(
       process.env.LIGHTCLAW_MEMORY_DIR ??
-        fileConfig.memoryDir ??
+        pickWithLegacy('memoryDir', 'paths.memory', fileConfig.memoryDir, fileConfig.paths?.memory) ??
         path.join(lightclawHome(), 'memory'),
     ),
   )
+  const memoryRecallEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MEMORY_RECALL_ENABLED) ??
+    pickWithLegacy(
+      'memoryRecall.enabled',
+      'memory.recall.enabled',
+      fileConfig.memoryRecall?.enabled,
+      fileConfig.memory?.recall?.enabled,
+    ) ??
+    true
+  const memoryRecallTopN = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MEMORY_RECALL_TOP_N) ??
+        pickWithLegacy(
+          'memoryRecall.topN',
+          'memory.recall.topN',
+          fileConfig.memoryRecall?.topN,
+          fileConfig.memory?.recall?.topN,
+        ) ??
+        5,
+    ),
+  )
+  const sessionMemoryEnabled =
+    parseBoolean(process.env.LIGHTCLAW_SESSION_MEMORY_ENABLED) ??
+    pickWithLegacy(
+      'sessionMemory.enabled',
+      'memory.session.enabled',
+      fileConfig.sessionMemory?.enabled,
+      fileConfig.memory?.session?.enabled,
+    ) ??
+    true
+  const sessionMemoryUpdateTokenThreshold = Math.max(
+    1000,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD) ??
+        pickWithLegacy(
+          'sessionMemory.updateTokenThreshold',
+          'memory.session.updateTokenThreshold',
+          fileConfig.sessionMemory?.updateTokenThreshold,
+          fileConfig.memory?.session?.updateTokenThreshold,
+        ) ??
+        20_000,
+    ),
+  )
+  const sessionMemoryUpdateToolCallThreshold = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD) ??
+        pickWithLegacy(
+          'sessionMemory.updateToolCallThreshold',
+          'memory.session.updateToolCallThreshold',
+          fileConfig.sessionMemory?.updateToolCallThreshold,
+          fileConfig.memory?.session?.updateToolCallThreshold,
+        ) ??
+        5,
+    ),
+  )
+  const memoryNudgeEnabled =
+    parseBoolean(process.env.LIGHTCLAW_MEMORY_NUDGE_ENABLED) ??
+    pickWithLegacy(
+      'memoryNudge.enabled',
+      'memory.nudge.enabled',
+      fileConfig.memoryNudge?.enabled,
+      fileConfig.memory?.nudge?.enabled,
+    ) ??
+    DEFAULT_MEMORY_NUDGE.enabled
+  const memoryNudgeEveryTurns = Math.max(
+    0,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MEMORY_NUDGE_EVERY_TURNS) ??
+        pickWithLegacy(
+          'memoryNudge.everyTurns',
+          'memory.nudge.everyTurns',
+          fileConfig.memoryNudge?.everyTurns,
+          fileConfig.memory?.nudge?.everyTurns,
+        ) ??
+        DEFAULT_MEMORY_NUDGE.everyTurns,
+    ),
+  )
+
+  // — permission —
   const permissionMode =
     parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_MODE) ??
     parsePermissionMode(fileConfig.permissionMode) ??
     'acceptEdits'
-  const permissionAuditLog =
+  const permissionAuditPath =
     process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
-    fileConfig.permissionAuditLog
+    pickWithLegacy(
+      'permissionAuditLog',
+      'paths.permissionAudit',
+      fileConfig.permissionAuditLog,
+      fileConfig.paths?.permissionAudit,
+    )
+  const permissionRulesRaw = pickWithLegacy(
+    'permissionRuleFiles',
+    'paths.permissionRules',
+    fileConfig.permissionRuleFiles,
+    fileConfig.paths?.permissionRules,
+  ) ?? {}
+
+  // — mcp —
   const mcpEnabled = parseBoolean(process.env.LIGHTCLAW_NO_MCP) === true
     ? false
     : parseBoolean(process.env.LIGHTCLAW_MCP_ENABLED) ??
-      fileConfig.mcpEnabled ??
+      pickWithLegacy(
+        'mcpEnabled',
+        'mcp.enabled',
+        fileConfig.mcpEnabled,
+        fileConfig.mcp?.enabled,
+      ) ??
       true
   const mcpConnectTimeout = Math.max(
     1000,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_MCP_CONNECT_TIMEOUT) ??
-        fileConfig.mcpConnectTimeout ??
+        pickWithLegacy(
+          'mcpConnectTimeout',
+          'mcp.connectTimeout',
+          fileConfig.mcpConnectTimeout,
+          fileConfig.mcp?.connectTimeout,
+        ) ??
         10_000,
     ),
   )
@@ -1002,7 +1357,12 @@ export function getConfig(): LightClawConfig {
     1,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_MCP_CONNECT_CONCURRENCY) ??
-        fileConfig.mcpConnectConcurrency ??
+        pickWithLegacy(
+          'mcpConnectConcurrency',
+          'mcp.connectConcurrency',
+          fileConfig.mcpConnectConcurrency,
+          fileConfig.mcp?.connectConcurrency,
+        ) ??
         4,
     ),
   )
@@ -1010,28 +1370,58 @@ export function getConfig(): LightClawConfig {
     1024,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_MCP_MAX_TOOL_OUTPUT_BYTES) ??
-        fileConfig.mcpMaxToolOutputBytes ??
+        pickWithLegacy(
+          'mcpMaxToolOutputBytes',
+          'mcp.maxToolOutputBytes',
+          fileConfig.mcpMaxToolOutputBytes,
+          fileConfig.mcp?.maxToolOutputBytes,
+        ) ??
         20_480,
     ),
   )
+  const mcpConfigUserPath = pickWithLegacy(
+    'mcpConfigFiles.user',
+    'paths.mcpConfig',
+    fileConfig.mcpConfigFiles?.user,
+    fileConfig.paths?.mcpConfig,
+  )
+
+  // — tool output cap —
   const maxToolOutputBytes = Math.max(
     1024,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_MAX_TOOL_OUTPUT_BYTES) ??
-        fileConfig.maxToolOutputBytes ??
+        pickWithLegacy(
+          'maxToolOutputBytes',
+          'tools.maxOutputBytes',
+          fileConfig.maxToolOutputBytes,
+          fileConfig.tools?.maxOutputBytes,
+        ) ??
         51_200,
     ),
   )
+
+  // — hooks —
   const hooksEnabled = parseBoolean(process.env.LIGHTCLAW_NO_HOOKS) === true
     ? false
     : parseBoolean(process.env.LIGHTCLAW_HOOKS_ENABLED) ??
-      fileConfig.hooksEnabled ??
+      pickWithLegacy(
+        'hooksEnabled',
+        'hooks.enabled',
+        fileConfig.hooksEnabled,
+        fileConfig.hooks?.enabled,
+      ) ??
       true
   const hookTimeoutBlocking = Math.max(
     100,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_HOOK_TIMEOUT_BLOCKING) ??
-        fileConfig.hookTimeoutBlocking ??
+        pickWithLegacy(
+          'hookTimeoutBlocking',
+          'hooks.timeoutBlocking',
+          fileConfig.hookTimeoutBlocking,
+          fileConfig.hooks?.timeoutBlocking,
+        ) ??
         5000,
     ),
   )
@@ -1039,10 +1429,23 @@ export function getConfig(): LightClawConfig {
     100,
     Math.floor(
       parseNumber(process.env.LIGHTCLAW_HOOK_TIMEOUT_NON_BLOCKING) ??
-        fileConfig.hookTimeoutNonBlocking ??
+        pickWithLegacy(
+          'hookTimeoutNonBlocking',
+          'hooks.timeoutNonBlocking',
+          fileConfig.hookTimeoutNonBlocking,
+          fileConfig.hooks?.timeoutNonBlocking,
+        ) ??
         10_000,
     ),
   )
+  const hooksUserPath = pickWithLegacy(
+    'hookDirs.user',
+    'paths.hooks',
+    fileConfig.hookDirs?.user,
+    fileConfig.paths?.hooks,
+  )
+
+  // — runtime —
   const runtimeBackend =
     parseRuntimeBackend(process.env.LIGHTCLAW_RUNTIME_BACKEND) ??
     parseRuntimeBackend(fileConfig.runtime?.backend) ??
@@ -1057,157 +1460,102 @@ export function getConfig(): LightClawConfig {
         1_800_000,
     ),
   )
-  const memoryRecallEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MEMORY_RECALL_ENABLED) ??
-    fileConfig.memoryRecall?.enabled ??
-    true
-  const memoryRecallTopN = Math.max(
-    1,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MEMORY_RECALL_TOP_N) ??
-        fileConfig.memoryRecall?.topN ??
-        5,
-    ),
-  )
-  const sessionMemoryEnabled =
-    parseBoolean(process.env.LIGHTCLAW_SESSION_MEMORY_ENABLED) ??
-    fileConfig.sessionMemory?.enabled ??
-    true
-  const sessionMemoryUpdateTokenThreshold = Math.max(
-    1000,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD) ??
-        fileConfig.sessionMemory?.updateTokenThreshold ??
-        20_000,
-    ),
-  )
-  const sessionMemoryUpdateToolCallThreshold = Math.max(
-    1,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_SESSION_MEMORY_TOOLCALL_THRESHOLD) ??
-        fileConfig.sessionMemory?.updateToolCallThreshold ??
-        5,
-    ),
-  )
-  const memoryNudgeEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MEMORY_NUDGE_ENABLED) ??
-    fileConfig.memoryNudge?.enabled ??
-    DEFAULT_MEMORY_NUDGE.enabled
-  const memoryNudgeEveryTurns = Math.max(
-    0,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MEMORY_NUDGE_EVERY_TURNS) ??
-        fileConfig.memoryNudge?.everyTurns ??
-        DEFAULT_MEMORY_NUDGE.everyTurns,
-    ),
-  )
-  const preCompactFlushEnabled =
-    parseBoolean(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED) ??
-    fileConfig.preCompactFlush?.enabled ??
-    true
-  const preCompactFlushTimeoutMs = Math.max(
-    1000,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_PRE_COMPACT_FLUSH_TIMEOUT_MS) ??
-        fileConfig.preCompactFlush?.timeoutMs ??
-        8000,
-    ),
-  )
-  const microCompactEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MICRO_COMPACT_ENABLED) ??
-    fileConfig.microCompact?.enabled ??
-    true
-  const microCompactIdleEnabled =
-    parseBoolean(process.env.LIGHTCLAW_MC_IDLE_ENABLED) ??
-    fileConfig.microCompact?.idle?.enabled ??
-    true
-  const microCompactIdleGapThresholdMinutes = Math.max(
-    0,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MC_IDLE_GAP_THRESHOLD_MINUTES) ??
-        fileConfig.microCompact?.idle?.gapThresholdMinutes ??
-        60,
-    ),
-  )
-  const microCompactIdleKeepRecent = Math.max(
-    1,
-    Math.floor(
-      parseNumber(process.env.LIGHTCLAW_MC_IDLE_KEEP_RECENT) ??
-        fileConfig.microCompact?.idle?.keepRecent ??
-        5,
-    ),
-  )
   const dockerCpuLimit = Math.max(0.1, Number(dockerConfig.cpuLimit ?? 4))
   const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
     : ['/tmp']
   const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
-  warnDeprecatedDiscoveryConfig(fileConfig)
+
+  // — dispatch —
+  const dispatch = resolveDispatchConfig(fileConfig)
+
+  // — sub-LLM pins —
+  const subLLM = resolveSubLLMConfig(fileConfig, modelNames)
+
+  // — tools catalog —
+  const catalog = resolveToolCatalogConfig(fileConfig)
+
+  // — apiLogs —
+  const apiLogsEnabled = parseBoolean(process.env.LIGHTCLAW_API_LOGS_ENABLED)
+    ?? pickWithLegacy(
+      'apiLogs.enabled',
+      'apiLogsEnabled',
+      fileConfig.apiLogs?.enabled,
+      fileConfig.apiLogsEnabled,
+    )
+    ?? false
+  const apiLogsDirRaw = process.env.LIGHTCLAW_API_LOGS_DIR
+    ?? pickWithLegacy(
+      'apiLogs.dir',
+      'paths.apiLogs',
+      fileConfig.apiLogs?.dir ? expandHomePath(fileConfig.apiLogs.dir) : undefined,
+      fileConfig.paths?.apiLogs ? expandHomePath(fileConfig.paths.apiLogs) : undefined,
+    )
+    ?? path.join(lightclawHome(), 'api-logs')
 
   return {
     defaultModel,
     models,
     endpoints,
     ...(roles ? { roles } : {}),
-    sessionsDir: resolveSessionsDir(),
-    autoCompact,
-    autoMemory,
-    autoDream,
-    backgroundTask,
-    dispatch,
-    memoryDir,
-    workspaceRoot: resolveWorkspaceRoot(),
     contextWindow,
-    compactThresholdRatio,
-    compactKeepRecent,
-    ...(maxTurns !== undefined ? { maxTurns } : {}),
-    ...(subagentMaxTurns !== undefined ? { subagentMaxTurns } : {}),
     permissionMode,
-    permissionRuleFiles: fileConfig.permissionRuleFiles ?? {},
-    ...(permissionAuditLog ? { permissionAuditLog } : {}),
-    mcpEnabled,
-    mcpConnectTimeout,
-    mcpConnectConcurrency,
-    mcpConfigFiles: {
-      user: expandOptionalPath(fileConfig.mcpConfigFiles?.user),
+    apiLogsEnabled,
+    paths: {
+      sessions: resolveSessionsDir(),
+      workspace: resolveWorkspaceRoot(),
+      memory: memoryDir,
+      apiLogs: apiLogsDirRaw,
+      ...(hooksUserPath ? { hooks: expandOptionalPath(hooksUserPath)! } : {}),
+      ...(mcpConfigUserPath ? { mcpConfig: expandOptionalPath(mcpConfigUserPath)! } : {}),
+      ...(permissionAuditPath ? { permissionAudit: permissionAuditPath } : {}),
+      permissionRules: permissionRulesRaw,
     },
-    mcpMaxToolOutputBytes,
-    maxToolOutputBytes,
-    hooksEnabled,
-    hookTimeoutBlocking,
-    hookTimeoutNonBlocking,
-    hookDirs: {
-      user: expandOptionalPath(fileConfig.hookDirs?.user),
+    turns: {
+      ...(mainTurns !== undefined ? { main: mainTurns } : {}),
+      ...(subagentDefaultTurns !== undefined ? { subagentDefault: subagentDefaultTurns } : {}),
     },
-    memoryRecall: {
-      enabled: memoryRecallEnabled,
-      topN: memoryRecallTopN,
-    },
-    sessionMemory: {
-      enabled: sessionMemoryEnabled,
-      updateTokenThreshold: sessionMemoryUpdateTokenThreshold,
-      updateToolCallThreshold: sessionMemoryUpdateToolCallThreshold,
-    },
-    memoryNudge: {
-      enabled: memoryNudgeEnabled,
-      everyTurns: memoryNudgeEveryTurns,
-    },
-    preCompactFlush: {
-      enabled: preCompactFlushEnabled,
-      timeoutMs: preCompactFlushTimeoutMs,
-    },
-    microCompact: {
-      enabled: microCompactEnabled,
-      idle: {
-        enabled: microCompactIdleEnabled,
-        gapThresholdMinutes: microCompactIdleGapThresholdMinutes,
-        keepRecent: microCompactIdleKeepRecent,
+    memory: {
+      extractor: { enabled: autoMemory },
+      curator,
+      recall: { enabled: memoryRecallEnabled, topN: memoryRecallTopN },
+      session: {
+        enabled: sessionMemoryEnabled,
+        updateTokenThreshold: sessionMemoryUpdateTokenThreshold,
+        updateToolCallThreshold: sessionMemoryUpdateToolCallThreshold,
       },
+      nudge: { enabled: memoryNudgeEnabled, everyTurns: memoryNudgeEveryTurns },
+    },
+    compact: {
+      auto: autoCompact,
+      thresholdRatio: compactThresholdRatio,
+      keepRecent: compactKeepRecent,
+      preFlush: { enabled: preCompactFlushEnabled, timeoutMs: preCompactFlushTimeoutMs },
+      micro: {
+        enabled: microCompactEnabled,
+        idle: {
+          enabled: microCompactIdleEnabled,
+          gapThresholdMinutes: microCompactIdleGapThresholdMinutes,
+          keepRecent: microCompactIdleKeepRecent,
+        },
+      },
+    },
+    dispatch,
+    subLLM,
+    mcp: {
+      enabled: mcpEnabled,
+      connectTimeout: mcpConnectTimeout,
+      connectConcurrency: mcpConnectConcurrency,
+      maxToolOutputBytes: mcpMaxToolOutputBytes,
+    },
+    hooks: {
+      enabled: hooksEnabled,
+      timeoutBlocking: hookTimeoutBlocking,
+      timeoutNonBlocking: hookTimeoutNonBlocking,
     },
     tools: {
       webSearch: {
-        ...resolveToolModuleConfig(fileConfig.tools?.webSearch, 'tools.webSearch', modelNames),
         braveApiKey:
           process.env.BRAVE_SEARCH_API_KEY ??
           fileConfig.tools?.webSearch?.braveApiKey,
@@ -1222,52 +1570,12 @@ export function getConfig(): LightClawConfig {
                 .map(entry => entry.trim())
             : [],
       },
-      imageRead: resolveToolModuleConfig(fileConfig.tools?.imageRead, 'tools.imageRead', modelNames),
-      compact: resolveToolModuleConfig(fileConfig.tools?.compact, 'tools.compact', modelNames),
-      deferredLoading:
-        parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??
-        parseDeferredLoadingMode(fileConfig.tools?.deferredLoading) ??
-        'always',
-      deferredLoadingThreshold: Math.max(
-        1,
-        Math.floor(
-          parseNumber(process.env.LIGHTCLAW_DEFERRED_LOADING_THRESHOLD) ??
-          fileConfig.tools?.deferredLoadingThreshold ??
-          30,
-        ),
-      ),
-      discoveredToolsMaxSize: Math.max(
-        0,
-        Math.floor(
-          parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE) ??
-          fileConfig.tools?.discoveredToolsMaxSize ??
-          30,
-        ),
-      ),
-      discoveredToolsTtlTurns: Math.max(
-        0,
-        Math.floor(
-          parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_TTL_TURNS) ??
-          fileConfig.tools?.discoveredToolsTtlTurns ??
-          20,
-        ),
-      ),
+      maxOutputBytes: maxToolOutputBytes,
+      catalog,
     },
     lang: parseLang(process.env.LIGHTCLAW_LANG)
       ?? parseLang(fileConfig.lang)
       ?? 'cn',
-    apiLogs: {
-      // Default off: this is an admin-only debug / training-data feature.
-      // Multi-user deployments shouldn't burn disk recording every model
-      // call. Admin enables explicitly via config.apiLogs.enabled or
-      // LIGHTCLAW_API_LOGS_ENABLED=1.
-      enabled: parseBoolean(process.env.LIGHTCLAW_API_LOGS_ENABLED)
-        ?? fileConfig.apiLogs?.enabled
-        ?? false,
-      dir: process.env.LIGHTCLAW_API_LOGS_DIR
-        ?? (fileConfig.apiLogs?.dir ? expandHomePath(fileConfig.apiLogs.dir) : undefined)
-        ?? path.join(lightclawHome(), 'api-logs'),
-    },
     attachments: {
       // Inline-multimodal byte caps. Cross-channel, cross-provider — kept
       // outside `models` because they're not model-specific. PR3 inline
@@ -1327,31 +1635,31 @@ function resolveNetworkBridgeSettings(
   return { mode, proxy, noProxy, port, bindHost, acl }
 }
 
-function resolveAutoDreamConfig(
-  fileConfig: NonNullable<ConfigFileShape['autoDream']>,
-): AutoDreamConfig {
-  const minSessionsRaw = Number(fileConfig.minSessions)
-  const scanThrottleRaw = Number(fileConfig.scanThrottleMs)
-  const maxTurnsRaw = Number(fileConfig.maxTurns)
-  const resolved: AutoDreamConfig = {
-    enabled: fileConfig.enabled ?? DEFAULT_AUTO_DREAM.enabled,
+function resolveCuratorConfig(
+  raw: NonNullable<ConfigFileShape['memory']>['curator'] | NonNullable<ConfigFileShape['autoDream']>,
+): CuratorConfig {
+  const minSessionsRaw = Number(raw?.minSessions)
+  const scanThrottleRaw = Number(raw?.scanThrottleMs)
+  const maxTurnsRaw = Number(raw?.maxTurns)
+  const resolved: CuratorConfig = {
+    enabled: raw?.enabled ?? DEFAULT_CURATOR.enabled,
     minHours: Math.max(
       0,
-      Number.isFinite(Number(fileConfig.minHours))
-        ? Number(fileConfig.minHours)
-        : DEFAULT_AUTO_DREAM.minHours,
+      Number.isFinite(Number(raw?.minHours))
+        ? Number(raw?.minHours)
+        : DEFAULT_CURATOR.minHours,
     ),
     minSessions: Math.max(
       1,
       Math.floor(Number.isFinite(minSessionsRaw)
         ? minSessionsRaw
-        : DEFAULT_AUTO_DREAM.minSessions),
+        : DEFAULT_CURATOR.minSessions),
     ),
     scanThrottleMs: Math.max(
       0,
       Math.floor(Number.isFinite(scanThrottleRaw)
         ? scanThrottleRaw
-        : DEFAULT_AUTO_DREAM.scanThrottleMs),
+        : DEFAULT_CURATOR.scanThrottleMs),
     ),
   }
   if (Number.isFinite(maxTurnsRaw) && maxTurnsRaw >= 1) {
@@ -1360,60 +1668,125 @@ function resolveAutoDreamConfig(
   return resolved
 }
 
-function resolveBackgroundTaskConfig(
-  fileConfig: NonNullable<ConfigFileShape['backgroundTask']>,
-): BackgroundTaskConfig {
-  const maxConcurrentRaw = Number(fileConfig.maxConcurrentRunsPerUser)
-  const catchupRaw = Number(fileConfig.startupCatchupIntervalMs)
-  const retryRaw = Number(fileConfig.fireRetryMaxAttempts)
-  const disableRaw = Number(fileConfig.recurringAutoDisableThreshold)
-  return {
+function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
+  const dispatch = fileConfig.dispatch ?? {}
+  const ceilingRaw = Number(dispatch.maxChainDepthCeiling)
+  const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw >= 1
+    ? Math.floor(ceilingRaw)
+    : DEFAULT_DISPATCH_CONFIG.maxChainDepthCeiling
+  const depthRaw = Number(dispatch.maxChainDepth)
+  const declared = Number.isFinite(depthRaw) && depthRaw >= 1
+    ? Math.floor(depthRaw)
+    : DEFAULT_DISPATCH_CONFIG.maxChainDepth
+  const historyTtlRaw = Number(dispatch.historyTtlMs)
+  const historyTtlMs = Number.isFinite(historyTtlRaw) && historyTtlRaw >= 0
+    ? Math.floor(historyTtlRaw)
+    : DEFAULT_DISPATCH_HISTORY_TTL_MS
+
+  const schedulerSource = pickWithLegacy(
+    'backgroundTask',
+    'dispatch.scheduler',
+    fileConfig.backgroundTask,
+    dispatch.scheduler,
+  ) ?? {}
+
+  const maxConcurrentRaw = Number(schedulerSource.maxConcurrentRunsPerUser)
+  const catchupRaw = Number(schedulerSource.startupCatchupIntervalMs)
+  const retryRaw = Number(schedulerSource.fireRetryMaxAttempts)
+  const disableRaw = Number(schedulerSource.recurringAutoDisableThreshold)
+  const scheduler: DispatchSchedulerConfig = {
     maxConcurrentRunsPerUser: Math.max(
       1,
       Math.floor(Number.isFinite(maxConcurrentRaw)
         ? maxConcurrentRaw
-        : DEFAULT_BACKGROUND_TASK.maxConcurrentRunsPerUser),
+        : DEFAULT_DISPATCH_SCHEDULER.maxConcurrentRunsPerUser),
     ),
     startupCatchupIntervalMs: Math.max(
       0,
       Math.floor(Number.isFinite(catchupRaw)
         ? catchupRaw
-        : DEFAULT_BACKGROUND_TASK.startupCatchupIntervalMs),
+        : DEFAULT_DISPATCH_SCHEDULER.startupCatchupIntervalMs),
     ),
     fireRetryMaxAttempts: Math.max(
       1,
       Math.floor(Number.isFinite(retryRaw)
         ? retryRaw
-        : DEFAULT_BACKGROUND_TASK.fireRetryMaxAttempts),
+        : DEFAULT_DISPATCH_SCHEDULER.fireRetryMaxAttempts),
     ),
     recurringAutoDisableThreshold: Math.max(
       1,
       Math.floor(Number.isFinite(disableRaw)
         ? disableRaw
-        : DEFAULT_BACKGROUND_TASK.recurringAutoDisableThreshold),
+        : DEFAULT_DISPATCH_SCHEDULER.recurringAutoDisableThreshold),
     ),
   }
-}
 
-function resolveDispatchConfig(
-  fileConfig: NonNullable<ConfigFileShape['dispatch']>,
-): DispatchConfig {
-  const ceilingRaw = Number(fileConfig.maxChainDepthCeiling)
-  const ceiling = Number.isFinite(ceilingRaw) && ceilingRaw >= 1
-    ? Math.floor(ceilingRaw)
-    : DEFAULT_DISPATCH_CONFIG.maxChainDepthCeiling
-  const depthRaw = Number(fileConfig.maxChainDepth)
-  const declared = Number.isFinite(depthRaw) && depthRaw >= 1
-    ? Math.floor(depthRaw)
-    : DEFAULT_DISPATCH_CONFIG.maxChainDepth
-  const historyTtlRaw = Number(fileConfig.historyTtlMs)
-  const historyTtlMs = Number.isFinite(historyTtlRaw) && historyTtlRaw >= 0
-    ? Math.floor(historyTtlRaw)
-    : DEFAULT_DISPATCH_CONFIG.historyTtlMs
   return {
     maxChainDepth: Math.min(declared, ceiling),
     maxChainDepthCeiling: ceiling,
     historyTtlMs,
+    scheduler,
+  }
+}
+
+function resolveToolCatalogConfig(fileConfig: ConfigFileShape): ToolCatalogConfig {
+  const tools = fileConfig.tools ?? {}
+  const catalog = tools.catalog ?? {}
+  const deferredLoading =
+    parseDeferredLoadingMode(process.env.LIGHTCLAW_DEFERRED_LOADING) ??
+    parseDeferredLoadingMode(
+      pickWithLegacy(
+        'tools.deferredLoading',
+        'tools.catalog.deferredLoading',
+        tools.deferredLoading,
+        catalog.deferredLoading,
+      ),
+    ) ??
+    'always'
+  const deferredLoadingThreshold = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_DEFERRED_LOADING_THRESHOLD) ??
+        pickWithLegacy(
+          'tools.deferredLoadingThreshold',
+          'tools.catalog.deferredLoadingThreshold',
+          tools.deferredLoadingThreshold,
+          catalog.deferredLoadingThreshold,
+        ) ??
+        30,
+    ),
+  )
+  const discoveredToolsMaxSize = Math.max(
+    0,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE) ??
+        pickWithLegacy(
+          'tools.discoveredToolsMaxSize',
+          'tools.catalog.discoveredToolsMaxSize',
+          tools.discoveredToolsMaxSize,
+          catalog.discoveredToolsMaxSize,
+        ) ??
+        30,
+    ),
+  )
+  const discoveredToolsTtlTurns = Math.max(
+    0,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_DISCOVERED_TOOLS_TTL_TURNS) ??
+        pickWithLegacy(
+          'tools.discoveredToolsTtlTurns',
+          'tools.catalog.discoveredToolsTtlTurns',
+          tools.discoveredToolsTtlTurns,
+          catalog.discoveredToolsTtlTurns,
+        ) ??
+        20,
+    ),
+  )
+  return {
+    deferredLoading,
+    deferredLoadingThreshold,
+    discoveredToolsMaxSize,
+    discoveredToolsTtlTurns,
   }
 }
 

@@ -24,8 +24,8 @@ export const autoCompactHook: Hook = {
         console.log(
           `[micro-compact:idle] cleared ${mc.cleared} tool_result(s), `
           + `~${mc.tokensSaved} tokens saved `
-          + `(gap > ${ctx.config.microCompact.idle.gapThresholdMinutes}min, `
-          + `kept last ${ctx.config.microCompact.idle.keepRecent})`,
+          + `(gap > ${ctx.config.compact.micro.idle.gapThresholdMinutes}min, `
+          + `kept last ${ctx.config.compact.micro.idle.keepRecent})`,
         )
       }
     } catch (err) {
@@ -42,19 +42,19 @@ export async function runCompaction(
   ctx: HookContext,
   force: boolean,
 ): Promise<boolean> {
-  if (!ctx.config.autoCompact) {
+  if (!ctx.config.compact.auto) {
     return false
   }
 
   if (!force) {
     const totalTokens = estimateMessagesTokens(ctx.messages)
-    const threshold = ctx.config.contextWindow * ctx.config.compactThresholdRatio
+    const threshold = ctx.config.contextWindow * ctx.config.compact.thresholdRatio
     if (totalTokens <= threshold) {
       return false
     }
   }
 
-  if (ctx.config.autoMemory && ctx.config.preCompactFlush.enabled) {
+  if (ctx.config.memory.extractor.enabled && ctx.config.compact.preFlush.enabled) {
     const flushed = await flushBeforeCompact({
       messages: [...ctx.messages],
       lastExtractedAt: getLastExtractedAt(),
@@ -62,7 +62,7 @@ export async function runCompaction(
       canonicalUser: getCurrentUserId(),
       config: ctx.config,
       ownerRole: ctx.role,
-      timeoutMs: ctx.config.preCompactFlush.timeoutMs,
+      timeoutMs: ctx.config.compact.preFlush.timeoutMs,
     })
     if (flushed.lastExtractedAt > getLastExtractedAt()) {
       setLastExtractedAt(flushed.lastExtractedAt)
@@ -74,7 +74,7 @@ export async function runCompaction(
   try {
     const result = await compactConversation({
       messages: ctx.messages,
-      keepRecent: ctx.config.compactKeepRecent,
+      keepRecent: ctx.config.compact.keepRecent,
       config: ctx.config,
       sessionId: getSessionId(),
     })
@@ -100,7 +100,7 @@ export async function runCompaction(
 
     if (force) {
       const fallback = compactFallbackTruncate(ctx.messages, {
-        keepRecent: Math.max(2, ctx.config.compactKeepRecent * 2),
+        keepRecent: Math.max(2, ctx.config.compact.keepRecent * 2),
         reason: message,
       })
       if (fallback.removedCount > 0) {

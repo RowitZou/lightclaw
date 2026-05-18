@@ -141,7 +141,7 @@ export async function dispatchToolCall(
           current.discoveredTools,
           tool.name,
           current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
+          ctx.config.tools.catalog.discoveredToolsMaxSize,
         )
       }
     }
@@ -163,7 +163,7 @@ export async function dispatchToolCall(
           current.discoveredTools,
           name,
           current.turnCounter,
-          ctx.config.tools.discoveredToolsMaxSize,
+          ctx.config.tools.catalog.discoveredToolsMaxSize,
         )
       },
     })

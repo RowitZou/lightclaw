@@ -426,7 +426,7 @@ export async function compactConversation(
   // model has a chance to reference the session-memory.md file.
   let composedSummary = summary
   if (params.sessionId) {
-    const sm = await readSessionMemory(params.sessionId, params.config.sessionsDir)
+    const sm = await readSessionMemory(params.sessionId, params.config.paths.sessions)
     const trimmedSm = sm.trim()
     if (trimmedSm.length > 0) {
       composedSummary = `## Session Working Memory (frozen at compact)\n${trimmedSm}\n\n---\n\n${summary}`

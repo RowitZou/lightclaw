@@ -25,18 +25,18 @@ export function hooksEnabled(): boolean {
 }
 
 export async function loadHooks(config: LightClawConfig): Promise<RegisteredHook[]> {
-  enabled = config.hooksEnabled
+  enabled = config.hooks.enabled
   manager.configure({
-    blockingTimeoutMs: config.hookTimeoutBlocking,
-    nonBlockingTimeoutMs: config.hookTimeoutNonBlocking,
+    blockingTimeoutMs: config.hooks.timeoutBlocking,
+    nonBlockingTimeoutMs: config.hooks.timeoutNonBlocking,
   })
 
-  if (!config.hooksEnabled) {
+  if (!config.hooks.enabled) {
     manager.clear()
     return []
   }
 
-  const userDir = config.hookDirs.user ?? path.join(lightclawHome(), 'hooks')
+  const userDir = config.paths.hooks ?? path.join(lightclawHome(), 'hooks')
   void warnIfLegacyHooksDir(path.join(getCwd(), '.lightclaw', 'hooks'))
   const hooks = await scanHookDir(userDir, 'user')
   manager.setHooks(hooks)

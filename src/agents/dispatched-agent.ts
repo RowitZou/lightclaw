@@ -49,7 +49,7 @@ export type DispatchedAgentParams = {
   queryImpl?: typeof query
   // Optional cap on tool-use turns for this dispatch. Memory extraction passes a
   // small explicit value (intentional short task); subagent invocations leave
-  // it undefined so query() falls back to config.maxTurns / no cap.
+  // it undefined so query() falls back to config.turns.main / no cap.
   maxTurns?: number
   label: string
   signal?: AbortSignal

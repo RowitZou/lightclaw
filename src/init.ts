@@ -116,7 +116,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   initializeAgents()
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   initializePhase8SignalSubscribers()
-  await recoverOrphanedBranchPlaceholders(resolvedConfig.sessionsDir)
+  await recoverOrphanedBranchPlaceholders(resolvedConfig.paths.sessions)
     .then(count => {
       if (count > 0) {
         process.stderr.write(`[branch] recovered ${count} orphaned placeholder(s)\n`)
@@ -332,7 +332,7 @@ async function createResolvedSessionContext(
     cwd: resolvedCwd,
     channel: input?.channel,
     model: resolvedConfig.defaultModel,
-    sessionsDir: resolvedConfig.sessionsDir,
+    sessionsDir: resolvedConfig.paths.sessions,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,
     sessionId: input?.sessionId,
@@ -344,9 +344,9 @@ async function createResolvedSessionContext(
     runtime,
     fileRules: loadFileRules({
       cwd: resolvedCwd,
-      userPath: resolvedConfig.permissionRuleFiles.user,
-      projectPath: resolvedConfig.permissionRuleFiles.project,
-      localPath: resolvedConfig.permissionRuleFiles.local,
+      userPath: resolvedConfig.paths.permissionRules.user,
+      projectPath: resolvedConfig.paths.permissionRules.project,
+      localPath: resolvedConfig.paths.permissionRules.local,
     }),
     // Identity rules are per-canonical-user and persisted (Phase 17 —
     // replaces the old in-memory sessionRulesByUser map). Reload on every

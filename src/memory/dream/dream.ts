@@ -39,7 +39,7 @@ export async function executeAutoDream(params: {
   config: LightClawConfig
   currentSessionId: string
 }): Promise<void> {
-  if (!params.config.autoMemory || !params.config.autoDream.enabled) {
+  if (!params.config.memory.extractor.enabled || !params.config.memory.curator.enabled) {
     return
   }
 
@@ -74,7 +74,7 @@ async function executeAutoDreamInner(params: {
     await ensureMemoryDir(params.memoryDir)
     const lastConsolidatedAt = await readLastConsolidatedAt(params.memoryDir)
     const elapsedHours = (Date.now() - lastConsolidatedAt) / (60 * 60 * 1000)
-    if (lastConsolidatedAt !== 0 && elapsedHours < params.config.autoDream.minHours) {
+    if (lastConsolidatedAt !== 0 && elapsedHours < params.config.memory.curator.minHours) {
       return
     }
 
@@ -82,7 +82,7 @@ async function executeAutoDreamInner(params: {
     const lastScanAt = state.lastSessionScanAtByUser.get(params.userId) ?? 0
     if (
       lastScanAt !== 0 &&
-      now - lastScanAt < params.config.autoDream.scanThrottleMs
+      now - lastScanAt < params.config.memory.curator.scanThrottleMs
     ) {
       return
     }
@@ -93,7 +93,7 @@ async function executeAutoDreamInner(params: {
       lastConsolidatedAt,
       excludeSessionId: params.currentSessionId,
     })
-    if (sessionIds.length < params.config.autoDream.minSessions) {
+    if (sessionIds.length < params.config.memory.curator.minSessions) {
       return
     }
 
@@ -112,13 +112,13 @@ async function executeAutoDreamInner(params: {
         agentType: 'memoryCurator',
         prompt: buildDreamPrompt({
           memoryDir: params.memoryDir,
-          transcriptDir: params.config.sessionsDir,
+          transcriptDir: params.config.paths.sessions,
           sessionIds,
           memoryTree: await gatherDreamMemoryTree(params.memoryDir),
         }),
         canUseToolOverride: createAutoDreamCanUseTool(params.memoryDir),
         canonicalUserOverride: params.userId,
-        maxTurnsOverride: params.config.autoDream.maxTurns,
+        maxTurnsOverride: params.config.memory.curator.maxTurns,
       })
       // WorkerFailure (PR1.6): runSubagent now returns failures as
       // {kind:'failure', envelope} instead of throwing. For autoDream the

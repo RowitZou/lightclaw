@@ -54,7 +54,7 @@ export function sanitizePath(inputPath: string): string {
 }
 
 export function memoryRoot(config: LightClawConfig): string {
-  return config.memoryDir || path.join(lightclawHome(), 'memory')
+  return config.paths.memory || path.join(lightclawHome(), 'memory')
 }
 
 // Memory is keyed by canonical LightClaw user (Phase 9). The previous

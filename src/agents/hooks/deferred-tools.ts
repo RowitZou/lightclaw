@@ -12,7 +12,7 @@ export const deferredToolsHook: Hook = {
       pruneStaleDiscoveredTools(
         sessionCtx.discoveredTools,
         sessionCtx.turnCounter,
-        ctx.config.tools.discoveredToolsTtlTurns,
+        ctx.config.tools.catalog.discoveredToolsTtlTurns,
       )
     }
 

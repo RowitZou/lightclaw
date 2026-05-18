@@ -140,7 +140,7 @@ export async function requestPermission(input: {
   }
 
   recordAudit({
-    path: config.permissionAuditLog,
+    path: config.paths.permissionAudit,
     toolName: tool.name,
     mcpServer: tool.mcpServer,
     decision,

@@ -128,7 +128,12 @@ function snapshotConfig(): LightClawConfig {
     endpoints: {
       newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' },
     },
-    memoryRecall: { enabled: false, topN: 3 },
-    sessionMemory: { enabled: false },
+    paths: {
+      sessions: path.join(tmpRoot, 'sessions'),
+    },
+    memory: {
+      recall: { enabled: false, topN: 3 },
+      session: { enabled: false },
+    },
   } as unknown as LightClawConfig
 }

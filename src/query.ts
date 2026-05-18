@@ -194,11 +194,11 @@ export async function query(params: QueryParams): Promise<{
   // Mirror Claude Code CLI: no default cap on tool-use turns; loop runs until
   // the model emits end_turn (or until abort / context exhaustion). Callers
   // that need a hard ceiling pass it explicitly (e.g. memory extraction);
-  // operators can opt into a global ceiling via config.maxTurns.
+  // operators can opt into a global ceiling via config.turns.main.
   const maxTurns =
     params.maxTurns
     ?? resolveRoleMaxTurns(params.role, config)
-    ?? config.maxTurns
+    ?? config.turns.main
     ?? Number.POSITIVE_INFINITY
   const messages = [...params.messages]
   const assistantTexts: string[] = []
@@ -209,11 +209,11 @@ export async function query(params: QueryParams): Promise<{
   // Open per-query API logger and push it on the AsyncLocalStorage scope so
   // every nested streamChat call (main loop turns + recall + session-memory
   // + compact, plus subagent forks that open their own nested logger) writes
-  // into this query's file. No-op when config.apiLogs.enabled is false (the
+  // into this query's file. No-op when config.apiLogsEnabled is false (the
   // default).
   const apiLogger = openApiLogger({
-    enabled: config.apiLogs.enabled,
-    dir: config.apiLogs.dir,
+    enabled: config.apiLogsEnabled,
+    dir: config.paths.apiLogs,
     sessionId: getSessionId(),
   })
   return runWithApiLogger(apiLogger, () => queryInner())
@@ -231,14 +231,14 @@ export async function query(params: QueryParams): Promise<{
   // sees the freshly written file. Failures are logged, never raised.
   const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
     if (
-      !config.autoMemory
-      || !config.sessionMemory.enabled
+      !config.memory.extractor.enabled
+      || !config.memory.session.enabled
     ) {
       return
     }
     if (
-      getSessionMemoryTokensSinceUpdate() < config.sessionMemory.updateTokenThreshold
-      || getSessionMemoryToolCallsSinceUpdate() < config.sessionMemory.updateToolCallThreshold
+      getSessionMemoryTokensSinceUpdate() < config.memory.session.updateTokenThreshold
+      || getSessionMemoryToolCallsSinceUpdate() < config.memory.session.updateToolCallThreshold
     ) {
       return
     }
@@ -258,7 +258,7 @@ export async function query(params: QueryParams): Promise<{
     try {
       const update: SessionMemoryUpdateInput = {
         sessionId: getSessionId(),
-        sessionsDir: config.sessionsDir,
+        sessionsDir: config.paths.sessions,
         newMessages,
         config,
       }
@@ -279,7 +279,7 @@ export async function query(params: QueryParams): Promise<{
   const systemPromptTemplate = hasSystemPromptOverride
     ? null
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, {
-        autoMemory: !invocation.noAutoMemory && config.autoMemory,
+        autoMemory: !invocation.noAutoMemory && config.memory.extractor.enabled,
         config,
         queryText: getLastUserText(messages),
         sessionId: getSessionId(),
@@ -371,7 +371,7 @@ export async function query(params: QueryParams): Promise<{
     roleKind: rolePolicy.kind,
     permissionApprover: invocation.permissionApprover,
     onToolResult: invocation.onToolResult,
-    maxToolOutputBytes: config.maxToolOutputBytes,
+    maxToolOutputBytes: config.tools.maxOutputBytes,
     config,
     canUseTool: invocation.canUseTool,
     chainState: invocation.chainState,

@@ -141,7 +141,7 @@ describe('autoDream runner', () => {
       userId: 'alice',
       memoryDir: tmpMemoryDir,
       currentSessionId: 'current',
-      config: dreamConfig({ enabled: true }, { autoMemory: false }),
+      config: dreamConfig({ enabled: true }, { memory: { extractor: { enabled: false } } as LightClawConfig['memory'] }),
     })
     assert.equal(existsSync(tmpMemoryDir), false)
   })
@@ -562,19 +562,21 @@ describe('autoDream runner', () => {
 })
 
 function dreamConfig(
-  autoDream: Partial<LightClawConfig['autoDream']>,
+  curator: Partial<NonNullable<LightClawConfig['memory']>['curator']>,
   overrides: Partial<LightClawConfig> = {},
 ): LightClawConfig {
   return {
-    autoMemory: true,
-    autoDream: {
-      enabled: false,
-      minHours: 24,
-      minSessions: 3,
-      scanThrottleMs: 600_000,
-      ...autoDream,
+    memory: {
+      extractor: { enabled: true },
+      curator: {
+        enabled: false,
+        minHours: 24,
+        minSessions: 3,
+        scanThrottleMs: 600_000,
+        ...curator,
+      },
     },
-    sessionsDir: tmpSessionsDir,
+    paths: { sessions: tmpSessionsDir },
     ...overrides,
   } as LightClawConfig
 }

@@ -35,6 +35,124 @@ export type ConfigFileModel = {
   reasoningEffort?: string
 }
 
+export type ConfigFilePathsSection = {
+  /** Per-canonical-user session transcript root. Env override:
+   *  LIGHTCLAW_SESSIONS_DIR. */
+  sessions?: string
+  /** Per-user workspace cwd root. Env override: LIGHTCLAW_WORKSPACE_ROOT. */
+  workspace?: string
+  /** Per-canonical-user memory tree root. Env override: LIGHTCLAW_MEMORY_DIR. */
+  memory?: string
+  /** Directory under which apiLogs JSONL files are written. */
+  apiLogs?: string
+  /** Admin hooks discovery directory (single admin-owned tree). */
+  hooks?: string
+  /** Admin MCP config file path. */
+  mcpConfig?: string
+  /** Permission audit log file path (admin only). */
+  permissionAudit?: string
+  /** Layered permission rule files. All three are read+merged at startup;
+   *  `user` is canonical, `project` / `local` are cwd-anchored fallbacks. */
+  permissionRules?: {
+    user?: string
+    project?: string
+    local?: string
+  }
+}
+
+export type ConfigFileTurnsSection = {
+  /** Main agent loop hard cap. Undefined = no cap (matches Claude Code CLI). */
+  main?: number
+  /** Default cap for any subagent whose role does not set its own `maxTurns`.
+   *  Undefined = no fallback cap (subagents run until end_turn / context
+   *  exhaustion unless role-pinned). */
+  subagentDefault?: number
+}
+
+export type ConfigFileMcpSection = {
+  enabled?: boolean
+  connectTimeout?: number
+  connectConcurrency?: number
+  maxToolOutputBytes?: number
+}
+
+export type ConfigFileHooksSection = {
+  enabled?: boolean
+  timeoutBlocking?: number
+  timeoutNonBlocking?: number
+}
+
+export type ConfigFileMemorySection = {
+  extractor?: {
+    enabled?: boolean
+  }
+  curator?: {
+    enabled?: boolean
+    minHours?: number
+    minSessions?: number
+    scanThrottleMs?: number
+    maxTurns?: number
+  }
+  recall?: {
+    enabled?: boolean
+    topN?: number
+  }
+  session?: {
+    enabled?: boolean
+    updateTokenThreshold?: number
+    updateToolCallThreshold?: number
+  }
+  nudge?: {
+    enabled?: boolean
+    everyTurns?: number
+  }
+}
+
+export type ConfigFileCompactSection = {
+  auto?: boolean
+  thresholdRatio?: number
+  keepRecent?: number
+  preFlush?: {
+    enabled?: boolean
+    timeoutMs?: number
+  }
+  micro?: {
+    enabled?: boolean
+    idle?: {
+      enabled?: boolean
+      gapThresholdMinutes?: number
+      keepRecent?: number
+    }
+  }
+}
+
+export type ConfigFileDispatchSchedulerSection = {
+  maxConcurrentRunsPerUser?: number
+  startupCatchupIntervalMs?: number
+  fireRetryMaxAttempts?: number
+  recurringAutoDisableThreshold?: number
+}
+
+/** Sub-LLM model pins. Each value is the display name of a model in
+ *  `models`. These are framework-internal LLMs (not user-visible Tools);
+ *  kept here so `tools.<X>.model` doesn't conflate "Tool config" with
+ *  "sub-LLM selection". */
+export type ConfigFileSubLLMSection = {
+  /** Sub-LLM that summarizes / rewrites compaction prefixes. */
+  compact?: string
+  /** Sub-LLM that produces text descriptions of inline images. */
+  imageRead?: string
+  /** Sub-LLM that summarizes WebSearch / WebFetch results. */
+  webSearch?: string
+}
+
+export type ConfigFileToolCatalogSection = {
+  deferredLoading?: string
+  deferredLoadingThreshold?: number
+  discoveredToolsMaxSize?: number
+  discoveredToolsTtlTurns?: number
+}
+
 export type ConfigFileShape = {
   /** Named endpoint pool (apiKey + optional baseUrl) referenced by models.
    *  Same physical gateway can host both anthropic and openai protocols —
@@ -49,102 +167,83 @@ export type ConfigFileShape = {
   roles?: Record<string, {
     model?: unknown
     maxTurns?: unknown
-    budget?: {
-      maxTokens?: unknown
-      maxCost?: unknown
-    }
   }>
-  sessionsDir?: string
-  autoCompact?: boolean
-  autoMemory?: boolean
-  autoDream?: {
-    enabled?: boolean
-    minHours?: number
-    minSessions?: number
-    scanThrottleMs?: number
-    maxTurns?: number
-  }
-  backgroundTask?: {
-    maxConcurrentRunsPerUser?: number
-    startupCatchupIntervalMs?: number
-    fireRetryMaxAttempts?: number
-    recurringAutoDisableThreshold?: number
-  }
+  contextWindow?: number
+  /** Permission policy mode. Top-level flat field (not nested) because the
+   *  permission concept currently has only this one knob — `ruleFiles` /
+   *  `auditLog` are paths and live under `paths.*`. */
+  permissionMode?: string
+  /** Master switch for the apiLogs JSONL persistence feature. Top-level
+   *  flat because only the `enabled` knob remains here — log directory
+   *  lives under `paths.apiLogs`. */
+  apiLogsEnabled?: boolean
+  /** All filesystem paths in one place. Per-feature dirs (apiLogs / hooks /
+   *  mcpConfig / permission*) live here even though each belongs to a
+   *  different feature, so a single grep tells the admin where every byte
+   *  lands. */
+  paths?: ConfigFilePathsSection
+  /** Turn caps. `roles.<X>.maxTurns` overrides for a specific role. */
+  turns?: ConfigFileTurnsSection
+  /** Memory subsystem. Groups extractor / curator / recall / session / nudge
+   *  knobs that were previously scattered as top-level `autoMemory` /
+   *  `autoDream` / `memoryRecall` / `sessionMemory` / `memoryNudge`. Memory
+   *  dir moved to `paths.memory`. Legacy top-level keys still accepted
+   *  with a one-time deprecation warning. */
+  memory?: ConfigFileMemorySection
+  /** Compaction subsystem. Groups auto / threshold / keep-recent / pre-flush /
+   *  micro-compact knobs that were previously top-level `autoCompact` /
+   *  `compactThresholdRatio` / `compactKeepRecent` / `preCompactFlush` /
+   *  `microCompact`. Legacy top-level keys still accepted with deprecation
+   *  warning. */
+  compact?: ConfigFileCompactSection
   dispatch?: {
     maxChainDepth?: number
     maxChainDepthCeiling?: number
     historyTtlMs?: number
+    /** Scheduler / store backing `Dispatch(mode:'background', schedule:...)`.
+     *  Previously top-level `backgroundTask.*`. Legacy key still accepted
+     *  with deprecation warning. */
+    scheduler?: ConfigFileDispatchSchedulerSection
   }
-  memoryDir?: string
-  workspaceRoot?: string
-  contextWindow?: number
-  compactThresholdRatio?: number
-  compactKeepRecent?: number
-  maxTurns?: number
-  subagentMaxTurns?: number
-  permissionMode?: string
-  permissionRuleFiles?: {
-    user?: string
-    project?: string
-    local?: string
-  }
-  permissionAuditLog?: string
-  mcpEnabled?: boolean
-  mcpConnectTimeout?: number
-  mcpConnectConcurrency?: number
-  mcpConfigFiles?: {
-    user?: string
-  }
-  mcpMaxToolOutputBytes?: number
-  maxToolOutputBytes?: number
-  hooksEnabled?: boolean
-  hookTimeoutBlocking?: number
-  hookTimeoutNonBlocking?: number
-  hookDirs?: {
-    user?: string
-  }
-  memoryRecall?: {
-    enabled?: boolean
-    topN?: number
-  }
-  sessionMemory?: {
-    enabled?: boolean
-    updateTokenThreshold?: number
-    updateToolCallThreshold?: number
-  }
-  memoryNudge?: {
-    enabled?: boolean
-    everyTurns?: number
-  }
-  preCompactFlush?: {
-    enabled?: boolean
-    timeoutMs?: number
-  }
-  microCompact?: {
-    enabled?: boolean
-    idle?: {
-      enabled?: boolean
-      gapThresholdMinutes?: number
-      keepRecent?: number
-    }
-  }
+  /** Sub-LLM model pins for framework-internal LLM operations. Each value
+   *  is a model display name. Was `tools.<X>.model`; conflated tool config
+   *  with sub-LLM selection — separated out into its own namespace. */
+  subLLM?: ConfigFileSubLLMSection
+  mcp?: ConfigFileMcpSection
+  hooks?: ConfigFileHooksSection
   tools?: {
     webSearch?: {
       braveApiKey?: string
+      /** @deprecated Moved to `subLLM.webSearch` (string). */
       model?: string
     }
     webFetch?: {
       preapprovedDomains?: string[]
     }
+    /** @deprecated Moved to `subLLM.imageRead` (string). */
     imageRead?: {
       model?: string
     }
+    /** @deprecated Moved to `subLLM.compact` (string). */
     compact?: {
       model?: string
     }
+    /** General tool output byte cap (per-call, post-channel-encoding).
+     *  Previously top-level `maxToolOutputBytes`. */
+    maxOutputBytes?: number
+    /** Tool catalog system (deferred loading + discovery LRU). Previously
+     *  these four fields lived directly under `tools.*` alongside per-tool
+     *  config; grouped here so the `tools.*` namespace contains either
+     *  per-tool config or the catalog meta. Legacy top-level
+     *  `tools.deferredLoading*` / `tools.discoveredTools*` still accepted. */
+    catalog?: ConfigFileToolCatalogSection
+    /** @deprecated Moved to `tools.catalog.deferredLoading`. */
     deferredLoading?: string
+    /** @deprecated Moved to `tools.catalog.deferredLoadingThreshold`. */
     deferredLoadingThreshold?: number
+    /** @deprecated Moved to `tools.catalog.discoveredToolsMaxSize`. */
     discoveredToolsMaxSize?: number
+    /** @deprecated Moved to `tools.catalog.discoveredToolsTtlTurns`. */
     discoveredToolsTtlTurns?: number
   }
   runtime?: {
@@ -218,10 +317,6 @@ export type ConfigFileShape = {
       acl?: string[]
     }
   }
-  apiLogs?: {
-    enabled?: boolean
-    dir?: string
-  }
   attachments?: {
     /** Image inline cap. Files above this size are Pillow-resized down
      *  before submission to a vision-capable model. Default 5 MB. */
@@ -235,6 +330,112 @@ export type ConfigFileShape = {
     maxInlinePerTurn?: number
   }
   lang?: string
+
+  // ──────── LEGACY top-level fields (deprecated, still accepted) ────────
+  // Migration layer in `config.ts` reads these as a fallback when the new
+  // namespace key is missing, emits a one-time warning per field, and maps
+  // them to the new locations. Will be removed in a future cleanup.
+
+  /** @deprecated → `paths.sessions` */
+  sessionsDir?: string
+  /** @deprecated → `paths.workspace` */
+  workspaceRoot?: string
+  /** @deprecated → `paths.memory` */
+  memoryDir?: string
+  /** @deprecated → `apiLogsEnabled` + `paths.apiLogs` */
+  apiLogs?: {
+    enabled?: boolean
+    dir?: string
+  }
+  /** @deprecated → `paths.permissionAudit` */
+  permissionAuditLog?: string
+  /** @deprecated → `paths.permissionRules.*` */
+  permissionRuleFiles?: {
+    user?: string
+    project?: string
+    local?: string
+  }
+  /** @deprecated → `paths.hooks` */
+  hookDirs?: {
+    user?: string
+  }
+  /** @deprecated → `paths.mcpConfig` */
+  mcpConfigFiles?: {
+    user?: string
+  }
+  /** @deprecated → `turns.main` */
+  maxTurns?: number
+  /** @deprecated → `turns.subagentDefault` */
+  subagentMaxTurns?: number
+  /** @deprecated → `mcp.enabled` */
+  mcpEnabled?: boolean
+  /** @deprecated → `mcp.connectTimeout` */
+  mcpConnectTimeout?: number
+  /** @deprecated → `mcp.connectConcurrency` */
+  mcpConnectConcurrency?: number
+  /** @deprecated → `mcp.maxToolOutputBytes` */
+  mcpMaxToolOutputBytes?: number
+  /** @deprecated → `hooks.enabled` */
+  hooksEnabled?: boolean
+  /** @deprecated → `hooks.timeoutBlocking` */
+  hookTimeoutBlocking?: number
+  /** @deprecated → `hooks.timeoutNonBlocking` */
+  hookTimeoutNonBlocking?: number
+  /** @deprecated → `tools.maxOutputBytes` */
+  maxToolOutputBytes?: number
+  /** @deprecated → `memory.extractor.enabled` */
+  autoMemory?: boolean
+  /** @deprecated → `memory.curator` */
+  autoDream?: {
+    enabled?: boolean
+    minHours?: number
+    minSessions?: number
+    scanThrottleMs?: number
+    maxTurns?: number
+  }
+  /** @deprecated → `memory.recall` */
+  memoryRecall?: {
+    enabled?: boolean
+    topN?: number
+  }
+  /** @deprecated → `memory.session` */
+  sessionMemory?: {
+    enabled?: boolean
+    updateTokenThreshold?: number
+    updateToolCallThreshold?: number
+  }
+  /** @deprecated → `memory.nudge` */
+  memoryNudge?: {
+    enabled?: boolean
+    everyTurns?: number
+  }
+  /** @deprecated → `compact.auto` */
+  autoCompact?: boolean
+  /** @deprecated → `compact.thresholdRatio` */
+  compactThresholdRatio?: number
+  /** @deprecated → `compact.keepRecent` */
+  compactKeepRecent?: number
+  /** @deprecated → `compact.preFlush` */
+  preCompactFlush?: {
+    enabled?: boolean
+    timeoutMs?: number
+  }
+  /** @deprecated → `compact.micro` */
+  microCompact?: {
+    enabled?: boolean
+    idle?: {
+      enabled?: boolean
+      gapThresholdMinutes?: number
+      keepRecent?: number
+    }
+  }
+  /** @deprecated → `dispatch.scheduler` */
+  backgroundTask?: {
+    maxConcurrentRunsPerUser?: number
+    startupCatchupIntervalMs?: number
+    fireRetryMaxAttempts?: number
+    recurringAutoDisableThreshold?: number
+  }
 }
 
 export function loadConfigFile(): ConfigFileShape {

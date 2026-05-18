@@ -32,7 +32,7 @@ export async function runHook<N extends HookName>(
 ): Promise<HookResultMap[N]> {
   return getHookManager().run(name, payload, entry => {
     recordHookAudit({
-      path: getConfig().permissionAuditLog,
+      path: getConfig().paths.permissionAudit,
       ...entry,
     })
   })
