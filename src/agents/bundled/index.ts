@@ -35,8 +35,14 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'generalist',
     whenToUse:
       'Multi-step research, ambiguous searches, or tasks that may span many files. Self-tracks progress via TodoWrite for complex chains; saves durable findings via MemoryWrite.',
-    tools: ['*'],
+    // Wildcard covers default tool surface; Dispatch must be explicit per the
+    // BLOCKED_WORKER_TOOLS gate (`explicitlyReachableDispatch` requires the
+    // literal name in tools, not the wildcard). The three management tools
+    // are listed alongside Dispatch as a self-documenting "dispatcher
+    // capability" cluster even though wildcard would also reach them.
+    tools: ['*', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
     skills: ['remember'],
+    reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
   },
@@ -80,7 +86,12 @@ export const BUNDLED_AGENTS: Role[] = [
       'MemoryWrite',
       'MemoryRead',
       'TodoWrite',
+      'Dispatch',
+      'ListDispatches',
+      'CancelDispatch',
+      'UpdateDispatch',
     ],
+    reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: feishuSecretaryPrompt,
     kind: 'worker',
     outputContract: 'report',
@@ -91,8 +102,9 @@ export const BUNDLED_AGENTS: Role[] = [
       'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. The subagent plans, edits, runs verification (typecheck / tests / build) via the verify skill, self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + verify skill + memory for project conventions).',
-    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill'],
+    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
     skills: ['verify', 'remember'],
+    reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
     kind: 'worker',
     outputContract: 'report',
@@ -118,8 +130,13 @@ export const BUNDLED_AGENTS: Role[] = [
       'MemoryWrite',
       'MemoryRead',
       'TodoWrite',
+      'Dispatch',
+      'ListDispatches',
+      'CancelDispatch',
+      'UpdateDispatch',
     ],
     skills: ['verify-env', 'remember'],
+    reachableRoles: ['feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: archivistPrompt,
     kind: 'worker',
     outputContract: 'report',
@@ -130,9 +147,9 @@ export const BUNDLED_AGENTS: Role[] = [
       'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks via the verify skill (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict. May dispatch `coder` ONCE per pass for a small in-line fix the reviewer can describe precisely, then re-read the patch and finalize the report; larger blockers are returned to the requester for decision.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; verify skill + memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
-    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch'],
+    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
     skills: ['verify', 'remember'],
-    reachableRoles: ['coder'],
+    reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: reviewerPrompt,
     kind: 'worker',
     outputContract: 'report',

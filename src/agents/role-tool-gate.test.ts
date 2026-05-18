@@ -73,14 +73,26 @@ test('worker Dispatch visibility requires explicit tool and reachable roles', as
   assert.equal(isToolVisibleToRole(noTargets, 'Dispatch'), false)
 })
 
-test('bundled reviewer can dispatch only to coder', () => {
+test('bundled reviewer dispatches to producers (coder / feishuSecretary) + info workers (local / web), but not to peer organizers', () => {
   const reviewer = BUNDLED_AGENTS.find(agent => agent.agentType === 'reviewer')
   assert.ok(reviewer)
 
   assert.equal(isToolVisibleToRole(reviewer, 'Dispatch'), true)
-  assert.deepEqual(reviewer.reachableRoles, ['coder'])
-  assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'coder'), true)
-  assert.equal(isDispatchTargetReachable(resolveRolePolicy(reviewer), 'generalist'), false)
+  assert.deepEqual(reviewer.reachableRoles, ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'])
+  for (const target of ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher']) {
+    assert.equal(
+      isDispatchTargetReachable(resolveRolePolicy(reviewer), target),
+      true,
+      `reviewer should reach ${target}`,
+    )
+  }
+  for (const target of ['generalist', 'archivist', 'reviewer', 'main']) {
+    assert.equal(
+      isDispatchTargetReachable(resolveRolePolicy(reviewer), target),
+      false,
+      `reviewer should NOT reach ${target}`,
+    )
+  }
 })
 
 test('isDispatchTargetReachable supports wildcard and explicit targets', () => {
@@ -145,6 +157,75 @@ test('memoryCurator role exposes only memory curation tools and reads', () => {
   assert.equal(isToolVisibleToRole(autoDream, 'Bash'), false)
   assert.equal(isToolVisibleToRole(autoDream, 'MemoryWrite'), false)
   assert.equal(isToolVisibleToRole(autoDream, 'MemoryWriteAt'), true)
+})
+
+test('Notify is reserved for main: blocked for every worker including wildcard / explicit listing', async () => {
+  // Wildcard tools must not unlock Notify.
+  const wildcardWorker = deriveCanUseTool(role({ kind: 'worker', tools: ['*'] }))
+  assert.equal((await wildcardWorker(tool('Notify'), {})).behavior, 'deny')
+
+  // Even explicitly listing 'Notify' does not unlock it for a worker.
+  // (Parallel to Dispatch, but without the explicit-reachable escape hatch.)
+  const explicitWorker = deriveCanUseTool(role({ kind: 'worker', tools: ['Notify'] }))
+  assert.equal((await explicitWorker(tool('Notify'), {})).behavior, 'deny')
+
+  // Orchestrator (main) with wildcard sees Notify naturally.
+  const orchestrator = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
+  assert.equal((await orchestrator(tool('Notify'), {})).behavior, 'allow')
+})
+
+test('bundled dispatch matrix matches the role-to-role topology', () => {
+  const matrix: Record<string, string[] | null> = {
+    main: ['*'],
+    generalist: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
+    reviewer: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
+    archivist: ['feishuSecretary', 'localExplorer', 'webSearcher'],
+    coder: ['localExplorer', 'webSearcher'],
+    feishuSecretary: ['localExplorer', 'webSearcher'],
+    localExplorer: null,
+    webSearcher: null,
+  }
+  for (const [agentType, expected] of Object.entries(matrix)) {
+    const agent = BUNDLED_AGENTS.find(a => a.agentType === agentType)
+    assert.ok(agent, `${agentType} not found in BUNDLED_AGENTS`)
+    if (expected === null) {
+      assert.equal(agent.reachableRoles, undefined, `${agentType} should not declare reachableRoles`)
+      assert.equal(
+        isToolVisibleToRole(agent, 'Dispatch'),
+        false,
+        `${agentType} should not have Dispatch visible`,
+      )
+      continue
+    }
+    assert.deepEqual(agent.reachableRoles, expected, `${agentType} reachableRoles mismatch`)
+    assert.equal(
+      isToolVisibleToRole(agent, 'Dispatch'),
+      true,
+      `${agentType} should have Dispatch visible`,
+    )
+    // Dispatch family is bound: List/Cancel/Update all visible to dispatchers.
+    for (const mgmt of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+      assert.equal(
+        isToolVisibleToRole(agent, mgmt),
+        true,
+        `${agentType} should have ${mgmt} visible (Dispatch family binding)`,
+      )
+    }
+  }
+})
+
+test('every non-main bundled role is denied Notify (worker-blocked invariant)', () => {
+  for (const agent of BUNDLED_AGENTS) {
+    if (agent.agentType === 'main') {
+      assert.equal(isToolVisibleToRole(agent, 'Notify'), true, 'main should keep Notify')
+      continue
+    }
+    assert.equal(
+      isToolVisibleToRole(agent, 'Notify'),
+      false,
+      `${agent.agentType} should be denied Notify`,
+    )
+  }
 })
 
 function role(overrides: Partial<Role> = {}): Role {

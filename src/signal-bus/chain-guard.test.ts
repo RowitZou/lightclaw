@@ -91,6 +91,25 @@ test('effectiveMaxChainDepth clamps declared depth to ceiling', () => {
   assert.equal(effectiveMaxChainDepth(config({ maxChainDepth: 9, maxChainDepthCeiling: 5 })), 5)
 })
 
+test('depth-4 chain (e.g. main → reviewer → coder → leaf) fits within default maxChainDepth', () => {
+  // Phase 9 PR2: bundled dispatch matrix has paths of node-length 4 (depth 3).
+  // Default maxChainDepth is 4 to leave one layer of headroom; the deepest
+  // bundled chain (main → reviewer → coder → leaf-info-worker) must pass.
+  const leafRole = role('localExplorer', ['Read'])
+  const root = createRootChainState('alice', mainRole, 'root-session')
+  const reviewer = deriveChildChainState(root, reviewerRole, 'reviewer-session', 'd1')
+  const coder = deriveChildChainState(reviewer, coderRole, 'coder-session', 'd2')
+  const leaf = deriveChildChainState(coder, leafRole, 'leaf-session', 'd3')
+
+  assert.doesNotThrow(() => assertChainGuards({
+    parent: coder,
+    child: leaf,
+    callerPolicy: policy(['localExplorer']),
+    callee: leafRole,
+    config: config({ maxChainDepth: 4 }),
+  }))
+})
+
 function assertReason(fn: () => void, reason: ChainGuardError['reason']): void {
   assert.throws(fn, error => error instanceof ChainGuardError && error.reason === reason)
 }

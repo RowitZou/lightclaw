@@ -419,7 +419,11 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
 }
 
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
-  maxChainDepth: 3,
+  // Bundled dispatch matrix has paths of node-length 4 (depth 3), e.g.
+  // main → generalist → coder → localExplorer. maxDepth 4 leaves one layer
+  // of headroom for user-defined roles that slot into the graph as
+  // additional hops without immediately tripping the guard.
+  maxChainDepth: 4,
   maxChainDepthCeiling: 5,
   historyTtlMs: DEFAULT_DISPATCH_HISTORY_TTL_MS,
   scheduler: DEFAULT_DISPATCH_SCHEDULER,

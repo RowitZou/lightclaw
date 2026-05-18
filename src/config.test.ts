@@ -546,7 +546,7 @@ describe('config: endpoints + models registry', () => {
       recurringAutoDisableThreshold: 3,
     })
     assert.deepEqual(cfg.dispatch, {
-      maxChainDepth: 3,
+      maxChainDepth: 4,
       maxChainDepthCeiling: 5,
       historyTtlMs: 24 * 60 * 60 * 1000,
       scheduler: {
