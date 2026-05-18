@@ -3,14 +3,13 @@ import type { ScheduleSpec } from '../background-task/types.js'
 import type { PendingAttachment } from '../channels/types.js'
 import type { ChainState } from './chain-state.js'
 
-export type DispatchRole =
-  | 'generalist'
-  | 'localExplorer'
-  | 'webSearcher'
-  | 'feishuSecretary'
-  | 'coder'
-  | 'archivist'
-  | 'reviewer'
+// Dispatch.role accepts any dispatchable AgentType, including user-defined
+// roles registered at `<lightclawHome>/roles/<name>/ROLE.md`. Runtime
+// validation in `executeDispatch` rejects unknown / orchestrator / internal
+// roles; the type is intentionally open so the LLM can pass user-defined
+// worker names without a zod enum reject. Bundled worker names live in
+// `BUNDLED_AGENT_TYPES` (`agents/types.ts`).
+export type DispatchRole = AgentType
 export type DispatchMode = 'blocking' | 'background'
 export type DispatchSchedule = 'now' | ScheduleSpec
 

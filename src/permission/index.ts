@@ -1,4 +1,6 @@
+import { isUserDefinedAgent } from '../agents/registry.js'
 import { getConfig } from '../config.js'
+import { getCurrentRole } from '../state.js'
 import {
   getAllPermissionRules,
   getCurrentUserId,
@@ -8,6 +10,7 @@ import {
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
+import { commandContainsHighRiskBash, isHighRiskPathLiteral } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { formatRule } from './rules.js'
 import { loadIdentityRules } from './storage.js'
@@ -46,7 +49,7 @@ export async function requestPermission(input: {
     const fresh = loadIdentityRules(userId)
     setIdentityRules(fresh)
   }
-  const verdict = evaluatePermission({
+  let verdict = evaluatePermission({
     toolName: tool.name,
     toolSource: tool.source,
     mcpServer: tool.mcpServer,
@@ -56,6 +59,16 @@ export async function requestPermission(input: {
     mode,
     rules: getAllPermissionRules(),
   })
+  // User-defined role override: a persisted "allow always" rule must NOT
+  // silently auto-allow a destructive Bash head or a high-risk path write
+  // when the caller is a user-authored role. The dev-plan invariant says
+  // user-defined roles route every high-risk-by-content op through an
+  // explicit ask, even though admin authored the role. Bundled roles keep
+  // the standard rule lookup (their tool surfaces are reviewed at PR0
+  // byte-lock time, so persisted allows are trusted).
+  if (verdict.behavior === 'allow' && shouldForceAskForUserDefinedHighRisk(tool, toolInput)) {
+    verdict = { behavior: 'ask' }
+  }
 
   // Approver is channel-injected via state on every query() entry, but the
   // ctx field still wins when explicitly provided (test injection / future
@@ -137,6 +150,36 @@ export async function requestPermission(input: {
   })
 
   return decision
+}
+
+/**
+ * Defense-in-depth for user-defined roles: when the caller is a user-authored
+ * role (loaded from `<lightclawHome>/roles/<name>/ROLE.md`), high-risk Bash
+ * heads and high-risk path writes route through an explicit ask even when
+ * the user already granted "以后都允许" for that scope. The "always allow"
+ * button itself is already hidden for high-risk asks (see `isHighRiskAsk` +
+ * the channel approver's UI), but persisted rules from before a user-defined
+ * role existed could still match — this layer closes that loop. Bundled roles
+ * are unaffected; their tool surfaces go through PR0 byte-lock review.
+ */
+function shouldForceAskForUserDefinedHighRisk(tool: Tool, toolInput: unknown): boolean {
+  const role = getCurrentRole()
+  if (!role || !isUserDefinedAgent(role.agentType)) {
+    return false
+  }
+  if (tool.name === 'Bash') {
+    const cmd = (toolInput as { command?: unknown })?.command
+    if (typeof cmd === 'string') {
+      return commandContainsHighRiskBash(cmd)
+    }
+  }
+  if (tool.name === 'Edit' || tool.name === 'Write' || tool.name === 'Read') {
+    const file = (toolInput as { file_path?: unknown })?.file_path
+    if (typeof file === 'string') {
+      return isHighRiskPathLiteral(file)
+    }
+  }
+  return false
 }
 
 function computeSuggestedRules(

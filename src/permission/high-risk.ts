@@ -375,7 +375,7 @@ function isHighRiskPathContent(content: string | undefined): boolean {
   return isHighRiskPathLiteral(dir)
 }
 
-function isHighRiskPathLiteral(absolutePath: string): boolean {
+export function isHighRiskPathLiteral(absolutePath: string): boolean {
   if (!absolutePath) return false
   for (const prefix of HIGH_RISK_PATH_PREFIXES) {
     if (absolutePath === prefix || absolutePath.startsWith(`${prefix}/`)) {

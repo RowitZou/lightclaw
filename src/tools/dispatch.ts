@@ -204,15 +204,10 @@ export const dispatchTool = buildTool({
   riskLevel: 'execute',
   concurrencySafe: true,
   inputSchema: z.object({
-    role: z.enum([
-      'generalist',
-      'localExplorer',
-      'webSearcher',
-      'feishuSecretary',
-      'coder',
-      'archivist',
-      'reviewer',
-    ]),
+    // Open string so user-defined roles registered at <lightclawHome>/roles/
+    // can be dispatched. executeDispatch rejects unknown / orchestrator /
+    // internal roles with a clear tool error so the model can retry.
+    role: z.string().min(1),
     prompt: z.string().min(10),
     schedule: dispatchScheduleSchema,
     mode: z.enum(['blocking', 'background']),
@@ -247,9 +242,6 @@ export async function executeDispatch(
 
   const userId = requireCurrentUserId()
   const sessionId = getSessionId()
-  const internalRole = internalRoleFor(input.role, input.mode)
-  const dispatchId = `${userId}-${shortId()}`
-  const startedAt = Date.now()
   const callerRole = getCurrentRole() ?? getAgent('main')
   const calleeRole = getAgent(input.role)
   if (!callerRole || !calleeRole) {
@@ -258,6 +250,15 @@ export async function executeDispatch(
       isError: true,
     }
   }
+  if (calleeRole.kind !== 'worker') {
+    return {
+      output: `Cannot dispatch ${calleeRole.kind} role "${input.role}". Dispatch targets must be worker-kind roles.`,
+      isError: true,
+    }
+  }
+  const internalRole = internalRoleFor(input.role, input.mode)
+  const dispatchId = `${userId}-${shortId()}`
+  const startedAt = Date.now()
   const parentChainState = context.chainState ??
     createRootChainState(userId, callerRole, sessionId)
   const childSessionId = input.mode === 'blocking' ? `dispatched-${dispatchId}` : dispatchId

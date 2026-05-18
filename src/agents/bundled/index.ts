@@ -19,15 +19,13 @@ export const BUNDLED_AGENTS: Role[] = [
     tools: ['*'],
     skills: ['remember'],
     mcpServers: ['*'],
-    reachableRoles: [
-      'generalist',
-      'localExplorer',
-      'webSearcher',
-      'feishuSecretary',
-      'coder',
-      'archivist',
-      'reviewer',
-    ],
+    // Main reaches every worker, including user-defined roles loaded from
+    // `<lightclawHome>/roles/<name>/ROLE.md`. `isDispatchTargetReachable`
+    // and `formatReachableRolesSection` expand '*' against the live registry
+    // and filter to worker kind, so bundled and user-defined workers are
+    // treated symmetrically. Phase 7 chain guards (depth / cycle /
+    // privilege monotonic) still apply.
+    reachableRoles: ['*'],
     hooks: ['*'],
     systemPrompt: mainPrompt,
     kind: 'orchestrator',

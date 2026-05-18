@@ -445,17 +445,28 @@ function formatReachableRolesSection(reachableRoles: readonly string[], tools: r
   if (!hasLoadedTool(tools, 'Dispatch')) {
     return ''
   }
-  const agents = new Map(getAllAgents().map(agent => [agent.agentType, agent]))
+  const allAgents = getAllAgents()
   const lines = [
     '## Reachable Workers',
     'You can dispatch the following workers via Dispatch:',
   ]
-  for (const roleName of reachableRoles) {
-    const agent = agents.get(roleName)
-    if (!agent || agent.kind !== 'worker') {
-      continue
+  if (reachableRoles.includes('*')) {
+    // Wildcard expands to every registered worker (bundled + user-defined,
+    // in registration order). main uses this to stay symmetric over the
+    // user-defined role roster without an admin slash to re-list each role.
+    for (const agent of allAgents) {
+      if (agent.kind !== 'worker') continue
+      lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
     }
-    lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+  } else {
+    const agents = new Map(allAgents.map(agent => [agent.agentType, agent]))
+    for (const roleName of reachableRoles) {
+      const agent = agents.get(roleName)
+      if (!agent || agent.kind !== 'worker') {
+        continue
+      }
+      lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+    }
   }
   return lines.length > 2 ? lines.join('\n') : ''
 }

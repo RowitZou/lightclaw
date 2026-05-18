@@ -102,6 +102,7 @@ export async function parseUserDefinedRole(filePath: string): Promise<Role> {
   const skills = optionalList(parsed.frontmatter, 'skills')
   validateSkills(skills, filePath)
   const mcpServers = optionalList(parsed.frontmatter, 'mcpServers')
+  validateMcpServers(mcpServers, filePath)
   const body = parsed.body.trim()
   if (!body) {
     throw new UserDefinedRoleError('missing-required-field', filePath, 'systemPrompt body')
@@ -276,6 +277,27 @@ function validateSkills(skills: string[], filePath: string): void {
   }
 }
 
+/**
+ * V1 (Phase 7.5) ships only admin-owned user-defined roles at
+ * `<lightclawHome>/roles/<name>/ROLE.md`. The path itself is the admin-owned
+ * signal: only the daemon-process user (admin) can write into that directory
+ * by default. Per `info/dev-plan-reference.md` §4.2, the `mcpServers`
+ * paired-non-admin invariant is therefore vacuously true in V1 — no
+ * enforcement code is needed because no paired non-admin path exists yet.
+ *
+ * Phase 8+ may add `<lightclawHome>/per-user/<canonical>/roles/...` for
+ * paired-user-authored roles. When that lands, this validator must throw
+ * `'mcp-not-allowed-for-non-admin-user-defined'` (the enum reason is already
+ * defined above for forward-compat) using the caller's owner determination.
+ *
+ * Keeping the call site is deliberate scaffolding: it documents the V1
+ * vacuous case + makes Phase 8+ a single-function diff rather than a
+ * find-the-missing-hook hunt.
+ */
+function validateMcpServers(_mcpServers: string[], _filePath: string): void {
+  // V1 no-op — all user-defined roles are admin-owned by location convention.
+}
+
 function parseKind(value: string, filePath: string): RoleKind {
   if (value === 'orchestrator' || value === 'worker' || value === 'internal') {
     return value
@@ -303,8 +325,89 @@ function parseMaxTurns(value: string | undefined, filePath: string): number | un
 
 const USER_DEFINED_ROLE_README = `# LightClaw User-Defined Roles
 
-Drop admin-owned \`<lightclawHome>/roles/<name>/ROLE.md\` files here to append focused worker roles to the bundled roster.
+LightClaw lets admins extend the bundled role roster by dropping \`<lightclawHome>/roles/<name>/ROLE.md\` files into this directory. The daemon picks them up on cold start and hot-reloads them on mtime change.
 
-\`ROLE.md\` is YAML frontmatter plus a Markdown body. Required fields: \`name\`, \`whenToUse\`, \`description\`, \`tools\`, and the body system prompt.
+This is a thin extensibility layer — bundled roles (\`main\`, \`generalist\`, \`coder\`, \`reviewer\`, \`archivist\`, \`feishuSecretary\`, \`localExplorer\`, \`webSearcher\`, \`memoryExtractor\`, \`memoryCurator\`) stay first-class; user-defined roles are **append-only** additions.
 
-Security invariants: wildcard tools are rejected, \`Dispatch\` is rejected, and \`skills\` must name bundled skills only (\`verify\`, \`verify-env\`, \`remember\`). Hot reload affects only new dispatches; invalid reloads keep the previous valid role.`
+## File format
+
+\`<lightclawHome>/roles/<name>/ROLE.md\` is YAML frontmatter + Markdown body:
+
+\`\`\`markdown
+---
+name: my-coordinator              # role agentType; camelCase or snake_case; must not collide with bundled
+whenToUse: One-line description shown in catalog / dispatch context.
+description: Same one-liner, used for tool catalog rendering.
+tools:                            # explicit tool list — wildcard \`['*']\` is REJECTED
+  - Read
+  - Grep
+  - MemoryWrite
+  - TodoWrite
+skills:                           # optional; bundled-only — \`verify\`, \`verify-env\`, \`remember\`
+  - remember
+kind: worker                      # 'orchestrator' | 'worker' | 'internal'; default 'worker'
+hooks:                            # optional; defaults to worker policy
+  - auto-compact
+  - split-render
+maxTurns: 20                      # optional
+---
+
+You are <name>, a focused <description>.
+
+Workflow ... (body becomes systemPrompt verbatim)
+\`\`\`
+
+## Security invariants (framework-enforced, no opt-out)
+
+- **\`tools\` cannot be \`['*']\`** — wildcard tools on a user-defined role is unbounded privilege; you must list each tool explicitly.
+- **\`tools\` cannot include \`Dispatch\`** — only bundled \`main\` / \`reviewer\` dispatch sub-roles. A user-defined role with \`Dispatch\` would let you bypass the bundled \`reachableRoles\` enforcement that protects the worker-to-worker dispatch graph.
+- **\`Bash\` + destructive heads forces ask** — if your user-defined role has \`'Bash'\`, destructive heads (\`rm\` / \`dd\` / \`sudo\` / shells / package runners / wrappers / command substitution) are routed through the framework permission ask flow even if you grant "always allow" on a previous turn.
+- **\`skills\` must be bundled** — only \`verify\`, \`verify-env\`, \`remember\` are loadable today. User-defined skills are a Phase 8+ feature.
+- **\`mcpServers\` is admin-owned** — Phase 7.5 ships only admin-owned roles under \`<lightclawHome>/roles/\`, so the invariant is vacuously enforced; Phase 8+ per-user role paths will activate \`'mcp-not-allowed-for-non-admin-user-defined'\` directly.
+
+Files that violate any of the above fail loudly on cold start (daemon does not start) or are silently ignored on hot reload (warning logged, previous version kept).
+
+## Hot reload
+
+- The daemon watches mtime on \`<lightclawHome>/roles/\`. Any change rebuilds the in-memory role roster.
+- **In-flight dispatches keep their spawn-time role definition** — only the next new dispatch sees the reloaded version.
+- Hot reload failures keep the previous version; cold start failures hard-fail.
+
+## Example
+
+\`\`\`markdown
+---
+name: paper-coordinator
+whenToUse: User asks to coordinate paper-reading tasks (organize PDFs, summarize sections, file refs).
+description: Reads papers and proposes organization actions; does not modify files itself.
+tools:
+  - Read
+  - Grep
+  - Glob
+  - MemoryWrite
+  - MemoryRead
+  - TodoWrite
+skills:
+  - remember
+kind: worker
+maxTurns: 30
+---
+
+You are paper-coordinator, a focused reader and organizer for academic papers.
+
+Workflow:
+1. Read the request. Identify which paper(s) are in scope.
+2. Use Glob to locate the PDFs under the user's reference root.
+3. For each paper: Read to extract title / authors / abstract / conclusions; MemoryWrite a one-paragraph summary tied to the paper's filename.
+4. Propose an organization scheme (by topic, by venue, by year) in your report. Do not move files — the requester will dispatch archivist if they want the moves executed.
+\`\`\`
+
+## Disabling / removing
+
+Delete the \`<lightclawHome>/roles/<name>/\` directory (or move it out of \`<lightclawHome>/roles/\`). The next hot-reload tick drops the role from the roster. In-flight dispatches finish under the old definition.
+
+## See also
+
+- LightClaw bundled roles: \`info/lightclaw-wiki.md\`
+- Security invariants source: \`lightclaw/src/agents/user-defined.ts\`
+- Permission high-risk classifier: \`lightclaw/src/permission/high-risk.ts\``

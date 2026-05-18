@@ -13,16 +13,25 @@ describe('Dispatch tool family', () => {
     assert.equal(names.has('UpdateDispatch'), true)
   })
 
-  it('requires mode and restricts role enum', () => {
+  it('requires mode but accepts open role strings (orchestrator / internal / unknown rejected at runtime)', () => {
+    // mode is required by the schema
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'generalist',
       prompt: 'Do a focused task for me.',
     }).success, false)
+    // role is z.string().min(1) so user-defined names (or any string) parse;
+    // runtime executeDispatch rejects orchestrator / internal / unknown roles.
+    // See "rejects orchestrator / internal / unknown dispatch targets at runtime".
+    assert.equal(dispatchTool.inputSchema?.safeParse({
+      role: 'paper-coordinator',
+      prompt: 'Do a focused task for me.',
+      mode: 'blocking',
+    }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'main',
       prompt: 'Do a focused task for me.',
       mode: 'blocking',
-    }).success, false)
+    }).success, true)
   })
 
   it('accepts now-blocking and scheduled-background shapes', () => {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { afterEach, beforeEach } from 'node:test'
 
+import { registerAgent, resetAgentRegistryForTest } from '../agents/registry.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { LightClawConfig } from '../config.js'
 import type { Runtime } from '../runtime/index.js'
@@ -18,6 +19,85 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true })
+})
+
+test('executeDispatch rejects unknown role with a clear tool error', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'nonexistent-role',
+      prompt: 'Try to call a role that was never registered.',
+      schedule: 'now',
+      mode: 'blocking',
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /Unknown dispatch role: nonexistent-role/)
+})
+
+test('executeDispatch rejects orchestrator dispatch targets at runtime', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'main',
+      prompt: 'Try to dispatch the orchestrator role.',
+      schedule: 'now',
+      mode: 'blocking',
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /Cannot dispatch orchestrator role "main"/)
+})
+
+test('executeDispatch rejects internal dispatch targets at runtime', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'memoryExtractor',
+      prompt: 'Try to dispatch an internal role.',
+      schedule: 'now',
+      mode: 'blocking',
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /Cannot dispatch internal role "memoryExtractor"/)
+})
+
+test('main with reachableRoles ["*"] reaches a registered user-defined worker', async () => {
+  resetAgentRegistryForTest()
+  registerAgent({
+    agentType: 'paper-coordinator',
+    name: 'paper-coordinator',
+    kind: 'worker',
+    whenToUse: 'Coordinates paper-reading tasks.',
+    description: 'paper coordinator',
+    tools: ['Read', 'Grep'],
+    systemPrompt: 'You are paper-coordinator.',
+  })
+
+  let output
+  try {
+    output = await runWithSessionContext(session('main', ['*']), () =>
+      executeDispatch({
+        role: 'paper-coordinator',
+        prompt: 'Skim the latest PDF and list section headings.',
+        schedule: 'now',
+        mode: 'blocking',
+      }, toolContext()),
+    )
+  } finally {
+    resetAgentRegistryForTest()
+  }
+
+  // Reachability passes (no role-not-reachable rejection). We expect the
+  // dispatch to proceed past chain-guard into runSubagent / runtime, which
+  // is undefined in this stub config — the call throws there, not at gate.
+  // Either an isError result that does NOT carry the chain-guard message or
+  // a thrown error from the downstream subagent invocation is acceptable;
+  // both prove the role passed the reachability check.
+  if (output) {
+    assert.doesNotMatch(output.output, /role-not-reachable/i)
+  }
 })
 
 test('executeDispatch rejects unreachable worker before running a subagent', async () => {

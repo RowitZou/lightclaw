@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
+import { registerAgent, resetAgentRegistryForTest } from '../agents/registry.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { Tool } from '../tool.js'
@@ -98,6 +99,114 @@ describe('requestPermission background-task allowlist fallback', () => {
     }))
     assert.equal(decision.behavior, 'deny')
     assert.deepEqual(denials, [])
+  })
+})
+
+describe('requestPermission user-defined role force-ask on high-risk', () => {
+  // Phase 7.5 review: user-defined roles route every high-risk-by-content
+  // op through an explicit ask even when a persisted "allow always" rule
+  // matches. Bundled roles keep the standard rule lookup; only the
+  // user-defined-call site flips an allow back to ask.
+
+  it('forces ask for user-defined caller doing high-risk Bash even with allow rule', async () => {
+    const userDefinedRole = {
+      agentType: 'paper-coordinator',
+      name: 'paper-coordinator',
+      kind: 'worker' as const,
+      whenToUse: 'paper coordinator',
+      description: 'paper coordinator',
+      tools: ['Bash'],
+      systemPrompt: 'You are paper-coordinator.',
+    }
+    resetAgentRegistryForTest()
+    registerAgent(userDefinedRole)
+    // The public registerAgent does NOT tag as user-defined; drive the
+    // proper user-defined flag via the cold-start loader against a temp
+    // roles dir so isUserDefinedAgent returns true.
+    const { initializeUserDefinedAgents } = await import('../agents/registry.js')
+    const rolesDir = path.join(tmpHome, 'roles', 'paper-coordinator')
+    mkdirSync(rolesDir, { recursive: true })
+    writeFileSync(path.join(rolesDir, 'ROLE.md'), [
+      '---',
+      'name: paper-coordinator',
+      'whenToUse: paper coordinator',
+      'description: paper coordinator',
+      'tools:',
+      '  - Bash',
+      '---',
+      '',
+      'You are paper-coordinator.',
+    ].join('\n'))
+    await initializeUserDefinedAgents({ home: tmpHome, failOnError: true, watch: false })
+
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'm',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 'permission-user-defined-test',
+      permissionMode: 'default',
+      currentRole: userDefinedRole,
+      identityRules: [{
+        source: 'user',
+        behavior: 'allow',
+        value: { toolName: 'Bash', ruleContent: 'rm:*' },
+      }],
+    })
+    let askInputSeen: unknown = null
+    const decision = await runWithSessionContext(ctx, async () => requestPermission({
+      tool: fakeTool('Bash', 'execute'),
+      toolInput: { command: 'rm -rf /tmp/x' },
+      ctx: {
+        isSubagent: false,
+        permissionApprover: {
+          async ask(askInput) {
+            askInputSeen = askInput
+            return { behavior: 'allow' }
+          },
+        },
+      },
+    }))
+    resetAgentRegistryForTest()
+
+    // Persisted Bash(rm:*) allow rule would normally short-circuit to allow
+    // without consulting the approver. The force-ask override sends it
+    // through the approver instead — proved by askInputSeen being set.
+    assert.notEqual(askInputSeen, null)
+    assert.equal(decision.behavior, 'allow')
+  })
+
+  it('does NOT force ask for bundled-role caller with same allow rule + high-risk Bash', async () => {
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'm',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 'permission-bundled-test',
+      permissionMode: 'default',
+      identityRules: [{
+        source: 'user',
+        behavior: 'allow',
+        value: { toolName: 'Bash', ruleContent: 'rm:*' },
+      }],
+    })
+    let askInputSeen: unknown = null
+    const decision = await runWithSessionContext(ctx, async () => requestPermission({
+      tool: fakeTool('Bash', 'execute'),
+      toolInput: { command: 'rm -rf /tmp/x' },
+      ctx: {
+        isSubagent: false,
+        permissionApprover: {
+          async ask(askInput) {
+            askInputSeen = askInput
+            return { behavior: 'deny', reason: 'test-stub' }
+          },
+        },
+      },
+    }))
+
+    assert.equal(askInputSeen, null)
+    assert.equal(decision.behavior, 'allow')
   })
 })
 

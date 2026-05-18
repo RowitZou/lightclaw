@@ -78,6 +78,17 @@ export function getAllAgents(): Role[] {
   return [...registry.values()]
 }
 
+/**
+ * Whether `agentType` was loaded from a user-authored
+ * `<lightclawHome>/roles/<name>/ROLE.md` file. Used by the permission layer
+ * to force-ask high-risk Bash from user-defined callers — admin-authored
+ * but still distinct from bundled roles, so persisted "allow always" rules
+ * do not silently bypass destructive head checks for them.
+ */
+export function isUserDefinedAgent(agentType: AgentType): boolean {
+  return userDefinedAgentTypes.has(agentType)
+}
+
 function replaceUserDefinedAgents(roles: Role[]): void {
   initializeAgents()
   for (const agentType of userDefinedAgentTypes) {
