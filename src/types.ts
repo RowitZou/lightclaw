@@ -157,7 +157,6 @@ export type UserMessage = {
   uuid: string
   parentUuid: string | null
   timestamp: number
-  branchSpawn?: BranchSpawnMeta
   origin?: 'bg-task-wake'
   metadata?: {
     interjectionEntries?: Array<{
@@ -178,7 +177,6 @@ export type AssistantMessage = {
   uuid: string
   parentUuid: string | null
   timestamp: number
-  branchPlaceholder?: BranchPlaceholderMeta
   message: {
     role: 'assistant'
     content: AssistantContentBlock[]
@@ -199,19 +197,6 @@ export type SystemCompactMessage = {
 }
 
 export type Message = UserMessage | AssistantMessage | SystemCompactMessage
-
-export type BranchSpawnMeta = {
-  branchId: string
-  branchSessionId: string
-}
-
-export type BranchPlaceholderMeta = {
-  branchId: string
-  branchSessionId: string
-  status: 'running' | 'completed' | 'failed' | 'interrupted'
-  startedAt: string
-  completedAt?: string
-}
 
 export type SessionMeta = {
   sessionId: string

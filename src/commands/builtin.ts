@@ -67,7 +67,7 @@ export function createBuiltinReplRegistry(
 ): ReplCommandRegistry {
   // includeChannelOnly defaults to true so the channel dispatcher and any
   // other caller keep the full command set; the terminal admin console
-  // passes false to drop the agent-loop commands (/branch /b /fresh /stop).
+  // passes false to drop the agent-loop commands (only /stop today).
   const includeChannelOnly = opts?.includeChannelOnly ?? true
   const registry = new ReplCommandRegistry()
   // Built inside the function so command descriptions / usage strings pick
@@ -153,65 +153,6 @@ function buildBuiltinCommands(): ReplCommand[] {
     visibleTo: 'admin',
     async handler(_args, ctx) {
       ctx.output.write(await formatCost())
-    },
-  },
-  {
-    name: '/fresh',
-    usage: t('cmd.fresh.usage'),
-    description: t('cmd.fresh.desc'),
-    channelOnly: true,
-    async handler(args, ctx) {
-      const prompt = args.trim()
-      if (!prompt) {
-        ctx.output.write(`${t('common.error.prefix')}${t('fresh.usage')}\n`)
-        return
-      }
-      const { runFresh } = await import('./fresh.js')
-      // When the channel runner pre-built the user message content (the
-      // typical reply-quote + attachment case), forward it verbatim so the
-      // fresh sub-session sees the same `<quoted-message>` + `[媒体附件]`
-      // breadcrumb the main turn would have seen. Fall through to plain
-      // `prompt` covers the no-quote / no-attachment case where the
-      // prebuilt content would just be the bare text.
-      const result = await runFresh({
-        config: ctx.config,
-        prompt,
-        channelUserMessageContent: ctx.channelUserMessageContent,
-      })
-      // /fresh body is LLM markdown — render it through the channel's
-      // markdown reply path instead of the structured plain_text notice.
-      ctx.setSlashBodyFormat?.('lark_md')
-      ctx.output.write(result)
-    },
-  },
-  {
-    name: '/branch',
-    usage: t('cmd.branch.usage'),
-    description: t('cmd.branch.desc'),
-    channelOnly: true,
-    async handler(args, ctx) {
-      if (!args.trim()) {
-        ctx.output.write(`${t('common.error.prefix')}${t('branch.usage')}\n`)
-        return
-      }
-      if (ctx.isChannel) {
-        // ChannelRunner intercepts valid /branch commands before slash
-        // dispatch so it can allocate an independent lock/session id and
-        // stream the branch reply to the original message.
-        ctx.output.write(`${t('branch.runnerOnly')}\n`)
-        return
-      }
-      ctx.output.write(`${t('branch.channelOnly')}\n`)
-    },
-  },
-  {
-    name: '/b',
-    usage: '/b <prompt>',
-    description: t('cmd.branch.desc'),
-    channelOnly: true,
-    async handler(args, ctx) {
-      const command = buildBuiltinCommands().find(item => item.name === '/branch')
-      await command?.handler(args, ctx)
     },
   },
   {

@@ -24,7 +24,7 @@ export type ParsedFeishuSessionId =
 // chars; real Feishu ids (chat_id `oc_…`, thread `omt_…`, sender open_id `ou_…`)
 // are entirely within that allowed set, so split-back returns usable ids.
 // Returns null for any sessionId that does not match `feishu:dm:*` /
-// `feishu:group:*` (terminal sessions, branch/fresh forks, bg-task fires).
+// `feishu:group:*` (terminal sessions, bg-task fires).
 export function parseFeishuSessionId(sessionId: string): ParsedFeishuSessionId | null {
   if (!sessionId.startsWith('feishu:')) {
     return null

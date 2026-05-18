@@ -67,7 +67,7 @@ export type SessionContext = {
   /** name → turn index of last use (ToolSearch match OR actual tool_use).
    *  Map preserves insertion order for LRU cap; the value lets the per-turn
    *  catalog builder drop entries unused for `tools.discoveredToolsTtlTurns`
-   *  turns. Session-scoped; daemon restart / `/fresh` / fork all wipe it. */
+   *  turns. Session-scoped; daemon restart and dispatched-worker forks wipe it. */
   discoveredTools: Map<string, number>
   /** Monotone counter incremented at the start of each query-loop turn.
    *  Survives across multiple `query()` invocations within the same channel

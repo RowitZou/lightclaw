@@ -23,8 +23,7 @@ let imageReadiness: ImageReadinessTracker | null = null
 let networkBridge: NetworkBridge | null = null
 // Keyed by sessionId — Phase 26 formula `feishu:dm:<chatId>` /
 // `feishu:group:<chatId>[:<threadId>]:<senderOpenId>` for channel sessions,
-// the terminal session id for the REPL, and `branch-<canonical>-<uuid>` /
-// `fresh-<uuid>` for fork-like sub-sessions. `/stop` must therefore target
+// and the terminal session id for the REPL. `/stop` must therefore target
 // the same sessionId the inbound message resolves to so a `/stop` typed in
 // a group never aborts the DM session's in-flight turn (or vice versa).
 const abortControllerBySession = new Map<string, AbortController>()

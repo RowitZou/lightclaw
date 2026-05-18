@@ -38,11 +38,6 @@ import { getMainRole } from '../agents/registry.js'
 import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
-  appendBranchSpawnPair,
-  mergeBranchResultBack,
-  trimToLastCompletedTurn,
-} from '../session/branch-merge.js'
-import {
   appendMessage,
   loadMeta,
   loadTranscript,
@@ -308,10 +303,7 @@ export class ChannelRunner {
     if (fastPath === 'stop') {
       // Phase 32: /stop targets the sessionId of THIS inbound chat
       // (Phase 26 formula). A /stop typed in a group never aborts the DM
-      // session's in-flight turn and vice versa. `/branch` and `/fresh`
-      // sub-sessions run on their own sessionIds and are intentionally not
-      // stoppable from a parent-chat /stop — both are designed as
-      // fire-and-forget / one-shot work.
+      // session's in-flight turn and vice versa.
       const targetSessionId = this.strategy.resolveSessionId(message, userId)
       const aborted = (await getSignalRouter().publish({
         kind: 'notification',
@@ -335,29 +327,20 @@ export class ChannelRunner {
     }
 
     const mainSessionId = this.strategy.resolveSessionId(message, userId)
-    const branchRequest = parseBranchRequest(message.text, userId)
-    const freshSessionId = parseFreshRequest(message.text)
-      ? `fresh-${randomUUID()}`
-      : null
-    const sessionId = branchRequest?.branchSessionId ?? freshSessionId ?? mainSessionId
-    const effectiveMessage = branchRequest
-      ? { ...message, text: branchRequest.prompt }
-      : message
+    const sessionId = mainSessionId
+    const effectiveMessage = message
     assertSessionIdShape(mainSessionId)
-    assertSessionIdShape(sessionId)
     // Slash commands carry user-to-system meta intent (e.g. /mode, /rules
     // allow, /auth import, /user approve, /sandbox prefetch). Wrapping them
     // as `<user-interjection>` is wrong: the LLM treats the text as natural
     // language and `dispatchChannelSlash` never runs, so the command is
     // effectively dropped. Read-only slashes and /stop already short-circuit
-    // via parseFastPathSlash above; /b and /fresh are caught by their own
-    // parsers. This guard covers the remaining write slashes — they fall
-    // through to the in-lock dispatchChannelSlash path so they serialize
-    // with the in-flight turn instead of being eaten by the queue.
+    // via parseFastPathSlash above. This guard covers the remaining write
+    // slashes — they fall through to the in-lock dispatchChannelSlash path
+    // so they serialize with the in-flight turn instead of being eaten by
+    // the queue.
     const looksLikeSlash = isLikelySlashCommand(message.text)
     if (
-      !branchRequest &&
-      !freshSessionId &&
       !looksLikeSlash &&
       channelInterjectionQueue.hasInflightFor(mainSessionId)
     ) {
@@ -415,10 +398,8 @@ export class ChannelRunner {
     // handleMessage call would see hasInflightFor() === false and queue
     // itself on the lock instead of pushing to the interjection queue,
     // and by the time fn1 finally marks in-flight fn2 is already past the
-    // routing decision. /b and /fresh always run on independent sessionIds
-    // so they never need this mark.
-    const shouldMarkInFlight = !branchRequest && !freshSessionId
-    if (shouldMarkInFlight) {
+    // routing decision.
+    {
       if (!looksLikeSlash) {
         const pendingForTurn = getPendingAttachments(effectiveMessage)
         const senderName = await this.resolveSenderNameForInterjection(effectiveMessage)
@@ -450,9 +431,7 @@ export class ChannelRunner {
       const typingToken = await this.startTyping(message)
       try {
         const meta = await loadMeta(sessionId)
-        const messages = branchRequest
-          ? trimToLastCompletedTurn(await loadTranscript(mainSessionId))
-          : await loadTranscript(sessionId)
+        const messages = await loadTranscript(sessionId)
         const workspace = workspaceFor(userId)
         // Wrap the entire turn in a SessionContext scope BEFORE
         // resetSessionContext resolves the real fields. The placeholder ctx
@@ -508,39 +487,6 @@ export class ChannelRunner {
             cwd: getCwd(),
             trigger: 'channel',
             channelId: this.strategy.channelId,
-          })
-        }
-
-        // Branch spawn pair (user `/b X` + assistant placeholder) MUST land
-        // on the main transcript at a between-turn boundary — interleaving
-        // mid-turn would split a tool_use from its tool_result and break
-        // the Anthropic API protocol on the next replay. `appendBranchSpawnPair`
-        // re-acquires the main session lock to enforce that boundary.
-        //
-        // We do NOT await it here. Awaiting would block the branch query
-        // behind the very main turn the user just side-stepped — exactly
-        // the symptom /branch is meant to avoid. Instead the write is
-        // queued FIFO behind any in-flight main turn, the branch query
-        // runs in parallel, and the merge-back path below awaits this
-        // promise before its own rewriteTranscript so the placeholder
-        // is in place when merge-back tries to find it by branchId.
-        let spawnPairPromise: Promise<void> | undefined
-        const branchStartedAt = new Date().toISOString()
-        if (branchRequest) {
-          spawnPairPromise = appendBranchSpawnPair({
-            mainSessionId,
-            userQuery: branchRequest.prompt,
-            meta: {
-              branchId: branchRequest.branchId,
-              branchSessionId: branchRequest.branchSessionId,
-              status: 'running',
-              startedAt: branchStartedAt,
-            },
-          }).catch(error => {
-            const detail = error instanceof Error ? error.message : String(error)
-            process.stderr.write(
-              `branch ${branchRequest!.branchId} spawn-pair write failed: ${detail}\n`,
-            )
           })
         }
 
@@ -608,9 +554,8 @@ export class ChannelRunner {
         // Pre-shape the user message content the same way the main query path
         // will (line ~575): string when nothing's inline, content-block array
         // when there are inline image / pdf bytes. Threaded into the slash
-        // dispatcher so /fresh can forward the full quote + attachment
-        // context into its sub-session instead of seeing only the raw
-        // `/fresh <prompt>` arg text.
+        // dispatcher for slash handlers that need the full quote + attachment
+        // context instead of seeing only the raw arg text.
         const prebuiltUserMessageContent: string | UserContentBlock[] =
           inlineEncoding.inlineBlocks.length > 0
             ? [
@@ -634,19 +579,16 @@ export class ChannelRunner {
           channelUserMessageContent: prebuiltUserMessageContent,
         })
         if (slash.handled) {
-          if (!sessionId.startsWith('fresh-')) {
-            await persistMeta(Date.now(), messages.length)
-          }
+          await persistMeta(Date.now(), messages.length)
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
           const slashText = slash.output.trim() || 'ok'
           // Two routing paths depending on what the slash handler produced:
-          //   - 'lark_md'    → genuine markdown (only /fresh today, since its
-          //                    body is LLM-generated text). Goes through the
-          //                    same markdown reply path as a normal LLM turn,
-          //                    so **bold** / ## headings / lists render
-          //                    instead of showing literal asterisks/hashes.
+          //   - 'lark_md'    → genuine markdown body. Goes through the same
+          //                    markdown reply path as a normal LLM turn, so
+          //                    **bold** / ## headings / lists render instead
+          //                    of showing literal asterisks/hashes.
           //   - 'plain_text' → structured help/status/rules tables that
           //                    contain `<prompt>` / `<n>` / `[<a|b|c>]` style
           //                    placeholders. lark_md would parse those as
@@ -760,20 +702,6 @@ export class ChannelRunner {
                   ].join('\n\n'),
                 }],
                 interjectionDrain: async () => {
-                  // Branch and fresh sessions run on independent sessionIds
-                  // (branch-<canonical>-<uuid> / fresh-<uuid>) off the main
-                  // session. Interjections queued under mainSessionId belong
-                  // to the main session's next turn — they must NOT be
-                  // drained by a fork. Without this guard, a branch query
-                  // running concurrently with a busy main DM steals the
-                  // main's queued interjections and silently injects them
-                  // into the branch's prompt (observed 2026-05-11 dogfood:
-                  // a "/b 查一下上海的天气" turn pulled the DM's
-                  // "这个图你能看见吗" interjection and the branch model
-                  // started talking about images the user never sent it).
-                  if (branchRequest || freshSessionId) {
-                    return []
-                  }
                   // Drain returns the queued entries; we then materialize any
                   // attached media so the interjection prompt block can render
                   // path breadcrumbs the model can Read. Materialization is
@@ -1004,26 +932,6 @@ export class ChannelRunner {
             // stderr; the card carries a friendly summary built by
             // formatQueryFailure (which already truncates and avoids
             // dumping raw provider error envelopes).
-            if (branchRequest) {
-              // Wait for the deferred spawn-pair write to land first so the
-              // placeholder is on disk by the time merge-back searches for it
-              // by branchId. Both go through channelSessionLock(mainSessionId)
-              // FIFO, so this awaits at most until the main turn (if any in
-              // flight when /b arrived) finishes and the spawn pair settles.
-              await spawnPairPromise
-              await mergeBranchResultBack({
-                mainSessionId,
-                branchId: branchRequest.branchId,
-                outcome: { kind: 'failure', reason: detail },
-                fallback: {
-                  userQuery: branchRequest.prompt,
-                  branchSessionId: branchRequest.branchSessionId,
-                  startedAt: branchStartedAt,
-                },
-              }).catch(mergeError => {
-                process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(mergeError)}\n`)
-              })
-            }
             // /stop already surfaced its own "Stopped." notice via the
             // pre-lock fast path; an extra red failure card here would imply
             // a real error occurred and contradict the user's deliberate
@@ -1050,7 +958,7 @@ export class ChannelRunner {
         const didMutateExistingHistory =
           JSON.stringify(previousTail) !== JSON.stringify(nextTail)
         const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
-        if (branchRequest || result.didCompact || didMutateExistingHistory) {
+        if (result.didCompact || didMutateExistingHistory) {
           await rewriteTranscript(sessionId, result.messages)
         } else {
           for (const item of newlyAddedMessages) {
@@ -1059,29 +967,6 @@ export class ChannelRunner {
         }
 
         await persistMeta(Date.now(), result.messages.length)
-        if (branchRequest) {
-          // See the failure-path comment above: the deferred spawn-pair
-          // write is FIFO-ordered ahead of merge-back on the same lock,
-          // but we still await its promise so any error path that resolved
-          // out-of-band (e.g. rejected promise turned into a stderr log)
-          // is settled before we try to find the placeholder.
-          await spawnPairPromise
-          await mergeBranchResultBack({
-            mainSessionId,
-            branchId: branchRequest.branchId,
-            outcome: {
-              kind: 'success',
-              finalText: result.assistantText || t('fresh.empty'),
-            },
-            fallback: {
-              userQuery: branchRequest.prompt,
-              branchSessionId: branchRequest.branchSessionId,
-              startedAt: branchStartedAt,
-            },
-          }).catch(error => {
-            process.stderr.write(`branch ${branchRequest.branchId} merge-back failed: ${String(error)}\n`)
-          })
-        }
         // Memory extraction stays fire-and-forget here. Draining each
         // inbound message would force the user to wait up to 60s before
         // the next reply when an extraction is slow. The CLI exit path
@@ -1097,7 +982,7 @@ export class ChannelRunner {
         // text in between) still anchors the fallback reply on the user's
         // latest input rather than the turn opener.
         if (!streamedAtLeastOnce) {
-          await this.sendReply(replyTargetMessage, result.assistantText || t('fresh.empty'))
+          await this.sendReply(replyTargetMessage, result.assistantText || t('channel.assistant.empty'))
         }
         })
       } catch (error) {
@@ -1121,7 +1006,7 @@ export class ChannelRunner {
       // runExclusive above — the symmetric outer try/finally is the only
       // way to guarantee the queue's in-flight set is consistent with the
       // session's actual liveness across every exit path of handleMessage.
-      if (shouldMarkInFlight) {
+      {
         const leftover = channelInterjectionQueue.unmarkInFlight(mainSessionId)
         if (leftover.length > 0) {
           // Bug 9 (2026-05-10 audit): query() drains interjections at
@@ -1606,10 +1491,6 @@ export class ChannelRunner {
   }
 }
 
-function parseFreshRequest(text: string): boolean {
-  return /^\/fresh(?:\s|$)/.test(text.trimStart())
-}
-
 /**
  * Apply the channel strategy's `materializeAttachment` hook to every entry
  * in `message.pendingAttachments`. Encapsulates the full failure matrix
@@ -1828,28 +1709,6 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
  */
 export function isLikelySlashCommand(text: string): boolean {
   return text.trimStart().startsWith('/')
-}
-
-function parseBranchRequest(
-  text: string,
-  canonicalUser: string,
-): { branchId: string; branchSessionId: string; prompt: string } | null {
-  const trimmed = text.trimStart()
-  const match = /^\/(?:branch|b)(?:\s+([\s\S]+))?$/.exec(trimmed)
-  if (!match) {
-    return null
-  }
-  const prompt = (match[1] ?? '').trim()
-  if (!prompt) {
-    return null
-  }
-  const branchId = randomUUID().slice(0, 8)
-  const safeUser = canonicalUser.replace(/[^a-zA-Z0-9_-]/g, '_')
-  return {
-    branchId,
-    branchSessionId: `branch-${safeUser}-${branchId}`,
-    prompt,
-  }
 }
 
 function isPairableChannel(channel: string): channel is ChannelKind {

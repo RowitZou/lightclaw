@@ -20,7 +20,6 @@ import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
 import { NetworkBridge } from './runtime/network-bridge.js'
 import { resolveDockerImage } from './runtime/pool.js'
-import { recoverOrphanedBranchPlaceholders } from './session/branch-merge.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
   getImageReadiness,
@@ -116,15 +115,6 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   initializeAgents()
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   registerBusSubscribers()
-  await recoverOrphanedBranchPlaceholders(resolvedConfig.paths.sessions)
-    .then(count => {
-      if (count > 0) {
-        process.stderr.write(`[branch] recovered ${count} orphaned placeholder(s)\n`)
-      }
-    })
-    .catch(error => {
-      process.stderr.write(`[branch] orphan recovery failed: ${String(error)}\n`)
-    })
   await maybeSweepDispatchHistory(lightclawHome(), resolvedConfig.dispatch.historyTtlMs)
     .catch(error => {
       process.stderr.write(`[dispatch-history] sweep failed: ${String(error)}\n`)
@@ -279,7 +269,7 @@ function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefin
  * dispatched against the same sessionId aborts via that map entry. The
  * function reads `getSessionId()` from the ALS, so the caller must be inside
  * a `runWithSessionContext()` scope — every existing caller (channel runner /
- * REPL / `/fresh`) already satisfies this.
+ * REPL) already satisfies this.
  */
 export function beginQuery(): AbortSignal {
   clearActiveSkillAllowedTools()

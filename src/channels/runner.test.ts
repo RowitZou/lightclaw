@@ -219,10 +219,6 @@ describe('ChannelRunner pre-lock fast path', () => {
     // /feedback writes feedback.jsonl on a separate path from the
     // session transcript — no main-lock contention, no LLM call.
     assert.equal(parseFastPathSlash('/feedback something'), 'read')
-    // /branch / /fresh have their own lock keys, not pre-lock.
-    assert.equal(parseFastPathSlash('/branch hi'), null)
-    assert.equal(parseFastPathSlash('/b hi'), null)
-    assert.equal(parseFastPathSlash('/fresh hi'), null)
     // Non-slash falls through.
     assert.equal(parseFastPathSlash('hello'), null)
     assert.equal(parseFastPathSlash(''), null)

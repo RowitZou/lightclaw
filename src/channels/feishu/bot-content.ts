@@ -42,10 +42,10 @@ export function parseMessageContent(input: {
   /**
    * Bot's own open_id. When set, mentions whose openId matches are erased
    * entirely (any position, any count) — group inbound text like
-   * "@LightClaw /b foo" becomes "/b foo" so slash detection downstream
-   * (`parseFastPathSlash`, `parseBranchRequest`, `parseFreshRequest`)
-   * matches just like in DM. Other mentions are still rendered as
-   * "@<name>" so the LLM keeps user-of-interest context.
+   * "@LightClaw /help" becomes "/help" so slash detection downstream
+   * (e.g. `parseFastPathSlash`) matches just like in DM. Other mentions
+   * are still rendered as "@<name>" so the LLM keeps user-of-interest
+   * context.
    */
   botStripId?: string
 }): ParsedFeishuMessage {

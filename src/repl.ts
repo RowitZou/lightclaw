@@ -37,9 +37,8 @@ export async function startRepl(params: ReplParams): Promise<void> {
     historySize: 200,
   })
 
-  // includeChannelOnly: false drops /branch /b /fresh /stop — those are
-  // agent-loop / in-flight-turn commands with no meaning in a console that
-  // never runs a query.
+  // includeChannelOnly: false drops /stop — it is an in-flight-turn command
+  // with no meaning in a console that never runs a query.
   const registry = createBuiltinReplRegistry({ includeChannelOnly: false })
   const currentUserId = getCurrentUserId()
   const currentUserIsAdmin = currentUserId ? await checkIsAdmin(currentUserId) : false
