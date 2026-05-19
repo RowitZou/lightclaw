@@ -118,9 +118,14 @@ export class RlaunchRuntime implements Runtime {
   readonly workspaceRoot: string
   readonly canonicalUser: string
   readonly control: ControlPlane
-  readonly data: DataPlane
-  readonly paths: PathPolicy
-  readonly fs: RuntimeFs
+  /** Internal storage for `data` / `fs`. Public access goes through getters
+   *  that forward to a `markRetired()`-installed successor when this instance
+   *  has been swapped out of the pool but is still referenced by some
+   *  AsyncLocalStorage-cached SessionContext. */
+  private _data!: DataPlane
+  private _fs!: RuntimeFs
+  /** Internal storage for `paths`. Same forwarding rationale as `_data`. */
+  private _paths!: PathPolicy
 
   lastActivityMs = Date.now()
 
@@ -130,6 +135,16 @@ export class RlaunchRuntime implements Runtime {
   private workerName: string | null = null
   private lastKnownState: ProcessState = 'unknown'
   private inflightStart: Promise<void> | null = null
+  /** Set to true via `markRetired()` when this runtime has been swapped out
+   *  of `RuntimePool` (typically by /mount applying a new mount config). The
+   *  resolver, when set, returns the user's current pool entry — almost
+   *  always the successor `RlaunchRuntime`. All public methods that touch
+   *  cluster state check this flag and forward to the successor when present
+   *  so that stale ALS references from concurrent mid-turn sessions follow
+   *  the new runtime instead of trying to respawn against a dead worker.
+   *  See `# LightClaw Runtime Safety Notes` (worker retire / forwarder). */
+  private retired = false
+  private successorResolver: (() => Runtime | undefined) | null = null
   /** Memoizes successful helper staging per worker. Reset implicitly when
    *  workerName changes (worker restart / GC) so the next ensureRunning()
    *  re-stages into the fresh container. */
@@ -186,8 +201,8 @@ export class RlaunchRuntime implements Runtime {
       isRunning: () => this.isRunning(),
       isAvailable: () => this.isAvailable(),
     }
-    this.paths = new MountTablePathPolicy(mounts)
-    const sharedClusterFsData = new SharedClusterFsData(this.paths, () => this.workerName)
+    this._paths = new MountTablePathPolicy(mounts)
+    const sharedClusterFsData = new SharedClusterFsData(this._paths, () => this.workerName)
     const guardedSharedClusterFsData: DataPlane = {
       kind: sharedClusterFsData.kind,
       independentFromControl: sharedClusterFsData.independentFromControl,
@@ -209,17 +224,64 @@ export class RlaunchRuntime implements Runtime {
         return sharedClusterFsData.readdir(pathname)
       },
     }
-    this.data = new LayeredDataPlane(
+    this._data = new LayeredDataPlane(
       [
         guardedSharedClusterFsData,
         this.execRelayFs,
       ],
-      this.paths,
+      this._paths,
       { maxExecRelayBytes: 4 * 1024 * 1024 },
     )
-    this.fs = this.data
-    this.fs.writeFileViaHostMount = this.execRelayFs.writeFileViaHostMount
-    this.fs.readFileViaHostMount = this.execRelayFs.readFileViaHostMount
+    this._fs = this._data
+    this._fs.writeFileViaHostMount = this.execRelayFs.writeFileViaHostMount
+    this._fs.readFileViaHostMount = this.execRelayFs.readFileViaHostMount
+  }
+
+  /** Returns the successor runtime if this instance has been marked retired
+   *  AND the pool's current entry resolves to a different instance. Returns
+   *  null when not retired or when the pool has no successor yet (e.g. mid-
+   *  swap, or after `purgeUser` cleared the slot entirely). */
+  private liveSuccessor(): Runtime | null {
+    if (!this.retired) return null
+    const successor = this.successorResolver?.()
+    return successor && successor !== this ? successor : null
+  }
+
+  /** Public accessor for the data plane. Forwards to the successor's data
+   *  plane when retired so stale ALS references see the new MountTablePathPolicy
+   *  + new SharedClusterFsData (which captures the new worker name getter). */
+  get data(): DataPlane {
+    return this.liveSuccessor()?.data ?? this._data
+  }
+
+  /** Same forwarding shape as `data`. `fs === data` for Rlaunch by construction,
+   *  preserved here for both the successor case (successor.fs) and the local
+   *  fallback. */
+  get fs(): RuntimeFs {
+    return this.liveSuccessor()?.fs ?? this._fs
+  }
+
+  /** Forward path policy too — RO/RW mode bits on extra mounts diverge between
+   *  generations after a /mount add --rw or --ro toggle, and `runtime.paths`
+   *  is the authoritative source the PathPolicy gate consults for write
+   *  rejection. Stale callers using OLD.paths would otherwise enforce stale
+   *  semantics. */
+  get paths(): PathPolicy {
+    return this.liveSuccessor()?.paths ?? this._paths
+  }
+
+  /** Mark this runtime as retired, supplying a resolver that the pool calls
+   *  to find the current live runtime for the same canonical user. Public
+   *  methods (`exec`, `ensureRunning`, `start`, `isAvailable`, `isRunning`,
+   *  the `data` / `fs` / `paths` getters) forward to that successor when set.
+   *
+   *  Called by `RuntimePool.swapRlaunchRuntime()` (the /mount restart path)
+   *  and by `RuntimePool.remove()` / `purgeUser()` for graceful degradation
+   *  of stale ALS references during admin tear-down. Idempotent: re-marking
+   *  is a no-op except for refreshing the resolver. */
+  markRetired(resolver: () => Runtime | undefined): void {
+    this.retired = true
+    this.successorResolver = resolver
   }
 
   get name(): string | null {
@@ -236,6 +298,8 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async start(triggerReason?: string): Promise<void> {
+    const successor = this.liveSuccessor()
+    if (successor) return successor.start()
     // Dedup concurrent callers (preheat-on-startup, preheat-on-approval,
     // ensureRunning, health checker restart) so they don't each spawn a
     // duplicate cluster worker and orphan the older ones.
@@ -334,6 +398,8 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async isAvailable(): Promise<RuntimeAvailability> {
+    const successor = this.liveSuccessor()
+    if (successor) return successor.isAvailable()
     if (this.workerName) {
       const phase = await this.processPhase(this.workerName)
       if (phase === 'running') {
@@ -381,6 +447,14 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async stop(): Promise<void> {
+    // Intentionally NO liveSuccessor() forward here: stop() runs the
+    // *cluster-side* teardown for this instance's worker; forwarding would
+    // ask the successor to stop ITS worker, which is the wrong target.
+    // After markRetired(), the successor takes over cluster lifecycle via
+    // its own _startOnce() deploymentHash-mismatch branch — if this OLD
+    // worker was already stopped by that path, the lookupWorkerRecord
+    // check below will find no record matching this OLD cfg.deploymentHash
+    // and return early without re-stopping.
     if (!this.workerName) {
       const record = lookupWorkerRecord(this.cfg.canonicalUser)
       this.workerName = record?.deploymentHash === this.cfg.deploymentHash ? record.name : null
@@ -393,16 +467,22 @@ export class RlaunchRuntime implements Runtime {
   }
 
   async remove(): Promise<void> {
+    // Same rationale as stop(): no successor forward; this is the
+    // teardown path for THIS instance's worker record.
     await this.stop().catch(() => {})
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
   }
 
   isRunning(): boolean {
+    const successor = this.liveSuccessor()
+    if (successor) return successor.isRunning()
     return this.lastKnownState === 'running'
   }
 
   async exec(input: ExecInput): Promise<ExecResult> {
+    const successor = this.liveSuccessor()
+    if (successor) return successor.exec(input)
     this.lastActivityMs = Date.now()
     await this.ensureRunning()
     const result = await this.runBrainctlExec(input)
@@ -669,6 +749,18 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private async ensureRunning(): Promise<void> {
+    // Defense in depth: the `fs` / `data` getters already forward to the
+    // successor when retired, so external callers should never reach this
+    // instance's ensureRunning post-retire. The guard is here in case a
+    // closure inside _data (built at construction time) still holds a
+    // bound reference to `this.ensureRunning`.
+    const successor = this.liveSuccessor()
+    if (successor) {
+      // Successor's fs/data plane runs its own ensureRunning internally,
+      // so just delegate via a no-op exec that exercises ensureRunning.
+      await successor.start()
+      return
+    }
     if (!this.workerName) {
       await this.start()
     }

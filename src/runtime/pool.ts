@@ -78,6 +78,15 @@ export class RuntimePool {
     const result = runtime instanceof DockerRuntime
       ? { containerName: runtime.containerName, image: runtime.image }
       : {}
+    if (runtime instanceof RlaunchRuntime) {
+      // Mark retired BEFORE tearing down so any concurrent mid-turn ALS
+      // reference to this instance forwards to whatever the pool serves up
+      // next (initially nothing; once the caller / next turn re-acquires,
+      // the new entry takes over). Stop / remove run after the flag is set
+      // so an exec arriving during the brief stop() window forwards
+      // gracefully instead of hitting the worker-lost retry / respawn path.
+      runtime.markRetired(() => this.runtimes.get(key))
+    }
     await runtime.stop().catch(() => {})
     if (runtime instanceof DockerRuntime) {
       await runtime.remove()
@@ -86,6 +95,44 @@ export class RuntimePool {
     }
     this.runtimes.delete(key)
     return result
+  }
+
+  /** Atomic /mount restart: build a new RlaunchRuntime with the current
+   *  on-disk config (mount-aware deploymentHash, fresh extraMounts list),
+   *  install it as the pool entry for this user, and mark the previous one
+   *  retired so any AsyncLocalStorage reference held by a concurrent mid-
+   *  turn session forwards to the new instance instead of trying to respawn
+   *  a fresh worker with the OLD config.
+   *
+   *  Returns the new runtime; the caller is expected to `setRuntime(next)`
+   *  in its own SessionContext and `await next.start()`. The OLD cluster
+   *  worker is stopped inside that start() via the existing
+   *  `_startOnce` deploymentHash-mismatch branch — we deliberately do not
+   *  stop it here so the forwarder always has a live successor by the time
+   *  any stale exec arrives. */
+  swapRlaunchRuntime(
+    userId: string,
+    config: LightClawConfig,
+    workspaceHostPath?: string,
+  ): RlaunchRuntime {
+    if (config.runtime.backend !== 'rlaunch') {
+      throw new Error(
+        'RuntimePool.swapRlaunchRuntime requires runtime.backend = "rlaunch"',
+      )
+    }
+    const key = runtimeKey(userId, workspaceHostPath)
+    const old = this.runtimes.get(key)
+    const next = this.create(userId, config, workspaceHostPath, undefined)
+    if (!(next instanceof RlaunchRuntime)) {
+      throw new Error('RuntimePool.swapRlaunchRuntime expected RlaunchRuntime')
+    }
+    this.runtimes.set(key, next)
+    if (old instanceof RlaunchRuntime && old !== next) {
+      // Resolver reads `this.runtimes.get(key)` lazily on every successor
+      // lookup, so subsequent swaps continue to forward correctly.
+      old.markRetired(() => this.runtimes.get(key))
+    }
+    return next
   }
 
   async releaseAll(): Promise<void> {

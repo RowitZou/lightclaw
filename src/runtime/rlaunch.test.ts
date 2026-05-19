@@ -1282,3 +1282,149 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     assert.equal(startCalls, 0, 'respawn must NOT happen on abort')
   })
 })
+
+describe('RlaunchRuntime markRetired forwarder', () => {
+  // The retire-forwarder is what makes /mount safe across same-user
+  // concurrent sessions: when /mount swaps the pool entry, the old
+  // RlaunchRuntime instance is still referenced by other sessions'
+  // AsyncLocalStorage; we don't want those references to respawn a
+  // worker with the stale mount config. Marking the old instance
+  // retired with a resolver pointing at the new pool entry routes all
+  // future calls on the old reference into the new runtime.
+  let hostRootOld: string
+  let hostRootNew: string
+  let oldRuntime: RlaunchRuntime
+  let newRuntime: RlaunchRuntime
+
+  const makeConfig = (host: string, hash: string): RlaunchRuntimeConfig => ({
+    canonicalUser: 'alice',
+    deploymentHash: hash,
+    image: 'registry/x:tag',
+    chargedGroup: 'hs_cpu',
+    namespace: 'ailab-hs',
+    cpu: 1,
+    memoryMb: 1024,
+    gpu: 0,
+    privateMachine: 'group',
+    positiveTags: [],
+    workerGcTimeHours: 1,
+    imagePullPolicy: 'IfNotPresent',
+    maxWaitDuration: '5m',
+    predictBeforeStart: false,
+    workspaceHostPath: host,
+    workspaceGpfsMount: `gpfs://gpfs1/ns/u/alice:/workspace`,
+    workspaceContainerPath: '/workspace',
+    env: {},
+    daemonUid: 1000,
+    daemonGid: 1000,
+  })
+
+  beforeEach(() => {
+    hostRootOld = mkdtempSync(path.join(tmpdir(), 'lightclaw-retire-old-'))
+    hostRootNew = mkdtempSync(path.join(tmpdir(), 'lightclaw-retire-new-'))
+    oldRuntime = new RlaunchRuntime(makeConfig(hostRootOld, 'oldhash01'), new WorkerReadinessTracker('alice'))
+    newRuntime = new RlaunchRuntime(makeConfig(hostRootNew, 'newhash02'), new WorkerReadinessTracker('alice'))
+  })
+
+  afterEach(() => {
+    rmSync(hostRootOld, { recursive: true, force: true })
+    rmSync(hostRootNew, { recursive: true, force: true })
+  })
+
+  it('forwards exec / start / isAvailable / isRunning to the successor when retired', async () => {
+    // Stub the successor's methods. We deliberately do NOT stub oldRuntime
+    // because the whole point is to exercise oldRuntime's real exec / start /
+    // etc. and verify the guard at the top forwards before any local body runs.
+    let newExecCalls = 0
+    let newStartCalls = 0
+    let newIsAvailableCalls = 0
+    ;(newRuntime as unknown as { exec: (i: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      newExecCalls++
+      return { stdout: 'from-new', stderr: '', exitCode: 0 }
+    }
+    ;(newRuntime as unknown as { start: () => Promise<void> }).start = async () => {
+      newStartCalls++
+    }
+    ;(newRuntime as unknown as { isAvailable: () => Promise<{ ok: true }> }).isAvailable = async () => {
+      newIsAvailableCalls++
+      return { ok: true }
+    }
+    ;(newRuntime as unknown as { isRunning: () => boolean }).isRunning = () => true
+
+    oldRuntime.markRetired(() => newRuntime)
+    const result = await oldRuntime.exec({ command: 'echo hi' })
+    assert.equal(result.stdout, 'from-new', 'exec forwards to successor')
+    assert.equal(newExecCalls, 1)
+
+    await oldRuntime.start()
+    assert.equal(newStartCalls, 1, 'start forwards to successor')
+
+    const avail = await oldRuntime.isAvailable()
+    assert.deepEqual(avail, { ok: true })
+    assert.equal(newIsAvailableCalls, 1)
+
+    assert.equal(oldRuntime.isRunning(), true, 'isRunning forwards to successor')
+  })
+
+  it('forwards data / fs / paths getters to the successor', () => {
+    const oldDataBefore = oldRuntime.data
+    const oldFsBefore = oldRuntime.fs
+    const oldPathsBefore = oldRuntime.paths
+    // Pre-retire sanity: data getter returns the local instance.
+    assert.notEqual(oldDataBefore, newRuntime.data, 'sanity: pre-retire data is local')
+
+    oldRuntime.markRetired(() => newRuntime)
+    assert.equal(oldRuntime.data, newRuntime.data, 'data getter returns successor data plane')
+    assert.equal(oldRuntime.fs, newRuntime.fs, 'fs getter returns successor fs')
+    assert.equal(oldRuntime.paths, newRuntime.paths, 'paths getter returns successor PathPolicy')
+
+    // The local backing fields are unchanged; only the getter routing differs.
+    // (Captured-before references still equal each other after retire; they
+    // simply aren't what the getter now returns.)
+    assert.equal(oldFsBefore, oldDataBefore, 'local fs/data alias preserved')
+    assert.equal(oldPathsBefore, oldPathsBefore, 'local paths still exist (identity check)')
+  })
+
+  it('falls through to the local instance when the resolver returns no successor', () => {
+    // Capture local references before retire.
+    const localData = oldRuntime.data
+    const localFs = oldRuntime.fs
+    const localPaths = oldRuntime.paths
+
+    oldRuntime.markRetired(() => undefined)
+    // Resolver returned undefined → liveSuccessor() returns null → getters
+    // fall through to the local _data / _fs / _paths.
+    assert.equal(oldRuntime.data, localData, 'data falls through to local')
+    assert.equal(oldRuntime.fs, localFs, 'fs falls through to local')
+    assert.equal(oldRuntime.paths, localPaths, 'paths falls through to local')
+  })
+
+  it('refreshes successor lookup on every call so chained swaps follow forward', async () => {
+    const thirdRuntime = new RlaunchRuntime(
+      makeConfig(hostRootNew, 'thirdhas3'),
+      new WorkerReadinessTracker('alice'),
+    )
+    let pointer: RlaunchRuntime = newRuntime
+    let newCalls = 0
+    let thirdCalls = 0
+    ;(newRuntime as unknown as { exec: (i: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      newCalls++
+      return { stdout: 'from-new', stderr: '', exitCode: 0 }
+    }
+    ;(thirdRuntime as unknown as { exec: (i: ExecInput) => Promise<ExecResult> }).exec = async () => {
+      thirdCalls++
+      return { stdout: 'from-third', stderr: '', exitCode: 0 }
+    }
+    oldRuntime.markRetired(() => pointer)
+
+    const r1 = await oldRuntime.exec({ command: 'echo' })
+    assert.equal(r1.stdout, 'from-new')
+
+    // Simulate a second swap landing in the pool.
+    pointer = thirdRuntime
+    const r2 = await oldRuntime.exec({ command: 'echo' })
+    assert.equal(r2.stdout, 'from-third', 'resolver is re-evaluated per call')
+    assert.equal(newCalls, 1)
+    assert.equal(thirdCalls, 1)
+  })
+})

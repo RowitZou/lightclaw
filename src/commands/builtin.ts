@@ -97,12 +97,14 @@ async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
   if (!(current instanceof RlaunchRuntime)) {
     throw new Error('/mount requires an active rlaunch runtime.')
   }
-  await getRuntimePool().remove(userId)
-  const next = getRuntimePool().acquire(userId, ctx.config)
+  // Atomic swap: pool installs the new runtime under the same per-user key
+  // and marks the old one retired with a resolver pointing at the live entry,
+  // so concurrent mid-turn ALS references to the old instance forward to the
+  // new one instead of trying to respawn a worker with the stale mount
+  // config. The old cluster worker is stopped inside next.start() via the
+  // existing deploymentHash-mismatch branch in _startOnce.
+  const next = getRuntimePool().swapRlaunchRuntime(userId, ctx.config)
   setRuntime(next)
-  if (!(next instanceof RlaunchRuntime)) {
-    throw new Error('/mount requires runtime.backend = "rlaunch".')
-  }
   await next.start()
   return next.name ?? t('sandbox.workerNone')
 }
