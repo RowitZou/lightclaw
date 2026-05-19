@@ -71,6 +71,7 @@ import type {
   UserContentBlock,
   UserToolResultBlock,
 } from './types.js'
+import type { AttachmentKind } from './provider/types.js'
 
 type QueryParams = {
   role: Role
@@ -79,6 +80,15 @@ type QueryParams = {
   tools: Tool[]
   config?: LightClawConfig
   maxTurns?: number
+  /**
+   * Per-call override forwarded to every `streamChat()` inside this query
+   * invocation. Channel runner sets this on a retry after a wire 4xx
+   * attributed to the `inToolResult` position so the immediate retry
+   * downgrades the offending kind via `finalizeToolResultBlocks` instead of
+   * re-sending the same unsupported block. See provider/types.ts
+   * `StreamChatParams.forceFallbackInToolResult` for the autopilot rationale.
+   */
+  forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -445,6 +455,9 @@ export async function query(params: QueryParams): Promise<{
           tools: turnCatalog.tools.map(toolToAPISchema),
           cacheBreakpointMessageIndex: invocation.cacheBreakpointMessageIndex,
           signal,
+          ...(params.forceFallbackInToolResult
+            ? { forceFallbackInToolResult: params.forceFallbackInToolResult }
+            : {}),
           apiLogContext: {
             kind: apiLogKind,
             ...(apiLogKind === 'subagent' && invocation.subagentLabel

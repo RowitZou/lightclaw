@@ -79,6 +79,7 @@ import {
 import { buildInterjectionBlock } from './feishu/interjection-prompt.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
 import { incrementFailureCounter, writeCacheEntry } from '../provider/capability-cache.js'
+import type { AttachmentKind } from '../provider/types.js'
 import {
   getPendingAttachments,
   type ChannelId,
@@ -686,6 +687,14 @@ export class ChannelRunner {
         // four-kind universe gives 4 max retries on top of the transient
         // retry budget.
         const capabilityFlipped = new Set<string>()
+        // Per-call recovery for inToolResult 4xx: kinds accumulated here are
+        // passed as `forceFallbackInToolResult` on the next query attempt, so
+        // `finalizeToolResultBlocks` downgrades the offending kind (PDF →
+        // image pages, image → describe text) for THIS retry without waiting
+        // for the sticky-5-failure counter to flip the cache. Persists across
+        // attempts within the same inbound message — a kind that 4xx'd on
+        // attempt N stays force-downgraded on attempts N+1, N+2.
+        const forceFallbackInToolResultKinds = new Set<AttachmentKind>()
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
@@ -800,28 +809,36 @@ export class ChannelRunner {
                 getMainRole(),
                 getEnabledTools(provider, getAllTools('feishu')),
               ),
+              ...(forceFallbackInToolResultKinds.size > 0
+                ? { forceFallbackInToolResult: forceFallbackInToolResultKinds }
+                : {}),
             })
             break
           } catch (error) {
             lastError = error
             const detail = error instanceof Error ? error.message : String(error)
-            // Capability autopilot: per-kind one-shot. Detect provider
-            // signal, flip the cache, rebuild the user message without
-            // the offending content blocks (paths fall through to the
-            // text breadcrumb so the agent uses Read),
-            // and retry without consuming a transient attempt.
             // Capability autopilot with **request-body position attribution**.
-            // Pass the in-memory `messages` array to isCapabilityMissingError;
-            // it scans content shape and returns the actual position(s) the
-            // offending kind appeared in. Two-position fix: inUserMessage 4xx
-            // still gets the existing re-encode-with-text-breadcrumb per-call
-            // recovery; inToolResult 4xx increments the right counter so the
-            // sticky-5-failure flip eventually triggers documentDowngrade /
-            // describeImagesAdaptive on subsequent calls (the per-call
-            // recovery for inToolResult is a future improvement — current
-            // edge case: 5 failed turns before sticky disable, all rare cases
-            // like codex proxy strip or model variant shape changes; see
-            // dev-plan v2 §A for the full per-call recovery design).
+            // `isCapabilityMissingError` scans the in-memory `messages` and
+            // returns the actual position(s) where the offending kind
+            // appeared (`inUserMessage` for a top-level user attachment,
+            // `inToolResult` for a block nested under `tool_result.content`).
+            // Per-call recovery is now wired for BOTH positions:
+            //   - inUserMessage → re-encode the user message with the
+            //     offending kind moved to text-breadcrumb / fallback path
+            //     (the agent uses Read on subsequent turns).
+            //   - inToolResult → accumulate the kind into
+            //     `forceFallbackInToolResultKinds` so the next attempt's
+            //     `streamChat → finalizeToolResultBlocks` downgrades the
+            //     kind via documentDowngrade / describeImagesAdaptive for
+            //     THIS retry, instead of waiting for the sticky-5 cache
+            //     flip to take effect on subsequent turns.
+            // Counter advance behavior:
+            //   - inUserMessage counter is rolled back after the re-encode
+            //     because the binary was never semantically re-tried.
+            //   - inToolResult counter stays advanced — the 4xx was real
+            //     signal that this (kind, position) is unsupported here,
+            //     and the cache should still trip to enabled=false after
+            //     5 such incidents.
             // Internal `Message[]` is `{type:'user'|'assistant'|'system',
             // message:{role,content,...}}` — the scanner wants `{role,content}`
             // (the wire-shape). Map down to that shape for the autopilot
@@ -841,13 +858,23 @@ export class ChannelRunner {
                   p => !capabilityFlipped.has(`${missingSignal.kind}@${p}`),
                 )
               : []
+            // Gate: missing signal + at least one new position + at least one
+            // actionable recovery path. inUserMessage recovery requires a
+            // materialized user attachment to re-encode; inToolResult recovery
+            // only needs the forceFallback override to be installed on the
+            // next attempt, so it has no per-turn materialization prereq.
+            const inUserMessageFlipped =
+              missingSignal !== null && affectedPositions.includes('inUserMessage')
+            const inToolResultFlipped =
+              missingSignal !== null && affectedPositions.includes('inToolResult')
+            const canRecoverUserMessage =
+              inUserMessageFlipped && materializedAttachment.length > 0
             if (
               missingSignal &&
               affectedPositions.length > 0 &&
-              materializedAttachment.length > 0
+              (canRecoverUserMessage || inToolResultFlipped)
             ) {
               const flipSummaries: string[] = []
-              const inUserMessageFlipped = affectedPositions.includes('inUserMessage')
               let userMessageCounterKept = true
               for (const position of affectedPositions) {
                 capabilityFlipped.add(`${missingSignal.kind}@${position}`)
@@ -878,63 +905,59 @@ export class ChannelRunner {
               process.stderr.write(
                 `${channelId}: capability fallback (${flipSummaries.join(', ')}) for ${providerEntry.endpoint}/${providerEntry.upstreamModel}\n`,
               )
-              // For inToolResult-side rejection: counter is now incremented;
-              // future calls see correct cache state. THIS call's retry will
-              // still hit the same wire 4xx unless the counter trip flipped
-              // enabled=false (5th consecutive). The retry path below only
-              // mutates the user message for inUserMessage attribution.
-              if (!inUserMessageFlipped) {
-                // No user-message side recovery to perform — but we still
-                // want to try one more attempt, in case the trip closed the
-                // cache for inToolResult and api.streamChat's internal
-                // finalize will downgrade on the retry.
-                attempt -= 1
-                continue
+              // Per-call recovery for tool_result side: install the override
+              // so `streamChat → finalizeToolResultBlocks` downgrades this
+              // kind on the next attempt regardless of cache state. Persists
+              // across remaining attempts so re-issued retries still benefit.
+              if (inToolResultFlipped) {
+                forceFallbackInToolResultKinds.add(missingSignal.kind)
               }
-              // Rebuild user-message encoding with the now-cached false.
-              const reEncoded = await encodeAttachmentsForInlineForSession({
-                materialized: materializedAttachment,
-                config: appConfig,
-                runtime: getRuntime(),
-              })
-              if (userMessageCounterKept) {
-                writeCacheEntry({
-                  endpoint: providerEntry.endpoint,
-                  baseUrl: providerBaseUrl,
-                  upstreamModel: providerEntry.upstreamModel,
-                  kind: missingSignal.kind,
-                  position: 'inUserMessage',
-                  entry: { enabled: true, failures: 0 },
+              if (canRecoverUserMessage) {
+                // Rebuild user-message encoding with the now-cached false.
+                const reEncoded = await encodeAttachmentsForInlineForSession({
+                  materialized: materializedAttachment,
+                  config: appConfig,
+                  runtime: getRuntime(),
                 })
+                if (userMessageCounterKept) {
+                  writeCacheEntry({
+                    endpoint: providerEntry.endpoint,
+                    baseUrl: providerBaseUrl,
+                    upstreamModel: providerEntry.upstreamModel,
+                    kind: missingSignal.kind,
+                    position: 'inUserMessage',
+                    entry: { enabled: true, failures: 0 },
+                  })
+                }
+                const reText = await formatChannelUserText(
+                  this.strategy,
+                  effectiveMessage,
+                  materializedAttachment,
+                  reEncoded.fallbackPaths,
+                )
+                const newContent = reEncoded.inlineBlocks.length > 0
+                  ? [
+                      ...(reText.length > 0
+                        ? [{ type: 'text' as const, text: reText }]
+                        : []),
+                      ...reEncoded.inlineBlocks,
+                    ]
+                  : reText
+                const replaced = createUserMessage(
+                  newContent,
+                  userMessage.parentUuid,
+                  userMessage.timestamp,
+                )
+                // Preserve the same uuid so transcript continuity (parentUuid
+                // chains, branch/merge resolution) stays intact across the
+                // retry.
+                replaced.uuid = userMessage.uuid
+                messages[messages.length - 1] = replaced
+                // Persist: rewrite the last user message on disk so a crash
+                // mid-retry leaves a coherent transcript. rewriteTranscript
+                // overwrites the whole jsonl atomically.
+                await rewriteTranscript(sessionId, messages)
               }
-              const reText = await formatChannelUserText(
-                this.strategy,
-                effectiveMessage,
-                materializedAttachment,
-                reEncoded.fallbackPaths,
-              )
-              const newContent = reEncoded.inlineBlocks.length > 0
-                ? [
-                    ...(reText.length > 0
-                      ? [{ type: 'text' as const, text: reText }]
-                      : []),
-                    ...reEncoded.inlineBlocks,
-                  ]
-                : reText
-              const replaced = createUserMessage(
-                newContent,
-                userMessage.parentUuid,
-                userMessage.timestamp,
-              )
-              // Preserve the same uuid so transcript continuity (parentUuid
-              // chains, branch/merge resolution) stays intact across the
-              // retry.
-              replaced.uuid = userMessage.uuid
-              messages[messages.length - 1] = replaced
-              // Persist: rewrite the last user message on disk so a crash
-              // mid-retry leaves a coherent transcript. rewriteTranscript
-              // overwrites the whole jsonl atomically.
-              await rewriteTranscript(sessionId, messages)
               attempt -= 1  // structural retry, not transient
               continue
             }

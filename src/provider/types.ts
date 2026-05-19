@@ -56,6 +56,17 @@ export type StreamChatParams = {
   reasoningEffort?: ReasoningEffort
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
+  /**
+   * Per-call override consumed by `finalizeToolResultBlocks`: kinds named here
+   * are treated as `cache.enabled=false` for the `inToolResult` position
+   * regardless of the persisted cache state. The channel runner's capability
+   * autopilot sets this on a retry after a wire 4xx attributed to
+   * `inToolResult`, so the immediate retry downgrades (PDF→image pages /
+   * image→describe text) instead of re-sending the same unsupported block.
+   * Counter / cache advance still happens runner-side; this is purely the
+   * per-call recovery the cache flip alone cannot deliver in time.
+   */
+  forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
 }
 
 export type WebSearchParams = {

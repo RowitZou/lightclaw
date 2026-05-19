@@ -69,6 +69,9 @@ export async function* streamChat(
       endpointBaseUrl: baseUrl,
       upstreamModel: entry.upstreamModel,
       config,
+      ...(rest.forceFallbackInToolResult
+        ? { forceFallbackInToolResult: rest.forceFallbackInToolResult }
+        : {}),
       describeAdapter: ({ images }) =>
         loggedDescribeImage({
           provider: describeRoute.provider,
