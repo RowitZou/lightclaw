@@ -174,6 +174,61 @@ describe('ChannelRunner slash detection', () => {
   })
 })
 
+describe('ChannelRunner per-message context hydration', () => {
+  // Regression guard for the 2026-05-19 group dogfood bug: a feishuSecretary
+  // worker dispatched from a group main session called FeishuCreateFile and
+  // got permission_grants.chat = 'skipped-not-group' even though the inbound
+  // was a real group message. Root cause was the runner's resetSessionContext
+  // hydration path: the placeholder ctx populated resourceGrantTarget from
+  // strategy.resolveResourceGrantTarget, then Object.assign with a freshly
+  // built resolvedContext (which has no resourceGrantTarget) clobbered it
+  // back to undefined. permissionApprover and channelFileSender were already
+  // pinned and restored — this test pins down that resourceGrantTarget joins
+  // the same survivor list.
+  it('resetSessionContext returns a resolvedContext with resourceGrantTarget undefined (drives the need to pin)', async () => {
+    const { resetSessionContext } = await import('../init.js')
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const { sessionContext: resolved } = await resetSessionContext({
+      cwd: tmpHome,
+      channel: 'feishu',
+      sessionId: 'feishu:group:oc_X:ou_Y',
+      currentUserId: 'alice',
+    })
+    assert.equal(resolved.resourceGrantTarget, undefined)
+  })
+
+  it('preserves the placeholder resourceGrantTarget across Object.assign + pin-restore', async () => {
+    const { createEmptySessionContext, runWithSessionContext } = await import('../session-context.js')
+    const { resetSessionContext } = await import('../init.js')
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const grantTarget = { chatId: 'oc_4e92', senderOpenId: 'ou_7f0fb' }
+    const placeholder = createEmptySessionContext({
+      sessionId: 'feishu:group:oc_4e92:ou_7f0fb',
+      currentUserId: 'alice',
+      channel: 'feishu',
+      resourceGrantTarget: grantTarget,
+    })
+    await runWithSessionContext(placeholder, async () => {
+      const { sessionContext: resolved } = await resetSessionContext({
+        cwd: tmpHome,
+        channel: 'feishu',
+        sessionId: 'feishu:group:oc_4e92:ou_7f0fb',
+        currentUserId: 'alice',
+      })
+      const pinnedApprover = placeholder.permissionApprover
+      const pinnedChannelFileSender = placeholder.channelFileSender
+      const pinnedResourceGrantTarget = placeholder.resourceGrantTarget
+      Object.assign(placeholder, resolved)
+      placeholder.permissionApprover = pinnedApprover
+      placeholder.channelFileSender = pinnedChannelFileSender
+      placeholder.resourceGrantTarget = pinnedResourceGrantTarget
+      assert.deepEqual(placeholder.resourceGrantTarget, grantTarget)
+    })
+  })
+})
+
 describe('ChannelRunner pre-lock fast path', () => {
   it('parseFastPathSlash classifies /stop, read whitelist, and write/non-slash correctly', async () => {
     const { parseFastPathSlash } = await import('./runner.js')

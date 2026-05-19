@@ -508,11 +508,21 @@ export class ChannelRunner {
           permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
           currentUserId: userId,
         })
+        // Fields populated only on the placeholder (per-inbound-message, set
+        // before resetSessionContext runs) survive Object.assign overwrite by
+        // pin-and-restore. resetSessionContext's createSessionContext does
+        // not know about channel-specific concepts, so it returns a fresh
+        // ctx with these slots as undefined — without the restore, group
+        // FeishuCreateFile lost the chat grant target (saw skipped-not-group
+        // on 2026-05-19 dogfood; chat link only worked for the sender,
+        // 403 for other group members).
         const pinnedApprover = sessionContext.permissionApprover
         const pinnedChannelFileSender = sessionContext.channelFileSender
+        const pinnedResourceGrantTarget = sessionContext.resourceGrantTarget
         Object.assign(sessionContext, resolvedContext)
         sessionContext.permissionApprover = pinnedApprover
         sessionContext.channelFileSender = pinnedChannelFileSender
+        sessionContext.resourceGrantTarget = pinnedResourceGrantTarget
         await refreshSkillRegistry(getCwd())
         if (!meta) {
           await runHook('onSessionStart', {
