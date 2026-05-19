@@ -195,6 +195,28 @@ describe('buildLaunchArgs', () => {
     const args = buildLaunchArgs(baseCfg, { detach: true, predictOnly: false })
     assert.equal(args.some(arg => arg.startsWith('--set-env=')), false)
   })
+
+  it('emits workspace and extra dynamic mount flags', () => {
+    const args = buildLaunchArgs(
+      {
+        ...baseCfg,
+        extraMounts: [{
+          hostPath: '/mnt/gpfs/data',
+          workerPath: '/mnt/gpfs/data',
+          gpfsMount: 'gpfs://gpfs1/data:/mnt/gpfs/data',
+          mode: 'ro',
+        }],
+      },
+      { detach: true, predictOnly: false },
+    )
+    assert.deepEqual(
+      args.filter(arg => arg.startsWith('--mount=')),
+      [
+        '--mount=gpfs://gpfs1/ns/u/alice:/workspace',
+        '--mount=gpfs://gpfs1/data:/mnt/gpfs/data',
+      ],
+    )
+  })
 })
 
 describe('composeExecScript', () => {
@@ -689,6 +711,53 @@ describe('RlaunchRuntime.fs.writeFileViaHostMount (host-side bind-mount fast pat
       Buffer.from('x'),
     )
     assert.equal(result, null)
+  })
+
+  it('returns null for LightClaw read-only extra mounts so writeFile can enforce policy', async () => {
+    const readOnlyHost = mkdtempSync(path.join(tmpdir(), 'lightclaw-extra-ro-'))
+    try {
+      const roRuntime = new RlaunchRuntime({
+        canonicalUser: 'alice',
+        deploymentHash: 'abc12345',
+        image: 'registry/x:tag',
+        chargedGroup: 'hs_cpu',
+        namespace: 'ailab-hs',
+        cpu: 1,
+        memoryMb: 1024,
+        gpu: 0,
+        privateMachine: 'group',
+        positiveTags: [],
+        workerGcTimeHours: 1,
+        imagePullPolicy: 'IfNotPresent',
+        maxWaitDuration: '5m',
+        predictBeforeStart: false,
+        workspaceHostPath: hostRoot,
+        workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+        workspaceContainerPath: '/workspace',
+        extraMounts: [{
+          hostPath: readOnlyHost,
+          workerPath: '/mnt/readonly-data',
+          gpfsMount: 'gpfs://gpfs1/ns/readonly-data:/mnt/readonly-data',
+          mode: 'ro',
+        }],
+        env: {},
+        daemonUid: process.getuid?.() ?? 0,
+        daemonGid: process.getgid?.() ?? 0,
+      }, new WorkerReadinessTracker('alice'))
+      const fastWrite = roRuntime.fs.writeFileViaHostMount!
+      const result = await fastWrite.call(
+        roRuntime.fs,
+        '/mnt/readonly-data/out.bin',
+        Buffer.from('x'),
+      )
+      assert.equal(result, null)
+      assert.throws(
+        () => readFileSync(path.join(readOnlyHost, 'out.bin')),
+        /ENOENT/,
+      )
+    } finally {
+      rmSync(readOnlyHost, { recursive: true, force: true })
+    }
   })
 
   it('sticky-disables itself after a host fs failure and returns null thereafter', async () => {

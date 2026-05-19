@@ -45,12 +45,14 @@ import {
   getUsageTotals,
   setIdentityRules,
   setModel,
+  setRuntime,
   setPermissionMode,
 } from '../state.js'
 
 import { runAuthCommand } from './auth.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
+import { runMountCommand } from './mount.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -84,6 +86,25 @@ export function createBuiltinReplRegistry(
 export const RENAMED_COMMANDS: Record<string, string> = {
   '/identity': '/user',
   '/permissions': '/rules',
+}
+
+async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
+  const userId = ctx.userId ?? getCurrentUserId()
+  if (!userId) {
+    throw new Error(t('common.error.noActiveIdentity'))
+  }
+  const current = getRuntime()
+  if (!(current instanceof RlaunchRuntime)) {
+    throw new Error('/mount requires an active rlaunch runtime.')
+  }
+  await getRuntimePool().remove(userId)
+  const next = getRuntimePool().acquire(userId, ctx.config)
+  setRuntime(next)
+  if (!(next instanceof RlaunchRuntime)) {
+    throw new Error('/mount requires runtime.backend = "rlaunch".')
+  }
+  await next.start()
+  return next.name ?? t('sandbox.workerNone')
 }
 
 function buildBuiltinCommands(): ReplCommand[] {
@@ -429,6 +450,17 @@ function buildBuiltinCommands(): ReplCommand[] {
     visibleTo: 'admin',
     async handler(args, ctx) {
       ctx.output.write(await runFeishuWorkspaceCommand(args))
+    },
+  },
+  {
+    name: '/mount',
+    usage: '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
+    description: 'Manage per-user dynamic rlaunch mounts',
+    channelOnly: true,
+    async handler(args, ctx) {
+      ctx.output.write(await runMountCommand(args, ctx, {
+        restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
+      }))
     },
   },
   {

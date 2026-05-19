@@ -40,6 +40,15 @@ export function identityPermissionsPath(canonicalUser: string): string {
   )
 }
 
+export function rlaunchMountsPath(canonicalUser: string): string {
+  return path.join(
+    identityRoot(),
+    'per-user',
+    sanitizePathSegment(canonicalUser),
+    'rlaunch-mounts.json',
+  )
+}
+
 export function workspaceRoot(): string {
   const fileConfig = loadConfigFile()
   // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new

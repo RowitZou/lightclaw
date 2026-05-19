@@ -23,6 +23,10 @@ import { dockerCmdRaw } from './docker.js'
 import type { ImageReadinessTracker } from './image-readiness.js'
 import { runProcess } from './process.js'
 import { deleteWorkerRecord, readWorkerState } from './rlaunch-state.js'
+import {
+  resolveUserRlaunchRuntimeMounts,
+  rlaunchMountFingerprint,
+} from './rlaunch-mounts.js'
 import type { Runtime } from './types.js'
 import { WorkerReadinessTracker } from './worker-readiness.js'
 
@@ -416,6 +420,14 @@ export function buildRlaunchRuntimeConfig(
   const rlaunch = config.runtime.rlaunch
   const network = config.runtime.network
   const gpfs = workspaceToGpfsMount(userId, rlaunch)
+  const extraMounts = resolveUserRlaunchRuntimeMounts(userId, rlaunch)
+  const mountHash = rlaunchMountFingerprint(extraMounts)
+  const rlaunchDeploymentHash = createHash('sha256')
+    .update(deploymentHash)
+    .update('\0')
+    .update(mountHash)
+    .digest('hex')
+    .slice(0, 8)
   // rlaunch worker is on a different cluster node, so it cannot reach the
   // bridge over loopback — point at the host's first non-internal IPv4.
   const env = network.mode === 'host'
@@ -423,7 +435,7 @@ export function buildRlaunchRuntimeConfig(
     : rlaunch.env
   return {
     canonicalUser: userId,
-    deploymentHash,
+    deploymentHash: rlaunchDeploymentHash,
     image: rlaunch.image,
     chargedGroup: rlaunch.chargedGroup,
     namespace: rlaunch.namespace,
@@ -439,6 +451,7 @@ export function buildRlaunchRuntimeConfig(
     workspaceHostPath: gpfs.hostPath || workspaceHostPath,
     workspaceGpfsMount: gpfs.mount,
     workspaceContainerPath: '/workspace',
+    extraMounts,
     env,
     daemonUid: process.getuid?.() ?? 0,
     daemonGid: process.getgid?.() ?? 0,

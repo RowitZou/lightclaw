@@ -42,6 +42,12 @@ export type RlaunchRuntimeConfig = {
   workspaceHostPath: string
   workspaceGpfsMount: string
   workspaceContainerPath: string
+  extraMounts?: readonly {
+    hostPath: string
+    workerPath: string
+    gpfsMount: string
+    mode: 'rw' | 'ro'
+  }[]
   /** Env injected at worker creation via `rlaunch -e KEY=VALUE`. */
   env: Readonly<Record<string, string>>
   /**
@@ -155,7 +161,22 @@ export class RlaunchRuntime implements Runtime {
     this.tracker = tracker
     this.canonicalUser = config.canonicalUser
     this.workspaceRoot = config.workspaceContainerPath
-    this.mountTable = [[path.resolve(config.workspaceHostPath), config.workspaceContainerPath]]
+    const mounts = [
+      {
+        host: config.workspaceHostPath,
+        worker: config.workspaceContainerPath,
+        mode: 'rw' as const,
+      },
+      ...(config.extraMounts ?? []).map(mount => ({
+        host: mount.hostPath,
+        worker: mount.workerPath,
+        mode: mount.mode,
+      })),
+    ]
+    this.mountTable = mounts.map(mount => [
+      path.resolve(mount.host),
+      path.posix.normalize(mount.worker),
+    ] as [string, string])
     this.control = {
       kind: 'brainctl-exec',
       stdoutByteReliability: 'unreliable-large',
@@ -165,11 +186,7 @@ export class RlaunchRuntime implements Runtime {
       isRunning: () => this.isRunning(),
       isAvailable: () => this.isAvailable(),
     }
-    this.paths = new MountTablePathPolicy([{
-      host: config.workspaceHostPath,
-      worker: config.workspaceContainerPath,
-      mode: 'rw',
-    }])
+    this.paths = new MountTablePathPolicy(mounts)
     const sharedClusterFsData = new SharedClusterFsData(this.paths, () => this.workerName)
     const guardedSharedClusterFsData: DataPlane = {
       kind: sharedClusterFsData.kind,
@@ -563,6 +580,9 @@ export class RlaunchRuntime implements Runtime {
       // caller fall back to writeFile()". A flaky host write should not be
       // worse than the slow-but-correct path it's meant to optimize.
       if (this.hostMountFastWriteDisabled) {
+        return null
+      }
+      if (!this.paths.isAllowed(pathname, 'write')) {
         return null
       }
       const hostPath = this.toHostPath(pathname)
@@ -1152,8 +1172,10 @@ export function buildLaunchArgs(
     `--image-pull-policy=${cfg.imagePullPolicy}`,
     `--max-wait-duration=${cfg.maxWaitDuration}`,
     `--worker-garbage-collection-time=${formatGcDuration(cfg.workerGcTimeHours)}`,
-    `--mount=${cfg.workspaceGpfsMount}`,
   ]
+  for (const mount of [cfg.workspaceGpfsMount, ...(cfg.extraMounts ?? []).map(mount => mount.gpfsMount)]) {
+    args.push(`--mount=${mount}`)
+  }
   for (const tag of cfg.positiveTags) {
     args.push(`--positive-tags=${tag}`)
   }
