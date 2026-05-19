@@ -29,7 +29,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
 
 const EXPECTED = {
   Dispatch: '7b484d61374afa49cd53e26d41a27b9c387479fadebebe467e19eab2c3312b10',
-  ListDispatches: 'da49c1dd13f59696253688581ff42eed5469adbf9cf6d82b18f6a8eb0e9bba58',
+  ListDispatches: '88c6d590ebce67a09022cb6b142bbef0a82da23557b31832584a83dd7d71030a',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',

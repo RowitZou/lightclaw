@@ -379,7 +379,6 @@ export type DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: number
   startupCatchupIntervalMs: number
   fireRetryMaxAttempts: number
-  recurringAutoDisableThreshold: number
 }
 
 export type DispatchConfig = {
@@ -416,7 +415,6 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: 3,
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
-  recurringAutoDisableThreshold: 3,
 }
 
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
@@ -1717,7 +1715,6 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
   const maxConcurrentRaw = Number(schedulerSource.maxConcurrentRunsPerUser)
   const catchupRaw = Number(schedulerSource.startupCatchupIntervalMs)
   const retryRaw = Number(schedulerSource.fireRetryMaxAttempts)
-  const disableRaw = Number(schedulerSource.recurringAutoDisableThreshold)
   const scheduler: DispatchSchedulerConfig = {
     maxConcurrentRunsPerUser: Math.max(
       1,
@@ -1736,12 +1733,6 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
       Math.floor(Number.isFinite(retryRaw)
         ? retryRaw
         : DEFAULT_DISPATCH_SCHEDULER.fireRetryMaxAttempts),
-    ),
-    recurringAutoDisableThreshold: Math.max(
-      1,
-      Math.floor(Number.isFinite(disableRaw)
-        ? disableRaw
-        : DEFAULT_DISPATCH_SCHEDULER.recurringAutoDisableThreshold),
     ),
   }
 

@@ -543,7 +543,6 @@ describe('config: endpoints + models registry', () => {
       maxConcurrentRunsPerUser: 3,
       startupCatchupIntervalMs: 60_000,
       fireRetryMaxAttempts: 3,
-      recurringAutoDisableThreshold: 3,
     })
     assert.deepEqual(cfg.dispatch, {
       maxChainDepth: 4,
@@ -553,7 +552,6 @@ describe('config: endpoints + models registry', () => {
         maxConcurrentRunsPerUser: 3,
         startupCatchupIntervalMs: 60_000,
         fireRetryMaxAttempts: 3,
-        recurringAutoDisableThreshold: 3,
       },
     })
   })
@@ -627,7 +625,6 @@ describe('config: endpoints + models registry', () => {
         maxConcurrentRunsPerUser: 2,
         startupCatchupIntervalMs: 5000,
         fireRetryMaxAttempts: 5,
-        recurringAutoDisableThreshold: 4,
       },
     })
     const cfg = getConfig()
@@ -635,7 +632,6 @@ describe('config: endpoints + models registry', () => {
       maxConcurrentRunsPerUser: 2,
       startupCatchupIntervalMs: 5000,
       fireRetryMaxAttempts: 5,
-      recurringAutoDisableThreshold: 4,
     })
   })
 
@@ -660,7 +656,6 @@ describe('config: endpoints + models registry', () => {
         maxConcurrentRunsPerUser: 3,
         startupCatchupIntervalMs: 60_000,
         fireRetryMaxAttempts: 3,
-        recurringAutoDisableThreshold: 3,
       },
     })
   })

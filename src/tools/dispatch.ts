@@ -121,7 +121,7 @@ const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (sch
 
 Use to monitor what's running before deciding to dispatch new work that might overlap, before CancelDispatch / UpdateDispatch when you know what to target, or when answering a user question that requires reasoning over current delegated state.
 
-Returns each dispatch's id, label, role, schedule shape, next run time, current enabled state, and recent fire history (if \`include_history: true\`). The history lets you trace "did this fire? when? with what outcome?" for debugging dispatched work.`
+Returns each dispatch's id, label, role, schedule shape, next run time, current enabled state, and (if \`include_history: true\`) the last fire timestamp. Past fire outcomes are not in this output — each fire's result was already delivered to you via wake at the time it completed.`
 
 const CANCEL_DISPATCH_DESCRIPTION = `Cancel a scheduled background dispatch by id. An already in-flight fire is allowed to finish; only future runs are stopped.
 

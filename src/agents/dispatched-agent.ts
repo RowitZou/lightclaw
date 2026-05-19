@@ -143,7 +143,14 @@ export async function runDispatchedAgent(
   // or when there's no Feishu sender registered (terminal-only sessions).
   // loadChannelConfig() is called once per worker construction (not per
   // turn), which is acceptable given dispatch frequency.
-  const activityForwarder = params.chainState
+  //
+  // bg dispatch is fire-and-forget by design: caller already moved on, and
+  // streaming intermediate turns back to the originating chat re-couples
+  // the bg task to user attention (especially bad for scheduled fires at
+  // unattended hours). bg results come back via the wake / interjection
+  // path on completion; intermediate visibility belongs to blocking
+  // dispatch only.
+  const activityForwarder = params.chainState && params.mode !== 'bg'
     ? buildWorkerActivityForwarder({
         chainState: params.chainState,
         enabled: loadChannelConfig().feishu.streamWorkerActivity,
