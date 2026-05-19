@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import { setActiveSkillAllowedTools } from '../state.js'
 import { evaluatePermission } from './policy.js'
 import type { PermissionMode, PermissionRule, RiskLevel } from './types.js'
 
@@ -201,6 +202,70 @@ describe('evaluatePermission — chained Bash command segment matching', () => {
       riskLevel: 'execute',
       mode: 'default',
       rules: [allowGrep],
+    })
+    assert.equal(r.behavior, 'allow')
+  })
+})
+
+describe('evaluatePermission — active skill boundary', () => {
+  async function evaluateUnderSkill(input: {
+    toolName: string
+    allowedTools: string[]
+  }): Promise<ReturnType<typeof evaluatePermission>> {
+    const ctx = createSessionContext({
+      cwd: process.cwd(),
+      model: 'test-model',
+      sessionsDir: '/tmp/lightclaw-skill-boundary-test-sessions',
+      memoryDir: '/tmp/lightclaw-skill-boundary-test-memory',
+      sessionId: 'skill-boundary-test',
+    })
+    return runWithSessionContext(ctx, async () => {
+      setActiveSkillAllowedTools(input.allowedTools)
+      return evaluatePermission({
+        toolName: input.toolName,
+        input: {},
+        riskLevel: 'safe',
+        mode: 'default',
+        rules: [],
+      })
+    })
+  }
+
+  it('denies a tool outside the active skill allowlist', async () => {
+    const r = await evaluateUnderSkill({
+      toolName: 'WebFetch',
+      allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
+    })
+    assert.equal(r.behavior, 'deny')
+    assert.match(
+      'reason' in r ? r.reason : '',
+      /active skill allows only .*; WebFetch is outside that boundary/,
+    )
+  })
+
+  it('allows a tool listed in the active skill allowlist', async () => {
+    const r = await evaluateUnderSkill({
+      toolName: 'Read',
+      allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
+    })
+    assert.equal(r.behavior, 'allow')
+  })
+
+  it('lets ToolSearch through even when the skill allowlist does not name it', async () => {
+    // Skills that include a deferred tool (e.g. MemoryWrite, post-Phase-31)
+    // need ToolSearch to load its schema. Without this exemption the dogfood
+    // remember skill ate the first turn on 2026-05-19.
+    const r = await evaluateUnderSkill({
+      toolName: 'ToolSearch',
+      allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
+    })
+    assert.equal(r.behavior, 'allow')
+  })
+
+  it('lets UseSkill through even when the skill allowlist does not name it', async () => {
+    const r = await evaluateUnderSkill({
+      toolName: 'UseSkill',
+      allowedTools: ['Read'],
     })
     assert.equal(r.behavior, 'allow')
   })

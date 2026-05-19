@@ -126,7 +126,14 @@ export function evaluatePermission(args: {
 }
 
 function evaluateSkillBoundary(toolName: string): PermissionDecision | null {
-  if (toolName === 'UseSkill') {
+  // UseSkill / ToolSearch are meta-tools, not capability tools. UseSkill lets
+  // the agent switch to another skill mid-task; ToolSearch loads the schema
+  // for any deferred tool already named in the skill's allowlist (Phase 31
+  // moved Memory*/Web*/etc into deferred, so a skill listing `MemoryWrite`
+  // implicitly depends on ToolSearch to fetch its schema). Forcing every
+  // skill to enumerate the meta layer in `allowed_tools` would leak the
+  // deferred-loading mechanism into skill authors' surface.
+  if (toolName === 'UseSkill' || toolName === 'ToolSearch') {
     return null
   }
 
