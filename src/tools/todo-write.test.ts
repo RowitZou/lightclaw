@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
-import test, { afterEach } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import test, { afterEach, beforeEach } from 'node:test'
 
 import { todoWriteTool } from './todo-write.js'
 import {
   createSessionContext,
   runWithSessionContext,
 } from '../session-context.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import { setTodos } from '../state.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
@@ -14,6 +18,28 @@ import type { Role } from '../agents/types.js'
 
 const captured: AgentSignal[] = []
 let unsubscribe: (() => void) | null = null
+let tmpHome: string
+
+// Session storage (saveMeta / appendMessage / persistTodos) resolves the
+// target directory through `resolveSessionsDir()` in src/config.ts, which
+// reads `LIGHTCLAW_SESSIONS_DIR` env var → config file → `<home>/sessions`.
+// SessionContext.sessionsDir is NOT consulted there, so without overriding
+// the home root, `persistTodos` writes meta.json to the operator's real
+// `<home>/sessions/main-session/` and `<home>/sessions/dispatched-abc/`.
+// Dogfood on 2026-05-19 caught two such leak directories; both lock-stepped
+// to this test's sessionIds (`main-session`, `dispatched-abc`).
+beforeEach(() => {
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-todo-test-'))
+  setLightclawHomeOverride(tmpHome)
+})
+
+afterEach(() => {
+  captured.length = 0
+  unsubscribe?.()
+  unsubscribe = null
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
+})
 
 function captureProgress(): void {
   if (unsubscribe) return
@@ -23,12 +49,6 @@ function captureProgress(): void {
     }
   })
 }
-
-afterEach(() => {
-  captured.length = 0
-  unsubscribe?.()
-  unsubscribe = null
-})
 
 test('TodoWrite emits progress tagged with main when triggered by main', async () => {
   captureProgress()
