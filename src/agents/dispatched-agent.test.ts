@@ -388,6 +388,12 @@ test("runDispatchedAgent treats resumeFrom='last' with no prior snapshot as a fr
         }
       },
     }))
+    // Wait for the snapshot persist to finish BEFORE clearing the home
+    // override, otherwise the dispatch-history write leaks into the real
+    // ~/.lightclaw dir. runDispatchedAgent fires persist as a background
+    // .then() after the main result resolves; tests that don't await this
+    // promise observe their snapshots land outside the temp dir.
+    await result.forkTranscriptPersisted
     assert.equal(result.finalText, 'fresh')
     assert.equal(result.resumedFromDispatchId, undefined)
     // Only the new dispatch prompt — no inherited prefix injected.
