@@ -44,6 +44,37 @@ function extractCoalesceKey(memoryDir: string, roleAgentType: string): string {
   return `${memoryDir}|${roleAgentType}`
 }
 
+/** Listener bus for "an extract task just cleared its in-progress key for
+ *  memoryDir X". Currently dream (memoryCurator) subscribes so it can retry
+ *  any deferred dream attempts (per-user) at the first quiet window. Listeners
+ *  must be fast / non-throwing — they run synchronously inside the extract
+ *  pipeline's `.finally`. */
+type ExtractSettledListener = (memoryDir: string) => void
+const extractSettledListeners: Set<ExtractSettledListener> = new Set()
+
+export function onExtractSettled(listener: ExtractSettledListener): () => void {
+  extractSettledListeners.add(listener)
+  return () => extractSettledListeners.delete(listener)
+}
+
+function emitExtractSettled(memoryDir: string): void {
+  for (const listener of extractSettledListeners) {
+    try {
+      listener(memoryDir)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[memory] extract-settled listener failed: ${msg}`)
+    }
+  }
+}
+
+/** Test-only: emit the extract-settled event without actually running an
+ *  extract pipeline. Used by dream tests to verify the pending → retry
+ *  path without setting up a full ExtractCtx. */
+export function _triggerExtractSettledForTest(memoryDir: string): void {
+  emitExtractSettled(memoryDir)
+}
+
 function keyPrefixForMemoryDir(memoryDir: string): string {
   return `${memoryDir}|`
 }
@@ -316,6 +347,11 @@ export async function executeExtraction(ctx: ExtractCtx): Promise<ExtractResult>
     })
     .finally(() => {
       state.inProgressByRoleDir.delete(key)
+      // Notify subscribers (currently dream/memoryCurator) so any pending
+      // dream attempt for this memoryDir can retry now that one extract has
+      // settled. Other roles' extracts in flight are checked by the
+      // subscriber via isExtractionInProgressFor().
+      emitExtractSettled(ctx.memoryDir)
     })
 
   state.inFlight.add(task)

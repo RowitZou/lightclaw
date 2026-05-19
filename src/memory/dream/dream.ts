@@ -2,7 +2,10 @@ import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
 import { createAutoDreamCanUseTool } from '../auto-mem-can-use-tool.js'
 import { ensureMemoryDir } from '../auto-memory.js'
-import { isExtractionInProgressFor } from '../extract.js'
+import {
+  isExtractionInProgressFor,
+  onExtractSettled,
+} from '../extract.js'
 import {
   markConsolidationSucceeded,
   readLastConsolidatedAt,
@@ -12,17 +15,75 @@ import {
 import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
 import { gatherDreamSessions } from './sessions.js'
 
+type AutoDreamParams = {
+  userId: string
+  memoryDir: string
+  config: LightClawConfig
+  currentSessionId: string
+}
+
 type DreamState = {
   inProgressByUser: Set<string>
   inFlight: Set<Promise<void>>
   lastSessionScanAtByUser: Map<string, number>
+  /** Users whose dream attempt was deferred because extract was still in
+   *  flight when the hook tried to fire. The next `onExtractSettled`
+   *  callback for that user's memoryDir re-fires `executeAutoDream` so dream
+   *  catches the first quiet window without waiting for another turn-end
+   *  hook to retrigger. Dedup is automatic (Map keyed by userId): N pending
+   *  requests for the same user collapse to one (dream is per-canonical-user
+   *  idempotent within the 24h gate window, so multiple pending = identical
+   *  intent). Latest params win so retry uses the most recent
+   *  currentSessionId.
+   *  Cleared in `executeAutoDream` the moment the outer gate accepts — even
+   *  if inner gates (minHours / minSessions / lock) subsequently bail, we
+   *  don't loop: the next turn-end hook will re-stash if work remains. */
+  pendingByUser: Map<string, AutoDreamParams>
 }
 
 const state: DreamState = {
   inProgressByUser: new Set(),
   inFlight: new Set(),
   lastSessionScanAtByUser: new Map(),
+  pendingByUser: new Map(),
 }
+
+// Register at module load: every time an extract task clears its
+// in-progress key, check if any pending dream's user matches the settled
+// memoryDir AND that user has no other extract still in flight. If so,
+// retry. This is the mechanism that breaks the "extract is always running →
+// dream's outer gate always bails" deadlock observed in 2026-05-18 dogfood
+// (0 memoryCurator runs across 92 memoryExtractor runs).
+//
+// queueMicrotask defers the registration until after all module bodies
+// finish executing. The dream → run-subagent → dispatched-agent → query →
+// hook-registry → hooks/auto-memory → dream import chain forms a cycle
+// that leaves extract.ts mid-initialization (hoisted function visible,
+// `extractSettledListeners` const still in TDZ) when dream.ts's module body
+// first runs. Calling `onExtractSettled` synchronously here would throw
+// ReferenceError. The microtask runs after the cycle unwinds and all consts
+// are initialized.
+queueMicrotask(() => {
+  onExtractSettled(settledMemoryDir => {
+    if (state.pendingByUser.size === 0) {
+      return
+    }
+    // Snapshot to avoid mutation-during-iteration when retries re-stash.
+    const pending = [...state.pendingByUser.entries()]
+    for (const [userId, params] of pending) {
+      if (params.memoryDir !== settledMemoryDir) {
+        continue
+      }
+      if (state.inProgressByUser.has(userId)) {
+        continue
+      }
+      if (isExtractionInProgressFor(params.memoryDir)) {
+        continue
+      }
+      void executeAutoDream(params).catch(() => {})
+    }
+  })
+})
 
 // Test seam: dream.test.ts replaces the subagent runner with a fake so
 // gate-pass / rollback / success paths are exercised without a real LLM call.
@@ -33,12 +94,7 @@ export function setRunSubagentForTest(impl: RunSubagentFn | null): void {
   runSubagentImpl = impl ?? runSubagent
 }
 
-export async function executeAutoDream(params: {
-  userId: string
-  memoryDir: string
-  config: LightClawConfig
-  currentSessionId: string
-}): Promise<void> {
+export async function executeAutoDream(params: AutoDreamParams): Promise<void> {
   if (!params.config.memory.extractor.enabled || !params.config.memory.curator.enabled) {
     return
   }
@@ -47,8 +103,17 @@ export async function executeAutoDream(params: {
     state.inProgressByUser.has(params.userId) ||
     isExtractionInProgressFor(params.memoryDir)
   ) {
+    // Stash so the next onExtractSettled callback for this memoryDir can
+    // retry without waiting for another turn-end hook. Dedup is automatic;
+    // see DreamState.pendingByUser comment.
+    state.pendingByUser.set(params.userId, params)
     return
   }
+  // Accepted past the outer gate. Clear the pending flag now (not on
+  // success): if inner gates bail (minHours / minSessions / lock), the next
+  // turn-end hook will re-stash if needed, and we avoid a tight retry loop
+  // where every settle event re-fires a dream that minHours instantly bails.
+  state.pendingByUser.delete(params.userId)
 
   const task = executeAutoDreamInner(params)
   state.inFlight.add(task)
@@ -161,6 +226,11 @@ export function resetAutoDreamStateForTest(): void {
   state.inProgressByUser.clear()
   state.inFlight.clear()
   state.lastSessionScanAtByUser.clear()
+  state.pendingByUser.clear()
+}
+
+export function getAutoDreamPendingCountForTest(): number {
+  return state.pendingByUser.size
 }
 
 export function getAutoDreamInFlightCountForTest(): number {

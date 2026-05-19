@@ -22,13 +22,17 @@ import { memoryDeleteTool } from '../../tools/memory-delete.js'
 import { memoryMoveTool } from '../../tools/memory-move.js'
 import { memoryWriteAtTool } from '../../tools/memory-write-at.js'
 import { writeMemoryFile } from '../auto-memory.js'
-import { setExtractionInProgressForTest } from '../extract.js'
+import {
+  _triggerExtractSettledForTest,
+  setExtractionInProgressForTest,
+} from '../extract.js'
 import { consolidationLockPath, tryAcquireConsolidationLock } from './lock.js'
 import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
 import {
   drainPendingDream,
   executeAutoDream,
   getAutoDreamInFlightCountForTest,
+  getAutoDreamPendingCountForTest,
   resetAutoDreamStateForTest,
   setRunSubagentForTest,
 } from './dream.js'
@@ -253,9 +257,80 @@ describe('autoDream runner', () => {
 
       assert.equal(forkInvoked, false)
       assert.equal(existsSync(consolidationLockPath(tmpMemoryDir)), false)
+      // Bail stashes a pending entry for the retry hook to pick up when
+      // extract settles.
+      assert.equal(getAutoDreamPendingCountForTest(), 1)
     } finally {
       setExtractionInProgressForTest(tmpMemoryDir, false)
     }
+  })
+
+  it('retries pending dream when extract settles for the same memoryDir', async () => {
+    setExtractionInProgressForTest(tmpMemoryDir, true)
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    writeSession('s3', 'alice', Date.now() + 2)
+
+    let forkInvocations = 0
+    setRunSubagentForTest(async () => {
+      forkInvocations += 1
+      return fakeForkResult()
+    })
+
+    // First attempt bails on outer gate (extract in-progress), stashes pending.
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+    assert.equal(forkInvocations, 0)
+    assert.equal(getAutoDreamPendingCountForTest(), 1)
+
+    // Simulate extract clearing its key and notifying subscribers. Drop the
+    // in-progress flag first so the dream retry's outer gate passes; then
+    // emit the settle event so the retry actually fires.
+    setExtractionInProgressForTest(tmpMemoryDir, false)
+    _triggerExtractSettledForTest(tmpMemoryDir)
+
+    // Retry is fire-and-forget; let the in-flight dream resolve before asserting.
+    await drainPendingDream(5_000)
+    assert.equal(forkInvocations, 1)
+    assert.equal(getAutoDreamPendingCountForTest(), 0)
+    assert.equal(getAutoDreamInFlightCountForTest(), 0)
+  })
+
+  it('extract-settled retry skips when another role is still extracting', async () => {
+    setExtractionInProgressForTest(tmpMemoryDir, true)
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    writeSession('s3', 'alice', Date.now() + 2)
+
+    let forkInvocations = 0
+    setRunSubagentForTest(async () => {
+      forkInvocations += 1
+      return fakeForkResult()
+    })
+
+    // Stash pending.
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+    assert.equal(getAutoDreamPendingCountForTest(), 1)
+
+    // Emit settle while in-progress flag is STILL set (simulates one of N
+    // concurrent extracts finishing while others continue). Retry should
+    // bail at outer gate again and keep the pending entry.
+    _triggerExtractSettledForTest(tmpMemoryDir)
+    await drainPendingDream(1_000)
+    assert.equal(forkInvocations, 0)
+    assert.equal(getAutoDreamPendingCountForTest(), 1)
+
+    // Cleanup.
+    setExtractionInProgressForTest(tmpMemoryDir, false)
   })
 
   it('does not skip when an extraction for a different memoryDir is in progress', async () => {
