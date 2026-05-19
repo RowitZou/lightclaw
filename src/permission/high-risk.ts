@@ -17,24 +17,32 @@
 //
 // §1.4 (2026-05-14): a head-only scan against a small fixed set missed a
 // large family of arbitrary-code-execution / privilege-escalation vectors —
-// ephemeral package runners (`npx`, `pnpm dlx` — fetch-and-run remote code,
-// the `curl … | sh` family), `source <(curl …)`, command wrappers that hide
-// the real head in their arguments (`xargs sh -c`, `timeout 10 bash -c`,
-// `find -exec`), path / quote evasion (`/bin/rm`, `\rm`, `'rm'`) and command
-// substitution used as the command itself (`$(curl …)`). The classifier now
-// normalizes heads, unwraps wrapper commands, and treats package runners as
-// high-risk. See `isHighRiskBashSegment` below.
+// command wrappers that hide the real head in their arguments (`xargs sh -c`,
+// `timeout 10 bash -c`, `find -exec`), path / quote evasion (`/bin/rm`,
+// `\rm`, `'rm'`) and command substitution used as the command itself
+// (`$(curl …)`). The classifier normalizes heads, unwraps wrapper commands,
+// and recurses into command substitution bodies. See `isHighRiskBashSegment`
+// below.
 //
 // Deliberately NOT high-risk: language interpreters (`python`, `node`,
-// `perl`, `ruby`, …). They are general-purpose, not inherently destructive,
-// and an everyday command for this workload — a hidden "always allow" button
-// on every `python …` invocation is pure friction. The "soundness hole"
-// argument (a broad `Bash(python:*)` rule also covers `python -c <evil>`)
-// does not actually buy security: anyone who can run `python` can run `sh`,
-// and `sh` is already high-risk — flagging the interpreter only relocates
-// the friction, it does not close the path. Shells (`bash`/`sh`/…) stay
-// high-risk because `curl … | sh` is the specific install-from-internet
-// attack the original list was built around.
+// `perl`, `ruby`, …) AND ephemeral package runners (`npx`, `pnpm dlx`, …).
+// Both classes are general-purpose, routine on this workload, and the
+// "always allow" friction does not buy real security: anyone who can run
+// `python` / `npx` can write a script and `bash` it, and `bash` is already
+// high-risk. Package runners were re-classified down on 2026-05-19 after the
+// original §1.4 rationale was found to be inconsistent with the interpreter
+// carve-out (the "fetch-and-run remote code" argument applies equally to
+// `python -c "$(curl …)"`). Shells (`bash`/`sh`/…) stay high-risk because
+// `curl … | sh` is the specific install-from-internet attack the original
+// list was built around.
+//
+// `source` / `.` was also dropped on 2026-05-19. Daily flows like `source
+// venv/bin/activate` and `. env.sh` hit it constantly; the sourced script
+// path is itself controlled by upstream tool gates (`Write` / `WebFetch`).
+// `source <(curl …)` becomes equivalent to `python <(curl …)` — both rely
+// on the same "interpreter is not high-risk" carve-out and are accepted as
+// part of the same tradeoff; the `bash <(curl …)` form still trips via the
+// `bash` head.
 
 import { splitBashCommand, tokenizeBashSegment } from './bash-parse.js'
 import { parseRule } from './rules.js'
@@ -47,11 +55,12 @@ import type { PermissionAskInput, PermissionRuleValue } from './types.js'
 //   sudo / su / doas / pkexec / runuser — privilege escalation
 //   bash / sh / zsh / fish / dash / ksh — runs an arbitrary script (`curl … | sh`)
 //   eval                               — arbitrary code execution
-//   source / .                         — executes a script in the *current* shell
 //
 // chmod / chown / kill etc. are deliberately NOT here — they're too common in
 // benign workflows (`chmod +x deploy.sh`) and a permanent rule for them is a
-// normal user expectation.
+// normal user expectation. Same applies to `source` / `.` (`source
+// venv/bin/activate`, `. env.sh` are everyday flows) — see the header
+// comment above for the full rationale.
 const HIGH_RISK_BASH_HEADS = new Set<string>([
   'rm',
   'dd',
@@ -68,26 +77,6 @@ const HIGH_RISK_BASH_HEADS = new Set<string>([
   'dash',
   'ksh',
   'eval',
-  'source',
-  '.',
-])
-
-// Ephemeral package runners — download and execute arbitrary remote packages.
-// From a static command string they are indistinguishable from running a
-// locally-installed binary (`npx tsc`), so they are treated as high-risk: a
-// permanent `Bash(npx:*)` rule is "allow the agent to fetch-and-run anything".
-// Single-token forms have no benign subcommand (`npx` / `bunx` / `uvx` only
-// run things).
-const PKG_RUNNER_HEADS_1 = new Set<string>(['npx', 'bunx', 'uvx'])
-// Two-token forms — must be checked before the plain head so `npm exec` /
-// `pnpm dlx` are not mistaken for benign `npm` / `pnpm` subcommands.
-const PKG_RUNNER_HEADS_2 = new Set<string>([
-  'npm exec',
-  'pnpm dlx',
-  'yarn dlx',
-  'bun x',
-  'uv run',
-  'pipx run',
 ])
 
 // Command wrappers — they run another command passed in their *arguments*, so
@@ -177,7 +166,6 @@ export function isHighRiskAsk(ask: PermissionAskInput): boolean {
   if (
     ask.toolName === 'FeishuDeleteConfirm' ||
     ask.toolName === 'FeishuReplaceDocConfirm' ||
-    ask.toolName === 'FeishuMoveConfirm' ||
     ask.toolName === 'FeishuSheetDestructiveConfirm'
   ) {
     return true
@@ -242,29 +230,16 @@ function normalizeBashHead(token: string): string {
 
 /**
  * True when a single (normalized) token names a head that is high-risk on its
- * own — destructive / privilege-escalating heads, single-token package
- * runners, or a command substitution used as the command itself.
+ * own — destructive / privilege-escalating heads, or a command substitution
+ * used as the command itself.
  */
 function isHighRiskHeadToken(token: string): boolean {
   const h = normalizeBashHead(token)
   if (!h) return false
   if (HIGH_RISK_BASH_HEADS.has(h)) return true
   if (h.startsWith('mkfs.')) return true
-  if (PKG_RUNNER_HEADS_1.has(h)) return true
   // command substitution used as the command itself: `$(curl url)` / backtick
   if (h.startsWith('$(') || h.startsWith('`')) return true
-  return false
-}
-
-/** True when the segment's leading token(s) form an ephemeral package runner. */
-function isPkgRunnerHead(tokens: string[]): boolean {
-  if (tokens.length === 0) return false
-  const t0 = normalizeBashHead(tokens[0]!)
-  if (PKG_RUNNER_HEADS_1.has(t0)) return true
-  if (tokens.length >= 2) {
-    const t1 = tokens[1]!.toLowerCase()
-    if (PKG_RUNNER_HEADS_2.has(`${t0} ${t1}`)) return true
-  }
   return false
 }
 
@@ -284,8 +259,7 @@ const SUBSTITUTION_BODY = /\$\(([^()]*)\)|`([^`]*)`/g
 
 /**
  * True when a single chain-split segment is high-risk. Handles, in order:
- *   - ephemeral package runners (`npx`, `pnpm dlx`, …)
- *   - destructive / interpreter / priv-esc / source heads (with normalization)
+ *   - destructive / priv-esc / shell heads (with normalization)
  *   - command wrappers (`env`, `xargs`, `find -exec`, `timeout`, `nohup`, …)
  *     whose real command head lives in their argument tokens
  *   - command substitution bodies (`echo $(rm -rf x)`)
@@ -294,12 +268,8 @@ function isHighRiskBashSegment(segment: string): boolean {
   const tokens = tokenizeBashSegment(segment)
   if (tokens.length === 0) return false
 
-  // 2-token package runners must be checked before the plain head so
-  // `npm exec` / `pnpm dlx` aren't read as benign `npm` / `pnpm`.
-  if (isPkgRunnerHead(tokens)) return true
-
-  // Destructive / priv-esc / shell / interpreter / single-token-runner head,
-  // with path / quote / backslash normalization.
+  // Destructive / priv-esc / shell head, with path / quote / backslash
+  // normalization.
   if (isHighRiskHeadToken(tokens[0]!)) return true
 
   // Wrapper commands carry the real command in their arguments.
@@ -335,7 +305,6 @@ function isHighRiskWrapperArgs(head: string, tokens: string[]): boolean {
       if (/^-(exec|execdir|ok|okdir)$/.test(tokens[i]!)) {
         const rest = tokens.slice(i + 1)
         if (isHighRiskHeadToken(rest[0]!)) return true
-        if (isPkgRunnerHead(rest)) return true
       }
     }
     return false
@@ -344,21 +313,19 @@ function isHighRiskWrapperArgs(head: string, tokens: string[]): boolean {
     const tok = tokens[i]!
     if (isTrivialArgToken(tok)) continue
     if (isHighRiskHeadToken(tok)) return true
-    if (isPkgRunnerHead(tokens.slice(i))) return true
   }
   return false
 }
 
 function isHighRiskBashContent(content: string | undefined): boolean {
   if (!content) return false
-  // content shape: "rm:*" / "git push:*" / "pnpm dlx:*" — head precedes ":".
+  // content shape: "rm:*" / "git push:*" — head precedes ":".
   const colon = content.indexOf(':')
   const head = (colon >= 0 ? content.slice(0, colon) : content).trim()
   if (!head) return false
-  // The rule head may be one or two tokens ("rm", "git push", "pnpm dlx").
+  // The rule head is one or two tokens ("rm", "git push").
   const tokens = head.split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return false
-  if (isPkgRunnerHead(tokens)) return true
   if (isHighRiskHeadToken(tokens[0]!)) return true
   // A persisted `Bash(<wrapper>:*)` rule is itself high-risk: unlike the raw
   // command path (where we can scan the wrapper's args), a broad wrapper rule
