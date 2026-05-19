@@ -10,6 +10,7 @@ import type { LightClawConfig } from '../config.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
+import { loadBackgroundTasks } from '../background-task/store.js'
 import { executeDispatch } from './dispatch.js'
 
 let tmpRoot: string
@@ -157,20 +158,21 @@ test('executeDispatch rejects dispatches beyond max chain depth', async () => {
   assert.match(output.output, /chain-too-deep|depth limit/i)
 })
 
-test('executeDispatch rejects background resumeFrom instead of silently starting fresh', async () => {
+test('executeDispatch stores resumeFrom on background dispatches', async () => {
   const output = await runWithSessionContext(session('main', ['*']), () =>
     executeDispatch({
       role: 'webSearcher',
       prompt: 'Continue the prior research in the background.',
-      schedule: 'now',
+      schedule: { kind: 'after', afterMinutes: 5 },
       mode: 'background',
       resumeFrom: 'last',
     }, toolContext()),
   )
 
-  assert.equal(output.isError, true)
-  assert.match(output.output, /supported only for blocking Dispatch/)
-  assert.match(output.output, /silently start a fresh fork/)
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /Dispatch scheduled:/)
+  const [task] = loadBackgroundTasks('alice')
+  assert.equal(task?.resumeFrom, 'last')
 })
 
 test('executeDispatch rejects background attachments instead of dropping them at fire time', async () => {

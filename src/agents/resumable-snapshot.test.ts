@@ -77,6 +77,48 @@ test('loadLatestDispatchSnapshot returns the newest snapshot by file mtime', asy
   }
 })
 
+test('loadLatestDispatchSnapshot isolates same callee by caller role', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-dispatch-history-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    const mainTranscript = path.join(tempDir, 'main.jsonl')
+    const reviewerTranscript = path.join(tempDir, 'reviewer.jsonl')
+    await writeFile(mainTranscript, '{}\n', 'utf8')
+    await writeFile(reviewerTranscript, '{}\n', 'utf8')
+    await runWithSessionContext(makeContext(tempDir, 'alice'), async () => {
+      await persistDispatchSnapshot(makeSnapshot({
+        dispatchId: 'main-latest',
+        callerAgentType: 'main',
+        calleeAgentType: 'webSearcher',
+        transcriptPath: mainTranscript,
+      }))
+      await persistDispatchSnapshot(makeSnapshot({
+        dispatchId: 'reviewer-latest',
+        callerAgentType: 'reviewer',
+        calleeAgentType: 'webSearcher',
+        transcriptPath: reviewerTranscript,
+      }))
+    })
+
+    const mainLatest = await loadLatestDispatchSnapshot({
+      principal: 'alice',
+      callerAgentType: 'main',
+      calleeAgentType: 'webSearcher',
+    })
+    const reviewerLatest = await loadLatestDispatchSnapshot({
+      principal: 'alice',
+      callerAgentType: 'reviewer',
+      calleeAgentType: 'webSearcher',
+    })
+
+    assert.equal(mainLatest?.dispatchId, 'main-latest')
+    assert.equal(reviewerLatest?.dispatchId, 'reviewer-latest')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('loadDispatchSnapshot treats schema mismatch and missing transcript as not found', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-dispatch-history-'))
   setLightclawHomeOverride(tempDir)

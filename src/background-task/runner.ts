@@ -12,6 +12,7 @@ import { query } from '../query.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { runDispatchedAgent } from '../agents/dispatched-agent.js'
+import type { AgentType } from '../agents/types.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
@@ -146,9 +147,13 @@ export async function runBackgroundTaskFire(input: {
         label: 'background_task',
         signal: input.signal,
         chainState: input.task.chainState,
+        canonicalUser: input.task.ownerCanonicalUser,
+        callerAgentType: getBackgroundTaskCallerAgentType(input.task),
+        resumeFrom: input.task.resumeFrom,
       })
       await rewriteTranscript(sessionId, output.messages)
       await touchMeta(sessionId, output.messages.length)
+      await output.forkTranscriptPersisted
       return output
     }).finally(() => {
       if (input.task.chainState) {
@@ -204,6 +209,14 @@ export function buildBackgroundTaskSessionId(
   const taskId = task.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80)
   const fireId = fireUuid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48)
   return `bg-${task.ownerCanonicalUser}-${taskId}-${fireId}`
+}
+
+export function getBackgroundTaskCallerAgentType(
+  task: BackgroundTaskEntry,
+): AgentType {
+  return task.chainState?.path.at(-2)?.role
+    ?? task.chainState?.path[0]?.role
+    ?? 'main'
 }
 
 // Wrap task.prompt in a fire envelope so the fresh subagent knows it is the

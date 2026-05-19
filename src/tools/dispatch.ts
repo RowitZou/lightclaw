@@ -298,17 +298,6 @@ export async function executeDispatch(
     throw error
   }
 
-  if (input.mode === 'background' && effectiveResumeFrom) {
-    return {
-      output: [
-        'resumeFrom is currently supported only for blocking Dispatch.',
-        'Background dispatch fires through the scheduler path, so accepting resumeFrom here would silently start a fresh fork.',
-        'Use mode="blocking" to resume, or omit resumeFrom for a background dispatch.',
-      ].join('\n'),
-      isError: true,
-    }
-  }
-
   if (input.mode === 'background' && input.attachments && input.attachments.length > 0) {
     return {
       output: [
@@ -425,6 +414,7 @@ export async function executeDispatch(
     ownerCanonicalUser: userId,
     prompt: input.prompt,
     role: input.role,
+    ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
     schedule: normalizedSchedule,
     label: input.label ?? `${input.role} dispatch`,
     notifyOn: 'always' as const,
@@ -451,6 +441,7 @@ export async function executeDispatch(
     durationMs: Date.now() - startedAt,
     finalTextPreview: `scheduled ${entry.id}`,
     chainState: effectiveChildChainState,
+    ...(effectiveResumeFrom ? { resumeFromDispatchId: effectiveResumeFrom } : {}),
   }).catch(() => {})
   return {
     output: [

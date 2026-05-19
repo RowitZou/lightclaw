@@ -189,6 +189,63 @@ test('runDispatchedAgent persists a dispatch-history snapshot after a worker com
   }
 })
 
+test('runDispatchedAgent persists a dispatch-history snapshot in bg mode', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+    })
+
+    const result = await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      mode: 'bg',
+      dispatchPrompt: 'background snapshot should persist',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      callerAgentType: 'main',
+      canonicalUser: 'alice',
+      chainState: makeChainState('dispatch-bg'),
+      label: 'background_task',
+      queryImpl: async params => ({
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'done in bg' }],
+            stopReason: 'end_turn',
+            usage: emptyUsage(),
+          }),
+        ],
+        assistantText: 'done in bg',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: emptyUsage(),
+      }),
+    }))
+    await result.forkTranscriptPersisted
+
+    const snapshot = await loadDispatchSnapshot({
+      principal: 'alice',
+      callerAgentType: 'main',
+      calleeAgentType: 'test-worker',
+      dispatchId: 'dispatch-bg',
+    })
+    assert.equal(snapshot?.dispatchId, 'dispatch-bg')
+    assert.equal(snapshot?.callerAgentType, 'main')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('runDispatchedAgent injects resumeFrom last transcript before the new prompt', async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
   setLightclawHomeOverride(tempDir)
