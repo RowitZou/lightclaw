@@ -116,9 +116,15 @@ export async function runBackgroundTaskFire(input: {
     const result = await runWithSessionContext(ctx, async () => {
       const output = await queryImpl({
         role: {
+          // The wide tool / prompt surface still comes from main; only the
+          // identity fields take the scheduled worker so currentRole-driven
+          // attribution (MemoryWrite L3 routing, per-role extract owner,
+          // audit `role` field) lands under the role the user actually
+          // scheduled. Phase 8 PR5 stored `task.role` precisely for this;
+          // the runner just had to start reading it.
           ...getMainRole(),
-          agentType: 'background_task',
-          name: 'background_task',
+          agentType: input.task.role,
+          name: input.task.role,
           kind: 'worker',
         },
         invocation: {

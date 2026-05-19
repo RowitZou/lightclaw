@@ -284,6 +284,45 @@ describe('runBackgroundTaskFire', () => {
     }
   })
 
+  it('threads task.role through to the query role.agentType (Phase 8 PR5 wiring)', async () => {
+    // Bug fix: bg fire runner used to hardcode role.agentType='background_task'
+    // and lose Phase 8 PR5's stored task.role. That caused every bg-fire
+    // MemoryWrite to land in <memoryDir>/background_task/ instead of the
+    // scheduled worker's L3 (e.g. <memoryDir>/webSearcher/). This test pins
+    // the wiring: the role passed to query() carries task.role as agentType
+    // so currentRole-driven attribution (L3 routing, audit role field,
+    // per-role extract owner) lands under the right worker.
+    let observedAgentType = ''
+    let observedName: string | undefined = undefined
+    let observedKind: string | undefined = undefined
+    setBackgroundTaskQueryForTest(async input => {
+      observedAgentType = input.role.agentType
+      observedName = input.role.name
+      observedKind = input.role.kind
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({
+        id: 'alice-task1',
+        ownerCanonicalUser: 'alice',
+        role: 'webSearcher',
+      }),
+      fireUuid: 'fire-role-pin',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(observedAgentType, 'webSearcher')
+    assert.equal(observedName, 'webSearcher')
+    assert.equal(observedKind, 'worker')
+  })
+
   it('rejects fires for non-admin users when backend is local', async () => {
     setBackgroundTaskQueryForTest(async () => ({
       messages: [],
