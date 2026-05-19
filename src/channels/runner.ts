@@ -35,6 +35,7 @@ import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { getMainRole } from '../agents/registry.js'
+import { filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
@@ -573,7 +574,10 @@ export class ChannelRunner {
           userId,
           isAdmin: await isAdmin(userId),
           getActiveTools: () =>
-            getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools('feishu')),
+            filterToolsByRoleVisibility(
+              getMainRole(),
+              getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools('feishu')),
+            ),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
           channelUserMessageContent: prebuiltUserMessageContent,
@@ -761,7 +765,10 @@ export class ChannelRunner {
                 },
               }),
               messages,
-              tools: getEnabledTools(provider, getAllTools('feishu')),
+              tools: filterToolsByRoleVisibility(
+                getMainRole(),
+                getEnabledTools(provider, getAllTools('feishu')),
+              ),
             })
             break
           } catch (error) {
@@ -1214,7 +1221,10 @@ export class ChannelRunner {
     })
 
     const provider = getMainRoleRoute(config).provider
-    const tools = getEnabledTools(provider, getAllTools('feishu'))
+    const tools = filterToolsByRoleVisibility(
+      getMainRole(),
+      getEnabledTools(provider, getAllTools('feishu')),
+    )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
     // Load transcript from disk so /status (and any other read slash that

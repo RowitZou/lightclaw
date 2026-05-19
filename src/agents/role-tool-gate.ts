@@ -1,4 +1,4 @@
-import type { CanUseToolFn } from '../tool.js'
+import type { CanUseToolFn, Tool } from '../tool.js'
 import { resolveRolePolicy } from './role-presets.js'
 import type { ResolvedRolePolicy } from './role-presets.js'
 import type { Role } from './types.js'
@@ -41,6 +41,16 @@ export function deriveCanUseTool(role: Role): CanUseToolFn {
 
 export function isToolVisibleToRole(role: Role, toolName: string): boolean {
   return checkRoleToolVisibility(role, toolName).allowed
+}
+
+/** Filter a tool array down to the entries the role is allowed to see. Used
+ *  at every catalog-construction site so reserved tools (Feishu set for
+ *  main/generalist; Notify for workers; etc.) never appear in the system
+ *  prompt's tool catalog, the deferred-tools `<system-reminder>`, or the
+ *  ToolSearch deferred pool — leaks that previously surfaced as the model
+ *  trying the tool and getting denied at `canUseTool` time (wasted turn). */
+export function filterToolsByRoleVisibility(role: Role, tools: readonly Tool[]): Tool[] {
+  return tools.filter(tool => isToolVisibleToRole(role, tool.name))
 }
 
 export function isDispatchTargetReachable(

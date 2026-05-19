@@ -9,14 +9,9 @@ import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './type
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { getAgent } from './registry.js'
 import { ResumeSnapshotNotFoundError, runDispatchedAgent } from './dispatched-agent.js'
-import { isToolVisibleToRole } from './role-tool-gate.js'
+import { filterToolsByRoleVisibility } from './role-tool-gate.js'
 
-function filterTools(
-  agent: Role,
-  enabledTools: Tool[],
-): Tool[] {
-  return enabledTools.filter(tool => isToolVisibleToRole(agent, tool.name))
-}
+const filterTools = filterToolsByRoleVisibility
 
 export async function runSubagent(params: {
   agentType: AgentType

@@ -6,6 +6,7 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import { resolveRolePolicy } from './role-presets.js'
 import {
   deriveCanUseTool,
+  filterToolsByRoleVisibility,
   isDispatchTargetReachable,
   isToolVisibleToRole,
 } from './role-tool-gate.js'
@@ -237,6 +238,28 @@ function role(overrides: Partial<Role> = {}): Role {
     ...overrides,
   }
 }
+
+test('filterToolsByRoleVisibility drops Feishu tools from main wildcard catalog', () => {
+  const main = BUNDLED_AGENTS.find(a => a.agentType === 'main')!
+  const input = [
+    tool('Bash'),
+    tool('Read'),
+    tool('Dispatch'),
+    tool('FeishuRead'),
+    tool('FeishuList'),
+    tool('FeishuWriteDoc'),
+    tool('FeishuCreateFile'),
+  ]
+  const visible = filterToolsByRoleVisibility(main, input).map(t => t.name)
+  assert.deepEqual(visible, ['Bash', 'Read', 'Dispatch'])
+})
+
+test('filterToolsByRoleVisibility drops Notify from worker even with wildcard tools', () => {
+  const generalist = BUNDLED_AGENTS.find(a => a.agentType === 'generalist')!
+  const input = [tool('Bash'), tool('Read'), tool('Notify'), tool('Dispatch')]
+  const visible = filterToolsByRoleVisibility(generalist, input).map(t => t.name)
+  assert.equal(visible.includes('Notify'), false, 'worker must not see Notify')
+})
 
 function tool(name: string): Tool {
   return {
