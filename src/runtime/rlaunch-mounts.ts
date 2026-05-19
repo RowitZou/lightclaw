@@ -33,16 +33,6 @@ export function normalizeRlaunchMountPath(input: string): string {
   return path.resolve(expanded)
 }
 
-export function parseRlaunchMountMode(input: string | undefined): RlaunchMountMode {
-  if (!input || input.length === 0) {
-    return 'ro'
-  }
-  if (input === 'ro' || input === 'rw') {
-    return input
-  }
-  throw new Error(`mount mode must be "ro" or "rw"; got "${input}"`)
-}
-
 export function loadUserRlaunchMounts(canonicalUser: string): UserRlaunchMount[] {
   const target = rlaunchMountsPath(canonicalUser)
   if (!existsSync(target)) {

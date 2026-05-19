@@ -6,7 +6,6 @@ import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
-  parseRlaunchMountMode,
   removeUserRlaunchMount,
   setUserRlaunchMount,
   userMountToRuntimeMount,
@@ -27,11 +26,11 @@ type MountCommandDeps = {
 const USAGE = [
   'Usage:',
   '  /mount list',
-  '  /mount add <absolute-gpfs-path> [ro|rw]',
+  '  /mount add <absolute-gpfs-path> [--ro|--rw]',
   '  /mount remove <absolute-gpfs-path>',
   '',
   'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.',
-  'Default mode is ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
+  'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
 ].join('\n')
 
 export async function runMountCommand(
@@ -62,10 +61,7 @@ export async function runMountCommand(
   }
 
   if (action === 'add') {
-    if (parts.length < 2 || parts.length > 3) {
-      return `${USAGE}\n`
-    }
-    const parsed = parseMountInput(parts[1]!, parts[2])
+    const parsed = parseAddArgs(parts.slice(1))
     if (typeof parsed === 'string') {
       return `${parsed}\n`
     }
@@ -136,14 +132,31 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   ].join('\n')
 }
 
-function parseMountInput(
-  rawPath: string,
-  rawMode: string | undefined,
+function parseAddArgs(
+  rest: readonly string[],
 ): { mountPath: string; mode: RlaunchMountMode } | string {
+  const positional: string[] = []
+  let mode: RlaunchMountMode | undefined
+  for (const token of rest) {
+    if (token === '--ro' || token === '--rw') {
+      const next: RlaunchMountMode = token === '--rw' ? 'rw' : 'ro'
+      if (mode && mode !== next) {
+        return 'mount mode is ambiguous: both --ro and --rw given'
+      }
+      mode = next
+    } else if (token.startsWith('--')) {
+      return `unknown flag: ${token} (expected --ro or --rw)`
+    } else {
+      positional.push(token)
+    }
+  }
+  if (positional.length !== 1) {
+    return USAGE
+  }
   try {
     return {
-      mountPath: normalizeRlaunchMountPath(rawPath),
-      mode: parseRlaunchMountMode(rawMode),
+      mountPath: normalizeRlaunchMountPath(positional[0]!),
+      mode: mode ?? 'ro',
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error)

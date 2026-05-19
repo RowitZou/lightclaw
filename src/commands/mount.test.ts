@@ -57,11 +57,11 @@ describe('/mount command', () => {
     assert.match(added, /worker-1/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 
-    const unchanged = await runMountCommand(`add ${dataPath} ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    const unchanged = await runMountCommand(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(unchanged, /already exists/)
     assert.equal(restartCount, 1)
 
-    const updated = await runMountCommand(`add ${dataPath} rw`, { config: makeConfig(), userId: 'alice' }, deps)
+    const updated = await runMountCommand(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Updated rlaunch mount/)
     assert.match(updated, /worker-2/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
@@ -98,8 +98,12 @@ describe('/mount command', () => {
       /Overlapping runtime mount entries/,
     )
     assert.match(
-      await runMountCommand(`add ${dataPath} nope`, { config: makeConfig(), userId: 'alice' }),
-      /mount mode must be "ro" or "rw"/,
+      await runMountCommand(`add ${dataPath} --nope`, { config: makeConfig(), userId: 'alice' }),
+      /unknown flag: --nope/,
+    )
+    assert.match(
+      await runMountCommand(`add ${dataPath} --ro --rw`, { config: makeConfig(), userId: 'alice' }),
+      /mount mode is ambiguous/,
     )
     assert.match(
       await runMountCommand('remove relative/path', { config: makeConfig(), userId: 'alice' }),
