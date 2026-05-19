@@ -52,11 +52,19 @@ const SEND_RETRY_MAX_DELAY_MS = 8000
 // turn. Worst-case SendFile under a sustained outage becomes
 // 5 min + 6 * 30 s + ~24 s backoff ~= 8.4 min instead of ~35 min.
 const FILE_UPLOAD_RETRY_TIMEOUT_MS = 30 * 1000
-// IM file-attachment ceiling: Feishu hard-caps `im.v1.files.create` at
-// 30 MB on enterprise tenants (20 MB on standard tier — that surfaces as
-// a 4xx body recognized by isFileTooLargeError so the sender still falls
-// back cleanly without hard-coding the lower limit).
-const IM_ATTACHMENT_MAX_BYTES = 30 * 1024 * 1024
+// IM file-attachment ceiling: 20 MB. Picked conservatively, NOT documented:
+// the 30 MB doc says "≤30 MB" but 2026-05-19 dogfood saw a 29.3 MB PDF
+// upload return a bare HTTP 400 (no Feishu error code in body) on what is
+// an enterprise tenant. The real cap appears tenant- or version-dependent
+// and undershoots the documented number. 20 MB is the safe value across
+// all tiers we've seen — files between 20 and 30 MB take an extra
+// `sendFileViaDrive` hop instead of the inline IM card, which is a
+// marginal UX downgrade vs the previous "fail with opaque 400 and force
+// the model to retry / compress" path. The `isFileTooLargeError` catch
+// below still backstops any future cap regression — if the IM upload
+// rejects a sub-20-MB file with a recognizable size body, the sender
+// still falls through to the drive path without changing this ceiling.
+const IM_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
 // Transient network failures we've observed on flaky corporate proxies in
 // front of open.feishu.cn: 30s axios timeouts (ECONNABORTED), connection
 // resets, upstream TLS handshake aborts, intermittent DNS. These are worth
@@ -822,18 +830,29 @@ function isWithdrawnReplyError(error: unknown): boolean {
 }
 
 // Feishu IM upload returns a 4xx with body code 230003 ("file size limit
-// exceeded") when the payload is past the tenant-specific cap (20 MB on
-// standard tier, 30 MB on enterprise). It also surfaces in some path
-// fallbacks as a message containing "file size" / "too large". Tolerant
+// exceeded") when the payload is past the tenant-specific cap. It also
+// surfaces in some path fallbacks as a message containing "file size" /
+// "too large", and as an HTTP 413 ("Payload Too Large") at the gateway
+// layer when the body never reaches the Lark error envelope. Tolerant
 // matcher so a tenant downgrade does not turn into a hard SendFile error
-// — the caller falls back to drive upload instead.
+// — the caller falls back to drive upload instead. Does NOT match bare
+// HTTP 400 (no Feishu code) because that overlaps with permission /
+// malformed-request failures we want to surface to the caller; the
+// pre-flight `IM_ATTACHMENT_MAX_BYTES` cap above is the primary guard
+// against the 2026-05-19 opaque-400 case.
 function isFileTooLargeError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false
   }
-  const e = error as { response?: { data?: { code?: unknown; msg?: unknown } }; message?: unknown }
+  const e = error as {
+    response?: { status?: unknown; data?: { code?: unknown; msg?: unknown } }
+    message?: unknown
+  }
   const code = e.response?.data?.code
   if (typeof code === 'number' && code === 230003) {
+    return true
+  }
+  if (e.response?.status === 413) {
     return true
   }
   const bodyMsg = typeof e.response?.data?.msg === 'string' ? (e.response!.data!.msg as string).toLowerCase() : ''

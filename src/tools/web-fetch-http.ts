@@ -101,13 +101,17 @@ export function _setDaemonFetchUrlForTests(fn: DaemonFetchFn | null): void {
   daemonFetchFn = fn
 }
 
-/** 10 MB cap on raw response body, Claude Code-aligned
- *  (`utils.ts:112 MAX_HTTP_CONTENT_LENGTH`). Axios drops responses larger
- *  than this with an error — we'd rather fail loudly than silently truncate
- *  binary downloads. The cap is sized for typical web content (HTML pages
- *  < 1 MB, PDFs < 5 MB); larger artifacts (datasets, models) belong in
- *  Bash + curl with explicit user intent. */
-const MAX_HTTP_CONTENT_LENGTH = 10 * 1024 * 1024
+/** 30 MB cap on raw response body. Originally 10 MB to align with Claude
+ *  Code (`utils.ts:112`), raised 2026-05-19 after two dogfoods on the same
+ *  arxiv VGGT-Ω PDF (~30 MB) tripped this guard and forced the agent to
+ *  detour through `Bash + curl`. Academic PDFs in the 10-30 MB range are
+ *  routine — the original "PDFs < 5 MB" sizing premise was empirically
+ *  wrong. 30 MB aligns with the Feishu IM-attachment ceiling (`sender.ts`
+ *  IM_ATTACHMENT_MAX_BYTES), giving one consistent ceiling across the
+ *  pipeline; even larger artifacts (datasets, models) still need
+ *  `Bash + curl` with explicit user intent. Axios drops responses larger
+ *  than this with an error — fail loudly rather than silently truncate. */
+const MAX_HTTP_CONTENT_LENGTH = 30 * 1024 * 1024
 
 /** 60 s default fetch timeout, Claude Code-aligned (`utils.ts:116`).
  *  Caller-overridable via `timeoutMs` param. Schema cap in

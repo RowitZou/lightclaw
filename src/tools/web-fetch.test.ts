@@ -315,14 +315,14 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
     // `maxContentLength size of N exceeded`, and CanceledError (abort).
     // All three were observed dogfood-side losing the URL.
     _setDaemonFetchUrlForTests(async () => {
-      throw new Error('maxContentLength size of 10485760 exceeded')
+      throw new Error('maxContentLength size of 31457280 exceeded')
     })
     const result = await webFetchTool.call(
       { url: 'https://arxiv.org/pdf/2605.10730' },
       buildCtx(),
     )
     assert.equal(result.isError, true)
-    assert.match(result.output as string, /maxContentLength size of 10485760 exceeded/)
+    assert.match(result.output as string, /maxContentLength size of 31457280 exceeded/)
     assert.match(result.output as string, /\(url: https:\/\/arxiv\.org\/pdf\/2605\.10730\)/)
   })
 
