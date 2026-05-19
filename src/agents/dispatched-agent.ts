@@ -293,6 +293,18 @@ async function resolveResumeSnapshot(input: {
         dispatchId: input.resumeFrom,
       })
   if (!snapshot) {
+    // 'last' is best-effort: when no prior snapshot exists for this (caller,
+    // callee) pair, start fresh instead of throwing. This is critical for bg
+    // recurring tasks created with resumeFrom='last' — the first fire has
+    // nothing to resume from but should still run; subsequent fires pick up
+    // the prior fire's snapshot. Blocking callers benefit too: the model
+    // gets a clean fresh run instead of a self-correction round-trip.
+    //
+    // Explicit dispatchId stays strict: the caller named a specific id, so
+    // not finding it is an error worth surfacing.
+    if (input.resumeFrom === 'last') {
+      return null
+    }
     throw new ResumeSnapshotNotFoundError(
       input.callerAgentType,
       input.calleeAgentType,

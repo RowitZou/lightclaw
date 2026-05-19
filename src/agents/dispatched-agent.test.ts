@@ -344,6 +344,61 @@ test('runDispatchedAgent injects resumeFrom last transcript before the new promp
   }
 })
 
+test("runDispatchedAgent treats resumeFrom='last' with no prior snapshot as a fresh fork", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+    })
+    let seenMessages: Message[] = []
+    const result = await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'kickoff with last-but-empty',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      callerAgentType: 'main',
+      canonicalUser: 'alice',
+      resumeFrom: 'last',
+      chainState: makeChainState('first-fire'),
+      label: 'background_task',
+      queryImpl: async params => {
+        seenMessages = params.messages
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'fresh' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'fresh',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+    assert.equal(result.finalText, 'fresh')
+    assert.equal(result.resumedFromDispatchId, undefined)
+    // Only the new dispatch prompt — no inherited prefix injected.
+    assert.equal(seenMessages.length, 1)
+    assert.equal(seenMessages[0]?.type, 'user')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('runDispatchedAgent returns resume-snapshot-not-found through runSubagent failure path', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
   setLightclawHomeOverride(tempDir)
