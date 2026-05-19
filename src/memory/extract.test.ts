@@ -23,14 +23,7 @@ import {
   setExtractionInProgressForTest,
   triggerForkExtract,
 } from './extract.js'
-import {
-  createAutoDreamCanUseTool,
-  createAutoMemCanUseTool,
-  getBashHead,
-  isReadOnlyBash,
-} from './auto-mem-can-use-tool.js'
 import { writeMemoryFile } from './auto-memory.js'
-import type { Tool } from '../tool.js'
 
 const dummyConfig = {
   defaultModel: 'claude-sonnet-4-6',
@@ -45,26 +38,6 @@ function memory(filename: string): MemoryEntry {
     description: 'A project convention',
     content: 'Why: useful\nHow to apply: remember it',
     mtimeMs: 1,
-  }
-}
-
-function tool(name: string): Tool {
-  return {
-    name,
-    description: name,
-    source: 'builtin',
-    domain: 'host',
-    riskLevel: 'safe',
-    async call() {
-      return { output: 'ok' }
-    },
-    formatResult(output, toolUseId) {
-      return {
-        type: 'tool_result',
-        tool_use_id: toolUseId,
-        content: String(output),
-      }
-    },
   }
 }
 
@@ -135,51 +108,6 @@ test('hasMemoryWritesSince ignores old MemoryWrite tool_use', () => {
     timestamp: 5,
   })
   assert.equal(hasMemoryWritesSince([message], 10), false)
-})
-
-test('getBashHead skips env prefixes and path dirs', () => {
-  assert.equal(getBashHead('LANG=C /usr/bin/grep foo file'), 'grep')
-})
-
-test('isReadOnlyBash accepts read-only heads', () => {
-  assert.equal(isReadOnlyBash({ command: 'cat note.md' }), true)
-})
-
-test('isReadOnlyBash rejects mutating heads', () => {
-  assert.equal(isReadOnlyBash({ command: 'rm -rf /tmp/a' }), false)
-})
-
-test('auto memory tool gate allows MemoryWrite', async () => {
-  const gate = createAutoMemCanUseTool('/tmp/memory')
-  assert.deepEqual(await gate(tool('MemoryWrite'), {}), { behavior: 'allow' })
-})
-
-test('auto memory tool gate still allows read-only Bash for extraction', async () => {
-  const gate = createAutoMemCanUseTool('/tmp/memory')
-  assert.deepEqual(await gate(tool('Bash'), { command: 'grep foo MEMORY.md' }), { behavior: 'allow' })
-})
-
-test('auto memory tool gate denies Edit', async () => {
-  const gate = createAutoMemCanUseTool('/tmp/memory')
-  const decision = await gate(tool('Edit'), {})
-  assert.equal(decision.behavior, 'deny')
-})
-
-test('autoDream tool gate allows only explicit memory curation tools and reads', async () => {
-  const gate = createAutoDreamCanUseTool('/tmp/memory')
-  for (const name of ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob']) {
-    assert.equal((await gate(tool(name), {})).behavior, 'allow')
-  }
-
-  assert.deepEqual(await gate(tool('Bash'), { command: 'cat MEMORY.md' }), {
-    behavior: 'deny',
-    reason: 'autoDream may not run shell commands.',
-  })
-  assert.deepEqual(await gate(tool('MemoryWrite'), {}), {
-    behavior: 'deny',
-    reason: 'autoDream cannot use MemoryWrite.',
-  })
-  assert.equal((await gate(tool('Edit'), {})).behavior, 'deny')
 })
 
 test('per-role extraction passes currentRoleOverride to memoryExtractor', async () => {

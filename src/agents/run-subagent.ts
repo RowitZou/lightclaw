@@ -49,13 +49,6 @@ export async function runSubagent(params: {
       detail: 'Pick one of the available subagent types.',
     })
   }
-  if (agent.kind === 'internal' && !params.canUseToolOverride) {
-    return subagentFailure('tool-unavailable',
-      `Internal subagent "${params.agentType}" requires canUseToolOverride for its input-sensitive runtime gate.`,
-      { kind: 'give-up' },
-    )
-  }
-
   const config = getConfig()
   const roleModel = resolveRoleModel(agent, config)
   const provider = getProviderFor(config, roleModel).provider

@@ -7,7 +7,6 @@ import { parseForkTranscriptFile } from '../agents/fork-transcript.js'
 import { collectAssistantText } from '../messages.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
-import { createAutoMemCanUseTool } from './auto-mem-can-use-tool.js'
 import { maybeEvictAgedMemories } from './aging-eviction.js'
 import { resolveMemoryDirsForRole } from './scope.js'
 import type { MemoryEntry } from './types.js'
@@ -239,16 +238,13 @@ async function runExtractionInner(ctx: ExtractCtx): Promise<ExtractResult> {
 
   const beforeFiles = new Set(existingMemories.map(entry => entry.filename))
   const prompt = buildExtractPrompt(newMessages, existingMemories)
-  // Run through the Role pathway (kind='internal'). The subagent
-  // gets a focused systemPrompt (no Available Skills section, no UseSkill
-  // induction toward the `remember` skill) and a tools array containing only
-  // MemoryWrite / MemoryRead / Read / Grep / Glob. Runtime gate stays as
-  // createAutoMemCanUseTool for defense-in-depth. maxTurns lives on the
-  // Role (20 - see bundled/index.ts).
+  // Run through the Role pathway (kind='internal'). The Role's `tools`
+  // list (MemoryWrite / MemoryRead / Read / Grep / Glob) is the single
+  // source of truth for what this subagent can use — runtime gate is the
+  // default `deriveCanUseTool(role)` applied by runSubagent.
   const result = await runSubagentImpl({
     agentType: 'memoryExtractor',
     prompt,
-    canUseToolOverride: createAutoMemCanUseTool(ctx.memoryDir),
     canonicalUserOverride: ctx.canonicalUser,
     currentRoleOverride: ownerRole,
   })

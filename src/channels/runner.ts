@@ -33,9 +33,8 @@ import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
-import { createMainAgentCanUseTool } from '../agents/main-agent-can-use-tool.js'
 import { getMainRole } from '../agents/registry.js'
-import { filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
+import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
@@ -677,7 +676,7 @@ export class ChannelRunner {
               invocation: channelInvocationContext({
                 channelContext: this.strategy.buildChannelPrompt(effectiveMessage),
                 permissionApprover: approver,
-                canUseTool: createMainAgentCanUseTool('normal', mainRole),
+                canUseTool: deriveCanUseTool(mainRole),
                 onToolUse(event) {
                   process.stderr.write(`${channelId}: tool ${event.name}\n`)
                 },

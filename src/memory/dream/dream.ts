@@ -1,6 +1,5 @@
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
-import { createAutoDreamCanUseTool } from '../auto-mem-can-use-tool.js'
 import { ensureMemoryDir } from '../auto-memory.js'
 import {
   isExtractionInProgressFor,
@@ -168,11 +167,11 @@ async function executeAutoDreamInner(params: {
     }
 
     try {
-      // Run through the Role pathway (kind='internal'). The fork
-      // gets a focused systemPrompt (no Available Skills section) and a
-      // tools array containing only MemoryRead / MemoryWriteAt / MemoryMove /
-      // MemoryDelete / Read / Grep / Glob. Runtime gate stays as
-      // createAutoDreamCanUseTool for defense-in-depth.
+      // Run through the Role pathway (kind='internal'). The Role's
+      // `tools` list (MemoryRead / MemoryWriteAt / MemoryMove /
+      // MemoryDelete / Read / Grep / Glob) is the single source of truth
+      // for what this subagent can use — runtime gate is the default
+      // `deriveCanUseTool(role)` applied by runSubagent.
       const result = await runSubagentImpl({
         agentType: 'memoryCurator',
         prompt: buildDreamPrompt({
@@ -181,7 +180,6 @@ async function executeAutoDreamInner(params: {
           sessionIds,
           memoryTree: await gatherDreamMemoryTree(params.memoryDir),
         }),
-        canUseToolOverride: createAutoDreamCanUseTool(params.memoryDir),
         canonicalUserOverride: params.userId,
         maxTurnsOverride: params.config.memory.curator.maxTurns,
       })
