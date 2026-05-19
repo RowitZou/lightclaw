@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { safeWriteJson } from '../atomic-write.js'
 import { lightclawHome } from '../paths.js'
 import type { AttachmentKind } from './types.js'
 
@@ -73,8 +74,12 @@ function save(): void {
   if (!cached) return
   const file = cachePath()
   try {
-    mkdirSync(path.dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(cached, null, 2), 'utf8')
+    // Atomic write (tmp + fsync + rename). Daemon-shared file written
+    // concurrently from multiple user-session streamChat paths — a raw
+    // writeFileSync could leave a half-written JSON file that the next
+    // load()'s catch arm silently rebuilds as empty, losing every learned
+    // capability flag and forcing the full pre-charge probe to re-run.
+    safeWriteJson(file, cached)
   } catch (error) {
     process.stderr.write(
       `[capability-cache] save failed: ${error instanceof Error ? error.message : String(error)}\n`,

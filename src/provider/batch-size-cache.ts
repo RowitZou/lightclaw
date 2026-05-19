@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { safeWriteJson } from '../atomic-write.js'
 import { lightclawHome } from '../paths.js'
 import type { AttachmentKind } from './types.js'
 
@@ -70,8 +71,12 @@ function save(): void {
   if (!cached) return
   const file = cachePath()
   try {
-    mkdirSync(path.dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(cached, null, 2), 'utf8')
+    // Atomic write — same rationale as capability-cache: daemon-shared,
+    // concurrent writers across user sessions, a partial write leaves the
+    // catch arm in load() silently rebuilding to {} and losing every learned
+    // batch ceiling, forcing the adaptive splitter to re-discover ceilings
+    // from scratch.
+    safeWriteJson(file, cached)
   } catch (error) {
     process.stderr.write(
       `[batch-size-cache] save failed: ${error instanceof Error ? error.message : String(error)}\n`,

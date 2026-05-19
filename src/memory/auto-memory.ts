@@ -2,6 +2,7 @@ import { readdir, readFile, rm, mkdir, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { Role } from '../agents/types.js'
+import { safeWriteFile } from '../atomic-write.js'
 import type { LightClawConfig } from '../config.js'
 import { lightclawHome } from '../paths.js'
 import {
@@ -326,5 +327,11 @@ export async function rebuildMemoryIndex(memoryDir: string): Promise<void> {
     entry => `- [${entry.type}] ${entry.filename}: ${entry.description}`,
   )
   const nextContent = lines.length > 0 ? `${lines.join('\n')}\n` : ''
-  await writeFile(path.join(memoryDir, MEMORY_INDEX_FILE), nextContent, 'utf8')
+  // Atomic write. MEMORY.md is rebuilt on every memory write (writeMemoryFile
+  // / deleteMemoryFile / MemoryWriteAt / MemoryMove / MemoryDelete), so the
+  // same per-user dir sees main + extract + dream all trigger rebuildIndex
+  // concurrently. A raw writeFile can interleave bytes between two rebuilders
+  // and leave MEMORY.md with a malformed line or a stale tail; safeWriteFile
+  // makes the publish atomic (last writer wins cleanly).
+  safeWriteFile(path.join(memoryDir, MEMORY_INDEX_FILE), nextContent)
 }
