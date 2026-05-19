@@ -431,8 +431,6 @@ export async function executeDispatch(
     notifyTo: 'agent' as const,
     enabled: true,
     createdAt: now,
-    consecutiveFailures: 0,
-    fireHistory: [],
     originSessionId: sessionId,
     chainState: effectiveChildChainState,
   }
@@ -519,8 +517,7 @@ export const listDispatchesTool = buildTool({
       enabled: task.enabled,
       nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
       lastFiredAt: task.lastFiredAt ?? null,
-      consecutiveFailures: task.consecutiveFailures,
-      ...(input.include_history ? { fireHistory: task.fireHistory ?? [] } : {}),
+      ...(input.include_history ? { lastFire: task.lastFiredAt ? { firedAt: task.lastFiredAt } : null } : {}),
     }))
     return { output: tasks.length === 0 ? 'No active background dispatches.' : JSON.stringify(tasks, null, 2) }
   },

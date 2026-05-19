@@ -16,7 +16,6 @@ import { setLightclawHomeOverride } from '../paths.js'
 import {
   addBackgroundTask,
   appendCompletedTaskRecord,
-  appendFireHistory,
   backgroundTaskStorePath,
   completedTaskIndexPath,
   flushLastFiredAt,
@@ -90,6 +89,27 @@ describe('background-task store', () => {
     assert.equal(loaded[0].role, 'generalist')
   })
 
+  it('drops legacy failure-state fields when loading old v2 entries', () => {
+    const target = backgroundTaskStorePath('alice')
+    mkdirSync(path.dirname(target), { recursive: true })
+    const legacy = {
+      ...fakeTask('alice', 'task-1'),
+      consecutiveFailures: 7,
+      fireHistory: [{
+        firedAt: '2026-05-07T10:00:00.000Z',
+        summary: 'old failure',
+        success: false,
+      }],
+    }
+    writeFileSync(target, JSON.stringify({ version: 2, tasks: [legacy] }), 'utf8')
+
+    const [loaded] = loadBackgroundTasks('alice')
+    assert.ok(loaded)
+    assert.equal(loaded.id, 'task-1')
+    assert.equal('consecutiveFailures' in loaded, false)
+    assert.equal('fireHistory' in loaded, false)
+  })
+
   it('adds multiple tasks without replacing unrelated entries', () => {
     addBackgroundTask('alice', fakeTask('alice', 'task-1'))
     addBackgroundTask('alice', fakeTask('alice', 'task-2'))
@@ -108,25 +128,6 @@ describe('background-task store', () => {
       loadBackgroundTasks('alice')[0].lastFiredAt,
       '2026-05-07T10:01:00.000Z',
     )
-  })
-
-  it('caps fireHistory FIFO at 20 entries', () => {
-    addBackgroundTask('alice', fakeTask('alice', 'task-1'))
-    for (let i = 0; i < 25; i += 1) {
-      appendFireHistory({
-        canonicalUser: 'alice',
-        taskId: 'task-1',
-        entry: {
-          firedAt: new Date(Date.UTC(2026, 4, 7, 10, i, 0)).toISOString(),
-          summary: `fire-${i}`,
-          success: true,
-        },
-      })
-    }
-    const history = loadBackgroundTasks('alice')[0].fireHistory ?? []
-    assert.equal(history.length, 20)
-    assert.equal(history[0].summary, 'fire-5') // earliest 5 dropped
-    assert.equal(history[history.length - 1].summary, 'fire-24')
   })
 
   it('removes a task and is a no-op when id is unknown', () => {
@@ -152,7 +153,6 @@ describe('background-task store', () => {
     assert.equal(updated?.label, 'paused')
     assert.equal(updated?.notifyOn, 'always')
     assert.equal(updated?.notifyTo, 'user')
-    assert.equal(updated?.consecutiveFailures, 0)
     assert.equal(updateBackgroundTask('alice', 'never', { enabled: true }), null)
   })
 
@@ -253,7 +253,5 @@ function fakeTask(user: string, id: string): BackgroundTaskEntry {
     notifyTo: 'user',
     enabled: true,
     createdAt: '2026-05-07T10:00:00.000Z',
-    consecutiveFailures: 0,
-    fireHistory: [],
   }
 }

@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { afterEach, beforeEach, describe, it } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import path from 'node:path'
+import { tmpdir } from 'node:os'
 
 import type { ChainState } from '../signal-bus/chain-state.js'
-import { resolveLiveWorkerSpawner } from './scheduler.js'
+import { setLightclawHomeOverride } from '../paths.js'
+import { BackgroundTaskScheduler, resolveLiveWorkerSpawner } from './scheduler.js'
+import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
+import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -68,3 +74,68 @@ describe('resolveLiveWorkerSpawner', () => {
     assert.equal(resolveLiveWorkerSpawner(state, new Set(['feishu:dm:oc_x'])), null)
   })
 })
+
+describe('BackgroundTaskScheduler fire completion', () => {
+  let tmpHome: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-bg-scheduler-test-'))
+    setLightclawHomeOverride(tmpHome)
+  })
+
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  it('does not autopause recurring tasks after failures', async () => {
+    const task = fakeTask()
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: { dispatch: { scheduler: { fireRetryMaxAttempts: number } } }
+    }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1 } } }
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    for (let i = 0; i < 5; i += 1) {
+      await onFireComplete('alice', task, `fire-${i}`, {
+        kind: 'failure',
+        reason: `failed-${i}`,
+        transient: false,
+        attempt: 1,
+      }, 1)
+    }
+    flushLastFiredAt()
+
+    const [loaded] = loadBackgroundTasks('alice')
+    assert.ok(loaded)
+    assert.equal(loaded.enabled, true)
+    assert.equal('consecutiveFailures' in loaded, false)
+    assert.equal('fireHistory' in loaded, false)
+  })
+})
+
+function fakeTask(): BackgroundTaskEntry {
+  return {
+    id: 'task-1',
+    ownerCanonicalUser: 'alice',
+    prompt: 'check the workspace and summarize anything important',
+    role: 'generalist',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'Workspace check',
+    notifyOn: 'success',
+    notifyTo: 'user',
+    enabled: true,
+    createdAt: '2026-05-07T10:00:00.000Z',
+  }
+}

@@ -62,12 +62,14 @@ export type DispatchedAgentParams = {
   maxTurns?: number
   label: string
   signal?: AbortSignal
+  mode?: 'sync' | 'bg'
 }
 
 export type DispatchedAgentResult = {
   finalText: string
   stopReason: string | null
   usage: UsageStats
+  messages: Message[]
   forkTranscriptPath: string | null
   forkTranscriptPersisted: Promise<string | null>
   resumedFromDispatchId?: string
@@ -218,6 +220,7 @@ export async function runDispatchedAgent(
       finalText: result.assistantText,
       stopReason: result.stopReason,
       usage: result.usage,
+      messages: result.messages,
       forkTranscriptPath,
       forkTranscriptPersisted: persistTask ?? Promise.resolve(null),
       ...(resume ? { resumedFromDispatchId: resume.snapshot.dispatchId } : {}),
@@ -312,6 +315,7 @@ async function maybePersistDispatchSnapshot(input: {
   childCtx: SessionContext | null
 }): Promise<void> {
   if (!input.principal || input.params.role.kind !== 'worker') return
+  if (input.params.mode === 'bg') return
   const dispatchId = input.params.chainState?.path.at(-1)?.dispatchId ?? randomUUID().slice(0, 8)
   const childCtx = input.childCtx
   const snapshot: ResumableSessionSnapshot = {

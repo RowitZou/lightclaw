@@ -14,11 +14,9 @@ import {
   backgroundTaskEntrySchema,
   type BackgroundTaskEntry,
   type BackgroundTaskStoreFile,
-  type FireHistoryEntry,
 } from './types.js'
 
 const STORE_VERSION = 2
-const FIRE_HISTORY_LIMIT = 20
 
 type LastFiredDirty = {
   canonicalUser: string
@@ -65,6 +63,8 @@ export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[
       if (typeof (baseCandidate as { role?: unknown }).role !== 'string') {
         ;(baseCandidate as { role: string }).role = 'generalist'
       }
+      delete (baseCandidate as { consecutiveFailures?: unknown }).consecutiveFailures // legacy migration
+      delete (baseCandidate as { fireHistory?: unknown }).fireHistory // legacy migration
       const result = backgroundTaskEntrySchema.safeParse(baseCandidate)
       if (result.success) {
         tasks.push(result.data)
@@ -121,8 +121,6 @@ export type BackgroundTaskPatch = Partial<
     | 'notifyTo'
     | 'enabled'
     | 'lastFiredAt'
-    | 'consecutiveFailures'
-    | 'fireHistory'
     | 'pendingPriorPromptNotice'
   >
 >
@@ -153,19 +151,6 @@ export function getBackgroundTask(
   id: string,
 ): BackgroundTaskEntry | null {
   return loadBackgroundTasks(canonicalUser).find(task => task.id === id) ?? null
-}
-
-export function appendFireHistory(input: {
-  canonicalUser: string
-  taskId: string
-  entry: FireHistoryEntry
-}): BackgroundTaskEntry | null {
-  const task = getBackgroundTask(input.canonicalUser, input.taskId)
-  if (!task) {
-    return null
-  }
-  const history = [...(task.fireHistory ?? []), input.entry].slice(-FIRE_HISTORY_LIMIT)
-  return updateBackgroundTask(input.canonicalUser, input.taskId, { fireHistory: history })
 }
 
 export function updateLastFiredAt(

@@ -5,7 +5,6 @@ import { getAdmin, getIdentity } from '../identity/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import {
   appendCompletedTaskRecord,
-  appendFireHistory,
   flushLastFiredAt,
   getBackgroundTask,
   listAllUsersWithBackgroundTasks,
@@ -283,7 +282,6 @@ export class BackgroundTaskScheduler {
     }
 
     const firedAt = new Date().toISOString()
-    let autopaused = false
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
       // Record before pruning so a late CancelDispatch call can tell
       // "already finished" apart from "id never existed" (Bug 7 from
@@ -303,31 +301,6 @@ export class BackgroundTaskScheduler {
       } else {
         updateLastFiredAt(canonicalUser, task.id, firedAt)
       }
-      appendFireHistory({
-        canonicalUser,
-        taskId: task.id,
-        entry: {
-          firedAt,
-          summary: outcome.kind === 'success'
-            ? outcome.summary
-            : `FAILED: ${outcome.reason}`,
-          success: outcome.kind === 'success',
-        },
-      })
-      if (outcome.kind === 'success') {
-        updateBackgroundTask(canonicalUser, task.id, {
-          consecutiveFailures: 0,
-        })
-      } else {
-        const latest = getBackgroundTask(canonicalUser, task.id) ?? task
-        const failures = latest.consecutiveFailures + 1
-        const threshold = this.config?.dispatch.scheduler.recurringAutoDisableThreshold ?? 3
-        updateBackgroundTask(canonicalUser, task.id, {
-          consecutiveFailures: failures,
-          ...(failures >= threshold ? { enabled: false } : {}),
-        })
-        autopaused = failures >= threshold
-      }
     }
 
     const shouldNotify =
@@ -335,7 +308,7 @@ export class BackgroundTaskScheduler {
       (task.notifyOn === 'success' && outcome.kind === 'success') ||
       (task.notifyOn === 'failure' && outcome.kind === 'failure')
     if (shouldNotify) {
-      await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome, autopaused)
+      await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome)
     }
   }
 
@@ -345,7 +318,6 @@ export class BackgroundTaskScheduler {
     fireUuid: string,
     firedAt: string,
     outcome: FireOutcome,
-    autopaused: boolean,
   ): Promise<void> {
     const identity = await getIdentity(canonicalUser).catch(() => null)
     const ownerOpenId = identity?.channels.feishu[0]

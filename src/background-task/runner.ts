@@ -2,7 +2,6 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
-import { createUserMessage } from '../messages.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
@@ -10,9 +9,9 @@ import { getAdmin } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
-import { emptyInvocationContext } from '../agents/invocation-context.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
+import { runDispatchedAgent } from '../agents/dispatched-agent.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
@@ -87,7 +86,6 @@ export async function runBackgroundTaskFire(input: {
     // to fail-transient-then-disable on docker hosts.
     const tracker = config.runtime.backend === 'docker' ? getImageReadiness() : undefined
     const runtime = getRuntimePool().acquire(input.task.ownerCanonicalUser, config, cwd, tracker)
-    const userMessage = createUserMessage(buildBackgroundTaskFirePrompt(input.task))
     const permissionDenials: PermissionDenialDetail[] = []
     const ctx = createSessionContext({
       cwd,
@@ -123,29 +121,22 @@ export async function runBackgroundTaskFire(input: {
       )
     }
     const result = await runWithSessionContext(ctx, async () => {
-      const output = await queryImpl({
+      const output = await runDispatchedAgent({
+        mode: 'bg',
+        dispatchPrompt: buildBackgroundTaskFirePrompt(input.task),
         role,
-        invocation: {
-          ...emptyInvocationContext(),
-          // `deriveCanUseTool(role)` is the same gate dispatched workers
-          // use (run-subagent.ts), so BLOCKED_WORKER_TOOLS (Notify, Dispatch
-          // unless explicit) and FEISHU_RESERVED_TOOLS automatically cover
-          // bg-fire too. Future additions to either set propagate for free.
-          // The previous `createBackgroundTaskCanUseTool` was a hand-rolled
-          // function that only denied a since-deleted `BackgroundTask`
-          // tool — it bypassed both visibility tables, which let bg-fire
-          // dogfood call Notify (2026-05-18 stock monitoring incident).
-          canUseTool: deriveCanUseTool(role),
-          signal: input.signal,
-          subagentLabel: 'background_task',
-          chainState: input.task.chainState,
-        },
-        messages: [userMessage],
         tools,
         config: {
           ...config,
           defaultModel: model,
         },
+        // `deriveCanUseTool(role)` is the same gate dispatched workers use,
+        // so BLOCKED_WORKER_TOOLS and FEISHU_RESERVED_TOOLS cover bg-fire too.
+        canUseToolOverride: deriveCanUseTool(role),
+        queryImpl,
+        label: 'background_task',
+        signal: input.signal,
+        chainState: input.task.chainState,
       })
       await rewriteTranscript(sessionId, output.messages)
       await touchMeta(sessionId, output.messages.length)
@@ -168,7 +159,7 @@ export async function runBackgroundTaskFire(input: {
 
     return {
       kind: 'success',
-      summary: result.assistantText || '(background task returned empty text)',
+      summary: result.finalText || '(background task returned empty text)',
       transcriptPath: path.join(getSessionDir(sessionId), 'transcript.jsonl'),
     }
   } catch (error) {

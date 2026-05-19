@@ -429,8 +429,6 @@ function fakeTask(overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskE
     notifyTo: 'user',
     enabled: true,
     createdAt: '2026-05-07T10:00:00.000Z',
-    consecutiveFailures: 0,
-    fireHistory: [],
     ...overrides,
   }
 }

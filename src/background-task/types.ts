@@ -34,12 +34,6 @@ export const scheduleSpecSchema = z.discriminatedUnion('kind', [
 
 export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>
 
-export type FireHistoryEntry = {
-  firedAt: string
-  summary: string
-  success: boolean
-}
-
 export type BackgroundTaskEntry = {
   id: string
   ownerCanonicalUser: string
@@ -58,8 +52,6 @@ export type BackgroundTaskEntry = {
   enabled: boolean
   createdAt: string
   lastFiredAt?: string
-  consecutiveFailures: number
-  fireHistory?: FireHistoryEntry[]
   // Set by UpdateDispatch when prompt is changed: holds the prior
   // prompt so the NEXT completion delivery can surface "prompt was changed
   // before this fire (old: ...)" once and then clear. Consumed by
@@ -116,12 +108,6 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   enabled: z.boolean(),
   createdAt: z.string(),
   lastFiredAt: z.string().optional(),
-  consecutiveFailures: z.number().int().nonnegative(),
-  fireHistory: z.array(z.object({
-    firedAt: z.string(),
-    summary: z.string(),
-    success: z.boolean(),
-  })).optional(),
   pendingPriorPromptNotice: z.string().optional(),
   originSessionId: z.string().optional(),
   chainState: z.any().optional(),
