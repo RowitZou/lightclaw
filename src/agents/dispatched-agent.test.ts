@@ -118,6 +118,65 @@ test('async fork-like work inherits the parent SessionContext', async () => {
   })
 })
 
+test('worker ALS sessionId aligns with chainState path末端 + chainState rides on SessionContext', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-align')
+
+    let observedSessionId: string | undefined
+    let observedChainState: ChainState | undefined
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'check sessionId alignment',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      callerAgentType: 'main',
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        const inner = await import('../session-context.js').then(m => m.getCurrentSessionContext())
+        observedSessionId = inner?.sessionId
+        observedChainState = inner?.chainState
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    assert.equal(observedSessionId, 'child') // chainState.path[1].sessionId
+    assert.equal(observedChainState?.chainId, 'chain-a')
+    assert.equal(observedChainState?.path.at(-1)?.sessionId, 'child')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('runDispatchedAgent persists a dispatch-history snapshot after a worker completes', async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
   setLightclawHomeOverride(tempDir)
@@ -182,7 +241,11 @@ test('runDispatchedAgent persists a dispatch-history snapshot after a worker com
     assert.deepEqual(snapshot?.discoveredTools, [['WebSearch', 4]])
     assert.deepEqual(snapshot?.todos, [{ content: 'done', activeForm: 'doing', status: 'completed' }])
     assert.equal(snapshot?.compactionCount, 2)
-    assert.equal(snapshot?.sessionMemoryPath, path.join(tempDir, 'sessions', ctx.sessionId, 'session-memory.md'))
+    // Worker ALS sessionId aligns with chainState.path末端 ('child' here),
+    // so snapshot.sessionMemoryPath points at the worker's own session-memory
+    // file rather than the parent main session's. See dispatched-agent.ts
+    // childCtx.sessionId assignment.
+    assert.equal(snapshot?.sessionMemoryPath, path.join(tempDir, 'sessions', 'child', 'session-memory.md'))
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })

@@ -52,6 +52,63 @@ test('forward-progress-to-channel rate-limits progress per session', async () =>
   ])
 })
 
+test('worker-triggered progress is rendered with a chain breadcrumb', async () => {
+  const replies: string[] = []
+  await runWithSessionContext(session('s-worker'), async () => {
+    const ctx = hookContext(text => {
+      replies.push(text)
+    })
+    await forwardProgressToChannelHook.beforeTurn?.(ctx)
+
+    // worker (webSearcher) under main publishes to the chain-root main
+    // sessionId so the hook still finds main's ctx; chainPath drives the
+    // breadcrumb so the user can attribute which agent emitted progress.
+    await getSignalRouter().publish({
+      kind: 'progress',
+      from: { kind: 'role', id: 'webSearcher', sessionId: 'dispatched-x' },
+      to: { kind: 'role', id: 'main', sessionId: 's-worker' },
+      payload: {
+        milestoneLabel: 'fetch alphaXiv top-2',
+        completedCount: 1,
+        totalCount: 3,
+        chainPath: ['main', 'webSearcher'],
+      },
+      timing: { emittedAt: 20_000 },
+      chainId: 'chain-x',
+    })
+  })
+
+  assert.deepEqual(replies, [
+    '[main → webSearcher] Progress: 1/3 completed - fetch alphaXiv top-2',
+  ])
+})
+
+test('main-triggered progress (chainPath of length 1) stays unprefixed', async () => {
+  const replies: string[] = []
+  await runWithSessionContext(session('s-main-only'), async () => {
+    const ctx = hookContext(text => {
+      replies.push(text)
+    })
+    await forwardProgressToChannelHook.beforeTurn?.(ctx)
+
+    await getSignalRouter().publish({
+      kind: 'progress',
+      from: { kind: 'role', id: 'main', sessionId: 's-main-only' },
+      to: { kind: 'role', id: 'main', sessionId: 's-main-only' },
+      payload: {
+        milestoneLabel: 'wrap up',
+        completedCount: 2,
+        totalCount: 2,
+        chainPath: ['main'],
+      },
+      timing: { emittedAt: 30_000 },
+      chainId: 's-main-only',
+    })
+  })
+
+  assert.deepEqual(replies, ['Progress: 2/2 completed - wrap up'])
+})
+
 test('forward-progress-to-channel unregisters active context after end turn', async () => {
   const replies: string[] = []
   await runWithSessionContext(session('s-done'), async () => {

@@ -67,5 +67,18 @@ async function handleProgressSignal(signal: AgentSignal): Promise<void> {
 }
 
 function formatProgress(payload: AgentSignal<'progress'>['payload']): string {
-  return `Progress: ${payload.completedCount}/${payload.totalCount} completed - ${payload.milestoneLabel}`
+  const breadcrumb = formatBreadcrumb(payload.chainPath)
+  const body = `Progress: ${payload.completedCount}/${payload.totalCount} completed - ${payload.milestoneLabel}`
+  return breadcrumb ? `${breadcrumb} ${body}` : body
+}
+
+// Worker-triggered progress arrives via this hook through the chain-root
+// (main) sessionId. Render the chain breadcrumb (`[main → webSearcher]`)
+// to match worker-activity-stream's prefix so users can attribute each
+// progress line. main-triggered progress (chainPath length 1) stays bare.
+function formatBreadcrumb(chainPath: readonly string[] | undefined): string {
+  if (!chainPath || chainPath.length <= 1) {
+    return ''
+  }
+  return `[${chainPath.join(' → ')}]`
 }

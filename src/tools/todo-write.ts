@@ -1,7 +1,13 @@
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
-import { getSessionId, getTodos, setTodos } from '../state.js'
+import {
+  getCurrentChainState,
+  getCurrentRole,
+  getSessionId,
+  getTodos,
+  setTodos,
+} from '../state.js'
 import { persistTodos, validateTodos } from '../todos/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 
@@ -84,23 +90,38 @@ async function maybeEmitProgress(
   if (completed.length === 0) {
     return
   }
-  const sessionId = getSessionId()
+  const triggerSessionId = getSessionId()
   const now = Date.now()
-  const last = lastProgressEmitBySession.get(sessionId) ?? 0
+  const last = lastProgressEmitBySession.get(triggerSessionId) ?? 0
   if (now - last < 5000) {
     return
   }
-  lastProgressEmitBySession.set(sessionId, now)
+  lastProgressEmitBySession.set(triggerSessionId, now)
+  // Resolve trigger role + chain path + chain-root sessionId. Dispatched
+  // workers get all three from chainState; the main turn has no chainState
+  // and falls back to currentRole (== main) + the live sessionId.
+  const chainState = getCurrentChainState()
+  const currentRole = getCurrentRole()
+  const triggerRoleId = currentRole?.agentType ?? 'main'
+  const chainPath = chainState
+    ? chainState.path.map(node => node.role)
+    : [triggerRoleId]
+  const rootSessionId = chainState?.path[0]?.sessionId ?? triggerSessionId
+  const chainId = chainState?.chainId ?? rootSessionId
   await getSignalRouter().publish({
     kind: 'progress',
-    from: { kind: 'role', id: 'main', sessionId },
-    to: { kind: 'role', id: 'main', sessionId },
+    from: { kind: 'role', id: triggerRoleId, sessionId: triggerSessionId },
+    // Route to the chain root (main) so a single subscriber on the channel
+    // out-path picks up both main and worker progress. Subscribers use
+    // payload.chainPath for attribution.
+    to: { kind: 'role', id: 'main', sessionId: rootSessionId },
     payload: {
       milestoneLabel: completed[completed.length - 1].content,
       completedCount: current.filter(todo => todo.status === 'completed').length,
       totalCount: current.length,
+      chainPath,
     },
     timing: { emittedAt: now },
-    chainId: sessionId,
+    chainId,
   })
 }

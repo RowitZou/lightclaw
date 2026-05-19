@@ -100,6 +100,10 @@ export function getCurrentRole(): Role | undefined {
   return currentState().currentRole
 }
 
+export function getCurrentChainState(): import('./signal-bus/chain-state.js').ChainState | undefined {
+  return currentState().chainState
+}
+
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
 }

@@ -7,6 +7,7 @@ import type { PermissionDenialDetail } from './background-task/types.js'
 import type { TodoItem, UsageStats } from './types.js'
 import type { ChannelKey } from './channel-types.js'
 import type { Role } from './agents/types.js'
+import type { ChainState } from './signal-bus/chain-state.js'
 
 export type ChannelFileSendInput = {
   content: Buffer
@@ -84,6 +85,11 @@ export type SessionContext = {
   runtime?: Runtime
   isBackgroundTask?: boolean
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
+  // Dispatch chain this session belongs to. main turn entries leave this
+  // unset; dispatched workers (blocking + background) carry the chain so
+  // role-aware signal publishers (progress, future events) can resolve
+  // attribution and route through the chain root sessionId.
+  chainState?: ChainState
 }
 
 export const sessionContextStorage = new AsyncLocalStorage<SessionContext>()

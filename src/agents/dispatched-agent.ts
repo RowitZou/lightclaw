@@ -182,10 +182,19 @@ export async function runDispatchedAgent(
   const forkContextEndIndex = inheritedMessages.length
   let messagesToPersist: Message[] = messages
   let persistTask: Promise<string | null> | null = null
+  // Worker ALS sessionId comes from the chain path's last node so per-
+  // sessionId state (api-logger dir, todos persist, session-memory, hooks)
+  // splits cleanly from main. The parent fork-transcript path above keeps
+  // using currentCtx.sessionId since that captures "which main session
+  // spawned this fork" on disk. chainState rides on the SessionContext so
+  // role-aware publishers (todo-write → progress) can resolve the chain
+  // path and chain-root sessionId without re-reading invocation state.
   const childCtx = currentCtx
     ? {
         ...currentCtx,
         currentRole: params.role,
+        sessionId: chainSessionId ?? currentCtx.sessionId,
+        chainState: params.chainState,
         ...(resume?.snapshot.todos ? { todos: [...resume.snapshot.todos] } : {}),
         ...(resume?.snapshot.compactionCount !== undefined
           ? { compactionCount: resume.snapshot.compactionCount }

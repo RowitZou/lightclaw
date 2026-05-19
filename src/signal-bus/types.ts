@@ -84,6 +84,12 @@ export type SignalPayload = {
     todoId?: string
     completedCount: number
     totalCount: number
+    // Role chain from main down to the triggering role, derived from
+    // chainState.path at publish time. Single-element ['main'] means
+    // the main agent triggered it directly; ['main', 'webSearcher']
+    // means a dispatched webSearcher TodoWrite produced the progress.
+    // Subscribers use this to render attribution (e.g. breadcrumb prefix).
+    chainPath?: string[]
   }
 }
 
