@@ -123,7 +123,6 @@ export type BackgroundTaskPatch = Partial<
     | 'lastFiredAt'
     | 'consecutiveFailures'
     | 'fireHistory'
-    | 'allowedTools'
     | 'pendingPriorPromptNotice'
   >
 >

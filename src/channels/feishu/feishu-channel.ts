@@ -13,12 +13,6 @@ import type {
 import type { FeishuRawMessage } from './bot-content.js'
 import { clearFeishuClient, createFeishuClient, registerFeishuClient } from './client.js'
 import { FeishuDedup } from './dedup.js'
-import {
-  BackgroundTaskCardCoordinator,
-  clearBackgroundTaskCardCoordinator,
-  registerBackgroundTaskCardCoordinator,
-  type BackgroundTaskCardAction,
-} from './bg-card-coordinator.js'
 import { fileNameFor } from './media.js'
 import {
   PairingCardCoordinator,
@@ -96,9 +90,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       registerFeishuSender(sender)
       registerFeishuClient(client)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
-      const bgCardCoordinator = new BackgroundTaskCardCoordinator(sender)
       const pairingCoordinator = new PairingCardCoordinator(sender)
-      registerBackgroundTaskCardCoordinator(bgCardCoordinator)
       const runner = new ChannelRunner(
         createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator, botSelf),
       )
@@ -217,9 +209,6 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           onMessage,
           onRecall,
           onCardAction: action => {
-            if ('kind' in action && action.kind === 'background_task') {
-              return bgCardCoordinator.handleCardAction(action)
-            }
             if ('kind' in action && action.kind === 'lightclaw_pairing') {
               return pairingCoordinator.handleCardAction(action as PairingCardAction)
             }
@@ -233,7 +222,6 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             clearFeishuSender(sender)
             clearFeishuClient(client)
             clearChannelRunner(runner)
-            clearBackgroundTaskCardCoordinator(bgCardCoordinator)
             return handle.close()
           },
         }
@@ -253,7 +241,6 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           pendingDrainer.stop()
           clearFeishuSender(sender)
           clearFeishuClient(client)
-          clearBackgroundTaskCardCoordinator(bgCardCoordinator)
           return server.close()
         },
       }

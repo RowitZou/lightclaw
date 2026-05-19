@@ -22,7 +22,6 @@ function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
       dispatchId: `dispatch-${idx}`,
       at: idx,
     })),
-    inheritedAllowedTools: [],
     chainStartedAt: 0,
   }
 }

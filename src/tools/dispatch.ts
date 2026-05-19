@@ -19,7 +19,6 @@ import {
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type ScheduleSpec } from '../background-task/types.js'
-import { parseRule } from '../permission/rules.js'
 import { getCurrentRole, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
@@ -34,9 +33,7 @@ import { ChainGuardError, assertChainGuards } from '../signal-bus/chain-guard.js
 import {
   createRootChainState,
   deriveChildChainState,
-  intersectToolPatterns,
   type ChainState,
-  withInheritedAllowedTools,
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
 
@@ -91,13 +88,7 @@ For schedule≠'now' (background) dispatches, additional rules:
 - Do NOT include timing in the prompt — the schedule field already controls when. Phrases like "when the time comes", "after N minutes", "到时间后", "一分钟后" leak scheduling tense into the executor and make it ask the user for clarification instead of doing the work.
   Good: "Get the current Asia/Shanghai time and send the result to me as '现在是 YYYY-MM-DD HH:mm:ss。'"
   Bad:  "After 1 minute, get the current Beijing time and send it to me." / "到时间后获取北京时间发给我。"
-
-## allowed_tools (background only)
-
-Grants this dispatch permission to use specific tools without user approval, using the same pattern syntax as /rules allow.
-- Built-in safe tools are already allowed for background fires: Read, Glob, Grep, TodoWrite, MemoryRead, ListDispatches.
-- Any Bash/WebFetch/Edit/Write/MCP operation the task needs should be listed precisely, e.g. Bash(rsync:*), Bash(find:*), WebFetch(api.example.com), Edit(/tmp/**).
-- Be conservative; if you miss a needed rule, the dispatch will fail with permission details surfaced back to you as a background-task-result so you can decide next steps.
+- The dispatched role's own \`tools\` list IS the authorization for the fire — pick a role whose tool surface fits the task. If a fire hits a high-risk input mid-execution (rm / sudo / writes to /etc / ...), the user will see a one-shot permission card; everything else auto-approves under the role's scope.
 
 ## resumeFrom (optional)
 
@@ -140,32 +131,13 @@ To temporarily disable rather than delete, use UpdateDispatch with \`enabled: fa
 
 Idempotent: cancelling a dispatch that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`
 
-const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dispatch. Mutable fields: prompt, schedule, label, enabled, allowed_tools.
+const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
-Use when you adjust delegated work as the situation evolves: refine the prompt as you learn more, change schedule to fit the user's new ask, pause with enabled=false, or extend allowed_tools after a permission denial surfaces in a background-task-result.
+Use when you adjust delegated work as the situation evolves: refine the prompt as you learn more, change schedule to fit the user's new ask, pause with enabled=false. The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead.
 
-Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead.
-
-\`allowed_tools\` is a FULL REPLACEMENT, not a diff: passing \`["Bash(npm:*)"]\` replaces whatever was there before; include the full intended list. Other fields you don't pass are left unchanged.
-
-If the dispatch is a oneshot that already fired (failed and waiting for retry) and you pass \`allowed_tools\`, an immediate retry is triggered automatically.`
-
-const allowedToolsSchema = z.array(
-  z.string().min(1).refine(isValidPermissionRulePattern, {
-    message: 'invalid permission rule pattern',
-  }),
-).optional()
+Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. Other fields you don't pass are left unchanged.`
 
 const dispatchScheduleSchema = z.union([z.literal('now'), scheduleSpecSchema]).default('now')
-
-function isValidPermissionRulePattern(value: string): boolean {
-  try {
-    const parsed = parseRule(value)
-    return parsed.ruleContent === undefined || parsed.ruleContent.trim().length > 0
-  } catch {
-    return false
-  }
-}
 
 function shortId(): string {
   return randomUUID().slice(0, 8)
@@ -236,7 +208,6 @@ export const dispatchTool = buildTool({
     schedule: dispatchScheduleSchema,
     mode: z.enum(['blocking', 'background']),
     label: z.string().min(2).max(80).optional(),
-    allowed_tools: allowedToolsSchema,
     resumeFrom: z.string().min(1).optional(),
     attachments: z.array(z.string().min(1)).optional(),
   }),
@@ -252,7 +223,6 @@ export async function executeDispatch(
     schedule?: DispatchSchedule
     mode: DispatchMode
     label?: string
-    allowed_tools?: string[]
     resumeFrom?: string
     attachments?: string[]
   },
@@ -289,18 +259,12 @@ export async function executeDispatch(
   const parentChainState = context.chainState ??
     createRootChainState(userId, callerRole, sessionId)
   const childSessionId = input.mode === 'blocking' ? `dispatched-${dispatchId}` : dispatchId
-  const childChainState = deriveChildChainState(
+  const effectiveChildChainState = deriveChildChainState(
     parentChainState,
     calleeRole,
     childSessionId,
     dispatchId,
   )
-  const effectiveChildChainState = input.allowed_tools
-    ? withInheritedAllowedTools(
-        childChainState,
-        intersectToolPatterns(childChainState.inheritedAllowedTools, input.allowed_tools),
-      )
-    : childChainState
   const callerPolicy = resolveRolePolicy(callerRole)
   try {
     assertChainGuards({
@@ -386,7 +350,6 @@ export async function executeDispatch(
       schedule,
       mode: input.mode,
       ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
-      ...(input.allowed_tools ? { allowed_tools: input.allowed_tools } : {}),
       ...(input.label ? { label: input.label } : {}),
       chainState: effectiveChildChainState,
     },
@@ -470,7 +433,6 @@ export async function executeDispatch(
     createdAt: now,
     consecutiveFailures: 0,
     fireHistory: [],
-    ...(input.allowed_tools ? { allowedTools: input.allowed_tools } : {}),
     originSessionId: sessionId,
     chainState: effectiveChildChainState,
   }
@@ -526,11 +488,6 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
       })
     case 'chain-cycle':
       return t('chain.error.cycle', { role: error.callee.agentType })
-    case 'chain-monotonic-violation':
-      return t('chain.error.monotonic_violation', {
-        child: error.chainState.inheritedAllowedTools.join(',') || '(none)',
-        parent: 'parent chain',
-      })
     case 'role-not-reachable':
       return t('chain.error.role_not_reachable', {
         caller: error.chainState.path.at(-2)?.role ?? 'current role',
@@ -563,7 +520,6 @@ export const listDispatchesTool = buildTool({
       nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
       lastFiredAt: task.lastFiredAt ?? null,
       consecutiveFailures: task.consecutiveFailures,
-      allowedTools: task.allowedTools ?? [],
       ...(input.include_history ? { fireHistory: task.fireHistory ?? [] } : {}),
     }))
     return { output: tasks.length === 0 ? 'No active background dispatches.' : JSON.stringify(tasks, null, 2) }
@@ -604,10 +560,10 @@ export const cancelDispatchTool = buildTool({
 
 export const updateDispatchTool = buildTool({
   name: 'UpdateDispatch',
-  whenToUse: `Modify an active dispatch's prompt / schedule / enabled / allowed_tools as the situation evolves.`,
+  whenToUse: `Modify an active dispatch's prompt / schedule / label / enabled as the situation evolves.`,
   shouldDefer: true,
   description: UPDATE_DISPATCH_DESCRIPTION,
-  searchHint: 'update dispatch edit schedule prompt allowed tools pause resume 修改 后台 定时',
+  searchHint: 'update dispatch edit schedule prompt pause resume 修改 后台 定时',
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -616,7 +572,6 @@ export const updateDispatchTool = buildTool({
     schedule: scheduleSpecSchema.optional(),
     label: z.string().min(2).max(80).optional(),
     enabled: z.boolean().optional(),
-    allowed_tools: allowedToolsSchema,
   }),
   async call(input) {
     const userId = requireCurrentUserId()
@@ -637,7 +592,6 @@ export const updateDispatchTool = buildTool({
       ...(schedule ? { schedule } : {}),
       ...(input.label ? { label: input.label } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.allowed_tools !== undefined ? { allowedTools: input.allowed_tools } : {}),
     })
     notifyBackgroundTaskChanged(userId, input.id)
     if (!updated) {
@@ -651,18 +605,10 @@ export const updateDispatchTool = buildTool({
       }
       return { output: `Dispatch not found: ${input.id}`, isError: true }
     }
-    const shouldRetryOneshot =
-      input.allowed_tools !== undefined &&
-      existing?.schedule.kind === 'oneshot' &&
-      existing.lastFiredAt !== undefined
-    if (shouldRetryOneshot) {
-      getBackgroundTaskScheduler().fireImmediate(userId, input.id)
-    }
     return {
       output: [
         `Updated dispatch ${updated.id} (${updated.label}).`,
         `Next run: ${describeNextRun(computeTaskNextRunAt(updated))}`,
-        ...(shouldRetryOneshot ? ['Triggered immediate retry because this oneshot dispatch already fired.'] : []),
       ].join('\n'),
     }
   },

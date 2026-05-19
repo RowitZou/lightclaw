@@ -27,21 +27,20 @@ afterEach(() => {
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
-describe('requestPermission background-task allowlist fallback', () => {
-  it('allows ASK decisions that match taskAllowedTools without an approver', async () => {
+describe('requestPermission background-task fallback', () => {
+  it('auto-allows non-high-risk inputs under role scope without an approver', async () => {
     const decision = await withPermissionState(async () => requestPermission({
       tool: fakeTool('Bash', 'execute'),
       toolInput: { command: 'rsync -av a b' },
       ctx: {
         isSubagent: true,
         isBackgroundTask: true,
-        taskAllowedTools: ['Bash(rsync:*)'],
       },
     }))
     assert.equal(decision.behavior, 'allow')
   })
 
-  it('denies ASK decisions outside taskAllowedTools and reports a denial detail', async () => {
+  it('denies high-risk inputs and reports a denial detail', async () => {
     const denials: unknown[] = []
     const decision = await withPermissionState(async () => requestPermission({
       tool: fakeTool('Bash', 'execute'),
@@ -49,16 +48,12 @@ describe('requestPermission background-task allowlist fallback', () => {
       ctx: {
         isSubagent: true,
         isBackgroundTask: true,
-        taskAllowedTools: ['Bash(rsync:*)'],
         onPermissionDenial(detail) {
           denials.push(detail)
         },
       },
     }))
     assert.equal(decision.behavior, 'deny')
-    if (decision.behavior === 'deny') {
-      assert.match(decision.reason, /background-task-not-in-allowlist/)
-    }
     assert.deepEqual(denials, [{
       toolName: 'Bash',
       inputPreview: 'Command: rm -rf x',
@@ -67,10 +62,9 @@ describe('requestPermission background-task allowlist fallback', () => {
   })
 
   it('does NOT report a denial detail when an identity deny rule causes the deny', async () => {
-    // Adding the suggested rule to task.allowedTools cannot repair this kind of
-    // deny — deny rules outrank allow rules in evaluatePermission, so surfacing
-    // it as a card "[Approve & Retry]" would loop the user. Callback must stay
-    // limited to ask→allowlist-deny to keep the retry loop honest.
+    // Identity deny rules outrank allow rules; surfacing them as a denial
+    // detail would invite the requester to try to override what the user
+    // explicitly forbade. Callback is limited to the bg high-risk path.
     const denials: unknown[] = []
     const ctx = createSessionContext({
       cwd: tmpHome,
@@ -91,7 +85,6 @@ describe('requestPermission background-task allowlist fallback', () => {
       ctx: {
         isSubagent: true,
         isBackgroundTask: true,
-        taskAllowedTools: [],
         onPermissionDenial(detail) {
           denials.push(detail)
         },

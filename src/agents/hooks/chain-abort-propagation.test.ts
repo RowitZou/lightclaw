@@ -29,7 +29,6 @@ test('chain-abort-propagation aborts the main session and blocking chain childre
       { role: 'coder', sessionId: 's-child', dispatchId: 'd1', at: 2 },
       { role: 'background_task', sessionId: 'bg-alice-task-fire', dispatchId: 'd2', at: 3 },
     ],
-    inheritedAllowedTools: ['Read'],
     parentDispatchId: 'd1',
     chainStartedAt: 1,
   }

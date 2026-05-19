@@ -107,7 +107,6 @@ export async function runBackgroundTaskFire(input: {
       }),
       identityRules: loadIdentityRules(input.task.ownerCanonicalUser),
       isBackgroundTask: true,
-      taskAllowedTools: input.task.allowedTools ?? [],
       onPermissionDenial(detail) {
         permissionDenials.push(detail)
       },

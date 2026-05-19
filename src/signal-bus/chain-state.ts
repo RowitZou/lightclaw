@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { Role, RoleResourceAllowlist } from '../agents/types.js'
-
-export type ToolPattern = string
+import type { Role } from '../agents/types.js'
 
 export type ChainNode = {
   role: string
@@ -15,7 +13,6 @@ export type ChainState = {
   chainId: string
   depth: number
   path: ChainNode[]
-  inheritedAllowedTools: ToolPattern[]
   parentDispatchId?: string
   chainStartedAt: number
 }
@@ -35,7 +32,6 @@ export function createRootChainState(
       dispatchId: 'root',
       at: now,
     }],
-    inheritedAllowedTools: normalizeToolPatterns(mainRole.tools),
     chainStartedAt: now,
   }
 }
@@ -46,10 +42,6 @@ export function deriveChildChainState(
   calleeSessionId: string,
   dispatchId: string,
 ): ChainState {
-  const inheritedAllowedTools = intersectToolPatterns(
-    parent.inheritedAllowedTools,
-    normalizeToolPatterns(callee.tools),
-  )
   return {
     chainId: parent.chainId,
     depth: parent.depth + 1,
@@ -62,38 +54,9 @@ export function deriveChildChainState(
         at: Date.now(),
       },
     ],
-    inheritedAllowedTools,
     parentDispatchId: parent.path.at(-1)?.dispatchId,
     chainStartedAt: parent.chainStartedAt,
   }
-}
-
-export function withInheritedAllowedTools(
-  state: ChainState,
-  inheritedAllowedTools: readonly ToolPattern[],
-): ChainState {
-  return {
-    ...state,
-    inheritedAllowedTools: [...inheritedAllowedTools],
-  }
-}
-
-export function intersectToolPatterns(
-  left: readonly ToolPattern[],
-  right: readonly ToolPattern[],
-): ToolPattern[] {
-  if (left.includes('*')) {
-    return [...right]
-  }
-  if (right.includes('*')) {
-    return [...left]
-  }
-  const rightSet = new Set(right)
-  return left.filter(item => rightSet.has(item))
-}
-
-function normalizeToolPatterns(tools: RoleResourceAllowlist): ToolPattern[] {
-  return [...tools]
 }
 
 function sanitizeChainPart(value: string): string {

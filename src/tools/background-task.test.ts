@@ -108,27 +108,20 @@ describe('Dispatch background mode', () => {
       schedule: { kind: 'interval', everyMinutes: 60 },
       mode: 'background',
       label: 'Workspace check',
-      allowed_tools: ['Bash(find:*)'],
     }, fakeContext()))
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
     assert.equal(task.label, 'Workspace check')
     assert.equal(task.notifyTo, 'agent')
-    assert.deepEqual(task.allowedTools, ['Bash(find:*)'])
 
     const updated = await withUser(async () => updateDispatchTool.call({
       id: task.id,
       enabled: false,
       label: 'Paused check',
-      allowed_tools: ['Bash(rsync:*)', 'WebFetch(api.example.com)'],
     }, fakeContext()))
     assert.equal(updated.isError, undefined)
     assert.equal(loadBackgroundTasks('alice')[0].enabled, false)
     assert.equal(loadBackgroundTasks('alice')[0].label, 'Paused check')
-    assert.deepEqual(loadBackgroundTasks('alice')[0].allowedTools, [
-      'Bash(rsync:*)',
-      'WebFetch(api.example.com)',
-    ])
 
     const cancelled = await withUser(async () => cancelDispatchTool.call({
       id: task.id,
@@ -160,14 +153,13 @@ describe('Dispatch background mode', () => {
     assert.equal(reloaded.pendingPriorPromptNotice, 'remind me at 8am that the daily standup is starting')
   })
 
-  it('UpdateDispatch accepts prompt + allowed_tools together in one call', async () => {
+  it('UpdateDispatch accepts a prompt change and stashes the prior prompt notice', async () => {
     const created = await withUser(async () => dispatchTool.call({
       role: 'generalist',
       prompt: 'check the workspace and summarize anything important',
       schedule: { kind: 'interval', everyMinutes: 60 },
       mode: 'background',
       label: 'Workspace check',
-      allowed_tools: ['Bash(find:*)'],
     }, fakeContext()))
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
@@ -175,13 +167,11 @@ describe('Dispatch background mode', () => {
     const updated = await withUser(async () => updateDispatchTool.call({
       id: task.id,
       prompt: 'check the workspace, run pytest, and surface any failing tests with a one-line summary',
-      allowed_tools: ['Bash(find:*)', 'Bash(pytest:*)'],
     }, fakeContext()))
     assert.equal(updated.isError, undefined)
     const reloaded = loadBackgroundTasks('alice')[0]
     assert.match(reloaded.prompt, /pytest/)
     assert.equal(reloaded.notifyTo, 'agent')
-    assert.deepEqual(reloaded.allowedTools, ['Bash(find:*)', 'Bash(pytest:*)'])
     assert.match(reloaded.pendingPriorPromptNotice ?? '', /summarize anything important/)
   })
 
@@ -206,18 +196,6 @@ describe('Dispatch background mode', () => {
     const reloaded = loadBackgroundTasks('alice')[0]
     assert.equal(reloaded.label, 'Renamed check-in')
     assert.equal(reloaded.pendingPriorPromptNotice, undefined)
-  })
-
-  it('rejects malformed allowed_tools patterns during input validation', () => {
-    const parsed = dispatchTool.inputSchema?.safeParse({
-      role: 'generalist',
-      prompt: 'check the workspace and summarize anything important',
-      schedule: { kind: 'interval', everyMinutes: 60 },
-      mode: 'background',
-      label: 'Bad rules',
-      allowed_tools: ['Bash[rsync]'],
-    })
-    assert.equal(parsed?.success, false)
   })
 
   it('CancelDispatch is idempotent on already-finished oneshot (Bug 7)', async () => {

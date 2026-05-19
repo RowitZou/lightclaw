@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
-import { getBackgroundTaskCardCoordinator } from '../channels/feishu/bg-card-coordinator.js'
 import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
-import { isHighRiskRulePattern } from '../permission/high-risk.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import {
   appendCompletedTaskRecord,
@@ -33,31 +31,6 @@ type QueueItem = {
 }
 
 const RETRY_BASE_MS = 2000
-
-/**
- * Effective delivery target for a completed fire. High-risk permission denials
- * are FORCED to the user permission-failure card (regardless of task.notifyTo
- * === 'agent'); the wake path never sees high-risk patterns. This is the
- * Phase 23 safety invariant — surfacing high-risk rules to a human approval
- * card is safer than letting the main agent self-update task.allowedTools in
- * wake mode.
- */
-export function resolveEffectiveNotifyTo(
-  outcome: FireOutcome,
-  taskNotifyTo: 'user' | 'agent',
-): 'user' | 'agent' {
-  if (outcome.kind !== 'failure') {
-    return taskNotifyTo
-  }
-  const denials = outcome.permissionDenials
-  if (!denials || denials.length === 0) {
-    return taskNotifyTo
-  }
-  const hasHighRisk = denials.some(denial =>
-    denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
-  )
-  return hasHighRisk ? 'user' : taskNotifyTo
-}
 
 /**
  * Pick the receiver for a bg-dispatch result, preferring the closest live
@@ -399,27 +372,6 @@ export class BackgroundTaskScheduler {
       })
     }
 
-    if (outcome.kind === 'failure' && hasHighRiskPermissionDenial(outcome)) {
-      const coordinator = getBackgroundTaskCardCoordinator()
-      if (!coordinator) {
-        process.stderr.write(
-          `[background-task] ${task.id} fire ${fireUuid} high-risk permission failure but no Feishu card coordinator is registered\n`,
-        )
-        return
-      }
-      await coordinator.sendCompletionCard({
-        fireUuid,
-        task,
-        ownerCanonicalUser: canonicalUser,
-        ownerOpenId,
-        outcome,
-        firedAt,
-        ...(autopaused ? { autopaused: true } : {}),
-        ...(priorPromptNotice ? { priorPromptNotice } : {}),
-      })
-      return
-    }
-
     const outcomeLabel = outcomeKindForBackgroundResult(outcome)
     const resultText = outcome.kind === 'success'
       ? outcome.summary
@@ -500,13 +452,6 @@ export class BackgroundTaskScheduler {
       chainId: mainSessionId,
     })
   }
-}
-
-function hasHighRiskPermissionDenial(outcome: FireOutcome): boolean {
-  if (outcome.kind !== 'failure') return false
-  return (outcome.permissionDenials ?? []).some(denial =>
-    denial.suggestedRules.some(rule => isHighRiskRulePattern(rule)),
-  )
 }
 
 function outcomeKindForBackgroundResult(

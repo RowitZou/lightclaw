@@ -140,7 +140,6 @@ test('executeDispatch rejects dispatches beyond max chain depth', async () => {
       { role: 'coder', sessionId: 's2', dispatchId: 'd2', at: 3 },
       { role: 'localExplorer', sessionId: 's3', dispatchId: 'd3', at: 4 },
     ],
-    inheritedAllowedTools: ['Read', 'Dispatch'],
     parentDispatchId: 'd3',
     chainStartedAt: 1,
   }

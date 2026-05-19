@@ -19,7 +19,6 @@ test('appendDispatchAudit writes chainState snapshot into dispatch log', async (
         { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
         { role: 'reviewer', sessionId: 's-reviewer', dispatchId: 'd1', at: 2 },
       ],
-      inheritedAllowedTools: ['Read', 'Dispatch'],
       parentDispatchId: 'root',
       chainStartedAt: 1,
     }
@@ -52,8 +51,6 @@ test('appendDispatchAudit writes chainState snapshot into dispatch log', async (
     assert.equal(row.chainState.depth, 1)
     assert.equal(row.resumeFromDispatchId, 'dispatch-prior')
     assert.deepEqual(row.chainState.path.map((node: { role: string }) => node.role), ['main', 'reviewer'])
-    assert.deepEqual(row.chainState.inheritedAllowedTools, ['Read', 'Dispatch'])
-    assert.deepEqual(row.inheritedAllowedTools, ['Read', 'Dispatch'])
   } finally {
     setLightclawHomeOverride(undefined)
     await rm(tmpHome, { recursive: true, force: true })

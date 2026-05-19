@@ -5,7 +5,6 @@ import type { Role } from '../agents/types.js'
 import {
   createRootChainState,
   deriveChildChainState,
-  intersectToolPatterns,
 } from './chain-state.js'
 
 const mainRole: Role = {
@@ -40,7 +39,6 @@ test('createRootChainState initializes a root dispatch chain', () => {
   assert.equal(root.path.length, 1)
   assert.equal(root.path[0]?.role, 'main')
   assert.equal(root.path[0]?.sessionId, 'feishu:dm:1')
-  assert.deepEqual(root.inheritedAllowedTools, ['*'])
   assert.equal(root.chainStartedAt, root.path[0]?.at)
 })
 
@@ -53,10 +51,9 @@ test('deriveChildChainState increments depth and inherits root timestamps', () =
   assert.equal(child.parentDispatchId, 'root')
   assert.equal(child.chainStartedAt, root.chainStartedAt)
   assert.deepEqual(child.path.map(node => node.role), ['main', 'reviewer'])
-  assert.deepEqual(child.inheritedAllowedTools, ['Read', 'Grep', 'Dispatch'])
 })
 
-test('deriveChildChainState keeps allowed tools monotonic across multiple hops', () => {
+test('deriveChildChainState records the full path across multiple hops', () => {
   const root = createRootChainState('alice', mainRole, 'root-session')
   const reviewer = deriveChildChainState(root, reviewerRole, 'reviewer-session', 'd1')
   const coder = deriveChildChainState(reviewer, coderRole, 'coder-session', 'd2')
@@ -64,11 +61,4 @@ test('deriveChildChainState keeps allowed tools monotonic across multiple hops',
   assert.equal(coder.depth, 2)
   assert.equal(coder.parentDispatchId, 'd1')
   assert.deepEqual(coder.path.map(node => node.role), ['main', 'reviewer', 'coder'])
-  assert.deepEqual(coder.inheritedAllowedTools, ['Read', 'Dispatch'])
-})
-
-test('intersectToolPatterns treats wildcard as inherited upper bound', () => {
-  assert.deepEqual(intersectToolPatterns(['*'], ['Read', 'Write']), ['Read', 'Write'])
-  assert.deepEqual(intersectToolPatterns(['Read', 'Write'], ['*']), ['Read', 'Write'])
-  assert.deepEqual(intersectToolPatterns(['Read', 'Bash'], ['Read', 'Write']), ['Read'])
 })

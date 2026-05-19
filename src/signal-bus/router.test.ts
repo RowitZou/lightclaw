@@ -70,7 +70,6 @@ describe('SignalRouter', () => {
         { role: 'reviewer', sessionId: 's-reviewer', dispatchId: 'd1', at: 2_000 },
         { role: 'coder', sessionId: 's-coder', dispatchId: 'd2', at: 3_000 },
       ],
-      inheritedAllowedTools: ['Read'],
       parentDispatchId: 'd1',
       chainStartedAt: 1_000,
     }

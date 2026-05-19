@@ -113,7 +113,6 @@ export async function dispatchToolCall(
         signal: ctx.signal,
         permissionApprover: ctx.permissionApprover,
         isBackgroundTask: sessionCtx?.isBackgroundTask,
-        taskAllowedTools: sessionCtx?.taskAllowedTools,
         onPermissionDenial: sessionCtx?.onPermissionDenial,
       },
     })

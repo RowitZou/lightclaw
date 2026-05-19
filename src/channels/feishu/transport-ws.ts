@@ -5,7 +5,6 @@ import * as Lark from '@larksuiteoapi/node-sdk'
 import { t } from '../../i18n/index.js'
 import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
-import type { BackgroundTaskCardAction } from './bg-card-coordinator.js'
 import { FeishuDedup } from './dedup.js'
 import type { PairingCardAction } from './pairing-card.js'
 import type {
@@ -100,7 +99,7 @@ export async function startFeishuWsClient(input: {
    */
   onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | BackgroundTaskCardAction | PairingCardAction,
+    action: FeishuCardAction | PairingCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -236,7 +235,7 @@ export async function startFeishuWsClient(input: {
 
 function normalizeCardAction(
   data: unknown,
-): FeishuCardAction | BackgroundTaskCardAction | PairingCardAction | null {
+): FeishuCardAction | PairingCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -247,7 +246,6 @@ function normalizeCardAction(
   const value = parseActionValue(action?.value)
   if (
     value?.kind !== 'lightclaw_permission' &&
-    value?.kind !== 'lightclaw_bg_task' &&
     value?.kind !== 'lightclaw_pairing'
   ) {
     return null
@@ -264,27 +262,6 @@ function normalizeCardAction(
     stringValue(operatorId?.open_id) ??
     stringValue(user?.open_id) ??
     stringValue(userId?.open_id)
-
-  if (value.kind === 'lightclaw_bg_task') {
-    const actionKind =
-      value.action === 'retry_now' || value.action === 'approve_and_retry'
-        ? value.action
-        : null
-    const fireUuid = stringValue(value.fireUuid)
-    const taskId = stringValue(value.taskId)
-    const ownerCanonicalUser = stringValue(value.ownerCanonicalUser)
-    if (!actionKind || !fireUuid || !taskId || !ownerCanonicalUser) {
-      return null
-    }
-    return {
-      kind: 'background_task',
-      action: actionKind,
-      fireUuid,
-      taskId,
-      ownerCanonicalUser,
-      ...(operatorOpenId ? { operatorOpenId } : {}),
-    }
-  }
 
   if (value.kind === 'lightclaw_pairing') {
     const actionKind =

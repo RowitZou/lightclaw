@@ -83,7 +83,6 @@ export type SessionContext = {
   lastMemoryNudgeTurn: number
   runtime?: Runtime
   isBackgroundTask?: boolean
-  taskAllowedTools?: string[]
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }
 
@@ -147,7 +146,6 @@ export function createSessionContext(input: {
   resourceGrantTarget?: ResourceGrantTarget
   runtime?: Runtime
   isBackgroundTask?: boolean
-  taskAllowedTools?: string[]
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }): SessionContext {
   return {
@@ -180,7 +178,6 @@ export function createSessionContext(input: {
     lastMemoryNudgeTurn: 0,
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
-    taskAllowedTools: input.taskAllowedTools,
     onPermissionDenial: input.onPermissionDenial,
   }
 }

@@ -7,7 +7,6 @@ import type { ChainState } from './chain-state.js'
 export type ChainGuardReason =
   | 'chain-too-deep'
   | 'chain-cycle'
-  | 'chain-monotonic-violation'
   | 'role-not-reachable'
 
 export class ChainGuardError extends Error {
@@ -50,18 +49,6 @@ export function assertChainGuards(input: {
     )
   }
 
-  if (
-    !isSubsetOfToolPatterns(input.child.inheritedAllowedTools, input.parent.inheritedAllowedTools) ||
-    !isSubsetOfToolPatterns(input.child.inheritedAllowedTools, input.callee.tools)
-  ) {
-    throw new ChainGuardError(
-      'chain-monotonic-violation',
-      input.child,
-      input.callee,
-      'Dispatched allowed tools are wider than the parent chain allows.',
-    )
-  }
-
   if (!isDispatchTargetReachable(input.callerPolicy, input.callee.agentType)) {
     throw new ChainGuardError(
       'role-not-reachable',
@@ -74,18 +61,4 @@ export function assertChainGuards(input: {
 
 export function effectiveMaxChainDepth(config: { dispatch: DispatchConfig }): number {
   return Math.min(config.dispatch.maxChainDepth, config.dispatch.maxChainDepthCeiling)
-}
-
-export function isSubsetOfToolPatterns(
-  child: readonly string[],
-  parent: readonly string[],
-): boolean {
-  if (parent.includes('*')) {
-    return true
-  }
-  if (child.includes('*')) {
-    return parent.includes('*')
-  }
-  const parentSet = new Set(parent)
-  return child.every(item => parentSet.has(item))
 }

@@ -55,13 +55,13 @@ describe('background-task store', () => {
   })
 
   it('saves and loads tasks atomically', () => {
-    const task = { ...fakeTask('alice', 'task-1'), allowedTools: ['Bash(rsync:*)'] }
+    const task = fakeTask('alice', 'task-1')
     saveBackgroundTasks('alice', [task])
     assert.deepEqual(loadBackgroundTasks('alice'), [task])
     assert.ok(existsSync(backgroundTaskStorePath('alice')))
   })
 
-  it('lazy-migrates v1 stores without allowedTools and saves back as v2', () => {
+  it('lazy-migrates v1 stores and saves back as v2', () => {
     const target = backgroundTaskStorePath('alice')
     mkdirSync(path.dirname(target), { recursive: true })
     writeFileSync(target, JSON.stringify({
@@ -71,12 +71,10 @@ describe('background-task store', () => {
 
     const loaded = loadBackgroundTasks('alice')
     assert.equal(loaded.length, 1)
-    assert.equal(loaded[0].allowedTools, undefined)
 
-    saveBackgroundTasks('alice', [{ ...loaded[0], allowedTools: ['Bash(find:*)'] }])
+    saveBackgroundTasks('alice', loaded)
     const raw = JSON.parse(readFileSync(target, 'utf8'))
     assert.equal(raw.version, 2)
-    assert.deepEqual(raw.tasks[0].allowedTools, ['Bash(find:*)'])
   })
 
   it("backfills role='generalist' for legacy entries persisted before Phase 8 PR5", () => {

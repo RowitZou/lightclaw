@@ -56,6 +56,5 @@ export type PermissionContext = {
   signal?: AbortSignal
   permissionApprover?: PermissionApprover
   isBackgroundTask?: boolean
-  taskAllowedTools?: string[]
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
 }

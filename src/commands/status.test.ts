@@ -131,7 +131,6 @@ function chain(pathRows: Array<[string, string, string, number]>): ChainState {
       dispatchId,
       at,
     })),
-    inheritedAllowedTools: ['Read', 'Dispatch'],
     parentDispatchId: pathRows.at(-2)?.[2],
     chainStartedAt: pathRows[0]?.[3] ?? 0,
   }

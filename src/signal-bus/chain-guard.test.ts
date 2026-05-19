@@ -7,7 +7,6 @@ import type { LightClawConfig } from '../config.js'
 import {
   createRootChainState,
   deriveChildChainState,
-  withInheritedAllowedTools,
 } from './chain-state.js'
 import {
   ChainGuardError,
@@ -58,20 +57,6 @@ test('assertChainGuards rejects chain-cycle', () => {
     callee: reviewerRole,
     config: config(),
   }), 'chain-cycle')
-})
-
-test('assertChainGuards rejects chain-monotonic-violation', () => {
-  const root = createRootChainState('alice', mainRole, 'root-session')
-  const reviewer = deriveChildChainState(root, reviewerRole, 'reviewer-session', 'd1')
-  const widened = withInheritedAllowedTools(reviewer, ['Read', 'Write', 'Dispatch'])
-
-  assertReason(() => assertChainGuards({
-    parent: root,
-    child: widened,
-    callerPolicy: policy(['reviewer']),
-    callee: reviewerRole,
-    config: config(),
-  }), 'chain-monotonic-violation')
 })
 
 test('assertChainGuards rejects role-not-reachable', () => {

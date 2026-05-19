@@ -15,7 +15,6 @@ export type DispatchAuditRecord = {
   depth?: number
   status?: 'start' | 'complete' | 'failed' | 'rejected-by-guard' | 'aborted'
   chainStatePath?: ChainState['path']
-  inheritedAllowedTools?: string[]
   chainStartedAt?: number
   caller: { role: string; sessionId?: string }
   callee: { role: string; internalRole?: string; sessionId?: string }
@@ -47,7 +46,6 @@ function enrichDispatchAuditRecord(record: DispatchAuditRecord): DispatchAuditRe
     depth: record.depth ?? record.chainState?.depth,
     status: record.status ?? statusFromOutcome(record.outcome),
     chainStatePath: record.chainStatePath ?? record.chainState?.path,
-    inheritedAllowedTools: record.inheritedAllowedTools ?? record.chainState?.inheritedAllowedTools,
     chainStartedAt: record.chainStartedAt ?? record.chainState?.chainStartedAt,
   }
 }

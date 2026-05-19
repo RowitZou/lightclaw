@@ -108,14 +108,11 @@ describe('runBackgroundTaskFire', () => {
     }
   })
 
-  it('marks the inner SessionContext as background task and passes task allowedTools', async () => {
-    let observed = { isBackgroundTask: false as boolean | undefined, allowedTools: undefined as string[] | undefined }
+  it('marks the inner SessionContext as background task', async () => {
+    let observed = { isBackgroundTask: false as boolean | undefined }
     setBackgroundTaskQueryForTest(async () => {
       const ctx = requireSessionContext()
-      observed = {
-        isBackgroundTask: ctx.isBackgroundTask,
-        allowedTools: ctx.taskAllowedTools,
-      }
+      observed = { isBackgroundTask: ctx.isBackgroundTask }
       return {
         messages: [],
         assistantText: 'ok',
@@ -129,14 +126,12 @@ describe('runBackgroundTaskFire', () => {
       task: fakeTask({
         id: 'alice-task1',
         ownerCanonicalUser: 'alice',
-        allowedTools: ['Bash(rsync:*)'],
       }),
       fireUuid: 'fire-allowed',
       signal: new AbortController().signal,
     })
 
     assert.equal(observed.isBackgroundTask, true)
-    assert.deepEqual(observed.allowedTools, ['Bash(rsync:*)'])
   })
 
   it('turns collected permission denials into a failure outcome', async () => {

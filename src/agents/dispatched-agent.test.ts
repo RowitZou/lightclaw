@@ -344,7 +344,6 @@ function makeChainState(dispatchId: string): ChainState {
       { role: 'main', sessionId: 'parent', dispatchId: 'root', at: 1 },
       { role: 'test-worker', sessionId: 'child', dispatchId, at: 2 },
     ],
-    inheritedAllowedTools: [],
     parentDispatchId: 'root',
     chainStartedAt: 1,
   }

@@ -28,10 +28,10 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
 })
 
 const EXPECTED = {
-  Dispatch: 'c8dc037805e63787d4df57b6146f453095c2221cbf8bd6e49dc2e7d5f6d4d0f1',
+  Dispatch: '7b484d61374afa49cd53e26d41a27b9c387479fadebebe467e19eab2c3312b10',
   ListDispatches: 'da49c1dd13f59696253688581ff42eed5469adbf9cf6d82b18f6a8eb0e9bba58',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
-  UpdateDispatch: 'a823f127ab8b773f1cf94217bdb80b5f75037e7ad83462881f6cf996b405fa3b',
+  UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
   // Main template is byte-identical to the pre-split BACKGROUND_TASK_RESULT_BLOCK_TEMPLATE.
   BackgroundTaskResultBlockMain: '5e7c00f274656c36eab17ab59b6dc61f7b945b5b86386ff659e2dbed9ae99a18',

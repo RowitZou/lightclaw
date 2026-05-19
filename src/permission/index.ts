@@ -10,7 +10,7 @@ import {
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
-import { commandContainsHighRiskBash, isHighRiskPathLiteral } from './high-risk.js'
+import { commandContainsHighRiskBash, isHighRiskAsk, isHighRiskPathLiteral } from './high-risk.js'
 import { evaluatePermission } from './policy.js'
 import { formatRule } from './rules.js'
 import { loadIdentityRules } from './storage.js'
@@ -19,7 +19,6 @@ import type {
   PermissionDecision,
   PermissionRuleValue,
 } from './types.js'
-import { matchesUnattendedAllowlist } from './unattended-allowlist.js'
 
 export async function requestPermission(input: {
   tool: Tool
@@ -100,28 +99,30 @@ export async function requestPermission(input: {
     if (approver) {
       decision = await approver.ask(askInput)
     } else if (ctx.isBackgroundTask) {
-      if (matchesUnattendedAllowlist(tool, toolInput, ctx.taskAllowedTools)) {
-        decision = { behavior: 'allow' }
-      } else {
+      // bg-fire (no approver). The role's `tools` allowlist already passed
+      // at canUseTool — by the time we reach here, the tool itself is
+      // authorized for this role. The only remaining decision is
+      // input-level: high-risk inputs must reach a human; everything else
+      // auto-allows because the role IS the authorization scope.
+      if (isHighRiskAsk(askInput)) {
         decision = {
           behavior: 'deny',
           reason: [
-            `Permission denied: ${tool.name} not in background-task allowlist.`,
-            `background-task-not-in-allowlist: ${tool.name} requires confirmation in ${mode} mode, but no approver is attached.`,
-            'Add this operation to the task allowed_tools and retry.',
+            `Permission denied: ${tool.name} requires confirmation for this input (high-risk).`,
+            'A user permission card has been queued; once the user clicks Allow this fire can retry.',
           ].join(' '),
         }
-        // Only the ask→fallback-deny path is repairable by adding the suggested
-        // rule to task.allowedTools. Identity deny rules (verdict.behavior ===
-        // 'deny' below) are NOT repairable that way — task.allowedTools is
-        // outranked by deny rules in evaluatePermission, so surfacing those
-        // denials would loop the user through approve→retry→deny indefinitely.
-        // Keep the callback strictly to "verdict was ask, allowlist denied".
+        // Collect for the high-risk → user card path in
+        // scheduler.deliverCompletion. Identity deny rules (verdict
+        // 'deny' below) are intentionally NOT collected — those are explicit
+        // /rules deny, not repairable by a card click.
         ctx.onPermissionDenial?.({
           toolName: tool.name,
           inputPreview,
           suggestedRules: suggestedRules.map(formatRule),
         })
+      } else {
+        decision = { behavior: 'allow' }
       }
     } else {
       decision = {
