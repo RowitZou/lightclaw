@@ -4,6 +4,7 @@ import { getMainRole } from '../agents/registry.js'
 import type { Role } from '../agents/types.js'
 import { maybeSweepForkTranscripts } from '../agents/fork-transcript-retention.js'
 import { parseForkTranscriptFile } from '../agents/fork-transcript.js'
+import { getSignalRouter } from '../signal-bus/router.js'
 import { collectAssistantText } from '../messages.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
@@ -303,7 +304,11 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
         console.error(`[memory aging] eviction failed: ${message}`)
       }
       try {
-        await maybeSweepForkTranscripts(current.config.paths.sessions)
+        const router = getSignalRouter()
+        await maybeSweepForkTranscripts(current.config.paths.sessions, {
+          ephemeralTtlMs: current.config.dispatch.ephemeralSessionTtlMs,
+          activeSessionIds: router.getAllActiveSessionIds(),
+        })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[fork-transcript] retention sweep failed: ${message}`)
