@@ -6,8 +6,7 @@ import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
   loadUserRlaunchMounts,
   normalizeRlaunchMountPath,
-  removeUserRlaunchMount,
-  setUserRlaunchMount,
+  saveUserRlaunchMounts,
   userMountToRuntimeMount,
   type RlaunchMountMode,
   type UserRlaunchMount,
@@ -26,8 +25,8 @@ type MountCommandDeps = {
 const USAGE = [
   'Usage:',
   '  /mount list',
-  '  /mount add <absolute-gpfs-path> [--ro|--rw]',
-  '  /mount remove <absolute-gpfs-path>',
+  '  /mount add <absolute-gpfs-path...> [--ro|--rw]',
+  '  /mount remove <absolute-gpfs-path...>',
   '',
   'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.',
   'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
@@ -61,56 +60,101 @@ export async function runMountCommand(
   }
 
   if (action === 'add') {
-    const parsed = parseAddArgs(parts.slice(1))
+    const parsed = parseMountAddInput(parts.slice(1))
     if (typeof parsed === 'string') {
       return `${parsed}\n`
     }
-    const { mountPath, mode } = parsed
-    const validation = await validateMountPath(ctxWithUser, mountPath, mode)
-    if (validation) {
-      return validation
+    const { mountPaths, mode } = parsed
+    for (const mountPath of mountPaths) {
+      const validation = await validateMountPath(ctxWithUser, mountPath, mode)
+      if (validation) {
+        return validation
+      }
     }
     const current = loadUserRlaunchMounts(userId)
-    const next = [
-      ...current.filter(mount => mount.path !== mountPath),
-      { path: mountPath, mode },
-    ].sort((a, b) => a.path.localeCompare(b.path))
+    const currentByPath = new Map(current.map(mount => [mount.path, mount.mode] as const))
+    const nextByPath = new Map(currentByPath)
+    for (const mountPath of mountPaths) {
+      nextByPath.set(mountPath, mode)
+    }
+    const next = mountsFromMap(nextByPath)
     const overlapError = validateMountTable(ctxWithUser, next)
     if (overlapError) {
       return `${overlapError}\n`
     }
-    const result = setUserRlaunchMount(userId, mountPath, mode)
-    if (!result.changed) {
-      return `Mount already exists: ${mountPath} (mode=${mode}). No restart needed.\n`
+    const added = mountPaths.filter(mountPath => !currentByPath.has(mountPath))
+    const updated = mountPaths.filter(mountPath => {
+      const previousMode = currentByPath.get(mountPath)
+      return previousMode !== undefined && previousMode !== mode
+    })
+    const unchanged = mountPaths.filter(mountPath => currentByPath.get(mountPath) === mode)
+    if (added.length === 0 && updated.length === 0) {
+      return mountPaths.length === 1
+        ? `Mount already exists: ${mountPaths[0]} (mode=${mode}). No restart needed.\n`
+        : [
+            `Mounts already exist with mode=${mode}:`,
+            ...formatPathList(unchanged),
+            'No restart needed.',
+            '',
+          ].join('\n')
     }
+    saveUserRlaunchMounts(userId, next)
     const restart = await restartAfterMountChange(deps)
-    const verb = result.updated ? 'Updated' : 'Added'
+    if (mountPaths.length === 1) {
+      const verb = updated.length > 0 ? 'Updated' : 'Added'
+      return [
+        `${verb} rlaunch mount: ${mountPaths[0]}`,
+        `mode: ${mode}`,
+        `worker path: ${mountPaths[0]}`,
+        restart,
+        '',
+      ].join('\n')
+    }
     return [
-      `${verb} rlaunch mount: ${mountPath}`,
+      ...(added.length > 0 ? ['Added rlaunch mounts:', ...formatPathList(added)] : []),
+      ...(updated.length > 0 ? ['Updated rlaunch mounts:', ...formatPathList(updated)] : []),
+      ...(unchanged.length > 0 ? ['Already present:', ...formatPathList(unchanged)] : []),
       `mode: ${mode}`,
-      `worker path: ${mountPath}`,
+      'worker paths: same as host paths',
       restart,
       '',
     ].join('\n')
   }
 
   if (action === 'remove' || action === 'rm') {
-    if (parts.length !== 2) {
+    if (parts.length < 2) {
       return `${USAGE}\n`
     }
-    let mountPath: string
-    try {
-      mountPath = normalizeRlaunchMountPath(parts[1]!)
-    } catch (error) {
-      return `${error instanceof Error ? error.message : String(error)}\n`
+    const parsed = parseMountRemoveInput(parts.slice(1))
+    if (typeof parsed === 'string') {
+      return `${parsed}\n`
     }
-    const result = removeUserRlaunchMount(userId, mountPath)
-    if (!result.removed) {
-      return `Mount not found: ${result.path}\n`
+    const current = loadUserRlaunchMounts(userId)
+    const removeSet = new Set(parsed)
+    const removed = current.filter(mount => removeSet.has(mount.path)).map(mount => mount.path)
+    const missing = parsed.filter(mountPath => !current.some(mount => mount.path === mountPath))
+    if (removed.length === 0) {
+      return parsed.length === 1
+        ? `Mount not found: ${parsed[0]}\n`
+        : [
+            'Mounts not found:',
+            ...formatPathList(missing),
+            '',
+          ].join('\n')
     }
+    saveUserRlaunchMounts(userId, current.filter(mount => !removeSet.has(mount.path)))
     const restart = await restartAfterMountChange(deps)
+    if (parsed.length === 1) {
+      return [
+        `Removed rlaunch mount: ${removed[0]}`,
+        restart,
+        '',
+      ].join('\n')
+    }
     return [
-      `Removed rlaunch mount: ${result.path}`,
+      'Removed rlaunch mounts:',
+      ...formatPathList(removed),
+      ...(missing.length > 0 ? ['Mounts not found:', ...formatPathList(missing)] : []),
       restart,
       '',
     ].join('\n')
@@ -132,9 +176,14 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   ].join('\n')
 }
 
-function parseAddArgs(
+/** Parses `/mount add` arguments: any number of positional paths, plus an
+ *  optional `--ro` / `--rw` flag for mode (default `--ro`). Flag may appear
+ *  before or after the paths. Conflicting flags (both --ro and --rw) and
+ *  unknown `--*` flags produce explicit errors. Returns deduped, sorted
+ *  absolute paths plus the resolved mode. */
+function parseMountAddInput(
   rest: readonly string[],
-): { mountPath: string; mode: RlaunchMountMode } | string {
+): { mountPaths: string[]; mode: RlaunchMountMode } | string {
   const positional: string[] = []
   let mode: RlaunchMountMode | undefined
   for (const token of rest) {
@@ -150,14 +199,25 @@ function parseAddArgs(
       positional.push(token)
     }
   }
-  if (positional.length !== 1) {
-    return USAGE
+  if (positional.length === 0) {
+    return 'At least one rlaunch mount path is required.'
   }
   try {
     return {
-      mountPath: normalizeRlaunchMountPath(positional[0]!),
+      mountPaths: dedupePaths(positional.map(normalizeRlaunchMountPath)),
       mode: mode ?? 'ro',
     }
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+function parseMountRemoveInput(rawPaths: string[]): string[] | string {
+  if (rawPaths.length === 0) {
+    return 'At least one rlaunch mount path is required.'
+  }
+  try {
+    return dedupePaths(rawPaths.map(normalizeRlaunchMountPath))
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
@@ -216,6 +276,20 @@ function validateMountTable(
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
+}
+
+function mountsFromMap(mounts: ReadonlyMap<string, RlaunchMountMode>): UserRlaunchMount[] {
+  return [...mounts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([mountPath, mode]) => ({ path: mountPath, mode }))
+}
+
+function dedupePaths(paths: readonly string[]): string[] {
+  return [...new Set(paths)].sort((a, b) => a.localeCompare(b))
+}
+
+function formatPathList(paths: readonly string[]): string[] {
+  return paths.map(mountPath => `- ${mountPath}`)
 }
 
 async function restartAfterMountChange(deps: MountCommandDeps): Promise<string> {
