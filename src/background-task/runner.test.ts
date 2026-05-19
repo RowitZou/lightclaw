@@ -12,28 +12,10 @@ import type { Message } from '../types.js'
 import {
   buildBackgroundTaskFirePrompt,
   buildBackgroundTaskSessionId,
-  createBackgroundTaskCanUseTool,
   runBackgroundTaskFire,
   setBackgroundTaskQueryForTest,
 } from './runner.js'
 import type { BackgroundTaskEntry } from './types.js'
-
-describe('background-task runner tool gate', () => {
-  it('blocks recursive BackgroundTask calls', async () => {
-    const gate = createBackgroundTaskCanUseTool()
-    const decision = await gate(fakeTool('BackgroundTask'), {})
-    assert.deepEqual(decision, {
-      behavior: 'deny',
-      reason: 'BackgroundTask cannot be invoked from inside a background task.',
-    })
-  })
-
-  it('allows normal tools so scheduled jobs can do real work', async () => {
-    const gate = createBackgroundTaskCanUseTool()
-    assert.deepEqual(await gate(fakeTool('Read'), {}), { behavior: 'allow' })
-    assert.deepEqual(await gate(fakeTool('Dispatch'), {}), { behavior: 'allow' })
-  })
-})
 
 describe('buildBackgroundTaskFirePrompt', () => {
   it('embeds the task instruction inside an <instruction> block within the envelope', () => {
@@ -284,21 +266,20 @@ describe('runBackgroundTaskFire', () => {
     }
   })
 
-  it('threads task.role through to the query role.agentType (Phase 8 PR5 wiring)', async () => {
-    // Bug fix: bg fire runner used to hardcode role.agentType='background_task'
-    // and lose Phase 8 PR5's stored task.role. That caused every bg-fire
-    // MemoryWrite to land in <memoryDir>/background_task/ instead of the
-    // scheduled worker's L3 (e.g. <memoryDir>/webSearcher/). This test pins
-    // the wiring: the role passed to query() carries task.role as agentType
-    // so currentRole-driven attribution (L3 routing, audit role field,
-    // per-role extract owner) lands under the right worker.
+  it('threads task.role through to query as the real registered worker Role', async () => {
+    // bg-fire used to spread main's role definition and override agentType
+    // to a literal 'background_task' — frankenstein with main's wide tool
+    // surface and worker badge. Now it looks up the real worker Role via
+    // getAgent(task.role), so currentRole-driven attribution (L3 routing,
+    // audit role field, per-role extract owner) lands under the right
+    // worker AND tool/canUseTool gates act on the worker's real surface.
     let observedAgentType = ''
-    let observedName: string | undefined = undefined
     let observedKind: string | undefined = undefined
+    let observedToolsListsDispatch = false
     setBackgroundTaskQueryForTest(async input => {
       observedAgentType = input.role.agentType
-      observedName = input.role.name
       observedKind = input.role.kind
+      observedToolsListsDispatch = (input.role.tools as readonly string[]).includes('Dispatch')
       return {
         messages: [],
         assistantText: 'ok',
@@ -319,8 +300,79 @@ describe('runBackgroundTaskFire', () => {
     })
 
     assert.equal(observedAgentType, 'webSearcher')
-    assert.equal(observedName, 'webSearcher')
     assert.equal(observedKind, 'worker')
+    // webSearcher is a leaf in the dispatch matrix — does NOT list Dispatch.
+    // The pre-cleanup frankenstein role would have inherited main's Dispatch.
+    assert.equal(observedToolsListsDispatch, false)
+  })
+
+  it('canUseTool denies Notify for bg-fire even when task.role inherits a wildcard surface', async () => {
+    // The Notify-in-bg-fire incident (2026-05-18 stock monitoring dogfood):
+    // bg-fire called Notify(target='this-chat') 6 times, all silently
+    // re-routed to user-DM because the bg-fire sessionId is not Feishu-
+    // formatted. Root cause was bg-fire's hand-rolled canUseTool bypassed
+    // BLOCKED_WORKER_TOOLS entirely. Now that bg-fire uses
+    // deriveCanUseTool(role) like every other worker, Notify is rejected
+    // at the visibility layer and the bus → main path is the only way for
+    // a bg-fire signal to become a user-facing card.
+    let observedBehavior: string | null = null
+    setBackgroundTaskQueryForTest(async input => {
+      const decision = await input.invocation.canUseTool!(fakeTool('Notify'), {})
+      observedBehavior = decision.behavior
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({
+        id: 'alice-task1',
+        ownerCanonicalUser: 'alice',
+        role: 'webSearcher',
+      }),
+      fireUuid: 'fire-notify-deny',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(observedBehavior, 'deny')
+  })
+
+  it('scheduled feishuSecretary still gets Feishu tools (regression guard for catalog filter)', async () => {
+    // Per Phase 8 PR5 + dispatch matrix, scheduled feishuSecretary tasks
+    // (e.g. "every Monday generate the Feishu weekly report") need their
+    // FEISHU_RESERVED_TOOLS to survive the bg-fire canUseTool + catalog
+    // filter. The frankenstein role's tools:['*'] would have stripped
+    // them via FEISHU_RESERVED_TOOLS (wildcard does NOT satisfy explicit-
+    // listing). The real feishuSecretary Role explicitly lists Feishu
+    // tools, so they pass.
+    let canCallFeishuWriteDoc = false
+    setBackgroundTaskQueryForTest(async input => {
+      const decision = await input.invocation.canUseTool!(fakeTool('FeishuWriteDoc'), {})
+      canCallFeishuWriteDoc = decision.behavior === 'allow'
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({
+        id: 'alice-task1',
+        ownerCanonicalUser: 'alice',
+        role: 'feishuSecretary',
+      }),
+      fireUuid: 'fire-feishu-survives',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(canCallFeishuWriteDoc, true)
   })
 
   it('rejects fires for non-admin users when backend is local', async () => {

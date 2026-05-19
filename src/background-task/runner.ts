@@ -11,7 +11,8 @@ import { loadIdentityPreferences } from '../identity/preferences.js'
 import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
 import { emptyInvocationContext } from '../agents/invocation-context.js'
-import { getMainRole } from '../agents/registry.js'
+import { getAgent, getMainRole } from '../agents/registry.js'
+import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
@@ -23,7 +24,6 @@ import {
   rewriteTranscript,
   touchMeta,
 } from '../session/storage.js'
-import type { CanUseToolFn, Tool } from '../tool.js'
 import type { BackgroundTaskEntry, FireOutcome, PermissionDenialDetail } from './types.js'
 
 type QueryFn = typeof query
@@ -70,7 +70,17 @@ export async function runBackgroundTaskFire(input: {
 
     const provider = getProviderFor(config, model).provider
     const { getAllTools, getEnabledTools } = await import('../tools.js')
-    const tools = getEnabledTools(provider, getAllTools('feishu'))
+    // Resolve the real worker Role from registry so all the role-driven
+    // gates (BLOCKED_WORKER_TOOLS, FEISHU_RESERVED_TOOLS, role's own
+    // `tools` allowlist, currentRole-driven memory L3 routing) act on the
+    // worker the user actually scheduled — not a frankenstein with main's
+    // tool surface. Fallback to `generalist` mirrors the bg-tasks store
+    // loader's pre-PR5 migration default.
+    const role = getAgent(input.task.role) ?? getAgent('generalist') ?? getMainRole()
+    const tools = filterToolsByRoleVisibility(
+      role,
+      getEnabledTools(provider, getAllTools('feishu')),
+    )
     // Docker backend requires the tracker; local / rlaunch ignore it. Pass it
     // unconditionally so a task fire under any backend gets a valid runtime —
     // missing this caused DockerRuntime to throw at acquire() and every fire
@@ -115,21 +125,18 @@ export async function runBackgroundTaskFire(input: {
     }
     const result = await runWithSessionContext(ctx, async () => {
       const output = await queryImpl({
-        role: {
-          // The wide tool / prompt surface still comes from main; only the
-          // identity fields take the scheduled worker so currentRole-driven
-          // attribution (MemoryWrite L3 routing, per-role extract owner,
-          // audit `role` field) lands under the role the user actually
-          // scheduled. Phase 8 PR5 stored `task.role` precisely for this;
-          // the runner just had to start reading it.
-          ...getMainRole(),
-          agentType: input.task.role,
-          name: input.task.role,
-          kind: 'worker',
-        },
+        role,
         invocation: {
           ...emptyInvocationContext(),
-          canUseTool: createBackgroundTaskCanUseTool(),
+          // `deriveCanUseTool(role)` is the same gate dispatched workers
+          // use (run-subagent.ts), so BLOCKED_WORKER_TOOLS (Notify, Dispatch
+          // unless explicit) and FEISHU_RESERVED_TOOLS automatically cover
+          // bg-fire too. Future additions to either set propagate for free.
+          // The previous `createBackgroundTaskCanUseTool` was a hand-rolled
+          // function that only denied a since-deleted `BackgroundTask`
+          // tool — it bypassed both visibility tables, which let bg-fire
+          // dogfood call Notify (2026-05-18 stock monitoring incident).
+          canUseTool: deriveCanUseTool(role),
           signal: input.signal,
           subagentLabel: 'background_task',
           chainState: input.task.chainState,
@@ -189,18 +196,6 @@ function dedupePermissionDenials(
     out.push(denial)
   }
   return out
-}
-
-export function createBackgroundTaskCanUseTool(): CanUseToolFn {
-  return async (tool: Tool) => {
-    if (tool.name === 'BackgroundTask') {
-      return {
-        behavior: 'deny',
-        reason: 'BackgroundTask cannot be invoked from inside a background task.',
-      }
-    }
-    return { behavior: 'allow' }
-  }
 }
 
 export function buildBackgroundTaskSessionId(
