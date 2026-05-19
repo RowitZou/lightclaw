@@ -12,6 +12,7 @@ import { query } from '../query.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { runDispatchedAgent } from '../agents/dispatched-agent.js'
+import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
@@ -87,6 +88,10 @@ export async function runBackgroundTaskFire(input: {
     const tracker = config.runtime.backend === 'docker' ? getImageReadiness() : undefined
     const runtime = getRuntimePool().acquire(input.task.ownerCanonicalUser, config, cwd, tracker)
     const permissionDenials: PermissionDenialDetail[] = []
+    const permissionApprover = await getChannelApproverFor(
+      input.task.ownerCanonicalUser,
+      sessionId,
+    )
     const ctx = createSessionContext({
       cwd,
       model,
@@ -104,6 +109,10 @@ export async function runBackgroundTaskFire(input: {
         localPath: config.paths.permissionRules.local,
       }),
       identityRules: loadIdentityRules(input.task.ownerCanonicalUser),
+      // Null is expected during daemon startup/shutdown gaps or for users
+      // without an active channel binding; permission/index.ts keeps the
+      // old bg fallback only for that degraded case.
+      permissionApprover,
       isBackgroundTask: true,
       onPermissionDenial(detail) {
         permissionDenials.push(detail)

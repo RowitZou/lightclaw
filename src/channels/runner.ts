@@ -21,6 +21,7 @@ import {
 } from '../identity/pairing.js'
 import {
   getAdminFeishuOpenId,
+  getIdentity,
   isAdmin,
   lookupBySender,
   rebuildReverseIndex,
@@ -258,6 +259,37 @@ export class ChannelRunner {
     }
     await refreshSkillRegistry(this.strategy.cwd)
     this.initialized = true
+  }
+
+  async createPermissionApproverFor(input: {
+    canonicalUser: string
+    sessionId: string
+  }): Promise<PermissionApprover | null> {
+    if (!this.strategy.createPermissionApprover) {
+      return null
+    }
+    const identity = await getIdentity(input.canonicalUser)
+    const channels = identity?.channels as Record<string, string[] | undefined> | undefined
+    const senderOpenId = channels?.[this.strategy.channelId]?.[0]
+    if (!senderOpenId) {
+      return null
+    }
+    const message: NormalizedChannelMessage = {
+      channel: this.strategy.channelId,
+      eventId: `synthetic-permission-${input.sessionId}`,
+      chatId: `synthetic-permission-${senderOpenId}`,
+      senderOpenId,
+      senderKey: `${this.strategy.channelId}:${senderOpenId}`,
+      chatType: 'group',
+      messageId: `synthetic-permission-${input.sessionId}`,
+      text: '',
+      synthetic: true,
+    }
+    return this.strategy.createPermissionApprover(
+      message,
+      input.sessionId,
+      input.canonicalUser,
+    )
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {

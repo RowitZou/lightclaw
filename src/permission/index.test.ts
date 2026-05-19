@@ -40,7 +40,32 @@ describe('requestPermission background-task fallback', () => {
     assert.equal(decision.behavior, 'allow')
   })
 
-  it('denies high-risk inputs and reports a denial detail', async () => {
+  it('routes high-risk inputs through the approver when one is attached', async () => {
+    const denials: unknown[] = []
+    let askSeen: unknown = null
+    const decision = await withPermissionState(async () => requestPermission({
+      tool: fakeTool('Bash', 'execute'),
+      toolInput: { command: 'rm -rf x' },
+      ctx: {
+        isSubagent: true,
+        isBackgroundTask: true,
+        permissionApprover: {
+          async ask(input) {
+            askSeen = input
+            return { behavior: 'allow' }
+          },
+        },
+        onPermissionDenial(detail) {
+          denials.push(detail)
+        },
+      },
+    }))
+    assert.equal(decision.behavior, 'allow')
+    assert.notEqual(askSeen, null)
+    assert.deepEqual(denials, [])
+  })
+
+  it('denies high-risk inputs and reports a denial detail without an approver', async () => {
     const denials: unknown[] = []
     const decision = await withPermissionState(async () => requestPermission({
       tool: fakeTool('Bash', 'execute'),

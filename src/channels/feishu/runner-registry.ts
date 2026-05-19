@@ -10,6 +10,7 @@
 // out to multiple tenants.
 
 import type { ChannelRunner } from '../runner.js'
+import type { PermissionApprover } from '../../permission/types.js'
 
 let activeRunner: ChannelRunner | null = null
 
@@ -25,4 +26,14 @@ export function clearChannelRunner(runner: ChannelRunner): void {
 
 export function getChannelRunner(): ChannelRunner | null {
   return activeRunner
+}
+
+export async function getChannelApproverFor(
+  canonicalUser: string,
+  sessionId: string,
+): Promise<PermissionApprover | null> {
+  return await activeRunner?.createPermissionApproverFor({
+    canonicalUser,
+    sessionId,
+  }) ?? null
 }

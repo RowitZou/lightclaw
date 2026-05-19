@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
 import { requireSessionContext } from '../session-context.js'
+import {
+  clearChannelRunner,
+  registerChannelRunner,
+} from '../channels/feishu/runner-registry.js'
+import type { ChannelRunner } from '../channels/runner.js'
 import type { Tool } from '../tool.js'
 import type { Message } from '../types.js'
 import {
@@ -63,6 +68,7 @@ describe('background-task runner sessionId shape', () => {
 
 describe('runBackgroundTaskFire', () => {
   let tmpHome: string
+  let registeredChannelRunner: ChannelRunner | null = null
 
   beforeEach(async () => {
     tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-bg-runner-test-'))
@@ -81,6 +87,10 @@ describe('runBackgroundTaskFire', () => {
   })
 
   afterEach(() => {
+    if (registeredChannelRunner) {
+      clearChannelRunner(registeredChannelRunner)
+      registeredChannelRunner = null
+    }
     setBackgroundTaskQueryForTest(null)
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
@@ -132,6 +142,45 @@ describe('runBackgroundTaskFire', () => {
     })
 
     assert.equal(observed.isBackgroundTask, true)
+  })
+
+  it('injects the active channel approver into bg-fire SessionContext', async () => {
+    const approver = {
+      ask: async () => ({ behavior: 'allow' as const }),
+    }
+    const approverRequests: Array<{ canonicalUser: string; sessionId: string }> = []
+    registeredChannelRunner = {
+      createPermissionApproverFor(input: { canonicalUser: string; sessionId: string }) {
+        approverRequests.push(input)
+        return Promise.resolve(approver)
+      },
+    } as unknown as ChannelRunner
+    registerChannelRunner(registeredChannelRunner)
+
+    let observedApprover = false
+    setBackgroundTaskQueryForTest(async () => {
+      observedApprover = requireSessionContext().permissionApprover === approver
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({
+        id: 'alice-task1',
+        ownerCanonicalUser: 'alice',
+      }),
+      fireUuid: 'fire-approver',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(observedApprover, true)
+    assert.equal(approverRequests[0]?.canonicalUser, 'alice')
+    assert.match(approverRequests[0]?.sessionId ?? '', /^bg-alice-alice-task1-fire-approver/)
   })
 
   it('turns collected permission denials into a failure outcome', async () => {
