@@ -13,7 +13,12 @@ import {
 } from './web-fetch-cache.js'
 import { textBodyToMarkdown } from './web-fetch-extract.js'
 import { deriveFilename, isBinaryContentType } from './web-fetch-filename.js'
-import { daemonFetchUrl } from './web-fetch-http.js'
+import {
+  CrossHostRedirectError,
+  daemonFetchUrl,
+  RedirectLimitError,
+  SsrfRedirectError,
+} from './web-fetch-http.js'
 import { isPreapprovedUrl } from './web-fetch-preapproved.js'
 
 const DEFAULT_MAX_BYTES = 50_000     // helper exec output cap (schema default); admin can raise via input.maxBytes up to MAX_BYTES_HARD_CAP
@@ -162,6 +167,46 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
         })
       }
     } catch (err) {
+      // Redirect-guard family carries structured fields so the model gets
+      // an actionable recovery hint instead of the generic axios envelope.
+      // No permission card is involved here — these errors come out of
+      // the daemon-fetch layer. The model's recourse for CrossHost is to
+      // re-issue WebFetch on the final URL (which goes through normal
+      // per-hostname permission gating; auto-allowed in `acceptEdits`
+      // mode, card in default mode); for SsrfRedirect / RedirectLimit
+      // there is no recourse — those are hard blocks.
+      if (err instanceof SsrfRedirectError) {
+        return {
+          output:
+            `WebFetch failed (exit 1): redirect to non-public address ` +
+            `(${err.reason}) at ${err.blockedUrl}. SSRF guard refused to ` +
+            `follow. Chain: ${err.redirectChain.join(' → ')} (url: ${input.url})`,
+          isError: true,
+        }
+      }
+      if (err instanceof CrossHostRedirectError) {
+        // Pull the would-be final target out of the chain so the model has
+        // exactly the URL string it should call WebFetch on next.
+        const finalTarget = err.toUrl
+        return {
+          output:
+            `WebFetch failed (exit 1): cross-host redirect from ` +
+            `${err.fromHost} to ${finalTarget}. The daemon does not follow ` +
+            `cross-host redirects automatically. If this destination is ` +
+            `intended, call WebFetch on ${finalTarget} directly. ` +
+            `Chain: ${err.redirectChain.join(' → ')} → ${finalTarget} ` +
+            `(url: ${input.url})`,
+          isError: true,
+        }
+      }
+      if (err instanceof RedirectLimitError) {
+        return {
+          output:
+            `WebFetch failed (exit 1): redirect limit exceeded. Chain: ` +
+            `${err.redirectChain.join(' → ')} (url: ${input.url})`,
+          isError: true,
+        }
+      }
       // Mirror the Python helper's stderr envelope: `fetch failed: <msg>`
       // wrapped in the WebFetch tool's `WebFetch failed (exit 1): ...`
       // shell. The error type (AxiosError / TimeoutError / DOMException

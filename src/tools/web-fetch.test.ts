@@ -45,12 +45,14 @@ function stubFetch(opts: {
   contentType?: string
   status?: number
   finalUrl?: string
+  redirectChain?: string[]
 }): void {
   _setDaemonFetchUrlForTests(async () => ({
     status: opts.status ?? 200,
     finalUrl: opts.finalUrl ?? 'https://example.com/',
     contentType: opts.contentType ?? 'text/plain; charset=utf-8',
     bytes: Buffer.from(opts.body, 'utf-8'),
+    redirectChain: opts.redirectChain ?? [],
   }))
 }
 
@@ -234,6 +236,7 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
       finalUrl: 'https://arxiv.org/pdf/2509.25721',
       contentType: 'application/pdf',
       bytes: pdfBytes,
+      redirectChain: [],
     }))
     const writes = new Map<string, Buffer>()
     const result = await webFetchTool.call(
@@ -266,6 +269,7 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
       finalUrl: 'https://arxiv.org/pdf/2604.28181',
       contentType: 'application/pdf',
       bytes: bigPdf,
+      redirectChain: [],
     }))
     const writes = new Map<string, Buffer>()
     const result = await webFetchTool.call(

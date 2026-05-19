@@ -71,6 +71,7 @@ function buildCtxWithFetch(body: string, fetchCount: { n: number }): ToolCallCon
       finalUrl: 'https://example.com/',
       contentType: 'text/plain; charset=utf-8',
       bytes: Buffer.from(body, 'utf-8'),
+      redirectChain: [],
     }
   })
   return {
