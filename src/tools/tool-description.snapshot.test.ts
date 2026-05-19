@@ -33,10 +33,18 @@ const EXPECTED = {
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
-  // Main template is byte-identical to the pre-split BACKGROUND_TASK_RESULT_BLOCK_TEMPLATE.
-  BackgroundTaskResultBlockMain: '5e7c00f274656c36eab17ab59b6dc61f7b945b5b86386ff659e2dbed9ae99a18',
-  // Worker template (new — see PR2 design write-up).
-  BackgroundTaskResultBlockWorker: '3f76e5d79fef3b9978c5111b0885fed2ffef8517711ec828aec4b6187d7cfef3',
+  // Main template rewritten 2026-05-19 to push the default toward an
+  // unattended-agent posture: surface every result via plain reply, take
+  // autonomous follow-up when the path is clear, reserve Notify for the
+  // narrow cases where the user genuinely must intervene. Outcome=aborted
+  // section dropped — /stop and CancelDispatch do not abort in-flight bg
+  // fires (chain-abort-propagation skips bg-* sessions), so the path was
+  // unreachable through user actions.
+  BackgroundTaskResultBlockMain: '9ad1e2c62a3965dfe9af85e6e08fe636714b3ca596e5039584ead1d62f5d7033',
+  // Worker template rewritten in the same pass to mirror main's
+  // unattended-agent posture inside the worker's narrower channel
+  // (final-text only, no Notify equivalent).
+  BackgroundTaskResultBlockWorker: 'c5abd2cc7b0ba5418143caa683be5ef5fdf5f98da886cd7686ae6461d9c14676',
 }
 
 function hash(value: string): string {

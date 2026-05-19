@@ -7,58 +7,58 @@ export type BackgroundTaskResultOutcome =
 // Main-receiver template: rendered when the bg-dispatch result returns to
 // the orchestrator (main). The "you, the manager" framing fits — main is
 // user-facing and holds the Notify card capability that worker roles do
-// not have.
+// not have. The 2026-05-19 rewrite pushed the default toward an unattended
+// agent posture: surface every result via plain reply, take autonomous
+// follow-up when the path is clear, reserve Notify for cases where the
+// user genuinely must intervene.
 export const BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE = `<background-task-result label="{label}" outcome="{success|failed|permission-denied|aborted}" dispatchId="{id}">
 {result text from the dispatched run}
 </background-task-result>
 
 A background dispatch you previously scheduled has finished. The block above is its result — outcome and full text. Treat this as a delegated worker handing in their work to you, the manager.
 
-Your decision space is continuous, not binary. The ONE thing to ration is Notify — silent continue and plain reply are both acceptable defaults:
+Default mode: handle the result without escalating. The user does not see the block above directly — only what you choose to send. You are an unattended agent, so:
+- If the result clearly calls for a next step and the path forward is reasonably clear, take that step yourself (option 2) and tell the user via plain reply (option 1). Don't pause for permission.
+- If the result is terminal — the dispatched work delivered what was asked, the recurring check came back clean, the result is informational with no obvious follow-up — just send a plain reply (option 1). Don't manufacture work to look busy.
+- Reserve Notify (option 3) for the small set of cases where the user genuinely must intervene.
 
-1. Continue silently. Integrate the result into your ongoing work without surfacing it. Pick this when the result has no bearing on what the user can see or cares about right now (e.g. you're still mid-task on something unrelated; the result is a routine check that landed as expected).
+1. Send a plain reply mentioning the result, and (if option 2 also applies) what you decided to do about it. This always happens regardless of outcome — it is the user's primary visibility into delegated work. One or two sentences is usually right ("the daily fetch finished — nothing unusual"; "the research came back, I'm folding it into the answer now"; "the cleanup ran and removed 12 stale files"). Plain reply is NOT a scarce resource.
 
-2. Adjust your current plan if the result changes the situation — you were about to ask the user something the result just answered, or you discover the BG task failed in a way that affects what you're doing now. This may or may not involve telling the user; combine with option 3 if it does.
+2. Take the next step autonomously WHEN the result calls for one — invoke the next skill, call the relevant tool, fire a new Dispatch, or update an existing one. Pick the best plan using your judgment and just execute it; do not pause to ask the user for permission to proceed when the path forward is clear. Skip this entirely when the dispatched work was self-contained and there is no obvious follow-up; option 1 alone is the right answer there.
 
-3. Send a plain reply mentioning the result. This is a normal action, NOT an interruption. In a chat with regular bot activity, plain reply lives in the same flow as your other turn-by-turn output — user sees progress without being pinged. Use this freely when there's value in user seeing what happened: progress visibility ("the daily fetch finished, nothing unusual"), context for what you'll do next ("the research came back, I'll factor it into the answer"), transparency about delegated work, or just confirming a dispatched task ran. Plain reply is NOT a scarce resource.
+3. Send a Notify card ONLY when you genuinely need the user. Three triggers, no others: (a) you cannot proceed on your own and need the user's decision or input to unblock; (b) there is major information the user must know now and a plain reply might be missed (security incident, data loss, hard deadline slip); (c) the situation requires user intervention — something only they can do. If the next step is obvious enough that you could plausibly take it yourself, take it (option 2) and surface what you did via option 1 instead. Notify is the scarce attention channel; overuse makes users tune out cards.
 
-4. Send a Notify card ONLY when the user genuinely cannot miss this (see Notify tool description for the bar). Notify is the scarce attention resource — overuse makes users tune out cards. Most background results do NOT warrant Notify.
-
-Decision heuristic: ask "would the user be surprised / confused / unable to act if I never mention this?"
-- "They wouldn't notice either way" → option 1 (silent).
-- "Useful context but no action needed; they may glance or skim" → option 3 (plain reply). This is the common case.
-- "They need to drop what they're doing and react" → option 4 (Notify).
-
-For outcome=failed or permission-denied: read the failure detail. You may consider UpdateDispatch (extend allowed_tools, change prompt, change schedule) or CancelDispatch if it makes sense. Choose 1/3/4 above on the user-surfacing axis independently from the self-healing axis.
-
-For outcome=aborted: the dispatch was cancelled (by /stop or chain abort) — usually option 1 unless the user explicitly asked about its status.`
+For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateDispatch (extend allowed_tools, change prompt, change schedule), CancelDispatch, or a new Dispatch with a revised plan — take it. If recovery requires user input, plain-reply the failure (option 1); escalate to Notify (option 3) only when waiting silently would actually harm them.`
 
 // Worker-receiver template: rendered when the bg-dispatch result returns to
 // a worker that spawned it (scheduler resolves spawner-aware delivery). The
 // "manager / user-facing reply / Notify" framing of the main template does
 // not apply — workers communicate to their requester via final-text, not
-// directly to the user, and they do not have the Notify tool.
+// directly to the user, and they do not have the Notify tool. The
+// 2026-05-19 rewrite mirrors main's unattended-agent posture inside the
+// worker's narrower channel: take autonomous follow-up when the path is
+// clear, surface the result in final-text when the requester needs it,
+// keep silent absorption legitimate for genuinely irrelevant exploratory
+// checks.
 export const BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE = `<background-task-result label="{label}" outcome="{success|failed|permission-denied|aborted}" dispatchId="{id}">
 {result text from the dispatched run}
 </background-task-result>
 
 A background dispatch you fired earlier in this turn has finished. The block above is its result — outcome and full text.
 
-Your final-text summary is the only thing your requester sees from this turn, so the question is whether to fold this result into that summary or treat it as side context.
+Default mode: handle the result without stalling. You are mid-turn and still owe your requester a final-text summary — that is the only thing they will see from this turn. You are operating autonomously, so:
+- If the result calls for a next step within this turn, take that step yourself (option 2) and reflect what you did in your final-text summary (option 3). You cannot pause for a sign-off from your requester mid-turn — handle it.
+- If the result is part of what your requester needs to know, fold it into your final-text summary (option 3). Don't manufacture additional work to look productive when the dispatch already delivered what you needed.
+- If the result genuinely has no bearing on what you'll hand back, silent absorption (option 1) is fine. Don't pad the summary with irrelevant dispatch history.
+- There is no Notify equivalent at the worker tier; your only escalation channel is what you write into your final-text summary.
 
-1. Continue silently. Absorb the result and don't mention the dispatch in your final summary. Pick this when the result has no bearing on what you're about to hand back (the dispatch was an exploratory check that confirmed what you expected).
+1. Continue without surfacing the dispatch in your final-text. Absorb the result silently. Pick this only when the result genuinely has no bearing on what you're about to hand back — the dispatch was an exploratory check that confirmed what you already expected. When in doubt between 1 and 3, prefer 3; silent swallow is harder for the requester to recover from than a brief mention.
 
-2. Adjust the rest of your turn. If the result changes your plan — remaining steps, what to verify, scope to drop — incorporate it before continuing. This may or may not surface in your final summary; combine with option 3 if it should.
+2. Take the next step autonomously WHEN the result calls for one — invoke the next skill, call the relevant tool, or fire another Dispatch as part of the remaining turn. Pick the best plan using your judgment and just execute it; the worker tier has no "ask requester" path mid-turn, so when the path forward is clear, take it. Skip this entirely when the dispatched work was self-contained — option 1 or option 3 alone covers it. Combine with option 3 so your final-text reflects what you did.
 
-3. Mention the result in your final-text summary. Your requester does not see the block directly — only what you choose to surface. Use this when the dispatch outcome is part of what your requester needs to know to act on your work: a key piece of evidence, a failed check that affects your verdict, scope you couldn't cover.
+3. Surface the result in your final-text summary. Your requester does not see the block above directly — only what you choose to write. Use this whenever the dispatch outcome is part of what your requester needs to act on your work: evidence, scope you couldn't cover, a failed check that affects your verdict, or an action you took based on the result. One or two sentences in the summary is usually enough.
 
-Decision heuristic: ask "would my requester be misled or unable to act if I leave this out of my final summary?"
-- "No, they would not notice or care" → option 1.
-- "Yes, this changes what they should do" → option 3 (combine with 2 if your plan also shifts).
-
-For outcome=failed or permission-denied: read the failure detail. You may consider UpdateDispatch (extend allowed_tools, change prompt, change schedule) or CancelDispatch to manage the failed dispatch. Choose 1/3 above on the requester-surfacing axis independently from this self-healing axis.
-
-For outcome=aborted: the dispatch was cancelled — usually option 1 unless the failure is relevant to your final summary.`
+For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateDispatch (extend allowed_tools, change prompt, change schedule), CancelDispatch, or a new Dispatch with a revised plan — take it as part of this turn. Surface the failure and what you did via option 3 so your requester can act on the full picture; failures should not be silently swallowed (option 1 is for results that change nothing, not for failures).`
 
 export function formatBackgroundTaskResultBlock(input: {
   label: string
