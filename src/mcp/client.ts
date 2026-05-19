@@ -4,6 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { createMcpTransport } from './transport.js'
 import type { McpToolDescriptor, ScopedMcpServerConfig } from './types.js'
+import { VERSION } from '../version.js'
 
 export type ConnectedMcpClient = {
   client: Client
@@ -18,7 +19,7 @@ export async function connectMcpServer(input: {
   const client = new Client(
     {
       name: 'lightclaw',
-      version: '0.1.0',
+      version: VERSION,
     },
     {
       capabilities: {},

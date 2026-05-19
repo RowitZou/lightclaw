@@ -16,6 +16,7 @@ import {
 import { startRepl } from './repl.js'
 import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
+import { VERSION } from './version.js'
 
 type CliArgs = {
   help: boolean
@@ -90,7 +91,7 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 function printHelp(): void {
-  console.log(`LightClaw v0.1.0
+  console.log(`LightClaw v${VERSION}
 
 Usage:
   lightclaw
