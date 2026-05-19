@@ -385,6 +385,7 @@ export type DispatchConfig = {
   maxChainDepth: number
   maxChainDepthCeiling: number
   historyTtlMs: number
+  ephemeralSessionTtlMs: number
   scheduler: DispatchSchedulerConfig
 }
 
@@ -396,6 +397,7 @@ const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
 const DEFAULT_DISPATCH_HISTORY_TTL_MS = 24 * 60 * 60 * 1000
+const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000
 // memory.curator (formerly autoDream) defaults ON: every gate it consults
 // (lock file, time / scan-throttle / session-count thresholds, in-progress
 // extraction check) is per canonical user under that user's memory dir, so
@@ -425,6 +427,7 @@ export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   maxChainDepth: 4,
   maxChainDepthCeiling: 5,
   historyTtlMs: DEFAULT_DISPATCH_HISTORY_TTL_MS,
+  ephemeralSessionTtlMs: DEFAULT_EPHEMERAL_SESSION_TTL_MS,
   scheduler: DEFAULT_DISPATCH_SCHEDULER,
 }
 
@@ -1704,6 +1707,10 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
   const historyTtlMs = Number.isFinite(historyTtlRaw) && historyTtlRaw >= 0
     ? Math.floor(historyTtlRaw)
     : DEFAULT_DISPATCH_HISTORY_TTL_MS
+  const ephemeralTtlRaw = Number(dispatch.ephemeralSessionTtlMs)
+  const ephemeralSessionTtlMs = Number.isFinite(ephemeralTtlRaw) && ephemeralTtlRaw >= 0
+    ? Math.floor(ephemeralTtlRaw)
+    : DEFAULT_EPHEMERAL_SESSION_TTL_MS
 
   const schedulerSource = pickWithLegacy(
     'backgroundTask',
@@ -1740,6 +1747,7 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
     maxChainDepth: Math.min(declared, ceiling),
     maxChainDepthCeiling: ceiling,
     historyTtlMs,
+    ephemeralSessionTtlMs,
     scheduler,
   }
 }

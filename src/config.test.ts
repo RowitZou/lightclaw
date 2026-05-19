@@ -548,6 +548,7 @@ describe('config: endpoints + models registry', () => {
       maxChainDepth: 4,
       maxChainDepthCeiling: 5,
       historyTtlMs: 24 * 60 * 60 * 1000,
+      ephemeralSessionTtlMs: 72 * 60 * 60 * 1000,
       scheduler: {
         maxConcurrentRunsPerUser: 3,
         startupCatchupIntervalMs: 60_000,
@@ -652,6 +653,7 @@ describe('config: endpoints + models registry', () => {
       maxChainDepth: 4,
       maxChainDepthCeiling: 6,
       historyTtlMs: 12_345,
+      ephemeralSessionTtlMs: 72 * 60 * 60 * 1000,
       scheduler: {
         maxConcurrentRunsPerUser: 3,
         startupCatchupIntervalMs: 60_000,

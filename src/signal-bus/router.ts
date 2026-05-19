@@ -96,6 +96,14 @@ export class SignalRouter {
     return [...(this.chainRegistry.get(chainId) ?? [])]
   }
 
+  getAllActiveSessionIds(): Set<string> {
+    const out = new Set<string>()
+    for (const set of this.chainRegistry.values()) {
+      for (const id of set) out.add(id)
+    }
+    return out
+  }
+
   getActiveChainsForUser(canonicalUser: string, now = Date.now()): ChainView[] {
     const groups = new Map<string, ChainState[]>()
     for (const entry of this.activeChains.values()) {
