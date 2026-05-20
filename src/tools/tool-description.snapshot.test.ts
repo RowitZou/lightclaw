@@ -36,7 +36,10 @@ const EXPECTED = {
   // the chain after the dispatcher is gone, and an unannounced one reaches
   // the receiver with no record of why it exists.
   Dispatch: '9d2fde24d7f6aab8c3820d66bad469a22800a8fbeae37ef2ca4b6b4ac627e2b6',
-  ListDispatches: '88c6d590ebce67a09022cb6b142bbef0a82da23557b31832584a83dd7d71030a',
+  // ListDispatches description updated Phase 12 PR2 (2026-05-20): documents
+  // the new `scope` param (default lists only the caller's own dispatches;
+  // `scope: 'all'` is main-orchestrator-only) and the `caller` output field.
+  ListDispatches: '246a6e8ae95d21feef8d8ed908bd58aa469c0ac6e71a1f8b4535699da0baba73',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',

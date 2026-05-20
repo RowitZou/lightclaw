@@ -117,7 +117,9 @@ const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (sch
 
 Use to monitor what's running before deciding to dispatch new work that might overlap, before CancelDispatch / UpdateDispatch when you know what to target, or when answering a user question that requires reasoning over current delegated state.
 
-Returns each dispatch's id, label, role, schedule shape, next run time, current enabled state, and (if \`include_history: true\`) the last fire timestamp. Past fire outcomes are not in this output — each fire's result was already delivered to you via wake at the time it completed.`
+By default this lists only dispatches you created. Pass \`scope: 'all'\` to list every background dispatch for the user, regardless of which agent scheduled it — available to the main orchestrator only.
+
+Returns each dispatch's id, label, role, caller (the agent that scheduled it), schedule shape, next run time, current enabled state, and (if \`include_history: true\`) the last fire timestamp. Past fire outcomes are not in this output — each fire's result was already delivered to you via wake at the time it completed.`
 
 const CANCEL_DISPATCH_DESCRIPTION = `Cancel a scheduled background dispatch by id. An already in-flight fire is allowed to finish; only future runs are stopped.
 
@@ -495,19 +497,33 @@ export const listDispatchesTool = buildTool({
   concurrencySafe: true,
   inputSchema: z.object({
     include_history: z.boolean().optional(),
+    scope: z.enum(['mine', 'all']).optional(),
   }),
   async call(input) {
     const userId = requireCurrentUserId()
-    const tasks = loadBackgroundTasks(userId).map(task => ({
-      id: task.id,
-      label: task.label,
-      role: task.role,
-      schedule: task.schedule,
-      enabled: task.enabled,
-      nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
-      lastFiredAt: task.lastFiredAt ?? null,
-      ...(input.include_history ? { lastFire: task.lastFiredAt ? { firedAt: task.lastFiredAt } : null } : {}),
-    }))
+    if (input.scope === 'all') {
+      const role = getCurrentRole()
+      if (role && role.kind !== 'orchestrator') {
+        return {
+          output: "scope:'all' is available only to the main orchestrator. Omit scope to list the dispatches you created.",
+          isError: true,
+        }
+      }
+    }
+    const currentSession = getSessionId()
+    const tasks = loadBackgroundTasks(userId)
+      .filter(task => input.scope === 'all' || taskCallerSession(task) === currentSession)
+      .map(task => ({
+        id: task.id,
+        label: task.label,
+        role: task.role,
+        caller: taskCallerRole(task),
+        schedule: task.schedule,
+        enabled: task.enabled,
+        nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
+        lastFiredAt: task.lastFiredAt ?? null,
+        ...(input.include_history ? { lastFire: task.lastFiredAt ? { firedAt: task.lastFiredAt } : null } : {}),
+      }))
     return { output: tasks.length === 0 ? 'No active background dispatches.' : JSON.stringify(tasks, null, 2) }
   },
 })

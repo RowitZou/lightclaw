@@ -11,7 +11,7 @@ import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { addBackgroundTask, loadBackgroundTasks } from '../background-task/store.js'
-import { cancelDispatchTool, executeDispatch, updateDispatchTool } from './dispatch.js'
+import { cancelDispatchTool, executeDispatch, listDispatchesTool, updateDispatchTool } from './dispatch.js'
 
 let tmpRoot: string
 
@@ -335,6 +335,80 @@ test('management ownership falls back to originSessionId for legacy dispatches',
   )
   assert.equal(allowed.isError, undefined)
   assert.match(allowed.output, /Cancelled dispatch/)
+})
+
+test('ListDispatches default scope lists only the caller own dispatches', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run research one in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w2' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run research two in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+
+  const output = await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () => listDispatchesTool.call({ scope: 'mine' }, toolContext()),
+  )
+
+  const listed = JSON.parse(output.output) as Array<{ caller: string }>
+  assert.equal(listed.length, 1)
+  // Output surfaces the creating role.
+  assert.equal(listed[0]?.caller, 'generalist')
+})
+
+test('ListDispatches scope all lists every dispatch for the user from main', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run research one in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w2' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run research two in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+
+  const output = await runWithSessionContext(
+    session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
+    () => listDispatchesTool.call({ scope: 'all' }, toolContext()),
+  )
+
+  const listed = JSON.parse(output.output) as unknown[]
+  assert.equal(listed.length, 2)
+})
+
+test('ListDispatches scope all is refused for a worker', async () => {
+  const output = await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () => listDispatchesTool.call({ scope: 'all' }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /main orchestrator/)
 })
 
 function session(
