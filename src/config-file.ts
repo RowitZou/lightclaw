@@ -298,6 +298,10 @@ export type ConfigFileShape = {
       positiveTags?: string[]
       gpfsHostPrefix?: string
       gpfsMountPrefix?: string
+      gpfsMounts?: Array<{
+        hostPrefix?: string
+        mountPrefix?: string
+      }>
       imagePullPolicy?: string
       maxWaitDuration?: string
       workerGcTimeHours?: number

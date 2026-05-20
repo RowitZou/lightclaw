@@ -796,3 +796,52 @@ describe('config: runtime.docker.security', () => {
     assert.throws(() => getConfig(), /workspaceQuotaMb must be a non-negative number/)
   })
 })
+
+describe('config: runtime.rlaunch.gpfsMounts', () => {
+  it('parses multiple gpfs mount rules and derives legacy prefixes from the first rule', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        backend: 'rlaunch',
+        rlaunch: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsMounts: [
+            { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1/' },
+            { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
+          ],
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.runtime.rlaunch.gpfsHostPrefix, '/mnt/shared-storage-user')
+    assert.equal(cfg.runtime.rlaunch.gpfsMountPrefix, 'gpfs://gpfs1/')
+    assert.deepEqual(cfg.runtime.rlaunch.gpfsMounts, [
+      { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' },
+      { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
+    ])
+  })
+
+  it('requires legacy gpfs prefix fields to be configured together', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        backend: 'rlaunch',
+        rlaunch: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsHostPrefix: '/mnt/shared-storage-user',
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /must be configured together/)
+  })
+})

@@ -187,6 +187,10 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
       "positiveTags":     [],
       "gpfsHostPrefix":   "<host-side-gpfs-mount>",   // e.g. /mnt/shared-storage-user
       "gpfsMountPrefix":  "<gpfs-url-prefix>",        // e.g. gpfs://gpfs1
+      "gpfsMounts": [                                 // optional: extra host->gpfs rules when host paths span multiple gpfs filesystems
+        { "hostPrefix": "<host-gpfs-mount-a>", "mountPrefix": "<gpfs-url-prefix-a>" },
+        { "hostPrefix": "<host-gpfs-mount-b>", "mountPrefix": "<gpfs-url-prefix-b>" }
+      ],
       "imagePullPolicy":  "IfNotPresent",
       "maxWaitDuration":  "5m",
       "workerGcTimeHours": 24,

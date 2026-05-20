@@ -186,6 +186,10 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
       "positiveTags":     [],
       "gpfsHostPrefix":   "<host-side-gpfs-mount>",   // 例：/mnt/shared-storage-user
       "gpfsMountPrefix":  "<gpfs-url-prefix>",        // 例：gpfs://gpfs1
+      "gpfsMounts": [                                 // 可选：宿主机路径横跨多个 gpfs 文件系统时，额外的 host->gpfs 映射规则
+        { "hostPrefix": "<host-gpfs-mount-a>", "mountPrefix": "<gpfs-url-prefix-a>" },
+        { "hostPrefix": "<host-gpfs-mount-b>", "mountPrefix": "<gpfs-url-prefix-b>" }
+      ],
       "imagePullPolicy":  "IfNotPresent",
       "maxWaitDuration":  "5m",
       "workerGcTimeHours": 24,

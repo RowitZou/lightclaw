@@ -130,6 +130,28 @@ describe('/mount command', () => {
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'ro' }])
   })
 
+  it('accepts mounts under secondary gpfs mapping rules', async () => {
+    const gpfs2Root = path.join(tmpHome, 'gpfs2')
+    const publicData = path.join(gpfs2Root, 'gpfs2-shared-public', 'huggingface')
+    mkdirSync(publicData, { recursive: true })
+    let restartCount = 0
+    const deps = {
+      restartRlaunch: async () => {
+        restartCount += 1
+        return `worker-${restartCount}`
+      },
+    }
+
+    const added = await runMountCommand(
+      `add ${publicData}`,
+      { config: makeConfig([{ hostPrefix: gpfs2Root, mountPrefix: 'gpfs://gpfs2' }]), userId: 'alice' },
+      deps,
+    )
+    assert.match(added, /Added rlaunch mount/)
+    assert.match(added, /worker-1/)
+    assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
+  })
+
   it('rejects non-rlaunch backends, outside-prefix paths, and workspace-overlapping mounts', async () => {
     const dataPath = path.join(gpfsRoot, 'datasets')
     mkdirSync(dataPath, { recursive: true })
@@ -143,7 +165,7 @@ describe('/mount command', () => {
     )
     assert.match(
       await runMountCommand('add /tmp/outside', { config: makeConfig(), userId: 'alice' }),
-      /gpfsHostPrefix|not accessible/,
+      /gpfsMounts|not accessible/,
     )
     assert.match(
       await runMountCommand(`add ${workspaceRoot}`, { config: makeConfig(), userId: 'alice' }),
@@ -164,13 +186,19 @@ describe('/mount command', () => {
   })
 })
 
-function makeConfig(): LightClawConfig {
+function makeConfig(
+  extraGpfsMounts: Array<{ hostPrefix: string; mountPrefix: string }> = [],
+): LightClawConfig {
   return {
     runtime: {
       backend: 'rlaunch',
       rlaunch: {
         gpfsHostPrefix: gpfsRoot,
         gpfsMountPrefix: 'gpfs://gpfs1',
+        gpfsMounts: [
+          { hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' },
+          ...extraGpfsMounts,
+        ],
       },
     },
   } as unknown as LightClawConfig

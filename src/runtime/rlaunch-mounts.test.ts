@@ -63,8 +63,24 @@ describe('rlaunch dynamic mounts store', () => {
         gpfsHostPrefix: gpfsRoot,
         gpfsMountPrefix: 'gpfs://gpfs1',
       }),
-      /gpfsHostPrefix/,
+      /gpfsMounts/,
     )
+  })
+
+  it('maps mounts through the longest matching gpfsMounts rule', () => {
+    const gpfs2Root = path.join(tmpHome, 'gpfs2')
+    const projectRoot = path.join(gpfs2Root, 'projects')
+    const hostPath = path.join(projectRoot, 'dataset')
+    const mount = buildGpfsMountString(hostPath, hostPath, {
+      gpfsHostPrefix: gpfsRoot,
+      gpfsMountPrefix: 'gpfs://gpfs1',
+      gpfsMounts: [
+        { hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' },
+        { hostPrefix: gpfs2Root, mountPrefix: 'gpfs://gpfs2' },
+        { hostPrefix: projectRoot, mountPrefix: 'gpfs://gpfs2-projects' },
+      ],
+    })
+    assert.equal(mount, `gpfs://gpfs2-projects/dataset:${hostPath}`)
   })
 
   it('resolves runtime mounts and produces stable fingerprints', () => {

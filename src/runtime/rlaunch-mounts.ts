@@ -4,7 +4,10 @@ import path from 'node:path'
 
 import { rlaunchMountsPath } from '../identity/paths.js'
 import { expandHomePath } from '../paths.js'
-import type { RlaunchRuntimeSettings } from '../config.js'
+import {
+  buildGpfsMountStringFromRules,
+  type RlaunchGpfsMountConfig,
+} from './gpfs-mount-rules.js'
 
 export type RlaunchMountMode = 'ro' | 'rw'
 
@@ -106,7 +109,7 @@ export function removeUserRlaunchMount(
 
 export function resolveUserRlaunchRuntimeMounts(
   canonicalUser: string,
-  rlaunchConfig: Pick<RlaunchRuntimeSettings, 'gpfsHostPrefix' | 'gpfsMountPrefix'>,
+  rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchRuntimeMount[] {
   return loadUserRlaunchMounts(canonicalUser).map(mount =>
     userMountToRuntimeMount(mount, rlaunchConfig),
@@ -115,7 +118,7 @@ export function resolveUserRlaunchRuntimeMounts(
 
 export function userMountToRuntimeMount(
   mount: UserRlaunchMount,
-  rlaunchConfig: Pick<RlaunchRuntimeSettings, 'gpfsHostPrefix' | 'gpfsMountPrefix'>,
+  rlaunchConfig: RlaunchGpfsMountConfig,
 ): RlaunchRuntimeMount {
   const hostPath = normalizeRlaunchMountPath(mount.path)
   return {
@@ -129,22 +132,10 @@ export function userMountToRuntimeMount(
 export function buildGpfsMountString(
   hostPathInput: string,
   workerPathInput: string,
-  rlaunchConfig: Pick<RlaunchRuntimeSettings, 'gpfsHostPrefix' | 'gpfsMountPrefix'>,
+  rlaunchConfig: RlaunchGpfsMountConfig,
 ): string {
   const hostPath = normalizeRlaunchMountPath(hostPathInput)
-  const workerPath = path.posix.normalize(workerPathInput)
-  if (!workerPath.startsWith('/')) {
-    throw new Error(`rlaunch worker mount path must be absolute: ${workerPathInput}`)
-  }
-  const hostPrefix = path.resolve(expandHomePath(rlaunchConfig.gpfsHostPrefix))
-  if (hostPath !== hostPrefix && !hostPath.startsWith(`${hostPrefix}${path.sep}`)) {
-    throw new Error(
-      `rlaunch mount path must be under runtime.rlaunch.gpfsHostPrefix (${hostPrefix}); got ${hostPath}`,
-    )
-  }
-  const suffix = hostPath.slice(hostPrefix.length).split(path.sep).filter(Boolean).join('/')
-  const mountPrefix = rlaunchConfig.gpfsMountPrefix.replace(/\/+$/, '')
-  return `${mountPrefix}${suffix ? `/${suffix}` : ''}:${workerPath}`
+  return buildGpfsMountStringFromRules(hostPath, workerPathInput, rlaunchConfig)
 }
 
 export function rlaunchMountFingerprint(mounts: readonly RlaunchRuntimeMount[]): string {
