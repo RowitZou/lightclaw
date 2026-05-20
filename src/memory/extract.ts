@@ -172,6 +172,27 @@ function newestTimestamp(messages: Message[], fallback: number): number {
   return Math.max(fallback, ...messages.map(message => message.timestamp))
 }
 
+const BACKGROUND_RESULT_BLOCK_RE =
+  /<background-task-result\b[^>]*>[\s\S]*?<\/background-task-result>/g
+
+/**
+ * A `<background-task-result>` block is a finished worker's deliverable
+ * injected into the manager's prompt when a background dispatch completes.
+ * The worker that produced it already ran its own extraction over its fork
+ * transcript, so re-extracting the same finding from the manager's window
+ * would duplicate it into the manager's memory tier (2026-05-20 dogfood
+ * Bug 3: one PKM research topic landed 3 copies in the user-level root on
+ * top of the worker's own L3 entries). Replace each block with a one-line
+ * marker so the manager's surrounding turns still read coherently — the
+ * manager's own synthesis lives in its assistant messages, which are kept.
+ */
+export function stripBackgroundResultBlocks(text: string): string {
+  return text.replace(
+    BACKGROUND_RESULT_BLOCK_RE,
+    '[background-task result omitted — already extracted by the worker that produced it]',
+  )
+}
+
 export function buildExtractPrompt(
   newMessages: Message[],
   existingMemories: MemoryEntry[],
@@ -183,10 +204,9 @@ export function buildExtractPrompt(
           .join('\n')
       : '[none]'
 
-  const conversationText = newMessages
-    .map(message => messageToText(message))
-    .join('\n\n')
-    .slice(0, 100_000)
+  const conversationText = stripBackgroundResultBlocks(
+    newMessages.map(message => messageToText(message)).join('\n\n'),
+  ).slice(0, 100_000)
 
   return [
     'Extract durable memories from the conversation segment below by calling the MemoryWrite tool. Follow the workflow and conventions from your system prompt.',

@@ -67,6 +67,27 @@ test('buildExtractPrompt invokes MemoryWrite and renders existing memories', () 
   assert.match(prompt, /project-style\.md/)
 })
 
+test('buildExtractPrompt strips background-task-result blocks but keeps surrounding turns', () => {
+  const bgBlock = [
+    '<background-task-result label="PKM research" outcome="success" dispatchId="d1">',
+    'Agentic RAG is the dominant pattern for personal knowledge management agents.',
+    '</background-task-result>',
+  ].join('\n')
+  const prompt = buildExtractPrompt(
+    [
+      createUserMessage(bgBlock, null, 10),
+      createUserMessage('thanks, please also note I prefer metric units', null, 20),
+    ],
+    [],
+  )
+  // The worker that produced the bg result already extracted it into its own
+  // L3; the manager must not re-extract the same finding.
+  assert.doesNotMatch(prompt, /Agentic RAG is the dominant pattern/)
+  assert.match(prompt, /background-task result omitted/)
+  // The manager's own surrounding turn is still in the extraction window.
+  assert.match(prompt, /prefer metric units/)
+})
+
 test('memoryExtractor system prompt bans JSON-text output (regression guard)', () => {
   // Output discipline lives in the role's system prompt, not in the
   // per-call user message (which previously duplicated this rule). The
