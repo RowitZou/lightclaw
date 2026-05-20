@@ -585,7 +585,7 @@ export const feishuCreateFileTool = buildTool<FeishuCreateFileInput, FeishuCreat
 export const feishuWriteDocTool = buildTool<FeishuWriteDocInput, FeishuWriteDocOutput | string>({
   name: 'FeishuWriteDoc',
   description:
-    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. replace/delete block use stricter one-shot confirmation; table row/column/merge edits use a dedicated grantable FeishuTableEditConfirm. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
+    'Write to an existing Feishu/Lark doc/docx. Accepts a doc URL, wiki URL whose underlying node is a doc, or direct document_id. Actions: append_markdown, insert_markdown, replace_markdown, update_block_text, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file. upload_image/upload_file accept local runtime workspace file_path only; remote URLs are not accepted, and uploads use a dedicated FeishuUploadConfirm permission. Omitting action keeps legacy plain-text append. Whole-document replace uses stricter one-shot confirmation; document-internal block edits are grantable, and table row/column/merge edits use a dedicated grantable FeishuTableEditConfirm. Use FeishuCreateFile for new docs. When confirming the write to the user, share the returned `url` (clickable https://feishu.cn/docx/... link) — never the raw `document_id` token.',
   domain: 'host',
   riskLevel: 'write',
   channelScope: ['feishu'],
@@ -1862,7 +1862,7 @@ export async function requireFeishuWriteConfirmation(input: {
 }
 
 function feishuConfirmToolName(operation: FeishuWriteOperation): string {
-  if (operation === 'delete' || operation === 'delete-doc-block') {
+  if (operation === 'delete') {
     return 'FeishuDeleteConfirm'
   }
   if (operation === 'replace-doc') {
@@ -1899,7 +1899,6 @@ function feishuConfirmToolName(operation: FeishuWriteOperation): string {
 
 function isOneShotFeishuOperation(operation: FeishuWriteOperation): boolean {
   return operation === 'delete' ||
-    operation === 'delete-doc-block' ||
     operation === 'replace-doc' ||
     operation === 'delete-sheet'
 }

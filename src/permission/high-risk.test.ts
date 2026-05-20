@@ -187,10 +187,11 @@ describe('commandContainsHighRiskBash (raw-command fallback)', () => {
 })
 
 describe('isHighRiskAsk (top-level driver)', () => {
-  it('FALSE for FeishuWriteConfirm virtual approval asks — destructive doc ops use dedicated high-risk tools', () => {
-    // create/append/add operations are scoped to the user's own workspace and
-    // non-destructive; they should
-    // be grantable as "以后都允许" just like any other Tool(write) ask.
+  it('FALSE for FeishuWriteConfirm virtual approval asks — document-internal edits are grantable', () => {
+    // create/append/add and document-internal block operations are bounded
+    // content edits; they should be grantable as "以后都允许" just like any
+    // other Tool(write) ask. Whole-resource deletes/replaces use dedicated
+    // one-shot virtual tools below.
     for (const operation of [
       'create-doc',
       'create-sheet',
@@ -200,6 +201,7 @@ describe('isHighRiskAsk (top-level driver)', () => {
       'add-sheet',
       'create-doc-table',
       'write-doc-table-cells',
+      'delete-doc-block',
     ] as const) {
       assert.equal(
         isHighRiskAsk(ask({

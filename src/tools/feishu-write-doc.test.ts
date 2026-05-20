@@ -324,7 +324,55 @@ describe('FeishuWriteDoc tool', () => {
       action: 'delete_block',
       block_id: 'block1',
     })
-    assert.equal(deleteAsk?.toolName, 'FeishuDeleteConfirm')
+    assert.equal(deleteAsk?.toolName, 'FeishuWriteConfirm')
+    assert.deepEqual(deleteAsk?.suggestedRules, [{ toolName: 'FeishuWriteConfirm' }])
+  })
+
+  it('short-circuits doc block deletion when a FeishuWriteConfirm allow rule is persisted', async () => {
+    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await writeFile(
+      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
+      'utf8',
+    )
+
+    let askCount = 0
+    const deleted = await withFeishuSession({
+      approver: {
+        ask: async () => {
+          askCount += 1
+          return { behavior: 'allow' }
+        },
+      },
+      fn: () =>
+        runFeishuWriteDoc(
+          {
+            document_id: 'docBlocks',
+            action: 'delete_block',
+            block_id: 'block1',
+          },
+          {
+            client,
+            deleteBlock: async input => ({
+              documentId: input.documentId,
+              blockId: input.blockId,
+              action: 'delete_block',
+            }),
+          },
+        ),
+    })
+
+    assert.equal(askCount, 0, 'approver.ask must not be called when FeishuWriteConfirm covers block deletion')
+    assert.deepEqual(deleted.output, {
+      document_id: 'docBlocks',
+      url: 'https://feishu.cn/docx/docBlocks',
+      action: 'delete_block',
+      block_id: 'block1',
+    })
+    const records = await readAuditRecords()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].operation, 'delete-doc-block')
+    assert.equal(records[0].status, 'confirmed')
   })
 
   it('creates and mutates doc tables with dedicated audit operations', async () => {
