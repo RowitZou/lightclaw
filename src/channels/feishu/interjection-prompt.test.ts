@@ -30,6 +30,25 @@ describe('buildInterjectionBlock', () => {
     assert.match(block, /<\/user-interjection>/)
   })
 
+  it('offers background Dispatch as a way to fit a substantial off-topic request', () => {
+    // A separable off-topic interjection should not force the model to
+    // serialize: the Step 2 framework points it at a background worker so
+    // the original task keeps running.
+    const block = buildInterjectionBlock({
+      interjections: [{
+        messageId: 'm1',
+        senderOpenId: 'ou_alice',
+        text: 'also draft the Q3 report',
+        arrivedAt: 1,
+      }],
+      originalUserText: 'fix the build',
+      completedToolUses: [],
+    })
+
+    assert.match(block, /Substantial and self-contained/)
+    assert.match(block, /Dispatch it to a background worker \(mode:'background'\)/)
+  })
+
   it('adds the auto-denied ASK reminder only when an entry triggered it', () => {
     const block = buildInterjectionBlock({
       interjections: [{

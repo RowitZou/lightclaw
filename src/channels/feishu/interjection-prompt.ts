@@ -60,8 +60,9 @@ export function buildInterjectionBlock(ctx: InterjectionContext): string {
     '    - On-topic: the interjection refines, comments on, or asks about the current task -> fold it into your existing plan.',
     '    - Off-topic: the interjection introduces a separate request -> treat it as an additional task that ALSO must be completed.',
     '',
-    '  Step 2 - for off-topic, you choose execution order based on context:',
+    '  Step 2 - for off-topic, decide how to fit it in:',
     '    - Short/quick items (a fact, a one-line read, an acknowledgement) -> handle inline, then resume the original.',
+    '    - Substantial and self-contained -> Dispatch it to a background worker (mode:\'background\') so it runs in parallel while you stay on the original. Briefly tell the user you have kicked it off. Prefer this whenever the new request is a separable chunk of work - it is the manager move and spares the user a serial wait.',
     '    - The original task is at a natural pause (between major steps) -> handle the new task in line.',
     '    - Otherwise -> finish the original first, then handle the new request.',
   )
