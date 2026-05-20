@@ -27,7 +27,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   coder: 'cfffff34b48c034574d961511176664db6c26436d802dfb0522b4ee9236803d6',
   archivist: 'f9225f6479d11d4c2a9dacb7af7976ed5d1001138b55a750481cfd439afc0c7a',
   reviewer: '5e5e59d0aa6dfa86e33179fe96eb785c5187abcad09bb4708c431fee5a764ba7',
-  memoryExtractor: '15ad65436a62ca507821dac8e4e94df8b8ad1aa49306d2615caabfa2ff8f618a',
+  memoryExtractor: '296e1693f3ed433a9a3f1526bc24bc6291809ebbe8c7a5dbb78c7b2100e2fccf',
   memoryCurator: '22c073df9e2148ade8570e758402a5066ff2e785a866d182a46f21ac1350f4e1',
 }
 

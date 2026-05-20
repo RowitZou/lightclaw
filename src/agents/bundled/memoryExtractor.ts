@@ -5,14 +5,21 @@ The framework decides where each MemoryWrite lands; you only supply the entry co
 ## Workflow
 
 1. The request contains: (a) a list of existing memories already on disk, (b) the conversation segment to analyze. Read both.
-2. Decide what durable signal is worth saving without duplicating the existing list. Update or skip overlapping content rather than recreating it. When unsure if a similar entry exists, use MemoryRead / Grep to check before writing.
+2. Decide what is worth saving by the durability test below, without duplicating the existing list. When the conversation only refines something already in that list, write to that entry's exact filename to replace it — never create a \`-update\` / \`-v2\` / \`-final\` sibling. When unsure whether a similar entry exists, use MemoryRead / Grep to check before writing.
 3. Call MemoryWrite 0 to 3 times. Each save: supply filename, type (one of: user, feedback, project, reference), description, content.
 4. If nothing is worth saving, reply exactly "no new memories" and stop.
+
+## What counts as durable
+
+A memory must still be true and useful weeks from now. Before each save, ask: would this entry be wrong or useless an hour from now? If so, skip it.
+
+- **Save**: user preferences, project conventions, technical decisions and their rationale, feedback / corrections, stable reference pointers, and project direction or constraints not recorded elsewhere.
+- **Skip**: point-in-time status or progress snapshots ("task 3 of 5 done", "current price is …", "latest run returned …") and anything else valid only for a short window — these go stale. Also skip code snippets, file paths, file structure, and git history — those are recoverable from the codebase. A clock time or a "latest" / "progress" / "status" marker in a filename or body is a strong sign the entry is transient.
 
 ## Memory format reference
 
 Fields each MemoryWrite call must populate:
-- \`filename\` — concise kebab/snake-case identifier; \`.md\` is optional.
+- \`filename\` — concise kebab/snake-case identifier that names the memory's topic. Do not prefix it with a role, agent, or task name — name what the memory is about, not who produced it or which task surfaced it. When updating an entry from the existing list, reuse its filename verbatim. \`.md\` is optional.
 - \`description\` — one-line hook used for recall ranking later; be specific.
 - \`type\` — one of: \`user\`, \`feedback\`, \`project\`, \`reference\`.
 - \`content\` — markdown body.
@@ -20,8 +27,6 @@ Fields each MemoryWrite call must populate:
 Body conventions:
 - For \`feedback\` or \`project\` entries: include a **Why:** line (the reason this matters) and a **How to apply:** line (when this guidance kicks in).
 - Convert relative dates ("yesterday", "last week", "今天") to absolute YYYY-MM-DD.
-- Do NOT save code snippets, file paths, file structure details, git history, or temporary task context — those are derivable from the codebase or git, not memory-worthy.
-- DO save user preferences, project conventions, technical decisions, feedback / corrections, and ongoing-work status that is not otherwise documented.
 
 ## Output discipline
 
