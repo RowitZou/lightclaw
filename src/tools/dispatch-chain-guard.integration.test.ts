@@ -10,8 +10,8 @@ import type { LightClawConfig } from '../config.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
-import { loadBackgroundTasks } from '../background-task/store.js'
-import { executeDispatch } from './dispatch.js'
+import { addBackgroundTask, loadBackgroundTasks } from '../background-task/store.js'
+import { cancelDispatchTool, executeDispatch, updateDispatchTool } from './dispatch.js'
 
 let tmpRoot: string
 
@@ -192,7 +192,156 @@ test('executeDispatch rejects background attachments instead of dropping them at
   assert.match(output.output, /inline bytes cannot follow/)
 })
 
-function session(agentType: string, reachableRoles: string[]) {
+test('background dispatch records the caller role and session', async () => {
+  await runWithSessionContext(
+    session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run this research in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+
+  const [task] = loadBackgroundTasks('alice')
+  assert.equal(task?.callerRole, 'main')
+  assert.equal(task?.callerSessionId, 'feishu:dm:c1')
+})
+
+test('CancelDispatch refuses a worker targeting another session dispatch', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run this research in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  const [created] = loadBackgroundTasks('alice')
+  assert.ok(created)
+
+  const output = await runWithSessionContext(
+    session('coder', [], { sessionId: 'dispatched-w2' }),
+    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /outside your scope/)
+  // A denied cancel must leave the dispatch untouched.
+  assert.equal(loadBackgroundTasks('alice').length, 1)
+})
+
+test('CancelDispatch allows a worker to cancel its own dispatch', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run this research in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  const [created] = loadBackgroundTasks('alice')
+  assert.ok(created)
+
+  const output = await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+  )
+
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /Cancelled dispatch/)
+  assert.equal(loadBackgroundTasks('alice').length, 0)
+})
+
+test('CancelDispatch lets main cancel a worker-created dispatch', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run this research in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  const [created] = loadBackgroundTasks('alice')
+  assert.ok(created)
+
+  const output = await runWithSessionContext(
+    session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
+    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+  )
+
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /Cancelled dispatch/)
+})
+
+test('UpdateDispatch refuses a worker targeting another session dispatch', async () => {
+  await runWithSessionContext(
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    () =>
+      executeDispatch({
+        role: 'webSearcher',
+        prompt: 'Run this research in the background.',
+        schedule: { kind: 'after', afterMinutes: 5 },
+        mode: 'background',
+      }, toolContext()),
+  )
+  const [created] = loadBackgroundTasks('alice')
+  assert.ok(created)
+
+  const output = await runWithSessionContext(
+    session('coder', [], { sessionId: 'dispatched-w2' }),
+    () => updateDispatchTool.call({ id: created.id, enabled: false }, toolContext()),
+  )
+
+  assert.equal(output.isError, true)
+  assert.match(output.output, /outside your scope/)
+  // The dispatch keeps its original enabled state.
+  assert.equal(loadBackgroundTasks('alice')[0]?.enabled, true)
+})
+
+test('management ownership falls back to originSessionId for legacy dispatches', async () => {
+  // A pre-Phase-12 entry carries originSessionId but no callerSessionId.
+  addBackgroundTask('alice', {
+    id: 'alice-legacy',
+    ownerCanonicalUser: 'alice',
+    prompt: 'legacy scheduled work',
+    role: 'webSearcher',
+    schedule: { kind: 'oneshot', at: new Date(Date.now() + 3_600_000).toISOString() },
+    label: 'legacy dispatch',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    originSessionId: 'dispatched-legacy',
+  })
+
+  const denied = await runWithSessionContext(
+    session('coder', [], { sessionId: 'dispatched-other' }),
+    () => cancelDispatchTool.call({ id: 'alice-legacy' }, toolContext()),
+  )
+  assert.equal(denied.isError, true)
+  assert.match(denied.output, /outside your scope/)
+
+  const allowed = await runWithSessionContext(
+    session('coder', [], { sessionId: 'dispatched-legacy' }),
+    () => cancelDispatchTool.call({ id: 'alice-legacy' }, toolContext()),
+  )
+  assert.equal(allowed.isError, undefined)
+  assert.match(allowed.output, /Cancelled dispatch/)
+})
+
+function session(
+  agentType: string,
+  reachableRoles: string[],
+  opts: { kind?: 'orchestrator' | 'worker'; sessionId?: string } = {},
+) {
   return createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),
     model: 'claude-sonnet-4-6',
@@ -201,13 +350,13 @@ function session(agentType: string, reachableRoles: string[]) {
     currentUserId: 'alice',
     currentRole: {
       agentType,
-      kind: 'worker',
+      kind: opts.kind ?? 'worker',
       whenToUse: agentType,
       systemPrompt: '',
       tools: ['Read', 'Dispatch'],
       reachableRoles,
     },
-    sessionId: 's-current',
+    sessionId: opts.sessionId ?? 's-current',
   })
 }
 

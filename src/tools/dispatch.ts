@@ -18,7 +18,7 @@ import {
 } from '../background-task/store.js'
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
-import { scheduleSpecSchema, type ScheduleSpec } from '../background-task/types.js'
+import { scheduleSpecSchema, type BackgroundTaskEntry, type ScheduleSpec } from '../background-task/types.js'
 import { getCurrentRole, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
@@ -169,6 +169,31 @@ function validateFutureOneshot(schedule: ScheduleSpec): string | null {
     ].join('\n')
   }
   return null
+}
+
+// --- Caller ownership for dispatch management tools (Phase 12) --------------
+// Background dispatches record the role + session that created them. main (the
+// orchestrator) manages any of the user's dispatches; a worker may only manage
+// dispatches it created in its own session, so a worker dispatcher cannot
+// cancel / update a cron that main or another worker scheduled.
+
+/** Session a background dispatch was created from = its ownership key. New
+ *  entries store `callerSessionId`; entries persisted before that field
+ *  existed fall back to `originSessionId`, which carries the same session. */
+function taskCallerSession(task: BackgroundTaskEntry): string | undefined {
+  return task.callerSessionId ?? task.originSessionId
+}
+
+/** Creator role for display; 'main' for entries persisted before the field. */
+function taskCallerRole(task: BackgroundTaskEntry): string {
+  return task.callerRole ?? 'main'
+}
+
+/** Whether the current caller may cancel / update this dispatch. */
+function currentCallerMayManage(task: BackgroundTaskEntry): boolean {
+  const role = getCurrentRole()
+  if (!role || role.kind === 'orchestrator') return true
+  return taskCallerSession(task) === getSessionId()
 }
 
 export const dispatchTool = buildTool({
@@ -394,6 +419,8 @@ export async function executeDispatch(
     enabled: true,
     createdAt: now,
     originSessionId: sessionId,
+    callerRole: callerRole.agentType,
+    callerSessionId: sessionId,
     chainState: effectiveChildChainState,
   }
   addBackgroundTask(userId, entry)
@@ -498,6 +525,13 @@ export const cancelDispatchTool = buildTool({
   }),
   async call(input) {
     const userId = requireCurrentUserId()
+    const owned = getBackgroundTask(userId, input.id)
+    if (owned && !currentCallerMayManage(owned)) {
+      return {
+        output: `Dispatch ${input.id} was created by ${taskCallerRole(owned)} in a different session and is outside your scope. You can only cancel dispatches you created. Report it back to your requester instead of retrying.`,
+        isError: true,
+      }
+    }
     const removed = removeBackgroundTask(userId, input.id)
     notifyBackgroundTaskChanged(userId, input.id)
     if (removed) {
@@ -535,6 +569,12 @@ export const updateDispatchTool = buildTool({
   async call(input) {
     const userId = requireCurrentUserId()
     const existing = getBackgroundTask(userId, input.id)
+    if (existing && !currentCallerMayManage(existing)) {
+      return {
+        output: `Dispatch ${input.id} was created by ${taskCallerRole(existing)} in a different session and is outside your scope. You can only update dispatches you created. Report it back to your requester instead of retrying.`,
+        isError: true,
+      }
+    }
     let schedule = input.schedule
     if (schedule?.kind === 'after') {
       schedule = { kind: 'oneshot', at: new Date(Date.now() + schedule.afterMinutes * 60_000).toISOString() }

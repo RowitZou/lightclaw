@@ -67,6 +67,16 @@ export type BackgroundTaskEntry = {
   // falls back to resolveWakeSessionId (most-recent DM) when this field
   // is missing or the origin session no longer exists on disk.
   originSessionId?: string
+  /** Role agentType that created this dispatch — the caller of the Dispatch
+   *  tool, NOT the callee worker carried in `role`. The management tools use
+   *  it to attribute a dispatch to its creator. Optional: entries persisted
+   *  before this field existed are treated as main-created. */
+  callerRole?: string
+  /** Session the dispatch was created from = the ownership key for
+   *  ListDispatches / CancelDispatch / UpdateDispatch. Optional: legacy
+   *  entries lack it and the management tools fall back to `originSessionId`,
+   *  which carries the same "created from" session. */
+  callerSessionId?: string
   chainState?: ChainState
 }
 
@@ -89,7 +99,7 @@ export type FireOutcome =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId'>>
     }
   | {
       version: 2
@@ -110,5 +120,7 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   lastFiredAt: z.string().optional(),
   pendingPriorPromptNotice: z.string().optional(),
   originSessionId: z.string().optional(),
+  callerRole: z.string().optional(),
+  callerSessionId: z.string().optional(),
   chainState: z.any().optional(),
 })
