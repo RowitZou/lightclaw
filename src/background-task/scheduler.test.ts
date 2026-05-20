@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os'
 
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { setLightclawHomeOverride } from '../paths.js'
-import { BackgroundTaskScheduler, resolveLiveWorkerSpawner } from './scheduler.js'
+import {
+  BackgroundTaskScheduler,
+  resolveLiveWorkerSpawner,
+  setRunBackgroundTaskFireForTest,
+} from './scheduler.js'
 import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 
@@ -84,6 +88,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
   })
 
   afterEach(() => {
+    setRunBackgroundTaskFireForTest(null)
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
   })
@@ -122,6 +127,78 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(loaded.enabled, true)
     assert.equal('consecutiveFailures' in loaded, false)
     assert.equal('fireHistory' in loaded, false)
+  })
+
+  it('releases the concurrency slot when the run settles, not after completion handling', async () => {
+    const taskA = { ...fakeTask(), id: 'task-a' }
+    const taskB = { ...fakeTask(), id: 'task-b' }
+    saveBackgroundTasks('alice', [taskA, taskB])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: { dispatch: { scheduler: { maxConcurrentRunsPerUser: number } } }
+    }).config = { dispatch: { scheduler: { maxConcurrentRunsPerUser: 1 } } }
+
+    const fired: string[] = []
+    let resolveRunA: (() => void) | undefined
+    const runADone = new Promise<void>(resolve => {
+      resolveRunA = resolve
+    })
+    setRunBackgroundTaskFireForTest(async ({ task }) => {
+      fired.push(task.id)
+      if (task.id === 'task-a') {
+        await runADone
+      }
+      return { kind: 'success', summary: 'ok', transcriptPath: '/tmp/x' }
+    })
+    // Completion handling hangs forever — it must NOT hold the concurrency
+    // slot or block the FIFO queue from draining.
+    ;(scheduler as unknown as { onFireComplete: () => Promise<void> }).onFireComplete =
+      () => new Promise<void>(() => {})
+
+    scheduler.fireImmediate('alice', 'task-a') // takes the only slot
+    scheduler.fireImmediate('alice', 'task-b') // overflow → FIFO queue
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.deepEqual(fired, ['task-a'], 'task-b must stay queued while the slot is busy')
+
+    resolveRunA?.() // task-a's agent run settles; completion handler still hangs
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(
+      fired,
+      ['task-a', 'task-b'],
+      'task-b must fire once the run settles, even though completion handling never resolves',
+    )
+  })
+
+  it('tick() drains a stranded FIFO overflow queue', async () => {
+    const task = { ...fakeTask(), id: 'q-a' }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: { dispatch: { scheduler: { maxConcurrentRunsPerUser: number } } }
+    }).config = { dispatch: { scheduler: { maxConcurrentRunsPerUser: 3 } } }
+
+    const fired: string[] = []
+    setRunBackgroundTaskFireForTest(async ({ task: fired_task }) => {
+      fired.push(fired_task.id)
+      return { kind: 'success', summary: 'ok', transcriptPath: '/tmp/x' }
+    })
+    ;(scheduler as unknown as { onFireComplete: () => Promise<void> }).onFireComplete =
+      async () => {}
+
+    // Simulate a stranded queue: an entry sits in fifoQueueByUser with no
+    // in-flight fire to ever trigger dequeue() — the 2026-05-20 dogfood bug.
+    ;(scheduler as unknown as {
+      fifoQueueByUser: Map<string, Array<{ taskId: string; fireUuid: string; attempt: number }>>
+    }).fifoQueueByUser.set('alice', [{ taskId: 'q-a', fireUuid: 'uuid-1', attempt: 1 }])
+
+    await (scheduler as unknown as { tick: () => Promise<void> }).tick()
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    assert.deepEqual(fired, ['q-a'], 'tick() must drain the stranded queue')
+    const remaining = (scheduler as unknown as {
+      fifoQueueByUser: Map<string, unknown[]>
+    }).fifoQueueByUser.get('alice')
+    assert.equal(remaining?.length ?? 0, 0, 'queue must be empty after tick drains it')
   })
 })
 

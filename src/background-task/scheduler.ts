@@ -31,6 +31,21 @@ type QueueItem = {
 
 const RETRY_BASE_MS = 2000
 
+type RunBackgroundTaskFireFn = typeof runBackgroundTaskFire
+
+let runBackgroundTaskFireImpl: RunBackgroundTaskFireFn = runBackgroundTaskFire
+
+/**
+ * Test seam: override the bg-fire runner so scheduler tests can exercise the
+ * fire / dequeue / queue-drain logic without spinning up a real agent. Pass
+ * null to restore the production implementation.
+ */
+export function setRunBackgroundTaskFireForTest(
+  impl: RunBackgroundTaskFireFn | null,
+): void {
+  runBackgroundTaskFireImpl = impl ?? runBackgroundTaskFire
+}
+
 /**
  * Pick the receiver for a bg-dispatch result, preferring the closest live
  * worker spawner in the chain over the legacy "always main" route. Walks
@@ -185,6 +200,20 @@ export class BackgroundTaskScheduler {
         }
       }
     }
+
+    // Backstop: drain each user's FIFO overflow queue. Normally dequeue()
+    // chains off each fire's slot release, but if that chain is ever broken
+    // (a fire whose completion handler never settles, a daemon hiccup), the
+    // queued tasks would otherwise be stranded — past-due oneshot tasks never
+    // re-enter the heap. The 1s poller re-attempts them here so the overflow
+    // queue is always self-healing.
+    for (const canonicalUser of [...this.fifoQueueByUser.keys()]) {
+      let queue = this.fifoQueueByUser.get(canonicalUser)
+      while (queue && queue.length > 0 && this.canFireNow(canonicalUser)) {
+        this.dequeue(canonicalUser)
+        queue = this.fifoQueueByUser.get(canonicalUser)
+      }
+    }
   }
 
   private enqueueOrFire(canonicalUser: string, item: QueueItem): void {
@@ -216,32 +245,58 @@ export class BackgroundTaskScheduler {
       (this.runningCountByUser.get(canonicalUser) ?? 0) + 1,
     )
     const controller = new AbortController()
-    const promise = runBackgroundTaskFire({
+
+    // The concurrency slot is held ONLY for the agent run itself. Completion
+    // handling (record + result delivery) runs afterwards and must NOT keep
+    // the slot or gate the FIFO queue — a slow / hung deliverCompletion would
+    // otherwise strand every queued task behind it (2026-05-20 dogfood: 7 of
+    // 10 batch-dispatched tasks never fired). releaseSlot is idempotent.
+    let slotReleased = false
+    const releaseSlot = (): void => {
+      if (slotReleased) return
+      slotReleased = true
+      this.runningCountByUser.set(
+        canonicalUser,
+        Math.max(0, (this.runningCountByUser.get(canonicalUser) ?? 1) - 1),
+      )
+      this.dequeue(canonicalUser)
+    }
+
+    const promise = runBackgroundTaskFireImpl({
       task,
       fireUuid,
       signal: controller.signal,
     })
-      .then(outcome => this.onFireComplete(canonicalUser, task, fireUuid, {
-        ...outcome,
-        ...(outcome.kind === 'failure' ? { attempt } : {}),
-      } as FireOutcome, attempt))
-      .catch(error => {
-        const reason = error instanceof Error ? error.message : String(error)
-        return this.onFireComplete(
-          canonicalUser,
-          task,
-          fireUuid,
-          { kind: 'failure', reason, transient: true, attempt },
+      .then(
+        outcome =>
+          ({
+            ...outcome,
+            ...(outcome.kind === 'failure' ? { attempt } : {}),
+          }) as FireOutcome,
+        (error: unknown): FireOutcome => ({
+          kind: 'failure',
+          reason: error instanceof Error ? error.message : String(error),
+          transient: true,
           attempt,
+        }),
+      )
+      .then(outcome => {
+        // Release the slot the instant the agent run settles — before, not
+        // after, completion handling. dequeue() chains the next queued task.
+        releaseSlot()
+        return this.onFireComplete(canonicalUser, task, fireUuid, outcome, attempt)
+      })
+      .catch(error => {
+        process.stderr.write(
+          `[background-task] ${task.id} fire ${fireUuid} completion handling failed: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
         )
       })
       .finally(() => {
-        this.runningCountByUser.set(
-          canonicalUser,
-          Math.max(0, (this.runningCountByUser.get(canonicalUser) ?? 1) - 1),
-        )
+        // Safety net: releaseSlot already ran on every normal path above.
+        releaseSlot()
         this.inFlight.delete(promise)
-        this.dequeue(canonicalUser)
       })
     this.inFlight.add(promise)
   }
