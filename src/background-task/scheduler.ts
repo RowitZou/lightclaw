@@ -78,6 +78,14 @@ export class BackgroundTaskScheduler {
   private readonly heapByUser = new Map<string, HeapItem[]>()
   private readonly runningCountByUser = new Map<string, number>()
   private readonly fifoQueueByUser = new Map<string, QueueItem[]>()
+  // Task ids the scheduler has already taken into its fire pipeline (queued,
+  // firing, running, or pending retry) but whose run has not terminally
+  // settled. A `schedule:'now'` dispatch is BOTH heap-scheduled (addBackgroundTask
+  // + notifyBackgroundTaskChanged) AND fired directly (fireImmediate); without
+  // this guard the 1s poller re-fires the still-in-store oneshot ~1s later
+  // (2026-05-20 dogfood double-fire). Claimed oneshots are skipped by tick()
+  // and excluded from heap rebuilds.
+  private readonly claimedByUser = new Map<string, Set<string>>()
   private readonly inFlight = new Set<Promise<void>>()
   private pollerTimer: NodeJS.Timeout | null = null
   private config: LightClawConfig | null = null
@@ -163,6 +171,14 @@ export class BackgroundTaskScheduler {
     const now = new Date()
     const heap = tasks
       .filter(task => task.enabled)
+      .filter(
+        // A claimed oneshot has already been taken into the fire pipeline;
+        // re-adding it to the heap would let tick() fire it a second time.
+        // Recurring/interval tasks legitimately re-enter the heap for their
+        // next occurrence, so the exclusion is oneshot-only.
+        task =>
+          !(task.schedule.kind === 'oneshot' && this.isClaimed(canonicalUser, task.id)),
+      )
       .map(task => {
         const next = computeTaskNextRunAt(task, now)
         return next ? { taskId: task.id, runAt: next.getTime() } : null
@@ -181,13 +197,18 @@ export class BackgroundTaskScheduler {
     for (const [canonicalUser, heap] of this.heapByUser) {
       while (heap.length > 0 && heap[0].runAt <= now) {
         const due = heap.shift()!
-        this.enqueueOrFire(canonicalUser, {
-          taskId: due.taskId,
-          fireUuid: randomUUID(),
-          attempt: 1,
-        })
-
         const task = getBackgroundTask(canonicalUser, due.taskId)
+        // Skip a task already claimed by another fire path. A schedule:'now'
+        // dispatch fires via fireImmediate AND leaves a heap entry; without
+        // this guard the poller re-fires it ~1s later (2026-05-20 dogfood).
+        if (!this.isClaimed(canonicalUser, due.taskId)) {
+          this.enqueueOrFire(canonicalUser, {
+            taskId: due.taskId,
+            fireUuid: randomUUID(),
+            attempt: 1,
+          })
+        }
+
         if (task?.enabled && task.schedule.kind !== 'oneshot') {
           const next = computeTaskNextRunAt(
             { ...task, lastFiredAt: new Date(now + 1).toISOString() },
@@ -217,11 +238,16 @@ export class BackgroundTaskScheduler {
   }
 
   private enqueueOrFire(canonicalUser: string, item: QueueItem): void {
+    const task = getBackgroundTask(canonicalUser, item.taskId)
+    if (!task?.enabled) {
+      // Task was cancelled / disabled before this fire path reached it —
+      // drop any claim so the claimed-set does not leak.
+      this.unmarkClaimed(canonicalUser, item.taskId)
+      return
+    }
+    this.markClaimed(canonicalUser, item.taskId)
     if (this.canFireNow(canonicalUser)) {
-      const task = getBackgroundTask(canonicalUser, item.taskId)
-      if (task?.enabled) {
-        this.fire(canonicalUser, task, item.fireUuid, item.attempt)
-      }
+      this.fire(canonicalUser, task, item.fireUuid, item.attempt)
       return
     }
     const queue = this.fifoQueueByUser.get(canonicalUser) ?? []
@@ -232,6 +258,28 @@ export class BackgroundTaskScheduler {
   private canFireNow(canonicalUser: string): boolean {
     const max = this.config?.dispatch.scheduler.maxConcurrentRunsPerUser ?? 3
     return (this.runningCountByUser.get(canonicalUser) ?? 0) < max
+  }
+
+  private markClaimed(canonicalUser: string, taskId: string): void {
+    let claimed = this.claimedByUser.get(canonicalUser)
+    if (!claimed) {
+      claimed = new Set()
+      this.claimedByUser.set(canonicalUser, claimed)
+    }
+    claimed.add(taskId)
+  }
+
+  private unmarkClaimed(canonicalUser: string, taskId: string): void {
+    const claimed = this.claimedByUser.get(canonicalUser)
+    if (!claimed) return
+    claimed.delete(taskId)
+    if (claimed.size === 0) {
+      this.claimedByUser.delete(canonicalUser)
+    }
+  }
+
+  private isClaimed(canonicalUser: string, taskId: string): boolean {
+    return this.claimedByUser.get(canonicalUser)?.has(taskId) ?? false
   }
 
   private fire(
@@ -313,6 +361,9 @@ export class BackgroundTaskScheduler {
     const task = getBackgroundTask(canonicalUser, next.taskId)
     if (task?.enabled) {
       this.fire(canonicalUser, task, next.fireUuid, next.attempt)
+    } else {
+      // Task vanished / disabled while queued — release its claim.
+      this.unmarkClaimed(canonicalUser, next.taskId)
     }
   }
 
@@ -333,8 +384,14 @@ export class BackgroundTaskScheduler {
           attempt: attempt + 1,
         })
       }, delayMs).unref?.()
+      // Stay claimed across the retry — the re-enqueue above re-marks it, but
+      // releasing here would open a rebuild double-add window during the delay.
       return
     }
+
+    // Terminal outcome — this run will not fire again. Release the claim so a
+    // recurring task can be rescheduled and the claimed-set does not leak.
+    this.unmarkClaimed(canonicalUser, task.id)
 
     const firedAt = new Date().toISOString()
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {

@@ -200,6 +200,98 @@ describe('BackgroundTaskScheduler fire completion', () => {
     }).fifoQueueByUser.get('alice')
     assert.equal(remaining?.length ?? 0, 0, 'queue must be empty after tick drains it')
   })
+
+  it('does not double-fire a schedule:now oneshot that is heap-scheduled and fired directly', async () => {
+    // dispatch.ts schedule:'now' path: addBackgroundTask + notifyTaskChanged
+    // (heap-schedules the oneshot at now+~1s) + fireImmediate (fires it now).
+    // The leftover heap entry must NOT make the poller tick fire it again
+    // (2026-05-20 dogfood: the last tasks of a batch double-fired).
+    const at = new Date(Date.now() + 40).toISOString()
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      id: 'now-task',
+      notifyOn: 'failure',
+      schedule: { kind: 'oneshot', at },
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: {
+        dispatch: { scheduler: { maxConcurrentRunsPerUser: number; fireRetryMaxAttempts: number } }
+      }
+    }).config = {
+      dispatch: { scheduler: { maxConcurrentRunsPerUser: 3, fireRetryMaxAttempts: 3 } },
+    }
+
+    const fired: string[] = []
+    let resolveFire: (() => void) | undefined
+    const fireGate = new Promise<void>(resolve => {
+      resolveFire = resolve
+    })
+    setRunBackgroundTaskFireForTest(async ({ task: t }) => {
+      fired.push(t.id)
+      await fireGate // keep the fire in-flight so the task stays in the store
+      return { kind: 'success', summary: 'ok', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.notifyTaskChanged('alice', 'now-task') // heap-schedules the oneshot
+    scheduler.fireImmediate('alice', 'now-task') // fires it once; fire stays in-flight
+
+    await new Promise(resolve => setTimeout(resolve, 60)) // let the heap entry's runAt pass
+    await (scheduler as unknown as { tick: () => Promise<void> }).tick()
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    assert.deepEqual(
+      fired,
+      ['now-task'],
+      'the oneshot must fire exactly once even though it is both in-flight and heap-scheduled',
+    )
+
+    resolveFire?.()
+    await new Promise(resolve => setTimeout(resolve, 10))
+  })
+
+  it('a heap rebuild does not re-add an already-claimed oneshot', async () => {
+    const at = new Date(Date.now() + 10_000).toISOString() // far future → heap-eligible
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      id: 'claimed-task',
+      notifyOn: 'failure',
+      schedule: { kind: 'oneshot', at },
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: {
+        dispatch: { scheduler: { maxConcurrentRunsPerUser: number; fireRetryMaxAttempts: number } }
+      }
+    }).config = {
+      dispatch: { scheduler: { maxConcurrentRunsPerUser: 3, fireRetryMaxAttempts: 3 } },
+    }
+
+    const fired: string[] = []
+    let resolveFire: (() => void) | undefined
+    const fireGate = new Promise<void>(resolve => {
+      resolveFire = resolve
+    })
+    setRunBackgroundTaskFireForTest(async ({ task: t }) => {
+      fired.push(t.id)
+      await fireGate
+      return { kind: 'success', summary: 'ok', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'claimed-task') // claims + fires
+    scheduler.notifyTaskChanged('alice', 'claimed-task') // rebuild must exclude the claimed oneshot
+
+    const heap = (scheduler as unknown as {
+      heapByUser: Map<string, unknown[]>
+    }).heapByUser.get('alice')
+    assert.equal(heap?.length ?? 0, 0, 'a claimed oneshot must not be re-added to the heap')
+    assert.deepEqual(fired, ['claimed-task'], 'the oneshot fired exactly once via fireImmediate')
+
+    resolveFire?.()
+    await new Promise(resolve => setTimeout(resolve, 10))
+  })
 })
 
 function fakeTask(): BackgroundTaskEntry {
