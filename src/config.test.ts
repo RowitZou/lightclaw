@@ -547,7 +547,6 @@ describe('config: endpoints + models registry', () => {
     assert.deepEqual(cfg.dispatch, {
       maxChainDepth: 4,
       maxChainDepthCeiling: 5,
-      historyTtlMs: 24 * 60 * 60 * 1000,
       ephemeralSessionTtlMs: 72 * 60 * 60 * 1000,
       scheduler: {
         maxConcurrentRunsPerUser: 3,
@@ -636,7 +635,7 @@ describe('config: endpoints + models registry', () => {
     })
   })
 
-  it('parses dispatch history ttl overrides', () => {
+  it('parses dispatch depth and ephemeral session ttl overrides', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -645,15 +644,14 @@ describe('config: endpoints + models registry', () => {
       dispatch: {
         maxChainDepth: 4,
         maxChainDepthCeiling: 6,
-        historyTtlMs: 12_345,
+        ephemeralSessionTtlMs: 12_345,
       },
     })
     const cfg = getConfig()
     assert.deepEqual(cfg.dispatch, {
       maxChainDepth: 4,
       maxChainDepthCeiling: 6,
-      historyTtlMs: 12_345,
-      ephemeralSessionTtlMs: 72 * 60 * 60 * 1000,
+      ephemeralSessionTtlMs: 12_345,
       scheduler: {
         maxConcurrentRunsPerUser: 3,
         startupCatchupIntervalMs: 60_000,

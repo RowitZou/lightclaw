@@ -10,7 +10,6 @@ import { getConfig, type LightClawConfig } from './config.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
 import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
-import { maybeSweepDispatchHistory } from './agents/resumable-snapshot.js'
 import { lightclawHome } from './paths.js'
 import { workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
@@ -115,10 +114,6 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   initializeAgents()
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   registerBusSubscribers()
-  await maybeSweepDispatchHistory(lightclawHome(), resolvedConfig.dispatch.historyTtlMs)
-    .catch(error => {
-      process.stderr.write(`[dispatch-history] sweep failed: ${String(error)}\n`)
-    })
   getBackgroundTaskScheduler().start(resolvedConfig)
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()

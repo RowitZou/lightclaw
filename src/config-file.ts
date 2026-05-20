@@ -202,7 +202,6 @@ export type ConfigFileShape = {
   dispatch?: {
     maxChainDepth?: number
     maxChainDepthCeiling?: number
-    historyTtlMs?: number
     ephemeralSessionTtlMs?: number
     /** Scheduler / store backing `Dispatch(mode:'background', schedule:...)`.
      *  Previously top-level `backgroundTask.*`. Legacy key still accepted

@@ -384,7 +384,6 @@ export type DispatchSchedulerConfig = {
 export type DispatchConfig = {
   maxChainDepth: number
   maxChainDepthCeiling: number
-  historyTtlMs: number
   ephemeralSessionTtlMs: number
   scheduler: DispatchSchedulerConfig
 }
@@ -396,7 +395,6 @@ type ConfigFileDockerMount = NonNullable<
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
-const DEFAULT_DISPATCH_HISTORY_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000
 // memory.curator (formerly autoDream) defaults ON: every gate it consults
 // (lock file, time / scan-throttle / session-count thresholds, in-progress
@@ -426,7 +424,6 @@ export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   // additional hops without immediately tripping the guard.
   maxChainDepth: 4,
   maxChainDepthCeiling: 5,
-  historyTtlMs: DEFAULT_DISPATCH_HISTORY_TTL_MS,
   ephemeralSessionTtlMs: DEFAULT_EPHEMERAL_SESSION_TTL_MS,
   scheduler: DEFAULT_DISPATCH_SCHEDULER,
 }
@@ -1703,10 +1700,6 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
   const declared = Number.isFinite(depthRaw) && depthRaw >= 1
     ? Math.floor(depthRaw)
     : DEFAULT_DISPATCH_CONFIG.maxChainDepth
-  const historyTtlRaw = Number(dispatch.historyTtlMs)
-  const historyTtlMs = Number.isFinite(historyTtlRaw) && historyTtlRaw >= 0
-    ? Math.floor(historyTtlRaw)
-    : DEFAULT_DISPATCH_HISTORY_TTL_MS
   const ephemeralTtlRaw = Number(dispatch.ephemeralSessionTtlMs)
   const ephemeralSessionTtlMs = Number.isFinite(ephemeralTtlRaw) && ephemeralTtlRaw >= 0
     ? Math.floor(ephemeralTtlRaw)
@@ -1746,7 +1739,6 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
   return {
     maxChainDepth: Math.min(declared, ceiling),
     maxChainDepthCeiling: ceiling,
-    historyTtlMs,
     ephemeralSessionTtlMs,
     scheduler,
   }

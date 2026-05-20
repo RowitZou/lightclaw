@@ -8,7 +8,7 @@ import type { UserContentBlock } from '../types.js'
 import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { getAgent } from './registry.js'
-import { ResumeSnapshotNotFoundError, runDispatchedAgent } from './dispatched-agent.js'
+import { runDispatchedAgent } from './dispatched-agent.js'
 import { filterToolsByRoleVisibility } from './role-tool-gate.js'
 
 const filterTools = filterToolsByRoleVisibility
@@ -34,8 +34,6 @@ export async function runSubagent(params: {
   // Used by Phase 3 per-role extract: prompt/tools/gate still come from the
   // child agent Role, but MemoryWrite's physical binding sees this owner Role.
   currentRoleOverride?: Role
-  callerAgentType?: AgentType
-  resumeFrom?: string
   chainState?: ChainState
   // Inline content blocks (image / pdf) appended to the worker's first user
   // message alongside the prompt text. Caller is expected to validate paths
@@ -90,9 +88,7 @@ export async function runSubagent(params: {
       config,
       role: agent,
       currentRoleOverride: params.currentRoleOverride,
-      callerAgentType: params.callerAgentType,
       canonicalUser: cacheUserKey,
-      resumeFrom: params.resumeFrom,
       chainState: params.chainState,
       canUseToolOverride: params.canUseToolOverride,
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
@@ -113,7 +109,6 @@ export async function runSubagent(params: {
       kind: 'success',
       finalText: result.finalText,
       stopReason: result.stopReason,
-      resumedFromDispatchId: result.resumedFromDispatchId,
     }
   } catch (error) {
     return subagentFailureForError(error, params.signal)
@@ -158,7 +153,7 @@ function maybeTriggerForkExtract(input: {
 }
 
 export type RunSubagentResult =
-  | { kind: 'success'; finalText: string; stopReason: string | null; resumedFromDispatchId?: string }
+  | { kind: 'success'; finalText: string; stopReason: string | null }
   | { kind: 'failure'; envelope: WorkerFailure }
 
 function subagentFailure(
@@ -194,12 +189,6 @@ function subagentFailureForError(
     return subagentFailure('max-turns-exceeded', message, {
       kind: 'retry-with-narrower-scope',
       detail: 'Reduce scope or increase the subagent turn cap.',
-    })
-  }
-  if (error instanceof ResumeSnapshotNotFoundError) {
-    return subagentFailure('resume-snapshot-not-found', error.message, {
-      kind: 'retry-with-narrower-scope',
-      detail: 'Retry the same Dispatch without resumeFrom to start a fresh fork.',
     })
   }
   return subagentFailure('other', message, { kind: 'ask-user' })

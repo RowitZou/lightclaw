@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
-import type { AgentType, Role, WorkerFailure } from '../agents/types.js'
+import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
@@ -142,21 +142,6 @@ function internalRoleFor(role: DispatchRole, mode: DispatchMode): AgentType {
   return role
 }
 
-export function resolveEffectiveResumeFrom(
-  calleeRole: Pick<Role, 'defaultResumePolicy'>,
-  callerProvided: string | undefined,
-): string | undefined {
-  switch (calleeRole.defaultResumePolicy) {
-    case 'always':
-      return callerProvided ?? 'last'
-    case 'never':
-    case 'auto':
-      return undefined
-    default:
-      return callerProvided
-  }
-}
-
 function normalizeSchedule(schedule: DispatchSchedule): ScheduleSpec {
   if (schedule === 'now') {
     return { kind: 'oneshot', at: new Date(Date.now() + 1000).toISOString() }
@@ -214,7 +199,6 @@ export async function executeDispatch(
     schedule?: DispatchSchedule
     mode: DispatchMode
     label?: string
-    resumeFrom?: string
     attachments?: string[]
   },
   context: ToolCallContext,
@@ -244,7 +228,6 @@ export async function executeDispatch(
     }
   }
   const internalRole = internalRoleFor(input.role, input.mode)
-  const effectiveResumeFrom = resolveEffectiveResumeFrom(calleeRole, input.resumeFrom)
   const dispatchId = `${userId}-${shortId()}`
   const startedAt = Date.now()
   const parentChainState = context.chainState ??
@@ -329,7 +312,6 @@ export async function executeDispatch(
       prompt: finalDispatchPrompt,
       schedule,
       mode: input.mode,
-      ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
       ...(input.label ? { label: input.label } : {}),
       chainState: effectiveChildChainState,
     },
@@ -351,8 +333,6 @@ export async function executeDispatch(
       prompt: finalDispatchPrompt,
       signal: context.abortSignal,
       canonicalUserOverride: userId,
-      callerAgentType: callerRole.agentType,
-      resumeFrom: effectiveResumeFrom,
       chainState: effectiveChildChainState,
       ...(attachments.inlineBlocks.length > 0
         ? { dispatchAttachmentBlocks: attachments.inlineBlocks }
@@ -373,7 +353,6 @@ export async function executeDispatch(
         durationMs: Date.now() - startedAt,
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
         chainState: effectiveChildChainState,
-        ...(effectiveResumeFrom ? { resumeFromDispatchId: effectiveResumeFrom } : {}),
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
@@ -389,7 +368,6 @@ export async function executeDispatch(
       durationMs: Date.now() - startedAt,
       finalTextPreview: (result.finalText || '').slice(0, 200),
       chainState: effectiveChildChainState,
-      ...(result.resumedFromDispatchId ? { resumeFromDispatchId: result.resumedFromDispatchId } : {}),
     }).catch(() => {})
     return { output: result.finalText || '(dispatched role returned empty text)' }
   }
@@ -405,7 +383,6 @@ export async function executeDispatch(
     ownerCanonicalUser: userId,
     prompt: input.prompt,
     role: input.role,
-    ...(effectiveResumeFrom ? { resumeFrom: effectiveResumeFrom } : {}),
     schedule: normalizedSchedule,
     label: input.label ?? `${input.role} dispatch`,
     notifyOn: 'always' as const,
@@ -432,7 +409,6 @@ export async function executeDispatch(
     durationMs: Date.now() - startedAt,
     finalTextPreview: `scheduled ${entry.id}`,
     chainState: effectiveChildChainState,
-    ...(effectiveResumeFrom ? { resumeFromDispatchId: effectiveResumeFrom } : {}),
   }).catch(() => {})
   return {
     output: [

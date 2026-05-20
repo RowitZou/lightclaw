@@ -65,6 +65,8 @@ export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[
       }
       delete (baseCandidate as { consecutiveFailures?: unknown }).consecutiveFailures // legacy migration
       delete (baseCandidate as { fireHistory?: unknown }).fireHistory // legacy migration
+      // Legacy field removed with dispatch context-inheritance retirement.
+      delete (baseCandidate as Record<string, unknown>)['resume' + 'From']
       const result = backgroundTaskEntrySchema.safeParse(baseCandidate)
       if (result.success) {
         tasks.push(result.data)

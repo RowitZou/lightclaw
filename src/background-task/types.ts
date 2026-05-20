@@ -45,7 +45,6 @@ export type BackgroundTaskEntry = {
    *  injects 'generalist' as the legacy default before zod parse so
    *  old on-disk entries continue to parse cleanly. */
   role: string
-  resumeFrom?: string
   schedule: ScheduleSpec
   label: string
   notifyOn: 'success' | 'failure' | 'always'
@@ -102,7 +101,6 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   ownerCanonicalUser: z.string().min(1),
   prompt: z.string().min(1),
   role: z.string().min(1),
-  resumeFrom: z.string().min(1).optional(),
   schedule: scheduleSpecSchema,
   label: z.string().min(1),
   notifyOn: z.enum(['success', 'failure', 'always']),

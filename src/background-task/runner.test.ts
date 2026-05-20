@@ -6,10 +6,8 @@ import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
-import { createAssistantMessage, createUserMessage } from '../messages.js'
+import { createAssistantMessage } from '../messages.js'
 import { requireSessionContext } from '../session-context.js'
-import { persistForkTranscript } from '../agents/fork-transcript.js'
-import { persistDispatchSnapshot } from '../agents/resumable-snapshot.js'
 import {
   clearChannelRunner,
   registerChannelRunner,
@@ -20,7 +18,6 @@ import type { Message } from '../types.js'
 import {
   buildBackgroundTaskFirePrompt,
   buildBackgroundTaskSessionId,
-  getBackgroundTaskCallerAgentType,
   runBackgroundTaskFire,
   setBackgroundTaskQueryForTest,
 } from './runner.js'
@@ -69,24 +66,6 @@ describe('background-task runner sessionId shape', () => {
     assert.equal(sessionId.includes('..'), false)
   })
 
-  it('uses the direct spawner role as the resume caller', () => {
-    const task = fakeTask({
-      chainState: {
-        chainId: 'chain-a',
-        depth: 2,
-        path: [
-          { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
-          { role: 'reviewer', sessionId: 's-reviewer', dispatchId: 'd-reviewer', at: 2 },
-          { role: 'webSearcher', sessionId: 's-web', dispatchId: 'd-web', at: 3 },
-        ],
-        parentDispatchId: 'd-reviewer',
-        chainStartedAt: 1,
-      },
-    })
-
-    assert.equal(getBackgroundTaskCallerAgentType(task), 'reviewer')
-    assert.equal(getBackgroundTaskCallerAgentType(fakeTask()), 'main')
-  })
 })
 
 describe('runBackgroundTaskFire', () => {
@@ -238,73 +217,6 @@ describe('runBackgroundTaskFire', () => {
         suggestedRules: ['Bash(rm:*)'],
       }])
     }
-  })
-
-  it('injects resumeFrom snapshots for bg-fire using the direct spawner role', async () => {
-    const transcriptPath = path.join(tmpHome, 'sessions', 'prior', 'forks', 'webSearcher-old.jsonl')
-    await persistForkTranscript(transcriptPath, [
-      createUserMessage('prior reviewer research request', null, 1),
-      createAssistantMessage({
-        content: [{ type: 'text', text: 'prior reviewer answer' }],
-        stopReason: 'end_turn',
-        usage: { input_tokens: 0, output_tokens: 0 },
-        timestamp: 2,
-      }),
-    ])
-    await persistDispatchSnapshot({
-      schemaVersion: 1,
-      chainId: 'chain-prior',
-      dispatchId: 'prior-reviewer-web',
-      callerSessionId: 's-reviewer',
-      callerAgentType: 'reviewer',
-      calleeAgentType: 'webSearcher',
-      transcriptPath,
-      forkContextEndIndex: 0,
-      snapshotAt: '2026-05-18T00:00:00.000Z',
-    }, 'alice')
-
-    let observedMessages: Message[] = []
-    setBackgroundTaskQueryForTest(async input => {
-      observedMessages = input.messages as Message[]
-      return {
-        messages: input.messages as Message[],
-        assistantText: 'ok',
-        stopReason: 'end_turn',
-        didCompact: false,
-        usage: {},
-      }
-    })
-
-    const outcome = await runBackgroundTaskFire({
-      task: fakeTask({
-        id: 'alice-resume-task',
-        ownerCanonicalUser: 'alice',
-        role: 'webSearcher',
-        resumeFrom: 'last',
-        chainState: {
-          chainId: 'chain-reviewer-bg',
-          depth: 2,
-          path: [
-            { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
-            { role: 'reviewer', sessionId: 's-reviewer', dispatchId: 'd-reviewer', at: 2 },
-            { role: 'webSearcher', sessionId: 'alice-resume-task', dispatchId: 'alice-resume-task', at: 3 },
-          ],
-          parentDispatchId: 'd-reviewer',
-          chainStartedAt: 1,
-        },
-      }),
-      fireUuid: 'fire-resume',
-      signal: new AbortController().signal,
-    })
-
-    assert.equal(outcome.kind, 'success')
-    assert.equal(observedMessages.length, 3)
-    assert.equal(observedMessages[0]?.type, 'user')
-    assert.equal(observedMessages[1]?.type, 'assistant')
-    assert.equal(observedMessages[2]?.type, 'user')
-    assert.equal(observedMessages[0]?.message.content, 'prior reviewer research request')
-    assert.equal(observedMessages[2]?.type === 'user' && typeof observedMessages[2].message.content === 'string', true)
-    assert.match(String(observedMessages[2]?.message.content), /<task-id>alice-resume-task<\/task-id>/)
   })
 
   it('wraps task.prompt in a fire envelope so the executor knows it is the scheduled run', async () => {

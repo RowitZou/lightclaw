@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { getAllTools } from '../tools.js'
-import { dispatchTool, listDispatchesTool, resolveEffectiveResumeFrom, updateDispatchTool } from './dispatch.js'
+import { dispatchTool, listDispatchesTool, updateDispatchTool } from './dispatch.js'
 
 describe('Dispatch tool family', () => {
   it('registers all dispatch tools in the builtin catalog', () => {
@@ -79,11 +79,16 @@ describe('Dispatch tool family', () => {
     assert.equal(listDispatchesTool.description.includes('notify_to'), false)
   })
 
-  it('resolves defaultResumePolicy without regressing explicit caller resumeFrom', () => {
-    assert.equal(resolveEffectiveResumeFrom({}, 'dispatch-1'), 'dispatch-1')
-    assert.equal(resolveEffectiveResumeFrom({ defaultResumePolicy: 'always' }, undefined), 'last')
-    assert.equal(resolveEffectiveResumeFrom({ defaultResumePolicy: 'always' }, 'dispatch-2'), 'dispatch-2')
-    assert.equal(resolveEffectiveResumeFrom({ defaultResumePolicy: 'never' }, 'dispatch-3'), undefined)
-    assert.equal(resolveEffectiveResumeFrom({ defaultResumePolicy: 'auto' }, 'dispatch-4'), undefined)
+  it('keeps the retired context-inheritance field out of the Dispatch schema output', () => {
+    const retiredKey = 'resume' + 'From'
+    const parsed = dispatchTool.inputSchema?.parse({
+      role: 'webSearcher',
+      prompt: 'Research one current fact and report briefly.',
+      schedule: 'now',
+      mode: 'blocking',
+      [retiredKey]: 'last',
+    }) as Record<string, unknown>
+
+    assert.equal(Object.hasOwn(parsed, retiredKey), false)
   })
 })

@@ -27,10 +27,9 @@ export type ForkTranscriptPathInput = {
  * Phase 3 review (2026-05-16): pre-marker persistence wrote the messages
  * array verbatim with no slice information, which forced per-role extract to
  * analyze the whole transcript including parent context — that polluted
- * extract output with content from the parent DM. The marker lets the
- * extract trigger slice fork-own vs context cleanly while autoDream and
- * (future) Phase 4 `resumeFrom` still have the complete transcript for
- * narrow-grep / faithful replay.
+ * extract output with content from the parent DM. Dispatch now starts from
+ * a fresh prompt, so new markers are written with `forkContextEndIndex: 0`;
+ * the field remains for old fork transcripts and extraction slicing.
  */
 export type ForkTranscriptMeta = {
   kind: 'fork-transcript-meta'

@@ -34,7 +34,6 @@ test('appendDispatchAudit writes chainState snapshot into dispatch log', async (
       durationMs: 12,
       finalTextPreview: 'ok',
       chainState,
-      resumeFromDispatchId: 'dispatch-prior',
     })
 
     const file = path.join(tmpHome, 'audit', 'dispatch', '2026-05-18', 'chain-alice-test.jsonl')
@@ -49,7 +48,6 @@ test('appendDispatchAudit writes chainState snapshot into dispatch log', async (
     assert.equal(row.chainStartedAt, 1)
     assert.deepEqual(row.chainStatePath.map((node: { role: string }) => node.role), ['main', 'reviewer'])
     assert.equal(row.chainState.depth, 1)
-    assert.equal(row.resumeFromDispatchId, 'dispatch-prior')
     assert.deepEqual(row.chainState.path.map((node: { role: string }) => node.role), ['main', 'reviewer'])
   } finally {
     setLightclawHomeOverride(undefined)

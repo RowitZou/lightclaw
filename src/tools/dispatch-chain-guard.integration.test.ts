@@ -158,21 +158,22 @@ test('executeDispatch rejects dispatches beyond max chain depth', async () => {
   assert.match(output.output, /chain-too-deep|depth limit/i)
 })
 
-test('executeDispatch stores resumeFrom on background dispatches', async () => {
+test('executeDispatch drops retired context-inheritance fields on background dispatches', async () => {
+  const retiredKey = 'resume' + 'From'
   const output = await runWithSessionContext(session('main', ['*']), () =>
     executeDispatch({
       role: 'webSearcher',
-      prompt: 'Continue the prior research in the background.',
+      prompt: 'Run this research in the background.',
       schedule: { kind: 'after', afterMinutes: 5 },
       mode: 'background',
-      resumeFrom: 'last',
+      [retiredKey]: 'last',
     }, toolContext()),
   )
 
   assert.equal(output.isError, undefined)
   assert.match(output.output, /Dispatch scheduled:/)
   const [task] = loadBackgroundTasks('alice')
-  assert.equal(task?.resumeFrom, 'last')
+  assert.equal(Object.hasOwn(task ?? {}, retiredKey), false)
 })
 
 test('executeDispatch rejects background attachments instead of dropping them at fire time', async () => {

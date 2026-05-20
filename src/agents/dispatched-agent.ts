@@ -8,10 +8,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
-import { SESSION_MEMORY_FILENAME } from '../memory/session-memory.js'
 import { loadChannelConfig } from '../channels/config.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { buildWorkerActivityForwarder } from '../channels/feishu/worker-activity-stream.js'
@@ -28,15 +26,9 @@ import type {
   UsageStats,
   UserContentBlock,
 } from '../types.js'
-import type { AgentType, Role } from './types.js'
+import type { Role } from './types.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
-import { getForkTranscriptPath, parseForkTranscriptFile, persistForkTranscript } from './fork-transcript.js'
-import {
-  loadDispatchSnapshot,
-  loadLatestDispatchSnapshot,
-  persistDispatchSnapshot,
-  type ResumableSessionSnapshot,
-} from './resumable-snapshot.js'
+import { getForkTranscriptPath, persistForkTranscript } from './fork-transcript.js'
 
 export type DispatchedAgentParams = {
   /** Caller-authored task brief. This is the dispatched agent's first user message. */
@@ -50,9 +42,7 @@ export type DispatchedAgentParams = {
   tools: Tool[]
   config: LightClawConfig
   currentRoleOverride?: Role
-  callerAgentType?: AgentType
   canonicalUser?: string
-  resumeFrom?: string
   chainState?: ChainState
   canUseToolOverride?: CanUseToolFn
   queryImpl?: typeof query
@@ -72,7 +62,6 @@ export type DispatchedAgentResult = {
   messages: Message[]
   forkTranscriptPath: string | null
   forkTranscriptPersisted: Promise<string | null>
-  resumedFromDispatchId?: string
 }
 
 export function buildDispatchedInitialMessages(
@@ -94,21 +83,7 @@ export async function runDispatchedAgent(
   params: DispatchedAgentParams,
 ): Promise<DispatchedAgentResult> {
   const currentCtx = getCurrentSessionContext()
-  const principal = params.canonicalUser ?? currentCtx?.currentUserId
-  const callerAgentType =
-    params.callerAgentType
-    ?? currentCtx?.currentRole?.agentType
-    ?? params.currentRoleOverride?.agentType
-    ?? 'main'
-  const resume = await resolveResumeSnapshot({
-    resumeFrom: params.resumeFrom,
-    principal,
-    callerAgentType,
-    calleeAgentType: params.role.agentType,
-  })
-  const inheritedMessages = resume?.messages ?? []
   const messages = [
-    ...inheritedMessages,
     ...buildDispatchedInitialMessages(
       params.dispatchPrompt,
       params.dispatchAttachmentBlocks,
@@ -176,10 +151,9 @@ export async function runDispatchedAgent(
     config: params.config,
     maxTurns: params.maxTurns,
   })
-  // Fresh dispatch has no inherited prefix. Resumed dispatch prefixes the
-  // previous worker transcript and marks the new prompt boundary so extraction
-  // still analyzes only this fire's own work.
-  const forkContextEndIndex = inheritedMessages.length
+  // Dispatches always start fresh. The marker is kept at zero so fork
+  // transcript parsing stays backward-compatible with older files.
+  const forkContextEndIndex = 0
   let messagesToPersist: Message[] = messages
   let persistTask: Promise<string | null> | null = null
   // Worker ALS sessionId comes from the chain path's last node so per-
@@ -195,11 +169,7 @@ export async function runDispatchedAgent(
         currentRole: params.role,
         sessionId: chainSessionId ?? currentCtx.sessionId,
         chainState: params.chainState,
-        ...(resume?.snapshot.todos ? { todos: [...resume.snapshot.todos] } : {}),
-        ...(resume?.snapshot.compactionCount !== undefined
-          ? { compactionCount: resume.snapshot.compactionCount }
-          : {}),
-        discoveredTools: new Map(resume?.snapshot.discoveredTools ?? []),
+        discoveredTools: new Map(),
         turnCounter: 0,
       }
     : null
@@ -214,15 +184,7 @@ export async function runDispatchedAgent(
         messagesToPersist,
         forkContextEndIndex,
       )
-        .then(async () => {
-          await maybePersistDispatchSnapshot({
-            params,
-            principal,
-            callerAgentType,
-            forkTranscriptPath,
-            forkContextEndIndex,
-            childCtx,
-          })
+        .then(() => {
           return forkTranscriptPath
         })
         .catch(error => {
@@ -239,7 +201,6 @@ export async function runDispatchedAgent(
       messages: result.messages,
       forkTranscriptPath,
       forkTranscriptPersisted: persistTask ?? Promise.resolve(null),
-      ...(resume ? { resumedFromDispatchId: resume.snapshot.dispatchId } : {}),
     }
   } finally {
     if (!persistTask && forkTranscriptPath) {
@@ -256,116 +217,4 @@ export async function runDispatchedAgent(
         })
     }
   }
-}
-
-type ResolvedResumeSnapshot = {
-  snapshot: ResumableSessionSnapshot
-  messages: Message[]
-}
-
-export class ResumeSnapshotNotFoundError extends Error {
-  constructor(
-    public readonly callerAgentType: AgentType,
-    public readonly calleeAgentType: AgentType,
-    public readonly resumeFrom: string,
-  ) {
-    super(formatResumeSnapshotNotFound(callerAgentType, calleeAgentType, resumeFrom))
-    this.name = 'ResumeSnapshotNotFoundError'
-  }
-}
-
-async function resolveResumeSnapshot(input: {
-  resumeFrom?: string
-  principal?: string
-  callerAgentType: AgentType
-  calleeAgentType: AgentType
-}): Promise<ResolvedResumeSnapshot | null> {
-  if (!input.resumeFrom) return null
-  if (!input.principal) {
-    throw new ResumeSnapshotNotFoundError(
-      input.callerAgentType,
-      input.calleeAgentType,
-      input.resumeFrom,
-    )
-  }
-
-  const snapshot = input.resumeFrom === 'last'
-    ? await loadLatestDispatchSnapshot({
-        principal: input.principal,
-        callerAgentType: input.callerAgentType,
-        calleeAgentType: input.calleeAgentType,
-      })
-    : await loadDispatchSnapshot({
-        principal: input.principal,
-        callerAgentType: input.callerAgentType,
-        calleeAgentType: input.calleeAgentType,
-        dispatchId: input.resumeFrom,
-      })
-  if (!snapshot) {
-    // 'last' is best-effort: when no prior snapshot exists for this (caller,
-    // callee) pair, start fresh instead of throwing. This is critical for bg
-    // recurring tasks created with resumeFrom='last' — the first fire has
-    // nothing to resume from but should still run; subsequent fires pick up
-    // the prior fire's snapshot. Blocking callers benefit too: the model
-    // gets a clean fresh run instead of a self-correction round-trip.
-    //
-    // Explicit dispatchId stays strict: the caller named a specific id, so
-    // not finding it is an error worth surfacing.
-    if (input.resumeFrom === 'last') {
-      return null
-    }
-    throw new ResumeSnapshotNotFoundError(
-      input.callerAgentType,
-      input.calleeAgentType,
-      input.resumeFrom,
-    )
-  }
-
-  const parsed = await parseForkTranscriptFile(snapshot.transcriptPath)
-  return { snapshot, messages: parsed.messages }
-}
-
-function formatResumeSnapshotNotFound(
-  callerAgentType: AgentType,
-  calleeAgentType: AgentType,
-  resumeFrom: string,
-): string {
-  const suffix = resumeFrom === 'last' ? '' : `/${resumeFrom}`
-  return `No dispatch-history entry for ${callerAgentType}-${calleeAgentType}${suffix}. Snapshot may have expired (24h TTL) or never persisted. Retry without resumeFrom for a fresh dispatch.`
-}
-
-async function maybePersistDispatchSnapshot(input: {
-  params: DispatchedAgentParams
-  principal?: string
-  callerAgentType: AgentType
-  forkTranscriptPath: string
-  forkContextEndIndex: number
-  childCtx: SessionContext | null
-}): Promise<void> {
-  if (!input.principal || input.params.role.kind !== 'worker') return
-  const dispatchId = input.params.chainState?.path.at(-1)?.dispatchId ?? randomUUID().slice(0, 8)
-  const childCtx = input.childCtx
-  const snapshot: ResumableSessionSnapshot = {
-    schemaVersion: 1,
-    chainId: input.params.chainState?.chainId ?? dispatchId,
-    dispatchId,
-    callerSessionId: childCtx?.sessionId ?? '',
-    callerAgentType: input.callerAgentType,
-    calleeAgentType: input.params.role.agentType,
-    transcriptPath: input.forkTranscriptPath,
-    forkContextEndIndex: input.forkContextEndIndex,
-    ...(childCtx ? { todos: [...childCtx.todos] } : {}),
-    ...(childCtx ? { discoveredTools: [...childCtx.discoveredTools.entries()] } : {}),
-    ...(childCtx
-      ? { sessionMemoryPath: path.join(childCtx.sessionsDir, childCtx.sessionId, SESSION_MEMORY_FILENAME) }
-      : {}),
-    ...(childCtx ? { compactionCount: childCtx.compactionCount } : {}),
-    snapshotAt: new Date().toISOString(),
-  }
-
-  await persistDispatchSnapshot(snapshot, input.principal)
-    .catch(error => {
-      const message = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[dispatch-history] snapshot persist failed: ${message}\n`)
-    })
 }

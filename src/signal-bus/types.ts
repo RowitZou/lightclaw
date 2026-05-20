@@ -34,7 +34,6 @@ export type SignalPayload = {
     prompt: string
     schedule: DispatchSchedule
     mode: DispatchMode
-    resumeFrom?: string
     allowed_tools?: string[]
     label?: string
     chainState?: ChainState

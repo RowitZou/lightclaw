@@ -28,11 +28,9 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
 })
 
 const EXPECTED = {
-  // Dispatch description rewritten Phase 11 PR1 (2026-05-20): the
-  // `## resumeFrom (optional)` section + the "(unless resumeFrom is used)"
-  // parenthetical were removed as the first step of retiring the dispatch
-  // resume / ResumableSessionSnapshot subsystem. resumeFrom is no longer a
-  // model-visible parameter.
+  // Dispatch description rewritten Phase 11 PR1 (2026-05-20): removed the
+  // old context-inheritance section and parenthetical. Dispatch workers are
+  // now always fresh-context workers.
   Dispatch: 'c9c489df68610a8de8dd8b53e546f25bf5aab9739c8d6006b5a3dccee5603934',
   ListDispatches: '88c6d590ebce67a09022cb6b142bbef0a82da23557b31832584a83dd7d71030a',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
