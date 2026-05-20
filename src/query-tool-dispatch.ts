@@ -43,6 +43,50 @@ export type DispatchContext = {
   mainTurnRouting?: ToolCallContext['mainTurnRouting']
 }
 
+/**
+ * Abort-signal message. `channels/runner.ts` (`ABORT_FAILURE_PATTERN`)
+ * classifies a turn failure as a user-driven /stop by matching this exact
+ * substring — the same string the provider SDK throws when it aborts an
+ * in-flight request. Keep them in sync so a preemptive abort reads identically
+ * to a mid-stream one.
+ */
+const ABORT_ERROR_MESSAGE = 'Request was aborted.'
+
+/** Throw immediately if the turn has been aborted (e.g. by /stop). */
+export function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new Error(ABORT_ERROR_MESSAGE)
+  }
+}
+
+/**
+ * Race `promise` against `signal`. If the signal aborts first, reject right
+ * away instead of waiting for `promise` to settle — so a tool / hook /
+ * permission call that ignores its own `abortSignal` cannot keep the turn loop
+ * (and the channel session lock) pinned after /stop. The abandoned promise
+ * keeps running; a late rejection from it is swallowed so it never surfaces as
+ * an unhandledRejection.
+ */
+export async function awaitAbortable<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  throwIfAborted(signal)
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error(ABORT_ERROR_MESSAGE))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener('abort', onAbort)
+    }
+    void Promise.resolve(promise).catch(() => {})
+  }
+}
+
 export async function dispatchToolCall(
   toolUse: ToolUseBlock,
   ctx: DispatchContext,
@@ -75,14 +119,18 @@ export async function dispatchToolCall(
   const callId = toolUse.id
 
   try {
-    const hookDecision = await runHook('beforeToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-    })
+    throwIfAborted(ctx.signal)
+    const hookDecision = await awaitAbortable(
+      runHook('beforeToolCall', {
+        sessionId: getSessionId(),
+        callId,
+        toolName: tool.name,
+        source: tool.source,
+        mcpServer: tool.mcpServer,
+        input: effectiveInput,
+      }),
+      ctx.signal,
+    )
 
     if (hookDecision?.replacementInput !== undefined) {
       effectiveInput = hookDecision.replacementInput
@@ -98,32 +146,39 @@ export async function dispatchToolCall(
     }
 
     if (ctx.canUseTool) {
-      const gate = await ctx.canUseTool(tool, effectiveInput)
+      const gate = await awaitAbortable(
+        Promise.resolve(ctx.canUseTool(tool, effectiveInput)),
+        ctx.signal,
+      )
       if (gate.behavior === 'deny') {
         return reportToolResult(ctx, toolUse, gate.reason, true)
       }
     }
 
     const sessionCtx = getCurrentSessionContext()
-    const decision = await requestPermission({
-      tool,
-      toolInput: effectiveInput,
-      ctx: {
-        isSubagent: ctx.roleKind !== 'orchestrator',
-        signal: ctx.signal,
-        permissionApprover: ctx.permissionApprover,
-        isBackgroundTask: sessionCtx?.isBackgroundTask,
-        onPermissionDenial: sessionCtx?.onPermissionDenial,
-      },
-    })
+    const decision = await awaitAbortable(
+      requestPermission({
+        tool,
+        toolInput: effectiveInput,
+        ctx: {
+          isSubagent: ctx.roleKind !== 'orchestrator',
+          signal: ctx.signal,
+          permissionApprover: ctx.permissionApprover,
+          isBackgroundTask: sessionCtx?.isBackgroundTask,
+          onPermissionDenial: sessionCtx?.onPermissionDenial,
+        },
+      }),
+      ctx.signal,
+    )
 
+    throwIfAborted(ctx.signal)
     if (decision.behavior === 'deny') {
       return reportToolResult(ctx, toolUse, decision.reason, true)
     }
 
     if (tool.domain === 'environment') {
       const runtime = getRuntime()
-      const availability = await runtime.isAvailable()
+      const availability = await awaitAbortable(runtime.isAvailable(), ctx.signal)
       if (!availability.ok) {
         const isFatal = !availability.retryable
         const body = availability.retryable
@@ -146,40 +201,47 @@ export async function dispatchToolCall(
     }
 
     const start = Date.now()
-    const result = await tool.call(effectiveInput, {
-      cwd: getCwd(),
-      abortSignal: ctx.signal,
-      runtime: getRuntime(),
-      config: ctx.config,
-      mainTurnRouting: ctx.mainTurnRouting,
-      canUseTool: ctx.canUseTool,
-      chainState: ctx.chainState,
-      deferredTools: ctx.deferredTools,
-      discoverTool(name) {
-        const current = getCurrentSessionContext()
-        if (!current) return
-        markDiscovered(
-          current.discoveredTools,
-          name,
-          current.turnCounter,
-          ctx.config.tools.catalog.discoveredToolsMaxSize,
-        )
-      },
-    })
+    const result = await awaitAbortable(
+      tool.call(effectiveInput, {
+        cwd: getCwd(),
+        abortSignal: ctx.signal,
+        runtime: getRuntime(),
+        config: ctx.config,
+        mainTurnRouting: ctx.mainTurnRouting,
+        canUseTool: ctx.canUseTool,
+        chainState: ctx.chainState,
+        deferredTools: ctx.deferredTools,
+        discoverTool(name) {
+          const current = getCurrentSessionContext()
+          if (!current) return
+          markDiscovered(
+            current.discoveredTools,
+            name,
+            current.turnCounter,
+            ctx.config.tools.catalog.discoveredToolsMaxSize,
+          )
+        },
+      }),
+      ctx.signal,
+    )
+    throwIfAborted(ctx.signal)
     const formatted = tool.formatResult(result.output, toolUse.id, result.isError)
 
     const formattedTextView = toolResultContentToText(formatted.content)
-    const afterTool = await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: formattedTextView,
-      durationMs: Date.now() - start,
-      ...(formatted.is_error ? { error: formattedTextView } : {}),
-    })
+    const afterTool = await awaitAbortable(
+      runHook('afterToolCall', {
+        sessionId: getSessionId(),
+        callId,
+        toolName: tool.name,
+        source: tool.source,
+        mcpServer: tool.mcpServer,
+        input: effectiveInput,
+        result: formattedTextView,
+        durationMs: Date.now() - start,
+        ...(formatted.is_error ? { error: formattedTextView } : {}),
+      }),
+      ctx.signal,
+    )
     if (afterTool?.replacementResult !== undefined) {
       formatted.content = afterTool.replacementResult
     }
@@ -196,17 +258,25 @@ export async function dispatchToolCall(
     return formatted
   } catch (error) {
     const content = error instanceof Error ? error.message : String(error)
-    await runHook('afterToolCall', {
-      sessionId: getSessionId(),
-      callId,
-      toolName: tool.name,
-      source: tool.source,
-      mcpServer: tool.mcpServer,
-      input: effectiveInput,
-      result: content,
-      durationMs: 0,
-      error: content,
-    })
+    try {
+      await awaitAbortable(
+        runHook('afterToolCall', {
+          sessionId: getSessionId(),
+          callId,
+          toolName: tool.name,
+          source: tool.source,
+          mcpServer: tool.mcpServer,
+          input: effectiveInput,
+          result: content,
+          durationMs: 0,
+          error: content,
+        }),
+        ctx.signal,
+      )
+    } catch {
+      // The turn is already aborting; don't let an observability hook keep
+      // the channel session lock held after /stop.
+    }
     return reportToolResult(ctx, toolUse, content, true)
   }
 }

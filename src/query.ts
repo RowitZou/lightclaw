@@ -61,6 +61,7 @@ import {
 } from './tool.js'
 import {
   dispatchToolCall,
+  throwIfAborted,
   type DispatchContext,
   type ToolUseBlock,
 } from './query-tool-dispatch.js'
@@ -394,6 +395,8 @@ export async function query(params: QueryParams): Promise<{
   >
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    // Bail before starting a new turn if /stop aborted between turns.
+    throwIfAborted(signal)
     let stopEvent: StopEvent | undefined
     turnCatalog = {
       tools: params.tools,
@@ -630,6 +633,9 @@ export async function query(params: QueryParams): Promise<{
     try {
       let i = 0
       while (i < toolUses.length) {
+        // On /stop, throw out of the loop; the finally below synthesizes
+        // tool_results for every tool_use not yet completed.
+        throwIfAborted(signal)
         const head = toolUses[i]
         const headTool = findToolByName(turnCatalog.tools, head.name)
         if (headTool?.concurrencySafe) {
@@ -651,12 +657,14 @@ export async function query(params: QueryParams): Promise<{
             toolResults.push(results[k])
             addSessionMemoryToolCall()
           }
+          throwIfAborted(signal)
         } else {
           const result = await dispatchToolCall(head, dispatchCtx)
           completed.add(head.id)
           toolResults.push(result)
           addSessionMemoryToolCall()
           i += 1
+          throwIfAborted(signal)
         }
       }
     } finally {
@@ -699,6 +707,9 @@ export async function query(params: QueryParams): Promise<{
       messages.push(nextUserMessage)
     }
 
+    // After /stop, skip post-turn work (session-memory update, auto-compact /
+    // auto-extract afterEndTurn hooks) for the turn the user just aborted.
+    throwIfAborted(signal)
     if (!invocation.ephemeral) {
       await maybeUpdateSessionMemory([...messages])
       for (const hook of lifecycleHooks) {
