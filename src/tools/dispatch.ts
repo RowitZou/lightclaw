@@ -74,7 +74,7 @@ When parallelizing blocking dispatches across an assistant message, only do so f
 
 ## Writing the prompt
 
-The dispatched role starts with a fresh context (unless \`resumeFrom\` is used — see below). It has NOT seen this conversation. Write the prompt as a self-contained imperative:
+The dispatched role starts with a fresh context. It has NOT seen this conversation. Write the prompt as a self-contained imperative:
 - Explain what you're trying to accomplish and why.
 - Describe what you've already learned or ruled out.
 - Give enough context that the role can make judgment calls, not just follow a narrow instruction.
@@ -89,14 +89,6 @@ For schedule≠'now' (background) dispatches, additional rules:
   Good: "Get the current Asia/Shanghai time and send the result to me as '现在是 YYYY-MM-DD HH:mm:ss。'"
   Bad:  "After 1 minute, get the current Beijing time and send it to me." / "到时间后获取北京时间发给我。"
 - The dispatched role's own \`tools\` list IS the authorization for the fire — pick a role whose tool surface fits the task. If a fire hits a high-risk input mid-execution (rm / sudo / writes to /etc / ...), the user will see a one-shot permission card; everything else auto-approves under the role's scope.
-
-## resumeFrom (optional)
-
-resumeFrom: 'last' | <dispatchId> — continue a previous dispatch instead of starting a fresh fork. The previous dispatch's transcript and worldview are restored so the new fire picks up exactly where it left off.
-- Use when multi-hop work spans dispatches: round 1 did initial research, round 2 needs to build on round 1's findings without re-fetching.
-- 'last' = resume the most recent dispatch of the same role for the same user. Pass a specific dispatchId (from ListDispatches) when you need a particular one.
-- With resumeFrom the prompt is the NEXT incremental instruction to that ongoing dispatch, NOT a fresh self-contained brief — write it as a delta ("now also do X" / "based on round 1 findings, do Y") and skip the "explain what you're trying to accomplish" framing that fresh prompts need.
-- Do NOT use resumeFrom when the prior dispatch is irrelevant — fresh forks have cleaner cache behavior.
 
 ## attachments (optional)
 
@@ -208,7 +200,6 @@ export const dispatchTool = buildTool({
     schedule: dispatchScheduleSchema,
     mode: z.enum(['blocking', 'background']),
     label: z.string().min(2).max(80).optional(),
-    resumeFrom: z.string().min(1).optional(),
     attachments: z.array(z.string().min(1)).optional(),
   }),
   async call(input, context) {
