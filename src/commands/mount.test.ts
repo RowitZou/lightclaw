@@ -193,8 +193,6 @@ function makeConfig(
     runtime: {
       backend: 'rlaunch',
       rlaunch: {
-        gpfsHostPrefix: gpfsRoot,
-        gpfsMountPrefix: 'gpfs://gpfs1',
         gpfsMounts: [
           { hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' },
           ...extraGpfsMounts,

@@ -76,8 +76,6 @@ export type RlaunchRuntimeSettings = {
   gpu: number
   privateMachine: 'group' | 'yes' | 'no' | 'project' | 'tenant'
   positiveTags: string[]
-  gpfsHostPrefix: string
-  gpfsMountPrefix: string
   gpfsMounts: RlaunchGpfsMountRule[]
   imagePullPolicy: 'IfNotPresent' | 'Always' | 'Never'
   maxWaitDuration: string
@@ -91,9 +89,8 @@ export type RlaunchRuntimeSettings = {
 
 /**
  * One host→gpfs prefix mapping. `gpfsMounts` holds a table of these so a
- * deployment whose host paths span multiple gpfs filesystems can translate
- * each one; the legacy single `gpfsHostPrefix` / `gpfsMountPrefix` pair is
- * folded in as the first rule for backward compatibility.
+ * deployment whose host paths span one or more gpfs filesystems can
+ * translate each one; path resolution picks the longest matching hostPrefix.
  */
 export type RlaunchGpfsMountRule = {
   hostPrefix: string
@@ -1879,35 +1876,17 @@ function resolveRlaunchRuntimeSettings(
     return ''
   }
 
-  // gpfs prefix resolution accepts two equivalent config shapes. Legacy:
-  // a single `gpfsHostPrefix` / `gpfsMountPrefix` pair. New: a `gpfsMounts`
-  // table of host→mount rules. Either can be used alone, or both together.
-  // The legacy pair is always folded in as the first rule, and the first
-  // rule (legacy or `gpfsMounts[0]`) backfills the two legacy fields so
-  // existing consumers of `gpfsHostPrefix` / `gpfsMountPrefix` keep working.
-  const gpfsMountRules = validateRlaunchGpfsMounts(fileConfig.gpfsMounts)
-  const legacyGpfsHostPrefix = fileConfig.gpfsHostPrefix?.trim()
-  const legacyGpfsMountPrefix = fileConfig.gpfsMountPrefix?.trim()
-  if (Boolean(legacyGpfsHostPrefix) !== Boolean(legacyGpfsMountPrefix)) {
+  // gpfs prefix resolution: `gpfsMounts` is a table of host→gpfs rules and is
+  // the single source of truth. The rlaunch backend requires at least one
+  // rule; path translation picks the longest matching hostPrefix. Non-rlaunch
+  // backends may leave it empty.
+  const gpfsMounts = dedupeRlaunchGpfsMounts(validateRlaunchGpfsMounts(fileConfig.gpfsMounts))
+  if (backend === 'rlaunch' && gpfsMounts.length === 0) {
     throw new Error(
-      'runtime.rlaunch.gpfsHostPrefix and runtime.rlaunch.gpfsMountPrefix must be configured together.',
+      'runtime.rlaunch.gpfsMounts is required when runtime.backend = "rlaunch". ' +
+      `Set it in ${path.join(lightclawHome(), 'config.json')}.`,
     )
   }
-  const firstGpfsRule = gpfsMountRules[0]
-  const gpfsHostPrefix = legacyGpfsHostPrefix || firstGpfsRule?.hostPrefix || ''
-  const gpfsMountPrefix = legacyGpfsMountPrefix || firstGpfsRule?.mountPrefix || ''
-  if (backend === 'rlaunch' && (!gpfsHostPrefix || !gpfsMountPrefix)) {
-    throw new Error(
-      'runtime.rlaunch.gpfsHostPrefix/gpfsMountPrefix or runtime.rlaunch.gpfsMounts[0] ' +
-      `is required when runtime.backend = "rlaunch". Set it in ${path.join(lightclawHome(), 'config.json')}.`,
-    )
-  }
-  const gpfsMounts = gpfsHostPrefix && gpfsMountPrefix
-    ? dedupeRlaunchGpfsMounts([
-        { hostPrefix: gpfsHostPrefix, mountPrefix: gpfsMountPrefix },
-        ...gpfsMountRules,
-      ])
-    : []
 
   return {
     image: required('image'),
@@ -1920,8 +1899,6 @@ function resolveRlaunchRuntimeSettings(
     positiveTags: Array.isArray(fileConfig.positiveTags)
       ? fileConfig.positiveTags.filter(tag => typeof tag === 'string' && tag.trim()).map(tag => tag.trim())
       : [],
-    gpfsHostPrefix,
-    gpfsMountPrefix,
     gpfsMounts,
     imagePullPolicy: parseImagePullPolicy(fileConfig.imagePullPolicy) ?? 'IfNotPresent',
     maxWaitDuration: fileConfig.maxWaitDuration ?? '5m',

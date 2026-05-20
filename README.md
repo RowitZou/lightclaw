@@ -185,9 +185,7 @@ Everything lives in `<LIGHTCLAW_HOME>/config.json` (default `~/.lightclaw/config
       "gpu":              0,
       "privateMachine":   "group",
       "positiveTags":     [],
-      "gpfsHostPrefix":   "<host-side-gpfs-mount>",   // e.g. /mnt/shared-storage-user
-      "gpfsMountPrefix":  "<gpfs-url-prefix>",        // e.g. gpfs://gpfs1
-      "gpfsMounts": [                                 // optional: extra host->gpfs rules when host paths span multiple gpfs filesystems
+      "gpfsMounts": [                                 // host->gpfs mount rules; >=1 required for the rlaunch backend, longest hostPrefix wins
         { "hostPrefix": "<host-gpfs-mount-a>", "mountPrefix": "<gpfs-url-prefix-a>" },
         { "hostPrefix": "<host-gpfs-mount-b>", "mountPrefix": "<gpfs-url-prefix-b>" }
       ],

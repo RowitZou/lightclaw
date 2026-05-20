@@ -296,8 +296,6 @@ export type ConfigFileShape = {
       gpu?: number
       privateMachine?: string
       positiveTags?: string[]
-      gpfsHostPrefix?: string
-      gpfsMountPrefix?: string
       gpfsMounts?: Array<{
         hostPrefix?: string
         mountPrefix?: string

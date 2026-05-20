@@ -4,15 +4,11 @@ import type { RlaunchGpfsMountRule, RlaunchRuntimeSettings } from '../config.js'
 import { expandHomePath } from '../paths.js'
 
 /**
- * The subset of rlaunch settings the gpfs translation needs: the legacy
- * single prefix pair (always present on a resolved config) plus the optional
- * multi-rule `gpfsMounts` table. Tools and tests can pass either the full
+ * The subset of rlaunch settings the gpfs translation needs: the `gpfsMounts`
+ * host→gpfs rule table. Tools and tests can pass either the full
  * `RlaunchRuntimeSettings` or a hand-built object of this shape.
  */
-export type RlaunchGpfsMountConfig = Pick<
-  RlaunchRuntimeSettings,
-  'gpfsHostPrefix' | 'gpfsMountPrefix'
-> & Partial<Pick<RlaunchRuntimeSettings, 'gpfsMounts'>>
+export type RlaunchGpfsMountConfig = Pick<RlaunchRuntimeSettings, 'gpfsMounts'>
 
 export function buildGpfsMountStringFromRules(
   hostPathInput: string,
@@ -65,13 +61,7 @@ export function normalizeGpfsMountRules(
     byHostPrefix.set(hostPrefix, mountPrefix)
   }
 
-  const configuredRules = rlaunchConfig.gpfsMounts && rlaunchConfig.gpfsMounts.length > 0
-    ? rlaunchConfig.gpfsMounts
-    : [{
-        hostPrefix: rlaunchConfig.gpfsHostPrefix,
-        mountPrefix: rlaunchConfig.gpfsMountPrefix,
-      }]
-
+  const configuredRules = rlaunchConfig.gpfsMounts ?? []
   if (configuredRules.length === 0) {
     throw new Error('runtime.rlaunch.gpfsMounts must contain at least one rule.')
   }

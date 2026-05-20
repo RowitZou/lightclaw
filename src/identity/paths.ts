@@ -86,11 +86,12 @@ export function workspaceToGpfsMount(
   try {
     resolveGpfsMountRule(root, rlaunchConfig)
   } catch {
-    const hostPrefix = path.resolve(expandHomePath(rlaunchConfig.gpfsHostPrefix))
+    const hostPrefixes = rlaunchConfig.gpfsMounts.map(rule => rule.hostPrefix)
+    const example = hostPrefixes[0] ?? '<gpfs-host-prefix>'
     throw new Error(
-      `RlaunchRuntime requires LIGHTCLAW_WORKSPACE_ROOT under "${hostPrefix}" (gpfs); ` +
-      `got "${root}". Set LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ` +
-      `${hostPrefix}/<namespace>/<user>/lightclaw-workspaces`,
+      `RlaunchRuntime requires LIGHTCLAW_WORKSPACE_ROOT under a configured gpfs host prefix ` +
+      `(${hostPrefixes.join(', ')}); got "${root}". Set LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ` +
+      `${example}/<namespace>/<user>/lightclaw-workspaces`,
     )
   }
 

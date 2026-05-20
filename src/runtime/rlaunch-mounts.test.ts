@@ -51,17 +51,15 @@ describe('rlaunch dynamic mounts store', () => {
   it('builds gpfs mount strings with worker path equal to host path', () => {
     const hostPath = path.join(gpfsRoot, 'datasets')
     const mount = buildGpfsMountString(hostPath, hostPath, {
-      gpfsHostPrefix: gpfsRoot,
-      gpfsMountPrefix: 'gpfs://gpfs1',
+      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
     })
     assert.equal(mount, `gpfs://gpfs1/datasets:${hostPath}`)
   })
 
-  it('rejects paths outside gpfsHostPrefix', () => {
+  it('rejects paths outside every gpfsMounts rule', () => {
     assert.throws(
       () => buildGpfsMountString('/tmp/outside', '/tmp/outside', {
-        gpfsHostPrefix: gpfsRoot,
-        gpfsMountPrefix: 'gpfs://gpfs1',
+        gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
       }),
       /gpfsMounts/,
     )
@@ -72,8 +70,6 @@ describe('rlaunch dynamic mounts store', () => {
     const projectRoot = path.join(gpfs2Root, 'projects')
     const hostPath = path.join(projectRoot, 'dataset')
     const mount = buildGpfsMountString(hostPath, hostPath, {
-      gpfsHostPrefix: gpfsRoot,
-      gpfsMountPrefix: 'gpfs://gpfs1',
       gpfsMounts: [
         { hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' },
         { hostPrefix: gpfs2Root, mountPrefix: 'gpfs://gpfs2' },
@@ -90,8 +86,7 @@ describe('rlaunch dynamic mounts store', () => {
     setUserRlaunchMount('alice', a, 'ro')
 
     const mounts = resolveUserRlaunchRuntimeMounts('alice', {
-      gpfsHostPrefix: gpfsRoot,
-      gpfsMountPrefix: 'gpfs://gpfs1',
+      gpfsMounts: [{ hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' }],
     })
     assert.deepEqual(mounts.map(mount => mount.workerPath), [a, b])
     assert.equal(rlaunchMountFingerprint(mounts), rlaunchMountFingerprint([...mounts].reverse()))

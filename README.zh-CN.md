@@ -184,9 +184,7 @@ export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
       "gpu":              0,
       "privateMachine":   "group",
       "positiveTags":     [],
-      "gpfsHostPrefix":   "<host-side-gpfs-mount>",   // 例：/mnt/shared-storage-user
-      "gpfsMountPrefix":  "<gpfs-url-prefix>",        // 例：gpfs://gpfs1
-      "gpfsMounts": [                                 // 可选：宿主机路径横跨多个 gpfs 文件系统时，额外的 host->gpfs 映射规则
+      "gpfsMounts": [                                 // host->gpfs 映射规则；rlaunch 后端至少需 1 条，解析按 hostPrefix 最长前缀匹配
         { "hostPrefix": "<host-gpfs-mount-a>", "mountPrefix": "<gpfs-url-prefix-a>" },
         { "hostPrefix": "<host-gpfs-mount-b>", "mountPrefix": "<gpfs-url-prefix-b>" }
       ],

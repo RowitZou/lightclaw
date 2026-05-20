@@ -56,8 +56,7 @@ describe('workspaceToGpfsMount', () => {
   it('maps a host gpfs workspace root to an rlaunch mount URL', () => {
     process.env.LIGHTCLAW_WORKSPACE_ROOT = '/mnt/shared-storage-user/ailab-hs/zouyicheng/lightclaw-workspaces'
     assert.deepEqual(workspaceToGpfsMount('alice', {
-      gpfsHostPrefix: '/mnt/shared-storage-user',
-      gpfsMountPrefix: 'gpfs://gpfs1',
+      gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' }],
     }), {
       hostPath: '/mnt/shared-storage-user/ailab-hs/zouyicheng/lightclaw-workspaces/alice',
       mount: 'gpfs://gpfs1/ailab-hs/zouyicheng/lightclaw-workspaces/alice:/workspace',
@@ -67,8 +66,6 @@ describe('workspaceToGpfsMount', () => {
   it('maps a workspace root through secondary gpfsMounts rules', () => {
     process.env.LIGHTCLAW_WORKSPACE_ROOT = '/mnt/shared-storage-gpfs2/gpfs2-shared-public/lightclaw-workspaces'
     assert.deepEqual(workspaceToGpfsMount('alice', {
-      gpfsHostPrefix: '/mnt/shared-storage-user',
-      gpfsMountPrefix: 'gpfs://gpfs1',
       gpfsMounts: [
         { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' },
         { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
@@ -82,8 +79,7 @@ describe('workspaceToGpfsMount', () => {
   it('rejects non-gpfs workspace roots', () => {
     process.env.LIGHTCLAW_WORKSPACE_ROOT = '/home/zouyicheng/lightclaw-workspaces'
     assert.throws(() => workspaceToGpfsMount('alice', {
-      gpfsHostPrefix: '/mnt/shared-storage-user',
-      gpfsMountPrefix: 'gpfs://gpfs1',
+      gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' }],
     }), /requires LIGHTCLAW_WORKSPACE_ROOT/)
   })
 })
