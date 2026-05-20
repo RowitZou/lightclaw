@@ -803,12 +803,20 @@ export class ChannelRunner {
                     }
                     materialized.push(entry)
                   }
-                  if (materialized.length > 0) {
-                    const latest = materialized[materialized.length - 1]
+                  // Anchor the reply quote to the most recent *real user*
+                  // interjection. bg-result interjections carry a synthetic
+                  // messageId the platform never saw — anchoring the reply to
+                  // one makes im.message.reply 400 (code 99992354) and the
+                  // turn's reply is lost. Skip them; if the whole batch is
+                  // bg-results the anchor stays on the prior real message.
+                  const latestUserEntry = [...materialized]
+                    .reverse()
+                    .find(entry => entry.source !== 'background-task')
+                  if (latestUserEntry) {
                     replyTargetMessage = {
                       ...effectiveMessage,
-                      messageId: latest.messageId,
-                      senderOpenId: latest.senderOpenId,
+                      messageId: latestUserEntry.messageId,
+                      senderOpenId: latestUserEntry.senderOpenId,
                     }
                   }
                   return materialized

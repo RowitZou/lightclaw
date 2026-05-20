@@ -104,6 +104,37 @@ test('FeishuSender does not fall back to create message for non-transient reply 
   assert.equal(createCalls, 0)
 })
 
+test('FeishuSender falls back to create when the reply target is invalid (code 99992354)', async () => {
+  let replyCalls = 0
+  let createCalls = 0
+  const client = {
+    im: {
+      message: {
+        reply: async () => {
+          replyCalls += 1
+          return {
+            code: 99992354,
+            msg: 'The request you send is not a valid open_message_id or not exists',
+          }
+        },
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_created' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendInteractiveCard(baseMessage, { elements: [] })
+
+  // 99992354 is a deterministic "reply target gone" envelope: attempted once
+  // (no retry storm), then the message is delivered via create.
+  assert.equal(replyCalls, 1)
+  assert.equal(createCalls, 1)
+})
+
 test('FeishuSender retries Feishu rate-limit envelopes on create message', async () => {
   let createCalls = 0
   const client = {

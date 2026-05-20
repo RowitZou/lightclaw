@@ -106,6 +106,15 @@ describe('classifyFeishuError', () => {
     })).kind, 'withdrawn-target')
   })
 
+  it('classifies an invalid/nonexistent open_message_id (99992354) as withdrawn-target', () => {
+    // bg-wake synthetic messageIds the platform never saw 400 with this code;
+    // the reply path treats it like a withdrawn target and falls back to create.
+    assert.equal(classifyFeishuError(axiosLike({
+      status: 400,
+      data: { code: 99992354, msg: 'The request you send is not a valid open_message_id or not exists' },
+    })).kind, 'withdrawn-target')
+  })
+
   it('falls back to unknown and unwraps FeishuApiError', () => {
     const unknown = classifyFeishuError(new Error('totally unrelated'))
     assert.equal(unknown.kind, 'unknown')
