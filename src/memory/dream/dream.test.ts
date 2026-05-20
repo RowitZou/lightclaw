@@ -194,6 +194,47 @@ describe('autoDream runner', () => {
     assert.equal(forkInvoked, false)
   })
 
+  it('runs despite minHours when a memory-file burst is detected', async () => {
+    writeSession('s1', 'alice', Date.now())
+
+    mkdirSync(tmpMemoryDir, { recursive: true })
+    // Last consolidation 2h ago — within the 24h minHours window, and stale
+    // enough (older than the 1h lock-holder window) that the lock is
+    // re-acquirable once the burst bypass lets execution reach it.
+    const lockPath = consolidationLockPath(tmpMemoryDir)
+    writeFileSync(lockPath, `${process.pid}\n`)
+    const twoHoursAgoSec = Date.now() / 1000 - 2 * 3600
+    await utimes(lockPath, twoHoursAgoSec, twoHoursAgoSec)
+
+    // Four memory files written just now — all newer than lastConsolidatedAt.
+    for (let index = 0; index < 4; index += 1) {
+      await writeMemoryFile(
+        tmpMemoryDir,
+        memoryEntry(`burst-note-${index}.md`, `burst note ${index}`),
+      )
+    }
+
+    let forkInvoked = false
+    setRunSubagentForTest(async () => {
+      forkInvoked = true
+      return fakeForkResult()
+    })
+
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({
+        enabled: true,
+        minHours: 24,
+        minSessions: 1,
+        burstFileThreshold: 3,
+      }),
+    })
+
+    assert.equal(forkInvoked, true)
+  })
+
   it('skips when scan throttle is active', async () => {
     setRunSubagentForTest(async () => fakeForkResult())
 
@@ -648,6 +689,7 @@ function dreamConfig(
         minHours: 24,
         minSessions: 3,
         scanThrottleMs: 600_000,
+        burstFileThreshold: 0,
         ...curator,
       },
     },

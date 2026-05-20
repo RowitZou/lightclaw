@@ -47,6 +47,16 @@ function roleWithTools(tools: RoleResourceAllowlist): Role {
   }
 }
 
+function internalRole(): Role {
+  return {
+    agentType: 'memoryCurator',
+    kind: 'internal',
+    whenToUse: 'test',
+    systemPrompt: '',
+    tools: ['Read', 'Grep', 'Glob'],
+  }
+}
+
 test('dispatched initial messages contain only the caller-authored prompt', () => {
   const messages = buildDispatchedInitialMessages('investigate this ticket')
 
@@ -225,6 +235,115 @@ test('runDispatchedAgent persists a fresh fork transcript with zero context boun
     assert.equal(parsed.forkContextEndIndex, 0)
     assert.equal(parsed.messages[0]?.type, 'user')
     assert.equal(parsed.messages[1]?.type, 'assistant')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('internal-kind dispatch runs on a host-direct runtime, not the inherited sandbox', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const sandbox = fakeRuntime(tempDir)
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: sandbox,
+      sessionId: 'main-session',
+    })
+
+    let observedRuntime: Runtime | undefined
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'curate the memory tree',
+      role: internalRole(),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      label: 'memoryCurator',
+      queryImpl: async params => {
+        observedRuntime = await import('../session-context.js')
+          .then(m => m.getCurrentSessionContext()?.runtime)
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // The internal role must NOT see the triggering turn's sandbox runtime —
+    // its Glob / Grep / Read operate on daemon-side memory + session dirs.
+    assert.notEqual(observedRuntime, sandbox)
+    assert.equal(observedRuntime?.kind, 'local')
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('worker-kind dispatch keeps the inherited runtime', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const sandbox = fakeRuntime(tempDir)
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: sandbox,
+      sessionId: 'main-session',
+    })
+
+    let observedRuntime: Runtime | undefined
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'do worker work',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        observedRuntime = await import('../session-context.js')
+          .then(m => m.getCurrentSessionContext()?.runtime)
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    assert.equal(observedRuntime, sandbox)
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })

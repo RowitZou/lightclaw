@@ -1,3 +1,6 @@
+import { readdir, stat } from 'node:fs/promises'
+import path from 'node:path'
+
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
 import { ensureMemoryDir } from '../auto-memory.js'
@@ -139,7 +142,22 @@ async function executeAutoDreamInner(params: {
     const lastConsolidatedAt = await readLastConsolidatedAt(params.memoryDir)
     const elapsedHours = (Date.now() - lastConsolidatedAt) / (60 * 60 * 1000)
     if (lastConsolidatedAt !== 0 && elapsedHours < params.config.memory.curator.minHours) {
-      return
+      // minHours is a steady-state throttle. A burst of extractor output in a
+      // single window — a night of heavy background dispatch produced 50+ new
+      // memory files in the 2026-05-20 dogfood — would otherwise sit
+      // un-curated for a full 24h. Bypass the throttle when enough new memory
+      // files have landed since the last consolidation that duplication is
+      // likely. `burstFileThreshold: 0` disables the bypass. The shorter
+      // `scanThrottleMs` gate still applies below, so a burst cannot make the
+      // curator run more than once per scan window.
+      const burstThreshold = params.config.memory.curator.burstFileThreshold
+      const isBurst =
+        burstThreshold > 0
+        && (await countMemoriesModifiedSince(params.memoryDir, lastConsolidatedAt))
+          >= burstThreshold
+      if (!isBurst) {
+        return
+      }
     }
 
     const now = Date.now()
@@ -205,6 +223,60 @@ async function executeAutoDreamInner(params: {
   } finally {
     state.inProgressByUser.delete(params.userId)
   }
+}
+
+/**
+ * Count `.md` memory files in the user-level root and every role-private
+ * subdirectory whose mtime is newer than `since`. `_shared/` (curator-owned
+ * output) and `archive/` (the aging-eviction sink) are excluded — this counts
+ * only the tiers extractors write to. It stats files instead of parsing
+ * frontmatter so a large tree stays cheap on the curator gate path.
+ */
+async function countMemoriesModifiedSince(
+  memoryDir: string,
+  since: number,
+): Promise<number> {
+  const dirsToScan = [memoryDir]
+  try {
+    for (const entry of await readdir(memoryDir, { withFileTypes: true })) {
+      if (
+        entry.isDirectory()
+        && entry.name !== '_shared'
+        && entry.name !== 'archive'
+        && !entry.name.startsWith('.')
+      ) {
+        dirsToScan.push(path.join(memoryDir, entry.name))
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 0
+    }
+    throw error
+  }
+
+  let count = 0
+  for (const dir of dirsToScan) {
+    try {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (
+          !entry.isFile()
+          || !entry.name.endsWith('.md')
+          || entry.name === 'MEMORY.md'
+        ) {
+          continue
+        }
+        const fileStat = await stat(path.join(dir, entry.name))
+        if (fileStat.mtimeMs > since) {
+          count += 1
+        }
+      }
+    } catch {
+      // Directory unreadable or a file vanished mid-scan — skip it. An
+      // occasional undercount is harmless for a threshold check.
+    }
+  }
+  return count
 }
 
 export async function drainPendingDream(timeoutMs = 60_000): Promise<void> {

@@ -17,7 +17,7 @@ import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
 import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
-import { getRuntime } from '../state.js'
+import { getDaemonLocalRuntime, getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
@@ -171,6 +171,15 @@ export async function runDispatchedAgent(
         chainState: params.chainState,
         discoveredTools: new Map(),
         turnCounter: 0,
+        // Framework-internal roles (memoryExtractor / memoryCurator) work
+        // purely on daemon-side data — the memory tree and session
+        // transcripts. Pin them to a host-direct runtime so their
+        // environment-domain tools (Glob / Grep / Read) are not blinded by
+        // whatever sandbox runtime the triggering turn happened to hold; a
+        // Docker / Rlaunch sandbox mounts the user workspace, not those dirs.
+        ...(params.role.kind === 'internal'
+          ? { runtime: getDaemonLocalRuntime() }
+          : {}),
       }
     : null
   try {

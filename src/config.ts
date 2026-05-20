@@ -372,6 +372,11 @@ export type CuratorConfig = {
   minHours: number
   minSessions: number
   scanThrottleMs: number
+  /** When this many memory files (or more) have been written since the last
+   *  consolidation, the curator bypasses the `minHours` throttle so a burst of
+   *  extractor output does not sit un-curated for a full day. `0` disables the
+   *  bypass. */
+  burstFileThreshold: number
   maxTurns?: number
 }
 
@@ -409,6 +414,7 @@ const DEFAULT_CURATOR: CuratorConfig = {
   minHours: 24,
   minSessions: 3,
   scanThrottleMs: 10 * 60 * 1000,
+  burstFileThreshold: 20,
 }
 
 const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
@@ -1662,6 +1668,7 @@ function resolveCuratorConfig(
 ): CuratorConfig {
   const minSessionsRaw = Number(raw?.minSessions)
   const scanThrottleRaw = Number(raw?.scanThrottleMs)
+  const burstFileThresholdRaw = Number(raw?.burstFileThreshold)
   const maxTurnsRaw = Number(raw?.maxTurns)
   const resolved: CuratorConfig = {
     enabled: raw?.enabled ?? DEFAULT_CURATOR.enabled,
@@ -1682,6 +1689,12 @@ function resolveCuratorConfig(
       Math.floor(Number.isFinite(scanThrottleRaw)
         ? scanThrottleRaw
         : DEFAULT_CURATOR.scanThrottleMs),
+    ),
+    burstFileThreshold: Math.max(
+      0,
+      Math.floor(Number.isFinite(burstFileThresholdRaw)
+        ? burstFileThresholdRaw
+        : DEFAULT_CURATOR.burstFileThreshold),
     ),
   }
   if (Number.isFinite(maxTurnsRaw) && maxTurnsRaw >= 1) {

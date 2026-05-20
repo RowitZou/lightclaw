@@ -492,6 +492,7 @@ describe('config: endpoints + models registry', () => {
       minHours: 24,
       minSessions: 3,
       scanThrottleMs: 600_000,
+      burstFileThreshold: 20,
     })
   })
 
@@ -527,8 +528,21 @@ describe('config: endpoints + models registry', () => {
       minHours: 0.5,
       minSessions: 2,
       scanThrottleMs: 30_000,
+      burstFileThreshold: 20,
       maxTurns: 12,
     })
+  })
+
+  it('parses memory.curator.burstFileThreshold override', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      memory: { curator: { burstFileThreshold: 5 } },
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.memory.curator.burstFileThreshold, 5)
   })
 
   it('defaults dispatch scheduler governance config', () => {

@@ -4,9 +4,11 @@ import type {
   PermissionRule,
 } from './permission/types.js'
 import { ImageReadinessTracker } from './runtime/image-readiness.js'
+import { LocalRuntime } from './runtime/local.js'
 import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
+import { lightclawHome } from './paths.js'
 import type { Role } from './agents/types.js'
 import {
   getCurrentSessionContext,
@@ -19,6 +21,7 @@ import type { TodoItem, UsageStats } from './types.js'
 type SessionState = SessionContext
 
 let runtimePool: RuntimePool | null = null
+let daemonLocalRuntime: Runtime | null = null
 let imageReadiness: ImageReadinessTracker | null = null
 let networkBridge: NetworkBridge | null = null
 // Keyed by sessionId — Phase 26 formula `feishu:dm:<chatId>` /
@@ -222,6 +225,24 @@ export function setRuntime(runtime: Runtime): void {
 export function getRuntimePool(): RuntimePool {
   runtimePool ??= new RuntimePool()
   return runtimePool
+}
+
+/**
+ * Process-wide host-direct runtime for framework-internal roles
+ * (memoryExtractor / memoryCurator). Their entire working set — the user's
+ * memory tree and session transcripts — lives daemon-side, so their
+ * environment-domain tools (Glob / Grep / Read, which route through
+ * `runtime.exec` / `runtime.fs`) must run against the daemon filesystem.
+ * Inheriting the triggering turn's sandbox runtime (Docker / Rlaunch) makes
+ * those tools blind, since the sandbox mounts the user workspace, not the
+ * memory / sessions dirs. `runDispatchedAgent` pins this onto the
+ * SessionContext of every `kind: 'internal'` dispatch. Lazily created;
+ * `workspaceRoot` is only a fallback cwd — internal-role tools always pass
+ * absolute paths.
+ */
+export function getDaemonLocalRuntime(): Runtime {
+  daemonLocalRuntime ??= new LocalRuntime(lightclawHome())
+  return daemonLocalRuntime
 }
 
 export function getImageReadiness(): ImageReadinessTracker {

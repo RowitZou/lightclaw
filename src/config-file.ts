@@ -95,6 +95,7 @@ export type ConfigFileMemorySection = {
     minHours?: number
     minSessions?: number
     scanThrottleMs?: number
+    burstFileThreshold?: number
     maxTurns?: number
   }
   recall?: {
@@ -394,6 +395,7 @@ export type ConfigFileShape = {
     minHours?: number
     minSessions?: number
     scanThrottleMs?: number
+    burstFileThreshold?: number
     maxTurns?: number
   }
   /** @deprecated → `memory.recall` */
