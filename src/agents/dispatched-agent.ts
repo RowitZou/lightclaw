@@ -16,7 +16,7 @@ import { buildWorkerActivityForwarder } from '../channels/feishu/worker-activity
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
-import { getCurrentSessionContext, runWithSessionContext, type SessionContext } from '../session-context.js'
+import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
 import { getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
