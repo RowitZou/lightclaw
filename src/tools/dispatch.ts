@@ -107,7 +107,11 @@ User time expressions like "10:00" are often ambiguous between AM and PM; relati
 
 ## Trust but verify
 
-Dispatched roles return a single final-text summary. Tool results from inside them are NOT visible to you. If the role reports writing code, check the actual changes before reporting the task as done.`
+Dispatched roles return a single final-text summary. Tool results from inside them are NOT visible to you. If the role reports writing code, check the actual changes before reporting the task as done.
+
+## Reporting in-flight background dispatches
+
+A background dispatch outlives the turn that starts it, and its \`<background-task-result>\` only returns to you if you are still running when it finishes. If you hand back your result first, the dispatch keeps running without you and its result later surfaces with no record of why it exists. So when you finish with a background dispatch still in flight — one you started, or one a role you dispatched reported starting — name it in what you hand back: what it is doing, and that its result will arrive separately.`
 
 const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed). Blocking dispatches are not included — those return synchronously and you already have their result.
 

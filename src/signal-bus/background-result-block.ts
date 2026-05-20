@@ -15,7 +15,7 @@ export const BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE = `<background-task-resu
 {result text from the dispatched run}
 </background-task-result>
 
-A background dispatch you previously scheduled has finished. The block above is its result — outcome and full text. Treat this as a delegated worker handing in their work to you, the manager.
+A background dispatch has finished — one you scheduled, or one a role you dispatched started and left running past its own turn. The block above is its result — outcome and full text. Treat this as a delegated worker handing in their work to you, the manager.
 
 Default mode: handle the result without escalating. The user does not see the block above directly — only what you choose to send. You are an unattended agent, so:
 - If the result clearly calls for a next step and the path forward is reasonably clear, take that step yourself (option 2) and tell the user via plain reply (option 1). Don't pause for permission.
@@ -44,7 +44,7 @@ export const BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE = `<background-task-re
 {result text from the dispatched run}
 </background-task-result>
 
-A background dispatch you fired earlier in this turn has finished. The block above is its result — outcome and full text.
+A background dispatch has finished — one you fired earlier in this turn, or one a role you dispatched started and left running. The block above is its result — outcome and full text.
 
 Default mode: handle the result without stalling. You are mid-turn and still owe your requester a final-text summary — that is the only thing they will see from this turn. You are operating autonomously, so:
 - If the result calls for a next step within this turn, take that step yourself (option 2) and reflect what you did in your final-text summary (option 3). You cannot pause for a sign-off from your requester mid-turn — handle it.

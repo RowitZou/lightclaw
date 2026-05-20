@@ -30,8 +30,12 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
 const EXPECTED = {
   // Dispatch description rewritten Phase 11 PR1 (2026-05-20): removed the
   // old context-inheritance section and parenthetical. Dispatch workers are
-  // now always fresh-context workers.
-  Dispatch: 'c9c489df68610a8de8dd8b53e546f25bf5aab9739c8d6006b5a3dccee5603934',
+  // now always fresh-context workers. 2026-05-20: appended the "## Reporting
+  // in-flight background dispatches" section so a dispatcher names any bg
+  // dispatch still running in what it hands back — its result surfaces up
+  // the chain after the dispatcher is gone, and an unannounced one reaches
+  // the receiver with no record of why it exists.
+  Dispatch: '9d2fde24d7f6aab8c3820d66bad469a22800a8fbeae37ef2ca4b6b4ac627e2b6',
   ListDispatches: '88c6d590ebce67a09022cb6b142bbef0a82da23557b31832584a83dd7d71030a',
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
@@ -42,12 +46,15 @@ const EXPECTED = {
   // narrow cases where the user genuinely must intervene. Outcome=aborted
   // section dropped — /stop and CancelDispatch do not abort in-flight bg
   // fires (chain-abort-propagation skips bg-* sessions), so the path was
-  // unreachable through user actions.
-  BackgroundTaskResultBlockMain: '9ad1e2c62a3965dfe9af85e6e08fe636714b3ca596e5039584ead1d62f5d7033',
+  // unreachable through user actions. 2026-05-20: opening sentence widened
+  // so it reads correctly when the receiver is not the role that scheduled
+  // the dispatch (orphan result fell back up the chain to main).
+  BackgroundTaskResultBlockMain: 'e4ba103c86e31fb009680b50f9e6cdaff3f1461796b02334bdd943f6bca7b9fb',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
-  // (final-text only, no Notify equivalent).
-  BackgroundTaskResultBlockWorker: 'c5abd2cc7b0ba5418143caa683be5ef5fdf5f98da886cd7686ae6461d9c14676',
+  // (final-text only, no Notify equivalent). 2026-05-20: opening sentence
+  // widened the same way as the main template for orphan-result accuracy.
+  BackgroundTaskResultBlockWorker: 'abe6ad1cbed8f017db1901549d01c46347d68408cc5adafecdb868b96840c0a1',
 }
 
 function hash(value: string): string {
