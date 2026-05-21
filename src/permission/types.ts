@@ -58,6 +58,13 @@ export function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMod
   return PERMISSION_MODE_RANK[mode] <= PERMISSION_MODE_RANK[ceiling]
 }
 
+/** `mode` capped to `ceiling`. The effective permission mode never runs
+ *  looser than the ceiling, no matter how `mode` was set (config / env /
+ *  channel default / persisted session meta / identity preference). */
+export function clampPermissionMode(mode: PermissionMode, ceiling: PermissionMode): PermissionMode {
+  return isModeWithinCeiling(mode, ceiling) ? mode : ceiling
+}
+
 export type RiskLevel = 'safe' | 'write' | 'execute'
 export type PermissionBehavior = 'allow' | 'deny' | 'ask'
 export type PermissionRuleSource =

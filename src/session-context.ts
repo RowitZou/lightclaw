@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 
-import type { PermissionApprover, PermissionMode, PermissionRule } from './permission/types.js'
+import { clampPermissionMode, type PermissionApprover, type PermissionMode, type PermissionRule } from './permission/types.js'
 import type { Runtime } from './runtime/index.js'
 import type { PermissionDenialDetail } from './background-task/types.js'
 import type { TodoItem, UsageStats } from './types.js'
@@ -56,6 +56,10 @@ export type SessionContext = {
   totalOutputTokens: number
   todos: TodoItem[]
   permissionMode: PermissionMode
+  /** Hard cap on `permissionMode` for this session's user. `getPermissionMode`
+   *  clamps the effective mode to this; `createSessionContext` also clamps the
+   *  stored `permissionMode` at construction. */
+  permissionCeiling: PermissionMode
   cliArgRules: PermissionRule[]
   identityRules: PermissionRule[]
   fileRules: PermissionRule[]
@@ -143,6 +147,7 @@ export function createSessionContext(input: {
   lastExtractedAt?: number
   todos?: TodoItem[]
   permissionMode?: PermissionMode
+  permissionCeiling?: PermissionMode
   cliArgRules?: PermissionRule[]
   identityRules?: PermissionRule[]
   fileRules?: PermissionRule[]
@@ -169,7 +174,11 @@ export function createSessionContext(input: {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     todos: input.todos ?? [],
-    permissionMode: input.permissionMode ?? 'default',
+    permissionMode: clampPermissionMode(
+      input.permissionMode ?? 'default',
+      input.permissionCeiling ?? 'bypassPermissions',
+    ),
+    permissionCeiling: input.permissionCeiling ?? 'bypassPermissions',
     cliArgRules: input.cliArgRules ?? [],
     identityRules: input.identityRules ?? [],
     fileRules: input.fileRules ?? [],
@@ -214,6 +223,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     totalOutputTokens: 0,
     todos: [],
     permissionMode: 'default',
+    permissionCeiling: 'bypassPermissions',
     cliArgRules: [],
     identityRules: [],
     fileRules: [],

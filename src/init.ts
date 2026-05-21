@@ -13,7 +13,7 @@ import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
 import { lightclawHome } from './paths.js'
 import { workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
-import { getAdmin, listActiveCanonicalUsers } from './identity/store.js'
+import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
@@ -326,6 +326,9 @@ async function createResolvedSessionContext(
     lastExtractedAt: input?.lastExtractedAt,
     todos: input?.todos,
     permissionMode: input?.permissionMode ?? resolvedConfig.permissionMode,
+    permissionCeiling: input?.currentUserId
+      ? await getUserPermissionCeiling(input.currentUserId)
+      : resolvedConfig.permissionCeiling,
     runtime,
     fileRules: loadFileRules({
       cwd: resolvedCwd,

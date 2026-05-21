@@ -47,9 +47,15 @@ function mergeFeishuConfig(input: ConfigFileChannelsSection['feishu']): FeishuCh
       'channels.feishu.mediaDir is deprecated and ignored; inbound media is written to the runtime workspace .lightclaw/inbox/ path.\n',
     )
   }
+  // Channel mode resolution: env override > explicit channels.feishu.permissionMode
+  // > top-level config.permissionMode (the global default) > acceptEdits.
+  // The fallback to the top-level field is what makes `permissionMode` in
+  // config.json actually govern the Feishu agent — without it the channel
+  // silently ran at acceptEdits no matter what the top-level field said.
   const permissionMode =
     parsePermissionMode(process.env.LIGHTCLAW_FEISHU_PERMISSION_MODE) ??
     parsePermissionMode(input?.permissionMode) ??
+    parsePermissionMode(loadConfigFile().permissionMode) ??
     'acceptEdits'
   const webhook: Partial<FeishuChannelConfig['webhook']> = input?.webhook ?? {}
   const transport =

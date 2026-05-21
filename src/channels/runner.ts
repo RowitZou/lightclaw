@@ -22,6 +22,7 @@ import {
 import {
   getAdminFeishuOpenId,
   getIdentity,
+  getUserPermissionCeiling,
   isAdmin,
   lookupBySender,
   rebuildReverseIndex,
@@ -557,12 +558,14 @@ export class ChannelRunner {
           lastExtractedAt: meta?.lastExtractedAt,
           todos: meta?.todos,
           // Per-identity preferences (loaded inside resetSessionContext) win
-          // over both arguments below — that is what aligns mode/model across
-          // the same user's terminal + channel sessions. This line provides
-          // the fallback chain when prefs are absent: meta (so an in-channel
-          // `/mode <m>` survives reload) > channels.json default (first ever
-          // message of a brand-new feishu session).
-          permissionMode: meta?.permissionMode ?? this.strategy.permissionMode,
+          // over this argument — that aligns mode across the same user's
+          // sessions and preserves an explicit `/mode <m>` (which writes the
+          // preference, not just meta). permissionMode is deliberately NOT
+          // sourced from session meta: freezing it there made a config /
+          // ceiling change never reach an existing session. The effective
+          // mode is re-derived from the channel default (config.permissionMode)
+          // every message; the per-session ceiling clamp still applies.
+          permissionMode: this.strategy.permissionMode,
           currentUserId: userId,
         })
         // Fields populated only on the placeholder (per-inbound-message, set
@@ -1441,6 +1444,7 @@ export class ChannelRunner {
       currentUserId: userId,
       sessionId,
       permissionMode: prefs.permissionMode ?? config.permissionMode,
+      permissionCeiling: await getUserPermissionCeiling(userId),
       identityRules: loadIdentityRules(userId),
       fileRules: loadFileRules({
         cwd,

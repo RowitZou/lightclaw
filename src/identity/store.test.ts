@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -12,6 +12,7 @@ import {
   getIdentity,
   getUserPermissionCeiling,
   setAdmin,
+  setUserPermissionCeiling,
 } from './store.js'
 
 let home: string
@@ -27,18 +28,26 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
-describe('identity permission ceiling defaults', () => {
-  it('uses config.permissionCeiling when creating users and reading legacy records', async () => {
+describe('identity permission ceiling', () => {
+  it('does not stamp a ceiling at creation; getUserPermissionCeiling follows live config', async () => {
     writeConfig({ permissionCeiling: 'read' })
     assert.deepEqual(await createUser('alice'), { ok: true })
-    assert.equal((await getIdentity('alice'))?.permissionCeiling, 'plan')
+    // createUser must not freeze the config default into the identity record,
+    // otherwise a later config change can never reach the user.
+    assert.equal((await getIdentity('alice'))?.permissionCeiling, undefined)
+    assert.equal(await getUserPermissionCeiling('alice'), 'plan')
 
-    assert.deepEqual(await createUser('bob'), { ok: true })
-    const identitiesPath = path.join(home, 'identity', 'identities.json')
-    const raw = JSON.parse(readFileSync(identitiesPath, 'utf8')) as Record<string, { permissionCeiling?: string }>
-    delete raw.bob!.permissionCeiling
-    writeFileSync(identitiesPath, JSON.stringify(raw), 'utf8')
-    assert.equal(await getUserPermissionCeiling('bob'), 'plan')
+    writeConfig({ permissionCeiling: 'yolo' })
+    assert.equal(await getUserPermissionCeiling('alice'), 'bypassPermissions')
+  })
+
+  it('an explicit /ceiling override persists and outranks the live config default', async () => {
+    writeConfig({ permissionCeiling: 'yolo' })
+    await createUser('bob')
+    assert.equal((await setUserPermissionCeiling('bob', 'acceptEdits')).ok, true)
+    assert.equal((await getIdentity('bob'))?.permissionCeiling, 'acceptEdits')
+    writeConfig({ permissionCeiling: 'read' })
+    assert.equal(await getUserPermissionCeiling('bob'), 'acceptEdits')
   })
 })
 

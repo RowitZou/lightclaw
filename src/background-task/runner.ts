@@ -5,7 +5,7 @@ import { getConfig } from '../config.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
-import { getAdmin } from '../identity/store.js'
+import { getAdmin, getUserPermissionCeiling } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import { workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
@@ -53,6 +53,7 @@ export async function runBackgroundTaskFire(input: {
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
     const model = prefs.model ?? config.defaultModel
     const permissionMode = prefs.permissionMode ?? config.permissionMode
+    const permissionCeiling = await getUserPermissionCeiling(input.task.ownerCanonicalUser)
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))
     await mkdir(cwd, { recursive: true, mode: 0o700 })
 
@@ -101,6 +102,7 @@ export async function runBackgroundTaskFire(input: {
       sessionId,
       channel: 'feishu',
       permissionMode,
+      permissionCeiling,
       runtime,
       fileRules: loadFileRules({
         cwd,

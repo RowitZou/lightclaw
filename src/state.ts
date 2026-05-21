@@ -1,7 +1,8 @@
-import type {
-  PermissionApprover,
-  PermissionMode,
-  PermissionRule,
+import {
+  clampPermissionMode,
+  type PermissionApprover,
+  type PermissionMode,
+  type PermissionRule,
 } from './permission/types.js'
 import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import { LocalRuntime } from './runtime/local.js'
@@ -154,7 +155,8 @@ export function setTodos(todos: TodoItem[]): void {
 }
 
 export function getPermissionMode(): PermissionMode {
-  return currentState().permissionMode
+  const state = currentState()
+  return clampPermissionMode(state.permissionMode, state.permissionCeiling)
 }
 
 export function setPermissionMode(mode: PermissionMode): void {

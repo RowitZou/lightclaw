@@ -102,6 +102,22 @@ describe('loadChannelConfig', () => {
     assert.equal(config.feishu.transport, 'ws')
     assert.equal(config.feishu.permissionMode, 'acceptEdits')
   })
+
+  it('feishu permissionMode falls back to the top-level config.permissionMode', () => {
+    writeJson('config.json', {
+      permissionMode: 'yolo',
+      channels: { feishu: { enabled: true, appId: 'app' } },
+    })
+    assert.equal(loadChannelConfig().feishu.permissionMode, 'bypassPermissions')
+  })
+
+  it('explicit channels.feishu.permissionMode overrides the top-level default', () => {
+    writeJson('config.json', {
+      permissionMode: 'yolo',
+      channels: { feishu: { enabled: true, appId: 'app', permissionMode: 'read' } },
+    })
+    assert.equal(loadChannelConfig().feishu.permissionMode, 'plan')
+  })
 })
 
 function writeJson(fileName: string, body: unknown): void {

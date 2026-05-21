@@ -8,9 +8,11 @@ import {
   getCurrentUserId,
   getCwd,
   getPermissionApprover,
+  getPermissionMode,
   getSessionId,
   setCwd,
   setPermissionApprover,
+  setPermissionMode,
   setAbortControllerForSession,
 } from './state.js'
 import {
@@ -257,6 +259,28 @@ describe('channel runner reset+scope path (concurrent user isolation)', () => {
 
       assert.equal(getPermissionApprover(), approver, 'approver survives Object.assign')
       assert.equal(getCwd(), '/tmp/pinned-cwd', 'reset values still take effect')
+    })
+  })
+})
+
+describe('permission mode is clamped to the ceiling', () => {
+  it('createSessionContext clamps the stored permissionMode down to the ceiling', () => {
+    const ctx = freshContext({ permissionMode: 'bypassPermissions', permissionCeiling: 'acceptEdits' })
+    assert.equal(ctx.permissionMode, 'acceptEdits')
+    assert.equal(ctx.permissionCeiling, 'acceptEdits')
+  })
+
+  it('leaves a mode that is within the ceiling unchanged', () => {
+    const ctx = freshContext({ permissionMode: 'default', permissionCeiling: 'acceptEdits' })
+    assert.equal(ctx.permissionMode, 'default')
+  })
+
+  it('getPermissionMode never returns a mode looser than the ceiling', async () => {
+    const ctx = freshContext({ permissionMode: 'default', permissionCeiling: 'acceptEdits' })
+    await runWithSessionContext(ctx, async () => {
+      // Even a direct setPermissionMode above the ceiling is capped on read.
+      setPermissionMode('bypassPermissions')
+      assert.equal(getPermissionMode(), 'acceptEdits')
     })
   })
 })

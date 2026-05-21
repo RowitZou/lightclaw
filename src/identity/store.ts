@@ -85,10 +85,14 @@ export async function createUser(
   }
 
   const now = new Date().toISOString()
+  // permissionCeiling is intentionally NOT stamped here. Leaving it unset
+  // makes getUserPermissionCeiling fall back to the live config default, so a
+  // change to config.permissionCeiling applies to every identity that has not
+  // had an explicit ceiling set via `/ceiling`. setUserPermissionCeiling is
+  // the only writer of a persisted per-identity value.
   identities[name] = {
     createdAt: now,
     updatedAt: now,
-    permissionCeiling: getConfig().permissionCeiling,
     channels: {
       feishu: [],
       terminal: [],
