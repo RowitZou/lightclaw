@@ -1,10 +1,22 @@
 import assert from 'node:assert/strict'
-import { afterEach, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import type { ToolCallContext } from '../tool.js'
 import { _setBraveHttpGetForTests } from './web-search-brave.js'
 import { _setDdgHttpGetForTests } from './web-search-ddg.js'
 import { webSearchTool } from './web-search.js'
+
+// webSearchTool reads tools.webSearch.braveApiKey + runtime.network.proxy via
+// getConfig(), which throws when no config.json exists — install a minimal
+// one so these unit tests do not depend on ~/.lightclaw/config.json.
+let restoreConfigHome: () => void
+before(() => {
+  restoreConfigHome = installTestConfigHome()
+})
+after(() => {
+  restoreConfigHome()
+})
 
 /** Minimal ToolCallContext for WebSearch (no runtime.fs / no helper exec
  *  — Phase 34 daemon-side). */

@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict'
-import { afterEach, describe, it } from 'node:test'
+import { after, afterEach, before, describe, it } from 'node:test'
 
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import {
   _setDdgHttpGetForTests,
   fetchDuckDuckGoSearch,
 } from './web-search-ddg.js'
 import { _setWebRetryDelaysForTests } from './web-retry.js'
+
+// fetchDuckDuckGoSearch reads runtime.network.proxy via getConfig(), which
+// throws when no config.json exists — install a minimal one so these unit
+// tests do not depend on the developer's ~/.lightclaw/config.json.
+let restoreConfigHome: () => void
+before(() => {
+  restoreConfigHome = installTestConfigHome()
+})
+after(() => {
+  restoreConfigHome()
+})
 
 function buildDdgResponse(html: string): unknown {
   return {

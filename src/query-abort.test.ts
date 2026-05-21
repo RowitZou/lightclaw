@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { after, before, describe, it } from 'node:test'
 import { z } from 'zod'
 
 import {
@@ -10,6 +10,7 @@ import {
   type ToolUseBlock,
 } from './query-tool-dispatch.js'
 import { createSessionContext, runWithSessionContext } from './session-context.js'
+import { installTestConfigHome } from './test-support/config-fixture.js'
 import { buildTool, type ToolCallResult } from './tool.js'
 import type { LightClawConfig } from './config.js'
 import type { Runtime } from './runtime/types.js'
@@ -61,8 +62,23 @@ describe('awaitAbortable', () => {
 })
 
 describe('dispatchToolCall abort integration', () => {
+  // dispatchToolCall's hook / permission gates call the global getConfig(),
+  // which throws when no config.json exists — install a minimal one so the
+  // dispatch reaches the tool call instead of bailing out early.
+  let restoreConfigHome: () => void
+  before(() => {
+    restoreConfigHome = installTestConfigHome()
+  })
+  after(() => {
+    restoreConfigHome()
+  })
+
   it('preempts a tool call that ignores its abortSignal and returns an error result', async () => {
     let toolEntered = false
+    let signalEntered: (() => void) | undefined
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve
+    })
     const stuckTool = buildTool({
       name: 'StuckTool',
       description: 'A tool whose call never settles and ignores abortSignal.',
@@ -71,6 +87,7 @@ describe('dispatchToolCall abort integration', () => {
       inputSchema: z.object({}),
       call() {
         toolEntered = true
+        signalEntered?.()
         // Never resolves and never checks abortSignal — the misbehaving-tool
         // case awaitAbortable exists to backstop.
         return new Promise<ToolCallResult<string>>(() => {})
@@ -105,10 +122,16 @@ describe('dispatchToolCall abort integration', () => {
     })
 
     const started = Date.now()
-    setTimeout(() => controller.abort(), 10)
-    const result = await runWithSessionContext(sessionCtx, () =>
+    const dispatch = runWithSessionContext(sessionCtx, () =>
       dispatchToolCall(toolUse, ctx),
     )
+    // Abort only once the stuck tool is actually inside call(). A fixed-delay
+    // timer would race the hook + permission gates that run before the tool
+    // is entered — on a slow/cold run the abort lands during those gates and
+    // the tool is never reached.
+    await entered
+    controller.abort()
+    const result = await dispatch
 
     assert.equal(toolEntered, true, 'the stuck tool call should have been entered')
     assert.ok(

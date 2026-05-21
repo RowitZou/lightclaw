@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict'
-import { afterEach, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 
 import { _setWebFetchSummarizerForTests, webFetchTool } from './web-fetch.js'
 import { _clearWebFetchCacheForTests } from './web-fetch-cache.js'
 import { _setDaemonFetchUrlForTests } from './web-fetch-http.js'
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import type { ToolCallContext } from '../tool.js'
 
 const MAX_MARKDOWN_LENGTH = 100_000  // mirror constant in web-fetch.ts
+
+// webFetchTool reads tools.webFetch.preapprovedDomains via getConfig(), which
+// throws when no config.json exists — install a minimal one so these unit
+// tests do not depend on the developer's ~/.lightclaw/config.json.
+let restoreConfigHome: () => void
+before(() => {
+  restoreConfigHome = installTestConfigHome()
+})
+after(() => {
+  restoreConfigHome()
+})
 
 /**
  * Build a minimal ToolCallContext that records any binary writes to a

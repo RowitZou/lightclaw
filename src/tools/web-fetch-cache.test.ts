@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { afterEach, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 
 import {
   _clearWebFetchCacheForTests,
@@ -12,6 +12,7 @@ import {
 
 import { _setWebFetchSummarizerForTests, webFetchTool } from './web-fetch.js'
 import { _setDaemonFetchUrlForTests } from './web-fetch-http.js'
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import type { ToolCallContext } from '../tool.js'
 
 describe('web-fetch-cache (unit)', () => {
@@ -84,6 +85,16 @@ function buildCtxWithFetch(body: string, fetchCount: { n: number }): ToolCallCon
 }
 
 describe('WebFetch integration with cache', () => {
+  // webFetchTool reads tools.webFetch.preapprovedDomains via getConfig(),
+  // which throws when no config.json exists — install a minimal one so these
+  // tests do not depend on the developer's ~/.lightclaw/config.json.
+  let restoreConfigHome: () => void
+  before(() => {
+    restoreConfigHome = installTestConfigHome()
+  })
+  after(() => {
+    restoreConfigHome()
+  })
   beforeEach(() => {
     _clearWebFetchCacheForTests()
   })

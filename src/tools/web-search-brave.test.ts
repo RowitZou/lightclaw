@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict'
-import { afterEach, describe, it } from 'node:test'
+import { after, afterEach, before, describe, it } from 'node:test'
 
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import {
   _setBraveHttpGetForTests,
   fetchBraveSearch,
 } from './web-search-brave.js'
 import { _setWebRetryDelaysForTests } from './web-retry.js'
+
+// fetchBraveSearch reads runtime.network.proxy via getConfig(), which throws
+// when no config.json exists — install a minimal one so these unit tests do
+// not depend on the developer's ~/.lightclaw/config.json.
+let restoreConfigHome: () => void
+before(() => {
+  restoreConfigHome = installTestConfigHome()
+})
+after(() => {
+  restoreConfigHome()
+})
 
 function buildBraveResponse(opts: {
   status?: number

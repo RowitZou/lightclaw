@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test'
+import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -173,6 +173,24 @@ describe('detectHostIp', () => {
 })
 
 describe('pool config builders with network.mode=host', () => {
+  // buildRlaunchRuntimeConfig resolves the gpfs mount from workspaceRoot(),
+  // which reads LIGHTCLAW_WORKSPACE_ROOT — point it under the gpfs host
+  // prefix declared in makeConfig().rlaunch.gpfsMounts so the rlaunch case
+  // does not depend on the developer's ambient workspace root.
+  let savedWorkspaceRoot: string | undefined
+  before(() => {
+    savedWorkspaceRoot = process.env.LIGHTCLAW_WORKSPACE_ROOT
+    process.env.LIGHTCLAW_WORKSPACE_ROOT =
+      '/mnt/shared-storage-user/ailab-hs/test/lightclaw-workspaces'
+  })
+  after(() => {
+    if (savedWorkspaceRoot === undefined) {
+      delete process.env.LIGHTCLAW_WORKSPACE_ROOT
+    } else {
+      process.env.LIGHTCLAW_WORKSPACE_ROOT = savedWorkspaceRoot
+    }
+  })
+
   const networkHost: NetworkBridgeSettings = {
     mode: 'host',
     proxy: 'http://corp-proxy:1091',

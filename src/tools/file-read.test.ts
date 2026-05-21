@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 
 import { LocalRuntime } from '../runtime/local.js'
+import { installTestConfigHome } from '../test-support/config-fixture.js'
 import type { ToolCallContext } from '../tool.js'
 
 import { fileReadTool, type FileReadStructuredOutput, type FileReadVisualOutput } from './file-read.js'
@@ -140,6 +141,17 @@ describe('Read (office structured extraction)', () => {
 })
 
 describe('Read (visual path: image / pdf-pages)', () => {
+  // The image / pdf visual path checks model multimodal capability via
+  // getConfig(), which throws when no config.json exists — install a minimal
+  // one so these tests do not depend on ~/.lightclaw/config.json.
+  let restoreConfigHome: () => void
+  before(() => {
+    restoreConfigHome = installTestConfigHome()
+  })
+  after(() => {
+    restoreConfigHome()
+  })
+
   it('emits image block in tool_result for jpeg input', async () => {
     // Create a minimal valid JPEG via Pillow (sandbox path); avoids
     // platform-specific image generation in node land.
