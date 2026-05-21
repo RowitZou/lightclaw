@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+
 import { loadChannelConfig } from './channels/config.js'
 import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
@@ -11,10 +14,11 @@ import {
 import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
+import { runConfigWizard } from './config-wizard.js'
 import { cleanupMcp, initializeMcp } from './mcp/index.js'
 import { drainPendingDream } from './memory/dream/dream.js'
 import { drainPendingExtraction } from './memory/extract.js'
-import { setLightclawHomeOverride } from './paths.js'
+import { lightclawHome, setLightclawHomeOverride } from './paths.js'
 import {
   acquireProcessLock,
   LightClawAlreadyRunningError,
@@ -160,6 +164,16 @@ async function main(): Promise<void> {
     }
   } else if (args.home) {
     setLightclawHomeOverride(args.home)
+  }
+
+  const homeConfigPath = path.join(lightclawHome(), 'config.json')
+  if (!args.config && !existsSync(homeConfigPath)) {
+    if (!process.stdin.isTTY) {
+      throw new Error(
+        `No config found at ${homeConfigPath}. Run LightClaw in an interactive terminal to create one, or pass --config <file>.`,
+      )
+    }
+    await runConfigWizard({ homeFlag: args.home })
   }
 
   // Mutual exclusion: refuse to start if another LightClaw is already

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.63.0",
+    "@clack/prompts": "^1.4.0",
     "@larksuiteoapi/node-sdk": "^1.61.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.15.2",
