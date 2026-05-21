@@ -2,6 +2,12 @@ import { loadChannelConfig } from './channels/config.js'
 import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
 import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
+import {
+  isHomeConfigPath,
+  readExternalConfigFile,
+  resolveStartupHome,
+  syncExternalConfig,
+} from './config-bootstrap.js'
 import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
@@ -21,6 +27,7 @@ import { VERSION } from './version.js'
 type CliArgs = {
   help: boolean
   home?: string
+  config?: string
   error?: string
 }
 
@@ -81,6 +88,16 @@ function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
+    if (arg === '--config') {
+      const value = argv[index + 1]
+      if (!value) {
+        return { ...args, error: '--config requires a value' }
+      }
+      args.config = value
+      index += 1
+      continue
+    }
+
     return {
       ...args,
       error: arg.startsWith('-') ? `unknown flag: ${arg}` : `unknown argument: ${arg}`,
@@ -96,6 +113,7 @@ function printHelp(): void {
 Usage:
   lightclaw
   lightclaw --home <dir>
+  lightclaw --config <file>
 
 Starts the LightClaw daemon: the enabled channels (Feishu) plus a
 slash-only terminal admin console. The agent is reached through the
@@ -104,9 +122,11 @@ channels — the terminal no longer runs an interactive agent session.
 Options:
   -h, --help      Show help
       --home      Override LightClaw home directory (default ~/.lightclaw)
+      --config    Read an external config file and sync it into <home>/config.json
 
 Environment:
   LIGHTCLAW_HOME             Coarse data root (sessions / memory / config / identity / workspaces / state)
+                            External config may also set a "home" field when --home/LIGHTCLAW_HOME are absent.
   LIGHTCLAW_WORKSPACE_ROOT   Per-user workspace root (overrides <home>/workspaces)
   LIGHTCLAW_NO_MEMORY=1      Disable auto-memory extraction and memory index injection
   LIGHTCLAW_NO_MCP=1         Disable MCP client startup and MCP tool injection
@@ -129,10 +149,16 @@ async function main(): Promise<void> {
     return
   }
 
-  // Apply --home before any code path resolves a LightClaw-rooted path
-  // (process lock, identity store, channels). lightclawHome() is lazy, so
-  // setting the override here is sufficient.
-  if (args.home) {
+  // Apply startup path decisions before any code path resolves a
+  // LightClaw-rooted path (process lock, identity store, channels).
+  if (args.config) {
+    const external = readExternalConfigFile(args.config)
+    const home = resolveStartupHome({ homeFlag: args.home, externalHome: external.home })
+    setLightclawHomeOverride(home)
+    if (!isHomeConfigPath(args.config)) {
+      syncExternalConfig(external, home)
+    }
+  } else if (args.home) {
     setLightclawHomeOverride(args.home)
   }
 

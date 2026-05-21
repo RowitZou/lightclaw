@@ -1,6 +1,10 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
+import {
+  atomicWriteJson,
+  isPlainObject,
+  readJsonObjectOrEmpty,
+} from '../../config-io.js'
 import { lightclawHome } from '../../paths.js'
 
 // Auto-register Codex endpoint + model into <home>/config.json after a
@@ -53,25 +57,6 @@ function configPath(): string {
   return path.join(lightclawHome(), 'config.json')
 }
 
-function readConfigJsonOrEmpty(file: string): Record<string, unknown> {
-  if (!existsSync(file)) return {}
-  const raw = readFileSync(file, 'utf8')
-  if (!raw.trim()) return {}
-  const parsed = JSON.parse(raw) as unknown
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(
-      `Config at ${file} is not a JSON object — refusing to auto-write.`,
-    )
-  }
-  return parsed as Record<string, unknown>
-}
-
-function atomicWriteJson(file: string, body: unknown): void {
-  const tmp = `${file}.tmp.${process.pid}`
-  writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 })
-  renameSync(tmp, file)
-}
-
 /** Add `endpoints.codex = { auth: 'codex-oauth' }` and three model
  *  entries `gpt-codex-{deep,mid,fast}` (high/medium/low reasoning effort,
  *  shared upstream slug) if absent. Idempotent — each tier is checked
@@ -89,7 +74,7 @@ export function autoRegisterCodex(
   opts: { upstreamModel?: string } = {},
 ): AutoRegisterResult {
   const file = configPath()
-  const cfg = readConfigJsonOrEmpty(file)
+  const cfg = readJsonObjectOrEmpty(file)
 
   const endpoints =
     isPlainObject(cfg.endpoints) ? { ...cfg.endpoints } : {}
@@ -149,7 +134,7 @@ export function purgeCodexFromConfig(): {
   modelsRemoved: string[]
 } {
   const file = configPath()
-  const cfg = readConfigJsonOrEmpty(file)
+  const cfg = readJsonObjectOrEmpty(file)
 
   const endpoints = isPlainObject(cfg.endpoints) ? { ...cfg.endpoints } : {}
   const models = isPlainObject(cfg.models) ? { ...cfg.models } : {}
@@ -179,10 +164,6 @@ export function purgeCodexFromConfig(): {
     endpointRemoved: endpointPresent,
     modelsRemoved: removedModelNames,
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Test-only escape hatch for inspection. */

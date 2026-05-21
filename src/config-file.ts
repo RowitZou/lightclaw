@@ -171,6 +171,10 @@ export type ConfigFileToolCatalogSection = {
 }
 
 export type ConfigFileShape = {
+  /** Data root used only when this file is passed as an external `--config`.
+   *  The loader never reads `home` from `<home>/config.json`, because that
+   *  would create a cycle: finding config would first require knowing home. */
+  home?: string
   /** Named endpoint pool (apiKey + optional baseUrl) referenced by models.
    *  Same physical gateway can host both anthropic and openai protocols —
    *  schema lives on each model entry, not here. */
