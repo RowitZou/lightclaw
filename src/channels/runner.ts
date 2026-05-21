@@ -235,6 +235,42 @@ export type ChannelRunnerStrategy = {
 }
 
 /**
+ * Build the synthetic NormalizedChannelMessage that replays one leftover
+ * interjection back through handleMessage. Exported for regression coverage.
+ *
+ * A bg-result leftover entry (`source === 'background-task'`) carries a
+ * synthetic `bg-<dispatchId>-<emittedAt>` messageId the Feishu platform never
+ * saw. Replaying it as an ordinary inbound makes im.message.reply /
+ * messageReaction.create return 400 (code 99992354) on that fake id. Marking
+ * the replay `synthetic` makes the Feishu sender skip the reply quote + typing
+ * reaction and post via im.message.create instead. Real-user leftovers keep
+ * `synthetic: false` so the reply still threads off the user's genuine
+ * message; the explicit assignment also overrides whatever `synthetic` value
+ * the spread would otherwise inherit from `originalMessage`.
+ */
+export function buildLeftoverReplayMessage(
+  originalMessage: NormalizedChannelMessage,
+  entry: InterjectionEntry,
+): NormalizedChannelMessage {
+  return {
+    ...originalMessage,
+    eventId: `replay-${entry.messageId}`,
+    messageId: entry.messageId,
+    senderOpenId: entry.senderOpenId,
+    text: entry.text,
+    ...(entry.pendingAttachments?.length
+      ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
+      : {}),
+    // Drop the original quotedMessage — the leftover entry has its own
+    // quotedSummary that came from the interjection enqueue path. If the
+    // entry itself was quoted, we lose that ancestry on replay, which is
+    // acceptable (Phase 28 quote context is best-effort).
+    quotedMessage: undefined,
+    synthetic: entry.source === 'background-task',
+  }
+}
+
+/**
  * Generic, channel-agnostic message runner. Holds the per-session serial
  * lock, wires a message through resetSessionContext() + query({ role,
  * invocation }), persists the transcript, and delegates the reply back to
@@ -1130,21 +1166,7 @@ export class ChannelRunner {
     leftover: InterjectionEntry[],
   ): Promise<void> {
     for (const entry of leftover) {
-      const synthetic: NormalizedChannelMessage = {
-        ...originalMessage,
-        eventId: `replay-${entry.messageId}`,
-        messageId: entry.messageId,
-        senderOpenId: entry.senderOpenId,
-        text: entry.text,
-        ...(entry.pendingAttachments?.length
-          ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
-          : {}),
-        // Drop the original quotedMessage — the leftover entry has its own
-        // quotedSummary that came from the interjection enqueue path. If
-        // the entry itself was quoted, we'll lose that ancestry on replay,
-        // which is acceptable (Phase 28 quote context is best-effort).
-        quotedMessage: undefined,
-      }
+      const synthetic = buildLeftoverReplayMessage(originalMessage, entry)
       try {
         await this.handleMessage(synthetic)
       } catch (error) {

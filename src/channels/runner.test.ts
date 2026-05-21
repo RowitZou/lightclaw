@@ -17,9 +17,11 @@ import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import type { Runtime } from '../runtime/types.js'
 import { channelInterjectionQueue } from './feishu/interjection-queue.js'
+import type { InterjectionEntry } from './feishu/interjection-queue.js'
 
 import {
   applyAttachmentMaterialization,
+  buildLeftoverReplayMessage,
   ChannelRunner,
   formatChannelUserText,
   renderQuotedMessageBlock,
@@ -498,6 +500,60 @@ describe('ChannelRunner mention gate', () => {
       0,
       'synthetic must short-circuit before the mention gate is consulted',
     )
+  })
+})
+
+describe('buildLeftoverReplayMessage synthetic-flag handling', () => {
+  // Regression: a bg-result leftover interjection replayed through
+  // handleMessage without `synthetic: true` carried its fake
+  // `bg-<dispatchId>-<emittedAt>` messageId into im.message.reply /
+  // messageReaction.create, producing 400 (code 99992354) on every fire.
+  it('marks a bg-result leftover replay synthetic so its fake messageId never reaches reply/reactions', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'original turn' })
+    const entry: InterjectionEntry = {
+      messageId: 'bg-zouyicheng-072b0023-1779274961191',
+      senderOpenId: 'ou_alice',
+      text: '<background-task-result>...</background-task-result>',
+      arrivedAt: 1779274961191,
+      source: 'background-task',
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.synthetic, true)
+    assert.equal(replay.messageId, entry.messageId)
+    assert.equal(replay.text, entry.text)
+    assert.equal(replay.eventId, `replay-${entry.messageId}`)
+  })
+
+  it('keeps a real-user leftover replay non-synthetic so the reply still threads off the user message', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'original turn' })
+    const entry: InterjectionEntry = {
+      messageId: 'om_realuser123',
+      senderOpenId: 'ou_bob',
+      text: 'a follow-up the user typed mid-flight',
+      arrivedAt: 1779274961191,
+      source: 'user',
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.synthetic, false)
+    assert.equal(replay.messageId, 'om_realuser123')
+    assert.equal(replay.senderOpenId, 'ou_bob')
+  })
+
+  it('overrides an inherited synthetic flag: a real-user leftover off a synthetic opener stays non-synthetic', () => {
+    const original: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'synthetic opener' }),
+      synthetic: true,
+    }
+    // No `source` field — a plain bare-chat interjection. Must resolve to
+    // non-synthetic even though the opener it spreads from was synthetic.
+    const entry: InterjectionEntry = {
+      messageId: 'om_realuser456',
+      senderOpenId: 'ou_alice',
+      text: 'real user words',
+      arrivedAt: 1779274961191,
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.synthetic, false)
   })
 })
 
