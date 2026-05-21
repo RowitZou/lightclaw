@@ -558,20 +558,20 @@ describe('buildLeftoverReplayMessage synthetic-flag handling', () => {
 })
 
 describe('ChannelRunner in-flight slash routing', () => {
-  // Smoke-cover the regression behind the 2026-05-08 dogfood incident
-  // (group session feishu:group:oc_4e92...:ou_7f0fb...): with a session
-  // marked in-flight, write-style slashes ("/mode auto", "/rules allow X",
-  // ...) were swept into the interjection queue, packed into the next
-  // <user-interjection> block, and the LLM received "/mode auto" as natural
-  // language — dispatchChannelSlash never ran. The interjection-guard now
-  // checks isLikelySlashCommand BEFORE consulting the queue, so any text
-  // starting with "/" routes to the in-lock dispatchChannelSlash path.
-  it('does not push a write slash into the interjection queue while in-flight', async () => {
+  // A write slash ("/mode auto", "/rules allow X", ...) that lands while the
+  // session's main turn is in flight must NOT be swept into the interjection
+  // queue (the LLM would read "/mode auto" as natural language and
+  // dispatchChannelSlash would never run). It is routed to the dedicated
+  // pending-slash queue instead, which the in-flight turn drains and applies
+  // at its next tool-call boundary (query.ts slashDrain). The routing returns
+  // BEFORE acquiring the session lock, so the slash never stacks behind the
+  // very turn it is meant to adjust.
+  it('queues a write slash into the pending-slash queue while in-flight', async () => {
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')
 
     const { channelInterjectionQueue } = await import('./feishu/interjection-queue.js')
-    const { channelSessionLock } = await import('./session-lock.js')
+    const { channelPendingSlashQueue } = await import('./feishu/pending-slash-queue.js')
     const strategy = installFakeStrategy('feishu')
     const runner = new ChannelRunner(strategy)
     // Stub resolveSessionId so handleMessage's mainSessionId matches the
@@ -579,48 +579,38 @@ describe('ChannelRunner in-flight slash routing', () => {
     const mainSessionId = 'feishu-alice-main'
     strategy.resolveSessionId = () => mainSessionId
 
-    // Externally mark the session as in-flight AND hold its lock so the
-    // turn never makes progress past `runExclusive` — handleMessage routes
-    // by the synchronous interjection-guard check before any await, so this
-    // is enough to prove the routing decision without standing up a full
-    // LLM/runtime stack.
+    // Mark the session in-flight. The write slash is now routed to the
+    // pending-slash queue and returns before reaching runExclusive, so no
+    // held lock is needed to observe the routing decision.
     channelInterjectionQueue.markInFlight(mainSessionId)
-    let releaseHold: (() => void) | undefined
-    const heldLock = channelSessionLock.runExclusive(
-      mainSessionId,
-      () => new Promise<void>(resolve => {
-        releaseHold = resolve
-      }),
-    )
 
     const slashMessage = makeFakeFeishuMessage({
       sender: 'ou_alice',
       text: '/mode auto',
       chatId: mainSessionId,
     })
-    // handleMessage will await runExclusive forever (the held lock); fire
-    // and forget, then probe the queue state on the next microtask. The
-    // synchronous interjection-guard runs before any await, so the decision
-    // is already locked in by the time we yield.
-    void runner.handleMessage(slashMessage)
-    await delay(20)
+    try {
+      await runner.handleMessage(slashMessage)
 
-    assert.equal(
-      channelInterjectionQueue.size(mainSessionId),
-      0,
-      'write slash must not be pushed into the interjection queue',
-    )
-    assert.equal(
-      strategy.notices.find(n => n.messageId === slashMessage.messageId),
-      undefined,
-      'no interjection.acked notice should be produced for a slash',
-    )
-
-    // Cleanup: release the lock and the in-flight marker so the suspended
-    // handleMessage can unwind without leaking into the next test.
-    channelInterjectionQueue.unmarkInFlight(mainSessionId)
-    releaseHold?.()
-    await heldLock.catch(() => {})
+      assert.equal(
+        channelInterjectionQueue.size(mainSessionId),
+        0,
+        'write slash must not be pushed into the interjection queue',
+      )
+      assert.equal(
+        channelPendingSlashQueue.size(mainSessionId),
+        1,
+        'write slash must be queued in the pending-slash queue',
+      )
+      assert.ok(
+        strategy.notices.find(n => n.messageId === slashMessage.messageId),
+        'the user should get a queued-ack notice for the slash',
+      )
+    } finally {
+      // Cleanup so the in-flight marker / queue entry do not leak.
+      channelInterjectionQueue.unmarkInFlight(mainSessionId)
+      channelPendingSlashQueue.drain(mainSessionId)
+    }
   })
 
   it('still queues bare chat as an interjection while in-flight', async () => {

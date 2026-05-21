@@ -192,7 +192,10 @@ export async function query(params: QueryParams): Promise<{
   const config = params.config ?? getConfig()
   const invocation = params.invocation ?? emptyInvocationContext()
   const rolePolicy = resolveRolePolicy(params.role)
-  const roleModel = resolveRoleModel(params.role, config)
+  // Re-resolved at the top of every turn (see the loop below) so a mid-turn
+  // `/model` — applied by slashDrain at a tool boundary, which mutates
+  // config.defaultModel — takes effect for the rest of this query.
+  let roleModel = resolveRoleModel(params.role, config)
   const currentSessionContext = getCurrentSessionContext()
   if (currentSessionContext) {
     currentSessionContext.currentRole = invocation.currentRoleOverride ?? params.role
@@ -397,6 +400,10 @@ export async function query(params: QueryParams): Promise<{
   for (let turn = 0; turn < maxTurns; turn += 1) {
     // Bail before starting a new turn if /stop aborted between turns.
     throwIfAborted(signal)
+    // Pick up a mid-turn `/model` switch: slashDrain at the previous tool
+    // boundary mutated config.defaultModel, so this turn streams under the
+    // new model. No-op when nothing changed.
+    roleModel = resolveRoleModel(params.role, config)
     let stopEvent: StopEvent | undefined
     turnCatalog = {
       tools: params.tools,
@@ -557,6 +564,10 @@ export async function query(params: QueryParams): Promise<{
     }
 
     if (toolUses.length === 0) {
+      // A write slash may have arrived during this final no-tool turn.
+      // Apply it before the query returns so it does not have to wait for
+      // the runner's post-query leftover-replay path.
+      await invocation.slashDrain?.()
       // Phase 27 late-interjection rescue: if the user sent an interjection
       // *during* the LLM turn that just produced a final answer (no
       // tool_use), the tool-boundary drain in the finally block below
@@ -678,6 +689,10 @@ export async function query(params: QueryParams): Promise<{
           })
         }
       }
+      // Apply write slashes (/mode, /model, /rules allow, ...) queued
+      // mid-turn before draining interjections, so a mode / model switch is
+      // already in effect for the turn the drained interjections start.
+      await invocation.slashDrain?.()
       const interjections = (await invocation.interjectionDrain?.()) ?? []
       const content: UserContentBlock[] = [...toolResults]
       if (interjections.length > 0) {

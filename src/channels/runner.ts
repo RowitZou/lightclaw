@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
-import { getConfig } from '../config.js'
+import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
 import { workspaceFor } from '../identity/paths.js'
@@ -68,7 +68,7 @@ import {
   type ChannelFileSendOutput,
 } from '../session-context.js'
 import { getAllTools, getEnabledTools } from '../tools.js'
-import type { SessionMeta, UserContentBlock } from '../types.js'
+import type { Message, SessionMeta, UserContentBlock } from '../types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
@@ -76,6 +76,7 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
+import { channelPendingSlashQueue } from './feishu/pending-slash-queue.js'
 import { buildInterjectionBlock } from './feishu/interjection-prompt.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
 import { incrementFailureCounter, writeCacheEntry } from '../provider/capability-cache.js'
@@ -455,6 +456,26 @@ export class ChannelRunner {
         `${this.strategy.channelId}: interjection queued for session ${mainSessionId} (size=${channelInterjectionQueue.size(mainSessionId)})\n`,
       )
       await this.sendNotice(message, 'info', t('channel.interjection.acked'), 'plain_text')
+      return
+    }
+    // Write slashes (/mode, /model, /rules allow, /auth import, ...) that
+    // arrive while this sessionId's turn is already in flight are queued,
+    // not stacked on the lock. The in-flight turn drains and applies them at
+    // its next tool-call boundary (query.ts slashDrain), so a mid-turn
+    // `/mode auto` takes effect for the rest of the turn instead of waiting
+    // for the whole turn to finish. /stop and read-only slashes already
+    // short-circuited via parseFastPathSlash above, so this branch is
+    // reached only by write / unknown slashes. When the session is idle they
+    // fall through unchanged to the in-lock dispatchChannelSlash path below.
+    if (
+      looksLikeSlash &&
+      channelInterjectionQueue.hasInflightFor(mainSessionId)
+    ) {
+      channelPendingSlashQueue.push(mainSessionId, message)
+      process.stderr.write(
+        `${this.strategy.channelId}: slash queued for in-flight session ${mainSessionId} (size=${channelPendingSlashQueue.size(mainSessionId)})\n`,
+      )
+      await this.sendNotice(message, 'info', t('channel.slash.queued'), 'plain_text')
       return
     }
     // Phase 27: mark in-flight BEFORE entering the lock so any concurrent
@@ -857,6 +878,23 @@ export class ChannelRunner {
                   }
                   return materialized
                 },
+                // Apply write slashes queued while this turn was in flight.
+                // Invoked from query.ts at each tool-call boundary, inside
+                // this turn's SessionContext scope, so `/mode` / `/model`
+                // mutate the live context and take effect for the turn's
+                // remaining tool calls.
+                slashDrain: async () => {
+                  const pending = channelPendingSlashQueue.drain(mainSessionId)
+                  for (const slashMessage of pending) {
+                    await this.dispatchInFlightSlash(slashMessage, {
+                      config: appConfig,
+                      sessionId,
+                      createdAt: meta?.createdAt ?? Date.now(),
+                      messages,
+                      userId,
+                    })
+                  }
+                },
               }),
               messages,
               tools: filterToolsByRoleVisibility(
@@ -1145,6 +1183,26 @@ export class ChannelRunner {
           })
         }
       }
+      // Symmetric leftover handling for write slashes: anything queued after
+      // the query's last tool boundary (a slash that landed during the final
+      // no-tool turn, or during sendReply / typing / background drain) is
+      // replayed as an ordinary inbound. The session is idle now
+      // (unmarkInFlight ran above), so each replay dispatches immediately
+      // through the in-lock dispatchChannelSlash path.
+      {
+        const leftoverSlashes = channelPendingSlashQueue.drain(mainSessionId)
+        if (leftoverSlashes.length > 0) {
+          process.stderr.write(
+            `${this.strategy.channelId}: replaying ${leftoverSlashes.length} post-query slash(es) for ${mainSessionId}\n`,
+          )
+          this.replayLeftoverSlashes(leftoverSlashes).catch(error => {
+            const detail = error instanceof Error ? error.message : String(error)
+            process.stderr.write(
+              `${this.strategy.channelId}: post-query slash replay failed for ${mainSessionId}: ${detail}\n`,
+            )
+          })
+        }
+      }
     }
   }
 
@@ -1173,6 +1231,85 @@ export class ChannelRunner {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
           `${this.strategy.channelId}: replay handleMessage failed for ${entry.messageId}: ${detail}\n`,
+        )
+      }
+    }
+  }
+
+  /**
+   * Dispatch one write slash that was queued while this session's turn was in
+   * flight, then post its output. Invoked from query.ts's slashDrain at a
+   * tool-call boundary, so it runs inside the turn's SessionContext scope —
+   * `/mode` / `/model` mutate the live context and config and take effect for
+   * the turn's remaining tool calls. Best-effort: any failure is logged and
+   * never propagated, so a slash error cannot mask the turn's own outcome.
+   */
+  private async dispatchInFlightSlash(
+    slashMessage: NormalizedChannelMessage,
+    ctx: {
+      config: LightClawConfig
+      sessionId: string
+      createdAt: number
+      messages: Message[]
+      userId: string
+    },
+  ): Promise<void> {
+    try {
+      const slash = await dispatchChannelSlash(slashMessage.text, {
+        config: ctx.config,
+        sessionId: ctx.sessionId,
+        createdAt: ctx.createdAt,
+        messages: ctx.messages,
+        userId: ctx.userId,
+        isAdmin: (await isAdmin(ctx.userId)) === true,
+        // No write slash handler reads the active tool catalog; an empty
+        // list keeps the ReplContext shape valid without rebuilding it.
+        getActiveTools: () => [],
+        setActiveTools() {},
+        persistMeta: count => persistMeta(Date.now(), count),
+      })
+      if (!slash.handled) {
+        process.stderr.write(
+          `${this.strategy.channelId}: in-flight slash not handled: ${slashMessage.text.slice(0, 60)}\n`,
+        )
+        return
+      }
+      const slashText = slash.output.trim() || 'ok'
+      if (slash.bodyFormat === 'lark_md') {
+        await this.sendReply(slashMessage, slashText)
+      } else {
+        await this.sendNotice(slashMessage, 'info', slashText, 'plain_text')
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: in-flight slash dispatch failed for ${slashMessage.messageId}: ${detail}\n`,
+      )
+    }
+  }
+
+  /**
+   * Re-enter handleMessage for each write slash left in the pending-slash
+   * queue after the in-flight turn ended. The session is idle by now, so each
+   * slash takes the normal in-lock dispatchChannelSlash path. The original
+   * slash message is reused (real messageId / sender) so the output notice
+   * still threads off the user's command; only `eventId` is freshened to
+   * mark the replay. Best-effort: errors are logged, never thrown back to the
+   * original turn's finally chain.
+   */
+  private async replayLeftoverSlashes(
+    leftover: NormalizedChannelMessage[],
+  ): Promise<void> {
+    for (const slashMessage of leftover) {
+      try {
+        await this.handleMessage({
+          ...slashMessage,
+          eventId: `replay-${slashMessage.eventId}`,
+        })
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `${this.strategy.channelId}: replay slash handleMessage failed for ${slashMessage.messageId}: ${detail}\n`,
         )
       }
     }

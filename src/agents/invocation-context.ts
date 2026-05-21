@@ -38,6 +38,15 @@ export type InvocationContext = {
   onCompactError?(message: string): void
   channelContext?: string
   interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
+  /**
+   * Drain and apply write-slash commands (`/mode`, `/model`, `/rules allow`,
+   * ...) that arrived while this turn was in flight. query.ts invokes it at
+   * every tool-call boundary so a mid-turn slash takes effect for the turn's
+   * remaining tool calls instead of waiting for the whole turn to finish.
+   * The channel runner's implementation dispatches each queued slash and
+   * posts its output as a channel notice; it never throws.
+   */
+  slashDrain?: () => Promise<void> | void
   interjectionRenderer?: (
     entries: InterjectionEntry[],
     context: {
