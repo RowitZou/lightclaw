@@ -28,7 +28,7 @@ import {
   loadIdentityRules,
   removeIdentityRule,
 } from '../permission/storage.js'
-import type { PermissionMode, PermissionRule } from '../permission/types.js'
+import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
@@ -1006,30 +1006,6 @@ async function userRemove(args: string[]): Promise<string> {
     response += `${t('user.remove.cleanupDocker', { container: cleanup.dockerContainer })}\n`
   }
   return response
-}
-
-function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMode): boolean {
-  return modeRank(mode) <= modeRank(ceiling)
-}
-
-function modeRank(mode: PermissionMode): number {
-  // Rank reflects actual looseness from permission/policy.ts:
-  //   plan              — only safe (read-only) tools allowed   → strictest
-  //   default           — safe runs free, write/execute ASK
-  //   acceptEdits       — safe + write run free, execute ASK
-  //   bypassPermissions — everything runs                       → loosest
-  // Ceiling=default therefore allows {plan, default} so a user who wants
-  // read-only mode can opt into plan without an admin bumping the ceiling.
-  switch (mode) {
-    case 'plan':
-      return 0
-    case 'default':
-      return 1
-    case 'acceptEdits':
-      return 2
-    case 'bypassPermissions':
-      return 3
-  }
 }
 
 function firstLine(text: string): string {

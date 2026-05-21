@@ -7,6 +7,7 @@ import {
   readJsonObjectOrEmpty,
 } from './config-io.js'
 import {
+  isModeWithinCeiling,
   parsePermissionModeInput,
   permissionModeToAlias,
   type PermissionMode,
@@ -69,15 +70,13 @@ export function clampPermissionModeToCeiling(): boolean {
     return false
   }
   const config = readJsonObjectOrEmpty(configPath)
-  const mode = parsePermissionModeValue(
-    process.env.LIGHTCLAW_PERMISSION_MODE ?? config.permissionMode,
-    'acceptEdits',
-  )
-  const ceiling = parsePermissionModeValue(
-    process.env.LIGHTCLAW_PERMISSION_CEILING ?? config.permissionCeiling,
-    'acceptEdits',
-  )
-  if (permissionModeRank(mode) <= permissionModeRank(ceiling)) {
+  // Reconcile the config file only — env overrides (LIGHTCLAW_PERMISSION_MODE
+  // / _CEILING) are deliberately ignored. getConfig() applies env on top of
+  // the file, so clamping the file based on a transient env value would
+  // rewrite config.json on every boot without changing the effective mode.
+  const mode = parsePermissionModeValue(config.permissionMode, 'acceptEdits')
+  const ceiling = parsePermissionModeValue(config.permissionCeiling, 'acceptEdits')
+  if (isModeWithinCeiling(mode, ceiling)) {
     return false
   }
 
@@ -93,17 +92,4 @@ function parsePermissionModeValue(value: unknown, fallback: PermissionMode): Per
   return typeof value === 'string'
     ? parsePermissionModeInput(value) ?? fallback
     : fallback
-}
-
-function permissionModeRank(mode: PermissionMode): number {
-  switch (mode) {
-    case 'plan':
-      return 0
-    case 'default':
-      return 1
-    case 'acceptEdits':
-      return 2
-    case 'bypassPermissions':
-      return 3
-  }
 }

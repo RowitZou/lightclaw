@@ -151,14 +151,18 @@ describe('clampPermissionModeToCeiling', () => {
     assert.equal(clampPermissionModeToCeiling(), false)
   })
 
-  it('uses env overrides when deciding whether to clamp', () => {
+  it('reconciles the config file only and ignores env overrides', () => {
     const home = path.join(tmpRoot, 'home')
     setLightclawHomeOverride(home)
+    // File is self-consistent (ask <= yolo). An env override above the file
+    // ceiling must NOT trigger a rewrite: getConfig() applies env on top of
+    // the file anyway, so clamping the file from env would churn config.json
+    // every boot for no effect.
     syncExternalConfig({ permissionMode: 'ask', permissionCeiling: 'yolo' }, home)
     process.env.LIGHTCLAW_PERMISSION_MODE = 'bypassPermissions'
     process.env.LIGHTCLAW_PERMISSION_CEILING = 'default'
-    assert.equal(clampPermissionModeToCeiling(), true)
-    assert.equal((readJson(path.join(home, 'config.json')) as Record<string, unknown>).permissionMode, 'default')
+    assert.equal(clampPermissionModeToCeiling(), false)
+    assert.equal((readJson(path.join(home, 'config.json')) as Record<string, unknown>).permissionMode, 'ask')
   })
 })
 

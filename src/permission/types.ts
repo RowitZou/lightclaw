@@ -39,6 +39,25 @@ export function permissionModeToAlias(mode: PermissionMode): string {
   return PERMISSION_MODE_TO_ALIAS[mode] ?? mode
 }
 
+// Rank reflects actual looseness from permission/policy.ts:
+//   plan              — only safe (read-only) tools allowed   → strictest
+//   default           — safe runs free, write/execute ASK
+//   acceptEdits       — safe + write run free, execute ASK
+//   bypassPermissions — everything runs                       → loosest
+// Ceiling=default therefore allows {plan, default} so a user who wants
+// read-only mode can opt into plan without an admin bumping the ceiling.
+const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {
+  plan: 0,
+  default: 1,
+  acceptEdits: 2,
+  bypassPermissions: 3,
+}
+
+/** True when `mode` is no looser than `ceiling`. */
+export function isModeWithinCeiling(mode: PermissionMode, ceiling: PermissionMode): boolean {
+  return PERMISSION_MODE_RANK[mode] <= PERMISSION_MODE_RANK[ceiling]
+}
+
 export type RiskLevel = 'safe' | 'write' | 'execute'
 export type PermissionBehavior = 'allow' | 'deny' | 'ask'
 export type PermissionRuleSource =
