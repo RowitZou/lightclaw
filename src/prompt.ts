@@ -1,6 +1,6 @@
 import { platform } from 'node:process'
 
-import { getAllAgents } from './agents/registry.js'
+import { getAllAgents, getMainRole } from './agents/registry.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
 import type { Role } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
@@ -55,15 +55,6 @@ export type SubagentPromptContext = {
   cwd?: string
   sessionId?: string
   environmentRoot: string
-}
-
-const MAIN_PROMPT_ROLE: Role = {
-  agentType: 'main',
-  name: 'main',
-  kind: 'orchestrator',
-  whenToUse: 'Primary user-facing orchestrator.',
-  systemPrompt: '',
-  tools: ['*'],
 }
 
 /**
@@ -234,7 +225,7 @@ export async function buildSystemPromptTemplate(
   environmentRoot: string,
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
-  return await buildPromptForRole(MAIN_PROMPT_ROLE, {
+  return await buildPromptForRole(getMainRole(), {
     tools,
     cwd,
     environmentRoot,
