@@ -2,12 +2,15 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { lightclawHome } from './paths.js'
+import type { FeishuChannelConfig } from './channels/types.js'
 
 // Pure file IO + JSON shape for `<lightclawHome>/config.json`. Lives apart
 // from `config.ts` so modules that only need to peek at the raw file
 // (e.g. `identity/paths.ts:workspaceRoot()`) can do so without pulling in
 // `config.ts`'s downstream type imports — keeps the import graph acyclic
 // even if someone later adds a non-type runtime import to `config.ts`.
+// Type-only imports from leaf type modules are erased at build time and keep
+// this module runtime-independent.
 
 export type ConfigFileEndpoint = {
   apiKey?: string
@@ -61,6 +64,16 @@ export type ConfigFilePathsSection = {
     user?: string
     project?: string
     local?: string
+  }
+}
+
+export type ConfigFileChannelsSection = {
+  feishu?: Partial<FeishuChannelConfig> & {
+    /** @deprecated Inbound media now lands in the runtime workspace inbox. */
+    mediaDir?: string
+    webhook?: Partial<FeishuChannelConfig['webhook']>
+    inboxAging?: Partial<FeishuChannelConfig['inboxAging']>
+    cloudSpace?: Partial<FeishuChannelConfig['cloudSpace']>
   }
 }
 
@@ -177,6 +190,10 @@ export type ConfigFileShape = {
    *  permission concept currently has only this one knob — `ruleFiles` /
    *  `auditLog` are paths and live under `paths.*`. */
   permissionMode?: string
+  /** Channel configuration now lives in config.json. The legacy standalone
+   *  `<home>/channels.json` file is still read as a deprecation fallback
+   *  when this section is absent. */
+  channels?: ConfigFileChannelsSection
   /** Master switch for the apiLogs JSONL persistence feature. Top-level
    *  flat because only the `enabled` knob remains here — log directory
    *  lives under `paths.apiLogs`. */

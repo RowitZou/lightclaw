@@ -3,17 +3,11 @@ import path from 'node:path'
 
 import { DEFAULT_INBOX_AGING_CONFIG } from './feishu/inbox-aging.js'
 import { parsePermissionMode } from '../config.js'
+import { loadConfigFile, type ConfigFileChannelsSection } from '../config-file.js'
 import { expandHomePath, lightclawHome } from '../paths.js'
 import type { ChannelsConfig, FeishuChannelConfig } from './types.js'
 
-type ChannelsFileShape = {
-  feishu?: Partial<FeishuChannelConfig> & {
-    mediaDir?: string
-    webhook?: Partial<FeishuChannelConfig['webhook']>
-    inboxAging?: Partial<FeishuChannelConfig['inboxAging']>
-    cloudSpace?: Partial<FeishuChannelConfig['cloudSpace']>
-  }
-}
+const warnedLegacyChannelsFiles = new Set<string>()
 
 export function loadChannelConfig(): ChannelsConfig {
   const fileConfig = loadChannelsFile()
@@ -22,16 +16,32 @@ export function loadChannelConfig(): ChannelsConfig {
   }
 }
 
-function loadChannelsFile(): ChannelsFileShape {
+function loadChannelsFile(): ConfigFileChannelsSection {
+  const configChannels = loadConfigFile().channels
+  if (configChannels !== undefined) {
+    return configChannels
+  }
+
   const filePath = path.join(lightclawHome(), 'channels.json')
   if (!existsSync(filePath)) {
     return {}
   }
 
-  return JSON.parse(readFileSync(filePath, 'utf8')) as ChannelsFileShape
+  warnLegacyChannelsFile(filePath)
+  return JSON.parse(readFileSync(filePath, 'utf8')) as ConfigFileChannelsSection
 }
 
-function mergeFeishuConfig(input: ChannelsFileShape['feishu']): FeishuChannelConfig {
+function warnLegacyChannelsFile(filePath: string): void {
+  if (warnedLegacyChannelsFiles.has(filePath)) {
+    return
+  }
+  warnedLegacyChannelsFiles.add(filePath)
+  process.stderr.write(
+    `Deprecated config: ${filePath} is still supported, but channels should now live under config.json "channels".\n`,
+  )
+}
+
+function mergeFeishuConfig(input: ConfigFileChannelsSection['feishu']): FeishuChannelConfig {
   if (input?.mediaDir) {
     process.stderr.write(
       'channels.feishu.mediaDir is deprecated and ignored; inbound media is written to the runtime workspace .lightclaw/inbox/ path.\n',
