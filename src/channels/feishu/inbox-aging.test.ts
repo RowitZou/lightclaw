@@ -117,6 +117,30 @@ describe('inbox aging', () => {
     assert.equal(existsSync(freshDownload), true)
   })
 
+  it('sweeps .lightclaw/exec/ on its own 6h TTL, independent of ttlDays', async () => {
+    // The exec scratch dir holds RlaunchRuntime output-capture / staging
+    // files. They are normally deleted inline; the sweep reaps crash
+    // stragglers on a 6h TTL — far shorter than the 7d artifact TTL, so a
+    // 7h-old exec file is removed even though it is well inside ttlDays=7.
+    const exec = path.join(homeRoot, 'grace', '.lightclaw', 'exec')
+    mkdirSync(exec, { recursive: true })
+    const staleExec = path.join(exec, 'grace-aaaa.out')
+    const freshExec = path.join(exec, 'grace-bbbb.out')
+    writeFileSync(staleExec, 'stragglerbytes')
+    writeFileSync(freshExec, 'live')
+    const sevenHoursAgo = Date.now() / 1000 - 7 * 3600
+    const oneHourAgo = Date.now() / 1000 - 3600
+    utimesSync(staleExec, sevenHoursAgo, sevenHoursAgo)
+    utimesSync(freshExec, oneHourAgo, oneHourAgo)
+
+    const result = await sweepInboxForUser({ canonicalUser: 'grace', ttlDays: 7 })
+
+    assert.equal(result.removedCount, 1)
+    assert.equal(result.bytesFreed, 'stragglerbytes'.length)
+    assert.equal(existsSync(staleExec), false)
+    assert.equal(existsSync(freshExec), true)
+  })
+
   it('handles missing downloads dir gracefully when inbox exists', async () => {
     const inbox = path.join(homeRoot, 'frank', '.lightclaw', 'inbox', 'oc_chat')
     mkdirSync(inbox, { recursive: true })

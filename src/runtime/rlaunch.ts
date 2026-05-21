@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import * as fsp from 'node:fs/promises'
 import path from 'node:path'
 
@@ -76,40 +77,18 @@ type ProcessState =
 const DEFAULT_TIMEOUT_MS = 30_000
 const START_TIMEOUT_MS = 180_000
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
-// Cap for stdin payloads inlined into the bash command body via base64. brainctl
-// exec's stdin pipe is unreliable (silent drops + stdout suppression — see
-// runBrainctlExec / wrapCommand for the full story), so RlaunchRuntime never
-// uses it; instead the stdin payload rides inside the same `bash -c` command
-// string the worker is already running.
-//
-// The bottleneck is NOT Linux's MAX_ARG_STRLEN (128 KB) but brainctl's own
-// websocket frame limit. Empirical probing on this cluster: scripts up to
-// ~56.6 KB total succeed; anything above returns `websocket: bad handshake`
-// at the host before reaching the worker. base64 expansion is 4/3, so the raw
-// payload ceiling is ~42 KB. We cap at 32 KB to leave headroom for env-var
-// exports, long container paths, and any cluster-side tightening of that
-// frame limit. fs.writeFile transparently chunks above this.
-const MAX_INLINE_STDIN_BYTES = 32 * 1024
-// fs.writeFile chunk size for payloads above MAX_INLINE_STDIN_BYTES. Each
-// chunk is one exec round-trip (truncate + N appends + stat). 32 KB chunks =
-// 32 round-trips per MB; multi-MB writes are slow but correct. If perf ever
-// matters here, write via the gpfs bind mount on the host instead.
-const WRITE_FILE_CHUNK_BYTES = 32 * 1024
-// fs.readFile single-hop stdout cap. Output is bounded by `runProcess`'s
-// `maxBufferBytes` (a self-imposed cap, NOT a brainctl ws-frame limit — the
-// frame limit only applies to the daemon→worker stdin direction). Picked at
-// 256 MB so a 100 MB raw file (the tool-side cap for PDFs / images via
-// `MAX_PDF_BYTES` / `MAX_IMAGE_BYTES`) → ~134 MB base64 stdout fits with
-// headroom; daemon RAM (typically 16 GB+ on cluster dev nodes) is plenty.
-//
-// History: prior versions chunked at 512 KB raw via `dd skip=K count=1 |
-// base64 -w 0` to stay under a 4 MB cap. The chunked path silently truncated
-// occasional hops (~8 KB lost on a 4.5 MB PDF in 2026-05-10 dogfood) and
-// surfaced as `byte mismatch (expected X, got Y)` from the post-loop stat
-// guard. Single-hop `base64 -w 0 path` eliminates the chunking protocol
-// entirely (no per-hop seek + concat = no chance to lose hops). For files
-// > 192 MB raw, the cap throws loud rather than silently truncate.
-const READ_FILE_BUFFER_BYTES = 256 * 1024 * 1024
+// brainctl's exec stdout no longer carries tool output: every non-privileged
+// (agent-dispatched) exec redirects the command's stdout/stderr to files on
+// the gpfs-backed workspace and brainctl stdout carries only the
+// `LIGHTCLAW_EXIT:<n>` marker. This cap bounds that marker channel — a few
+// hundred KB is far more than the marker needs but leaves room for stray
+// setpriv / bash diagnostics without `runProcess` killing the call.
+const BRAINCTL_MARKER_BUFFER_BYTES = 256 * 1024
+// Workspace-relative (container-path) scratch dir for exec output-capture
+// files and exec-relay file staging. Sits under the workspace mount so the
+// daemon can read it host-side via shared-cluster-fs; swept by inbox-aging at
+// a short (6h) TTL as a backstop for daemon-crash stragglers.
+const EXEC_SCRATCH_SUBDIR = '.lightclaw/exec'
 
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
@@ -541,89 +520,56 @@ export class RlaunchRuntime implements Runtime {
     kind: 'exec-relay',
     independentFromControl: false,
     reliability: 'depends-on-control-plane',
-    readFile: async pathname =>
-      readFileViaExec(input => this.exec(input), this.toContainerPath(pathname), pathname),
+    readFile: async pathname => {
+      // Stage the (possibly container-local) file onto the gpfs-backed
+      // scratch dir with `cp`, then read it host-side. The bytes never
+      // traverse brainctl's exec stdout — the channel carries only cp's
+      // exit code.
+      const containerPath = this.toContainerPath(pathname)
+      const id = this.execScratchId()
+      const stageContainer = path.posix.join(this.execScratchDirContainer(), `${id}.read`)
+      const stageHost = this.toHostPath(stageContainer)
+      if (!stageHost) {
+        throw new Error(`readFile ${pathname}: cannot resolve a host-visible scratch path`)
+      }
+      const result = await this.exec({
+        command: `cp -- ${shellQuote(containerPath)} ${shellQuote(stageContainer)}`,
+      })
+      if (result.exitCode !== 0) {
+        throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+      }
+      try {
+        return await fsp.readFile(stageHost)
+      } finally {
+        await fsp.rm(stageHost, { force: true }).catch(() => {})
+      }
+    },
     writeFile: async (pathname, content) => {
+      // Write the payload to the gpfs-backed scratch dir host-side (zero-copy,
+      // byte-exact), then `cp` it into place inside the worker. No base64, no
+      // inline cap, no chunking — the payload never rides the exec channel, so
+      // there is no byte-mismatch surface left to verify against.
       const containerPath = this.toContainerPath(pathname)
       const buffer = typeof content === 'string' ? Buffer.from(content) : content
-      const expectedBytes = buffer.length
-      // Single-hop fast path for payloads that fit under the inline cap.
-      // Stream content via ExecInput.stdin; runBrainctlExec folds it into the
-      // command body so brainctl's broken stdin pipe is never on the hot path.
-      // stat on the same shell hop catches partial / mismatched writes as a
-      // thrown error instead of silent success.
-      if (buffer.length <= WRITE_FILE_CHUNK_BYTES) {
-        const command =
-          `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
-          `cat > ${shellQuote(containerPath)} && ` +
-          `stat -c %s ${shellQuote(containerPath)}`
+      const id = this.execScratchId()
+      const stageContainer = path.posix.join(this.execScratchDirContainer(), `${id}.write`)
+      const stageHost = this.toHostPath(stageContainer)
+      if (!stageHost) {
+        throw new Error(`writeFile ${pathname}: cannot resolve a host-visible scratch path`)
+      }
+      await fsp.mkdir(path.dirname(stageHost), { recursive: true })
+      await fsp.writeFile(stageHost, buffer)
+      try {
         const result = await this.exec({
-          command,
-          stdin: buffer,
-          maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
+          command:
+            `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
+            `cp -- ${shellQuote(stageContainer)} ${shellQuote(containerPath)}`,
         })
         if (result.exitCode !== 0) {
           throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
         }
-        const actualBytes = Number(result.stdout.trim())
-        if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
-          throw new Error(
-            `writeFile ${pathname}: byte mismatch (expected ${expectedBytes}, ` +
-              `wrote ${result.stdout.trim() || 'unknown'})`,
-          )
-        }
-        return
-      }
-
-      // Chunked path for payloads above the per-arg ceiling. Each exec call
-      // streams one chunk (≤ WRITE_FILE_CHUNK_BYTES raw → comfortably under
-      // MAX_INLINE_STDIN_BYTES once base64-expanded). The first chunk truncates
-      // (`cat >`); subsequent chunks append (`cat >>`). A final stat verifies
-      // the assembled total size. We do NOT parallelize: appends must be
-      // ordered to keep the file byte-identical.
-      const firstChunk = buffer.subarray(0, WRITE_FILE_CHUNK_BYTES)
-      const truncate = await this.exec({
-        command:
-          `mkdir -p "$(dirname ${shellQuote(containerPath)})" && ` +
-          `cat > ${shellQuote(containerPath)}`,
-        stdin: firstChunk,
-        maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
-      })
-      if (truncate.exitCode !== 0) {
-        throw new Error(
-          `writeFile ${pathname} (chunk 0): ${truncate.stderr.trim() || truncate.stdout.trim()}`,
-        )
-      }
-
-      for (let offset = WRITE_FILE_CHUNK_BYTES; offset < buffer.length; offset += WRITE_FILE_CHUNK_BYTES) {
-        const end = Math.min(offset + WRITE_FILE_CHUNK_BYTES, buffer.length)
-        const chunk = buffer.subarray(offset, end)
-        const append = await this.exec({
-          command: `cat >> ${shellQuote(containerPath)}`,
-          stdin: chunk,
-          maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
-        })
-        if (append.exitCode !== 0) {
-          throw new Error(
-            `writeFile ${pathname} (chunk @${offset}): ${append.stderr.trim() || append.stdout.trim()}`,
-          )
-        }
-      }
-
-      const stat = await this.exec({
-        command: `stat -c %s ${shellQuote(containerPath)}`,
-      })
-      if (stat.exitCode !== 0) {
-        throw new Error(
-          `writeFile ${pathname} (final stat): ${stat.stderr.trim() || stat.stdout.trim()}`,
-        )
-      }
-      const actualBytes = Number(stat.stdout.trim())
-      if (!Number.isFinite(actualBytes) || actualBytes !== expectedBytes) {
-        throw new Error(
-          `writeFile ${pathname}: byte mismatch (expected ${expectedBytes}, ` +
-            `wrote ${stat.stdout.trim() || 'unknown'})`,
-        )
+      } finally {
+        await fsp.rm(stageHost, { force: true }).catch(() => {})
       }
     },
     stat: async (pathname): Promise<RuntimeStat> => {
@@ -954,41 +900,137 @@ export class RlaunchRuntime implements Runtime {
     if (!this.workerName) {
       throw new Error('RlaunchRuntime worker is not started.')
     }
-    // We never pass `-i` to brainctl. The cluster's brainctl exec has two
-    // related stdio bugs:
-    //   (1) stdin payloads are silently dropped before the worker-side child
-    //       reads them (~16% loss on writeFile, ~100% loss on small payloads
-    //       like helper JSON). The child sees EOF on stdin and either errors
-    //       (helper "invalid stdin json") or hangs.
-    //   (2) brainctl exec -i with no real stdin (or a closed pipe) also
-    //       suppresses the child's stdout, so even commands that don't read
-    //       stdin lose their output.
-    // Both are sidestepped by folding the stdin payload into the bash command
-    // body (wrapCommand) and never opening brainctl's stdin pipe. stdout then
-    // streams back reliably and stdin reaches the child via an in-shell pipe.
-    const wrapped = this.wrapCommand(input)
-    return runProcess('brainctl', [
+    // brainctl exec is a control channel only. Its websocket exec stream
+    // silently drops bytes on large payloads in BOTH directions (the
+    // `9cafbdc` stdin incident: ~16% writeFile corruption; the 6 MB PDF
+    // stdout byte-mismatch dogfood bug). `ExecInput.stdin` is therefore
+    // unsupported — callers stage payloads via fs.writeFile — and tool
+    // command output is redirected to files on the gpfs-backed workspace
+    // rather than streamed back over brainctl stdout.
+    if (input.stdin !== undefined) {
+      throw new Error(
+        'RlaunchRuntime exec does not accept ExecInput.stdin; stage the ' +
+        'payload with fs.writeFile and read it from disk inside the command.',
+      )
+    }
+    // Privileged bootstrap execs (chown / helper staging) keep brainctl's own
+    // stdout: they run as root, so capture files written under the workspace
+    // would be root-owned and unreadable by the non-root daemon, and their
+    // output is small / log-only anyway.
+    if (input.privileged === true) {
+      return runProcess('brainctl', this.brainctlExecArgs(this.wrapCommand(input)), {
+        abortSignal: input.abortSignal,
+        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+        limitMessage: 'rlaunch worker exec terminated',
+      })
+    }
+    // Tool execs: the command's stdout / stderr land in per-call files on the
+    // gpfs-backed workspace; brainctl stdout carries only `LIGHTCLAW_EXIT:<n>`.
+    const id = this.execScratchId()
+    const scratchDir = this.execScratchDirContainer()
+    const outFile = path.posix.join(scratchDir, `${id}.out`)
+    const errFile = path.posix.join(scratchDir, `${id}.err`)
+    const brainctlResult = await runProcess(
+      'brainctl',
+      this.brainctlExecArgs(this.wrapCommand(input, { outFile, errFile })),
+      {
+        abortSignal: input.abortSignal,
+        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxBufferBytes: BRAINCTL_MARKER_BUFFER_BYTES,
+        limitMessage: 'rlaunch worker exec terminated',
+      },
+    )
+    return this.collectExecOutput(
+      brainctlResult,
+      outFile,
+      errFile,
+      input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+    )
+  }
+
+  private brainctlExecArgs(wrapped: string): string[] {
+    return [
       '-n', this.cfg.namespace,
       'exec', `process/${this.workerName}`,
       '--', 'bash', '-c', wrapped,
-    ], {
-      abortSignal: input.abortSignal,
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
-      limitMessage: 'rlaunch worker exec terminated',
-    })
+    ]
   }
 
-  private wrapCommand(input: ExecInput): string {
+  /** Container-path scratch dir for exec output-capture files and exec-relay
+   *  file staging. Under the workspace mount so it is host-visible via
+   *  shared-cluster-fs; swept by inbox-aging at a 6h TTL. */
+  private execScratchDirContainer(): string {
+    return path.posix.join(this.workspaceRoot, EXEC_SCRATCH_SUBDIR)
+  }
+
+  /** Per-call unique basename for a scratch file. randomUUID alone guarantees
+   *  no collision between concurrent execs — the rlaunch worker (and its one
+   *  exec dir) is shared by every session and dispatched worker of a single
+   *  canonical user — and the canonical-user prefix is a human-readable
+   *  marker for any straggler the 6h sweep has to reap. */
+  private execScratchId(): string {
+    const marker = this.canonicalUser.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 48)
+    return `${marker}-${randomUUID()}`
+  }
+
+  /** Assemble an `ExecResult` from a capture-mode brainctl call: parse the
+   *  `LIGHTCLAW_EXIT:<n>` marker off brainctl stdout, read the command's
+   *  stdout / stderr from their gpfs-backed files host-side, then delete them.
+   *  When no marker is present the wrapped script never ran (a brainctl-level
+   *  failure); the raw brainctl result is returned so `exec()`'s
+   *  `isWorkerLostError` still sees the real control-plane envelope. */
+  private async collectExecOutput(
+    brainctlResult: ExecResult,
+    outFile: string,
+    errFile: string,
+    capBytes: number,
+  ): Promise<ExecResult> {
+    const exitCode = parseExitMarker(brainctlResult.stdout)
+    if (exitCode === null) {
+      return brainctlResult
+    }
+    const outHost = this.toHostPath(outFile)
+    const errHost = this.toHostPath(errFile)
+    const out = outHost
+      ? await readCappedFile(outHost, capBytes)
+      : { text: '', truncated: false }
+    const err = errHost
+      ? await readCappedFile(errHost, capBytes)
+      : { text: '', truncated: false }
+    if (outHost) await fsp.rm(outHost, { force: true }).catch(() => {})
+    if (errHost) await fsp.rm(errHost, { force: true }).catch(() => {})
+    let stderr = err.text
+    if (out.truncated) {
+      stderr += `${stderr ? '\n' : ''}[stdout truncated at ${capBytes} bytes]`
+    }
+    if (err.truncated) {
+      stderr += `${stderr ? '\n' : ''}[stderr truncated at ${capBytes} bytes]`
+    }
+    return { stdout: out.text, stderr, exitCode }
+  }
+
+  private wrapCommand(
+    input: ExecInput,
+    capture?: { outFile: string; errFile: string },
+  ): string {
     const cwd = input.cwd ? this.toContainerPath(input.cwd) : this.workspaceRoot
+    const privileged = input.privileged === true
     return composeExecScript({
       command: input.command,
       env: input.env,
       cwd,
-      stdin: input.stdin,
-      dropPrivileges: input.privileged
+      dropPrivileges: privileged
         ? undefined
         : { uid: this.cfg.daemonUid, gid: this.cfg.daemonGid },
+      capture: privileged || !capture
+        ? undefined
+        : {
+            outFile: capture.outFile,
+            errFile: capture.errFile,
+            execDir: this.execScratchDirContainer(),
+            maxBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+          },
     })
   }
 
@@ -1177,68 +1219,77 @@ export class RlaunchRuntime implements Runtime {
 /**
  * Build the bash script that goes to `brainctl exec ... -- bash -c <script>`.
  * Pure: no class state, no side effects. The dispatcher (RlaunchRuntime.exec)
- * resolves cwd against the mount table and hands us an environment-side path.
+ * resolves cwd against the mount table and hands us a container-side path.
  *
- * Output shape (no drop):
- *   <env exports> cd '<cwd>' && <body>
- * Output shape (drop to daemon uid):
- *   <env exports> cd '<cwd>' && setpriv --reuid=<uid> --regid=<gid>
- *     --clear-groups --inh-caps=-all -- bash -c <bash-quoted body>
+ * Two shapes:
  *
- * `<body>` is either the raw command (no stdin) or a base64 inline pipe:
- *   { printf %s '<b64>' | base64 -d; } | { <command>; }
+ * Privileged / no-capture (bootstrap: chown, helper staging) — output streams
+ * back on brainctl's own stdout:
+ *   <env> cd '<cwd>' && <command>
+ *   <env> cd '<cwd>' && setpriv --reuid=<u> --regid=<g> … -- bash -c '<command>'
  *
- * The brace group around <command> is load-bearing: bash precedence makes `|`
- * bind tighter than `&&`, so `{b64} | mkdir && cat` would attach stdin to
- * mkdir only and leave `cat` reading EOF. Wrapping the user command in
- * `{ ...; }` makes the entire chain inherit the pipe.
+ * Capture (every agent-dispatched tool exec) — the command's stdout / stderr
+ * are redirected to files on the gpfs-backed workspace so the bytes never
+ * traverse brainctl's unreliable-large exec stdout; brainctl stdout carries
+ * only the `LIGHTCLAW_EXIT:<n>` marker:
+ *   <env> setpriv … -- bash -c '
+ *     mkdir -p <execDir> && cd <cwd> &&
+ *     { <command>; } 2> <errFile> | head -c <cap> > <outFile>
+ *     echo "LIGHTCLAW_EXIT:${PIPESTATUS[0]}"'
  *
- * When `dropPrivileges` is set, the body is re-quoted into a second
- * `bash -c` invocation that runs under `setpriv` — every agent-dispatched
- * tool call lands as uid `<daemonUid>`, so files it writes to the gpfs-
- * backed workspace are daemon-owned and the daemon's host-side DataPlane
- * (shared-cluster-fs) can read/write them without EACCES. `env` exports
- * happen BEFORE the setpriv wrap so the inherited shell environment
- * crosses the boundary; `cwd` is set BEFORE setpriv too (setpriv doesn't
- * have a `--chdir` flag on all builds) and the inner shell inherits it.
+ * `head -c <cap>` is a real pipe (not process substitution): when the cap is
+ * hit head closes the pipe, the command takes SIGPIPE and dies, so a runaway
+ * cannot fill the gpfs mount; and because it is a pipeline stage, the wrapped
+ * bash does not exit until head has fully drained — no read-before-flush race.
+ * `${PIPESTATUS[0]}` is the command's own exit code (head's is `[1]`). stderr
+ * goes straight to a file (host-capped on read; a stderr-only runaway is
+ * bounded by the exec timeout). The capture path is always setpriv-wrapped so
+ * the files are daemon-owned and the daemon can read them back host-side;
+ * `env` exports cross the setpriv boundary, `cwd` is applied by the inner
+ * shell.
  */
 export function composeExecScript(input: {
   command: string
   env?: Record<string, string>
   cwd: string
-  stdin?: string | Buffer
   dropPrivileges?: { uid: number; gid: number }
+  capture?: { outFile: string; errFile: string; execDir: string; maxBytes: number }
 }): string {
   const envPart = input.env && Object.keys(input.env).length > 0
     ? `${Object.entries(input.env)
       .map(([key, value]) => `export ${key}=${shellQuote(value)};`)
       .join(' ')} `
     : ''
-  let body: string
-  if (input.stdin === undefined) {
-    body = input.command
-  } else {
-    const buffer = typeof input.stdin === 'string' ? Buffer.from(input.stdin) : input.stdin
-    if (buffer.length > MAX_INLINE_STDIN_BYTES) {
-      throw new Error(
-        `RlaunchRuntime exec: stdin payload ${buffer.length} B exceeds inline limit ` +
-          `(${MAX_INLINE_STDIN_BYTES} B). Stage via fs.writeFile + read from disk, ` +
-          'or split the call into smaller chunks.',
-      )
+
+  if (!input.capture) {
+    const cwdCd = `cd ${shellQuote(input.cwd)} && `
+    if (!input.dropPrivileges) {
+      return `${envPart}${cwdCd}${input.command}`
     }
-    const b64 = buffer.toString('base64')
-    body = `{ printf %s ${shellQuote(b64)} | base64 -d; } | { ${input.command}; }`
+    const { uid, gid } = input.dropPrivileges
+    return (
+      `${envPart}${cwdCd}setpriv ` +
+      `--reuid=${uid} --regid=${gid} --clear-groups --inh-caps=-all ` +
+      `-- bash -c ${shellQuote(input.command)}`
+    )
   }
-  const cwdCd = `cd ${shellQuote(input.cwd)} && `
+
   if (!input.dropPrivileges) {
-    return `${envPart}${cwdCd}${body}`
+    // A capture request without setpriv would write root-owned files the
+    // non-root daemon cannot read back. wrapCommand always pairs them.
+    throw new Error('composeExecScript: capture mode requires dropPrivileges')
   }
+  const { outFile, errFile, execDir, maxBytes } = input.capture
+  // The brace group around <command> keeps the redirections attached to the
+  // whole user command, not just its first segment.
+  const body =
+    `mkdir -p ${shellQuote(execDir)} && cd ${shellQuote(input.cwd)} && ` +
+    `{ ${input.command}; } 2> ${shellQuote(errFile)} ` +
+    `| head -c ${maxBytes} > ${shellQuote(outFile)}\n` +
+    `echo "LIGHTCLAW_EXIT:${'${PIPESTATUS[0]}'}"`
   const { uid, gid } = input.dropPrivileges
-  // Re-quote the body for the inner bash -c so quoting rules nest cleanly.
-  // --clear-groups drops supplementary groups; --inh-caps=-all drops every
-  // inheritable capability so child processes can't re-acquire privilege.
   return (
-    `${envPart}${cwdCd}setpriv ` +
+    `${envPart}setpriv ` +
     `--reuid=${uid} --regid=${gid} --clear-groups --inh-caps=-all ` +
     `-- bash -c ${shellQuote(body)}`
   )
@@ -1372,52 +1423,36 @@ function truncateForLog(s: string | undefined, cap = 200): string {
   return `${trimmed.slice(0, cap)}…(+${trimmed.length - cap}B)`
 }
 
-type ReadFileExec = (input: ExecInput) => Promise<ExecResult>
-
-/**
- * Chunked fs.readFile for backends behind a frame-bounded exec channel
- * (brainctl ws). First hop runs `stat -c %s` to learn size; small files come
- * back via single-hop `base64 -w 0`, anything above READ_FILE_CHUNK_BYTES is
- * pulled chunk by chunk via `dd skip=K count=1 | base64 -w 0`. Sequential so
- * the byte order is preserved; final size is verified before returning.
- *
- * Exported for unit testing — production callers go through fs.readFile which
- * resolves the runtime path via toContainerPath first.
- */
-export async function readFileViaExec(
-  exec: ReadFileExec,
-  containerPath: string,
-  pathname: string,
-): Promise<Buffer> {
-  // Single-hop: stat to know expected size, then `base64 -w 0 path` to dump
-  // the whole file. The trailing assertion catches any truncation / silent
-  // brainctl stdout drop without falling back to a chunked retry (since
-  // chunking is what introduced the byte-mismatch bug we replaced this for).
-  const sizeRes = await exec({
-    command: `stat -c %s ${shellQuote(containerPath)}`,
-  })
-  if (sizeRes.exitCode !== 0) {
-    throw new Error(`readFile ${pathname}: ${sizeRes.stderr.trim() || sizeRes.stdout.trim()}`)
+/** Extract the exit code from a `LIGHTCLAW_EXIT:<n>` line emitted by the
+ *  capture-mode exec wrapper. Returns null when no marker is present — the
+ *  signal that the wrapped script never ran (brainctl-level failure), so the
+ *  caller should fall back to the raw brainctl result. */
+export function parseExitMarker(stdout: string): number | null {
+  const matches = stdout.match(/^LIGHTCLAW_EXIT:(-?\d+)\r?$/gm)
+  if (!matches || matches.length === 0) {
+    return null
   }
-  const totalBytes = Number(sizeRes.stdout.trim())
-  if (!Number.isFinite(totalBytes) || totalBytes < 0) {
-    throw new Error(`readFile ${pathname}: invalid stat size '${sizeRes.stdout.trim()}'`)
-  }
-
-  const result = await exec({
-    command: `base64 -w 0 ${shellQuote(containerPath)}`,
-    maxBufferBytes: READ_FILE_BUFFER_BYTES,
-  })
-  if (result.exitCode !== 0) {
-    throw new Error(`readFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
-  }
-  const buffer = Buffer.from(result.stdout.trim(), 'base64')
-  if (buffer.length !== totalBytes) {
-    throw new Error(
-      `readFile ${pathname}: byte mismatch (expected ${totalBytes}, got ${buffer.length})`,
-    )
-  }
-  return buffer
+  const last = matches[matches.length - 1]
+  const n = Number(last.replace(/^LIGHTCLAW_EXIT:/, '').trim())
+  return Number.isFinite(n) ? n : null
 }
 
-export const READ_FILE_BUFFER_BYTES_FOR_TESTS = READ_FILE_BUFFER_BYTES
+/** Read a capture file host-side, decoding as UTF-8 and trimming to `cap`
+ *  bytes. A missing file decodes to empty: a command that produced no output
+ *  still creates its redirection target, but a script-level failure may
+ *  skip it. */
+async function readCappedFile(
+  hostPath: string,
+  cap: number,
+): Promise<{ text: string; truncated: boolean }> {
+  let buf: Buffer
+  try {
+    buf = await fsp.readFile(hostPath)
+  } catch {
+    return { text: '', truncated: false }
+  }
+  if (buf.length > cap) {
+    return { text: buf.subarray(0, cap).toString('utf8'), truncated: true }
+  }
+  return { text: buf.toString('utf8'), truncated: false }
+}

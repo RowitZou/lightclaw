@@ -6,6 +6,11 @@ import { workspaceFor } from '../../identity/paths.js'
 
 const DEFAULT_TTL_DAYS = 7
 const DEFAULT_INTERVAL_MINUTES = 60
+// `.lightclaw/exec/` holds RlaunchRuntime exec output-capture and file-staging
+// scratch files. Each exec deletes its own files inline; this sweep only reaps
+// stragglers left by a daemon crash mid-exec, so it runs on a much shorter TTL
+// (6h) than the inbox/downloads artifact cache (7d).
+const EXEC_SCRATCH_TTL_MS = 6 * 60 * 60 * 1000
 
 export type InboxAgingConfig = {
   enabled: boolean
@@ -63,6 +68,17 @@ export async function sweepInboxForUser(input: {
   removedCount += downloadsResult.removedCount
   bytesFreed += downloadsResult.bytesFreed
   if (downloadsResult.error && !firstError) firstError = downloadsResult.error
+
+  // RlaunchRuntime exec scratch — its own short 6h TTL, independent of the
+  // 7d artifact TTL above. Normal execs delete their files inline; this only
+  // catches daemon-crash-mid-exec stragglers.
+  const execResult = await sweepFlatDir(
+    path.join(workspaceRoot, '.lightclaw', 'exec'),
+    Date.now() - EXEC_SCRATCH_TTL_MS,
+  )
+  removedCount += execResult.removedCount
+  bytesFreed += execResult.bytesFreed
+  if (execResult.error && !firstError) firstError = execResult.error
 
   return {
     user: input.canonicalUser,

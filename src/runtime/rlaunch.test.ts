@@ -9,9 +9,8 @@ import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
   buildLaunchArgs,
   composeExecScript,
+  parseExitMarker,
   parseWorkerName,
-  readFileViaExec,
-  READ_FILE_BUFFER_BYTES_FOR_TESTS,
   RlaunchRuntime,
   setWorkerLostRetryDelayMsForTests,
   type RlaunchRuntimeConfig,
@@ -230,14 +229,21 @@ describe('buildLaunchArgs', () => {
   })
 })
 
+/** Decode the inner `bash -c '<body>'` body from a setpriv-wrapped script. */
+function unwrapBashC(script: string): string {
+  const marker = "-- bash -c '"
+  const start = script.indexOf(marker)
+  if (start < 0) throw new Error(`no inner bash -c in: ${script}`)
+  return script.slice(start + marker.length, -1).replace(/'\\''/g, "'")
+}
+
 describe('composeExecScript', () => {
-  it('emits a plain `cd && cmd` script when no stdin / env are supplied', () => {
-    const script = composeExecScript({ command: 'ls -la', cwd: '/workspace' })
-    assert.equal(script, "cd '/workspace' && ls -la")
-    // No -i flag is added by runBrainctlExec, but the script itself must also
-    // not contain anything that depends on brainctl's broken stdin pipe.
-    assert.equal(script.includes('base64 -d'), false)
-    assert.equal(script.includes('printf'), false)
+  it('emits a plain `cd && cmd` script in the privileged no-capture path', () => {
+    // Bootstrap callers (chownWorkspaceOnce, stageHelpersOnce) pass
+    // `privileged: true`, which becomes no dropPrivileges + no capture.
+    const script = composeExecScript({ command: 'apt-get update', cwd: '/workspace' })
+    assert.equal(script, "cd '/workspace' && apt-get update")
+    assert.equal(script.includes('setpriv'), false)
   })
 
   it('exports env vars before the cd, with shell-safe quoting', () => {
@@ -251,131 +257,110 @@ describe('composeExecScript', () => {
     assert.match(script, / cd '\/workspace' && python3 helper.py$/)
   })
 
-  it('folds stdin into the command body via base64 inline + brace group', () => {
-    const payload = '{"query":"hello","max_results":3}'
-    const script = composeExecScript({
-      command: 'python3 /tmp/consume-stdin.py',
-      cwd: '/workspace',
-      stdin: payload,
-    })
-    const expectedB64 = Buffer.from(payload).toString('base64')
-    assert.ok(
-      script.includes(`{ printf %s '${expectedB64}' | base64 -d; }`),
-      `script must inline base64 payload: ${script}`,
-    )
-    assert.ok(
-      script.includes('| { python3 /tmp/consume-stdin.py; }'),
-      'command must be wrapped in `{ ...; }` so the pipe feeds the whole chain',
-    )
-    assert.equal(script.startsWith("cd '/workspace' && "), true)
-  })
-
-  it('round-trips binary payloads through base64 (no escaping needed)', () => {
-    // bytes 0x00..0xff except newlines; covers null, quotes, dollar, backslash
-    const buf = Buffer.from(
-      Array.from({ length: 256 }, (_, i) => i).filter(b => b !== 0x0a),
-    )
-    const script = composeExecScript({
-      command: 'cat > /tmp/bin',
-      cwd: '/workspace',
-      stdin: buf,
-    })
-    const b64 = buf.toString('base64')
-    assert.ok(script.includes(`'${b64}'`), 'base64 must be single-quote enclosed')
-    // base64 alphabet [A-Za-z0-9+/=] never contains `'`, so quoting is trivial.
-    assert.equal(b64.includes("'"), false)
-  })
-
-  it('throws when stdin exceeds the 32 KB inline cap (brainctl ws-frame headroom)', () => {
-    // Cap is sized for brainctl's ~56 KB ws-frame ceiling — empirically the
-    // first failure on this cluster is around 43 KB raw / 57 KB b64. 32 KB
-    // raw → 43 KB b64 → ~44 KB script with wrap + room for env exports and
-    // long container paths. fs.writeFile chunks transparently above this;
-    // direct exec callers must refactor to write-then-read for big payloads.
-    const ok = Buffer.alloc(32 * 1024, 0x41)
-    assert.doesNotThrow(() => composeExecScript({ command: 'cat', cwd: '/workspace', stdin: ok }))
-    const oversized = Buffer.alloc(32 * 1024 + 1, 0x41)
-    assert.throws(
-      () => composeExecScript({ command: 'cat', cwd: '/workspace', stdin: oversized }),
-      /exceeds inline limit/,
-    )
-  })
-
-  it('treats empty stdin as an explicit empty pipe (caller asked for stdin)', () => {
-    const script = composeExecScript({ command: 'cat', cwd: '/workspace', stdin: '' })
-    // Empty payload still produces the pipeline; the helper sees EOF on first
-    // read, same as if we had passed nothing — keeping the path uniform avoids
-    // a surprise difference between `stdin: undefined` and `stdin: ''`.
-    assert.ok(script.includes('base64 -d'))
-    assert.ok(script.includes('| { cat; }'))
-  })
-
   it('drops the env exports section entirely when env is an empty object', () => {
     const script = composeExecScript({ command: 'ls', cwd: '/workspace', env: {} })
-    assert.equal(script.startsWith('export '), false)
     assert.equal(script, "cd '/workspace' && ls")
   })
 
-  it('preserves complex commands inside the brace group when stdin is present', () => {
-    // Mirrors fs.writeFile's command shape — the brace group must protect the
-    // chain so `cat` (not `mkdir`) receives the piped bytes.
-    const script = composeExecScript({
-      command: 'mkdir -p "$(dirname \'/tmp/x\')" && cat > \'/tmp/x\' && stat -c %s \'/tmp/x\'',
-      cwd: '/workspace',
-      stdin: 'payload',
-    })
-    assert.ok(
-      script.includes(
-        '| { mkdir -p "$(dirname \'/tmp/x\')" && cat > \'/tmp/x\' && stat -c %s \'/tmp/x\'; }',
-      ),
-      'whole && chain must be inside the brace group',
-    )
-  })
-
-  it('wraps the body in `setpriv --reuid=<uid> --regid=<gid> -- bash -c …` when dropPrivileges is set', () => {
+  it('wraps the body in setpriv when dropPrivileges is set without capture', () => {
     const script = composeExecScript({
       command: 'whoami',
       cwd: '/workspace',
       dropPrivileges: { uid: 10250, gid: 10250 },
     })
-    // env/cwd happen BEFORE setpriv (outer shell), then we re-enter bash via
-    // setpriv with the original body shell-quoted. Container PID 1 is root
-    // (rlaunch image USER directive), so the demote happens here at exec time.
-    assert.match(
+    assert.equal(
       script,
-      /^cd '\/workspace' && setpriv --reuid=10250 --regid=10250 --clear-groups --inh-caps=-all -- bash -c 'whoami'$/,
+      "cd '/workspace' && setpriv --reuid=10250 --regid=10250 --clear-groups --inh-caps=-all -- bash -c 'whoami'",
     )
   })
 
-  it('keeps body shell-safe when dropPrivileges + stdin are both used', () => {
-    // The base64 pipe + brace group has single quotes inside; the outer
-    // shellQuote must escape them so the inner `bash -c '...'` is valid.
+  it('routes command output through capture files and emits only the exit marker', () => {
     const script = composeExecScript({
-      command: "cat > '/workspace/x'",
+      command: 'ls -la',
       cwd: '/workspace',
-      stdin: 'payload',
-      dropPrivileges: { uid: 10250, gid: 10250 },
+      dropPrivileges: { uid: 1000, gid: 1000 },
+      capture: {
+        outFile: '/workspace/.lightclaw/exec/alice-x.out',
+        errFile: '/workspace/.lightclaw/exec/alice-x.err',
+        execDir: '/workspace/.lightclaw/exec',
+        maxBytes: 1048576,
+      },
     })
-    assert.ok(script.startsWith("cd '/workspace' && setpriv --reuid=10250 --regid=10250 "),
-      `must start with the setpriv prefix: ${script}`)
-    assert.ok(script.includes('--inh-caps=-all -- bash -c '),
-      'must drop inheritable caps and re-enter bash')
-    // Inner body decodes to the expected base64 pipeline.
-    const innerQuoted = script.slice(script.indexOf("-- bash -c '") + "-- bash -c '".length, -1)
-    const inner = innerQuoted.replace(/'\\''/g, "'")
-    assert.ok(inner.includes('base64 -d'),
-      `inner bash body should still contain the base64 stdin trick: ${inner}`)
-    assert.ok(inner.includes("| { cat > '/workspace/x'; }"),
-      'inner bash body must keep the brace group around the user command')
+    // Capture mode is always setpriv-wrapped so the files are daemon-owned.
+    assert.ok(
+      script.startsWith('setpriv --reuid=1000 --regid=1000 --clear-groups --inh-caps=-all -- bash -c '),
+      `must be setpriv-wrapped: ${script}`,
+    )
+    const inner = unwrapBashC(script)
+    assert.ok(inner.includes("mkdir -p '/workspace/.lightclaw/exec'"), inner)
+    assert.ok(inner.includes("cd '/workspace'"), inner)
+    // Command stdout/stderr are redirected to files; brainctl stdout sees none.
+    assert.ok(
+      inner.includes(
+        "{ ls -la; } 2> '/workspace/.lightclaw/exec/alice-x.err' " +
+        "| head -c 1048576 > '/workspace/.lightclaw/exec/alice-x.out'",
+      ),
+      inner,
+    )
+    // Only the exit marker rides brainctl's stdout.
+    assert.ok(inner.includes('echo "LIGHTCLAW_EXIT:${PIPESTATUS[0]}"'), inner)
+    assert.equal(inner.includes('base64'), false)
   })
 
-  it('omits setpriv when dropPrivileges is undefined (privileged path)', () => {
-    // Bootstrap callers (chownWorkspaceOnce, stageHelpersOnce) need root inside
-    // the container; they pass `privileged: true` which translates to no
-    // dropPrivileges on the composeExecScript input.
-    const script = composeExecScript({ command: 'apt-get update', cwd: '/workspace' })
-    assert.equal(script, "cd '/workspace' && apt-get update")
-    assert.equal(script.includes('setpriv'), false)
+  it('keeps a complex `&&` command intact inside the capture brace group', () => {
+    const script = composeExecScript({
+      command: "mkdir -p '/tmp/d' && cp -- '/tmp/a' '/tmp/b'",
+      cwd: '/workspace',
+      dropPrivileges: { uid: 1000, gid: 1000 },
+      capture: {
+        outFile: '/workspace/.lightclaw/exec/c.out',
+        errFile: '/workspace/.lightclaw/exec/c.err',
+        execDir: '/workspace/.lightclaw/exec',
+        maxBytes: 4096,
+      },
+    })
+    const inner = unwrapBashC(script)
+    assert.ok(
+      inner.includes("{ mkdir -p '/tmp/d' && cp -- '/tmp/a' '/tmp/b'; } 2> "),
+      `the whole && chain must sit inside the brace group: ${inner}`,
+    )
+  })
+
+  it('carries env exports across the setpriv boundary in capture mode', () => {
+    const script = composeExecScript({
+      command: 'env',
+      cwd: '/workspace',
+      env: { HTTP_PROXY: 'http://127.0.0.1:1080' },
+      dropPrivileges: { uid: 1000, gid: 1000 },
+      capture: {
+        outFile: '/workspace/.lightclaw/exec/e.out',
+        errFile: '/workspace/.lightclaw/exec/e.err',
+        execDir: '/workspace/.lightclaw/exec',
+        maxBytes: 4096,
+      },
+    })
+    // env exports are emitted before `setpriv` so the inherited environment
+    // crosses into the demoted shell.
+    assert.ok(
+      script.startsWith("export HTTP_PROXY='http://127.0.0.1:1080'; setpriv "),
+      script,
+    )
+  })
+
+  it('refuses capture mode without dropPrivileges (files must be daemon-owned)', () => {
+    assert.throws(
+      () => composeExecScript({
+        command: 'ls',
+        cwd: '/workspace',
+        capture: {
+          outFile: '/workspace/.lightclaw/exec/x.out',
+          errFile: '/workspace/.lightclaw/exec/x.err',
+          execDir: '/workspace/.lightclaw/exec',
+          maxBytes: 4096,
+        },
+      }),
+      /capture mode requires dropPrivileges/,
+    )
   })
 })
 
@@ -398,122 +383,27 @@ describe('translateRlaunchError', () => {
   })
 })
 
-describe('readFileViaExec (rlaunch single-hop readFile)', () => {
-  // Stub exec simulating `stat` and `base64 -w 0` against an in-memory
-  // payload Buffer. Captures every exec command for assertion. The earlier
-  // dd-chunked path is gone (see READ_FILE_BUFFER_BYTES rationale) — the
-  // stub no longer needs to handle dd at all.
-  function makeStubExec(payload: Buffer): {
-    exec: (input: ExecInput) => Promise<ExecResult>
-    commands: string[]
-  } {
-    const commands: string[] = []
-    const exec = async (input: ExecInput): Promise<ExecResult> => {
-      commands.push(input.command)
-      const cmd = input.command
-      if (cmd.startsWith('stat -c %s ')) {
-        return { stdout: `${payload.length}\n`, stderr: '', exitCode: 0 }
-      }
-      if (cmd.startsWith('base64 -w 0 ')) {
-        return { stdout: payload.toString('base64'), stderr: '', exitCode: 0 }
-      }
-      return { stdout: '', stderr: `unknown command in stub: ${cmd}`, exitCode: 1 }
-    }
-    return { exec, commands }
-  }
-
-  it('reads small files in two hops (stat + base64)', async () => {
-    const payload = Buffer.from('hello world', 'utf8')
-    const { exec, commands } = makeStubExec(payload)
-    const out = await readFileViaExec(exec, '/workspace/file.txt', '/workspace/file.txt')
-    assert.deepEqual(out, payload)
-    assert.equal(commands.length, 2)
-    assert.match(commands[0], /^stat -c %s /)
-    assert.match(commands[1], /^base64 -w 0 /)
-    // The dd-chunked protocol is intentionally retired; if it ever comes
-    // back via copy-paste, this assertion catches it.
-    assert.equal(commands.some(c => c.includes('dd if=')), false)
+describe('parseExitMarker', () => {
+  it('extracts the exit code from a LIGHTCLAW_EXIT marker line', () => {
+    assert.equal(parseExitMarker('LIGHTCLAW_EXIT:0\n'), 0)
+    assert.equal(parseExitMarker('LIGHTCLAW_EXIT:127\n'), 127)
+    assert.equal(parseExitMarker('LIGHTCLAW_EXIT:1'), 1)
   })
 
-  it('round-trips a 30 MB binary payload byte-for-byte in a single base64 hop', async () => {
-    const totalBytes = 30 * 1024 * 1024
-    const payload = Buffer.alloc(totalBytes)
-    // Pseudo-random fill that makes byte mismatches obvious. xorshift32 keeps
-    // the test fast vs. crypto.randomBytes on a 30 MB buffer.
-    let seed = 0x9e3779b9
-    for (let i = 0; i < totalBytes; i += 1) {
-      seed ^= seed << 13
-      seed ^= seed >>> 17
-      seed ^= seed << 5
-      payload[i] = seed & 0xff
-    }
-    const { exec, commands } = makeStubExec(payload)
-    const out = await readFileViaExec(exec, '/workspace/30mb.bin', '/workspace/30mb.bin')
-    assert.equal(out.length, totalBytes)
-    assert.equal(Buffer.compare(out, payload), 0)
-    // Always exactly 2 hops regardless of size: stat + base64.
-    assert.equal(commands.length, 2)
+  it('tolerates a trailing CR and surrounding output', () => {
+    assert.equal(parseExitMarker('some setpriv noise\nLIGHTCLAW_EXIT:42\r\n'), 42)
   })
 
-  it('passes the high stdout cap to the base64 hop so big files fit', async () => {
-    const payload = Buffer.from('x', 'utf8')
-    const captured: ExecInput[] = []
-    const exec = async (input: ExecInput): Promise<ExecResult> => {
-      captured.push(input)
-      if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: `${payload.length}\n`, stderr: '', exitCode: 0 }
-      }
-      return { stdout: payload.toString('base64'), stderr: '', exitCode: 0 }
-    }
-    await readFileViaExec(exec, '/workspace/x', '/workspace/x')
-    const base64Call = captured.find(c => c.command.startsWith('base64 -w 0 '))
-    assert.ok(base64Call, 'expected a base64 -w 0 hop')
-    assert.equal(base64Call.maxBufferBytes, READ_FILE_BUFFER_BYTES_FOR_TESTS)
-    // Sanity: cap is at least 256 MB so a typical 100 MB raw file's base64
-    // (~134 MB) fits with headroom.
-    assert.ok(READ_FILE_BUFFER_BYTES_FOR_TESTS >= 256 * 1024 * 1024)
+  it('returns null when no marker is present (brainctl-level failure)', () => {
+    // The wrapped script never reached its `echo` line — e.g. the worker was
+    // lost or setpriv is missing. Caller falls back to the raw brainctl result
+    // so isWorkerLostError still sees the real control-plane envelope.
+    assert.equal(parseExitMarker(''), null)
+    assert.equal(parseExitMarker('Error from server (NotFound): ...'), null)
   })
 
-  it('throws when stat reports a non-numeric size', async () => {
-    const exec = async (): Promise<ExecResult> => ({
-      stdout: 'not-a-number\n',
-      stderr: '',
-      exitCode: 0,
-    })
-    await assert.rejects(
-      readFileViaExec(exec, '/workspace/x', '/workspace/x'),
-      /invalid stat size/,
-    )
-  })
-
-  it('throws on byte mismatch when base64 stdout is truncated', async () => {
-    // Simulate the symptom that motivated this whole rewrite: stat says X,
-    // base64 returns < X bytes (silent stdout drop). The single-hop guard
-    // fires loudly instead of returning a corrupt buffer.
-    const truncatedBase64 = Buffer.alloc(100, 0xab).toString('base64')
-    const exec = async (input: ExecInput): Promise<ExecResult> => {
-      if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: '4480407\n', stderr: '', exitCode: 0 }
-      }
-      return { stdout: truncatedBase64, stderr: '', exitCode: 0 }
-    }
-    await assert.rejects(
-      readFileViaExec(exec, '/workspace/big.pdf', '/workspace/big.pdf'),
-      /byte mismatch \(expected 4480407, got 100\)/,
-    )
-  })
-
-  it('propagates exec failure on the base64 hop', async () => {
-    const exec = async (input: ExecInput): Promise<ExecResult> => {
-      if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: '512\n', stderr: '', exitCode: 0 }
-      }
-      return { stdout: '', stderr: 'no space left on device', exitCode: 1 }
-    }
-    await assert.rejects(
-      readFileViaExec(exec, '/workspace/y', '/workspace/y'),
-      /no space left on device/,
-    )
+  it('takes the last marker when more than one is present', () => {
+    assert.equal(parseExitMarker('LIGHTCLAW_EXIT:1\nLIGHTCLAW_EXIT:0\n'), 0)
   })
 })
 
@@ -578,56 +468,87 @@ describe('RlaunchRuntime three-plane data path', () => {
     assert.equal(execCalled, false)
   })
 
-  it('routes container-local absolute paths (/tmp, /etc, …) through exec-relay', async () => {
-    // Workspace gate dropped: paths outside the gpfs mount are container-
-    // local. shared-cluster-fs filters via PathPolicy.isShared, exec-relay
-    // accepts everything. Container isolation + permission system are the
-    // safety boundary, not a path-string guard.
+  it('reads a container-local file by staging it onto the gpfs scratch dir', async () => {
+    // /tmp is outside the workspace mount → exec-relay. The new path `cp`s the
+    // file onto the host-visible .lightclaw/exec scratch dir; the daemon then
+    // reads it host-side. No bytes cross brainctl's exec stdout.
+    const payload = Buffer.from('hello /tmp\n')
     const captured: string[] = []
     ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
       captured.push(input.command)
-      if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: '11\n', stderr: '', exitCode: 0 }
+      if (input.command.startsWith("stat -c '%s|%F|%Y' ")) {
+        return { stdout: `${payload.length}|regular file|0`, stderr: '', exitCode: 0 }
       }
-      if (input.command.startsWith('base64 -w 0 ')) {
-        return { stdout: Buffer.from('hello /tmp\n').toString('base64'), stderr: '', exitCode: 0 }
+      const cp = input.command.match(/^cp -- '(.+)' '(.+)'$/)
+      if (cp) {
+        assert.equal(cp[1], '/tmp/lightclaw-test.log', 'source path is the literal /tmp path')
+        const dstHost = runtime.paths.toHostPath(cp[2])
+        assert.ok(dstHost, `scratch path must be host-visible: ${cp[2]}`)
+        mkdirSync(path.dirname(dstHost), { recursive: true })
+        writeFileSync(dstHost, payload)
+        return { stdout: '', stderr: '', exitCode: 0 }
       }
       return { stdout: '', stderr: `unexpected: ${input.command}`, exitCode: 1 }
     }
 
     const got = await runtime.fs.readFile('/tmp/lightclaw-test.log')
     assert.equal(got.toString('utf8'), 'hello /tmp\n')
-    // Both hops landed at the literal `/tmp/...` container path — no rewrite.
-    assert.ok(captured[0].endsWith("'/tmp/lightclaw-test.log'"),
-      `stat hop should target /tmp directly: ${captured[0]}`)
-    assert.ok(captured[1].endsWith("'/tmp/lightclaw-test.log'"),
-      `base64 hop should target /tmp directly: ${captured[1]}`)
+    // The cp hop staged into the workspace .lightclaw/exec scratch dir.
+    assert.ok(
+      captured.some(c => c.includes("cp -- '/tmp/lightclaw-test.log' '/workspace/.lightclaw/exec/")),
+      captured.join(' ; '),
+    )
   })
 
-  it('folds `..` traversal via normalize and lets the resulting path through', async () => {
+  it('writes a container-local file by staging the payload host-side then cp', async () => {
+    // exec-relay writeFile writes the bytes to the gpfs scratch dir host-side
+    // (byte-exact), then `cp`s them into place inside the worker — the payload
+    // never rides the exec channel.
+    const payload = Buffer.from('written via stage\n')
+    let stagedContent: Buffer | null = null
+    ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
+      const cp = input.command.match(/cp -- '(.+)' '(.+)'$/)
+      if (cp) {
+        const srcHost = runtime.paths.toHostPath(cp[1])
+        assert.ok(srcHost, `stage path must be host-visible: ${cp[1]}`)
+        stagedContent = readFileSync(srcHost)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      return { stdout: '', stderr: `unexpected: ${input.command}`, exitCode: 1 }
+    }
+
+    await runtime.fs.writeFile('/tmp/out.txt', payload)
+    assert.ok(stagedContent, 'cp must have seen a staged file')
+    assert.equal(Buffer.compare(stagedContent, payload), 0)
+  })
+
+  it('folds `..` traversal via normalize before staging the read', async () => {
     // path.posix.normalize('/workspace/../etc/passwd') === '/etc/passwd'.
-    // After 18ff987's "trust runtime isolation" policy was extended to
-    // toContainerPath, the resulting absolute path is no longer string-
-    // guarded; the container reads its own /etc/passwd (image default
-    // contents), not the host's. Permission system / high-risk classifier
-    // still gate Edit/Write on sensitive paths separately.
+    // The resulting absolute path is not string-guarded; the container reads
+    // its own /etc/passwd (image default contents), not the host's.
+    const payload = Buffer.from('root')
     const captured: string[] = []
     ;(runtime as unknown as { exec: (input: ExecInput) => Promise<ExecResult> }).exec = async input => {
       captured.push(input.command)
-      if (input.command.startsWith('stat -c %s ')) {
-        return { stdout: '4\n', stderr: '', exitCode: 0 }
+      if (input.command.startsWith("stat -c '%s|%F|%Y' ")) {
+        return { stdout: '4|regular file|0', stderr: '', exitCode: 0 }
       }
-      if (input.command.startsWith('base64 -w 0 ')) {
-        return { stdout: Buffer.from('root').toString('base64'), stderr: '', exitCode: 0 }
+      const cp = input.command.match(/^cp -- '(.+)' '(.+)'$/)
+      if (cp) {
+        const dstHost = runtime.paths.toHostPath(cp[2])
+        mkdirSync(path.dirname(dstHost!), { recursive: true })
+        writeFileSync(dstHost!, payload)
+        return { stdout: '', stderr: '', exitCode: 0 }
       }
       return { stdout: '', stderr: 'unexpected', exitCode: 1 }
     }
 
     const got = await runtime.fs.readFile('/workspace/../etc/passwd')
     assert.equal(got.toString('utf8'), 'root')
-    // After normalize, the hop targets /etc/passwd (no `..` left in the path).
-    assert.ok(captured[0].includes("'/etc/passwd'"),
-      `traversal should be normalized away: ${captured[0]}`)
+    assert.ok(
+      captured.some(c => c.includes("cp -- '/etc/passwd' ")),
+      `traversal should normalize to /etc/passwd: ${captured.join(' ; ')}`,
+    )
   })
 
   it('rejects relative paths with a clear non-absolute error', async () => {
