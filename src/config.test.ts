@@ -35,6 +35,8 @@ const ENV_KEYS = [
   'LIGHTCLAW_DEFAULT_MODEL',
   'LIGHTCLAW_DEFERRED_LOADING',
   'LIGHTCLAW_DEFERRED_LOADING_THRESHOLD',
+  'LIGHTCLAW_PERMISSION_MODE',
+  'LIGHTCLAW_PERMISSION_CEILING',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -143,6 +145,26 @@ describe('config: endpoints + models registry', () => {
     process.env.LIGHTCLAW_DEFAULT_MODEL = 'sonnet'
     const cfg = getConfig()
     assert.equal(cfg.defaultModel, 'sonnet')
+  })
+
+  it('parses permission mode and ceiling aliases from config and env', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      permissionMode: 'read',
+      permissionCeiling: 'auto',
+    })
+    let cfg = getConfig()
+    assert.equal(cfg.permissionMode, 'plan')
+    assert.equal(cfg.permissionCeiling, 'acceptEdits')
+
+    process.env.LIGHTCLAW_PERMISSION_MODE = 'yolo'
+    process.env.LIGHTCLAW_PERMISSION_CEILING = 'ask'
+    cfg = getConfig()
+    assert.equal(cfg.permissionMode, 'bypassPermissions')
+    assert.equal(cfg.permissionCeiling, 'default')
   })
 
   it('rejects defaultModel not present in models', () => {

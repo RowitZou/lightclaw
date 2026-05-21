@@ -5,6 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import {
+  clampPermissionModeToCeiling,
   isHomeConfigPath,
   readExternalConfigFile,
   resolveStartupHome,
@@ -13,19 +14,29 @@ import {
 import { setLightclawHomeOverride } from './paths.js'
 
 let tmpRoot = ''
-const savedHome = process.env.LIGHTCLAW_HOME
+const ENV_KEYS = [
+  'LIGHTCLAW_HOME',
+  'LIGHTCLAW_PERMISSION_MODE',
+  'LIGHTCLAW_PERMISSION_CEILING',
+] as const
+const savedEnv: Record<string, string | undefined> = {}
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-config-bootstrap-'))
-  delete process.env.LIGHTCLAW_HOME
+  for (const key of ENV_KEYS) {
+    savedEnv[key] = process.env[key]
+    delete process.env[key]
+  }
 })
 
 afterEach(() => {
   setLightclawHomeOverride(undefined)
-  if (savedHome === undefined) {
-    delete process.env.LIGHTCLAW_HOME
-  } else {
-    process.env.LIGHTCLAW_HOME = savedHome
+  for (const key of ENV_KEYS) {
+    if (savedEnv[key] === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = savedEnv[key]
+    }
   }
   rmSync(tmpRoot, { recursive: true, force: true })
 })
@@ -115,7 +126,58 @@ describe('isHomeConfigPath', () => {
   })
 })
 
+describe('clampPermissionModeToCeiling', () => {
+  it('rewrites home config when permissionMode exceeds permissionCeiling', () => {
+    const home = path.join(tmpRoot, 'home')
+    setLightclawHomeOverride(home)
+    syncExternalConfig({ permissionMode: 'yolo', permissionCeiling: 'auto' }, home)
+    const writes = captureStderr(() => {
+      assert.equal(clampPermissionModeToCeiling(), true)
+    })
+    assert.equal((readJson(path.join(home, 'config.json')) as Record<string, unknown>).permissionMode, 'acceptEdits')
+    assert.match(writes.join(''), /clamped home config to auto/)
+  })
+
+  it('does not rewrite when mode is within ceiling or fields are absent', () => {
+    const home = path.join(tmpRoot, 'home')
+    setLightclawHomeOverride(home)
+    syncExternalConfig({ permissionMode: 'ask', permissionCeiling: 'auto' }, home)
+    assert.equal(clampPermissionModeToCeiling(), false)
+    assert.equal((readJson(path.join(home, 'config.json')) as Record<string, unknown>).permissionMode, 'ask')
+
+    const otherHome = path.join(tmpRoot, 'other-home')
+    setLightclawHomeOverride(otherHome)
+    syncExternalConfig({}, otherHome)
+    assert.equal(clampPermissionModeToCeiling(), false)
+  })
+
+  it('uses env overrides when deciding whether to clamp', () => {
+    const home = path.join(tmpRoot, 'home')
+    setLightclawHomeOverride(home)
+    syncExternalConfig({ permissionMode: 'ask', permissionCeiling: 'yolo' }, home)
+    process.env.LIGHTCLAW_PERMISSION_MODE = 'bypassPermissions'
+    process.env.LIGHTCLAW_PERMISSION_CEILING = 'default'
+    assert.equal(clampPermissionModeToCeiling(), true)
+    assert.equal((readJson(path.join(home, 'config.json')) as Record<string, unknown>).permissionMode, 'default')
+  })
+})
+
 function readJson(file: string): unknown {
   assert.equal(existsSync(file), true)
   return JSON.parse(readFileSync(file, 'utf8')) as unknown
+}
+
+function captureStderr(fn: () => void): string[] {
+  const original = process.stderr.write
+  const writes: string[] = []
+  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+    writes.push(String(chunk))
+    return true
+  }) as typeof process.stderr.write
+  try {
+    fn()
+  } finally {
+    process.stderr.write = original
+  }
+  return writes
 }

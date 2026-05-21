@@ -194,6 +194,9 @@ export type ConfigFileShape = {
    *  permission concept currently has only this one knob — `ruleFiles` /
    *  `auditLog` are paths and live under `paths.*`. */
   permissionMode?: string
+  /** Default per-identity permission ceiling. Accepts internal mode names
+   *  or user-facing aliases (`read` / `ask` / `auto` / `yolo`). */
+  permissionCeiling?: string
   /** Channel configuration now lives in config.json. The legacy standalone
    *  `<home>/channels.json` file is still read as a deprecation fallback
    *  when this section is absent. */

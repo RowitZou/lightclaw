@@ -6,6 +6,7 @@ import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
 import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import {
+  clampPermissionModeToCeiling,
   isHomeConfigPath,
   readExternalConfigFile,
   resolveStartupHome,
@@ -175,6 +176,7 @@ async function main(): Promise<void> {
     }
     await runConfigWizard({ homeFlag: args.home })
   }
+  clampPermissionModeToCeiling()
 
   // Mutual exclusion: refuse to start if another LightClaw is already
   // running. Multiple instances would race the same dedup file, sessions

@@ -88,7 +88,7 @@ export async function createUser(
   identities[name] = {
     createdAt: now,
     updatedAt: now,
-    permissionCeiling: 'acceptEdits',
+    permissionCeiling: getConfig().permissionCeiling,
     channels: {
       feishu: [],
       terminal: [],
@@ -100,7 +100,7 @@ export async function createUser(
 
 export async function getUserPermissionCeiling(name: string): Promise<PermissionMode> {
   const identity = await getIdentity(name)
-  return identity?.permissionCeiling ?? 'acceptEdits'
+  return identity?.permissionCeiling ?? getConfig().permissionCeiling
 }
 
 export async function setUserPermissionCeiling(

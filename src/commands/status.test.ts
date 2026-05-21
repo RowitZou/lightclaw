@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
@@ -20,6 +20,7 @@ let tmpRoot: string
 beforeEach(() => {
   tmpRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-status-'))
   setLightclawHomeOverride(path.join(tmpRoot, 'home'))
+  writeConfig()
   setLang('en')
 })
 
@@ -142,4 +143,19 @@ function snapshotConfig(): LightClawConfig {
     models: {},
     endpoints: {},
   } as unknown as LightClawConfig
+}
+
+function writeConfig(): void {
+  const home = path.join(tmpRoot, 'home')
+  mkdirSync(home, { recursive: true })
+  writeFileSync(
+    path.join(home, 'config.json'),
+    JSON.stringify({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        'claude-sonnet-4-6': { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' },
+      },
+      defaultModel: 'claude-sonnet-4-6',
+    }),
+  )
 }

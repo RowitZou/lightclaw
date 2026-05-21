@@ -4,7 +4,10 @@ import { loadConfigFile, type ConfigFileShape } from './config-file.js'
 import { workspaceRoot as resolveWorkspaceRoot } from './identity/paths.js'
 import { expandHomePath, lightclawHome } from './paths.js'
 import { parseLang } from './i18n/index.js'
-import { PERMISSION_MODES, type PermissionMode } from './permission/types.js'
+import {
+  parsePermissionModeInput,
+  type PermissionMode,
+} from './permission/types.js'
 import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 import { BUNDLED_AGENTS } from './agents/bundled/index.js'
@@ -337,6 +340,8 @@ export type LightClawConfig = {
   /** Permission policy mode. Flat top-level field — the permission concept
    *  has only this single knob (rule files / audit log live under paths). */
   permissionMode: PermissionMode
+  /** Default ceiling for identities that do not have a per-user ceiling. */
+  permissionCeiling: PermissionMode
   /** Master switch for the apiLogs JSONL persistence feature. Directory
    *  lives under `paths.apiLogs`. */
   apiLogsEnabled: boolean
@@ -959,9 +964,7 @@ export function parsePermissionMode(value: string | undefined): PermissionMode |
     return undefined
   }
 
-  return PERMISSION_MODES.includes(value as PermissionMode)
-    ? value as PermissionMode
-    : undefined
+  return parsePermissionModeInput(value) ?? undefined
 }
 
 export function resolveSessionsDir(): string {
@@ -1379,6 +1382,10 @@ export function getConfig(): LightClawConfig {
     parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_MODE) ??
     parsePermissionMode(fileConfig.permissionMode) ??
     'acceptEdits'
+  const permissionCeiling =
+    parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_CEILING) ??
+    parsePermissionMode(fileConfig.permissionCeiling) ??
+    'acceptEdits'
   const permissionAuditPath =
     process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
     pickWithLegacy(
@@ -1566,6 +1573,7 @@ export function getConfig(): LightClawConfig {
     ...(roles ? { roles } : {}),
     contextWindow,
     permissionMode,
+    permissionCeiling,
     apiLogsEnabled,
     paths: {
       sessions: resolveSessionsDir(),
