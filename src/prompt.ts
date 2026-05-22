@@ -464,7 +464,6 @@ function formatRoleSkillsSection(skills: readonly string[], role: Role): string 
     '## Available Skills',
     body,
     'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding.',
-    'After UseSkill returns a skill with allowed_tools, stay within that tool boundary for the rest of the task unless another skill is loaded.',
   ].join('\n')
 }
 
