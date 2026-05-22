@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 import { loadChannelConfig } from './channels/config.js'
+import { resumePendingTurns } from './channels/feishu/resume.js'
 import { listChannels } from './channels/registry.js'
 import type { ChannelHandle } from './channels/types.js'
 import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
@@ -201,6 +202,16 @@ async function main(): Promise<void> {
     await initializeHooks(config)
     await initializeMcp(config)
     const channelHandles = await startEnabledChannels()
+    // Resume any turns a previous daemon crash interrupted mid-flight. Fire-
+    // and-forget: each resume re-enters the agent loop and can take a while,
+    // and the daemon must stay responsive to new inbounds meanwhile.
+    void resumePendingTurns().catch(error => {
+      process.stderr.write(
+        `[crash-resume] scan failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    })
     try {
       await startRepl({ config })
     } finally {

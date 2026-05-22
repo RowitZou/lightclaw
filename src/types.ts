@@ -211,6 +211,15 @@ export type SessionMeta = {
   todos?: TodoItem[]
   permissionMode?: import('./permission/types.js').PermissionMode
   userId?: string
+  /**
+   * Set while a turn is in flight for this session, cleared when the turn
+   * finishes in-process (success or handled failure). A hard daemon crash
+   * leaves it set — the startup crash-resume scan finds these sessions and
+   * continues the interrupted turn from the persisted transcript.
+   * `resumeAttempts` caps how many times a turn that keeps crashing the
+   * daemon on resume is retried.
+   */
+  pendingTurn?: { startedAt: number; resumeAttempts: number }
 }
 
 export type StreamTextEvent = {

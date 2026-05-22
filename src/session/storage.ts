@@ -165,6 +165,7 @@ export async function touchMeta(
     todos: current?.todos,
     permissionMode: getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
+    pendingTurn: current?.pendingTurn,
   })
 }
 
@@ -188,6 +189,7 @@ export async function updateMetaLastExtractedAt(
     todos: current?.todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
+    pendingTurn: current?.pendingTurn,
   })
 }
 
@@ -211,6 +213,7 @@ export async function updateMetaSessionMemoryAt(
     todos: current?.todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
+    pendingTurn: current?.pendingTurn,
   })
 }
 
@@ -234,5 +237,68 @@ export async function updateMetaTodos(
     todos,
     permissionMode: current?.permissionMode ?? getPermissionMode(),
     userId: current?.userId ?? getCurrentUserId(),
+    pendingTurn: current?.pendingTurn,
   })
+}
+
+/**
+ * Mark this session as having a turn in flight. The marker survives a hard
+ * daemon crash — it is only cleared by `clearPendingTurn` on in-process
+ * completion — so the startup crash-resume scan can find interrupted turns.
+ * `resumeAttempts` carries across the crash; markPendingTurn preserves the
+ * existing count and only refreshes `startedAt`.
+ */
+export async function markPendingTurn(sessionId: string): Promise<void> {
+  const current = await loadMeta(sessionId)
+  const now = Date.now()
+  await saveMeta(sessionId, {
+    sessionId,
+    model: current?.model ?? getModel(),
+    cwd: current?.cwd ?? getCwd(),
+    createdAt: current?.createdAt ?? now,
+    lastActiveAt: current?.lastActiveAt ?? now,
+    messageCount: current?.messageCount ?? 0,
+    compactionCount: current?.compactionCount ?? getCompactionCount(),
+    lastExtractedAt: current?.lastExtractedAt,
+    sessionMemoryUpdatedAt: current?.sessionMemoryUpdatedAt,
+    todos: current?.todos,
+    permissionMode: current?.permissionMode ?? getPermissionMode(),
+    userId: current?.userId ?? getCurrentUserId(),
+    pendingTurn: {
+      startedAt: now,
+      resumeAttempts: current?.pendingTurn?.resumeAttempts ?? 0,
+    },
+  })
+}
+
+/**
+ * Clear the pendingTurn marker — called when a turn finishes in-process
+ * (success or handled failure). A hard crash leaves the marker set. No-op
+ * when there is no marker (e.g. a slash-only message, or no meta yet).
+ */
+export async function clearPendingTurn(sessionId: string): Promise<void> {
+  const current = await loadMeta(sessionId)
+  if (!current?.pendingTurn) {
+    return
+  }
+  await saveMeta(sessionId, { ...current, pendingTurn: undefined })
+}
+
+/**
+ * Bump the crash-resume attempt counter on the pendingTurn marker and return
+ * the new value. The resume scan calls this before each resume so a turn that
+ * crashes the daemon on every resume cannot loop forever. Returns 0 when
+ * there is no marker.
+ */
+export async function incrementResumeAttempts(sessionId: string): Promise<number> {
+  const current = await loadMeta(sessionId)
+  if (!current?.pendingTurn) {
+    return 0
+  }
+  const next = current.pendingTurn.resumeAttempts + 1
+  await saveMeta(sessionId, {
+    ...current,
+    pendingTurn: { ...current.pendingTurn, resumeAttempts: next },
+  })
+  return next
 }

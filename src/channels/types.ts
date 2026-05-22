@@ -83,6 +83,13 @@ export type NormalizedChannelMessage = {
    * from a real inbound.
    */
   synthetic?: boolean
+  /**
+   * Set only on the synthetic message the crash-resume scan feeds to
+   * handleMessage. The session transcript already holds the interrupted
+   * conversation, so handleMessage must NOT append a new user message — it
+   * runs query() on the loaded transcript as-is. Implies `synthetic`.
+   */
+  resumeExisting?: boolean
 }
 
 export type QuotedMessageContext = {

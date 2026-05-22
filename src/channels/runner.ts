@@ -41,8 +41,10 @@ import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
   appendMessage,
+  clearPendingTurn,
   loadMeta,
   loadTranscript,
+  markPendingTurn,
   rewriteTranscript,
   saveMeta,
 } from '../session/storage.js'
@@ -513,6 +515,11 @@ export class ChannelRunner {
       // mapped back to mainSessionId and abort the turn it kicked off.
       channelInterjectionQueue.markInFlight(mainSessionId, message.messageId)
     }
+    // Crash-resume: tracks whether this handleMessage actually started a turn
+    // (set the pendingTurn marker). The finally clears the marker only when
+    // set, so slash-only messages that return before the marker don't touch
+    // an unrelated session's marker.
+    let didMarkPendingTurn = false
     try {
     await this.locks.runExclusive(sessionId, async () => {
       // In-flight typing indicator: fire BEFORE any work so the user sees
@@ -720,8 +727,19 @@ export class ChannelRunner {
             ]
           : userText
         const userMessage = createUserMessage(userMessageContent, getLastUuid(messages))
-        messages.push(userMessage)
-        await appendMessage(sessionId, userMessage)
+        // Crash-resume synthetic messages carry the whole interrupted
+        // conversation in the loaded transcript already, so do NOT append a
+        // new user message — query() runs on the transcript as-is. A normal
+        // inbound appends its user message here.
+        if (!message.resumeExisting) {
+          messages.push(userMessage)
+          await appendMessage(sessionId, userMessage)
+        }
+        // Persist the in-flight-turn marker before query() starts: a hard
+        // crash before the turn finishes leaves it set so the startup
+        // crash-resume scan can continue this turn.
+        await markPendingTurn(sessionId)
+        didMarkPendingTurn = true
         const messageCountBeforeQuery = messages.length
         // Count of transcript messages already persisted to disk. The
         // incremental persistMessages callback advances it as query() flushes
@@ -1188,6 +1206,18 @@ export class ChannelRunner {
       }
     })
     } finally {
+      // Crash-resume: clear the in-flight-turn marker now that the turn has
+      // finished in-process (success, failure, slash-return, or abort). Only
+      // a hard daemon crash leaves it set for the startup resume scan.
+      if (didMarkPendingTurn) {
+        await clearPendingTurn(sessionId).catch(error => {
+          process.stderr.write(
+            `${this.strategy.channelId}: clearPendingTurn failed for ${sessionId}: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          )
+        })
+      }
       // Always unmark in-flight when the lock body returns, regardless of
       // whether query() succeeded, slash-handled return early, threw, or
       // was abort-cancelled. Pairs with the markInFlight that ran BEFORE
@@ -2220,6 +2250,10 @@ async function persistMeta(createdAt: number, messageCount: number): Promise<voi
     todos: getTodos(),
     permissionMode: getPermissionMode(),
     userId: existingMeta?.userId ?? getCurrentUserId(),
+    // Preserve the crash-resume in-flight marker. persistMeta runs mid-turn
+    // (post-query, failure path); without this it would clobber the marker
+    // markPendingTurn set, and a later crash would not be resumable.
+    pendingTurn: existingMeta?.pendingTurn,
   }
   await saveMeta(sessionId, meta)
 }
