@@ -192,6 +192,49 @@ describe('query incremental transcript persistence', () => {
     assert.equal(result.stopReason, 'end_turn')
   })
 
+  it('does not re-execute a completed tool round-trip when a later turn retries', async () => {
+    // The transient-crash above happens on turn 0, so "no prior-turn work
+    // re-executes" is vacuously true there. Here turn 0 runs a tool to
+    // completion *before* turn 1 crashes transiently: the per-turn retry must
+    // re-do only turn 1's API call. If the failure had instead bubbled to a
+    // whole-query retry, the query would restart from turn 0 and the tool
+    // would run a second time — the Bug 2 hazard this guards against.
+    let pingCalls = 0
+    const countingPing = buildTool({
+      name: 'Ping',
+      description: 'A trivial tool that counts its invocations.',
+      domain: 'host',
+      riskLevel: 'safe',
+      inputSchema: z.object({}),
+      call() {
+        pingCalls += 1
+        return Promise.resolve({ output: 'pong' })
+      },
+    })
+    // turn 0: tool round-trip; turn 1: transient crash; turn 1 retry: end.
+    fakeStreamChat([toolUseTurn, crashTurn, endTurn])
+    const ctx = createSessionContext({
+      cwd: '/tmp',
+      model: 'test-model',
+      sessionsDir: '/tmp/sessions',
+      memoryDir: '/tmp/memory',
+      sessionId: 'feishu:dm:transcript-persist-test-retry',
+      channel: 'feishu',
+      permissionMode: 'bypassPermissions',
+      runtime: {} as unknown as Runtime,
+    })
+    const result = await runWithSessionContext(ctx, () =>
+      query({
+        role: TEST_ROLE,
+        invocation: { systemPromptOverride: 'test system prompt' },
+        messages: [createUserMessage('hello', null)],
+        tools: [countingPing],
+      }),
+    )
+    assert.equal(result.stopReason, 'end_turn')
+    assert.equal(pingCalls, 1, 'turn 0 tool executed exactly once across the retry')
+  })
+
   it('runs without a persistMessages callback (optional contract)', async () => {
     fakeStreamChat([endTurn])
     const ctx = createSessionContext({

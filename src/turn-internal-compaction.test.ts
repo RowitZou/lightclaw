@@ -77,16 +77,21 @@ function fakeStreamChat(
 }
 
 /** Fake compaction: collapses the prefix into a summary + last 2 messages,
- *  exactly once, only when there are >= 4 messages to work with. No LLM. */
-function installFakeCompaction(): { count: () => number } {
+ *  only when there are >= 4 messages to work with. Fires at most
+ *  `maxCompactions` times per install, so a test can pin exactly how many
+ *  compactions one query performs. No LLM. */
+function installFakeCompaction(maxCompactions = 1): { count: () => number } {
   let compactions = 0
   setCompactConversationForTest(async (params) => {
-    if (compactions > 0 || params.messages.length < 4) {
+    if (compactions >= maxCompactions || params.messages.length < 4) {
       return { messages: [...params.messages], summaryTokens: 0, removedCount: 0, usage: {} }
     }
     compactions += 1
     const keep = params.messages.slice(-2)
-    const summary = createSystemCompactMessage({ summary: 'TEST SUMMARY', parentUuid: null })
+    const summary = createSystemCompactMessage({
+      summary: `TEST SUMMARY ${compactions}`,
+      parentUuid: null,
+    })
     return {
       messages: [summary, { ...keep[0]!, parentUuid: summary.uuid }, ...keep.slice(1)],
       summaryTokens: 5,
@@ -218,6 +223,68 @@ describe('turn-internal compaction (5.21 Bug 5)', () => {
     // round-trips reached persistMessages. (The caller's end-of-query rewrite
     // is the source of truth from there.)
     assert.equal(result.didCompact, true)
+    assert.equal(persistCalls, 2)
+  })
+
+  it('rewrite-and-resumes across multiple compactions in one query', async () => {
+    // The single-compaction test above proves one rewrite checkpoint. A long
+    // turn can cross the threshold more than once; the cursor reset after each
+    // rewrite must be correct for every compaction, not just the first.
+    const fake = installFakeCompaction(2)
+    fakeStreamChat([toolUseTurn, toolUseTurn, toolUseTurn, endTurn], [])
+
+    const events: Array<{ kind: 'persist' | 'rewrite'; messages: Message[] }> = []
+    const result = await runCompactingQuery({
+      cacheBreakpointMessageIndex: 0,
+      persistMessages: batch => events.push({ kind: 'persist', messages: [...batch] }),
+      rewriteMessages: messages => events.push({ kind: 'rewrite', messages: [...messages] }),
+    })
+
+    // Compaction fired twice inside this one query, both mid-query.
+    assert.equal(fake.count(), 2, 'compacted twice')
+    assert.equal(result.didCompact, true)
+
+    // Each compaction produced its own rewrite checkpoint.
+    assert.equal(
+      events.filter(e => e.kind === 'rewrite').length,
+      2,
+      'two rewrite checkpoints',
+    )
+
+    // Fold the write log (persist = append, rewrite = replace-all): after two
+    // compaction boundaries the reconstruction still equals the final
+    // in-memory transcript — the cursor reset is correct for the repeat, not
+    // just the first compaction.
+    let onDisk: Message[] = []
+    for (const event of events) {
+      onDisk = event.kind === 'rewrite' ? [...event.messages] : [...onDisk, ...event.messages]
+    }
+    assert.deepEqual(onDisk, result.messages)
+  })
+
+  it('degrades to stop-flushing when the rewrite checkpoint itself throws', async () => {
+    // A rewriteMessages throw (disk full / EIO during the resync) must be
+    // caught like a persist failure: flushing stops, the caller's end-of-query
+    // rewrite becomes the source of truth, and the failure never reaches the
+    // query loop.
+    installFakeCompaction()
+    fakeStreamChat([toolUseTurn, toolUseTurn, toolUseTurn, endTurn], [])
+
+    let persistCalls = 0
+    const result = await runCompactingQuery({
+      persistMessages: () => {
+        persistCalls += 1
+      },
+      rewriteMessages: () => {
+        throw new Error('disk full')
+      },
+    })
+
+    assert.equal(result.didCompact, true)
+    assert.equal(result.stopReason, 'end_turn')
+    // Only the two pre-compaction round-trips were persisted; the failed
+    // rewrite disabled flushing from that point on — same end state as the
+    // no-rewriteMessages-callback fallback.
     assert.equal(persistCalls, 2)
   })
 })
