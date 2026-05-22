@@ -161,6 +161,11 @@ export async function runBackgroundTaskFire(input: {
         persistMessages: async batch => {
           await appendMessages(sessionId, batch)
         },
+        // Resync after a mid-fire compaction rewrote the message prefix;
+        // query.ts then resumes incremental appends from this baseline.
+        rewriteMessages: async msgs => {
+          await rewriteTranscript(sessionId, msgs)
+        },
       })
       // Success path: incremental flushes already wrote the turns; this
       // final rewrite is the source of truth — it folds in a mid-run

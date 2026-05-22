@@ -55,13 +55,19 @@ export type InvocationContext = {
    * assistant message, so a mid-turn crash leaves a coherent partial
    * transcript on disk instead of losing the whole turn. Each batch is always
    * a valid message sub-sequence — never an orphan assistant tool_use without
-   * its tool_result. The implementation appends each message; query.ts
-   * catches and logs a throw, never surfacing it to the turn. Skipped for the
-   * rest of the query once a compaction rewrites the message prefix — from
-   * that point the caller's end-of-query rewriteTranscript is the source of
-   * truth.
+   * its tool_result. The implementation appends the batch atomically; query.ts
+   * catches and logs a throw, never surfacing it to the turn.
    */
   persistMessages?: (messages: Message[]) => Promise<void> | void
+  /**
+   * Overwrite the whole on-disk transcript with `messages`. query.ts invokes
+   * it once after a compaction has rewritten the message prefix (the
+   * incremental append cursor is then stale), then resumes incremental
+   * `persistMessages` from the compacted baseline. Without this callback a
+   * mid-turn compaction stops incremental persistence for the rest of the
+   * query — so any caller that wires `persistMessages` should wire this too.
+   */
+  rewriteMessages?: (messages: Message[]) => Promise<void> | void
   interjectionRenderer?: (
     entries: InterjectionEntry[],
     context: {
@@ -109,10 +115,12 @@ export function forkInvocationContext(input: {
   // observability stream that forwards worker activity to the chat that
   // initiated the chain (see channels/feishu/worker-activity-stream.ts).
   onAssistantTurn?: InvocationContext['onAssistantTurn']
-  // Optional incremental transcript persistence callback (see
-  // InvocationContext.persistMessages). Background fires wire this so a
-  // crash mid-fire leaves a partial bg-session transcript on disk.
+  // Optional incremental transcript persistence callbacks (see
+  // InvocationContext.persistMessages / rewriteMessages). Background fires
+  // wire these so a crash mid-fire leaves a partial bg-session transcript on
+  // disk, and a mid-fire compaction resyncs it instead of stopping flushes.
   persistMessages?: InvocationContext['persistMessages']
+  rewriteMessages?: InvocationContext['rewriteMessages']
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -125,6 +133,7 @@ export function forkInvocationContext(input: {
     ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
     ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
     ...(input.persistMessages ? { persistMessages: input.persistMessages } : {}),
+    ...(input.rewriteMessages ? { rewriteMessages: input.rewriteMessages } : {}),
   }
 }
 

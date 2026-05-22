@@ -940,6 +940,13 @@ export class ChannelRunner {
                   await appendMessages(sessionId, batch)
                   persistedTranscriptCount += batch.length
                 },
+                // Resync the on-disk transcript after a mid-turn compaction
+                // rewrote the message prefix; query.ts then resumes
+                // incremental appends from this compacted baseline.
+                rewriteMessages: async (msgs) => {
+                  await rewriteTranscript(sessionId, msgs)
+                  persistedTranscriptCount = msgs.length
+                },
               }),
               messages,
               tools: filterToolsByRoleVisibility(

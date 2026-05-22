@@ -59,6 +59,10 @@ export type DispatchedAgentParams = {
    *  Background fires use it to keep a crashed long fire's partial transcript
    *  on disk instead of losing the whole fire. */
   persistMessages?: (messages: Message[]) => Promise<void> | void
+  /** Optional transcript resync, paired with `persistMessages`. query() calls
+   *  it after a mid-fire compaction rewrites the message prefix, then resumes
+   *  incremental persistence from the compacted baseline. */
+  rewriteMessages?: (messages: Message[]) => Promise<void> | void
 }
 
 export type DispatchedAgentResult = {
@@ -153,6 +157,7 @@ export async function runDispatchedAgent(
         : {}),
       ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
       ...(params.persistMessages ? { persistMessages: params.persistMessages } : {}),
+      ...(params.rewriteMessages ? { rewriteMessages: params.rewriteMessages } : {}),
     }),
     messages,
     tools: params.tools,

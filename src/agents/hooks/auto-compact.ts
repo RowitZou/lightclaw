@@ -15,6 +15,17 @@ import {
 import { estimateMessagesTokens } from '../../token-estimate.js'
 import type { Hook, HookContext } from './types.js'
 
+// Test seam: the threshold compaction path calls `compactImpl` so tests can
+// swap in a synchronous fake and exercise turn-internal compaction without a
+// real summary LLM call. Production always uses the real implementation.
+let compactImpl: typeof compactConversation = compactConversation
+
+export function setCompactConversationForTest(
+  impl: typeof compactConversation | null,
+): void {
+  compactImpl = impl ?? compactConversation
+}
+
 export const autoCompactHook: Hook = {
   name: 'auto-compact',
   async beforeTurn(ctx) {
@@ -31,6 +42,18 @@ export const autoCompactHook: Hook = {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[micro-compact:idle] failed: ${msg}`)
+    }
+    // Threshold compaction inside the turn loop, not only at afterEndTurn:
+    // a turn that runs many tool iterations without ending would otherwise
+    // never compact and grow context without bound (5.21 dogfood Bug 5).
+    // runCompaction is gated by the token threshold, so this is a cheap
+    // no-op until the turn actually grows past it. A compaction failure
+    // must not kill the turn — it just proceeds uncompacted.
+    try {
+      await runCompaction(ctx, false)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[auto-compact:beforeTurn] failed: ${msg}`)
     }
   },
   async afterEndTurn(ctx) {
@@ -72,7 +95,7 @@ export async function runCompaction(
 
   ctx.invocation.onCompactStart?.()
   try {
-    const result = await compactConversation({
+    const result = await compactImpl({
       messages: ctx.messages,
       keepRecent: ctx.config.compact.keepRecent,
       config: ctx.config,

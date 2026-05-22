@@ -254,6 +254,15 @@ export async function query(params: QueryParams): Promise<{
   // past which messages have not yet been handed to invocation.persistMessages.
   // Starts past the on-disk history prefix.
   let transcriptPersistCursor = params.messages.length
+  // Set by markDidCompact when a compaction rewrites the message prefix;
+  // consumed by the next flushTranscript, which resyncs the whole on-disk
+  // transcript through rewriteMessages and then resumes incremental appends.
+  let compactionRewritePending = false
+  // Latched true only when a compaction happens but no rewriteMessages
+  // callback is wired (or the resync write itself failed) — incremental
+  // persistence then stops and the caller's end-of-query rewrite is the
+  // source of truth.
+  let transcriptFlushDisabled = false
 
   // Open per-query API logger and push it on the AsyncLocalStorage scope so
   // every nested streamChat call (main loop turns + recall + session-memory
@@ -375,13 +384,37 @@ export async function query(params: QueryParams): Promise<{
   // of new messages as the turn produces them — at every tool-call boundary
   // (assistant + tool_result pair) and after the final end-turn assistant
   // message — so a crash mid-turn leaves a valid partial transcript on disk
-  // instead of losing the whole turn. Once a compaction has rewritten the
-  // message prefix the cursor is stale, so flushing stops and the caller's
-  // end-of-query rewriteTranscript becomes the source of truth (see runner.ts
-  // post-query handling). Best-effort: a persist throw is caught and logged,
-  // never surfaced to the turn.
+  // instead of losing the whole turn. When a compaction rewrites the message
+  // prefix the append cursor goes stale: the next flush resyncs the whole
+  // transcript once through rewriteMessages, then incremental appends resume
+  // from the compacted baseline (so a long turn that compacts mid-flight
+  // stays durable). Best-effort: a persist / rewrite throw is caught and
+  // logged, never surfaced to the turn.
   const flushTranscript = async (): Promise<void> => {
-    if (didCompact || !invocation.persistMessages) {
+    if (!invocation.persistMessages) {
+      return
+    }
+    if (compactionRewritePending) {
+      // A compaction spliced the message prefix. Resync the on-disk
+      // transcript to the compacted state, then resume incremental appends.
+      compactionRewritePending = false
+      if (!invocation.rewriteMessages) {
+        // No resync channel — fall back to "stop flushing", the caller's
+        // end-of-query rewrite is then the source of truth.
+        transcriptFlushDisabled = true
+        return
+      }
+      try {
+        await invocation.rewriteMessages(messages)
+        transcriptPersistCursor = messages.length
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`[query] rewriteMessages failed: ${detail}\n`)
+        transcriptFlushDisabled = true
+      }
+      return
+    }
+    if (transcriptFlushDisabled) {
       return
     }
     if (transcriptPersistCursor >= messages.length) {
@@ -461,6 +494,9 @@ export async function query(params: QueryParams): Promise<{
     },
     markDidCompact() {
       didCompact = true
+      // The next flushTranscript resyncs the on-disk transcript to the
+      // compacted state, then incremental appends resume.
+      compactionRewritePending = true
     },
     stopReason: () => stopReason,
   })
@@ -574,7 +610,13 @@ export async function query(params: QueryParams): Promise<{
             ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
             : {}),
           tools: turnCatalog.tools.map(toolToAPISchema),
-          cacheBreakpointMessageIndex: invocation.cacheBreakpointMessageIndex,
+          // A compaction splices the message prefix, so the caller's
+          // breakpoint index no longer points at the message it was derived
+          // from. Drop it once compacted and let the provider auto-place the
+          // prompt-cache breakpoint.
+          cacheBreakpointMessageIndex: didCompact
+            ? undefined
+            : invocation.cacheBreakpointMessageIndex,
           signal,
           ...(params.forceFallbackInToolResult
             ? { forceFallbackInToolResult: params.forceFallbackInToolResult }
