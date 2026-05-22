@@ -15,6 +15,7 @@ import type {
 } from './types.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
+import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
@@ -479,7 +480,13 @@ export class RlaunchRuntime implements Runtime {
     if (successor) return successor.exec(input)
     this.lastActivityMs = Date.now()
     await this.ensureRunning()
-    const result = await this.runBrainctlExec(input)
+    // Wrap the command so the worker pod kills the command's whole process
+    // tree on timeout: killing the local `brainctl exec` client does NOT
+    // reach the in-worker process (Bug 4). This is the agent tool-exec path;
+    // privileged bootstrap execs (chown / helper staging) call runBrainctlExec
+    // directly and stay unwrapped.
+    const wrapped = this.wrapForSandboxTimeout(input)
+    const result = await this.runBrainctlExec(wrapped)
     if (!this.isWorkerLostError(result)) {
       return result
     }
@@ -506,7 +513,7 @@ export class RlaunchRuntime implements Runtime {
       // sees the normal cancellation flow.
       return result
     }
-    const firstRetry = await this.runBrainctlExec(input)
+    const firstRetry = await this.runBrainctlExec(wrapped)
     if (!this.isWorkerLostError(firstRetry)) {
       process.stderr.write(
         `[rlaunch] worker-lost retry recovered on ${this.workerName ?? '<unknown>'}; ` +
@@ -524,10 +531,25 @@ export class RlaunchRuntime implements Runtime {
     this.workerName = null
     await this.start('worker-lost on exec after 1s retry, retrying')
     await this.waitUntilRunning()
-    const retry = await this.runBrainctlExec(input)
+    const retry = await this.runBrainctlExec(wrapped)
     return {
       ...retry,
       stderr: `[runtime] worker restarted, container-local /tmp etc. lost\n${retry.stderr}`,
+    }
+  }
+
+  /**
+   * Wrap an agent exec so the worker pod self-enforces the timeout and kills
+   * the command's whole process tree — see `wrapSandboxCommandWithTimeout`.
+   * The daemon-side `runProcess` timeout is bumped to a backstop so the
+   * in-worker watchdog always resolves the command first.
+   */
+  private wrapForSandboxTimeout(input: ExecInput): ExecInput {
+    const budgetMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    return {
+      ...input,
+      command: wrapSandboxCommandWithTimeout(input.command, budgetMs),
+      timeoutMs: sandboxBackstopTimeoutMs(budgetMs),
     }
   }
 

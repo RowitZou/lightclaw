@@ -20,6 +20,7 @@ import { BindMountData } from './data-plane/bind-mount.js'
 import { LayeredDataPlane } from './data-plane/layered.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
 import { runProcess, shellQuote } from './process.js'
+import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 
 export type DockerMount = {
   host: string
@@ -289,6 +290,19 @@ export class DockerRuntime implements Runtime {
     this.lastActivityMs = Date.now()
     await this.ensureRunning()
     await this.assertWorkspaceQuota()
+    // Wrap agent commands so the container kills the command's whole process
+    // tree on timeout: killing the local `docker exec` client does NOT reach
+    // the in-container process (Bug 4). Skipped when stdin is set — those are
+    // harness-internal fast IO (execRelayFs.writeFile) that spawn no tree and
+    // whose stdin should not detour through the wrapper's setsid child.
+    if (input.stdin === undefined) {
+      const budgetMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+      return this.runDockerExec({
+        ...input,
+        command: wrapSandboxCommandWithTimeout(input.command, budgetMs),
+        timeoutMs: sandboxBackstopTimeoutMs(budgetMs),
+      })
+    }
     return this.runDockerExec(input)
   }
 
