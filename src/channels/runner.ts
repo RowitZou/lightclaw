@@ -41,6 +41,7 @@ import { channelInvocationContext } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
   appendMessage,
+  appendMessages,
   clearPendingTurn,
   loadMeta,
   loadTranscript,
@@ -936,10 +937,8 @@ export class ChannelRunner {
                 // crash mid-turn leaves a coherent partial transcript on disk
                 // instead of losing the whole turn.
                 persistMessages: async (batch) => {
-                  for (const item of batch) {
-                    await appendMessage(sessionId, item)
-                    persistedTranscriptCount += 1
-                  }
+                  await appendMessages(sessionId, batch)
+                  persistedTranscriptCount += batch.length
                 },
               }),
               messages,
@@ -1170,10 +1169,11 @@ export class ChannelRunner {
         } else {
           // query() persisted every new message incrementally via
           // persistMessages; append only any tail it did not reach
-          // (defensive — normally empty).
-          for (const item of result.messages.slice(persistedTranscriptCount)) {
-            await appendMessage(sessionId, item)
-          }
+          // (defensive — normally empty, then a no-op).
+          await appendMessages(
+            sessionId,
+            result.messages.slice(persistedTranscriptCount),
+          )
         }
 
         await persistMeta(Date.now(), result.messages.length)

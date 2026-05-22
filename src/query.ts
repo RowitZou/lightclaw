@@ -330,9 +330,13 @@ export async function query(params: QueryParams): Promise<{
       return
     }
     const batch = messages.slice(transcriptPersistCursor)
-    transcriptPersistCursor = messages.length
     try {
       await invocation.persistMessages(batch)
+      // Advance the cursor only after a successful persist. persistMessages
+      // writes the batch atomically (one appendFile), so a throw leaves
+      // nothing on disk — keeping the cursor put means the next flush
+      // re-sends the whole batch, neither duplicating nor leaving a gap.
+      transcriptPersistCursor += batch.length
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(`[query] persistMessages failed: ${detail}\n`)

@@ -161,6 +161,28 @@ describe('query incremental transcript persistence', () => {
     assert.equal(batches[0][1].type, 'user')
   })
 
+  it('re-sends the batch on the next flush when a persist fails (cursor holds)', async () => {
+    // A persist failure (disk full / EIO) must not advance the cursor — the
+    // un-persisted batch has to be re-sent by the next flush, or the
+    // transcript silently loses a message (and orphans its tool_use pair).
+    fakeStreamChat([toolUseTurn, endTurn])
+    let calls = 0
+    const persisted: Message[][] = []
+    const result = await runQuery(batch => {
+      calls += 1
+      if (calls === 1) {
+        // First flush (the tool round-trip) fails.
+        throw new Error('disk full')
+      }
+      persisted.push(batch)
+    })
+
+    // The failed flush left the cursor put, so the second flush re-sent the
+    // un-persisted tool round-trip together with the end-turn answer.
+    const flushed = persisted.flat()
+    assert.deepEqual(flushed, result.messages.slice(1), 'no gap, no duplicate')
+  })
+
   it('retries a turn in place when streamChat fails transiently', async () => {
     // Turn 0's first streamChat throws a transient error; the per-turn retry
     // re-does just that API call and the retry succeeds — the failure never

@@ -20,7 +20,7 @@ import {
   runWithSessionContext,
 } from '../session-context.js'
 import {
-  appendMessage,
+  appendMessages,
   getSessionDir,
   rewriteTranscript,
   touchMeta,
@@ -159,9 +159,7 @@ export async function runBackgroundTaskFire(input: {
         // round-trip as it lands so a crash mid-fire leaves a partial
         // bg-session transcript on disk instead of nothing.
         persistMessages: async batch => {
-          for (const message of batch) {
-            await appendMessage(sessionId, message)
-          }
+          await appendMessages(sessionId, batch)
         },
       })
       // Success path: incremental flushes already wrote the turns; this

@@ -36,16 +36,35 @@ export function getSessionDir(sessionId: string): string {
   return path.join(resolveSessionsDir(), sessionId)
 }
 
+/**
+ * Append a batch of messages to the transcript in a single `appendFile`
+ * write. The single syscall is the point: appending message-by-message
+ * leaves a window where a process kill between two writes ends the
+ * transcript on an orphan `assistant` tool_use whose `tool_result` never
+ * reached disk — which fails the next resume with a provider 400. One write
+ * makes the batch land all-or-nothing with respect to a kill. A no-op when
+ * `messages` is empty (no dir is created).
+ */
+export async function appendMessages(
+  sessionId: string,
+  messages: Message[],
+): Promise<void> {
+  if (messages.length === 0) {
+    return
+  }
+  await ensureSessionDir(sessionId)
+  await appendFile(
+    getTranscriptPath(sessionId),
+    messages.map(message => `${JSON.stringify(message)}\n`).join(''),
+    'utf8',
+  )
+}
+
 export async function appendMessage(
   sessionId: string,
   message: Message,
 ): Promise<void> {
-  await ensureSessionDir(sessionId)
-  await appendFile(
-    getTranscriptPath(sessionId),
-    `${JSON.stringify(message)}\n`,
-    'utf8',
-  )
+  await appendMessages(sessionId, [message])
 }
 
 export async function loadTranscript(sessionId: string): Promise<Message[]> {
