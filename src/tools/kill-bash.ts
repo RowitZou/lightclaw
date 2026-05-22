@@ -38,7 +38,7 @@ export const killBashTool = buildTool({
     }
 
     const snapshot = await killBackgroundJob(entry)
-    registry.markTerminal(entry.meta.jobId, snapshot)
+    registry.remove(entry.meta.jobId)
     return {
       output:
         `Background Bash job ${snapshot.jobId} status: ${snapshot.status}` +

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
+import type { LightClawConfig } from '../config.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import { BackgroundJobRegistry } from './registry.js'
@@ -35,7 +40,7 @@ test('BackgroundExecWatcher publishes exactly one signal when a job completes', 
     assert.equal(signal.payload.status, 'completed')
     assert.match(signal.payload.outputTail.stdoutTail ?? '', /done/)
   }
-  assert.equal(registry.get('bg-00000001')?.status, 'completed')
+  assert.equal(registry.get('bg-00000001'), undefined)
 })
 
 test('BackgroundExecWatcher kills jobs that exceed output ceiling and publishes lost', async () => {
@@ -61,6 +66,35 @@ test('BackgroundExecWatcher kills jobs that exceed output ceiling and publishes 
   if (payload.kind === 'background-exec-result') {
     assert.equal(payload.status, 'lost')
   }
+  assert.equal(registry.get('bg-00000001'), undefined)
+})
+
+test('BackgroundExecWatcher withholds delivery to a non-admin under LocalRuntime', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'lc-bgexec-'))
+  setLightclawHomeOverride(home)
+  const registry = new BackgroundJobRegistry()
+  const runtime = new FakeRuntime()
+  const meta = job('bg-00000001')
+  registry.register(meta, runtime.asRuntime())
+  await runtime.fs.writeFile('/workspace/.lightclaw/bg-exec/bg-00000001/exit', '0')
+  await runtime.fs.writeFile(meta.outFile, 'done\n')
+  const seen: AgentSignal[] = []
+  const unsubscribe = getSignalRouter().subscribe({ kind: 'role', id: '*' }, signal => {
+    seen.push(signal)
+  })
+  try {
+    const watcher = new BackgroundExecWatcher(registry)
+    watcher.start({ runtime: { backend: 'local' } } as unknown as LightClawConfig)
+    watcher.stop()
+    await watcher.tick(2_000)
+  } finally {
+    unsubscribe()
+    setLightclawHomeOverride(undefined)
+    await rm(home, { recursive: true, force: true })
+  }
+
+  assert.equal(seen.length, 0)
+  assert.equal(registry.get('bg-00000001'), undefined)
 })
 
 function job(jobId: string): BackgroundJobMeta {

@@ -21,7 +21,7 @@ test('KillBash kills a running job in the current session', async () => {
 
   assert.equal(result.isError, false)
   assert.match(result.output, /status: killed/)
-  assert.equal(registry.get('bg-00000001')?.status, 'killed')
+  assert.equal(registry.get('bg-00000001'), undefined)
   registry.clear()
 })
 

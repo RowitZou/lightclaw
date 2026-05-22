@@ -3,6 +3,8 @@ import { getBackgroundJobRegistry, type BackgroundJobRegistry } from './registry
 import { probeBackgroundJob } from './probe.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
+import type { LightClawConfig } from '../config.js'
+import { getAdmin } from '../identity/store.js'
 import type { BackgroundJobEntry, BackgroundJobSnapshot } from './types.js'
 
 export const WATCHER_INTERVAL_MS = 7_000
@@ -12,10 +14,14 @@ const OUTPUT_TAIL_BYTES = 8 * 1024
 
 export class BackgroundExecWatcher {
   private timer: NodeJS.Timeout | null = null
+  private config: LightClawConfig | null = null
 
   constructor(private readonly registry: BackgroundJobRegistry = getBackgroundJobRegistry()) {}
 
-  start(): void {
+  start(config?: LightClawConfig): void {
+    if (config) {
+      this.config = config
+    }
     if (this.timer) {
       return
     }
@@ -42,10 +48,28 @@ export class BackgroundExecWatcher {
       if (snapshot.status === 'running') {
         continue
       }
+      // KillBash may have terminated + removed this job concurrently while we
+      // were probing — re-check so we neither double-deliver nor act stale.
+      if (this.registry.get(entry.meta.jobId)?.status !== 'running') {
+        continue
+      }
       this.registry.markTerminal(entry.meta.jobId, snapshot)
-      const outputTail = await readOutputTail(entry)
-      await publishBackgroundExecResult(entry, snapshot, outputTail)
+      if (await this.shouldDeliver(entry)) {
+        const outputTail = await readOutputTail(entry)
+        await publishBackgroundExecResult(entry, snapshot, outputTail)
+      }
+      this.registry.remove(entry.meta.jobId)
     }
+  }
+
+  // Mirrors scheduler.deliverCompletion's admin-only gate: under LocalRuntime
+  // a paired non-admin's result must not re-enter the admin's session via a
+  // synthetic turn.
+  private async shouldDeliver(entry: BackgroundJobEntry): Promise<boolean> {
+    if (this.config?.runtime.backend !== 'local') {
+      return true
+    }
+    return (await getAdmin()) === entry.meta.canonicalUser
   }
 
   private async snapshot(entry: BackgroundJobEntry, now: number): Promise<BackgroundJobSnapshot> {

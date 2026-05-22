@@ -105,4 +105,17 @@ describe('Bash error-recovery hints', () => {
     assert.equal(result.isError, true)
     assert.match(result.output, /run_in_background: true/)
   })
+
+  it('sandbox-watchdog timeout also includes the background-mode hint', async () => {
+    const result = await bashTool.call(
+      { command: 'git clone https://example.invalid/large.git' },
+      buildCtx({
+        stdout: '',
+        stderr: 'lightclaw: command exceeded the 300s sandbox time limit; terminating',
+        exitCode: 143,
+      }),
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output, /run_in_background: true/)
+  })
 })

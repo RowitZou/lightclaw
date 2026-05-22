@@ -115,7 +115,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   registerBusSubscribers()
   getBackgroundTaskScheduler().start(resolvedConfig)
-  getBackgroundExecWatcher().start()
+  getBackgroundExecWatcher().start(resolvedConfig)
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)

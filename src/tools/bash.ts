@@ -108,9 +108,11 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
       }
     }
 
-    const timeoutHint = result.stderr.includes('command timed out after')
-      ? `\n\n[Hint: this command hit the foreground time limit. For work that genuinely needs longer — large clones, long builds — re-run it with run_in_background: true.]`
-      : ''
+    const timeoutHint =
+      result.stderr.includes('command timed out after') ||
+      result.stderr.includes('sandbox time limit')
+        ? `\n\n[Hint: this command hit the foreground time limit. For work that genuinely needs longer — large clones, long builds — re-run it with run_in_background: true.]`
+        : ''
 
     return {
       output: `${detail}\n\nexit_code: ${result.exitCode}${timeoutHint}`,
