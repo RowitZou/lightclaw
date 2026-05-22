@@ -7,8 +7,10 @@ import path from 'node:path'
 import {
   getActiveApiLogger,
   openApiLogger,
+  reconstructApiLogRecord,
   runWithApiLogger,
   type ApiLogTurnRecord,
+  type ApiLogTurnRecordOnDisk,
 } from './storage.js'
 
 let tmpDir: string
@@ -161,6 +163,71 @@ describe('api-logs storage', () => {
       parsed.map(p => p.kind),
       [...kinds],
     )
+  })
+
+  it('delta-encodes a growing agent loop and reconstructs every line', async () => {
+    const bigSystem = 'You are LightClaw.\n'.repeat(200)  // ~3.6 KB, constant
+    const logger = openApiLogger({ enabled: true, dir: tmpDir, sessionId: 'sess' })
+    // Turn-shaped sequence: keyframe, two appends, a compaction (prefix
+    // rewritten to a summary), then another append.
+    const histories = [
+      [{ role: 'user', content: 'm0' }, { role: 'assistant', content: 'm1' }],
+      [
+        { role: 'user', content: 'm0' },
+        { role: 'assistant', content: 'm1' },
+        { role: 'user', content: 'm2' },
+        { role: 'assistant', content: 'm3' },
+      ],
+      [
+        { role: 'user', content: 'm0' },
+        { role: 'assistant', content: 'm1' },
+        { role: 'user', content: 'm2' },
+        { role: 'assistant', content: 'm3' },
+        { role: 'user', content: 'm4' },
+        { role: 'assistant', content: 'm5' },
+      ],
+      // compaction: the head collapses into one summary message.
+      [
+        { role: 'user', content: 'SUMMARY' },
+        { role: 'assistant', content: 'm5' },
+      ],
+      [
+        { role: 'user', content: 'SUMMARY' },
+        { role: 'assistant', content: 'm5' },
+        { role: 'user', content: 'm6' },
+      ],
+    ]
+    for (let i = 0; i < histories.length; i++) {
+      await logger.appendTurn(
+        rec({ turn: i, request: { system: bigSystem, tools: [{ name: 'Bash' }], messages: histories[i]! } }),
+      )
+    }
+
+    const lines = fs.readFileSync(logger.filePath(), 'utf8').trim().split('\n')
+    const onDisk = lines.map(l => JSON.parse(l) as ApiLogTurnRecordOnDisk)
+    assert.equal(onDisk.length, 5)
+
+    // Line 0 is a keyframe; line 1 is a delta that does NOT re-dump system.
+    assert.equal(onDisk[0]!.request.messages !== undefined, true)
+    assert.equal(onDisk[1]!.request.messagesBase, 0)
+    assert.equal(onDisk[1]!.request.systemRef, 0)
+    assert.ok(
+      lines[1]!.length < lines[0]!.length / 2,
+      'delta line is far smaller than the keyframe',
+    )
+    // The compaction line rewrote the prefix → it falls back to an inline
+    // keyframe for messages rather than a bogus delta.
+    assert.equal(onDisk[3]!.request.messages !== undefined, true)
+    assert.equal(onDisk[3]!.request.messagesBase, undefined)
+
+    // Every line reconstructs to the exact full request that was logged.
+    for (let i = 0; i < histories.length; i++) {
+      const full = reconstructApiLogRecord(onDisk, i)
+      assert.deepEqual(full.request.messages, histories[i])
+      assert.equal(full.request.system, bigSystem)
+      assert.deepEqual(full.request.tools, [{ name: 'Bash' }])
+      assert.equal(full.turn, i)
+    }
   })
 })
 

@@ -3,16 +3,26 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { encodeApiLogRecord, type LaneEncodeState } from './delta.js'
+
+export { reconstructApiLogRecord } from './delta.js'
+
 /**
  * Per-query API logger. One file per `query()` call:
  *
  *   <dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl
  *
- * Each line is a single streamChat call. The full system prompt, tools
- * schema, request messages array, and response content are stored verbatim —
- * no truncation. Intended for admin debugging (correlating a Bedrock 400
- * with the exact request shape) and as a training-data trail for future
- * model work.
+ * Each line is one streamChat call, recorded delta-encoded: a record stores
+ * only what changed versus the previous record of the same `kind` — the
+ * messages array as a prefix-delta, the system prompt and tools schema as a
+ * back-reference when unchanged (see `delta.ts`). Without this a long agent
+ * loop logs the full, ever-growing request on every line and one file grows
+ * O(n²) in turn count (a 63-turn dogfood session produced a single 20.8 MB
+ * file). No fidelity is lost: `reconstructApiLogRecord` inflates any record
+ * back to the exact full request sent to the endpoint, which is the
+ * supported way to recover one complete history. Intended for admin
+ * debugging (correlating a provider 400 with the exact request shape) and
+ * as a training-data trail for future model work.
  *
  * Coverage is universal: every streamChat call in the process is logged
  * (main loop, subagent forks, memory recall, session-memory writes, compact
@@ -103,6 +113,51 @@ export interface ApiLogTurnRecord {
   }
 }
 
+/**
+ * On-disk request shape — delta-encoded. `system` / `tools` appear either
+ * inline OR as a `*Ref` back-reference to an earlier record's seq; `messages`
+ * appear either inline (keyframe) OR as a prefix-delta against `messagesBase`.
+ * Inflate with `reconstructApiLogRecord`. See `delta.ts`.
+ */
+export interface ApiLogRequestOnDisk {
+  system?: string | unknown
+  systemRef?: number
+  tools?: unknown[]
+  toolsRef?: number
+  messages?: Array<{ role: string; content: unknown }>
+  messagesBase?: number
+  messagesPrefixLen?: number
+  messagesTail?: Array<{ role: string; content: unknown }>
+  /** Reconstructed total message count — always present, so readers can
+   *  filter by conversation size without inflating the delta. */
+  messageCount: number
+  cacheBreakpointMessageIndex?: number
+  maxTokens?: number
+  reasoningEffort?: string
+}
+
+/**
+ * One line of a log file as actually written to disk. Differs from
+ * `ApiLogTurnRecord` only in `request` (delta-encoded) and the added `seq`.
+ * Old pre-delta files have neither `seq` nor `request.*Ref` and every line
+ * is already a full record — parse those directly.
+ */
+export interface ApiLogTurnRecordOnDisk {
+  /** Per-file monotonic sequence index; delta back-references key off it. */
+  seq: number
+  kind: ApiLogKind
+  subagentLabel?: string
+  sessionId: string
+  user?: string
+  turn: number
+  attempt: number
+  ts: string
+  model: string
+  request: ApiLogRequestOnDisk
+  response?: ApiLogTurnRecord['response']
+  error?: ApiLogTurnRecord['error']
+}
+
 export interface ApiLogger {
   appendTurn(record: ApiLogTurnRecord): Promise<void>
   /** Path of the file being written; useful for tests + diagnostics. */
@@ -136,19 +191,44 @@ export function openApiLogger(input: OpenApiLoggerInput): ApiLogger {
   const filePath = path.join(dayDir, filename)
 
   let dirReady = false
+  // Per-file delta encoder state. `seqCounter` numbers records; `lanes`
+  // holds the previous record of each `kind` so the next one can diff
+  // against it. `writeChain` serializes appendFile calls so on-disk line
+  // order matches seq order even though callers fire appendTurn-and-forget.
+  let seqCounter = 0
+  const lanes = new Map<string, LaneEncodeState>()
+  let writeChain: Promise<void> = Promise.resolve()
 
   return {
-    async appendTurn(record: ApiLogTurnRecord): Promise<void> {
+    appendTurn(record: ApiLogTurnRecord): Promise<void> {
+      // Encode synchronously, before any await, so seq assignment and lane
+      // state advance in call order regardless of when the write resolves.
+      let line: string
       try {
-        if (!dirReady) {
-          await fs.promises.mkdir(dayDir, { recursive: true })
-          dirReady = true
-        }
-        await fs.promises.appendFile(filePath, JSON.stringify(record) + '\n', 'utf8')
+        const seq = seqCounter++
+        const laneKey = `${record.kind}:${record.subagentLabel ?? ''}`
+        const { record: onDisk, lane } = encodeApiLogRecord(record, seq, lanes.get(laneKey))
+        lanes.set(laneKey, lane)
+        line = JSON.stringify(onDisk) + '\n'
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[api-logs] append failed for ${filePath}: ${detail}\n`)
+        process.stderr.write(`[api-logs] encode failed for ${filePath}: ${detail}\n`)
+        return Promise.resolve()
       }
+
+      writeChain = writeChain.then(async () => {
+        try {
+          if (!dirReady) {
+            await fs.promises.mkdir(dayDir, { recursive: true })
+            dirReady = true
+          }
+          await fs.promises.appendFile(filePath, line, 'utf8')
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[api-logs] append failed for ${filePath}: ${detail}\n`)
+        }
+      })
+      return writeChain
     },
     filePath(): string {
       return filePath
