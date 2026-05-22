@@ -1098,7 +1098,10 @@ export class ChannelRunner {
               attempt -= 1  // structural retry, not transient
               continue
             }
-            const isTransient = TRANSIENT_FAILURE_PATTERN.test(detail)
+            // Structured transient-vs-fatal classification (see
+            // isTransientError). `attempt < MAX_QUERY_RETRIES` hard-caps the
+            // loop, so a wrongly-classified error can never retry forever.
+            const isTransient = isTransientError(error)
             const willRetry = isTransient && attempt < MAX_QUERY_RETRIES
             if (willRetry) {
               const backoff = QUERY_RETRY_BASE_MS * 2 ** attempt
@@ -1111,7 +1114,7 @@ export class ChannelRunner {
             // Always log to stderr + record an error marker in the
             // transcript so subsequent turns have an honest history.
             process.stderr.write(`${channelId}: query failed session ${sessionId}: ${detail}\n`)
-            const failureText = formatQueryFailure(detail)
+            const failureText = formatQueryFailure(detail, isTransient)
             const assistantMessage = createAssistantMessage({
               content: [{ type: 'text', text: failureText }],
               stopReason: 'error',
@@ -1139,7 +1142,7 @@ export class ChannelRunner {
             // abort. Skip the notice (transcript marker already records the
             // /stop attribution via formatQueryFailure).
             if (!ABORT_FAILURE_PATTERN.test(detail)) {
-              await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail))
+              await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail, isTransient))
             }
             return
           }
@@ -2029,7 +2032,7 @@ function isPairableChannel(channel: string): channel is ChannelKind {
 // failure to the user. Non-transient errors (auth, schema, prompt-too-long
 // post-compaction) skip the retry and go straight to the red notice.
 const TRANSIENT_FAILURE_PATTERN =
-  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure|stream returned no events/i
+  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure|stream returned no events|terminated|fetch failed|other side closed|UND_ERR/i
 
 // Up to 3 attempts total per inbound message: the first attempt + 2 retries.
 // Exponential backoff (800ms → 1600ms) keeps the worst-case extra latency
@@ -2052,11 +2055,113 @@ function delay(ms: number): Promise<void> {
 // AbortError.
 const ABORT_FAILURE_PATTERN = /Request was aborted/i
 
-function formatQueryFailure(detail: string): string {
+// HTTP statuses that are deterministic client errors — re-sending the same
+// request just fails again, so they are never retried.
+const FATAL_HTTP_STATUS = new Set([400, 401, 403, 404, 405, 413, 422])
+
+// Node / OS socket error codes meaning "the connection broke" — a transient
+// network blip when the endpoint was working moments earlier.
+const TRANSIENT_ERROR_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE',
+  'EAI_AGAIN', 'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'ENOTFOUND',
+])
+
+// Deterministic, non-network query failures: a whole-query re-run only
+// reproduces them (and a re-run is expensive), so they stay fatal.
+const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
+
+function queryErrorChain(error: unknown): unknown[] {
+  const chain: unknown[] = []
+  let node: unknown = error
+  for (let depth = 0; depth < 6 && node != null; depth += 1) {
+    chain.push(node)
+    node = (node as { cause?: unknown }).cause
+  }
+  return chain
+}
+
+function httpStatusOf(node: unknown): number | undefined {
+  if (typeof node !== 'object' || node === null) {
+    return undefined
+  }
+  const obj = node as Record<string, unknown>
+  const response = obj.response as Record<string, unknown> | undefined
+  for (const candidate of [obj.status, obj.statusCode, response?.status]) {
+    if (typeof candidate === 'number' && candidate >= 100 && candidate < 600) {
+      return candidate
+    }
+  }
+  return undefined
+}
+
+function isAbortError(error: unknown): boolean {
+  for (const node of queryErrorChain(error)) {
+    if (
+      typeof node === 'object' && node !== null &&
+      (node as { name?: unknown }).name === 'AbortError'
+    ) {
+      return true
+    }
+  }
+  const detail = error instanceof Error ? error.message : String(error)
+  return ABORT_FAILURE_PATTERN.test(detail)
+}
+
+/**
+ * Decide whether a query() throw should be retried by the runner's bounded
+ * retry loop. Inspects the error object and its `cause` chain — HTTP status,
+ * Node/undici socket `code`, error `name` — instead of regexing the message
+ * string, so whole CLASSES of transient failures are caught without an
+ * exact-string allowlist (the gap that misclassified the undici
+ * `TypeError: terminated` from the 2026-05-21 dogfood as fatal).
+ *
+ * A genuinely unrecognized error defaults to `true` (retry). That can never
+ * loop: the caller hard-caps attempts at MAX_QUERY_RETRIES, so a truly fatal
+ * error just fails honestly after the cap — while a wrongly-given-up
+ * transient error costs a whole dead turn the user must redo. Abort (/stop)
+ * and deterministic client errors (4xx, "Exceeded maximum tool turns") are
+ * the explicit non-retry cases.
+ */
+export function isTransientError(error: unknown): boolean {
+  if (isAbortError(error)) {
+    return false
+  }
+  const detail = error instanceof Error ? error.message : String(error)
+  if (FATAL_MESSAGE_PATTERN.test(detail)) {
+    return false
+  }
+  for (const node of queryErrorChain(error)) {
+    const status = httpStatusOf(node)
+    if (status !== undefined) {
+      if (FATAL_HTTP_STATUS.has(status)) {
+        return false
+      }
+      if (status === 408 || status === 429 || status >= 500) {
+        return true
+      }
+    }
+    if (typeof node === 'object' && node !== null) {
+      const code = (node as { code?: unknown }).code
+      if (
+        typeof code === 'string' &&
+        (TRANSIENT_ERROR_CODES.has(code) || code.startsWith('UND_ERR'))
+      ) {
+        return true
+      }
+    }
+  }
+  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
+    return true
+  }
+  // Unrecognized — default to retry (bounded by MAX_QUERY_RETRIES).
+  return true
+}
+
+function formatQueryFailure(detail: string, isTransient: boolean): string {
   if (ABORT_FAILURE_PATTERN.test(detail)) {
     return t('channel.failure.transcriptAborted')
   }
-  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
+  if (isTransient) {
     return t('channel.failure.transcriptTransient', { detail })
   }
   return t('channel.failure.transcript', { detail })
@@ -2065,8 +2170,8 @@ function formatQueryFailure(detail: string): string {
 // Friendly summary for the red notice card. The transcript marker (built by
 // formatQueryFailure) keeps the full detail for debugging; the card stays
 // short so the user gets a clear, non-overwhelming signal.
-function formatNoticeFromFailure(detail: string): string {
-  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
+function formatNoticeFromFailure(detail: string, isTransient: boolean): string {
+  if (isTransient) {
     return [
       t('channel.failure.title'),
       '',
