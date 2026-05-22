@@ -4,6 +4,7 @@ import path from 'node:path'
 import { registerCodexAuthProvider } from './auth/codex/index.js'
 import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
 import { getBackgroundTaskScheduler } from './background-task/scheduler.js'
+import { getBackgroundExecWatcher } from './background-exec/watcher.js'
 import { loadChannelConfig } from './channels/config.js'
 import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
@@ -114,6 +115,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   registerBusSubscribers()
   getBackgroundTaskScheduler().start(resolvedConfig)
+  getBackgroundExecWatcher().start()
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()
   await getRuntimePool().sweepOrphans(resolvedConfig)
@@ -367,6 +369,7 @@ function installSignalHandlers(sessionContext: SessionContext): void {
     void Promise.allSettled([
       runtimeStopSafely(sessionContext),
       runtimePoolReleaseSafely(),
+      backgroundExecWatcherStopSafely(),
       workerHealthCheckerStopSafely(),
       networkBridgeStopSafely(),
     ]).finally(() => process.exit(exitCode))
@@ -389,6 +392,10 @@ function installSignalHandlers(sessionContext: SessionContext): void {
 
 async function workerHealthCheckerStopSafely(): Promise<void> {
   workerHealthChecker?.stop()
+}
+
+async function backgroundExecWatcherStopSafely(): Promise<void> {
+  getBackgroundExecWatcher().stop()
 }
 
 async function networkBridgeStopSafely(): Promise<void> {

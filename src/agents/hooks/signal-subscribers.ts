@@ -1,4 +1,5 @@
 import { ensureBackgroundResultToInterjectionSubscription } from './background-result-to-interjection.js'
+import { ensureBackgroundExecResultToInterjectionSubscription } from './background-exec-result-to-interjection.js'
 import { ensureChainAbortPropagationSubscription } from './chain-abort-propagation.js'
 
 /** Bootstrap entry for the process-wide Signal Bus subscriber hooks
@@ -7,5 +8,6 @@ import { ensureChainAbortPropagationSubscription } from './chain-abort-propagati
  *  register themselves through the role hook pipeline, not here. */
 export function registerBusSubscribers(): void {
   ensureBackgroundResultToInterjectionSubscription()
+  ensureBackgroundExecResultToInterjectionSubscription()
   ensureChainAbortPropagationSubscription()
 }

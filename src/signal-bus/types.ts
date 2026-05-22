@@ -69,6 +69,17 @@ export type SignalPayload = {
         result: string
         priorPromptNotice?: string
       }
+    | {
+        kind: 'background-exec-result'
+        canonicalUser: string
+        jobId: string
+        status: 'completed' | 'killed' | 'lost'
+        exitCode?: number
+        command: string
+        outFile: string
+        errFile: string
+        outputTail: { stdoutTail?: string; stderrTail?: string }
+      }
     | { kind: 'abort'; abortReason?: string; canonicalUser?: string }
     | { kind: 'system-notice'; text: string; severity: 'info' | 'warning' | 'error' }
   turn: {

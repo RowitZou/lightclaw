@@ -3,6 +3,7 @@ import type { Role } from './types.js'
 import { autoCompactHook } from './hooks/auto-compact.js'
 import { autoMemoryHook } from './hooks/auto-memory.js'
 import { backgroundResultToInterjectionHook } from './hooks/background-result-to-interjection.js'
+import { backgroundExecResultToInterjectionHook } from './hooks/background-exec-result-to-interjection.js'
 import { chainAbortPropagationHook } from './hooks/chain-abort-propagation.js'
 import { deferredToolsHook } from './hooks/deferred-tools.js'
 import { forwardProgressToChannelHook } from './hooks/forward-progress-to-channel.js'
@@ -20,6 +21,7 @@ export const BUNDLED_HOOKS: Record<string, Hook> = {
   'auto-memory-extract': autoMemoryHook,
   'forward-progress-to-channel': forwardProgressToChannelHook,
   'background-result-to-interjection': backgroundResultToInterjectionHook,
+  'background-exec-result-to-interjection': backgroundExecResultToInterjectionHook,
   'chain-abort-propagation': chainAbortPropagationHook,
 }
 
