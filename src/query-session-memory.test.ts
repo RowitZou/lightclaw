@@ -14,15 +14,19 @@ import { buildTool } from './tool.js'
 import { createUserMessage } from './messages.js'
 import type { Role } from './agents/types.js'
 import type { Runtime } from './runtime/types.js'
-import type { StreamEvent } from './types.js'
+import type { Message, StreamEvent } from './types.js'
 
-// Bug 7 (5.21 dogfood): session-memory updates fire many times in a long turn
-// (~17× across 63 iterations). That frequency is correct — session-memory.md
-// is the crash-resume / compaction checkpoint — but each fire used to block
-// the agent loop on a full LLM rewrite. The fix makes mid-turn updates
-// non-blocking and single-flight: while one update is in flight, later tool
-// boundaries skip and let the work coalesce; end_turn awaits the in-flight one
-// so the file is current before the query returns.
+// 5.21 Bug 7: session-memory updates fire many times in a long turn. The
+// frequency is correct — session-memory.md is the crash-resume / compaction
+// checkpoint — and `08f82bd` made mid-turn updates non-blocking + single-flight
+// so they no longer stall the agent loop. That first cut had a regression:
+// it kept a wall-clock (`Date.now()`) watermark and a finally-reset of the
+// counters. Under non-blocking updates the loop keeps producing messages
+// during the rewrite window, so the watermark jumped PAST them and the next
+// update's `timestamp > since` filter permanently excluded every message
+// created while an update was in flight. The fix: watermark = newest message
+// actually summarized; counters reset against the snapshot, not after the
+// await. These tests assert the corrected behaviour AND full message coverage.
 
 const TEST_ROLE: Role = {
   agentType: 'main',
@@ -33,10 +37,13 @@ const TEST_ROLE: Role = {
   hooks: [],
 }
 
-// One tool turn that reports heavy token usage — enough that the default
-// 20000-token session-memory threshold is crossed every turn, leaving the
-// default 5 tool-call threshold as the gate that actually fires the update.
+// One tool turn with heavy token usage so the 20000-token session-memory
+// threshold is crossed every turn — the 5-tool-call threshold is then the gate
+// that fires the update. The leading sleep spaces turns apart in wall-clock so
+// message timestamps are strictly increasing across turns (the watermark is
+// timestamp-based, and the fake stream is otherwise instant).
 async function* heavyToolUseTurn(): AsyncGenerator<StreamEvent> {
+  await new Promise(resolve => setTimeout(resolve, 3))
   yield { type: 'tool_use', id: 'call', name: 'Ping', input: {}, index: 0 }
   yield {
     type: 'stop',
@@ -66,7 +73,6 @@ async function* endTurn(): AsyncGenerator<StreamEvent> {
   }
 }
 
-// Serve one scripted event stream per streamChat call (one call per turn).
 function fakeStreamChat(turns: Array<() => AsyncGenerator<StreamEvent>>): void {
   let i = 0
   const impl = (): AsyncGenerator<StreamEvent> => {
@@ -75,6 +81,20 @@ function fakeStreamChat(turns: Array<() => AsyncGenerator<StreamEvent>>): void {
     return turn()
   }
   setStreamChatForTest(impl as unknown as Parameters<typeof setStreamChatForTest>[0])
+}
+
+function makePingTool(onCall?: () => void) {
+  return buildTool({
+    name: 'Ping',
+    description: 'A trivial tool that always succeeds.',
+    domain: 'host',
+    riskLevel: 'safe',
+    inputSchema: z.object({}),
+    call() {
+      onCall?.()
+      return Promise.resolve({ output: 'pong' })
+    },
+  })
 }
 
 function runQuery(sessionId: string, tools: ReturnType<typeof buildTool>[]) {
@@ -113,58 +133,52 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     setSessionMemoryUpdaterForTest(null)
   })
 
-  it('runs mid-turn updates non-blocking + single-flight; end_turn awaits the in-flight one', async () => {
+  it('is non-blocking + single-flight, and never drops a message produced during an in-flight update', async () => {
     // 10 tool turns then end_turn. The 5-tool-call threshold is first met at
-    // tool boundary 5 and (with the old blocking behaviour) again at 10.
+    // tool boundary 5; with the old blocking behaviour it was met again at 10.
     fakeStreamChat([
       ...Array.from({ length: 10 }, () => heavyToolUseTurn),
       endTurn,
     ])
 
     let pingCalls = 0
-    const pingTool = buildTool({
-      name: 'Ping',
-      description: 'A trivial tool that always succeeds.',
-      domain: 'host',
-      riskLevel: 'safe',
-      inputSchema: z.object({}),
-      call() {
-        pingCalls += 1
-        return Promise.resolve({ output: 'pong' })
-      },
+    const pingTool = makePingTool(() => {
+      pingCalls += 1
     })
 
+    // Record the exact message set handed to each session-memory update. The
+    // first update is held open so tool boundaries 6..10 run while it is in
+    // flight — exactly the window whose messages the watermark bug dropped.
+    const summarizedBatches: Message[][] = []
     let updaterCalls = 0
-    // The Promise executor runs synchronously, so resolveFirstUpdate is
-    // assigned before setSessionMemoryUpdaterForTest is ever invoked.
     let resolveFirstUpdate!: (value: { updated: boolean }) => void
     const firstUpdateGate = new Promise<{ updated: boolean }>(resolve => {
       resolveFirstUpdate = resolve
     })
-    setSessionMemoryUpdaterForTest(() => {
+    setSessionMemoryUpdaterForTest(input => {
       updaterCalls += 1
-      // Hold the first update open so later tool boundaries run while it is
-      // still in flight; subsequent updates resolve immediately.
+      summarizedBatches.push(input.newMessages)
       return updaterCalls === 1
         ? firstUpdateGate
         : Promise.resolve({ updated: true })
     })
 
     let queryResolved = false
-    const queryPromise = runQuery('feishu:dm:bug7-session-memory', [pingTool])
-      .then(result => {
+    const queryPromise = runQuery('feishu:dm:bug7-watermark', [pingTool]).then(
+      result => {
         queryResolved = true
         return result
-      })
+      },
+    )
 
     // Let the loop run through every tool turn. With blocking mid-turn updates
     // it would be stuck on update #1; instead it sails through all 10 turns
-    // and parks at the end_turn flush.
+    // and parks at the end_turn flush, which awaits the in-flight update.
     const deadline = Date.now() + 3_000
     while (pingCalls < 10 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await new Promise(resolve => setTimeout(resolve, 30))
 
     assert.equal(
       pingCalls,
@@ -174,7 +188,7 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     assert.equal(
       updaterCalls,
       1,
-      'tool boundary 10 also crossed the threshold but coalesced into the in-flight update (single-flight)',
+      'boundaries 6..10 crossed the threshold but coalesced into the in-flight update (single-flight)',
     )
     assert.equal(
       queryResolved,
@@ -184,26 +198,37 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
 
     resolveFirstUpdate({ updated: true })
     const result = await queryPromise
+
     assert.equal(result.stopReason, 'end_turn')
-    // The flush awaited the in-flight update, which had already covered the
-    // turn's messages and reset the counters, so the flush's own update is a
-    // threshold no-op — no redundant rewrite at end_turn.
-    assert.equal(updaterCalls, 1)
+    assert.equal(
+      updaterCalls,
+      2,
+      'end_turn flush ran a second update covering the messages produced while update #1 was in flight',
+    )
+
+    // The crux: every non-system message must be summarized by exactly one
+    // update — no gap (the watermark bug dropped boundaries 6..10) and no
+    // overlap (a correct watermark partitions the messages cleanly).
+    const coverage = new Map<string, number>()
+    for (const batch of summarizedBatches) {
+      for (const message of batch) {
+        coverage.set(message.uuid, (coverage.get(message.uuid) ?? 0) + 1)
+      }
+    }
+    for (const message of result.messages) {
+      if (message.type === 'system') {
+        continue
+      }
+      assert.equal(
+        coverage.get(message.uuid),
+        1,
+        `message ${message.uuid} (${message.type}) must be summarized exactly once, was ${coverage.get(message.uuid) ?? 0}`,
+      )
+    }
   })
 
   it('does not touch session-memory when the turn never crosses the thresholds', async () => {
     fakeStreamChat([lightToolUseTurn, endTurn])
-
-    const pingTool = buildTool({
-      name: 'Ping',
-      description: 'A trivial tool that always succeeds.',
-      domain: 'host',
-      riskLevel: 'safe',
-      inputSchema: z.object({}),
-      call() {
-        return Promise.resolve({ output: 'pong' })
-      },
-    })
 
     let updaterCalls = 0
     setSessionMemoryUpdaterForTest(() => {
@@ -211,7 +236,9 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
       return Promise.resolve({ updated: true })
     })
 
-    const result = await runQuery('feishu:dm:bug7-session-memory-light', [pingTool])
+    const result = await runQuery('feishu:dm:bug7-watermark-light', [
+      makePingTool(),
+    ])
     assert.equal(result.stopReason, 'end_turn')
     assert.equal(updaterCalls, 0, 'a sub-threshold turn must not fire a session-memory update')
   })

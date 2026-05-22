@@ -303,6 +303,13 @@ export async function query(params: QueryParams): Promise<{
     ) {
       return
     }
+    // Reset the accumulators now, synchronously, against `snapshot` — NOT in a
+    // finally after the await. Mid-turn updates run non-blocking, so the agent
+    // loop keeps producing messages (and bumping these counters) while the LLM
+    // rewrite is in flight; a finally-reset would wipe that concurrent
+    // accumulation and the next update would fire late. Resetting here leaves
+    // exactly the post-snapshot work counted toward the next update.
+    resetSessionMemoryCounters()
 
     const meta = await loadMeta(getSessionId())
     const since = meta?.sessionMemoryUpdatedAt ?? 0
@@ -310,9 +317,6 @@ export async function query(params: QueryParams): Promise<{
       message => message.type !== 'system' && message.timestamp > since,
     )
     if (newMessages.length === 0) {
-      // Nothing new to summarize but counters crossed — reset so we do not
-      // hammer the model on every subsequent turn.
-      resetSessionMemoryCounters()
       return
     }
 
@@ -325,15 +329,18 @@ export async function query(params: QueryParams): Promise<{
       }
       const result = await sessionMemoryUpdaterImpl(update)
       if (result.updated) {
-        const ts = Date.now()
+        // Watermark = the newest message actually summarized, NOT Date.now().
+        // Mid-turn updates are non-blocking, so the loop produces more messages
+        // during the rewrite window; a wall-clock watermark would jump past
+        // them and the next update's `timestamp > since` filter would
+        // permanently exclude every message created while this update ran.
+        const ts = Math.max(...newMessages.map(message => message.timestamp))
         await updateMetaSessionMemoryAt(getSessionId(), ts)
         incrementSessionMemoryUpdateCount()
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[session-memory] ${message}`)
-    } finally {
-      resetSessionMemoryCounters()
     }
   }
 
