@@ -19,14 +19,14 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '929be745efc904f63dace5fc9bdbd54f69ff2853bc9025e682d829fa508a97d8',
-  generalist: 'a00e65aec6229d38fa7b1cdc4e8d37f315b1dd9ef38c8a4796423b9241f1c91c',
-  localExplorer: '376db19eef850b81e5c4a961bd77b16a86df2904ef182b8d9efbfc1e5c88150a',
+  main: '8c91f0bba65a8af5b2f92ca523a80d7f04bd3b92a4d877926e3ef1bffb56831a',
+  generalist: 'db0c490132ea66a6d3a54083944a29b33725c9b3aaea06bd59b1ea501fa27051',
+  localExplorer: '9e6a8cef2703d839e13fbe6237cbb44d9d20a316be063ea735cb77ed687bae90',
   webSearcher: 'c39b46cb0c0056620774951519996d7957ccfc6b9484b7721d7fe8620a66ef69',
   feishuSecretary: '1ff8657c73685005f1af3a50449f40e25f20700cf6b4733495387ee837bc7080',
-  coder: 'cfffff34b48c034574d961511176664db6c26436d802dfb0522b4ee9236803d6',
-  archivist: 'f9225f6479d11d4c2a9dacb7af7976ed5d1001138b55a750481cfd439afc0c7a',
-  reviewer: '5e5e59d0aa6dfa86e33179fe96eb785c5187abcad09bb4708c431fee5a764ba7',
+  coder: '537655a1d541324a25e2015d90d0b5e831170ee1f78206fab88e75d1c91fa67a',
+  archivist: '3dee3e23d872672c570c5e83c0185b531418ce470bdd38da7488f73af8608cc5',
+  reviewer: '6159822f8ca2db83700798ef169d8cbfa57103fc823902789f3c8bf1d93f22f3',
   memoryExtractor: '296e1693f3ed433a9a3f1526bc24bc6291809ebbe8c7a5dbb78c7b2100e2fccf',
   memoryCurator: '22c073df9e2148ade8570e758402a5066ff2e785a866d182a46f21ac1350f4e1',
 }
@@ -59,6 +59,7 @@ test('buildPromptForRole matches the prompt snapshot for main and bundled roles'
       tools: mainTools,
       cwd: ctx.cwd,
       environmentRoot: '/workspace',
+      scratchRoot: '/scratch',
       options: {
         autoMemory: false,
         config: snapshotConfig(),
@@ -79,6 +80,7 @@ test('buildPromptForRole matches the prompt snapshot for main and bundled roles'
         cwd: ctx.cwd,
         sessionId: ctx.sessionId,
         environmentRoot: '/workspace',
+        scratchRoot: '/scratch',
       })
       assert.equal(promptHash(prompt), SNAPSHOT_HASHES[agent.agentType])
     }
@@ -91,6 +93,7 @@ test('buildPromptForRole rejects orchestrator roles without orchestrator context
       tools: [],
       config: snapshotConfig(),
       environmentRoot: '/workspace',
+      scratchRoot: '/scratch',
     }),
     /requires orchestrator prompt context/,
   )

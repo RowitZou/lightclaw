@@ -46,6 +46,7 @@ export type OrchestratorPromptContext = {
   tools: Tool[]
   cwd: string
   environmentRoot: string
+  scratchRoot: string
   options: PromptOptions
 }
 
@@ -55,6 +56,7 @@ export type SubagentPromptContext = {
   cwd?: string
   sessionId?: string
   environmentRoot: string
+  scratchRoot: string
 }
 
 /**
@@ -223,12 +225,14 @@ export async function buildSystemPromptTemplate(
   tools: Tool[],
   cwd: string,
   environmentRoot: string,
+  scratchRoot: string,
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
   return await buildPromptForRole(getMainRole(), {
     tools,
     cwd,
     environmentRoot,
+    scratchRoot,
     options,
   })
 }
@@ -255,6 +259,7 @@ export async function buildPromptForRole(
       context.tools,
       context.cwd,
       context.environmentRoot,
+      context.scratchRoot,
       context.options,
     )
   }
@@ -266,6 +271,7 @@ export async function buildPromptForRole(
       cwd: context.cwd,
       sessionId: context.options.sessionId,
       environmentRoot: context.environmentRoot,
+      scratchRoot: context.scratchRoot,
     })
   }
 
@@ -283,6 +289,7 @@ async function buildOrchestratorPromptTemplate(
   tools: Tool[],
   cwd: string,
   environmentRoot: string,
+  scratchRoot: string,
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
   await refreshSkillRegistry(cwd)
@@ -291,6 +298,7 @@ async function buildOrchestratorPromptTemplate(
     config: options.config,
     cwd,
     environmentRoot,
+    scratchRoot,
     sessionId: options.sessionId,
     isSubagent: false,
   })
@@ -321,6 +329,7 @@ type RolePromptPartsInput = {
   config: LightClawConfig
   cwd: string
   environmentRoot: string
+  scratchRoot: string
   sessionId?: string
   isSubagent: boolean
 }
@@ -350,7 +359,15 @@ async function buildRolePromptParts(
     preTodoSections.push(role.systemPrompt)
   }
 
-  preTodoSections.push(formatEnvironmentSection(role, input.environmentRoot, input.config))
+  preTodoSections.push(
+    formatEnvironmentSection(
+      role,
+      input.environmentRoot,
+      input.scratchRoot,
+      input.config,
+      hasTool(policy.tools, 'Bash'),
+    ),
+  )
 
   if (projectMemory.trim().length > 0) {
     preTodoSections.push(['## Project Memory', projectMemory].join('\n\n'))
@@ -398,17 +415,35 @@ async function buildRolePromptParts(
 function formatEnvironmentSection(
   role: Role,
   environmentRoot: string,
+  scratchRoot: string,
   config: LightClawConfig,
+  includeScratch: boolean,
 ): string {
-  return [
+  const lines = [
     '# Environment Info',
     '',
     `Workspace directory: ${environmentRoot}`,
+  ]
+  // Scratch guidance is only rendered for roles that can run Bash — the
+  // roles that actually do git / build / archive work. A role without Bash
+  // (e.g. a web-only or Feishu-only worker) cannot use scratch, so telling
+  // it about the directory would be irrelevant context.
+  if (includeScratch) {
+    lines.push(
+      `Scratch directory: ${scratchRoot} — fast local disk. The workspace is on ` +
+      `shared storage where bulk small-file operations (git clone, dependency ` +
+      `installs, builds, unpacking archives) run very slowly, so do that work ` +
+      `under the scratch directory instead. Scratch is temporary — copy ` +
+      `anything worth keeping into the workspace.`,
+    )
+  }
+  lines.push(
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     formatCurrentDateLine(),
     `Platform: ${platform}`,
     `Model: ${resolveRoleModel(role, config)}`,
-  ].join('\n')
+  )
+  return lines.join('\n')
 }
 
 function formatRoleSkillsSection(skills: readonly string[], role: Role): string {
@@ -586,11 +621,19 @@ export async function buildSubagentPrompt(
   tools: Tool[],
   config: LightClawConfig,
   environmentRoot: string,
+  scratchRoot: string,
   agent: Role,
   cwd = getCwd(),
   sessionId?: string,
 ): Promise<string> {
-  return await buildPromptForRole(agent, { tools, config, cwd, sessionId, environmentRoot })
+  return await buildPromptForRole(agent, {
+    tools,
+    config,
+    cwd,
+    sessionId,
+    environmentRoot,
+    scratchRoot,
+  })
 }
 
 async function buildSubagentPromptContent(
@@ -603,6 +646,7 @@ async function buildSubagentPromptContent(
     cwd: context.cwd ?? getCwd(),
     sessionId: context.sessionId,
     environmentRoot: context.environmentRoot,
+    scratchRoot: context.scratchRoot,
     isSubagent: true,
   })
   const template: SystemPromptTemplate = {
