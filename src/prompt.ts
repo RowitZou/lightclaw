@@ -433,8 +433,12 @@ function formatEnvironmentSection(
       `Scratch directory: ${scratchRoot} — fast local disk. The workspace is on ` +
       `shared storage where bulk small-file operations (git clone, dependency ` +
       `installs, builds, unpacking archives) run very slowly, so do that work ` +
-      `under the scratch directory instead. Scratch is temporary — copy ` +
-      `anything worth keeping into the workspace.`,
+      `under the scratch directory instead. Scratch is NOT durable storage: it ` +
+      `is wiped — without warning and in full — whenever the worker restarts, ` +
+      `the container is removed, or the sandbox is reset, and anything left ` +
+      `there is permanently lost. As soon as a clone, download, or build ` +
+      `produces something the user needs, copy it into the workspace; never ` +
+      `leave a deliverable sitting in scratch.`,
     )
   }
   lines.push(
