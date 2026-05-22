@@ -49,6 +49,7 @@ import {
   saveMeta,
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
+import { ABORT_FAILURE_PATTERN, isTransientError } from '../transient-error.js'
 import {
   abortInFlightForSession,
   awaitBackgroundTasks,
@@ -2025,136 +2026,19 @@ function isPairableChannel(channel: string): channel is ChannelKind {
   return channel === 'feishu'
 }
 
-// Network errors that we expect to be transient. Anthropic SDK retries
-// internally for HTTP 5xx/429 only; client→proxy connect failures (typical
-// here since baseURL points at an internal proxy) bypass that retry, so the
-// channel layer takes its own pass over these patterns before surfacing the
-// failure to the user. Non-transient errors (auth, schema, prompt-too-long
-// post-compaction) skip the retry and go straight to the red notice.
-const TRANSIENT_FAILURE_PATTERN =
-  /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure|stream returned no events|terminated|fetch failed|other side closed|UND_ERR/i
-
 // Up to 3 attempts total per inbound message: the first attempt + 2 retries.
 // Exponential backoff (800ms → 1600ms) keeps the worst-case extra latency
 // around 2.4 s, which is below the user's typical "is it stuck?" threshold
 // while covering single-blip proxy hiccups that the Anthropic SDK ignores.
+// This whole-query retry is the last resort: query.ts's per-turn loop already
+// retries a transient streamChat failure in place (no prior-turn tool calls
+// re-execute), so this layer only fires when that per-turn retry was also
+// exhausted. Transient-vs-fatal classification lives in src/transient-error.ts.
 const MAX_QUERY_RETRIES = 2
 const QUERY_RETRY_BASE_MS = 800
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-// User-driven /stop and channel-runner-driven interjection auto-aborts both
-// surface as the SDK's "Request was aborted." string. Without explicit
-// attribution the next turn (or the agent itself reading transcript) sees
-// only the generic "本轮处理失败" wrapper and has to guess between network
-// glitch / model error / user stop — Phase 27 dogfood produced exactly this
-// confusion. Whitelist by signature instead of plumbing reason through the
-// abort controller, which matches how /stop already piggybacks on the SDK's
-// AbortError.
-const ABORT_FAILURE_PATTERN = /Request was aborted/i
-
-// HTTP statuses that are deterministic client errors — re-sending the same
-// request just fails again, so they are never retried.
-const FATAL_HTTP_STATUS = new Set([400, 401, 403, 404, 405, 413, 422])
-
-// Node / OS socket error codes meaning "the connection broke" — a transient
-// network blip when the endpoint was working moments earlier.
-const TRANSIENT_ERROR_CODES = new Set([
-  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE',
-  'EAI_AGAIN', 'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'ENOTFOUND',
-])
-
-// Deterministic, non-network query failures: a whole-query re-run only
-// reproduces them (and a re-run is expensive), so they stay fatal.
-const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
-
-function queryErrorChain(error: unknown): unknown[] {
-  const chain: unknown[] = []
-  let node: unknown = error
-  for (let depth = 0; depth < 6 && node != null; depth += 1) {
-    chain.push(node)
-    node = (node as { cause?: unknown }).cause
-  }
-  return chain
-}
-
-function httpStatusOf(node: unknown): number | undefined {
-  if (typeof node !== 'object' || node === null) {
-    return undefined
-  }
-  const obj = node as Record<string, unknown>
-  const response = obj.response as Record<string, unknown> | undefined
-  for (const candidate of [obj.status, obj.statusCode, response?.status]) {
-    if (typeof candidate === 'number' && candidate >= 100 && candidate < 600) {
-      return candidate
-    }
-  }
-  return undefined
-}
-
-function isAbortError(error: unknown): boolean {
-  for (const node of queryErrorChain(error)) {
-    if (
-      typeof node === 'object' && node !== null &&
-      (node as { name?: unknown }).name === 'AbortError'
-    ) {
-      return true
-    }
-  }
-  const detail = error instanceof Error ? error.message : String(error)
-  return ABORT_FAILURE_PATTERN.test(detail)
-}
-
-/**
- * Decide whether a query() throw should be retried by the runner's bounded
- * retry loop. Inspects the error object and its `cause` chain — HTTP status,
- * Node/undici socket `code`, error `name` — instead of regexing the message
- * string, so whole CLASSES of transient failures are caught without an
- * exact-string allowlist (the gap that misclassified the undici
- * `TypeError: terminated` from the 2026-05-21 dogfood as fatal).
- *
- * A genuinely unrecognized error defaults to `true` (retry). That can never
- * loop: the caller hard-caps attempts at MAX_QUERY_RETRIES, so a truly fatal
- * error just fails honestly after the cap — while a wrongly-given-up
- * transient error costs a whole dead turn the user must redo. Abort (/stop)
- * and deterministic client errors (4xx, "Exceeded maximum tool turns") are
- * the explicit non-retry cases.
- */
-export function isTransientError(error: unknown): boolean {
-  if (isAbortError(error)) {
-    return false
-  }
-  const detail = error instanceof Error ? error.message : String(error)
-  if (FATAL_MESSAGE_PATTERN.test(detail)) {
-    return false
-  }
-  for (const node of queryErrorChain(error)) {
-    const status = httpStatusOf(node)
-    if (status !== undefined) {
-      if (FATAL_HTTP_STATUS.has(status)) {
-        return false
-      }
-      if (status === 408 || status === 429 || status >= 500) {
-        return true
-      }
-    }
-    if (typeof node === 'object' && node !== null) {
-      const code = (node as { code?: unknown }).code
-      if (
-        typeof code === 'string' &&
-        (TRANSIENT_ERROR_CODES.has(code) || code.startsWith('UND_ERR'))
-      ) {
-        return true
-      }
-    }
-  }
-  if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
-    return true
-  }
-  // Unrecognized — default to retry (bounded by MAX_QUERY_RETRIES).
-  return true
 }
 
 function formatQueryFailure(detail: string, isTransient: boolean): string {

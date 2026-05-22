@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { after, afterEach, before, describe, it } from 'node:test'
 import { z } from 'zod'
 
-import { query, setStreamChatForTest } from './query.js'
+import { query, setStreamChatForTest, setTransientTurnRetryDelayForTest } from './query.js'
 import { createSessionContext, runWithSessionContext } from './session-context.js'
 import { installTestConfigHome } from './test-support/config-fixture.js'
 import { buildTool } from './tool.js'
@@ -101,9 +101,11 @@ describe('query incremental transcript persistence', () => {
   let restoreConfigHome: () => void
   before(() => {
     restoreConfigHome = installTestConfigHome()
+    setTransientTurnRetryDelayForTest(0)
   })
   after(() => {
     restoreConfigHome()
+    setTransientTurnRetryDelayForTest(null)
   })
   afterEach(() => {
     setStreamChatForTest(null)
@@ -157,6 +159,15 @@ describe('query incremental transcript persistence', () => {
     assert.equal(batches[0].length, 2)
     assert.equal(batches[0][0].type, 'assistant')
     assert.equal(batches[0][1].type, 'user')
+  })
+
+  it('retries a turn in place when streamChat fails transiently', async () => {
+    // Turn 0's first streamChat throws a transient error; the per-turn retry
+    // re-does just that API call and the retry succeeds — the failure never
+    // propagates to a whole-query retry, so no prior-turn work re-executes.
+    fakeStreamChat([crashTurn, endTurn])
+    const result = await runQuery(() => {})
+    assert.equal(result.stopReason, 'end_turn')
   })
 
   it('runs without a persistMessages callback (optional contract)', async () => {

@@ -1,6 +1,7 @@
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat as defaultStreamChat } from './api.js'
+import { isTransientError } from './transient-error.js'
 import {
   emptyInvocationContext,
   type InterjectionEntry,
@@ -82,6 +83,14 @@ export function setStreamChatForTest(
   impl: typeof defaultStreamChat | null,
 ): void {
   streamChatImpl = impl ?? defaultStreamChat
+}
+
+// Backoff before a per-turn transient streamChat retry. A `let` + test seam
+// so the unit test driving a transient failure does not actually wait.
+let transientTurnRetryDelayMs = 800
+
+export function setTransientTurnRetryDelayForTest(ms: number | null): void {
+  transientTurnRetryDelayMs = ms ?? 800
 }
 
 type QueryParams = {
@@ -539,6 +548,21 @@ export async function query(params: QueryParams): Promise<{
               shouldRetry = true
               break
             }
+          }
+          // Transient stream failure (connection drop, 5xx, 429, ...): retry
+          // just this turn's streamChat. Retrying here — rather than letting
+          // the error propagate to the channel runner's whole-query retry —
+          // re-does only the failed API call, so the completed tool calls of
+          // prior turns are not re-executed. Bounded by this loop's attempt
+          // cap; a still-failing transient error then propagates to the
+          // runner's own bounded retry as the last resort.
+          if (!shouldRetry && isTransientError(error)) {
+            const detail = error instanceof Error ? error.message : String(error)
+            process.stderr.write(
+              `[query] transient stream error on turn ${turn}; retrying turn: ${detail}\n`,
+            )
+            await new Promise(resolve => setTimeout(resolve, transientTurnRetryDelayMs))
+            shouldRetry = true
           }
           if (shouldRetry) {
             continue

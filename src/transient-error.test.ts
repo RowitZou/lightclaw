@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+
+import { isTransientError } from './transient-error.js'
+
+describe('isTransientError', () => {
+  it('classifies network / undici / 5xx errors as transient', () => {
+    // undici connection-drop — the 2026-05-21 dogfood miss.
+    assert.equal(isTransientError(new TypeError('terminated')), true)
+    assert.equal(
+      isTransientError(Object.assign(new Error('boom'), { code: 'ECONNRESET' })),
+      true,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('overloaded'), { status: 503 })),
+      true,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('rate limited'), { status: 429 })),
+      true,
+    )
+    // Structured signal carried on the cause chain.
+    assert.equal(
+      isTransientError(new Error('fetch failed', { cause: { code: 'UND_ERR_SOCKET' } })),
+      true,
+    )
+  })
+
+  it('classifies 4xx / abort / turn-cap as fatal (no retry)', () => {
+    assert.equal(
+      isTransientError(Object.assign(new Error('bad request'), { status: 400 })),
+      false,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('unauthorized'), { status: 401 })),
+      false,
+    )
+    // /stop and interjection auto-abort must never be retried.
+    assert.equal(
+      isTransientError(Object.assign(new Error('x'), { name: 'AbortError' })),
+      false,
+    )
+    assert.equal(isTransientError(new Error('Request was aborted')), false)
+    // Deterministic — a whole-query re-run only reproduces it.
+    assert.equal(isTransientError(new Error('Exceeded maximum tool turns (50).')), false)
+  })
+
+  it('defaults a genuinely unrecognized error to transient (retry)', () => {
+    assert.equal(isTransientError(new Error('something nobody has seen before')), true)
+  })
+})
