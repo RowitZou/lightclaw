@@ -54,6 +54,15 @@ export function rlaunchMountsPath(canonicalUser: string): string {
   )
 }
 
+export function userSkillsRoot(canonicalUser: string): string {
+  return path.join(
+    identityRoot(),
+    'per-user',
+    sanitizePathSegment(canonicalUser),
+    'skills',
+  )
+}
+
 export function workspaceRoot(): string {
   const fileConfig = loadConfigFile()
   // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new

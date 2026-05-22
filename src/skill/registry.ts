@@ -1,10 +1,10 @@
-import { discoverSkills, loadSkillBody } from './loader.js'
+import { discoverSkillsForUser, loadSkillBody } from './loader.js'
 import type { LoadedSkill, SkillMeta } from './types.js'
 
 let skillRegistry = new Map<string, SkillMeta>()
 
-export async function refreshSkillRegistry(cwd: string): Promise<SkillMeta[]> {
-  const skills = await discoverSkills(cwd)
+export async function refreshSkillRegistry(cwd: string, userId?: string): Promise<SkillMeta[]> {
+  const skills = await discoverSkillsForUser(cwd, userId)
   skillRegistry = new Map(skills.map(skill => [skill.name, skill]))
   return listRegisteredSkills()
 }
@@ -50,6 +50,10 @@ export async function buildRegisteredSkillInvocation(
     sections.push(`Skill arguments:\n${args.trim()}`)
   }
 
-  sections.push(loadedSkill.body.trim())
+  sections.push(replaceSkillArguments(loadedSkill.body.trim(), args))
   return sections.join('\n\n')
+}
+
+function replaceSkillArguments(body: string, args?: string): string {
+  return body.replaceAll('$ARGUMENTS', args?.trim() ?? '')
 }

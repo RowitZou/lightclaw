@@ -592,7 +592,7 @@ export class ChannelRunner {
         sessionContext.permissionApprover = pinnedApprover
         sessionContext.channelFileSender = pinnedChannelFileSender
         sessionContext.resourceGrantTarget = pinnedResourceGrantTarget
-        await refreshSkillRegistry(getCwd())
+        await refreshSkillRegistry(getCwd(), getCurrentUserId())
         if (!meta) {
           await runHook('onSessionStart', {
             sessionId,

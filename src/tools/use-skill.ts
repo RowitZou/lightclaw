@@ -7,6 +7,7 @@ import {
 } from '../skill/registry.js'
 import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
 import { getCurrentSessionContext } from '../session-context.js'
+import { getCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
@@ -28,7 +29,7 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
   }),
   async call(input, context) {
     try {
-      await refreshSkillRegistry(context.cwd)
+      await refreshSkillRegistry(context.cwd, getCurrentUserId())
       const role = getCurrentSessionContext()?.currentRole
       const skill = getRegisteredSkill(input.name)
       if (role && skill && !isSkillCompatibleWithRole(skill, role)) {

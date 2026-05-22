@@ -292,7 +292,7 @@ async function buildOrchestratorPromptTemplate(
   scratchRoot: string,
   options: PromptOptions,
 ): Promise<SystemPromptTemplate> {
-  await refreshSkillRegistry(cwd)
+  await refreshSkillRegistry(cwd, getCurrentUserId())
   const prompt = await buildRolePromptParts(role, {
     tools,
     config: options.config,
