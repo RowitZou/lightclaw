@@ -167,6 +167,23 @@ export type Runtime = {
    * LocalRuntime uses the host path; DockerRuntime will use /workspace.
    */
   readonly workspaceRoot: string
+  /**
+   * Scratch root in the environment's own path view — a fast, node-local /
+   * container-local directory for IO-heavy throwaway work (git clone, build
+   * trees, archive extraction).
+   *
+   * Distinct from `workspaceRoot`: on cluster deployments the workspace sits
+   * on a GPFS / shared mount whose small-file metadata ops run ~50x slower
+   * than local disk, so git operations that touch thousands of small files
+   * pathologically slow down there. `scratchRoot` always points at genuine
+   * local disk (DockerRuntime: the container's writable rootfs layer;
+   * RlaunchRuntime: the worker pod's node-local filesystem; LocalRuntime: an
+   * OS temp dir).
+   *
+   * Ephemeral: wiped on sandbox reset / container / worker restart. Anything
+   * that must persist has to be copied into `workspaceRoot` explicitly.
+   */
+  readonly scratchRoot: string
   readonly securityProfile: SecurityProfile
   readonly control: ControlPlane
   readonly data: DataPlane

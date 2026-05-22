@@ -89,12 +89,21 @@ const BRAINCTL_MARKER_BUFFER_BYTES = 256 * 1024
 // daemon can read it host-side via shared-cluster-fs; swept by inbox-aging at
 // a short (6h) TTL as a backstop for daemon-crash stragglers.
 const EXEC_SCRATCH_SUBDIR = '.lightclaw/exec'
+// Worker-node-local scratch dir for IO-heavy throwaway work (git clone /
+// build / archive extraction). NOT a gpfs mount — it lives on the worker
+// pod's own filesystem, so small-file ops run at local-disk speed instead of
+// paying the ~50x GPFS metadata penalty of the workspace mount. Ephemeral:
+// wiped on worker restart, re-provisioned by `ensureScratchDir`. Distinct
+// from `EXEC_SCRATCH_SUBDIR` above, which is harness-internal exec plumbing
+// on the gpfs mount. See `Runtime.scratchRoot`.
+const WORKER_SCRATCH_DIR = '/scratch'
 
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'rlaunch' as const
   readonly isolated = true
   readonly securityProfile = 'cluster-isolated' as const
   readonly workspaceRoot: string
+  readonly scratchRoot: string
   readonly canonicalUser: string
   readonly control: ControlPlane
   /** Internal storage for `data` / `fs`. Public access goes through getters
@@ -136,6 +145,11 @@ export class RlaunchRuntime implements Runtime {
    *  entirely on the hot path. */
   private workspaceChownedFor: string | null = null
   private inflightChown: Promise<void> | null = null
+  /** Memoizes successful scratch-dir provisioning per worker. Same lifecycle
+   *  as `workspaceChownedFor` — resets when the workerName changes, so a
+   *  respawned worker (whose node-local /scratch was wiped) re-provisions. */
+  private scratchDirReadyFor: string | null = null
+  private inflightScratchDir: Promise<void> | null = null
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -155,6 +169,7 @@ export class RlaunchRuntime implements Runtime {
     this.tracker = tracker
     this.canonicalUser = config.canonicalUser
     this.workspaceRoot = config.workspaceContainerPath
+    this.scratchRoot = WORKER_SCRATCH_DIR
     const mounts = [
       {
         host: config.workspaceHostPath,
@@ -717,6 +732,7 @@ export class RlaunchRuntime implements Runtime {
     // The chown only targets the workspace mount, which is exactly the
     // surface the daemon's shared-cluster-fs reads/writes.
     await this.ensureWorkspaceChowned()
+    await this.ensureScratchDir()
     await this.ensureHelpersStaged()
   }
 
@@ -768,6 +784,49 @@ export class RlaunchRuntime implements Runtime {
       // Still memoize so we don't retry every tool call; admin must investigate.
     }
     this.workspaceChownedFor = this.workerName
+  }
+
+  /**
+   * Idempotently provision the worker-node-local scratch dir (`scratchRoot`)
+   * so the agent has a fast local-disk area for git clone / build / archive
+   * work instead of paying the ~50x small-file penalty of the gpfs-backed
+   * workspace mount. `/scratch` is NOT a gpfs mount — it lives on the worker
+   * pod's own filesystem and is wiped when the worker restarts, so this is
+   * memoized per workerName and re-runs on respawn, parallel to
+   * `ensureWorkspaceChowned`. Failures are loud but non-fatal: git-heavy work
+   * just falls back to the slower workspace mount.
+   */
+  private async ensureScratchDir(): Promise<void> {
+    if (this.scratchDirReadyFor === this.workerName) return
+    if (this.inflightScratchDir) return this.inflightScratchDir
+    this.inflightScratchDir = this.provisionScratchDirOnce().finally(() => {
+      this.inflightScratchDir = null
+    })
+    return this.inflightScratchDir
+  }
+
+  private async provisionScratchDirOnce(): Promise<void> {
+    // chmod 1777 (sticky world-writable, like /tmp) lets the setpriv-wrapped
+    // daemon-uid tool execs write here without threading the uid into this
+    // command. Privileged exec: creating a dir at the container fs root needs
+    // root (worker PID 1).
+    const result = await this.runBrainctlExec({
+      command:
+        `mkdir -p ${shellQuote(this.scratchRoot)} && ` +
+        `chmod 1777 ${shellQuote(this.scratchRoot)} || true`,
+      timeoutMs: 30_000,
+      privileged: true,
+    })
+    if (result.exitCode !== 0) {
+      process.stderr.write(
+        `[rlaunch] scratch dir provisioning (${this.scratchRoot}) failed ` +
+        `for worker ${this.workerName ?? '<unbound>'}; git-heavy work will ` +
+        `fall back to the slower workspace mount: ` +
+        `${result.stderr.trim() || result.stdout.trim()}\n`,
+      )
+      // Still memoize so we don't retry every tool call; admin must investigate.
+    }
+    this.scratchDirReadyFor = this.workerName
   }
 
   /**

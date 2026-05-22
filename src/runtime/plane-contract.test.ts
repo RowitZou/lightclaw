@@ -87,6 +87,8 @@ function assertContract(runtime: Runtime, expectedKind: Runtime['kind']): void {
 
   // Identity / metadata
   assert.equal(typeof runtime.workspaceRoot, 'string')
+  assert.equal(typeof runtime.scratchRoot, 'string')
+  assert.ok(runtime.scratchRoot.length > 0, 'runtime.scratchRoot must be non-empty')
   assert.ok(
     VALID_SECURITY_PROFILES.has(runtime.securityProfile),
     `unknown securityProfile: ${runtime.securityProfile}`,
@@ -112,6 +114,8 @@ describe('Runtime plane contract — LocalRuntime', () => {
       assert.equal(runtime.control.stdoutByteReliability, 'guaranteed')
       assert.equal(runtime.data.independentFromControl, true)
       assert.equal(runtime.data.reliability, 'fs-semantic')
+      // Local scratch is a host OS temp dir — genuine local disk.
+      assert.ok(runtime.scratchRoot.includes('lightclaw-scratch'))
     } finally {
       rmSync(hostRoot, { recursive: true, force: true })
     }
@@ -158,6 +162,8 @@ describe('Runtime plane contract — DockerRuntime', () => {
       assert.equal(runtime.data.kind, 'bind-mount') // LayeredDataPlane reports the first layer kind
       assert.equal(runtime.securityProfile, 'container-isolated')
       assert.equal(runtime.control.stdoutByteReliability, 'guaranteed')
+      // Container-local scratch on the writable rootfs layer.
+      assert.equal(runtime.scratchRoot, '/scratch')
     } finally {
       rmSync(hostRoot, { recursive: true, force: true })
     }
@@ -225,6 +231,8 @@ describe('Runtime plane contract — RlaunchRuntime', () => {
       assert.equal(runtime.securityProfile, 'cluster-isolated')
       // Bug 1 invariant: brainctl-exec MUST advertise unreliable-large stdout.
       assert.equal(runtime.control.stdoutByteReliability, 'unreliable-large')
+      // Worker-node-local scratch, distinct from the gpfs workspace mount.
+      assert.equal(runtime.scratchRoot, '/scratch')
     } finally {
       rmSync(hostRoot, { recursive: true, force: true })
     }

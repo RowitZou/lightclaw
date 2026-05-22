@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
@@ -23,6 +24,7 @@ export class LocalRuntime implements Runtime {
   readonly isolated = false
   readonly securityProfile = 'host-trusted' as const
   readonly workspaceRoot: string
+  readonly scratchRoot: string
   readonly control: ControlPlane
   readonly data: DataPlane
   readonly paths: PathPolicy
@@ -40,6 +42,9 @@ export class LocalRuntime implements Runtime {
     noProxy: readonly string[] = [],
   ) {
     this.workspaceRoot = path.resolve(workspaceRoot)
+    // Scratch lives on a host OS temp dir — genuine local disk even when the
+    // workspace itself is a GPFS / shared mount. See `Runtime.scratchRoot`.
+    this.scratchRoot = path.join(tmpdir(), 'lightclaw-scratch')
     this.proxyEnv = buildLocalProxyEnv(proxy, noProxy)
     this.control = {
       kind: 'local-spawn',
@@ -61,7 +66,17 @@ export class LocalRuntime implements Runtime {
   }
 
   async start(): Promise<void> {
-    // Local execution is already available in the host process.
+    // Local execution is already available in the host process; the only
+    // setup is the scratch dir. Best-effort — a missing scratch dir only
+    // costs the shared-fs git slowdown that scratchRoot exists to avoid.
+    try {
+      await mkdir(this.scratchRoot, { recursive: true })
+    } catch (err) {
+      process.stderr.write(
+        `[local] failed to create scratch dir ${this.scratchRoot}: ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+      )
+    }
   }
 
   async stop(): Promise<void> {

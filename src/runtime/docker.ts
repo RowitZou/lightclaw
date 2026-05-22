@@ -77,12 +77,20 @@ const READ_FILE_BUFFER_BYTES = 64 * 1024 * 1024
 // free, but a 60s lag on quota detection is acceptable: the quota is the
 // runaway-write tripwire, not a precise accountant.
 const WORKSPACE_DU_CACHE_MS = 60_000
+// Container-local scratch dir for IO-heavy throwaway work (git clone /
+// build / archive extraction). Lives on the container's writable rootfs
+// layer — overlay2 on the daemon host's local disk, bounded by the existing
+// `storageOptSize` cap — so small-file ops run at local-disk speed instead
+// of paying the GPFS metadata penalty of the workspace bind mount.
+// Provisioned by `ensureScratchDir`; see `Runtime.scratchRoot`.
+const SCRATCH_DIR = '/scratch'
 
 export class DockerRuntime implements Runtime {
   readonly kind = 'docker' as const
   readonly isolated = true
   readonly securityProfile = 'container-isolated' as const
   readonly workspaceRoot: string
+  readonly scratchRoot: string
   readonly containerName: string
   readonly image: string
   readonly control: ControlPlane
@@ -99,11 +107,16 @@ export class DockerRuntime implements Runtime {
   private workspaceUsageBytes = 0
   private workspaceUsageCheckedAtMs = 0
   private workspaceUsageInflight: Promise<number> | null = null
+  // Memoizes scratch-dir provisioning for the current container. Reset on
+  // container recreate (`createContainer`) and removal (`remove`) so a fresh
+  // rootfs gets re-provisioned.
+  private scratchReady = false
 
   constructor(config: DockerRuntimeConfig, tracker: ImageReadinessTracker) {
     this.cfg = config
     this.tracker = tracker
     this.workspaceRoot = config.workspaceContainerPath
+    this.scratchRoot = SCRATCH_DIR
     this.containerName = config.containerName
     this.image = config.image
     this.mountTable = [
@@ -265,6 +278,7 @@ export class DockerRuntime implements Runtime {
   async remove(): Promise<void> {
     await this.dockerCmd(['rm', '-f', this.cfg.containerName]).catch(() => {})
     this.lastKnownState = 'absent'
+    this.scratchReady = false
   }
 
   isRunning(): boolean {
@@ -341,13 +355,38 @@ export class DockerRuntime implements Runtime {
 
   private async ensureRunning(): Promise<void> {
     const state = await this.inspectState()
-    if (state === 'running') {
+    if (state !== 'running') {
+      if (state === 'restarting' || state === 'removing') {
+        await delay(100)
+      }
+      await this.start()
+    }
+    await this.ensureScratchDir()
+  }
+
+  /**
+   * Provision the container-local scratch dir (`SCRATCH_DIR`) once per
+   * container lifecycle. The mkdir runs as root (`-u 0`) because the
+   * filesystem root is not writable by the image's unprivileged user;
+   * `chmod 1777` then lets agent-dispatched execs (which run as that
+   * unprivileged user) write there. Memoized via `scratchReady`, reset on
+   * container recreate. Non-fatal on failure: the agent can still work in
+   * the workspace mount — scratch is only the fast path for git-heavy work.
+   */
+  private async ensureScratchDir(): Promise<void> {
+    if (this.scratchReady) return
+    const result = await dockerCmdRaw([
+      'exec', '-u', '0', this.cfg.containerName, 'bash', '-c',
+      `mkdir -p ${shellQuote(this.scratchRoot)} && chmod 1777 ${shellQuote(this.scratchRoot)}`,
+    ])
+    if (result.exitCode !== 0) {
+      process.stderr.write(
+        `[docker] failed to provision scratch dir ${this.scratchRoot} in ` +
+        `${this.cfg.containerName}: ${result.stderr.trim() || result.stdout.trim()}\n`,
+      )
       return
     }
-    if (state === 'restarting' || state === 'removing') {
-      await delay(100)
-    }
-    await this.start()
+    this.scratchReady = true
   }
 
   private async assertWorkspaceQuota(): Promise<void> {
@@ -443,6 +482,8 @@ export class DockerRuntime implements Runtime {
   }
 
   private async createContainer(): Promise<void> {
+    // Fresh rootfs incoming — the scratch dir must be re-provisioned.
+    this.scratchReady = false
     const args = buildDockerCreateArgs(this.cfg)
     try {
       await this.dockerCmd(args)
