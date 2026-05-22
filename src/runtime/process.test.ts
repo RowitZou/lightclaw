@@ -102,3 +102,82 @@ describe('runProcess kills the whole process group', () => {
     }
   })
 })
+
+// 5.21 dogfood Bug 4: the abort path (user /stop) must take down the whole
+// process group with the same SIGTERM→SIGKILL escalation as the timeout path.
+// Pre-fix runProcess passed `signal` to spawn(); Node's built-in abort handler
+// only kills the direct child and synchronously emits an `error` event that
+// resolves the promise with killed===false — so the SIGKILL group sweep and
+// the escalation never run, and a SIGTERM-ignoring descendant leaks.
+describe('runProcess kills the whole process group on abort', () => {
+  it('reaps a SIGTERM-ignoring descendant when the command is aborted', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-pg-abort-'))
+    const pidFile = path.join(dir, 'grandchild.pid')
+    try {
+      const controller = new AbortController()
+      // Same shape as the timeout test: the direct child exits on SIGTERM,
+      // so only the process-group SIGKILL sweep can reap the grandchild.
+      const script =
+        `bash -c 'trap "" TERM; echo $$ > ${JSON.stringify(pidFile)}; ` +
+        `while true; do sleep 1; done' &\n` +
+        `until [ -s ${JSON.stringify(pidFile)} ]; do sleep 0.02; done\n` +
+        `sleep 30`
+      const started = runProcess('/bin/bash', ['-c', script], {
+        abortSignal: controller.signal,
+        // A long timeout so the abort path — not the timeout path — is the
+        // thing under test.
+        timeoutMs: 30_000,
+        forceKillGraceMs: 200,
+        maxBufferBytes: 1024 * 1024,
+        limitMessage: 'process terminated',
+      })
+      const grandchildPid = await waitForPidFile(pidFile)
+      controller.abort()
+      const result = await started
+      assert.equal(result.exitCode, -1)
+      assert.match(result.stderr, /command aborted/)
+
+      // Give the OS a moment to deliver SIGKILL and reap the process.
+      await delay(200)
+      assert.equal(
+        isRunning(grandchildPid),
+        false,
+        `grandchild pid ${grandchildPid} should have been killed with the group`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('escalates to SIGKILL when an aborted command itself ignores SIGTERM', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-pg-abort-escalate-'))
+    const pidFile = path.join(dir, 'child.pid')
+    try {
+      const controller = new AbortController()
+      const script =
+        `trap "" TERM; echo $$ > ${JSON.stringify(pidFile)}; ` +
+        `while true; do sleep 1; done`
+      const started = runProcess('/bin/bash', ['-c', script], {
+        abortSignal: controller.signal,
+        timeoutMs: 30_000,
+        forceKillGraceMs: 200,
+        maxBufferBytes: 1024 * 1024,
+        limitMessage: 'process terminated',
+      })
+      const childPid = await waitForPidFile(pidFile)
+      controller.abort()
+      const result = await started
+      assert.equal(result.exitCode, -1)
+      assert.match(result.stderr, /command aborted/)
+      assert.match(result.stderr, /sending SIGKILL/)
+      await delay(200)
+      assert.equal(
+        isRunning(childPid),
+        false,
+        `child pid ${childPid} should have been force-killed`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

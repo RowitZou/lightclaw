@@ -66,11 +66,19 @@ export async function runProcess(
     const forceKillGraceMs = options.forceKillGraceMs ?? FORCE_KILL_GRACE_MS
     // `detached: true` makes the child a process-group leader (pgid == pid),
     // so a timeout / abort / maxBuffer kill can take down the whole tree.
+    // We deliberately do NOT pass `signal` to spawn(): Node's built-in abort
+    // handling only `child.kill()`s the direct child (orphaning every
+    // descendant) and synchronously emits an `error` event, which would
+    // `finish()` the promise with `killed === false` — skipping both the
+    // SIGKILL group sweep in finish() and the SIGTERM→SIGKILL escalation.
+    // The `onAbort` handler below is the sole abort path: it signals the
+    // whole process group with the same escalation guarantee as the timeout
+    // and maxBuffer kills, so a SIGTERM-ignoring descendant is reaped on
+    // abort instead of leaking (5.21 Bug 4).
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
       detached: true,
-      signal: options.abortSignal,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
@@ -164,10 +172,11 @@ export async function runProcess(
     })
     child.stdin.on('error', () => { /* ignored */ })
 
-    // Abort path (e.g. user /stop): spawn() itself emits SIGTERM to the direct
-    // child when the signal fires, but that leaves descendants orphaned — so
-    // we also SIGTERM the whole process group and apply the same escalation
-    // guarantee.
+    // Abort path (e.g. user /stop): SIGTERM the whole process group and apply
+    // the same SIGTERM→SIGKILL escalation as the timeout / maxBuffer kills, so
+    // a descendant that ignores SIGTERM is reaped instead of leaking as an
+    // orphan. finish() then does the synchronous SIGKILL group sweep because
+    // this path sets `killed`.
     if (options.abortSignal) {
       const onAbort = (): void => {
         if (killed) {
