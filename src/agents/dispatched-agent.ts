@@ -53,6 +53,12 @@ export type DispatchedAgentParams = {
   label: string
   signal?: AbortSignal
   mode?: 'sync' | 'bg'
+  /** Optional incremental transcript persistence. When set, runDispatchedAgent
+   *  pre-writes the initial dispatch messages through it and forwards it to
+   *  query() so each completed tool round-trip is flushed as it lands.
+   *  Background fires use it to keep a crashed long fire's partial transcript
+   *  on disk instead of losing the whole fire. */
+  persistMessages?: (messages: Message[]) => Promise<void> | void
 }
 
 export type DispatchedAgentResult = {
@@ -145,6 +151,7 @@ export async function runDispatchedAgent(
         ? { interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId) }
         : {}),
       ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
+      ...(params.persistMessages ? { persistMessages: params.persistMessages } : {}),
     }),
     messages,
     tools: params.tools,
@@ -182,6 +189,22 @@ export async function runDispatchedAgent(
           : {}),
       }
     : null
+  // Incremental transcript persistence: hand the caller the initial dispatch
+  // messages so a crash-time partial transcript starts coherently from the
+  // dispatch prompt; query() then flushes each completed tool round-trip
+  // through the same callback. Best-effort — a persist failure must not
+  // abort the dispatch.
+  if (params.persistMessages) {
+    try {
+      await params.persistMessages(messages)
+    } catch (error) {
+      process.stderr.write(
+        `[dispatched-agent] initial persistMessages failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
+  }
   try {
     const result = childCtx
       ? await runWithSessionContext(childCtx, run)

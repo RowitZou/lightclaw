@@ -109,6 +109,10 @@ export function forkInvocationContext(input: {
   // observability stream that forwards worker activity to the chat that
   // initiated the chain (see channels/feishu/worker-activity-stream.ts).
   onAssistantTurn?: InvocationContext['onAssistantTurn']
+  // Optional incremental transcript persistence callback (see
+  // InvocationContext.persistMessages). Background fires wire this so a
+  // crash mid-fire leaves a partial bg-session transcript on disk.
+  persistMessages?: InvocationContext['persistMessages']
 }): InvocationContext {
   return {
     systemPromptOverride: input.systemPrompt,
@@ -120,6 +124,7 @@ export function forkInvocationContext(input: {
     chainState: input.chainState,
     ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
     ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
+    ...(input.persistMessages ? { persistMessages: input.persistMessages } : {}),
   }
 }
 

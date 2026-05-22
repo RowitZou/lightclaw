@@ -20,6 +20,7 @@ import {
   runWithSessionContext,
 } from '../session-context.js'
 import {
+  appendMessage,
   getSessionDir,
   rewriteTranscript,
   touchMeta,
@@ -132,6 +133,11 @@ export async function runBackgroundTaskFire(input: {
       )
     }
     const result = await runWithSessionContext(ctx, async () => {
+      // Start each fire attempt from an empty transcript. The scheduler
+      // reuses the same fireUuid (→ same sessionId) across transient
+      // retries, so a prior attempt's incrementally-flushed partial must be
+      // cleared before this attempt appends.
+      await rewriteTranscript(sessionId, [])
       const output = await runDispatchedAgent({
         mode: 'bg',
         dispatchPrompt: buildBackgroundTaskFirePrompt(input.task),
@@ -149,7 +155,19 @@ export async function runBackgroundTaskFire(input: {
         signal: input.signal,
         chainState: input.task.chainState,
         canonicalUser: input.task.ownerCanonicalUser,
+        // Incremental transcript persistence: flush each completed tool
+        // round-trip as it lands so a crash mid-fire leaves a partial
+        // bg-session transcript on disk instead of nothing.
+        persistMessages: async batch => {
+          for (const message of batch) {
+            await appendMessage(sessionId, message)
+          }
+        },
       })
+      // Success path: incremental flushes already wrote the turns; this
+      // final rewrite is the source of truth — it folds in a mid-run
+      // compaction that stopped incremental flushing. On a crash
+      // runDispatchedAgent throws before here and the partial stays on disk.
       await rewriteTranscript(sessionId, output.messages)
       await touchMeta(sessionId, output.messages.length)
       await output.forkTranscriptPersisted

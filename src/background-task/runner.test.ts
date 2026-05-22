@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAdmin } from '../identity/store.js'
 import { createAssistantMessage } from '../messages.js'
+import { loadTranscript } from '../session/storage.js'
 import { requireSessionContext } from '../session-context.js'
 import {
   clearChannelRunner,
@@ -118,6 +119,39 @@ describe('runBackgroundTaskFire', () => {
       assert.equal(outcome.summary, 'experiment loss is 2.1, training stable')
       assert.match(outcome.transcriptPath, /transcript\.jsonl$/)
     }
+  })
+
+  it('keeps a partial bg transcript on disk when the fire crashes mid-turn', async () => {
+    const assistantMsg = createAssistantMessage({
+      content: [{ type: 'text', text: 'partial progress before crash' }],
+      stopReason: null,
+      usage: {},
+      parentUuid: null,
+    })
+    // Simulate query() flushing one completed turn through the incremental
+    // persistMessages callback, then crashing — the 5.21 Bug 2 pattern.
+    setBackgroundTaskQueryForTest(async input => {
+      await input.invocation.persistMessages?.([assistantMsg])
+      throw new Error('本轮处理失败: terminated')
+    })
+
+    const task = fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' })
+    const outcome = await runBackgroundTaskFire({
+      task,
+      fireUuid: 'fire-crash',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'failure')
+
+    // The crash threw before the end-of-fire rewriteTranscript, but the
+    // incremental flush already left the pre-written dispatch prompt plus
+    // the partial turn on disk instead of nothing.
+    const sessionId = buildBackgroundTaskSessionId(task, 'fire-crash')
+    const persisted = await loadTranscript(sessionId)
+    assert.equal(persisted.length, 2)
+    assert.equal(persisted[0].type, 'user')
+    assert.equal(persisted[1].type, 'assistant')
   })
 
   it('marks the inner SessionContext as background task', async () => {
