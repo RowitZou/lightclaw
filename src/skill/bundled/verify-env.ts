@@ -8,7 +8,6 @@ export const verifyEnvSkill: LoadedSkill = {
     'SKIP when the request is purely code-level (use `verify` instead) or when no env / runtime is in scope.',
   ].join('\n'),
   whenToUse: 'The requester needs to know whether a conda / pip / docker setup is healthy before relying on it.',
-  userInvocable: true,
   allowedTools: ['Bash'],
   source: 'builtin',
   filePath: 'builtin:verify-env',

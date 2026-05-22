@@ -195,7 +195,6 @@ function skill(overrides: Partial<SkillMeta>): SkillMeta {
   return {
     name: 'skill',
     description: 'A skill',
-    userInvocable: true,
     source: 'builtin',
     filePath: 'builtin:skill',
     ...overrides,

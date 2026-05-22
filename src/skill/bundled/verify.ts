@@ -8,7 +8,6 @@ export const verifySkill: LoadedSkill = {
     'SKIP when the task is read-only, no meaningful validation exists, or validation already ran in this turn.',
   ].join('\n'),
   whenToUse: 'Code or state changed and validation would increase confidence.',
-  userInvocable: true,
   allowedTools: ['Bash', 'Read', 'Grep', 'Glob'],
   source: 'builtin',
   filePath: 'builtin:verify',

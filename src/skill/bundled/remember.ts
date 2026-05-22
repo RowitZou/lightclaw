@@ -8,7 +8,6 @@ export const rememberSkill: LoadedSkill = {
     'SKIP when the user is only narrating context without asking to preserve it, or when the fact is temporary.',
   ].join('\n'),
   whenToUse: "The requester clearly wants a durable memory saved or reviewed — either explicitly ('remember that ...', '记一下 ...') or implicitly when the request hands over a fact / preference / decision worth preserving across sessions.",
-  userInvocable: true,
   allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
   source: 'builtin',
   filePath: 'builtin:remember',

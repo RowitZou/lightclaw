@@ -7,28 +7,13 @@ import type { LoadedSkill, SkillMeta, SkillSource } from './types.js'
 import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 
 const warnedLegacySkillDirs = new Set<string>()
-
-function toBoolean(value: string | string[] | undefined, fallback: boolean): boolean {
-  if (typeof value !== 'string') {
-    return fallback
-  }
-
-  const normalized = value.trim().toLowerCase()
-  if (['true', '1', 'yes', 'on'].includes(normalized)) {
-    return true
-  }
-  if (['false', '0', 'no', 'off'].includes(normalized)) {
-    return false
-  }
-  return fallback
-}
+const warnedCollisionSkills = new Set<string>()
 
 function toSkillMeta(skill: LoadedSkill): SkillMeta {
   return {
     name: skill.name,
     description: skill.description,
     whenToUse: skill.whenToUse,
-    userInvocable: skill.userInvocable,
     allowedTools: skill.allowedTools,
     source: skill.source,
     filePath: skill.filePath,
@@ -57,7 +42,6 @@ function parseSkillFrontmatter(
       typeof frontmatter.when_to_use === 'string'
         ? frontmatter.when_to_use.trim()
         : undefined,
-    userInvocable: toBoolean(frontmatter.user_invocable, true),
     allowedTools: Array.isArray(frontmatter.allowed_tools)
       ? frontmatter.allowed_tools.map(value => value.trim()).filter(Boolean)
       : undefined,
@@ -110,6 +94,16 @@ export async function discoverSkills(cwd: string): Promise<SkillMeta[]> {
     path.join(lightclawHome(), 'skills'),
     'user',
   )) {
+    if (skillMap.has(skill.name)) {
+      if (!warnedCollisionSkills.has(skill.name)) {
+        warnedCollisionSkills.add(skill.name)
+        process.stderr.write(
+          `skills: user skill "${skill.name}" (${skill.filePath}) collides with a bundled skill; ` +
+            `ignoring the user skill. Rename it to load.\n`,
+        )
+      }
+      continue
+    }
     skillMap.set(skill.name, skill)
   }
 
