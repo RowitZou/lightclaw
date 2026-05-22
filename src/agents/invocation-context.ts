@@ -3,6 +3,7 @@ import type { CanUseToolFn } from '../tool.js'
 import type { Role } from './types.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
+  Message,
   ToolExecutionEvent,
   UserContentBlock,
 } from '../types.js'
@@ -47,6 +48,20 @@ export type InvocationContext = {
    * posts its output as a channel notice; it never throws.
    */
   slashDrain?: () => Promise<void> | void
+  /**
+   * Persist a batch of newly-produced transcript messages incrementally.
+   * query.ts invokes it at every tool-call boundary (after the assistant +
+   * tool_result pair is on the in-memory array) and after the final end-turn
+   * assistant message, so a mid-turn crash leaves a coherent partial
+   * transcript on disk instead of losing the whole turn. Each batch is always
+   * a valid message sub-sequence — never an orphan assistant tool_use without
+   * its tool_result. The implementation appends each message; query.ts
+   * catches and logs a throw, never surfacing it to the turn. Skipped for the
+   * rest of the query once a compaction rewrites the message prefix — from
+   * that point the caller's end-of-query rewriteTranscript is the source of
+   * truth.
+   */
+  persistMessages?: (messages: Message[]) => Promise<void> | void
   interjectionRenderer?: (
     entries: InterjectionEntry[],
     context: {

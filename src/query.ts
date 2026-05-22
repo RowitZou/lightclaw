@@ -1,6 +1,6 @@
 
 import { getConfig, type LightClawConfig } from './config.js'
-import { streamChat } from './api.js'
+import { streamChat as defaultStreamChat } from './api.js'
 import {
   emptyInvocationContext,
   type InterjectionEntry,
@@ -73,6 +73,16 @@ import type {
   UserToolResultBlock,
 } from './types.js'
 import type { AttachmentKind } from './provider/types.js'
+
+// streamChat indirection so unit tests can drive the query loop with a fake
+// event stream. Production code always uses the real implementation.
+let streamChatImpl: typeof defaultStreamChat = defaultStreamChat
+
+export function setStreamChatForTest(
+  impl: typeof defaultStreamChat | null,
+): void {
+  streamChatImpl = impl ?? defaultStreamChat
+}
 
 type QueryParams = {
   role: Role
@@ -219,6 +229,10 @@ export async function query(params: QueryParams): Promise<{
   let stopReason: string | null = null
   let didCompact = false
   let totalUsage: UsageStats = {}
+  // Cursor into `messages` for incremental transcript persistence — the index
+  // past which messages have not yet been handed to invocation.persistMessages.
+  // Starts past the on-disk history prefix.
+  let transcriptPersistCursor = params.messages.length
 
   // Open per-query API logger and push it on the AsyncLocalStorage scope so
   // every nested streamChat call (main loop turns + recall + session-memory
@@ -287,6 +301,32 @@ export async function query(params: QueryParams): Promise<{
       console.error(`[session-memory] ${message}`)
     } finally {
       resetSessionMemoryCounters()
+    }
+  }
+
+  // Incremental transcript persistence. Hands the caller each coherent batch
+  // of new messages as the turn produces them — at every tool-call boundary
+  // (assistant + tool_result pair) and after the final end-turn assistant
+  // message — so a crash mid-turn leaves a valid partial transcript on disk
+  // instead of losing the whole turn. Once a compaction has rewritten the
+  // message prefix the cursor is stale, so flushing stops and the caller's
+  // end-of-query rewriteTranscript becomes the source of truth (see runner.ts
+  // post-query handling). Best-effort: a persist throw is caught and logged,
+  // never surfaced to the turn.
+  const flushTranscript = async (): Promise<void> => {
+    if (didCompact || !invocation.persistMessages) {
+      return
+    }
+    if (transcriptPersistCursor >= messages.length) {
+      return
+    }
+    const batch = messages.slice(transcriptPersistCursor)
+    transcriptPersistCursor = messages.length
+    try {
+      await invocation.persistMessages(batch)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[query] persistMessages failed: ${detail}\n`)
     }
   }
 
@@ -393,7 +433,7 @@ export async function query(params: QueryParams): Promise<{
   }
 
   type StopEvent = Extract<
-    Awaited<ReturnType<typeof streamChat>> extends AsyncGenerator<infer T> ? T : never,
+    Awaited<ReturnType<typeof defaultStreamChat>> extends AsyncGenerator<infer T> ? T : never,
     { type: 'stop' }
   >
 
@@ -454,7 +494,7 @@ export async function query(params: QueryParams): Promise<{
           endpointBaseUrl: config.endpoints[mainRoute.entry.endpoint]?.baseUrl,
           upstreamModel: mainRoute.entry.upstreamModel,
         }
-        for await (const event of streamChat({
+        for await (const event of streamChatImpl({
           config,
           model: roleModel,
           messages: toApiMessages(messages),
@@ -564,6 +604,10 @@ export async function query(params: QueryParams): Promise<{
     }
 
     if (toolUses.length === 0) {
+      // Persist the final end-turn assistant message before post-turn work
+      // (session-memory, auto-compact) so a crash here still keeps the
+      // model's answer on disk.
+      await flushTranscript()
       // A write slash may have arrived during this final no-tool turn.
       // Apply it before the query returns so it does not have to wait for
       // the runner's post-query leftover-replay path.
@@ -599,6 +643,7 @@ export async function query(params: QueryParams): Promise<{
             })),
           }
           messages.push(lateUserMessage)
+          await flushTranscript()
           process.stderr.write(
             `query: injected ${lateInterjections.length} late interjection${lateInterjections.length === 1 ? '' : 's'} after end_turn\n`,
           )
@@ -720,6 +765,10 @@ export async function query(params: QueryParams): Promise<{
         }
       }
       messages.push(nextUserMessage)
+      // Persist this completed tool round-trip (assistant + tool_result user
+      // message) before post-turn work so a crash keeps it on disk. Inside
+      // the finally so an aborted dispatch still flushes the partial turn.
+      await flushTranscript()
     }
 
     // After /stop, skip post-turn work (session-memory update, auto-compact /

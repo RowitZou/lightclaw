@@ -723,6 +723,11 @@ export class ChannelRunner {
         messages.push(userMessage)
         await appendMessage(sessionId, userMessage)
         const messageCountBeforeQuery = messages.length
+        // Count of transcript messages already persisted to disk. The
+        // incremental persistMessages callback advances it as query() flushes
+        // each tool round-trip; reset to the on-disk baseline at the start of
+        // every attempt so a retry re-counts from scratch.
+        let persistedTranscriptCount = messageCountBeforeQuery
         // Resolve provider via the same resolver the encoder used so endpoint
         // / upstreamModel match the cache key for any capability flips.
         const { provider, entry: providerEntry } = getMainRoleRoute(appConfig)
@@ -771,6 +776,15 @@ export class ChannelRunner {
           // after a successful stop event, but defensive against compaction-
           // or hook-side transient errors that could leave a partial tail.
           messages.length = messageCountBeforeQuery
+          // Discard any partial transcript a previous attempt flushed
+          // incrementally so the retry re-runs query() from the on-disk
+          // baseline (history + the inbound user message). attempt 0 has
+          // nothing to discard; the capability-fallback path does its own
+          // rewriteTranscript, so this only matters for transient retries.
+          if (attempt > 0) {
+            await rewriteTranscript(sessionId, messages)
+          }
+          persistedTranscriptCount = messageCountBeforeQuery
           // Reset the streaming guard on each attempt; a retried query
           // re-emits the same turns from scratch.
           streamedAtLeastOnce = false
@@ -896,6 +910,16 @@ export class ChannelRunner {
                       messages,
                       userId,
                     })
+                  }
+                },
+                // Incremental transcript persistence: query.ts flushes each
+                // completed tool round-trip (and the final answer) here so a
+                // crash mid-turn leaves a coherent partial transcript on disk
+                // instead of losing the whole turn.
+                persistMessages: async (batch) => {
+                  for (const item of batch) {
+                    await appendMessage(sessionId, item)
+                    persistedTranscriptCount += 1
                   }
                 },
               }),
@@ -1078,7 +1102,10 @@ export class ChannelRunner {
             })
             messages.push(assistantMessage)
             await appendMessage(sessionId, assistantMessage)
-            await persistMeta(Date.now(), messages.length)
+            // query() may have flushed partial-turn messages incrementally
+            // before throwing; the on-disk count is those plus this failure
+            // marker, not the runner's (baseline-only) messages array.
+            await persistMeta(Date.now(), persistedTranscriptCount + 1)
             // Surface every query failure as a red notice card so the user
             // always gets visible feedback. Previously only transient
             // network errors surfaced; non-transient (API 400, tool dispatch
@@ -1113,11 +1140,16 @@ export class ChannelRunner {
         const nextTail = result.messages[messageCountBeforeQuery - 1]
         const didMutateExistingHistory =
           JSON.stringify(previousTail) !== JSON.stringify(nextTail)
-        const newlyAddedMessages = result.messages.slice(messageCountBeforeQuery)
         if (result.didCompact || didMutateExistingHistory) {
+          // Compaction / capability-fallback rewrote the message prefix —
+          // query.ts stopped incremental flushing, so overwrite the whole
+          // transcript with the final in-memory state.
           await rewriteTranscript(sessionId, result.messages)
         } else {
-          for (const item of newlyAddedMessages) {
+          // query() persisted every new message incrementally via
+          // persistMessages; append only any tail it did not reach
+          // (defensive — normally empty).
+          for (const item of result.messages.slice(persistedTranscriptCount)) {
             await appendMessage(sessionId, item)
           }
         }
