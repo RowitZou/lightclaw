@@ -7,7 +7,6 @@ import {
 } from '../skill/registry.js'
 import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
 import { getCurrentSessionContext } from '../session-context.js'
-import { setActiveSkillAllowedTools } from '../state.js'
 import { buildTool } from '../tool.js'
 
 export const useSkillTool = buildTool({
@@ -45,7 +44,6 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           isError: true,
         }
       }
-      setActiveSkillAllowedTools(skill?.allowedTools)
 
       return {
         output: content,

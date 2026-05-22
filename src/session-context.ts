@@ -63,7 +63,6 @@ export type SessionContext = {
   cliArgRules: PermissionRule[]
   identityRules: PermissionRule[]
   fileRules: PermissionRule[]
-  activeSkillAllowedTools?: string[]
   permissionApprover: PermissionApprover | null
   channelFileSender: ChannelFileSender | null
   resourceGrantTarget?: ResourceGrantTarget
@@ -151,7 +150,6 @@ export function createSessionContext(input: {
   cliArgRules?: PermissionRule[]
   identityRules?: PermissionRule[]
   fileRules?: PermissionRule[]
-  activeSkillAllowedTools?: string[]
   permissionApprover?: PermissionApprover | null
   channelFileSender?: ChannelFileSender | null
   resourceGrantTarget?: ResourceGrantTarget
@@ -182,7 +180,6 @@ export function createSessionContext(input: {
     cliArgRules: input.cliArgRules ?? [],
     identityRules: input.identityRules ?? [],
     fileRules: input.fileRules ?? [],
-    activeSkillAllowedTools: input.activeSkillAllowedTools,
     permissionApprover: input.permissionApprover ?? null,
     channelFileSender: input.channelFileSender ?? null,
     resourceGrantTarget: input.resourceGrantTarget,
@@ -227,7 +224,6 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     cliArgRules: [],
     identityRules: [],
     fileRules: [],
-    activeSkillAllowedTools: undefined,
     permissionApprover: null,
     channelFileSender: null,
     resourceGrantTarget: undefined,

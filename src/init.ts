@@ -28,7 +28,6 @@ import {
   getSessionId,
   resetAbortController,
   setAbortControllerForSession,
-  clearActiveSkillAllowedTools,
   setNetworkBridge,
 } from './state.js'
 import {
@@ -267,7 +266,6 @@ function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefin
  * REPL) already satisfies this.
  */
 export function beginQuery(): AbortSignal {
-  clearActiveSkillAllowedTools()
   const controller = resetAbortController()
   setAbortControllerForSession(getSessionId(), controller)
   return controller.signal

@@ -61,9 +61,6 @@ function cloneSessionContext(current: SessionState): SessionContext {
     cliArgRules: [...current.cliArgRules],
     identityRules: [...current.identityRules],
     fileRules: [...current.fileRules],
-    activeSkillAllowedTools: current.activeSkillAllowedTools
-      ? [...current.activeSkillAllowedTools]
-      : undefined,
     backgroundTasks: new Set(current.backgroundTasks),
   }
 }
@@ -273,19 +270,6 @@ export function getAllPermissionRules(): PermissionRule[] {
     ...current.cliArgRules,
     ...current.fileRules,
   ]
-}
-
-export function getActiveSkillAllowedTools(): string[] | undefined {
-  const allowedTools = currentState().activeSkillAllowedTools
-  return allowedTools ? [...allowedTools] : undefined
-}
-
-export function setActiveSkillAllowedTools(allowedTools: string[] | undefined): void {
-  currentState().activeSkillAllowedTools = allowedTools ? [...allowedTools] : undefined
-}
-
-export function clearActiveSkillAllowedTools(): void {
-  currentState().activeSkillAllowedTools = undefined
 }
 
 export function getAbortController(): AbortController {

@@ -1,4 +1,3 @@
-import { getActiveSkillAllowedTools } from '../state.js'
 import type {
   PermissionAskDecision,
   PermissionDecision,
@@ -40,11 +39,6 @@ export function evaluatePermission(args: {
         }
       }
     }
-  }
-
-  const skillBoundary = evaluateSkillBoundary(toolName)
-  if (skillBoundary) {
-    return skillBoundary
   }
 
   let firstAllow: PermissionRule | undefined
@@ -123,41 +117,4 @@ export function evaluatePermission(args: {
   }
 
   return riskLevel === 'safe' ? { behavior: 'allow' } : { behavior: 'ask' }
-}
-
-function evaluateSkillBoundary(toolName: string): PermissionDecision | null {
-  // UseSkill / ToolSearch are meta-tools, not capability tools. UseSkill lets
-  // the agent switch to another skill mid-task; ToolSearch loads the schema
-  // for any deferred tool already named in the skill's allowlist (Phase 31
-  // moved Memory*/Web*/etc into deferred, so a skill listing `MemoryWrite`
-  // implicitly depends on ToolSearch to fetch its schema). Forcing every
-  // skill to enumerate the meta layer in `allowed_tools` would leak the
-  // deferred-loading mechanism into skill authors' surface.
-  if (toolName === 'UseSkill' || toolName === 'ToolSearch') {
-    return null
-  }
-
-  const allowedTools = getActiveSkillAllowedTools()
-  if (!allowedTools) {
-    return null
-  }
-
-  if (allowedTools.some(pattern => matchesToolPattern(toolName, pattern))) {
-    return null
-  }
-
-  return {
-    behavior: 'deny',
-    reason: `Permission denied: active skill allows only ${allowedTools.join(', ')}; ${toolName} is outside that boundary.`,
-  }
-}
-
-function matchesToolPattern(toolName: string, pattern: string): boolean {
-  if (pattern === toolName || pattern === '*') {
-    return true
-  }
-  if (pattern.endsWith('*')) {
-    return toolName.startsWith(pattern.slice(0, -1))
-  }
-  return false
 }
