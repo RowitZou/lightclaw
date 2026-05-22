@@ -6,6 +6,7 @@ import {
 } from './tools/dispatch.js'
 import { notifyTool } from './tools/notify.js'
 import { bashTool } from './tools/bash.js'
+import { killBashTool } from './tools/kill-bash.js'
 import { conversationGrepTool } from './tools/conversation-grep.js'
 import { conversationListTool } from './tools/conversation-list.js'
 import { conversationReadTool } from './tools/conversation-read.js'
@@ -44,6 +45,7 @@ import type { ChannelKey } from './channel-types.js'
 
 export const builtinTools = [
   bashTool,
+  killBashTool,
   conversationListTool,
   conversationReadTool,
   conversationGrepTool,

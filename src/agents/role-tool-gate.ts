@@ -91,6 +91,10 @@ function checkRoleToolVisibility(
     }
   }
 
+  if (toolName === 'KillBash' && (tools.includes('*') || tools.includes('Bash'))) {
+    return { allowed: true }
+  }
+
   if (!tools.includes('*') && !tools.includes(toolName)) {
     return {
       allowed: false,

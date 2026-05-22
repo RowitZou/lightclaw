@@ -3,6 +3,9 @@ import { describe, it } from 'node:test'
 
 import { bashTool } from './bash.js'
 import type { ToolCallContext } from '../tool.js'
+import { FakeRuntime } from '../background-exec/test-helpers.js'
+import { BackgroundJobRegistry, getBackgroundJobRegistry } from '../background-exec/registry.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
 
 function buildCtx(execResult: {
   stdout: string
@@ -55,5 +58,51 @@ describe('Bash error-recovery hints', () => {
     assert.equal(result.isError, undefined)
     assert.match(result.output, /stdout:\s*hi/)
     assert.doesNotMatch(result.output, /Hint/)
+  })
+
+  it('run_in_background launches a detached job and returns output file paths', async () => {
+    getBackgroundJobRegistry().clear()
+    const runtime = new FakeRuntime()
+    runtime.queueExec({ stdout: '', stderr: '', exitCode: 0 })
+    runtime.queueExec({ stdout: 'LIGHTCLAW_BG_PGID:4321\n', stderr: '', exitCode: 0 })
+    const ctx = createSessionContext({
+      sessionId: 's1',
+      currentUserId: 'alice',
+      cwd: '/workspace',
+      model: 'test',
+      sessionsDir: '/sessions',
+      memoryDir: '/memory',
+      runtime: runtime.asRuntime(),
+    })
+
+    const result = await runWithSessionContext(ctx, () =>
+      bashTool.call(
+        { command: 'sleep 400 && echo done', run_in_background: true },
+        {
+          abortSignal: new AbortController().signal,
+          runtime: runtime.asRuntime(),
+        } as ToolCallContext,
+      )
+    )
+
+    assert.equal(result.isError, undefined)
+    assert.match(result.output, /Started background Bash job bg-/)
+    assert.match(result.output, /stdout: \/workspace\/\.lightclaw\/bg-exec\/bg-/)
+    assert.match(runtime.execCalls[1].command, /setsid bash -c/)
+    assert.equal(getBackgroundJobRegistry().listForSession('s1').length, 1)
+    getBackgroundJobRegistry().clear()
+  })
+
+  it('timeout failures include the background-mode hint', async () => {
+    const result = await bashTool.call(
+      { command: 'git clone https://example.invalid/large.git' },
+      buildCtx({
+        stdout: '',
+        stderr: 'command timed out after 300000ms.',
+        exitCode: -1,
+      }),
+    )
+    assert.equal(result.isError, true)
+    assert.match(result.output, /run_in_background: true/)
   })
 })

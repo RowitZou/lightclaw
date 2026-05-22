@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
+import { launchBackgroundJob } from '../background-exec/launcher.js'
 import { suggestBashRules } from '../permission/suggestions.js'
+import { getCurrentRole, getCurrentUserId, getSessionId } from '../state.js'
 import { buildTool } from '../tool.js'
 
 const MAX_OUTPUT_CHARS = 30000
@@ -40,17 +42,38 @@ Git rules:
 - Prefer new commits over \`--amend\`; never amend a commit you've already pushed.
 - Stage by named file, not \`git add -A\` / \`git add .\` — risk of including secrets, build artifacts, or unrelated work.
 
-Long-running work: schedule via Dispatch background mode, not via Bash + \`sleep\`. Do not use \`sleep\` to poll a condition — diagnose the root cause or restructure.`,
+Long-running work: set \`run_in_background: true\` for a command that may run past the foreground time limit (large clones, long builds or test suites). It detaches, returns an output file path, and does not block the turn — you are notified when it finishes, so you do not need to poll. \`Read\` the output path to check progress before then, and stop a job you no longer need with \`KillBash\`. Do not use \`sleep\` to poll a condition.`,
   domain: 'environment',
   riskLevel: 'execute',
   inputSchema: z.object({
     command: z.string().min(1),
     timeout: z.number().int().min(1).max(MAX_TIMEOUT_SECONDS).optional(),
+    run_in_background: z.boolean().optional().describe(
+      'Set to true to run this command in the background instead of waiting for it. The turn is not blocked; stdout/stderr stream to a file whose path is returned — use `Read` on that path to check progress. You are notified when the command finishes, so you don\'t need to poll. Stop a job you no longer need with `KillBash`. Do not append `&` to the command.',
+    ),
   }),
   suggestPermissionRules(input) {
     return suggestBashRules(input.command)
   },
   async call(input, context) {
+    if (input.run_in_background) {
+      const meta = await launchBackgroundJob({
+        runtime: context.runtime,
+        command: input.command,
+        cwd: context.runtime.workspaceRoot,
+        canonicalUser: getCurrentUserId() ?? 'terminal',
+        sessionId: getSessionId(),
+        roleId: getCurrentRole()?.agentType,
+      })
+      return {
+        output:
+          `Started background Bash job ${meta.jobId}.\n` +
+          `stdout: ${meta.outFile}\n` +
+          `stderr: ${meta.errFile}\n\n` +
+          `Use Read on the output files to check progress. Stop it with KillBash if it is no longer needed.`,
+      }
+    }
+
     const timeoutMs = Math.min(input.timeout ?? 30, MAX_TIMEOUT_SECONDS) * 1000
 
     const result = await context.runtime.exec({
@@ -85,8 +108,12 @@ Long-running work: schedule via Dispatch background mode, not via Bash + \`sleep
       }
     }
 
+    const timeoutHint = result.stderr.includes('command timed out after')
+      ? `\n\n[Hint: this command hit the foreground time limit. For work that genuinely needs longer — large clones, long builds — re-run it with run_in_background: true.]`
+      : ''
+
     return {
-      output: `${detail}\n\nexit_code: ${result.exitCode}`,
+      output: `${detail}\n\nexit_code: ${result.exitCode}${timeoutHint}`,
       isError: true,
     }
   },

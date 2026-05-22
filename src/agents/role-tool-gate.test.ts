@@ -58,6 +58,12 @@ test('worker roles deny tools outside explicit role.tools', async () => {
   })
 })
 
+test('KillBash is a Bash companion tool for explicit and wildcard Bash roles only', () => {
+  assert.equal(isToolVisibleToRole(role({ kind: 'worker', tools: ['Bash'] }), 'KillBash'), true)
+  assert.equal(isToolVisibleToRole(role({ kind: 'worker', tools: ['*'] }), 'KillBash'), true)
+  assert.equal(isToolVisibleToRole(role({ kind: 'worker', tools: ['Read'] }), 'KillBash'), false)
+})
+
 test('worker Dispatch visibility requires explicit tool and reachable roles', async () => {
   const reviewer = role({
     kind: 'worker',
