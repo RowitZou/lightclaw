@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { StringDecoder } from 'node:string_decoder'
 
+import { runProcess } from './process.js'
 import type {
   ControlPlane,
   DataPlane,
@@ -102,110 +101,27 @@ export class LocalRuntime implements Runtime {
   }
 
   async exec(input: ExecInput): Promise<ExecResult> {
-    return new Promise(resolve => {
-      let settled = false
-      let killed = false
-      let stdout = ''
-      let stderr = ''
-      let stdoutBytes = 0
-      let stderrBytes = 0
-      const maxBytes = input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES
-      // StringDecoder buffers partial UTF-8 sequences across chunk boundaries
-      // so multi-byte characters split mid-sequence are not corrupted.
-      const stdoutDecoder = new StringDecoder('utf8')
-      const stderrDecoder = new StringDecoder('utf8')
-
-      // Build env precedence: process.env < proxyEnv (from
-      // runtime.network.proxy) < input.env (caller override). When no
-      // proxy is configured and no caller override is supplied we pass
-      // `undefined` so child inherits parent env directly — matching
-      // the historical behavior for the un-configured case.
-      const env =
-        this.proxyEnv || input.env
-          ? { ...process.env, ...(this.proxyEnv ?? {}), ...(input.env ?? {}) }
-          : undefined
-      const child = spawn('/bin/bash', ['-c', input.command], {
-        cwd: this.absolutize(input.cwd),
-        env,
-        signal: input.abortSignal,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-
-      const finish = (result: ExecResult): void => {
-        if (settled) {
-          return
-        }
-        settled = true
-        clearTimeout(timeout)
-        resolve({
-          ...result,
-          stdout: result.stdout + stdoutDecoder.end(),
-          stderr: result.stderr + stderrDecoder.end(),
-        })
-      }
-
-      const killForLimit = (streamName: 'stdout' | 'stderr'): void => {
-        if (killed) {
-          return
-        }
-        killed = true
-        stderr += `\n${streamName} exceeded maxBufferBytes (${maxBytes}); process terminated.`
-        child.kill('SIGTERM')
-      }
-
-      const timeout = setTimeout(() => {
-        if (killed) {
-          return
-        }
-        killed = true
-        stderr += `\ncommand timed out after ${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`
-        child.kill('SIGTERM')
-      }, input.timeoutMs ?? DEFAULT_TIMEOUT_MS)
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdoutBytes += chunk.length
-        if (stdoutBytes <= maxBytes) {
-          stdout += stdoutDecoder.write(chunk)
-        } else {
-          killForLimit('stdout')
-        }
-      })
-
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderrBytes += chunk.length
-        if (stderrBytes <= maxBytes) {
-          stderr += stderrDecoder.write(chunk)
-        } else {
-          killForLimit('stderr')
-        }
-      })
-
-      child.on('error', error => {
-        finish({
-          stdout,
-          stderr: stderr || error.message,
-          exitCode: -1,
-        })
-      })
-
-      child.on('close', (code, signal) => {
-        finish({
-          stdout,
-          stderr,
-          exitCode: killed || signal ? -1 : code ?? 1,
-        })
-      })
-
-      // Swallow EPIPE / ERR_STREAM_DESTROYED if the child dies (or is killed by
-      // an aborted signal) before we finish writing stdin. Without this, the
-      // unhandled 'error' event would crash the host process.
-      child.stdin.on('error', () => { /* ignored */ })
-
-      if (input.stdin !== undefined) {
-        child.stdin.end(input.stdin)
-      } else {
-        child.stdin.end()
-      }
+    // Build env precedence: process.env < proxyEnv (from
+    // runtime.network.proxy) < input.env (caller override). When no
+    // proxy is configured and no caller override is supplied we pass
+    // `undefined` so child inherits parent env directly — matching
+    // the historical behavior for the un-configured case.
+    const env =
+      this.proxyEnv || input.env
+        ? { ...process.env, ...(this.proxyEnv ?? {}), ...(input.env ?? {}) }
+        : undefined
+    // Delegate to runProcess: a timeout / abort / maxBuffer kill then takes
+    // down the whole spawned process group (`bash -c "git clone"` → git →
+    // git-index-pack), not just the direct bash child. runProcess also adds
+    // the SIGTERM→SIGKILL escalation this path never had.
+    return runProcess('/bin/bash', ['-c', input.command], {
+      abortSignal: input.abortSignal,
+      cwd: this.absolutize(input.cwd),
+      env,
+      stdin: input.stdin,
+      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+      limitMessage: 'process terminated',
     })
   }
 
