@@ -13,7 +13,7 @@ import { resolveHooks } from './agents/hook-registry.js'
 import type { HookContext, RenderedPrompt } from './agents/hooks/types.js'
 import { runHook } from './hooks/index.js'
 import {
-  updateSessionMemory,
+  updateSessionMemory as defaultUpdateSessionMemory,
   type SessionMemoryUpdateInput,
 } from './memory/session-memory.js'
 import {
@@ -91,6 +91,18 @@ let transientTurnRetryDelayMs = 800
 
 export function setTransientTurnRetryDelayForTest(ms: number | null): void {
   transientTurnRetryDelayMs = ms ?? 800
+}
+
+// updateSessionMemory indirection so unit tests can observe and control
+// session-memory write timing without a real LLM call. Production code always
+// uses the real implementation.
+let sessionMemoryUpdaterImpl: typeof defaultUpdateSessionMemory =
+  defaultUpdateSessionMemory
+
+export function setSessionMemoryUpdaterForTest(
+  impl: typeof defaultUpdateSessionMemory | null,
+): void {
+  sessionMemoryUpdaterImpl = impl ?? defaultUpdateSessionMemory
 }
 
 type QueryParams = {
@@ -263,9 +275,12 @@ export async function query(params: QueryParams): Promise<{
     usage: UsageStats
   }> {
 
-  // P1: SessionMemory write triggered post-turn when both token and tool_call
-  // accumulators cross their thresholds. Synchronous so the next prompt build
-  // sees the freshly written file. Failures are logged, never raised.
+  // SessionMemory write — runs the threshold check and, when both the token
+  // and tool_call accumulators have crossed, the LLM rewrite. Driven by the
+  // two wrappers below: kickSessionMemoryUpdate (non-blocking, mid-turn tool
+  // boundaries) and flushSessionMemoryUpdate (awaited at end_turn so the next
+  // prompt build / a compaction boundary sees the fresh file). Failures are
+  // logged, never raised.
   const maybeUpdateSessionMemory = async (snapshot: Message[]): Promise<void> => {
     if (
       !config.memory.extractor.enabled
@@ -299,7 +314,7 @@ export async function query(params: QueryParams): Promise<{
         newMessages,
         config,
       }
-      const result = await updateSessionMemory(update)
+      const result = await sessionMemoryUpdaterImpl(update)
       if (result.updated) {
         const ts = Date.now()
         await updateMetaSessionMemoryAt(getSessionId(), ts)
@@ -310,6 +325,49 @@ export async function query(params: QueryParams): Promise<{
       console.error(`[session-memory] ${message}`)
     } finally {
       resetSessionMemoryCounters()
+    }
+  }
+
+  // Mid-turn session-memory updates run non-blocking. A long turn crosses the
+  // token + tool_call thresholds many times (a 31-min / 63-iteration dogfood
+  // turn fired ~17 updates); awaiting each LLM rewrite inside the agent loop
+  // adds that latency straight to wall-clock. Only one update is allowed in
+  // flight at a time — while one runs, later tool boundaries skip and leave
+  // the counters accumulating, so the next update naturally coalesces the work
+  // done in between instead of queuing a call per boundary.
+  let sessionMemoryInFlight: Promise<void> | null = null
+
+  // Non-blocking: kick a session-memory update unless one is already running.
+  // Used at mid-turn tool boundaries — fire-and-forget, errors logged.
+  const kickSessionMemoryUpdate = (snapshot: Message[]): void => {
+    if (sessionMemoryInFlight) {
+      return
+    }
+    const pending = maybeUpdateSessionMemory(snapshot).catch(err => {
+      const detail = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`[query] session-memory update failed: ${detail}\n`)
+    })
+    sessionMemoryInFlight = pending
+    void pending.finally(() => {
+      if (sessionMemoryInFlight === pending) {
+        sessionMemoryInFlight = null
+      }
+    })
+  }
+
+  // Blocking: await any in-flight mid-turn update, then run a final update so
+  // the on-disk session-memory.md is current before the query returns. Used at
+  // end_turn. The final update is still threshold-gated, so a short turn that
+  // never crossed the thresholds is a no-op here, same as before.
+  const flushSessionMemoryUpdate = async (snapshot: Message[]): Promise<void> => {
+    if (sessionMemoryInFlight) {
+      await sessionMemoryInFlight
+    }
+    try {
+      await maybeUpdateSessionMemory(snapshot)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`[query] session-memory flush failed: ${detail}\n`)
     }
   }
 
@@ -681,7 +739,7 @@ export async function query(params: QueryParams): Promise<{
       }
       const extractionSnapshot = [...messages]
       if (!invocation.ephemeral) {
-        await maybeUpdateSessionMemory(extractionSnapshot)
+        await flushSessionMemoryUpdate(extractionSnapshot)
         for (const hook of lifecycleHooks) {
           await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
         }
@@ -803,7 +861,7 @@ export async function query(params: QueryParams): Promise<{
     // auto-extract afterEndTurn hooks) for the turn the user just aborted.
     throwIfAborted(signal)
     if (!invocation.ephemeral) {
-      await maybeUpdateSessionMemory([...messages])
+      kickSessionMemoryUpdate([...messages])
       for (const hook of lifecycleHooks) {
         await hook.afterEndTurn?.(makeHookContext(), stopEvent.usage)
       }
