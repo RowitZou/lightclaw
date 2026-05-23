@@ -73,6 +73,22 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   assert.equal(form.elements.some(element => element.tag === 'select_static'), true)
   assert.equal(form.elements.some(element => element.tag === 'multi_select_static'), true)
 
+  // Option descriptions must NOT be baked into the dropdown label (Feishu
+  // truncates long option text on one line). The description for option B
+  // should appear in the "选项说明" markdown block above the select; the
+  // dropdown's option.text.content carries only the bare label "B".
+  const selectStatic = form.elements.find(el => el.tag === 'select_static') as {
+    options: Array<{ text: { content: string }; value: string }>
+  }
+  assert.deepEqual(
+    selectStatic.options.map(o => o.text.content),
+    ['A', 'B'],
+    'dropdown options should carry the bare label, not "label - description"',
+  )
+  const firstQuestionMd = form.elements.find(el => el.tag === 'markdown') as { content: string }
+  assert.match(firstQuestionMd.content, /选项说明/)
+  assert.match(firstQuestionMd.content, /\*\*B\*\* — second/)
+
   // V2 buttons live in a column_set inside the form, with the callback value
   // at behaviors[0].value (the V1 top-level `value` field is no longer the
   // source of truth).

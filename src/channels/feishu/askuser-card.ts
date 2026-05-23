@@ -443,19 +443,37 @@ export function buildAskUserCard(input: {
   //    transport-ws extraction continues to work.
   const formElements: Record<string, unknown>[] = []
   input.questions.forEach((question, index) => {
+    // Feishu's select dropdown truncates long option text on one line (2026-05-23
+    // dogfood: "下拉框里的选项过长会被省略，看不清"). Move every description out
+    // of the option label into a "选项说明" block above the select; the
+    // dropdown only carries the bare short label, which renders in full.
+    const headerLines = [
+      `**Q${index + 1} / ${escapeLarkMd(question.header)}**`,
+      escapeLarkMd(question.question),
+    ]
+    const hasDescriptions = question.options.some(option => option.description)
+    if (hasDescriptions) {
+      headerLines.push('')
+      headerLines.push('**选项说明：**')
+      for (const option of question.options) {
+        const labelBold = `**${escapeLarkMd(option.label)}**`
+        if (option.description) {
+          headerLines.push(`- ${labelBold} — ${escapeLarkMd(option.description)}`)
+        } else {
+          headerLines.push(`- ${labelBold}`)
+        }
+      }
+    }
     formElements.push({
       tag: 'markdown',
-      content: `**Q${index + 1} / ${escapeLarkMd(question.header)}**\n${escapeLarkMd(question.question)}`,
+      content: headerLines.join('\n'),
     })
     formElements.push({
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
       options: question.options.map((option, optionIndex) => ({
-        text: {
-          tag: 'plain_text',
-          content: option.description ? `${option.label} - ${option.description}` : option.label,
-        },
+        text: { tag: 'plain_text', content: option.label },
         value: String(optionIndex),
       })),
     })
