@@ -53,7 +53,6 @@ import { refreshSkillRegistry } from '../skill/registry.js'
 import { ABORT_FAILURE_PATTERN, isTransientError } from '../transient-error.js'
 import {
   abortInFlightForSession,
-  awaitBackgroundTasks,
   getCompactionCount,
   getCurrentUserId,
   getCwd,
@@ -1184,11 +1183,20 @@ export class ChannelRunner {
         }
 
         await persistMeta(Date.now(), result.messages.length)
-        // Memory extraction stays fire-and-forget here. Draining each
-        // inbound message would force the user to wait up to 60s before
-        // the next reply when an extraction is slow. The CLI exit path
-        // (cli.ts SIGINT/SIGTERM/finally) drains before process shutdown.
-        await awaitBackgroundTasks()
+        // Memory extraction (and any other afterEndTurn-registered task) is
+        // fire-and-forget — do NOT await it here. We are still inside the
+        // session lock body, before the outer finally runs unmarkInFlight;
+        // awaiting would hold the in-flight marker for the entire extraction
+        // and misroute any user follow-up that arrives in that window into
+        // the interjection queue (where it cannot be consumed because the
+        // turn has already end_turn-ed; the leftover-rescue path eventually
+        // replays it as a fresh turn, but only AFTER the slow extraction
+        // returns). Codex / slow extractor lit this up in dogfood: user said
+        // "hi" → bot replied → user said "next thing" → silence until /stop.
+        // a34c39a (2026-05-02) replaced an earlier `drainPendingExtraction(60_000)`
+        // here with the fire-and-forget comment but left the `await` in
+        // place; that was the regression we are reverting. The CLI exit path
+        // (cli.ts SIGINT/SIGTERM/finally) still drains before process shutdown.
         process.stderr.write(`${channelId}: query done session ${sessionId}\n`)
         // If onAssistantTurn streamed body text mid-query, the user already
         // saw it — sending result.assistantText here would just duplicate.

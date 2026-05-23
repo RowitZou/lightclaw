@@ -1434,3 +1434,46 @@ describe('ChannelRunner recall handling', () => {
     assert.equal(strategy.chatNotices.length, 0)
   })
 })
+
+describe('ChannelRunner finally — background-task fire-and-forget contract', () => {
+  // Regression pin for the 2026-05-23 dogfood bug: user said "hi" → bot
+  // replied → user said the next thing → silence until /stop. Root cause:
+  // a34c39a (2026-05-02) replaced an earlier `drainPendingExtraction(60_000)`
+  // inside the in-flight lock body with a "fire-and-forget" comment but kept
+  // the existing `await awaitBackgroundTasks()` on the very next line. The
+  // stale await held the session's in-flight marker for the entire memory
+  // extraction (slow on codex / reasoning models — 17s+, occasionally wedged
+  // until aborted), so user follow-ups arriving in that window were misrouted
+  // to the interjection queue. The turn had already `end_turn`-ed so nothing
+  // consumed them; the leftover-rescue path eventually replays them as a
+  // fresh turn, but only AFTER awaitBackgroundTasks finally returns — which
+  // in the dogfood case required /stop to abort the wedged extraction.
+  //
+  // A behavioral e2e test would need a fake provider + fake runtime + full
+  // ChannelRunner.handleMessage query path wired up — heavy compared to the
+  // one-line fix. This pinning test catches the exact regression shape (an
+  // `await awaitBackgroundTasks()` inside runner.ts) directly. If a future
+  // legitimate use needs awaitBackgroundTasks here, refactor so the await
+  // happens AFTER unmarkInFlight runs (i.e. outside the runExclusive body),
+  // and update this test to enforce that placement instead of forbidding
+  // the call outright.
+  it('runner.ts does not inline-await awaitBackgroundTasks inside the session lock', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const runnerSrc = readFileSync(
+      fileURLToPath(new URL('./runner.ts', import.meta.url)),
+      'utf8',
+    )
+    const offending = runnerSrc.match(/\bawait\s+awaitBackgroundTasks\s*\(/g)
+    assert.equal(
+      offending,
+      null,
+      'runner.ts must NOT contain `await awaitBackgroundTasks(...)` — it ' +
+      'would hold the channel in-flight marker for the entire background ' +
+      'task duration (memory extraction on codex/reasoning models can wedge ' +
+      'indefinitely), misrouting user follow-ups to the interjection queue ' +
+      'after end_turn. Background tasks are fire-and-forget here; the CLI ' +
+      'exit path (cli.ts SIGINT/SIGTERM/finally) drains them at shutdown.',
+    )
+  })
+})
