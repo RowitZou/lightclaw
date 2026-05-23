@@ -4,6 +4,7 @@ import {
   listDispatchesTool,
   updateDispatchTool,
 } from './tools/dispatch.js'
+import { askUserQuestionTool } from './tools/ask-user-question.js'
 import { notifyTool } from './tools/notify.js'
 import { bashTool } from './tools/bash.js'
 import { killBashTool } from './tools/kill-bash.js'
@@ -78,6 +79,7 @@ export const builtinTools = [
   cancelDispatchTool,
   updateDispatchTool,
   notifyTool,
+  askUserQuestionTool,
 ]
 
 export function getAllTools(
@@ -87,6 +89,7 @@ export function getAllTools(
   const all = [...builtinTools, ...getMcpTools()]
   return all.filter(tool =>
     (options?.includeInternal || !tool.internalOnly) &&
+    (!tool.channelOnly || channel !== undefined) &&
     (!channel || isToolVisibleInChannel(tool, channel)),
   )
 }

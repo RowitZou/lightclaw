@@ -7,6 +7,7 @@ import type { FeishuChannelConfig } from '../types.js'
 import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
 import type { PairingCardAction } from './pairing-card.js'
+import type { AskUserCardAction } from './askuser-card.js'
 import type {
   FeishuCardAction,
   FeishuCardActionResponse,
@@ -99,7 +100,7 @@ export async function startFeishuWsClient(input: {
    */
   onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | PairingCardAction,
+    action: FeishuCardAction | PairingCardAction | AskUserCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -129,7 +130,9 @@ export async function startFeishuWsClient(input: {
         ? action.requestId
         : 'fireUuid' in action
           ? action.fireUuid
-          : action.applicationToken
+          : 'applicationToken' in action
+            ? action.applicationToken
+            : action.id
     process.stderr.write(
       `feishu ws: card action request=${actionId} action=${action.action}\n`,
     )
@@ -235,7 +238,7 @@ export async function startFeishuWsClient(input: {
 
 function normalizeCardAction(
   data: unknown,
-): FeishuCardAction | PairingCardAction | null {
+): FeishuCardAction | PairingCardAction | AskUserCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -246,7 +249,8 @@ function normalizeCardAction(
   const value = parseActionValue(action?.value)
   if (
     value?.kind !== 'lightclaw_permission' &&
-    value?.kind !== 'lightclaw_pairing'
+    value?.kind !== 'lightclaw_pairing' &&
+    value?.kind !== 'lightclaw_askuser'
   ) {
     return null
   }
@@ -281,6 +285,26 @@ function normalizeCardAction(
       action: actionKind,
       applicationToken,
       ...(operatorOpenId ? { operatorOpenId } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
+    }
+  }
+
+  if (value.kind === 'lightclaw_askuser') {
+    const actionKind =
+      value.action === 'submit' || value.action === 'cancel'
+        ? value.action
+        : null
+    const id = stringValue(value.id)
+    if (!actionKind || !id) {
+      return null
+    }
+    const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
+    const formValue = asRecord(action?.form_value) ?? asRecord(event?.form_value)
+    return {
+      kind: 'lightclaw_askuser',
+      action: actionKind,
+      id,
+      ...(formValue ? { formValue } : {}),
       ...(openMessageId ? { openMessageId } : {}),
     }
   }

@@ -26,6 +26,10 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
     behavior: 'deny',
     reason: 'Dispatch is not available to subagents.',
   })
+  assert.deepEqual(await gate(tool('AskUserQuestion'), {}), {
+    behavior: 'deny',
+    reason: 'AskUserQuestion is not available to subagents.',
+  })
 })
 
 test('Feishu reserved tools require an explicit role allowlist entry', async () => {
@@ -179,6 +183,7 @@ test('Notify is reserved for main: blocked for every worker including wildcard /
   // Orchestrator (main) with wildcard sees Notify naturally.
   const orchestrator = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
   assert.equal((await orchestrator(tool('Notify'), {})).behavior, 'allow')
+  assert.equal((await orchestrator(tool('AskUserQuestion'), {})).behavior, 'allow')
 })
 
 test('bundled dispatch matrix matches the role-to-role topology', () => {
@@ -260,11 +265,12 @@ test('filterToolsByRoleVisibility drops Feishu tools from main wildcard catalog'
   assert.deepEqual(visible, ['Bash', 'Read', 'Dispatch'])
 })
 
-test('filterToolsByRoleVisibility drops Notify from worker even with wildcard tools', () => {
+test('filterToolsByRoleVisibility drops user-escalation tools from worker even with wildcard tools', () => {
   const generalist = BUNDLED_AGENTS.find(a => a.agentType === 'generalist')!
-  const input = [tool('Bash'), tool('Read'), tool('Notify'), tool('Dispatch')]
+  const input = [tool('Bash'), tool('Read'), tool('Notify'), tool('AskUserQuestion'), tool('Dispatch')]
   const visible = filterToolsByRoleVisibility(generalist, input).map(t => t.name)
   assert.equal(visible.includes('Notify'), false, 'worker must not see Notify')
+  assert.equal(visible.includes('AskUserQuestion'), false, 'worker must not see AskUserQuestion')
 })
 
 function tool(name: string): Tool {

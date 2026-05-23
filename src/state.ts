@@ -18,6 +18,7 @@ import {
   type SessionContext,
 } from './session-context.js'
 import type { TodoItem, UsageStats } from './types.js'
+import { abortAskUserQuestionsBySession } from './channels/feishu/askuser-card.js'
 
 type SessionState = SessionContext
 
@@ -300,6 +301,10 @@ export function abortInFlightForSession(sessionId: string): boolean {
     return false
   }
   ctrl.abort()
+  void abortAskUserQuestionsBySession(sessionId).catch(error => {
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(`[ask-user] abort-by-session failed: ${detail}\n`)
+  })
   return true
 }
 

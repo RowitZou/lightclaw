@@ -392,23 +392,45 @@ export class FeishuSender {
     chatId: string,
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
-  ): Promise<void> {
+  ): Promise<{ messageId?: string }> {
     try {
-      await this.sendReplyOrCreate({
+      const response = await this.sendReplyOrCreate({
         chatId,
         msgType: 'interactive',
         content: JSON.stringify(card),
       })
+      const messageId = response.data?.message_id
+      return messageId ? { messageId } : {}
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: { type: 'create', chatId },
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
-        return
+        return {}
       }
       throw err
     }
+  }
+
+  async patchInteractiveCard(
+    messageId: string,
+    card: InteractiveCard,
+  ): Promise<void> {
+    const response = await this.withMessageRetry(
+      'patch interactive',
+      async () => {
+        const response = await this.client.im.message.patch({
+          path: { message_id: messageId },
+          data: {
+            content: JSON.stringify(card),
+          },
+        } as never)
+        assertOk(response, 'Feishu patch message failed')
+        return response
+      },
+    )
+    assertOk(response, 'Feishu patch message failed')
   }
 
   async sendFile(

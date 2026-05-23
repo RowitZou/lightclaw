@@ -30,6 +30,15 @@ describe('channel-aware tool visibility', () => {
     assert.equal(feishu.includes('SendFile'), true)
   })
 
+  it('hides channel-only tools when no channel context exists', () => {
+    const noChannel = getAllTools().map(tool => tool.name)
+    const feishu = getAllTools('feishu').map(tool => tool.name)
+    const terminal = getAllTools('terminal').map(tool => tool.name)
+    assert.equal(noChannel.includes('AskUserQuestion'), false)
+    assert.equal(feishu.includes('AskUserQuestion'), true)
+    assert.equal(terminal.includes('AskUserQuestion'), false)
+  })
+
   it('hides internal-only tools unless explicitly requested', () => {
     const visible = getAllTools().map(tool => tool.name)
     const internal = getAllTools(undefined, { includeInternal: true }).map(tool => tool.name)

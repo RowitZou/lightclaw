@@ -13,6 +13,7 @@ const BLOCKED_WORKER_TOOLS = new Set([
   // `explicitlyReachableDispatch`). main is orchestrator-kind and gets it
   // through the wildcard naturally.
   'Notify',
+  'AskUserQuestion',
 ])
 
 const FEISHU_RESERVED_TOOLS = new Set([

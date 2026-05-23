@@ -27,6 +27,7 @@ export type ToolCallContext = {
   canUseTool?: CanUseToolFn
   chainState?: ChainState
   deferredTools?: readonly Tool[]
+  toolCallId?: string
   discoverTool?(name: string): void
 }
 
@@ -66,6 +67,8 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   concurrencySafe?: boolean
   /** Omitted means visible in every channel. */
   channelScope?: readonly ChannelKey[]
+  /** Channel-only tools are hidden when no channel context exists. */
+  channelOnly?: boolean
   /**
    * Internal-only tools are excluded from user-facing catalogs and ToolSearch.
    * They may be included explicitly for framework-managed internal roles.
@@ -111,6 +114,7 @@ export function buildTool<TInput, TOutput>(input: {
   riskLevel: RiskLevel
   concurrencySafe?: boolean
   channelScope?: readonly ChannelKey[]
+  channelOnly?: boolean
   internalOnly?: boolean
   alwaysLoad?: boolean
   shouldDefer?: boolean

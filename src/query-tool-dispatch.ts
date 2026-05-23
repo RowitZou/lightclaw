@@ -211,6 +211,7 @@ export async function dispatchToolCall(
         canUseTool: ctx.canUseTool,
         chainState: ctx.chainState,
         deferredTools: ctx.deferredTools,
+        toolCallId: toolUse.id,
         discoverTool(name) {
           const current = getCurrentSessionContext()
           if (!current) return

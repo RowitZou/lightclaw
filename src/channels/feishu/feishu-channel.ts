@@ -24,6 +24,13 @@ import { PendingQueueStore } from './pending-queue.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
+import {
+  AskUserQuestionCoordinator,
+  clearAskUserQuestionCoordinator,
+  registerAskUserQuestionCoordinator,
+  type AskUserCardAction,
+} from './askuser-card.js'
+import { AskUserScheduler } from './askuser-scheduler.js'
 import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
@@ -91,6 +98,11 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       registerFeishuClient(client)
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
       const pairingCoordinator = new PairingCardCoordinator(sender)
+      const askUserCoordinator = new AskUserQuestionCoordinator(sender)
+      const askUserScheduler = new AskUserScheduler()
+      registerAskUserQuestionCoordinator(askUserCoordinator)
+      await askUserCoordinator.crashResume()
+      askUserScheduler.start()
       const runner = new ChannelRunner(
         createFeishuStrategy(config, sender, client, permissionCoordinator, pairingCoordinator, botSelf),
       )
@@ -212,6 +224,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             if ('kind' in action && action.kind === 'lightclaw_pairing') {
               return pairingCoordinator.handleCardAction(action as PairingCardAction)
             }
+            if ('kind' in action && action.kind === 'lightclaw_askuser') {
+              return askUserCoordinator.handleCardAction(action as AskUserCardAction)
+            }
             return permissionCoordinator.handleCardAction(action as FeishuCardAction)
           },
         })
@@ -219,6 +234,8 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         return {
           stop: () => {
             pendingDrainer.stop()
+            askUserScheduler.stop()
+            clearAskUserQuestionCoordinator(askUserCoordinator)
             clearFeishuSender(sender)
             clearFeishuClient(client)
             clearChannelRunner(runner)
@@ -239,6 +256,8 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       return {
         stop: () => {
           pendingDrainer.stop()
+          askUserScheduler.stop()
+          clearAskUserQuestionCoordinator(askUserCoordinator)
           clearFeishuSender(sender)
           clearFeishuClient(client)
           return server.close()
