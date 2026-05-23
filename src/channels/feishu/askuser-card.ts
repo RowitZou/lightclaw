@@ -49,6 +49,12 @@ type PendingRuntime = PendingQuestionRecord & {
   timer?: NodeJS.Timeout
   abortListener?: () => void
   abortSignal?: AbortSignal
+  // Set true once finishPending starts. New countdown ticks early-return when
+  // they see this, and finishPending awaits any in-flight tick BEFORE issuing
+  // patchFinal so a stale countdown HTTP call can't land after the answered
+  // card and revert the UI back to the form (2026-05-23 flicker dogfood).
+  consumed?: boolean
+  inflightCountdownPatch?: Promise<void>
 }
 
 let activeCoordinator: AskUserQuestionCoordinator | null = null
@@ -306,7 +312,22 @@ export class AskUserQuestionCoordinator {
     answers?: AskUserQuestionAnswer[],
   ): Promise<void> {
     const runtime = this.pendingById.get(pending.id)
+    // Flip `consumed` BEFORE stopCountdownPump so a tick scheduled in this
+    // same event-loop turn (clearInterval is racy with it) early-returns
+    // instead of firing one last form-state patch.
+    if (runtime) {
+      runtime.consumed = true
+    }
     this.stopCountdownPump(runtime)
+    // Wait for any in-flight countdown patch to settle. Without this, a stale
+    // countdown HTTP call can land AFTER our final patch and revert the
+    // answered card back to the interactive form (2026-05-23 flicker dogfood:
+    // "确认卡片出现了一瞬间，然后又变回了选择卡片"). The await never throws —
+    // patchPromise was created with a .catch already attached in
+    // startCountdownPump.
+    if (runtime?.inflightCountdownPatch) {
+      await runtime.inflightCountdownPatch
+    }
     if (runtime?.abortListener && runtime.abortSignal) {
       runtime.abortSignal.removeEventListener('abort', runtime.abortListener)
     }
@@ -356,9 +377,19 @@ export class AskUserQuestionCoordinator {
   private startCountdownPump(pending: PendingRuntime): void {
     this.stopCountdownPump(pending)
     pending.timer = setInterval(() => {
-      void this.patchCountdown(pending).catch(error => {
+      // Tick fired after the pending was consumed (clearInterval is racy with
+      // a tick already scheduled in this loop turn) — skip to avoid issuing a
+      // form-state HTTP patch that would land on top of the answered card.
+      if (pending.consumed) return
+      const patchPromise = this.patchCountdown(pending).catch(error => {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(`[ask-user] countdown patch failed: ${detail}\n`)
+      })
+      pending.inflightCountdownPatch = patchPromise
+      void patchPromise.finally(() => {
+        if (pending.inflightCountdownPatch === patchPromise) {
+          pending.inflightCountdownPatch = undefined
+        }
       })
     }, 10_000)
     pending.timer.unref?.()

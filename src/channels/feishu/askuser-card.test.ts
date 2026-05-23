@@ -444,6 +444,82 @@ test('abortBySession via the tool-call abortSignal cancels the pending', async (
   await assert.rejects(pending, /aborted by \/stop/)
 })
 
+test('finishPending awaits in-flight countdown patch so the final patch wins (flicker regression)', async (t) => {
+  // 2026-05-23 dogfood: "确认卡片出现了一瞬间，然后又变回了选择卡片". Root
+  // cause: the 10s countdown setInterval fires fire-and-forget patches.
+  // `clearInterval` cannot cancel an HTTP call that is already on the wire,
+  // so a countdown patch issued just before submit can land AFTER patchFinal
+  // and revert the answered card back to the form. Fix: flip `consumed` on
+  // finishPending entry and await any in-flight countdown patch before
+  // issuing patchFinal. This test exercises that ordering by holding the
+  // first patchInteractiveCard call until released.
+  t.mock.timers.enable({ apis: ['setInterval'] })
+
+  let releaseHeldPatch: () => void = () => {}
+  let firstPatchTaken = false
+  sender.patchInteractiveCard = async (messageId: string, card: Record<string, unknown>) => {
+    if (!firstPatchTaken) {
+      firstPatchTaken = true
+      await new Promise<void>(resolve => { releaseHeldPatch = resolve })
+    }
+    sender.patches.push({ messageId, card })
+  }
+
+  const ctrl = new AbortController()
+  const pendingPromise = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_flicker',
+    abortSignal: ctrl.signal,
+    questions: [{ header: 'Q', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+
+  // Fire one countdown tick. The setInterval handler invokes patchCountdown,
+  // which enters the slow first patchInteractiveCard call and is held there.
+  t.mock.timers.tick(10_000)
+  // Yield once so the handler runs and stashes `inflightCountdownPatch`.
+  await new Promise(resolve => setImmediate(resolve))
+
+  // Submit while the countdown patch is in flight. The submit's
+  // patchInteractiveCard call will NOT be held (firstPatchTaken is true),
+  // so without the await in finishPending the answered card would land
+  // FIRST and the countdown patch would overwrite it on release.
+  const submitPromise = coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'submit',
+    formValue: { q0: '0' },
+  })
+  // Yield generously so handleCardAction → consumePending → finishPending
+  // reaches its `await inflightCountdownPatch` before we check patches.
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+
+  // Held countdown blocks; finishPending is blocked on it before patchFinal.
+  // If this assertion ever fires with patches.length === 1, the fix
+  // regressed — the answered card landed before the countdown patch did.
+  assert.equal(
+    sender.patches.length,
+    0,
+    'finishPending must wait for in-flight countdown patch before issuing patchFinal',
+  )
+
+  releaseHeldPatch()
+  await submitPromise
+  await pendingPromise
+
+  // Both patches landed; the FINAL one (green "已确认" answered card) must
+  // be the last entry. If the order is reversed, the user sees flicker.
+  assert.equal(sender.patches.length, 2, 'countdown then final patch')
+  const lastCard = sender.patches[sender.patches.length - 1]!.card as {
+    header?: { template?: string; title?: { content?: string } }
+  }
+  assert.equal(lastCard.header?.template, 'green', 'last patch must be the answered card')
+  assert.match(lastCard.header?.title?.content ?? '', /已确认/)
+})
+
 async function waitForRegistration(id: string): Promise<void> {
   for (let i = 0; i < 20; i += 1) {
     if (coord.hasPending(id)) {
