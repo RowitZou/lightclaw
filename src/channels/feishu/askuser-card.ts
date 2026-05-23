@@ -9,7 +9,13 @@ import {
 } from './pending-questions-store.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
 
-export const ASK_USER_TIMEOUT_MS = 60 * 60_000
+// 10 minutes (down from the original 1h). Per 2026-05-23 dogfood feedback:
+// 1h was set for long-horizon parity but in practice a user who hasn't
+// answered within ~10 minutes has either moved on or won't return — letting
+// the card live an hour just stretches the agent's "stuck on user input"
+// state. Long-running work that genuinely needs the user back falls through
+// to the safe `defaultOptionIndex` and the agent continues.
+export const ASK_USER_TIMEOUT_MS = 10 * 60_000
 
 export type AskUserQuestionInput = {
   questions: Array<{
@@ -42,6 +48,15 @@ export type AskUserCardAction = {
   formValue?: Record<string, unknown>
   openMessageId?: string
 }
+
+/**
+ * When set, finishPending skips the side-fire `patchInteractiveCard` call so
+ * the caller can return the new card inline in the form-submit callback
+ * response — Feishu V2's atomic-replace path. The side-fire patch race-loses
+ * to Feishu's "form submit complete" re-render, which is what caused the
+ * 2026-05-23 dogfood flicker even when no countdown tick was anywhere near.
+ */
+type FinishOptions = { skipFinalPatch?: boolean }
 
 type PendingRuntime = PendingQuestionRecord & {
   resolve?: (answers: AskUserQuestionAnswer[]) => void
@@ -247,8 +262,15 @@ export class AskUserQuestionCoordinator {
       }
     }
     if (action.action === 'cancel') {
-      await this.consumePending(action.id, 'cancel')
-      return { toast: { type: 'info', content: '已取消' } }
+      // Return the final cancel card in the callback response itself so Feishu
+      // atomically replaces the form on submit. A separate async
+      // patchInteractiveCard race-loses to Feishu's "form submit complete"
+      // re-render and the card flickers back to the form (2026-05-23 dogfood:
+      // "确认卡片出现了一瞬间，然后又变回了选择卡片", reproducible even with a
+      // freshly-sent card so countdown ticks are NOT the cause).
+      const cancelCard = buildFinalCard('已取消', '本次问询未提交。')
+      await this.consumePending(action.id, 'cancel', undefined, { skipFinalPatch: true })
+      return { toast: { type: 'info', content: '已取消' }, card: rawCard(cancelCard) }
     }
     // Diagnostic log: form_value shape is the surface most prone to V1/V2
     // mismatch. Capping at 500 chars keeps stderr readable. Remove once
@@ -272,8 +294,18 @@ export class AskUserQuestionCoordinator {
       }
       return { toast: { type: 'error', content: '提交异常，请重试' } }
     }
-    await this.consumePending(action.id, 'user', parsed.answers)
-    return { toast: { type: 'success', content: '已提交' } }
+    // Same atomic-replace rationale as cancel: V2 form submit must include the
+    // new card in the callback response, otherwise Feishu re-renders the form
+    // after our async patch lands and the answered card flickers off.
+    const answeredCard = buildAnsweredCard({
+      title: '✅ 已确认',
+      intro: '用户已确认以下选择',
+      template: 'green',
+      questions: pending.questions,
+      answers: parsed.answers,
+    })
+    await this.consumePending(action.id, 'user', parsed.answers, { skipFinalPatch: true })
+    return { toast: { type: 'success', content: '已提交' }, card: rawCard(answeredCard) }
   }
 
   async abortBySession(sessionId: string): Promise<void> {
@@ -290,13 +322,14 @@ export class AskUserQuestionCoordinator {
     id: string,
     mode: ConsumeMode,
     answers?: AskUserQuestionAnswer[],
+    opts: FinishOptions = {},
   ): Promise<boolean> {
     const claimed = await this.store.claimPending(id, mode)
     if (!claimed) {
       return false
     }
     const runtime = this.pendingById.get(id)
-    await this.finishPending(runtime ?? claimed, mode, answers)
+    await this.finishPending(runtime ?? claimed, mode, answers, opts)
     return true
   }
 
@@ -310,6 +343,7 @@ export class AskUserQuestionCoordinator {
     pending: PendingRuntime | PendingQuestionRecord,
     mode: ConsumeMode,
     answers?: AskUserQuestionAnswer[],
+    opts: FinishOptions = {},
   ): Promise<void> {
     const runtime = this.pendingById.get(pending.id)
     // Flip `consumed` BEFORE stopCountdownPump so a tick scheduled in this
@@ -338,13 +372,15 @@ export class AskUserQuestionCoordinator {
 
     if (mode === 'user' && answers) {
       runtime?.resolve?.(answers)
-      await this.patchFinal(pending, buildAnsweredCard({
-        title: '✅ 已确认',
-        intro: '用户已确认以下选择',
-        template: 'green',
-        questions: pending.questions,
-        answers,
-      }))
+      if (!opts.skipFinalPatch) {
+        await this.patchFinal(pending, buildAnsweredCard({
+          title: '✅ 已确认',
+          intro: '用户已确认以下选择',
+          template: 'green',
+          questions: pending.questions,
+          answers,
+        }))
+      }
       return
     }
 
@@ -352,26 +388,32 @@ export class AskUserQuestionCoordinator {
       const defaults = answersFromDefaults(pending.questions)
       if (defaults) {
         runtime?.resolve?.(defaults)
-        await this.patchFinal(pending, buildAnsweredCard({
-          title: '⏰ 已超时，已采用默认',
-          intro: '用户未及时回复，已采用默认选项',
-          template: 'orange',
-          questions: pending.questions,
-          answers: defaults,
-        }))
+        if (!opts.skipFinalPatch) {
+          await this.patchFinal(pending, buildAnsweredCard({
+            title: '⏰ 已超时，已采用默认',
+            intro: '用户未及时回复，已采用默认选项',
+            template: 'orange',
+            questions: pending.questions,
+            answers: defaults,
+          }))
+        }
       } else {
         runtime?.reject?.(new Error('timeout-no-default'))
-        await this.patchFinal(pending, buildFinalCard('⏰ 已超时', '没有安全默认选项，本次问询已取消。'))
+        if (!opts.skipFinalPatch) {
+          await this.patchFinal(pending, buildFinalCard('⏰ 已超时', '没有安全默认选项，本次问询已取消。'))
+        }
       }
       return
     }
 
     const reason = mode === 'stop' ? 'aborted by /stop' : 'cancelled by user'
     runtime?.reject?.(new Error(reason))
-    await this.patchFinal(
-      pending,
-      buildFinalCard(mode === 'stop' ? '已取消（/stop 中断）' : '已取消', '本次问询未提交。'),
-    )
+    if (!opts.skipFinalPatch) {
+      await this.patchFinal(
+        pending,
+        buildFinalCard(mode === 'stop' ? '已取消（/stop 中断）' : '已取消', '本次问询未提交。'),
+      )
+    }
   }
 
   private startCountdownPump(pending: PendingRuntime): void {
@@ -726,4 +768,14 @@ const LARK_MD_ESCAPE_RE = /([\\`*_~\[\]<>])/g
 
 function escapeLarkMd(text: string): string {
   return text.replace(LARK_MD_ESCAPE_RE, '\\$1')
+}
+
+// Feishu V2 card callback `card` field shape — paired with a `toast` in the
+// askuser response so the form-submit ack carries both the success toast and
+// the new card. pairing-card.ts uses the same `{type:'raw', data:<card>}`
+// envelope, just inside a card-only response (no toast). The atomic
+// replacement happens server-side as part of processing the form submit;
+// any race against an async patchInteractiveCard is bypassed.
+function rawCard(card: Record<string, unknown>): { type: 'raw'; data: Record<string, unknown> } {
+  return { type: 'raw', data: card }
 }

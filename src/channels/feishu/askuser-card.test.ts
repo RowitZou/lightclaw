@@ -129,7 +129,12 @@ test('coordinator resolves submitted answers with per-question otherText', async
   })
   const id = sender.lastAskId()
   await waitForRegistration(id)
-  await coord.handleCardAction({
+  // Submit answer card lives in the form-submit callback response itself
+  // (V2 atomic-replace path) — side-fire patchInteractiveCard race-loses to
+  // Feishu's "form submit complete" re-render and the card flickers back to
+  // the form (2026-05-23 dogfood). Assert on the response shape, not on
+  // sender.patches.
+  const response = await coord.handleCardAction({
     kind: 'lightclaw_askuser',
     action: 'submit',
     id,
@@ -139,7 +144,7 @@ test('coordinator resolves submitted answers with per-question otherText', async
       q1: ['0', '1'],
       q1_other: 'include Grep',
     },
-  })
+  }) as { toast: { type: string; content: string }; card: { type: string; data: Record<string, unknown> } }
   const answers = await pending
   assert.equal(answers.length, 2)
   assert.deepEqual(answers[0]!.selectedLabels, ['B'])
@@ -147,11 +152,11 @@ test('coordinator resolves submitted answers with per-question otherText', async
   assert.deepEqual(answers[1]!.selectedLabels, ['Read', 'Edit'])
   assert.equal(answers[1]!.otherText, 'include Grep')
   assert.equal(answers[1]!.byTimeoutDefault, false)
-  assert.equal(sender.patches.length, 1, 'final patch fires exactly once')
-  // Patched card replaces the interactive form with a structured
-  // confirmation view: green header, "已确认" title, each question's
-  // header + selection rendered, otherText rendered when present.
-  const finalCard = sender.patches[0]!.card as {
+  assert.equal(response.toast.type, 'success')
+  assert.equal(response.toast.content, '已提交')
+  assert.equal(sender.patches.length, 0, 'submit must NOT side-fire patchInteractiveCard')
+  assert.equal(response.card.type, 'raw', 'card returned as type:raw for atomic replace')
+  const finalCard = response.card.data as {
     schema: string
     header: { template: string; title: { content: string } }
     body: { elements: Array<{ tag: string; content: string }> }
@@ -444,15 +449,76 @@ test('abortBySession via the tool-call abortSignal cancels the pending', async (
   await assert.rejects(pending, /aborted by \/stop/)
 })
 
-test('finishPending awaits in-flight countdown patch so the final patch wins (flicker regression)', async (t) => {
-  // 2026-05-23 dogfood: "确认卡片出现了一瞬间，然后又变回了选择卡片". Root
-  // cause: the 10s countdown setInterval fires fire-and-forget patches.
-  // `clearInterval` cannot cancel an HTTP call that is already on the wire,
-  // so a countdown patch issued just before submit can land AFTER patchFinal
-  // and revert the answered card back to the form. Fix: flip `consumed` on
-  // finishPending entry and await any in-flight countdown patch before
-  // issuing patchFinal. This test exercises that ordering by holding the
-  // first patchInteractiveCard call until released.
+test('handleCardAction returns inline rawCard so Feishu atomically replaces the form (flicker regression v2)', async () => {
+  // 2026-05-23 dogfood v2: even with no countdown tick in sight ("剩 60:00",
+  // submitted <10s after card send) the green answered card flashed briefly
+  // and Feishu re-rendered the form. Root cause: V2 form submit semantics
+  // require the new card in the callback response itself; a separate async
+  // patchInteractiveCard race-loses to Feishu's "form submit complete"
+  // re-render. Fix: build the card BEFORE consumePending, pass
+  // skipFinalPatch:true to suppress the side-fire patch, and return
+  // {toast, card: rawCard(...)} so Feishu replaces the card atomically as
+  // part of the form-submit ack — same pattern pairing-card already uses.
+  const pendingPromise = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_inline_submit',
+    abortSignal: new AbortController().signal,
+    questions: [{ header: 'Q', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+
+  const response = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'submit',
+    formValue: { q0: '0' },
+  }) as { toast: { type: string; content: string }; card: { type: string; data: Record<string, unknown> } }
+  await pendingPromise
+
+  // No side-fire patch: the answered card lives in response.card, not on
+  // the wire as a separate patchInteractiveCard call. This is the core
+  // anti-flicker invariant.
+  assert.equal(sender.patches.length, 0, 'submit must NOT issue a side-fire patch')
+  assert.equal(response.card.type, 'raw', 'card returned as raw envelope for atomic replace')
+  const answered = response.card.data as { header?: { template?: string; title?: { content?: string } } }
+  assert.equal(answered.header?.template, 'green')
+  assert.match(answered.header?.title?.content ?? '', /已确认/)
+})
+
+test('handleCardAction cancel returns inline rawCard (no side-fire patch)', async () => {
+  // Cancel path has the same flicker surface — Feishu re-renders the form
+  // after the callback returns unless we hand back the cancel card inline.
+  const pendingPromise = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_inline_cancel',
+    abortSignal: new AbortController().signal,
+    questions: [{ header: 'Q', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+
+  const response = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'cancel',
+  }) as { toast: { type: string; content: string }; card: { type: string; data: Record<string, unknown> } }
+  await assert.rejects(pendingPromise, /cancelled by user/)
+
+  assert.equal(sender.patches.length, 0, 'cancel must NOT issue a side-fire patch')
+  assert.equal(response.card.type, 'raw')
+  const cancel = response.card.data as { header?: { template?: string; title?: { content?: string } } }
+  assert.equal(cancel.header?.template, 'grey')
+  assert.match(cancel.header?.title?.content ?? '', /已取消/)
+})
+
+test('finishPending still awaits in-flight countdown so stale patch cannot overwrite atomic card update', async (t) => {
+  // Defense-in-depth: even though submit now returns the new card inline in
+  // the callback response (atomic on Feishu's side), a stale countdown
+  // patchInteractiveCard landing AFTER the response would still hit the same
+  // messageId with form-state and revert the user's view. consumed + await
+  // inflightCountdownPatch guarantees: countdown lands FIRST, then the
+  // callback response is sent with the new card, and no further patches fire.
   t.mock.timers.enable({ apis: ['setInterval'] })
 
   let releaseHeldPatch: () => void = () => {}
@@ -465,59 +531,48 @@ test('finishPending awaits in-flight countdown patch so the final patch wins (fl
     sender.patches.push({ messageId, card })
   }
 
-  const ctrl = new AbortController()
   const pendingPromise = coord.askAndAwait({
     sessionId: 'feishu:dm:oc_chat',
-    turnId: 'toolu_flicker',
-    abortSignal: ctrl.signal,
+    turnId: 'toolu_flicker_inflight',
+    abortSignal: new AbortController().signal,
     questions: [{ header: 'Q', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] }],
   })
   const id = sender.lastAskId()
   await waitForRegistration(id)
 
-  // Fire one countdown tick. The setInterval handler invokes patchCountdown,
-  // which enters the slow first patchInteractiveCard call and is held there.
+  // Fire one countdown tick — the resulting patchInteractiveCard call enters
+  // the slow first branch and is held.
   t.mock.timers.tick(10_000)
-  // Yield once so the handler runs and stashes `inflightCountdownPatch`.
   await new Promise(resolve => setImmediate(resolve))
 
-  // Submit while the countdown patch is in flight. The submit's
-  // patchInteractiveCard call will NOT be held (firstPatchTaken is true),
-  // so without the await in finishPending the answered card would land
-  // FIRST and the countdown patch would overwrite it on release.
+  // Submit while the countdown patch is still in flight.
   const submitPromise = coord.handleCardAction({
     kind: 'lightclaw_askuser',
     id,
     action: 'submit',
     formValue: { q0: '0' },
   })
-  // Yield generously so handleCardAction → consumePending → finishPending
-  // reaches its `await inflightCountdownPatch` before we check patches.
   for (let i = 0; i < 10; i += 1) {
     await new Promise(resolve => setImmediate(resolve))
   }
 
-  // Held countdown blocks; finishPending is blocked on it before patchFinal.
-  // If this assertion ever fires with patches.length === 1, the fix
-  // regressed — the answered card landed before the countdown patch did.
-  assert.equal(
-    sender.patches.length,
-    0,
-    'finishPending must wait for in-flight countdown patch before issuing patchFinal',
-  )
+  // Submit must not have returned yet — finishPending is blocked on the
+  // held countdown patch. No patches landed (countdown still held).
+  assert.equal(sender.patches.length, 0)
 
   releaseHeldPatch()
-  await submitPromise
+  const response = await submitPromise as { card: { type: string; data: Record<string, unknown> } }
   await pendingPromise
 
-  // Both patches landed; the FINAL one (green "已确认" answered card) must
-  // be the last entry. If the order is reversed, the user sees flicker.
-  assert.equal(sender.patches.length, 2, 'countdown then final patch')
-  const lastCard = sender.patches[sender.patches.length - 1]!.card as {
-    header?: { template?: string; title?: { content?: string } }
-  }
-  assert.equal(lastCard.header?.template, 'green', 'last patch must be the answered card')
-  assert.match(lastCard.header?.title?.content ?? '', /已确认/)
+  // Exactly one patch landed (the countdown, form-state). Submit itself
+  // does NOT fire a side-patch — the new card is in response.card. Critical
+  // ordering invariant: countdown lands BEFORE the callback returns, so
+  // Feishu can never receive a stale form-state patch after our atomic
+  // card-replace response.
+  assert.equal(sender.patches.length, 1, 'countdown landed, no submit side-patch')
+  assert.equal(response.card.type, 'raw')
+  const answered = response.card.data as { header?: { template?: string } }
+  assert.equal(answered.header?.template, 'green')
 })
 
 async function waitForRegistration(id: string): Promise<void> {
