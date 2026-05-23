@@ -53,6 +53,12 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   const inputs = body.elements.filter(element => element.tag === 'input')
   assert.equal(inputs.length, 2, 'one input slot per question')
   assert.deepEqual(inputs.map(input => input.name), ['q0_other', 'q1_other'])
+  // Feishu 2.0 rejects `required` on the input component with
+  // `ErrCode: 10002; ErrMsg: required is not allowed` (2026-05-23 dogfood).
+  // Omitting the field entirely is the only safe shape.
+  for (const input of inputs) {
+    assert.equal('required' in input, false, 'input must not carry the unsupported `required` field')
+  }
   assert.equal(body.elements.some(element => element.tag === 'select_static'), true)
   assert.equal(body.elements.some(element => element.tag === 'multi_select_static'), true)
 })

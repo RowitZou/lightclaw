@@ -404,13 +404,16 @@ export function buildAskUserCard(input: {
     })
     // Per-question optional Other slot. Bound by name to this specific
     // question (q<i>_other) so multi-question cards have no ambiguity about
-    // which question the free text belongs to.
+    // which question the free text belongs to. The Feishu 2.0 `input`
+    // component does NOT accept a `required` field (2026-05-23 dogfood:
+    // `ErrCode: 10002; ErrMsg: required is not allowed`); omitting it is
+    // sufficient — empty input is treated as no answer and parseFormValue
+    // skips it.
     elements.push({
       tag: 'input',
       name: otherName(index),
       label: { tag: 'plain_text', content: '其它说明（选项不够时填这里，可不填）' },
       input_type: 'multiline_text',
-      required: false,
       placeholder: { tag: 'plain_text', content: '可选：选项不能完全表达时,在此补充' },
     })
   })
