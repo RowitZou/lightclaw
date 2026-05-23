@@ -50,7 +50,18 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   })
   assert.equal(card.schema, '2.0')
   const body = card.body as { elements: Array<Record<string, unknown>> }
-  const inputs = body.elements.filter(element => element.tag === 'input')
+  // Feishu 2.0 (2026-05-23 dogfood): the V1 `tag:'action'` container is
+  // rejected with `code=200861 cards of schema V2 no longer support this
+  // capability`. body.elements must be a single `form` container wrapping
+  // every question + the column_set of buttons; bare top-level `action`
+  // elements signal a regression to V1 shape.
+  assert.equal(body.elements.length, 1, 'card body must have a single form container')
+  const form = body.elements[0] as { tag: string; name: string; elements: Array<Record<string, unknown>> }
+  assert.equal(form.tag, 'form', 'top-level element must be a form container')
+  assert.ok(form.name, 'form container needs a name field')
+  assert.equal(form.elements.some(el => el.tag === 'action'), false, 'no V1 action container in V2 cards')
+
+  const inputs = form.elements.filter(element => element.tag === 'input')
   assert.equal(inputs.length, 2, 'one input slot per question')
   assert.deepEqual(inputs.map(input => input.name), ['q0_other', 'q1_other'])
   // Feishu 2.0 rejects `required` on the input component with
@@ -59,8 +70,26 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   for (const input of inputs) {
     assert.equal('required' in input, false, 'input must not carry the unsupported `required` field')
   }
-  assert.equal(body.elements.some(element => element.tag === 'select_static'), true)
-  assert.equal(body.elements.some(element => element.tag === 'multi_select_static'), true)
+  assert.equal(form.elements.some(element => element.tag === 'select_static'), true)
+  assert.equal(form.elements.some(element => element.tag === 'multi_select_static'), true)
+
+  // V2 buttons live in a column_set inside the form, with the callback value
+  // at behaviors[0].value (the V1 top-level `value` field is no longer the
+  // source of truth).
+  const columnSet = form.elements.find(el => el.tag === 'column_set') as
+    | { columns: Array<{ elements: Array<Record<string, unknown>> }> }
+    | undefined
+  assert.ok(columnSet, 'buttons must be laid out via column_set inside the form')
+  const buttons = columnSet.columns.flatMap(c => c.elements)
+  assert.equal(buttons.length, 2, 'submit + cancel buttons')
+  for (const button of buttons) {
+    assert.equal(button.tag, 'button')
+    assert.equal((button as any).form_action_type, 'submit', 'V2 buttons inside a form need form_action_type')
+    const behaviors = (button as any).behaviors as Array<{ type: string; value: { kind: string; action: string; id: string } }>
+    assert.equal(behaviors[0]!.type, 'callback')
+    assert.equal(behaviors[0]!.value.kind, 'lightclaw_askuser')
+    assert.equal(behaviors[0]!.value.id, 'ask_1')
+  }
 })
 
 test('coordinator resolves submitted answers with per-question otherText', async () => {
@@ -360,11 +389,29 @@ class FakeSender {
   }
 
   lastAskId(): string {
+    // V2 shape: body.elements = [form], form.elements contains a column_set,
+    // each column has a button whose behaviors[0].value carries the id.
     const card = this.cards[this.cards.length - 1] as {
-      body: { elements: Array<{ actions?: Array<{ value?: { id?: string } }> }> }
+      body: {
+        elements: Array<{
+          tag: string
+          elements?: Array<{
+            tag: string
+            columns?: Array<{
+              elements?: Array<{
+                tag: string
+                behaviors?: Array<{ value?: { id?: string } }>
+              }>
+            }>
+          }>
+        }>
+      }
     }
-    const action = card.body.elements.flatMap(element => element.actions ?? [])[0]
-    assert.ok(action?.value?.id)
-    return action.value.id
+    const form = card.body.elements.find(el => el.tag === 'form')
+    const columnSet = form?.elements?.find(el => el.tag === 'column_set')
+    const button = columnSet?.columns?.flatMap(c => c.elements ?? []).find(el => el.tag === 'button')
+    const id = button?.behaviors?.[0]?.value?.id
+    assert.ok(id, 'submit button must carry a behaviors[0].value.id')
+    return id
   }
 }

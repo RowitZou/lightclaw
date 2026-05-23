@@ -145,10 +145,26 @@ class FakeSender {
 
   lastAskId(): string {
     const card = this.cards[this.cards.length - 1] as {
-      body: { elements: Array<{ actions?: Array<{ value?: { id?: string } }> }> }
+      body: {
+        elements: Array<{
+          tag: string
+          elements?: Array<{
+            tag: string
+            columns?: Array<{
+              elements?: Array<{
+                tag: string
+                behaviors?: Array<{ value?: { id?: string } }>
+              }>
+            }>
+          }>
+        }>
+      }
     }
-    const action = card.body.elements.flatMap(element => element.actions ?? [])[0]
-    assert.ok(action?.value?.id)
-    return action.value.id
+    const form = card.body.elements.find(el => el.tag === 'form')
+    const columnSet = form?.elements?.find(el => el.tag === 'column_set')
+    const button = columnSet?.columns?.flatMap(c => c.elements ?? []).find(el => el.tag === 'button')
+    const id = button?.behaviors?.[0]?.value?.id
+    assert.ok(id, 'submit button must carry a behaviors[0].value.id')
+    return id
   }
 }

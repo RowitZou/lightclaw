@@ -384,13 +384,27 @@ export function buildAskUserCard(input: {
   nowMs?: number
 }): Record<string, unknown> {
   const nowMs = input.nowMs ?? Date.now()
-  const elements: Record<string, unknown>[] = []
+  // Feishu 2.0 form layout (2026-05-23 dogfood-driven):
+  //  - The V1 `action` container (`tag:'action', layout:'flow', actions:[...]`)
+  //    is rejected on V2 cards: code=200861 `cards of schema V2 no longer
+  //    support this capability`. Buttons must live inside the `form` container
+  //    directly, with a `column_set` for side-by-side layout.
+  //  - submit + cancel both use `form_action_type:'submit'`. Treating the
+  //    cancel button as a real submit (with a distinct `value.action`) lets
+  //    the server route on the action discriminator without juggling form
+  //    `reset` semantics (reset clears inputs in the UI, which we do not want
+  //    for a cancellation that is about to be patched into a final state).
+  //  - The callback `value` lives at `behaviors[0].value` in V2 (the V1
+  //    top-level `value` field is no longer the source of truth for V2).
+  //    Server-side, Feishu surfaces it as `event.action.value`, so existing
+  //    transport-ws extraction continues to work.
+  const formElements: Record<string, unknown>[] = []
   input.questions.forEach((question, index) => {
-    elements.push({
+    formElements.push({
       tag: 'markdown',
       content: `**Q${index + 1} / ${escapeLarkMd(question.header)}**\n${escapeLarkMd(question.question)}`,
     })
-    elements.push({
+    formElements.push({
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
@@ -409,7 +423,7 @@ export function buildAskUserCard(input: {
     // `ErrCode: 10002; ErrMsg: required is not allowed`); omitting it is
     // sufficient — empty input is treated as no answer and parseFormValue
     // skips it.
-    elements.push({
+    formElements.push({
       tag: 'input',
       name: otherName(index),
       label: { tag: 'plain_text', content: '其它说明（选项不够时填这里，可不填）' },
@@ -417,24 +431,38 @@ export function buildAskUserCard(input: {
       placeholder: { tag: 'plain_text', content: '可选：选项不能完全表达时,在此补充' },
     })
   })
-  elements.push({
-    tag: 'action',
-    layout: 'flow',
-    actions: [
+  formElements.push({
+    tag: 'column_set',
+    columns: [
       {
-        tag: 'button',
-        text: { tag: 'plain_text', content: '提交' },
-        type: 'primary',
-        form_action_type: 'submit',
-        behaviors: [{ type: 'callback' }],
-        value: { kind: 'lightclaw_askuser', action: 'submit', id: input.id },
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          name: 'askuser_submit',
+          text: { tag: 'plain_text', content: '提交' },
+          type: 'primary',
+          form_action_type: 'submit',
+          behaviors: [{
+            type: 'callback',
+            value: { kind: 'lightclaw_askuser', action: 'submit', id: input.id },
+          }],
+        }],
       },
       {
-        tag: 'button',
-        text: { tag: 'plain_text', content: '取消' },
-        type: 'default',
-        behaviors: [{ type: 'callback' }],
-        value: { kind: 'lightclaw_askuser', action: 'cancel', id: input.id },
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          name: 'askuser_cancel',
+          text: { tag: 'plain_text', content: '取消' },
+          type: 'default',
+          form_action_type: 'submit',
+          behaviors: [{
+            type: 'callback',
+            value: { kind: 'lightclaw_askuser', action: 'cancel', id: input.id },
+          }],
+        }],
       },
     ],
   })
@@ -445,7 +473,13 @@ export function buildAskUserCard(input: {
       template: 'blue',
       title: { tag: 'plain_text', content: `LightClaw 请你拍板（剩 ${formatRemaining(input.deadlineMs - nowMs)}）` },
     },
-    body: { elements },
+    body: {
+      elements: [{
+        tag: 'form',
+        name: 'askuser_form',
+        elements: formElements,
+      }],
+    },
   }
 }
 
