@@ -244,8 +244,26 @@ export class AskUserQuestionCoordinator {
       await this.consumePending(action.id, 'cancel')
       return { toast: { type: 'info', content: '已取消' } }
     }
+    // Diagnostic log: form_value shape is the surface most prone to V1/V2
+    // mismatch. Capping at 500 chars keeps stderr readable. Remove once
+    // production-stable across providers.
+    process.stderr.write(
+      `[ask-user] submit ${action.id} form_value=${JSON.stringify(action.formValue ?? {}).slice(0, 500)}\n`,
+    )
     const parsed = parseFormValue(pending.questions, action.formValue ?? {})
     if (!parsed.ok) {
+      // Differentiate "user clicked submit before picking anything" from a
+      // structural schema problem. The former is a UX nudge ("go pick"), the
+      // latter is a real error ("our card or Feishu shape mismatch"). Without
+      // this split a forgetful user got a scary "提交异常" toast.
+      if (parsed.reason === 'missing-selection') {
+        return {
+          toast: {
+            type: 'warning',
+            content: '请先在每个下拉框做出选择再提交',
+          },
+        }
+      }
       return { toast: { type: 'error', content: '提交异常，请重试' } }
     }
     await this.consumePending(action.id, 'user', parsed.answers)
@@ -370,10 +388,23 @@ export class AskUserQuestionCoordinator {
     pending: PendingQuestionRecord,
     card: Record<string, unknown>,
   ): Promise<void> {
-    if (!pending.cardMessageId) return
+    if (!pending.cardMessageId) {
+      process.stderr.write(
+        `[ask-user] final patch skipped for ${pending.id}: no cardMessageId on record\n`,
+      )
+      return
+    }
     await this.sender.patchInteractiveCard(pending.cardMessageId, card).catch(error => {
       const detail = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[ask-user] final patch failed: ${detail}\n`)
+      // Loud version: include card title so we can match it to the user's
+      // observed UI state. Patch failures here are silently UX-fatal — the
+      // toast still says "已取消" / "已提交" but the card stays as the
+      // interactive form, exactly the symptom the user reports.
+      const header = (card as { header?: { title?: { content?: string } } }).header
+      const titleHint = header?.title?.content ?? '<unknown>'
+      process.stderr.write(
+        `[ask-user] final patch FAILED for ${pending.id} (title=${titleHint}, messageId=${pending.cardMessageId}): ${detail}\n`,
+      )
     })
   }
 }
@@ -550,25 +581,40 @@ function buildFinalCard(title: string, body: string): Record<string, unknown> {
   }
 }
 
+type ParseFormValueResult =
+  | { ok: true; answers: AskUserQuestionAnswer[] }
+  | { ok: false; reason: 'missing-selection' | 'malformed' }
+
 function parseFormValue(
   questions: AskUserQuestionInput['questions'],
   formValue: Record<string, unknown>,
-): { ok: true; answers: AskUserQuestionAnswer[] } | { ok: false } {
+): ParseFormValueResult {
   const answers: AskUserQuestionAnswer[] = []
   for (let i = 0; i < questions.length; i += 1) {
     const question = questions[i]!
     const raw = formValue[selectName(i)]
+    // Empty selection = Feishu either omitted the key (no pick) or returned
+    // '' / []. Distinguish from "wrong type" so the toast can say "go pick"
+    // instead of "schema broken".
+    const isEmpty =
+      raw === undefined ||
+      raw === null ||
+      raw === '' ||
+      (Array.isArray(raw) && raw.length === 0)
+    if (isEmpty) {
+      return { ok: false, reason: 'missing-selection' }
+    }
     const selectedIndexes = question.multiSelect
       ? Array.isArray(raw) && raw.every(item => typeof item === 'string') ? raw : null
       : typeof raw === 'string' ? [raw] : null
     if (!selectedIndexes) {
-      return { ok: false }
+      return { ok: false, reason: 'malformed' }
     }
     const selectedLabels: string[] = []
     for (const rawIndex of selectedIndexes) {
       const index = Number(rawIndex)
       if (!Number.isInteger(index) || index < 0 || index >= question.options.length) {
-        return { ok: false }
+        return { ok: false, reason: 'malformed' }
       }
       selectedLabels.push(question.options[index]!.label)
     }

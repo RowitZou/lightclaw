@@ -183,6 +183,50 @@ test('coordinator rejects malformed form_value without consuming pending', async
   await assert.rejects(pending, /cancelled by user/)
 })
 
+test('coordinator surfaces "missing-selection" toast when a select is unpicked', async () => {
+  // The single most likely "提交异常" cause in practice: user clicks submit
+  // without making a dropdown choice — Feishu omits the key from form_value
+  // entirely (or returns an empty string / empty array). Toast must steer
+  // the user to pick, not imply a system error.
+  const pending = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_1',
+    abortSignal: new AbortController().signal,
+    questions: [{
+      header: 'Name',
+      question: 'Pick a name',
+      options: [{ label: 'A' }, { label: 'B' }],
+    }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+  // Submit with form_value missing the q0 key entirely (Feishu's shape when
+  // nothing was picked).
+  const omitted = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    action: 'submit',
+    id,
+    formValue: { q0_other: '' },
+  })
+  assert.deepEqual(omitted, {
+    toast: { type: 'warning', content: '请先在每个下拉框做出选择再提交' },
+  })
+  // Empty string also counts as "not picked".
+  const emptyString = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    action: 'submit',
+    id,
+    formValue: { q0: '', q0_other: '' },
+  })
+  assert.deepEqual(emptyString, {
+    toast: { type: 'warning', content: '请先在每个下拉框做出选择再提交' },
+  })
+  // Pending must still be live — these are user nudges, not consumes.
+  assert.equal(coord.hasPending(id), true)
+  await coord.handleCardAction({ kind: 'lightclaw_askuser', action: 'cancel', id })
+  await assert.rejects(pending, /cancelled by user/)
+})
+
 test('coordinator resolves timeout defaults and aborts no-default timeout', async () => {
   const withDefault = coord.askAndAwait({
     sessionId: 'feishu:dm:oc_chat',
