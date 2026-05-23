@@ -83,6 +83,33 @@ export async function markConsolidationSucceeded(memoryDir: string): Promise<voi
   await writeFile(consolidationLockPath(memoryDir), `${process.pid}\n`)
 }
 
+/** Drop this process's pid from the lock file at shutdown without losing the
+ *  `lastConsolidatedAt` watermark. Without this, a clean exit leaves the lock
+ *  carrying our (now-dead) pid; `tryAcquireConsolidationLock` on the next
+ *  start would detect the stale-pid case and reclaim, but the reclaim path
+ *  unlinks + recreates the file, resetting mtime to the acquire moment and
+ *  erasing the real last-consolidation timestamp — so the `minHours` throttle
+ *  starts counting from restart instead of from the prior successful dream.
+ *  Clearing the holder (writeFile '') while preserving mtime via utimes keeps
+ *  the watermark intact and turns the next start's acquire into a no-conflict
+ *  empty-file path. Idempotent and best-effort: never throws across shutdown,
+ *  and ignores locks held by a different pid (concurrent daemons under the
+ *  same memoryDir is an unsupported configuration; releasing someone else's
+ *  pid would be worse than leaving it). */
+export async function releaseConsolidationLockOwnership(memoryDir: string): Promise<void> {
+  const lockFile = consolidationLockPath(memoryDir)
+  try {
+    const current = await readLockFile(lockFile)
+    if (!current || current.pid !== process.pid) return
+    const mtimeSeconds = current.mtimeMs / 1000
+    await writeFile(lockFile, '')
+    await utimes(lockFile, mtimeSeconds, mtimeSeconds)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    // best-effort during shutdown drain — never throw
+  }
+}
+
 async function readLockFile(
   lockFile: string,
 ): Promise<{ mtimeMs: number; pid: number | undefined } | null> {

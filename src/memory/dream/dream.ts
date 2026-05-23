@@ -3,7 +3,8 @@ import path from 'node:path'
 
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { LightClawConfig } from '../../config.js'
-import { ensureMemoryDir } from '../auto-memory.js'
+import { listActiveCanonicalUsers } from '../../identity/store.js'
+import { ensureMemoryDir, getMemoryDir } from '../auto-memory.js'
 import {
   isExtractionInProgressFor,
   onExtractSettled,
@@ -11,6 +12,7 @@ import {
 import {
   markConsolidationSucceeded,
   readLastConsolidatedAt,
+  releaseConsolidationLockOwnership,
   rollbackConsolidationLock,
   tryAcquireConsolidationLock,
 } from './lock.js'
@@ -277,6 +279,27 @@ async function countMemoriesModifiedSince(
     }
   }
   return count
+}
+
+/** Walk every paired canonical user's memoryDir and release any consolidate
+ *  lock this process still holds. Called from shutdown drains so the lock
+ *  file no longer carries our (about-to-die) pid — the next start gets a
+ *  clean empty-file acquire that preserves the prior `lastConsolidatedAt`
+ *  watermark instead of resetting `minHours` to "now". See
+ *  `releaseConsolidationLockOwnership` for the rationale. Best-effort: a
+ *  failure here must not block the rest of the shutdown sequence. */
+export async function releaseConsolidationLocksOnShutdown(
+  config: LightClawConfig,
+): Promise<void> {
+  let users: string[]
+  try {
+    users = await listActiveCanonicalUsers()
+  } catch {
+    return
+  }
+  await Promise.allSettled(
+    users.map(user => releaseConsolidationLockOwnership(getMemoryDir(user, config))),
+  )
 }
 
 export async function drainPendingDream(timeoutMs = 60_000): Promise<void> {

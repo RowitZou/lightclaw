@@ -189,11 +189,15 @@ export async function runInboxAgingSweepOnce(
       process.stderr.write(`[inbox-aging] ${r.user}: ${r.error}\n`)
     }
   }
-  if (totalRemoved > 0) {
-    process.stderr.write(
-      `[inbox-aging] removed ${totalRemoved} file(s) (${formatBytes(totalBytes)}) across ${users.length} user(s)\n`,
-    )
-  }
+  // Always emit a heartbeat — without it, an operator grepping logs cannot
+  // tell whether the hourly sweep is alive (silent) from "sweep ran, 0 to
+  // reap" (silent). One stderr line per `intervalMinutes` is negligible vs
+  // the dogfood loss when the scheduler is wedged.
+  process.stderr.write(
+    totalRemoved > 0
+      ? `[inbox-aging] swept ${users.length} user(s), removed ${totalRemoved} file(s) (${formatBytes(totalBytes)})\n`
+      : `[inbox-aging] swept ${users.length} user(s), 0 removed\n`,
+  )
   return results
 }
 

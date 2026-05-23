@@ -18,8 +18,9 @@ import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { runConfigWizard } from './config-wizard.js'
 import { cleanupMcp, initializeMcp } from './mcp/index.js'
-import { drainPendingDream } from './memory/dream/dream.js'
+import { drainPendingDream, releaseConsolidationLocksOnShutdown } from './memory/dream/dream.js'
 import { drainPendingExtraction } from './memory/extract.js'
+import type { LightClawConfig } from './config.js'
 import { lightclawHome, setLightclawHomeOverride } from './paths.js'
 import {
   acquireProcessLock,
@@ -38,6 +39,12 @@ type CliArgs = {
 }
 
 let shuttingDown = false
+// Captured by `main()` after config bootstrap so the signal-handler shutdown
+// path (registered at module load, long before config exists) can reach the
+// same memoryRoot the daemon runs against. Stays undefined if a signal fires
+// before bootstrap completes, in which case the consolidate-lock release is
+// skipped — same outcome as pre-fix behavior.
+let configForShutdown: LightClawConfig | undefined
 
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) {
@@ -51,6 +58,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   await drainPendingDream(60_000).catch(error => {
     process.stderr.write(`auto-dream drain failed: ${String(error)}\n`)
   })
+  if (configForShutdown) {
+    await releaseConsolidationLocksOnShutdown(configForShutdown).catch(error => {
+      process.stderr.write(`consolidate-lock release failed: ${String(error)}\n`)
+    })
+  }
   await drainPendingBackgroundTasks(60_000).catch(error => {
     process.stderr.write(`background task drain failed: ${String(error)}\n`)
   })
@@ -198,6 +210,7 @@ async function main(): Promise<void> {
     currentUserId,
     channel: 'terminal',
   })
+  configForShutdown = config
   await runWithSessionContext(sessionContext, async () => {
     await initializeHooks(config)
     await initializeMcp(config)
@@ -223,6 +236,9 @@ async function main(): Promise<void> {
       // last two used to live in repl.ts before it became a plain console.
       await drainPendingExtraction(60_000)
       await drainPendingDream(60_000)
+      await releaseConsolidationLocksOnShutdown(config).catch(error => {
+        process.stderr.write(`consolidate-lock release failed: ${String(error)}\n`)
+      })
       await drainPendingBackgroundTasks(60_000)
       await getBackgroundTaskScheduler().stop()
       for (const handle of channelHandles.reverse()) {

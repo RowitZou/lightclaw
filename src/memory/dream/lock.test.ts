@@ -9,6 +9,7 @@ import {
   consolidationLockPath,
   markConsolidationSucceeded,
   readLastConsolidatedAt,
+  releaseConsolidationLockOwnership,
   rollbackConsolidationLock,
   tryAcquireConsolidationLock,
 } from './lock.js'
@@ -94,5 +95,38 @@ describe('autoDream consolidation lock', () => {
     await new Promise(resolve => setTimeout(resolve, 5))
     await markConsolidationSucceeded(tmpMemoryDir)
     assert.ok(statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs >= before)
+  })
+
+  it('release-on-shutdown clears holder pid but keeps the last-consolidated mtime', async () => {
+    await tryAcquireConsolidationLock(tmpMemoryDir)
+    await markConsolidationSucceeded(tmpMemoryDir)
+    const lockFile = consolidationLockPath(tmpMemoryDir)
+    const lastConsolidatedMs = statSync(lockFile).mtimeMs
+
+    // Wait long enough that a naive "delete + recreate on next acquire" would
+    // produce a measurably later mtime, so the assertion below has to come
+    // from the release path actively preserving the watermark.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await releaseConsolidationLockOwnership(tmpMemoryDir)
+
+    assert.equal(readFileSync(lockFile, 'utf8'), '')
+    assert.ok(Math.abs(statSync(lockFile).mtimeMs - lastConsolidatedMs) < 5)
+    assert.equal(await readLastConsolidatedAt(tmpMemoryDir), statSync(lockFile).mtimeMs)
+  })
+
+  it('release-on-shutdown is a no-op when the lock is held by a different pid', async () => {
+    const lockFile = consolidationLockPath(tmpMemoryDir)
+    writeFileSync(lockFile, '999999999\n')
+    const otherPidMtime = statSync(lockFile).mtimeMs
+
+    await releaseConsolidationLockOwnership(tmpMemoryDir)
+
+    assert.equal(readFileSync(lockFile, 'utf8').trim(), '999999999')
+    assert.equal(statSync(lockFile).mtimeMs, otherPidMtime)
+  })
+
+  it('release-on-shutdown silently tolerates a missing lock file', async () => {
+    await releaseConsolidationLockOwnership(tmpMemoryDir)
+    assert.equal(await readLastConsolidatedAt(tmpMemoryDir), 0)
   })
 })
