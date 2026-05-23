@@ -17,12 +17,9 @@ const AskUserQuestionInputSchema = z.object({
       description: z.string().optional(),
     })).min(2).max(4),
     multiSelect: z.boolean().default(false),
-    defaultOptionIndex: z.number().int().nonnegative().optional(),
+    defaultOptionIndex: z.number().int().nonnegative(),
   }).superRefine((question, ctx) => {
-    if (
-      question.defaultOptionIndex !== undefined &&
-      question.defaultOptionIndex >= question.options.length
-    ) {
+    if (question.defaultOptionIndex >= question.options.length) {
       ctx.addIssue({
         code: 'custom',
         path: ['defaultOptionIndex'],
@@ -44,12 +41,14 @@ unresolved. Use this when:
 - You need a fact only the user knows before continuing usefully.
 
 Each call: 1-4 questions, each with 2-4 options. Set \`multiSelect\` when more
-than one option could apply. Set \`defaultOptionIndex\` only when there is a
-genuinely safe default — if there isn't one, leave it blank and the question
-will abort the turn on timeout instead of guessing.
+than one option could apply. Always set \`defaultOptionIndex\` — pick the
+safest, least destructive option for the case the user is away. The default
+fires on timeout so long-running work keeps moving; pick deliberately rather
+than guessing.
 
-The card includes a free-text slot for anything the options don't cover. The
-user's reply may come back as the chosen options or as that free-text.
+Each question has its own free-text slot for anything the options don't
+cover. Answers come back as \`selectedLabels\` plus an optional per-question
+\`otherText\`.
 
 Decide first, ask second. Don't use this to confirm a choice you already know,
 to ask permission to proceed, or to elicit something you can reasonably try
@@ -87,10 +86,15 @@ export const askUserQuestionTool = buildTool<AskUserQuestionInput, AskUserQuesti
   formatResult(output, toolUseId, isError) {
     const lines = ['AskUserQuestion answers:']
     for (const answer of output.answers) {
-      const suffix = answer.byTimeoutDefault ? ' (timeout default; user did not actively choose)' : ''
+      const timeoutSuffix = answer.byTimeoutDefault
+        ? ' (timeout default; user did not actively choose)'
+        : ''
       lines.push(
-        `- ${answer.header}: ${answer.selectedLabels.join(', ') || '(no selection)'}${suffix}`,
+        `- ${answer.header}: ${answer.selectedLabels.join(', ') || '(no selection)'}${timeoutSuffix}`,
       )
+      if (answer.otherText) {
+        lines.push(`  other: ${answer.otherText}`)
+      }
     }
     return {
       type: 'tool_result',

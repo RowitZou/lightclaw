@@ -304,6 +304,7 @@ function normalizeCardAction(
       kind: 'lightclaw_askuser',
       action: actionKind,
       id,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
       ...(formValue ? { formValue } : {}),
       ...(openMessageId ? { openMessageId } : {}),
     }

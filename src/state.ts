@@ -18,7 +18,20 @@ import {
   type SessionContext,
 } from './session-context.js'
 import type { TodoItem, UsageStats } from './types.js'
-import { abortAskUserQuestionsBySession } from './channels/feishu/askuser-card.js'
+
+// Channel-specific cleanup hooks that need to run when a sessionId is aborted
+// (e.g. AskUserQuestion's pending card teardown). Channels register their hook
+// at startup and dispose on shutdown so state.ts stays unaware of channel
+// internals. Hooks are best-effort and must not throw.
+type SessionAbortHook = (sessionId: string) => void | Promise<void>
+const sessionAbortHooks = new Set<SessionAbortHook>()
+
+export function registerSessionAbortHook(hook: SessionAbortHook): () => void {
+  sessionAbortHooks.add(hook)
+  return () => {
+    sessionAbortHooks.delete(hook)
+  }
+}
 
 type SessionState = SessionContext
 
@@ -301,10 +314,14 @@ export function abortInFlightForSession(sessionId: string): boolean {
     return false
   }
   ctrl.abort()
-  void abortAskUserQuestionsBySession(sessionId).catch(error => {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[ask-user] abort-by-session failed: ${detail}\n`)
-  })
+  for (const hook of sessionAbortHooks) {
+    void Promise.resolve()
+      .then(() => hook(sessionId))
+      .catch(error => {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`[state] session abort hook failed for ${sessionId}: ${detail}\n`)
+      })
+  }
   return true
 }
 

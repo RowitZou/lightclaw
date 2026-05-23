@@ -26,11 +26,13 @@ import type { FeishuCardAction } from './permission-card.js'
 import { FeishuSender } from './sender.js'
 import {
   AskUserQuestionCoordinator,
+  abortAskUserQuestionsBySession,
   clearAskUserQuestionCoordinator,
   registerAskUserQuestionCoordinator,
   type AskUserCardAction,
 } from './askuser-card.js'
 import { AskUserScheduler } from './askuser-scheduler.js'
+import { registerSessionAbortHook } from '../../state.js'
 import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
@@ -101,6 +103,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       const askUserCoordinator = new AskUserQuestionCoordinator(sender)
       const askUserScheduler = new AskUserScheduler()
       registerAskUserQuestionCoordinator(askUserCoordinator)
+      // Bridge `/stop` (state.ts) to the AskUser coordinator without
+      // making state.ts depend on the feishu module. state.ts only knows
+      // about an opaque session abort hook; we register ours here.
+      const disposeAskUserAbortHook = registerSessionAbortHook(sessionId =>
+        abortAskUserQuestionsBySession(sessionId),
+      )
       await askUserCoordinator.crashResume()
       askUserScheduler.start()
       const runner = new ChannelRunner(
@@ -234,6 +242,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         return {
           stop: () => {
             pendingDrainer.stop()
+            disposeAskUserAbortHook()
             askUserScheduler.stop()
             clearAskUserQuestionCoordinator(askUserCoordinator)
             clearFeishuSender(sender)

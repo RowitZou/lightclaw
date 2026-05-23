@@ -14,6 +14,13 @@ export type PendingQuestionRecord = {
   deadline: string
   createdAt: string
   chatId: string
+  /**
+   * Group sessions only — the senderOpenId of the user who triggered the
+   * AskUserQuestion. Used both for routing the card to the requester's DM
+   * (so other group members cannot operate it) and for the operator ACL
+   * check on click. Unset for DM sessions (chat is 1-on-1 with the bot).
+   */
+  requesterOpenId?: string
   cardMessageId?: string
 }
 
@@ -110,6 +117,55 @@ function parsePending(raw: string): PendingQuestionRecord | null {
       typeof value.chatId !== 'string'
     ) {
       return null
+    }
+    if (
+      value.requesterOpenId !== undefined &&
+      typeof value.requesterOpenId !== 'string'
+    ) {
+      return null
+    }
+    if (
+      value.cardMessageId !== undefined &&
+      typeof value.cardMessageId !== 'string'
+    ) {
+      return null
+    }
+    // Validate question shape — a corrupt record whose `questions` survived
+    // Array.isArray but lacks structure would otherwise crash
+    // buildAskUserCard / parseFormValue downstream on rehydrate.
+    if (value.questions.length === 0) {
+      return null
+    }
+    for (const question of value.questions) {
+      const candidate = question as Partial<AskUserQuestionInput['questions'][number]>
+      if (
+        !candidate ||
+        typeof candidate.question !== 'string' ||
+        typeof candidate.header !== 'string' ||
+        !Array.isArray(candidate.options)
+      ) {
+        return null
+      }
+      for (const option of candidate.options) {
+        if (!option || typeof option.label !== 'string') {
+          return null
+        }
+        if (option.description !== undefined && typeof option.description !== 'string') {
+          return null
+        }
+      }
+      if (candidate.multiSelect !== undefined && typeof candidate.multiSelect !== 'boolean') {
+        return null
+      }
+      if (
+        candidate.defaultOptionIndex !== undefined &&
+        (typeof candidate.defaultOptionIndex !== 'number' ||
+          !Number.isInteger(candidate.defaultOptionIndex) ||
+          candidate.defaultOptionIndex < 0 ||
+          candidate.defaultOptionIndex >= candidate.options.length)
+      ) {
+        return null
+      }
     }
     return value
   } catch {

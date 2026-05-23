@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { parseFeishuSessionId } from './routing.js'
+import { parseFeishuSessionId, type ParsedFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import {
   PendingQuestionsStore,
@@ -25,6 +25,12 @@ export type AskUserQuestionAnswer = {
   question: string
   header: string
   selectedLabels: string[]
+  /**
+   * Optional per-question free-text the user typed into that question's
+   * "Other" slot. Independent of `selectedLabels` so the model can tell
+   * which option was chosen vs what additional context was supplied.
+   */
+  otherText?: string
   byTimeoutDefault: boolean
 }
 
@@ -32,6 +38,7 @@ export type AskUserCardAction = {
   kind: 'lightclaw_askuser'
   id: string
   action: 'submit' | 'cancel'
+  operatorOpenId?: string
   formValue?: Record<string, unknown>
   openMessageId?: string
 }
@@ -79,6 +86,15 @@ export async function abortAskUserQuestionsBySession(sessionId: string): Promise
 
 export class AskUserQuestionCoordinator {
   private readonly pendingById = new Map<string, PendingRuntime>()
+  /**
+   * Reverse index for the "one pending question per session" invariant.
+   * Keying off sessionId (not toolCallId) is the fix for the previous guard
+   * that compared per-tool-call ids — each tool call has a unique id, so the
+   * old check could never trip even for parallel AskUserQuestion calls within
+   * the same agent turn. The model is expected to batch multiple questions
+   * into a single AskUserQuestion call (1-4 questions per call).
+   */
+  private readonly pendingBySession = new Map<string, string>()
 
   constructor(
     private readonly sender: FeishuSender,
@@ -92,8 +108,8 @@ export class AskUserQuestionCoordinator {
     turnId: string
     abortSignal: AbortSignal
   }): Promise<AskUserQuestionAnswer[]> {
-    if ([...this.pendingById.values()].some(p => p.sessionId === input.sessionId && p.turnId === input.turnId)) {
-      throw new Error('concurrent AskUserQuestion calls in the same turn are not supported.')
+    if (this.pendingBySession.has(input.sessionId)) {
+      throw new Error('concurrent AskUserQuestion calls in the same session are not supported.')
     }
     const parsed = parseFeishuSessionId(input.sessionId)
     if (!parsed) {
@@ -102,6 +118,11 @@ export class AskUserQuestionCoordinator {
 
     const id = randomUUID()
     const deadlineMs = this.now() + ASK_USER_TIMEOUT_MS
+    // For group sessions, requesterOpenId is encoded directly in the sessionId
+    // (Phase 26 formula). For DM, the chat is naturally 1-on-1 with the bot,
+    // so the only person who can click is the requester — leave requesterOpenId
+    // unset and the ACL check trivially passes.
+    const requesterOpenId = parsed.kind === 'group' ? parsed.senderOpenId : undefined
     const record: PendingQuestionRecord = {
       id,
       schemaVersion: 1,
@@ -111,11 +132,10 @@ export class AskUserQuestionCoordinator {
       deadline: new Date(deadlineMs).toISOString(),
       createdAt: new Date(this.now()).toISOString(),
       chatId: parsed.chatId,
+      ...(requesterOpenId ? { requesterOpenId } : {}),
     }
     const card = buildAskUserCard({ id, questions: input.questions, deadlineMs, nowMs: this.now() })
-    const sent = await this.sender.sendInteractiveCardToChatId(parsed.chatId, card, {
-      purpose: 'notice',
-    })
+    const sent = await this.sendCard(parsed, requesterOpenId, card)
     const withMessage = { ...record, ...(sent.messageId ? { cardMessageId: sent.messageId } : {}) }
     await this.store.writePending(withMessage)
 
@@ -132,7 +152,37 @@ export class AskUserQuestionCoordinator {
       pending.abortListener = abortListener
       input.abortSignal.addEventListener('abort', abortListener, { once: true })
       this.pendingById.set(id, pending)
+      this.pendingBySession.set(input.sessionId, id)
       this.startCountdownPump(pending)
+    })
+  }
+
+  /**
+   * Card delivery routing mirrors permission-card (Phase 26): group sessions
+   * push the card to the requester's DM via `sendInteractiveCardToOpenId` so
+   * other group members can see the agent turn proceed but cannot operate the
+   * card themselves; DM sessions push to the chat directly because the chat
+   * IS the 1-on-1 with the bot. On DM-push failure for a group session, fall
+   * back to in-chat send — the operator ACL at callback time still enforces
+   * "only the original requester can click".
+   */
+  private async sendCard(
+    parsed: ParsedFeishuSessionId,
+    requesterOpenId: string | undefined,
+    card: Record<string, unknown>,
+  ): Promise<{ messageId?: string }> {
+    if (parsed.kind === 'group' && requesterOpenId) {
+      try {
+        return await this.sender.sendInteractiveCardToOpenId(requesterOpenId, card)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `[ask-user] DM push failed for ${requesterOpenId}, falling back to in-chat: ${detail}\n`,
+        )
+      }
+    }
+    return await this.sender.sendInteractiveCardToChatId(parsed.chatId, card, {
+      purpose: 'notice',
     })
   }
 
@@ -154,6 +204,7 @@ export class AskUserQuestionCoordinator {
     }
     const pending: PendingRuntime = { ...record }
     this.pendingById.set(record.id, pending)
+    this.pendingBySession.set(record.sessionId, record.id)
     this.startCountdownPump(pending)
   }
 
@@ -168,13 +219,30 @@ export class AskUserQuestionCoordinator {
   }
 
   async handleCardAction(action: AskUserCardAction): Promise<FeishuCardActionResponse> {
-    if (action.action === 'cancel') {
-      await this.consumePending(action.id, 'cancel')
-      return { toast: { type: 'info', content: '已取消' } }
-    }
     const pending = this.pendingById.get(action.id)
     if (!pending) {
       return { toast: { type: 'warning', content: '这张问询卡片已经失效' } }
+    }
+    if (
+      pending.requesterOpenId &&
+      action.operatorOpenId &&
+      pending.requesterOpenId !== action.operatorOpenId
+    ) {
+      // Group ACL: someone other than the original requester clicked the card.
+      // Don't consume the pending — the requester may still be about to act.
+      process.stderr.write(
+        `[ask-user] rejected operator ${action.operatorOpenId} for question ${pending.id}; requester is ${pending.requesterOpenId}\n`,
+      )
+      return {
+        toast: {
+          type: 'warning',
+          content: '只有发起这次问询的成员可以操作此卡片',
+        },
+      }
+    }
+    if (action.action === 'cancel') {
+      await this.consumePending(action.id, 'cancel')
+      return { toast: { type: 'info', content: '已取消' } }
     }
     const parsed = parseFormValue(pending.questions, action.formValue ?? {})
     if (!parsed.ok) {
@@ -185,8 +253,9 @@ export class AskUserQuestionCoordinator {
   }
 
   async abortBySession(sessionId: string): Promise<void> {
-    const matches = [...this.pendingById.values()].filter(pending => pending.sessionId === sessionId)
-    await Promise.all(matches.map(pending => this.consumePending(pending.id, 'stop')))
+    const id = this.pendingBySession.get(sessionId)
+    if (!id) return
+    await this.consumePending(id, 'stop')
   }
 
   hasPending(id: string): boolean {
@@ -224,6 +293,9 @@ export class AskUserQuestionCoordinator {
       runtime.abortSignal.removeEventListener('abort', runtime.abortListener)
     }
     this.pendingById.delete(pending.id)
+    if (this.pendingBySession.get(pending.sessionId) === pending.id) {
+      this.pendingBySession.delete(pending.sessionId)
+    }
 
     if (mode === 'user' && answers) {
       runtime?.resolve?.(answers)
@@ -294,6 +366,17 @@ export class AskUserQuestionCoordinator {
   }
 }
 
+const SELECT_NAME_PREFIX = 'q'
+const OTHER_NAME_SUFFIX = '_other'
+
+function selectName(index: number): string {
+  return `${SELECT_NAME_PREFIX}${index}`
+}
+
+function otherName(index: number): string {
+  return `${SELECT_NAME_PREFIX}${index}${OTHER_NAME_SUFFIX}`
+}
+
 export function buildAskUserCard(input: {
   id: string
   questions: AskUserQuestionInput['questions']
@@ -309,7 +392,7 @@ export function buildAskUserCard(input: {
     })
     elements.push({
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
-      name: `q${index}`,
+      name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
       options: question.options.map((option, optionIndex) => ({
         text: {
@@ -319,14 +402,17 @@ export function buildAskUserCard(input: {
         value: String(optionIndex),
       })),
     })
-  })
-  elements.push({
-    tag: 'input',
-    name: 'other',
-    label: { tag: 'plain_text', content: '其它说明（选项不够时填这里）' },
-    input_type: 'multiline_text',
-    required: false,
-    placeholder: { tag: 'plain_text', content: '如选项不够,可在此补充' },
+    // Per-question optional Other slot. Bound by name to this specific
+    // question (q<i>_other) so multi-question cards have no ambiguity about
+    // which question the free text belongs to.
+    elements.push({
+      tag: 'input',
+      name: otherName(index),
+      label: { tag: 'plain_text', content: '其它说明（选项不够时填这里，可不填）' },
+      input_type: 'multiline_text',
+      required: false,
+      placeholder: { tag: 'plain_text', content: '可选：选项不能完全表达时,在此补充' },
+    })
   })
   elements.push({
     tag: 'action',
@@ -381,7 +467,7 @@ function parseFormValue(
   const answers: AskUserQuestionAnswer[] = []
   for (let i = 0; i < questions.length; i += 1) {
     const question = questions[i]!
-    const raw = formValue[`q${i}`]
+    const raw = formValue[selectName(i)]
     const selectedIndexes = question.multiSelect
       ? Array.isArray(raw) && raw.every(item => typeof item === 'string') ? raw : null
       : typeof raw === 'string' ? [raw] : null
@@ -396,16 +482,15 @@ function parseFormValue(
       }
       selectedLabels.push(question.options[index]!.label)
     }
+    const otherRaw = formValue[otherName(i)]
+    const otherText = typeof otherRaw === 'string' ? otherRaw.trim() : ''
     answers.push({
       question: question.question,
       header: question.header,
       selectedLabels,
+      ...(otherText ? { otherText } : {}),
       byTimeoutDefault: false,
     })
-  }
-  const other = typeof formValue.other === 'string' ? formValue.other.trim() : ''
-  if (other) {
-    answers[answers.length - 1]?.selectedLabels.push(`Other: ${other}`)
   }
   return { ok: true, answers }
 }
@@ -434,7 +519,10 @@ function answersFromDefaults(
 
 function summarizeAnswers(answers: AskUserQuestionAnswer[]): string {
   return answers
-    .map(answer => `- ${answer.header}: ${answer.selectedLabels.join(', ')}`)
+    .map(answer => {
+      const main = `${answer.header}: ${answer.selectedLabels.join(', ')}`
+      return answer.otherText ? `- ${main} | 其它: ${answer.otherText}` : `- ${main}`
+    })
     .join('\n')
 }
 
@@ -445,6 +533,12 @@ function formatRemaining(ms: number): string {
   return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
+// Conservative escape for user-provided text rendered inside markdown blocks.
+// Covers the high-risk injection vectors (bold/italic/strike/links/code/raw
+// HTML/escape sequences) while leaving common harmless chars like `#` `+` `-`
+// `!` `|` untouched so question text reads naturally.
+const LARK_MD_ESCAPE_RE = /([\\`*_~\[\]<>])/g
+
 function escapeLarkMd(text: string): string {
-  return text.replace(/[<>]/g, char => (char === '<' ? '&lt;' : '&gt;'))
+  return text.replace(LARK_MD_ESCAPE_RE, '\\$1')
 }

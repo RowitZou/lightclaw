@@ -46,6 +46,15 @@ test('AskUserQuestion schema rejects long headers and out-of-range defaults', ()
     }).success,
     false,
   )
+  // defaultOptionIndex is required so timeout always has a forward-progress
+  // path — schema must reject a question that omits it.
+  const { defaultOptionIndex: _, ...withoutDefault } = validInput.questions[0]!
+  assert.equal(
+    askUserQuestionTool.inputSchema?.safeParse({
+      questions: [withoutDefault],
+    }).success,
+    false,
+  )
 })
 
 test('AskUserQuestion formatter marks timeout defaults explicitly', () => {
@@ -58,4 +67,28 @@ test('AskUserQuestion formatter marks timeout defaults explicitly', () => {
     }],
   }, 'toolu_1')
   assert.match(String(block.content), /timeout default/)
+})
+
+test('AskUserQuestion formatter renders per-question otherText on its own line', () => {
+  const block = askUserQuestionTool.formatResult({
+    answers: [
+      {
+        question: 'Scope?',
+        header: 'Scope',
+        selectedLabels: ['Narrow'],
+        otherText: 'plus the API surface',
+        byTimeoutDefault: false,
+      },
+      {
+        question: 'Tools?',
+        header: 'Tools',
+        selectedLabels: ['Read', 'Edit'],
+        byTimeoutDefault: false,
+      },
+    ],
+  }, 'toolu_2')
+  const content = String(block.content)
+  assert.match(content, /Scope: Narrow\n {2}other: plus the API surface/)
+  assert.match(content, /Tools: Read, Edit/)
+  assert.equal(content.split('other:').length, 2, 'no other line for answers without otherText')
 })
