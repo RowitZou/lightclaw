@@ -90,13 +90,17 @@ describe('WorkerHealthChecker backoff', () => {
         }
       },
     })
-    const checker = new WorkerHealthChecker(fakePool([runtime]), 1_000)
+    // intervalMs=100 → first-failure backoff is 100 * 2 = 200ms; the wait
+    // below only needs to clear that window. Production uses 1s but the
+    // exponential formula is identical, so 100ms keeps the test honest while
+    // dropping wall time from ~2.1s to ~0.25s.
+    const checker = new WorkerHealthChecker(fakePool([runtime]), 100)
 
     await checker.tick()
     assert.equal(restartCalls, 1)
 
     nextRestartFails = false
-    await new Promise(resolve => setTimeout(resolve, 2_100))
+    await new Promise(resolve => setTimeout(resolve, 250))
     await checker.tick()
     assert.equal(restartCalls, 2)
 

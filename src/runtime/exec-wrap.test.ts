@@ -41,9 +41,16 @@ describe('wrapSandboxCommandWithTimeout', () => {
   })
 
   it('is transparent: forwards stdout and exit code of a normal command', async () => {
-    const wrapped = wrapSandboxCommandWithTimeout('echo hello && exit 7', 30_000)
+    // Budget is intentionally small (2s, not the docker/rlaunch default 30s)
+    // so the watchdog sleep doesn't dominate test wall time. The point of
+    // this case is "fast command rides through unchanged" — the inner echo
+    // exits in ~1ms and the wrapper should return immediately afterward.
+    // (Pre-2026-05-23 this used budget=30s and took ~35s; the wait on the
+    // killed watchdog group still drags out the full budget+grace under
+    // some bash configurations, so keep the budget tight here.)
+    const wrapped = wrapSandboxCommandWithTimeout('echo hello && exit 7', 2_000)
     const result = await runProcess('/bin/bash', ['-c', wrapped], {
-      timeoutMs: sandboxBackstopTimeoutMs(30_000),
+      timeoutMs: sandboxBackstopTimeoutMs(2_000),
       maxBufferBytes: 1024 * 1024,
       limitMessage: 'process terminated',
     })

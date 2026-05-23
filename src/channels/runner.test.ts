@@ -479,7 +479,15 @@ describe('ChannelRunner mention gate', () => {
   it('synthetic message bypasses the mention gate even when isMessageTargeted=false', async () => {
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')
-    const strategy = installFakeStrategy('feishu')
+    // Stop the message at the allowlist gate (runner.ts:367) so handleMessage
+    // returns BEFORE acquiring a runtime / launching a query. The assertion
+    // below only cares about the mention gate (runner.ts:351-357), which sits
+    // strictly upstream of isMessageAllowed; whether the message ultimately
+    // lands in query or is dropped at the allowlist doesn't change the
+    // mentionCheckCalls outcome. Without this, the synthetic message walks
+    // all the way to query() under the docker-backend test config and stalls
+    // ~200s waiting on a fake LLM endpoint / image-readiness probe.
+    const strategy = installFakeStrategy('feishu', { allowed: false })
     const runner = new ChannelRunner(strategy)
     let mentionCheckCalls = 0
     strategy.isMessageTargeted = () => {
