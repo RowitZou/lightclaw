@@ -132,6 +132,26 @@ test('coordinator resolves submitted answers with per-question otherText', async
   assert.equal(answers[1]!.otherText, 'include Grep')
   assert.equal(answers[1]!.byTimeoutDefault, false)
   assert.equal(sender.patches.length, 1, 'final patch fires exactly once')
+  // Patched card replaces the interactive form with a structured
+  // confirmation view: green header, "已确认" title, each question's
+  // header + selection rendered, otherText rendered when present.
+  const finalCard = sender.patches[0]!.card as {
+    schema: string
+    header: { template: string; title: { content: string } }
+    body: { elements: Array<{ tag: string; content: string }> }
+  }
+  assert.equal(finalCard.schema, '2.0')
+  assert.equal(finalCard.header.template, 'green')
+  assert.match(finalCard.header.title.content, /已确认/)
+  const finalMarkdown = finalCard.body.elements[0]!.content
+  assert.match(finalMarkdown, /Q1 \/ Name/)
+  assert.match(finalMarkdown, /选择.*B/)
+  assert.match(finalMarkdown, /Q2 \/ Tools/)
+  assert.match(finalMarkdown, /选择.*Read.*Edit/)
+  assert.match(finalMarkdown, /其它.*include Grep/)
+  // The interactive form / column_set / buttons must NOT survive the patch.
+  assert.equal(finalMarkdown.includes('form'), false)
+  assert.equal(finalMarkdown.includes('提交'), false)
 })
 
 test('coordinator rejects malformed form_value without consuming pending', async () => {
@@ -180,6 +200,16 @@ test('coordinator resolves timeout defaults and aborts no-default timeout', asyn
   const answers = await withDefault
   assert.deepEqual(answers[0]!.selectedLabels, ['B'])
   assert.equal(answers[0]!.byTimeoutDefault, true)
+  // Timeout-with-default patches the card to a structured "已超时，已采用默认"
+  // confirmation (orange header, '默认' label per question) so the user can
+  // see what the agent went with.
+  const timeoutPatch = sender.patches[sender.patches.length - 1]!.card as {
+    header: { template: string; title: { content: string } }
+    body: { elements: Array<{ content: string }> }
+  }
+  assert.equal(timeoutPatch.header.template, 'orange')
+  assert.match(timeoutPatch.header.title.content, /已超时/)
+  assert.match(timeoutPatch.body.elements[0]!.content, /默认.*B/)
 
   // Different sessionId so the previous pending doesn't trip the
   // per-session concurrency guard.

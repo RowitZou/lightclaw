@@ -299,7 +299,13 @@ export class AskUserQuestionCoordinator {
 
     if (mode === 'user' && answers) {
       runtime?.resolve?.(answers)
-      await this.patchFinal(pending, buildFinalCard('已提交', summarizeAnswers(answers)))
+      await this.patchFinal(pending, buildAnsweredCard({
+        title: '✅ 已确认',
+        intro: '用户已确认以下选择',
+        template: 'green',
+        questions: pending.questions,
+        answers,
+      }))
       return
     }
 
@@ -307,10 +313,16 @@ export class AskUserQuestionCoordinator {
       const defaults = answersFromDefaults(pending.questions)
       if (defaults) {
         runtime?.resolve?.(defaults)
-        await this.patchFinal(pending, buildFinalCard('已超时，已采用默认', summarizeAnswers(defaults)))
+        await this.patchFinal(pending, buildAnsweredCard({
+          title: '⏰ 已超时，已采用默认',
+          intro: '用户未及时回复，已采用默认选项',
+          template: 'orange',
+          questions: pending.questions,
+          answers: defaults,
+        }))
       } else {
         runtime?.reject?.(new Error('timeout-no-default'))
-        await this.patchFinal(pending, buildFinalCard('已超时', '没有安全默认选项，本次问询已取消。'))
+        await this.patchFinal(pending, buildFinalCard('⏰ 已超时', '没有安全默认选项，本次问询已取消。'))
       }
       return
     }
@@ -479,6 +491,47 @@ export function buildAskUserCard(input: {
         name: 'askuser_form',
         elements: formElements,
       }],
+    },
+  }
+}
+
+function buildAnsweredCard(input: {
+  title: string
+  intro: string
+  template: 'green' | 'orange' | 'grey'
+  questions: AskUserQuestionInput['questions']
+  answers: AskUserQuestionAnswer[]
+}): Record<string, unknown> {
+  // Structured confirmation card — mirrors the permission-card "resolved"
+  // shape: original question text retained for context, then a clear list of
+  // what the user (or timeout default) actually chose. The original
+  // interactive form is replaced with this read-only view.
+  const lines: string[] = [`**${escapeLarkMd(input.intro)}**`, '']
+  input.answers.forEach((answer, index) => {
+    const question = input.questions[index]
+    lines.push(`**Q${index + 1} / ${escapeLarkMd(answer.header)}**`)
+    if (question) {
+      lines.push(`> ${escapeLarkMd(question.question)}`)
+    }
+    const selections = answer.selectedLabels.length > 0
+      ? answer.selectedLabels.map(label => escapeLarkMd(label)).join('、')
+      : '_(未选)_'
+    const tag = answer.byTimeoutDefault ? '默认' : '选择'
+    lines.push(`- **${tag}**：${selections}`)
+    if (answer.otherText) {
+      lines.push(`- **其它**：${escapeLarkMd(answer.otherText)}`)
+    }
+    lines.push('')
+  })
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      template: input.template,
+      title: { tag: 'plain_text', content: input.title },
+    },
+    body: {
+      elements: [{ tag: 'markdown', content: lines.join('\n').trimEnd() }],
     },
   }
 }
