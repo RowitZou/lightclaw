@@ -61,15 +61,8 @@ type FinishOptions = { skipFinalPatch?: boolean }
 type PendingRuntime = PendingQuestionRecord & {
   resolve?: (answers: AskUserQuestionAnswer[]) => void
   reject?: (error: Error) => void
-  timer?: NodeJS.Timeout
   abortListener?: () => void
   abortSignal?: AbortSignal
-  // Set true once finishPending starts. New countdown ticks early-return when
-  // they see this, and finishPending awaits any in-flight tick BEFORE issuing
-  // patchFinal so a stale countdown HTTP call can't land after the answered
-  // card and revert the UI back to the form (2026-05-23 flicker dogfood).
-  consumed?: boolean
-  inflightCountdownPatch?: Promise<void>
 }
 
 let activeCoordinator: AskUserQuestionCoordinator | null = null
@@ -155,7 +148,7 @@ export class AskUserQuestionCoordinator {
       chatId: parsed.chatId,
       ...(requesterOpenId ? { requesterOpenId } : {}),
     }
-    const card = buildAskUserCard({ id, questions: input.questions, deadlineMs, nowMs: this.now() })
+    const card = buildAskUserCard({ id, questions: input.questions })
     const sent = await this.sendCard(parsed, requesterOpenId, card)
     const withMessage = { ...record, ...(sent.messageId ? { cardMessageId: sent.messageId } : {}) }
     await this.store.writePending(withMessage)
@@ -174,7 +167,6 @@ export class AskUserQuestionCoordinator {
       input.abortSignal.addEventListener('abort', abortListener, { once: true })
       this.pendingById.set(id, pending)
       this.pendingBySession.set(input.sessionId, id)
-      this.startCountdownPump(pending)
     })
   }
 
@@ -226,7 +218,6 @@ export class AskUserQuestionCoordinator {
     const pending: PendingRuntime = { ...record }
     this.pendingById.set(record.id, pending)
     this.pendingBySession.set(record.sessionId, record.id)
-    this.startCountdownPump(pending)
   }
 
   async expireDuePending(nowMs = this.now()): Promise<void> {
@@ -346,22 +337,6 @@ export class AskUserQuestionCoordinator {
     opts: FinishOptions = {},
   ): Promise<void> {
     const runtime = this.pendingById.get(pending.id)
-    // Flip `consumed` BEFORE stopCountdownPump so a tick scheduled in this
-    // same event-loop turn (clearInterval is racy with it) early-returns
-    // instead of firing one last form-state patch.
-    if (runtime) {
-      runtime.consumed = true
-    }
-    this.stopCountdownPump(runtime)
-    // Wait for any in-flight countdown patch to settle. Without this, a stale
-    // countdown HTTP call can land AFTER our final patch and revert the
-    // answered card back to the interactive form (2026-05-23 flicker dogfood:
-    // "确认卡片出现了一瞬间，然后又变回了选择卡片"). The await never throws —
-    // patchPromise was created with a .catch already attached in
-    // startCountdownPump.
-    if (runtime?.inflightCountdownPatch) {
-      await runtime.inflightCountdownPatch
-    }
     if (runtime?.abortListener && runtime.abortSignal) {
       runtime.abortSignal.removeEventListener('abort', runtime.abortListener)
     }
@@ -416,47 +391,6 @@ export class AskUserQuestionCoordinator {
     }
   }
 
-  private startCountdownPump(pending: PendingRuntime): void {
-    this.stopCountdownPump(pending)
-    pending.timer = setInterval(() => {
-      // Tick fired after the pending was consumed (clearInterval is racy with
-      // a tick already scheduled in this loop turn) — skip to avoid issuing a
-      // form-state HTTP patch that would land on top of the answered card.
-      if (pending.consumed) return
-      const patchPromise = this.patchCountdown(pending).catch(error => {
-        const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[ask-user] countdown patch failed: ${detail}\n`)
-      })
-      pending.inflightCountdownPatch = patchPromise
-      void patchPromise.finally(() => {
-        if (pending.inflightCountdownPatch === patchPromise) {
-          pending.inflightCountdownPatch = undefined
-        }
-      })
-    }, 10_000)
-    pending.timer.unref?.()
-  }
-
-  private stopCountdownPump(pending: PendingRuntime | undefined): void {
-    if (pending?.timer) {
-      clearInterval(pending.timer)
-      pending.timer = undefined
-    }
-  }
-
-  private async patchCountdown(pending: PendingQuestionRecord): Promise<void> {
-    if (!pending.cardMessageId) return
-    await this.sender.patchInteractiveCard(
-      pending.cardMessageId,
-      buildAskUserCard({
-        id: pending.id,
-        questions: pending.questions,
-        deadlineMs: Date.parse(pending.deadline),
-        nowMs: this.now(),
-      }),
-    )
-  }
-
   private async patchFinal(
     pending: PendingQuestionRecord,
     card: Record<string, unknown>,
@@ -496,10 +430,7 @@ function otherName(index: number): string {
 export function buildAskUserCard(input: {
   id: string
   questions: AskUserQuestionInput['questions']
-  deadlineMs: number
-  nowMs?: number
 }): Record<string, unknown> {
-  const nowMs = input.nowMs ?? Date.now()
   // Feishu 2.0 form layout (2026-05-23 dogfood-driven):
   //  - The V1 `action` container (`tag:'action', layout:'flow', actions:[...]`)
   //    is rejected on V2 cards: code=200861 `cards of schema V2 no longer
@@ -623,7 +554,7 @@ export function buildAskUserCard(input: {
     config: { wide_screen_mode: true },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: `LightClaw 请你拍板（剩 ${formatRemaining(input.deadlineMs - nowMs)}）` },
+      title: { tag: 'plain_text', content: `LightClaw 请你拍板（限时 ${Math.round(ASK_USER_TIMEOUT_MS / 60_000)} 分钟）` },
     },
     body: {
       elements: [{
@@ -783,21 +714,6 @@ function answersFromDefaults(
   return answers
 }
 
-function summarizeAnswers(answers: AskUserQuestionAnswer[]): string {
-  return answers
-    .map(answer => {
-      const main = `${answer.header}: ${answer.selectedLabels.join(', ')}`
-      return answer.otherText ? `- ${main} | 其它: ${answer.otherText}` : `- ${main}`
-    })
-    .join('\n')
-}
-
-function formatRemaining(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return `${minutes}:${String(rest).padStart(2, '0')}`
-}
 
 // Conservative escape for user-provided text rendered inside markdown blocks.
 // Covers the high-risk injection vectors (bold/italic/strike/links/code/raw

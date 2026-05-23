@@ -32,8 +32,6 @@ afterEach(() => {
 test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and action buttons', () => {
   const card = buildAskUserCard({
     id: 'ask_1',
-    deadlineMs: 61_000,
-    nowMs: 1_000,
     questions: [
       {
         header: 'Name',
@@ -118,8 +116,6 @@ test('buildAskUserCard pre-fills initial_option on single-select when defaultOpt
   // not pre-filled (a single default is misleading UI for a multi-pick).
   const card = buildAskUserCard({
     id: 'ask_default',
-    deadlineMs: 61_000,
-    nowMs: 1_000,
     questions: [
       {
         header: 'Name',
@@ -599,67 +595,44 @@ test('handleCardAction cancel returns inline rawCard (no side-fire patch)', asyn
   assert.match(cancel.header?.title?.content ?? '', /已取消/)
 })
 
-test('finishPending still awaits in-flight countdown so stale patch cannot overwrite atomic card update', async (t) => {
-  // Defense-in-depth: even though submit now returns the new card inline in
-  // the callback response (atomic on Feishu's side), a stale countdown
-  // patchInteractiveCard landing AFTER the response would still hit the same
-  // messageId with form-state and revert the user's view. consumed + await
-  // inflightCountdownPatch guarantees: countdown lands FIRST, then the
-  // callback response is sent with the new card, and no further patches fire.
-  t.mock.timers.enable({ apis: ['setInterval'] })
-
-  let releaseHeldPatch: () => void = () => {}
-  let firstPatchTaken = false
-  sender.patchInteractiveCard = async (messageId: string, card: Record<string, unknown>) => {
-    if (!firstPatchTaken) {
-      firstPatchTaken = true
-      await new Promise<void>(resolve => { releaseHeldPatch = resolve })
-    }
-    sender.patches.push({ messageId, card })
-  }
-
-  const pendingPromise = coord.askAndAwait({
+test('coordinator does NOT periodically patch the card while pending (no form-state clobber)', async () => {
+  // 2026-05-23 dogfood: user reported "选了前面又选后面，前面消失了" — every
+  // 10s the coordinator was patching the card with a fresh buildAskUserCard,
+  // which clobbered the user's in-progress dropdown selections client-side.
+  // Fix: drop the countdown setInterval entirely; header is now static
+  // "限时 X 分钟" instead of live "剩 mm:ss". Test asserts: after a pending is
+  // registered, even after waiting longer than the old 10s tick interval,
+  // sender.patches stays empty (no side-fire patches from the coordinator).
+  const ctrl = new AbortController()
+  const pending = coord.askAndAwait({
     sessionId: 'feishu:dm:oc_chat',
-    turnId: 'toolu_flicker_inflight',
-    abortSignal: new AbortController().signal,
-    questions: [{ header: 'Q', question: 'Q', options: [{ label: 'A' }, { label: 'B' }] }],
+    turnId: 'toolu_no_countdown',
+    abortSignal: ctrl.signal,
+    questions: [{
+      header: 'Q',
+      question: 'Pick',
+      options: [{ label: 'A' }, { label: 'B' }],
+      defaultOptionIndex: 0,
+    }],
   })
-  const id = sender.lastAskId()
-  await waitForRegistration(id)
+  await waitForRegistration(sender.lastAskId())
 
-  // Fire one countdown tick — the resulting patchInteractiveCard call enters
-  // the slow first branch and is held.
-  t.mock.timers.tick(10_000)
-  await new Promise(resolve => setImmediate(resolve))
+  // Wait substantially longer than the old 10s countdown tick — if any
+  // setInterval-driven patch is still alive, sender.patches would grow.
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(
+    sender.patches.length,
+    0,
+    'coordinator must NOT issue side-fire patches mid-pending (would clobber user form state)',
+  )
 
-  // Submit while the countdown patch is still in flight.
-  const submitPromise = coord.handleCardAction({
+  // Clean up via cancel so the test doesn't leave a dangling pending.
+  await coord.handleCardAction({
     kind: 'lightclaw_askuser',
-    id,
-    action: 'submit',
-    formValue: { q0: '0' },
+    id: sender.lastAskId(),
+    action: 'cancel',
   })
-  for (let i = 0; i < 10; i += 1) {
-    await new Promise(resolve => setImmediate(resolve))
-  }
-
-  // Submit must not have returned yet — finishPending is blocked on the
-  // held countdown patch. No patches landed (countdown still held).
-  assert.equal(sender.patches.length, 0)
-
-  releaseHeldPatch()
-  const response = await submitPromise as { card: { type: string; data: Record<string, unknown> } }
-  await pendingPromise
-
-  // Exactly one patch landed (the countdown, form-state). Submit itself
-  // does NOT fire a side-patch — the new card is in response.card. Critical
-  // ordering invariant: countdown lands BEFORE the callback returns, so
-  // Feishu can never receive a stale form-state patch after our atomic
-  // card-replace response.
-  assert.equal(sender.patches.length, 1, 'countdown landed, no submit side-patch')
-  assert.equal(response.card.type, 'raw')
-  const answered = response.card.data as { header?: { template?: string } }
-  assert.equal(answered.header?.template, 'green')
+  await assert.rejects(pending, /cancelled by user/)
 })
 
 async function waitForRegistration(id: string): Promise<void> {
