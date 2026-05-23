@@ -541,7 +541,18 @@ export function buildAskUserCard(input: {
       tag: 'markdown',
       content: headerLines.join('\n'),
     })
-    formElements.push({
+    // 2026-05-23 dogfood: single-select dropdown visually shows the first
+    // option's label even when nothing is bound, but form_value omits the q
+    // key until the user actively interacts with the dropdown. Net effect:
+    // user submits thinking they've picked "选项 A" (what the dropdown
+    // displays), gets "请先在每个下拉框做出选择再提交" toast. Fix: bind the
+    // tool-schema-required defaultOptionIndex into the V2 `initial_option`
+    // field (the option's text content, per Feishu V2 doc), so the dropdown
+    // is genuinely pre-selected from the start. Multi-select is intentionally
+    // not pre-filled — a single default for a multi-pick question would
+    // suggest "only this is picked" UI-wise. parseFormValue's missing-key
+    // fallback (below) covers both shapes.
+    const selectComponent: Record<string, unknown> = {
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
@@ -549,7 +560,14 @@ export function buildAskUserCard(input: {
         text: { tag: 'plain_text', content: option.label },
         value: String(optionIndex),
       })),
-    })
+    }
+    if (!question.multiSelect && question.defaultOptionIndex !== undefined) {
+      const defaultOption = question.options[question.defaultOptionIndex]
+      if (defaultOption) {
+        selectComponent['initial_option'] = defaultOption.label
+      }
+    }
+    formElements.push(selectComponent)
     // Per-question optional Other slot. Bound by name to this specific
     // question (q<i>_other) so multi-question cards have no ambiguity about
     // which question the free text belongs to. The Feishu 2.0 `input`
@@ -684,15 +702,38 @@ function parseFormValue(
   for (let i = 0; i < questions.length; i += 1) {
     const question = questions[i]!
     const raw = formValue[selectName(i)]
+    const otherRaw = formValue[otherName(i)]
+    const otherText = typeof otherRaw === 'string' ? otherRaw.trim() : ''
     // Empty selection = Feishu either omitted the key (no pick) or returned
-    // '' / []. Distinguish from "wrong type" so the toast can say "go pick"
-    // instead of "schema broken".
+    // '' / []. 2026-05-23 dogfood: V2 select_static visually displays the
+    // first option label even before user interaction, so a user who reads
+    // "选项 A" and clicks submit truly believes they picked it; form_value
+    // would NOT carry q<i> until they actually opened the dropdown. The tool
+    // schema requires defaultOptionIndex precisely so the system has a safe
+    // fallback — apply it here so submit-without-touching-dropdown maps to
+    // "user accepted the default" (byTimeoutDefault stays false; this is a
+    // user-confirmed default, not a timeout-rescue default). Multi-select
+    // questions also honor this when defaultOptionIndex is set, though the
+    // pre-fill UI is intentionally NOT applied to multi-select dropdowns.
     const isEmpty =
       raw === undefined ||
       raw === null ||
       raw === '' ||
       (Array.isArray(raw) && raw.length === 0)
     if (isEmpty) {
+      if (question.defaultOptionIndex !== undefined) {
+        const defaultOption = question.options[question.defaultOptionIndex]
+        if (defaultOption) {
+          answers.push({
+            question: question.question,
+            header: question.header,
+            selectedLabels: [defaultOption.label],
+            ...(otherText ? { otherText } : {}),
+            byTimeoutDefault: false,
+          })
+          continue
+        }
+      }
       return { ok: false, reason: 'missing-selection' }
     }
     const selectedIndexes = question.multiSelect
@@ -709,8 +750,6 @@ function parseFormValue(
       }
       selectedLabels.push(question.options[index]!.label)
     }
-    const otherRaw = formValue[otherName(i)]
-    const otherText = typeof otherRaw === 'string' ? otherRaw.trim() : ''
     answers.push({
       question: question.question,
       header: question.header,

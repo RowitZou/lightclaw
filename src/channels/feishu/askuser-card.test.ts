@@ -108,6 +108,93 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   }
 })
 
+test('buildAskUserCard pre-fills initial_option on single-select when defaultOptionIndex is set', () => {
+  // 2026-05-23 dogfood: V2 select_static visually showed "选项 A" even
+  // without binding, but form_value omitted q0 until the user opened the
+  // dropdown — user clicked submit thinking they'd picked it, got the
+  // missing-selection toast. Fix: bind defaultOptionIndex into V2's
+  // `initial_option` (the option's text content) so the dropdown is
+  // genuinely pre-selected from the start. Multi-select is intentionally
+  // not pre-filled (a single default is misleading UI for a multi-pick).
+  const card = buildAskUserCard({
+    id: 'ask_default',
+    deadlineMs: 61_000,
+    nowMs: 1_000,
+    questions: [
+      {
+        header: 'Name',
+        question: 'Pick a name',
+        options: [{ label: 'A' }, { label: 'B' }],
+        defaultOptionIndex: 1,
+      },
+      {
+        header: 'Tools',
+        question: 'Pick tools',
+        options: [{ label: 'Read' }, { label: 'Edit' }],
+        multiSelect: true,
+        defaultOptionIndex: 0,
+      },
+    ],
+  })
+  const form = (card.body as { elements: Array<Record<string, unknown>> }).elements[0] as {
+    elements: Array<Record<string, unknown>>
+  }
+  const single = form.elements.find(el => el.tag === 'select_static') as { initial_option?: string }
+  assert.equal(single.initial_option, 'B', 'single-select must carry initial_option matching default option label')
+  const multi = form.elements.find(el => el.tag === 'multi_select_static') as Record<string, unknown>
+  assert.equal(
+    'initial_option' in multi,
+    false,
+    'multi-select must NOT pre-fill initial_option (misleading UI for multi-pick)',
+  )
+  assert.equal(
+    'initial_options' in multi,
+    false,
+    'multi-select must NOT auto-pre-fill the plural variant either',
+  )
+})
+
+test('parseFormValue: missing q key for a question with defaultOptionIndex resolves to the default', async () => {
+  // Same dogfood root cause as the initial_option test above. Even with
+  // initial_option set, Feishu may still omit the q key in form_value if
+  // the user submits without interacting with the dropdown (the V2 API
+  // semantics here are unfortunate). Fallback: when the q key is missing
+  // and the question has defaultOptionIndex, treat it as "user accepted
+  // the default" (byTimeoutDefault=false because the user actively chose
+  // to submit; timeout-default is a different code path).
+  const pending = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_default_fallback',
+    abortSignal: new AbortController().signal,
+    questions: [{
+      header: 'Name',
+      question: 'Pick a name',
+      options: [{ label: 'A' }, { label: 'B' }],
+      defaultOptionIndex: 0,
+    }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+  const response = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    action: 'submit',
+    id,
+    // q0 entirely missing — what Feishu sends when user clicks submit
+    // without ever touching the pre-selected dropdown.
+    formValue: { q0_other: '' },
+  }) as { toast: { type: string }; card: { type: string; data: Record<string, unknown> } }
+  const answers = await pending
+  assert.equal(answers.length, 1)
+  assert.deepEqual(answers[0]!.selectedLabels, ['A'], 'missing q0 falls back to defaultOptionIndex=0 → "A"')
+  assert.equal(
+    answers[0]!.byTimeoutDefault,
+    false,
+    'user-confirmed default is NOT the timeout-rescue path; byTimeoutDefault stays false',
+  )
+  assert.equal(response.toast.type, 'success')
+  assert.equal(response.card.type, 'raw')
+})
+
 test('coordinator resolves submitted answers with per-question otherText', async () => {
   const pending = coord.askAndAwait({
     sessionId: 'feishu:dm:oc_chat',
