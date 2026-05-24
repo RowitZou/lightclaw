@@ -75,9 +75,12 @@ export function toApiMessages(messages: Message[]): Array<{
 }> {
   return messages.map(message => {
     if (message.type === 'system') {
+      // The continuation header is already baked into the summary by
+      // formatCompactBoundaryText (compact.ts); adding a wire-side
+      // "Previous conversation summary:" prefix here duplicates it.
       return {
         role: 'user',
-        content: `Previous conversation summary:\n${message.message.summary}`,
+        content: message.message.summary,
       }
     }
 
