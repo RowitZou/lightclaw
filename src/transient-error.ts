@@ -32,6 +32,27 @@ const TRANSIENT_ERROR_CODES = new Set([
 // reproduces them (and a re-run is expensive), so they stay fatal.
 const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
 
+export class IdleStreamError extends Error {
+  readonly kind: 'ttfb' | 'inter-event'
+  readonly idleMs: number
+  readonly model: string
+  readonly endpoint: string
+
+  constructor(input: {
+    kind: 'ttfb' | 'inter-event'
+    idleMs: number
+    model: string
+    endpoint: string
+  }) {
+    super(`stream idle > ${input.idleMs}ms (${input.kind})`)
+    this.name = 'IdleStreamError'
+    this.kind = input.kind
+    this.idleMs = input.idleMs
+    this.model = input.model
+    this.endpoint = input.endpoint
+  }
+}
+
 function queryErrorChain(error: unknown): unknown[] {
   const chain: unknown[] = []
   let node: unknown = error
@@ -87,6 +108,9 @@ export function isAbortError(error: unknown): boolean {
  * cases.
  */
 export function isTransientError(error: unknown): boolean {
+  if (error instanceof IdleStreamError) {
+    return true
+  }
   if (isAbortError(error)) {
     return false
   }

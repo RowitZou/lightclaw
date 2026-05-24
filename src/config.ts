@@ -254,6 +254,11 @@ export type TurnsConfig = {
   subagentDefault?: number
 }
 
+export type StreamIdleConfig = {
+  ttfbMs: number
+  interEventMs: number
+}
+
 export type PathsConfig = {
   sessions: string
   workspace: string
@@ -347,6 +352,7 @@ export type LightClawConfig = {
   apiLogsEnabled: boolean
   paths: PathsConfig
   turns: TurnsConfig
+  streamIdle: StreamIdleConfig
   memory: MemoryConfig
   compact: CompactConfig
   dispatch: DispatchConfig
@@ -450,6 +456,11 @@ export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   maxChainDepthCeiling: 5,
   ephemeralSessionTtlMs: DEFAULT_EPHEMERAL_SESSION_TTL_MS,
   scheduler: DEFAULT_DISPATCH_SCHEDULER,
+}
+
+const DEFAULT_STREAM_IDLE: StreamIdleConfig = {
+  ttfbMs: 90_000,
+  interEventMs: 30_000,
 }
 
 // Memory Nudge defaults ON (dark launch, mirroring memory.curator's rollout
@@ -1271,6 +1282,16 @@ export function getConfig(): LightClawConfig {
         fileConfig.turns?.subagentDefault,
       ),
   )
+  const streamIdle: StreamIdleConfig = {
+    ttfbMs: Math.max(
+      1,
+      Math.floor(Number(fileConfig.streamIdle?.ttfbMs ?? DEFAULT_STREAM_IDLE.ttfbMs)),
+    ),
+    interEventMs: Math.max(
+      1,
+      Math.floor(Number(fileConfig.streamIdle?.interEventMs ?? DEFAULT_STREAM_IDLE.interEventMs)),
+    ),
+  }
 
   // — memory —
   const autoMemory = parseBoolean(process.env.LIGHTCLAW_NO_MEMORY) === true
@@ -1590,6 +1611,7 @@ export function getConfig(): LightClawConfig {
       ...(mainTurns !== undefined ? { main: mainTurns } : {}),
       ...(subagentDefaultTurns !== undefined ? { subagentDefault: subagentDefaultTurns } : {}),
     },
+    streamIdle,
     memory: {
       extractor: { enabled: autoMemory },
       curator,

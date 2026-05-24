@@ -1,7 +1,7 @@
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat as defaultStreamChat } from './api.js'
-import { isTransientError } from './transient-error.js'
+import { IdleStreamError, isTransientError } from './transient-error.js'
 import {
   emptyInvocationContext,
   type InterjectionEntry,
@@ -121,6 +121,18 @@ type QueryParams = {
    * `StreamChatParams.forceFallbackInToolResult` for the autopilot rationale.
    */
   forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
+}
+
+const STREAM_IDLE_CHECK_INTERVAL_MS = 5_000
+
+function streamIdleThresholds(
+  config: LightClawConfig,
+  provider: { idleTimeouts?: { ttfbMs?: number; interEventMs?: number } },
+): { ttfbMs: number; interEventMs: number } {
+  return {
+    ttfbMs: provider.idleTimeouts?.ttfbMs ?? config.streamIdle.ttfbMs,
+    interEventMs: provider.idleTimeouts?.interEventMs ?? config.streamIdle.interEventMs,
+  }
 }
 
 function mergeUsage(base: UsageStats, next: UsageStats): UsageStats {
@@ -614,53 +626,92 @@ export async function query(params: QueryParams): Promise<{
         // hung" because the daemon is idle waiting on response bytes.
         // Grep: [ttfb] for per-call distribution; admin can compute percentiles.
         const streamStartMs = Date.now()
+        const idleThresholds = streamIdleThresholds(config, mainRoute.provider)
+        const streamAbort = new AbortController()
+        const combinedSignal = AbortSignal.any([signal, streamAbort.signal])
+        let lastEventAt = streamStartMs
         let ttfbLogged = false
-        for await (const event of streamChatImpl({
-          config,
-          model: roleModel,
-          messages: toApiMessages(messages),
-          system: renderedPrompt.system,
-          ...(renderedPrompt.systemVariableSuffix
-            ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
-            : {}),
-          tools: turnCatalog.tools.map(toolToAPISchema),
-          // A compaction splices the message prefix, so the caller's
-          // breakpoint index no longer points at the message it was derived
-          // from. Drop it once compacted and let the provider auto-place the
-          // prompt-cache breakpoint.
-          cacheBreakpointMessageIndex: didCompact
-            ? undefined
-            : invocation.cacheBreakpointMessageIndex,
-          signal,
-          ...(params.forceFallbackInToolResult
-            ? { forceFallbackInToolResult: params.forceFallbackInToolResult }
-            : {}),
-          apiLogContext: {
-            kind: apiLogKind,
-            ...(apiLogKind === 'subagent' && invocation.subagentLabel
-              ? { subagentLabel: invocation.subagentLabel }
+        const idleTick = setInterval(() => {
+          if (streamAbort.signal.aborted || signal.aborted) {
+            return
+          }
+          const kind = ttfbLogged ? 'inter-event' : 'ttfb'
+          const budget = kind === 'inter-event'
+            ? idleThresholds.interEventMs
+            : idleThresholds.ttfbMs
+          const idleMs = Date.now() - lastEventAt
+          if (idleMs <= budget) {
+            return
+          }
+          const error = new IdleStreamError({
+            kind,
+            idleMs,
+            model: roleModel,
+            endpoint: mainRoute.entry.endpoint,
+          })
+          process.stderr.write(
+            `[stream-idle-abort] sid=${getSessionId()} kind=${kind} ms=${idleMs} model=${roleModel} endpoint=${mainRoute.entry.endpoint}\n`,
+          )
+          streamAbort.abort(error)
+          clearInterval(idleTick)
+        }, STREAM_IDLE_CHECK_INTERVAL_MS)
+        try {
+          for await (const event of streamChatImpl({
+            config,
+            model: roleModel,
+            messages: toApiMessages(messages),
+            system: renderedPrompt.system,
+            ...(renderedPrompt.systemVariableSuffix
+              ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
               : {}),
-            turn,
-            attempt,
-          },
-        })) {
-          if (!ttfbLogged) {
-            ttfbLogged = true
-            process.stderr.write(
-              `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
-            )
-          }
-          if (event.type === 'text') {
-            invocation.onTextDelta?.(event.text)
-            continue
-          }
+            tools: turnCatalog.tools.map(toolToAPISchema),
+            // A compaction splices the message prefix, so the caller's
+            // breakpoint index no longer points at the message it was derived
+            // from. Drop it once compacted and let the provider auto-place the
+            // prompt-cache breakpoint.
+            cacheBreakpointMessageIndex: didCompact
+              ? undefined
+              : invocation.cacheBreakpointMessageIndex,
+            signal: combinedSignal,
+            ...(params.forceFallbackInToolResult
+              ? { forceFallbackInToolResult: params.forceFallbackInToolResult }
+              : {}),
+            apiLogContext: {
+              kind: apiLogKind,
+              ...(apiLogKind === 'subagent' && invocation.subagentLabel
+                ? { subagentLabel: invocation.subagentLabel }
+                : {}),
+              turn,
+              attempt,
+            },
+          })) {
+            lastEventAt = Date.now()
+            if (!ttfbLogged) {
+              ttfbLogged = true
+              process.stderr.write(
+                `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
+              )
+            }
+            if (event.type === 'text') {
+              invocation.onTextDelta?.(event.text)
+              continue
+            }
 
-          if (event.type === 'tool_use') {
-            invocation.onToolUse?.({ name: event.name, input: event.input })
-            continue
-          }
+            if (event.type === 'tool_use') {
+              invocation.onToolUse?.({ name: event.name, input: event.input })
+              continue
+            }
 
-          stopEvent = event
+            stopEvent = event
+          }
+        } catch (error) {
+          const reason = streamAbort.signal.reason
+          if (streamAbort.signal.aborted && reason instanceof IdleStreamError) {
+            throw reason
+          }
+          throw error
+        } finally {
+          clearInterval(idleTick)
         }
         break
       } catch (error) {

@@ -125,6 +125,10 @@ export type TranscribeAudioResult = {
 export type Provider = {
   name: Schema
   capabilities: ProviderCapabilities
+  idleTimeouts?: {
+    ttfbMs?: number
+    interEventMs?: number
+  }
   streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent>
   webSearch?(params: WebSearchParams): Promise<WebSearchResult>
   describeImage?(params: DescribeImageParams): Promise<DescribeImageResult>

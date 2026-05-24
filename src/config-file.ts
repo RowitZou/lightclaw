@@ -212,6 +212,13 @@ export type ConfigFileShape = {
   paths?: ConfigFilePathsSection
   /** Turn caps. `roles.<X>.maxTurns` overrides for a specific role. */
   turns?: ConfigFileTurnsSection
+  /** Stream idle abort thresholds. Defaults live in config.ts. */
+  streamIdle?: {
+    /** Max wait for the first stream event before abort + retry. */
+    ttfbMs?: number
+    /** Max gap between stream events after the first event. */
+    interEventMs?: number
+  }
   /** Memory subsystem. Groups extractor / curator / recall / session / nudge
    *  knobs that were previously scattered as top-level `autoMemory` /
    *  `autoDream` / `memoryRecall` / `sessionMemory` / `memoryNudge`. Memory
