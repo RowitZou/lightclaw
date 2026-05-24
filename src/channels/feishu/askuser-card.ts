@@ -447,25 +447,26 @@ export function buildAskUserCard(input: {
   //    transport-ws extraction continues to work.
   const formElements: Record<string, unknown>[] = []
   input.questions.forEach((question, index) => {
-    // Feishu's select dropdown truncates long option text on one line (2026-05-23
-    // dogfood: "下拉框里的选项过长会被省略，看不清"). Move every description out
-    // of the option label into a "选项说明" block above the select; the
-    // dropdown only carries the bare short label, which renders in full.
+    // Feishu V2 select_static dropdown clips long option text on one line with
+    // ellipsis (2026-05-23 dogfood: first "下拉框里的选项过长会被省略" — moved
+    // descriptions out; then "选项太长会被省略" — labels themselves can still
+    // be too long). The dropdown container width is fixed by Feishu and not
+    // controllable by us. Mitigation: ALWAYS render an options list above the
+    // dropdown so the full label (and optional description) is visible even
+    // when the dropdown itself truncates. Was previously gated on
+    // hasDescriptions; now unconditional.
     const headerLines = [
       `**Q${index + 1} / ${escapeLarkMd(question.header)}**`,
       escapeLarkMd(question.question),
+      '',
+      '**选项：**',
     ]
-    const hasDescriptions = question.options.some(option => option.description)
-    if (hasDescriptions) {
-      headerLines.push('')
-      headerLines.push('**选项说明：**')
-      for (const option of question.options) {
-        const labelBold = `**${escapeLarkMd(option.label)}**`
-        if (option.description) {
-          headerLines.push(`- ${labelBold} — ${escapeLarkMd(option.description)}`)
-        } else {
-          headerLines.push(`- ${labelBold}`)
-        }
+    for (const option of question.options) {
+      const labelBold = `**${escapeLarkMd(option.label)}**`
+      if (option.description) {
+        headerLines.push(`- ${labelBold} — ${escapeLarkMd(option.description)}`)
+      } else {
+        headerLines.push(`- ${labelBold}`)
       }
     }
     formElements.push({

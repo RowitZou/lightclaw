@@ -73,7 +73,7 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
 
   // Option descriptions must NOT be baked into the dropdown label (Feishu
   // truncates long option text on one line). The description for option B
-  // should appear in the "选项说明" markdown block above the select; the
+  // should appear in the "选项" markdown block above the select; the
   // dropdown's option.text.content carries only the bare label "B".
   const selectStatic = form.elements.find(el => el.tag === 'select_static') as {
     options: Array<{ text: { content: string }; value: string }>
@@ -84,7 +84,11 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
     'dropdown options should carry the bare label, not "label - description"',
   )
   const firstQuestionMd = form.elements.find(el => el.tag === 'markdown') as { content: string }
-  assert.match(firstQuestionMd.content, /选项说明/)
+  // The options markdown block is ALWAYS rendered (not gated on
+  // hasDescriptions) so even when the dropdown clips long labels, the full
+  // label + optional description are visible above.
+  assert.match(firstQuestionMd.content, /\*\*选项：\*\*/)
+  assert.match(firstQuestionMd.content, /\*\*A\*\*/)
   assert.match(firstQuestionMd.content, /\*\*B\*\* — second/)
 
   // V2 buttons live in a column_set inside the form, with the callback value
@@ -104,6 +108,32 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
     assert.equal(behaviors[0]!.value.kind, 'lightclaw_askuser')
     assert.equal(behaviors[0]!.value.id, 'ask_1')
   }
+})
+
+test('buildAskUserCard always renders the options markdown block, even without descriptions', () => {
+  // 2026-05-23 dogfood follow-up: even bare labels (no description) can be
+  // too long for Feishu's fixed-width dropdown and get ellipsized. The
+  // markdown block above must render unconditionally so the user has a full
+  // readable fallback for the dropdown's truncated text.
+  const card = buildAskUserCard({
+    id: 'ask_no_desc',
+    questions: [{
+      header: 'Choice',
+      question: 'Pick one',
+      options: [
+        { label: '选项 A — 这是一个用来测试是否会被下拉框截断的较长 label' },
+        { label: '选项 B — 第二个也较长的 label，用于验证 markdown 块里完整渲染' },
+      ],
+      defaultOptionIndex: 0,
+    }],
+  })
+  const form = (card.body as { elements: Array<Record<string, unknown>> }).elements[0] as {
+    elements: Array<Record<string, unknown>>
+  }
+  const md = form.elements.find(el => el.tag === 'markdown') as { content: string }
+  assert.match(md.content, /\*\*选项：\*\*/, 'options block must render even without descriptions')
+  assert.match(md.content, /选项 A — 这是一个用来测试是否会被下拉框截断的较长 label/)
+  assert.match(md.content, /选项 B — 第二个也较长的 label，用于验证 markdown 块里完整渲染/)
 })
 
 test('buildAskUserCard pre-fills initial_option on single-select when defaultOptionIndex is set', () => {
