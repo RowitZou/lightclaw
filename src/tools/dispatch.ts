@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
 import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
+import { stallTrace } from '../stall-trace.js'
 import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
@@ -244,6 +245,7 @@ export async function executeDispatch(
 
   const userId = requireCurrentUserId()
   const sessionId = getSessionId()
+  stallTrace('dispatch-enter', { sid: sessionId, role: input.role, mode: input.mode, schedule })
   const callerRole = getCurrentRole() ?? getAgent('main')
   const calleeRole = getAgent(input.role)
   if (!callerRole || !calleeRole) {
@@ -359,6 +361,8 @@ export async function executeDispatch(
       effectiveChildChainState,
       userId,
     )
+    stallTrace('dispatch-subagent-enter', { sid: sessionId, child: childSessionId, role: input.role })
+    const subT0 = Date.now()
     const result = await runSubagent({
       agentType: internalRole,
       prompt: finalDispatchPrompt,
@@ -371,6 +375,7 @@ export async function executeDispatch(
     }).finally(() => {
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
     })
+    stallTrace('dispatch-subagent-exit', { sid: sessionId, child: childSessionId, role: input.role, kind: result.kind, ms: Date.now() - subT0 })
     if (result.kind === 'failure') {
       await appendDispatchAudit({
         at: new Date().toISOString(),
@@ -385,6 +390,7 @@ export async function executeDispatch(
         finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
         chainState: effectiveChildChainState,
       }).catch(() => {})
+      stallTrace('dispatch-exit', { sid: sessionId, role: input.role, mode: input.mode, outcome: 'failed' })
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
     await appendDispatchAudit({
@@ -400,6 +406,7 @@ export async function executeDispatch(
       finalTextPreview: (result.finalText || '').slice(0, 200),
       chainState: effectiveChildChainState,
     }).catch(() => {})
+    stallTrace('dispatch-exit', { sid: sessionId, role: input.role, mode: input.mode, outcome: 'success' })
     return { output: result.finalText || '(dispatched role returned empty text)' }
   }
 

@@ -35,6 +35,7 @@ import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
+import { stallTrace } from '../stall-trace.js'
 import { getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { channelInvocationContext } from '../agents/invocation-context.js'
@@ -335,6 +336,7 @@ export class ChannelRunner {
   }
 
   async handleMessage(message: NormalizedChannelMessage): Promise<void> {
+    stallTrace('runner-enter', { messageId: message.messageId, chatId: message.chatId, chatType: message.chatType, synthetic: message.synthetic })
     // Synthetic messages (Phase 25 post-approval pre-text replay) bypass the
     // mention gate. The gate is "did the user point this at us?" — meaningful
     // only for live user input. Replay re-injects text the user typed BEFORE
@@ -527,7 +529,9 @@ export class ChannelRunner {
     // an unrelated session's marker.
     let didMarkPendingTurn = false
     try {
+    stallTrace('runner-pre-lock', { sid: sessionId, messageId: message.messageId })
     await this.locks.runExclusive(sessionId, async () => {
+      stallTrace('runner-fn-enter', { sid: sessionId, messageId: message.messageId })
       // In-flight typing indicator: fire BEFORE any work so the user sees
       // a "we got it" signal even when meta load / runtime probe is slow.
       // The token is opaque (channel-defined) and gets handed back to
@@ -819,6 +823,7 @@ export class ChannelRunner {
           replyTargetMessage = effectiveMessage
           try {
             const mainRole = getMainRole()
+            stallTrace('runner-query-start', { sid: sessionId, attempt })
             result = await query({
               config: appConfig,
               role: mainRole,
@@ -1158,6 +1163,7 @@ export class ChannelRunner {
             return
           }
         }
+        stallTrace('runner-query-returned', { sid: sessionId, hasResult: !!result })
         if (!result) {
           // Defensive: loop should either set `result` or return early.
           process.stderr.write(
@@ -1227,9 +1233,11 @@ export class ChannelRunner {
         throw error
       } finally {
         await this.stopTyping(message, typingToken)
+        stallTrace('runner-fn-exit', { sid: sessionId, messageId: message.messageId })
       }
     })
     } finally {
+      stallTrace('runner-outer-finally-enter', { sid: sessionId, messageId: message.messageId })
       // Crash-resume: clear the in-flight-turn marker now that the turn has
       // finished in-process (success, failure, slash-return, or abort). Only
       // a hard daemon crash leaves it set for the startup resume scan.
@@ -1292,6 +1300,7 @@ export class ChannelRunner {
           })
         }
       }
+      stallTrace('runner-outer-finally-exit', { sid: sessionId, messageId: message.messageId })
     }
   }
 
