@@ -10,6 +10,7 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import {
   discoverSkills,
   discoverSkillsForUser,
+  recordSkillUsage,
   writeUserSkill,
 } from './loader.js'
 import {
@@ -200,6 +201,99 @@ describe('discoverSkillsForUser', () => {
         discoverSkillsForUser(process.cwd(), 'alice'),
         /invalid role name/,
       )
+    })
+  })
+
+  it('parses last_used_at and exposes it on SkillMeta (V1 audit-only)', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'recent-flow',
+        [
+          'name: recent-flow',
+          'description: Has timestamp.',
+          'roles:',
+          '  - main',
+          'last_used_at: 2026-05-24T10:00:00.000Z',
+        ].join('\n'),
+      )
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'never-used-flow',
+        [
+          'name: never-used-flow',
+          'description: No timestamp.',
+          'roles:',
+          '  - main',
+        ].join('\n'),
+      )
+
+      const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.equal(
+        skills.find(skill => skill.name === 'recent-flow')?.lastUsedAt,
+        '2026-05-24T10:00:00.000Z',
+      )
+      assert.equal(
+        skills.find(skill => skill.name === 'never-used-flow')?.lastUsedAt,
+        undefined,
+      )
+    })
+  })
+})
+
+describe('recordSkillUsage', () => {
+  it('inserts last_used_at when missing and replaces it when present', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'flow-a',
+        [
+          'name: flow-a',
+          'description: No stamp yet.',
+          'roles:',
+          '  - main',
+        ].join('\n'),
+      )
+      const flowAPath = path.join(userSkillsRoot('alice'), 'flow-a', 'SKILL.md')
+      await recordSkillUsage(flowAPath, '2026-05-24T12:00:00.000Z')
+      const flowA = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.equal(
+        flowA.find(skill => skill.name === 'flow-a')?.lastUsedAt,
+        '2026-05-24T12:00:00.000Z',
+      )
+
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'flow-b',
+        [
+          'name: flow-b',
+          'description: Has old stamp.',
+          'roles:',
+          '  - main',
+          'last_used_at: 2025-01-01T00:00:00.000Z',
+        ].join('\n'),
+      )
+      const flowBPath = path.join(userSkillsRoot('alice'), 'flow-b', 'SKILL.md')
+      await recordSkillUsage(flowBPath, '2026-05-24T13:00:00.000Z')
+      const flowB = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.equal(
+        flowB.find(skill => skill.name === 'flow-b')?.lastUsedAt,
+        '2026-05-24T13:00:00.000Z',
+      )
+    })
+  })
+
+  it('silently no-ops when the file is missing or has no frontmatter', async () => {
+    await withTempHome(async home => {
+      // Missing file: no throw.
+      await recordSkillUsage(path.join(home, 'nonexistent', 'SKILL.md'))
+
+      // No frontmatter at all: leaves file untouched.
+      const plainPath = path.join(home, 'plain.md')
+      await writeFile(plainPath, 'Body only, no frontmatter.\n', 'utf8')
+      await recordSkillUsage(plainPath)
+      const plainAfter = await import('node:fs/promises').then(fs => fs.readFile(plainPath, 'utf8'))
+      assert.equal(plainAfter, 'Body only, no frontmatter.\n')
     })
   })
 })

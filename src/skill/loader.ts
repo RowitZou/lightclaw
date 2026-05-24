@@ -22,6 +22,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     roles: skill.roles,
     source: skill.source,
     filePath: skill.filePath,
+    lastUsedAt: skill.lastUsedAt,
   }
 }
 
@@ -46,6 +47,11 @@ function parseSkillFrontmatter(
     return null
   }
   const roles = parseSkillRoles(filePath, source, frontmatter.roles)
+  const lastUsedAtRaw = frontmatter.last_used_at
+  const lastUsedAt =
+    typeof lastUsedAtRaw === 'string' && lastUsedAtRaw.trim().length > 0
+      ? lastUsedAtRaw.trim()
+      : undefined
 
   return {
     name,
@@ -60,6 +66,7 @@ function parseSkillFrontmatter(
     roles,
     source,
     filePath,
+    lastUsedAt,
   }
 }
 
@@ -223,6 +230,44 @@ export async function deleteUserSkill(input: {
   }
   await rm(skillDir, { recursive: true, force: true })
   return { name, filePath }
+}
+
+/**
+ * Best-effort write of `last_used_at: <ISO8601>` into a per-user SKILL.md
+ * frontmatter. Called fire-and-forget after a UseSkill hit; failures only
+ * stderr-log so a skill call is never blocked by an audit-only update. V1
+ * doesn't consume this field; reserved for Phase 8+ aging / SkillSearch
+ * recency heuristics.
+ *
+ * Updates the line in-place if present; otherwise inserts a new line right
+ * before the frontmatter closing `---`. Preserves all other bytes — agent /
+ * curator wrote the SKILL.md, this helper only edits one field.
+ */
+export async function recordSkillUsage(filePath: string, nowIso?: string): Promise<void> {
+  const stamp = (nowIso ?? new Date().toISOString()).trim()
+  let raw: string
+  try {
+    raw = await readFile(filePath, 'utf8')
+  } catch {
+    return
+  }
+  if (!raw.startsWith('---\n')) {
+    return
+  }
+  const closeIndex = raw.indexOf('\n---\n', 4)
+  if (closeIndex === -1) {
+    return
+  }
+  const header = raw.slice(0, closeIndex + 1)
+  const rest = raw.slice(closeIndex + 1)
+  const replaced = header.replace(/^last_used_at:.*$/m, `last_used_at: ${stamp}`)
+  const next = replaced === header
+    ? `${header.trimEnd()}\nlast_used_at: ${stamp}\n${rest}`
+    : `${replaced}${rest}`
+  if (next === raw) {
+    return
+  }
+  await writeFile(filePath, next, { encoding: 'utf8', mode: 0o600 })
 }
 
 export async function loadSkillBody(skill: SkillMeta): Promise<string> {

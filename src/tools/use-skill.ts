@@ -5,6 +5,7 @@ import {
   getRegisteredSkill,
   refreshSkillRegistry,
 } from '../skill/registry.js'
+import { recordSkillUsage } from '../skill/loader.js'
 import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { getCurrentUserId } from '../state.js'
@@ -44,6 +45,17 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           output: `Unknown skill: ${input.name}`,
           isError: true,
         }
+      }
+
+      // Fire-and-forget per-user skill last-used update. V1 audit-only (no
+      // framework code reads it yet); reserved for Phase 8+ aging / SkillSearch
+      // recency heuristics. Bundled skills live in module strings, not disk —
+      // skip them. Failures only stderr-log so a skill call is never blocked.
+      if (skill && skill.source === 'user' && skill.filePath) {
+        void recordSkillUsage(skill.filePath).catch(error => {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[use-skill] last_used_at update failed for ${input.name}: ${detail}\n`)
+        })
       }
 
       return {
