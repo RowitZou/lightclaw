@@ -1,5 +1,4 @@
 import type { InterjectionEntry } from '../../agents/invocation-context.js'
-import { stallTrace } from '../../stall-trace.js'
 
 export type { InterjectionEntry } from '../../agents/invocation-context.js'
 
@@ -20,7 +19,6 @@ export class InterjectionQueue {
     if (openerMessageId) {
       this.openerMessageBySession.set(sessionId, openerMessageId)
     }
-    stallTrace('iq-mark', { sid: sessionId, opener: openerMessageId })
   }
 
   /**
@@ -39,7 +37,6 @@ export class InterjectionQueue {
     this.openerMessageBySession.delete(sessionId)
     const leftover = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
-    stallTrace('iq-unmark', { sid: sessionId, leftover: leftover.length })
     return leftover
   }
 

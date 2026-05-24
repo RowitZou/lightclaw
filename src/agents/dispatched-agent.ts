@@ -20,7 +20,6 @@ import { getCurrentSessionContext, runWithSessionContext } from '../session-cont
 import { getDaemonLocalRuntime, getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
-import { stallTrace } from '../stall-trace.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type {
   Message,
@@ -212,14 +211,10 @@ export async function runDispatchedAgent(
       )
     }
   }
-  const dispatchedSid = chainSessionId ?? currentCtx?.sessionId
-  stallTrace('dispatched-agent-enter', { sid: dispatchedSid, role: params.role.agentType, mode: params.mode })
   try {
-    const t0 = Date.now()
     const result = childCtx
       ? await runWithSessionContext(childCtx, run)
       : await run()
-    stallTrace('dispatched-agent-query-returned', { sid: dispatchedSid, role: params.role.agentType, ms: Date.now() - t0, stop: result.stopReason })
     messagesToPersist = result.messages
     if (forkTranscriptPath) {
       persistTask = persistForkTranscript(
@@ -237,7 +232,6 @@ export async function runDispatchedAgent(
         })
     }
 
-    stallTrace('dispatched-agent-exit', { sid: dispatchedSid, role: params.role.agentType, outcome: 'success' })
     return {
       finalText: result.assistantText,
       stopReason: result.stopReason,

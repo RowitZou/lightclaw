@@ -2,7 +2,6 @@
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat as defaultStreamChat } from './api.js'
 import { isTransientError } from './transient-error.js'
-import { stallTrace } from './stall-trace.js'
 import {
   emptyInvocationContext,
   type InterjectionEntry,
@@ -284,7 +283,6 @@ export async function query(params: QueryParams): Promise<{
     didCompact: boolean
     usage: UsageStats
   }> {
-  stallTrace('query-enter', { sid: getSessionId(), role: params.role.agentType, kind: apiLogKind })
 
   // SessionMemory write — runs the threshold check and, when both the token
   // and tool_call accumulators have crossed, the LLM rewrite. Driven by the
@@ -554,7 +552,6 @@ export async function query(params: QueryParams): Promise<{
   >
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    stallTrace('query-turn-start', { sid: getSessionId(), role: params.role.agentType, turn })
     // Bail before starting a new turn if /stop aborted between turns.
     throwIfAborted(signal)
     // Pick up a mid-turn `/model` switch: slashDrain at the previous tool
@@ -689,7 +686,6 @@ export async function query(params: QueryParams): Promise<{
     if (!stopEvent) {
       throw new Error('Model stream ended without a stop event.')
     }
-    stallTrace('query-streamchat-done', { sid: getSessionId(), turn, stop: stopEvent.stopReason })
 
     addUsage(stopEvent.usage)
     totalUsage = mergeUsage(totalUsage, stopEvent.usage)
@@ -792,20 +788,12 @@ export async function query(params: QueryParams): Promise<{
       }
       const extractionSnapshot = [...messages]
       if (!invocation.ephemeral) {
-        stallTrace('query-flush-mem-enter', { sid: getSessionId(), turn })
-        const t0 = Date.now()
         await flushSessionMemoryUpdate(extractionSnapshot)
-        stallTrace('query-flush-mem-exit', { sid: getSessionId(), turn, ms: Date.now() - t0 })
         for (const hook of lifecycleHooks) {
-          const hookName = hook.name ?? 'unnamed'
-          stallTrace('query-afterendturn-enter', { sid: getSessionId(), hook: hookName })
-          const hookT0 = Date.now()
           await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
-          stallTrace('query-afterendturn-exit', { sid: getSessionId(), hook: hookName, ms: Date.now() - hookT0 })
         }
       }
       const assistantText = assistantTexts.join('\n\n')
-      stallTrace('query-afterquery-enter', { sid: getSessionId() })
       await runHook('afterQuery', {
         sessionId: getSessionId(),
         finalText: assistantText,
@@ -815,7 +803,6 @@ export async function query(params: QueryParams): Promise<{
         },
         messageCount: messages.length,
       })
-      stallTrace('query-exit', { sid: getSessionId(), role: params.role.agentType, stop: stopReason })
       return {
         messages,
         assistantText,
