@@ -26,12 +26,19 @@ function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
   }
 }
 
-type SenderCall = { chatId: string; text: string }
+type SenderCall = { chatId: string; text: string; threadId?: string }
 
 function stubSender(calls: SenderCall[]): FeishuSender {
   return {
-    async sendMarkdownTextToChatId(chatId: string, text: string) {
-      calls.push({ chatId, text })
+    async sendMarkdownTextToChatId(
+      chatId: string,
+      text: string,
+      _ctx?: unknown,
+      threadId?: string,
+    ) {
+      const call: SenderCall = { chatId, text }
+      if (threadId !== undefined) call.threadId = threadId
+      calls.push(call)
     },
   } as unknown as FeishuSender
 }
@@ -165,4 +172,31 @@ test('forwarder resolves group session chatId correctly', async () => {
   await forwarder('group worker text')
   assert.equal(calls[0]?.chatId, 'oc_group_chat')
   assert.equal(calls[0]?.text, '正在改代码｜group worker text')
+  // No threadId in chain-root sessionId, so plain chat-id routing is enough.
+  assert.equal(calls[0]?.threadId, undefined)
+})
+
+// Topic-group routing. The Phase 26 sessionId formula encodes threadId for
+// topic-group sessions (`feishu:group:<chatId>:<threadId>:<senderOpenId>`).
+// Without threading the sub-channel id to the sender, dispatched worker
+// activity falls back to `im.message.create` + receive_id_type=chat_id, and
+// Feishu's topic-group rule (every message must belong to a thread) creates
+// a NEW topic — the user sees worker observability splatter across fresh
+// topics instead of stacking under the one they opened.
+test('forwarder threads through topic-group sub-channel id', async () => {
+  const calls: SenderCall[] = []
+  registerFeishuSender(stubSender(calls))
+  const forwarder = buildWorkerActivityForwarder({
+    chainState: chain([
+      { role: 'main', sessionId: 'feishu:group:oc_group:omt_topic:ou_sender' },
+      { role: 'coder', sessionId: 'dispatched-c1' },
+    ]),
+    enabled: true,
+  })
+  assert.ok(forwarder)
+  await forwarder('topic-group worker text')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.chatId, 'oc_group')
+  assert.equal(calls[0]?.threadId, 'omt_topic')
+  assert.equal(calls[0]?.text, '正在改代码｜topic-group worker text')
 })

@@ -195,9 +195,13 @@ export class AskUserQuestionCoordinator {
         )
       }
     }
+    // Group-session in-chat fallback: when DM push failed (or wasn't an
+    // option), route via thread_id so the card lands in the user's topic
+    // instead of a fresh auto-created one.
+    const threadId = parsed.kind === 'group' ? parsed.threadId : undefined
     return await this.sender.sendInteractiveCardToChatId(parsed.chatId, card, {
       purpose: 'notice',
-    })
+    }, threadId)
   }
 
   async crashResume(nowMs = this.now()): Promise<void> {

@@ -236,6 +236,13 @@ export type ChannelRunnerStrategy = {
     chatId: string,
     kind: SystemNoticeKind,
     content: string,
+    /**
+     * Feishu topic-group sub-channel id. When set, the notice routes
+     * through `receive_id_type='thread_id'` so it stays in the topic
+     * the recalled turn opened in; otherwise topic-group rules drop
+     * it into a fresh auto-created topic.
+     */
+    threadId?: string,
   ): Promise<void>
 }
 
@@ -1429,7 +1436,12 @@ export class ChannelRunner {
         `${this.strategy.channelId}: recall ${recall.messageId} -> abort session ${openerSessionId} (aborted=${aborted})\n`,
       )
       if (aborted) {
-        await this.sendRecallNotice(recall.chatId)
+        // Resolve the topic-group sub-channel from the opener sessionId so
+        // the "turn interrupted" notice lands in the same topic the user
+        // opened. Channel-specific resolver omitted for channels without a
+        // session-id parser — they just send to chat_id.
+        const threadId = this.resolveThreadIdFromSessionId(openerSessionId)
+        await this.sendRecallNotice(recall.chatId, threadId)
       }
       return
     }
@@ -1453,18 +1465,35 @@ export class ChannelRunner {
    * red error card — a user-initiated recall is routine, not a failure.
    * Best-effort: a channel without `sendNoticeToChatId` aborts silently.
    */
-  private async sendRecallNotice(chatId: string): Promise<void> {
+  private async sendRecallNotice(chatId: string, threadId?: string): Promise<void> {
     if (!this.strategy.sendNoticeToChatId) {
       return
     }
     try {
-      await this.strategy.sendNoticeToChatId(chatId, 'info', t('channel.recall.aborted'))
+      await this.strategy.sendNoticeToChatId(chatId, 'info', t('channel.recall.aborted'), threadId)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
         `${this.strategy.channelId}: recall notice failed for chat ${chatId}: ${detail}\n`,
       )
     }
+  }
+
+  /**
+   * Best-effort topic-group sub-channel extraction. Feishu's Phase 26
+   * sessionId formula encodes `threadId` for topic-group sessions
+   * (`feishu:group:<chatId>:<threadId>:<senderOpenId>`); other channels
+   * yield `undefined` and fall back to plain chat-id routing.
+   */
+  private resolveThreadIdFromSessionId(sessionId: string): string | undefined {
+    if (!sessionId.startsWith('feishu:')) {
+      return undefined
+    }
+    const parts = sessionId.split(':')
+    if (parts[1] === 'group' && parts.length === 5) {
+      return parts[3]
+    }
+    return undefined
   }
 
   private async resolveSenderNameForInterjection(

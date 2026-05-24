@@ -121,13 +121,22 @@ export function createFeishuStrategy(
         buildSystemNoticeCard({ kind, content }),
       )
     },
-    sendNoticeToChatId: async (chatId: string, kind: SystemNoticeKind, content: string) => {
+    sendNoticeToChatId: async (
+      chatId: string,
+      kind: SystemNoticeKind,
+      content: string,
+      threadId?: string,
+    ) => {
       // Recall-abort notice. No inbound message to reply against (the opener
       // was withdrawn), so this pushes straight to the chat via
       // im.message.create. kind='info' renders the wathet card, not red.
+      // threadId, when present, routes via `receive_id_type='thread_id'`
+      // so topic-group recalls stay in the user's topic.
       await sender.sendInteractiveCardToChatId(
         chatId,
         buildSystemNoticeCard({ kind, content }),
+        {},
+        threadId,
       )
     },
     ...(typing

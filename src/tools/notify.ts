@@ -96,10 +96,14 @@ export const notifyTool = buildTool({
           canonicalUser: userId,
         })
       } else {
+        // Topic-group sub-channel id is encoded only on group sessions
+        // (Phase 26 formula). Routing the `this-chat` notify card through
+        // chat_id alone would land it in a fresh auto-created topic.
+        const threadId = parsed.kind === 'group' ? parsed.threadId : undefined
         await sender.sendInteractiveCardToChatId(parsed.chatId, card, {
           purpose: 'notice',
           canonicalUser: userId,
-        })
+        }, threadId)
       }
     }
     return { output: `Notification delivered: ${input.severity} "${input.title}" to ${input.target}` }

@@ -268,3 +268,113 @@ test('multi-chunk text send queues remaining chunks when the first chunk fails t
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// Topic-group thread routing. Feishu topic groups require every outbound
+// message to be associated with a thread; an `im.message.create` with
+// receive_id_type='chat_id' creates a NEW topic. The reply API (based on
+// message_id) handles the in-topic case automatically, but the fallback-to-
+// create path drops the thread association unless we explicitly route via
+// receive_id_type='thread_id'.
+test('reply→create fallback routes via thread_id when the inbound message carries threadId', async () => {
+  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+  const client = {
+    im: {
+      message: {
+        reply: async () => ({
+          code: 99992354,
+          msg: 'The request you send is not a valid open_message_id or not exists',
+        }),
+        create: async (input: unknown) => {
+          createCalls.push(input as { params: unknown; data: { receive_id: string } })
+          return { code: 0, data: { message_id: 'om_created_in_thread' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendInteractiveCard(
+    { ...baseMessage, chatType: 'group', threadId: 'omt_topic42' },
+    { elements: [] },
+  )
+
+  assert.equal(createCalls.length, 1)
+  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
+  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic42')
+})
+
+test('sendInteractiveCardToChatId routes via thread_id when threadId is supplied', async () => {
+  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+  const client = {
+    im: {
+      message: {
+        reply: async () => { throw new Error('reply must not be called when no replyToMessageId') },
+        create: async (input: unknown) => {
+          createCalls.push(input as { params: unknown; data: { receive_id: string } })
+          return { code: 0, data: { message_id: 'om_thread' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendInteractiveCardToChatId('oc_chat', { elements: [] }, undefined, 'omt_topic88')
+
+  assert.equal(createCalls.length, 1)
+  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
+  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic88')
+})
+
+test('sendMarkdownTextToChatId routes via thread_id when threadId is supplied', async () => {
+  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+  const client = {
+    im: {
+      message: {
+        reply: async () => { throw new Error('reply must not be called when no replyToMessageId') },
+        create: async (input: unknown) => {
+          createCalls.push(input as { params: unknown; data: { receive_id: string } })
+          return { code: 0, data: { message_id: 'om_thread' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendMarkdownTextToChatId('oc_chat', 'hello topic', undefined, 'omt_topic99')
+
+  assert.equal(createCalls.length, 1)
+  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
+  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic99')
+})
+
+test('reply→create fallback keeps receive_id_type=chat_id when no threadId is present', async () => {
+  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+  const client = {
+    im: {
+      message: {
+        reply: async () => ({
+          code: 99992354,
+          msg: 'reply target gone',
+        }),
+        create: async (input: unknown) => {
+          createCalls.push(input as { params: unknown; data: { receive_id: string } })
+          return { code: 0, data: { message_id: 'om_chat' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  await sender.sendInteractiveCard(
+    { ...baseMessage, chatType: 'group' /* no threadId */ },
+    { elements: [] },
+  )
+
+  assert.equal(createCalls.length, 1)
+  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'chat_id' })
+  assert.equal(createCalls[0]!.data.receive_id, 'oc_chat')
+})

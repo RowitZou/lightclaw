@@ -19,8 +19,12 @@ import { SessionLock } from '../session-lock.js'
  * and the bounded size (≤500 entries × a few KB) keeps rewrites cheap.
  */
 export type PendingRecipient =
-  | { type: 'reply'; chatId: string; replyToMessageId: string }
-  | { type: 'create'; chatId: string }
+  // Feishu topic-group sub-channel id. When set, the fallback `create`
+  // path routes via `receive_id_type='thread_id'` so the queued notice
+  // re-enters the same topic the original send targeted (omitting it
+  // would land the drained notice in a new auto-created topic).
+  | { type: 'reply'; chatId: string; replyToMessageId: string; threadId?: string }
+  | { type: 'create'; chatId: string; threadId?: string }
   | { type: 'open_id'; openId: string }
 
 export type PendingPayload =

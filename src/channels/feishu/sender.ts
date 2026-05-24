@@ -152,12 +152,13 @@ export class FeishuSender {
         const response = await this.sendReplyOrCreate({
           chatId: message.chatId,
           replyToMessageId: replyTo,
+          ...(message.threadId ? { threadId: message.threadId } : {}),
           text: chunk,
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
         if (await this.maybeEnqueueOnTransient(err, {
-          recipient: this.replyRecipient(message.chatId, replyTo),
+          recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
           payload: { kind: 'text', text: chunk },
           ctx,
         })) {
@@ -166,7 +167,7 @@ export class FeishuSender {
           // can't reuse a chunk's message_id we never received).
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
-              recipient: this.replyRecipient(message.chatId, replyTo),
+              recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
               payload: { kind: 'text', text: chunks[j]! },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
@@ -200,19 +201,20 @@ export class FeishuSender {
         const response = await this.sendReplyOrCreate({
           chatId: message.chatId,
           replyToMessageId: replyTo,
+          ...(message.threadId ? { threadId: message.threadId } : {}),
           msgType: 'interactive',
           content: JSON.stringify(card),
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
         if (await this.maybeEnqueueOnTransient(err, {
-          recipient: this.replyRecipient(message.chatId, replyTo),
+          recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
           payload: { kind: 'card', card },
           ctx,
         })) {
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
-              recipient: this.replyRecipient(message.chatId, replyTo),
+              recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
               payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
@@ -235,12 +237,13 @@ export class FeishuSender {
       await this.sendReplyOrCreate({
         chatId: message.chatId,
         replyToMessageId: replyTarget,
+        ...(message.threadId ? { threadId: message.threadId } : {}),
         msgType: 'interactive',
         content: JSON.stringify(card),
       })
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
-        recipient: this.replyRecipient(message.chatId, replyTarget),
+        recipient: this.replyRecipient(message.chatId, replyTarget, message.threadId),
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
@@ -353,6 +356,7 @@ export class FeishuSender {
     chatId: string,
     text: string,
     ctx: SendNoticeContext = {},
+    threadId?: string,
   ): Promise<void> {
     const chunks = chunkText(text || '(empty)', this.config.textChunkSize)
     for (let i = 0; i < chunks.length; i += 1) {
@@ -361,18 +365,19 @@ export class FeishuSender {
       try {
         await this.sendReplyOrCreate({
           chatId,
+          ...(threadId ? { threadId } : {}),
           msgType: 'interactive',
           content: JSON.stringify(card),
         })
       } catch (err) {
         if (await this.maybeEnqueueOnTransient(err, {
-          recipient: { type: 'create', chatId },
+          recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
           payload: { kind: 'card', card },
           ctx,
         })) {
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
-              recipient: { type: 'create', chatId },
+              recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
               payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
@@ -395,10 +400,12 @@ export class FeishuSender {
     chatId: string,
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
+    threadId?: string,
   ): Promise<{ messageId?: string }> {
     try {
       const response = await this.sendReplyOrCreate({
         chatId,
+        ...(threadId ? { threadId } : {}),
         msgType: 'interactive',
         content: JSON.stringify(card),
       })
@@ -406,7 +413,7 @@ export class FeishuSender {
       return messageId ? { messageId } : {}
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
-        recipient: { type: 'create', chatId },
+        recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
@@ -453,6 +460,7 @@ export class FeishuSender {
         await this.sendReplyOrCreate({
           chatId: message.chatId,
           replyToMessageId: this.replyTargetFor(message),
+          ...(message.threadId ? { threadId: message.threadId } : {}),
           msgType: 'file',
           content: JSON.stringify({ file_key: fileKey }),
         })
@@ -560,6 +568,15 @@ export class FeishuSender {
   private async sendReplyOrCreate(input: {
     chatId: string
     replyToMessageId?: string
+    /**
+     * Feishu topic-group sub-channel id. When the fallback `create` path
+     * runs in a topic group, sending with `receive_id_type='chat_id'`
+     * creates a NEW topic (every message in a topic group must belong to
+     * a thread). Routing via `receive_id_type='thread_id'` instead keeps
+     * the reply in the same topic the user opened. `reply` is unaffected
+     * — `im.message.reply` resolves the thread off the original message.
+     */
+    threadId?: string
     text?: string
     msgType?: 'text' | 'interactive' | 'file'
     content?: string
@@ -603,13 +620,20 @@ export class FeishuSender {
       }
     }
 
+    const useThread = !!input.threadId
     const response = await this.withMessageRetry(
       `create ${msgType}`,
       async () => {
+        // Cast: Feishu's `im.message.create` accepts `receive_id_type='thread_id'`
+        // (documented for topic-group sub-channel routing), but the Lark
+        // SDK's type definition lags behind and still enumerates only the
+        // legacy 5 values. The runtime API accepts it; assert the wider
+        // shape so topic-group routing compiles without weakening the SDK
+        // typing for unrelated callers.
         const response = await this.client.im.message.create({
-        params: { receive_id_type: 'chat_id' },
+        params: { receive_id_type: (useThread ? 'thread_id' : 'chat_id') as 'chat_id' },
         data: {
-          receive_id: input.chatId,
+          receive_id: useThread ? (input.threadId as string) : input.chatId,
           msg_type: msgType,
           content,
         },
@@ -621,11 +645,15 @@ export class FeishuSender {
     return response
   }
 
-  private replyRecipient(chatId: string, replyToMessageId: string | undefined): PendingRecipient {
+  private replyRecipient(
+    chatId: string,
+    replyToMessageId: string | undefined,
+    threadId: string | undefined,
+  ): PendingRecipient {
     if (replyToMessageId) {
-      return { type: 'reply', chatId, replyToMessageId }
+      return { type: 'reply', chatId, replyToMessageId, ...(threadId ? { threadId } : {}) }
     }
-    return { type: 'create', chatId }
+    return { type: 'create', chatId, ...(threadId ? { threadId } : {}) }
   }
 
   /**
@@ -718,6 +746,7 @@ export class FeishuSender {
     await this.sendReplyOrCreate({
       chatId: recipient.chatId,
       replyToMessageId: recipient.type === 'reply' ? recipient.replyToMessageId : undefined,
+      ...(recipient.threadId ? { threadId: recipient.threadId } : {}),
       msgType,
       content,
     })
@@ -749,8 +778,9 @@ function buildMarkdownCard(content: string): Record<string, unknown> {
 
 function describeRecipient(recipient: PendingRecipient): string {
   if (recipient.type === 'open_id') return `open_id=${recipient.openId}`
-  if (recipient.type === 'reply') return `reply chat=${recipient.chatId} msg=${recipient.replyToMessageId}`
-  return `create chat=${recipient.chatId}`
+  const thread = 'threadId' in recipient && recipient.threadId ? ` thread=${recipient.threadId}` : ''
+  if (recipient.type === 'reply') return `reply chat=${recipient.chatId} msg=${recipient.replyToMessageId}${thread}`
+  return `create chat=${recipient.chatId}${thread}`
 }
 
 export function inferFeishuFileType(fileName: string): FeishuFileType {

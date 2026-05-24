@@ -45,6 +45,13 @@ export function buildWorkerActivityForwarder(input: {
   if (!parsed) return undefined
   const actor = formatLeafActor(input.chainState)
   const chatId = parsed.chatId
+  // Feishu topic-group sub-channel id: present only when the chain root
+  // sessionId encodes a thread (Phase 26 formula
+  // `feishu:group:<chatId>:<threadId>:<senderOpenId>`). Without this,
+  // `sendMarkdownTextToChatId` falls through to `receive_id_type='chat_id'`
+  // and topic-group rules drop the observability stream into a fresh
+  // auto-created topic instead of the one the user opened.
+  const threadId = parsed.kind === 'group' ? parsed.threadId : undefined
 
   return async (text: string) => {
     const trimmed = text.trim()
@@ -52,7 +59,7 @@ export function buildWorkerActivityForwarder(input: {
     const sender = getFeishuSender()
     if (!sender) return
     try {
-      await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`)
+      await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`, {}, threadId)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
