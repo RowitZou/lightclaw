@@ -1850,7 +1850,7 @@ export async function applyAttachmentMaterialization(
     process.stderr.write(
       `channel: ${strategy.channelId} got pendingAttachments without materializeAttachment hook\n`,
     )
-    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+    message.text = appendLine(message.text, '[media download failed]')
     return []
   }
 
@@ -1912,7 +1912,7 @@ export async function applyAttachmentMaterialization(
   if (failureCount > 0) {
     // Surface a single download-failed notice regardless of N; the agent
     // does not benefit from per-attachment failure counts in its prompt.
-    message.text = appendLine(message.text, t('channel.media.downloadFailed'))
+    message.text = appendLine(message.text, '[media download failed]')
   }
   return materialized
 }
@@ -2154,8 +2154,9 @@ export async function formatChannelUserText(
   // Multi-attachment: keep one breadcrumb header + per-attachment lines so
   // the agent can reference each by index. Order matches the order channel
   // adapter parsed them in (which matches the user's send order for Feishu
-  // post content).
-  const lines: string[] = [`${prefix}${body}` || '(no text)', '', t('channel.media.attachment')]
+  // post content). Breadcrumb / status strings are model-facing and stay
+  // English per i18n notes ("stderr + model-visible stays English").
+  const lines: string[] = [`${prefix}${body}` || '(no text)', '', '[media attachment]']
   for (const att of list) {
     lines.push(`- type: ${att.mimeType}`)
     // Status marker so the agent does not Read paths whose bytes are already
@@ -2163,8 +2164,8 @@ export async function formatChannelUserText(
     // ("path = unread resource → call Read") wins and the agent burns turns
     // re-opening files it can already see.
     const status = pendingSet.has(att)
-      ? t('channel.media.statusPending')
-      : t('channel.media.statusInline')
+      ? 'pending (not yet read — you must call Read on this path to see the content)'
+      : 'inline (already visible — path is only for file operations such as Bash resize / copy)'
     const suffix = att.quotedFromMessageId
       ? ' (via quoted message)'
       : ''

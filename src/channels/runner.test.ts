@@ -779,7 +779,7 @@ describe('applyAttachmentMaterialization', () => {
     }
 
     assert.deepEqual(result, [])
-    assert.match(message.text, /\[媒体下载失败\]$/)
+    assert.match(message.text, /\[media download failed\]$/)
     assert.ok(
       stderr.lines.some(line =>
         line.includes('feishu got pendingAttachments without materializeAttachment hook'),
@@ -856,7 +856,7 @@ describe('applyAttachmentMaterialization', () => {
     }
 
     assert.deepEqual(result, [])
-    assert.match(message.text, /\[媒体下载失败\]$/)
+    assert.match(message.text, /\[media download failed\]$/)
     // No "threw" warn — null return is a graceful failure path that the
     // hook itself already logged in stderr (e.g. SDK error envelope).
     assert.ok(
@@ -886,7 +886,7 @@ describe('applyAttachmentMaterialization', () => {
     }
 
     assert.deepEqual(result, [])
-    assert.match(message.text, /\[媒体下载失败\]$/)
+    assert.match(message.text, /\[media download failed\]$/)
     assert.ok(
       stderr.lines.some(line =>
         line.includes('materializeAttachment threw') && line.includes('disk full'),
@@ -955,7 +955,7 @@ describe('applyAttachmentMaterialization', () => {
     assert.deepEqual(result.map(r => r.path), ['/p/a.jpg', '/p/c.jpg'])
     // Single download-failed notice regardless of N failures (N=1 here)
     assert.equal(
-      (message.text.match(/\[媒体下载失败\]/g) ?? []).length,
+      (message.text.match(/\[media download failed\]/g) ?? []).length,
       1,
       'exactly one notice appended, not per-failure',
     )

@@ -59,7 +59,7 @@ test('fetchFeishuMediaPayload unwraps Lark binary-endpoint wrapper { getReadable
   // Lark SDK binary endpoints (im.messageResource.get etc.) return a
   // wrapper object instead of an envelope with `data`. Without the
   // unwrap step in fetchFeishuMediaPayload, bufferizePayload throws
-  // "unsupported payload type" and the user sees [媒体下载失败].
+  // "unsupported payload type" and the user sees [media download failed].
   let streamCalled = false
   const wrapper = {
     writeFile: async () => undefined,

@@ -163,7 +163,8 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             fileName: fileNameFor(raw.messageId, mediaKey),
           })))
         } else if (raw.mediaKeys?.length) {
-          message.text = appendLine(message.text, t('channel.media.skipped'))
+          // Model-facing breadcrumb stays English per i18n notes.
+          message.text = appendLine(message.text, '[media attachment: skipped (mediaEnabled=false)]')
         }
         if (raw.parentId) {
           const parent = await parentFetcher.fetch(raw.parentId, botSelf.openId)

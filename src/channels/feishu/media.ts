@@ -147,7 +147,7 @@ function inferMime(key: ParsedMediaKey): string {
  *  handle it. Older SDK versions / JSON envelopes that hand us a Buffer
  *  / Uint8Array / Stream directly bypass this unwrap. Without it,
  *  bufferizePayload's five branches all miss the wrapper and throw
- *  "unsupported payload type", which surfaces as channel.media.downloadFailed
+ *  "unsupported payload type", which surfaces as `[media download failed]`
  *  to the user. */
 export function unwrapResourceResponse(payload: unknown): unknown {
   if (

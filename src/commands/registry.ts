@@ -31,7 +31,7 @@ export type ReplContext = {
   // Channel-only: the fully-formed user-message content the channel runner
   // built for this turn — already merged with the `[senderName]` prefix,
   // the `<quoted-message>` / `<quoted-message-unavailable>` block, the
-  // `[媒体附件]` path breadcrumb, and any inline content blocks (image /
+  // `[media attachment]` path breadcrumb, and any inline content blocks (image /
   // pdf bytes) that survived the inline encoder. Slash handlers that spawn
   // a sub-session — /fresh — should forward this verbatim so the sub
   // agent receives the same context the main session would have seen

@@ -390,11 +390,6 @@ export const LOCALES = {
     'channel.startup.reason.scheduling': '资源调度中',
     'channel.startup.reason.generic': '暂时不可用',
     'channel.actor.fallback': '正在执行任务',
-    'channel.media.downloadFailed': '[媒体下载失败]',
-    'channel.media.skipped': '[媒体附件: skipped (mediaEnabled=false)]',
-    'channel.media.attachment': '[媒体附件]',
-    'channel.media.statusInline': 'inline (已可见，path 仅用于文件操作如 Bash 缩放/复制等)',
-    'channel.media.statusPending': 'pending (未读取，需调用 Read 后才能看到内容)',
     'channel.cardCallbackUnknown': '卡片回调格式暂未识别。请直接回复"是"或"否"。',
     'channel.failure.transcriptAborted': '本轮已被 /stop 中止。',
 
@@ -874,11 +869,6 @@ export const LOCALES = {
     'channel.startup.reason.scheduling': 'resources are being scheduled',
     'channel.startup.reason.generic': 'temporarily unavailable',
     'channel.actor.fallback': 'working on a task',
-    'channel.media.downloadFailed': '[media download failed]',
-    'channel.media.skipped': '[media attachment: skipped (mediaEnabled=false)]',
-    'channel.media.attachment': '[media attachment]',
-    'channel.media.statusInline': 'inline (already visible — path is only for file operations such as Bash resize / copy)',
-    'channel.media.statusPending': 'pending (not yet read — you must call Read on this path to see the content)',
     'channel.cardCallbackUnknown': 'Unrecognized card callback shape. Please reply "yes" or "no" instead.',
     'channel.failure.transcriptAborted': 'This turn was aborted by /stop.',
 
