@@ -568,7 +568,11 @@ export async function query(params: QueryParams): Promise<{
       deferredEnabled: false,
     }
     for (const hook of lifecycleHooks) {
+      const hookName = hook.name ?? 'unnamed'
+      stallTrace('query-beforeturn-enter', { sid: getSessionId(), turn, hook: hookName })
+      const ht0 = Date.now()
       await hook.beforeTurn?.(makeHookContext())
+      stallTrace('query-beforeturn-exit', { sid: getSessionId(), turn, hook: hookName, ms: Date.now() - ht0 })
     }
     dispatchCtx.tools = turnCatalog.tools
     dispatchCtx.allTools = params.tools
@@ -580,6 +584,7 @@ export async function query(params: QueryParams): Promise<{
     // not yielded until the request is accepted, so a retry does not
     // double-print to the user.
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      stallTrace('query-attempt-start', { sid: getSessionId(), turn, attempt })
       stopEvent = undefined
       // Lazy-init: avoid eagerly calling renderEffectiveSystemPrompt() when a
       // beforeStream hook (split-render) is going to overwrite the result.
@@ -590,20 +595,32 @@ export async function query(params: QueryParams): Promise<{
       // the default `hooks: ['prompt-too-long-retry']` policy hit this path).
       let renderedPrompt: RenderedPrompt | null = null
       for (const hook of lifecycleHooks) {
+        const hookName = hook.name ?? 'unnamed'
+        stallTrace('query-beforestream-enter', { sid: getSessionId(), turn, attempt, hook: hookName })
+        const ht0 = Date.now()
         const rendered = await hook.beforeStream?.(makeHookContext())
+        stallTrace('query-beforestream-exit', { sid: getSessionId(), turn, attempt, hook: hookName, ms: Date.now() - ht0, rendered: !!rendered })
         if (rendered) {
           renderedPrompt = rendered
         }
       }
       if (!renderedPrompt) {
+        stallTrace('query-render-prompt-enter', { sid: getSessionId(), turn, attempt })
+        const rpt0 = Date.now()
         renderedPrompt = {
           system: hasSystemPromptOverride
             ? (systemPromptOverride ?? '')
             : renderEffectiveSystemPrompt(),
         }
+        stallTrace('query-render-prompt-exit', { sid: getSessionId(), turn, attempt, ms: Date.now() - rpt0 })
       }
+      let firstEventSeen = false
+      const sct0 = Date.now()
       try {
+        stallTrace('query-getprovider-enter', { sid: getSessionId(), turn, attempt, model: roleModel })
+        const pt0 = Date.now()
         const mainRoute = getProviderFor(config, roleModel)
+        stallTrace('query-getprovider-exit', { sid: getSessionId(), turn, attempt, ms: Date.now() - pt0, endpoint: mainRoute.entry.endpoint })
         dispatchCtx.mainTurnRouting = {
           provider: mainRoute.provider,
           schema: mainRoute.provider.name,
@@ -611,6 +628,7 @@ export async function query(params: QueryParams): Promise<{
           endpointBaseUrl: config.endpoints[mainRoute.entry.endpoint]?.baseUrl,
           upstreamModel: mainRoute.entry.upstreamModel,
         }
+        stallTrace('query-streamchat-call-pre', { sid: getSessionId(), turn, attempt, model: roleModel, endpoint: mainRoute.entry.endpoint, msgs: messages.length })
         for await (const event of streamChatImpl({
           config,
           model: roleModel,
@@ -640,6 +658,10 @@ export async function query(params: QueryParams): Promise<{
             attempt,
           },
         })) {
+          if (!firstEventSeen) {
+            firstEventSeen = true
+            stallTrace('query-streamchat-first-event', { sid: getSessionId(), turn, attempt, ms: Date.now() - sct0, type: event.type })
+          }
           if (event.type === 'text') {
             invocation.onTextDelta?.(event.text)
             continue
@@ -652,8 +674,10 @@ export async function query(params: QueryParams): Promise<{
 
           stopEvent = event
         }
+        stallTrace('query-streamchat-call-post', { sid: getSessionId(), turn, attempt, ms: Date.now() - sct0, hadFirstEvent: firstEventSeen })
         break
       } catch (error) {
+        stallTrace('query-streamchat-catch', { sid: getSessionId(), turn, attempt, ms: Date.now() - sct0, hadFirstEvent: firstEventSeen, err: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) })
         if (attempt === 0) {
           let shouldRetry = false
           for (const hook of lifecycleHooks) {
