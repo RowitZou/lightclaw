@@ -482,6 +482,9 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
             ) {
               const t = typeof delta.thinking === 'string' ? delta.thinking : ''
               contentBlock.thinking += t
+              if (t.length > 0) {
+                yield { type: 'keepalive', reason: 'reasoning' }
+              }
             }
 
             // Signature is delivered as a single delta near the end of a

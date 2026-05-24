@@ -242,9 +242,15 @@ export type StreamStopEvent = {
   content: AssistantContentBlock[]
 }
 
+export type StreamKeepaliveEvent = {
+  type: 'keepalive'
+  reason: string
+}
+
 export type StreamEvent =
   | StreamTextEvent
   | StreamToolUseEvent
+  | StreamKeepaliveEvent
   | StreamStopEvent
 
 export type ToolExecutionEvent = {

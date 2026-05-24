@@ -310,6 +310,13 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         }
 
         const delta = choice.delta
+        const reasoningDelta = (delta as {
+          reasoning?: unknown
+          reasoning_content?: unknown
+        }).reasoning_content ?? (delta as { reasoning?: unknown }).reasoning
+        if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+          yield { type: 'keepalive', reason: 'reasoning' }
+        }
         if (typeof delta.content === 'string' && delta.content.length > 0) {
           text += delta.content
           yield {

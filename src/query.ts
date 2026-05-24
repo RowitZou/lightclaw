@@ -692,6 +692,9 @@ export async function query(params: QueryParams): Promise<{
                 `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
               )
             }
+            if (event.type === 'keepalive') {
+              continue
+            }
             if (event.type === 'text') {
               invocation.onTextDelta?.(event.text)
               continue

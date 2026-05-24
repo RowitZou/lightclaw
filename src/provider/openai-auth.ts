@@ -415,7 +415,7 @@ export function createOpenAIAuthProvider(
           ? { tools, tool_choice: 'auto', parallel_tool_calls: true }
           : {}),
         ...(params.reasoningEffort
-          ? { reasoning: { effort: params.reasoningEffort } }
+          ? { reasoning: { effort: params.reasoningEffort, summary: 'auto' } }
           : {}),
         stream: true,
         store: false,
@@ -562,6 +562,10 @@ export async function* processResponseStream(
   const toolUseBlocks: AssistantToolUseBlock[] = []
 
   for await (const event of stream) {
+    if (event.type.startsWith('response.reasoning_summary')) {
+      yield { type: 'keepalive', reason: 'reasoning' }
+      continue
+    }
     switch (event.type) {
       case 'response.output_item.added': {
         const item = event.item as { type?: string; id?: string; call_id?: string; name?: string }
