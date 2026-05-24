@@ -608,6 +608,13 @@ export async function query(params: QueryParams): Promise<{
           endpointBaseUrl: config.endpoints[mainRoute.entry.endpoint]?.baseUrl,
           upstreamModel: mainRoute.entry.upstreamModel,
         }
+        // TTFB observation — the wall-clock between calling streamChatImpl and
+        // receiving the first stream event. Surfaces upstream-link slowness
+        // (proxy / chatgpt backend queue) that otherwise reads as "daemon
+        // hung" because the daemon is idle waiting on response bytes.
+        // Grep: [ttfb] for per-call distribution; admin can compute percentiles.
+        const streamStartMs = Date.now()
+        let ttfbLogged = false
         for await (const event of streamChatImpl({
           config,
           model: roleModel,
@@ -637,6 +644,12 @@ export async function query(params: QueryParams): Promise<{
             attempt,
           },
         })) {
+          if (!ttfbLogged) {
+            ttfbLogged = true
+            process.stderr.write(
+              `[ttfb] sid=${getSessionId()} role=${params.role.agentType} model=${roleModel} endpoint=${mainRoute.entry.endpoint} kind=${apiLogKind} ms=${Date.now() - streamStartMs}\n`,
+            )
+          }
           if (event.type === 'text') {
             invocation.onTextDelta?.(event.text)
             continue
