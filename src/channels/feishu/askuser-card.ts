@@ -473,18 +473,22 @@ export function buildAskUserCard(input: {
       tag: 'markdown',
       content: headerLines.join('\n'),
     })
-    // 2026-05-23 dogfood: single-select dropdown visually shows the first
-    // option's label even when nothing is bound, but form_value omits the q
-    // key until the user actively interacts with the dropdown. Net effect:
-    // user submits thinking they've picked "选项 A" (what the dropdown
-    // displays), gets "请先在每个下拉框做出选择再提交" toast. Fix: bind the
-    // tool-schema-required defaultOptionIndex into the V2 `initial_option`
-    // field (the option's text content, per Feishu V2 doc), so the dropdown
-    // is genuinely pre-selected from the start. Multi-select is intentionally
-    // not pre-filled — a single default for a multi-pick question would
-    // suggest "only this is picked" UI-wise. parseFormValue's missing-key
-    // fallback (below) covers both shapes.
-    const selectComponent: Record<string, unknown> = {
+    // 2026-05-23 dogfood (3.9): the previous 3.6 fix bound `initial_option:
+    // <label>` to make the dropdown visually pre-selected. But Feishu V2's
+    // `initial_option` field semantics: the form_value submitted by the
+    // user (without changing the dropdown) is THE TEXT (label) of the
+    // initial option, NOT the option's `value` field. parseFormValue then
+    // does `Number("选项 A")` → NaN → returns `malformed` → "提交异常" toast.
+    //
+    // Drop initial_option entirely. Feishu's select_static already renders
+    // the first option's label visually when no initial is set (proven by
+    // earlier dogfood screenshots pre-3.6), so dropping it does NOT change
+    // the visual. parseFormValue's missing-key → defaultOptionIndex fallback
+    // (added in 3.6) covers the "user submits without touching" case. Plus
+    // parseFormValue now also matches by label string defensively (see
+    // selectedIndexes block below) so any future path that sends back labels
+    // resolves correctly.
+    formElements.push({
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
@@ -492,14 +496,7 @@ export function buildAskUserCard(input: {
         text: { tag: 'plain_text', content: option.label },
         value: String(optionIndex),
       })),
-    }
-    if (!question.multiSelect && question.defaultOptionIndex !== undefined) {
-      const defaultOption = question.options[question.defaultOptionIndex]
-      if (defaultOption) {
-        selectComponent['initial_option'] = defaultOption.label
-      }
-    }
-    formElements.push(selectComponent)
+    })
     // Per-question optional Other slot. Bound by name to this specific
     // question (q<i>_other) so multi-question cards have no ambiguity about
     // which question the free text belongs to. The Feishu 2.0 `input`
@@ -676,11 +673,25 @@ function parseFormValue(
     }
     const selectedLabels: string[] = []
     for (const rawIndex of selectedIndexes) {
+      // Primary path: the value we set on each option is `String(optionIndex)`
+      // ("0" / "1" / ...), so form_value normally carries the numeric string.
       const index = Number(rawIndex)
-      if (!Number.isInteger(index) || index < 0 || index >= question.options.length) {
-        return { ok: false, reason: 'malformed' }
+      if (Number.isInteger(index) && index >= 0 && index < question.options.length) {
+        selectedLabels.push(question.options[index]!.label)
+        continue
       }
-      selectedLabels.push(question.options[index]!.label)
+      // Defensive fallback: if Feishu sends back the option's text/label
+      // (instead of value) — which happened with 3.6's `initial_option`
+      // hack on unconfirmed-default submits — match the raw string against
+      // option labels directly. Keeps the user out of the "提交异常" toast
+      // even if some future config or schema mismatch repopulates form_value
+      // with a label-shaped string.
+      const byLabel = question.options.findIndex(option => option.label === rawIndex)
+      if (byLabel >= 0) {
+        selectedLabels.push(question.options[byLabel]!.label)
+        continue
+      }
+      return { ok: false, reason: 'malformed' }
     }
     answers.push({
       question: question.question,

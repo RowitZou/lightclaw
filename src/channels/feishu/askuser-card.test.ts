@@ -136,14 +136,16 @@ test('buildAskUserCard always renders the options markdown block, even without d
   assert.match(md.content, /选项 B — 第二个也较长的 label，用于验证 markdown 块里完整渲染/)
 })
 
-test('buildAskUserCard pre-fills initial_option on single-select when defaultOptionIndex is set', () => {
-  // 2026-05-23 dogfood: V2 select_static visually showed "选项 A" even
-  // without binding, but form_value omitted q0 until the user opened the
-  // dropdown — user clicked submit thinking they'd picked it, got the
-  // missing-selection toast. Fix: bind defaultOptionIndex into V2's
-  // `initial_option` (the option's text content) so the dropdown is
-  // genuinely pre-selected from the start. Multi-select is intentionally
-  // not pre-filled (a single default is misleading UI for a multi-pick).
+test('buildAskUserCard does NOT set initial_option / initial_index on select dropdowns', () => {
+  // 2026-05-23 dogfood (3.9): the previous 3.6 fix bound `initial_option:
+  // <label>` to visually pre-select the default. But Feishu V2's
+  // initial_option semantics caused form_value to carry the option's TEXT
+  // (label) instead of its value, so parseFormValue's Number() conversion
+  // tripped → malformed → "提交异常" toast. Drop initial_option entirely;
+  // Feishu's select_static already renders the first option visually.
+  // parseFormValue's missing-key → defaultOptionIndex fallback covers the
+  // "user submits without touching" case. Test pins: no initial_* fields
+  // on either single- or multi-select.
   const card = buildAskUserCard({
     id: 'ask_default',
     questions: [
@@ -165,19 +167,47 @@ test('buildAskUserCard pre-fills initial_option on single-select when defaultOpt
   const form = (card.body as { elements: Array<Record<string, unknown>> }).elements[0] as {
     elements: Array<Record<string, unknown>>
   }
-  const single = form.elements.find(el => el.tag === 'select_static') as { initial_option?: string }
-  assert.equal(single.initial_option, 'B', 'single-select must carry initial_option matching default option label')
-  const multi = form.elements.find(el => el.tag === 'multi_select_static') as Record<string, unknown>
-  assert.equal(
-    'initial_option' in multi,
-    false,
-    'multi-select must NOT pre-fill initial_option (misleading UI for multi-pick)',
-  )
-  assert.equal(
-    'initial_options' in multi,
-    false,
-    'multi-select must NOT auto-pre-fill the plural variant either',
-  )
+  for (const tag of ['select_static', 'multi_select_static']) {
+    const el = form.elements.find(e => e.tag === tag) as Record<string, unknown>
+    for (const field of ['initial_option', 'initial_options', 'initial_index']) {
+      assert.equal(
+        field in el,
+        false,
+        `${tag} must NOT carry ${field} (Feishu V2 semantics put labels in form_value, breaking parseFormValue)`,
+      )
+    }
+  }
+})
+
+test('parseFormValue falls back to label match when raw is not a numeric index', async () => {
+  // Defense-in-depth: if any path (initial_option regression, alternate
+  // Feishu API version, etc.) sends back the option's text label instead
+  // of the numeric value, parseFormValue must still resolve correctly
+  // rather than firing "提交异常".
+  const pending = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_label_fallback',
+    abortSignal: new AbortController().signal,
+    questions: [{
+      header: 'Pick',
+      question: 'Pick',
+      options: [{ label: '选项 A' }, { label: '选项 B' }],
+      defaultOptionIndex: 0,
+    }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+  const response = await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'submit',
+    // raw is the LABEL string, not the numeric "1" — this is the shape
+    // initial_option-driven form_value used to carry.
+    formValue: { q0: '选项 B' },
+  }) as { toast: { type: string }; card?: unknown }
+  const answers = await pending
+  assert.deepEqual(answers[0]!.selectedLabels, ['选项 B'])
+  assert.equal(response.toast.type, 'success')
 })
 
 test('parseFormValue: missing q key for a question with defaultOptionIndex resolves to the default', async () => {
