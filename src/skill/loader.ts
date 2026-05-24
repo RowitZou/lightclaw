@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { userSkillsRoot } from '../identity/paths.js'
@@ -10,6 +10,7 @@ import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 const warnedLegacySkillDirs = new Set<string>()
 const warnedCollisionSkills = new Set<string>()
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+const ROLE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const SHELL_INJECTION_RE = /!\s*`[^`]*`/
 
 function toSkillMeta(skill: LoadedSkill): SkillMeta {
@@ -18,6 +19,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     description: skill.description,
     whenToUse: skill.whenToUse,
     allowedTools: skill.allowedTools,
+    roles: skill.roles,
     source: skill.source,
     filePath: skill.filePath,
   }
@@ -43,6 +45,7 @@ function parseSkillFrontmatter(
   if (!name || !description) {
     return null
   }
+  const roles = parseSkillRoles(filePath, source, frontmatter.roles)
 
   return {
     name,
@@ -54,9 +57,33 @@ function parseSkillFrontmatter(
     allowedTools: Array.isArray(frontmatter['allowed-tools'])
       ? frontmatter['allowed-tools'].map(value => value.trim()).filter(Boolean)
       : undefined,
+    roles,
     source,
     filePath,
   }
+}
+
+function parseSkillRoles(
+  filePath: string,
+  source: SkillSource,
+  value: string | string[] | undefined,
+): string[] {
+  if (value === undefined) {
+    return source === 'user' ? ['main'] : []
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Skill ${filePath} frontmatter "roles" must be a YAML list of role names.`)
+  }
+  const roles = value.map(role => role.trim())
+  if (roles.length === 0 || roles.some(role => role.length === 0)) {
+    throw new Error(`Skill ${filePath} frontmatter "roles" must contain at least one role name.`)
+  }
+  for (const role of roles) {
+    if (!ROLE_NAME_RE.test(role)) {
+      throw new Error(`Skill ${filePath} frontmatter "roles" contains invalid role name "${role}".`)
+    }
+  }
+  return roles
 }
 
 async function loadSkillsFromDirectory(
@@ -174,6 +201,28 @@ export async function writeUserSkill(input: {
   await writeFile(filePath, input.markdown, { encoding: 'utf8', mode: 0o600 })
   await chmod(filePath, 0o600)
   return meta
+}
+
+export async function deleteUserSkill(input: {
+  userId: string
+  name: string
+}): Promise<{ name: string; filePath: string }> {
+  const name = normalizeSkillName(input.name)
+  if (getBundledSkillByName(name)) {
+    throw new Error(`Skill "${name}" is bundled and cannot be deleted by SkillDelete.`)
+  }
+  const skillDir = path.join(userSkillsRoot(input.userId), name)
+  const filePath = path.join(skillDir, 'SKILL.md')
+  try {
+    await unlink(filePath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Skill "${name}" does not exist in the current user's skill set.`)
+    }
+    throw error
+  }
+  await rm(skillDir, { recursive: true, force: true })
+  return { name, filePath }
 }
 
 export async function loadSkillBody(skill: SkillMeta): Promise<string> {

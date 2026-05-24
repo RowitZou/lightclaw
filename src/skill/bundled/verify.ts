@@ -9,6 +9,7 @@ export const verifySkill: LoadedSkill = {
   ].join('\n'),
   whenToUse: 'Code or state changed and validation would increase confidence.',
   allowedTools: ['Bash', 'Read', 'Grep', 'Glob'],
+  roles: [],
   source: 'builtin',
   filePath: 'builtin:verify',
   body: [

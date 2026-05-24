@@ -5,6 +5,8 @@ export const BUNDLED_AGENT_TYPES = [
   'webSearcher',
   'memoryExtractor',
   'memoryCurator',
+  'skillCurator',
+  'skillConsolidator',
   'feishuSecretary',
   'coder',
   'archivist',

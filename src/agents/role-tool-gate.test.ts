@@ -262,10 +262,13 @@ test('bundled dispatch matrix matches the role-to-role topology', () => {
   }
 })
 
-test('every non-main bundled role is denied Notify (worker-blocked invariant)', () => {
+test('every non-main bundled worker role is denied user-escalation and skill-write tools', () => {
   for (const agent of BUNDLED_AGENTS) {
     if (agent.agentType === 'main') {
       assert.equal(isToolVisibleToRole(agent, 'Notify'), true, 'main should keep Notify')
+      continue
+    }
+    if (agent.kind !== 'worker') {
       continue
     }
     assert.equal(
@@ -278,7 +281,29 @@ test('every non-main bundled role is denied Notify (worker-blocked invariant)', 
       false,
       `${agent.agentType} should be denied SkillWrite`,
     )
+    assert.equal(
+      isToolVisibleToRole(agent, 'SkillDelete'),
+      false,
+      `${agent.agentType} should be denied SkillDelete`,
+    )
   }
+})
+
+test('skill internal roles can use only their explicit skill tool surfaces', () => {
+  const skillCurator = BUNDLED_AGENTS.find(agent => agent.agentType === 'skillCurator')
+  const skillConsolidator = BUNDLED_AGENTS.find(agent => agent.agentType === 'skillConsolidator')
+  assert.ok(skillCurator)
+  assert.ok(skillConsolidator)
+
+  assert.deepEqual(skillCurator.tools, ['SkillWrite', 'Read', 'Grep', 'Glob'])
+  assert.equal(isToolVisibleToRole(skillCurator, 'SkillWrite'), true)
+  assert.equal(isToolVisibleToRole(skillCurator, 'SkillDelete'), false)
+  assert.equal(isToolVisibleToRole(skillCurator, 'Notify'), false)
+
+  assert.deepEqual(skillConsolidator.tools, ['SkillWrite', 'SkillDelete', 'Read'])
+  assert.equal(isToolVisibleToRole(skillConsolidator, 'SkillWrite'), true)
+  assert.equal(isToolVisibleToRole(skillConsolidator, 'SkillDelete'), true)
+  assert.equal(isToolVisibleToRole(skillConsolidator, 'Notify'), false)
 })
 
 function role(overrides: Partial<Role> = {}): Role {

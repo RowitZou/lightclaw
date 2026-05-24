@@ -10,6 +10,7 @@ export const rememberSkill: LoadedSkill = {
   whenToUse:
     "Use when the requester wants a durable FACT saved or reviewed — what / when / who / which / a preference / a decision / a constraint. Explicit ('remember that …', '记一下 …') or implicit when the request hands over a fact worth preserving across sessions. Skip if the request is about HOW to run a recurring workflow (use `skillify` instead) or if the content is temporary task state.",
   allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
+  roles: [],
   source: 'builtin',
   filePath: 'builtin:remember',
   body: [

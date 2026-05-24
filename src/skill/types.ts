@@ -5,6 +5,7 @@ export type SkillMeta = {
   description: string
   whenToUse?: string
   allowedTools?: string[]
+  roles: string[]
   source: SkillSource
   filePath: string
 }

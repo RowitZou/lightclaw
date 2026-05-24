@@ -8,6 +8,8 @@ import { memoryCuratorPrompt } from './memoryCurator.js'
 import { memoryExtractorPrompt } from './memoryExtractor.js'
 import { mainPrompt } from './main.js'
 import { reviewerPrompt } from './reviewer.js'
+import { skillConsolidatorPrompt } from './skillConsolidator.js'
+import { skillCuratorPrompt } from './skillCurator.js'
 import { webSearcherPrompt } from './webSearcher.js'
 
 export const BUNDLED_AGENTS: Role[] = [
@@ -174,6 +176,22 @@ export const BUNDLED_AGENTS: Role[] = [
     whenToUse: 'Internal: framework-managed memory consolidation.',
     tools: ['MemoryRead', 'MemoryWriteAt', 'MemoryMove', 'MemoryDelete', 'Read', 'Grep', 'Glob'],
     systemPrompt: memoryCuratorPrompt,
+    kind: 'internal',
+    outputContract: 'side-effect',
+  },
+  {
+    agentType: 'skillCurator',
+    whenToUse: 'Internal: framework-managed per-role skill discovery.',
+    tools: ['SkillWrite', 'Read', 'Grep', 'Glob'],
+    systemPrompt: skillCuratorPrompt,
+    kind: 'internal',
+    outputContract: 'side-effect',
+  },
+  {
+    agentType: 'skillConsolidator',
+    whenToUse: 'Internal: framework-managed per-user skill consolidation.',
+    tools: ['SkillWrite', 'SkillDelete', 'Read'],
+    systemPrompt: skillConsolidatorPrompt,
     kind: 'internal',
     outputContract: 'side-effect',
   },

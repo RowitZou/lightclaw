@@ -134,6 +134,74 @@ describe('discoverSkillsForUser', () => {
       )
     })
   })
+
+  it('parses roles and falls back old user skills to main', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'coder-flow',
+        [
+          'name: coder-flow',
+          'description: A coder workflow.',
+          'roles:',
+          '  - coder',
+          '  - reviewer',
+        ].join('\n'),
+      )
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'legacy-main-flow',
+        'name: legacy-main-flow\ndescription: No roles yet.',
+      )
+
+      const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.deepEqual(skills.find(skill => skill.name === 'coder-flow')?.roles, [
+        'coder',
+        'reviewer',
+      ])
+      assert.deepEqual(skills.find(skill => skill.name === 'legacy-main-flow')?.roles, [
+        'main',
+      ])
+    })
+  })
+
+  it('rejects invalid roles frontmatter', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'bad-scalar-role',
+        'name: bad-scalar-role\ndescription: Bad.\nroles: coder',
+      )
+      await assert.rejects(
+        discoverSkillsForUser(process.cwd(), 'alice'),
+        /roles" must be a YAML list/,
+      )
+    })
+
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'bad-empty-role',
+        'name: bad-empty-role\ndescription: Bad.\nroles:\n  - ""',
+      )
+      await assert.rejects(
+        discoverSkillsForUser(process.cwd(), 'alice'),
+        /roles" must contain at least one role name/,
+      )
+    })
+
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'bad-role-name',
+        'name: bad-role-name\ndescription: Bad.\nroles:\n  - ../coder',
+      )
+      await assert.rejects(
+        discoverSkillsForUser(process.cwd(), 'alice'),
+        /invalid role name/,
+      )
+    })
+  })
 })
 
 describe('writeUserSkill', () => {
@@ -157,6 +225,7 @@ describe('writeUserSkill', () => {
       assert.equal(meta.name, 'data-cleanup')
       assert.equal(meta.source, 'user')
       assert.deepEqual(meta.allowedTools, ['Read', 'Write'])
+      assert.deepEqual(meta.roles, ['main'])
       assert.equal((await stat(meta.filePath)).mode & 0o777, 0o600)
     })
   })

@@ -336,7 +336,7 @@ describe('autoDream runner', () => {
 
     // Retry is fire-and-forget; let the in-flight dream resolve before asserting.
     await drainPendingDream(5_000)
-    assert.equal(forkInvocations, 1)
+    assert.equal(forkInvocations, 2)
     assert.equal(getAutoDreamPendingCountForTest(), 0)
     assert.equal(getAutoDreamInFlightCountForTest(), 0)
   })
@@ -417,7 +417,7 @@ describe('autoDream runner', () => {
       config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
     })
 
-    assert.equal(forkInvocations, 1)
+    assert.equal(forkInvocations, 2)
     assert.equal(existsSync(consolidationLockPath(tmpMemoryDir)), true)
     assert.equal(
       readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8').trim(),
@@ -434,7 +434,9 @@ describe('autoDream runner', () => {
     let prompt = ''
     setRunSubagentForTest(async input => {
       forkInvocations += 1
-      prompt = input.prompt
+      if (input.agentType === 'memoryCurator') {
+        prompt = input.prompt
+      }
       return fakeForkResult()
     })
 
@@ -445,10 +447,63 @@ describe('autoDream runner', () => {
       config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
     })
 
-    assert.equal(forkInvocations, 1)
+    assert.equal(forkInvocations, 2)
     assert.match(prompt, /root-note\.md: root-note description/)
     assert.match(prompt, /_shared\/shared-note\.md: shared-note description/)
     assert.match(prompt, /webSearcher\/webSearcher-note\.md: webSearcher-note description/)
+  })
+
+  it('runs per-role skillCurator for new fork transcripts, then skillConsolidator', async () => {
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    writeForkTranscript('s1', 'coder', 'abc123')
+
+    const calls: Array<{ agentType: string; prompt: string }> = []
+    setRunSubagentForTest(async input => {
+      calls.push({ agentType: String(input.agentType), prompt: input.prompt })
+      return fakeForkResult()
+    })
+
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+
+    assert.deepEqual(calls.map(call => call.agentType), [
+      'memoryCurator',
+      'skillCurator',
+      'skillConsolidator',
+    ])
+    assert.match(calls[1]?.prompt ?? '', /Target role: `coder`/)
+    assert.match(calls[1]?.prompt ?? '', /coder-abc123\.jsonl/)
+    assert.match(calls[1]?.prompt ?? '', /## Skills Currently Visible To This Role/)
+    assert.match(calls[2]?.prompt ?? '', /# Dream: Skill Consolidation/)
+  })
+
+  it('isolates skillCurator failure and still runs skillConsolidator', async () => {
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+    writeForkTranscript('s1', 'coder', 'abc123')
+
+    const calls: string[] = []
+    setRunSubagentForTest(async input => {
+      calls.push(String(input.agentType))
+      if (input.agentType === 'skillCurator') {
+        throw new Error('skill curator blew up')
+      }
+      return fakeForkResult()
+    })
+
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
+
+    assert.deepEqual(calls, ['memoryCurator', 'skillCurator', 'skillConsolidator'])
   })
 
   it('lists only existing shared and role-private sections in the memory tree', async () => {
@@ -538,20 +593,20 @@ describe('autoDream runner', () => {
     )
     const priorMtime = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
 
+    let forkInvocations = 0
     setRunSubagentForTest(async () => {
+      forkInvocations += 1
       throw new Error('fork blew up')
     })
 
-    await assert.rejects(
-      executeAutoDream({
-        userId: 'alice',
-        memoryDir: tmpMemoryDir,
-        currentSessionId: 'current',
-        config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
-      }),
-      /fork blew up/,
-    )
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+    })
 
+    assert.equal(forkInvocations, 2)
     const afterRollback = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
     assert.ok(
       Math.abs(afterRollback - priorMtime) < 5,
@@ -714,6 +769,19 @@ function writeSession(sessionId: string, userId: string, lastActiveAt: number): 
       compactionCount: 0,
       permissionMode: 'default',
     }),
+  )
+}
+
+function writeForkTranscript(sessionId: string, roleAgentType: string, forkId: string): void {
+  const forksDir = path.join(tmpSessionsDir, sessionId, 'forks')
+  mkdirSync(forksDir, { recursive: true })
+  writeFileSync(
+    path.join(forksDir, `${roleAgentType}-${forkId}.jsonl`),
+    [
+      JSON.stringify({ kind: 'fork-transcript-meta', forkContextEndIndex: 0 }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'repeat the release checklist' } }),
+    ].join('\n') + '\n',
+    'utf8',
   )
 }
 

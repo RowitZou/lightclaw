@@ -2,7 +2,18 @@ import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import type { SkillMeta } from './types.js'
 
+const MAIN_GENERALIST_PAIR = new Set(['main', 'generalist'])
+
 export function isSkillNameAllowedForRole(skill: SkillMeta, role: Role): boolean {
+  if (skill.source === 'user') {
+    const roleName = String(role.agentType)
+    if (skill.roles.includes(roleName)) {
+      return true
+    }
+    return MAIN_GENERALIST_PAIR.has(roleName) &&
+      skill.roles.some(skillRole => MAIN_GENERALIST_PAIR.has(skillRole))
+  }
+
   const skills = (role.skills ?? []) as readonly string[]
   return skills.includes('*') || skills.includes(skill.name)
 }

@@ -9,6 +9,7 @@ export const verifyEnvSkill: LoadedSkill = {
   ].join('\n'),
   whenToUse: 'The requester needs to know whether a conda / pip / docker setup is healthy before relying on it.',
   allowedTools: ['Bash'],
+  roles: [],
   source: 'builtin',
   filePath: 'builtin:verify-env',
   body: [

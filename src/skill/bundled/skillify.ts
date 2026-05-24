@@ -7,6 +7,7 @@ export const skillifySkill: LoadedSkill = {
   whenToUse:
     "Use when the user is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill') or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux.",
   allowedTools: ['SkillWrite', 'AskUserQuestion', 'Read', 'Grep', 'Glob'],
+  roles: [],
   source: 'builtin',
   filePath: 'builtin:skillify',
   body: String.raw`# Skillify {{userDescriptionBlock}}

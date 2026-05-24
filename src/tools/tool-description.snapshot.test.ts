@@ -9,6 +9,7 @@ import {
   updateDispatchTool,
 } from './dispatch.js'
 import { notifyTool } from './notify.js'
+import { skillDeleteTool } from './skill-delete.js'
 import { skillWriteTool } from './skill-write.js'
 import {
   BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE,
@@ -22,6 +23,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
     CancelDispatch: hash(cancelDispatchTool.description),
     UpdateDispatch: hash(updateDispatchTool.description),
     Notify: hash(notifyTool.description),
+    SkillDelete: hash(skillDeleteTool.description),
     SkillWrite: hash(skillWriteTool.description),
     BackgroundTaskResultBlockMain: hash(BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE),
     BackgroundTaskResultBlockWorker: hash(BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE),
@@ -45,6 +47,7 @@ const EXPECTED = {
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
+  SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
   SkillWrite: '464842ab2124573dbc52c264980cff3ee3b331be63923c7f2e0ce0b54cb5f530',
   // Main template rewritten 2026-05-19 to push the default toward an
   // unattended-agent posture: surface every result via plain reply, take

@@ -15,6 +15,7 @@ const BLOCKED_WORKER_TOOLS = new Set([
   'Notify',
   'AskUserQuestion',
   'SkillWrite',
+  'SkillDelete',
 ])
 
 const FEISHU_RESERVED_TOOLS = new Set([

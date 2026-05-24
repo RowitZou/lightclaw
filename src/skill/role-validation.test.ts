@@ -107,6 +107,63 @@ test('named role skills allow only matching skill names', () => {
   assert.equal(isSkillNameAllowedForRole(verify, main), false)
 })
 
+test('per-user skill roles control name visibility', () => {
+  const coderSkill = skill({
+    name: 'review-fix-loop',
+    source: 'user',
+    roles: ['coder'],
+    allowedTools: ['Read'],
+  })
+
+  assert.equal(
+    isSkillNameAllowedForRole(coderSkill, role({ agentType: 'coder', tools: ['Read'] })),
+    true,
+  )
+  assert.equal(
+    isSkillNameAllowedForRole(coderSkill, role({ agentType: 'reviewer', tools: ['Read'] })),
+    false,
+  )
+})
+
+test('main and generalist bridge per-user skill names but still respect tool compatibility', () => {
+  const mainSkill = skill({
+    name: 'main-flow',
+    source: 'user',
+    roles: ['main'],
+    allowedTools: ['Read'],
+  })
+  const mainNotifySkill = skill({
+    name: 'notify-flow',
+    source: 'user',
+    roles: ['main'],
+    allowedTools: ['Notify'],
+  })
+  const generalistSkill = skill({
+    name: 'generalist-flow',
+    source: 'user',
+    roles: ['generalist'],
+    allowedTools: ['Read'],
+  })
+  const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'] })
+  const generalist = role({ agentType: 'generalist', kind: 'worker', tools: ['*'] })
+
+  assert.equal(isSkillNameAllowedForRole(mainSkill, generalist), true)
+  assert.equal(isSkillCompatibleWithRole(mainSkill, generalist), true)
+  assert.equal(isSkillNameAllowedForRole(mainNotifySkill, generalist), true)
+  assert.equal(isSkillCompatibleWithRole(mainNotifySkill, generalist), false)
+  assert.equal(isSkillNameAllowedForRole(generalistSkill, main), true)
+  assert.equal(isSkillCompatibleWithRole(generalistSkill, main), true)
+})
+
+test('bundled skills keep literal role allowlist semantics', () => {
+  const verify = skill({ name: 'verify', source: 'builtin', roles: ['main'] })
+  const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'], skills: ['remember'] })
+  const coder = role({ agentType: 'coder', tools: ['*'], skills: ['verify'] })
+
+  assert.equal(isSkillNameAllowedForRole(verify, main), false)
+  assert.equal(isSkillNameAllowedForRole(verify, coder), true)
+})
+
 test('allowedTools must be visible to the role after worker blocks', () => {
   assert.equal(
     isSkillCompatibleWithRole(
@@ -195,6 +252,7 @@ function skill(overrides: Partial<SkillMeta>): SkillMeta {
   return {
     name: 'skill',
     description: 'A skill',
+    roles: [],
     source: 'builtin',
     filePath: 'builtin:skill',
     ...overrides,

@@ -1,7 +1,9 @@
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
+import { getAllAgents } from '../../agents/registry.js'
 import { runSubagent } from '../../agents/run-subagent.js'
+import type { AgentType, Role } from '../../agents/types.js'
 import type { LightClawConfig } from '../../config.js'
 import { listActiveCanonicalUsers } from '../../identity/store.js'
 import { ensureMemoryDir, getMemoryDir } from '../auto-memory.js'
@@ -16,7 +18,14 @@ import {
   rollbackConsolidationLock,
   tryAcquireConsolidationLock,
 } from './lock.js'
-import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
+import {
+  buildDreamPrompt,
+  buildSkillConsolidatorPrompt,
+  buildSkillCuratorPrompt,
+  gatherDreamMemoryTree,
+  gatherDreamUserSkillsFull,
+  gatherDreamVisibleSkills,
+} from './prompt.js'
 import { gatherDreamSessions } from './sessions.js'
 
 type AutoDreamParams = {
@@ -192,17 +201,19 @@ async function executeAutoDreamInner(params: {
       // MemoryDelete / Read / Grep / Glob) is the single source of truth
       // for what this subagent can use — runtime gate is the default
       // `deriveCanUseTool(role)` applied by runSubagent.
-      const result = await runSubagentImpl({
-        agentType: 'memoryCurator',
-        prompt: buildDreamPrompt({
-          memoryDir: params.memoryDir,
-          transcriptDir: params.config.paths.sessions,
-          sessionIds,
-          memoryTree: await gatherDreamMemoryTree(params.memoryDir),
-        }),
-        canonicalUserOverride: params.userId,
-        maxTurnsOverride: params.config.memory.curator.maxTurns,
-      })
+      let memoryCuratorSucceeded = false
+      try {
+        const result = await runSubagentImpl({
+          agentType: 'memoryCurator',
+          prompt: buildDreamPrompt({
+            memoryDir: params.memoryDir,
+            transcriptDir: params.config.paths.sessions,
+            sessionIds,
+            memoryTree: await gatherDreamMemoryTree(params.memoryDir),
+          }),
+          canonicalUserOverride: params.userId,
+          maxTurnsOverride: params.config.memory.curator.maxTurns,
+        })
       // WorkerFailure (PR1.6): runSubagent now returns failures as
       // {kind:'failure', envelope} instead of throwing. For autoDream the
       // distinction matters: if the subagent didn't actually consolidate
@@ -211,13 +222,28 @@ async function executeAutoDreamInner(params: {
       // even though nothing was committed. Roll back the lock so the next
       // eligible turn can try again, and surface the failure so a calling
       // drain can log it.
-      if (result.kind === 'failure') {
-        await rollbackConsolidationLock(params.memoryDir, priorMtime)
-        const { reason, message } = result.envelope
-        console.error(`[auto-dream] subagent failed (${reason}): ${message}`)
-        return
+        if (result.kind === 'failure') {
+          const { reason, message } = result.envelope
+          console.error(`[auto-dream] memoryCurator failed (${reason}): ${message}`)
+        } else {
+          memoryCuratorSucceeded = true
+        }
+      } catch (error) {
+        console.error(`[auto-dream] memoryCurator failed: ${errorMessage(error)}`)
       }
-      await markConsolidationSucceeded(params.memoryDir)
+      await runSkillDreamPasses({
+        userId: params.userId,
+        cwd: process.cwd(),
+        sessionsDir: params.config.paths.sessions,
+        sessionIds,
+        lastConsolidatedAt,
+        maxTurns: params.config.memory.curator.maxTurns,
+      })
+      if (memoryCuratorSucceeded) {
+        await markConsolidationSucceeded(params.memoryDir)
+      } else {
+        await rollbackConsolidationLock(params.memoryDir, priorMtime)
+      }
     } catch (error) {
       await rollbackConsolidationLock(params.memoryDir, priorMtime)
       throw error
@@ -225,6 +251,116 @@ async function executeAutoDreamInner(params: {
   } finally {
     state.inProgressByUser.delete(params.userId)
   }
+}
+
+async function runSkillDreamPasses(params: {
+  userId: string
+  cwd: string
+  sessionsDir: string
+  sessionIds: string[]
+  lastConsolidatedAt: number
+  maxTurns?: number
+}): Promise<void> {
+  const workerRoles = getAllAgents()
+    .filter(role => role.kind === 'worker')
+    .sort((left, right) => String(left.agentType).localeCompare(String(right.agentType)))
+
+  for (const role of workerRoles) {
+    const transcriptPaths = await gatherForkTranscriptPathsForRole({
+      sessionsDir: params.sessionsDir,
+      sessionIds: params.sessionIds,
+      role,
+      since: params.lastConsolidatedAt,
+    })
+    if (transcriptPaths.length === 0) {
+      continue
+    }
+    try {
+      const result = await runSubagentImpl({
+        agentType: 'skillCurator',
+        prompt: buildSkillCuratorPrompt({
+          userId: params.userId,
+          role,
+          transcriptPaths,
+          visibleSkills: await gatherDreamVisibleSkills({
+            cwd: params.cwd,
+            userId: params.userId,
+            role,
+          }),
+        }),
+        canonicalUserOverride: params.userId,
+        maxTurnsOverride: params.maxTurns,
+      })
+      logDreamSubagentFailure('skillCurator', result)
+    } catch (error) {
+      console.error(`[auto-dream] skillCurator failed for ${role.agentType}: ${errorMessage(error)}`)
+    }
+  }
+
+  try {
+    const result = await runSubagentImpl({
+      agentType: 'skillConsolidator',
+      prompt: buildSkillConsolidatorPrompt({
+        userId: params.userId,
+        userSkills: await gatherDreamUserSkillsFull({
+          cwd: params.cwd,
+          userId: params.userId,
+        }),
+      }),
+      canonicalUserOverride: params.userId,
+      maxTurnsOverride: params.maxTurns,
+    })
+    logDreamSubagentFailure('skillConsolidator', result)
+  } catch (error) {
+    console.error(`[auto-dream] skillConsolidator failed: ${errorMessage(error)}`)
+  }
+}
+
+async function gatherForkTranscriptPathsForRole(params: {
+  sessionsDir: string
+  sessionIds: string[]
+  role: Role
+  since: number
+}): Promise<string[]> {
+  const paths: string[] = []
+  const prefix = `${params.role.agentType}-`
+  for (const sessionId of params.sessionIds) {
+    const forksDir = path.join(params.sessionsDir, sessionId, 'forks')
+    let entries
+    try {
+      entries = await readdir(forksDir, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        continue
+      }
+      throw error
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith('.jsonl')) {
+        continue
+      }
+      const filePath = path.join(forksDir, entry.name)
+      if (params.since !== 0) {
+        const fileStat = await stat(filePath)
+        if (fileStat.mtimeMs <= params.since) {
+          continue
+        }
+      }
+      paths.push(filePath)
+    }
+  }
+  return paths.sort((left, right) => left.localeCompare(right))
+}
+
+function logDreamSubagentFailure(agentType: AgentType, result: Awaited<ReturnType<RunSubagentFn>>): void {
+  if (result.kind === 'failure') {
+    const { reason, message } = result.envelope
+    console.error(`[auto-dream] ${agentType} failed (${reason}): ${message}`)
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
