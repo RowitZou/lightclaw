@@ -418,6 +418,12 @@ export class AskUserQuestionCoordinator {
 
 const SELECT_NAME_PREFIX = 'q'
 const OTHER_NAME_SUFFIX = '_other'
+// Canonical label for the system-appended "其它" option. Single-select
+// dropdowns in Feishu V2 cannot be un-selected once picked, so a user who
+// accidentally picks A has no way to switch to "none of the above" without
+// this synthetic last option. Multi-select likewise gets it so users can
+// explicitly add "Other (see text)" alongside picks.
+const OTHER_OPTION_LABEL = '其它'
 
 function selectName(index: number): string {
   return `${SELECT_NAME_PREFIX}${index}`
@@ -469,6 +475,12 @@ export function buildAskUserCard(input: {
         headerLines.push(`- ${labelBold}`)
       }
     }
+    // System-appended "其它" — user can pick this when none of the model's
+    // options fit, and explain in the "其它说明" input below. Without this
+    // option, a user who accidentally picks A has no UI to "un-pick" (V2
+    // single-select can't unselect), forcing the ambiguous "selected A but
+    // also filled other text" state the user reported on 2026-05-23.
+    headerLines.push(`- **${OTHER_OPTION_LABEL}** — 都不合适时选这个，并在下方"${OTHER_OPTION_LABEL}说明"里填详细`)
     formElements.push({
       tag: 'markdown',
       content: headerLines.join('\n'),
@@ -492,10 +504,19 @@ export function buildAskUserCard(input: {
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
       placeholder: { tag: 'plain_text', content: '请选择' },
-      options: question.options.map((option, optionIndex) => ({
-        text: { tag: 'plain_text', content: option.label },
-        value: String(optionIndex),
-      })),
+      options: [
+        ...question.options.map((option, optionIndex) => ({
+          text: { tag: 'plain_text', content: option.label },
+          value: String(optionIndex),
+        })),
+        // Synthetic "其它" appended at index `question.options.length` so its
+        // value doesn't collide with any model-provided option. parseFormValue
+        // recognises this exact value and resolves to OTHER_OPTION_LABEL.
+        {
+          text: { tag: 'plain_text', content: OTHER_OPTION_LABEL },
+          value: String(question.options.length),
+        },
+      ],
     })
     // Per-question optional Other slot. Bound by name to this specific
     // question (q<i>_other) so multi-question cards have no ambiguity about
@@ -507,7 +528,7 @@ export function buildAskUserCard(input: {
     formElements.push({
       tag: 'input',
       name: otherName(index),
-      label: { tag: 'plain_text', content: '其它说明（选项不够时填这里，可不填）' },
+      label: { tag: 'plain_text', content: `${OTHER_OPTION_LABEL}说明（选了"${OTHER_OPTION_LABEL}"或想补充时填这里，可不填）` },
       input_type: 'multiline_text',
       placeholder: { tag: 'plain_text', content: '可选：选项不能完全表达时,在此补充' },
     })
@@ -672,7 +693,15 @@ function parseFormValue(
       return { ok: false, reason: 'malformed' }
     }
     const selectedLabels: string[] = []
+    // Synthetic Other option's value is `String(question.options.length)` —
+    // appended in buildAskUserCard so users have an explicit "none of the
+    // above" escape hatch in the dropdown.
+    const otherSyntheticValue = String(question.options.length)
     for (const rawIndex of selectedIndexes) {
+      if (rawIndex === otherSyntheticValue || rawIndex === OTHER_OPTION_LABEL) {
+        selectedLabels.push(OTHER_OPTION_LABEL)
+        continue
+      }
       // Primary path: the value we set on each option is `String(optionIndex)`
       // ("0" / "1" / ...), so form_value normally carries the numeric string.
       const index = Number(rawIndex)

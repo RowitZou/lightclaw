@@ -78,18 +78,30 @@ test('buildAskUserCard emits a schema 2.0 card with per-question Other slots and
   const selectStatic = form.elements.find(el => el.tag === 'select_static') as {
     options: Array<{ text: { content: string }; value: string }>
   }
+  // dropdown options = model's options + system-appended "其它" at the end
+  // (gives users an explicit "none of the above" pick since V2 single-select
+  // can't be un-picked once chosen; 2026-05-23 dogfood).
   assert.deepEqual(
     selectStatic.options.map(o => o.text.content),
-    ['A', 'B'],
-    'dropdown options should carry the bare label, not "label - description"',
+    ['A', 'B', '其它'],
+    'dropdown options: bare labels + appended 其它',
+  )
+  // 其它's value is `String(question.options.length)` so it doesn't collide
+  // with any model option's "0"/"1"/... value.
+  assert.equal(
+    selectStatic.options[selectStatic.options.length - 1]!.value,
+    '2',
+    'synthetic 其它 value = String(question.options.length)',
   )
   const firstQuestionMd = form.elements.find(el => el.tag === 'markdown') as { content: string }
   // The options markdown block is ALWAYS rendered (not gated on
   // hasDescriptions) so even when the dropdown clips long labels, the full
-  // label + optional description are visible above.
+  // label + optional description are visible above. 其它 also appears as the
+  // last bullet so users know to pick it for "none of the above".
   assert.match(firstQuestionMd.content, /\*\*选项：\*\*/)
   assert.match(firstQuestionMd.content, /\*\*A\*\*/)
   assert.match(firstQuestionMd.content, /\*\*B\*\* — second/)
+  assert.match(firstQuestionMd.content, /\*\*其它\*\* — 都不合适/)
 
   // V2 buttons live in a column_set inside the form, with the callback value
   // at behaviors[0].value (the V1 top-level `value` field is no longer the
@@ -208,6 +220,69 @@ test('parseFormValue falls back to label match when raw is not a numeric index',
   const answers = await pending
   assert.deepEqual(answers[0]!.selectedLabels, ['选项 B'])
   assert.equal(response.toast.type, 'success')
+})
+
+test('picking the synthetic 其它 option resolves to selectedLabels: ["其它"] + otherText', async () => {
+  // 2026-05-23 dogfood: user reported that once they accidentally picked A
+  // there's no way to "un-pick" in V2 single-select. Solution: append a
+  // synthetic "其它" as the last option so users can switch from A → 其它
+  // and put their real intent in the free-text input. parseFormValue must
+  // recognise the synthetic value (String(question.options.length)) and
+  // resolve to OTHER_OPTION_LABEL.
+  const pending = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_other_pick',
+    abortSignal: new AbortController().signal,
+    questions: [{
+      header: 'Pick',
+      question: 'Pick',
+      options: [{ label: 'A' }, { label: 'B' }],
+      defaultOptionIndex: 0,
+    }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+  await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'submit',
+    // q0 = "2" = synthetic 其它 (options.length = 2), q0_other = freetext
+    formValue: { q0: '2', q0_other: '都不对，应该是 C' },
+  })
+  const answers = await pending
+  assert.deepEqual(answers[0]!.selectedLabels, ['其它'])
+  assert.equal(answers[0]!.otherText, '都不对，应该是 C')
+  assert.equal(answers[0]!.byTimeoutDefault, false)
+})
+
+test('multi-select: 其它 can be combined with model options', async () => {
+  // Picking ["Read", "其它"] → user wants Read AND signals "plus something
+  // not in the listed options, see otherText". Single default doesn't
+  // pre-fill multi-select dropdown but 其它 still appears as a pickable
+  // option at the end.
+  const pending = coord.askAndAwait({
+    sessionId: 'feishu:dm:oc_chat',
+    turnId: 'toolu_multi_other',
+    abortSignal: new AbortController().signal,
+    questions: [{
+      header: 'Tools',
+      question: 'Pick tools',
+      options: [{ label: 'Read' }, { label: 'Edit' }],
+      multiSelect: true,
+      defaultOptionIndex: 0,
+    }],
+  })
+  const id = sender.lastAskId()
+  await waitForRegistration(id)
+  await coord.handleCardAction({
+    kind: 'lightclaw_askuser',
+    id,
+    action: 'submit',
+    formValue: { q0: ['0', '2'], q0_other: 'also need Grep' },
+  })
+  const answers = await pending
+  assert.deepEqual(answers[0]!.selectedLabels, ['Read', '其它'])
+  assert.equal(answers[0]!.otherText, 'also need Grep')
 })
 
 test('parseFormValue: missing q key for a question with defaultOptionIndex resolves to the default', async () => {
