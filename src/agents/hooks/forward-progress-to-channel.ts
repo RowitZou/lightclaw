@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index.js'
 import { getSessionId } from '../../state.js'
 import { getSignalRouter } from '../../signal-bus/router.js'
 import type { AgentSignal } from '../../signal-bus/types.js'
@@ -68,7 +69,11 @@ async function handleProgressSignal(signal: AgentSignal): Promise<void> {
 
 function formatProgress(payload: AgentSignal<'progress'>['payload']): string {
   const breadcrumb = formatBreadcrumb(payload.chainPath)
-  const body = `Progress: ${payload.completedCount}/${payload.totalCount} completed - ${payload.milestoneLabel}`
+  const body = t('channel.progress.completed', {
+    completed: payload.completedCount,
+    total: payload.totalCount,
+    label: payload.milestoneLabel,
+  })
   return breadcrumb ? `${breadcrumb} ${body}` : body
 }
 

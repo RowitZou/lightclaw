@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { t } from '../../i18n/index.js'
 import { parseFeishuSessionId, type ParsedFeishuSessionId } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import {
@@ -233,7 +234,7 @@ export class AskUserQuestionCoordinator {
   async handleCardAction(action: AskUserCardAction): Promise<FeishuCardActionResponse> {
     const pending = this.pendingById.get(action.id)
     if (!pending) {
-      return { toast: { type: 'warning', content: '这张问询卡片已经失效' } }
+      return { toast: { type: 'warning', content: t('channel.askuser.toast.expired') } }
     }
     if (
       pending.requesterOpenId &&
@@ -248,7 +249,7 @@ export class AskUserQuestionCoordinator {
       return {
         toast: {
           type: 'warning',
-          content: '只有发起这次问询的成员可以操作此卡片',
+          content: t('channel.askuser.toast.notOperator'),
         },
       }
     }
@@ -259,9 +260,15 @@ export class AskUserQuestionCoordinator {
       // re-render and the card flickers back to the form (2026-05-23 dogfood:
       // "确认卡片出现了一瞬间，然后又变回了选择卡片", reproducible even with a
       // freshly-sent card so countdown ticks are NOT the cause).
-      const cancelCard = buildFinalCard('已取消', '本次问询未提交。')
+      const cancelCard = buildFinalCard(
+        t('channel.askuser.cancelled.title.byUser'),
+        t('channel.askuser.cancelled.body'),
+      )
       await this.consumePending(action.id, 'cancel', undefined, { skipFinalPatch: true })
-      return { toast: { type: 'info', content: '已取消' }, card: rawCard(cancelCard) }
+      return {
+        toast: { type: 'info', content: t('channel.askuser.toast.cancelled') },
+        card: rawCard(cancelCard),
+      }
     }
     // Diagnostic log: form_value shape is the surface most prone to V1/V2
     // mismatch. Capping at 500 chars keeps stderr readable. Remove once
@@ -279,24 +286,27 @@ export class AskUserQuestionCoordinator {
         return {
           toast: {
             type: 'warning',
-            content: '请先在每个下拉框做出选择再提交',
+            content: t('channel.askuser.toast.missingSelection'),
           },
         }
       }
-      return { toast: { type: 'error', content: '提交异常，请重试' } }
+      return { toast: { type: 'error', content: t('channel.askuser.toast.submitError') } }
     }
     // Same atomic-replace rationale as cancel: V2 form submit must include the
     // new card in the callback response, otherwise Feishu re-renders the form
     // after our async patch lands and the answered card flickers off.
     const answeredCard = buildAnsweredCard({
-      title: '✅ 已确认',
-      intro: '用户已确认以下选择',
+      title: t('channel.askuser.answered.title'),
+      intro: t('channel.askuser.answered.intro'),
       template: 'green',
       questions: pending.questions,
       answers: parsed.answers,
     })
     await this.consumePending(action.id, 'user', parsed.answers, { skipFinalPatch: true })
-    return { toast: { type: 'success', content: '已提交' }, card: rawCard(answeredCard) }
+    return {
+      toast: { type: 'success', content: t('channel.askuser.toast.submitted') },
+      card: rawCard(answeredCard),
+    }
   }
 
   async abortBySession(sessionId: string): Promise<void> {
@@ -349,8 +359,8 @@ export class AskUserQuestionCoordinator {
       runtime?.resolve?.(answers)
       if (!opts.skipFinalPatch) {
         await this.patchFinal(pending, buildAnsweredCard({
-          title: '✅ 已确认',
-          intro: '用户已确认以下选择',
+          title: t('channel.askuser.answered.title'),
+          intro: t('channel.askuser.answered.intro'),
           template: 'green',
           questions: pending.questions,
           answers,
@@ -365,8 +375,8 @@ export class AskUserQuestionCoordinator {
         runtime?.resolve?.(defaults)
         if (!opts.skipFinalPatch) {
           await this.patchFinal(pending, buildAnsweredCard({
-            title: '⏰ 已超时，已采用默认',
-            intro: '用户未及时回复，已采用默认选项',
+            title: t('channel.askuser.timeout.withDefault.title'),
+            intro: t('channel.askuser.timeout.withDefault.intro'),
             template: 'orange',
             questions: pending.questions,
             answers: defaults,
@@ -375,7 +385,10 @@ export class AskUserQuestionCoordinator {
       } else {
         runtime?.reject?.(new Error('timeout-no-default'))
         if (!opts.skipFinalPatch) {
-          await this.patchFinal(pending, buildFinalCard('⏰ 已超时', '没有安全默认选项，本次问询已取消。'))
+          await this.patchFinal(pending, buildFinalCard(
+            t('channel.askuser.timeout.noDefault.title'),
+            t('channel.askuser.timeout.noDefault.body'),
+          ))
         }
       }
       return
@@ -386,7 +399,12 @@ export class AskUserQuestionCoordinator {
     if (!opts.skipFinalPatch) {
       await this.patchFinal(
         pending,
-        buildFinalCard(mode === 'stop' ? '已取消（/stop 中断）' : '已取消', '本次问询未提交。'),
+        buildFinalCard(
+          mode === 'stop'
+            ? t('channel.askuser.cancelled.title.byStop')
+            : t('channel.askuser.cancelled.title.byUser'),
+          t('channel.askuser.cancelled.body'),
+        ),
       )
     }
   }
@@ -418,12 +436,17 @@ export class AskUserQuestionCoordinator {
 
 const SELECT_NAME_PREFIX = 'q'
 const OTHER_NAME_SUFFIX = '_other'
-// Canonical label for the system-appended "其它" option. Single-select
-// dropdowns in Feishu V2 cannot be un-selected once picked, so a user who
-// accidentally picks A has no way to switch to "none of the above" without
-// this synthetic last option. Multi-select likewise gets it so users can
-// explicitly add "Other (see text)" alongside picks.
-const OTHER_OPTION_LABEL = '其它'
+// Canonical label for the system-appended "Other" option, resolved through
+// i18n at render time. Single-select dropdowns in Feishu V2 cannot be
+// un-selected once picked, so a user who accidentally picks A has no way to
+// switch to "none of the above" without this synthetic last option.
+// Multi-select likewise gets it so users can explicitly add "Other (see
+// text)" alongside picks. parseFormValue's defensive label-matching path
+// reads the same getter so a Feishu lang switch can't desync the
+// round-trip — both sides resolve at the same call time.
+function otherOptionLabel(): string {
+  return t('channel.askuser.otherOption.label')
+}
 
 function selectName(index: number): string {
   return `${SELECT_NAME_PREFIX}${index}`
@@ -452,6 +475,7 @@ export function buildAskUserCard(input: {
   //    Server-side, Feishu surfaces it as `event.action.value`, so existing
   //    transport-ws extraction continues to work.
   const formElements: Record<string, unknown>[] = []
+  const otherLabel = otherOptionLabel()
   input.questions.forEach((question, index) => {
     // Feishu V2 select_static dropdown clips long option text on one line with
     // ellipsis (2026-05-23 dogfood: first "下拉框里的选项过长会被省略" — moved
@@ -465,7 +489,7 @@ export function buildAskUserCard(input: {
       `**Q${index + 1} / ${escapeLarkMd(question.header)}**`,
       escapeLarkMd(question.question),
       '',
-      '**选项：**',
+      t('channel.askuser.optionsListHeader'),
     ]
     for (const option of question.options) {
       const labelBold = `**${escapeLarkMd(option.label)}**`
@@ -475,12 +499,14 @@ export function buildAskUserCard(input: {
         headerLines.push(`- ${labelBold}`)
       }
     }
-    // System-appended "其它" — user can pick this when none of the model's
-    // options fit, and explain in the "其它说明" input below. Without this
+    // System-appended "Other" — user can pick this when none of the model's
+    // options fit, and explain in the per-question input below. Without this
     // option, a user who accidentally picks A has no UI to "un-pick" (V2
     // single-select can't unselect), forcing the ambiguous "selected A but
     // also filled other text" state the user reported on 2026-05-23.
-    headerLines.push(`- **${OTHER_OPTION_LABEL}** — 都不合适时选这个，并在下方"${OTHER_OPTION_LABEL}说明"里填详细`)
+    headerLines.push(
+      `- **${otherLabel}** — ${t('channel.askuser.otherOption.hint', { otherLabel })}`,
+    )
     formElements.push({
       tag: 'markdown',
       content: headerLines.join('\n'),
@@ -503,17 +529,17 @@ export function buildAskUserCard(input: {
     formElements.push({
       tag: question.multiSelect ? 'multi_select_static' : 'select_static',
       name: selectName(index),
-      placeholder: { tag: 'plain_text', content: '请选择' },
+      placeholder: { tag: 'plain_text', content: t('channel.askuser.selectPlaceholder') },
       options: [
         ...question.options.map((option, optionIndex) => ({
           text: { tag: 'plain_text', content: option.label },
           value: String(optionIndex),
         })),
-        // Synthetic "其它" appended at index `question.options.length` so its
+        // Synthetic "Other" appended at index `question.options.length` so its
         // value doesn't collide with any model-provided option. parseFormValue
-        // recognises this exact value and resolves to OTHER_OPTION_LABEL.
+        // recognises this exact value and resolves to the i18n "Other" label.
         {
-          text: { tag: 'plain_text', content: OTHER_OPTION_LABEL },
+          text: { tag: 'plain_text', content: otherLabel },
           value: String(question.options.length),
         },
       ],
@@ -528,9 +554,9 @@ export function buildAskUserCard(input: {
     formElements.push({
       tag: 'input',
       name: otherName(index),
-      label: { tag: 'plain_text', content: `${OTHER_OPTION_LABEL}说明（选了"${OTHER_OPTION_LABEL}"或想补充时填这里，可不填）` },
+      label: { tag: 'plain_text', content: t('channel.askuser.otherInput.label', { otherLabel }) },
       input_type: 'multiline_text',
-      placeholder: { tag: 'plain_text', content: '可选：选项不能完全表达时,在此补充' },
+      placeholder: { tag: 'plain_text', content: t('channel.askuser.otherInput.placeholder') },
     })
   })
   formElements.push({
@@ -542,7 +568,7 @@ export function buildAskUserCard(input: {
         elements: [{
           tag: 'button',
           name: 'askuser_submit',
-          text: { tag: 'plain_text', content: '提交' },
+          text: { tag: 'plain_text', content: t('channel.askuser.button.submit') },
           type: 'primary',
           form_action_type: 'submit',
           behaviors: [{
@@ -557,7 +583,7 @@ export function buildAskUserCard(input: {
         elements: [{
           tag: 'button',
           name: 'askuser_cancel',
-          text: { tag: 'plain_text', content: '取消' },
+          text: { tag: 'plain_text', content: t('channel.askuser.button.cancel') },
           type: 'default',
           form_action_type: 'submit',
           behaviors: [{
@@ -573,7 +599,12 @@ export function buildAskUserCard(input: {
     config: { wide_screen_mode: true },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: `LightClaw 请你拍板（限时 ${Math.round(ASK_USER_TIMEOUT_MS / 60_000)} 分钟）` },
+      title: {
+        tag: 'plain_text',
+        content: t('channel.askuser.cardTitle', {
+          minutes: Math.round(ASK_USER_TIMEOUT_MS / 60_000),
+        }),
+      },
     },
     body: {
       elements: [{
@@ -605,11 +636,13 @@ function buildAnsweredCard(input: {
     }
     const selections = answer.selectedLabels.length > 0
       ? answer.selectedLabels.map(label => escapeLarkMd(label)).join('、')
-      : '_(未选)_'
-    const tag = answer.byTimeoutDefault ? '默认' : '选择'
+      : t('channel.askuser.answer.unselected')
+    const tag = answer.byTimeoutDefault
+      ? t('channel.askuser.answer.label.default')
+      : t('channel.askuser.answer.label.user')
     lines.push(`- **${tag}**：${selections}`)
     if (answer.otherText) {
-      lines.push(`- **其它**：${escapeLarkMd(answer.otherText)}`)
+      lines.push(`- **${t('channel.askuser.answer.label.other')}**：${escapeLarkMd(answer.otherText)}`)
     }
     lines.push('')
   })
@@ -697,9 +730,10 @@ function parseFormValue(
     // appended in buildAskUserCard so users have an explicit "none of the
     // above" escape hatch in the dropdown.
     const otherSyntheticValue = String(question.options.length)
+    const otherLabel = otherOptionLabel()
     for (const rawIndex of selectedIndexes) {
-      if (rawIndex === otherSyntheticValue || rawIndex === OTHER_OPTION_LABEL) {
-        selectedLabels.push(OTHER_OPTION_LABEL)
+      if (rawIndex === otherSyntheticValue || rawIndex === otherLabel) {
+        selectedLabels.push(otherLabel)
         continue
       }
       // Primary path: the value we set on each option is `String(optionIndex)`

@@ -15,6 +15,7 @@ import {
 import { atomicWriteJson } from './config-io.js'
 import type { ConfigFileShape } from './config-file.js'
 import { resolveStartupHome } from './config-bootstrap.js'
+import { t } from './i18n/index.js'
 import { expandHomePath, setLightclawHomeOverride } from './paths.js'
 
 export type WizardAnswers = {
@@ -164,7 +165,7 @@ export async function runConfigWizard(input: {
       }),
     )
     if (configureFeishu) {
-      note(FEISHU_SETUP_NOTE, 'Feishu bot setup')
+      note(t('wizard.feishu.setupNote'), 'Feishu bot setup')
       feishu = {
         appId: await promptNonEmptyText('App ID'),
         appSecret: await promptNonEmptyPassword('App Secret'),
@@ -220,39 +221,6 @@ async function promptValue<T>(promise: Promise<T | symbol>): Promise<T> {
   return value
 }
 
-const FEISHU_SETUP_NOTE = `配置飞书机器人 —— 在「飞书开放平台」开发者后台完成以下 5 步：
-
-【1】创建应用
-  open.feishu.cn/app → 创建「企业自建应用」
-  「添加应用能力」→ 启用「机器人」
-  「凭证与基础信息」记下 App ID、App Secret
-
-【2】开通权限（「权限管理」按描述搜索勾选）
-  核心（必开）：
-    im:message
-    im:message:send_as_bot
-    im:message.p2p_msg:readonly
-    im:message.group_at_msg:readonly
-    im:resource
-    contact:user.base:readonly
-  选配（仅在要用飞书云文档工具时）：
-    drive:drive   docx:document   sheets:spreadsheet   wiki:wiki:readonly
-
-【3】配置事件与回调（「事件与回调」页，两个标签都设为长连接）
-  「事件配置」标签：订阅方式选「使用长连接」，添加事件：
-    im.message.receive_v1
-    im.message.recalled_v1
-  「回调配置」标签：订阅方式选「使用长连接」，启用：
-    卡片回传交互（card.action.trigger）
-  注：Encrypt Key / Verification Token 留空；若长连接选项不亮，
-      先启动 LightClaw 把长连接建上再回控制台刷新。
-
-【4】发布（「版本管理与发布」）
-  创建版本 → 可用范围含自己（或全员）→ 发布
-  权限 / 事件 / 回调的改动都必须发布后才生效。
-
-【5】开始使用
-  单聊：在飞书里主动给机器人发一条消息
-  群聊：把机器人拉进群
-
-下面把 App ID / App Secret 填进来：`
+// Body content lives in src/i18n/locales.ts under `wizard.feishu.setupNote`.
+// Resolved at call time (not module-load) so the active locale picked by
+// `setLang(config.lang)` in initializeApp() takes effect.

@@ -15,6 +15,11 @@ afterEach(() => {
   resetForwardProgressToChannelForTest()
 })
 
+// Progress body comes from t('channel.progress.completed', …); cn is the
+// default locale, so assertions read the cn rendering. Locale is intentionally
+// not toggled here to avoid leaking global setLang() into sibling test files
+// that run in the same process under node:test's default scheduling.
+
 test('forward-progress-to-channel forwards progress signals through the channel reply callback', async () => {
   const replies: string[] = []
   await runWithSessionContext(session('s-progress'), async () => {
@@ -30,7 +35,7 @@ test('forward-progress-to-channel forwards progress signals through the channel 
     }, 10_000)
   })
 
-  assert.deepEqual(replies, ['Progress: 1/3 completed - Run tests'])
+  assert.deepEqual(replies, ['进度：1/3 已完成 — Run tests'])
 })
 
 test('forward-progress-to-channel rate-limits progress per session', async () => {
@@ -47,8 +52,8 @@ test('forward-progress-to-channel rate-limits progress per session', async () =>
   })
 
   assert.deepEqual(replies, [
-    'Progress: 1/3 completed - A',
-    'Progress: 3/3 completed - C',
+    '进度：1/3 已完成 — A',
+    '进度：3/3 已完成 — C',
   ])
 })
 
@@ -79,7 +84,7 @@ test('worker-triggered progress is rendered with a chain breadcrumb', async () =
   })
 
   assert.deepEqual(replies, [
-    '[main → webSearcher] Progress: 1/3 completed - fetch alphaXiv top-2',
+    '[main → webSearcher] 进度：1/3 已完成 — fetch alphaXiv top-2',
   ])
 })
 
@@ -106,7 +111,7 @@ test('main-triggered progress (chainPath of length 1) stays unprefixed', async (
     })
   })
 
-  assert.deepEqual(replies, ['Progress: 2/2 completed - wrap up'])
+  assert.deepEqual(replies, ['进度：2/2 已完成 — wrap up'])
 })
 
 test('forward-progress-to-channel unregisters active context after end turn', async () => {

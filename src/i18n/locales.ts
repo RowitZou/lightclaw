@@ -392,6 +392,72 @@ export const LOCALES = {
     'channel.cardCallbackUnknown': '卡片回调格式暂未识别。请直接回复"是"或"否"。',
     'channel.failure.transcriptAborted': '本轮已被 /stop 中止。',
 
+    // ---- AskUserQuestion card ----
+    'channel.askuser.cardTitle': 'LightClaw 请你拍板（限时 {minutes} 分钟）',
+    'channel.askuser.optionsListHeader': '**选项：**',
+    'channel.askuser.otherOption.label': '其它',
+    'channel.askuser.otherOption.hint': '都不合适时选这个，并在下方"{otherLabel}说明"里填详细',
+    'channel.askuser.selectPlaceholder': '请选择',
+    'channel.askuser.otherInput.label': '{otherLabel}说明（选了"{otherLabel}"或想补充时填这里，可不填）',
+    'channel.askuser.otherInput.placeholder': '可选：选项不能完全表达时,在此补充',
+    'channel.askuser.button.submit': '提交',
+    'channel.askuser.button.cancel': '取消',
+    'channel.askuser.answered.title': '✅ 已确认',
+    'channel.askuser.answered.intro': '用户已确认以下选择',
+    'channel.askuser.timeout.withDefault.title': '⏰ 已超时，已采用默认',
+    'channel.askuser.timeout.withDefault.intro': '用户未及时回复，已采用默认选项',
+    'channel.askuser.timeout.noDefault.title': '⏰ 已超时',
+    'channel.askuser.timeout.noDefault.body': '没有安全默认选项，本次问询已取消。',
+    'channel.askuser.cancelled.title.byUser': '已取消',
+    'channel.askuser.cancelled.title.byStop': '已取消（/stop 中断）',
+    'channel.askuser.cancelled.body': '本次问询未提交。',
+    'channel.askuser.toast.expired': '这张问询卡片已经失效',
+    'channel.askuser.toast.notOperator': '只有发起这次问询的成员可以操作此卡片',
+    'channel.askuser.toast.cancelled': '已取消',
+    'channel.askuser.toast.missingSelection': '请先在每个下拉框做出选择再提交',
+    'channel.askuser.toast.submitError': '提交异常，请重试',
+    'channel.askuser.toast.submitted': '已提交',
+    'channel.askuser.answer.label.default': '默认',
+    'channel.askuser.answer.label.user': '选择',
+    'channel.askuser.answer.label.other': '其它',
+    'channel.askuser.answer.unselected': '_(未选)_',
+
+    // ---- Channel progress forwarding ----
+    'channel.progress.completed': '进度：{completed}/{total} 已完成 — {label}',
+
+    // ---- Config wizard ----
+    'wizard.feishu.setupNote':
+      '配置飞书机器人 —— 在「飞书开放平台」开发者后台完成以下 5 步：\n\n' +
+      '【1】创建应用\n' +
+      '  open.feishu.cn/app → 创建「企业自建应用」\n' +
+      '  「添加应用能力」→ 启用「机器人」\n' +
+      '  「凭证与基础信息」记下 App ID、App Secret\n\n' +
+      '【2】开通权限（「权限管理」按描述搜索勾选）\n' +
+      '  核心（必开）：\n' +
+      '    im:message\n' +
+      '    im:message:send_as_bot\n' +
+      '    im:message.p2p_msg:readonly\n' +
+      '    im:message.group_at_msg:readonly\n' +
+      '    im:resource\n' +
+      '    contact:user.base:readonly\n' +
+      '  选配（仅在要用飞书云文档工具时）：\n' +
+      '    drive:drive   docx:document   sheets:spreadsheet   wiki:wiki:readonly\n\n' +
+      '【3】配置事件与回调（「事件与回调」页，两个标签都设为长连接）\n' +
+      '  「事件配置」标签：订阅方式选「使用长连接」，添加事件：\n' +
+      '    im.message.receive_v1\n' +
+      '    im.message.recalled_v1\n' +
+      '  「回调配置」标签：订阅方式选「使用长连接」，启用：\n' +
+      '    卡片回传交互（card.action.trigger）\n' +
+      '  注：Encrypt Key / Verification Token 留空；若长连接选项不亮，\n' +
+      '      先启动 LightClaw 把长连接建上再回控制台刷新。\n\n' +
+      '【4】发布（「版本管理与发布」）\n' +
+      '  创建版本 → 可用范围含自己（或全员）→ 发布\n' +
+      '  权限 / 事件 / 回调的改动都必须发布后才生效。\n\n' +
+      '【5】开始使用\n' +
+      '  单聊：在飞书里主动给机器人发一条消息\n' +
+      '  群聊：把机器人拉进群\n\n' +
+      '下面把 App ID / App Secret 填进来：',
+
     // ---- Tool errors (user-visible from tool_result) ----
     'tool.aborted': '工具执行在完成前被中断。',
     'tool.unknown': '未知工具：{name}',
@@ -803,6 +869,73 @@ export const LOCALES = {
     'channel.media.statusPending': 'pending (not yet read — you must call Read on this path to see the content)',
     'channel.cardCallbackUnknown': 'Unrecognized card callback shape. Please reply "yes" or "no" instead.',
     'channel.failure.transcriptAborted': 'This turn was aborted by /stop.',
+
+    // ---- AskUserQuestion card ----
+    'channel.askuser.cardTitle': 'LightClaw needs your call (timeout {minutes}m)',
+    'channel.askuser.optionsListHeader': '**Options:**',
+    'channel.askuser.otherOption.label': 'Other',
+    'channel.askuser.otherOption.hint': "pick this when nothing else fits, then explain in the \"{otherLabel}\" note below",
+    'channel.askuser.selectPlaceholder': 'Choose…',
+    'channel.askuser.otherInput.label': '{otherLabel} note (fill when picking "{otherLabel}" or to add context; optional)',
+    'channel.askuser.otherInput.placeholder': "Optional: add detail when the options can't capture your intent",
+    'channel.askuser.button.submit': 'Submit',
+    'channel.askuser.button.cancel': 'Cancel',
+    'channel.askuser.answered.title': '✅ Confirmed',
+    'channel.askuser.answered.intro': 'User confirmed the following choices',
+    'channel.askuser.timeout.withDefault.title': '⏰ Timed out — defaults applied',
+    'channel.askuser.timeout.withDefault.intro': 'User did not reply in time; the default options were applied',
+    'channel.askuser.timeout.noDefault.title': '⏰ Timed out',
+    'channel.askuser.timeout.noDefault.body': 'No safe default option was set; the request was cancelled.',
+    'channel.askuser.cancelled.title.byUser': 'Cancelled',
+    'channel.askuser.cancelled.title.byStop': 'Cancelled (interrupted by /stop)',
+    'channel.askuser.cancelled.body': 'This request was not submitted.',
+    'channel.askuser.toast.expired': 'This question card has expired',
+    'channel.askuser.toast.notOperator': 'Only the original requester can act on this card',
+    'channel.askuser.toast.cancelled': 'Cancelled',
+    'channel.askuser.toast.missingSelection': 'Pick an option in every dropdown before submitting',
+    'channel.askuser.toast.submitError': 'Submission failed; please try again',
+    'channel.askuser.toast.submitted': 'Submitted',
+    'channel.askuser.answer.label.default': 'default',
+    'channel.askuser.answer.label.user': 'choice',
+    'channel.askuser.answer.label.other': 'other',
+    'channel.askuser.answer.unselected': '_(unselected)_',
+
+    // ---- Channel progress forwarding ----
+    'channel.progress.completed': 'Progress: {completed}/{total} completed - {label}',
+
+    // ---- Config wizard ----
+    'wizard.feishu.setupNote':
+      'Configure the Feishu bot — complete these 5 steps in the Feishu Open Platform developer console:\n\n' +
+      '[1] Create the app\n' +
+      '  open.feishu.cn/app → create a "Custom App for your Enterprise"\n' +
+      '  "Add app capabilities" → enable "Bot"\n' +
+      '  "Credentials & Basic Info" → record App ID and App Secret\n\n' +
+      '[2] Enable scopes ("Permissions & Scopes", search by description)\n' +
+      '  Required (always on):\n' +
+      '    im:message\n' +
+      '    im:message:send_as_bot\n' +
+      '    im:message.p2p_msg:readonly\n' +
+      '    im:message.group_at_msg:readonly\n' +
+      '    im:resource\n' +
+      '    contact:user.base:readonly\n' +
+      '  Optional (only if you want the Feishu cloud doc tools):\n' +
+      '    drive:drive   docx:document   sheets:spreadsheet   wiki:wiki:readonly\n\n' +
+      '[3] Configure events & callbacks ("Events & Callbacks" page — set both tabs to long-connection)\n' +
+      '  "Event Configuration" tab: select "Use long connection", add events:\n' +
+      '    im.message.receive_v1\n' +
+      '    im.message.recalled_v1\n' +
+      '  "Callback Configuration" tab: select "Use long connection", enable:\n' +
+      '    card.action.trigger (card callback interactions)\n' +
+      '  Note: leave Encrypt Key / Verification Token blank; if the long-connection\n' +
+      '        option is greyed out, start LightClaw first so the long connection\n' +
+      '        is established, then refresh the console.\n\n' +
+      '[4] Publish ("Version Management & Release")\n' +
+      '  Create a version → set the visibility scope to include yourself (or everyone) → publish\n' +
+      '  Permission / event / callback changes only take effect after a new release.\n\n' +
+      '[5] Start using it\n' +
+      '  DM: open Feishu and send a message to the bot directly\n' +
+      '  Group: add the bot to a group chat\n\n' +
+      'Now enter App ID and App Secret below:',
 
     // ---- Tool errors ----
     'tool.aborted': 'Tool execution was aborted before completion.',
