@@ -646,7 +646,9 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
     t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
     t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
     t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
-    t('permission.feishu.fields.session', { id: escapeLarkMd(pending.sessionId) }),
+    // sessionId intentionally not shown — it's a machine identifier
+    // (`feishu:group:oc_xxx:ou_yyy`) that gives zero decision-relevant
+    // information to the user, who already sees the conversation they're in.
     '',
     '```',
     truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
@@ -771,7 +773,7 @@ function buildResolvedCard(
             t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
             t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
             t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
-            t('permission.feishu.fields.session', { id: escapeLarkMd(pending.sessionId) }),
+            // sessionId intentionally not shown — see buildApprovalCard comment.
             '',
             '```',
             truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),

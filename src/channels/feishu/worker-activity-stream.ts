@@ -3,10 +3,13 @@
 // When a worker emits an assistant text turn (via `query.ts`'s
 // `invocation.onAssistantTurn` callback), this module forwards the text
 // to the chat that initiated the chain — resolved from
-// `chainState.path[0].sessionId` — prefixed with a chain breadcrumb
-// (`[main → reviewer → coder] <text>`). The forward is one-way: user
-// replies in that chat enter via the normal Feishu inbound path and go
-// to main, never to the worker.
+// `chainState.path[0].sessionId` — prefixed with the LEAF actor's
+// product-language display name (`正在改代码｜<text>`). The full dispatch
+// chain (main → reviewer → coder) is internal scheduling and stays out of
+// view per the "user-no-detail-leak" principle.
+//
+// The forward is one-way: user replies in that chat enter via the normal
+// Feishu inbound path and go to main, never to the worker.
 //
 // `dispatched-agent.ts` builds a forwarder per dispatched worker and
 // installs it as `forkInvocationContext.onAssistantTurn`. Failure modes
@@ -23,6 +26,8 @@
 // alternative complicates the simple "see what your bot is doing in
 // the chat that asked it" mental model).
 
+import { t } from '../../i18n/index.js'
+import { resolveDisplayName } from '../../agents/role-display.js'
 import type { ChainState } from '../../signal-bus/chain-state.js'
 import { getFeishuSender } from './sender-registry.js'
 import { parseFeishuSessionId } from './routing.js'
@@ -38,7 +43,7 @@ export function buildWorkerActivityForwarder(input: {
   if (!rootNode) return undefined
   const parsed = parseFeishuSessionId(rootNode.sessionId)
   if (!parsed) return undefined
-  const breadcrumb = formatChainBreadcrumb(input.chainState)
+  const actor = formatLeafActor(input.chainState)
   const chatId = parsed.chatId
 
   return async (text: string) => {
@@ -47,7 +52,7 @@ export function buildWorkerActivityForwarder(input: {
     const sender = getFeishuSender()
     if (!sender) return
     try {
-      await sender.sendMarkdownTextToChatId(chatId, `${breadcrumb} ${trimmed}`)
+      await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
@@ -57,11 +62,12 @@ export function buildWorkerActivityForwarder(input: {
   }
 }
 
-export function formatChainBreadcrumb(chainState: ChainState): string {
-  // Path always starts with main (the orchestrator at index 0); each
-  // subsequent entry is one Dispatch hop downward. Render arrow-joined
-  // names so a 3-hop dispatch shows `[main → reviewer → coder]` for a
-  // coder text emission. Keeps the same format whether the dispatch is
-  // depth 1 (`[main → generalist]`) or depth 3.
-  return `[${chainState.path.map(node => node.role).join(' → ')}]`
+// Render only the LEAF actor (the role actually emitting the text) as a
+// product-language verb phrase ("正在改代码"). User-defined roles that omit
+// `displayName` fall back to a generic phrase rather than the raw agentType
+// (which would leak internal vocabulary).
+export function formatLeafActor(chainState: ChainState): string {
+  const leaf = chainState.path[chainState.path.length - 1]
+  if (!leaf) return t('channel.actor.fallback')
+  return resolveDisplayName(leaf.role) ?? t('channel.actor.fallback')
 }

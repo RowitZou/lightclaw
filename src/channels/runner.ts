@@ -459,7 +459,10 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: interjection queued for session ${mainSessionId} (size=${channelInterjectionQueue.size(mainSessionId)})\n`,
       )
-      await this.sendNotice(message, 'info', t('channel.interjection.acked'), 'plain_text')
+      // First-person ack ("记下了，我会...") reads as the bot speaking, so
+      // it belongs in the normal conversation stream rather than a
+      // third-person "LightClaw 提示" system notice card.
+      await this.sendReply(message, t('channel.interjection.acked'))
       return
     }
     // Write slashes (/mode, /model, /rules allow, /auth import, ...) that
@@ -479,7 +482,9 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: slash queued for in-flight session ${mainSessionId} (size=${channelPendingSlashQueue.size(mainSessionId)})\n`,
       )
-      await this.sendNotice(message, 'info', t('channel.slash.queued'), 'plain_text')
+      // Same reasoning as the interjection ack above — first-person reply
+      // belongs in the conversation stream, not a system notice card.
+      await this.sendReply(message, t('channel.slash.queued'))
       return
     }
     // Phase 27: mark in-flight BEFORE entering the lock so any concurrent

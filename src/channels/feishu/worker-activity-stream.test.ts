@@ -9,7 +9,7 @@ import {
 import type { FeishuSender } from './sender.js'
 import {
   buildWorkerActivityForwarder,
-  formatChainBreadcrumb,
+  formatLeafActor,
 } from './worker-activity-stream.js'
 
 function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -43,18 +43,24 @@ afterEach(() => {
   clearFeishuSender(stubSender([]))
 })
 
-test('formatChainBreadcrumb arrow-joins all roles in the chain path', () => {
+test('formatLeafActor returns the leaf role displayName, ignoring the dispatch chain above it', () => {
+  // Single-node chain (main only) — main has no displayName, so we fall
+  // back to the generic actor label. The hook layer never calls this for
+  // chainPath.length <= 1 (see forward-progress-to-channel.ts), but the
+  // function still has a defined return for defensiveness.
   assert.equal(
-    formatChainBreadcrumb(chain([{ role: 'main', sessionId: 'feishu:dm:c1' }])),
-    '[main]',
+    formatLeafActor(chain([{ role: 'main', sessionId: 'feishu:dm:c1' }])),
+    '正在执行任务',
   )
+  // Multi-hop chain — only the leaf displayName surfaces; the dispatch
+  // topology (main → reviewer → ...) stays out of view.
   assert.equal(
-    formatChainBreadcrumb(chain([
+    formatLeafActor(chain([
       { role: 'main', sessionId: 'feishu:dm:c1' },
       { role: 'reviewer', sessionId: 'dispatched-r1' },
       { role: 'coder', sessionId: 'dispatched-c1' },
     ])),
-    '[main → reviewer → coder]',
+    '正在改代码',
   )
 })
 
@@ -95,7 +101,7 @@ test('forwarder sends prefixed text to the chain-root chat', async () => {
   await forwarder('found 3 occurrences in src/foo.ts')
   assert.equal(calls.length, 1)
   assert.equal(calls[0]?.chatId, 'oc_root')
-  assert.equal(calls[0]?.text, '[main → reviewer → coder] found 3 occurrences in src/foo.ts')
+  assert.equal(calls[0]?.text, '正在改代码｜found 3 occurrences in src/foo.ts')
 })
 
 test('forwarder skips empty / whitespace-only text', async () => {
@@ -158,5 +164,5 @@ test('forwarder resolves group session chatId correctly', async () => {
   assert.ok(forwarder)
   await forwarder('group worker text')
   assert.equal(calls[0]?.chatId, 'oc_group_chat')
-  assert.equal(calls[0]?.text, '[main → coder] group worker text')
+  assert.equal(calls[0]?.text, '正在改代码｜group worker text')
 })

@@ -610,9 +610,12 @@ describe('ChannelRunner in-flight slash routing', () => {
         1,
         'write slash must be queued in the pending-slash queue',
       )
+      // The queued-ack is sent as a first-person plain reply (not a
+      // third-person system notice card) — first-person framing belongs in
+      // the conversation stream, not in a "LightClaw 提示" notice card.
       assert.ok(
-        strategy.notices.find(n => n.messageId === slashMessage.messageId),
-        'the user should get a queued-ack notice for the slash',
+        strategy.replies.find(r => r.messageId === slashMessage.messageId),
+        'the user should get a queued-ack reply for the slash',
       )
     } finally {
       // Cleanup so the in-flight marker / queue entry do not leak.

@@ -31,16 +31,21 @@ afterEach(() => {
 })
 
 describe('/status dispatch chain view', () => {
-  it('renders the empty chain state for the current user', async () => {
+  // The chain tree exposes internal scheduling structure (role / sessionId /
+  // depth / privilege-monotonic). It is admin-only — ordinary users have no
+  // decision use for it. These tests therefore run as admin; the "user gate"
+  // test below confirms a non-admin caller sees no chain section at all.
+
+  it('renders the empty chain state for an admin', async () => {
     await createUser('alice')
 
-    const output = await runStatus()
+    const output = await runStatus({ isAdmin: true })
 
     assert.match(output, /In-flight dispatch chains:/)
     assert.match(output, /No active chains\./)
   })
 
-  it('renders a single active dispatch chain for the current user', async () => {
+  it('renders a single active dispatch chain for an admin', async () => {
     await createUser('alice')
     const chainState = chain([
       ['main', 's-main', 'root', 1_000],
@@ -48,7 +53,7 @@ describe('/status dispatch chain view', () => {
     ])
     getSignalRouter().registerChainSession(chainState.chainId, 's-reviewer', chainState, 'alice')
     try {
-      const output = await runStatus()
+      const output = await runStatus({ isAdmin: true })
 
       assert.match(output, /Chain chain-alice-status/)
       assert.match(output, /\[0\] main@s-main/)
@@ -58,7 +63,7 @@ describe('/status dispatch chain view', () => {
     }
   })
 
-  it('renders a three-hop tree without leaking other users chains', async () => {
+  it('renders a three-hop tree for an admin without leaking other users chains', async () => {
     await createUser('alice')
     const alice = chain([
       ['main', 's-main', 'root', 1_000],
@@ -74,7 +79,7 @@ describe('/status dispatch chain view', () => {
     getSignalRouter().registerChainSession(alice.chainId, 's-coder', alice, 'alice')
     getSignalRouter().registerChainSession(bob.chainId, 'bob-s-coder', bob, 'bob')
     try {
-      const output = await runStatus()
+      const output = await runStatus({ isAdmin: true })
 
       assert.match(output, /└─ \[1\] reviewer@s-reviewer .*running/)
       assert.match(output, /   └─ \[2\] coder@s-coder .*running/)
@@ -85,9 +90,32 @@ describe('/status dispatch chain view', () => {
       getSignalRouter().unregisterChainSession(bob.chainId, 'bob-s-coder')
     }
   })
+
+  it('hides the chain section entirely from non-admin users (no leak of role / sessionId / depth)', async () => {
+    await createUser('alice')
+    const chainState = chain([
+      ['main', 's-main', 'root', 1_000],
+      ['reviewer', 's-reviewer', 'd1', 2_000],
+    ])
+    getSignalRouter().registerChainSession(chainState.chainId, 's-reviewer', chainState, 'alice')
+    try {
+      const output = await runStatus({ isAdmin: false })
+
+      // No "In-flight dispatch chains:" heading, no chain tree at all.
+      assert.doesNotMatch(output, /In-flight dispatch chains:/)
+      assert.doesNotMatch(output, /No active chains\./)
+      assert.doesNotMatch(output, /reviewer@s-reviewer/)
+      assert.doesNotMatch(output, /Chain chain-alice-status/)
+      // Sanity: the basic identity / mode / model / session lines are still
+      // rendered — the gate only suppresses the dispatch chain block.
+      assert.match(output, /You: alice/)
+    } finally {
+      getSignalRouter().unregisterChainSession(chainState.chainId, 's-reviewer')
+    }
+  })
 })
 
-async function runStatus(): Promise<string> {
+async function runStatus(opts: { isAdmin: boolean }): Promise<string> {
   const ctx = createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),
     model: 'claude-sonnet-4-6',
@@ -112,7 +140,7 @@ async function runStatus(): Promise<string> {
       messages: [],
       output,
       userId: 'alice',
-      isAdmin: false,
+      isAdmin: opts.isAdmin,
       isChannel: true,
       getActiveTools: () => [],
       setActiveTools() {},

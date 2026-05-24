@@ -6,6 +6,7 @@
 // first proactive push from the bot.
 
 import { t } from '../../i18n/index.js'
+import { classifyStartupReason } from './startup-reason.js'
 import { buildSystemNoticeCard } from './system-notice.js'
 
 export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Record<string, unknown> {
@@ -68,7 +69,11 @@ export function buildStartupFailureCard(input: {
     ? t('channel.welcome.startup.timeoutBody', { seconds: String(input.elapsedSeconds) })
     : t('channel.welcome.startup.failedBody', {
         seconds: String(input.elapsedSeconds),
-        reason: input.reason,
+        // Fold raw stderr-flavored reason (Docker / Rlaunch / image-readiness
+        // strings carrying ECONNREFUSED, brainctl exec failed, manifest
+        // unknown, etc.) into a product-language category before the user
+        // sees it. Raw reason still goes to stderr + admin diagnostics.
+        reason: classifyStartupReason(input.reason),
       })
   return buildSystemNoticeCard({
     kind: 'error',

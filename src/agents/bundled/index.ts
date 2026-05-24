@@ -44,6 +44,7 @@ export const BUNDLED_AGENTS: Role[] = [
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
+    displayName: { cn: '正在处理', en: 'working on it' },
   },
   {
     agentType: 'localExplorer',
@@ -53,6 +54,7 @@ export const BUNDLED_AGENTS: Role[] = [
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: localExplorerPrompt,
     kind: 'worker',
+    displayName: { cn: '正在查本地资料', en: 'searching local files' },
   },
   {
     agentType: 'webSearcher',
@@ -63,6 +65,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: webSearcherPrompt,
     kind: 'worker',
     outputContract: 'report',
+    displayName: { cn: '正在搜索互联网', en: 'searching the web' },
   },
   {
     agentType: 'feishuSecretary',
@@ -94,6 +97,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: feishuSecretaryPrompt,
     kind: 'worker',
     outputContract: 'report',
+    displayName: { cn: '正在处理飞书文档', en: 'working on Feishu docs' },
   },
   {
     agentType: 'coder',
@@ -107,6 +111,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: coderPrompt,
     kind: 'worker',
     outputContract: 'report',
+    displayName: { cn: '正在改代码', en: 'editing code' },
   },
   {
     agentType: 'archivist',
@@ -140,6 +145,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: archivistPrompt,
     kind: 'worker',
     outputContract: 'report',
+    displayName: { cn: '正在整理资料', en: 'organizing files' },
   },
   {
     agentType: 'reviewer',
@@ -153,6 +159,7 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: reviewerPrompt,
     kind: 'worker',
     outputContract: 'report',
+    displayName: { cn: '正在复核', en: 'reviewing' },
   },
   {
     agentType: 'memoryExtractor',

@@ -35,7 +35,7 @@ test('forward-progress-to-channel forwards progress signals through the channel 
     }, 10_000)
   })
 
-  assert.deepEqual(replies, ['进度：1/3 已完成 — Run tests'])
+  assert.deepEqual(replies, ['1/3 已完成 — Run tests'])
 })
 
 test('forward-progress-to-channel rate-limits progress per session', async () => {
@@ -52,12 +52,12 @@ test('forward-progress-to-channel rate-limits progress per session', async () =>
   })
 
   assert.deepEqual(replies, [
-    '进度：1/3 已完成 — A',
-    '进度：3/3 已完成 — C',
+    '1/3 已完成 — A',
+    '3/3 已完成 — C',
   ])
 })
 
-test('worker-triggered progress is rendered with a chain breadcrumb', async () => {
+test('worker-triggered progress renders only the leaf actor as a product-language verb phrase', async () => {
   const replies: string[] = []
   await runWithSessionContext(session('s-worker'), async () => {
     const ctx = hookContext(text => {
@@ -84,7 +84,7 @@ test('worker-triggered progress is rendered with a chain breadcrumb', async () =
   })
 
   assert.deepEqual(replies, [
-    '[main → webSearcher] 进度：1/3 已完成 — fetch alphaXiv top-2',
+    '正在搜索互联网｜1/3 已完成 — fetch alphaXiv top-2',
   ])
 })
 
@@ -111,7 +111,7 @@ test('main-triggered progress (chainPath of length 1) stays unprefixed', async (
     })
   })
 
-  assert.deepEqual(replies, ['进度：2/2 已完成 — wrap up'])
+  assert.deepEqual(replies, ['2/2 已完成 — wrap up'])
 })
 
 test('forward-progress-to-channel unregisters active context after end turn', async () => {

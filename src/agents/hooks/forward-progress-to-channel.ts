@@ -2,6 +2,7 @@ import { t } from '../../i18n/index.js'
 import { getSessionId } from '../../state.js'
 import { getSignalRouter } from '../../signal-bus/router.js'
 import type { AgentSignal } from '../../signal-bus/types.js'
+import { resolveDisplayName } from '../role-display.js'
 import type { Hook, HookContext } from './types.js'
 
 const RATE_LIMIT_MS = 5000
@@ -68,22 +69,30 @@ async function handleProgressSignal(signal: AgentSignal): Promise<void> {
 }
 
 function formatProgress(payload: AgentSignal<'progress'>['payload']): string {
-  const breadcrumb = formatBreadcrumb(payload.chainPath)
+  const actor = formatActor(payload.chainPath)
   const body = t('channel.progress.completed', {
     completed: payload.completedCount,
     total: payload.totalCount,
     label: payload.milestoneLabel,
   })
-  return breadcrumb ? `${breadcrumb} ${body}` : body
+  return actor ? `${actor}｜${body}` : body
 }
 
 // Worker-triggered progress arrives via this hook through the chain-root
-// (main) sessionId. Render the chain breadcrumb (`[main → webSearcher]`)
-// to match worker-activity-stream's prefix so users can attribute each
-// progress line. main-triggered progress (chainPath length 1) stays bare.
-function formatBreadcrumb(chainPath: readonly string[] | undefined): string {
+// (main) sessionId. We render only the LEAF actor — the role actually
+// emitting the progress — as a product-language verb phrase ("正在搜索互联网"),
+// not the full dispatch chain. Users care about the current action, not the
+// dispatcher tree above it; the chain topology is internal scheduling and
+// stays out of view per the "user-no-detail-leak" principle.
+//
+// main-triggered progress (chainPath length ≤ 1) stays bare — the user is
+// already talking to main directly and doesn't need a self-prefix.
+function formatActor(chainPath: readonly string[] | undefined): string {
   if (!chainPath || chainPath.length <= 1) {
     return ''
   }
-  return `[${chainPath.join(' → ')}]`
+  const leaf = chainPath[chainPath.length - 1]!
+  // User-defined roles may omit displayName — fall back to a generic label
+  // rather than the raw agentType (which would leak internal vocabulary).
+  return resolveDisplayName(leaf) ?? t('channel.actor.fallback')
 }

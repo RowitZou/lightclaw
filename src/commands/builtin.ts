@@ -662,7 +662,11 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
       }
     }
   }
-  if (userId) {
+  // Dispatch chain tree is admin-only — it surfaces internal scheduling
+  // structure (role / sessionId / depth / privilege-monotonic / chain ids)
+  // that ordinary users have no decision use for. Same admin/user split as
+  // the "Identities" block above; admin still sees the full tree.
+  if (ctx.isAdmin && userId) {
     lines.push('', ...formatDispatchChainStatus(getSignalRouter().getActiveChainsForUser(userId)))
   }
   lines.push('')

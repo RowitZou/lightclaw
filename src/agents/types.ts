@@ -64,4 +64,11 @@ export type Role = {
   // D. Lifecycle and output contract.
   outputContract?: OutputContract
   maxTurns?: number
+
+  // E. User-facing display name in active-verb form ("正在搜索互联网"). Used by
+  // the progress / worker-activity breadcrumb path. Optional — bundled workers
+  // fill it; user-defined roles may omit it and fall back to a generic label.
+  // Never use this in prompt body — the role's own systemPrompt is the source
+  // of identity for the model; displayName is purely surface text for the user.
+  displayName?: { cn: string; en: string }
 }
