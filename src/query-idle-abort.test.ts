@@ -91,6 +91,7 @@ function runQuery(
   sessionId: string,
   onTextDelta?: (text: string) => void,
   streamIdle?: { ttfbMs: number; interEventMs: number },
+  callerSignal?: AbortSignal,
 ) {
   const ctx = createSessionContext({
     cwd: '/tmp',
@@ -108,6 +109,7 @@ function runQuery(
       invocation: {
         systemPromptOverride: 'test system prompt',
         ...(onTextDelta ? { onTextDelta } : {}),
+        ...(callerSignal ? { signal: callerSignal } : {}),
       },
       messages: [createUserMessage('hello', null)],
       tools: [],
@@ -177,5 +179,48 @@ describe('query stream idle abort', () => {
         return true
       },
     )
+  })
+
+  it('propagates caller abort when caller fires concurrent with idle abort', async () => {
+    // Regression: the idle watcher tick has a ms-scale window where caller
+    // abort lands BETWEEN the tick's signal.aborted early-out and
+    // streamAbort.abort(), so both signals end up aborted by the time catch
+    // runs. Without caller precedence in catch, we'd re-throw IdleStreamError
+    // → isTransientError(true) → retry against the user's /stop intent.
+    const callerAC = new AbortController()
+    let calls = 0
+    setStreamChatForTest(((params: { signal?: AbortSignal }) => {
+      calls += 1
+      // The fake stream observes its combined signal aborting (the watcher's
+      // streamAbort fires first because ttfbMs/check interval are tiny) and
+      // races the caller abort into the SAME event-loop tick before the
+      // streamChatImpl throw reaches the catch block.
+      return (async function* (): AsyncGenerator<StreamEvent> {
+        await new Promise<void>((_resolve, reject) => {
+          params.signal?.addEventListener('abort', () => {
+            callerAC.abort()
+            reject(new Error('Request was aborted.'))
+          })
+        })
+      })()
+    }) as unknown as Parameters<typeof setStreamChatForTest>[0])
+
+    await assert.rejects(
+      runQuery(
+        'feishu:dm:idle-vs-caller',
+        undefined,
+        { ttfbMs: 5, interEventMs: 5 },
+        callerAC.signal,
+      ),
+      (error: unknown) => {
+        // Caller precedence: must NOT re-throw IdleStreamError even though
+        // streamAbort was the first aborter; the original AbortError
+        // propagates so isAbortError() catches it and retry is skipped.
+        assert.equal(error instanceof IdleStreamError, false)
+        return true
+      },
+    )
+    // No retry: caller intent wins, attempt-0 was the only attempt.
+    assert.equal(calls, 1)
   })
 })

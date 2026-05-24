@@ -712,6 +712,19 @@ export async function query(params: QueryParams): Promise<{
             stopEvent = event
           }
         } catch (error) {
+          // Caller signal (`/stop`, interjection auto-abort) takes precedence
+          // over the local idle watcher. Race: the watcher tick has a
+          // millisecond-scale window where caller abort lands BETWEEN the
+          // tick's own `signal.aborted` early-out and `streamAbort.abort()`,
+          // so both end up aborted. Without this precedence, that race
+          // re-throws IdleStreamError → `isTransientError(...) === true` →
+          // retries a user-stopped turn against the user's explicit intent.
+          // The classification is intentionally caller-first: if `/stop`
+          // fired, propagate the original AbortError so `isAbortError`
+          // catches it on the outer retry path and the turn ends honestly.
+          if (signal.aborted) {
+            throw error
+          }
           const reason = streamAbort.signal.reason
           if (streamAbort.signal.aborted && reason instanceof IdleStreamError) {
             throw reason
