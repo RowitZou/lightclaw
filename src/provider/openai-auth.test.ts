@@ -419,6 +419,31 @@ describe('openai-auth: processResponseStream', () => {
     assert.equal(stop.content[0]?.type, 'text')
   })
 
+  it('turns reasoning summary stream events into keepalive events', async () => {
+    const events = [
+      { type: 'response.reasoning_summary_part.added' },
+      { type: 'response.reasoning_summary_text.delta', delta: 'private reasoning' },
+      { type: 'response.output_text.delta', delta: 'final' },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 3 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+
+    assert.deepEqual(out.slice(0, 2).map(event => event.type), ['keepalive', 'keepalive'])
+    assert.equal(out[0]?.type === 'keepalive' ? out[0].reason : undefined, 'reasoning')
+    assert.equal(
+      out.some(event => event.type === 'text' && event.text.includes('private reasoning')),
+      false,
+    )
+    assert.equal(out[2]?.type, 'text')
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.stopReason, 'end_turn')
+    assert.deepEqual(stop.content, [{ type: 'text', text: 'final' }])
+  })
+
   it('surfaces input_tokens_details.cached_tokens as cache_read_input_tokens', async () => {
     // Bug 10 (2026-05-12 dogfood): Codex Responses returns prefix cache hits
     // under usage.input_tokens_details.cached_tokens; mapResponsesUsage used

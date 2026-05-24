@@ -1,5 +1,22 @@
 # LightClaw Runtime Safety Notes
 
+- **Stream idle abort (Phase 38, 2026-05-24).** `query.ts` wraps every
+  `streamChat()` call with a dual-threshold watchdog: TTFB
+  `config.streamIdle.ttfbMs` defaults to 90s, inter-event
+  `config.streamIdle.interEventMs` defaults to 30s. When either budget is
+  exceeded, it aborts the upstream request with `IdleStreamError`, writes a
+  `[stream-idle-abort] ... kind=<ttfb|inter-event>` stderr line, and reuses
+  the per-turn transient retry path. The existing `[ttfb]` line remains the
+  first-event observability marker; undici's transport timeout is only the
+  backstop now.
+- **Provider keepalive contract (Phase 38).** `StreamEvent { type:
+  'keepalive' }` is framework-internal only: `query.ts` refreshes the stream
+  idle clock and then continues, so keepalives must never become assistant
+  text, tool dispatch, transcript content, or channel output. Providers emit
+  keepalives for non-visible reasoning activity: `openai-auth` Responses
+  `response.reasoning_summary*`, OpenAI-compatible Chat Completions
+  `reasoning_content` / string `reasoning`, and Anthropic `thinking_delta`.
+  Do not prompt-engineer around this behavior; it is provider plumbing.
 - LocalRuntime is admin-only. When `runtime.backend = "local"`, paired non-admin users must not acquire a runtime; multi-user service must use DockerRuntime or RjobRuntime.
 - Do not add path-string workspace guards to tools, permission policy, OR runtime backends. Runtime safety comes from the LocalRuntime admin-only gate, Docker/Rjob isolation, read-only mounts, and the Phase 5 permission system. `toContainerPath` in docker.ts / rlaunch.ts accepts any absolute path post-normalize: workspace + mountTable hits get translated, everything else (`/tmp`, `/etc`, `/proc`, …) passes through as the container-local path so LayeredDataPlane's `exec-relay` layer runs the command inside the worker pod where it sees the image's own filesystem (e.g. container `/etc/passwd` is the image's, not the host's). Relative paths still throw — backends only legitimately see absolute paths. **Do not re-add the "Path is not within {RuntimeKind}Runtime workspace: …" guard**; that was leftover technical debt from 18ff987's sweep that this runtime-fs-cleanup phase completed.
 - **RlaunchRuntime never puts bulk bytes on the brainctl exec channel — in either direction.** brainctl exec is a control channel only; its websocket exec stream silently drops bytes on large payloads (the `9cafbdc` stdin incident: ~16% writeFile corruption; the 6 MB PDF stdout byte-mismatch dogfood bug). brainctl exec stdout therefore carries only control-shape data, never tool output:

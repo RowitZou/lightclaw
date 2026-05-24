@@ -123,7 +123,11 @@ type QueryParams = {
   forceFallbackInToolResult?: ReadonlySet<AttachmentKind>
 }
 
-const STREAM_IDLE_CHECK_INTERVAL_MS = 5_000
+let streamIdleCheckIntervalMs = 5_000
+
+export function setStreamIdleCheckIntervalForTest(ms: number | null): void {
+  streamIdleCheckIntervalMs = ms ?? 5_000
+}
 
 function streamIdleThresholds(
   config: LightClawConfig,
@@ -654,7 +658,7 @@ export async function query(params: QueryParams): Promise<{
           )
           streamAbort.abort(error)
           clearInterval(idleTick)
-        }, STREAM_IDLE_CHECK_INTERVAL_MS)
+        }, streamIdleCheckIntervalMs)
         try {
           for await (const event of streamChatImpl({
             config,

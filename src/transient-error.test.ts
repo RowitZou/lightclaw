@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { isTransientError } from './transient-error.js'
+import { IdleStreamError, isTransientError } from './transient-error.js'
 
 describe('isTransientError', () => {
   it('classifies network / undici / 5xx errors as transient', () => {
@@ -47,5 +47,15 @@ describe('isTransientError', () => {
 
   it('defaults a genuinely unrecognized error to transient (retry)', () => {
     assert.equal(isTransientError(new Error('something nobody has seen before')), true)
+  })
+
+  it('classifies stream idle aborts as transient', () => {
+    const error = new IdleStreamError({
+      kind: 'ttfb',
+      idleMs: 90_001,
+      model: 'test-model',
+      endpoint: 'test',
+    })
+    assert.equal(isTransientError(error), true)
   })
 })
