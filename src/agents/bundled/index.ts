@@ -104,11 +104,11 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'coder',
     whenToUse:
-      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. The subagent plans, edits, runs verification (typecheck / tests / build) via the verify skill, self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
+      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. The subagent plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
-      'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + verify skill + memory for project conventions).',
+      'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['verify', 'remember'],
+    skills: ['remember'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
     kind: 'worker',
@@ -142,7 +142,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'CancelDispatch',
       'UpdateDispatch',
     ],
-    skills: ['verify-env', 'remember'],
+    skills: ['remember'],
     reachableRoles: ['feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: archivistPrompt,
     kind: 'worker',
@@ -152,11 +152,11 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'reviewer',
     whenToUse:
-      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks via the verify skill (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
+      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
-      'Pre-delivery review specialist (read-only artifact survey; verify skill + memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
+      'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['verify', 'remember'],
+    skills: ['remember'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: reviewerPrompt,
     kind: 'worker',

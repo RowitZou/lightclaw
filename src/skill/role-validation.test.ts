@@ -20,7 +20,7 @@ afterEach(() => {
 test('wildcard role skills allow compatible skills', () => {
   assert.equal(
     isSkillCompatibleWithRole(
-      skill({ name: 'verify', allowedTools: ['Bash', 'Read'] }),
+      skill({ name: 'reader', allowedTools: ['Bash', 'Read'] }),
       role({ tools: ['*'], skills: ['*'] }),
     ),
     true,
@@ -72,8 +72,8 @@ test('skills requiring tools outside the role allowlist are filtered with a warn
   }
 
   const filtered = filterSkillsForRole(
-    [skill({ name: 'verify', allowedTools: ['Bash'] })],
-    role({ tools: ['Read'], skills: ['verify'] }),
+    [skill({ name: 'bash-flow', allowedTools: ['Bash'] })],
+    role({ tools: ['Read'], skills: ['bash-flow'] }),
   )
 
   assert.deepEqual(filtered, [])
@@ -100,11 +100,11 @@ test('missing role.skills hides the skill even when tools are present', () => {
 
 test('named role skills allow only matching skill names', () => {
   const remember = skill({ name: 'remember' })
-  const verify = skill({ name: 'verify' })
+  const skillify = skill({ name: 'skillify' })
   const main = role({ tools: ['*'], skills: ['remember'] })
 
   assert.equal(isSkillNameAllowedForRole(remember, main), true)
-  assert.equal(isSkillNameAllowedForRole(verify, main), false)
+  assert.equal(isSkillNameAllowedForRole(skillify, main), false)
 })
 
 test('per-user skill roles control name visibility', () => {
@@ -156,12 +156,12 @@ test('main and generalist bridge per-user skill names but still respect tool com
 })
 
 test('bundled skills keep literal role allowlist semantics', () => {
-  const verify = skill({ name: 'verify', source: 'builtin', roles: ['main'] })
-  const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'], skills: ['remember'] })
-  const coder = role({ agentType: 'coder', tools: ['*'], skills: ['verify'] })
+  const skillify = skill({ name: 'skillify', source: 'builtin', roles: ['generalist'] })
+  const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'], skills: ['skillify'] })
+  const generalist = role({ agentType: 'generalist', tools: ['*'], skills: ['remember'] })
 
-  assert.equal(isSkillNameAllowedForRole(verify, main), false)
-  assert.equal(isSkillNameAllowedForRole(verify, coder), true)
+  assert.equal(isSkillNameAllowedForRole(skillify, main), true)
+  assert.equal(isSkillNameAllowedForRole(skillify, generalist), false)
 })
 
 test('allowedTools must be visible to the role after worker blocks', () => {
@@ -187,36 +187,38 @@ test('filterSkillsForRole drops incompatible skills and warns once per drop', ()
 
   const filtered = filterSkillsForRole(
     [
-      skill({ name: 'verify', allowedTools: ['Read'] }),
+      skill({ name: 'reader', allowedTools: ['Read'] }),
       skill({ name: 'delegate', allowedTools: ['Dispatch'] }),
       skill({ name: 'hidden', allowedTools: ['Read'] }),
     ],
-    role({ kind: 'worker', tools: ['Read', 'Dispatch'], skills: ['verify', 'delegate'] }),
+    role({ kind: 'worker', tools: ['Read', 'Dispatch'], skills: ['reader', 'delegate'] }),
   )
 
-  assert.deepEqual(filtered.map(item => item.name), ['verify'])
+  assert.deepEqual(filtered.map(item => item.name), ['reader'])
   assert.equal(writes.length, 1)
   assert.match(writes[0] ?? '', /skipped "delegate" for role "test-role"/)
 })
 
-test('coder and reviewer can load the verify skill', () => {
-  const verify = skill({ name: 'verify', allowedTools: ['Bash', 'Read'] })
+test('coder and reviewer no longer expose scaffold verification skills', () => {
   const coder = BUNDLED_AGENTS.find(agent => agent.agentType === 'coder')
   const reviewer = BUNDLED_AGENTS.find(agent => agent.agentType === 'reviewer')
 
   assert.ok(coder)
   assert.ok(reviewer)
-  assert.deepEqual(filterSkillsForRole([verify], coder).map(item => item.name), ['verify'])
-  assert.deepEqual(filterSkillsForRole([verify], reviewer).map(item => item.name), ['verify'])
+  assert.deepEqual(coder.skills, ['remember'])
+  assert.deepEqual(reviewer.skills, ['remember'])
 })
 
-test('main role exposes remember but not verify', () => {
+test('main role exposes remember and skillify', () => {
   const remember = skill({ name: 'remember', allowedTools: ['MemoryWrite'] })
-  const verify = skill({ name: 'verify', allowedTools: ['Bash', 'Read'] })
+  const skillify = skill({ name: 'skillify', allowedTools: ['SkillWrite'] })
   const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
 
   assert.ok(main)
-  assert.deepEqual(filterSkillsForRole([remember, verify], main).map(item => item.name), ['remember'])
+  assert.deepEqual(filterSkillsForRole([remember, skillify], main).map(item => item.name), [
+    'remember',
+    'skillify',
+  ])
 })
 
 test('Phase 7.5 workers expose remember where requested', () => {
@@ -229,12 +231,11 @@ test('Phase 7.5 workers expose remember where requested', () => {
   }
 })
 
-test('archivist exposes verify-env and it stays Bash-scoped', () => {
-  const verifyEnv = skill({ name: 'verify-env', allowedTools: ['Bash'] })
+test('archivist only keeps remember from the bundled meta-skill set', () => {
   const archivist = BUNDLED_AGENTS.find(agent => agent.agentType === 'archivist')
 
   assert.ok(archivist)
-  assert.deepEqual(filterSkillsForRole([verifyEnv], archivist).map(item => item.name), ['verify-env'])
+  assert.deepEqual(archivist.skills, ['remember'])
 })
 
 function role(overrides: Partial<Role>): Role {

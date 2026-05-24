@@ -343,7 +343,7 @@ tools:                            # explicit tool list — wildcard \`['*']\` is
   - Grep
   - MemoryWrite
   - TodoWrite
-skills:                           # optional; bundled-only — \`verify\`, \`verify-env\`, \`remember\`
+skills:                           # optional; bundled-only — \`remember\`, \`skillify\`
   - remember
 kind: worker                      # 'orchestrator' | 'worker' | 'internal'; default 'worker'
 hooks:                            # optional; defaults to worker policy
@@ -362,7 +362,7 @@ Workflow ... (body becomes systemPrompt verbatim)
 - **\`tools\` cannot be \`['*']\`** — wildcard tools on a user-defined role is unbounded privilege; you must list each tool explicitly.
 - **\`tools\` cannot include \`Dispatch\`** — only bundled \`main\` / \`reviewer\` dispatch sub-roles. A user-defined role with \`Dispatch\` would let you bypass the bundled \`reachableRoles\` enforcement that protects the worker-to-worker dispatch graph.
 - **\`Bash\` + destructive heads forces ask** — if your user-defined role has \`'Bash'\`, destructive heads (\`rm\` / \`dd\` / \`sudo\` / shells / package runners / wrappers / command substitution) are routed through the framework permission ask flow even if you grant "always allow" on a previous turn.
-- **\`skills\` must be bundled** — only \`verify\`, \`verify-env\`, \`remember\` are loadable today. User-defined skills are a Phase 8+ feature.
+- **\`skills\` must be bundled** — only \`remember\`, \`skillify\` are loadable today. User-defined skills are a Phase 8+ feature.
 - **\`mcpServers\` is admin-owned** — Phase 7.5 ships only admin-owned roles under \`<lightclawHome>/roles/\`, so the invariant is vacuously enforced; Phase 8+ per-user role paths will activate \`'mcp-not-allowed-for-non-admin-user-defined'\` directly.
 
 Files that violate any of the above fail loudly on cold start (daemon does not start) or are silently ignored on hot reload (warning logged, previous version kept).

@@ -464,7 +464,6 @@ function formatRoleSkillsSection(skills: readonly string[], role: Role): string 
   return [
     '## Available Skills',
     body,
-    'Use skills naturally: when a skill description matches the task, call UseSkill automatically before proceeding.',
   ].join('\n')
 }
 
