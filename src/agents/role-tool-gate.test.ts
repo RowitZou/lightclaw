@@ -4,6 +4,8 @@ import test from 'node:test'
 import type { Tool } from '../tool.js'
 import { BUNDLED_AGENTS } from './bundled/index.js'
 import { resolveRolePolicy } from './role-presets.js'
+import { filterSkillsForRole } from '../skill/role-validation.js'
+import { bundledSkills } from '../skill/bundled/index.js'
 import {
   deriveCanUseTool,
   filterToolsByRoleVisibility,
@@ -29,6 +31,10 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
   assert.deepEqual(await gate(tool('AskUserQuestion'), {}), {
     behavior: 'deny',
     reason: 'AskUserQuestion is not available to subagents.',
+  })
+  assert.deepEqual(await gate(tool('SkillWrite'), {}), {
+    behavior: 'deny',
+    reason: 'SkillWrite is not available to subagents.',
   })
 })
 
@@ -184,6 +190,36 @@ test('Notify is reserved for main: blocked for every worker including wildcard /
   const orchestrator = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
   assert.equal((await orchestrator(tool('Notify'), {})).behavior, 'allow')
   assert.equal((await orchestrator(tool('AskUserQuestion'), {})).behavior, 'allow')
+  assert.equal((await orchestrator(tool('SkillWrite'), {})).behavior, 'allow')
+})
+
+test('SkillWrite and skillify are main-only', async () => {
+  const wildcardWorker = deriveCanUseTool(role({
+    kind: 'worker',
+    tools: ['*'],
+    skills: ['skillify'],
+  }))
+  assert.equal((await wildcardWorker(tool('SkillWrite'), {})).behavior, 'deny')
+
+  const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
+  assert.ok(main)
+  assert.equal(isToolVisibleToRole(main, 'SkillWrite'), true)
+  assert.equal(
+    filterSkillsForRole(bundledSkills, main).some(skill => skill.name === 'skillify'),
+    true,
+    'main should see skillify',
+  )
+
+  const worker = role({
+    kind: 'worker',
+    tools: ['*'],
+    skills: ['skillify'],
+  })
+  assert.equal(
+    filterSkillsForRole(bundledSkills, worker).some(skill => skill.name === 'skillify'),
+    false,
+    'worker should not see skillify because SkillWrite is blocked',
+  )
 })
 
 test('bundled dispatch matrix matches the role-to-role topology', () => {
@@ -237,6 +273,11 @@ test('every non-main bundled role is denied Notify (worker-blocked invariant)', 
       false,
       `${agent.agentType} should be denied Notify`,
     )
+    assert.equal(
+      isToolVisibleToRole(agent, 'SkillWrite'),
+      false,
+      `${agent.agentType} should be denied SkillWrite`,
+    )
   }
 })
 
@@ -267,10 +308,11 @@ test('filterToolsByRoleVisibility drops Feishu tools from main wildcard catalog'
 
 test('filterToolsByRoleVisibility drops user-escalation tools from worker even with wildcard tools', () => {
   const generalist = BUNDLED_AGENTS.find(a => a.agentType === 'generalist')!
-  const input = [tool('Bash'), tool('Read'), tool('Notify'), tool('AskUserQuestion'), tool('Dispatch')]
+  const input = [tool('Bash'), tool('Read'), tool('Notify'), tool('AskUserQuestion'), tool('SkillWrite'), tool('Dispatch')]
   const visible = filterToolsByRoleVisibility(generalist, input).map(t => t.name)
   assert.equal(visible.includes('Notify'), false, 'worker must not see Notify')
   assert.equal(visible.includes('AskUserQuestion'), false, 'worker must not see AskUserQuestion')
+  assert.equal(visible.includes('SkillWrite'), false, 'worker must not see SkillWrite')
 })
 
 function tool(name: string): Tool {

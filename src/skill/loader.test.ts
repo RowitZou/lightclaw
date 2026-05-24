@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { userSkillsRoot } from '../identity/paths.js'
+import { createUserMessage } from '../messages.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import {
   discoverSkills,
   discoverSkillsForUser,
@@ -217,6 +219,43 @@ describe('writeUserSkill', () => {
       const content = await buildRegisteredSkillInvocation('arg-skill', 'dataset.csv')
       assert.match(content ?? '', /Handle: dataset\.csv/)
       assert.doesNotMatch(content ?? '', /\$ARGUMENTS/)
+    })
+  })
+
+  it('replaces skillify session template variables when rendering the bundled invocation', async () => {
+    await withTempHome(async home => {
+      const sessionsDir = path.join(home, 'sessions')
+      const sessionId = 'skillify-session'
+      await mkdir(path.join(sessionsDir, sessionId), { recursive: true })
+      await writeFile(
+        path.join(sessionsDir, sessionId, 'session-memory.md'),
+        '# Session Working Memory\n\nThe user established a release checklist.\n',
+        'utf8',
+      )
+      await writeFile(
+        path.join(sessionsDir, sessionId, 'transcript.jsonl'),
+        `${JSON.stringify(createUserMessage('以后 release 都先跑 pnpm test，再开 PR。'))}\n`,
+        'utf8',
+      )
+      const ctx = createSessionContext({
+        cwd: process.cwd(),
+        model: 'claude-sonnet-4-6',
+        sessionsDir,
+        memoryDir: path.join(home, 'memory', 'alice'),
+        currentUserId: 'alice',
+        sessionId,
+      })
+
+      await runWithSessionContext(ctx, async () => {
+        await refreshSkillRegistry(process.cwd(), 'alice')
+        const content = await buildRegisteredSkillInvocation('skillify')
+        assert.match(content ?? '', /# Skillify for alice/)
+        assert.match(content ?? '', /The user established a release checklist/)
+        assert.match(content ?? '', /以后 release 都先跑 pnpm test/)
+        assert.doesNotMatch(content ?? '', /\{\{sessionMemory\}\}/)
+        assert.doesNotMatch(content ?? '', /\{\{userMessages\}\}/)
+        assert.doesNotMatch(content ?? '', /\{\{userDescriptionBlock\}\}/)
+      })
     })
   })
 })

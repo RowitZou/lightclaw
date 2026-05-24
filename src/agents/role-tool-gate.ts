@@ -14,6 +14,7 @@ const BLOCKED_WORKER_TOOLS = new Set([
   // through the wildcard naturally.
   'Notify',
   'AskUserQuestion',
+  'SkillWrite',
 ])
 
 const FEISHU_RESERVED_TOOLS = new Set([

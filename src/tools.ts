@@ -34,6 +34,7 @@ import { memoryMoveTool } from './tools/memory-move.js'
 import { memoryWriteAtTool } from './tools/memory-write-at.js'
 import { memoryWriteTool } from './tools/memory-write.js'
 import { sendFileTool } from './tools/send-file.js'
+import { skillWriteTool } from './tools/skill-write.js'
 import { sleepTool } from './tools/sleep.js'
 import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
@@ -69,6 +70,7 @@ export const builtinTools = [
   memoryDeleteTool,
   memoryWriteTool,
   sendFileTool,
+  skillWriteTool,
   sleepTool,
   useSkillTool,
   todoWriteTool,

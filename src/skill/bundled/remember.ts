@@ -3,11 +3,12 @@ import type { LoadedSkill } from '../types.js'
 export const rememberSkill: LoadedSkill = {
   name: 'remember',
   description: [
-    'Persist or review durable facts the user wants remembered later.',
-    'TRIGGER when the user explicitly says remember / do not forget / save this preference, or asks to organize durable memory.',
-    'SKIP when the user is only narrating context without asking to preserve it, or when the fact is temporary.',
+    'Persist or review durable facts the user wants remembered across sessions — what / when / who / which / a preference / a decision.',
+    'TRIGGER when the user explicitly says remember / do not forget / 记一下 / save this preference, or hands over a fact worth preserving.',
+    'SKIP when the request is about how to run a recurring workflow (that is the `skillify` skill), or when the fact is temporary.',
   ].join('\n'),
-  whenToUse: "The requester clearly wants a durable memory saved or reviewed — either explicitly ('remember that ...', '记一下 ...') or implicitly when the request hands over a fact / preference / decision worth preserving across sessions.",
+  whenToUse:
+    "Use when the requester wants a durable FACT saved or reviewed — what / when / who / which / a preference / a decision / a constraint. Explicit ('remember that …', '记一下 …') or implicit when the request hands over a fact worth preserving across sessions. Skip if the request is about HOW to run a recurring workflow (use `skillify` instead) or if the content is temporary task state.",
   allowedTools: ['MemoryRead', 'MemoryWrite', 'Read', 'Grep', 'Glob'],
   source: 'builtin',
   filePath: 'builtin:remember',

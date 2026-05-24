@@ -1,3 +1,10 @@
+import path from 'node:path'
+
+import { readSessionMemory } from '../memory/session-memory.js'
+import { getCurrentSessionContext } from '../session-context.js'
+import { loadTranscriptFile } from '../session/storage.js'
+import type { Message, UserContentBlock } from '../types.js'
+import { toolResultContentToText } from '../types.js'
 import { discoverSkillsForUser, loadSkillBody } from './loader.js'
 import type { LoadedSkill, SkillMeta } from './types.js'
 
@@ -50,10 +57,84 @@ export async function buildRegisteredSkillInvocation(
     sections.push(`Skill arguments:\n${args.trim()}`)
   }
 
-  sections.push(replaceSkillArguments(loadedSkill.body.trim(), args))
+  sections.push(await replaceSkillTemplateVariables(
+    replaceSkillArguments(loadedSkill.body.trim(), args),
+  ))
   return sections.join('\n\n')
 }
 
 function replaceSkillArguments(body: string, args?: string): string {
   return body.replaceAll('$ARGUMENTS', args?.trim() ?? '')
+}
+
+async function replaceSkillTemplateVariables(body: string): Promise<string> {
+  if (!body.includes('{{')) {
+    return body
+  }
+
+  const context = await buildSkillTemplateContext()
+  return body
+    .replaceAll('{{sessionMemory}}', context.sessionMemory)
+    .replaceAll('{{userMessages}}', context.userMessages)
+    .replaceAll('{{userDescriptionBlock}}', context.userDescriptionBlock)
+}
+
+async function buildSkillTemplateContext(): Promise<{
+  sessionMemory: string
+  userMessages: string
+  userDescriptionBlock: string
+}> {
+  const session = getCurrentSessionContext()
+  if (!session) {
+    return {
+      sessionMemory: '[empty]',
+      userMessages: '[unavailable outside a session]',
+      userDescriptionBlock: 'for this user',
+    }
+  }
+
+  const [sessionMemory, messages] = await Promise.all([
+    readSessionMemory(session.sessionId, session.sessionsDir),
+    loadTranscriptFile(path.join(session.sessionsDir, session.sessionId, 'transcript.jsonl')),
+  ])
+
+  return {
+    sessionMemory: sessionMemory.trim() || '[empty]',
+    userMessages: formatUserMessages(messages),
+    userDescriptionBlock: session.currentUserId ? `for ${session.currentUserId}` : 'for this user',
+  }
+}
+
+function formatUserMessages(messages: Message[]): string {
+  const lines = messages
+    .filter((message): message is Extract<Message, { type: 'user' }> => message.type === 'user')
+    .map((message, index) => {
+      const text = userContentToText(message.message.content).trim()
+      return text.length > 0 ? `${index + 1}. ${text}` : ''
+    })
+    .filter(Boolean)
+
+  return lines.length > 0 ? lines.join('\n\n') : '[empty]'
+}
+
+function userContentToText(content: string | UserContentBlock[]): string {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  return content
+    .map(block => {
+      if (block.type === 'text') {
+        return block.text
+      }
+      if (block.type === 'image') {
+        return `[Image: ${block.source.mediaType}]`
+      }
+      if (block.type === 'document') {
+        return `[Document: ${block.source.mediaType}]`
+      }
+      return `[Tool result]\n${toolResultContentToText(block.content)}`
+    })
+    .filter(Boolean)
+    .join('\n')
 }
