@@ -25,13 +25,20 @@ export function formatBackgroundExecResultBlock(
     tailParts.push(`stderr:\n${outputTail.stderrTail.trimEnd()}`)
   }
 
+  const lostNote = snapshot.status === 'lost'
+    ? `\nstatus="lost" means the wrapper exited without writing an exit code, typically
+because the sandbox runtime aborted or restarted mid-run. Re-running is usually
+safe; inspect the workspace first if the command was an in-place mutation
+(rename, partial write).\n`
+    : ''
+
   return `<background-exec-result ${attrs.join(' ')}>
 A background command you started has finished.
 Command: ${snapshot.command}
 Output file: ${snapshot.outFile}
 ${snapshot.errFile !== snapshot.outFile ? `Error file: ${snapshot.errFile}\n` : ''}--- last output ---
 ${tailParts.join('\n\n') || '[no output captured]'}
-</background-exec-result>
+${lostNote}</background-exec-result>
 
 \`Read\` the output file for the full logs if you need more than the tail above.
 Report the outcome to the user if they are waiting on it, or use it to continue
