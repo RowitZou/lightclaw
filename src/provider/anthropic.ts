@@ -373,6 +373,20 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
           continue
         }
 
+        // Anthropic Messages stream emits `event: ping` as a transport
+        // heartbeat (analogous to OpenAI Responses' `event: keepalive`).
+        // Without forwarding it as a framework keepalive, query.ts's idle
+        // clock counts only business events and a long extended-thinking
+        // turn could falsely trip the inter-event watchdog. This is
+        // defense-in-depth: dogfood goes through newapi (which may or
+        // may not relay ping through its proxy), but when LightClaw
+        // talks directly to Anthropic, ping is a real wire-level signal
+        // and must reset the idle clock.
+        if (part.type === 'ping') {
+          yield { type: 'keepalive', reason: 'transport' }
+          continue
+        }
+
         switch (part.type) {
           case 'message_start': {
             const message = isRecord(part.message) ? part.message : undefined

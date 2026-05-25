@@ -419,6 +419,36 @@ describe('openai-auth: processResponseStream', () => {
     assert.equal(stop.content[0]?.type, 'text')
   })
 
+  // 2026-05-25 dogfood/probe: OpenAI Responses emits server-side
+  // `event: keepalive` with `data: {"type":"keepalive","sequence_number":N}`
+  // every ~30s when no business event flows. Without forwarding it as a
+  // framework keepalive, query.ts's idle clock counts only business
+  // events and aborts legal long reasoning at the inter-event threshold.
+  // Pin the passthrough: a keepalive payload must yield exactly one
+  // `{type:'keepalive', reason:'transport'}` framework event and no
+  // text / tool output / stop event.
+  it('forwards OpenAI keepalive payload as framework keepalive', async () => {
+    const events = [
+      { type: 'keepalive', sequence_number: 215 },
+      { type: 'response.output_text.delta', delta: 'hello' },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 1 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+
+    assert.equal(out[0]?.type, 'keepalive')
+    assert.equal(
+      out[0]?.type === 'keepalive' ? out[0].reason : undefined,
+      'transport',
+    )
+    assert.equal(out[1]?.type, 'text')
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.deepEqual(stop.content, [{ type: 'text', text: 'hello' }])
+  })
+
   it('turns reasoning summary stream events into keepalive events', async () => {
     const events = [
       { type: 'response.reasoning_summary_part.added' },

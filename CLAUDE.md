@@ -13,10 +13,24 @@
   'keepalive' }` is framework-internal only: `query.ts` refreshes the stream
   idle clock and then continues, so keepalives must never become assistant
   text, tool dispatch, transcript content, or channel output. Providers emit
-  keepalives for non-visible reasoning activity: `openai-auth` Responses
-  `response.reasoning_summary*`, OpenAI-compatible Chat Completions
-  `reasoning_content` / string `reasoning`, and Anthropic `thinking_delta`.
-  Do not prompt-engineer around this behavior; it is provider plumbing.
+  keepalives from two sources, both yielded as the same framework event:
+  - **reasoning-derived (`reason:'reasoning'`)** — `openai-auth` Responses
+    `response.reasoning_summary*`, OpenAI-compatible Chat Completions
+    `reasoning_content` / string `reasoning`, and Anthropic
+    `thinking_delta`. These mark non-visible reasoning activity.
+  - **transport-derived (`reason:'transport'`)** — wire-level heartbeats the
+    upstream server emits when no business event flows: `openai-auth`
+    `event:keepalive` (probed 2026-05-25 at ~30s cadence; `data` carries
+    `{type:'keepalive', sequence_number:N}`, SDK passes through with
+    `event.type === 'keepalive'`), and Anthropic `ping`. Forwarding these
+    keeps the idle clock anchored to wire activity rather than business
+    events — without it, long legal hidden reasoning trips the inter-event
+    watchdog as false hung, exactly the 2026-05-25 dogfood false-positive.
+  `openai-auth` overrides `Provider.idleTimeouts` to `35s/35s`: ~30s keepalive
+  cadence + ~5s grace, tight enough that a real proxy/TCP stall (no
+  heartbeat received) trips abort fast. Other providers fall through to
+  `config.streamIdle` global defaults (90s/30s). Do not prompt-engineer
+  around any of this — it is provider plumbing.
 - LocalRuntime is admin-only. When `runtime.backend = "local"`, paired non-admin users must not acquire a runtime; multi-user service must use DockerRuntime or RjobRuntime.
 - Do not add path-string workspace guards to tools, permission policy, OR runtime backends. Runtime safety comes from the LocalRuntime admin-only gate, Docker/Rjob isolation, read-only mounts, and the Phase 5 permission system. `toContainerPath` in docker.ts / rlaunch.ts accepts any absolute path post-normalize: workspace + mountTable hits get translated, everything else (`/tmp`, `/etc`, `/proc`, …) passes through as the container-local path so LayeredDataPlane's `exec-relay` layer runs the command inside the worker pod where it sees the image's own filesystem (e.g. container `/etc/passwd` is the image's, not the host's). Relative paths still throw — backends only legitimately see absolute paths. **Do not re-add the "Path is not within {RuntimeKind}Runtime workspace: …" guard**; that was leftover technical debt from 18ff987's sweep that this runtime-fs-cleanup phase completed.
 - **RlaunchRuntime never puts bulk bytes on the brainctl exec channel — in either direction.** brainctl exec is a control channel only; its websocket exec stream silently drops bytes on large payloads (the `9cafbdc` stdin incident: ~16% writeFile corruption; the 6 MB PDF stdout byte-mismatch dogfood bug). brainctl exec stdout therefore carries only control-shape data, never tool output:

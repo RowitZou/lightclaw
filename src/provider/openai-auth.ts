@@ -378,6 +378,20 @@ export function createOpenAIAuthProvider(
       serverTools: { webSearch: false },
       promptCaching: false,
     },
+    // OpenAI Responses emits a server-side `event: keepalive` every ~30s
+    // whenever no business event flows on the SSE stream. Empirically
+    // confirmed 2026-05-25 across 4 independent probes: gaps of 30002 /
+    // 29989 / 30035 / 30299 ms — regular as a heartbeat. processResponseStream
+    // forwards those as `{type:'keepalive'}` so query.ts's idle clock
+    // resets on the wire signal, not just on business events. Net effect:
+    // legal reasoning silence is bounded by the keepalive cadence (~30s)
+    // and only a real upstream hang (proxy stall, TCP death) can exceed
+    // it. A 35s threshold gives ~5s grace over the heartbeat. TTFB
+    // matches because in practice first-byte arrives within 1-5s under
+    // healthy conditions, and a pre-first-event proxy stall (rare but
+    // observed at ~3% rate against 1091) restarts the request fast
+    // enough at 35s vs the previous 90s of pure waste.
+    idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const credentials = await getCredentials(authName)
       const client = new OpenAI({
@@ -569,6 +583,20 @@ export async function* processResponseStream(
   const toolUseBlocks: AssistantToolUseBlock[] = []
 
   for await (const event of stream) {
+    // OpenAI Responses emits a wire-level `event: keepalive` (with
+    // `data: {"type":"keepalive","sequence_number":N}`) every ~30s when
+    // there is no business event. Without forwarding this as a framework
+    // keepalive, query.ts's idle clock treats long hidden reasoning as
+    // a hung stream and aborts on inter-event 30s — exactly the
+    // false-positive that 2026-05-25 dogfood showed. Forwarding it
+    // resets the clock so true upstream hangs (no keepalive received)
+    // still trigger abort, but legal long reasoning rides through.
+    // Cast widens past the SDK's stale enum (type definition lags
+    // behind the live API; runtime existence confirmed by probe).
+    if ((event.type as string) === 'keepalive') {
+      yield { type: 'keepalive', reason: 'transport' }
+      continue
+    }
     if (event.type.startsWith('response.reasoning_summary')) {
       yield { type: 'keepalive', reason: 'reasoning' }
       continue
