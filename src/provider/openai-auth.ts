@@ -10,6 +10,7 @@ import type { FunctionTool } from 'openai/resources/responses/responses'
 import { getCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
 import type { OAuthEndpoint } from '../config.js'
+import { getSessionId } from '../state.js'
 import {
   toolResultContentToText,
   type AssistantContentBlock,
@@ -398,11 +399,16 @@ export function createOpenAIAuthProvider(
       const input = convertMessagesToResponsesInput(sanitizedMessages)
       const tools = convertToolsToResponsesShape(params.tools)
 
-      // Codex has no explicit cache_control breakpoint; the Responses API's
-      // automatic prefix-match cache keys on the leading byte stream. Putting
-      // the per-turn variable suffix at the END of `instructions` keeps the
-      // stable prefix (persona + memory + tool catalog) cache-hittable across
-      // turns even when the trailing TodoList block diverges.
+      // Codex has no explicit cache_control breakpoint; the Responses API does
+      // prefix-match caching automatically, but its cache is shard-local and
+      // requests with no stickiness hint route best-effort across shards —
+      // identical prefixes therefore miss for routing reasons (2026-05-25
+      // dogfood §3: cache_read sporadic mid-session, e.g. cR=47616 then cR=0
+      // 7s later on a monotonic-append next turn). Passing sessionId via
+      // `prompt_cache_key` pins all turns of one session to the same shard.
+      // Per-turn variable suffix still goes at the END of `instructions` so
+      // the stable prefix (persona + memory + tool catalog) stays cache-
+      // hittable across turns even when the trailing TodoList block diverges.
       const fullSystem = params.systemVariableSuffix
         ? `${params.system}\n\n${params.systemVariableSuffix}`
         : params.system
@@ -419,6 +425,7 @@ export function createOpenAIAuthProvider(
           : {}),
         stream: true,
         store: false,
+        prompt_cache_key: getSessionId(),
       }
 
       let stream: Awaited<ReturnType<typeof client.responses.create>>
