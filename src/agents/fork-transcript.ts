@@ -55,17 +55,33 @@ export async function persistForkTranscript(
   messages: Message[],
   forkContextEndIndex = 0,
 ): Promise<void> {
-  await mkdir(path.dirname(forkTranscriptPath), { recursive: true })
-  const meta: ForkTranscriptMeta = {
-    kind: 'fork-transcript-meta',
-    forkContextEndIndex,
+  try {
+    await mkdir(path.dirname(forkTranscriptPath), { recursive: true })
+    const meta: ForkTranscriptMeta = {
+      kind: 'fork-transcript-meta',
+      forkContextEndIndex,
+    }
+    const lines: string[] = [JSON.stringify(meta)]
+    for (const message of messages) {
+      lines.push(JSON.stringify(message))
+    }
+    const content = `${lines.join('\n')}\n`
+    await writeFile(forkTranscriptPath, content, 'utf8')
+    process.stderr.write(
+      `[fork-transcript] persisted path=${forkTranscriptPath} bytes=${content.length} messages=${messages.length}\n`,
+    )
+  } catch (error) {
+    // Diagnostic for the ghost-session class (2026-05-25 dogfood): a
+    // dispatched session shows ttfb logs but its forks/ dir never appears.
+    // The outer dispatched-agent .catch already writes one line without
+    // path context; this duplicates with path + errno so it is possible
+    // to tell whether mkdir / writeFile failed and on which sessionId.
+    const detail = error instanceof Error ? error.message : String(error)
+    process.stderr.write(
+      `[fork-transcript] persist failed path=${forkTranscriptPath} err=${detail}\n`,
+    )
+    throw error
   }
-  const lines: string[] = [JSON.stringify(meta)]
-  for (const message of messages) {
-    lines.push(JSON.stringify(message))
-  }
-  const content = `${lines.join('\n')}\n`
-  await writeFile(forkTranscriptPath, content, 'utf8')
 }
 
 /**
