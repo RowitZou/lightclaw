@@ -178,12 +178,14 @@ test('forwarder resolves group session chatId correctly', async () => {
 
 // Topic-group routing. The Phase 26 sessionId formula encodes threadId for
 // topic-group sessions (`feishu:group:<chatId>:<threadId>:<senderOpenId>`).
-// Without threading the sub-channel id to the sender, dispatched worker
-// activity falls back to `im.message.create` + receive_id_type=chat_id, and
-// Feishu's topic-group rule (every message must belong to a thread) creates
-// a NEW topic — the user sees worker observability splatter across fresh
-// topics instead of stacking under the one they opened.
-test('forwarder threads through topic-group sub-channel id', async () => {
+// Feishu's `im.message.create` does not accept `receive_id_type='thread_id'`
+// (only the 5-value legacy enum), and falling back to `chat_id` would
+// silently auto-create a NEW topic inside the same group — exactly what the
+// user-asked-here-stay-here invariant forbids. There is no reply anchor for
+// proactive worker observability either. The forwarder therefore drops the
+// message in topic groups entirely; the user sees nothing rather than a
+// flood of bot-spawned topics.
+test('forwarder drops messages in topic groups instead of creating new topics', async () => {
   const calls: SenderCall[] = []
   registerFeishuSender(stubSender(calls))
   const forwarder = buildWorkerActivityForwarder({
@@ -195,8 +197,5 @@ test('forwarder threads through topic-group sub-channel id', async () => {
   })
   assert.ok(forwarder)
   await forwarder('topic-group worker text')
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0]?.chatId, 'oc_group')
-  assert.equal(calls[0]?.threadId, 'omt_topic')
-  assert.equal(calls[0]?.text, '正在改代码｜topic-group worker text')
+  assert.equal(calls.length, 0, 'sender must not be invoked in topic groups')
 })

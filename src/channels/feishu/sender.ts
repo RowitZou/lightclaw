@@ -27,6 +27,37 @@ import { isFeishuGroupChatType } from './routing.js'
 import { resolveCurrentFeishuWorkspace } from './workspace/ops.js'
 import { getOrCreateUserUploadsFolder } from './workspace/uploads.js'
 
+// Topic-group create refusal. Feishu's `im.message.create` does not accept
+// `receive_id_type='thread_id'` — the API rejects with 400 / field
+// validation failed, options:[open_id,user_id,union_id,email,chat_id]. The
+// only other receive_id_type that could possibly target a topic-group chat
+// is `chat_id`, but that silently auto-creates a NEW topic inside the
+// group, which floods the user's group view. Reply paths are unaffected:
+// `im.message.reply` keys on the parent message_id and Feishu keeps the
+// reply in the parent's existing thread without us specifying anything.
+// What's left is "create without a reply anchor in a topic group" — there
+// is no safe API for it; we throw this sentinel error and let public
+// sender entries swallow it (best-effort, the same posture the rest of
+// observability / proactive-card paths already use for transient failures).
+class TopicCreateRefusedError extends Error {
+  readonly chatId: string
+  readonly threadId: string
+  constructor(chatId: string, threadId: string) {
+    super(
+      `Feishu topic-group create refused (chatId=${chatId} threadId=${threadId}): ` +
+        `im.message.create does not accept receive_id_type='thread_id', and falling back ` +
+        `to chat_id would auto-create a new topic`,
+    )
+    this.name = 'TopicCreateRefusedError'
+    this.chatId = chatId
+    this.threadId = threadId
+  }
+}
+
+function isTopicCreateRefused(err: unknown): err is TopicCreateRefusedError {
+  return err instanceof TopicCreateRefusedError
+}
+
 // Send retry coverage: capped exponential backoff that rides out short
 // proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
 // SNI-targeted resets recurring on the corp proxy, kicking in mid-burst and
@@ -157,6 +188,10 @@ export class FeishuSender {
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
+        if (isTopicCreateRefused(err)) {
+          process.stderr.write(`feishu send: ${err.message}; dropping message\n`)
+          return
+        }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
           payload: { kind: 'text', text: chunk },
@@ -207,6 +242,10 @@ export class FeishuSender {
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
+        if (isTopicCreateRefused(err)) {
+          process.stderr.write(`feishu send: ${err.message}; dropping message\n`)
+          return
+        }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
           payload: { kind: 'card', card },
@@ -242,6 +281,10 @@ export class FeishuSender {
         content: JSON.stringify(card),
       })
     } catch (err) {
+      if (isTopicCreateRefused(err)) {
+        process.stderr.write(`feishu send: ${err.message}; dropping card\n`)
+        return
+      }
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: this.replyRecipient(message.chatId, replyTarget, message.threadId),
         payload: { kind: 'card', card: card as Record<string, unknown> },
@@ -370,6 +413,10 @@ export class FeishuSender {
           content: JSON.stringify(card),
         })
       } catch (err) {
+        if (isTopicCreateRefused(err)) {
+          process.stderr.write(`feishu send: ${err.message}; dropping markdown push\n`)
+          return
+        }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
           payload: { kind: 'card', card },
@@ -412,6 +459,10 @@ export class FeishuSender {
       const messageId = response.data?.message_id
       return messageId ? { messageId } : {}
     } catch (err) {
+      if (isTopicCreateRefused(err)) {
+        process.stderr.write(`feishu send: ${err.message}; dropping card push\n`)
+        return {}
+      }
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
         payload: { kind: 'card', card: card as Record<string, unknown> },
@@ -469,14 +520,27 @@ export class FeishuSender {
         // Some Feishu tenants enforce a stricter cap (observed: 20 MB on
         // standard tier vs 30 MB on enterprise). Treat a too-large 4xx as
         // a soft signal to fall back to drive — same outcome as the
-        // explicit >30 MB branch. Other errors keep their original
-        // shape and propagate.
-        if (!isFileTooLargeError(error)) {
+        // explicit >30 MB branch.
+        //
+        // Topic-group refusal (no safe create routing) also falls through
+        // to drive upload: the drive path posts a markdown reply with the
+        // share link, which uses sendMarkdownText whose own reply→create
+        // path will succeed for the in-thread reply or, failing that,
+        // swallow refusal at its own guard. Dropping the file silently
+        // would lose user-visible content; the drive link is a real
+        // delivery surface.
+        if (!isFileTooLargeError(error) && !isTopicCreateRefused(error)) {
           throw error
         }
-        process.stderr.write(
-          `[feishu-uploads] IM file upload rejected as too large for "${file.name}" (${file.content.byteLength} bytes); falling back to drive upload.\n`,
-        )
+        if (isTopicCreateRefused(error)) {
+          process.stderr.write(
+            `[feishu-uploads] IM file send refused in topic group for "${file.name}"; falling back to drive upload.\n`,
+          )
+        } else {
+          process.stderr.write(
+            `[feishu-uploads] IM file upload rejected as too large for "${file.name}" (${file.content.byteLength} bytes); falling back to drive upload.\n`,
+          )
+        }
       }
     }
     return this.sendFileViaDrive(message, file)
@@ -620,23 +684,27 @@ export class FeishuSender {
       }
     }
 
-    const useThread = !!input.threadId
+    // Feishu's `im.message.create` only accepts receive_id_type ∈ {open_id,
+    // user_id, union_id, email, chat_id} — there is no `thread_id` value
+    // (confirmed by SDK signature AND a 400 from the live API). Falling
+    // back to `chat_id` inside a topic group silently creates a NEW topic,
+    // which is strictly worse than dropping the message. The reply branch
+    // above already covered the in-thread case via message_id; everything
+    // that reaches this point is a proactive push or a reply→create
+    // fallback, and neither has a safe routing for a topic group.
+    if (input.threadId) {
+      throw new TopicCreateRefusedError(input.chatId, input.threadId)
+    }
     const response = await this.withMessageRetry(
       `create ${msgType}`,
       async () => {
-        // Cast: Feishu's `im.message.create` accepts `receive_id_type='thread_id'`
-        // (documented for topic-group sub-channel routing), but the Lark
-        // SDK's type definition lags behind and still enumerates only the
-        // legacy 5 values. The runtime API accepts it; assert the wider
-        // shape so topic-group routing compiles without weakening the SDK
-        // typing for unrelated callers.
         const response = await this.client.im.message.create({
-        params: { receive_id_type: (useThread ? 'thread_id' : 'chat_id') as 'chat_id' },
-        data: {
-          receive_id: useThread ? (input.threadId as string) : input.chatId,
-          msg_type: msgType,
-          content,
-        },
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: input.chatId,
+            msg_type: msgType,
+            content,
+          },
         })
         assertOk(response, 'Feishu create message failed')
         return response

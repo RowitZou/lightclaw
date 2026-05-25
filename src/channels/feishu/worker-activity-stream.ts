@@ -46,13 +46,22 @@ export function buildWorkerActivityForwarder(input: {
   if (!parsed) return undefined
   const actor = formatLeafActor(input.chainState)
   const chatId = parsed.chatId
-  // Feishu topic-group sub-channel id: present only when the chain root
+  // Feishu topic-group sub-channel: present only when the chain root
   // sessionId encodes a thread (Phase 26 formula
-  // `feishu:group:<chatId>:<threadId>:<senderOpenId>`). Without this,
-  // `sendMarkdownTextToChatId` falls through to `receive_id_type='chat_id'`
-  // and topic-group rules drop the observability stream into a fresh
-  // auto-created topic instead of the one the user opened.
-  const threadId = parsed.kind === 'group' ? parsed.threadId : undefined
+  // `feishu:group:<chatId>:<threadId>:<senderOpenId>`). Worker observability
+  // is proactive (no reply anchor) and Feishu's `im.message.create` does NOT
+  // accept `receive_id_type='thread_id'` — the API rejects 400 with field
+  // validation failed. Falling back to `chat_id` would silently auto-create
+  // a NEW topic in the same group, which is strictly worse than dropping
+  // the stream: the user opened topic A and would see the bot flood their
+  // group with auto-created topics. Drop the activity entirely in topic
+  // groups; observability is a nice-to-have, "stay in the user's topic"
+  // is a hard invariant.
+  if (parsed.kind === 'group' && parsed.threadId) {
+    return async () => {
+      /* topic group: no observability stream */
+    }
+  }
 
   return async (text: string) => {
     const trimmed = text.trim()
@@ -60,7 +69,7 @@ export function buildWorkerActivityForwarder(input: {
     const sender = getFeishuSender()
     if (!sender) return
     try {
-      await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`, {}, threadId)
+      await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`)
     } catch (error) {
       process.stderr.write(
         `[worker-activity-stream] send to ${chatId} failed: ${formatFeishuErrorForLog(error, 'sendMarkdownTextToChatId')}\n`,

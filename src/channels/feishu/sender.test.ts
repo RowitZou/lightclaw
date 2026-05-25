@@ -269,14 +269,20 @@ test('multi-chunk text send queues remaining chunks when the first chunk fails t
   }
 })
 
-// Topic-group thread routing. Feishu topic groups require every outbound
-// message to be associated with a thread; an `im.message.create` with
-// receive_id_type='chat_id' creates a NEW topic. The reply API (based on
-// message_id) handles the in-topic case automatically, but the fallback-to-
-// create path drops the thread association unless we explicitly route via
-// receive_id_type='thread_id'.
-test('reply→create fallback routes via thread_id when the inbound message carries threadId', async () => {
-  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+// Topic-group thread routing. Feishu topic groups attach every outbound
+// message to a thread. The reply API (keyed on message_id) keeps a reply in
+// the parent's thread automatically, so reply-path delivery is correct
+// without further help. The create API, however, only accepts
+// receive_id_type ∈ {open_id, user_id, union_id, email, chat_id} — there is
+// no `thread_id` value (sender.ts previously cast 'thread_id' through; the
+// Feishu API responds 400 with `field validation failed, options:[…5 values…]`
+// 100% of the time). The only safe fallback would be `chat_id`, but that
+// silently creates a NEW topic in the same group, which is worse than
+// dropping the message: the user opened topic A and now sees the bot
+// flooding their group with auto-created topics. Refusing to send is the
+// chosen behavior; reply path stays unchanged.
+test('reply→create fallback in a topic group refuses to send instead of creating a new topic', async () => {
+  let createCalls = 0
   const client = {
     im: {
       message: {
@@ -284,9 +290,9 @@ test('reply→create fallback routes via thread_id when the inbound message carr
           code: 99992354,
           msg: 'The request you send is not a valid open_message_id or not exists',
         }),
-        create: async (input: unknown) => {
-          createCalls.push(input as { params: unknown; data: { receive_id: string } })
-          return { code: 0, data: { message_id: 'om_created_in_thread' } }
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_should_not_be_called' } }
         },
       },
       file: { create: async () => null },
@@ -294,25 +300,27 @@ test('reply→create fallback routes via thread_id when the inbound message carr
   } as unknown as FeishuClient
 
   const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  // Should resolve without throwing — the refusal is swallowed at the
+  // public sender entry, the same way worker-activity-stream / Notify
+  // / askuser-card already swallow send failures.
   await sender.sendInteractiveCard(
     { ...baseMessage, chatType: 'group', threadId: 'omt_topic42' },
     { elements: [] },
   )
 
-  assert.equal(createCalls.length, 1)
-  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
-  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic42')
+  assert.equal(createCalls, 0, 'create must not be called in a topic group when reply fails')
 })
 
-test('sendInteractiveCardToChatId routes via thread_id when threadId is supplied', async () => {
-  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+test('sendInteractiveCardToChatId refuses to send when threadId is supplied (no reply anchor available)', async () => {
+  let createCalls = 0
+  let replyCalls = 0
   const client = {
     im: {
       message: {
-        reply: async () => { throw new Error('reply must not be called when no replyToMessageId') },
-        create: async (input: unknown) => {
-          createCalls.push(input as { params: unknown; data: { receive_id: string } })
-          return { code: 0, data: { message_id: 'om_thread' } }
+        reply: async () => { replyCalls += 1; throw new Error('reply must not be called when no replyToMessageId') },
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_should_not_be_called' } }
         },
       },
       file: { create: async () => null },
@@ -322,20 +330,19 @@ test('sendInteractiveCardToChatId routes via thread_id when threadId is supplied
   const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
   await sender.sendInteractiveCardToChatId('oc_chat', { elements: [] }, undefined, 'omt_topic88')
 
-  assert.equal(createCalls.length, 1)
-  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
-  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic88')
+  assert.equal(replyCalls, 0, 'no inbound message to reply against')
+  assert.equal(createCalls, 0, 'create must not be called — would auto-create a new topic')
 })
 
-test('sendMarkdownTextToChatId routes via thread_id when threadId is supplied', async () => {
-  let createCalls: Array<{ params: unknown; data: { receive_id: string } }> = []
+test('sendMarkdownTextToChatId refuses to send when threadId is supplied (no reply anchor available)', async () => {
+  let createCalls = 0
   const client = {
     im: {
       message: {
         reply: async () => { throw new Error('reply must not be called when no replyToMessageId') },
-        create: async (input: unknown) => {
-          createCalls.push(input as { params: unknown; data: { receive_id: string } })
-          return { code: 0, data: { message_id: 'om_thread' } }
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_should_not_be_called' } }
         },
       },
       file: { create: async () => null },
@@ -345,9 +352,7 @@ test('sendMarkdownTextToChatId routes via thread_id when threadId is supplied', 
   const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
   await sender.sendMarkdownTextToChatId('oc_chat', 'hello topic', undefined, 'omt_topic99')
 
-  assert.equal(createCalls.length, 1)
-  assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'thread_id' })
-  assert.equal(createCalls[0]!.data.receive_id, 'omt_topic99')
+  assert.equal(createCalls, 0, 'create must not be called — would auto-create a new topic')
 })
 
 test('reply→create fallback keeps receive_id_type=chat_id when no threadId is present', async () => {
