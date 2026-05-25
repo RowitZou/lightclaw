@@ -22,7 +22,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   main: '2fca217bd75cd9073ee33b23c4c103030920cc8b83171e4dd1437eec7a4e64cd',
   generalist: 'dcbc01eb81bdeca97f3d61d1e3c5eef513429fde4da01aead6b7c4735ae9f793',
   localExplorer: '0f46566995d739a9fd851d4b0ca36ce13eb3824a58dc37d335dec86f2e0a0125',
-  webSearcher: 'c39b46cb0c0056620774951519996d7957ccfc6b9484b7721d7fe8620a66ef69',
+  webSearcher: 'ea5705aad6b97b965b1ef835f45e4e2fad41045eff665e7465fe388c8adf3844',
   feishuSecretary: '1ff8657c73685005f1af3a50449f40e25f20700cf6b4733495387ee837bc7080',
   coder: '50059b1f82e7f2558a1e5d56278775b98fa4efef6aa7028d69ea5d459d6acd8b',
   archivist: '2a82b4a371f3593556ee52089ca1edc11230fe5e5db94f7bf57369f00dfc717f',

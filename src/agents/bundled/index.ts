@@ -63,7 +63,8 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'webSearcher',
     whenToUse:
       'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. The subagent digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths, Grep over downloaded PDFs / HTMLs for specific facts when full read is too expensive), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
-    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite'],
+    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill'],
+    skills: ['web-research-workflow'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: webSearcherPrompt,
     kind: 'worker',

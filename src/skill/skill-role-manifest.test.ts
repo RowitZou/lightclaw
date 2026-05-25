@@ -93,7 +93,7 @@ describe('bundled skill ↔ role contract manifest', () => {
       main: ['remember', 'skillify'],
       generalist: ['remember'],
       localExplorer: ['local-exploration-workflow'],
-      webSearcher: [],
+      webSearcher: ['web-research-workflow'],
       feishuSecretary: [],
       coder: ['coding-workflow', 'remember'],
       archivist: ['remember'],
