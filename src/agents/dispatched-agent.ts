@@ -21,6 +21,11 @@ import { getDaemonLocalRuntime, getRuntime } from '../state.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
+import {
+  appendMessages,
+  rewriteTranscript,
+  touchMeta,
+} from '../session/storage.js'
 import type {
   Message,
   UsageStats,
@@ -142,6 +147,38 @@ export async function runDispatchedAgent(
         enabled: loadChannelConfig().feishu.streamWorkerActivity,
       })
     : undefined
+  // Default transcript persistence for dispatched workers. Callers that need a
+  // bespoke write path (bg-fire truncates on retry; channel runner hooks into
+  // its own rewrite cycle) keep passing persistMessages explicitly and win.
+  // Otherwise — sync Dispatch from runSubagent, or any future caller that
+  // forwards a chain — we write each completed tool round-trip to the chain
+  // leaf's transcript so a crash mid-dispatch leaves a coherent partial on
+  // disk and meta.messageCount stays honest for GC / audit. Gated on a chain
+  // sessionId that's distinct from the parent: internal roles (extract /
+  // curator) don't carry chainState, so they fall through unchanged and
+  // remain fork-transcript-only.
+  const shouldDefaultPersist =
+    !params.persistMessages
+    && chainSessionId !== undefined
+    && chainSessionId !== currentCtx?.sessionId
+  const persistTargetSessionId = chainSessionId
+  let defaultPersistCount = 0
+  const effectivePersist = params.persistMessages
+    ?? (shouldDefaultPersist && persistTargetSessionId
+      ? async (batch: Message[]) => {
+          await appendMessages(persistTargetSessionId, batch)
+          defaultPersistCount += batch.length
+          await touchMeta(persistTargetSessionId, defaultPersistCount)
+        }
+      : undefined)
+  const effectiveRewrite = params.rewriteMessages
+    ?? (shouldDefaultPersist && persistTargetSessionId
+      ? async (msgs: Message[]) => {
+          await rewriteTranscript(persistTargetSessionId, msgs)
+          defaultPersistCount = msgs.length
+          await touchMeta(persistTargetSessionId, defaultPersistCount)
+        }
+      : undefined)
   const run = () => (params.queryImpl ?? query)({
     role: params.role,
     invocation: forkInvocationContext({
@@ -156,8 +193,8 @@ export async function runDispatchedAgent(
         ? { interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId) }
         : {}),
       ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
-      ...(params.persistMessages ? { persistMessages: params.persistMessages } : {}),
-      ...(params.rewriteMessages ? { rewriteMessages: params.rewriteMessages } : {}),
+      ...(effectivePersist ? { persistMessages: effectivePersist } : {}),
+      ...(effectiveRewrite ? { rewriteMessages: effectiveRewrite } : {}),
     }),
     messages,
     tools: params.tools,
@@ -200,9 +237,9 @@ export async function runDispatchedAgent(
   // dispatch prompt; query() then flushes each completed tool round-trip
   // through the same callback. Best-effort — a persist failure must not
   // abort the dispatch.
-  if (params.persistMessages) {
+  if (effectivePersist) {
     try {
-      await params.persistMessages(messages)
+      await effectivePersist(messages)
     } catch (error) {
       process.stderr.write(
         `[dispatched-agent] initial persistMessages failed: ${

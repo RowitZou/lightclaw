@@ -16,6 +16,11 @@ import { parseForkTranscriptFile } from './fork-transcript.js'
 import { deriveCanUseTool } from './role-tool-gate.js'
 import type { Role, RoleResourceAllowlist } from './types.js'
 import { getCwd } from '../state.js'
+import {
+  loadMeta,
+  loadTranscript,
+} from '../session/storage.js'
+import type { Message } from '../types.js'
 
 function tool(name: string): Tool {
   return {
@@ -344,6 +349,269 @@ test('worker-kind dispatch keeps the inherited runtime', async () => {
     }))
 
     assert.equal(observedRuntime, sandbox)
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('dispatched session falls back to default transcript persistence when caller omits the callback', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const sessionsDir = path.join(tempDir, 'sessions')
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir,
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-default-persist')
+
+    // Fake query that simulates query.ts's two persistence touch points: a
+    // mid-turn flush at the first tool-call boundary, then the end-turn
+    // assistant message that the next flush would carry. dispatched-agent's
+    // pre-write has already written the initial user message before query()
+    // runs, so the in-flight batches start from index 1.
+    const assistantOne = createAssistantMessage({
+      content: [{ type: 'text', text: 'first assistant turn' }],
+      stopReason: 'tool_use',
+      usage: emptyUsage(),
+    })
+    const assistantTwo = createAssistantMessage({
+      content: [{ type: 'text', text: 'final assistant turn' }],
+      stopReason: 'end_turn',
+      usage: emptyUsage(),
+    })
+
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'do dispatched work',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        // Mid-turn flush.
+        await params.invocation.persistMessages?.([assistantOne])
+        // End-turn flush.
+        await params.invocation.persistMessages?.([assistantTwo])
+        return {
+          messages: [...params.messages, assistantOne, assistantTwo],
+          assistantText: 'final assistant turn',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // Default callback writes to the chain leaf's sessionId, not the parent.
+    const chainSessionId = chainState.path.at(-1)?.sessionId
+    assert.ok(chainSessionId && chainSessionId !== 'main-session')
+    const persisted = await loadTranscript(chainSessionId)
+    // initial user message + two assistant turns = 3 entries on disk.
+    assert.equal(persisted.length, 3)
+    assert.equal(persisted[0]?.type, 'user')
+    assert.equal(persisted[1]?.type, 'assistant')
+    assert.equal(persisted[2]?.type, 'assistant')
+    const meta = await loadMeta(chainSessionId)
+    assert.equal(meta?.messageCount, 3)
+    // Parent transcript stays empty — default persist must not pollute it.
+    const parentTranscript = await loadTranscript('main-session')
+    assert.equal(parentTranscript.length, 0)
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('dispatched default rewrite resyncs whole transcript after a mid-turn compaction', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-rewrite')
+
+    const summaryUser = createUserMessage('[compaction summary]')
+    const postSummaryAssistant = createAssistantMessage({
+      content: [{ type: 'text', text: 'post-compaction reply' }],
+      stopReason: 'end_turn',
+      usage: emptyUsage(),
+    })
+
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'compaction test',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        // Pre-rewrite append (would-be discarded by compaction).
+        await params.invocation.persistMessages?.([
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'pre-compaction' }],
+            stopReason: 'tool_use',
+            usage: emptyUsage(),
+          }),
+        ])
+        // Compaction collapses the prefix into a summary user msg.
+        await params.invocation.rewriteMessages?.([summaryUser])
+        // Post-compaction incremental append resumes.
+        await params.invocation.persistMessages?.([postSummaryAssistant])
+        return {
+          messages: [summaryUser, postSummaryAssistant],
+          assistantText: 'post-compaction reply',
+          stopReason: 'end_turn',
+          didCompact: true,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    const chainSessionId = chainState.path.at(-1)?.sessionId!
+    const persisted = await loadTranscript(chainSessionId)
+    assert.equal(persisted.length, 2)
+    assert.equal((persisted[0] as Message).type, 'user')
+    assert.equal((persisted[1] as Message).type, 'assistant')
+    const meta = await loadMeta(chainSessionId)
+    assert.equal(meta?.messageCount, 2)
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('internal-role dispatch (no chainState) does not write a separate transcript', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'curate memory',
+      role: internalRole(),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      label: 'memoryCurator',
+      queryImpl: async params => {
+        // Internal roles share the parent's ALS sessionId; the default persist
+        // gate must refuse so we don't append worker work into the user's main
+        // transcript.
+        assert.equal(params.invocation.persistMessages, undefined)
+        assert.equal(params.invocation.rewriteMessages, undefined)
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // No transcript file for main-session got created either — internal roles
+    // are fork-transcript-only.
+    const parentTranscript = await loadTranscript('main-session')
+    assert.equal(parentTranscript.length, 0)
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('explicit persistMessages caller wins over the default fallback', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-explicit')
+
+    const capturedBatches: Message[][] = []
+    const explicitPersist = (batch: Message[]) => {
+      capturedBatches.push([...batch])
+    }
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'explicit caller test',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      persistMessages: explicitPersist,
+      queryImpl: async params => {
+        // The exact reference the caller passed must reach query (no default
+        // wrapper that also writes to disk in parallel).
+        assert.equal(params.invocation.persistMessages, explicitPersist)
+        return {
+          messages: params.messages,
+          assistantText: '',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // Caller's callback got the pre-write batch (initial user message).
+    assert.equal(capturedBatches.length, 1)
+    assert.equal(capturedBatches[0]?.length, 1)
+    assert.equal(capturedBatches[0]?.[0]?.type, 'user')
+    // No on-disk transcript was created via the default path either.
+    const chainSessionId = chainState.path.at(-1)?.sessionId!
+    const persisted = await loadTranscript(chainSessionId)
+    assert.equal(persisted.length, 0)
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })
