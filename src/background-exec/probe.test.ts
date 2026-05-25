@@ -29,12 +29,27 @@ test('probeBackgroundJob reports running when process group exists', async () =>
   assert.equal(snapshot.status, 'running')
 })
 
-test('probeBackgroundJob reports lost when process group probe fails', async () => {
+test('probeBackgroundJob reports lost when process group probe returns non-zero exit', async () => {
   const { runtime, entry } = makeEntry()
   runtime.queueExec({ stdout: '', stderr: '', exitCode: 1 })
 
   const snapshot = await probeBackgroundJob(entry)
   assert.equal(snapshot.status, 'lost')
+  assert.ok(snapshot.endedAt, 'lost is terminal — endedAt must be set')
+})
+
+test('probeBackgroundJob reports unknown when probe exec itself throws', async () => {
+  const { runtime, entry } = makeEntry()
+  // Simulate a control-plane blip (brainctl ws drop, probe timeout, transient
+  // network) — the runtime.exec call itself rejects rather than returning a
+  // result. We did NOT observe the process group, so this must NOT collapse to
+  // 'lost' (which would prompt the model to start a new bg-job racing a
+  // wrapper that is in fact still alive).
+  runtime.queueExecError(new Error('brainctl: websocket: close 1006'))
+
+  const snapshot = await probeBackgroundJob(entry)
+  assert.equal(snapshot.status, 'unknown')
+  assert.equal(snapshot.endedAt, undefined, 'unknown is transient — no endedAt')
 })
 
 function makeEntry(): { runtime: FakeRuntime; entry: BackgroundJobEntry } {

@@ -14,7 +14,7 @@ export class FakeRuntime {
   readonly execCalls: ExecInput[] = []
   private readonly files = new Map<string, Buffer>()
   private readonly dirs = new Set<string>(['/workspace'])
-  private execQueue: ExecResult[] = []
+  private execQueue: Array<ExecResult | { throw: Error }> = []
 
   readonly fs = {
     kind: 'host-direct' as const,
@@ -57,6 +57,10 @@ export class FakeRuntime {
     this.execQueue.push(result)
   }
 
+  queueExecError(error: Error): void {
+    this.execQueue.push({ throw: error })
+  }
+
   async exec(input: ExecInput): Promise<ExecResult> {
     this.execCalls.push(input)
     if (input.command.startsWith('mkdir -p ')) {
@@ -69,7 +73,11 @@ export class FakeRuntime {
     if (killedMatch) {
       await this.fs.writeFile(killedMatch[1], 'killed')
     }
-    return this.execQueue.shift() ?? { stdout: '', stderr: '', exitCode: 0 }
+    const next = this.execQueue.shift()
+    if (next && 'throw' in next) {
+      throw next.throw
+    }
+    return next ?? { stdout: '', stderr: '', exitCode: 0 }
   }
 
   async start(): Promise<void> {}

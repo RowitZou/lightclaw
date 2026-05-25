@@ -52,7 +52,16 @@ export async function probeBackgroundJob(entry: BackgroundJobEntry): Promise<Bac
     maxBufferBytes: 16 * 1024,
   }).catch(() => null)
 
-  if (!probe || probe.exitCode !== 0) {
+  if (!probe) {
+    // The probe exec itself failed (control-plane blip, timeout, transient
+    // network). We did not actually observe the process group — return
+    // 'unknown' so the watcher waits across more ticks before declaring lost.
+    // A single blip on a healthy wrapper must not surface as a terminal
+    // 'lost' notification to the model.
+    return snapshot(meta, 'unknown')
+  }
+
+  if (probe.exitCode !== 0) {
     return snapshot(meta, 'lost', { endedAt: Date.now() })
   }
 

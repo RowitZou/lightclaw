@@ -11,6 +11,13 @@ export const WATCHER_INTERVAL_MS = 7_000
 export const MAX_BG_JOB_WALLCLOCK_MS = 24 * 3_600_000
 export const MAX_BG_JOB_OUTPUT_BYTES = 50 * 1024 * 1024
 const OUTPUT_TAIL_BYTES = 8 * 1024
+// Consecutive 'unknown' probes tolerated before promoting to 'lost'. At
+// WATCHER_INTERVAL_MS = 7s this gives ~21s for a brief control-plane blip
+// (brainctl ws drop, 5s probe timeout, transient network) to recover before
+// the model is told the job ended. Trades a real 'lost' showing up ~21s later
+// against avoiding false-positive 'lost' notifications that would prompt the
+// model to start a new bg-job racing a wrapper that is in fact still alive.
+export const UNKNOWN_GRACE_TICKS = 3
 
 export class BackgroundExecWatcher {
   private timer: NodeJS.Timeout | null = null
@@ -46,7 +53,27 @@ export class BackgroundExecWatcher {
     for (const entry of this.registry.listRunning()) {
       const snapshot = await this.snapshot(entry, now)
       if (snapshot.status === 'running') {
+        // Healthy probe — reset any unknown-tick accumulator from earlier
+        // control-plane blips so a recovered wrapper isn't carried over.
+        entry.unknownTicks = 0
         continue
+      }
+      if (snapshot.status === 'unknown') {
+        // Probe call itself failed; we did not observe the process group.
+        // Hold off on declaring 'lost' until the grace window has elapsed —
+        // a transient brainctl ws drop should not surface as a terminal
+        // notification that triggers the model to start a new bg-job racing
+        // the wrapper that is in fact still alive.
+        entry.unknownTicks = (entry.unknownTicks ?? 0) + 1
+        if (entry.unknownTicks < UNKNOWN_GRACE_TICKS) {
+          continue
+        }
+        // Grace exhausted — treat as actually lost. The wrapper has been
+        // unreachable across UNKNOWN_GRACE_TICKS * WATCHER_INTERVAL_MS;
+        // either the worker really died or the control plane is wedged in a
+        // way the model needs to know about either way.
+        snapshot.status = 'lost'
+        snapshot.endedAt = now
       }
       // KillBash may have terminated + removed this job concurrently while we
       // were probing — re-check so we neither double-deliver nor act stale.
@@ -137,7 +164,11 @@ async function publishBackgroundExecResult(
   snapshot: BackgroundJobSnapshot,
   outputTail: { stdoutTail?: string; stderrTail?: string },
 ): Promise<void> {
-  if (snapshot.status === 'running') {
+  if (snapshot.status === 'running' || snapshot.status === 'unknown') {
+    // 'unknown' is a transient probe state — the watcher should never reach
+    // here with it (the tick() loop either resets to running or promotes to
+    // 'lost' before calling publish), but guard the type narrow explicitly so
+    // the signal payload's 'completed' | 'killed' | 'lost' contract holds.
     return
   }
   const signal: AgentSignal<'notification'> = {
