@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { after, before } from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
+import { addLink, createUser } from '../identity/store.js'
+import type { SenderKey } from '../identity/types.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
@@ -12,6 +14,26 @@ import { BackgroundJobRegistry } from './registry.js'
 import { FakeRuntime } from './test-helpers.js'
 import type { BackgroundJobMeta } from './types.js'
 import { BackgroundExecWatcher, MAX_BG_JOB_OUTPUT_BYTES, UNKNOWN_GRACE_TICKS } from './watcher.js'
+
+// Watcher resolves ownerOpenId via getIdentity before publishing the
+// background-exec-result signal (mirroring scheduler.deliverCompletion's
+// pre-publish open_id resolution) — without a feishu binding for the
+// canonical user, publish is skipped on purpose. Stand up a one-time
+// identity record for the 'alice' job owner used by `job()` below so the
+// publish-path tests see the signal they assert on.
+let sharedHome: string | undefined
+before(async () => {
+  sharedHome = await mkdtemp(path.join(tmpdir(), 'lc-bgexec-watcher-'))
+  setLightclawHomeOverride(sharedHome)
+  await createUser('alice')
+  await addLink('alice', 'feishu:ou_alice' as SenderKey)
+})
+after(async () => {
+  setLightclawHomeOverride(undefined)
+  if (sharedHome) {
+    await rm(sharedHome, { recursive: true, force: true })
+  }
+})
 
 test('BackgroundExecWatcher publishes exactly one signal when a job completes', async () => {
   const registry = new BackgroundJobRegistry()
@@ -70,8 +92,10 @@ test('BackgroundExecWatcher kills jobs that exceed output ceiling and publishes 
 })
 
 test('BackgroundExecWatcher withholds delivery to a non-admin under LocalRuntime', async () => {
-  const home = await mkdtemp(path.join(tmpdir(), 'lc-bgexec-'))
-  setLightclawHomeOverride(home)
+  // The shared identity from `before()` covers ownerOpenId resolution;
+  // the admin-only LocalRuntime gate is exercised here without per-test
+  // home override (an extra one would clobber the shared override for
+  // later publish-path tests).
   const registry = new BackgroundJobRegistry()
   const runtime = new FakeRuntime()
   const meta = job('bg-00000001')
@@ -89,8 +113,6 @@ test('BackgroundExecWatcher withholds delivery to a non-admin under LocalRuntime
     await watcher.tick(2_000)
   } finally {
     unsubscribe()
-    setLightclawHomeOverride(undefined)
-    await rm(home, { recursive: true, force: true })
   }
 
   assert.equal(seen.length, 0)

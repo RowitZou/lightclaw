@@ -4,7 +4,7 @@ import { probeBackgroundJob } from './probe.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import type { LightClawConfig } from '../config.js'
-import { getAdmin } from '../identity/store.js'
+import { getAdmin, getIdentity } from '../identity/store.js'
 import type { BackgroundJobEntry, BackgroundJobSnapshot } from './types.js'
 
 export const WATCHER_INTERVAL_MS = 7_000
@@ -171,6 +171,19 @@ async function publishBackgroundExecResult(
     // the signal payload's 'completed' | 'killed' | 'lost' contract holds.
     return
   }
+  // Resolve owner open_id BEFORE publishing — the DM-idle synthetic-turn
+  // path in the receiver hook keys off ownerOpenId for `senderOpenId`, and
+  // passing canonicalUser there makes ChannelRunner.resolveMessageUser
+  // mis-render a pairing-application card to the bg-exec owner. Mirrors
+  // scheduler.deliverCompletion's pre-publish open_id resolution.
+  const identity = await getIdentity(entry.meta.canonicalUser).catch(() => null)
+  const ownerOpenId = identity?.channels.feishu[0]
+  if (!ownerOpenId) {
+    process.stderr.write(
+      `[background-exec] ${snapshot.jobId} terminal (${snapshot.status}) but no feishu open_id bound for ${entry.meta.canonicalUser}; skipping signal publish\n`,
+    )
+    return
+  }
   const signal: AgentSignal<'notification'> = {
     kind: 'notification',
     from: { kind: 'scheduler' },
@@ -182,6 +195,7 @@ async function publishBackgroundExecResult(
     payload: {
       kind: 'background-exec-result',
       canonicalUser: entry.meta.canonicalUser,
+      ownerOpenId,
       jobId: snapshot.jobId,
       status: snapshot.status,
       exitCode: snapshot.exitCode,

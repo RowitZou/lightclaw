@@ -66,7 +66,7 @@ async function handleBackgroundExecResultSignal(signal: AgentSignal): Promise<vo
     channelInterjectionQueue.push(sessionId, {
       text: block,
       messageId,
-      senderOpenId: payload.canonicalUser,
+      senderOpenId: payload.ownerOpenId,
       arrivedAt: signal.timing.emittedAt,
       source: 'background-task',
     })
@@ -77,7 +77,7 @@ async function handleBackgroundExecResultSignal(signal: AgentSignal): Promise<vo
     channelInterjectionQueue.push(sessionId, {
       text: block,
       messageId,
-      senderOpenId: payload.canonicalUser,
+      senderOpenId: payload.ownerOpenId,
       arrivedAt: signal.timing.emittedAt,
       source: 'background-task',
     })
@@ -90,7 +90,7 @@ async function handleBackgroundExecResultSignal(signal: AgentSignal): Promise<vo
     channelInterjectionQueue.push(sessionId, {
       text: block,
       messageId,
-      senderOpenId: payload.canonicalUser,
+      senderOpenId: payload.ownerOpenId,
       arrivedAt: signal.timing.emittedAt,
       source: 'background-task',
     })
@@ -107,7 +107,7 @@ async function handleBackgroundExecResultSignal(signal: AgentSignal): Promise<vo
     chatId: parsed.chatId,
     chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
     ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
-    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : payload.canonicalUser,
+    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : payload.ownerOpenId,
     text: block,
     synthetic: true,
   }

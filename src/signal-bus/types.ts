@@ -72,6 +72,16 @@ export type SignalPayload = {
     | {
         kind: 'background-exec-result'
         canonicalUser: string
+        // Owner's channel open_id (real `ou_xxx` for Feishu) resolved at
+        // publish time. The DM-idle synthetic NormalizedChannelMessage
+        // path uses this for `senderOpenId`; without it the receiver
+        // misreads `canonicalUser` as an open_id, finds no binding, and
+        // renders a pairing-application card to the very user who ran
+        // the bg-exec job. Required — publisher (`watcher.ts`) skips
+        // emission entirely when the owner has no resolvable open_id,
+        // mirroring `scheduler.deliverCompletion`'s `background-result`
+        // ownerOpenId contract.
+        ownerOpenId: string
         jobId: string
         status: 'completed' | 'killed' | 'lost'
         exitCode?: number
