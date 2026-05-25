@@ -38,6 +38,7 @@ import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
 import { startFeishuWsClient, type FeishuRecallEvent } from './transport-ws.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 export function createFeishuChannel(config: FeishuChannelConfig): Channel {
   return {
@@ -335,8 +336,7 @@ async function fetchBotSelfInfo(
       `[feishu] bot.v3.info.get returned code=${envelope?.code ?? 'unknown'} bot=${botData?.open_id ? 'present' : 'missing'}; mention gating disabled\n`,
     )
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`[feishu] failed to fetch bot self info: ${detail}; mention gating disabled\n`)
+    process.stderr.write(`[feishu] failed to fetch bot self info: ${formatFeishuErrorForLog(error, 'bot.v3.info.get')}; mention gating disabled\n`)
   }
   return {}
 }

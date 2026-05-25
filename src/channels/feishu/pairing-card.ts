@@ -21,6 +21,7 @@ import type { SenderKey } from '../../identity/types.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
 import type { FeishuSender } from './sender.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 export type PairingCardActionKind = 'confirm' | 'cancel' | 'approve' | 'reject'
 
@@ -201,9 +202,8 @@ export class PairingCardCoordinator {
       await this.sender.sendInteractiveCardToOpenId(applicantOpenId, card)
       return
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
-        `pairing-card: DM push failed (${kind}) for ${applicantOpenId}: ${detail}; falling back to in-chat\n`,
+        `pairing-card: DM push failed (${kind}) for ${applicantOpenId}: ${formatFeishuErrorForLog(error, 'sendInteractiveCardToOpenId')}; falling back to in-chat\n`,
       )
       await this.sender.sendInteractiveCard(message, card)
     }

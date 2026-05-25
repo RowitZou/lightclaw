@@ -31,6 +31,7 @@ import { resolveDisplayName } from '../../agents/role-display.js'
 import type { ChainState } from '../../signal-bus/chain-state.js'
 import { getFeishuSender } from './sender-registry.js'
 import { parseFeishuSessionId } from './routing.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 export type WorkerActivityForwarder = (text: string) => Promise<void>
 
@@ -61,9 +62,8 @@ export function buildWorkerActivityForwarder(input: {
     try {
       await sender.sendMarkdownTextToChatId(chatId, `${actor}｜${trimmed}`, {}, threadId)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
-        `[worker-activity-stream] send to ${chatId} failed: ${detail}\n`,
+        `[worker-activity-stream] send to ${chatId} failed: ${formatFeishuErrorForLog(error, 'sendMarkdownTextToChatId')}\n`,
       )
     }
   }

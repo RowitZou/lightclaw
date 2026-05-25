@@ -1,6 +1,7 @@
 import { parseMessageContent, type FeishuMention, type ParsedMediaKey } from './bot-content.js'
 import type { FeishuClient } from './client.js'
 import { fetchFeishuUserInfo } from './contact.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 export type ParsedParent = {
   text?: string
@@ -110,7 +111,7 @@ export class ParentMessageFetcher {
       const detail = error instanceof Error ? error.message : String(error)
       const permanent = isPermanentFetchError(error)
       process.stderr.write(
-        `feishu parent-fetch: failed parentId=${parentId} permanent=${permanent} reason=${detail}\n`,
+        `feishu parent-fetch: failed parentId=${parentId} permanent=${permanent} ${formatFeishuErrorForLog(error, 'im.message.get')}\n`,
       )
       // Only cache permanent outcomes (parent gone / scope denied). Transient
       // errors (timeout, 5xx, 401/429, network) must stay uncached so the next

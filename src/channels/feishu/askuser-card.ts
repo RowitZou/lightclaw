@@ -9,6 +9,7 @@ import {
   type PendingQuestionRecord,
 } from './pending-questions-store.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 // 10 minutes (down from the original 1h). Per 2026-05-23 dogfood feedback:
 // 1h was set for long-horizon parity but in practice a user who hasn't
@@ -189,9 +190,8 @@ export class AskUserQuestionCoordinator {
       try {
         return await this.sender.sendInteractiveCardToOpenId(requesterOpenId, card)
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
-          `[ask-user] DM push failed for ${requesterOpenId}, falling back to in-chat: ${detail}\n`,
+          `[ask-user] DM push failed for ${requesterOpenId}, falling back to in-chat: ${formatFeishuErrorForLog(error, 'sendInteractiveCardToOpenId')}\n`,
         )
       }
     }
@@ -424,7 +424,6 @@ export class AskUserQuestionCoordinator {
       return
     }
     await this.sender.patchInteractiveCard(pending.cardMessageId, card).catch(error => {
-      const detail = error instanceof Error ? error.message : String(error)
       // Loud version: include card title so we can match it to the user's
       // observed UI state. Patch failures here are silently UX-fatal — the
       // toast still says "已取消" / "已提交" but the card stays as the
@@ -432,7 +431,7 @@ export class AskUserQuestionCoordinator {
       const header = (card as { header?: { title?: { content?: string } } }).header
       const titleHint = header?.title?.content ?? '<unknown>'
       process.stderr.write(
-        `[ask-user] final patch FAILED for ${pending.id} (title=${titleHint}, messageId=${pending.cardMessageId}): ${detail}\n`,
+        `[ask-user] final patch FAILED for ${pending.id} (title=${titleHint}, messageId=${pending.cardMessageId}): ${formatFeishuErrorForLog(error, 'patchInteractiveCard')}\n`,
       )
     })
   }

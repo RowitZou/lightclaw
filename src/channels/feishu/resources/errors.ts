@@ -127,6 +127,28 @@ export function logFeishuRetry(
   )
 }
 
+/**
+ * One-line stderr formatter for any Feishu API failure caught in a
+ * best-effort path (catch → stderr.write → swallow). Surfaces the
+ * structured fields that error.message alone drops on the floor:
+ *   - kind            classifyFeishuError verdict (validation-failed / rate-limited / …)
+ *   - code            numeric envelope code (99992402 / 99991672 / …)
+ *   - logId           x-tt-logid header — what Feishu support needs to look up the request
+ *   - violations      field_violations array — names the field the server rejected
+ *   - msg             server-supplied msg field
+ *
+ * Pattern: `process.stderr.write(`[<context>] ${formatFeishuErrorForLog(err, '<op>')}\n`)`.
+ */
+export function formatFeishuErrorForLog(error: unknown, op: string): string {
+  const c = classifyFeishuError(error)
+  const parts = [`op=${op}`, `kind=${c.kind}`]
+  if (c.code !== undefined) parts.push(`code=${c.code}`)
+  if (c.logId) parts.push(`logId=${c.logId}`)
+  if (c.fieldViolations?.length) parts.push(`violations=${JSON.stringify(c.fieldViolations)}`)
+  if (c.msg) parts.push(`msg=${JSON.stringify(c.msg)}`)
+  return parts.join(' ')
+}
+
 export function detectFeishuScopeMissing(error: unknown): FeishuScopeMissingInfo | null {
   return detectFeishuScopeMissingFromEnvelope(extractEnvelope(error))
 }

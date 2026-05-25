@@ -77,7 +77,7 @@ describe('ParentMessageFetcher', () => {
     assert.equal(calls, 1, 'permanent failure must be cached so the second fetch is a no-op')
     assert.match(
       writes.text(),
-      /feishu parent-fetch: failed parentId=om_missing permanent=true reason=.*message not found/,
+      /feishu parent-fetch: failed parentId=om_missing permanent=true op=im\.message\.get kind=unknown msg=.*message not found/,
     )
   })
 
@@ -99,7 +99,7 @@ describe('ParentMessageFetcher', () => {
     }
 
     assert.equal(calls, 2, 'transient failure must not be cached; second fetch must retry')
-    assert.match(writes.text(), /permanent=false reason=.*service unavailable/)
+    assert.match(writes.text(), /permanent=false op=im\.message\.get.*kind=internal-server/)
   })
 
   it('does not cache timeout failures so they retry', async () => {
@@ -120,7 +120,7 @@ describe('ParentMessageFetcher', () => {
     }
 
     assert.equal(calls, 2, 'timeout is transient; second fetch must retry')
-    assert.match(writes.text(), /permanent=false reason=timeout after 5ms/)
+    assert.match(writes.text(), /permanent=false op=im\.message\.get kind=transient-network/)
   })
 
   it('treats unclassifiable errors (no http status) as transient', async () => {
@@ -141,7 +141,7 @@ describe('ParentMessageFetcher', () => {
     }
 
     assert.equal(calls, 2, 'no-status errors are transient by default; second fetch must retry')
-    assert.match(writes.text(), /permanent=false reason=ECONNRESET/)
+    assert.match(writes.text(), /permanent=false op=im\.message\.get kind=unknown/)
   })
 
   it('deduplicates concurrent fetches for the same parent', async () => {

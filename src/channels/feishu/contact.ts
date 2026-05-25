@@ -1,5 +1,5 @@
 import type { FeishuClient } from './client.js'
-import { classifyFeishuError } from './resources/errors.js'
+import { classifyFeishuError, formatFeishuErrorForLog } from './resources/errors.js'
 
 export type FeishuUserInfo = {
   name?: string
@@ -67,8 +67,9 @@ export async function fetchFeishuUserInfo(
       warnNoContactScopeOnce(`${c.adminMessage} contact:contact.base:readonly scope not granted; sender names will fall back to open_id`)
       return undefined
     }
-    const detail = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`feishu pairing: contact lookup failed for ${openId}: ${detail}\n`)
+    process.stderr.write(
+      `feishu pairing: contact lookup failed for ${openId}: ${formatFeishuErrorForLog(error, 'contact.user.get')}\n`,
+    )
     return undefined
   }
 }

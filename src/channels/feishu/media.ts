@@ -5,6 +5,7 @@ import type * as lark from '@larksuiteoapi/node-sdk'
 
 import type { Runtime } from '../../runtime/types.js'
 import type { ParsedMediaKey } from './bot-content.js'
+import { formatFeishuErrorForLog } from './resources/errors.js'
 
 export type FeishuMediaPayload = {
   buffer: Buffer
@@ -50,9 +51,8 @@ export async function fetchFeishuMediaPayload(input: {
       fileName: fileNameFor(input.messageId, input.mediaKey),
     }
   } catch (error) {
-    const text = error instanceof Error ? error.message : String(error)
     process.stderr.write(
-      `feishu media: download error key=${input.mediaKey.key}: ${text}\n`,
+      `feishu media: download error key=${input.mediaKey.key}: ${formatFeishuErrorForLog(error, 'im.messageResource.get')}\n`,
     )
     return null
   }
