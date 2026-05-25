@@ -6,7 +6,7 @@ import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 describe('bundled skills (Phase 16 codegen output)', () => {
   it('contains exactly the expected bundled skill names', () => {
     const names = bundledSkills.map(s => s.name).sort()
-    assert.deepEqual(names, ['coding-workflow', 'local-exploration-workflow', 'pre-delivery-review-workflow', 'remember', 'skillify', 'web-research-workflow'])
+    assert.deepEqual(names, ['archive-workflow', 'coding-workflow', 'local-exploration-workflow', 'pre-delivery-review-workflow', 'remember', 'skillify', 'web-research-workflow'])
   })
 
   it('every skill is tagged source=builtin with the canonical filePath sentinel', () => {

@@ -231,11 +231,11 @@ test('Phase 7.5 workers expose remember where requested', () => {
   }
 })
 
-test('archivist only keeps remember from the bundled meta-skill set', () => {
+test('archivist exposes archive-workflow and remember', () => {
   const archivist = BUNDLED_AGENTS.find(agent => agent.agentType === 'archivist')
 
   assert.ok(archivist)
-  assert.deepEqual(archivist.skills, ['remember'])
+  assert.deepEqual(archivist.skills, ['archive-workflow', 'remember'])
 })
 
 function role(overrides: Partial<Role>): Role {

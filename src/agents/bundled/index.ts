@@ -144,7 +144,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'CancelDispatch',
       'UpdateDispatch',
     ],
-    skills: ['remember'],
+    skills: ['archive-workflow', 'remember'],
     reachableRoles: ['feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: archivistPrompt,
     kind: 'worker',
