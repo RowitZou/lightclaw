@@ -8,10 +8,16 @@
   },
   "ilink_appid": "bot",
   "scripts": {
+    "gen:skills": "tsx scripts/build-bundled-skills.ts",
+    "copy:skill-assets": "tsx scripts/copy-skill-assets.ts",
+    "predev": "pnpm gen:skills",
     "dev": "tsx src/cli.ts",
-    "build": "tsdown src/cli.ts --format esm --out-dir dist --clean",
+    "prebuild": "pnpm gen:skills",
+    "build": "tsdown src/cli.ts --format esm --out-dir dist --clean && pnpm copy:skill-assets",
     "start": "node dist/cli.js",
+    "pretypecheck": "pnpm gen:skills",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm gen:skills",
     "test": "tsx --test $(find src -name '*.test.ts')"
   },
   "engines": {

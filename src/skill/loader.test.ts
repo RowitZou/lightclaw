@@ -385,6 +385,37 @@ describe('writeUserSkill', () => {
     })
   })
 
+  it('replaces ${LIGHTCLAW_SKILL_DIR} with the user skill directory at invocation time', async () => {
+    await withTempHome(async () => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'asset-skill',
+        markdown:
+          '---\nname: asset-skill\ndescription: References asset directory.\n---\n\n' +
+          'Run "${LIGHTCLAW_SKILL_DIR}/scripts/extract.py" to do the work.\n',
+      })
+
+      await refreshSkillRegistry(process.cwd(), 'alice')
+      const content = await buildRegisteredSkillInvocation('asset-skill')
+      const expectedDir = path.join(userSkillsRoot('alice'), 'asset-skill')
+      assert.ok(
+        content?.includes(`Run "${expectedDir}/scripts/extract.py"`),
+        `invocation must inject user skill directory, got:\n${content}`,
+      )
+      assert.doesNotMatch(content ?? '', /\$\{LIGHTCLAW_SKILL_DIR\}/)
+    })
+  })
+
+  it('leaves bundled invocations untouched when their body has no ${LIGHTCLAW_SKILL_DIR}', async () => {
+    await withTempHome(async () => {
+      await refreshSkillRegistry(process.cwd(), undefined)
+      const content = await buildRegisteredSkillInvocation('remember')
+      // remember body does not reference the placeholder; the invocation
+      // must not contain the literal placeholder string either.
+      assert.doesNotMatch(content ?? '', /\$\{LIGHTCLAW_SKILL_DIR\}/)
+    })
+  })
+
   it('replaces skillify session template variables when rendering the bundled invocation', async () => {
     await withTempHome(async home => {
       const sessionsDir = path.join(home, 'sessions')

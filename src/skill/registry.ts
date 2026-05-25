@@ -6,6 +6,7 @@ import { loadTranscriptFile } from '../session/storage.js'
 import type { Message, UserContentBlock } from '../types.js'
 import { toolResultContentToText } from '../types.js'
 import { discoverSkillsForUser, loadSkillBody } from './loader.js'
+import { skillDirFor } from './skill-dir.js'
 import type { LoadedSkill, SkillMeta } from './types.js'
 
 let skillRegistry = new Map<string, SkillMeta>()
@@ -59,6 +60,7 @@ export async function buildRegisteredSkillInvocation(
 
   sections.push(await replaceSkillTemplateVariables(
     replaceSkillArguments(loadedSkill.body.trim(), args),
+    loadedSkill,
   ))
   return sections.join('\n\n')
 }
@@ -67,13 +69,23 @@ function replaceSkillArguments(body: string, args?: string): string {
   return body.replaceAll('$ARGUMENTS', args?.trim() ?? '')
 }
 
-async function replaceSkillTemplateVariables(body: string): Promise<string> {
-  if (!body.includes('{{')) {
+async function replaceSkillTemplateVariables(body: string, meta: SkillMeta): Promise<string> {
+  const hasCurlyPair = body.includes('{{')
+  const hasShellStyle = body.includes('${LIGHTCLAW_SKILL_DIR}')
+  if (!hasCurlyPair && !hasShellStyle) {
     return body
   }
 
+  const next = hasShellStyle
+    ? body.replaceAll('${LIGHTCLAW_SKILL_DIR}', skillDirFor(meta))
+    : body
+
+  if (!hasCurlyPair) {
+    return next
+  }
+
   const context = await buildSkillTemplateContext()
-  return body
+  return next
     .replaceAll('{{sessionMemory}}', context.sessionMemory)
     .replaceAll('{{userMessages}}', context.userMessages)
     .replaceAll('{{userDescriptionBlock}}', context.userDescriptionBlock)

@@ -1,16 +1,16 @@
-import type { LoadedSkill } from '../types.js'
+---
+name: skillify
+description: "Capture a repeatable method — the how of a multi-step workflow — as a new skill. For one-off facts or preferences use `remember` instead."
+when_to_use: "Use when the user is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill') or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux."
+allowed-tools:
+  - SkillWrite
+  - AskUserQuestion
+  - Read
+  - Grep
+  - Glob
+---
 
-export const skillifySkill: LoadedSkill = {
-  name: 'skillify',
-  description:
-    'Capture a repeatable method — the how of a multi-step workflow — as a new skill. For one-off facts or preferences use `remember` instead.',
-  whenToUse:
-    "Use when the user is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill') or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux.",
-  allowedTools: ['SkillWrite', 'AskUserQuestion', 'Read', 'Grep', 'Glob'],
-  roles: [],
-  source: 'builtin',
-  filePath: 'builtin:skillify',
-  body: String.raw`# Skillify {{userDescriptionBlock}}
+# Skillify {{userDescriptionBlock}}
 
 You are capturing a repeatable workflow the user just established into a saved
 skill so you'll run it the same way next time.
@@ -170,5 +170,4 @@ they'll get next time. Something like:
 > human checkpoint, mention it: "I'll check with you before merging."}}
 > If you want to tweak it later, just tell me.
 
-The save is invisible to the user; the promise is in plain language.`,
-}
+The save is invisible to the user; the promise is in plain language.
