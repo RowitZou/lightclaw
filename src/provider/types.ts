@@ -129,6 +129,20 @@ export type Provider = {
     ttfbMs?: number
     interEventMs?: number
   }
+  /**
+   * Best-effort hook for `query.ts`'s transient retry path. When a stream
+   * abort fires (`IdleStreamError` from the idle watchdog, transient
+   * network error, 5xx, ...), the next attempt should land on a fresh
+   * TCP connection — undici / proxy keep-alive pools otherwise route the
+   * retry through the very socket that just stalled (1091 偶发 hang
+   * dogfood: ~3% of HTTPS requests get a stuck-with-no-bytes socket; if
+   * the retry reuses it, retry equals not retrying). Implementations
+   * should close any pooled dispatcher / TLS session and rebuild it so
+   * the next `streamChat` call does a fresh DNS / TCP / TLS handshake.
+   * Optional — providers without pooled connections (in-process mocks,
+   * SDK-managed pools they cannot reach) can omit it.
+   */
+  recycleConnections?(): void
   streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent>
   webSearch?(params: WebSearchParams): Promise<WebSearchResult>
   describeImage?(params: DescribeImageParams): Promise<DescribeImageResult>

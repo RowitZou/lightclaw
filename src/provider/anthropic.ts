@@ -306,12 +306,24 @@ function formatWebSearchBlocks(blocks: unknown[]): string {
 
 export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
   const baseURL = endpoint.baseUrl
-  const proxyFetch = buildProxyAwareFetch(buildProxyDispatcher(endpoint.proxy))
-  const client = new Anthropic({
+  // Dispatcher / fetch / SDK client are mutable, NOT const: `recycleConnections`
+  // tears them down and rebuilds them so the next streamChat lands on a
+  // fresh TCP / TLS handshake. See `openai-auth.ts` recycle doc for rationale
+  // (1091 偶发 hang on keep-alive sockets, retry on same socket reproduces).
+  let proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+  let proxyFetch = buildProxyAwareFetch(proxyDispatcher)
+  let client = new Anthropic({
     apiKey: endpoint.apiKey,
     ...(baseURL ? { baseURL } : {}),
     ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
+  function rebuildClient(): void {
+    client = new Anthropic({
+      apiKey: endpoint.apiKey,
+      ...(baseURL ? { baseURL } : {}),
+      ...(proxyFetch ? { fetch: proxyFetch } : {}),
+    })
+  }
   // Server-side WebSearch is only supported by Anthropic's first-party API.
   // Third-party gateways (Bedrock-backed New API, etc.) usually don't proxy
   // it cleanly, so we gate by absence of baseUrl as a conservative proxy
@@ -325,6 +337,14 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: webSearchSupported,
       },
       promptCaching: true,
+    },
+    recycleConnections() {
+      if (proxyDispatcher) {
+        void proxyDispatcher.close().catch(() => {})
+      }
+      proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+      proxyFetch = buildProxyAwareFetch(proxyDispatcher)
+      rebuildClient()
     },
     detectStaticDropKinds(): readonly ['audio', 'video'] {
       // Messages accepts image + document blocks. LightClaw has no audio /

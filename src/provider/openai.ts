@@ -248,12 +248,22 @@ export function mapUsage(usage: unknown): UsageStats {
 }
 
 export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
-  const proxyFetch = buildProxyAwareFetch(buildProxyDispatcher(endpoint.proxy))
-  const client = new OpenAI({
+  // Dispatcher / fetch / SDK client are mutable, NOT const. See
+  // `openai-auth.ts` recycle doc for rationale.
+  let proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+  let proxyFetch = buildProxyAwareFetch(proxyDispatcher)
+  let client = new OpenAI({
     apiKey: endpoint.apiKey,
     ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
     ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
+  function rebuildClient(): void {
+    client = new OpenAI({
+      apiKey: endpoint.apiKey,
+      ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
+      ...(proxyFetch ? { fetch: proxyFetch } : {}),
+    })
+  }
 
   return {
     name: 'openai',
@@ -262,6 +272,14 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         webSearch: false,
       },
       promptCaching: false,
+    },
+    recycleConnections() {
+      if (proxyDispatcher) {
+        void proxyDispatcher.close().catch(() => {})
+      }
+      proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+      proxyFetch = buildProxyAwareFetch(proxyDispatcher)
+      rebuildClient()
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const pendingTools = new Map<number, PendingToolCall>()

@@ -615,8 +615,12 @@ export async function query(params: QueryParams): Promise<{
             : renderEffectiveSystemPrompt(),
         }
       }
+      // Hoisted above the try block so the transient-retry catch can call
+      // `mainRoute.provider.recycleConnections?.()` to force a fresh TCP
+      // handshake on retry. Re-resolved each attempt because `/model`
+      // mid-turn slash could swap the provider between attempts.
+      const mainRoute = getProviderFor(config, roleModel)
       try {
-        const mainRoute = getProviderFor(config, roleModel)
         dispatchCtx.mainTurnRouting = {
           provider: mainRoute.provider,
           schema: mainRoute.provider.name,
@@ -760,6 +764,23 @@ export async function query(params: QueryParams): Promise<{
             shouldRetry = true
           }
           if (shouldRetry) {
+            // Force a fresh TCP connection on the retry attempt. The
+            // transient class includes IdleStreamError (proxy / TLS
+            // stalled with no bytes flowing); on retry the undici /
+            // proxy keep-alive pool would otherwise route through the
+            // very socket that just stalled, so retry without recycle
+            // ≈ no retry at all (2026-05-25 dogfood: 30 ttfb aborts in
+            // 30 min on the 1091 proxy's ~3% socket-stall rate).
+            // Best-effort — provider may not implement the hook.
+            try {
+              mainRoute.provider.recycleConnections?.()
+            } catch (recycleError) {
+              process.stderr.write(
+                `[query] recycleConnections threw on turn ${turn}: ${
+                  recycleError instanceof Error ? recycleError.message : String(recycleError)
+                }\n`,
+              )
+            }
             continue
           }
         }

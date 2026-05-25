@@ -366,17 +366,33 @@ export function createOpenAIAuthProvider(
 ): Provider {
   const authName = opts.authProviderName ?? 'codex'
   const baseURL = endpoint.baseUrl ?? CODEX_BACKEND_BASE_URL
-  // Build the dispatcher / fetch once at construction time — endpoint
-  // proxy is not expected to mutate after config resolves, and per-call
-  // construction would re-parse the proxy URL on every streamChat.
-  const proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
-  const proxiedFetch = buildProxyAwareFetch(proxyDispatcher)
+  // Dispatcher / fetch are mutable bindings, NOT const: `recycleConnections`
+  // tears them down and rebuilds them so the next streamChat lands on a
+  // fresh TCP / TLS handshake (1091 偶发 hang: keep-alive socket can stall
+  // with no bytes flowing; retry on the same socket reproduces the stall).
+  // `streamChat` reads these at call time, so the next invocation
+  // automatically picks up whatever the most recent recycle produced.
+  let proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+  let proxiedFetch = buildProxyAwareFetch(proxyDispatcher)
 
   return {
     name: 'openai-auth',
     capabilities: {
       serverTools: { webSearch: false },
       promptCaching: false,
+    },
+    recycleConnections() {
+      // Best-effort: undici Dispatcher.close() drains gracefully but we
+      // do not await it — the caller (query.ts) is on a retry path and
+      // the new streamChat must dispatch on the new pool immediately.
+      // The old dispatcher will close in the background; any in-flight
+      // request on it (none in practice since this fires from the retry
+      // catch arm after the prior streamChat unwound) would error out.
+      if (proxyDispatcher) {
+        void proxyDispatcher.close().catch(() => {})
+      }
+      proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
+      proxiedFetch = buildProxyAwareFetch(proxyDispatcher)
     },
     // OpenAI Responses emits a server-side `event: keepalive` every ~30s
     // whenever no business event flows on the SSE stream. Empirically

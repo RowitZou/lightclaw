@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   convertMessagesToResponsesInput,
   convertToolsToResponsesShape,
+  createOpenAIAuthProvider,
   formatOpenAIAuthError,
   processResponseStream,
 } from './openai-auth.js'
@@ -555,5 +556,55 @@ describe('openai-auth: formatOpenAIAuthError', () => {
       error.message,
       'vision failed status=400: code=invalid_request_error, type=invalid_request_error, param=input[0].content[1].image_url, message=Invalid image.',
     )
+  })
+})
+
+// 2026-05-25 dogfood §D follow-up: when query.ts's transient-retry path fires
+// (typically IdleStreamError from a 1091 proxy stalled-socket), the retry
+// must land on a fresh TCP / TLS handshake — undici's keep-alive pool
+// otherwise routes back through the same stuck socket, so retry equals not
+// retrying. `recycleConnections` is the framework hook; here we pin that
+// (1) the provider exposes it as a function on the optional Provider field,
+// (2) calling it on a proxy-configured endpoint succeeds without throwing
+//     (closes old ProxyAgent, builds a new one),
+// (3) calling it on a no-proxy endpoint is a safe no-op (no dispatcher to
+//     close — the guard inside recycleConnections must skip undefined).
+// Without these, a future refactor could drop the hook, the wire in
+// query.ts would silently swallow the optional-chaining miss, and retry
+// regresses to reusing the stalled socket.
+describe('openai-auth: recycleConnections (transient-retry hygiene)', () => {
+  it('exposes recycleConnections on the Provider', () => {
+    const provider = createOpenAIAuthProvider({
+      auth: 'codex-oauth',
+      proxy: 'http://127.0.0.1:1',
+    })
+    assert.equal(typeof provider.recycleConnections, 'function')
+  })
+
+  it('does not throw when called on a proxied provider', () => {
+    const provider = createOpenAIAuthProvider({
+      auth: 'codex-oauth',
+      proxy: 'http://127.0.0.1:1',
+    })
+    // Explicit existence assertion: optional-chaining silently no-ops on
+    // undefined, which would let a missing implementation pass a "doesn't
+    // throw" check vacuously. Pin both: must exist, must execute.
+    assert.equal(typeof provider.recycleConnections, 'function')
+    const recycle = provider.recycleConnections!
+    assert.doesNotThrow(() => recycle())
+    // Repeat — closes the rebuilt dispatcher and builds a third one, must
+    // also be safe (catches "first close + new build is a happy path but
+    // second close throws because we shadowed the wrong reference").
+    assert.doesNotThrow(() => recycle())
+  })
+
+  it('is a no-op when no proxy is configured (dispatcher undefined)', () => {
+    const provider = createOpenAIAuthProvider({
+      auth: 'codex-oauth',
+    })
+    assert.equal(typeof provider.recycleConnections, 'function')
+    // The `if (proxyDispatcher)` guard inside recycleConnections must
+    // tolerate `undefined`; without the guard, `undefined.close()` throws.
+    assert.doesNotThrow(() => provider.recycleConnections?.())
   })
 })
