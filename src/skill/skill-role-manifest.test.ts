@@ -92,7 +92,7 @@ describe('bundled skill ↔ role contract manifest', () => {
     assert.deepEqual(manifest, {
       main: ['remember', 'skillify'],
       generalist: ['remember'],
-      localExplorer: [],
+      localExplorer: ['local-exploration-workflow'],
       webSearcher: [],
       feishuSecretary: [],
       coder: ['coding-workflow', 'remember'],

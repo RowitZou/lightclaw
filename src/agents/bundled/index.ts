@@ -52,7 +52,8 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'localExplorer',
     whenToUse:
       'Fast read-only local exploration: files and directories, codebase contents, system state (processes, env vars, conda envs, disk usage, package versions), config files, log files. Read-only — no modifications.',
-    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite'],
+    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill'],
+    skills: ['local-exploration-workflow'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: localExplorerPrompt,
     kind: 'worker',
