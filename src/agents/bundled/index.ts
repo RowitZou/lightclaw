@@ -108,7 +108,7 @@ export const BUNDLED_AGENTS: Role[] = [
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['remember'],
+    skills: ['remember', 'coding-workflow'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
     kind: 'worker',
