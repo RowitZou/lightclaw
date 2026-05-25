@@ -26,7 +26,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   feishuSecretary: '1ff8657c73685005f1af3a50449f40e25f20700cf6b4733495387ee837bc7080',
   coder: '50059b1f82e7f2558a1e5d56278775b98fa4efef6aa7028d69ea5d459d6acd8b',
   archivist: '2a82b4a371f3593556ee52089ca1edc11230fe5e5db94f7bf57369f00dfc717f',
-  reviewer: '7e61cd841a63fcdce9e3ec46ea41c91670c299f74613e822b2edfc87921852a0',
+  reviewer: '47d824df9502b19e27bad73716bb790d26f855cd7d43fb003c3dff083e1d1d22',
   memoryExtractor: '296e1693f3ed433a9a3f1526bc24bc6291809ebbe8c7a5dbb78c7b2100e2fccf',
   memoryCurator: '22c073df9e2148ade8570e758402a5066ff2e785a866d182a46f21ac1350f4e1',
   skillCurator: 'a3defe886f1d17b51ba0dd959c0d1ce64f93d8e114d42d03c56f2d4b8bb9b067',

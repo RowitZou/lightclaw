@@ -156,7 +156,7 @@ export const BUNDLED_AGENTS: Role[] = [
     description:
       'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['remember'],
+    skills: ['remember', 'pre-delivery-review-workflow'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: reviewerPrompt,
     kind: 'worker',

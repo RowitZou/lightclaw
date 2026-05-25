@@ -97,7 +97,7 @@ describe('bundled skill ↔ role contract manifest', () => {
       feishuSecretary: [],
       coder: ['coding-workflow', 'remember'],
       archivist: ['remember'],
-      reviewer: ['remember'],
+      reviewer: ['pre-delivery-review-workflow', 'remember'],
       memoryExtractor: [],
       memoryCurator: [],
       skillCurator: [],
