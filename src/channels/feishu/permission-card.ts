@@ -85,6 +85,12 @@ type PendingPermission = {
   highRisk: boolean
   resolve(decision: PermissionDecision): void
   rendered: boolean
+  /** Captured from the approval card send response. Used by deny paths that
+   *  don't see a user click (interjection auto-deny / caller abort / 24h
+   *  expire) so the stale yellow card can be patched to the resolved shape
+   *  via `im.message.patch`, matching the click-driven Feishu callback
+   *  replacement that resolvedCardResponse triggers for normal allow/deny. */
+  cardMessageId?: string
   abortListener?: () => void
   /** 24h fallback so a card the user has forgotten about doesn't keep the
    *  channel session lock pinned forever. Cleared on normal resolve / abort. */
@@ -188,6 +194,11 @@ export class FeishuPermissionCoordinator {
 
       if (input.ask.signal) {
         const abortListener = () => {
+          void this.patchCardToResolved(
+            pending,
+            'deny',
+            t('permission.feishu.outcome.abort'),
+          )
           this.resolvePending(pending, {
             behavior: 'deny',
             reason: t('permission.feishu.deniedAbort', { tool: pending.ask.toolName }),
@@ -238,10 +249,11 @@ export class FeishuPermissionCoordinator {
     const card = buildApprovalCard(pending)
     if (isFeishuGroupChatType(pending.message.chatType)) {
       try {
-        await this.sender.sendInteractiveCardToOpenId(
+        const sent = await this.sender.sendInteractiveCardToOpenId(
           pending.message.senderOpenId,
           card,
         )
+        if (sent.messageId) pending.cardMessageId = sent.messageId
         return
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
@@ -249,7 +261,8 @@ export class FeishuPermissionCoordinator {
           `feishu permission: DM push failed for ${pending.message.senderOpenId}, falling back to in-chat card request=${pending.id}: ${detail}\n`,
         )
         try {
-          await this.sender.sendInteractiveCard(pending.message, card)
+          const sent = await this.sender.sendInteractiveCard(pending.message, card)
+          if (sent.messageId) pending.cardMessageId = sent.messageId
           return
         } catch (fallbackError) {
           const fallbackDetail = fallbackError instanceof Error
@@ -265,7 +278,8 @@ export class FeishuPermissionCoordinator {
     }
 
     try {
-      await this.sender.sendInteractiveCard(pending.message, card)
+      const sent = await this.sender.sendInteractiveCard(pending.message, card)
+      if (sent.messageId) pending.cardMessageId = sent.messageId
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
@@ -273,6 +287,35 @@ export class FeishuPermissionCoordinator {
       )
       await this.notifyCardDeliveryFailureAndDeny(pending, detail)
       return
+    }
+  }
+
+  /**
+   * Patch the originally-sent approval card to its resolved (button-less)
+   * shape via `im.message.patch`. Used by deny paths that don't see a user
+   * click — interjection auto-deny, caller-side abort, 24h expire — so the
+   * stale yellow card doesn't keep accepting clicks after the pending was
+   * already resolved. Best-effort: missing messageId (card send never
+   * captured one, or transient-enqueue path) silently no-ops; patch API
+   * errors get a stderr line but never throw, so the caller's resolve path
+   * is never blocked by Feishu UI work.
+   */
+  private async patchCardToResolved(
+    pending: PendingPermission,
+    outcome: ResolvedOutcome,
+    label: string,
+  ): Promise<void> {
+    if (!pending.cardMessageId) return
+    try {
+      await this.sender.patchInteractiveCard(
+        pending.cardMessageId,
+        buildResolvedCard(pending, { outcome, label }),
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `feishu permission: card patch failed request=${pending.id} message=${pending.cardMessageId}: ${detail}\n`,
+      )
     }
   }
 
@@ -506,6 +549,11 @@ export class FeishuPermissionCoordinator {
     process.stderr.write(
       `feishu permission: expired request=${pending.id} after ${this.expiryMs}ms\n`,
     )
+    void this.patchCardToResolved(
+      pending,
+      'deny',
+      t('permission.feishu.outcome.expired'),
+    )
     this.resolvePending(pending, {
       behavior: 'deny',
       reason: t('permission.feishu.deniedExpired', {
@@ -574,6 +622,11 @@ export class FeishuPermissionCoordinator {
     }
     process.stderr.write(
       `feishu permission: auto-denying head pending request=${pending.id} for session ${sessionId} due to interjection\n`,
+    )
+    void this.patchCardToResolved(
+      pending,
+      'deny',
+      t('permission.feishu.outcome.autoDenyInterjection'),
     )
     this.resolvePending(pending, {
       behavior: 'deny',

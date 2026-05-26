@@ -22,31 +22,55 @@ class FakeSender {
   cardSends = 0
   dmCardSends = 0
   textSends = 0
+  cardPatches = 0
   lastCard: Record<string, any> | null = null
   lastDmCard: Record<string, any> | null = null
   lastText: string | null = null
+  lastPatchedCard: Record<string, any> | null = null
+  lastPatchedMessageId: string | null = null
   cardShouldFail = false
   dmShouldFail = false
+  // When set, sendInteractiveCard / sendInteractiveCardToOpenId report this
+  // messageId in their response so the coordinator can later patch the same
+  // card. Approximates the real Feishu `im.message.create` response.
+  nextMessageId: string | null = 'msg-card-1'
 
-  async sendInteractiveCard(_msg: unknown, card: Record<string, any>): Promise<void> {
+  async sendInteractiveCard(
+    _msg: unknown,
+    card: Record<string, any>,
+  ): Promise<{ messageId?: string }> {
     this.cardSends += 1
     this.lastCard = card
     if (this.cardShouldFail) {
       throw new Error('card blocked')
     }
+    return this.nextMessageId ? { messageId: this.nextMessageId } : {}
   }
 
-  async sendInteractiveCardToOpenId(_openId: string, card: Record<string, any>): Promise<void> {
+  async sendInteractiveCardToOpenId(
+    _openId: string,
+    card: Record<string, any>,
+  ): Promise<{ messageId?: string }> {
     this.dmCardSends += 1
     this.lastDmCard = card
     if (this.dmShouldFail) {
       throw new Error('blocked')
     }
+    return this.nextMessageId ? { messageId: this.nextMessageId } : {}
   }
 
   async sendText(_msg: unknown, text: string): Promise<void> {
     this.textSends += 1
     this.lastText = text
+  }
+
+  async patchInteractiveCard(
+    messageId: string,
+    card: Record<string, any>,
+  ): Promise<void> {
+    this.cardPatches += 1
+    this.lastPatchedMessageId = messageId
+    this.lastPatchedCard = card
   }
 }
 
@@ -629,6 +653,136 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     t.mock.timers.tick(24 * 60 * 60 * 1000 + 1)
     // No expired notice card after the abort path resolved + cleared timer.
     assert.equal(sender.cardSends, 1, 'no expired card after abort')
+  }))
+
+  // ---- Stale-card patch on deny-without-click paths ----
+  //
+  // Three paths resolve a pending as deny without a user click on the
+  // yellow card: interjection auto-deny, caller-side AbortSignal, and
+  // the 24h expire timer. Pre-fix the original card stayed yellow with
+  // its buttons live, so a follow-up click landed in handleCardAction's
+  // "stale action" no-op branch and the user saw no UI response. The fix
+  // is best-effort `im.message.patch` to swap the original card for its
+  // resolved (button-less) form, matching the click path's behavior.
+  it('tryAutoDenyForInterjection patches the stale approval card to resolved', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    // Let renderPending settle so the card send response (with messageId)
+    // is captured into pending.cardMessageId.
+    await new Promise(r => setImmediate(r))
+    assert.equal(sender.cardSends, 1)
+
+    const denied = await coord.tryAutoDenyForInterjection('sess-1')
+    await pending
+    // Wait one microtask so fire-and-forget patch settles.
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(denied, true)
+    assert.equal(sender.cardPatches, 1, 'auto-deny patched the original card')
+    assert.equal(
+      sender.lastPatchedMessageId,
+      'msg-card-1',
+      'patch targets the captured approval-card messageId',
+    )
+    // The patched card body should be the resolved (deny) shape — header
+    // template flips to red and the chosen-label echoes the auto-deny reason.
+    const card = sender.lastPatchedCard as Record<string, any>
+    assert.equal((card.header as any).template, 'red')
+    const elements = card.elements as Array<{ text: { content: string } }>
+    assert.match(elements[0].text.content, /(已自动撤销|auto-revoked)/i)
+  }))
+
+  it('expirePending patches the stale approval card to resolved', t => inSession(async () => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(
+      sender as unknown as FeishuSender,
+      { expiryMs: 24 * 60 * 60 * 1000 },
+    )
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const decisionP = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => process.nextTick(r))
+    assert.equal(sender.cardSends, 1)
+
+    t.mock.timers.tick(24 * 60 * 60 * 1000)
+    await decisionP
+    // Patch is fire-and-forget; let the next microtask drain.
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.cardPatches, 1, 'expire patched the original card')
+    assert.equal(
+      sender.lastPatchedMessageId,
+      'msg-card-1',
+      'patch targets the captured approval-card messageId',
+    )
+    const card = sender.lastPatchedCard as Record<string, any>
+    assert.equal((card.header as any).template, 'red')
+    const elements = card.elements as Array<{ text: { content: string } }>
+    assert.match(elements[0].text.content, /(超时|expired)/i)
+  }))
+
+  it('AbortSignal-driven deny patches the stale approval card to resolved', () => inSession(async () => {
+    const sender = new FakeSender()
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+    const controller = new AbortController()
+    const askInput: PermissionAskInput = {
+      ...ask('Bash', 'curl:*'),
+      signal: controller.signal,
+    }
+    const decisionP = approver.ask(askInput)
+    await new Promise(r => setImmediate(r))
+    assert.equal(sender.cardSends, 1)
+
+    controller.abort()
+    await decisionP
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.cardPatches, 1, 'abort patched the original card')
+    assert.equal(
+      sender.lastPatchedMessageId,
+      'msg-card-1',
+      'patch targets the captured approval-card messageId',
+    )
+    const card = sender.lastPatchedCard as Record<string, any>
+    assert.equal((card.header as any).template, 'red')
+    const elements = card.elements as Array<{ text: { content: string } }>
+    assert.match(elements[0].text.content, /(中断|aborted)/i)
+  }))
+
+  it('patch is skipped when no card messageId was captured', () => inSession(async () => {
+    const sender = new FakeSender()
+    sender.nextMessageId = null
+    const coord = new FeishuPermissionCoordinator(sender as unknown as FeishuSender)
+    const approver = coord.createApprover({
+      message: fakeMessage('alice-open-id'),
+      sessionId: 'sess-1',
+      userId: 'alice',
+    })
+
+    const pending = approver.ask(ask('Bash', 'curl:*'))
+    await new Promise(r => setImmediate(r))
+    await coord.tryAutoDenyForInterjection('sess-1')
+    await pending
+    await new Promise(r => setImmediate(r))
+
+    assert.equal(sender.cardPatches, 0, 'no patch when messageId was never captured')
   }))
 })
 
