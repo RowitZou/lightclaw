@@ -54,6 +54,44 @@ test('probeBackgroundJob honors lost sentinel and recovers its reason', async ()
   assert.equal(snapshot.lostReason, 'unknown-grace-exhausted')
 })
 
+test('probeBackgroundJob re-checks exit after kill -0 fails to close the wrapper-mv race', async () => {
+  // Regression for 2026-05-26 dogfood §bg-exec false-positive. A python3 job
+  // that ran `time.sleep(2); sys.exit(0)` landed both `exit=0` AND
+  // `lost=probe` on disk because of this race window:
+  //   t0: process self-exits, kernel reaps pgid
+  //   t1: watcher.tick → probeBackgroundJob → stat exit → ENOENT
+  //                                          ↓
+  //                                    (bg-runner wrapper's `printf > exit.tmp
+  //                                     && mv exit.tmp exit` is in flight)
+  //   t2: probe → exec `kill -0 -- -<pgid>` → exit 1 (group reaped)
+  //   t3: probe → wrapper's mv lands → exit file now exists
+  //   t4: probe → returns `lost / probe` despite the process having cleanly
+  //               completed; watcher then stamps the `lost` sentinel
+  // Fix: after `kill -0` fails, re-check exit before returning lost. The
+  // window is bounded by how long it takes the wrapper to mv exit.tmp after
+  // SIGCHLD, which in practice is well within one tick — re-checking once is
+  // enough to close it without making the probe pay for two stats on the
+  // healthy path.
+  const { runtime, entry } = makeEntry()
+  // The kill -0 exec dequeues this callback. Before returning exitCode 1
+  // (process group gone), it writes the exit sentinel — simulating the
+  // wrapper's mv landing during the probe's exec call.
+  runtime.queueExecCallback(async () => {
+    await runtime.fs.writeFile(
+      '/workspace/.lightclaw/bg-exec/bg-00000001/exit',
+      '0',
+    )
+    return { stdout: '', stderr: '', exitCode: 1 }
+  })
+
+  const snapshot = await probeBackgroundJob(entry)
+  assert.equal(snapshot.status, 'completed',
+    'process self-exited and exit sentinel landed during probe — must not be stamped lost')
+  assert.equal(snapshot.exitCode, 0)
+  assert.equal(snapshot.lostReason, undefined,
+    'completed snapshots must not carry a lostReason')
+})
+
 test('probeBackgroundJob reports unknown when probe exec itself throws', async () => {
   const { runtime, entry } = makeEntry()
   // Simulate a control-plane blip (brainctl ws drop, probe timeout, transient

@@ -14,7 +14,7 @@ export class FakeRuntime {
   readonly execCalls: ExecInput[] = []
   private readonly files = new Map<string, Buffer>()
   private readonly dirs = new Set<string>(['/workspace'])
-  private execQueue: Array<ExecResult | { throw: Error }> = []
+  private execQueue: Array<ExecResult | { throw: Error } | { callback: () => Promise<ExecResult> }> = []
 
   readonly fs = {
     kind: 'host-direct' as const,
@@ -61,6 +61,14 @@ export class FakeRuntime {
     this.execQueue.push({ throw: error })
   }
 
+  // For race-window tests: the callback runs when this exec is dequeued and
+  // can perform side effects (e.g. write the exit sentinel to simulate the
+  // bg-runner wrapper landing its `mv exit.tmp exit` during the probe's
+  // `kill -0` call) before returning the simulated kill-0 exit code.
+  queueExecCallback(callback: () => Promise<ExecResult>): void {
+    this.execQueue.push({ callback })
+  }
+
   async exec(input: ExecInput): Promise<ExecResult> {
     this.execCalls.push(input)
     if (input.command.startsWith('mkdir -p ')) {
@@ -76,6 +84,9 @@ export class FakeRuntime {
     const next = this.execQueue.shift()
     if (next && 'throw' in next) {
       throw next.throw
+    }
+    if (next && 'callback' in next) {
+      return await next.callback()
     }
     return next ?? { stdout: '', stderr: '', exitCode: 0 }
   }

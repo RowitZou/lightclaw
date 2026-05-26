@@ -78,6 +78,24 @@ export async function probeBackgroundJob(entry: BackgroundJobEntry): Promise<Bac
   }
 
   if (probe.exitCode !== 0) {
+    // Narrow race window: process self-exited between the initial exit-file
+    // stat (line 38) and `kill -0` returning. The bg-runner wrapper's
+    // `printf > exit.tmp && mv exit.tmp exit` may have landed during the
+    // probe exec, in which case the job is actually completed — re-check
+    // before stamping lost. 2026-05-26 dogfood observed a python3
+    // `sleep(2); sys.exit(0)` land both `exit=0` and `lost=probe` on disk
+    // for exactly this race. The window is bounded by the wrapper's mv
+    // taking SIGCHLD → printf → mv to complete, so one extra stat closes
+    // it without paying anything on the healthy path (kill -0 returns 0).
+    const lateExit = await readFileIfExists(entry, jobFile(jobDir, EXIT_FILE))
+    if (lateExit) {
+      const raw = lateExit.toString('utf8').trim()
+      const exitCode = Number.parseInt(raw, 10)
+      return snapshot(meta, 'completed', {
+        exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+        endedAt: Date.now(),
+      })
+    }
     return snapshot(meta, 'lost', { endedAt: Date.now(), lostReason: 'probe' })
   }
 
