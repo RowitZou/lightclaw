@@ -338,6 +338,47 @@ describe('WebFetch tool — daemon-side migration regressions', () => {
     assert.match(result.output as string, /\(url: https:\/\/arxiv\.org\/pdf\/2605\.10730\)/)
   })
 
+  it('maxContentLength fetch failure appends a background-Bash hint so the LLM stops retrying with fg curl', async () => {
+    // 2026-05-26 dogfood: agent hit the 30MB cap on a 35MB arxiv PDF, then
+    // tried fg `Bash(curl -L --retry 3)`, timed out at the default 120s
+    // having only pulled ~25MB, and only then switched to bg-exec curl with
+    // -C -. Three turns to do what one Dispatch to bg-Bash should have
+    // done. axios drops `error.config.url`, so the envelope already had to
+    // re-append the URL; this case adds a single sentence that points the
+    // model at bg-Bash so the cap-exceeded surface stops being a two-step
+    // try-fg-curl-first trap.
+    _setDaemonFetchUrlForTests(async () => {
+      throw new Error('maxContentLength size of 31457280 exceeded')
+    })
+    const result = await webFetchTool.call(
+      { url: 'https://arxiv.org/pdf/2605.10730' },
+      buildCtx(),
+    )
+    assert.equal(result.isError, true)
+    const output = result.output as string
+    assert.match(output, /maxContentLength size of 31457280 exceeded/)
+    assert.match(output, /\(url: https:\/\/arxiv\.org\/pdf\/2605\.10730\)/)
+    assert.match(output, /background Bash job/i)
+  })
+
+  it('non-cap fetch failures (e.g. 404) do not append the background-Bash hint', async () => {
+    // The hint is cap-exceeded-specific. A 404 / DNS / TLS / abort failure
+    // is not solved by retrying as a background Bash download — re-fetching
+    // with bg-curl would hit the same wire error. Guard against the hint
+    // bleeding into the catch-all envelope.
+    _setDaemonFetchUrlForTests(async () => {
+      throw new Error('Request failed with status code 404')
+    })
+    const result = await webFetchTool.call(
+      { url: 'https://example.com/missing' },
+      buildCtx(),
+    )
+    assert.equal(result.isError, true)
+    const output = result.output as string
+    assert.match(output, /404/)
+    assert.doesNotMatch(output, /background Bash/i)
+  })
+
   it('5-line header format: URL / Status / Content-Type / Bytes / blank, byte-equivalent to Python helper', async () => {
     // Regression case: the helper-stdout shape is parsed loosely by the
     // model but admin grep relies on the exact `URL: <url>\nStatus: ...`

@@ -217,8 +217,19 @@ When a URL redirects to a different host, follow up with a new WebFetch on the r
       // — axios's `error.message` is `Request failed with status code 403`
       // alone, dropping `error.config.url`.
       const reason = err instanceof Error ? err.message : String(err)
+      // 2026-05-26 dogfood: cap-exceeded specifically traps the model into a
+      // fg `Bash(curl)` retry that then hits the default 120s timeout. The
+      // axios message is stable (`maxContentLength size of N exceeded`) and
+      // is the only failure mode in this catch where the same URL would
+      // succeed via a different transport; everything else (404 / DNS / TLS
+      // / abort) would hit the same wire error from bg-Bash too, so the
+      // hint is scoped to this one substring.
+      const capExceeded = reason.includes('maxContentLength size of')
+      const hint = capExceeded
+        ? `\nHint: for binary downloads above WebFetch's cap, switch to a background Bash job.`
+        : ''
       return {
-        output: `WebFetch failed (exit 1): fetch failed: ${reason} (url: ${input.url})`,
+        output: `WebFetch failed (exit 1): fetch failed: ${reason} (url: ${input.url})${hint}`,
         isError: true,
       }
     }
