@@ -674,6 +674,21 @@ export async function* processResponseStream(
         if (slot) {
           slot.args += ev.delta
         }
+        // Symmetric to reasoning_summary / output_text deltas: emit a
+        // framework keepalive on every non-empty wire delta so query.ts's
+        // idle watchdog clock resets while the model is actively streaming
+        // tool-call arguments. Without this the watchdog goes blind from
+        // output_item.added(function_call) through output_item.done — every
+        // wire delta happens but lightclaw silences itself. 2026-05-26
+        // dogfood: 4/4 Dispatch JSON truncations with
+        // `kind=inter-event ms=35001-39501ms` followed by partial-args
+        // `function_call args invalid JSON ... position 2740-4686`. Codex
+        // never paused — the watchdog falsely tripped on what it perceived
+        // as wire silence. See `# LightClaw Runtime Safety Notes` keepalive
+        // contract for the `'tool-args'` reason.
+        if (ev.delta && ev.delta.length > 0) {
+          yield { type: 'keepalive', reason: 'tool-args' }
+        }
         break
       }
       case 'response.output_item.done': {

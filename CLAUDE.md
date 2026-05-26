@@ -13,7 +13,7 @@
   'keepalive' }` is framework-internal only: `query.ts` refreshes the stream
   idle clock and then continues, so keepalives must never become assistant
   text, tool dispatch, transcript content, or channel output. Providers emit
-  keepalives from two sources, both yielded as the same framework event:
+  keepalives from three sources, all yielded as the same framework event:
   - **reasoning-derived (`reason:'reasoning'`)** — `openai-auth` Responses
     `response.reasoning_summary*`, OpenAI-compatible Chat Completions
     `reasoning_content` / string `reasoning`, and Anthropic
@@ -26,11 +26,41 @@
     keeps the idle clock anchored to wire activity rather than business
     events — without it, long legal hidden reasoning trips the inter-event
     watchdog as false hung, exactly the 2026-05-25 dogfood false-positive.
+  - **tool-args-derived (`reason:'tool-args'`)** — provider deltas that
+    accumulate a tool call's JSON arguments without otherwise yielding to
+    the consumer: `openai-auth` `response.function_call_arguments.delta`,
+    OpenAI Chat Completions `delta.tool_calls[*].function.arguments`, and
+    Anthropic `input_json_delta.partial_json`. Pre-Phase-38-followup these
+    were silently consumed into provider-internal accumulator slots,
+    leaving `query.ts`'s watchdog blind from `output_item.added`(function_call)
+    / `content_block_start`(tool_use) through `output_item.done` /
+    `content_block_stop`. A long-args streaming response — typical for
+    `Dispatch` calls with 3-5 KB structured prompts — would falsely trip
+    the inter-event abort even though codex / openai / anthropic were
+    actively emitting deltas every 20-200ms. 2026-05-26 dogfood: 4/4
+    Dispatch JSON truncations with `kind=inter-event ms=35001-39501ms`
+    followed by `function_call args invalid JSON ... position 2740-4686`.
+    Every provider now emits `{type:'keepalive', reason:'tool-args'}` on
+    each non-empty tool-args wire chunk so the watchdog clock resets on
+    wire activity, mirroring the reasoning_summary forwarding. The empty
+    `partial_json: ''` / `delta: ''` defensive case does not yield —
+    matching the `output_text.delta` / `thinking_delta` empty-string guard
+    convention. Per-chunk yield for `openai`'s Chat Completions path is
+    deduped to one event per chunk even when several parallel
+    `tool_calls[]` entries fire in the same chunk: one keepalive per wire
+    chunk is sufficient to anchor the clock, and emitting one per parallel
+    tool call would flood the event stream with redundant resets.
   `openai-auth` overrides `Provider.idleTimeouts` to `35s/35s`: ~30s keepalive
   cadence + ~5s grace, tight enough that a real proxy/TCP stall (no
   heartbeat received) trips abort fast. Other providers fall through to
   `config.streamIdle` global defaults (90s/30s). Do not prompt-engineer
   around any of this — it is provider plumbing.
+  When adding a new provider, **audit every accumulator path** (tool args
+  JSON, structured output deltas, embedded function-call streams) and
+  ensure the corresponding wire delta yields a framework keepalive. The
+  pattern is: if your provider has an `acc += delta` line in the stream
+  loop without a `yield` on the same wire event, the watchdog will go
+  blind for as long as that accumulator stays open.
 - LocalRuntime is admin-only. When `runtime.backend = "local"`, paired non-admin users must not acquire a runtime; multi-user service must use DockerRuntime or RjobRuntime.
 - Do not add path-string workspace guards to tools, permission policy, OR runtime backends. Runtime safety comes from the LocalRuntime admin-only gate, Docker/Rjob isolation, read-only mounts, and the Phase 5 permission system. `toContainerPath` in docker.ts / rlaunch.ts accepts any absolute path post-normalize: workspace + mountTable hits get translated, everything else (`/tmp`, `/etc`, `/proc`, …) passes through as the container-local path so LayeredDataPlane's `exec-relay` layer runs the command inside the worker pod where it sees the image's own filesystem (e.g. container `/etc/passwd` is the image's, not the host's). Relative paths still throw — backends only legitimately see absolute paths. **Do not re-add the "Path is not within {RuntimeKind}Runtime workspace: …" guard**; that was leftover technical debt from 18ff987's sweep that this runtime-fs-cleanup phase completed.
 - **RlaunchRuntime never puts bulk bytes on the brainctl exec channel — in either direction.** brainctl exec is a control channel only; its websocket exec stream silently drops bytes on large payloads (the `9cafbdc` stdin incident: ~16% writeFile corruption; the 6 MB PDF stdout byte-mismatch dogfood bug). brainctl exec stdout therefore carries only control-shape data, never tool output:

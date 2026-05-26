@@ -450,6 +450,84 @@ describe('openai-auth: processResponseStream', () => {
     assert.deepEqual(stop.content, [{ type: 'text', text: 'hello' }])
   })
 
+  // Symmetric to the reasoning-summary keepalive forwarding: when Codex is
+  // emitting `response.function_call_arguments.delta` events to fill a tool
+  // call's JSON arguments, those deltas ARE the wire activity but they are
+  // consumed internally by `processResponseStream` (accumulated into the
+  // pending tool-call slot) — pre-fix they did not yield anything to the
+  // query.ts idle watchdog, so a long-args streaming response that takes
+  // >35s falsely tripped the inter-event abort even though codex was
+  // emitting deltas every ~20ms. 2026-05-26 dogfood saw 4/4 Dispatch JSON
+  // truncations with `kind=inter-event ms=35001-39501ms` plus
+  // `function_call args invalid JSON ... position 2740-4686` — all upstream
+  // was healthy; lightclaw silenced its own watchdog. Fix yields a
+  // `{type:'keepalive', reason:'tool-args'}` per delta so the watchdog
+  // clock resets on each wire chunk, mirroring how reasoning_summary
+  // already yields keepalive. Pre-fix this test fails because no
+  // keepalive event reaches the consumer between added and done.
+  it('yields keepalive for each function_call_arguments.delta chunk', async () => {
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"role":' },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '"feishu' },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: 'Secretary"}' },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 1 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    // 3 keepalives (one per delta) + 1 tool_use + 1 stop
+    const keepalives = out.filter(e => e.type === 'keepalive')
+    assert.equal(keepalives.length, 3, 'expected one keepalive per delta')
+    for (const k of keepalives) {
+      assert.equal(
+        k.type === 'keepalive' ? k.reason : undefined,
+        'tool-args',
+        'function_call_arguments keepalive should carry reason:tool-args',
+      )
+    }
+    // Args still accumulated correctly and final tool_use parses input.
+    const toolUse = out.find(e => e.type === 'tool_use')
+    assert.ok(toolUse, 'tool_use yielded after args complete')
+    if (toolUse?.type === 'tool_use') {
+      assert.deepEqual(toolUse.input, { role: 'feishuSecretary' })
+    }
+  })
+
+  it('does not yield keepalive for empty function_call_arguments.delta', async () => {
+    // Defense: codex shouldn't send empty deltas (it always batches a
+    // non-empty chunk per delta event) but if it ever did, an empty
+    // delta is not real wire activity and shouldn't reset the clock.
+    // Mirrors the `output_text.delta` empty-string guard already in place.
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '' },
+      { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{}' },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 1 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const keepalives = out.filter(e => e.type === 'keepalive')
+    assert.equal(keepalives.length, 1, 'only the non-empty delta should produce a keepalive')
+  })
+
   it('turns reasoning summary stream events into keepalive events', async () => {
     const events = [
       { type: 'response.reasoning_summary_part.added' },

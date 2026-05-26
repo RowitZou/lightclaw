@@ -497,6 +497,17 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
                   ? delta.partial_json
                   : ''
               contentBlock.input += partialJson
+              // Symmetric to text_delta / thinking_delta: emit a framework
+              // keepalive on every non-empty wire delta so query.ts's idle
+              // watchdog clock resets while the model is actively streaming
+              // tool_use input JSON. Without this the watchdog goes blind
+              // from content_block_start(tool_use) through content_block_stop
+              // because the accumulator (contentBlock.input) is internal
+              // state, not a yielded event. See `# LightClaw Runtime Safety
+              // Notes` keepalive contract for the `'tool-args'` reason.
+              if (partialJson.length > 0) {
+                yield { type: 'keepalive', reason: 'tool-args' }
+              }
             }
 
             if (

@@ -347,6 +347,7 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
           }
         }
 
+        let yieldedToolArgsKeepalive = false
         for (const toolCall of delta.tool_calls ?? []) {
           const index = toolCall.index
           const current = pendingTools.get(index) ?? {
@@ -362,6 +363,22 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
           }
           if (toolCall.function?.arguments) {
             current.args += toolCall.function.arguments
+            // Symmetric to reasoning_content / content deltas: emit one
+            // framework keepalive per chunk that carries any non-empty
+            // tool-args wire activity so query.ts's idle watchdog clock
+            // resets while the model is actively streaming tool-call
+            // arguments. Without this the watchdog goes blind for the
+            // entire duration of tool_call args streaming because the
+            // accumulator (current.args) is internal state, not a yielded
+            // event. Yield at most once per chunk even with multiple
+            // parallel tool_calls — they share the same wire chunk and
+            // one keepalive marker is enough to anchor the clock. See
+            // `# LightClaw Runtime Safety Notes` keepalive contract for
+            // the `'tool-args'` reason.
+            if (toolCall.function.arguments.length > 0 && !yieldedToolArgsKeepalive) {
+              yield { type: 'keepalive', reason: 'tool-args' }
+              yieldedToolArgsKeepalive = true
+            }
           }
           pendingTools.set(index, current)
         }
