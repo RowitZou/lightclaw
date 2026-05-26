@@ -98,16 +98,17 @@ export function createFeishuStrategy(
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendMarkdownText(message, text),
     sendFile: (message, file) => sender.sendFile(message, file),
-    sendNotice: (
+    sendNotice: async (
       message: NormalizedChannelMessage,
       kind: SystemNoticeKind,
       content: string,
       bodyFormat?: 'lark_md' | 'plain_text',
-    ) =>
-      sender.sendInteractiveCard(
+    ) => {
+      await sender.sendInteractiveCard(
         message,
         buildSystemNoticeCard({ kind, content, bodyFormat }),
-      ),
+      )
+    },
     sendNoticeToOpenId: async ({ applicantOpenId, kind, content }) => {
       // Bootstrap-fallback notice routed to applicant DM. Used when admin
       // has no Feishu binding so the card UX is bypassed and the runner

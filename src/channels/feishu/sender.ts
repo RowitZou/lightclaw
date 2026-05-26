@@ -270,27 +270,29 @@ export class FeishuSender {
     message: NormalizedChannelMessage,
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
-  ): Promise<void> {
+  ): Promise<{ messageId?: string }> {
     const replyTarget = this.replyTargetFor(message)
     try {
-      await this.sendReplyOrCreate({
+      const response = await this.sendReplyOrCreate({
         chatId: message.chatId,
         replyToMessageId: replyTarget,
         ...(message.threadId ? { threadId: message.threadId } : {}),
         msgType: 'interactive',
         content: JSON.stringify(card),
       })
+      const messageId = response.data?.message_id
+      return messageId ? { messageId } : {}
     } catch (err) {
       if (isTopicCreateRefused(err)) {
         process.stderr.write(`feishu send: ${err.message}; dropping card\n`)
-        return
+        return {}
       }
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: this.replyRecipient(message.chatId, replyTarget, message.threadId),
         payload: { kind: 'card', card: card as Record<string, unknown> },
         ctx,
       })) {
-        return
+        return {}
       }
       throw err
     }
