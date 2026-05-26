@@ -181,6 +181,78 @@ describe('renderSystemPromptSplit — cache anchoring', () => {
   })
 })
 
+// Regression guard against the 2026-05-26 dogfood pattern: the per-turn
+// variable suffix is injected into the last user message (b9e53d1). The
+// TodoList block was a bare "## Current Todo List ..." prose ending with
+// "Use TodoWrite to keep this list current" — placed in user-role content,
+// the model read the trailing imperative as a fresh user instruction and
+// silently ended its turn instead of continuing the in_progress item. Wrap
+// the block in `<system-reminder>` and reword the trailing line so the
+// frame is unmistakable.
+describe('todo block — system-reminder framing in variable suffix', () => {
+  const templateWithTodos: SystemPromptTemplate = {
+    preTodos: 'pre',
+    postTodos: 'Available tools:',
+    includeTodos: true,
+  }
+
+  it('wraps the non-empty todo block in <system-reminder>', () => {
+    const { variable } = renderSystemPromptSplit(
+      templateWithTodos,
+      [{ content: 'do A', activeForm: 'doing A', status: 'in_progress' }],
+      { tools: [fakeTool('TodoWrite')] },
+    )
+    assert.match(variable, /<system-reminder>[\s\S]*## Current Todo List[\s\S]*<\/system-reminder>/)
+  })
+
+  it('wraps the empty-state todo block in <system-reminder>', () => {
+    const { variable } = renderSystemPromptSplit(templateWithTodos, [], {
+      tools: [fakeTool('TodoWrite')],
+    })
+    assert.match(variable, /<system-reminder>[\s\S]*## Current Todo List[\s\S]*\(no todos yet\)[\s\S]*<\/system-reminder>/)
+  })
+
+  it('drops the old imperative "Use TodoWrite to keep this list current" trailer', () => {
+    const { variable } = renderSystemPromptSplit(
+      templateWithTodos,
+      [{ content: 'do A', activeForm: 'doing A', status: 'in_progress' }],
+      { tools: [fakeTool('TodoWrite')] },
+    )
+    assert.doesNotMatch(variable, /Use TodoWrite to keep this list current/)
+  })
+
+  it('marks the block as framework state, not a fresh user instruction', () => {
+    const { variable } = renderSystemPromptSplit(
+      templateWithTodos,
+      [{ content: 'do A', activeForm: 'doing A', status: 'in_progress' }],
+      { tools: [fakeTool('TodoWrite')] },
+    )
+    assert.match(variable, /not a fresh user instruction/)
+  })
+
+  it('keeps the "advance the in_progress item" cue when todos exist', () => {
+    const { variable } = renderSystemPromptSplit(
+      templateWithTodos,
+      [{ content: 'do A', activeForm: 'doing A', status: 'in_progress' }],
+      { tools: [fakeTool('TodoWrite')] },
+    )
+    assert.match(variable, /Keep advancing the in_progress item/)
+  })
+
+  it('keeps the "at most one in_progress" invariant in both states', () => {
+    const { variable: nonEmpty } = renderSystemPromptSplit(
+      templateWithTodos,
+      [{ content: 'do A', activeForm: 'doing A', status: 'in_progress' }],
+      { tools: [fakeTool('TodoWrite')] },
+    )
+    const { variable: empty } = renderSystemPromptSplit(templateWithTodos, [], {
+      tools: [fakeTool('TodoWrite')],
+    })
+    assert.match(nonEmpty, /At most one item in_progress/)
+    assert.match(empty, /At most one item in_progress/)
+  })
+})
+
 function fakeTool(name: string): Tool {
   return {
     name,
