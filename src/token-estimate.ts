@@ -96,3 +96,64 @@ export function estimateMessagesTokens(messages: Message[]): number {
     0,
   )
 }
+
+const CALIBRATION_MIN = 0.5
+const CALIBRATION_MAX = 5.0
+
+/**
+ * Project how many input tokens the NEXT request to the provider will
+ * actually be billed. Anchor the projection on the most recent
+ * `assistant.usage.input_tokens` we have seen — that is the wire-truth
+ * for the slice the provider already processed — and estimate only what
+ * has been added since (the anchor's own response plus any new user /
+ * tool_result messages). The estimator's known per-session bias is
+ * recovered from `anchor.input_tokens / estimate(prefix)` and applied to
+ * the un-sent tail so the threshold judgement reflects upstream pressure
+ * instead of our local under-count (estimator runs 1.17-3.68x low on
+ * codex / multimodal sessions in 2026-05-26 dogfood data).
+ *
+ * Falls back to pure `estimateMessagesTokens` when no usable anchor
+ * exists (cold start; assistant turns that errored with empty usage).
+ * The calibration multiplier is clamped to [0.5, 5.0] so a pathological
+ * anchor (recovered transcript with a stale or otherwise weird usage
+ * record) cannot blow the projection past sanity.
+ */
+export function estimateProjectedInputTokens(messages: Message[]): number {
+  const anchorIdx = findAnchorIndex(messages)
+  if (anchorIdx < 0) {
+    return estimateMessagesTokens(messages)
+  }
+  const anchor = messages[anchorIdx]! as AssistantMessageRef
+  const anchorInput = anchor.message.usage.input_tokens ?? 0
+
+  const prefixEstimate = estimateMessagesTokens(messages.slice(0, anchorIdx))
+  const calibration =
+    prefixEstimate > 0
+      ? Math.min(
+          CALIBRATION_MAX,
+          Math.max(CALIBRATION_MIN, anchorInput / prefixEstimate),
+        )
+      : 1.0
+
+  let tailEstimate = estimateMessageTokens(anchor)
+  for (let i = anchorIdx + 1; i < messages.length; i += 1) {
+    tailEstimate += estimateMessageTokens(messages[i]!)
+  }
+
+  return anchorInput + Math.ceil(tailEstimate * calibration)
+}
+
+type AssistantMessageRef = Extract<Message, { type: 'assistant' }>
+
+function findAnchorIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i]
+    if (m && m.type === 'assistant') {
+      const it = m.message.usage.input_tokens
+      if (typeof it === 'number' && it > 0) {
+        return i
+      }
+    }
+  }
+  return -1
+}

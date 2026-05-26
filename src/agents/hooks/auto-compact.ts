@@ -12,7 +12,7 @@ import {
   incrementCompactionCount,
   setLastExtractedAt,
 } from '../../state.js'
-import { estimateMessagesTokens } from '../../token-estimate.js'
+import { estimateProjectedInputTokens } from '../../token-estimate.js'
 import type { Hook, HookContext } from './types.js'
 
 // Test seam: the threshold compaction path calls `compactImpl` so tests can
@@ -70,7 +70,14 @@ export async function runCompaction(
   }
 
   if (!force) {
-    const totalTokens = estimateMessagesTokens(ctx.messages)
+    // Project the next request's wire-tokens using the most recent
+    // assistant.usage.input_tokens as anchor and calibrating any newly
+    // appended messages with the same anchor's prefix bias. Falls back to
+    // pure local estimate on cold start. Without this, codex /
+    // multimodal sessions silently underestimated 1.17-3.68x and the
+    // 150K-default threshold never tripped before upstream rejected the
+    // request as oversize (2026-05-26 dogfood audit).
+    const totalTokens = estimateProjectedInputTokens(ctx.messages)
     const threshold = ctx.config.contextWindow * ctx.config.compact.thresholdRatio
     if (totalTokens <= threshold) {
       return false
