@@ -429,23 +429,22 @@ export function createOpenAIAuthProvider(
       const input = convertMessagesToResponsesInput(sanitizedMessages)
       const tools = convertToolsToResponsesShape(params.tools)
 
-      // Codex has no explicit cache_control breakpoint; the Responses API does
-      // prefix-match caching automatically, but its cache is shard-local and
-      // requests with no stickiness hint route best-effort across shards —
-      // identical prefixes therefore miss for routing reasons (2026-05-25
-      // dogfood §3: cache_read sporadic mid-session, e.g. cR=47616 then cR=0
-      // 7s later on a monotonic-append next turn). Passing sessionId via
-      // `prompt_cache_key` pins all turns of one session to the same shard.
-      // Per-turn variable suffix still goes at the END of `instructions` so
-      // the stable prefix (persona + memory + tool catalog) stays cache-
-      // hittable across turns even when the trailing TodoList block diverges.
-      const fullSystem = params.systemVariableSuffix
-        ? `${params.system}\n\n${params.systemVariableSuffix}`
-        : params.system
-
+      // Codex has no explicit cache_control breakpoint; the Responses API
+      // does prefix-match caching automatically based on a wire-fingerprint
+      // walk from the start of the request. Any byte change in
+      // `instructions` invalidates the cache from that point onward,
+      // including every token of `input` that follows. The framework
+      // therefore guarantees `params.system` is fully stable across turns
+      // of one query loop, and injects per-turn volatile state into the
+      // last user message at api boundary (`injectSystemReminderInto-
+      // LastUserMessage`). Do NOT re-concatenate any per-turn content
+      // onto `instructions` — it will silently kneecap cache hit-rate to
+      // a single ~1.5K block (2026-05-26 dogfood). Stickiness across
+      // OpenAI's per-shard caches is anchored separately via the
+      // `prompt_cache_key` field.
       const body: ResponseCreateParamsStreaming = {
         model: params.model,
-        instructions: fullSystem,
+        instructions: params.system,
         input,
         ...(tools.length > 0
           ? { tools, tool_choice: 'auto', parallel_tool_calls: true }

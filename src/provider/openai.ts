@@ -295,10 +295,14 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // that ARE context-sensitive (e.g., proxy strips an image_url, model
       // version difference) still go through `isCapabilityMissingError`
       // catch in `channels/runner.ts`.
-      const fullSystem = params.systemVariableSuffix
-        ? `${params.system}\n\n${params.systemVariableSuffix}`
-        : params.system
-      const wireMessages = convertMessages(fullSystem, sanitizedMessages)
+      // `params.system` is guaranteed stable across turns of one query
+      // loop; per-turn volatile state lives in the last user message
+      // (injected by the framework, see messages.ts
+      // `injectSystemReminderIntoLastUserMessage`). Do NOT splice any
+      // per-turn content into the system message here — that breaks the
+      // OpenAI auto prefix-cache fingerprint for the entire `messages`
+      // tail.
+      const wireMessages = convertMessages(params.system, sanitizedMessages)
       const stream = await client.chat.completions.create({
         model: params.model,
         messages: wireMessages,

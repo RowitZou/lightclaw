@@ -174,12 +174,12 @@ export async function* streamChat(
       ts: new Date().toISOString(),
       model: rest.model,
       request: {
-        // Log the combined system view so dogfood readers continue to see
-        // exactly what the model received, even after Phase 37 split the
-        // stable prefix from the per-turn variable suffix.
-        system: rest.systemVariableSuffix
-          ? `${rest.system}\n\n${rest.systemVariableSuffix}`
-          : rest.system,
+        // `params.system` is now the entire system prompt — the per-turn
+        // volatile suffix lives at the tail of the last user message in
+        // `finalizedMessages` (injected by query.ts to keep auto
+        // prefix-cache hittable). Log what the provider actually saw, so
+        // dogfood readers can grep both halves in the right places.
+        system: rest.system,
         tools: rest.tools,
         // Log finalized messages — describe-text replacements are what
         // the provider actually saw, which is what dogfood readers want.

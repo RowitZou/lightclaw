@@ -37,20 +37,16 @@ export type StreamChatParams = {
   model: string
   messages: ApiMessage[]
   /**
-   * Stable portion of the system prompt — persona, memory, skills, permission
-   * summary, MCP catalog, tool descriptions. Providers should attach their
-   * cache anchor (Anthropic cache_control, Codex/OAI automatic prefix match)
-   * to this string so it stays a cache hit across turns where only `systemVariableSuffix`
-   * changes.
+   * Full system prompt. The framework guarantees this string is stable
+   * across turns of the same query loop (persona, memory, skills,
+   * permission summary, MCP catalog, tool descriptions). Per-turn volatile
+   * state (TodoList, deferred-tools reminder) is injected by the framework
+   * into the last user message as a `<system-reminder>`-style text block
+   * BEFORE streamChat is called, so providers should treat this string as
+   * fully cacheable and attach their cache anchor (Anthropic cache_control
+   * / OpenAI auto prefix-cache) accordingly.
    */
   system: string
-  /**
-   * Per-turn suffix — current TodoList, deferred-tools system-reminder.
-   * Provider concatenates onto `system` (or emits a separate uncached block
-   * on Anthropic) so the stable prefix is not invalidated when the agent
-   * flips a todo state.
-   */
-  systemVariableSuffix?: string
   tools: ToolSchema[]
   maxTokens?: number
   reasoningEffort?: ReasoningEffort

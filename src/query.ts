@@ -21,6 +21,7 @@ import {
   createAssistantMessage,
   createUserMessage,
   getLastUuid,
+  injectSystemReminderIntoLastUserMessage,
   toApiMessages,
 } from './messages.js'
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
@@ -664,14 +665,27 @@ export async function query(params: QueryParams): Promise<{
           clearInterval(idleTick)
         }, streamIdleCheckIntervalMs)
         try {
+          // The per-turn volatile suffix (TodoList + deferred-tools
+          // reminder) used to ride the system prompt. On OpenAI Codex auto
+          // prefix-cache, any byte change in `instructions` breaks every
+          // subsequent token's cache hit — the entire `input` array
+          // following lost cache too. Inject the suffix at the END of the
+          // last user message instead, so the cache miss boundary aligns
+          // with where it would have miss anyway (the fresh tool_result
+          // block of this turn). The stable system prompt then stays
+          // fully cacheable across turns. Provider-agnostic by design.
+          // See `injectSystemReminderIntoLastUserMessage` for details.
+          const wireMessages = renderedPrompt.systemVariableSuffix
+            ? injectSystemReminderIntoLastUserMessage(
+                toApiMessages(messages),
+                renderedPrompt.systemVariableSuffix,
+              )
+            : toApiMessages(messages)
           for await (const event of streamChatImpl({
             config,
             model: roleModel,
-            messages: toApiMessages(messages),
+            messages: wireMessages,
             system: renderedPrompt.system,
-            ...(renderedPrompt.systemVariableSuffix
-              ? { systemVariableSuffix: renderedPrompt.systemVariableSuffix }
-              : {}),
             tools: turnCatalog.tools.map(toolToAPISchema),
             // A compaction splices the message prefix, so the caller's
             // breakpoint index no longer points at the message it was derived

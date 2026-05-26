@@ -76,29 +76,18 @@ function withCacheControl<T extends Record<string, unknown>>(block: T): T {
   }
 }
 
-function cacheSystem(
-  system: string,
-  variableSuffix?: string,
-): Array<Record<string, unknown>> {
-  // Anchor cache_control to the stable prefix only when a variable suffix is
-  // present. The suffix (TodoList, deferred-tools reminder) re-tokenizes
-  // each turn; pinning the breakpoint to the prefix keeps the persona +
-  // memory + tool-catalog block as a cache hit across turns. When no suffix
-  // is supplied (custom-systemPrompt callers, recall/session-memory model
-  // calls), fall back to the legacy single-block shape.
-  const prefix = {
-    type: 'text',
-    text: system,
-    cache_control: EPHEMERAL_CACHE,
-  }
-  if (!variableSuffix) {
-    return [prefix]
-  }
+function cacheSystem(system: string): Array<Record<string, unknown>> {
+  // `params.system` is guaranteed stable across turns of one query loop
+  // (per-turn volatile state lives in the last user message — see
+  // messages.ts `injectSystemReminderIntoLastUserMessage`). One block
+  // with cache_control is enough; the second uncached suffix block that
+  // existed pre-2026-05-26 was deleted along with the framework-level
+  // suffix-relocation refactor.
   return [
-    prefix,
     {
       type: 'text',
-      text: variableSuffix,
+      text: system,
+      cache_control: EPHEMERAL_CACHE,
     },
   ]
 }
@@ -368,7 +357,7 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
       const stream = await client.messages.create({
         model: params.model,
         max_tokens: params.maxTokens ?? 8192,
-        system: cacheSystem(params.system, params.systemVariableSuffix) as never,
+        system: cacheSystem(params.system) as never,
         messages: cacheMessages(
           params.messages,
           params.cacheBreakpointMessageIndex,
