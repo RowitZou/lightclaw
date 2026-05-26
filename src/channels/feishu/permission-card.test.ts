@@ -696,7 +696,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     const card = sender.lastPatchedCard as Record<string, any>
     assert.equal((card.header as any).template, 'red')
     const elements = card.elements as Array<{ text: { content: string } }>
-    assert.match(elements[0].text.content, /(用户插嘴|user interjected)/i)
+    assert.match(elements[0].text.content, /(已自动撤销|auto-revoked)/i)
   }))
 
   it('expirePending patches the stale approval card to resolved', t => inSession(async () => {
