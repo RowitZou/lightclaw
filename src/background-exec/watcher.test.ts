@@ -219,6 +219,66 @@ test('BackgroundExecWatcher resets unknown counter on a recovered running probe'
   assert.equal(entry.unknownTicks, UNKNOWN_GRACE_TICKS - 1)
 })
 
+test('BackgroundExecWatcher stamps lost sentinel + err marker on output-cap path', async () => {
+  // Regression for 2026-05-26 dogfood gap: lost-path bg-job directories had
+  // no on-disk artifact telling audit why the wrapper died. With the fix,
+  // the watcher writes a `lost` file (reason on first line) and appends a
+  // `[bg-exec: <reason>]` line to err's tail before publishing.
+  const registry = new BackgroundJobRegistry()
+  const runtime = new FakeRuntime()
+  const meta = job('bg-00000001')
+  registry.register(meta, runtime.asRuntime())
+  await runtime.fs.writeFile(meta.outFile, Buffer.alloc(MAX_BG_JOB_OUTPUT_BYTES + 1))
+  await runtime.fs.writeFile(meta.errFile, 'curl: (28) connect timed out\n')
+  // killBackgroundJob calls runtime.exec once; FakeRuntime returns a default
+  // success result and the inline >> '<jobDir>/killed' mock writes the killed
+  // sentinel — exactly what production does on a cap-trip.
+  runtime.queueExec({ stdout: '', stderr: '', exitCode: 0 })
+
+  const watcher = new BackgroundExecWatcher(registry)
+  await watcher.tick(2_000)
+
+  const lostBytes = await runtime.fs.readFile('/workspace/.lightclaw/bg-exec/bg-00000001/lost')
+  const lostText = lostBytes.toString('utf8')
+  assert.equal(lostText.split('\n')[0], 'output-cap-exceeded',
+    'first line of `lost` sentinel must be the machine-readable reason')
+
+  const errBytes = await runtime.fs.readFile(meta.errFile)
+  const errText = errBytes.toString('utf8')
+  assert.match(errText, /\[bg-exec: output-cap-exceeded\]/,
+    'err tail must carry the bg-exec marker so audit can grep the reason without opening `lost`')
+  assert.match(errText, /^curl: \(28\) connect timed out$/m,
+    'original err content must be preserved (append, not overwrite)')
+
+  assert.equal(registry.get('bg-00000001'), undefined)
+})
+
+test('BackgroundExecWatcher stamps lost sentinel + err marker on unknown-grace path', async () => {
+  // Same regression, different lost-entry point. Validates this is a class
+  // fix (every lost branch lands a sentinel), not just an instance fix for
+  // the cap-trip path.
+  const registry = new BackgroundJobRegistry()
+  const runtime = new FakeRuntime()
+  const meta = job('bg-00000001')
+  registry.register(meta, runtime.asRuntime())
+  await runtime.fs.writeFile(meta.errFile, 'fatal: early EOF\n')
+  for (let i = 0; i < UNKNOWN_GRACE_TICKS; i++) {
+    runtime.queueExecError(new Error('brainctl: websocket: close 1006'))
+  }
+
+  const watcher = new BackgroundExecWatcher(registry)
+  for (let i = 0; i < UNKNOWN_GRACE_TICKS; i++) {
+    await watcher.tick(2_000 + i * 7_000)
+  }
+
+  const lostBytes = await runtime.fs.readFile('/workspace/.lightclaw/bg-exec/bg-00000001/lost')
+  assert.equal(lostBytes.toString('utf8').split('\n')[0], 'unknown-grace-exhausted')
+
+  const errText = (await runtime.fs.readFile(meta.errFile)).toString('utf8')
+  assert.match(errText, /\[bg-exec: unknown-grace-exhausted\]/)
+  assert.match(errText, /fatal: early EOF/, 'original err content preserved')
+})
+
 function job(jobId: string): BackgroundJobMeta {
   return {
     jobId,

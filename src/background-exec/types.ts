@@ -7,6 +7,17 @@ import type { Runtime } from '../runtime/index.js'
 // 'running' across the window so the entry keeps getting probed.
 export type BackgroundJobStatus = 'running' | 'completed' | 'killed' | 'lost' | 'unknown'
 
+// Why the watcher decided a job is 'lost'. Persisted to the jobdir's `lost`
+// sentinel file (and stamped onto err's tail) so post-hoc audit can tell
+// `worker pgid vanished` apart from `daemon-side resource cap tripped`.
+// Without this, a stale `bg-<id>/` directory looks identical across the four
+// distinct failure modes.
+export type BackgroundJobLostReason =
+  | 'probe'
+  | 'unknown-grace-exhausted'
+  | 'output-cap-exceeded'
+  | 'wallclock-overrun'
+
 export type BackgroundJobMeta = {
   jobId: string
   command: string
@@ -29,6 +40,9 @@ export type BackgroundJobSnapshot = {
   command: string
   outFile: string
   errFile: string
+  // Populated only when status === 'lost'; the watcher reads it to decide
+  // which reason to stamp into the lost sentinel + err tail.
+  lostReason?: BackgroundJobLostReason
 }
 
 export type BackgroundJobEntry = {

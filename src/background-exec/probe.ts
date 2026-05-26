@@ -1,10 +1,15 @@
-import { jobFile, EXIT_FILE, KILLED_FILE } from './jobdir.js'
-import type { BackgroundJobEntry, BackgroundJobMeta, BackgroundJobSnapshot } from './types.js'
+import { jobFile, EXIT_FILE, KILLED_FILE, LOST_FILE } from './jobdir.js'
+import type {
+  BackgroundJobEntry,
+  BackgroundJobLostReason,
+  BackgroundJobMeta,
+  BackgroundJobSnapshot,
+} from './types.js'
 
 function snapshot(
   meta: BackgroundJobMeta,
   status: BackgroundJobSnapshot['status'],
-  extras: Pick<BackgroundJobSnapshot, 'exitCode' | 'endedAt'> = {},
+  extras: Pick<BackgroundJobSnapshot, 'exitCode' | 'endedAt' | 'lostReason'> = {},
 ): BackgroundJobSnapshot {
   return {
     jobId: meta.jobId,
@@ -45,6 +50,17 @@ export async function probeBackgroundJob(entry: BackgroundJobEntry): Promise<Bac
     return snapshot(meta, 'killed', { endedAt: Date.now() })
   }
 
+  // Lost sentinel is stamped by the watcher when it gives up on a pgid; honor
+  // it so a re-probe (idempotent) returns the same terminal status the
+  // watcher already published.
+  const lostContent = await readFileIfExists(entry, jobFile(jobDir, LOST_FILE))
+  if (lostContent) {
+    return snapshot(meta, 'lost', {
+      endedAt: Date.now(),
+      lostReason: parseLostReason(lostContent),
+    })
+  }
+
   const probe = await runtime.exec({
     command: `kill -0 -- -${meta.pgid} 2>/dev/null`,
     cwd: meta.cwd,
@@ -62,8 +78,22 @@ export async function probeBackgroundJob(entry: BackgroundJobEntry): Promise<Bac
   }
 
   if (probe.exitCode !== 0) {
-    return snapshot(meta, 'lost', { endedAt: Date.now() })
+    return snapshot(meta, 'lost', { endedAt: Date.now(), lostReason: 'probe' })
   }
 
   return snapshot(meta, 'running')
+}
+
+const LOST_REASONS: ReadonlySet<BackgroundJobLostReason> = new Set([
+  'probe',
+  'unknown-grace-exhausted',
+  'output-cap-exceeded',
+  'wallclock-overrun',
+])
+
+function parseLostReason(content: Buffer): BackgroundJobLostReason | undefined {
+  const first = content.toString('utf8').split('\n')[0]?.trim()
+  return first && (LOST_REASONS as ReadonlySet<string>).has(first)
+    ? (first as BackgroundJobLostReason)
+    : undefined
 }

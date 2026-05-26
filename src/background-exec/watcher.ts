@@ -1,3 +1,6 @@
+import path from 'node:path'
+
+import { jobFile, LOST_FILE } from './jobdir.js'
 import { killBackgroundJob } from './kill.js'
 import { getBackgroundJobRegistry, type BackgroundJobRegistry } from './registry.js'
 import { probeBackgroundJob } from './probe.js'
@@ -5,7 +8,11 @@ import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
-import type { BackgroundJobEntry, BackgroundJobSnapshot } from './types.js'
+import type {
+  BackgroundJobEntry,
+  BackgroundJobLostReason,
+  BackgroundJobSnapshot,
+} from './types.js'
 
 export const WATCHER_INTERVAL_MS = 7_000
 export const MAX_BG_JOB_WALLCLOCK_MS = 24 * 3_600_000
@@ -74,11 +81,23 @@ export class BackgroundExecWatcher {
         // way the model needs to know about either way.
         snapshot.status = 'lost'
         snapshot.endedAt = now
+        snapshot.lostReason = 'unknown-grace-exhausted'
       }
       // KillBash may have terminated + removed this job concurrently while we
       // were probing — re-check so we neither double-deliver nor act stale.
       if (this.registry.get(entry.meta.jobId)?.status !== 'running') {
         continue
+      }
+      if (snapshot.status === 'lost') {
+        // Persist a lost sentinel + err-tail marker so post-hoc audit can tell
+        // `worker pgid vanished` apart from `daemon-side resource cap tripped`
+        // by inspecting the jobdir alone. Best-effort: the daemon-side signal
+        // publish is still the live notification path; this only fills the
+        // "what does the orphan directory mean" gap.
+        await markJobLost(entry, snapshot.lostReason ?? 'probe').catch(error => {
+          const detail = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`[background-exec] failed to stamp lost sentinel for ${entry.meta.jobId}: ${detail}\n`)
+        })
       }
       this.registry.markTerminal(entry.meta.jobId, snapshot)
       if (await this.shouldDeliver(entry)) {
@@ -111,6 +130,7 @@ export class BackgroundExecWatcher {
         command: entry.meta.command,
         outFile: entry.meta.outFile,
         errFile: entry.meta.errFile,
+        lostReason: 'output-cap-exceeded',
       }
     }
 
@@ -124,6 +144,7 @@ export class BackgroundExecWatcher {
         command: entry.meta.command,
         outFile: entry.meta.outFile,
         errFile: entry.meta.errFile,
+        lostReason: 'wallclock-overrun',
       }
     }
 
@@ -207,6 +228,33 @@ async function publishBackgroundExecResult(
     timing: { emittedAt: Date.now() },
   }
   await getSignalRouter().publish(signal)
+}
+
+// `lost`-sentinel writer. `bg-job` was killed via SIGKILL inside the wrapper
+// (cap path) or its pgid vanished from under us (probe / unknown-grace
+// path), so the wrapper never got to write `exit`. Drop two artifacts into
+// the jobdir: (1) a `lost` file whose first line is the reason — readable
+// by audit scripts and `probeBackgroundJob`'s LOST_FILE branch on a
+// daemon restart; (2) a `[bg-exec: <reason>]` marker appended to err so
+// the LLM seeing `<background-exec-result status="lost">` can also grep
+// the err tail for the same machine-readable reason.
+async function markJobLost(entry: BackgroundJobEntry, reason: BackgroundJobLostReason): Promise<void> {
+  const jobDir = path.posix.dirname(entry.meta.outFile)
+  const lostPath = jobFile(jobDir, LOST_FILE)
+  const iso = new Date().toISOString()
+  await entry.runtime.fs.writeFile(lostPath, `${reason}\n${iso}\n`)
+
+  const marker = `\n[bg-exec: ${reason}]\n`
+  let existing: Buffer
+  try {
+    existing = await entry.runtime.fs.readFile(entry.meta.errFile)
+  } catch {
+    existing = Buffer.alloc(0)
+  }
+  await entry.runtime.fs.writeFile(
+    entry.meta.errFile,
+    Buffer.concat([existing, Buffer.from(marker, 'utf8')]),
+  )
 }
 
 const watcher = new BackgroundExecWatcher()

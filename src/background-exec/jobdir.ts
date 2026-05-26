@@ -8,6 +8,7 @@ export const ERR_FILE = 'err'
 export const EXIT_FILE = 'exit'
 export const EXIT_TMP_FILE = 'exit.tmp'
 export const KILLED_FILE = 'killed'
+export const LOST_FILE = 'lost'
 export const META_FILE = 'meta.json'
 export const PGID_FILE = 'pgid'
 

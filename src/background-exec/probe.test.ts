@@ -36,6 +36,22 @@ test('probeBackgroundJob reports lost when process group probe returns non-zero 
   const snapshot = await probeBackgroundJob(entry)
   assert.equal(snapshot.status, 'lost')
   assert.ok(snapshot.endedAt, 'lost is terminal — endedAt must be set')
+  assert.equal(snapshot.lostReason, 'probe',
+    'kill -0 fallthrough must stamp lostReason so the watcher knows which sentinel to write')
+})
+
+test('probeBackgroundJob honors lost sentinel and recovers its reason', async () => {
+  // After a daemon restart (or any idempotent re-probe), the on-disk `lost`
+  // sentinel must round-trip back to status='lost' + the original reason.
+  const { runtime, entry } = makeEntry()
+  await runtime.fs.writeFile(
+    '/workspace/.lightclaw/bg-exec/bg-00000001/lost',
+    'unknown-grace-exhausted\n2026-05-26T00:00:00.000Z\n',
+  )
+
+  const snapshot = await probeBackgroundJob(entry)
+  assert.equal(snapshot.status, 'lost')
+  assert.equal(snapshot.lostReason, 'unknown-grace-exhausted')
 })
 
 test('probeBackgroundJob reports unknown when probe exec itself throws', async () => {
