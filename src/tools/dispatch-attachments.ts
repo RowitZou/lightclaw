@@ -1,4 +1,3 @@
-import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
@@ -53,17 +52,22 @@ export async function prepareDispatchAttachments(input: {
   const resolved = input.attachments.map(p =>
     validatePath(p, input.runtime.workspaceRoot),
   )
+  // Stat through runtime.fs so PathPolicy + shared-cluster-fs translate the
+  // agent-view container path to a daemon-readable host path. node:fs.stat
+  // on a sandbox-internal '/workspace/...' ENOENTs even when the file
+  // physically exists (2026-05-26 dogfood: feishuSecretary Dispatch failed
+  // twice on real images because validation ran against the daemon view).
   for (const p of resolved) {
     let stat
     try {
-      stat = await fs.stat(p)
+      stat = await input.runtime.fs.stat(p)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new DispatchAttachmentError(
         `attachment "${p}" not accessible: ${msg}`,
       )
     }
-    if (!stat.isFile()) {
+    if (!stat.isFile) {
       throw new DispatchAttachmentError(
         `attachment "${p}" is not a regular file`,
       )
