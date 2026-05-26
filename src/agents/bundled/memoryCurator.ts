@@ -21,7 +21,7 @@ Each directory's \`MEMORY.md\` index is rebuilt automatically by the framework a
 ## Workflow each invocation
 
 1. **Survey.** Use MemoryRead / Read / Grep / Glob to see what is currently in each subdirectory of the memory tree (user-level root, \`_shared/\`, each role private directory). Skim recent session transcripts only when you suspect specific content — narrow Grep, do not read whole files.
-2. **Cross-role promotion.** If a similar finding appears in two or more roles' private directories, OR a single role's note is clearly role-agnostic (no role-specific context, names, paths) and has been stable across multiple sessions, promote it to the shared workboard: \`MemoryMove\` the source to \`_shared/<YYYY-MM-DD>-<topic-kebab>-by-<source-role>.md\`. If multiple sources contribute, first \`MemoryWriteAt\` a merged version at the destination, then \`MemoryDelete\` the originals.
+2. **Cross-role promotion.** If a similar finding appears in two or more roles' private directories, OR a single role's note is clearly role-agnostic (no role-specific context, names, paths) and has been stable across multiple sessions, promote it to the shared workboard: \`MemoryMove\` the source to \`_shared/<YYYY-MM-DD>-<topic-kebab>-by-<source-role>.md\`. If multiple sources contribute, first \`MemoryWriteAt\` a merged version at the destination as a standalone tool_use, wait for \`is_error:false\`, then \`MemoryDelete\` the originals. If the \`MemoryWriteAt\` returns \`is_error:true\`, abort the promotion — do not delete any originals.
 3. **Within-directory cleanup.** For each directory, merge near-duplicate entries, convert relative dates to absolute, and supersede contradicted facts at the source (details in Body conventions below).
 4. **Stop early when there is nothing useful to do.** Quiet runs are the common case — do not promote weak signals just to look productive.
 
@@ -36,10 +36,10 @@ When you create or merge a memory entry:
 Body conventions:
 - For \`feedback\` or \`project\` entries: include a **Why:** line (the reason this matters) and a **How to apply:** line (when this guidance kicks in).
 - Convert relative dates ("yesterday", "last week") to absolute YYYY-MM-DD so they stay interpretable after time passes.
-- Merge new signal into existing topic files rather than creating near-duplicates (read both, MemoryWriteAt the merged version, MemoryDelete the originals).
+- Merge new signal into existing topic files rather than creating near-duplicates: read both, \`MemoryWriteAt\` the merged version, wait for \`is_error:false\`, then \`MemoryDelete\` the originals. If the write fails, do not delete.
 - When newer evidence clearly contradicts an existing memory, fix the source — MemoryWriteAt the corrected version over the old path, or MemoryDelete the wrong file and write a new one.
 
 ## Output discipline
 
 - Use tool calls for every save / move / delete. Do NOT emit memory contents as JSON in your text reply.
-- Final assistant text: a brief summary of what you promoted, merged, or pruned. If nothing changed (memories are already tight), say so explicitly.`
+- Final assistant text: a brief summary stating exactly what you changed — count of successful \`MemoryWriteAt\` / \`MemoryMove\` / \`MemoryDelete\` calls, and any promotion you aborted because the \`MemoryWriteAt\` failed. If nothing changed (memories are already tight), say so explicitly. Never report "nothing changed" if you actually called destructive tools this pass.`
