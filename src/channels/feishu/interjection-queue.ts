@@ -84,6 +84,36 @@ export class InterjectionQueue {
     this.queueBySession.set(sessionId, queue)
   }
 
+  /**
+   * Re-prepend entries to the head of the per-session FIFO queue.
+   *
+   * Used by the channel runner's transient retry path: when a query attempt
+   * fails, `rewriteTranscript` resets the on-disk transcript to the
+   * pre-query baseline, wiping the tool_result text block that carried any
+   * interjections drained during that attempt. Without this, the user's
+   * mid-turn words are lost — the queue already returned them to the failed
+   * attempt and would have nothing to give the retry. The runner records
+   * drained entries into a local tracker and calls this here before the
+   * next retry's `rewriteTranscript` so the retry's first `drain` sees them
+   * again.
+   *
+   * Entries are prepended preserving their internal order. Any interjection
+   * that arrived AFTER the drain (e.g. during the retry backoff sleep)
+   * stays behind them, keeping global FIFO across the queue + tracker.
+   *
+   * No-op when entries is empty.
+   *
+   * See `# LightClaw In-flight Interjection Notes` for the retry-requeue
+   * design; introduced 2026-05-26 after the DM dogfood lost a "clone 3
+   * projects" interjection to a codex SSE Dispatch truncation.
+   */
+  requeueHead(sessionId: string, entries: InterjectionEntry[]): void {
+    if (entries.length === 0) return
+    const queue = this.queueBySession.get(sessionId) ?? []
+    queue.unshift(...entries)
+    this.queueBySession.set(sessionId, queue)
+  }
+
   drain(sessionId: string): InterjectionEntry[] {
     const entries = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)

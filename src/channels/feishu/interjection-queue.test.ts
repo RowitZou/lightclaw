@@ -88,6 +88,40 @@ describe('InterjectionQueue', () => {
     assert.equal(queue.removeQueuedByMessageId('m2'), undefined)
     assert.equal(queue.removeQueuedByMessageId('never'), undefined)
   })
+
+  // requeueHead is the retry-rollback path: interjections drained during a
+  // query attempt whose transcript got rewritten back to the pre-query
+  // baseline need to be put back at the head of the queue so the retry's
+  // next drain sees them again. Without it the user's mid-turn words are
+  // lost to a transient stream error (2026-05-26 dogfood DM session: codex
+  // SSE truncated a Dispatch arguments JSON, both attempt retries failed,
+  // rewriteTranscript wiped the tool_result block that held the "clone 3
+  // projects" interjection, and the queue had already drained it).
+  it('requeueHead empty array is a no-op', () => {
+    const queue = new InterjectionQueue()
+    queue.push('s1', entry('m1', 'existing'))
+    queue.requeueHead('s1', [])
+    assert.deepEqual(queue.drain('s1').map(e => e.text), ['existing'])
+  })
+
+  it('requeueHead prepends entries preserving their internal order', () => {
+    const queue = new InterjectionQueue()
+    queue.requeueHead('s1', [entry('m1', 'a'), entry('m2', 'b')])
+    assert.deepEqual(queue.drain('s1').map(e => e.text), ['a', 'b'])
+  })
+
+  it('requeueHead with newer queued entries: drained come first, newer stay behind', () => {
+    // Scenario C from the design doc: user sends I1, I2; drain happens at
+    // a tool boundary; transient error; during retry backoff user sends I3;
+    // requeueHead restores I1/I2 at the head — global FIFO must hold.
+    const queue = new InterjectionQueue()
+    queue.push('s1', entry('m3', 'new-after-drain'))
+    queue.requeueHead('s1', [entry('m1', 'drained-1'), entry('m2', 'drained-2')])
+    assert.deepEqual(
+      queue.drain('s1').map(e => e.text),
+      ['drained-1', 'drained-2', 'new-after-drain'],
+    )
+  })
 })
 
 function entry(messageId: string, text: string) {

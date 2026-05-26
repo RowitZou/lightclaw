@@ -801,7 +801,29 @@ export class ChannelRunner {
         // attempts within the same inbound message — a kind that 4xx'd on
         // attempt N stays force-downgraded on attempts N+1, N+2.
         const forceFallbackInToolResultKinds = new Set<AttachmentKind>()
+        // Interjections drained during the current query (accumulated across
+        // tool-call boundaries within an attempt) so the retry path can put
+        // them back at the head of the queue before `rewriteTranscript`
+        // wipes the tool_result block that held them. Per-handleMessage
+        // scope: a successful query() return leaves the array unconsumed
+        // and the lexical scope releases it, which is intentional — the
+        // entries are already in the persisted transcript at that point.
+        const drainedDuringQuery: InterjectionEntry[] = []
         for (let attempt = 0; attempt <= MAX_QUERY_RETRIES; attempt += 1) {
+          // Restore interjections drained during a previous failed attempt
+          // BEFORE `rewriteTranscript` truncates the in-memory + on-disk
+          // user message that carried them. Without this the retry's
+          // drain returns nothing and the user's mid-turn words are
+          // permanently lost. 2026-05-26 dogfood DM session lost a "clone
+          // 3 projects" interjection this way when codex truncated a
+          // Dispatch arguments JSON.
+          if (attempt > 0 && drainedDuringQuery.length > 0) {
+            channelInterjectionQueue.requeueHead(mainSessionId, drainedDuringQuery)
+            process.stderr.write(
+              `[query] re-enqueued ${drainedDuringQuery.length} interjection(s) for retry attempt ${attempt} on session ${mainSessionId}\n`,
+            )
+            drainedDuringQuery.length = 0
+          }
           // Reset messages to the post-user-message snapshot before each
           // attempt. The main `query` path doesn't mutate `messages` until
           // after a successful stop event, but defensive against compaction-
@@ -875,6 +897,12 @@ export class ChannelRunner {
                   if (drained.length === 0) {
                     return drained
                   }
+                  // Record drained entries so a transient retry path can
+                  // requeue them at the head of the queue before
+                  // rewriteTranscript wipes the user message that holds
+                  // them. See `drainedDuringQuery` declaration above for
+                  // the rationale (2026-05-26 dogfood interjection loss).
+                  drainedDuringQuery.push(...drained)
                   const materialized: InterjectionEntry[] = []
                   for (const entry of drained) {
                     if (!entry.pendingAttachments?.length) {
