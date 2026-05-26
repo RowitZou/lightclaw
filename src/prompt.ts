@@ -124,19 +124,31 @@ function formatToolCatalog(tools: Tool[]): string {
     .join('\n')
 }
 
+// The todo block lives in the LAST USER MESSAGE since b9e53d1 (cache anchor
+// fix on 2026-05-26). User-role content with a trailing "Use TodoWrite..."
+// imperative reads to the model as a fresh user instruction, which caused
+// agents to silently end-turn mid-task on 2026-05-26 dogfood. Wrap in
+// <system-reminder> and reword the trailing cue from imperative to state +
+// continuation, mirroring the deferred-tools reminder framing.
 function formatTodoSection(todos: TodoItem[]): string {
   if (todos.length === 0) {
     return [
+      '<system-reminder>',
       '## Current Todo List',
       '(no todos yet)',
-      'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
+      '',
+      "This is the framework's snapshot of your todo state, not a fresh user instruction. When a task needs three or more sequential steps, open with a TodoWrite. At most one item in_progress.",
+      '</system-reminder>',
     ].join('\n')
   }
 
   return [
+    '<system-reminder>',
     '## Current Todo List',
     formatTodosForPrompt(todos),
-    'Use TodoWrite to keep this list current. Keep at most one item in_progress.',
+    '',
+    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress.",
+    '</system-reminder>',
   ].join('\n')
 }
 
