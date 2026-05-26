@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -67,6 +67,67 @@ describe('MemoryDelete', () => {
 
     assert.equal(result.isError, true)
     assert.match(result.output as string, /MEMORY\.md is framework-managed/)
+  })
+
+  it('refuses delete when a same-path MemoryWriteAt failed in the recent window', async () => {
+    const { memoryWriteAtTool } = await import('./memory-write-at.js')
+    const { __resetMemoryDestructiveGuardForTest } = await import(
+      '../memory/destructive-guard.js'
+    )
+    __resetMemoryDestructiveGuardForTest()
+
+    // Existing file that the curator would have intended to replace.
+    await writeFile(
+      path.join(memoryDir, 'webSearcher', 'preserve.md'),
+      '---\ntype: project\ndescription: Earlier version.\n---\n\nKeep this body.\n',
+      'utf8',
+    )
+
+    await withMemorySession(async () => {
+      // MemoryWriteAt with invalid type fails validation → tool records the
+      // destructive guard.
+      const write = await memoryWriteAtTool.call(
+        {
+          path: 'webSearcher/preserve.md',
+          content: 'New body that never lands.',
+          type: 'nonsense' as never,
+          description: 'merged version',
+        },
+        undefined as never,
+      )
+      assert.equal(write.isError, true)
+
+      // MemoryDelete on the same relative path must refuse.
+      const del = await memoryDeleteTool.call(
+        { path: 'webSearcher/preserve.md' },
+        undefined as never,
+      )
+      assert.equal(del.isError, true)
+      assert.match(String(del.output), /refus/i)
+      assert.match(String(del.output), /MemoryWriteAt/)
+
+      const stillThere = await readFile(
+        path.join(memoryDir, 'webSearcher', 'preserve.md'),
+        'utf8',
+      )
+      assert.match(stillThere, /Keep this body/)
+    })
+  })
+
+  it('allows delete when no recent same-path MemoryWriteAt failure', async () => {
+    const { __resetMemoryDestructiveGuardForTest } = await import(
+      '../memory/destructive-guard.js'
+    )
+    __resetMemoryDestructiveGuardForTest()
+
+    await withMemorySession(async () => {
+      const del = await memoryDeleteTool.call(
+        { path: 'webSearcher/a.md' },
+        undefined as never,
+      )
+      assert.equal(del.isError, undefined)
+      assert.equal(del.output, 'Deleted webSearcher/a.md')
+    })
   })
 })
 

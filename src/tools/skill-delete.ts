@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 import { getCurrentSessionContext } from '../session-context.js'
-import { deleteUserSkill } from '../skill/loader.js'
+import { shouldBlockSkillDelete } from '../skill/destructive-guard.js'
+import { deleteUserSkill, normalizeSkillName } from '../skill/loader.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import { buildTool } from '../tool.js'
 
@@ -36,9 +37,41 @@ export const skillDeleteTool = buildTool({
       }
     }
 
+    // Same-name destructive guard: if a SkillWrite for this name failed
+    // recently, refuse the delete. Without this, a dispatched curator that
+    // emits `SkillWrite(name:X) + SkillDelete(name:X)` in one batch silently
+    // loses the prior on-disk skill when the write fails validation. See
+    // `src/skill/destructive-guard.ts` and 2026-05-26 dogfood.
+    let normalizedName: string
+    try {
+      normalizedName = normalizeSkillName(input.name)
+    } catch (error) {
+      // Defer to deleteUserSkill so invalid names produce the same error
+      // shape downstream tests already assert on.
+      normalizedName = input.name
+    }
+    const block = shouldBlockSkillDelete(userId, normalizedName)
+    if (block.blocked) {
+      const ageSec = Math.max(1, Math.round((block.ageMs ?? 0) / 1000))
+      process.stderr.write(
+        `[skill-delete] refused user=${userId} name=${normalizedName} reason=same-name SkillWrite failed ${ageSec}s ago\n`,
+      )
+      return {
+        output:
+          `Refusing to delete skill "${normalizedName}": a SkillWrite for the same name failed ` +
+          `${ageSec}s ago. Deleting now would drop the still-present prior version. Retry the ` +
+          `SkillWrite (fix the validation error first); once it returns is_error:false, the ` +
+          `delete becomes safe.`,
+        isError: true,
+      }
+    }
+
     try {
       const deleted = await deleteUserSkill({ userId, name: input.name })
       await refreshSkillRegistry(context.cwd, userId)
+      process.stderr.write(
+        `[skill-delete] deleted user=${userId} name=${deleted.name}\n`,
+      )
       return {
         output: `Deleted skill "${deleted.name}" from ${deleted.filePath}.`,
       }

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { getCurrentSessionContext } from '../session-context.js'
+import { recordSkillWriteFailure } from '../skill/destructive-guard.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import { writeUserSkill } from '../skill/loader.js'
 import { buildTool } from '../tool.js'
@@ -63,8 +64,17 @@ export const skillWriteTool = buildTool({
         ].join('\n'),
       }
     } catch (error) {
+      // Record the failure so an immediately-following same-name SkillDelete
+      // (typical of the dream-curator destructive pattern) refuses instead of
+      // silently dropping the prior on-disk skill. See
+      // `src/skill/destructive-guard.ts`.
+      recordSkillWriteFailure(userId, input.name)
+      const reason = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `[skill-write] validation failed user=${userId} name=${input.name} reason=${reason}\n`,
+      )
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: reason,
         isError: true,
       }
     }
