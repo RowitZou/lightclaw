@@ -8,6 +8,7 @@ import {
   rebuildMemoryIndex,
   serializeFrontmatter,
 } from '../memory/auto-memory.js'
+import { recordMemoryWriteAtFailure } from '../memory/destructive-guard.js'
 import { assertNotMemoryIndex, joinAndAssertWithinMemoryDir } from '../memory/tool-path.js'
 import { isMemoryType } from '../memory/types.js'
 import { getMemoryDir } from '../state.js'
@@ -30,23 +31,39 @@ export const memoryWriteAtTool = buildTool({
     description: z.string().min(5).max(150),
   }),
   async call(input) {
+    // Resolve the absolute target path FIRST so any subsequent failure
+    // (schema, validation, fs error) can register a same-target failure
+    // for the destructive guard. Resolution itself can throw on
+    // `../`-escapes / bad filenames — those are unrelated to the
+    // destructive-pattern race so we let them fall through to the normal
+    // error path without recording.
+    const memoryDir = getMemoryDir()
+    let target: string
     try {
-      if (!isMemoryType(input.type)) {
-        return {
-          output: `Unsupported memory type: ${input.type}`,
-          isError: true,
-        }
-      }
-
-      const memoryDir = getMemoryDir()
       const rawTarget = joinAndAssertWithinMemoryDir(memoryDir, input.path)
       assertNotMemoryIndex(rawTarget)
       const targetDir = path.dirname(rawTarget)
-      const target = path.join(targetDir, normalizeMemoryFilename(path.basename(rawTarget)))
+      target = path.join(targetDir, normalizeMemoryFilename(path.basename(rawTarget)))
       joinAndAssertWithinMemoryDir(memoryDir, path.relative(memoryDir, target))
       assertNotMemoryIndex(target)
+    } catch (error) {
+      return {
+        output: error instanceof Error ? error.message : String(error),
+        isError: true,
+      }
+    }
 
-      await mkdir(targetDir, { recursive: true })
+    try {
+      if (!isMemoryType(input.type)) {
+        const msg = `Unsupported memory type: ${input.type}`
+        recordMemoryWriteAtFailure(memoryDir, target)
+        process.stderr.write(
+          `[memory-write-at] validation failed memoryDir=${memoryDir} path=${input.path} reason=${msg}\n`,
+        )
+        return { output: msg, isError: true }
+      }
+
+      await mkdir(path.dirname(target), { recursive: true })
       await writeFile(
         target,
         serializeFrontmatter(
@@ -58,14 +75,19 @@ export const memoryWriteAtTool = buildTool({
         ),
         'utf8',
       )
-      await rebuildMemoryIndex(targetDir)
+      await rebuildMemoryIndex(path.dirname(target))
 
       return {
         output: `Wrote to ${path.relative(memoryDir, target)}`,
       }
     } catch (error) {
+      recordMemoryWriteAtFailure(memoryDir, target)
+      const reason = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `[memory-write-at] validation failed memoryDir=${memoryDir} path=${input.path} reason=${reason}\n`,
+      )
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: reason,
         isError: true,
       }
     }

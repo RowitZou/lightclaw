@@ -5,7 +5,12 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { Role } from '../agents/types.js'
-import { loadMemoryIndex, scanMemoryFilesInDirs, writeMemoryFile } from './auto-memory.js'
+import {
+  loadMemoryIndex,
+  parseFrontmatter,
+  scanMemoryFilesInDirs,
+  writeMemoryFile,
+} from './auto-memory.js'
 import { resolveReadableMemoryDirsForRole } from './scope.js'
 
 let tmpRoot = ''
@@ -101,3 +106,55 @@ function workerRole(agentType: string): Role {
 function webRole(): Role {
   return workerRole('webSearcher')
 }
+
+describe('parseFrontmatter', () => {
+  it('parses block-style YAML list (regression guard)', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles:\n  - main\n  - web\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, ['main', 'web'])
+  })
+
+  it('parses single-element flow-style array: roles: [main]', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles: [main]\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, ['main'])
+  })
+
+  it('parses multi-element flow-style array: roles: [main, web]', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles: [main, web]\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, ['main', 'web'])
+  })
+
+  it('parses empty flow-style array: roles: []', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles: []\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, [])
+  })
+
+  it('trims whitespace in flow-style entries', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles: [ main , web ]\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, ['main', 'web'])
+  })
+
+  it('unquotes quoted entries inside flow-style array', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\nname: foo\nroles: ["main", \'web\']\n---\nbody\n',
+    )
+    assert.deepEqual(frontmatter.roles, ['main', 'web'])
+  })
+
+  it('non-list scalar values remain strings', () => {
+    const { frontmatter } = parseFrontmatter(
+      '---\ndescription: hello world\nname: foo\n---\nbody\n',
+    )
+    assert.equal(frontmatter.description, 'hello world')
+    assert.equal(frontmatter.name, 'foo')
+  })
+})

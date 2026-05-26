@@ -4,6 +4,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { rebuildMemoryIndex } from '../memory/auto-memory.js'
+import { shouldBlockMemoryDelete } from '../memory/destructive-guard.js'
 import {
   assertNotMemoryIndex,
   joinAndAssertWithinMemoryDir,
@@ -27,6 +28,28 @@ export const memoryDeleteTool = buildTool({
       const memoryDir = getMemoryDir()
       const target = joinAndAssertWithinMemoryDir(memoryDir, input.path)
       assertNotMemoryIndex(target)
+
+      // Same-target destructive guard: if a MemoryWriteAt for this path
+      // failed recently, refuse the delete. Without this, a dispatched
+      // curator that emits `MemoryWriteAt({path:X}) + MemoryDelete({path:X})`
+      // in one batch silently loses the prior on-disk file when the write
+      // fails validation. See `src/memory/destructive-guard.ts`.
+      const block = shouldBlockMemoryDelete(memoryDir, target)
+      if (block.blocked) {
+        const ageSec = Math.max(1, Math.round((block.ageMs ?? 0) / 1000))
+        process.stderr.write(
+          `[memory-delete] refused memoryDir=${memoryDir} path=${input.path} reason=same-path MemoryWriteAt failed ${ageSec}s ago\n`,
+        )
+        return {
+          output:
+            `Refusing to delete ${input.path}: a MemoryWriteAt for the same path failed ` +
+            `${ageSec}s ago. Deleting now would drop the still-present prior version. Retry the ` +
+            `MemoryWriteAt (fix the validation error first); once it returns is_error:false, the ` +
+            `delete becomes safe.`,
+          isError: true,
+        }
+      }
+
       let stats
       try {
         stats = await stat(target)
@@ -43,6 +66,9 @@ export const memoryDeleteTool = buildTool({
 
       await unlink(target)
       await rebuildMemoryIndex(path.dirname(target))
+      process.stderr.write(
+        `[memory-delete] deleted memoryDir=${memoryDir} path=${input.path}\n`,
+      )
       return {
         output: `Deleted ${input.path}`,
       }

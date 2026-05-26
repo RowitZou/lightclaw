@@ -40,6 +40,47 @@ function unquote(value: string): string {
   return trimmed
 }
 
+// Detect and split a single-line YAML flow-style array such as `[main]`,
+// `[main, web]`, `[ "a", 'b' ]`, or `[]`. Returns null when the input is not
+// a flow-style array (so the caller can fall back to scalar handling).
+// Quoted commas are respected so `["a,b", c]` yields `['a,b', 'c']`.
+function parseFlowArray(raw: string): string[] | null {
+  const trimmed = raw.trim()
+  if (trimmed.length < 2 || trimmed[0] !== '[' || trimmed.at(-1) !== ']') {
+    return null
+  }
+  const inner = trimmed.slice(1, -1).trim()
+  if (inner.length === 0) {
+    return []
+  }
+  const items: string[] = []
+  let current = ''
+  let inQuote: '"' | "'" | null = null
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i]
+    if (inQuote) {
+      current += ch
+      if (ch === inQuote) {
+        inQuote = null
+      }
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch
+      current += ch
+      continue
+    }
+    if (ch === ',') {
+      items.push(unquote(current))
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  items.push(unquote(current))
+  return items
+}
+
 function serializeValue(value: string): string {
   return /^[A-Za-z0-9_.\-/ ]+$/.test(value) ? value : JSON.stringify(value)
 }
@@ -107,7 +148,12 @@ export function parseFrontmatter(content: string): {
         frontmatter[key] = []
         currentKey = key
       } else {
-        frontmatter[key] = unquote(rawValue)
+        const flowArray = parseFlowArray(rawValue)
+        if (flowArray !== null) {
+          frontmatter[key] = flowArray
+        } else {
+          frontmatter[key] = unquote(rawValue)
+        }
         currentKey = key
       }
       continue

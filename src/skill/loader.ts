@@ -79,15 +79,25 @@ function parseSkillRoles(
     return source === 'user' ? ['main'] : []
   }
   if (!Array.isArray(value)) {
-    throw new Error(`Skill ${filePath} frontmatter "roles" must be a YAML list of role names.`)
+    throw new Error(
+      `Skill ${filePath} frontmatter "roles" must be a YAML list of role names ` +
+      `(e.g. \`roles: [main]\` flow-style, or block-style with one \`- name\` per ` +
+      `line). Got: ${JSON.stringify(value)}.`,
+    )
   }
   const roles = value.map(role => role.trim())
   if (roles.length === 0 || roles.some(role => role.length === 0)) {
-    throw new Error(`Skill ${filePath} frontmatter "roles" must contain at least one role name.`)
+    throw new Error(
+      `Skill ${filePath} frontmatter "roles" must contain at least one role name. ` +
+      `Got: ${JSON.stringify(value)}.`,
+    )
   }
   for (const role of roles) {
     if (!ROLE_NAME_RE.test(role)) {
-      throw new Error(`Skill ${filePath} frontmatter "roles" contains invalid role name "${role}".`)
+      throw new Error(
+        `Skill ${filePath} frontmatter "roles" contains invalid role name "${role}" ` +
+        `(role names must match ${ROLE_NAME_RE}). Got: ${JSON.stringify(value)}.`,
+      )
     }
   }
   return roles

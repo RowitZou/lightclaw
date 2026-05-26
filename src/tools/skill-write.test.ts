@@ -121,6 +121,63 @@ test('SkillWrite suggests per-skill permission rules', () => {
   }), [{ toolName: 'SkillWrite', ruleContent: 'release-checklist' }])
 })
 
+test('SkillWrite accepts flow-style YAML roles array (regression for 2026-05-26 dogfood)', async () => {
+  await withTempHome(async home => {
+    const ctx = createSessionContext({
+      cwd: path.join(home, 'workspace'),
+      model: 'claude-sonnet-4-6',
+      sessionsDir: path.join(home, 'sessions'),
+      memoryDir: path.join(home, 'memory', 'alice'),
+      currentUserId: 'alice',
+      sessionId: 'skill-write-flow-roles',
+    })
+
+    await runWithSessionContext(ctx, async () => {
+      const single = await skillWriteTool.call({
+        name: 'alphaxiv-flow-single',
+        markdown:
+          '---\nname: alphaxiv-flow-single\ndescription: Single-element flow-style array.\nroles: [main]\n---\n\nBody.\n',
+      }, callContext(ctx.cwd))
+      assert.equal(single.isError, undefined, String(single.output))
+      assert.match(String(single.output), /Saved skill "alphaxiv-flow-single"/)
+
+      const multi = await skillWriteTool.call({
+        name: 'alphaxiv-flow-multi',
+        markdown:
+          '---\nname: alphaxiv-flow-multi\ndescription: Multi-element flow-style array.\nroles: [main, generalist]\n---\n\nBody.\n',
+      }, callContext(ctx.cwd))
+      assert.equal(multi.isError, undefined, String(multi.output))
+    })
+  })
+})
+
+test('SkillWrite frontmatter error message names expected shape and shows actual value', async () => {
+  await withTempHome(async home => {
+    const ctx = createSessionContext({
+      cwd: path.join(home, 'workspace'),
+      model: 'claude-sonnet-4-6',
+      sessionsDir: path.join(home, 'sessions'),
+      memoryDir: path.join(home, 'memory', 'alice'),
+      currentUserId: 'alice',
+      sessionId: 'skill-write-roles-error',
+    })
+
+    await runWithSessionContext(ctx, async () => {
+      const bad = await skillWriteTool.call({
+        name: 'roles-bad-shape',
+        markdown:
+          '---\nname: roles-bad-shape\ndescription: Roles must be a list.\nroles: 12345\n---\n\nBody.\n',
+      }, callContext(ctx.cwd))
+      assert.equal(bad.isError, true)
+      const msg = String(bad.output)
+      assert.match(msg, /roles/i)
+      assert.match(msg, /YAML list/i)
+      assert.match(msg, /e\.g\./i, 'error message should include a concrete example shape')
+      assert.match(msg, /12345/, 'error message should echo the actual value that failed')
+    })
+  })
+})
+
 function callContext(cwd: string): ToolCallContext {
   return {
     cwd,
