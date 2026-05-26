@@ -154,7 +154,7 @@ export type FeishuReadOutput =
 
 const feishuCreateFileInputSchema = z.object({
   kind: z.enum(['doc', 'sheet', 'file']).describe('Resource type to create/upload. Supports "doc", "sheet", and local "file" upload.'),
-  title: z.string().min(1).max(200).describe('Title for the new resource.'),
+  title: z.string().trim().min(1).max(200).describe('Title for the new resource.'),
   folder_token: z.string().min(1).optional()
     .describe('Legacy explicit parent folder token. Must be inside the current user Feishu workspace. Prefer parent_folder.'),
   parent_folder: z.string().optional()
@@ -333,7 +333,7 @@ const feishuWriteSheetInputSchema = z.object({
     .describe('2D array of cell values. Inner arrays are rows.'),
   mode: z.enum(['append', 'overwrite']).optional()
     .describe('append adds rows at the END of the range; overwrite REPLACES cells in the range. Explicit choice - no default.'),
-  title: z.string().min(1).max(100).optional()
+  title: z.string().trim().min(1).max(100).optional()
     .describe('New sheet/tab title for add_sheet.'),
   index: z.number().int().min(0).optional()
     .describe('Optional insertion index for add_sheet.'),

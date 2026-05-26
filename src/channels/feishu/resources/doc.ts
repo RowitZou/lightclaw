@@ -596,7 +596,7 @@ export async function writeDocTableCells(input: {
         })
       }
       const text = String(rowValues[column] ?? '')
-      if (text.length > 0) {
+      if (text.trim().length > 0) {
         await withFeishuRetry(() => callFeishu(() => client.docx.documentBlockChildren.create({
           path: { document_id: input.documentId, block_id: cellId },
           data: { children: contentToDocBlocks(text) },
@@ -940,7 +940,11 @@ async function convertMarkdownToBlocks(input: {
   markdown: string
   retryCounter?: { count: number }
 }): Promise<{ blocks: Array<Record<string, unknown>>; firstLevelBlockIds: string[] }> {
-  const chunks = splitMarkdownByHeadings(input.markdown)
+  const markdown = input.markdown.trim()
+  if (markdown.length === 0) {
+    return { blocks: [], firstLevelBlockIds: [] }
+  }
+  const chunks = splitMarkdownByHeadings(markdown)
   const allBlocks: Array<Record<string, unknown>> = []
   const allRootIds: string[] = []
   for (const chunk of chunks) {

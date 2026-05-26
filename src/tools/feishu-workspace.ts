@@ -38,7 +38,7 @@ const feishuListInputSchema = z.object({
 })
 
 const feishuCreateFolderInputSchema = z.object({
-  name: z.string().min(1).max(80).regex(/^[^/\\:]+$/, {
+  name: z.string().trim().min(1).max(80).regex(/^[^/\\:]+$/, {
     message: 'Folder name cannot contain / \\ or :',
   }),
   parent_folder: z.string().optional().describe('Optional parent folder path within your workspace. Omit to create under workspace root.'),
@@ -51,7 +51,7 @@ const feishuDeleteInputSchema = z.object({
 const feishuMoveInputSchema = z.object({
   target: z.string().min(1).describe('Name or path of the doc/folder to move and/or rename within your workspace.'),
   destination: z.string().optional().describe('Destination folder path within your workspace. Use "/" or "." for workspace root. Omit when only renaming in place.'),
-  new_name: z.string().min(1).max(80).regex(/^[^/\\:]+$/, {
+  new_name: z.string().trim().min(1).max(80).regex(/^[^/\\:]+$/, {
     message: 'New name cannot contain / \\ or :',
   }).optional().describe('New basename for the doc/folder. Omit when only moving without renaming.'),
 }).refine(
