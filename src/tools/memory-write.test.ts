@@ -77,6 +77,32 @@ describe('MemoryWrite currentRole binding', () => {
     await readFile(path.join(memoryDir, 'fallback-note.md'), 'utf8')
   })
 
+  it('rejects content over 6000 chars without writing the file', async () => {
+    const oversized = 'x'.repeat(6001)
+    const result = await withMemorySession(mainRole(), () =>
+      memoryWriteTool.call(
+        {
+          filename: 'too-big',
+          type: 'project',
+          description: 'Oversized note',
+          content: oversized,
+        },
+        undefined as never,
+      ),
+    )
+
+    assert.equal(result.isError, true)
+    assert.match(result.output as string, /6001 characters/)
+    assert.match(result.output as string, /hard limit is 6000/)
+    await assert.rejects(
+      () => readFile(path.join(memoryDir, 'too-big.md'), 'utf8'),
+      { code: 'ENOENT' },
+    )
+    const audit = await readAudit()
+    assert.match(audit, /"status":"denied"/)
+    assert.match(audit, /content exceeds 6000 chars/)
+  })
+
   it('lets fork-like nested contexts override a parent worker role', async () => {
     const parent = createSessionContext({
       cwd: tmpRoot,

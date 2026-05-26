@@ -10,6 +10,8 @@ import { isMemoryType } from '../memory/types.js'
 import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
 
+const MEMORY_CONTENT_MAX_CHARS = 6000
+
 export const memoryWriteTool = buildTool({
   name: 'MemoryWrite',
   whenToUse: `User says 记住 / remember this, or you've learned a non-obvious project fact / user preference worth carrying across sessions.`,
@@ -52,6 +54,25 @@ Choose \`type\` carefully:
     const targetPath = safeTargetPath(resolved.selfWriteDir, input.filename)
     const sourceTier = resolveSourceTier(targetPath, memoryDir) ?? undefined
     try {
+      if (input.content.length > MEMORY_CONTENT_MAX_CHARS) {
+        const reason = `content exceeds ${MEMORY_CONTENT_MAX_CHARS} chars (was ${input.content.length})`
+        await auditMemoryWrite({
+          role: role.agentType,
+          filename: input.filename,
+          targetPath,
+          status: 'denied',
+          deniedReason: reason,
+          sourceTier,
+        })
+        return {
+          output:
+            `Memory content is ${input.content.length} characters; the hard limit is ${MEMORY_CONTENT_MAX_CHARS}. ` +
+            'Rewrite the entry as a tighter summary — keep only the essential rule / fact / pointer, ' +
+            'drop verbose examples and quoted dialogue — and call MemoryWrite again.',
+          isError: true,
+        }
+      }
+
       if (!memoryPathWithinDir(targetPath, resolved.selfWriteDir)) {
         throw new Error('Memory filename must stay within the role memory directory.')
       }

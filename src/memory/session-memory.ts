@@ -9,6 +9,19 @@ import { toolResultContentToText, type Message } from '../types.js'
 
 export const SESSION_MEMORY_FILENAME = 'session-memory.md'
 
+export const SM_BODY_MAX_CHARS = 16000
+
+function smRetryLengthGuidance(chars: number): string {
+  return [
+    '',
+    '## Length constraint',
+    '',
+    `Your previous draft was ${chars} characters; the hard cap is ${SM_BODY_MAX_CHARS}. ` +
+      'Rewrite the document significantly tighter — collapse "Files Touched" / "Key Findings" entries to one short line each, ' +
+      'prefer "—" for empty sections, drop verbose examples.',
+  ].join('\n')
+}
+
 const SESSION_MEMORY_TEMPLATE = `# Session Working Memory
 
 ## Current State
@@ -140,10 +153,9 @@ export const SESSION_MEMORY_SYSTEM_PROMPT = [
   '- Do not call tools. Output Markdown only.',
 ].join('\n')
 
-async function requestSessionMemoryUpdate(
-  prompt: string,
-  config: LightClawConfig,
-): Promise<string> {
+type SessionMemoryWriter = (prompt: string, config: LightClawConfig) => Promise<string>
+
+const defaultRequestSessionMemoryUpdate: SessionMemoryWriter = async (prompt, config) => {
   let body = ''
 
   for await (const event of streamChat({
@@ -163,6 +175,12 @@ async function requestSessionMemoryUpdate(
   return body.trim()
 }
 
+let requestSessionMemoryUpdate: SessionMemoryWriter = defaultRequestSessionMemoryUpdate
+
+export function setRequestSessionMemoryUpdateForTest(impl: SessionMemoryWriter | undefined): void {
+  requestSessionMemoryUpdate = impl ?? defaultRequestSessionMemoryUpdate
+}
+
 function stripCodeFence(text: string): string {
   const match = text.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i)
   return match?.[1]?.trim() ?? text
@@ -179,11 +197,31 @@ export async function updateSessionMemory(
   input: SessionMemoryUpdateInput,
 ): Promise<{ updated: boolean }> {
   const existing = await readSessionMemory(input.sessionId, input.sessionsDir)
-  const prompt = buildSessionMemoryPrompt(existing, input.newMessages)
-  const responseText = await requestSessionMemoryUpdate(prompt, input.config)
-  const body = stripCodeFence(responseText)
+  const basePrompt = buildSessionMemoryPrompt(existing, input.newMessages)
+
+  let body = stripCodeFence(await requestSessionMemoryUpdate(basePrompt, input.config))
   if (body.length === 0) {
     return { updated: false }
+  }
+
+  // System-layer cap: SM is injected into every subsequent system prompt as a
+  // fixed per-turn token tax, so an unbounded SM permanently inflates cost.
+  // The prompt already asks for "under 4000 tokens" but that is a soft model
+  // self-constraint. Hard cap with one retry; if retry still overshoots, keep
+  // the previous SM unchanged so the next post-turn update tries again from
+  // an in-bounds baseline rather than letting the file grow.
+  if (body.length > SM_BODY_MAX_CHARS) {
+    const retryPrompt = basePrompt + smRetryLengthGuidance(body.length)
+    body = stripCodeFence(await requestSessionMemoryUpdate(retryPrompt, input.config))
+    if (body.length === 0) {
+      return { updated: false }
+    }
+    if (body.length > SM_BODY_MAX_CHARS) {
+      console.error(
+        `[session-memory] retry still over cap (${body.length} > ${SM_BODY_MAX_CHARS}) for ${input.sessionId}; keeping previous SM`,
+      )
+      return { updated: false }
+    }
   }
 
   await writeSessionMemoryFile(input.sessionId, input.sessionsDir, body)
