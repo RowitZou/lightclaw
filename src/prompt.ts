@@ -96,6 +96,14 @@ export type SystemPromptRenderOptions = {
   tools: Tool[]
   deferredTools?: Tool[]
   discoveredTools?: ReadonlyMap<string, number>
+  // 2026-05-26: cache anchoring. When `inlineCatalogTools` is provided, the
+  // stable `## Tool Catalog` section renders only that subset, and the
+  // remainder of `tools` (discovered via ToolSearch this session) is rendered
+  // separately into the variable suffix. Callers that don't pass this still
+  // fall back to rendering the full `tools` array in the catalog — preserves
+  // backward compat for tests / custom systemPrompt shapes.
+  inlineCatalogTools?: Tool[]
+  discoveredCatalogTools?: Tool[]
 }
 
 function formatSkillsSection(role: Role): string {
@@ -572,8 +580,13 @@ export function renderSystemPromptSplit(
   todos: TodoItem[],
   options?: SystemPromptRenderOptions,
 ): RenderedSystemPrompt {
-  const tools = options?.tools ?? []
-  const toolDescriptions = formatToolCatalog(tools)
+  // Stable catalog: prefer the caller-supplied inlineCatalogTools subset (the
+  // always-loaded tools, whose membership is fixed for the query loop). Fall
+  // back to the full tools[] for callers that haven't opted into the split
+  // (tests, future custom systemPrompt shapes). The discovered subset is
+  // routed into the variable suffix below.
+  const stableCatalogTools = options?.inlineCatalogTools ?? options?.tools ?? []
+  const toolDescriptions = formatToolCatalog(stableCatalogTools)
   const toolSection = [
     '## Tool Catalog',
     'Available tools (full schemas / usage live in the tools API description field):',
@@ -587,6 +600,12 @@ export function renderSystemPromptSplit(
   const todoSection = formatOptionalTodoSection(todos, template.includeTodos)
   if (todoSection) {
     variableParts.push(todoSection)
+  }
+  const discoveredReminder = buildDiscoveredToolsReminder(
+    options?.discoveredCatalogTools ?? [],
+  )
+  if (discoveredReminder) {
+    variableParts.push(discoveredReminder)
   }
   const deferredReminder = buildDeferredToolsReminder(
     options?.deferredTools ?? [],
@@ -679,6 +698,30 @@ function buildDeferredToolsReminder(
 The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded. Calling them directly will fail. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:
 ${undiscovered
   .map(tool => (tool.whenToUse ? `${tool.name} — ${tool.whenToUse}` : tool.name))
+  .join('\n')}
+</system-reminder>`
+}
+
+// 2026-05-26: discovered (already-promoted) deferred tools used to be listed
+// in the stable `## Tool Catalog` section, which made the stable system
+// prompt grow each time ToolSearch promoted a new tool. Under OpenAI's
+// auto-cache (wire-byte prefix fingerprint), this broke prefix cache for
+// every subsequent turn — dogfood §cache hit rate measured ~11% instead of
+// the expected 60-80%. The fix renders these tools in the variable suffix
+// (injected into the last user message) so the stable section is invariant
+// under discoveredTools changes. The block name lists the tool names + their
+// whenToUse so the model has the same one-line hint it had pre-fix; full
+// schemas still live in the provider's tools API field.
+function buildDiscoveredToolsReminder(
+  discoveredCatalogTools: readonly Tool[],
+): string {
+  if (discoveredCatalogTools.length === 0) {
+    return ''
+  }
+  return `<system-reminder>
+The following deferred tools were loaded via ToolSearch earlier in this session and are now callable. Full schemas live in the tools API description field — call them by name:
+${discoveredCatalogTools
+  .map(tool => (tool.whenToUse ? `- ${tool.name}: ${tool.whenToUse}` : `- ${tool.name}`))
   .join('\n')}
 </system-reminder>`
 }

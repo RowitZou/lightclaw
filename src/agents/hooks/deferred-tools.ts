@@ -17,10 +17,15 @@ export const deferredToolsHook: Hook = {
     }
 
     if (ctx.systemPrompt.hasOverride) {
+      // Custom systemPrompt path: every tool ships inline in the catalog,
+      // there is no ToolSearch split. Mirror that into the prompt-cache
+      // fields so downstream renderers see a self-consistent shape.
       ctx.setTurnCatalog({
         tools: ctx.allTools,
         deferred: [],
         deferredEnabled: false,
+        inlineTools: ctx.allTools,
+        discoveredCatalogTools: [],
       })
       return
     }

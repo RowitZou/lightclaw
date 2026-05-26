@@ -8,6 +8,17 @@ export type TurnToolCatalog = {
   tools: Tool[]
   deferred: Tool[]
   deferredEnabled: boolean
+  // 2026-05-26: prompt-cache split. `inlineTools` is the always-loaded subset
+  // (alwaysLoad-tagged + ToolSearch when deferred loading is on); its
+  // membership is fixed for the lifetime of one query loop, so rendering it
+  // into the `## Tool Catalog` stable section keeps that section byte-stable.
+  // `discoveredCatalogTools` is the this-turn promoted-via-ToolSearch subset;
+  // its membership changes between turns, so the prompt renders it inside the
+  // variable suffix (injected into the last user message) instead of the
+  // stable system section. Both are still in `tools` so the provider's tools
+  // array carries every callable schema this turn.
+  inlineTools: Tool[]
+  discoveredCatalogTools: Tool[]
 }
 
 export function buildTurnToolCatalog(input: {
@@ -17,20 +28,26 @@ export function buildTurnToolCatalog(input: {
 }): TurnToolCatalog {
   const { allTools, discoveredTools, config } = input
   if (!shouldEnableDeferredLoading(config, allTools)) {
+    const all = [...allTools]
     return {
-      tools: [...allTools],
+      tools: all,
       deferred: [],
       deferredEnabled: false,
+      inlineTools: all,
+      discoveredCatalogTools: [],
     }
   }
 
   const { alwaysLoaded, deferred } = partitionTools(allTools)
   const discovered = deferred.filter(tool => discoveredTools.has(tool.name))
-  const tools = [...alwaysLoaded, toolSearchTool, ...discovered]
+  const inlineTools = dedupeTools([...alwaysLoaded, toolSearchTool])
+  const tools = dedupeTools([...inlineTools, ...discovered])
   return {
-    tools: dedupeTools(tools),
+    tools,
     deferred,
     deferredEnabled: true,
+    inlineTools,
+    discoveredCatalogTools: discovered,
   }
 }
 

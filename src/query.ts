@@ -491,6 +491,8 @@ export async function query(params: QueryParams): Promise<{
     tools: params.tools,
     deferred: [],
     deferredEnabled: false,
+    inlineTools: params.tools,
+    discoveredCatalogTools: [],
   }
 
   const makeHookContext = (messagesSnapshot?: Message[]): HookContext => ({
@@ -580,6 +582,8 @@ export async function query(params: QueryParams): Promise<{
       tools: params.tools,
       deferred: [],
       deferredEnabled: false,
+      inlineTools: params.tools,
+      discoveredCatalogTools: [],
     }
     for (const hook of lifecycleHooks) {
       await hook.beforeTurn?.(makeHookContext())

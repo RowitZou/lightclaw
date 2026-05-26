@@ -158,7 +158,7 @@ function hookContext(onAssistantTurn: (text: string) => void): HookContext {
       hasOverride: false,
       renderEffective: () => '',
     },
-    turnCatalog: { tools: [], deferred: [], deferredEnabled: false },
+    turnCatalog: { tools: [], deferred: [], deferredEnabled: false, inlineTools: [], discoveredCatalogTools: [] },
     setTurnCatalog() {},
     mergeUsage() {},
     markDidCompact() {},

@@ -21,6 +21,12 @@ export const splitRenderHook: Hook = {
     const sessionCtx = getCurrentSessionContext()
     const rendered = renderSystemPromptSplit(ctx.systemPrompt.template, getTodos(), {
       tools: ctx.turnCatalog.tools,
+      // 2026-05-26 cache anchoring: render only the always-loaded subset into
+      // the stable `## Tool Catalog`; route already-discovered deferred tools
+      // through the variable suffix so promoting a new tool via ToolSearch no
+      // longer extends the stable system prompt and breaks OpenAI prefix-cache.
+      inlineCatalogTools: ctx.turnCatalog.inlineTools,
+      discoveredCatalogTools: ctx.turnCatalog.discoveredCatalogTools,
       deferredTools: ctx.turnCatalog.deferred,
       discoveredTools: sessionCtx?.discoveredTools,
     })
