@@ -517,7 +517,14 @@ describe('openai-auth: processResponseStream', () => {
     assert.equal(stop.usage.cache_read_input_tokens, undefined)
   })
 
-  it('empty function_call arguments parse as {} not throwing', async () => {
+  it('empty function_call arguments throw for transient retry (codex wire drop)', async () => {
+    // Regression: a function_call whose `arguments` wire field is empty
+    // (zero bytes) is not a legitimate zero-arg call — Codex always emits
+    // at least `'{}'`. Pre-2026-05-26 fix the provider synthesized `{}`
+    // and let zod reject downstream, which mis-attributed wire drops to
+    // model hallucination (2026-05-26 dogfood: Dispatch({}) twice in 44s).
+    // Throwing here lets query.ts's per-turn transient retry kick in, so
+    // the same prefix retries against a warm cache.
     const events = [
       {
         type: 'response.output_item.added',
@@ -532,12 +539,70 @@ describe('openai-auth: processResponseStream', () => {
         response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 5 } },
       },
     ]
+    await assert.rejects(
+      () => collect(processResponseStream(fromArray(events) as never)),
+      /empty arguments — wire drop/,
+    )
+  })
+
+  it('zero-arg function_call with explicit "{}" parses as {} (legitimate empty input)', async () => {
+    // The complement to the wire-drop case above: a tool that genuinely
+    // takes no input still has a 2-byte `'{}'` on the wire, and that path
+    // must NOT throw.
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'NoArgsTool' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{}',
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'NoArgsTool', arguments: '{}' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 5 } },
+      },
+    ]
     const out = await collect(processResponseStream(fromArray(events) as never))
     const stop = out[out.length - 1] as StreamStopEvent
     assert.equal(stop.content.length, 1)
     if (stop.content[0]?.type === 'tool_use') {
       assert.deepEqual(stop.content[0].input, {})
     }
+  })
+
+  it('truncated / malformed function_call arguments throw for transient retry', async () => {
+    // A non-empty but invalid JSON body is also a wire failure (mid-stream
+    // truncation or a buffering proxy that cut the JSON object). Same
+    // remediation as the empty-args case: throw, let query.ts retry.
+    const events = [
+      {
+        type: 'response.output_item.added',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      {
+        type: 'response.function_call_arguments.delta',
+        item_id: 'fc_1',
+        delta: '{"role":"feishuS',
+      },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'Dispatch' },
+      },
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 5 } },
+      },
+    ]
+    await assert.rejects(
+      () => collect(processResponseStream(fromArray(events) as never)),
+      /arguments JSON parse failed/,
+    )
   })
 })
 

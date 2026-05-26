@@ -301,6 +301,46 @@ type PendingFunctionCall = {
   args: string
 }
 
+// A function_call whose `arguments` wire field is empty (zero bytes) or
+// non-JSON is a transport-level drop, not a model decision. Codex' Responses
+// API emits `arguments` as a JSON-encoded string for every function_call —
+// even a tool with zero parameters yields the two-byte literal `'{}'`. When
+// the SSE stream arrives with nothing in there, the model's reasoning
+// summary closed before its `function_call_arguments.delta` events finished
+// transmitting (observed in 2026-05-26 dogfood: Dispatch({}) emitted twice
+// 44s apart on gpt-codex-mid; the model's own self-talk between attempts
+// confirmed it had role/prompt in mind both times). Synthesizing `{}` would
+// hand the zod validator a wire-corrupted shape and route the resulting
+// "Invalid input" tool_result back to the model, which it cannot meaningfully
+// debug. Throwing instead lets query.ts treat the failure as transient and
+// retry the streamChat call against the same prefix — prompt cache stays
+// warm and the second attempt almost always carries the full arguments.
+function parseFunctionCallArguments(
+  slot: PendingFunctionCall,
+): Record<string, unknown> {
+  const body = slot.args.trim()
+  if (body.length === 0) {
+    process.stderr.write(
+      `[openai-auth] function_call args empty (tool=${slot.name} id=${slot.id}); throw for transient retry\n`,
+    )
+    throw new Error(
+      `openai-auth: function_call ${slot.name} (id=${slot.id}) arrived with empty arguments — wire drop`,
+    )
+  }
+  try {
+    return JSON.parse(body) as Record<string, unknown>
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    const preview = body.length > 200 ? `${body.slice(0, 200)}…` : body
+    process.stderr.write(
+      `[openai-auth] function_call args invalid JSON (tool=${slot.name} id=${slot.id} parse=${detail}); throw for transient retry\n`,
+    )
+    throw new Error(
+      `openai-auth: function_call ${slot.name} (id=${slot.id}) arguments JSON parse failed (${detail}): ${preview}`,
+    )
+  }
+}
+
 function errorDetail(value: unknown): string | null {
   if (typeof value === 'string') return value
   if (!isRecord(value)) return null
@@ -646,15 +686,7 @@ export async function* processResponseStream(
             }
             if (item.name && !slot.name) slot.name = item.name
             if (item.call_id) slot.id = item.call_id
-            let parsedInput: Record<string, unknown> = {}
-            if (slot.args.trim().length > 0) {
-              try {
-                parsedInput = JSON.parse(slot.args) as Record<string, unknown>
-              } catch {
-                // Leave parsedInput as {}; the model will see the
-                // mismatch via the resulting tool_result error.
-              }
-            }
+            const parsedInput = parseFunctionCallArguments(slot)
             toolUseBlocks.push({
               type: 'tool_use',
               id: slot.id,
@@ -725,14 +757,7 @@ export async function* processResponseStream(
   // pending function_calls without a corresponding output_item.done
   // (defensive — should not happen in normal flow).
   for (const [, slot] of pending) {
-    let parsedInput: Record<string, unknown> = {}
-    if (slot.args.trim().length > 0) {
-      try {
-        parsedInput = JSON.parse(slot.args) as Record<string, unknown>
-      } catch {
-        // ignore
-      }
-    }
+    const parsedInput = parseFunctionCallArguments(slot)
     toolUseBlocks.push({
       type: 'tool_use',
       id: slot.id,
