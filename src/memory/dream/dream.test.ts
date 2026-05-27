@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs'
 import { utimes } from 'node:fs/promises'
@@ -26,7 +25,7 @@ import {
   _triggerExtractSettledForTest,
   setExtractionInProgressForTest,
 } from '../extract.js'
-import { consolidationLockPath, tryAcquireConsolidationLock } from './lock.js'
+import { consolidationLockPath, readSubTaskLastSuccess } from './lock.js'
 import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
 import {
   drainPendingDream,
@@ -175,8 +174,20 @@ describe('autoDream runner', () => {
     writeSession('s2', 'alice', Date.now() + 1)
     writeSession('s3', 'alice', Date.now() + 2)
 
+    // Seed lock with all three sub-tasks recently succeeded → minHours
+    // bails all sub-tasks and the outer gate returns without acquiring.
     mkdirSync(tmpMemoryDir, { recursive: true })
-    writeFileSync(consolidationLockPath(tmpMemoryDir), `${process.pid}\n`)
+    const now = Date.now()
+    writeFileSync(
+      consolidationLockPath(tmpMemoryDir),
+      JSON.stringify({
+        subTasks: {
+          memoryCurator: now,
+          skillCurator: now,
+          skillConsolidator: now,
+        },
+      }) + '\n',
+    )
 
     let forkInvoked = false
     setRunSubagentForTest(async () => {
@@ -198,12 +209,23 @@ describe('autoDream runner', () => {
     writeSession('s1', 'alice', Date.now())
 
     mkdirSync(tmpMemoryDir, { recursive: true })
-    // Last consolidation 2h ago — within the 24h minHours window, and stale
-    // enough (older than the 1h lock-holder window) that the lock is
-    // re-acquirable once the burst bypass lets execution reach it.
+    // All three sub-tasks last succeeded 2h ago — within the 24h minHours
+    // window, and stale enough (older than the 1h lock-holder window) that
+    // the lock is re-acquirable once the burst bypass lets execution reach
+    // it.
     const lockPath = consolidationLockPath(tmpMemoryDir)
-    writeFileSync(lockPath, `${process.pid}\n`)
-    const twoHoursAgoSec = Date.now() / 1000 - 2 * 3600
+    const twoHoursAgoMs = Date.now() - 2 * 3600 * 1000
+    writeFileSync(
+      lockPath,
+      JSON.stringify({
+        subTasks: {
+          memoryCurator: twoHoursAgoMs,
+          skillCurator: twoHoursAgoMs,
+          skillConsolidator: twoHoursAgoMs,
+        },
+      }) + '\n',
+    )
+    const twoHoursAgoSec = twoHoursAgoMs / 1000
     await utimes(lockPath, twoHoursAgoSec, twoHoursAgoSec)
 
     // Four memory files written just now — all newer than lastConsolidatedAt.
@@ -400,7 +422,7 @@ describe('autoDream runner', () => {
     }
   })
 
-  it('runs the fork and marks consolidation succeeded when all gates pass', async () => {
+  it('runs the fork and marks every sub-task succeeded when all gates pass', async () => {
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
 
@@ -417,12 +439,85 @@ describe('autoDream runner', () => {
       config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
     })
 
+    // memoryCurator + skillConsolidator both ran (no fork transcripts → no
+    // skillCurator pass, but the no-op still marks lastSuccessAt).
     assert.equal(forkInvocations, 2)
     assert.equal(existsSync(consolidationLockPath(tmpMemoryDir)), true)
-    assert.equal(
-      readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8').trim(),
-      String(process.pid),
-    )
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'memoryCurator') > 0)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillCurator') > 0)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator') > 0)
+  })
+
+  it('re-runs only skillConsolidator on the next cycle when it failed and memoryCurator succeeded (Bug 1a regression)', async () => {
+    // 2026-05-27 dogfood Bug 1a: skillConsolidator tripped the codex 35s
+    // TTFB watchdog on a 100K+ input. Pre-PR1 the lock was a single mtime,
+    // so memoryCurator's success advanced it past minHours and
+    // skillConsolidator never got a retry — `[auto-dream]
+    // skillConsolidator failed` printed once and the sub-task stayed at 0
+    // successes for the rest of the daemon's lifetime.
+    writeSession('s1', 'alice', Date.now())
+    writeSession('s2', 'alice', Date.now() + 1)
+
+    // First cycle: memoryCurator + skillCurator no-op succeed,
+    // skillConsolidator returns WorkerFailure (the same envelope shape
+    // runSubagent returns on a TTFB abort).
+    setRunSubagentForTest(async input => {
+      if (input.agentType === 'skillConsolidator') {
+        return {
+          kind: 'failure',
+          envelope: {
+            status: 'failed',
+            reason: 'other',
+            message: 'stream idle > 35000ms (ttfb)',
+          },
+        }
+      }
+      return fakeForkResult()
+    })
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({
+        enabled: true,
+        minHours: 6,
+        minSessions: 1,
+        scanThrottleMs: 0,
+      }),
+    })
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'memoryCurator') > 0)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillCurator') > 0)
+    assert.equal(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator'), 0)
+
+    // Reset the per-process scan throttle so the second cycle's gates run
+    // afresh (production behavior: each turn-end hook is a fresh call).
+    resetAutoDreamStateForTest()
+
+    // Second cycle (within minHours=6 of first): only skillConsolidator is
+    // due. memoryCurator + skillCurator must be skipped; skillConsolidator
+    // must be attempted again.
+    const calls2: string[] = []
+    setRunSubagentForTest(async input => {
+      calls2.push(String(input.agentType))
+      return fakeForkResult()
+    })
+    await executeAutoDream({
+      userId: 'alice',
+      memoryDir: tmpMemoryDir,
+      currentSessionId: 'current',
+      config: dreamConfig({
+        enabled: true,
+        minHours: 6,
+        minSessions: 1,
+        scanThrottleMs: 0,
+      }),
+    })
+    // PRE-PR1: minHours sees a recent lock mtime, outer gate bails →
+    // calls2 stays [] → assertion fails.
+    // POST-PR1: memoryCurator + skillCurator within minHours and skipped;
+    // skillConsolidator never recorded success so it runs.
+    assert.deepEqual(calls2, ['skillConsolidator'])
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator') > 0)
   })
 
   it('passes a full user memory tree manifest to a single autoDream fork', async () => {
@@ -580,25 +675,40 @@ describe('autoDream runner', () => {
     assert.match(escaped.output as string, /path resolves outside memoryDir/)
   })
 
-  it('rolls back the lock when the fork throws', async () => {
+  it('leaves the failed sub-task at its prior watermark when memoryCurator returns WorkerFailure', async () => {
+    // PR1.6 regression guard: runSubagent returns failures as
+    // {kind:'failure', envelope}. Per-sub-task semantic: a failed
+    // sub-task's lastSuccessAt does not advance, so the next eligible
+    // cycle can retry it.
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
 
-    await tryAcquireConsolidationLock(tmpMemoryDir)
-    const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
-    await utimes(
-      consolidationLockPath(tmpMemoryDir),
-      olderTimestampSec,
-      olderTimestampSec,
+    const priorMC = Date.now() - 10 * 60 * 60 * 1000
+    mkdirSync(tmpMemoryDir, { recursive: true })
+    const lockFile = consolidationLockPath(tmpMemoryDir)
+    writeFileSync(
+      lockFile,
+      JSON.stringify({
+        subTasks: { memoryCurator: priorMC, skillCurator: priorMC, skillConsolidator: priorMC },
+      }) + '\n',
     )
-    const priorMtime = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
 
-    let forkInvocations = 0
-    setRunSubagentForTest(async () => {
-      forkInvocations += 1
-      throw new Error('fork blew up')
+    setRunSubagentForTest(async input => {
+      if (input.agentType === 'memoryCurator') {
+        return {
+          kind: 'failure',
+          envelope: {
+            status: 'failed',
+            reason: 'max-turns-exceeded',
+            message: 'subagent hit turn cap',
+          },
+        }
+      }
+      return fakeForkResult()
     })
 
+    // minHours: 0 forces every sub-task to be "due" so memoryCurator's
+    // failure path actually runs (rather than being throttled out).
     await executeAutoDream({
       userId: 'alice',
       memoryDir: tmpMemoryDir,
@@ -606,57 +716,53 @@ describe('autoDream runner', () => {
       config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
     })
 
-    assert.equal(forkInvocations, 2)
-    const afterRollback = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
-    assert.ok(
-      Math.abs(afterRollback - priorMtime) < 5,
-      `expected rollback mtime ~${priorMtime}, got ${afterRollback}`,
-    )
-    assert.equal(readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8'), '')
+    // memoryCurator failed → stays at priorMC.
+    const afterMC = await readSubTaskLastSuccess(tmpMemoryDir, 'memoryCurator')
+    assert.equal(afterMC, priorMC, 'memoryCurator lastSuccessAt should not advance after failure')
+    // skill sub-tasks succeeded → advanced past priorMC.
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillCurator') > priorMC)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator') > priorMC)
   })
 
-  it('rolls back the lock when the fork returns a WorkerFailure envelope', async () => {
-    // PR1.6 regression guard: runSubagent now returns failures as
-    // {kind:'failure', envelope} instead of throwing. autoDream must treat
-    // the structured failure equivalently to a thrown error — roll back the
-    // lock so the 24h throttle window isn't burned on an unsuccessful run.
+  it('preserves prior sub-task watermarks across a stale-pid reclaim', async () => {
+    // Verifies that when a previous daemon crashed mid-dream leaving a
+    // stale-pid lock, the next start's tryAcquireConsolidationLock reclaim
+    // path preserves the prior subTasks history (regression: pre-PR1 the
+    // reclaim path unlinked + recreated, erasing the watermark).
     writeSession('s1', 'alice', Date.now())
     writeSession('s2', 'alice', Date.now() + 1)
 
-    await tryAcquireConsolidationLock(tmpMemoryDir)
-    const olderTimestampSec = (Date.now() - 10 * 60 * 60 * 1000) / 1000
-    await utimes(
-      consolidationLockPath(tmpMemoryDir),
-      olderTimestampSec,
-      olderTimestampSec,
+    const priorTs = Date.now() - 10 * 60 * 60 * 1000
+    const lockFile = consolidationLockPath(tmpMemoryDir)
+    mkdirSync(tmpMemoryDir, { recursive: true })
+    writeFileSync(
+      lockFile,
+      JSON.stringify({
+        pid: 999999999,
+        subTasks: {
+          memoryCurator: priorTs,
+          // skillCurator + skillConsolidator never succeeded → both due.
+        },
+      }) + '\n',
     )
-    const priorMtime = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
+    const olderSec = priorTs / 1000
+    await utimes(lockFile, olderSec, olderSec)
 
-    setRunSubagentForTest(async () => ({
-      kind: 'failure',
-      envelope: {
-        status: 'failed',
-        reason: 'max-turns-exceeded',
-        message: 'subagent hit turn cap',
-      },
-    }))
+    setRunSubagentForTest(async () => fakeForkResult())
 
-    // executeAutoDream must NOT throw on structured failure — but must
-    // restore the prior lock mtime instead of marking consolidation
-    // succeeded.
     await executeAutoDream({
       userId: 'alice',
       memoryDir: tmpMemoryDir,
       currentSessionId: 'current',
+      // minHours: 0 makes memoryCurator due as well, so this cycle marks
+      // all three. priorTs survival is asserted via "memoryCurator
+      // advanced past priorTs but didn't reset to 0".
       config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
     })
 
-    const afterRollback = statSync(consolidationLockPath(tmpMemoryDir)).mtimeMs
-    assert.ok(
-      Math.abs(afterRollback - priorMtime) < 5,
-      `expected rollback mtime ~${priorMtime}, got ${afterRollback}`,
-    )
-    assert.equal(readFileSync(consolidationLockPath(tmpMemoryDir), 'utf8'), '')
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'memoryCurator') > priorTs)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillCurator') > priorTs)
+    assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator') > priorTs)
   })
 
   it('does not run a second fork while one is in progress for the same user', async () => {

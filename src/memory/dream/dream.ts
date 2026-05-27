@@ -12,10 +12,13 @@ import {
   onExtractSettled,
 } from '../extract.js'
 import {
-  markConsolidationSucceeded,
-  readLastConsolidatedAt,
+  type AcquireResult,
+  markSubTaskSucceeded,
+  readEarliestSubTaskSuccess,
+  readSubTaskLastSuccess,
   releaseConsolidationLockOwnership,
   rollbackConsolidationLock,
+  type SubTaskName,
   tryAcquireConsolidationLock,
 } from './lock.js'
 import {
@@ -150,25 +153,29 @@ async function executeAutoDreamInner(params: {
   state.inProgressByUser.add(params.userId)
   try {
     await ensureMemoryDir(params.memoryDir)
-    const lastConsolidatedAt = await readLastConsolidatedAt(params.memoryDir)
-    const elapsedHours = (Date.now() - lastConsolidatedAt) / (60 * 60 * 1000)
-    if (lastConsolidatedAt !== 0 && elapsedHours < params.config.memory.curator.minHours) {
-      // minHours is a steady-state throttle. A burst of extractor output in a
-      // single window — a night of heavy background dispatch produced 50+ new
-      // memory files in the 2026-05-20 dogfood — would otherwise sit
-      // un-curated for a full 24h. Bypass the throttle when enough new memory
-      // files have landed since the last consolidation that duplication is
-      // likely. `burstFileThreshold: 0` disables the bypass. The shorter
-      // `scanThrottleMs` gate still applies below, so a burst cannot make the
-      // curator run more than once per scan window.
+
+    // PR1 (2026-05-27): each sub-task has its own minHours throttle so a
+    // permanent skillConsolidator failure stays retryable while
+    // memoryCurator honors the 24h cap. Pre-PR1 a single lock mtime gated
+    // all three, so a TTFB failure on skillConsolidator was masked behind
+    // memoryCurator's success forever — Bug 1a from the 2026-05-27 dogfood.
+    const subTaskDue = await computeSubTaskDue(params.memoryDir, params.config)
+    if (!subTaskDue.memoryCurator && !subTaskDue.skillCurator && !subTaskDue.skillConsolidator) {
+      // No sub-task is due. Burst bypass still applies — a night of heavy
+      // extractor output (2026-05-20 dogfood: 50+ files in one window)
+      // should not sit un-curated for the full minHours window.
       const burstThreshold = params.config.memory.curator.burstFileThreshold
+      const watermark = await readEarliestSubTaskSuccess(params.memoryDir)
       const isBurst =
         burstThreshold > 0
-        && (await countMemoriesModifiedSince(params.memoryDir, lastConsolidatedAt))
-          >= burstThreshold
+        && (await countMemoriesModifiedSince(params.memoryDir, watermark)) >= burstThreshold
       if (!isBurst) {
         return
       }
+      // Burst overrides minHours, but only for the curator side
+      // (memoryCurator is what dedupes new extractor output). Skill
+      // sub-tasks still honor their own throttles.
+      subTaskDue.memoryCurator = true
     }
 
     const now = Date.now()
@@ -181,17 +188,18 @@ async function executeAutoDreamInner(params: {
     }
 
     state.lastSessionScanAtByUser.set(params.userId, now)
+    const sessionWatermark = await readEarliestSubTaskSuccess(params.memoryDir)
     const sessionIds = await gatherDreamSessions({
       userId: params.userId,
-      lastConsolidatedAt,
+      lastConsolidatedAt: sessionWatermark,
       excludeSessionId: params.currentSessionId,
     })
     if (sessionIds.length < params.config.memory.curator.minSessions) {
       return
     }
 
-    const priorMtime = await tryAcquireConsolidationLock(params.memoryDir)
-    if (priorMtime === null) {
+    const prior = await tryAcquireConsolidationLock(params.memoryDir)
+    if (prior === null) {
       return
     }
 
@@ -201,51 +209,54 @@ async function executeAutoDreamInner(params: {
       // MemoryDelete / Read / Grep / Glob) is the single source of truth
       // for what this subagent can use — runtime gate is the default
       // `deriveCanUseTool(role)` applied by runSubagent.
-      let memoryCuratorSucceeded = false
-      try {
-        const result = await runSubagentImpl({
-          agentType: 'memoryCurator',
-          prompt: buildDreamPrompt({
-            memoryDir: params.memoryDir,
-            transcriptDir: params.config.paths.sessions,
-            sessionIds,
-            memoryTree: await gatherDreamMemoryTree(params.memoryDir),
-          }),
-          canonicalUserOverride: params.userId,
-          maxTurnsOverride: params.config.memory.curator.maxTurns,
+      if (subTaskDue.memoryCurator) {
+        const memoryCuratorSucceeded = await runMemoryCurator({
+          memoryDir: params.memoryDir,
+          transcriptDir: params.config.paths.sessions,
+          sessionIds,
+          userId: params.userId,
+          maxTurns: params.config.memory.curator.maxTurns,
         })
-      // WorkerFailure (PR1.6): runSubagent now returns failures as
-      // {kind:'failure', envelope} instead of throwing. For autoDream the
-      // distinction matters: if the subagent didn't actually consolidate
-      // (max-turns / aborted / tool-unavailable), do NOT mark the
-      // consolidation as succeeded — that would burn the 24h throttle window
-      // even though nothing was committed. Roll back the lock so the next
-      // eligible turn can try again, and surface the failure so a calling
-      // drain can log it.
-        if (result.kind === 'failure') {
-          const { reason, message } = result.envelope
-          console.error(`[auto-dream] memoryCurator failed (${reason}): ${message}`)
-        } else {
-          memoryCuratorSucceeded = true
+        if (memoryCuratorSucceeded) {
+          await markSubTaskSucceeded(params.memoryDir, 'memoryCurator')
         }
-      } catch (error) {
-        console.error(`[auto-dream] memoryCurator failed: ${errorMessage(error)}`)
       }
-      await runSkillDreamPasses({
+
+      // Skill sub-tasks are independently due-gated. skillCurator's per-role
+      // pass uses its own watermark (own lastSuccessAt) so a sub-task that
+      // failed on a previous cycle scans fork transcripts since that prior
+      // attempt instead of inheriting memoryCurator's just-updated stamp.
+      const skillCuratorLastSuccess = await readSubTaskLastSuccess(
+        params.memoryDir,
+        'skillCurator',
+      )
+      const skillConsolidatorLastSuccess = await readSubTaskLastSuccess(
+        params.memoryDir,
+        'skillConsolidator',
+      )
+      const skillOutcome = await runSkillDreamPasses({
         userId: params.userId,
         cwd: process.cwd(),
         sessionsDir: params.config.paths.sessions,
         sessionIds,
-        lastConsolidatedAt,
+        skillCuratorLastSuccess,
+        runSkillCurator: subTaskDue.skillCurator,
+        runSkillConsolidator: subTaskDue.skillConsolidator,
         maxTurns: params.config.memory.curator.maxTurns,
       })
-      if (memoryCuratorSucceeded) {
-        await markConsolidationSucceeded(params.memoryDir)
-      } else {
-        await rollbackConsolidationLock(params.memoryDir, priorMtime)
+      if (subTaskDue.skillCurator
+        && (skillOutcome.skillCuratorSucceeded || skillOutcome.skillCuratorNoOp)) {
+        // No-op also marks success: with nothing to curate this cycle, leaving
+        // lastSuccessAt at 0 would re-fire the gate every turn forever. Treat
+        // "scanned and found nothing" as legitimate completion.
+        await markSubTaskSucceeded(params.memoryDir, 'skillCurator')
       }
+      if (subTaskDue.skillConsolidator && skillOutcome.skillConsolidatorSucceeded) {
+        await markSubTaskSucceeded(params.memoryDir, 'skillConsolidator')
+      }
+      await releaseConsolidationLockOwnership(params.memoryDir)
     } catch (error) {
-      await rollbackConsolidationLock(params.memoryDir, priorMtime)
+      await rollbackConsolidationLock(params.memoryDir, prior)
       throw error
     }
   } finally {
@@ -253,66 +264,162 @@ async function executeAutoDreamInner(params: {
   }
 }
 
+type SubTaskDueMap = Record<SubTaskName, boolean>
+
+async function computeSubTaskDue(
+  memoryDir: string,
+  config: LightClawConfig,
+): Promise<SubTaskDueMap> {
+  const minHoursMs = config.memory.curator.minHours * 60 * 60 * 1000
+  const now = Date.now()
+  async function isDue(name: SubTaskName): Promise<boolean> {
+    const last = await readSubTaskLastSuccess(memoryDir, name)
+    if (last === 0) return true
+    return now - last >= minHoursMs
+  }
+  return {
+    memoryCurator: await isDue('memoryCurator'),
+    skillCurator: await isDue('skillCurator'),
+    skillConsolidator: await isDue('skillConsolidator'),
+  }
+}
+
+async function runMemoryCurator(params: {
+  memoryDir: string
+  transcriptDir: string
+  sessionIds: string[]
+  userId: string
+  maxTurns?: number
+}): Promise<boolean> {
+  try {
+    const result = await runSubagentImpl({
+      agentType: 'memoryCurator',
+      prompt: buildDreamPrompt({
+        memoryDir: params.memoryDir,
+        transcriptDir: params.transcriptDir,
+        sessionIds: params.sessionIds,
+        memoryTree: await gatherDreamMemoryTree(params.memoryDir),
+      }),
+      canonicalUserOverride: params.userId,
+      maxTurnsOverride: params.maxTurns,
+    })
+    // WorkerFailure (PR1.6): runSubagent returns failures as
+    // {kind:'failure', envelope}. For autoDream the distinction matters: if
+    // memoryCurator didn't actually consolidate (max-turns / aborted /
+    // tool-unavailable), do NOT mark its lastSuccessAt — that would burn
+    // the per-sub-task throttle window even though nothing was committed.
+    if (result.kind === 'failure') {
+      const { reason, message } = result.envelope
+      console.error(`[auto-dream] memoryCurator failed (${reason}): ${message}`)
+      return false
+    }
+    return true
+  } catch (error) {
+    console.error(`[auto-dream] memoryCurator failed: ${errorMessage(error)}`)
+    return false
+  }
+}
+
+type SkillDreamOutcome = {
+  // Aggregate skillCurator success across every worker role that had new
+  // fork transcripts to process this cycle. Any single failure flips the
+  // flag false so the per-sub-task lock stays open for retry on the next
+  // due window — a failed coder skillCurator should not be hidden behind
+  // a successful localExplorer pass.
+  skillCuratorSucceeded: boolean
+  // True only when no worker role had new fork transcripts AND the caller
+  // asked us to run skillCurator. Distinguishes "nothing to do this cycle"
+  // from "ran and at least one failed". Both leave lastSuccessAt unchanged,
+  // but only the first should be silent in logs.
+  skillCuratorNoOp: boolean
+  skillConsolidatorSucceeded: boolean
+}
+
 async function runSkillDreamPasses(params: {
   userId: string
   cwd: string
   sessionsDir: string
   sessionIds: string[]
-  lastConsolidatedAt: number
+  skillCuratorLastSuccess: number
+  runSkillCurator: boolean
+  runSkillConsolidator: boolean
   maxTurns?: number
-}): Promise<void> {
-  const workerRoles = getAllAgents()
-    .filter(role => role.kind === 'worker')
-    .sort((left, right) => String(left.agentType).localeCompare(String(right.agentType)))
+}): Promise<SkillDreamOutcome> {
+  let skillCuratorSucceeded = true
+  let skillCuratorRanForAtLeastOneRole = false
+  let skillConsolidatorSucceeded = false
 
-  for (const role of workerRoles) {
-    const transcriptPaths = await gatherForkTranscriptPathsForRole({
-      sessionsDir: params.sessionsDir,
-      sessionIds: params.sessionIds,
-      role,
-      since: params.lastConsolidatedAt,
-    })
-    if (transcriptPaths.length === 0) {
-      continue
-    }
-    try {
-      const result = await runSubagentImpl({
-        agentType: 'skillCurator',
-        prompt: buildSkillCuratorPrompt({
-          userId: params.userId,
-          role,
-          transcriptPaths,
-          visibleSkills: await gatherDreamVisibleSkills({
-            cwd: params.cwd,
+  if (params.runSkillCurator) {
+    const workerRoles = getAllAgents()
+      .filter(role => role.kind === 'worker')
+      .sort((left, right) => String(left.agentType).localeCompare(String(right.agentType)))
+
+    for (const role of workerRoles) {
+      const transcriptPaths = await gatherForkTranscriptPathsForRole({
+        sessionsDir: params.sessionsDir,
+        sessionIds: params.sessionIds,
+        role,
+        since: params.skillCuratorLastSuccess,
+      })
+      if (transcriptPaths.length === 0) {
+        continue
+      }
+      skillCuratorRanForAtLeastOneRole = true
+      try {
+        const result = await runSubagentImpl({
+          agentType: 'skillCurator',
+          prompt: buildSkillCuratorPrompt({
             userId: params.userId,
             role,
+            transcriptPaths,
+            visibleSkills: await gatherDreamVisibleSkills({
+              cwd: params.cwd,
+              userId: params.userId,
+              role,
+            }),
+          }),
+          canonicalUserOverride: params.userId,
+          maxTurnsOverride: params.maxTurns,
+        })
+        if (result.kind === 'failure') {
+          logDreamSubagentFailure('skillCurator', result)
+          skillCuratorSucceeded = false
+        }
+      } catch (error) {
+        console.error(`[auto-dream] skillCurator failed for ${role.agentType}: ${errorMessage(error)}`)
+        skillCuratorSucceeded = false
+      }
+    }
+  }
+
+  if (params.runSkillConsolidator) {
+    try {
+      const result = await runSubagentImpl({
+        agentType: 'skillConsolidator',
+        prompt: buildSkillConsolidatorPrompt({
+          userId: params.userId,
+          userSkills: await gatherDreamUserSkillsFull({
+            cwd: params.cwd,
+            userId: params.userId,
           }),
         }),
         canonicalUserOverride: params.userId,
         maxTurnsOverride: params.maxTurns,
       })
-      logDreamSubagentFailure('skillCurator', result)
+      if (result.kind === 'failure') {
+        logDreamSubagentFailure('skillConsolidator', result)
+      } else {
+        skillConsolidatorSucceeded = true
+      }
     } catch (error) {
-      console.error(`[auto-dream] skillCurator failed for ${role.agentType}: ${errorMessage(error)}`)
+      console.error(`[auto-dream] skillConsolidator failed: ${errorMessage(error)}`)
     }
   }
 
-  try {
-    const result = await runSubagentImpl({
-      agentType: 'skillConsolidator',
-      prompt: buildSkillConsolidatorPrompt({
-        userId: params.userId,
-        userSkills: await gatherDreamUserSkillsFull({
-          cwd: params.cwd,
-          userId: params.userId,
-        }),
-      }),
-      canonicalUserOverride: params.userId,
-      maxTurnsOverride: params.maxTurns,
-    })
-    logDreamSubagentFailure('skillConsolidator', result)
-  } catch (error) {
-    console.error(`[auto-dream] skillConsolidator failed: ${errorMessage(error)}`)
+  return {
+    skillCuratorSucceeded: skillCuratorSucceeded && skillCuratorRanForAtLeastOneRole,
+    skillCuratorNoOp: params.runSkillCurator && !skillCuratorRanForAtLeastOneRole,
+    skillConsolidatorSucceeded,
   }
 }
 
