@@ -91,15 +91,48 @@ queueMicrotask(() => {
         continue
       }
       if (state.inProgressByUser.has(userId)) {
+        logRetryAttempt(userId, 'skip-dream-in-flight')
         continue
       }
       if (isExtractionInProgressFor(params.memoryDir)) {
+        // The 2026-05-27 dogfood Bug 1b suspicion: under heavy concurrent
+        // extract load this branch fires repeatedly while a sibling extract
+        // is still running, leaving pendingByUser unable to drain. This
+        // stderr line is what would surface that pattern in the next
+        // dogfood — grep for "skip-extract-in-flight" frequency.
+        logRetryAttempt(userId, 'skip-extract-in-flight')
         continue
       }
+      logRetryAttempt(userId, 'fired')
       void executeAutoDream(params).catch(() => {})
     }
   })
 })
+
+function logOuterGate(
+  userId: string,
+  reason: 'disabled' | 'dream-in-flight' | 'extract-in-flight',
+): void {
+  // Diagnostic-only (PR2, 2026-05-27). Bug 1b from the 2026-05-27 dogfood
+  // ("first autoDream took 11h to fire") could not be attributed from the
+  // existing stderr stream because every gated turn returned silently. Each
+  // bail now prints one line so the next dogfood can grep the cause without
+  // re-instrumenting. `pending=<n>` is the post-bail pendingByUser size —
+  // when this stays high across many turns under "extract-in-flight" the
+  // suspicion is confirmed (the retry hook can't drain through the queue).
+  console.error(
+    `[auto-dream] gated user=${userId} reason=${reason} pending=${state.pendingByUser.size}`,
+  )
+}
+
+function logRetryAttempt(
+  userId: string,
+  result: 'fired' | 'skip-dream-in-flight' | 'skip-extract-in-flight',
+): void {
+  console.error(
+    `[auto-dream] retry-attempt user=${userId} result=${result} pending=${state.pendingByUser.size}`,
+  )
+}
 
 // Test seam: dream.test.ts replaces the subagent runner with a fake so
 // gate-pass / rollback / success paths are exercised without a real LLM call.
@@ -112,17 +145,21 @@ export function setRunSubagentForTest(impl: RunSubagentFn | null): void {
 
 export async function executeAutoDream(params: AutoDreamParams): Promise<void> {
   if (!params.config.memory.extractor.enabled || !params.config.memory.curator.enabled) {
+    logOuterGate(params.userId, 'disabled')
     return
   }
 
-  if (
-    state.inProgressByUser.has(params.userId) ||
-    isExtractionInProgressFor(params.memoryDir)
-  ) {
+  const dreamInFlight = state.inProgressByUser.has(params.userId)
+  const extractInFlight = isExtractionInProgressFor(params.memoryDir)
+  if (dreamInFlight || extractInFlight) {
     // Stash so the next onExtractSettled callback for this memoryDir can
     // retry without waiting for another turn-end hook. Dedup is automatic;
     // see DreamState.pendingByUser comment.
     state.pendingByUser.set(params.userId, params)
+    logOuterGate(
+      params.userId,
+      dreamInFlight ? 'dream-in-flight' : 'extract-in-flight',
+    )
     return
   }
   // Accepted past the outer gate. Clear the pending flag now (not on

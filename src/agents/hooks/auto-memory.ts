@@ -49,10 +49,15 @@ export const autoMemoryHook: Hook = {
     registerBackgroundTask(task)
 
     if (!ctx.config.memory.curator.enabled) {
+      // PR2 diagnostic (2026-05-27): the dream hook silently bails on
+      // curator-disabled and userId-null. Tracing these turns the "first
+      // autoDream took 11h" attribution from guesswork into a grep.
+      console.error('[auto-dream] gated user=<none> reason=curator-disabled pending=hook')
       return
     }
     const userId = getCurrentUserId()
     if (!userId) {
+      console.error('[auto-dream] gated user=<none> reason=userId-null pending=hook')
       return
     }
 
