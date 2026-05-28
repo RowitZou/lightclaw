@@ -1,10 +1,11 @@
 import { z } from 'zod'
 
 import {
-  buildRegisteredSkillInvocation,
-  getRegisteredSkill,
+  buildLoadedSkillInvocation,
+  loadRegisteredSkill,
   refreshSkillRegistry,
 } from '../skill/registry.js'
+import { hasSkillAssets, materializeSkillAssets } from '../skill/skill-assets.js'
 import { recordSkillUsage } from '../skill/loader.js'
 import { isSkillCompatibleWithRole } from '../skill/role-validation.js'
 import { getCurrentSessionContext } from '../session-context.js'
@@ -32,20 +33,24 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
     try {
       await refreshSkillRegistry(context.cwd, getCurrentUserId())
       const role = getCurrentSessionContext()?.currentRole
-      const skill = getRegisteredSkill(input.name)
+      const skill = await loadRegisteredSkill(input.name)
+      if (!skill) {
+        return {
+          output: `Unknown skill: ${input.name}`,
+          isError: true,
+        }
+      }
       if (role && skill && !isSkillCompatibleWithRole(skill, role)) {
         return {
           output: `Unknown skill: ${input.name}`,
           isError: true,
         }
       }
-      const content = await buildRegisteredSkillInvocation(input.name, input.args)
-      if (!content) {
-        return {
-          output: `Unknown skill: ${input.name}`,
-          isError: true,
-        }
+      let skillDir: string | undefined
+      if (skill.body.includes('${LIGHTCLAW_SKILL_DIR}') && await hasSkillAssets(skill)) {
+        skillDir = await materializeSkillAssets(skill, context.runtime)
       }
+      const content = await buildLoadedSkillInvocation(skill, input.args, skillDir)
 
       // Fire-and-forget per-user skill last-used update. V1 audit-only (no
       // framework code reads it yet); reserved for Phase 8+ aging / SkillSearch

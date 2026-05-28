@@ -117,6 +117,27 @@ describe('inbox aging', () => {
     assert.equal(existsSync(freshDownload), true)
   })
 
+  it('also ages recursive skill-run files alongside inbox and downloads', async () => {
+    const root = path.join(homeRoot, 'ivy', '.lightclaw')
+    const skillRun = path.join(root, 'skill-run', 'asset-skill', 'scripts', 'nested')
+    mkdirSync(skillRun, { recursive: true })
+    const oldScript = path.join(skillRun, 'old.sh')
+    const freshScript = path.join(skillRun, 'fresh.sh')
+    writeFileSync(oldScript, 'oldscript')
+    writeFileSync(freshScript, 'freshscript')
+    const tenDaysAgo = Date.now() / 1000 - 10 * 86_400
+    const now = Date.now() / 1000
+    utimesSync(oldScript, tenDaysAgo, tenDaysAgo)
+    utimesSync(freshScript, now, now)
+
+    const result = await sweepInboxForUser({ canonicalUser: 'ivy', ttlDays: 7 })
+
+    assert.equal(result.removedCount, 1)
+    assert.equal(result.bytesFreed, 'oldscript'.length)
+    assert.equal(existsSync(oldScript), false)
+    assert.equal(existsSync(freshScript), true)
+  })
+
   it('sweeps .lightclaw/exec/ on its own 6h TTL, independent of ttlDays', async () => {
     // The exec scratch dir holds RlaunchRuntime output-capture / staging
     // files. They are normally deleted inline; the sweep reaps crash

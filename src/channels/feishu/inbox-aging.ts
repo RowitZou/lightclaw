@@ -33,16 +33,19 @@ export type InboxAgingSweepResult = {
 
 let intervalHandle: NodeJS.Timeout | null = null
 
-/** Walk one user's `<workspaceRoot>/<canonical>/.lightclaw/inbox/<chatId>/` and
- *  `<workspaceRoot>/<canonical>/.lightclaw/downloads/` dirs and delete files
+/** Walk one user's `<workspaceRoot>/<canonical>/.lightclaw/inbox/<chatId>/`,
+ *  `<workspaceRoot>/<canonical>/.lightclaw/downloads/`, and
+ *  `<workspaceRoot>/<canonical>/.lightclaw/skill-run/` dirs and delete files
  *  older than the configured TTL. Hermes-style mtime sweep — no archive, no
  *  soft-delete, no sidecar manifest. Empty subdirectories are left in place;
  *  cleaning empty dirs would race against in-flight writes.
  *
  *  inbox/ is two-deep (inbox/<chatId>/<file>) because attachments are scoped
  *  per chat. downloads/ is flat (downloads/<file>) because WebFetch has no
- *  natural namespace key — both share the same TTL since they are the same
- *  class of cache: agent-readable artifacts that decay in time. */
+ *  natural namespace key. skill-run/ is recursive because skill scripts and
+ *  references may have nested helper paths. All three share the same TTL since
+ *  they are the same class of cache: agent-readable artifacts that decay in
+ *  time. */
 export async function sweepInboxForUser(input: {
   canonicalUser: string
   ttlDays: number
@@ -68,6 +71,14 @@ export async function sweepInboxForUser(input: {
   removedCount += downloadsResult.removedCount
   bytesFreed += downloadsResult.bytesFreed
   if (downloadsResult.error && !firstError) firstError = downloadsResult.error
+
+  const skillRunResult = await sweepRecursiveDir(
+    path.join(workspaceRoot, '.lightclaw', 'skill-run'),
+    cutoffMs,
+  )
+  removedCount += skillRunResult.removedCount
+  bytesFreed += skillRunResult.bytesFreed
+  if (skillRunResult.error && !firstError) firstError = skillRunResult.error
 
   // RlaunchRuntime exec scratch — its own short 6h TTL, independent of the
   // 7d artifact TTL above. Normal execs delete their files inline; this only
@@ -124,6 +135,53 @@ async function sweepFlatDir(root: string, cutoffMs: number): Promise<SweepDirRes
     }
   }
   return { removedCount, bytesFreed }
+}
+
+async function sweepRecursiveDir(root: string, cutoffMs: number): Promise<SweepDirResult> {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true })
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { removedCount: 0, bytesFreed: 0 }
+    return {
+      removedCount: 0,
+      bytesFreed: 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  let removedCount = 0
+  let bytesFreed = 0
+  let firstError: string | undefined
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      const sub = await sweepRecursiveDir(entryPath, cutoffMs)
+      removedCount += sub.removedCount
+      bytesFreed += sub.bytesFreed
+      if (sub.error && !firstError) firstError = sub.error
+      continue
+    }
+    if (!entry.isFile()) continue
+
+    let stat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      stat = await fs.stat(entryPath)
+    } catch {
+      continue
+    }
+    if (stat.mtimeMs >= cutoffMs) continue
+    try {
+      await fs.unlink(entryPath)
+      removedCount += 1
+      bytesFreed += stat.size
+    } catch {
+      // Best-effort, symmetric with flat/nested sweeps above.
+    }
+  }
+
+  return { removedCount, bytesFreed, error: firstError }
 }
 
 async function sweepNestedDir(root: string, cutoffMs: number): Promise<SweepDirResult> {

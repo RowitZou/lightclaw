@@ -1,20 +1,17 @@
-// Build-time copy of bundled skill assets (scripts/ subdirectories) into
+// Build-time copy of bundled skill assets (scripts/ and references/) into
 // dist/skill-assets/<name>/. Runs after `tsdown` so that
 // `${LIGHTCLAW_SKILL_DIR}` placeholder resolves to a real on-disk directory
 // in production (where SKILL.md itself is already inlined into the JS bundle).
 //
-// Phase 16 V1 bundled skills (remember / skillify) ship without scripts/,
+// Phase 16 V1 bundled skills (remember / skillify) shipped without scripts/,
 // so this is effectively no-op for them. The empty placeholder directory is
 // still created so `bundledSkillDir(name)` always returns an existing path.
-//
-// Future: if a bundled skill ships reference/ or templates/ subdirs, extend
-// the per-asset-kind switch below. V1 only handles scripts/.
 
 import { cp, mkdir, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ASSET_SUBDIRS = ['scripts'] as const
+const ASSET_SUBDIRS = ['scripts', 'references'] as const
 
 async function main(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url))

@@ -12,13 +12,11 @@ const IS_DIST = SELF_PATH.includes(`${path.sep}dist${path.sep}`)
 /**
  * On-disk asset directory for a bundled skill.
  *
- * - dev (tsx):  `src/skill/bundled/<name>`  (SKILL.md + optional scripts/ in source tree)
- * - prod (dist): `dist/skill-assets/<name>` (scripts/ copied here at build time;
+ * - dev (tsx):  `src/skill/bundled/<name>`  (SKILL.md + optional assets in source tree)
+ * - prod (dist): `dist/skill-assets/<name>` (assets copied here at build time;
  *                                            SKILL.md is inlined into the JS bundle)
  *
- * Phase 16 V1 bundled skills (remember / skillify) ship without scripts/, so
- * the directory exists but has no useful content. The path always resolves so
- * future bundled skills can reference `${LIGHTCLAW_SKILL_DIR}/scripts/foo.py`
+ * The path always resolves so bundled skills can reference materialized assets
  * from SKILL.md body without further framework changes.
  */
 export function bundledSkillDir(name: string): string {

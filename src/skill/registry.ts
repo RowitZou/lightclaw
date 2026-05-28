@@ -40,12 +40,21 @@ export async function loadRegisteredSkill(name: string): Promise<LoadedSkill | n
 export async function buildRegisteredSkillInvocation(
   name: string,
   args?: string,
+  skillDir?: string,
 ): Promise<string | null> {
   const loadedSkill = await loadRegisteredSkill(name)
   if (!loadedSkill) {
     return null
   }
 
+  return buildLoadedSkillInvocation(loadedSkill, args, skillDir)
+}
+
+export async function buildLoadedSkillInvocation(
+  loadedSkill: LoadedSkill,
+  args?: string,
+  skillDir?: string,
+): Promise<string> {
   const sections = [
     `Use the skill \"${loadedSkill.name}\" and follow its instructions for this task.`,
   ]
@@ -61,6 +70,7 @@ export async function buildRegisteredSkillInvocation(
   sections.push(await replaceSkillTemplateVariables(
     replaceSkillArguments(loadedSkill.body.trim(), args),
     loadedSkill,
+    skillDir,
   ))
   return sections.join('\n\n')
 }
@@ -69,7 +79,11 @@ function replaceSkillArguments(body: string, args?: string): string {
   return body.replaceAll('$ARGUMENTS', args?.trim() ?? '')
 }
 
-async function replaceSkillTemplateVariables(body: string, meta: SkillMeta): Promise<string> {
+async function replaceSkillTemplateVariables(
+  body: string,
+  meta: SkillMeta,
+  skillDir?: string,
+): Promise<string> {
   const hasCurlyPair = body.includes('{{')
   const hasShellStyle = body.includes('${LIGHTCLAW_SKILL_DIR}')
   if (!hasCurlyPair && !hasShellStyle) {
@@ -77,7 +91,7 @@ async function replaceSkillTemplateVariables(body: string, meta: SkillMeta): Pro
   }
 
   const next = hasShellStyle
-    ? body.replaceAll('${LIGHTCLAW_SKILL_DIR}', skillDirFor(meta))
+    ? body.replaceAll('${LIGHTCLAW_SKILL_DIR}', skillDir ?? skillDirFor(meta))
     : body
 
   if (!hasCurlyPair) {
