@@ -6,6 +6,7 @@ import { userSkillsRoot } from '../identity/paths.js'
 import { parseFrontmatter } from '../memory/auto-memory.js'
 import { lightclawHome } from '../paths.js'
 import { SKILL_ASSET_SUBDIRS } from './skill-assets.js'
+import { SKILL_ARCHIVE_DIR } from './skill-aging.js'
 import type { LoadedSkill, SkillMeta, SkillSource } from './types.js'
 import { bundledSkills, getBundledSkillByName } from './bundled/index.js'
 
@@ -121,7 +122,7 @@ async function loadSkillsFromDirectory(
     const entries = await fs.readdir(rootDir, { withFileTypes: true })
     const skills = await Promise.all(
       entries
-        .filter(entry => entry.isDirectory())
+        .filter(entry => entry.isDirectory() && entry.name !== SKILL_ARCHIVE_DIR)
         .map(async entry => {
           const filePath = path.join(rootDir, entry.name, 'SKILL.md')
           try {

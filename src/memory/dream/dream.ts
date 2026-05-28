@@ -5,7 +5,9 @@ import { getAllAgents } from '../../agents/registry.js'
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { AgentType, Role } from '../../agents/types.js'
 import type { LightClawConfig } from '../../config.js'
+import { userSkillsRoot } from '../../identity/paths.js'
 import { listActiveCanonicalUsers } from '../../identity/store.js'
+import { ageUserSkills } from '../../skill/skill-aging.js'
 import { ensureMemoryDir, getMemoryDir } from '../auto-memory.js'
 import {
   isExtractionInProgressFor,
@@ -157,6 +159,7 @@ function dueShape(due: SubTaskDueMap): string {
   if (due.memoryCurator) parts.push('mc')
   if (due.skillCurator) parts.push('sc')
   if (due.skillConsolidator) parts.push('sco')
+  if (due.skillAging) parts.push('sa')
   return parts.length === 0 ? 'none' : parts.join('+')
 }
 
@@ -223,7 +226,12 @@ async function executeAutoDreamInner(params: {
     // all three, so a TTFB failure on skillConsolidator was masked behind
     // memoryCurator's success forever — Bug 1a from the 2026-05-27 dogfood.
     const subTaskDue = await computeSubTaskDue(params.memoryDir, params.config)
-    if (!subTaskDue.memoryCurator && !subTaskDue.skillCurator && !subTaskDue.skillConsolidator) {
+    if (
+      !subTaskDue.memoryCurator &&
+      !subTaskDue.skillCurator &&
+      !subTaskDue.skillConsolidator &&
+      !subTaskDue.skillAging
+    ) {
       // No sub-task is due. Burst bypass still applies — a night of heavy
       // extractor output (2026-05-20 dogfood: 50+ files in one window)
       // should not sit un-curated for the full minHours window.
@@ -327,6 +335,14 @@ async function executeAutoDreamInner(params: {
       if (subTaskDue.skillConsolidator && skillOutcome.skillConsolidatorSucceeded) {
         await markSubTaskSucceeded(params.memoryDir, 'skillConsolidator')
       }
+
+      // skillAging is deterministic (no subagent). It runs after the LLM skill
+      // passes so the consolidator gets first crack at merging; running both
+      // under the same consolidation lock keeps the user's skill dir free of
+      // archive-vs-merge write races.
+      if (subTaskDue.skillAging && (await runSkillAging(params.userId))) {
+        await markSubTaskSucceeded(params.memoryDir, 'skillAging')
+      }
       await releaseConsolidationLockOwnership(params.memoryDir)
     } catch (error) {
       await rollbackConsolidationLock(params.memoryDir, prior)
@@ -354,6 +370,7 @@ async function computeSubTaskDue(
     memoryCurator: await isDue('memoryCurator'),
     skillCurator: await isDue('skillCurator'),
     skillConsolidator: await isDue('skillConsolidator'),
+    skillAging: await isDue('skillAging'),
   }
 }
 
@@ -389,6 +406,26 @@ async function runMemoryCurator(params: {
     return true
   } catch (error) {
     console.error(`[auto-dream] memoryCurator failed: ${errorMessage(error)}`)
+    return false
+  }
+}
+
+/** Deterministic skill aging pass. Returns true when it completed (so the
+ *  caller advances the skillAging watermark), false on an unexpected error so
+ *  the next due window retries. Most passes archive / purge nothing — that is
+ *  still a successful completion. */
+async function runSkillAging(userId: string): Promise<boolean> {
+  try {
+    const result = await ageUserSkills(userSkillsRoot(userId), userId)
+    const touched = result.archived.length + result.purged.length
+    if (touched > 0) {
+      console.error(
+        `[auto-dream] skillAging user=${userId} archived=${result.archived.length} purged=${result.purged.length}`,
+      )
+    }
+    return true
+  } catch (error) {
+    console.error(`[auto-dream] skillAging failed: ${errorMessage(error)}`)
     return false
   }
 }

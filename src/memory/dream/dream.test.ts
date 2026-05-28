@@ -16,6 +16,7 @@ import type { Role } from '../../agents/types.js'
 import type { RunSubagentResult } from '../../agents/run-subagent.js'
 type SubagentResult = RunSubagentResult
 import type { LightClawConfig } from '../../config.js'
+import { userSkillsRoot } from '../../identity/paths.js'
 import { createSessionContext, runWithSessionContext } from '../../session-context.js'
 import { memoryDeleteTool } from '../../tools/memory-delete.js'
 import { memoryMoveTool } from '../../tools/memory-move.js'
@@ -174,8 +175,8 @@ describe('autoDream runner', () => {
     writeSession('s2', 'alice', Date.now() + 1)
     writeSession('s3', 'alice', Date.now() + 2)
 
-    // Seed lock with all three sub-tasks recently succeeded → minHours
-    // bails all sub-tasks and the outer gate returns without acquiring.
+    // Seed lock with all sub-tasks recently succeeded → minHours bails every
+    // sub-task and the outer gate returns without acquiring.
     mkdirSync(tmpMemoryDir, { recursive: true })
     const now = Date.now()
     writeFileSync(
@@ -185,6 +186,7 @@ describe('autoDream runner', () => {
           memoryCurator: now,
           skillCurator: now,
           skillConsolidator: now,
+          skillAging: now,
         },
       }) + '\n',
     )
@@ -222,6 +224,7 @@ describe('autoDream runner', () => {
           memoryCurator: twoHoursAgoMs,
           skillCurator: twoHoursAgoMs,
           skillConsolidator: twoHoursAgoMs,
+          skillAging: twoHoursAgoMs,
         },
       }) + '\n',
     )
@@ -518,6 +521,52 @@ describe('autoDream runner', () => {
     // skillConsolidator never recorded success so it runs.
     assert.deepEqual(calls2, ['skillConsolidator'])
     assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillConsolidator') > 0)
+  })
+
+  it('runs deterministic skillAging under the lock and archives stale user skills', async () => {
+    const prevHome = process.env.LIGHTCLAW_HOME
+    process.env.LIGHTCLAW_HOME = tmpRoot
+    try {
+      writeSession('s1', 'alice', Date.now())
+      writeSession('s2', 'alice', Date.now() + 1)
+
+      // A stale per-user skill: SKILL.md mtime 100 days old, no last_used_at,
+      // so skillAging's default 90d archive window catches it.
+      const skillsRoot = userSkillsRoot('alice')
+      const staleDir = path.join(skillsRoot, 'stale-skill')
+      mkdirSync(staleDir, { recursive: true })
+      const staleFile = path.join(staleDir, 'SKILL.md')
+      writeFileSync(
+        staleFile,
+        '---\nname: stale-skill\ndescription: old flow.\nroles:\n  - coder\n---\n\nBody.\n',
+        'utf8',
+      )
+      const oldSec = (Date.now() - 100 * 86_400_000) / 1000
+      await utimes(staleFile, oldSec, oldSec)
+
+      setRunSubagentForTest(async () => fakeForkResult())
+
+      await executeAutoDream({
+        userId: 'alice',
+        memoryDir: tmpMemoryDir,
+        currentSessionId: 'current',
+        config: dreamConfig({ enabled: true, minHours: 0, minSessions: 2 }),
+      })
+
+      // Archived out of the active set, and the skillAging sub-task recorded.
+      assert.equal(existsSync(path.join(skillsRoot, 'stale-skill')), false)
+      assert.equal(
+        existsSync(path.join(skillsRoot, '_archive', 'stale-skill', 'SKILL.md')),
+        true,
+      )
+      assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillAging') > 0)
+    } finally {
+      if (prevHome === undefined) {
+        delete process.env.LIGHTCLAW_HOME
+      } else {
+        process.env.LIGHTCLAW_HOME = prevHome
+      }
+    }
   })
 
   it('passes a full user memory tree manifest to a single autoDream fork', async () => {

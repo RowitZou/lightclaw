@@ -68,6 +68,28 @@ describe('discoverSkillsForUser', () => {
     })
   })
 
+  it('does not load skills archived under the _archive sink', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'active-skill',
+        'name: active-skill\ndescription: Still active.',
+      )
+      // A well-formed SKILL.md sitting under _archive/ must stay invisible —
+      // skill-aging moves retired skills here and the loader must not surface
+      // them.
+      await writeRawSkill(
+        path.join(userSkillsRoot('alice'), '_archive'),
+        'archived-skill',
+        'name: archived-skill\ndescription: Was archived.',
+      )
+      const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      const names = skills.map(skill => skill.name)
+      assert.equal(names.includes('active-skill'), true)
+      assert.equal(names.includes('archived-skill'), false)
+    })
+  })
+
   it('does not scan the retired global <home>/skills directory', async () => {
     await withTempHome(async home => {
       await writeRawSkill(

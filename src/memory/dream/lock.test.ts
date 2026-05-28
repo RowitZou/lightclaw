@@ -226,10 +226,11 @@ describe('autoDream consolidation lock', () => {
     await tryAcquireConsolidationLock(tmpMemoryDir)
     await markSubTaskSucceeded(tmpMemoryDir, 'memoryCurator')
     await markSubTaskSucceeded(tmpMemoryDir, 'skillCurator')
-    // skillConsolidator never marked → watermark = 0 (scan everything).
+    await markSubTaskSucceeded(tmpMemoryDir, 'skillConsolidator')
+    // skillAging never marked → watermark = 0 (scan everything).
     assert.equal(await readEarliestSubTaskSuccess(tmpMemoryDir), 0)
 
-    await markSubTaskSucceeded(tmpMemoryDir, 'skillConsolidator')
+    await markSubTaskSucceeded(tmpMemoryDir, 'skillAging')
     const earliest = await readEarliestSubTaskSuccess(tmpMemoryDir)
     assert.ok(earliest > 0)
   })

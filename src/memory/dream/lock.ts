@@ -10,13 +10,21 @@ const HOLDER_STALE_MS = 60 * 60 * 1000
  *  the ones that did succeed (memoryCurator) honor the `minHours` throttle.
  *  Pre-2026-05-27 the lock was a single timestamp covering all three, so a
  *  permanent skillConsolidator failure was masked behind every cycle's
- *  memoryCurator success — the bug Bug 1a from the 2026-05-27 dogfood. */
-export type SubTaskName = 'memoryCurator' | 'skillCurator' | 'skillConsolidator'
+ *  memoryCurator success — the bug Bug 1a from the 2026-05-27 dogfood.
+ *  `skillAging` (added 2026-05-28) is the deterministic skill-aging janitor
+ *  — it reuses the same per-sub-task throttle so it fires at most once per
+ *  `minHours` like the LLM passes, but runs no subagent. */
+export type SubTaskName =
+  | 'memoryCurator'
+  | 'skillCurator'
+  | 'skillConsolidator'
+  | 'skillAging'
 
 export const SUB_TASK_NAMES: readonly SubTaskName[] = [
   'memoryCurator',
   'skillCurator',
   'skillConsolidator',
+  'skillAging',
 ] as const
 
 /** v2 lock file shape (JSON, one line). `pid` is undefined when no daemon
@@ -98,6 +106,7 @@ function legacyMtimeAsAllSubTasks(mtimeMs: number): Partial<Record<SubTaskName, 
     memoryCurator: mtimeMs,
     skillCurator: mtimeMs,
     skillConsolidator: mtimeMs,
+    skillAging: mtimeMs,
   }
 }
 
