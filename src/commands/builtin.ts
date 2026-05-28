@@ -149,6 +149,9 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: t('cmd.feedback.usage'),
     description: t('cmd.feedback.desc'),
     visibleTo: 'user',
+    agentAdvisory:
+      'When the user wants to leave standing feedback for the admin (bug report / ' +
+      'feature request / preference) that should outlive this conversation.',
     async handler(args, ctx) {
       const text = args.trim()
       if (!text) {
@@ -201,6 +204,11 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: '/cost',
     description: t('cmd.cost.desc'),
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the user wants to inspect token usage or cost (per-session or aggregated).',
+    agentUsage: [
+      '/cost                               Show aggregated cost across all sessions',
+    ].join('\n'),
     async handler(_args, ctx) {
       ctx.output.write(await formatCost())
     },
@@ -209,6 +217,8 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/model',
     usage: t('cmd.model.usage'),
     description: t('cmd.model.desc'),
+    agentAdvisory:
+      'When the user explicitly asks to switch model or compare model behavior.',
     async handler(args, ctx) {
       const rawParts = args.trim().split(/\s+/).filter(Boolean)
       const clearCache = rawParts.includes('--clear-cache')
@@ -283,6 +293,8 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/mode',
     usage: t('cmd.mode.usage'),
     description: t('cmd.mode.desc'),
+    agentAdvisory:
+      'When the user wants to change permission posture (default / autoEdit / planMode / yolo).',
     async handler(args, ctx) {
       const trimmed = args.trim()
       const userId = getCurrentUserId()
@@ -326,6 +338,12 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: t('cmd.ceiling.usage'),
     description: t('cmd.ceiling.desc'),
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the user wants to set or query per-user usage / spend ceilings.',
+    agentUsage: [
+      '/ceiling                              Show current permission ceilings per user',
+      '/ceiling <user> <read|ask|auto|yolo>  Set permission-mode ceiling for user',
+    ].join('\n'),
     async handler(args, ctx) {
       const parts = args.trim().split(/\s+/).filter(Boolean)
       if (parts.length === 0) {
@@ -355,6 +373,18 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: t('cmd.user.usage'),
     description: t('cmd.user.desc'),
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the user wants to list paired channel users, inspect pairing state, ' +
+      'or unpair someone.',
+    agentUsage: [
+      '/user list                          List all paired users (canonical id + channel handle)',
+      '/user pending                       Show pending pairing requests',
+      '/user approve <code> [--as <name>]  Approve a pending pairing request',
+      '/user reject <code>                 Reject a pending pairing request',
+      '/user unlink <channel:id>           Unlink one channel identity from its canonical user',
+      '/user remove <name> [--purge]       Remove a canonical user; --purge also deletes user data',
+      '/user feedback [--page N]           Show standing user feedback for the admin',
+    ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runUserCommand(args))
     },
@@ -370,6 +400,14 @@ function buildBuiltinCommands(): ReplCommand[] {
     // Sandbox is meant to be invisible to users — environment health
     // surfaces to admin via channel notices, not via slash commands.
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the user wants to reset, inspect, or rebuild the sandbox runtime ' +
+      '(container respawn / scratch wipe).',
+    agentUsage: [
+      '/sandbox status                    Show runtime backend, container/worker state, mount table',
+      '/sandbox prefetch                  Start Docker image prefetch / readiness probe',
+      '/sandbox reset                     Wipe and respawn the runtime (drops scratch, keeps workspace)',
+    ].join('\n'),
     async handler(args, ctx) {
       const action = args.trim() || 'status'
       if (action === 'status') {
@@ -477,6 +515,15 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: '/feishu-workspace [status|list|orphans|delete <canonical>]',
     description: 'Manage Feishu cloud workspace root and per-user folders',
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the user wants to manage the Feishu cloud workspace root or ' +
+      'per-user document folders.',
+    agentUsage: [
+      '/feishu-workspace status                    Show root folder + per-user folder tokens',
+      '/feishu-workspace list                      List per-user folders with sizes',
+      '/feishu-workspace orphans                   List folders for unpaired canonical users',
+      '/feishu-workspace delete <canonical>        Delete an unpaired user folder',
+    ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runFeishuWorkspaceCommand(args))
     },
@@ -486,6 +533,17 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
     description: 'Manage per-user dynamic rlaunch mounts',
     channelOnly: true,
+    agentAdvisory:
+      'When the user references a host path outside the current workspace mount, ' +
+      'or a gpfs path that the agent cannot see — they need to mount it before ' +
+      'you can Read / Edit / Bash inside.',
+    agentUsage: [
+      '/mount list                          Show currently mounted paths',
+      '/mount add <absolute-gpfs-path...> [--ro|--rw]',
+      '                                     Mount host gpfs path into sandbox at the same path. Default mode is --ro.',
+      '/mount remove <absolute-gpfs-path...>',
+      '                                     Unmount; sandbox restart applied next turn.',
+    ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runMountCommand(args, ctx, {
         restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
@@ -496,6 +554,15 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/rules',
     usage: t('cmd.rules.usage'),
     description: t('cmd.rules.desc'),
+    agentAdvisory:
+      'When the user wants to pre-approve or deny a recurring permission prompt ' +
+      '(e.g. always allow `Bash(git:*)`).',
+    agentUsage: [
+      '/rules list                                Show currently active permission rules',
+      '/rules revoke <n>                          Remove a rule by number from /rules list',
+      '/rules revoke all                          Remove all current user permission rules',
+      '/rules ask <rule>                          Force a matching action to ask again',
+    ].join('\n'),
     async handler(args, ctx) {
       const trimmed = args.trim()
       const [head, ...rest] = trimmed.split(/\s+/)
@@ -577,6 +644,14 @@ function buildBuiltinCommands(): ReplCommand[] {
     // identity to their own ChatGPT account, which is not what the
     // multi-user model implies.
     visibleTo: 'admin',
+    agentAdvisory:
+      'When the daemon needs provider credentials set up or refreshed ' +
+      '(anthropic / openai / openai-auth / codex).',
+    agentUsage: [
+      '/auth list                         Show current credential state per provider',
+      '/auth import codex                 Import Codex OAuth credentials from ~/.codex/auth.json',
+      '/auth logout codex [--purge]       Remove stored Codex token; --purge also removes auto-registered config',
+    ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runAuthCommand(args, ctx.config))
     },

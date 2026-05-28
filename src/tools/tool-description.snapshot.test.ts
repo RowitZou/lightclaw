@@ -9,6 +9,7 @@ import {
   updateDispatchTool,
 } from './dispatch.js'
 import { notifyTool } from './notify.js'
+import { showSlashCatalogTool } from './show-slash-catalog.js'
 import { skillDeleteTool } from './skill-delete.js'
 import { skillWriteTool } from './skill-write.js'
 import {
@@ -23,6 +24,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
     CancelDispatch: hash(cancelDispatchTool.description),
     UpdateDispatch: hash(updateDispatchTool.description),
     Notify: hash(notifyTool.description),
+    ShowSlashCatalog: hash(showSlashCatalogTool.description),
     SkillDelete: hash(skillDeleteTool.description),
     SkillWrite: hash(skillWriteTool.description),
     BackgroundTaskResultBlockMain: hash(BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE),
@@ -47,6 +49,9 @@ const EXPECTED = {
   CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
+  // Phase 18 PR6: main-only tool for discovering channel slash commands
+  // the user can run when setup must happen outside agent tools.
+  ShowSlashCatalog: '46d6a98076f769638533981dfbc1476a5a3e0b89ed439543badcb5939e84ee5f',
   SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
   SkillWrite: '464842ab2124573dbc52c264980cff3ee3b331be63923c7f2e0ce0b54cb5f530',
   // Main template rewritten 2026-05-19 to push the default toward an

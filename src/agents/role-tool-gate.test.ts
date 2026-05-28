@@ -36,6 +36,10 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
     behavior: 'deny',
     reason: 'SkillWrite is not available to subagents.',
   })
+  assert.deepEqual(await gate(tool('ShowSlashCatalog'), {}), {
+    behavior: 'deny',
+    reason: 'ShowSlashCatalog is not available to subagents.',
+  })
 })
 
 test('Feishu reserved tools require an explicit role allowlist entry', async () => {
@@ -186,9 +190,13 @@ test('Notify is reserved for main: blocked for every worker including wildcard /
   const explicitWorker = deriveCanUseTool(role({ kind: 'worker', tools: ['Notify'] }))
   assert.equal((await explicitWorker(tool('Notify'), {})).behavior, 'deny')
 
+  const explicitCatalogWorker = deriveCanUseTool(role({ kind: 'worker', tools: ['ShowSlashCatalog'] }))
+  assert.equal((await explicitCatalogWorker(tool('ShowSlashCatalog'), {})).behavior, 'deny')
+
   // Orchestrator (main) with wildcard sees Notify naturally.
   const orchestrator = deriveCanUseTool(role({ kind: 'orchestrator', tools: ['*'] }))
   assert.equal((await orchestrator(tool('Notify'), {})).behavior, 'allow')
+  assert.equal((await orchestrator(tool('ShowSlashCatalog'), {})).behavior, 'allow')
   assert.equal((await orchestrator(tool('AskUserQuestion'), {})).behavior, 'allow')
   assert.equal((await orchestrator(tool('SkillWrite'), {})).behavior, 'allow')
 })
