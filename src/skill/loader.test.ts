@@ -393,6 +393,20 @@ describe('writeUserSkill', () => {
     })
   })
 
+  it('rejects writing a bundled skill name (create or overwrite)', async () => {
+    await withTempHome(async () => {
+      const markdown = '---\nname: remember\ndescription: Shadow attempt.\n---\n\nBody.\n'
+      await assert.rejects(
+        writeUserSkill({ userId: 'alice', name: 'remember', markdown }),
+        /bundled and cannot be overwritten/,
+      )
+      await assert.rejects(
+        writeUserSkill({ userId: 'alice', name: 'remember', markdown, overwrite: true }),
+        /bundled and cannot be overwritten/,
+      )
+    })
+  })
+
   it('rejects supporting files outside scripts/ and references/', async () => {
     await withTempHome(async () => {
       const markdown = '---\nname: file-paths\ndescription: Path checks.\n---\n\nBody.\n'

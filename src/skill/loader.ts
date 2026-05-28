@@ -201,6 +201,9 @@ export async function writeUserSkill(input: {
   files?: SkillWriteFile[]
 }): Promise<SkillMeta> {
   const name = normalizeSkillName(input.name)
+  if (getBundledSkillByName(name)) {
+    throw new Error(`Skill "${name}" is bundled and cannot be overwritten; choose a different name.`)
+  }
   const root = userSkillsRoot(input.userId)
   const skillDir = path.join(root, name)
   const filePath = path.join(skillDir, 'SKILL.md')
