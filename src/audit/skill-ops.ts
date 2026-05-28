@@ -19,6 +19,9 @@ export type SkillOpAudit = {
   /** Absolute on-disk SKILL.md path. Present on success; omitted when the op
    *  never reached the filesystem (no identity, guard refusal, bad name). */
   filePath?: string
+  /** Supporting files written alongside SKILL.md, excluding SKILL.md itself. */
+  fileCount?: number
+  files?: string[]
   /** `written` / `deleted` = the mutation landed; `denied` = a guard or
    *  identity precondition refused before touching disk; `failed` = an
    *  unexpected error after the op was attempted. */

@@ -1,6 +1,7 @@
-import { describe, it } from 'node:test'
+import { promises as fs } from 'node:fs'
+import { describe, it, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -324,6 +325,30 @@ describe('writeUserSkill', () => {
     })
   })
 
+  it('writes supporting scripts and references with private file permissions', async () => {
+    await withTempHome(async () => {
+      const meta = await writeUserSkill({
+        userId: 'alice',
+        name: 'data-helper',
+        markdown:
+          '---\nname: data-helper\ndescription: Uses helper files.\n---\n\n' +
+          'Run ${LIGHTCLAW_SKILL_DIR}/scripts/parse.py.\n',
+        files: [
+          { path: 'scripts/parse.py', content: 'print("ok")\n' },
+          { path: 'references/schema.md', content: '# Schema\n' },
+        ],
+      })
+
+      const skillDir = path.dirname(meta.filePath)
+      const scriptPath = path.join(skillDir, 'scripts', 'parse.py')
+      const referencePath = path.join(skillDir, 'references', 'schema.md')
+      assert.equal(await readFile(scriptPath, 'utf8'), 'print("ok")\n')
+      assert.equal(await readFile(referencePath, 'utf8'), '# Schema\n')
+      assert.equal((await stat(scriptPath)).mode & 0o777, 0o600)
+      assert.equal((await stat(referencePath)).mode & 0o777, 0o600)
+    })
+  })
+
   it('rejects invalid names, frontmatter mismatches, shell injection, and accidental overwrite', async () => {
     await withTempHome(async () => {
       await assert.rejects(
@@ -364,6 +389,146 @@ describe('writeUserSkill', () => {
         name: 'repeatable',
         markdown: '---\nname: repeatable\ndescription: Revised.\n---\n\nNew body.\n',
         overwrite: true,
+      })
+    })
+  })
+
+  it('rejects supporting files outside scripts/ and references/', async () => {
+    await withTempHome(async () => {
+      const markdown = '---\nname: file-paths\ndescription: Path checks.\n---\n\nBody.\n'
+      for (const filePath of ['../x', '/abs', 'assets/x', 'x.py']) {
+        await assert.rejects(
+          writeUserSkill({
+            userId: 'alice',
+            name: 'file-paths',
+            markdown,
+            files: [{ path: filePath, content: 'x' }],
+          }),
+          /scripts\/ or references\//,
+          `expected ${filePath} to be rejected`,
+        )
+      }
+    })
+  })
+
+  it('enforces supporting file count and size caps', async () => {
+    await withTempHome(async () => {
+      const markdown = '---\nname: capped-files\ndescription: Cap checks.\n---\n\nBody.\n'
+      await assert.rejects(
+        writeUserSkill({
+          userId: 'alice',
+          name: 'capped-files',
+          markdown,
+          files: [{ path: 'scripts/too-large.py', content: 'x'.repeat(64 * 1024 + 1) }],
+        }),
+        /byte limit/,
+      )
+
+      await assert.rejects(
+        writeUserSkill({
+          userId: 'alice',
+          name: 'capped-files',
+          markdown,
+          files: Array.from({ length: 33 }, (_, index) => ({
+            path: `references/${index}.md`,
+            content: 'x',
+          })),
+        }),
+        /32 file limit/,
+      )
+
+      await assert.rejects(
+        writeUserSkill({
+          userId: 'alice',
+          name: 'capped-files',
+          markdown,
+          files: Array.from({ length: 5 }, (_, index) => ({
+            path: `references/part-${index}.md`,
+            content: 'x'.repeat(60 * 1024),
+          })),
+        }),
+        /byte total limit/,
+      )
+    })
+  })
+
+  it('treats overwrite as a full replacement and drops omitted supporting files', async () => {
+    await withTempHome(async () => {
+      const firstMarkdown = '---\nname: replace-all\ndescription: First.\n---\n\nBody.\n'
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'replace-all',
+        markdown: firstMarkdown,
+        files: [
+          { path: 'scripts/old.py', content: 'print("old")\n' },
+          { path: 'references/keep.md', content: 'old docs\n' },
+        ],
+      })
+
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'replace-all',
+        markdown: '---\nname: replace-all\ndescription: Second.\n---\n\nNew body.\n',
+        overwrite: true,
+        files: [{ path: 'scripts/new.py', content: 'print("new")\n' }],
+      })
+
+      const skillDir = path.join(userSkillsRoot('alice'), 'replace-all')
+      await assert.rejects(readFile(path.join(skillDir, 'scripts', 'old.py'), 'utf8'), {
+        code: 'ENOENT',
+      })
+      await assert.rejects(readFile(path.join(skillDir, 'references', 'keep.md'), 'utf8'), {
+        code: 'ENOENT',
+      })
+      assert.equal(
+        await readFile(path.join(skillDir, 'scripts', 'new.py'), 'utf8'),
+        'print("new")\n',
+      )
+    })
+  })
+
+  it('preserves the prior skill directory when the staged swap fails', async () => {
+    await withTempHome(async () => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'swap-safe',
+        markdown: '---\nname: swap-safe\ndescription: First.\n---\n\nOld body.\n',
+        files: [{ path: 'scripts/old.py', content: 'print("old")\n' }],
+      })
+
+      const originalRename = fs.rename.bind(fs)
+      const renameMock = mock.method(fs, 'rename', async (
+        oldPath: Parameters<typeof fs.rename>[0],
+        newPath: Parameters<typeof fs.rename>[1],
+      ) => {
+        if (String(oldPath).includes('.tmp-')) {
+          throw new Error('mock swap failure')
+        }
+        return originalRename(oldPath, newPath)
+      })
+      try {
+        await assert.rejects(
+          writeUserSkill({
+            userId: 'alice',
+            name: 'swap-safe',
+            markdown: '---\nname: swap-safe\ndescription: Second.\n---\n\nNew body.\n',
+            overwrite: true,
+            files: [{ path: 'scripts/new.py', content: 'print("new")\n' }],
+          }),
+          /mock swap failure/,
+        )
+      } finally {
+        renameMock.mock.restore()
+      }
+
+      const skillDir = path.join(userSkillsRoot('alice'), 'swap-safe')
+      assert.match(await readFile(path.join(skillDir, 'SKILL.md'), 'utf8'), /Old body/)
+      assert.equal(
+        await readFile(path.join(skillDir, 'scripts', 'old.py'), 'utf8'),
+        'print("old")\n',
+      )
+      await assert.rejects(readFile(path.join(skillDir, 'scripts', 'new.py'), 'utf8'), {
+        code: 'ENOENT',
       })
     })
   })

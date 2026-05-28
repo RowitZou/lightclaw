@@ -57,7 +57,9 @@ const EXPECTED = {
   // the user can run when setup must happen outside agent tools.
   ShowSlashCatalog: '46d6a98076f769638533981dfbc1476a5a3e0b89ed439543badcb5939e84ee5f',
   SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
-  SkillWrite: '464842ab2124573dbc52c264980cff3ee3b331be63923c7f2e0ce0b54cb5f530',
+  // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
+  // and references/, plus overwrite as whole-skill replacement.
+  SkillWrite: 'd5ebf7d6cf38704524bf34e4bc3dfcb255faade7843370a0b56470644414c7bb',
   // Main template rewritten 2026-05-19 to push the default toward an
   // unattended-agent posture: surface every result via plain reply, take
   // autonomous follow-up when the path is clear, reserve Notify for the

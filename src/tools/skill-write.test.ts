@@ -45,6 +45,10 @@ test('SkillWrite writes a per-user skill and refreshes the registry', async () =
           '  - Read\n' +
           '---\n\n' +
           '# Release Checklist\n',
+        files: [
+          { path: 'scripts/release.py', content: 'print("release")\n' },
+          { path: 'references/notes.md', content: '# Notes\n' },
+        ],
       }, callContext(ctx.cwd))
 
       assert.equal(result.isError, undefined)
@@ -54,6 +58,20 @@ test('SkillWrite writes a per-user skill and refreshes the registry', async () =
         'utf8',
       )
       assert.match(saved, /# Release Checklist/)
+      assert.equal(
+        await readFile(
+          path.join(userSkillsRoot('alice'), 'release-checklist', 'scripts', 'release.py'),
+          'utf8',
+        ),
+        'print("release")\n',
+      )
+      assert.equal(
+        await readFile(
+          path.join(userSkillsRoot('alice'), 'release-checklist', 'references', 'notes.md'),
+          'utf8',
+        ),
+        '# Notes\n',
+      )
       assert.equal(getRegisteredSkill('release-checklist')?.source, 'user')
     })
   })
@@ -193,6 +211,7 @@ test('SkillWrite records a skill-ops audit row on success (2026-05-28 audit cove
       const result = await skillWriteTool.call({
         name: 'audited-skill',
         markdown: '---\nname: audited-skill\ndescription: Audited write.\n---\n\nBody.\n',
+        files: [{ path: 'scripts/audit.py', content: 'print("audit")\n' }],
       }, callContext(ctx.cwd))
       assert.equal(result.isError, undefined)
     })
@@ -206,6 +225,8 @@ test('SkillWrite records a skill-ops audit row on success (2026-05-28 audit cove
     assert.equal(write.name, 'audited-skill')
     assert.equal(write.userId, 'alice')
     assert.match(String(write.filePath), /audited-skill\/SKILL\.md$/)
+    assert.equal(write.fileCount, 1)
+    assert.deepEqual(write.files, ['scripts/audit.py'])
   })
 })
 

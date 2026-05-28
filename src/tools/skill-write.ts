@@ -7,11 +7,19 @@ import { refreshSkillRegistry } from '../skill/registry.js'
 import { writeUserSkill } from '../skill/loader.js'
 import { buildTool } from '../tool.js'
 
-const SKILL_WRITE_DESCRIPTION = `Save a SKILL.md to the current user's skill set. \`name\` is a short kebab-case
+const SKILL_WRITE_DESCRIPTION = `Save a skill to the current user's skill set. \`name\` is a short kebab-case
 identifier; \`markdown\` is the full SKILL.md (YAML frontmatter — name,
 description, when_to_use, optional allowed-tools — then the workflow body).
+
+\`files\` (optional) ships supporting files alongside SKILL.md: each path must
+sit under \`scripts/\` (deterministic helpers the body runs) or \`references/\`
+(longer docs the body reads on demand). Reference them from the body as
+\`\${LIGHTCLAW_SKILL_DIR}/scripts/<file>\`, which resolves at use time.
+
 \`overwrite\` defaults to false; set it true only to revise an existing skill.
-The skill becomes loadable with UseSkill on the next turn.
+Overwrite replaces the entire skill — re-send every file you want to keep,
+because any file you leave out is dropped. The skill becomes loadable with
+UseSkill on the next turn.
 
 Follow the \`skillify\` skill for how and when to author a good skill.`
 
@@ -32,6 +40,15 @@ export const skillWriteTool = buildTool({
       .string()
       .min(1)
       .describe('Complete SKILL.md content, including YAML frontmatter and markdown body.'),
+    files: z
+      .array(z.object({
+        path: z
+          .string()
+          .min(1)
+          .describe('Relative path under scripts/ or references/, e.g. "scripts/parse.py". No absolute paths or "..".'),
+        content: z.string().describe('File contents (UTF-8 text).'),
+      }))
+      .optional(),
     overwrite: z
       .boolean()
       .optional()
@@ -63,6 +80,7 @@ export const skillWriteTool = buildTool({
         userId,
         name: input.name,
         markdown: input.markdown,
+        files: input.files,
         overwrite: input.overwrite,
       })
       await refreshSkillRegistry(context.cwd, userId)
@@ -72,6 +90,8 @@ export const skillWriteTool = buildTool({
         tool: 'SkillWrite',
         name: meta.name,
         filePath: meta.filePath,
+        fileCount: input.files?.length ?? 0,
+        files: input.files?.map(file => file.path),
         status: 'written',
       })
       return {
