@@ -54,6 +54,15 @@ export function rlaunchMountsPath(canonicalUser: string): string {
   )
 }
 
+export function userSecretsPath(canonicalUser: string): string {
+  return path.join(
+    identityRoot(),
+    'per-user',
+    sanitizePathSegment(canonicalUser),
+    'secrets.json',
+  )
+}
+
 export function userSkillsRoot(canonicalUser: string): string {
   return path.join(
     identityRoot(),
