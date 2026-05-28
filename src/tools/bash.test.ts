@@ -62,14 +62,25 @@ describe('Bash error-recovery hints', () => {
     assert.doesNotMatch(result.output, /command not found/)
   })
 
-  it('exit 0 does not include any hint at all', async () => {
+  it('exit 0 reports exit_code: 0 and includes no hint', async () => {
     const result = await bashTool.call(
       { command: 'echo hi' },
       buildCtx({ stdout: 'hi', stderr: '', exitCode: 0 }),
     )
     assert.equal(result.isError, undefined)
     assert.match(result.output, /stdout:\s*hi/)
+    assert.match(result.output, /exit_code: 0/)
     assert.doesNotMatch(result.output, /Hint/)
+  })
+
+  it('exit 0 with only stderr (e.g. git clone progress) still reports completion', async () => {
+    const result = await bashTool.call(
+      { command: 'git clone https://example.com/repo.git' },
+      buildCtx({ stdout: '', stderr: "Cloning into 'repo'...", exitCode: 0 }),
+    )
+    assert.equal(result.isError, undefined)
+    assert.match(result.output, /Cloning into 'repo'/)
+    assert.match(result.output, /exit_code: 0/)
   })
 
   it('run_in_background launches a detached job and returns output file paths', async () => {

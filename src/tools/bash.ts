@@ -98,7 +98,7 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
 
     if (result.exitCode === 0) {
       return {
-        output: formatCommandOutput(result.stdout, result.stderr),
+        output: `${formatCommandOutput(result.stdout, result.stderr)}\n\nexit_code: 0`,
       }
     }
 
