@@ -47,6 +47,12 @@ export type ReplCommand = {
   usage: string                // e.g. "/mode <default|plan|acceptEdits|bypassPermissions>"
   description: string
   visibleTo?: CommandVisibility
+  // Agent-side: one-sentence "when to suggest this command to the user".
+  // Empty = command is invisible to ShowSlashCatalog (agent won't suggest).
+  agentAdvisory?: string
+  // Agent-side: detailed sub-command list / constraints / examples. Empty =
+  // ShowSlashCatalog falls back to the one-line `usage` field.
+  agentUsage?: string
   // Commands tied to the agent loop / in-flight turn (/branch, /b, /fresh,
   // /stop). They are meaningful only where a query actually runs — the
   // channel — and are dropped from the terminal admin console's registry.

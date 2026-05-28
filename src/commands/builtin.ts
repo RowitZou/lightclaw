@@ -53,6 +53,7 @@ import { runAuthCommand } from './auth.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import { runMountCommand } from './mount.js'
+import { runSecretCommand } from './secret.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -167,6 +168,29 @@ function buildBuiltinCommands(): ReplCommand[] {
         const detail = error instanceof Error ? error.message : String(error)
         ctx.output.write(`${t('common.error.prefix')}${t('feedback.fail', { detail })}\n`)
       }
+    },
+  },
+  {
+    name: '/secret',
+    usage: '/secret [list|status [NAME]|set <NAME> <VALUE>|enable <NAME>|disable <NAME>|remove <NAME>]',
+    description: 'Manage per-user runtime secrets (injected as env vars in Bash).',
+    channelOnly: true,
+    agentAdvisory:
+      'When the user\'s task needs an API token, password, or credential ' +
+      'you do not already have access to (GitHub push, HuggingFace download, ' +
+      'third-party API calls). After they set + enable a secret, you can ' +
+      'reference it as `$NAME` in Bash commands.',
+    agentUsage: [
+      '/secret list                  List stored secrets with mask + enabled flag',
+      '/secret status [NAME]         Inspect one secret, or all if NAME omitted',
+      '/secret set <NAME> <VALUE>    Store a secret. NAME must match ^[A-Z][A-Z0-9_]{0,63}$.',
+      '                                VALUE is taken verbatim to end of line (may contain spaces, $, quotes).',
+      '/secret enable <NAME>         Activate injection of $NAME in Bash from next turn',
+      '/secret disable <NAME>        Deactivate without removing the value',
+      '/secret remove <NAME>         Delete the stored entry',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runSecretCommand(args, ctx))
     },
   },
   {
