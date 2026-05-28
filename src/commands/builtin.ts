@@ -205,9 +205,9 @@ function buildBuiltinCommands(): ReplCommand[] {
     description: t('cmd.cost.desc'),
     visibleTo: 'admin',
     agentAdvisory:
-      'When the user wants to inspect token usage or cost (per-session or aggregated).',
+      'When the user wants to inspect this month\'s token usage / cost, broken down by model and by paired user.',
     agentUsage: [
-      '/cost                               Show aggregated cost across all sessions',
+      '/cost                               Show this month\'s token usage, broken down by model and by paired user',
     ].join('\n'),
     async handler(_args, ctx) {
       ctx.output.write(await formatCost())
@@ -339,10 +339,12 @@ function buildBuiltinCommands(): ReplCommand[] {
     description: t('cmd.ceiling.desc'),
     visibleTo: 'admin',
     agentAdvisory:
-      'When the user wants to set or query per-user usage / spend ceilings.',
+      'When the user wants to view or set a paired user\'s permission-mode ceiling — ' +
+      'the most permissive mode (read / ask / auto / yolo) that user is allowed to run in. ' +
+      'This caps permissions; it is not about spend or token usage (that is /cost).',
     agentUsage: [
-      '/ceiling                              Show current permission ceilings per user',
-      '/ceiling <user> <read|ask|auto|yolo>  Set permission-mode ceiling for user',
+      '/ceiling                              Show current permission-mode ceilings per user',
+      '/ceiling <user> <read|ask|auto|yolo>  Set the permission-mode ceiling for a user',
     ].join('\n'),
     async handler(args, ctx) {
       const parts = args.trim().split(/\s+/).filter(Boolean)
