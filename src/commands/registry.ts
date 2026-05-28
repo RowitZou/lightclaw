@@ -2,6 +2,7 @@ import type { Interface } from 'node:readline/promises'
 import type { Writable } from 'node:stream'
 
 import type { LightClawConfig } from '../config.js'
+import { t } from '../i18n/index.js'
 import type { Tool } from '../tool.js'
 import type { Message, UserContentBlock } from '../types.js'
 
@@ -108,18 +109,18 @@ export class ReplCommandRegistry {
       const hint = hints?.[name]
       ctx.output.write(
         hint
-          ? `error> unknown command: ${name}. Renamed to ${hint}. See /help.\n`
-          : `error> unknown command: ${name}\n`,
+          ? `${t('common.error.prefix')}${t('common.error.renamedHint', { name, newName: hint })}\n`
+          : `${t('common.error.prefix')}${t('common.error.unknownCommand', { name })}\n`,
       )
       return 'continue'
     }
     const visibility = command.visibleTo ?? 'all'
     if (visibility === 'admin' && !ctx.isAdmin) {
-      ctx.output.write(`error> ${name} is admin-only.\n`)
+      ctx.output.write(`${t('common.error.prefix')}${t('common.error.adminOnly', { name })}\n`)
       return 'continue'
     }
     if (visibility === 'user' && ctx.isAdmin) {
-      ctx.output.write(`error> ${name} is user-only (admins are the recipient, not the sender).\n`)
+      ctx.output.write(`${t('common.error.prefix')}${t('common.error.userOnly', { name })}\n`)
       return 'continue'
     }
 

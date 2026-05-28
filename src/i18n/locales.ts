@@ -27,30 +27,40 @@ export const LOCALES = {
     'help.title': 'LightClaw 命令：',
     'help.adminTitle': '仅 admin：',
     'help.statusHint': '查看当前 user / mode / model / session 请用 /status。',
+    'help.usageHint': '需要某个命令的具体用法？直接问 LightClaw。',
 
     // ---- Command descriptions (rendered in /help) ----
+    // /help shows the command name + this one-line description; detailed
+    // usage is deferred to "ask LightClaw" (help.usageHint). Keep each desc
+    // to a single short line.
     'cmd.help.desc': '列出所有可用命令',
     'cmd.status.desc': '查看当前 user / mode / model / session',
     'cmd.model.usage': '/model <name>',
     'cmd.model.desc': '为本次 session 切换模型',
     'cmd.mode.usage': '/mode [<read|ask|auto|yolo>]',
-    'cmd.mode.desc': '查看四档模式与当前值，或在 ceiling 范围内切换',
+    'cmd.mode.desc': '查看或切换权限模式',
     'cmd.rules.usage': '/rules [list | revoke <n> | revoke all | ask <rule>]',
-    'cmd.rules.desc': '管理已持久化的权限规则。list 显示编号；revoke <n> 删除一条；revoke all 清空；ask <rule> 注册一条覆盖 allow / bypassPermissions 的 ASK 规则。',
+    'cmd.rules.desc': '管理已持久化的权限规则',
+    'cmd.secret.usage': '/secret [list|status [NAME]|set <NAME> <VALUE>|enable <NAME>|disable <NAME>|remove <NAME>]',
+    'cmd.secret.desc': '管理 per-user 运行时密钥',
+    'cmd.mount.usage': '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
+    'cmd.mount.desc': '管理 per-user rlaunch 动态挂载',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
-    'cmd.sandbox.desc': '查看 / 重新拉取 / 重置 Docker 沙箱镜像与容器',
+    'cmd.sandbox.desc': '查看 / 重置沙箱镜像与容器',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
-    'cmd.ceiling.desc': '查看所有 identity 的 ceiling，或为某个用户设置 ceiling。不带参数列出全部。',
+    'cmd.ceiling.desc': '查看 / 设置用户的权限上限',
     'cmd.user.usage': '/user list|pending|approve|reject|unlink|remove|feedback',
     'cmd.user.desc': '管理身份与配对请求',
+    'cmd.feishuWorkspace.usage': '/feishu-workspace [status|list|orphans|delete <canonical>]',
+    'cmd.feishuWorkspace.desc': '管理飞书云空间根目录与用户目录',
     'cmd.stop.usage': '/stop',
-    'cmd.stop.desc': '中断进行中的 turn（已写入的文件不会回滚）',
+    'cmd.stop.desc': '中断进行中的 turn',
     'cmd.feedback.usage': '/feedback <text>',
-    'cmd.feedback.desc': '给 admin 留反馈（admin 通过 /user feedback 阅读）',
+    'cmd.feedback.desc': '给 admin 留反馈',
     'cmd.cost.usage': '/cost',
-    'cmd.cost.desc': '查看本月 token 用量按 model / user 聚合（admin 专属）',
+    'cmd.cost.desc': '查看本月 token 用量（按 model / user）',
     'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
-    'cmd.auth.desc': '管理外部 provider OAuth 凭证（admin 专属）。当前支持 OpenAI Codex（用 ChatGPT 订阅自带的 Codex 配额）',
+    'cmd.auth.desc': '管理外部 provider 的 OAuth 凭证',
 
     // ---- /auth (admin) ----
     'auth.usage': '用法：/auth list | import codex | logout codex [--purge]',
@@ -131,6 +141,10 @@ export const LOCALES = {
     'model.available': '可选：{list}',
     'model.unknown': '未知模型：{name}',
     'model.set': '已切换模型：{name}',
+    'model.clearCache.notRegistered': '当前模型 "{name}" 未注册。',
+    'model.clearCache.cleared': '已清除 {name}（{endpoint} -> {upstream}）的能力缓存{suffix}。',
+    'model.clearCache.noEntry': '（无现有条目）',
+    'model.clearCache.alsoCleared': ' 能力缓存已清除。',
 
     // ---- /rules ----
     'rules.empty': '当前用户没有持久化的权限规则。',
@@ -462,6 +476,99 @@ export const LOCALES = {
       '  群聊：把机器人拉进群\n\n' +
       '下面把 App ID / App Secret 填进来：',
 
+    // ---- /secret (channel) ----
+    'secret.usage':
+      '用法：\n' +
+      '  /secret list\n' +
+      '  /secret status [NAME]\n' +
+      '  /secret set <NAME> <VALUE...>\n' +
+      '  /secret enable <NAME>\n' +
+      '  /secret disable <NAME>\n' +
+      '  /secret remove <NAME>\n\n' +
+      '密钥是 per-user 的，值永不回显。启用后会作为 `$NAME` 注入到 Bash 命令中。',
+    'secret.noIdentity': 'LightClaw 当前没有可用身份；/secret 需要已配对的渠道用户。',
+    'secret.saved': '密钥 {name} 已保存（replaced={replaced}，length={length}）。运行 /secret enable {name} 开始注入。',
+    'secret.enableNotStored': '密钥 {name} 尚未存储。请先运行 /secret set {name} <VALUE>。',
+    'secret.enabled': '密钥 {name} 已启用。从你的下一条消息起，会作为 ${name} 注入到 Bash 命令中。',
+    'secret.disabled': '密钥 {name} 已停用，存储的值仍保留 —— 运行 /secret enable {name} 重新启用。',
+    'secret.notStored': '密钥 {name} 未存储。',
+    'secret.removed': '密钥 {name} 已删除。',
+    'secret.list.empty': '该用户没有存储任何密钥。',
+    'secret.list.header': '密钥：',
+    'secret.list.row': '- {name} enabled={enabled} length={length} updated={updated}',
+    'secret.status.absent': '{name} stored=no',
+    'secret.status.present': '{name} stored=yes enabled={enabled} length={length} updated={updated}',
+
+    // ---- /mount (channel) ----
+    'mount.usage':
+      '用法：\n' +
+      '  /mount list\n' +
+      '  /mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
+      '  /mount remove <absolute-gpfs-path...>\n\n' +
+      'rlaunch 动态挂载是 per-user 的，worker 路径与 host 路径相同。\n' +
+      '默认模式是 --ro（LightClaw 文件 API 拒绝写入；Bash 写入仍取决于 GPFS ACL）。',
+    'mount.requiresRlaunchRuntime': '/mount 需要一个活跃的 rlaunch runtime。',
+    'mount.onlyRlaunch': '/mount 仅在 runtime.backend = "rlaunch" 时可用。',
+    'mount.noIdentity': 'LightClaw 当前没有可用身份；/mount 需要已配对的渠道用户。',
+    'mount.list.empty': '该用户没有 rlaunch 动态挂载。',
+    'mount.list.header': 'rlaunch 动态挂载：',
+    'mount.list.row': '- {path}  lightclaw={perm}  worker={path}',
+    'mount.perm.rw': 'read-write',
+    'mount.perm.ro': 'read-only',
+    'mount.access.rw': 'read/write',
+    'mount.access.ro': 'read',
+    'mount.modeLine': 'mode: {mode}',
+    'mount.workerPathLine': 'worker 路径：{path}',
+    'mount.workerPathsSame': 'worker 路径：与 host 路径相同',
+    'mount.addedSingle': '已添加 rlaunch 挂载：{path}',
+    'mount.updatedSingle': '已更新 rlaunch 挂载：{path}',
+    'mount.addedMultiHeader': '已添加 rlaunch 挂载：',
+    'mount.updatedMultiHeader': '已更新 rlaunch 挂载：',
+    'mount.alreadyPresentHeader': '已存在：',
+    'mount.alreadyExistsSingle': '挂载已存在：{path}（mode={mode}）。无需重启。',
+    'mount.alreadyExistsMultiHeader': '以下挂载已存在（mode={mode}）：',
+    'mount.noRestartNeeded': '无需重启。',
+    'mount.removedSingle': '已移除 rlaunch 挂载：{path}',
+    'mount.removedMultiHeader': '已移除 rlaunch 挂载：',
+    'mount.notFoundSingle': '未找到挂载：{path}',
+    'mount.notFoundMultiHeader': '未找到以下挂载：',
+    'mount.pathRequired': '至少需要一个 rlaunch 挂载路径。',
+    'mount.modeAmbiguous': 'mount 模式有歧义：同时给了 --ro 和 --rw。',
+    'mount.unknownFlag': '未知 flag：{flag}（应为 --ro 或 --rw）。',
+    'mount.notAccessible': '守护进程无法访问挂载路径：{path}（{detail}）',
+    'mount.notDirectory': '挂载路径必须是目录：{path}',
+    'mount.lacksAccess': '守护进程对挂载路径缺少 {access} 权限：{path}（{detail}）',
+    'mount.restart.skipped': '本上下文跳过 rlaunch worker 重启。',
+    'mount.restart.done': 'rlaunch worker 已重启：{worker}',
+    'mount.restart.failed': '挂载状态已保存，但 rlaunch worker 重启失败：{detail}',
+
+    // ---- /feishu-workspace (admin) ----
+    'feishuWs.usage': '用法：/feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
+    'feishuWs.status.title': '飞书云空间：',
+    'feishuWs.status.root': '  root: {token}',
+    'feishuWs.status.notInitialized': '(未初始化)',
+    'feishuWs.status.userFolders': '  用户目录数：{count}',
+    'feishuWs.status.driveOk': '  drive API: ok',
+    'feishuWs.status.driveScopeMissing': '  drive API: 缺少 scope —— 需要：{scopes}（重新发布应用版本）',
+    'feishuWs.status.driveFailed': '  drive API: 失败 —— {detail}',
+    'feishuWs.status.scopeNone': '(见开发者后台)',
+    'feishuWs.list.empty': '没有记录任何飞书云空间目录。',
+    'feishuWs.list.header': 'canonical               folderToken                 updated',
+    'feishuWs.orphans.notInitialized': '飞书云空间根目录尚未初始化。',
+    'feishuWs.orphans.empty': '没有孤立的飞书云空间目录。',
+    'feishuWs.orphans.header': 'orphan folderToken              name',
+    'feishuWs.delete.usage': '用法：/feishu-workspace delete <canonical> [--confirm <token>]',
+    'feishuWs.delete.noFolder': '没有记录 "{canonical}" 的飞书云空间目录。',
+    'feishuWs.delete.preview':
+      '预览删除 "{canonical}" 的飞书云空间：\n' +
+      '  folderToken: {token}\n' +
+      '  直接子项：{count}\n' +
+      '确认请运行：/feishu-workspace delete {canonical} --confirm {confirmToken}\n' +
+      'Token 5 分钟内有效。',
+    'feishuWs.delete.tokenInvalid': '"{canonical}" 的确认 token 缺失或已过期。请重新运行 /feishu-workspace delete {canonical}。',
+    'feishuWs.delete.failed': '删除 "{canonical}" 的飞书云空间失败：{detail}',
+    'feishuWs.delete.done': '已删除 "{canonical}" 的飞书云空间（{count} 个直接子项已移入飞书回收站）。',
+
     // ---- Tool errors (user-visible from tool_result) ----
     'tool.aborted': '工具执行在完成前被中断。',
     'tool.unknown': '未知工具：{name}',
@@ -508,29 +615,36 @@ export const LOCALES = {
     'help.title': 'LightClaw commands:',
     'help.adminTitle': 'Admin only:',
     'help.statusHint': 'Use /status to see your current user / mode / model / session.',
+    'help.usageHint': 'Need a command\'s detailed usage? Just ask LightClaw.',
 
     'cmd.help.desc': 'List available commands',
     'cmd.status.desc': 'Show current user / mode / model / session',
     'cmd.model.usage': '/model <name>',
     'cmd.model.desc': 'Switch model for this session',
     'cmd.mode.usage': '/mode [<read|ask|auto|yolo>]',
-    'cmd.mode.desc': 'Show 4-tier menu + current, or switch within your ceiling',
+    'cmd.mode.desc': 'View or switch permission mode',
     'cmd.rules.usage': '/rules [list | revoke <n> | revoke all | ask <rule>]',
-    'cmd.rules.desc': 'Manage your persisted permission rules. list shows numbered rules; revoke <n> removes one; revoke all clears them; ask <rule> registers an ASK rule that overrides allow / bypassPermissions for matching calls.',
+    'cmd.rules.desc': 'Manage your persisted permission rules',
+    'cmd.secret.usage': '/secret [list|status [NAME]|set <NAME> <VALUE>|enable <NAME>|disable <NAME>|remove <NAME>]',
+    'cmd.secret.desc': 'Manage per-user runtime secrets',
+    'cmd.mount.usage': '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
+    'cmd.mount.desc': 'Manage per-user dynamic rlaunch mounts',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
-    'cmd.sandbox.desc': 'Inspect / re-pull / reset the Docker sandbox image and container',
+    'cmd.sandbox.desc': 'Inspect / reset the sandbox image and container',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
-    'cmd.ceiling.desc': 'Show every identity\'s ceiling, or set one user\'s ceiling. Bare /ceiling lists all.',
+    'cmd.ceiling.desc': 'View / set a user\'s permission ceiling',
     'cmd.user.usage': '/user list|pending|approve|reject|unlink|remove|feedback',
     'cmd.user.desc': 'Manage identities and pairing requests',
+    'cmd.feishuWorkspace.usage': '/feishu-workspace [status|list|orphans|delete <canonical>]',
+    'cmd.feishuWorkspace.desc': 'Manage Feishu cloud workspace root and per-user folders',
     'cmd.stop.usage': '/stop',
-    'cmd.stop.desc': 'Abort the in-flight turn (already-written files are not rolled back)',
+    'cmd.stop.desc': 'Abort the in-flight turn',
     'cmd.feedback.usage': '/feedback <text>',
-    'cmd.feedback.desc': 'Send feedback to admin (admin reads via /user feedback)',
+    'cmd.feedback.desc': 'Send feedback to admin',
     'cmd.cost.usage': '/cost',
-    'cmd.cost.desc': 'Show this month token usage by-model + by-user (admin only)',
+    'cmd.cost.desc': 'This month token usage (by model / user)',
     'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
-    'cmd.auth.desc': 'Manage OAuth credentials for external providers (admin only). Currently supports OpenAI Codex (use the Codex quota that comes with your ChatGPT subscription).',
+    'cmd.auth.desc': 'Manage OAuth credentials for external providers',
 
     // ---- /auth (admin) ----
     'auth.usage': 'Usage: /auth list | import codex | logout codex [--purge]',
@@ -614,6 +728,10 @@ export const LOCALES = {
     'model.available': 'available: {list}',
     'model.unknown': 'unknown model: {name}',
     'model.set': 'model: {name}',
+    'model.clearCache.notRegistered': 'Current model "{name}" is not registered.',
+    'model.clearCache.cleared': 'Cleared capability cache for {name} ({endpoint} -> {upstream}){suffix}.',
+    'model.clearCache.noEntry': ' (no existing entry)',
+    'model.clearCache.alsoCleared': ' Capability cache cleared.',
 
     // ---- /rules ----
     'rules.empty': 'No persisted permission rules for this user.',
@@ -944,6 +1062,99 @@ export const LOCALES = {
       '  DM: open Feishu and send a message to the bot directly\n' +
       '  Group: add the bot to a group chat\n\n' +
       'Now enter App ID and App Secret below:',
+
+    // ---- /secret (channel) ----
+    'secret.usage':
+      'Usage:\n' +
+      '  /secret list\n' +
+      '  /secret status [NAME]\n' +
+      '  /secret set <NAME> <VALUE...>\n' +
+      '  /secret enable <NAME>\n' +
+      '  /secret disable <NAME>\n' +
+      '  /secret remove <NAME>\n\n' +
+      'Secrets are per-user. Values are never echoed. Once a secret is enabled, it is injected as `$NAME` in Bash commands.',
+    'secret.noIdentity': 'No active LightClaw identity; /secret requires a paired channel user.',
+    'secret.saved': 'Secret {name} saved (replaced={replaced}, length={length}). Use /secret enable {name} to start injecting it.',
+    'secret.enableNotStored': 'Secret {name} is not stored. Use /secret set {name} <VALUE> first.',
+    'secret.enabled': 'Secret {name} enabled. It will be injected as ${name} in Bash commands starting from your next message.',
+    'secret.disabled': 'Secret {name} disabled. Stored value retained — /secret enable {name} to re-activate.',
+    'secret.notStored': 'Secret {name} was not stored.',
+    'secret.removed': 'Secret {name} removed.',
+    'secret.list.empty': 'No secrets stored for this user.',
+    'secret.list.header': 'Secrets:',
+    'secret.list.row': '- {name} enabled={enabled} length={length} updated={updated}',
+    'secret.status.absent': '{name} stored=no',
+    'secret.status.present': '{name} stored=yes enabled={enabled} length={length} updated={updated}',
+
+    // ---- /mount (channel) ----
+    'mount.usage':
+      'Usage:\n' +
+      '  /mount list\n' +
+      '  /mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
+      '  /mount remove <absolute-gpfs-path...>\n\n' +
+      'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.\n' +
+      'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
+    'mount.requiresRlaunchRuntime': '/mount requires an active rlaunch runtime.',
+    'mount.onlyRlaunch': '/mount is only available when runtime.backend = "rlaunch".',
+    'mount.noIdentity': 'No active LightClaw identity; /mount requires a paired channel user.',
+    'mount.list.empty': 'No dynamic rlaunch mounts for this user.',
+    'mount.list.header': 'Dynamic rlaunch mounts:',
+    'mount.list.row': '- {path}  lightclaw={perm}  worker={path}',
+    'mount.perm.rw': 'read-write',
+    'mount.perm.ro': 'read-only',
+    'mount.access.rw': 'read/write',
+    'mount.access.ro': 'read',
+    'mount.modeLine': 'mode: {mode}',
+    'mount.workerPathLine': 'worker path: {path}',
+    'mount.workerPathsSame': 'worker paths: same as host paths',
+    'mount.addedSingle': 'Added rlaunch mount: {path}',
+    'mount.updatedSingle': 'Updated rlaunch mount: {path}',
+    'mount.addedMultiHeader': 'Added rlaunch mounts:',
+    'mount.updatedMultiHeader': 'Updated rlaunch mounts:',
+    'mount.alreadyPresentHeader': 'Already present:',
+    'mount.alreadyExistsSingle': 'Mount already exists: {path} (mode={mode}). No restart needed.',
+    'mount.alreadyExistsMultiHeader': 'Mounts already exist with mode={mode}:',
+    'mount.noRestartNeeded': 'No restart needed.',
+    'mount.removedSingle': 'Removed rlaunch mount: {path}',
+    'mount.removedMultiHeader': 'Removed rlaunch mounts:',
+    'mount.notFoundSingle': 'Mount not found: {path}',
+    'mount.notFoundMultiHeader': 'Mounts not found:',
+    'mount.pathRequired': 'At least one rlaunch mount path is required.',
+    'mount.modeAmbiguous': 'mount mode is ambiguous: both --ro and --rw given.',
+    'mount.unknownFlag': 'unknown flag: {flag} (expected --ro or --rw).',
+    'mount.notAccessible': 'Mount path is not accessible from daemon: {path} ({detail})',
+    'mount.notDirectory': 'Mount path must be a directory: {path}',
+    'mount.lacksAccess': 'Mount path lacks {access} access for daemon: {path} ({detail})',
+    'mount.restart.skipped': 'rlaunch worker restart skipped in this context.',
+    'mount.restart.done': 'rlaunch worker restarted: {worker}',
+    'mount.restart.failed': 'Mount state was saved, but rlaunch worker restart failed: {detail}',
+
+    // ---- /feishu-workspace (admin) ----
+    'feishuWs.usage': 'Usage: /feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
+    'feishuWs.status.title': 'Feishu cloud workspace:',
+    'feishuWs.status.root': '  root: {token}',
+    'feishuWs.status.notInitialized': '(not initialized)',
+    'feishuWs.status.userFolders': '  user folders: {count}',
+    'feishuWs.status.driveOk': '  drive API: ok',
+    'feishuWs.status.driveScopeMissing': '  drive API: scope missing — required: {scopes} (re-publish app version)',
+    'feishuWs.status.driveFailed': '  drive API: failed — {detail}',
+    'feishuWs.status.scopeNone': '(see Developer Console)',
+    'feishuWs.list.empty': 'No Feishu cloud workspace folders recorded.',
+    'feishuWs.list.header': 'canonical               folderToken                 updated',
+    'feishuWs.orphans.notInitialized': 'Feishu cloud workspace root is not initialized.',
+    'feishuWs.orphans.empty': 'No orphan Feishu workspace folders.',
+    'feishuWs.orphans.header': 'orphan folderToken              name',
+    'feishuWs.delete.usage': 'Usage: /feishu-workspace delete <canonical> [--confirm <token>]',
+    'feishuWs.delete.noFolder': 'No Feishu workspace folder recorded for "{canonical}".',
+    'feishuWs.delete.preview':
+      'Preview delete Feishu workspace for "{canonical}":\n' +
+      '  folderToken: {token}\n' +
+      '  direct items: {count}\n' +
+      'Confirm with: /feishu-workspace delete {canonical} --confirm {confirmToken}\n' +
+      'Token expires in 5 minutes.',
+    'feishuWs.delete.tokenInvalid': 'Confirmation token for "{canonical}" is missing or expired. Run /feishu-workspace delete {canonical} again.',
+    'feishuWs.delete.failed': 'Failed to delete Feishu workspace for "{canonical}": {detail}',
+    'feishuWs.delete.done': 'Deleted Feishu workspace for "{canonical}" ({count} direct items moved to Feishu trash).',
 
     // ---- Tool errors ----
     'tool.aborted': 'Tool execution was aborted before completion.',

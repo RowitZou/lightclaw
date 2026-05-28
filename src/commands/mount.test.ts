@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
+import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
 import { runMountCommand } from './mount.js'
@@ -22,9 +23,11 @@ beforeEach(() => {
   setLightclawHomeOverride(tmpHome)
   oldWorkspaceRoot = process.env.LIGHTCLAW_WORKSPACE_ROOT
   process.env.LIGHTCLAW_WORKSPACE_ROOT = workspaceRoot
+  setLang('en')
 })
 
 afterEach(() => {
+  setLang('cn')
   setLightclawHomeOverride(undefined)
   if (oldWorkspaceRoot === undefined) {
     delete process.env.LIGHTCLAW_WORKSPACE_ROOT

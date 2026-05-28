@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { loadUserSecrets } from '../secrets/store.js'
 import { resolveAuditDir } from '../config.js'
+import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createBuiltinReplRegistry } from './builtin.js'
 import { runSecretCommand } from './secret.js'
@@ -16,9 +17,11 @@ describe('/secret command', () => {
   beforeEach(() => {
     home = mkdtempSync(path.join(tmpdir(), 'lightclaw-secret-command-'))
     setLightclawHomeOverride(home)
+    setLang('en')
   })
 
   afterEach(() => {
+    setLang('cn')
     setLightclawHomeOverride(undefined)
     rmSync(home, { recursive: true, force: true })
   })
@@ -149,6 +152,19 @@ describe('/secret command', () => {
     assert.deepEqual(audit.map(entry => entry.name).sort(), values.map(([name]) => name).sort())
     for (const [, value] of values) {
       assertAuditFileDoesNotContain(value)
+    }
+  })
+
+  it('renders Chinese output under the cn locale (i18n migration guard)', async () => {
+    setLang('cn')
+    try {
+      const saved = await runSecretCommand('set GH_TOKEN val', { userId: 'alice' })
+      assert.match(saved, /密钥 GH_TOKEN 已保存/)
+      assert.equal(saved.includes('Secret GH_TOKEN saved'), false)
+      assert.match(await runSecretCommand('help', { userId: 'alice' }), /用法：/)
+      assert.match(await runSecretCommand('list', {}), /需要已配对的渠道用户/)
+    } finally {
+      setLang('en')
     }
   })
 

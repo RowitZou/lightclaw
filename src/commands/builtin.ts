@@ -96,7 +96,7 @@ async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
   }
   const current = getRuntime()
   if (!(current instanceof RlaunchRuntime)) {
-    throw new Error('/mount requires an active rlaunch runtime.')
+    throw new Error(t('mount.requiresRlaunchRuntime'))
   }
   // Atomic swap: pool installs the new runtime under the same per-user key
   // and marks the old one retired with a resolver pointing at the live entry,
@@ -175,8 +175,8 @@ function buildBuiltinCommands(): ReplCommand[] {
   },
   {
     name: '/secret',
-    usage: '/secret [list|status [NAME]|set <NAME> <VALUE>|enable <NAME>|disable <NAME>|remove <NAME>]',
-    description: 'Manage per-user runtime secrets (injected as env vars in Bash).',
+    usage: t('cmd.secret.usage'),
+    description: t('cmd.secret.desc'),
     channelOnly: true,
     agentAdvisory:
       'When the user\'s task needs an API token, password, or credential ' +
@@ -233,7 +233,7 @@ function buildBuiltinCommands(): ReplCommand[] {
         const current = getModel()
         const entry = ctx.config.models[current]
         if (!entry) {
-          ctx.output.write(`${t('common.error.prefix')}Current model "${current}" is not registered.\n`)
+          ctx.output.write(`${t('common.error.prefix')}${t('model.clearCache.notRegistered', { name: current })}\n`)
           return
         }
         const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
@@ -248,7 +248,12 @@ function buildBuiltinCommands(): ReplCommand[] {
           upstreamModel: entry.upstreamModel,
         })
         ctx.output.write(
-          `Cleared capability cache for ${current} (${entry.endpoint} -> ${entry.upstreamModel})${removed ? '' : ' (no existing entry)'}.\n`,
+          `${t('model.clearCache.cleared', {
+            name: current,
+            endpoint: entry.endpoint,
+            upstream: entry.upstreamModel,
+            suffix: removed ? '' : t('model.clearCache.noEntry'),
+          })}\n`,
         )
         return
       }
@@ -282,7 +287,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       if (callerId) {
         setIdentityPreference({ canonicalUser: callerId, key: 'model', value: model })
       }
-      ctx.output.write(`${t('model.set', { name: model })}${clearCache ? ' Capability cache cleared.' : ''}\n`)
+      ctx.output.write(`${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`)
       await ctx.persistMeta(ctx.messages.length)
     },
   },
@@ -511,8 +516,8 @@ function buildBuiltinCommands(): ReplCommand[] {
   },
   {
     name: '/feishu-workspace',
-    usage: '/feishu-workspace [status|list|orphans|delete <canonical>]',
-    description: 'Manage Feishu cloud workspace root and per-user folders',
+    usage: t('cmd.feishuWorkspace.usage'),
+    description: t('cmd.feishuWorkspace.desc'),
     visibleTo: 'admin',
     agentAdvisory:
       'When the user wants to manage the Feishu cloud workspace root or ' +
@@ -529,8 +534,8 @@ function buildBuiltinCommands(): ReplCommand[] {
   },
   {
     name: '/mount',
-    usage: '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
-    description: 'Manage per-user dynamic rlaunch mounts',
+    usage: t('cmd.mount.usage'),
+    description: t('cmd.mount.desc'),
     channelOnly: true,
     agentAdvisory:
       'When the user references a host path outside the current workspace mount, ' +
@@ -711,16 +716,17 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   const all = registry.list(true)
   const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
   const adminCmds = all.filter(c => c.visibleTo === 'admin')
-  // Channel uses a `usage: description` colon layout rather than the
-  // padEnd-aligned terminal layout. Reason: feishu IM wraps long lines,
-  // which destroys column alignment anyway, and the resulting visual
-  // mess is worse than a simple colon-separated row. Terminal keeps
-  // the aligned table since fixed-width fonts make it readable.
+  // /help lists command NAMES + a one-line description only; detailed
+  // argument usage is deferred to "ask LightClaw" (help.usageHint), since
+  // the agent can see the full slash catalog and guide the user. Channel
+  // uses a `name: description` colon layout (feishu IM wraps long lines,
+  // destroying column alignment); the terminal keeps the padEnd-aligned
+  // table since fixed-width fonts make it readable.
   const formatRow = ctx.isChannel
-    ? (c: { usage: string; description: string }) => `  ${c.usage}: ${c.description}`
-    : ((): ((c: { usage: string; description: string }) => string) => {
-        const usageWidth = Math.max(...all.map(c => c.usage.length), 24)
-        return c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`
+    ? (c: { name: string; description: string }) => `  ${c.name}: ${c.description}`
+    : ((): ((c: { name: string; description: string }) => string) => {
+        const nameWidth = Math.max(...all.map(c => c.name.length), 10)
+        return c => `  ${c.name.padEnd(nameWidth, ' ')}  ${c.description}`
       })()
   const lines: string[] = [
     t('help.title'),
@@ -733,7 +739,7 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
       lines.push(formatRow(c))
     }
   }
-  lines.push('', t('help.statusHint'), '')
+  lines.push('', t('help.usageHint'), t('help.statusHint'), '')
   return color(ctx, lines.join('\n'))
 }
 

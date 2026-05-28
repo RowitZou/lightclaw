@@ -11,6 +11,7 @@ import {
   type WorkspaceRoot,
 } from '../channels/feishu/workspace/lifecycle.js'
 import { recordFeishuWriteAudit } from '../audit/feishu-writes.js'
+import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
 import { readJson } from '../identity/store.js'
 import { sanitizePathSegment } from '../identity/paths.js'
@@ -31,7 +32,7 @@ export async function runFeishuWorkspaceCommand(rawArgs: string): Promise<string
     case 'delete':
       return deleteCommand(args.slice(1))
     default:
-      return 'Usage: /feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]\n'
+      return `${t('feishuWs.usage')}\n`
   }
 }
 
@@ -39,9 +40,9 @@ async function statusCommand(): Promise<string> {
   const root = await readJson<WorkspaceRoot | null>(workspaceRootPath(), null)
   const workspaces = await listWorkspaceFiles()
   const lines = [
-    'Feishu cloud workspace:',
-    `  root: ${root?.folderToken ?? '(not initialized)'}`,
-    `  user folders: ${workspaces.length}`,
+    t('feishuWs.status.title'),
+    t('feishuWs.status.root', { token: root?.folderToken ?? t('feishuWs.status.notInitialized') }),
+    t('feishuWs.status.userFolders', { count: workspaces.length }),
   ]
   // Live drive API probe. Read-only, single listFolder with the smallest
   // page so we get either "ok" or a friendly scope-missing message. This
@@ -52,13 +53,15 @@ async function statusCommand(): Promise<string> {
   if (root?.folderToken) {
     try {
       await listFolder({ client: getFeishuClient(), folderToken: root.folderToken, maxItems: 1 })
-      lines.push('  drive API: ok')
+      lines.push(t('feishuWs.status.driveOk'))
     } catch (error) {
       const scope = (error as { feishuScopeMissing?: { requiredScopes: string[] } })?.feishuScopeMissing
       if (scope) {
-        lines.push(`  drive API: scope missing — required: ${scope.requiredScopes.join(' or ') || '(see Developer Console)'} (re-publish app version)`)
+        lines.push(t('feishuWs.status.driveScopeMissing', {
+          scopes: scope.requiredScopes.join(' or ') || t('feishuWs.status.scopeNone'),
+        }))
       } else {
-        lines.push(`  drive API: failed — ${feishuErrorMessage(error)}`)
+        lines.push(t('feishuWs.status.driveFailed', { detail: feishuErrorMessage(error) }))
       }
     }
   }
@@ -69,9 +72,9 @@ async function statusCommand(): Promise<string> {
 async function listCommand(): Promise<string> {
   const workspaces = await listWorkspaceFiles()
   if (workspaces.length === 0) {
-    return 'No Feishu cloud workspace folders recorded.\n'
+    return `${t('feishuWs.list.empty')}\n`
   }
-  const lines = ['canonical               folderToken                 updated']
+  const lines = [t('feishuWs.list.header')]
   for (const item of workspaces) {
     lines.push(`${item.canonical.padEnd(23)} ${item.workspace.folderToken.padEnd(27)} ${item.updated}`)
   }
@@ -81,25 +84,25 @@ async function listCommand(): Promise<string> {
 async function orphansCommand(): Promise<string> {
   const root = await readJson<WorkspaceRoot | null>(workspaceRootPath(), null)
   if (!root?.folderToken) {
-    return 'Feishu cloud workspace root is not initialized.\n'
+    return `${t('feishuWs.orphans.notInitialized')}\n`
   }
   const known = new Set((await listWorkspaceFiles()).map(item => item.workspace.folderToken))
   const listed = await listFolder({ client: getFeishuClient(), folderToken: root.folderToken })
   const orphans = listed.items.filter(item => item.type === 'folder' && !known.has(item.token))
   if (orphans.length === 0) {
-    return 'No orphan Feishu workspace folders.\n'
+    return `${t('feishuWs.orphans.empty')}\n`
   }
-  return `${['orphan folderToken              name', ...orphans.map(item => `${item.token.padEnd(29)} ${item.name}`)].join('\n')}\n`
+  return `${[t('feishuWs.orphans.header'), ...orphans.map(item => `${item.token.padEnd(29)} ${item.name}`)].join('\n')}\n`
 }
 
 async function deleteCommand(args: string[]): Promise<string> {
   const canonical = args[0]
   if (!canonical) {
-    return 'Usage: /feishu-workspace delete <canonical> [--confirm <token>]\n'
+    return `${t('feishuWs.delete.usage')}\n`
   }
   const workspace = await readJson<UserWorkspace | null>(userWorkspacePath(canonical), null)
   if (!workspace?.folderToken) {
-    return `No Feishu workspace folder recorded for "${canonical}".\n`
+    return `${t('feishuWs.delete.noFolder', { canonical })}\n`
   }
   const confirmIdx = args.indexOf('--confirm')
   if (confirmIdx < 0) {
@@ -113,20 +116,18 @@ async function deleteCommand(args: string[]): Promise<string> {
       folderToken: workspace.folderToken,
       itemCount,
     })
-    return [
-      `Preview delete Feishu workspace for "${canonical}":`,
-      `  folderToken: ${workspace.folderToken}`,
-      `  direct items: ${itemCount}`,
-      `Confirm with: /feishu-workspace delete ${canonical} --confirm ${token}`,
-      'Token expires in 5 minutes.',
-      '',
-    ].join('\n')
+    return `${t('feishuWs.delete.preview', {
+      canonical,
+      token: workspace.folderToken,
+      count: itemCount,
+      confirmToken: token,
+    })}\n`
   }
   const token = args[confirmIdx + 1]
   const pending = pendingDeleteTokens.get(canonical)
   if (!pending || pending.token !== token || pending.expiresAt < Date.now()) {
     pendingDeleteTokens.delete(canonical)
-    return `Confirmation token for "${canonical}" is missing or expired. Run /feishu-workspace delete ${canonical} again.\n`
+    return `${t('feishuWs.delete.tokenInvalid', { canonical })}\n`
   }
   const auditResource = { folderToken: workspace.folderToken, itemCount: pending.itemCount }
   try {
@@ -145,7 +146,7 @@ async function deleteCommand(args: string[]): Promise<string> {
       status: 'failed',
       error: feishuErrorMessage(error),
     })
-    return `Failed to delete Feishu workspace for "${canonical}": ${feishuErrorMessage(error)}\n`
+    return `${t('feishuWs.delete.failed', { canonical, detail: feishuErrorMessage(error) })}\n`
   }
   await rm(userWorkspacePath(canonical), { force: true })
   pendingDeleteTokens.delete(canonical)
@@ -156,7 +157,7 @@ async function deleteCommand(args: string[]): Promise<string> {
     resource: auditResource,
     status: 'confirmed',
   })
-  return `Deleted Feishu workspace for "${canonical}" (${pending.itemCount} direct items moved to Feishu trash).\n`
+  return `${t('feishuWs.delete.done', { canonical, count: pending.itemCount })}\n`
 }
 
 async function listWorkspaceFiles(): Promise<Array<{ canonical: string; workspace: UserWorkspace; updated: string }>> {

@@ -2,6 +2,7 @@ import { constants as fsConstants, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 
 import type { LightClawConfig } from '../config.js'
+import { t } from '../i18n/index.js'
 import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
   loadUserRlaunchMounts,
@@ -22,16 +23,6 @@ type MountCommandDeps = {
   restartRlaunch?: () => Promise<string>
 }
 
-const USAGE = [
-  'Usage:',
-  '  /mount list',
-  '  /mount add <absolute-gpfs-path...> [--ro|--rw]',
-  '  /mount remove <absolute-gpfs-path...>',
-  '',
-  'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.',
-  'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
-].join('\n')
-
 export async function runMountCommand(
   rawArgs: string,
   ctx: MountCommandContext,
@@ -41,20 +32,20 @@ export async function runMountCommand(
   const action = parts[0] ?? 'list'
 
   if (action === 'help' || action === '--help' || action === '-h') {
-    return `${USAGE}\n`
+    return `${t('mount.usage')}\n`
   }
   if (ctx.config.runtime.backend !== 'rlaunch') {
-    return '/mount is only available when runtime.backend = "rlaunch".\n'
+    return `${t('mount.onlyRlaunch')}\n`
   }
   if (!ctx.userId) {
-    return 'No active LightClaw identity; /mount requires a paired channel user.\n'
+    return `${t('mount.noIdentity')}\n`
   }
   const userId = ctx.userId
   const ctxWithUser = { ...ctx, userId }
 
   if (action === 'list') {
     if (parts.length !== 1) {
-      return `${USAGE}\n`
+      return `${t('mount.usage')}\n`
     }
     return formatMountList(loadUserRlaunchMounts(userId))
   }
@@ -90,32 +81,33 @@ export async function runMountCommand(
     const unchanged = mountPaths.filter(mountPath => currentByPath.get(mountPath) === mode)
     if (added.length === 0 && updated.length === 0) {
       return mountPaths.length === 1
-        ? `Mount already exists: ${mountPaths[0]} (mode=${mode}). No restart needed.\n`
+        ? `${t('mount.alreadyExistsSingle', { path: mountPaths[0], mode })}\n`
         : [
-            `Mounts already exist with mode=${mode}:`,
+            t('mount.alreadyExistsMultiHeader', { mode }),
             ...formatPathList(unchanged),
-            'No restart needed.',
+            t('mount.noRestartNeeded'),
             '',
           ].join('\n')
     }
     saveUserRlaunchMounts(userId, next)
     const restart = await restartAfterMountChange(deps)
     if (mountPaths.length === 1) {
-      const verb = updated.length > 0 ? 'Updated' : 'Added'
       return [
-        `${verb} rlaunch mount: ${mountPaths[0]}`,
-        `mode: ${mode}`,
-        `worker path: ${mountPaths[0]}`,
+        updated.length > 0
+          ? t('mount.updatedSingle', { path: mountPaths[0] })
+          : t('mount.addedSingle', { path: mountPaths[0] }),
+        t('mount.modeLine', { mode }),
+        t('mount.workerPathLine', { path: mountPaths[0] }),
         restart,
         '',
       ].join('\n')
     }
     return [
-      ...(added.length > 0 ? ['Added rlaunch mounts:', ...formatPathList(added)] : []),
-      ...(updated.length > 0 ? ['Updated rlaunch mounts:', ...formatPathList(updated)] : []),
-      ...(unchanged.length > 0 ? ['Already present:', ...formatPathList(unchanged)] : []),
-      `mode: ${mode}`,
-      'worker paths: same as host paths',
+      ...(added.length > 0 ? [t('mount.addedMultiHeader'), ...formatPathList(added)] : []),
+      ...(updated.length > 0 ? [t('mount.updatedMultiHeader'), ...formatPathList(updated)] : []),
+      ...(unchanged.length > 0 ? [t('mount.alreadyPresentHeader'), ...formatPathList(unchanged)] : []),
+      t('mount.modeLine', { mode }),
+      t('mount.workerPathsSame'),
       restart,
       '',
     ].join('\n')
@@ -123,7 +115,7 @@ export async function runMountCommand(
 
   if (action === 'remove' || action === 'rm') {
     if (parts.length < 2) {
-      return `${USAGE}\n`
+      return `${t('mount.usage')}\n`
     }
     const parsed = parseMountRemoveInput(parts.slice(1))
     if (typeof parsed === 'string') {
@@ -135,9 +127,9 @@ export async function runMountCommand(
     const missing = parsed.filter(mountPath => !current.some(mount => mount.path === mountPath))
     if (removed.length === 0) {
       return parsed.length === 1
-        ? `Mount not found: ${parsed[0]}\n`
+        ? `${t('mount.notFoundSingle', { path: parsed[0] })}\n`
         : [
-            'Mounts not found:',
+            t('mount.notFoundMultiHeader'),
             ...formatPathList(missing),
             '',
           ].join('\n')
@@ -146,31 +138,31 @@ export async function runMountCommand(
     const restart = await restartAfterMountChange(deps)
     if (parsed.length === 1) {
       return [
-        `Removed rlaunch mount: ${removed[0]}`,
+        t('mount.removedSingle', { path: removed[0] }),
         restart,
         '',
       ].join('\n')
     }
     return [
-      'Removed rlaunch mounts:',
+      t('mount.removedMultiHeader'),
       ...formatPathList(removed),
-      ...(missing.length > 0 ? ['Mounts not found:', ...formatPathList(missing)] : []),
+      ...(missing.length > 0 ? [t('mount.notFoundMultiHeader'), ...formatPathList(missing)] : []),
       restart,
       '',
     ].join('\n')
   }
 
-  return `${USAGE}\n`
+  return `${t('mount.usage')}\n`
 }
 
 function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   if (mounts.length === 0) {
-    return 'No dynamic rlaunch mounts for this user.\n'
+    return `${t('mount.list.empty')}\n`
   }
   return [
-    'Dynamic rlaunch mounts:',
+    t('mount.list.header'),
     ...mounts.map(mount =>
-      `- ${mount.path}  lightclaw=${formatLightclawPermission(mount.mode)}  worker=${mount.path}`,
+      t('mount.list.row', { path: mount.path, perm: formatLightclawPermission(mount.mode) }),
     ),
     '',
   ].join('\n')
@@ -190,17 +182,17 @@ function parseMountAddInput(
     if (token === '--ro' || token === '--rw') {
       const next: RlaunchMountMode = token === '--rw' ? 'rw' : 'ro'
       if (mode && mode !== next) {
-        return 'mount mode is ambiguous: both --ro and --rw given'
+        return t('mount.modeAmbiguous')
       }
       mode = next
     } else if (token.startsWith('--')) {
-      return `unknown flag: ${token} (expected --ro or --rw)`
+      return t('mount.unknownFlag', { flag: token })
     } else {
       positional.push(token)
     }
   }
   if (positional.length === 0) {
-    return 'At least one rlaunch mount path is required.'
+    return t('mount.pathRequired')
   }
   try {
     return {
@@ -214,7 +206,7 @@ function parseMountAddInput(
 
 function parseMountRemoveInput(rawPaths: string[]): string[] | string {
   if (rawPaths.length === 0) {
-    return 'At least one rlaunch mount path is required.'
+    return t('mount.pathRequired')
   }
   try {
     return dedupePaths(rawPaths.map(normalizeRlaunchMountPath))
@@ -224,7 +216,7 @@ function parseMountRemoveInput(rawPaths: string[]): string[] | string {
 }
 
 function formatLightclawPermission(mode: RlaunchMountMode): string {
-  return mode === 'rw' ? 'read-write' : 'read-only'
+  return mode === 'rw' ? t('mount.perm.rw') : t('mount.perm.ro')
 }
 
 async function validateMountPath(
@@ -241,16 +233,20 @@ async function validateMountPath(
   try {
     stat = statSync(mountPath)
   } catch (error) {
-    return `Mount path is not accessible from daemon: ${mountPath} (${error instanceof Error ? error.message : String(error)})\n`
+    return `${t('mount.notAccessible', { path: mountPath, detail: error instanceof Error ? error.message : String(error) })}\n`
   }
   if (!stat.isDirectory()) {
-    return `Mount path must be a directory: ${mountPath}\n`
+    return `${t('mount.notDirectory', { path: mountPath })}\n`
   }
   const required = fsConstants.R_OK | (mode === 'rw' ? fsConstants.W_OK : 0)
   try {
     await access(mountPath, required)
   } catch (error) {
-    return `Mount path lacks ${mode === 'rw' ? 'read/write' : 'read'} access for daemon: ${mountPath} (${error instanceof Error ? error.message : String(error)})\n`
+    return `${t('mount.lacksAccess', {
+      access: mode === 'rw' ? t('mount.access.rw') : t('mount.access.ro'),
+      path: mountPath,
+      detail: error instanceof Error ? error.message : String(error),
+    })}\n`
   }
   return null
 }
@@ -294,12 +290,12 @@ function formatPathList(paths: readonly string[]): string[] {
 
 async function restartAfterMountChange(deps: MountCommandDeps): Promise<string> {
   if (!deps.restartRlaunch) {
-    return 'rlaunch worker restart skipped in this context.'
+    return t('mount.restart.skipped')
   }
   try {
     const worker = await deps.restartRlaunch()
-    return `rlaunch worker restarted: ${worker || '<unknown>'}`
+    return t('mount.restart.done', { worker: worker || '<unknown>' })
   } catch (error) {
-    return `Mount state was saved, but rlaunch worker restart failed: ${error instanceof Error ? error.message : String(error)}`
+    return t('mount.restart.failed', { detail: error instanceof Error ? error.message : String(error) })
   }
 }

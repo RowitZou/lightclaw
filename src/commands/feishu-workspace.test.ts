@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { clearFeishuClient, registerFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
+import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 
@@ -20,6 +21,7 @@ type DriveStub = {
 beforeEach(async () => {
   tmpHome = await mkdtemp(path.join(tmpdir(), 'lightclaw-feishu-workspace-cmd-'))
   setLightclawHomeOverride(tmpHome)
+  setLang('en')
   driveState = {
     deleted: [],
     files: new Map([
@@ -38,6 +40,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setLang('cn')
   clearFeishuClient()
   setLightclawHomeOverride(undefined)
   await rm(tmpHome, { recursive: true, force: true })

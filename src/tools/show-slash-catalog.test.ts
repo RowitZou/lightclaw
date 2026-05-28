@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { setAdmin } from '../identity/store.js'
+import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { showSlashCatalogTool } from './show-slash-catalog.js'
@@ -18,9 +19,11 @@ describe('ShowSlashCatalog tool', () => {
     home = mkdtempSync(path.join(tmpdir(), 'lightclaw-show-slash-catalog-'))
     testHome = home
     setLightclawHomeOverride(home)
+    setLang('en')
   })
 
   afterEach(() => {
+    setLang('cn')
     setLightclawHomeOverride(undefined)
     testHome = ''
     rmSync(home, { recursive: true, force: true })

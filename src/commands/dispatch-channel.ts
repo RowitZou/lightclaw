@@ -2,6 +2,7 @@ import type { Writable } from 'node:stream'
 
 import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
+import { t } from '../i18n/index.js'
 import type { Message, UserContentBlock } from '../types.js'
 import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './builtin.js'
 import type { ReplContext, SlashBodyFormat } from './registry.js'
@@ -49,7 +50,7 @@ export async function dispatchChannelSlash(
     if (renamed) {
       return {
         handled: true,
-        output: `unknown command: ${name}. Renamed to ${renamed}. See /help.\n`,
+        output: `${t('common.error.prefix')}${t('common.error.renamedHint', { name, newName: renamed })}\n`,
         bodyFormat: 'plain_text',
       }
     }
