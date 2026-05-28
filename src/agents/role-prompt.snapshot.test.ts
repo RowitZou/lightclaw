@@ -18,14 +18,14 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '9b27552aebd2d3679d3f670f88dc13e298b94e42bc89471b2ea4aba2fea62590',
-  generalist: 'ce9c6f774c2fdb2bc458dafed8bd446265da5d27cfad0fb6b822e1bf62c4db32',
-  localExplorer: 'f34cbde4d61f82f326fb799cc8651ad1a651958e730520e8b3d1d4d2380b441f',
-  webSearcher: 'eac32f5687201ee05dd2a314f4dff34784f79f3de87a1d2cfc54fd087d3d0cac',
-  feishuSecretary: 'c1f93f09ba9d9de97d7be4092f79a19e3829446bfa87155a5e3133225c90ab7c',
-  coder: 'e527aadedc63c4569dafe1885735d3deee23790c178155bdf91c1a1caf3d9caa',
-  archivist: '0b8126ed092c685b775fc8e871b85af001a204a31453162db30b4d934eb214a7',
-  reviewer: 'b3720080b06ab26e00666119d18792cc909c962f3e7be268e3e663afb38ed92d',
+  main: 'a230cd407475225940bf7e25f9dd41b2333cefbf8d62369a487888068cc0c066',
+  generalist: 'cf962eeceb5d36033a2113227a842a0118353c56b2f388bd59735acc4bd02418',
+  localExplorer: 'e696e692079102bb25a0d55a2b498aca0651b0cf7729e784f88dd44d16b6601b',
+  webSearcher: '699ffb19a8ef71fda7990201dd1ae2dc10181dfb93e7781871e69362363ec216',
+  feishuSecretary: '1e81482cf2edebd6d5d97a17648da70cf3de4c640f92589f86dbb51ac645eb8d',
+  coder: '7a3758dc681eeb36785fb931b673046b04890e904213f5ff250cbae51cfd6aef',
+  archivist: '28571527d734714cc167b13df097deee72f758db016f30ca666af52aaeb9a12a',
+  reviewer: '142d719909d2a059e5553eca150049a493e5799dd2632cf7983d98dae08aff83',
   memoryExtractor: '6a72609e3239b47de91ca5c4587b886d7733d1e994abd88fa5631b3b1781558a',
   memoryCurator: 'a4a13dfff4626dd5bb704fa6c53f6d0a4899b96692204bf4611338bfa06b081f',
   skillCurator: '05a6c014080d4097e42f66c7817c80e23f6cf4032fead0a7eed34a27cc091626',

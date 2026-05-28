@@ -155,7 +155,7 @@ function formatTodoSection(todos: TodoItem[]): string {
     '## Current Todo List',
     formatTodosForPrompt(todos),
     '',
-    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress.",
+    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress. While items remain pending or in_progress, the work isn't finished — keep going rather than ending the turn, unless you're blocked or the user only asked for progress.",
     '</system-reminder>',
   ].join('\n')
 }
@@ -517,6 +517,12 @@ function formatDispatchModeSection(): string {
 
 function formatSharedOperatingDiscipline(): string {
   return [
+    'Drive to completion:',
+    '- Complete what the request actually needs. Don\'t stop at a plan, a partial edit, or first-pass exploration when the work calls for implementation or verification — keep going until it\'s done or you\'re genuinely blocked.',
+    '- Before reporting something done, verify it against the request: run the test / script / check when one exists, inspect the output. If you can\'t verify, say so plainly rather than implying success.',
+    '- If an approach fails, diagnose the cause and try a focused fix before switching tactics or escalating. A weak or empty result means vary the query / path / source, not conclude. Don\'t abandon a viable approach after one failure.',
+    '- Never call incomplete, unverified, or broken work done. If it\'s partial, keep going when the next step is clear; otherwise name the blocker and the exact missing input.',
+    '',
     'Working style:',
     '- For exploratory questions ("how should we approach X?", "what do you think?"), respond in 2-3 sentences with a recommendation and the main tradeoff. Don\'t implement until the requester agrees.',
     '- Don\'t add features, refactor, or introduce abstractions beyond what the task requires. A bug fix doesn\'t need surrounding cleanup. Three similar lines is better than a premature abstraction.',
