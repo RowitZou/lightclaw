@@ -96,6 +96,7 @@ export type SystemPromptRenderOptions = {
   tools: Tool[]
   deferredTools?: Tool[]
   discoveredTools?: ReadonlyMap<string, number>
+  enabledSecrets?: ReadonlyMap<string, string>
   // 2026-05-26: cache anchoring. When `inlineCatalogTools` is provided, the
   // stable `## Tool Catalog` section renders only that subset, and the
   // remainder of `tools` (discovered via ToolSearch this session) is rendered
@@ -169,6 +170,22 @@ function formatOptionalTodoSection(todos: TodoItem[], includeTodos: boolean | un
   }
 
   return formatTodoSection(todos)
+}
+
+function formatAvailableSecretsSection(enabledSecrets: ReadonlyMap<string, string> | undefined): string {
+  if (!enabledSecrets || enabledSecrets.size === 0) {
+    return ''
+  }
+  const names = [...enabledSecrets.keys()].sort()
+  return [
+    '## Available Secrets',
+    '',
+    "These environment variables are injected into Bash commands for you. Use them as `$NAME` (e.g. `git push https://$GH_TOKEN@github.com/...`). The values are confidential — never echo them, write them to files, or paste them into other tools' arguments.",
+    '',
+    "If a secret's purpose is unclear from its name (e.g. `API_KEY` without context, or a name you don't recognize from the conversation), ask the user what it is and how to use it before guessing.",
+    '',
+    ...names.map(name => `- ${name}`),
+  ].join('\n')
 }
 
 const MODE_BLURBS: Record<PermissionMode, string> = {
@@ -613,6 +630,10 @@ export function renderSystemPromptSplit(
   if (todoSection) {
     variableParts.push(todoSection)
   }
+  const availableSecrets = formatAvailableSecretsSection(options?.enabledSecrets)
+  if (availableSecrets) {
+    variableParts.push(availableSecrets)
+  }
   const discoveredReminder = buildDiscoveredToolsReminder(
     options?.discoveredCatalogTools ?? [],
   )
@@ -653,6 +674,7 @@ export function renderSystemPrompt(
     toolSection,
     template.postTodos,
     formatOptionalTodoSection(todos, template.includeTodos),
+    formatAvailableSecretsSection(options?.enabledSecrets),
     deferredReminder,
   ].filter(section => section.trim().length > 0)
   return sections.join('\n\n')

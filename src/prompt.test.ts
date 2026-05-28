@@ -75,6 +75,58 @@ describe('renderSystemPromptSplit — cache anchoring', () => {
     assert.equal(variable, '')
   })
 
+  it('keeps stable prefix byte-identical when available secrets change', () => {
+    const withoutSecrets = renderSystemPromptSplit(template, [], {
+      tools: [fakeTool('Bash')],
+    })
+    const withSecrets = renderSystemPromptSplit(template, [], {
+      tools: [fakeTool('Bash')],
+      enabledSecrets: new Map([
+        ['HF_TOKEN', 'hf_super_secret_value'],
+        ['GH_TOKEN', 'ghp_super_secret_value'],
+      ]),
+    })
+
+    assert.equal(withoutSecrets.stable, withSecrets.stable)
+    assert.match(withSecrets.variable, /^## Available Secrets$/m)
+    assert.match(withSecrets.variable, /^- GH_TOKEN$/m)
+    assert.match(withSecrets.variable, /^- HF_TOKEN$/m)
+    assert.doesNotMatch(withSecrets.variable, /super_secret_value/)
+  })
+
+  it('renders the confirmed available-secrets prompt literal in the variable suffix', () => {
+    const { variable } = renderSystemPromptSplit(template, [], {
+      tools: [fakeTool('Bash')],
+      enabledSecrets: new Map([
+        ['HF_TOKEN', 'hf_value'],
+        ['GH_TOKEN', 'gh_value'],
+      ]),
+    })
+
+    assert.equal(variable, [
+      '## Available Secrets',
+      '',
+      "These environment variables are injected into Bash commands for you. Use them as `$NAME` (e.g. `git push https://$GH_TOKEN@github.com/...`). The values are confidential — never echo them, write them to files, or paste them into other tools' arguments.",
+      '',
+      "If a secret's purpose is unclear from its name (e.g. `API_KEY` without context, or a name you don't recognize from the conversation), ask the user what it is and how to use it before guessing.",
+      '',
+      '- GH_TOKEN',
+      '- HF_TOKEN',
+    ].join('\n'))
+  })
+
+  it('keeps empty enabledSecrets byte-identical to the old empty variable suffix', () => {
+    const omitted = renderSystemPromptSplit(template, [], {
+      tools: [fakeTool('Read')],
+    })
+    const empty = renderSystemPromptSplit(template, [], {
+      tools: [fakeTool('Read')],
+      enabledSecrets: new Map(),
+    })
+
+    assert.deepEqual(empty, omitted)
+  })
+
   // Regression: 2026-05-26 dogfood §cache hit rate root-cause.
   // Even after fix/cache-suffix-relocate moved TodoList + deferred-reminder
   // out of `instructions`, the `## Tool Catalog` section still listed every

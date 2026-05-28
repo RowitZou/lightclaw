@@ -35,6 +35,7 @@ import {
   addSessionMemoryTokens,
   addUsage,
   getAbortController,
+  getCurrentEnabledSecrets,
   getCurrentUserId,
   getCwd,
   getRuntime,
@@ -481,6 +482,7 @@ export async function query(params: QueryParams): Promise<{
       tools: catalog.tools,
       deferredTools: catalog.deferred,
       discoveredTools: sessionCtx?.discoveredTools,
+      enabledSecrets: getCurrentEnabledSecrets(),
     })
     return invocation.channelContext
       ? `${invocation.channelContext}\n\n${rendered}`

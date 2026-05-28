@@ -1,5 +1,5 @@
 import { getCurrentSessionContext } from '../../session-context.js'
-import { getTodos } from '../../state.js'
+import { getCurrentEnabledSecrets, getTodos } from '../../state.js'
 import { renderSystemPromptSplit } from '../../prompt.js'
 import type { Hook } from './types.js'
 
@@ -29,6 +29,7 @@ export const splitRenderHook: Hook = {
       discoveredCatalogTools: ctx.turnCatalog.discoveredCatalogTools,
       deferredTools: ctx.turnCatalog.deferred,
       discoveredTools: sessionCtx?.discoveredTools,
+      enabledSecrets: getCurrentEnabledSecrets(),
     })
     return {
       system: ctx.invocation.channelContext
