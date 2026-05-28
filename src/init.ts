@@ -15,6 +15,7 @@ import { lightclawHome } from './paths.js'
 import { workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
 import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
+import { loadEnabledSecrets } from './secrets/store.js'
 import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
@@ -320,6 +321,9 @@ async function createResolvedSessionContext(
     sessionsDir: resolvedConfig.paths.sessions,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,
+    enabledSecrets: input?.currentUserId
+      ? loadEnabledSecrets(input.currentUserId)
+      : undefined,
     sessionId: input?.sessionId,
     resumedFrom: input?.resumedFrom,
     compactionCount: input?.compactionCount,

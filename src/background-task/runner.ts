@@ -14,6 +14,7 @@ import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-to
 import { runDispatchedAgent } from '../agents/dispatched-agent.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { loadEnabledSecrets } from '../secrets/store.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
   createSessionContext,
@@ -100,6 +101,7 @@ export async function runBackgroundTaskFire(input: {
       sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
+      enabledSecrets: loadEnabledSecrets(input.task.ownerCanonicalUser),
       sessionId,
       channel: 'feishu',
       permissionMode,

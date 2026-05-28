@@ -49,6 +49,7 @@ export type SessionContext = {
   memoryDir: string
   currentRole?: Role
   currentUserId?: string
+  enabledSecrets?: ReadonlyMap<string, string>
   resumedFrom: string | null
   compactionCount: number
   lastExtractedAt: number
@@ -138,6 +139,7 @@ export function createSessionContext(input: {
   sessionsDir: string
   memoryDir: string
   currentUserId?: string
+  enabledSecrets?: ReadonlyMap<string, string>
   currentRole?: Role
   sessionId?: string
   channel?: ChannelKey
@@ -166,6 +168,7 @@ export function createSessionContext(input: {
     memoryDir: input.memoryDir,
     currentRole: input.currentRole,
     currentUserId: input.currentUserId,
+    enabledSecrets: input.enabledSecrets,
     resumedFrom: input.resumedFrom ?? null,
     compactionCount: input.compactionCount ?? 0,
     lastExtractedAt: input.lastExtractedAt ?? 0,
@@ -214,6 +217,7 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     memoryDir: '',
     currentRole: undefined,
     resumedFrom: null,
+    enabledSecrets: undefined,
     compactionCount: 0,
     lastExtractedAt: 0,
     totalInputTokens: 0,

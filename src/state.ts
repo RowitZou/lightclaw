@@ -76,6 +76,9 @@ function cloneSessionContext(current: SessionState): SessionContext {
     identityRules: [...current.identityRules],
     fileRules: [...current.fileRules],
     backgroundTasks: new Set(current.backgroundTasks),
+    enabledSecrets: current.enabledSecrets
+      ? new Map(current.enabledSecrets)
+      : undefined,
   }
 }
 
@@ -121,6 +124,12 @@ export function getCurrentChainState(): import('./signal-bus/chain-state.js').Ch
 
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
+}
+
+const EMPTY_ENABLED_SECRETS: ReadonlyMap<string, string> = new Map<string, string>()
+
+export function getCurrentEnabledSecrets(): ReadonlyMap<string, string> {
+  return getCurrentSessionContext()?.enabledSecrets ?? EMPTY_ENABLED_SECRETS
 }
 
 export function requireCurrentUserId(): string {

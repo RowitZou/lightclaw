@@ -2,7 +2,12 @@ import { z } from 'zod'
 
 import { launchBackgroundJob } from '../background-exec/launcher.js'
 import { suggestBashRules } from '../permission/suggestions.js'
-import { getCurrentRole, getCurrentUserId, getSessionId } from '../state.js'
+import {
+  getCurrentEnabledSecrets,
+  getCurrentRole,
+  getCurrentUserId,
+  getSessionId,
+} from '../state.js'
 import { buildTool } from '../tool.js'
 
 const MAX_OUTPUT_CHARS = 30000
@@ -56,6 +61,11 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
     return suggestBashRules(input.command)
   },
   async call(input, context) {
+    const enabledSecrets = getCurrentEnabledSecrets()
+    const env = enabledSecrets.size > 0
+      ? Object.fromEntries(enabledSecrets)
+      : undefined
+
     if (input.run_in_background) {
       const meta = await launchBackgroundJob({
         runtime: context.runtime,
@@ -64,6 +74,7 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
         canonicalUser: getCurrentUserId() ?? 'terminal',
         sessionId: getSessionId(),
         roleId: getCurrentRole()?.agentType,
+        env,
       })
       return {
         output:
@@ -82,6 +93,7 @@ Long-running work: set \`run_in_background: true\` for a command that may run pa
       timeoutMs,
       maxBufferBytes: 1024 * 1024,
       abortSignal: context.abortSignal,
+      env,
     })
 
     if (result.exitCode === 0) {

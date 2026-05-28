@@ -23,6 +23,7 @@ export type LaunchBackgroundJobParams = {
   canonicalUser: string
   sessionId: string
   roleId?: string
+  env?: Record<string, string>
   jobId?: string
   now?: number
   registry?: BackgroundJobRegistry
@@ -50,6 +51,7 @@ export async function launchBackgroundJob(params: LaunchBackgroundJobParams): Pr
   const launch = await params.runtime.exec({
     command: buildLauncherScript({ command: params.command, cwd: params.cwd }, jobDir),
     cwd: params.runtime.workspaceRoot,
+    env: params.env,
     timeoutMs: LAUNCH_EXEC_BUDGET_MS,
     maxBufferBytes: 64 * 1024,
   })

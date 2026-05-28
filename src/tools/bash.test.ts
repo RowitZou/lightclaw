@@ -6,6 +6,7 @@ import type { ToolCallContext } from '../tool.js'
 import { FakeRuntime } from '../background-exec/test-helpers.js'
 import { BackgroundJobRegistry, getBackgroundJobRegistry } from '../background-exec/registry.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import type { ExecInput, ExecResult } from '../runtime/types.js'
 
 function buildCtx(execResult: {
   stdout: string
@@ -21,6 +22,17 @@ function buildCtx(execResult: {
       },
     },
   } as unknown as ToolCallContext
+}
+
+class EnvCapturingRuntime extends FakeRuntime {
+  override async exec(input: ExecInput): Promise<ExecResult> {
+    this.execCalls.push(input)
+    return {
+      stdout: input.env?.GH_TOKEN ? `token=${input.env.GH_TOKEN}` : 'missing-token',
+      stderr: '',
+      exitCode: 0,
+    }
+  }
 }
 
 describe('Bash error-recovery hints', () => {
@@ -72,6 +84,7 @@ describe('Bash error-recovery hints', () => {
       model: 'test',
       sessionsDir: '/sessions',
       memoryDir: '/memory',
+      enabledSecrets: new Map([['GH_TOKEN', 'background-secret']]),
       runtime: runtime.asRuntime(),
     })
 
@@ -89,6 +102,7 @@ describe('Bash error-recovery hints', () => {
     assert.match(result.output, /Started background Bash job bg-/)
     assert.match(result.output, /stdout: \/workspace\/\.lightclaw\/bg-exec\/bg-/)
     assert.match(runtime.execCalls[1].command, /setsid bash -c/)
+    assert.equal(runtime.execCalls[1].env?.GH_TOKEN, 'background-secret')
     assert.equal(getBackgroundJobRegistry().listForSession('s1').length, 1)
     getBackgroundJobRegistry().clear()
   })
@@ -117,5 +131,40 @@ describe('Bash error-recovery hints', () => {
     )
     assert.equal(result.isError, true)
     assert.match(result.output, /run_in_background: true/)
+  })
+
+  it('regression: injects enabled secrets via ExecInput.env without putting values in model-visible command text', async () => {
+    const secretValue = 'ghp_extremely_secret_dogfood_value_xyz'
+    const command = 'echo "$GH_TOKEN"'
+    const runtime = new EnvCapturingRuntime()
+    const ctx = createSessionContext({
+      sessionId: 'secret-session',
+      currentUserId: 'alice',
+      cwd: '/workspace',
+      model: 'test',
+      sessionsDir: '/sessions',
+      memoryDir: '/memory',
+      enabledSecrets: new Map([['GH_TOKEN', secretValue]]),
+      runtime: runtime.asRuntime(),
+    })
+
+    const result = await runWithSessionContext(ctx, () =>
+      bashTool.call(
+        { command },
+        {
+          abortSignal: new AbortController().signal,
+          runtime: runtime.asRuntime(),
+        } as ToolCallContext,
+      )
+    )
+
+    const modelVisiblePayload = JSON.stringify({
+      transcript: [{ type: 'tool_use', name: 'Bash', input: { command } }],
+      apiLog: { request: { messages: [{ role: 'assistant', content: command }] } },
+    })
+    assert.equal(modelVisiblePayload.includes(secretValue), false)
+    assert.equal(runtime.execCalls[0].command.includes(secretValue), false)
+    assert.equal(runtime.execCalls[0].env?.GH_TOKEN, secretValue)
+    assert.match(result.output, new RegExp(secretValue))
   })
 })
