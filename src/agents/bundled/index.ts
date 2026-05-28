@@ -62,7 +62,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'webSearcher',
     whenToUse:
-      'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. The subagent digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths, Grep over downloaded PDFs / HTMLs for specific facts when full read is too expensive), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
+      'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. It digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths, Grep over downloaded PDFs / HTMLs for specific facts when full read is too expensive), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
     tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill'],
     skills: ['web-research-workflow'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
@@ -74,7 +74,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'feishuSecretary',
     whenToUse:
-      'Feishu cloud-doc / cloud-space content lifecycle: read a doc, append to a sheet, create new docs / files, write doc content. Dispatch when the task involves new content authoring or content edits on Feishu resources (pasted URLs or workspace-scoped tokens). For pure structure operations (move / delete / create folder) without new content, archivist is also viable. The subagent handles permission grants and ancestry checks; you get back tokens, URLs, and permission outcomes.',
+      'Feishu cloud-doc / cloud-space content lifecycle: read a doc, append to a sheet, create new docs / files, write doc content. Dispatch when the task involves new content authoring or content edits on Feishu resources (pasted URLs or workspace-scoped tokens). For pure structure operations (move / delete / create folder) without new content, archivist is also viable. It handles permission grants and ancestry checks; you get back tokens, URLs, and permission outcomes.',
     description:
       'Feishu cloud-doc / cloud-space content specialist (creates + writes; pair with archivist for pure structure ops).',
     tools: [
@@ -108,7 +108,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'coder',
     whenToUse:
-      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. The subagent plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
+      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. It plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
@@ -156,7 +156,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'reviewer',
     whenToUse:
-      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). The subagent reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
+      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). It reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
