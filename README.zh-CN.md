@@ -2,458 +2,131 @@
 
 中文 · [English](./README.md)
 
-LightClaw 是一个自托管的个人 AI 助手。它作为 daemon 跑在你自己的机器上，能在飞书上和你对话，并跨 session 记住你告诉它的事情。一次安装，本机运行，不需要任何 SaaS 账号。
+LightClaw 是一个**自托管的多用户 AI Agent**。它作为常驻 daemon 跑在你自己的机器（或集群）上，通过飞书和你（以及你授权的人）对话，能读写文件、跑命令、抓网页、操作飞书云文档——全部在沙箱里完成。它跨 session 记住你的项目惯例、纠正过的事和正在跑的任务。一次部署，本机运行，不依赖任何 SaaS。
 
-### 它能为你做什么
+---
 
-- **在飞书上对话，在终端里管理。** Agent 活在 channel 里——在飞书私聊、群、话题里给它发消息。终端是 daemon 的 admin 控制台（配对、沙箱、用量、规则），不是 agent 对话窗口。
-- **让它真正动手做事。** 它会读写文件、跑 shell、抓网页、调你配的 MCP 工具——全在沙箱里，碰不到主机的其他部分。
-- **危险操作用人话和你确认。** 模型想做不可逆的事时给你一个明确的"是 / 否"——也可以一次"批准这一类"，之后不用再问。
-- **长任务不会越聊越糊涂。** 它记得你的项目惯例、纠正过的事、正在跑的任务；该用到的笔记会自动塞回上下文里——哪怕对话已经被自动压缩过几次。
-- **模型与工具自带。** Anthropic 与 OpenAI 兼容的 API、MCP server、自定义 hook 都可以直接接。
+## 特性
 
-架构、设计动机、开发历史都在另一个公开仓库 [项目 wiki](https://github.com/RowitZou/lightclaw_dev_log)。
+<table>
+<tr><td><b>飞书原生</b></td><td>私聊 / 群 / 话题里 @ 它就能对话，每个会话维度独立隔离；终端是纯 slash 的 admin 控制台，不跑 agent。</td></tr>
+<tr><td><b>真正动手</b></td><td>读写文件、跑 shell（前台 + 后台长任务）、抓网页、读 PDF / Office、操作飞书云文档——全在沙箱里完成。</td></tr>
+<tr><td><b>多用户 + 权限</b></td><td>admin 配对用户，每人独立 workspace / 记忆 / 规则；四档权限模式 + 人话确认卡 + per-user 上限。</td></tr>
+<tr><td><b>沙箱隔离</b></td><td>工具默认跑在本地 / Docker / 集群（rlaunch）沙箱里，碰不到主机其它部分——接给别人用不等于给他们 shell。</td></tr>
+<tr><td><b>长任务记忆</b></td><td>跨 session 记住你、你的项目、当前任务；自动压缩前先落盘，后台周期把散乱记忆整合成主题知识。</td></tr>
+<tr><td><b>多 Agent 协作</b></td><td>主 agent 把活派给专门子 agent（编码 / 调研 / 飞书 / 复审…），可并行扇出、后台跑、定时触发。</td></tr>
+<tr><td><b>模型灵活</b></td><td>同时接 Anthropic / OpenAI 兼容 / Codex OAuth，按角色钉不同模型（主对话走 Claude、记忆抽取走小模型）。</td></tr>
+<tr><td><b>可扩展</b></td><td>MCP server、生命周期 hook、admin 自定义角色、自然语言触发的 skill。</td></tr>
+</table>
 
 ---
 
 ## 快速开始
 
+需要 Node 22+、pnpm 10+、Python 3。
+
 ```bash
 pnpm install
-pnpm dev                 # tsx src/cli.ts —— 免构建，迭代最快
-# 或者
-pnpm build && pnpm start # 先 build 到 dist/cli.js 再 node 跑
+pnpm dev                  # tsx src/cli.ts —— 免构建，迭代最快
+# 或 pnpm build && pnpm start
 ```
 
-需要 Node 22+、pnpm 10+ 和 Python 3。LocalRuntime 下 `WebFetch` 通过 environment helper 脚本执行，需要安装 `markdownify`：
+写一个最小的 `~/.lightclaw/config.json` 即可启动（只有 `endpoints` / `models` / `defaultModel` 必填）：
 
-```bash
-python3 -m pip install --user markdownify
-```
-
-写一个最小的 `~/.lightclaw/config.json` 即可启动——完整模板见下方 [配置](#配置) 一节：
-
-```jsonc
+```json
 {
-  "endpoints": {
-    "anthropic-direct": { "apiKey": "<your-anthropic-api-key>" }
-  },
+  "endpoints": { "anthropic-direct": { "apiKey": "<your-api-key>" } },
   "models": {
     "claude-sonnet-4-6": {
-      "endpoint": "anthropic-direct",
-      "schema": "anthropic",
-      "upstreamModel": "claude-sonnet-4-6"
+      "endpoint": "anthropic-direct", "schema": "anthropic", "upstreamModel": "claude-sonnet-4-6"
     }
   },
   "defaultModel": "claude-sonnet-4-6"
 }
 ```
 
-首次启动会创建 v1 单 admin 身份，绑定到终端用户。之后每次启动都是为该 admin 拉起 daemon（channel + admin 控制台）。
+首次启动创建单 admin 身份并绑定当前终端用户，然后拉起 daemon。要让 agent 能对话，再配一段飞书并 `enabled: true`（见 [飞书接入](#飞书接入)）。
 
-如果不希望状态落在 `~/.lightclaw`（比如集群开发机销毁会一并丢掉 sessions / memory / identity），把 `LIGHTCLAW_HOME` 指到共享存储后再启动：
-
-```bash
-export LIGHTCLAW_HOME=<absolute-path-on-shared-storage>/lightclaw
-```
-
-也可以一次性 `lightclaw --home <path>` 临时切。具体迁移步骤见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+> 想把数据放到共享存储（集群部署、避免开发机销毁丢数据），启动前 `export LIGHTCLAW_HOME=<path>`。
 
 ---
 
 ## 配置
 
-所有配置都集中在 `<LIGHTCLAW_HOME>/config.json`（默认 `~/.lightclaw/config.json`）。完整带注释模板：
+所有配置集中在 `<LIGHTCLAW_HOME>/config.json`（默认 `~/.lightclaw/config.json`）。**完整的可配置项与每一项默认值见 [`config.example.jsonc`](./config.example.jsonc)**——除上面三个必填项外其余全部可选，环境变量优先级高于文件。运行时是纯 `JSON.parse`，拷字段时记得删掉注释。
 
-```jsonc
-{
-  // --- Endpoints：具名的 (apiKey + 可选 baseUrl) 池，被 models 引用 ---
-  // 同一个网关可同时承载 anthropic 和 openai 协议；schema 在 models 里给，
-  // 不在 endpoints 这里。
-  "endpoints": {
-    "anthropic-direct": {
-      "apiKey": "<your-anthropic-api-key>"
-      // 走官方 api.anthropic.com 时省略 baseUrl
-    },
-    "newapi": {
-      "apiKey": "<your-gateway-key>",
-      "baseUrl": "<https://your-gateway-host>"
-    }
-  },
-
-  // --- Models：display 名 -> { endpoint alias, schema, upstreamModel } ---
-  // display 名是 /model 列表和 routing 字段里看到的名字，自由命名。
-  // upstreamModel 才是发到上游 API 的真实 model id。
-  "models": {
-    "claude-sonnet-4-6": {
-      "endpoint": "anthropic-direct",
-      "schema": "anthropic",                      // "anthropic" | "openai"
-      "upstreamModel": "claude-sonnet-4-6"
-    },
-    "claude-haiku-4-5": {
-      "endpoint": "newapi",
-      "schema": "anthropic",
-      "upstreamModel": "claude-haiku-4-5-20251001"
-    },
-    "gpt-5-mini": {
-      "endpoint": "newapi",
-      "schema": "openai",
-      "upstreamModel": "gpt-5-mini"
-    }
-  },
-
-  // 启动时默认选哪个 display 名；运行时 /model <name> 可切换。
-  // 不填则取 models 里的第一个。
-  "defaultModel": "claude-sonnet-4-6",
-
-  // 可选 per-role 路由——值都是 models 里的 display 名。未填回落到 defaultModel。
-  // 支持跨 schema 异构（main 走 Claude、extract 走 GPT 等）。
-  "routing": {
-    "main":      "claude-sonnet-4-6",
-    "compact":   "claude-haiku-4-5",
-    "extract":   "gpt-5-mini",
-    "webSearch": "claude-haiku-4-5"
-  },
-
-  // --- 用户面语言（slash 输出、飞书卡片、banner、错误通知）---
-  // 默认 cn。stderr 日志一律英文（admin grep 友好），不受此设置影响。
-  // env: LIGHTCLAW_LANG=cn|en
-  "lang": "cn",
-
-  // --- 工具相关 ---
-  "tools": {
-    "webSearch": {
-      "braveApiKey": "<your-brave-search-api-key>"   // 可选；未配置回退 DDG HTML
-    }
-  },
-
-  // --- API 调用日志（admin 调试 / 训练数据用） ---
-  // 默认关闭。开启后每次 streamChat 请求 + 响应原样持久化（完整 system
-  // prompt、tools schema、messages 数组、响应 content / usage）。一 query
-  // 一文件：<dir>/<YYYY-MM-DD>/<sessionId>-<HHMMSS>-<uuid8>.jsonl，每行一
-  // 个 turn。用于排查上游协议错误，也可作为未来训练数据的原始 trace。
-  // 多 user 部署不该默认开（占存储），admin 在自己机器上按需打开。
-  "apiLogs": {
-    "enabled": false,                             // env: LIGHTCLAW_API_LOGS_ENABLED=1
-    "dir": "<lightclaw_home>/api-logs"            // env: LIGHTCLAW_API_LOGS_DIR
-  },
-
-  // --- 存储路径（全部可选）---
-  // 默认走 <LIGHTCLAW_HOME>/{sessions,memory,workspaces}；只有需要把 workspace 单独放
-  // 到大盘 / 共享存储 / 网络挂载时才覆盖。
-  "sessionsDir":   "<absolute-path-for-sessions>",
-  "memoryDir":     "<absolute-path-for-memory>",
-  "workspaceRoot": "<absolute-path-for-workspaces>",
-
-  // --- Runtime 后端（Bash / Read / Write 实际跑的地方）---
-  "runtime": {
-    "backend": "docker",                        // "local"（admin-only） | "docker" | "rlaunch"
-
-    // 可选的进程内 forward proxy。docker host 模式 / 集群 pod 不能直连外网时启用。
-    "network": {
-      "mode": "host",                           // "host" 启动 bridge；"isolated" 关闭
-      "upstream": "inherit",                    // "inherit" | "direct" | "<http://upstream-proxy:port>"
-      "port": 18080,
-      "bindHost": "0.0.0.0",
-      "acl": ["127.0.0.0/8", "<your-pod-cidr>"]  // 来源 IP 白名单；空数组 = 只放行 loopback
-    },
-
-    // DockerRuntime —— backend = "docker" 时生效
-    "docker": {
-      "imageOverride": "<custom-sandbox-image>",      // 默认 ghcr.io/rowitzou/lightclaw-sandbox:<version>
-      "memoryLimit": "4g",
-      "cpuLimit": 4,
-      "idleTimeoutMs": 1800000,                       // 容器闲置 30 分钟自动 stop
-      "network": "bridge",
-      "tmpfs": ["/tmp"],
-      "mounts": [
-        { "host": "/data/datasets", "container": "/data", "mode": "ro" }
-      ],
-      "env": { /* 注入到容器的静态 env */ },
-      "autoPull": true
-    },
-
-    // RlaunchRuntime —— backend = "rlaunch" 时生效（集群部署）
-    // 这些值由集群 admin 提供，LightClaw 不带默认。
-    "rlaunch": {
-      "image":            "<cluster-base-image>",
-      "chargedGroup":     "<your-charged-group>",
-      "namespace":        "<your-cluster-namespace>",
-      "cpu":              8,
-      "memoryMb":         16384,
-      "gpu":              0,
-      "privateMachine":   "group",
-      "positiveTags":     [],
-      "gpfsMounts": [                                 // host->gpfs 映射规则；rlaunch 后端至少需 1 条，解析按 hostPrefix 最长前缀匹配
-        { "hostPrefix": "<host-gpfs-mount-a>", "mountPrefix": "<gpfs-url-prefix-a>" },
-        { "hostPrefix": "<host-gpfs-mount-b>", "mountPrefix": "<gpfs-url-prefix-b>" }
-      ],
-      "imagePullPolicy":  "IfNotPresent",
-      "maxWaitDuration":  "5m",
-      "workerGcTimeHours": 24,
-      "predictBeforeStart":   true,
-      "healthCheckIntervalMs": 300000,
-      "preheatOnStartup":     true,
-      "preheatOnApproval":    true
-    }
-  }
-}
-```
-
-`endpoints` 和 `models` 必填（没有任何 model 时启动会拒绝）；其他段全部可选，用不到的整段删掉即可。环境变量（`LIGHTCLAW_MODEL`、`LIGHTCLAW_RUNTIME_BACKEND` 等）会覆盖文件里的同名字段。完整 env 参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
-
-同目录下的兄弟文件：
-
-| 文件 | 用途 |
-|---|---|
-| `permissions.json` | 全局 allow/deny/ask 规则；与下面的 per-user 规则合并 |
-| `identity/per-user/<canonical>/permissions.json` | 用户在飞书 / 终端点过的"以后都允许"自动落到这里，跨重启保留，无需手动维护 |
-| `mcp.json` | MCP server 注册 |
-| `channels.json` | 飞书等渠道配置 |
-| `hooks/*.mjs` | 生命周期 hook |
-
-带凭据的文件强制 `mode 0600`。
+同目录兄弟文件：`permissions.json`（权限规则）、`mcp.json`（MCP server）、`hooks/*.mjs`（hook）、`roles/<name>/ROLE.md`（自定义角色）。
 
 ---
 
-## CLI 面
+## 使用
 
 ```bash
-lightclaw
-lightclaw --home <dir>
-lightclaw --help
+lightclaw                 # 拉起 daemon：启用的 channel + 终端 admin 控制台
+lightclaw --home <dir>    # 临时切 home    lightclaw --config <file>  # 外部只读配置
 ```
 
-`lightclaw` 拉起 daemon：启用的 channel + 一个纯 slash 的终端 admin 控制台。终端不再跑交互式 agent session——和 agent 对话请走飞书。
+终端不跑 agent——和 agent 对话走飞书。常用 slash（终端与飞书共用，`admin` / `飞书` 标注例外）：
 
-旧 CLI flag / 子命令已经收口到配置和 slash：
-
-- 模型：`~/.lightclaw/config.json`（`endpoints` + `models` registry，`defaultModel`）；`LIGHTCLAW_MODEL` 按 display 名覆盖默认值
-- 功能开关：`LIGHTCLAW_NO_MEMORY=1`、`LIGHTCLAW_NO_MCP=1`、`LIGHTCLAW_NO_HOOKS=1`
-- 权限细规则：编辑 `~/.lightclaw/permissions.json`
-- 身份管理：`/user ...` slash
-- 渠道：在 `~/.lightclaw/channels.json` 里 `enabled: true`，主 `lightclaw` 进程会自动拉起
-
----
-
-## Slash 命令
-
-普通用户可见：
-
-| 命令 | 作用 |
+| 命令 | 说明 |
 |---|---|
-| `/help` | 列出可用命令（不含状态信息；状态请用 `/status`）。 |
-| `/status` | 查看当前 user / mode / model / session / 今日用量。 |
-| `/model <name>` | 切换当前 session 的模型。 |
-| `/mode <mode>` | 切换权限严格度。 |
-| `/rules` | 列编号规则、按编号撤销，或注册 ASK 规则（详见下文）。 |
-| `/fresh <prompt>`（仅飞书）| 临时一次性会话 — 不读 memory、不写 transcript。 |
-| `/branch <prompt>`（别名 `/b`，仅飞书）| 在当前 session 上分叉出并行 branch；主 turn 继续跑，branch 结果完成后合并回来。 |
-| `/stop`（仅飞书）| 中断当前 sessionId 的 in-flight turn；branch / fresh 各自独立 sessionId，不会被一并中断。 |
-| `/feedback <text>`（channel 用户专属）| 给 admin 留反馈；admin 用 `/user feedback` 阅读。 |
-| `/auth import codex` | 注册 Codex OAuth token，让 OpenAI-Auth 模型不依赖 API key 就能跑。 |
+| `/help` `/status` | 命令列表 / 当前 user·mode·model·用量 |
+| `/model` `/mode` | 切模型 / 切权限严格度 |
+| `/rules` | 看 / 撤 / 加权限规则 |
+| `/stop` `(飞书)` | 中断当前会话的 turn |
+| `/secret` `/mount` `(飞书)` | 个人密钥 / 动态 gpfs 挂载 |
+| `/feedback` | 给 admin 留反馈 |
+| `/user` `/ceiling` `/cost` `/sandbox` `/feishu-workspace` `/auth` `(admin)` | 配对、权限上限、用量、沙箱、云空间、Codex 登录 |
 
-Admin 专属：
-
-| 命令 | 作用 |
-|---|---|
-| `/user list|pending|approve|reject|unlink|remove|feedback` | 管理 pairing、用户绑定，并查看 user 反馈。 |
-| `/ceiling [<user> <read|ask|auto|yolo>]` | 不带参数列出所有 identity 的 ceiling；带参数设置单个用户。 |
-| `/sandbox [status|prefetch|reset]` | 查看 / 重新拉取 / 重置 runtime 沙箱镜像与容器。 |
-| `/cost` | 本月 token 用量（按 model + 按 user 聚合，含 cache 命中和 fresh 子项）。 |
-
-Channel 中以 `/` 开头的消息也会先走本地 slash 派发，所以 admin 可以在自己的飞书里审批 pairing code。终端 admin 控制台跑的是同一套命令，但不含 agent-loop 那几个（`/fresh`、`/branch` / `/b`、`/stop`）——它们只有在真正跑 query 的地方（即飞书）才有意义。
-
-### 权限模式与 ceiling
-
-四个 permission mode，从严到宽。channel / 用户面用 **alias** 列；**internal enum** 列是 `permissions.json` 里的原始 schema 值，作为兼容老脚本的输入也接受。
-
-| Alias | 内部 enum | 不询问就能跑的工具 |
-|---|---|---|
-| `read` | `plan` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 全部拒绝。 |
-| `ask` | `default` | 读取和搜索类工具。写入、编辑、执行、网络抓取、子 Agent 在交互模式下询问，非交互模式直接拒绝。 |
-| `auto` | `acceptEdits` | 读取、搜索、写入、编辑类工具。执行、网络抓取、子 Agent 仍询问。 |
-| `yolo` | `bypassPermissions` | 全部自动放行。 |
-
-`/mode <m>` 仅当 `m` 不超过当前 ceiling 的宽松度时才生效。默认 ceiling 是 `ask`（即 `default`），用户可以主动切到更安全的 `read`（即 `plan`）或留在 `ask`。如果想用更宽松的模式，admin 必须先抬升 ceiling：
-
-```text
-/ceiling alice yolo            # admin: 抬升 alice 的 ceiling
-/mode yolo                     # 然后 alice（或 admin 自己）才能切过去
-```
-
-输入两种形式（alias / 内部 enum）都接受；输出（status 面板、飞书卡片、ceiling 列表）一律渲染 alias。
-
-这套两步显式流程对 admin 自己同样生效——没有环境变量短路通道。
-
----
-
-## 身份与渠道
-
-未知飞书 sender 会收到 pairing code。Admin 审批：
-
-```text
-/user approve K7YQ3RPA --as alice
-```
-
-每个 canonical user 都有：
-
-- user-scoped memory：`~/.lightclaw/memory/<user>/`
-- 带 `userId` 的 session meta
-- `feishu-alice` 这类 channel session
-- 私有 workspace：`~/.lightclaw/workspaces/<user>/`
-
-渠道配置在 `~/.lightclaw/channels.json`。需要自动启动的渠道设置 `enabled: true`。
-
-### 飞书应用所需权限
-
-LightClaw 全程使用机器人的 tenant access token。请在飞书开放平台开发者后台（"权限管理"）勾上：
-
-| 权限点 | 作用 |
-|---|---|
-| `im:message` | 收发消息（含 interactive 卡片）。 |
-| `im:message:readonly` | 读取被引用 / 被回复的父消息，把引用上下文带给模型。 |
-| `im:resource` | 下载用户发的图片、音频、文件。 |
-| `im:message.reaction:write` | 处理过程中给用户消息打一个"思考中"的表情。 |
-| `im:file` | 把生成的文件推回会话（`SendFile`、产物附件）。 |
-| `contact:user.base:readonly` | 解析发送者昵称，用于群消息 `[name]` 前缀和 pairing。 |
-| `docs:document`、`docs:document:readonly` | 读写飞书文档（`FeishuRead`、`FeishuCreateFile`、`FeishuWriteDoc`）。 |
-| `sheets:spreadsheet`、`sheets:spreadsheet:readonly` | 读写飞书表格（`FeishuRead`、`FeishuWriteSheet`）。 |
-| `wiki:wiki:readonly` | 把知识库链接解析回真正的 doc / sheet。 |
-| `drive:drive` | 新建文档时给提出请求的用户授权访问。 |
-
-在"事件与回调"里订阅这些事件：
-
-- `im.message.receive_v1`
-- `im.message.recalled_v1`（撤回消息时中断它所触发的对话轮次）
-- `card.action.trigger`（如果后台同时显示 `card.action.trigger_v1` / `interactive_card.action.trigger`，一并勾上）
-
-权限或事件改完后必须在后台**重新发布应用版本**才会生效。
-
-飞书默认使用 `transport: "ws"`，不需要公网 webhook 入口。如果飞书应用的长连接事件没有开启加密，WS 模式可以不填 `encryptKey` / `verificationToken`；开启加密时需要填写 `encryptKey`，否则无法解密入站事件。`allowUsers` 和 `allowChats` 只有在对应列表非空时才检查；如果两个列表都为空，所有入站消息都会被丢弃。需要有意放开某一维度时使用 `["*"]`。
-
-助手想做需要确认的事时，会发一张三按钮卡片：
-
-- **批准本次** —— 仅放行这一次。
-- **批准这一类** —— 卡片标签会告诉你批准的范围（比如"任何 `pip install`"而不是"全部 Bash"），可以放心地放宽，但不会一次解锁整个工具。这个决定会**持久化**到 `<LIGHTCLAW_HOME>/identity/per-user/<canonical>/permissions.json`，跨进程重启保留；并发的 subagent 同类调用安装规则后会被静默放行，不会再弹一遍。
-- **拒绝** —— 直接拒绝，助手收到。
-
-对于高危操作（`Bash(rm/sudo/dd/sh/eval/...)`、`/etc` / `/usr` / `~/.ssh` / `~/.aws` 等敏感路径下的 Edit），中间的"批准这一类"按钮会**自动隐藏**——`cd /tmp && rm -rf foo` 这种链式命令也算高危，并且对老卡片回复 `2` / "批准所有"会被自动降级为 allow-once。所以飞书上手滑一下不可能把 `rm -rf` 永久放行。
-
-按钮不可用时，回复 `1` / `2` / `3` 也行。把 channel 设成 `bypassPermissions` 跑顺也没问题——再用 `permissions.json` 的 `ask` 列表把危险操作锁死即可（比如 `"ask": ["Bash(rm:*)"]`）；`ask` 优先级高于 `allow`，bypass 模式下也照样弹卡。
+**权限**：四档从严到宽 `read` / `ask` / `auto` / `yolo`，危险操作弹卡确认。`/mode` 不能超过 admin 给的上限（`/ceiling <user> <mode>`）。即便 `yolo` 也能用 `permissions.json` 的 `ask` 列表锁死指定操作（如 `"ask": ["Bash(rm:*)"]`）。
 
 ---
 
 ## 沙箱
 
-默认情况下，助手的工具——Bash、读写文件、抓网页——都跑在**沙箱**里，不在你的主机上。模型乱来时 `rm -rf` 不到你的 home，也可以放心把 bot 接给飞书上的朋友用，不等于给他们 shell。
+工具默认在沙箱里跑，`runtime.backend` 选后端：
 
-通过 `runtime.backend` 选三种 backend：
-
-| Backend | 适用场景 | 备注 |
+| Backend | 适用 | 备注 |
 |---|---|---|
-| `local` | 单人终端、不接飞书。 | 只 admin 可用；接飞书的 channel user 会被拒——没有真实隔离。 |
-| `docker` | 普通 Linux 主机上的多用户个人 bot。 | 每用户长跑容器，公开镜像 `ghcr.io/rowitzou/lightclaw-sandbox` lazy 拉取，闲置容器自动 stop。Workspace 文件跨重启保留；`/sandbox reset` 重建 writable layer。 |
-| `rlaunch` | 集群部署（kubebrain）。 | 每用户长跑集群 worker，gpfs workspace 挂到 `/workspace`；不做 idle stop，被 GC 后由 health checker 自动重建。 |
+| `local` | 只服务你自己 | admin 照常走飞书对话，但配对的其他用户会被拒（本地无隔离）|
+| `docker` | 普通主机多用户 bot | 每用户长跑容器，公开镜像 lazy 拉取，闲置自动 stop |
+| `rlaunch` | 集群（kubebrain）| 每用户长跑集群 worker，gpfs 挂到 `/workspace` |
 
-Docker 镜像自带日常工具：
-
-- **Shell / 数据**：jq、yq、sqlite、ripgrep、fd、Node 22
-- **Python 数科栈**：numpy / pandas / scipy / matplotlib / pyarrow / jsonlines / dotenv / requests / httpx
-- **多模态辅助包**（`Read` 工具与 WebFetch helper 用）：`poppler-utils`（`pdftotext` + `pdftoppm`，提供 PDF 文本提取与按页栅格化）、`Pillow`（图像 resize 给 vision sub-LLM）、`openpyxl` / `python-docx` / `python-pptx`（Office 文档）、`markdownify` / `trafilatura`（HTML → Markdown）
-
-LightClaw 启动时会在后台拉镜像，没拉完时工具调用优雅降级到 chat-only——第一次对话不会卡死。镜像发布在 `ghcr.io/rowitzou/lightclaw-sandbox:<version>`——tag 跟 daemon 的 `package.json` 版本号对齐，另有 `:latest` 浮动 tag。
-
-需要自定义 / 内网镜像，设 `runtime.docker.imageOverride`（或集群场景的 `runtime.rlaunch.image`）后重启 LightClaw。数据集 / 模型 checkpoint 推荐 `mode: "ro"` 挂载——内核拒绝写入。
-
-**网络 bridge.** 沙箱直连不到外网时（docker host networking、集群 pod 在 NAT 后面），设 `runtime.network.mode: "host"`。LightClaw 会在指定端口起一个进程内 forward proxy，并往容器 / pod 里注入 `http_proxy`。`upstream` 控制转发到哪里（`inherit` 继承 shell、`direct` 直连、或固定的代理 URL）；`acl` 是**来源 IP 白名单**，避免 bridge 被当成开放代理白嫖——集群部署务必加自家 pod CIDR（kubebrain 用 RFC 6598 `100.64.0.0/10`）。完整 schema 见上面的 [`配置`](#配置) 一节。
-
-完整配置参考见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md)。
+沙箱直连不到外网时（docker host 网络 / 集群 pod 在 NAT 后），设 `runtime.network.mode: "host"` 起进程内 forward proxy。镜像内置、网络与加固字段全在 [`config.example.jsonc`](./config.example.jsonc) 的 `runtime` 段。
 
 ---
 
-## 助手能用的能力
+## 飞书接入
 
-- **文件与 shell** —— `Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`。`Read` 原生处理纯文本/代码、PDF（默认走 `pdftotext` 文本路径；带 `pages` + `visual:true` 时如 provider 支持就直接把选中页作为原生 document 块塞给模型，否则降级到 `pdftoppm` 逐页渲染图）、Office 文档（xlsx / docx / pptx）——不需要单独的 `Extract*` 工具。
-- **Web** —— `WebFetch`（URL → 可读 Markdown，可选 sub-LLM 摘要 + 15 分钟自清理缓存；瞬时网络失败带指数退避重试；二进制下载保留全量字节）、`WebSearch`（Brave 或 DDG 降级；瞬时错误重试；"搜不到"会被翻译成"未必不存在"告知模型）
-- **飞书云文档** —— 直接贴飞书 / Lark 链接：`FeishuRead` 按 canonical 类型自动路由（doc / docx / wiki → doc-or-sheet / sheet → cells 或 metadata），可返回结构化 doc blocks 供下游精细编辑;超大文档返回 spill 到 workspace 文件,不污染 tool result。`FeishuCreateFile` 新建 doc；`FeishuWriteDoc` 在已有 doc 末尾追加并支持针对性结构编辑(表格行/块);`FeishuWriteSheet` 给 range append 行或 overwrite。所有写动作都弹飞书审批卡 + 落 `<LIGHTCLAW_HOME>/audit/feishu-writes/` 每日 jsonl 审计。Bot 也处理飞书消息撤回(被撤回的消息所触发的对话轮次会被干净中止)。`bitable` / `file` 类型 URL 解析但 v1 不支持读写。
-- **记忆** —— `MemoryRead` / `MemoryWrite` 做长期 per-user 笔记。自动抽取（`extract_memories`）和归并（`auto_dream`）作为后台 subagent 运行；`MemoryWrite` 是模型主动想记一条事实时的手动入口。**Memory Nudge** 每 ~20 轮往 prompt 里塞一条 system reminder 提示模型主动落盘,免得长对话里的临时发现被 context 滚没——零额外 API turn、零开销。
-- **会话历史** —— `ConversationList` / `ConversationRead` / `ConversationGrep` 跨 channel 查历史 session（terminal + 飞书 DM + 群 + topic thread）。
-- **后台任务** —— `BackgroundTask` 安排循环或一次性的任务在隔离 session 里晚些时候 fire；`ListBackgroundTasks` / `CancelBackgroundTask` / `UpdateBackgroundTask` 管理队列。完成结果走飞书 DM 卡片（`notifyTo: 'user'`）或唤醒主 agent 一轮 turn（`notifyTo: 'agent'`）。
-- **任务跟踪** —— `TodoWrite`，做多步规划
-- **子 Agent** —— 起并行的 `general-purpose` / `explore` 子助手做扇出工作；`AgentTool` 是 dispatch 入口
-- **发文件到 channel** —— `SendFile` 把 workspace 里的文件（图片 / 卡片 / doc）推到当前飞书会话
-- **Harness 等待** —— `Sleep` 短等待，不占 Bash 槽位，`/stop` 一秒打断
-- **Skill** —— 内置若干小能力（`verify`、`remember`…），任务匹配时模型自动用，不需要手动调
-- **MCP server** —— admin 配置的外部工具，模型以 `mcp__<server>__<tool>` 调用；MCP 工具返回的 image content 会作为原生 image 块直传给模型(而不是被降级成占位符),所以截图 / 图表 / vision-server 输出真能被模型看到
+在 `config.json` 的 `channels.feishu` 段配置并设 `enabled: true`。默认 `transport: "ws"`（长连接，**无需公网入口**）。
 
-大部分工具（Memory、Web、Conversation、BackgroundTask、AgentTool、Sleep、SendFile、UseSkill、4 个飞书云文档工具）默认 **deferred**：冷启动时只有名字进 prompt 不进 schema 目录，模型用 `ToolSearch` 按需把它们 promote 出来。8 个 inline 工具是 `Bash` / `Read` / `Write` / `Edit` / `Grep` / `Glob` / `TodoWrite` / `ToolSearch`。这样每轮 prompt cache 尽可能保持紧凑；promote 出来的工具进 session-scoped LRU + turn-based TTL，长 session 也不会让 catalog 越积越多。
+> `allowUsers` / `allowChats` 两个都为空会丢弃所有入站消息；放开某维度用 `["*"]`。
 
-以上所有调用都会走前面讲的同一套权限流。
+未知 sender 会收到配对码，admin 用 `/user approve <code> --as <name>` 审批，之后该用户拥有独立 workspace / 记忆 / 规则。助手做需确认的事时发三按钮卡片（批准本次 / 批准这一类 / 拒绝），高危操作不允许「批准这一类」永久放行。
+
+<details>
+<summary>自托管所需的飞书开放平台权限与事件</summary>
+
+权限管理（机器人 tenant access token）：
+
+- `im:message` / `im:message:readonly` / `im:resource` / `im:message.reaction:write` / `im:file` — 收发消息、读引用、下载附件、思考中表情、推文件
+- `contact:user.base:readonly` — 解析发送者昵称
+- `docs:document(:readonly)` / `sheets:spreadsheet(:readonly)` / `wiki:wiki:readonly` — 读写飞书文档 / 表格 / 知识库链接
+- `drive:drive` — 授权请求者、管理云空间
+
+事件订阅：`im.message.receive_v1`、`im.message.recalled_v1`、`card.action.trigger`。
+
+> 改完权限或事件后必须在后台**重新发布应用版本**才生效。
+
+</details>
 
 ---
 
 ## 记忆
 
-LightClaw 帮你记三件事：
-
-- **你的项目。** 把 `LIGHTCLAW.md` 放到仓库根，助手每次 session 都会读。`LIGHTCLAW.local.md` 用来放你不想 commit 的内容。
-- **你这个人。** 它会逐渐攒起你的角色、偏好、纠正过的事——跨 session、跨渠道。下次开新对话时最相关的几条会自动回到上下文里，你不用反复自我介绍。
-- **当前任务。** 长 session 内部维护一份"工作笔记"（在做什么、改了哪些文件、做过哪些决定、下一步是什么）。对话变长被自动压缩时，这些硬事实会先落盘——thread 不会被一压就断。
-
-长对话还会每 ~20 轮收一次 **Memory Nudge** 静默提示，让模型在 context 把任务中段的小发现冲走前主动落到 memory ——这样话越多的 session 也不会丢掉中途学到的东西。
-
-`LIGHTCLAW_NO_MEMORY=1` 全关。更细粒度开关见下方。
+LightClaw 帮你记三件事：**你的项目**（仓库根放 `LIGHTCLAW.md` 每次都读，`LIGHTCLAW.local.md` 放不 commit 的）、**你这个人**（跨 session 攒角色 / 偏好 / 纠正过的事，开新对话自动回最相关的几条）、**当前任务**（长 session 维护工作笔记，压缩前先落盘）。`LIGHTCLAW_NO_MEMORY=1` 一键全关。
 
 ---
-
-## 配置提示
-
-常用环境变量（覆盖 `config.json` 同名字段）：
-
-| 变量 | 用途 |
-|---|---|
-| `LIGHTCLAW_HOME` | 所有 LightClaw 状态的根（默认 `~/.lightclaw`）。集群部署改到共享存储 |
-| `LIGHTCLAW_SESSIONS_DIR` / `LIGHTCLAW_MEMORY_DIR` / `LIGHTCLAW_WORKSPACE_ROOT` | 在 `LIGHTCLAW_HOME` 之外单独覆盖某个子目录 |
-| `LIGHTCLAW_MODEL` | 覆盖 `defaultModel`（值是 `models` 里的 display 名）|
-| `LIGHTCLAW_ROUTING_MAIN` / `_COMPACT` / `_EXTRACT` / `_WEBSEARCH` | 单 task 路由覆盖（同样是 display 名）|
-| `BRAVE_SEARCH_API_KEY` | WebSearch Brave key（覆盖 `tools.webSearch.braveApiKey`）；不配走 DDG HTML |
-| `LIGHTCLAW_NO_MEMORY` / `LIGHTCLAW_NO_MCP` / `LIGHTCLAW_NO_HOOKS` | 整个子系统关掉 |
-| `LIGHTCLAW_MEMORY_RECALL_*` / `LIGHTCLAW_SESSION_MEMORY_*` / `LIGHTCLAW_PRE_COMPACT_FLUSH_*` | 记忆相关的细粒度开关与阈值，详见 [`info/env.md`](https://github.com/RowitZou/lightclaw_dev_log/blob/main/env.md) |
-| `LIGHTCLAW_PERMISSION_MODE` | 默认 permission mode |
-| `LIGHTCLAW_RUNTIME_BACKEND` | 执行环境：`local`、`docker`、`rlaunch`（集群） |
-| `LIGHTCLAW_DOCKER_IMAGE` / `LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS` | 覆盖沙箱镜像 / idle stop 时间 |
-
----
-
-## 贡献者地图
-
-```text
-src/
-├── cli.ts              # 极简 CLI、channel auto-start、admin 控制台
-├── init.ts             # config + workspace-scoped state 初始化
-├── init-wizard.ts      # 首次启动 admin 创建、终端 user 解析
-├── repl.ts             # 纯 slash 的终端 admin 控制台
-├── query.ts            # 主 agent 循环（tool 派发、auto-compact）
-├── prompt.ts           # system prompt 构造
-├── state.ts            # 进程级 session state 单例
-├── commands/           # /help、/status、/model、/mode、/rules、/sandbox、/user、/ceiling、channel dispatch
-├── channels/           # 飞书 runner、runner strategy、session lock
-├── identity/           # canonical user、pairing、workspace、安全 JSON 状态
-├── permission/         # mode/rule policy 和 skill tool 边界
-├── tools/              # 内置工具（Read、Write、Edit、Bash、Grep、Glob、…）
-├── runtime/            # Runtime 抽象层；LocalRuntime、DockerRuntime、RlaunchRuntime + NetworkBridge
-├── agents/             # general-purpose / explore 子 Agent + forked-agent runner（复用父 prefix 命中 prompt cache）
-├── skill/              # loader、registry、内置 skill（verify、remember）
-├── memory/             # LIGHTCLAW.md 发现与 user memory
-├── session/            # 会话 JSONL transcript + meta + auto-compact
-├── mcp/                # MCP Client
-├── hooks/              # 生命周期 hook loader
-├── todos/              # TodoWrite 存储
-└── provider/           # Anthropic / OpenAI-compatible provider
-scripts/
-└── sandbox-helpers/    # 通过 Runtime 执行的 Python helper（WebFetch / WebSearch / Glob）
-```
 
 ## License
 
