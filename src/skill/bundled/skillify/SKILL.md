@@ -178,6 +178,7 @@ and don't hardcode absolute paths. If the body invokes a script, list its
 interpreter in `allowed-tools` (e.g. `Bash(python:*)`).
 
 Save via `SkillWrite` — the SKILL.md as `markdown`, any helpers as `files`.
+The save location is fixed; don't ask the user about it.
 
 ### Step 4: Tell the user, in their language
 
