@@ -25,7 +25,6 @@ import { filterSkillsForRole } from './skill/role-validation.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
-import type { PermissionMode } from './permission/types.js'
 
 type PromptOptions = {
   autoMemory: boolean
@@ -188,33 +187,20 @@ function formatAvailableSecretsSection(enabledSecrets: ReadonlyMap<string, strin
   ].join('\n')
 }
 
-const MODE_BLURBS: Record<PermissionMode, string> = {
-  default:
-    'Read/search tools run freely. Write, edit, execute, network fetch, and subagent tools require confirmation; in non-interactive mode they are denied.',
-  acceptEdits:
-    'Read, search, write, and edit tools run freely. Execute, network fetch, and subagent tools still require confirmation.',
-  bypassPermissions: '',
-  plan:
-    'Read/search tools only. Write, edit, execute, network fetch, and subagent tools are denied unless an explicit allow rule matches.',
-}
-
-function formatPermissionSection(isSubagent = false): string {
-  const mode = getPermissionMode()
-  if (mode === 'bypassPermissions') {
-    return ''
+function formatPermissionSection(): string {
+  if (getPermissionMode() === 'plan') {
+    return [
+      '## Tool Use & Approvals',
+      'Planning only: investigate with read and search tools, but do not write, edit, or execute — present a plan for approval instead of taking the action.',
+    ].join('\n')
   }
 
-  const lines = [
-    '## Permission Mode',
-    `Current mode: ${mode}`,
-    ...(isSubagent
-      ? ['Subagent permission checks are non-interactive; confirmation requests are denied automatically.']
-      : []),
-    `In this mode: ${MODE_BLURBS[mode]}`,
-    'If a tool returns "Permission denied:", do not retry the same call. Choose a read-only alternative, explain the limitation, or ask the user to add an explicit allow rule/switch mode.',
-  ]
-
-  return lines.join('\n')
+  return [
+    '## Tool Use & Approvals',
+    "Act on what you've decided: when a tool call is the right next step, make it — don't ask for permission to run it first. Whether an action needs approval is handled outside your turn; you'll either get the result or a \"Permission denied:\" result.",
+    'On "Permission denied:", do not retry the same call — choose a read-only alternative or explain the limitation.',
+    '(Asking for information you genuinely need in order to decide what to do is different, and still appropriate.)',
+  ].join('\n')
 }
 
 function formatMcpSection(): string {
@@ -418,7 +404,7 @@ async function buildRolePromptParts(
     preTodoSections.push(['## Session Working Memory', sessionMemory.trim()].join('\n\n'))
   }
 
-  const permissionSection = formatPermissionSection(input.isSubagent)
+  const permissionSection = formatPermissionSection()
   if (permissionSection) {
     preTodoSections.push(permissionSection)
   }

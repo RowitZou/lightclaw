@@ -18,18 +18,18 @@ import { BUNDLED_AGENTS } from './bundled/index.js'
 import type { Role } from './types.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: 'd731e09ebca3e6ab8742d32cd0b9fb6aef285ab59e78d9a17ded59c6bf3f78de',
-  generalist: '83efe65d3b9cad213b7c759510475653631d77ab0f16601dad1ad331fa007a12',
-  localExplorer: '51511182050bec89df47b4ef9cf2655e47b1246cd9aa96779a7375f1c6146ef1',
-  webSearcher: '667aa1882ea32a0b1bfd9ee4a2fef567d6f450999dcfda1ff439c296a7f91500',
-  feishuSecretary: '0f2b9ebec42d376091125c0c60a52b73f38a29f4a128b482ca784411d70b23c0',
-  coder: '03b5aada950ab6e972f794af93d36ba02735fa8231c1793fa5c442341dd5dfbf',
-  archivist: '636920349ab800600349d2772a3d48e1954d0630242969769f951792bfca77a0',
-  reviewer: '63ca87addafed8472a3a00e0e31eef7fc852dd7f07fb4740258f24c79b342a1d',
-  memoryExtractor: '296e1693f3ed433a9a3f1526bc24bc6291809ebbe8c7a5dbb78c7b2100e2fccf',
-  memoryCurator: 'c37344ca99356a36610852a3d05f44bae6adaea28b04f494416e3801478a606c',
-  skillCurator: 'a3defe886f1d17b51ba0dd959c0d1ce64f93d8e114d42d03c56f2d4b8bb9b067',
-  skillConsolidator: 'c2700894cdd8f1b6476624b91b068b243692ae24a8670ae38dbf5b7be765e6da',
+  main: '4f85946e10ed55512cf8822cd80d46d489d2fec102a4ebc8f5f2648f7110d8d1',
+  generalist: '8f4bf725b5f3d9f9e495ee71e3038082c95fcbb337830a9cc70041e3164ac622',
+  localExplorer: 'f34cbde4d61f82f326fb799cc8651ad1a651958e730520e8b3d1d4d2380b441f',
+  webSearcher: 'eac32f5687201ee05dd2a314f4dff34784f79f3de87a1d2cfc54fd087d3d0cac',
+  feishuSecretary: '2da75ab4b4dbf4e578fed1c7f13f6aac39de4ab88407a1c2efce56c405fab2bc',
+  coder: '2a476d534c2b8dc74152d56eb508429c729ab0faa1d9cd200ac5365115e04320',
+  archivist: '13d6524ecbeb7bc5d4caba91b5afbffe6bf9dfcb69a5b566c751ed89d4dc4746',
+  reviewer: 'ab251fe9aac5adbeb8e4ac30c2b7566582312ae29e4afe1b10094ad443b5d065',
+  memoryExtractor: '6a72609e3239b47de91ca5c4587b886d7733d1e994abd88fa5631b3b1781558a',
+  memoryCurator: 'a4a13dfff4626dd5bb704fa6c53f6d0a4899b96692204bf4611338bfa06b081f',
+  skillCurator: 'da8924a7bf18ae8ca513b0cb774a65fac238e0eb20e4716b07575f21a4b42e2f',
+  skillConsolidator: '6f5bc144d77441face72a1c0c2bd79efe1a713e2f5a0256876cafe034e2f64fe',
 }
 
 let tmpRoot: string
