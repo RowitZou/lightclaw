@@ -76,8 +76,8 @@ describe('ShowSlashCatalog tool', () => {
   it('uses multi-line agentUsage when present and one-line usage as fallback', async () => {
     const output = await callCatalogAs('alice')
 
-    assert.match(output, /^    \/secret import-env <NAME>/m)
-    assert.match(output, /^    \/secret import-file <NAME> <ABS-PATH>/m)
+    assert.match(output, /^    \/secret set <NAME> <VALUE>/m)
+    assert.match(output, /^    \/secret enable <NAME>/m)
     assert.match(output, /^    \/model <name>$/m)
   })
 

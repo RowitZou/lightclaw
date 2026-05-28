@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -12,21 +12,13 @@ import { runSecretCommand } from './secret.js'
 
 describe('/secret command', () => {
   let home: string
-  let originalEnvSecret: string | undefined
 
   beforeEach(() => {
     home = mkdtempSync(path.join(tmpdir(), 'lightclaw-secret-command-'))
     setLightclawHomeOverride(home)
-    originalEnvSecret = process.env.SECRET_FROM_ENV
-    delete process.env.SECRET_FROM_ENV
   })
 
   afterEach(() => {
-    if (originalEnvSecret === undefined) {
-      delete process.env.SECRET_FROM_ENV
-    } else {
-      process.env.SECRET_FROM_ENV = originalEnvSecret
-    }
     setLightclawHomeOverride(undefined)
     rmSync(home, { recursive: true, force: true })
   })
@@ -62,63 +54,6 @@ describe('/secret command', () => {
     )
     assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /enabled=no/)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, 'secret')
-  })
-
-  it('imports from daemon env without echoing value and records value-free audit', async () => {
-    const value = 'env-secret-value-that-must-not-be-logged'
-    process.env.SECRET_FROM_ENV = value
-
-    const output = await runSecretCommand('import-env SECRET_FROM_ENV', { userId: 'alice' })
-    assert.match(output, /imported from daemon env/)
-    assert.match(output, new RegExp(`length=${value.length}`))
-    assert.equal(output.includes(value), false)
-    assert.equal(loadUserSecrets('alice').SECRET_FROM_ENV.value, value)
-
-    const audit = readAuditLines()
-    assert.equal(audit.length, 1)
-    assert.deepEqual(
-      pickAuditFields(audit[0]),
-      { user: 'alice', op: 'import-env', name: 'SECRET_FROM_ENV', source: 'env' },
-    )
-    assertAuditFileDoesNotContain(value)
-  })
-
-  it('imports the first trimmed line from an absolute file path', async () => {
-    const value = 'file-secret-value-that-stays-private'
-    const secretFile = path.join(home, 'admin-secret.txt')
-    writeFileSync(secretFile, `  ${value}  \nignored-second-line\n`, { mode: 0o600 })
-
-    const output = await runSecretCommand(`import-file FILE_TOKEN ${secretFile}`, { userId: 'alice' })
-    assert.match(output, /imported from file/)
-    assert.match(output, new RegExp(`length=${value.length}`))
-    assert.equal(output.includes(value), false)
-    assert.equal(loadUserSecrets('alice').FILE_TOKEN.value, value)
-
-    const audit = readAuditLines()
-    assert.equal(audit.length, 1)
-    assert.deepEqual(
-      pickAuditFields(audit[0]),
-      { user: 'alice', op: 'import-file', name: 'FILE_TOKEN', source: 'file' },
-    )
-    assertAuditFileDoesNotContain(value)
-  })
-
-  it('rejects import-env missing values and import-file invalid inputs', async () => {
-    assert.match(
-      await runSecretCommand('import-env SECRET_FROM_ENV', { userId: 'alice' }),
-      /\$SECRET_FROM_ENV not set in daemon environment/,
-    )
-    assert.match(
-      await runSecretCommand('import-file FILE_TOKEN relative.txt', { userId: 'alice' }),
-      /path must be absolute/,
-    )
-    const blankFile = path.join(home, 'blank-secret.txt')
-    writeFileSync(blankFile, '   \nvalue-on-second-line\n')
-    assert.match(
-      await runSecretCommand(`import-file FILE_TOKEN ${blankFile}`, { userId: 'alice' }),
-      /first line is empty/,
-    )
-    assert.equal(existsSync(currentAuditPath()), false)
   })
 
   it('removes a secret and reports missing entries idempotently', async () => {
@@ -226,8 +161,6 @@ describe('/secret command', () => {
     assert.equal(command.channelOnly, true)
     assert.match(command.agentAdvisory ?? '', /API token/)
     assert.match(command.agentUsage ?? '', /\/secret enable <NAME>/)
-    assert.match(command.agentUsage ?? '', /\/secret import-env <NAME>/)
-    assert.match(command.agentUsage ?? '', /\/secret import-file <NAME> <ABS-PATH>/)
     assert.equal(terminalRegistry.find('/secret'), undefined)
   })
 })
@@ -243,15 +176,6 @@ function readAuditLines(): Array<Record<string, unknown>> {
     .split('\n')
     .filter(Boolean)
     .map(line => JSON.parse(line) as Record<string, unknown>)
-}
-
-function pickAuditFields(entry: Record<string, unknown>): Record<string, unknown> {
-  return {
-    user: entry.user,
-    op: entry.op,
-    name: entry.name,
-    source: entry.source,
-  }
 }
 
 function assertAuditFileDoesNotContain(value: string): void {

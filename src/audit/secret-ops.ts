@@ -9,15 +9,13 @@ export type SecretOp =
   | 'enable'
   | 'disable'
   | 'remove'
-  | 'import-env'
-  | 'import-file'
 
 export type SecretOpAuditEntry = {
   ts: string
   user: string
   op: SecretOp
   name: string
-  source: 'chat' | 'env' | 'file'
+  source: 'chat'
 }
 
 export async function appendSecretOpAudit(entry: SecretOpAuditEntry): Promise<void> {

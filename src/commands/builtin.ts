@@ -175,7 +175,7 @@ function buildBuiltinCommands(): ReplCommand[] {
   },
   {
     name: '/secret',
-    usage: '/secret [list|status [NAME]|set <NAME> <VALUE>|import-env <NAME>|import-file <NAME> <ABS-PATH>|enable <NAME>|disable <NAME>|remove <NAME>]',
+    usage: '/secret [list|status [NAME]|set <NAME> <VALUE>|enable <NAME>|disable <NAME>|remove <NAME>]',
     description: 'Manage per-user runtime secrets (injected as env vars in Bash).',
     channelOnly: true,
     agentAdvisory:
@@ -188,9 +188,6 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/secret status [NAME]         Inspect one secret, or all if NAME omitted',
       '/secret set <NAME> <VALUE>    Store a secret. NAME must match ^[A-Z][A-Z0-9_]{0,63}$.',
       '                                VALUE is taken verbatim to end of line (may contain spaces, $, quotes).',
-      '/secret import-env <NAME>     Import a secret from the daemon environment variable NAME',
-      '/secret import-file <NAME> <ABS-PATH>',
-      '                              Import the first line of an admin-owned file as a secret',
       '/secret enable <NAME>         Activate injection of $NAME in Bash from next turn',
       '/secret disable <NAME>        Deactivate without removing the value',
       '/secret remove <NAME>         Delete the stored entry',
