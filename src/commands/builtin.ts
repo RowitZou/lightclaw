@@ -716,17 +716,20 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   const all = registry.list(true)
   const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
   const adminCmds = all.filter(c => c.visibleTo === 'admin')
-  // /help lists command NAMES + a one-line description only; detailed
-  // argument usage is deferred to "ask LightClaw" (help.usageHint), since
-  // the agent can see the full slash catalog and guide the user. Channel
-  // uses a `name: description` colon layout (feishu IM wraps long lines,
-  // destroying column alignment); the terminal keeps the padEnd-aligned
-  // table since fixed-width fonts make it readable.
+  // Layout differs by surface. The Feishu channel shows command NAMES and
+  // defers argument syntax to "ask LightClaw" (help.usageHint) — the agent
+  // can see the full slash catalog and walk the user through usage. The
+  // terminal admin console has NO agent loop to ask, so it shows each
+  // command's full `usage` (argument syntax) inline and drops the hint:
+  // /help must be self-contained there. Channel uses a `name: description`
+  // colon layout (feishu IM wraps long lines, destroying column alignment);
+  // the terminal keeps a padEnd-aligned table since fixed-width fonts make
+  // it readable.
   const formatRow = ctx.isChannel
-    ? (c: { name: string; description: string }) => `  ${c.name}: ${c.description}`
-    : ((): ((c: { name: string; description: string }) => string) => {
-        const nameWidth = Math.max(...all.map(c => c.name.length), 10)
-        return c => `  ${c.name.padEnd(nameWidth, ' ')}  ${c.description}`
+    ? (c: ReplCommand) => `  ${c.name}: ${c.description}`
+    : ((): ((c: ReplCommand) => string) => {
+        const usageWidth = Math.max(...all.map(c => c.usage.length), 10)
+        return c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`
       })()
   const lines: string[] = [
     t('help.title'),
@@ -739,7 +742,11 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
       lines.push(formatRow(c))
     }
   }
-  lines.push('', t('help.usageHint'), t('help.statusHint'), '')
+  lines.push('')
+  if (ctx.isChannel) {
+    lines.push(t('help.usageHint'))
+  }
+  lines.push(t('help.statusHint'), '')
   return color(ctx, lines.join('\n'))
 }
 
