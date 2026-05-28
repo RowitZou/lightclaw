@@ -18,7 +18,7 @@ export const BUNDLED_AGENTS: Role[] = [
     name: 'main',
     whenToUse: 'Primary user-facing orchestrator.',
     tools: ['*'],
-    skills: ['remember', 'skillify'],
+    skills: ['remember', 'skillify', 'delivery-orchestration'],
     mcpServers: ['*'],
     // Main reaches every worker, including user-defined roles loaded from
     // `<lightclawHome>/roles/<name>/ROLE.md`. `isDispatchTargetReachable`
