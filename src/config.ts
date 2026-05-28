@@ -436,7 +436,16 @@ const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000
 const DEFAULT_CURATOR: CuratorConfig = {
   enabled: true,
   minHours: 24,
-  minSessions: 3,
+  // 1, not 3: minSessions counts DISTINCT sessions touched since the last
+  // consolidation, as a proxy for "enough new material to curate". That proxy
+  // breaks for workloads concentrated in one or two long-lived sessions (a
+  // single DM / group that accumulates hundreds of turns) — they never reach
+  // 3 distinct new sessions, so the dream silently never fires (2026-05-28
+  // dogfood: `inner-gated reason=min-sessions sessions=1/3 due=mc+sc+sco`
+  // every cycle, lock never advanced). The burst bypass and per-sub-task
+  // minHours throttle are the real volume/cadence guards; a threshold of 1
+  // just requires that *some* session moved since the last run.
+  minSessions: 1,
   scanThrottleMs: 10 * 60 * 1000,
   burstFileThreshold: 20,
 }

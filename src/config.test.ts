@@ -512,7 +512,7 @@ describe('config: endpoints + models registry', () => {
     assert.deepEqual(cfg.memory.curator, {
       enabled: true,
       minHours: 24,
-      minSessions: 3,
+      minSessions: 1,
       scanThrottleMs: 600_000,
       burstFileThreshold: 20,
     })
