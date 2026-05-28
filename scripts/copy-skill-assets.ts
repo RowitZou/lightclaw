@@ -11,7 +11,7 @@ import { cp, mkdir, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ASSET_SUBDIRS = ['scripts', 'references'] as const
+import { SKILL_ASSET_SUBDIRS } from '../src/skill/skill-assets.js'
 
 async function main(): Promise<void> {
   const here = path.dirname(fileURLToPath(import.meta.url))
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
     // to an existing path even when the skill has no assets.
     await mkdir(destDir, { recursive: true })
 
-    for (const sub of ASSET_SUBDIRS) {
+    for (const sub of SKILL_ASSET_SUBDIRS) {
       const src = path.join(bundledDir, skillName, sub)
       try {
         const stats = await stat(src)
