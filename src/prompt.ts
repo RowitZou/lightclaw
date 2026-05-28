@@ -323,7 +323,6 @@ async function buildOrchestratorPromptTemplate(
     environmentRoot,
     scratchRoot,
     sessionId: options.sessionId,
-    isSubagent: false,
   })
 
   return {
@@ -354,7 +353,6 @@ type RolePromptPartsInput = {
   environmentRoot: string
   scratchRoot: string
   sessionId?: string
-  isSubagent: boolean
 }
 
 type RolePromptParts = {
@@ -706,7 +704,6 @@ async function buildSubagentPromptContent(
     sessionId: context.sessionId,
     environmentRoot: context.environmentRoot,
     scratchRoot: context.scratchRoot,
-    isSubagent: true,
   })
   const template: SystemPromptTemplate = {
     preTodos: prompt.preTodoSections.join('\n\n'),
