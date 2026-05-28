@@ -170,6 +170,34 @@ test('SkillDelete same-name guard scopes by userId — other users not blocked',
   })
 })
 
+test('SkillDelete records a skill-ops audit row on success (2026-05-28 audit coverage)', async () => {
+  await withTempHome(async home => {
+    const ctx = session(home)
+    await writeUserSkill({
+      userId: 'alice',
+      name: 'audit-me',
+      markdown: '---\nname: audit-me\ndescription: Will be deleted under audit.\n---\n\nBody.\n',
+    })
+
+    await runWithSessionContext(ctx, async () => {
+      const del = await skillDeleteTool.call({ name: 'audit-me' }, callContext(ctx.cwd))
+      assert.equal(del.isError, undefined)
+    })
+
+    // resolveAuditDir defaults to <home>/audit under setLightclawHomeOverride.
+    // Pre-fix: SkillDelete wrote nothing → this readFile throws ENOENT and the
+    // 5/26 §1 destructive class stays invisible to post-hoc audit.
+    const day = new Date().toISOString().slice(0, 10)
+    const raw = await readFile(path.join(home, 'audit', 'skill-ops', `${day}.jsonl`), 'utf8')
+    const rows = raw.trim().split('\n').map(line => JSON.parse(line))
+    const del = rows.find(r => r.tool === 'SkillDelete' && r.status === 'deleted')
+    assert.ok(del, 'expected a deleted skill-ops audit row')
+    assert.equal(del.name, 'audit-me')
+    assert.equal(del.userId, 'alice')
+    assert.match(String(del.filePath), /audit-me\/SKILL\.md$/)
+  })
+})
+
 test('SkillDelete is hidden from workers but available to skillConsolidator', () => {
   const worker = BUNDLED_AGENTS.find(agent => agent.agentType === 'generalist')
   const consolidator = BUNDLED_AGENTS.find(agent => agent.agentType === 'skillConsolidator')

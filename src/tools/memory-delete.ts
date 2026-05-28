@@ -3,15 +3,39 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { getMainRole } from '../agents/registry.js'
+import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
 import { rebuildMemoryIndex } from '../memory/auto-memory.js'
 import { shouldBlockMemoryDelete } from '../memory/destructive-guard.js'
+import { resolveSourceTier } from '../memory/scope.js'
 import {
   assertNotMemoryIndex,
   joinAndAssertWithinMemoryDir,
   MemoryToolPathError,
 } from '../memory/tool-path.js'
-import { getMemoryDir } from '../state.js'
+import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
+
+async function auditDelete(input: {
+  memoryDir: string
+  relPath: string
+  targetPath: string
+  status: 'deleted' | 'denied' | 'failed'
+  deniedReason?: string
+}): Promise<void> {
+  const tier = resolveSourceTier(input.targetPath, input.memoryDir) ?? undefined
+  await recordMemoryWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeMemoryAuditUserId(),
+    role: (getCurrentRole() ?? getMainRole()).agentType,
+    filename: path.basename(input.relPath),
+    targetPath: input.targetPath,
+    status: input.status,
+    operation: 'delete',
+    ...(tier ? { sourceTier: tier } : {}),
+    ...(input.deniedReason ? { deniedReason: input.deniedReason } : {}),
+  })
+}
 
 export const memoryDeleteTool = buildTool({
   name: 'MemoryDelete',
@@ -24,11 +48,22 @@ export const memoryDeleteTool = buildTool({
     path: z.string().min(1).describe('Relative file path under memoryDir.'),
   }),
   async call(input) {
+    const memoryDir = getMemoryDir()
+    let target: string
     try {
-      const memoryDir = getMemoryDir()
-      const target = joinAndAssertWithinMemoryDir(memoryDir, input.path)
+      target = joinAndAssertWithinMemoryDir(memoryDir, input.path)
       assertNotMemoryIndex(target)
+    } catch (error) {
+      // Path-resolution failures (../ escape, MEMORY.md) are unrelated to a
+      // real on-disk mutation; surface the error without an audit row to
+      // match MemoryWrite's "don't audit pre-resolution throws" convention.
+      return {
+        output: error instanceof Error ? error.message : String(error),
+        isError: true,
+      }
+    }
 
+    try {
       // Same-target destructive guard: if a MemoryWriteAt for this path
       // failed recently, refuse the delete. Without this, a dispatched
       // curator that emits `MemoryWriteAt({path:X}) + MemoryDelete({path:X})`
@@ -40,6 +75,13 @@ export const memoryDeleteTool = buildTool({
         process.stderr.write(
           `[memory-delete] refused memoryDir=${memoryDir} path=${input.path} reason=same-path MemoryWriteAt failed ${ageSec}s ago\n`,
         )
+        await auditDelete({
+          memoryDir,
+          relPath: input.path,
+          targetPath: target,
+          status: 'denied',
+          deniedReason: `same-path MemoryWriteAt failed ${ageSec}s ago`,
+        })
         return {
           output:
             `Refusing to delete ${input.path}: a MemoryWriteAt for the same path failed ` +
@@ -55,6 +97,7 @@ export const memoryDeleteTool = buildTool({
         stats = await stat(target)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          // Nothing was deleted — no audit row (no mutation occurred).
           return { output: 'No-op (file did not exist)' }
         }
         throw error
@@ -69,12 +112,26 @@ export const memoryDeleteTool = buildTool({
       process.stderr.write(
         `[memory-delete] deleted memoryDir=${memoryDir} path=${input.path}\n`,
       )
+      await auditDelete({
+        memoryDir,
+        relPath: input.path,
+        targetPath: target,
+        status: 'deleted',
+      })
       return {
         output: `Deleted ${input.path}`,
       }
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      await auditDelete({
+        memoryDir,
+        relPath: input.path,
+        targetPath: target,
+        status: 'failed',
+        deniedReason: reason,
+      })
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: reason,
         isError: true,
       }
     }

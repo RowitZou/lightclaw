@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { recordSkillOpAudit } from '../audit/skill-ops.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { shouldBlockSkillDelete } from '../skill/destructive-guard.js'
 import { deleteUserSkill, normalizeSkillName } from '../skill/loader.js'
@@ -31,6 +32,14 @@ export const skillDeleteTool = buildTool({
     const session = getCurrentSessionContext()
     const userId = session?.currentUserId
     if (!userId) {
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId: undefined,
+        tool: 'SkillDelete',
+        name: input.name,
+        status: 'denied',
+        reason: 'no active user identity',
+      })
       return {
         output: 'SkillDelete requires an active LightClaw user identity.',
         isError: true,
@@ -56,6 +65,14 @@ export const skillDeleteTool = buildTool({
       process.stderr.write(
         `[skill-delete] refused user=${userId} name=${normalizedName} reason=same-name SkillWrite failed ${ageSec}s ago\n`,
       )
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId,
+        tool: 'SkillDelete',
+        name: normalizedName,
+        status: 'denied',
+        reason: `same-name SkillWrite failed ${ageSec}s ago`,
+      })
       return {
         output:
           `Refusing to delete skill "${normalizedName}": a SkillWrite for the same name failed ` +
@@ -72,12 +89,29 @@ export const skillDeleteTool = buildTool({
       process.stderr.write(
         `[skill-delete] deleted user=${userId} name=${deleted.name}\n`,
       )
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId,
+        tool: 'SkillDelete',
+        name: deleted.name,
+        filePath: deleted.filePath,
+        status: 'deleted',
+      })
       return {
         output: `Deleted skill "${deleted.name}" from ${deleted.filePath}.`,
       }
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId,
+        tool: 'SkillDelete',
+        name: normalizedName,
+        status: 'failed',
+        reason,
+      })
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: reason,
         isError: true,
       }
     }

@@ -3,7 +3,10 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { getMainRole } from '../agents/registry.js'
+import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
 import { rebuildMemoryIndex } from '../memory/auto-memory.js'
+import { resolveSourceTier } from '../memory/scope.js'
 import {
   assertNotMemoryIndex,
   joinAndAssertWithinMemoryDir,
@@ -11,8 +14,31 @@ import {
   MemoryToolNotFoundError,
   MemoryToolPathError,
 } from '../memory/tool-path.js'
-import { getMemoryDir } from '../state.js'
+import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
+
+async function auditMove(input: {
+  memoryDir: string
+  fromRel: string
+  toRel: string
+  toAbs: string
+  status: 'moved' | 'failed'
+  deniedReason?: string
+}): Promise<void> {
+  const tier = resolveSourceTier(input.toAbs, input.memoryDir) ?? undefined
+  await recordMemoryWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeMemoryAuditUserId(),
+    role: (getCurrentRole() ?? getMainRole()).agentType,
+    filename: path.basename(input.toRel),
+    targetPath: input.toAbs,
+    status: input.status,
+    operation: 'move',
+    movedFrom: input.fromRel,
+    ...(tier ? { sourceTier: tier } : {}),
+    ...(input.deniedReason ? { deniedReason: input.deniedReason } : {}),
+  })
+}
 
 export const memoryMoveTool = buildTool({
   name: 'MemoryMove',
@@ -26,14 +52,27 @@ export const memoryMoveTool = buildTool({
     to: z.string().min(1).describe('Destination relative path under memoryDir.'),
   }),
   async call(input) {
+    const memoryDir = getMemoryDir()
+    let from: string
+    let to: string
     try {
-      const memoryDir = getMemoryDir()
-      const from = joinAndAssertWithinMemoryDir(memoryDir, input.from)
-      const to = joinAndAssertWithinMemoryDir(memoryDir, input.to)
+      from = joinAndAssertWithinMemoryDir(memoryDir, input.from)
+      to = joinAndAssertWithinMemoryDir(memoryDir, input.to)
       assertNotMemoryIndex(from)
       assertNotMemoryIndex(to)
-      const fromDir = path.dirname(from)
-      const toDir = path.dirname(to)
+    } catch (error) {
+      // Path-resolution failures (../ escape, MEMORY.md) are not an on-disk
+      // mutation; surface without an audit row, matching the other curator
+      // tools' "don't audit pre-resolution throws" convention.
+      return {
+        output: error instanceof Error ? error.message : String(error),
+        isError: true,
+      }
+    }
+
+    const fromDir = path.dirname(from)
+    const toDir = path.dirname(to)
+    try {
       let fromStats
 
       try {
@@ -67,12 +106,28 @@ export const memoryMoveTool = buildTool({
         fromDir === toDir ? Promise.resolve() : rebuildMemoryIndex(toDir),
       ])
 
+      await auditMove({
+        memoryDir,
+        fromRel: input.from,
+        toRel: input.to,
+        toAbs: to,
+        status: 'moved',
+      })
       return {
         output: `Moved ${input.from} to ${input.to}`,
       }
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      await auditMove({
+        memoryDir,
+        fromRel: input.from,
+        toRel: input.to,
+        toAbs: to,
+        status: 'failed',
+        deniedReason: reason,
+      })
       return {
-        output: error instanceof Error ? error.message : String(error),
+        output: reason,
         isError: true,
       }
     }

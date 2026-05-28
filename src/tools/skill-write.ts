@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { recordSkillOpAudit } from '../audit/skill-ops.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { recordSkillWriteFailure } from '../skill/destructive-guard.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
@@ -43,6 +44,14 @@ export const skillWriteTool = buildTool({
     const session = getCurrentSessionContext()
     const userId = session?.currentUserId
     if (!userId) {
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId: undefined,
+        tool: 'SkillWrite',
+        name: input.name,
+        status: 'denied',
+        reason: 'no active user identity',
+      })
       return {
         output: 'SkillWrite requires an active LightClaw user identity.',
         isError: true,
@@ -57,6 +66,14 @@ export const skillWriteTool = buildTool({
         overwrite: input.overwrite,
       })
       await refreshSkillRegistry(context.cwd, userId)
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId,
+        tool: 'SkillWrite',
+        name: meta.name,
+        filePath: meta.filePath,
+        status: 'written',
+      })
       return {
         output: [
           `Saved skill "${meta.name}" to ${meta.filePath}.`,
@@ -73,6 +90,14 @@ export const skillWriteTool = buildTool({
       process.stderr.write(
         `[skill-write] validation failed user=${userId} name=${input.name} reason=${reason}\n`,
       )
+      await recordSkillOpAudit({
+        at: new Date().toISOString(),
+        userId,
+        tool: 'SkillWrite',
+        name: input.name,
+        status: 'failed',
+        reason,
+      })
       return {
         output: reason,
         isError: true,

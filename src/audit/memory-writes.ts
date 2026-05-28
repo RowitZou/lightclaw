@@ -10,9 +10,19 @@ export type MemoryWriteAudit = {
   role: string
   filename: string
   targetPath: string
-  status: 'written' | 'denied'
+  /** Outcome. `written` covers MemoryWrite / MemoryWriteAt success; `moved` /
+   *  `deleted` are the memoryCurator-only verbs; `denied` is a guard /
+   *  validation refusal; `failed` is an unexpected fs / runtime error after
+   *  the op was attempted. Pre-2026-05-28 only `written` / `denied` existed
+   *  (MemoryWrite + read); memoryCurator's MemoryWriteAt / MemoryMove /
+   *  MemoryDelete wrote nothing here, so its destructive ops (the 5/26 §1
+   *  误删 class) were invisible to post-hoc audit. This widening closes that. */
+  status: 'written' | 'moved' | 'deleted' | 'denied' | 'failed'
   deniedReason?: string
-  operation?: 'write' | 'read'
+  operation?: 'write' | 'read' | 'write-at' | 'move' | 'delete'
+  /** Source relative path for `operation: 'move'` (targetPath carries the
+   *  destination). Omitted for every other operation. */
+  movedFrom?: string
   /** L1 = user root, L2 = `_shared`, L3 = role-private. Set when the
    *  target falls within the memory dir; omitted on boundary violations
    *  (path resolves outside memoryDir). Resolved via

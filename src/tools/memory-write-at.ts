@@ -3,16 +3,39 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
+import { getMainRole } from '../agents/registry.js'
+import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
 import {
   normalizeMemoryFilename,
   rebuildMemoryIndex,
   serializeFrontmatter,
 } from '../memory/auto-memory.js'
 import { recordMemoryWriteAtFailure } from '../memory/destructive-guard.js'
+import { resolveSourceTier } from '../memory/scope.js'
 import { assertNotMemoryIndex, joinAndAssertWithinMemoryDir } from '../memory/tool-path.js'
 import { isMemoryType } from '../memory/types.js'
-import { getMemoryDir } from '../state.js'
+import { getCurrentRole, getMemoryDir } from '../state.js'
 import { buildTool } from '../tool.js'
+
+async function auditWriteAt(input: {
+  memoryDir: string
+  targetPath: string
+  status: 'written' | 'denied' | 'failed'
+  deniedReason?: string
+}): Promise<void> {
+  const tier = resolveSourceTier(input.targetPath, input.memoryDir) ?? undefined
+  await recordMemoryWriteAudit({
+    at: new Date().toISOString(),
+    userId: safeMemoryAuditUserId(),
+    role: (getCurrentRole() ?? getMainRole()).agentType,
+    filename: path.basename(input.targetPath),
+    targetPath: input.targetPath,
+    status: input.status,
+    operation: 'write-at',
+    ...(tier ? { sourceTier: tier } : {}),
+    ...(input.deniedReason ? { deniedReason: input.deniedReason } : {}),
+  })
+}
 
 export const memoryWriteAtTool = buildTool({
   name: 'MemoryWriteAt',
@@ -60,6 +83,7 @@ export const memoryWriteAtTool = buildTool({
         process.stderr.write(
           `[memory-write-at] validation failed memoryDir=${memoryDir} path=${input.path} reason=${msg}\n`,
         )
+        await auditWriteAt({ memoryDir, targetPath: target, status: 'denied', deniedReason: msg })
         return { output: msg, isError: true }
       }
 
@@ -77,6 +101,7 @@ export const memoryWriteAtTool = buildTool({
       )
       await rebuildMemoryIndex(path.dirname(target))
 
+      await auditWriteAt({ memoryDir, targetPath: target, status: 'written' })
       return {
         output: `Wrote to ${path.relative(memoryDir, target)}`,
       }
@@ -86,6 +111,7 @@ export const memoryWriteAtTool = buildTool({
       process.stderr.write(
         `[memory-write-at] validation failed memoryDir=${memoryDir} path=${input.path} reason=${reason}\n`,
       )
+      await auditWriteAt({ memoryDir, targetPath: target, status: 'failed', deniedReason: reason })
       return {
         output: reason,
         isError: true,
