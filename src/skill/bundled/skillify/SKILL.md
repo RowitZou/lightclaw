@@ -61,6 +61,9 @@ Before asking anything, work out from the transcript:
   nice-to-haves
 - Which tools were actually used
 - Anything that must NEVER happen (the user said "no", "don't", "stop")
+- Whether any step is a fixed, deterministic procedure (parsing, formatting,
+  a set API-call sequence) that runs more reliably as a script than as prose —
+  those become a `scripts/` helper.
 
 ### Step 2: Decide whether to ask — and only ask what's truly unresolved
 
@@ -100,6 +103,11 @@ about names, file locations, allowed tools, or anything implementation-
 flavored — you decide those.
 
 ### Step 3: Write the SKILL.md
+
+Keep the body lean and imperative — a skill is a procedure, not a tutorial.
+Encode the brittle specifics the session surfaced (exact commands, ordering,
+hard constraints, the gotchas that bit you) and leave out generic advice
+you'd follow anyway; every line gets re-read on each future run.
 
 You decide all of the following without asking:
 
@@ -156,8 +164,20 @@ allowed-tools:
 …
 \`\`\`
 
-Save via \`SkillWrite\` to per-user storage. The save location is fixed; don't
-ask the user about it.
+**Supporting files (optional).** When a step is a fixed, deterministic
+procedure, write it as a helper instead of prose — the model re-deriving the
+same parsing/formatting every run is where skills drift. Put helpers under
+`scripts/` and longer reference docs under `references/`, and reference them
+from the body as `${LIGHTCLAW_SKILL_DIR}/scripts/<file>`. Before saving:
+write the script into your workspace, run it with Bash on a real input, and
+confirm it works — only then pass its verified contents to `SkillWrite`'s
+`files`. A script you never ran is a guess. The script runs from
+`${LIGHTCLAW_SKILL_DIR}/scripts/` at use time — a different path than where
+you tested it — so keep it self-contained: take input via arguments or stdin,
+and don't hardcode absolute paths. If the body invokes a script, list its
+interpreter in `allowed-tools` (e.g. `Bash(python:*)`).
+
+Save via `SkillWrite` — the SKILL.md as `markdown`, any helpers as `files`.
 
 ### Step 4: Tell the user, in their language
 
