@@ -134,6 +134,32 @@ function logRetryAttempt(
   )
 }
 
+// PR3 (2026-05-28). PR2 covered the outer gate (executeAutoDream entry).
+// The inner gates inside executeAutoDreamInner — minHours throttling, scan
+// throttle, minSessions, lock-held — used to bail silently. The 2026-05-28
+// dogfood saw `retry-attempt fired` followed by NO sub-task activity at all,
+// which on inspection was a silent minSessions bail (only feishu:group had
+// activity since the legacy lock watermark; current DM excluded). The next
+// dogfood that hits any inner-gate bail should grep one of these lines
+// instead of having to reason from sessions/* mtimes vs. lock mtime.
+function logInnerGate(
+  userId: string,
+  reason: 'min-hours-all-throttled' | 'scan-throttle' | 'min-sessions' | 'lock-held',
+  detail: string,
+): void {
+  console.error(
+    `[auto-dream] inner-gated user=${userId} reason=${reason} ${detail}`,
+  )
+}
+
+function dueShape(due: SubTaskDueMap): string {
+  const parts: string[] = []
+  if (due.memoryCurator) parts.push('mc')
+  if (due.skillCurator) parts.push('sc')
+  if (due.skillConsolidator) parts.push('sco')
+  return parts.length === 0 ? 'none' : parts.join('+')
+}
+
 // Test seam: dream.test.ts replaces the subagent runner with a fake so
 // gate-pass / rollback / success paths are exercised without a real LLM call.
 type RunSubagentFn = typeof runSubagent
@@ -203,10 +229,13 @@ async function executeAutoDreamInner(params: {
       // should not sit un-curated for the full minHours window.
       const burstThreshold = params.config.memory.curator.burstFileThreshold
       const watermark = await readEarliestSubTaskSuccess(params.memoryDir)
-      const isBurst =
-        burstThreshold > 0
-        && (await countMemoriesModifiedSince(params.memoryDir, watermark)) >= burstThreshold
+      const burstCount = burstThreshold > 0
+        ? await countMemoriesModifiedSince(params.memoryDir, watermark)
+        : 0
+      const isBurst = burstThreshold > 0 && burstCount >= burstThreshold
       if (!isBurst) {
+        logInnerGate(params.userId, 'min-hours-all-throttled',
+          `burst=${burstCount}/${burstThreshold}`)
         return
       }
       // Burst overrides minHours, but only for the curator side
@@ -221,6 +250,9 @@ async function executeAutoDreamInner(params: {
       lastScanAt !== 0 &&
       now - lastScanAt < params.config.memory.curator.scanThrottleMs
     ) {
+      const ageMs = now - lastScanAt
+      logInnerGate(params.userId, 'scan-throttle',
+        `age=${Math.round(ageMs / 1000)}s window=${Math.round(params.config.memory.curator.scanThrottleMs / 1000)}s`)
       return
     }
 
@@ -232,11 +264,15 @@ async function executeAutoDreamInner(params: {
       excludeSessionId: params.currentSessionId,
     })
     if (sessionIds.length < params.config.memory.curator.minSessions) {
+      logInnerGate(params.userId, 'min-sessions',
+        `sessions=${sessionIds.length}/${params.config.memory.curator.minSessions}`
+        + ` due=${dueShape(subTaskDue)}`)
       return
     }
 
     const prior = await tryAcquireConsolidationLock(params.memoryDir)
     if (prior === null) {
+      logInnerGate(params.userId, 'lock-held', 'another daemon or in-progress dream holds the lock')
       return
     }
 
