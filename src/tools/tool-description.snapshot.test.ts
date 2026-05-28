@@ -40,8 +40,12 @@ const EXPECTED = {
   // in-flight background dispatches" section so a dispatcher names any bg
   // dispatch still running in what it hands back — its result surfaces up
   // the chain after the dispatcher is gone, and an unannounced one reaches
-  // the receiver with no record of why it exists.
-  Dispatch: '9d2fde24d7f6aab8c3820d66bad469a22800a8fbeae37ef2ca4b6b4ac627e2b6',
+  // the receiver with no record of why it exists. 2026-05-28 (dispatch-nudge):
+  // reframed the schedule='now' mode-choice block (dropped "background is
+  // rarer", added the long-running → background trigger + blocking-freeze
+  // cost) and turned the "## Parallelism" caveat into a positive fan-out
+  // pattern with a worked example.
+  Dispatch: 'eec5b10c5ba4ffc272ca07149e50e354dbe03d7aefcb023a1d238ac12e0f17a5',
   // ListDispatches description updated Phase 12 PR2 (2026-05-20): documents
   // the new `scope` param (default lists only the caller's own dispatches;
   // `scope: 'all'` is main-orchestrator-only) and the `caller` output field.

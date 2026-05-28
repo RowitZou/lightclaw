@@ -436,6 +436,9 @@ async function buildRolePromptParts(
   const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools)
   if (reachableRolesSection) {
     preTodoSections.push(reachableRolesSection)
+    if (policy.kind === 'orchestrator') {
+      preTodoSections.push(formatDispatchModeSection())
+    }
   }
 
   const postTodoSections: string[] = []
@@ -521,6 +524,13 @@ function formatAskUserQuestionNudge(): string {
   ].join('\n')
 }
 
+function formatDispatchModeSection(): string {
+  return [
+    '## Dispatch Mode',
+    'Pick the dispatch mode by whether you need the result to write your current reply. Need it now and it is quick → blocking (fan out several short independent sub-tasks as parallel blocking calls in one message, then synthesize). Don\'t need it now, or it is long-running (deep research, large refactor, long build) → background, so the session stays responsive instead of freezing behind a multi-minute call; the result comes back later as a <background-task-result> for you to surface.',
+  ].join('\n')
+}
+
 function formatSharedOperatingDiscipline(): string {
   return [
     'Working style:',
@@ -557,7 +567,7 @@ function formatSharedOperatingDiscipline(): string {
     '- Visual content described by Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, identifiers, and other precise tokens may have OCR errors. When the user asks for an exact value, treat the transcription as a hint — re-render at higher fidelity or ask the user to confirm before committing the value.',
     '',
     'Capabilities to lean on (when present):',
-    '- When ## Reachable Workers is rendered above, prefer delegating any sub-task that matches a worker\'s specialty over handling it inline — you get a focused result back and stay on your own job.',
+    '- When ## Reachable Workers is rendered above, route a sub-task to the worker whose specialty fits rather than handling it inline — you get a focused result back and keep heavy reading out of your own context. Keep work inline only when it is a quick single step you would finish faster than writing the dispatch.',
     '- When ## Available Skills is rendered above, prefer calling a skill that matches the current work over scripting the same flow from scratch — skills tend to align with project convention and save trial-and-error.',
     '- When TodoWrite is in your tool catalog and a task needs three or more sequential steps, open with a TodoWrite to lay them out, and keep at most one item in_progress throughout. Skip TodoWrite for single-step tasks.',
     '',

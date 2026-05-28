@@ -55,9 +55,9 @@ mode (required, pick one):
 - 'blocking' — your current turn waits for the dispatched role to finish; you get its final-text summary as the tool result and can use it in your reply. ONLY valid when schedule='now'.
 - 'background' — Dispatch returns immediately with a dispatch id; the actual work happens later (or now, but asynchronously). When the work finishes, the result lands back in your context as a \`<background-task-result>\` block (drained at the next tool boundary if you're in-flight; delivered via a fresh continuation turn if you're idle) — you can then decide whether and how to surface it to the user. REQUIRED for any schedule other than 'now', and also valid for schedule='now' when you want to fire-and-forget.
 
-Mode choice when schedule='now':
-- blocking is the common case — you need the answer in this reply (parallel research before answering, code exploration before suggesting an edit, etc.).
-- background is rarer but useful: "fire web research now, but I want to keep writing my reply without waiting; the result can come back later as a background-task-result for me to process." Use when the dispatched work is genuinely independent of the current reply.
+Mode choice when schedule='now' — ask: do I need this result to write my current reply, and will it return quickly?
+- blocking — you need the answer to shape this reply AND it returns fast (research before answering, code exploration before an edit). Your turn waits, so a long blocking call freezes the session — the user's follow-ups just queue until it returns. Keep blocking for fast work; several short independent lookups can run as parallel blocking calls in one message (see ## Parallelism).
+- background — you don't need the result in this reply, OR the work is long-running (deep research, large refactor, long build / test — anything that would hold the turn for minutes). Dispatch returns an id immediately and your turn ends, so the session stays responsive; the result returns later as a <background-task-result> to surface or act on. You can tell the user it's running and that you'll report back.
 
 Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatch cannot wait for tomorrow's fire to finish.
 
@@ -70,7 +70,9 @@ Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatc
 
 ## Parallelism (blocking mode only)
 
-When parallelizing blocking dispatches across an assistant message, only do so for tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
+When several independent sub-tasks must all feed your current reply, dispatch them as parallel blocking calls in a single assistant message and synthesize the results — faster than one at a time, and each sub-task's reading stays out of your own context. Example: to compare how three modules handle errors, send three Dispatch calls in one message (one localExplorer per module, each scoped to one file set), then combine the findings in your reply. (Long-running independent work goes to background instead — see mode choice above.)
+
+Only parallelize tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
 
 ## Writing the prompt
 

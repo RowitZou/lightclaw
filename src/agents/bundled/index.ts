@@ -35,7 +35,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'generalist',
     whenToUse:
-      'Multi-step research, ambiguous searches, or tasks that may span many files. Self-tracks progress via TodoWrite for complex chains; saves durable findings via MemoryWrite.',
+      'General-purpose worker for open-ended sub-tasks that mix capabilities — reading, editing, running commands, and searching in one flow — and don\'t fit a single specialist. Dispatch it when a task is too branchy for one narrow worker but you still want it off your own context; it plans its own steps, self-tracks via TodoWrite, and saves durable findings via MemoryWrite. When a task is purely code / local read / web lookup, the matching specialist is sharper.',
     // Wildcard covers default tool surface; Dispatch must be explicit per the
     // BLOCKED_WORKER_TOOLS gate (`explicitlyReachableDispatch` requires the
     // literal name in tools, not the wildcard). The three management tools
