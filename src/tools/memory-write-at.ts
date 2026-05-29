@@ -40,6 +40,7 @@ async function auditWriteAt(input: {
 export const memoryWriteAtTool = buildTool({
   name: 'MemoryWriteAt',
   internalOnly: true,
+  whenToUse: 'Promote or write a memory file to a specific tier or path while consolidating.',
   description:
     'Internal memoryCurator tool: write a memory markdown file at an explicit path under the current user memory directory.',
   domain: 'host',

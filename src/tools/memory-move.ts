@@ -43,6 +43,7 @@ async function auditMove(input: {
 export const memoryMoveTool = buildTool({
   name: 'MemoryMove',
   internalOnly: true,
+  whenToUse: 'Relocate a memory file between tiers or paths while consolidating.',
   description:
     'Internal memoryCurator tool: move one memory markdown file to another path under the current user memory directory.',
   domain: 'host',

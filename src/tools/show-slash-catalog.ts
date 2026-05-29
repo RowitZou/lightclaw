@@ -7,6 +7,8 @@ import { buildTool } from '../tool.js'
 
 export const showSlashCatalogTool = buildTool({
   name: 'ShowSlashCatalog',
+  whenToUse:
+    "User needs setup you can't perform yourself — credentials, mounts, sandbox, permission rules; fetch the exact slash command name and arguments to tell them.",
   description: [
     'Lists slash commands the current user can type in chat to manage state you cannot mutate directly (credentials, mounts, sandbox, permissions, etc.).',
     '',

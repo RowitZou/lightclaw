@@ -40,6 +40,7 @@ async function auditDelete(input: {
 export const memoryDeleteTool = buildTool({
   name: 'MemoryDelete',
   internalOnly: true,
+  whenToUse: 'Remove a stale or superseded memory file while consolidating.',
   description:
     'Internal memoryCurator tool: delete one memory markdown file under the current user memory directory.',
   domain: 'host',
