@@ -2,7 +2,7 @@ import { platform } from 'node:process'
 
 import { getAllAgents, getMainRole } from './agents/registry.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
-import type { Role } from './agents/types.js'
+import type { Role, RoleKind } from './agents/types.js'
 import type { LightClawConfig } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
@@ -85,9 +85,9 @@ function formatCurrentDateLine(now: Date = new Date()): string {
     day: '2-digit',
   })
   return (
-    `Current date: ${ymd} (${weekday}, ${monthYear}). When evaluating retrieved data ` +
-    `(web search snippets, document timestamps, cached pages), compare against today's date — ` +
-    `anything dated before today is potentially stale and may need a follow-up WebFetch to confirm.`
+    `Current date: ${ymd} (${weekday}, ${monthYear}). When you rely on retrieved or cached data ` +
+    `(snippets, document timestamps, prior results), compare it against today's date — ` +
+    `anything dated before today may be stale; re-confirm against a current source before relying on it.`
   )
 }
 
@@ -187,7 +187,7 @@ function formatAvailableSecretsSection(enabledSecrets: ReadonlyMap<string, strin
   ].join('\n')
 }
 
-function formatPermissionSection(): string {
+function formatPermissionSection(kind: RoleKind): string {
   if (getPermissionMode() === 'plan') {
     return [
       '## Tool Use & Approvals',
@@ -195,12 +195,19 @@ function formatPermissionSection(): string {
     ].join('\n')
   }
 
-  return [
+  const lines = [
     '## Tool Use & Approvals',
     "Act on what you've decided: when a tool call is the right next step, make it — don't ask for permission to run it first. Whether an action needs approval is handled outside your turn; you'll either get the result or a \"Permission denied:\" result.",
     'On "Permission denied:", do not retry the same call — choose a read-only alternative or explain the limitation.',
-    '(Asking for information you genuinely need in order to decide what to do is different, and still appropriate.)',
-  ].join('\n')
+  ]
+  // Internal roles run autonomously in a background pass with no requester or
+  // user to consult — telling them "asking is appropriate" points at a channel
+  // that does not exist and conflicts with the Autonomy fragment. Only
+  // non-internal roles, which report back to a live requester, get the line.
+  if (kind !== 'internal') {
+    lines.push('(Asking for information you genuinely need in order to decide what to do is different, and still appropriate.)')
+  }
+  return lines.join('\n')
 }
 
 function formatMcpSection(): string {
@@ -402,7 +409,7 @@ async function buildRolePromptParts(
     preTodoSections.push(['## Session Working Memory', sessionMemory.trim()].join('\n\n'))
   }
 
-  const permissionSection = formatPermissionSection()
+  const permissionSection = formatPermissionSection(policy.kind)
   if (permissionSection) {
     preTodoSections.push(permissionSection)
   }
@@ -425,9 +432,25 @@ async function buildRolePromptParts(
     }
   }
 
+  const dataFlags = new Set<FragmentDataFlag>()
+  if (projectMemory.trim().length > 0) dataFlags.add('projectMemory')
+  if (autoMemoryIndex.trim().length > 0) dataFlags.add('autoMemoryIndex')
+  if (sessionMemory.trim().length > 0) dataFlags.add('sessionMemory')
+  if (reachableRolesSection) dataFlags.add('reachableWorkers')
+  if (skillsSection) dataFlags.add('skills')
+
+  const facts: RoleFacts = {
+    kind: policy.kind,
+    tools: policy.tools,
+    skills: policy.skills,
+    traits: role.traits ?? {},
+    data: dataFlags,
+  }
+
   const postTodoSections: string[] = []
-  if (policy.kind !== 'internal') {
-    postTodoSections.push(formatSharedOperatingDiscipline())
+  const discipline = formatSharedOperatingDiscipline(facts, role)
+  if (discipline) {
+    postTodoSections.push(discipline)
   }
 
   return {
@@ -456,14 +479,13 @@ function formatEnvironmentSection(
   if (includeScratch) {
     lines.push(
       `Scratch directory: ${scratchRoot} — fast local disk. The workspace is on ` +
-      `shared storage where bulk small-file operations (git clone, dependency ` +
-      `installs, builds, unpacking archives) run very slowly, so do that work ` +
-      `under the scratch directory instead. Scratch is NOT durable storage: it ` +
-      `is wiped — without warning and in full — whenever the worker restarts, ` +
-      `the container is removed, or the sandbox is reset, and anything left ` +
-      `there is permanently lost. As soon as a clone, download, or build ` +
-      `produces something the user needs, copy it into the workspace; never ` +
-      `leave a deliverable sitting in scratch.`,
+      `shared storage where heavy or bulk file operations run slowly, so do that ` +
+      `kind of work under the scratch directory instead. Scratch is NOT durable ` +
+      `storage: it is wiped — without warning and in full — whenever the worker ` +
+      `restarts, the container is removed, or the sandbox is reset, and anything ` +
+      `left there is permanently lost. As soon as work under scratch produces ` +
+      `something the user needs, copy it into the workspace; never leave a ` +
+      `deliverable sitting in scratch.`,
     )
   }
   lines.push(
@@ -515,55 +537,218 @@ function formatDispatchModeSection(): string {
   ].join('\n')
 }
 
-function formatSharedOperatingDiscipline(): string {
-  return [
-    'Drive to completion:',
-    '- Complete what the request actually needs. Don\'t stop at a plan, a partial edit, or first-pass exploration when the work calls for implementation or verification — keep going until it\'s done or you\'re genuinely blocked.',
-    '- Before reporting something done, verify it against the request: run the test / script / check when one exists, inspect the output. If you can\'t verify, say so plainly rather than implying success.',
-    '- If an approach fails, diagnose the cause and try a focused fix before switching tactics or escalating. A weak or empty result means vary the query / path / source, not conclude. Don\'t abandon a viable approach after one failure.',
-    '- Never call incomplete, unverified, or broken work done. If it\'s partial, keep going when the next step is clear; otherwise name the blocker and the exact missing input.',
-    '',
-    'Working style:',
-    '- For exploratory questions ("how should we approach X?", "what do you think?"), respond in 2-3 sentences with a recommendation and the main tradeoff. Don\'t implement until the requester agrees.',
-    '- Don\'t add features, refactor, or introduce abstractions beyond what the task requires. A bug fix doesn\'t need surrounding cleanup. Three similar lines is better than a premature abstraction.',
-    '- Don\'t add error handling, fallbacks, or validation for scenarios that can\'t happen. Trust internal code and framework guarantees. Only validate at system boundaries (user input, external APIs).',
-    '- Default to writing no comments. Add one only when the WHY is non-obvious. Don\'t explain WHAT the code does — well-named identifiers already do that.',
-    '- Prefer editing existing files to creating new ones. Don\'t create *.md / README / CHANGELOG files unless explicitly asked.',
-    '- Avoid backwards-compatibility shims and "// removed" placeholder comments. If something is unused, delete it.',
-    '',
-    'Response shape:',
-    '- Keep responses short and concise. Match length to the task — a one-line question gets a one-line answer.',
-    '- Reference code with file_path:line_number for navigability.',
-    '- Before your first action, state in one sentence what you\'re about to do. Give short progress updates at key moments — a decision, a surprise, a phase boundary. Silent is worse than brief.',
-    '- Do not narrate every action, and do not narrate internal deliberation.',
-    '- End-of-turn summary: one or two sentences. What changed and what\'s next.',
-    '- Do not put a colon before tool calls — tool calls may not render in output, leaving a dangling colon.',
-    '- Reply in the language the request used.',
-    '',
-    'Action safety:',
-    '- Local reversible actions (edits, tests, reads) — proceed freely.',
-    '- Hard-to-reverse or shared-state actions (git push, force-push, package upgrades, channel messages outside the agent reply, dropping tables) — confirm with the requester first unless explicitly authorized.',
-    '- When you hit an obstacle, do not use destructive shortcuts (--no-verify, --force, bypassing checks). Identify the root cause.',
-    '',
-    'Parallelism:',
-    '- You can call multiple tools in one response. When tool calls are independent, send them as parallel tool_use blocks in a single message — never serially.',
-    '- Independent reads (multiple Reads, Glob + Grep) should always run in parallel.',
-    '',
-    'Tool usage:',
-    '- Prefer direct answers when no tool is needed.',
-    '- Prefer dedicated tools over Bash when one fits — they are permission-scoped, sandbox-aware, and produce structured results easier to review than raw Bash stdout. Use Read instead of cat / head / tail / sed; Edit instead of sed / awk; Write instead of echo > / heredoc; Glob instead of find / ls; Grep instead of grep / rg. Reserve Bash for shell-only operations not covered by a dedicated tool — git, package managers, build / test commands, system diagnostics.',
-    '- When editing files, be precise and avoid unrelated changes.',
-    '- If a tool fails, explain the failure and recover with a narrower step — do not retry the same call.',
-    '- Visual content described by Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, identifiers, and other precise tokens may have OCR errors. When the user asks for an exact value, treat the transcription as a hint — re-render at higher fidelity or ask the user to confirm before committing the value.',
-    '',
-    'Capabilities to lean on (when present):',
-    '- When ## Reachable Workers is rendered above, route a sub-task to the worker whose specialty fits rather than handling it inline — you get a focused result back and keep heavy reading out of your own context. Keep work inline only when it is a quick single step you would finish faster than writing the dispatch.',
-    '- When ## Available Skills is rendered above, prefer calling a skill that matches the current work over scripting the same flow from scratch — skills tend to align with project convention and save trial-and-error.',
-    '- When TodoWrite is in your tool catalog and a task needs three or more sequential steps, open with a TodoWrite to lay them out, and keep at most one item in_progress throughout. Skip TodoWrite for single-step tasks.',
-    '',
-    'Sandbox availability:',
-    '- If an environment-domain tool (Bash / Read / Write / Edit / Grep / Glob / WebFetch / WebSearch) returns an error mentioning "Sandbox image" being not ready / pulling / failed / autoPull disabled, do not retry that tool. Acknowledge to the requester that the sandbox is being prepared (or has failed and admin has been notified) and offer to continue with chat-only assistance — discussion, planning, explaining concepts. Do not attempt environment-domain tools again until explicitly asked to retry.',
-  ].join('\n')
+// ── Shared operating-discipline fragment registry ─────────────────────────
+//
+// The role prompt is `persona` (the only role-authored section) plus a set of
+// reusable fragments assembled by rule. Each fragment carries a declarative
+// `when` condition read against the role's facts (tools / skills / kind /
+// declared traits / present data sections), so a NEW role — including a
+// user-defined one — composes the right prompt purely from what it declares,
+// without anyone editing fragment text. `Role.sections` is the surgical
+// override on top of the conditions. The lone pre-existing instance of this
+// pattern was the Bash-gated scratch line; this generalizes it.
+
+type FragmentDataFlag =
+  | 'projectMemory'
+  | 'autoMemoryIndex'
+  | 'sessionMemory'
+  | 'reachableWorkers'
+  | 'skills'
+
+type RoleFacts = {
+  kind: RoleKind
+  tools: readonly string[]
+  skills: readonly string[]
+  traits: Record<string, boolean>
+  data: ReadonlySet<FragmentDataFlag>
+}
+
+type FragmentCondition =
+  | 'always'
+  | { tool: string }
+  | { anyTool: string[] }
+  | { skill: string }
+  | { trait: string }
+  | { kind: RoleKind }
+  | { dataPresent: FragmentDataFlag }
+  | { not: FragmentCondition }
+  | { allOf: FragmentCondition[] }
+  | { anyOf: FragmentCondition[] }
+
+function factHasTool(facts: RoleFacts, name: string): boolean {
+  return facts.tools.includes('*') || facts.tools.includes(name)
+}
+
+function factHasSkill(facts: RoleFacts, name: string): boolean {
+  return facts.skills.includes('*') || facts.skills.includes(name)
+}
+
+function evaluateFragmentCondition(cond: FragmentCondition, facts: RoleFacts): boolean {
+  if (cond === 'always') return true
+  if ('tool' in cond) return factHasTool(facts, cond.tool)
+  if ('anyTool' in cond) return cond.anyTool.some(name => factHasTool(facts, name))
+  if ('skill' in cond) return factHasSkill(facts, cond.skill)
+  if ('trait' in cond) return facts.traits[cond.trait] === true
+  if ('kind' in cond) return facts.kind === cond.kind
+  if ('dataPresent' in cond) return facts.data.has(cond.dataPresent)
+  if ('not' in cond) return !evaluateFragmentCondition(cond.not, facts)
+  if ('allOf' in cond) return cond.allOf.every(c => evaluateFragmentCondition(c, facts))
+  if ('anyOf' in cond) return cond.anyOf.some(c => evaluateFragmentCondition(c, facts))
+  return false
+}
+
+type DisciplineBullet = { when?: FragmentCondition; text: string }
+type DisciplineBlock = {
+  id: string
+  when?: FragmentCondition
+  header: string
+  bullets: DisciplineBullet[]
+}
+
+const NOT_INTERNAL: FragmentCondition = { not: { kind: 'internal' } }
+
+// Ordered list of operating-discipline blocks. A block renders when its `when`
+// passes (default always) and at least one of its bullets passes; only the
+// passing bullets are emitted. `id` is the unit `Role.sections` can override.
+const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
+  {
+    id: 'disc.drive',
+    when: NOT_INTERNAL,
+    header: 'Drive to completion:',
+    bullets: [
+      { text: '- You are built for long-running work: keep going across many steps and turns until the request is actually fulfilled. The default is to continue, not to check in.' },
+      { text: '- Keep going until one of these is true, then stop and return to the requester:\n  - the work is genuinely done and verified;\n  - the requester tells you to stop, cancels, or redirects;\n  - a boundary or stop condition the requester set has been reached ("do X until Y", "stop once Z happens");\n  - a real ambiguity or missing fact would change the result, or you need input only the requester can give;\n  - the next move is a safety or genuinely irreversible decision that needs a human call;\n  - you are truly blocked with no path forward, and a focused retry hasn\'t opened one.' },
+      { text: '- Short of one of those, don\'t pause to ask "should I continue?", don\'t hand back a plan for approval, and don\'t stop at a partial result you could finish.' },
+      { text: '- Before reporting something done, verify it against the request: check the result against what was asked and inspect what you produced. If you can\'t verify, say so plainly rather than implying success.' },
+      { text: '- If an approach fails, diagnose the cause and try a focused fix before switching tactics or escalating. A weak or empty result means vary the query / path / source, not conclude. Don\'t abandon a viable approach after one failure.' },
+      { text: '- Never call incomplete, unverified, or broken work done. If it\'s partial, keep going when the next step is clear. When you report it done, give the requester the full picture — what was delivered, where it lives, and how you verified it — not a bare "done". When you must stop without finishing, report what you completed, what\'s still left, and the specific blocker: where it is and the exact missing input, so the requester can act without re-discovering it.' },
+    ],
+  },
+  {
+    id: 'disc.scope',
+    when: NOT_INTERNAL,
+    header: 'Scope:',
+    bullets: [
+      { text: '- Complete everything the request asks for, and don\'t let any part of it quietly fall away. If more is added while you work, that adds to what you finish — it doesn\'t replace the rest, unless the requester says so.' },
+      { text: '- Don\'t expand beyond what was asked: no extra features, structure, or polish the task didn\'t call for.' },
+    ],
+  },
+  {
+    id: 'disc.response',
+    when: NOT_INTERNAL,
+    header: 'Response shape:',
+    bullets: [
+      { text: '- Keep responses short and concise. Match length to the task — a one-line question gets a one-line answer.' },
+      { text: '- When you reference a location, make it navigable: a file path with line number, or a URL.' },
+      { text: '- Before your first action, state in one sentence what you\'re about to do. Give short progress updates at key moments — a decision, a surprise, a phase boundary. Silent is worse than brief.' },
+      { text: '- Do not narrate every action, and do not narrate internal deliberation.' },
+      { text: '- End-of-turn summary: one or two sentences. What changed and what\'s next.' },
+      { text: '- Do not put a colon before tool calls — tool calls may not render in output, leaving a dangling colon.' },
+    ],
+  },
+  {
+    id: 'disc.actionSafety',
+    when: NOT_INTERNAL,
+    header: 'Action safety:',
+    bullets: [
+      { text: '- Reversible actions — proceed freely.' },
+      { text: '- Be deliberate with hard-to-reverse or shared-state actions. Routine approval is gated by the approval layer outside your turn, so you don\'t need to ask before a normal tool call — but when an action is genuinely destructive or irreversible (deleting data, overwriting shared state, anything you can\'t take back) and the requester hasn\'t called for it, stop and confirm before you do it.' },
+      { text: '- When you hit an obstacle, don\'t reach for destructive shortcuts or bypass safeguards to force it through — find the root cause.' },
+    ],
+  },
+  {
+    id: 'disc.parallelism',
+    when: NOT_INTERNAL,
+    header: 'Parallelism:',
+    bullets: [
+      { text: '- You can call multiple tools in one response. When tool calls are independent, send them as parallel tool_use blocks in a single message — never serially.' },
+      { text: '- Independent reads (multiple Reads, Glob + Grep) should always run in parallel.' },
+    ],
+  },
+  {
+    id: 'disc.memoryHint',
+    when: { allOf: [NOT_INTERNAL, { tool: 'MemoryRead' }] },
+    header: 'Working with memory:',
+    bullets: [
+      { text: '- Treat any memory the framework injects as a hint to verify, not an authoritative fact. The environment may have changed since it was saved — files move, conventions drift, preferences shift. Memory shortens the lookup; it doesn\'t skip verification.' },
+    ],
+  },
+  {
+    id: 'disc.toolUsage',
+    when: NOT_INTERNAL,
+    header: 'Tool usage:',
+    bullets: [
+      { when: 'always', text: '- Prefer a direct answer when no tool is needed.' },
+      { when: { tool: 'Bash' }, text: '- Prefer dedicated tools over Bash when one fits — Read instead of cat / head / tail; Grep instead of grep / rg; Glob instead of find / ls. Reserve Bash for shell-only operations — git, package managers, build / test, system diagnostics.' },
+      { when: { anyTool: ['Write', 'Edit'] }, text: '- Use Edit instead of sed / awk and Write instead of echo > / heredoc. When editing files, be precise and avoid unrelated changes.' },
+      { when: 'always', text: '- If a tool fails, explain the failure and recover with a narrower step — do not retry the same call.' },
+      { when: { tool: 'Read' }, text: '- Visual content from Read on images / PDF page renders is transcribed by a smaller vision model. Names, numbers, and other precise tokens may have OCR errors. When an exact value matters, treat the transcription as a hint — re-render at higher fidelity or ask the requester to confirm before committing it.' },
+    ],
+  },
+  {
+    id: 'code.style',
+    when: { allOf: [NOT_INTERNAL, { trait: 'authorsCode' }] },
+    header: 'Code style:',
+    bullets: [
+      { text: '- Don\'t refactor untouched code or add abstractions beyond what the task requires — a bug fix doesn\'t need surrounding cleanup, and three similar lines beat a premature abstraction.' },
+      { text: '- Don\'t add error handling, fallbacks, or validation for scenarios that can\'t happen. Trust internal code and framework guarantees; validate only at system boundaries (user input, external APIs).' },
+      { text: '- Default to writing no comments. Add one only when the WHY is non-obvious — well-named identifiers already say WHAT.' },
+      { text: '- Prefer editing existing files to creating new ones. Don\'t create *.md / README / CHANGELOG files unless explicitly asked.' },
+      { text: '- Avoid backwards-compatibility shims and "// removed" placeholder comments. If something is unused, delete it.' },
+    ],
+  },
+  {
+    id: 'code.publishing',
+    when: { allOf: [NOT_INTERNAL, { trait: 'authorsCode' }] },
+    header: 'Publishing / handoff:',
+    bullets: [
+      { text: '- Don\'t commit, push, or open a PR — that\'s the requester\'s call, not yours. Finish the change, leave the working tree for them, and report it\'s ready to publish.' },
+    ],
+  },
+  {
+    id: 'cap.lean',
+    header: 'Capabilities to lean on (when present):',
+    bullets: [
+      { when: { allOf: [{ kind: 'orchestrator' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, route a sub-task to the worker whose specialty fits rather than handling it inline — your value is integrating their focused results, not doing every step yourself.' },
+      { when: { allOf: [{ kind: 'worker' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, you still do the work yourself by default — offload a sub-task to a worker only when it is heavy or clearly another specialty\'s, to keep your own context focused. Delegation is opt-in, not the default.' },
+      { when: { dataPresent: 'skills' }, text: '- When ## Available Skills is rendered above, prefer a skill that matches the current work over scripting the same flow from scratch — skills tend to align with project convention and save trial-and-error.' },
+      { when: { tool: 'TodoWrite' }, text: '- When TodoWrite is in your tool catalog and a task needs three or more sequential steps, open with a TodoWrite to lay them out, and keep at most one item in_progress throughout. Skip TodoWrite for single-step tasks.' },
+    ],
+  },
+  {
+    id: 'disc.sandbox',
+    when: NOT_INTERNAL,
+    header: 'Sandbox availability:',
+    bullets: [
+      { text: '- If a tool that needs the sandbox returns an error saying the sandbox image is not ready / pulling / failed / autoPull disabled, do not retry it. Tell the requester the sandbox is being prepared (or has failed and admin has been notified) and offer to continue with chat-only help — discussion, planning, explaining. Don\'t retry sandbox tools until explicitly asked.' },
+    ],
+  },
+  {
+    id: 'disc.autonomous',
+    when: { kind: 'internal' },
+    header: 'Autonomy:',
+    bullets: [
+      { text: '- You run autonomously — there is no requester to consult and no user watching, so there is no one to ask. Work only from what the request provides; when something is uncertain, make the most reasonable bounded call and move on rather than stalling. Finish the bounded task, or stop cleanly when there is nothing useful to do — never leave the pass waiting on input that will never come.' },
+    ],
+  },
+]
+
+function formatSharedOperatingDiscipline(facts: RoleFacts, role: Role): string {
+  const include = new Set(role.sections?.include ?? [])
+  const exclude = new Set(role.sections?.exclude ?? [])
+
+  const rendered: string[] = []
+  for (const block of DISCIPLINE_BLOCKS) {
+    if (exclude.has(block.id)) continue
+    const conditionPasses = include.has(block.id) || evaluateFragmentCondition(block.when ?? 'always', facts)
+    if (!conditionPasses) continue
+    const bullets = block.bullets
+      .filter(bullet => evaluateFragmentCondition(bullet.when ?? 'always', facts))
+      .map(bullet => bullet.text)
+    if (bullets.length === 0) continue
+    rendered.push([block.header, ...bullets].join('\n'))
+  }
+  return rendered.join('\n\n')
 }
 
 function formatReachableRolesSection(reachableRoles: readonly string[], tools: readonly Tool[]): string {

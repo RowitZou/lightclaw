@@ -46,6 +46,10 @@ export const BUNDLED_AGENTS: Role[] = [
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
+    // Authors code inline for branchy mixed tasks → gets the Code style /
+    // Publishing discipline fragments. (archivist has the same Write/Edit
+    // surface but is organize-not-author, so it does not set this.)
+    traits: { authorsCode: true },
     displayName: { cn: '正在处理', en: 'working on it' },
   },
   {
@@ -117,6 +121,9 @@ export const BUNDLED_AGENTS: Role[] = [
     systemPrompt: coderPrompt,
     kind: 'worker',
     outputContract: 'report',
+    // Repo-code authoring specialist → gets the Code style / Publishing
+    // discipline fragments.
+    traits: { authorsCode: true },
     displayName: { cn: '正在改代码', en: 'editing code' },
   },
   {

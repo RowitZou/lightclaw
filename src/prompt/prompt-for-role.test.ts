@@ -19,18 +19,18 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: 'bdf6f91f64d760369c2db369d07bb89ee292d307eea560c048e82306bd45e2bd',
-  generalist: 'cf962eeceb5d36033a2113227a842a0118353c56b2f388bd59735acc4bd02418',
-  localExplorer: 'e696e692079102bb25a0d55a2b498aca0651b0cf7729e784f88dd44d16b6601b',
-  webSearcher: '699ffb19a8ef71fda7990201dd1ae2dc10181dfb93e7781871e69362363ec216',
-  feishuSecretary: '1e81482cf2edebd6d5d97a17648da70cf3de4c640f92589f86dbb51ac645eb8d',
-  coder: '7a3758dc681eeb36785fb931b673046b04890e904213f5ff250cbae51cfd6aef',
-  archivist: '28571527d734714cc167b13df097deee72f758db016f30ca666af52aaeb9a12a',
-  reviewer: '142d719909d2a059e5553eca150049a493e5799dd2632cf7983d98dae08aff83',
-  memoryExtractor: '6a72609e3239b47de91ca5c4587b886d7733d1e994abd88fa5631b3b1781558a',
-  memoryCurator: 'a4a13dfff4626dd5bb704fa6c53f6d0a4899b96692204bf4611338bfa06b081f',
-  skillCurator: '05a6c014080d4097e42f66c7817c80e23f6cf4032fead0a7eed34a27cc091626',
-  skillConsolidator: '6f5bc144d77441face72a1c0c2bd79efe1a713e2f5a0256876cafe034e2f64fe',
+  main: '6319a79591eb6aa4a7f2bf3a38da9d1c7c7e483b02be7ba40225a05eb28c1817',
+  generalist: '14b0bd7afbba78f38d956785effcbb33aabf1862ee36d8461e4b7371c7f31140',
+  localExplorer: '5a0282508c69778e44c1aefd9308458ae33f39175bc0ea90e2bd6ae4ded3ba05',
+  webSearcher: 'a723541d40c7f6bedf5e4c3c95105634384f41ada8d274d1605f9a8ff1a33a3c',
+  feishuSecretary: 'ce74fcdde8b57ec27fd26b549509db3ec46a56060b6edf4a5ca37edc0f72b3d9',
+  coder: '4ac14b750b16e7f63f7297f00031d920e4c2f583679a586f63aa8693bac5bb6a',
+  archivist: 'f97d7dbd0fdef6b7dfdf3b5c631d1554c37f598df06ab7129921e0164ce7f8fe',
+  reviewer: '4516c19debd55d1d911c05f9c75c009ba0a0db909743d50ff2990717df5c50ba',
+  memoryExtractor: '4a67ded8194ab5d62961e1f868f460a215c5664b52ac3ad777e9e7da2c36b5b1',
+  memoryCurator: '5a6917fbbbe3c4482785fbc85c97580bad481364aa8fc08c8462d50588a2fc18',
+  skillCurator: '0924d182c4269d3bd20a369621f253de6146a3ab3b9e90ebe43fb5b3afec465c',
+  skillConsolidator: 'f8323502fa56851aefa73e24b7dc84e875f20fac3a5bc26c87ed93102b1c72a6',
 }
 
 let tmpRoot: string

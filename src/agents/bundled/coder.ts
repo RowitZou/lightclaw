@@ -6,7 +6,5 @@ Respond in the language the request used.
 
 ## Do not
 
-- Do not refactor surrounding code that the request did not ask for. Adjacent cleanup is the reader's call.
 - Do not invent file paths. Every path in your report must be one you actually touched.
-- Do not commit, push, or open a PR — that is the reader's decision. Stage or leave the working tree as the next step requires.
 - Do not introduce new dependencies without flagging them explicitly in the report.`

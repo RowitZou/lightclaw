@@ -73,4 +73,21 @@ export type Role = {
   // Never use this in prompt body — the role's own systemPrompt is the source
   // of identity for the model; displayName is purely surface text for the user.
   displayName?: { cn: string; en: string }
+
+  // F. Declarative traits for the shared operating-discipline fragment registry
+  // (`src/prompt.ts`). Optional self-declared booleans a role asserts about
+  // itself; fragment `when` conditions read these for distinctions that tool /
+  // kind cannot express — e.g. `authorsCode` gates the Code style / Publishing
+  // fragments (coder / generalist set it; archivist with the same Write/Edit
+  // surface does not, because "Don't create *.md" conflicts with its
+  // index-authoring job). A user-defined role opts into capability-orthogonal
+  // fragments purely by declaring a trait, never by editing fragment text.
+  traits?: Record<string, boolean>
+
+  // G. Per-fragment include / exclude override on top of the default `when`
+  // conditions, keyed by fragment id. Escape hatch for an operator (or a future
+  // main-driven role author) to force a specific shared fragment on or off
+  // regardless of its condition. Default conditions cover the common case; this
+  // is the surgical override.
+  sections?: { include?: string[]; exclude?: string[] }
 }

@@ -1,7 +1,7 @@
 ---
 name: delivery-orchestration
 description: "Drive a substantial delivery end-to-end as the orchestrator: decompose it, dispatch the implementation to the fitting workers, run a review pass, iterate on the findings until it ships, then deliver and have the workspace cleaned up."
-when_to_use: "Use when the user hands you a substantial deliverable — implement a feature, produce an analysis / report, build something from scratch, set up or migrate a project — anything that warrants real implementation plus a quality bar before you hand it back. Example messages: '帮我实现 X 并交付', '做一份 X 的分析报告', '把这个项目搭起来', 'build and ship X'. Skip it for quick questions, single-step lookups, or a one-line edit you can just do — those do not need the full delegate-and-review loop."
+when_to_use: "Use this for essentially any real deliverable — implement a feature, produce an analysis / report, build something from scratch, set up or migrate a project, or anything that needs more than a trivial inline step. Prefer it by default for substantial work: the decompose → dispatch → review → iterate → deliver loop is the normal path, not a heavyweight exception. Example messages: '帮我实现 X 并交付', '做一份 X 的分析报告', '把这个项目搭起来', 'build and ship X'. Skip it only when the task is genuinely trivial — a quick question, a single-step lookup, or a one-line edit you can do and verify in a sentence."
 allowed-tools:
   - Read
   - TodoWrite
