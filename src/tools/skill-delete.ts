@@ -2,7 +2,11 @@ import { z } from 'zod'
 
 import { recordSkillOpAudit } from '../audit/skill-ops.js'
 import { getCurrentSessionContext } from '../session-context.js'
-import { shouldBlockSkillDelete } from '../skill/destructive-guard.js'
+import { getCurrentRole } from '../state.js'
+import {
+  hasSurvivorWriteOtherThan,
+  shouldBlockSkillDelete,
+} from '../skill/destructive-guard.js'
 import { deleteUserSkill, normalizeSkillName } from '../skill/loader.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import { buildTool } from '../tool.js'
@@ -59,6 +63,41 @@ export const skillDeleteTool = buildTool({
       // shape downstream tests already assert on.
       normalizedName = input.name
     }
+    // Consolidation survivor guard: skillConsolidator (the only role with
+    // SkillDelete) must write a surviving skill BEFORE deleting the merged-from
+    // names. A run that deletes without first writing any different survivor is
+    // the 2026-05-29 data-loss class — the weak sub-LLM deleted two
+    // user-requested skills and hallucinated a merge into an unrelated skill it
+    // never wrote. The consolidator prompt already mandates write-then-delete;
+    // this enforces it at the tool boundary. Scoped to the consolidator role so
+    // other (test / future) SkillDelete callers are unaffected. See
+    // `src/skill/destructive-guard.ts`.
+    if (getCurrentRole()?.agentType === 'skillConsolidator') {
+      const sessionId = session?.sessionId ?? ''
+      if (!hasSurvivorWriteOtherThan(sessionId, normalizedName)) {
+        process.stderr.write(
+          `[skill-delete] refused user=${userId} name=${normalizedName} reason=consolidator delete without a survivor SkillWrite this run\n`,
+        )
+        await recordSkillOpAudit({
+          at: new Date().toISOString(),
+          userId,
+          tool: 'SkillDelete',
+          name: normalizedName,
+          status: 'denied',
+          reason: 'consolidation delete without a survivor SkillWrite this run',
+        })
+        return {
+          output:
+            `Refusing to delete skill "${normalizedName}": consolidation must first ` +
+            `SkillWrite a surviving merged skill (a different name) in this run, then ` +
+            `delete the merged-from names. No such survivor write happened, so deleting ` +
+            `now would drop the skill with nothing replacing it. Write the merged ` +
+            `survivor first (per the consolidation workflow), or leave this skill alone.`,
+          isError: true,
+        }
+      }
+    }
+
     const block = shouldBlockSkillDelete(userId, normalizedName)
     if (block.blocked) {
       const ageSec = Math.max(1, Math.round((block.ageMs ?? 0) / 1000))

@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { recordSkillOpAudit } from '../audit/skill-ops.js'
 import { getCurrentSessionContext } from '../session-context.js'
-import { recordSkillWriteFailure } from '../skill/destructive-guard.js'
+import { recordSkillSurvivorWrite, recordSkillWriteFailure } from '../skill/destructive-guard.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
 import { writeUserSkill } from '../skill/loader.js'
 import { buildTool } from '../tool.js'
@@ -84,6 +84,10 @@ export const skillWriteTool = buildTool({
         overwrite: input.overwrite,
       })
       await refreshSkillRegistry(context.cwd, userId)
+      // Record this save as a consolidation survivor for the current run, so a
+      // later skillConsolidator SkillDelete of a *different* name is allowed.
+      // See `src/skill/destructive-guard.ts` and 2026-05-29 dogfood Bug 1.
+      recordSkillSurvivorWrite(session?.sessionId ?? '', meta.name)
       await recordSkillOpAudit({
         at: new Date().toISOString(),
         userId,
