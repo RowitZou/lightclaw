@@ -220,6 +220,21 @@ function summarizeToolInput(block: AssistantToolUseBlock): string {
   return `${raw.slice(0, 117)}...`
 }
 
+// Dogfood 5/29 Bug 2 empty-stop backstop. Injected as a user message after a
+// contentless end_turn that left a todo in_progress. Neutral framing on
+// purpose: the harness cannot tell a spurious stop (next step was clear) from
+// a genuine block (needs user input), so it does not pre-decide — it refuses
+// the silent empty stop and hands control back, letting the model either take
+// the next step or articulate the blocker to the user in real words. Either
+// outcome beats a blank turn the user can't even see to respond to. English to
+// match the system-prompt todo reminder; this is a framework reminder, not the
+// user's words.
+const EMPTY_STOP_RESCUE_REMINDER = [
+  '<system-reminder>',
+  "You ended your turn without any output (no message, no tool call) while a todo item is still in_progress. An empty turn is never a finished state. Either take the next concrete step toward completing the in_progress work, or — if you genuinely cannot proceed without input — say so plainly and tell the user exactly what you need to continue. Do not end the turn empty again.",
+  '</system-reminder>',
+].join('\n')
+
 export async function query(params: QueryParams): Promise<{
   messages: Message[]
   /**
@@ -281,6 +296,14 @@ export async function query(params: QueryParams): Promise<{
   // persistence then stops and the caller's end-of-query rewrite is the
   // source of truth.
   let transcriptFlushDisabled = false
+  // Dogfood 5/29 Bug 2 empty-stop backstop guard. Set when a continuation
+  // nudge is injected after a contentless end_turn that left a todo
+  // in_progress; cleared by any later turn that produces real output (text or
+  // a tool call). Two empty stops in a row are therefore NOT both rescued —
+  // a model stuck emitting empties falls through to a normal end_turn instead
+  // of looping forever — while a spurious stop after genuine progress can be
+  // rescued again.
+  let pendingEmptyStopRescue = false
 
   // Open per-query API logger and push it on the AsyncLocalStorage scope so
   // every nested streamChat call (main loop turns + recall + session-memory
@@ -859,6 +882,13 @@ export async function query(params: QueryParams): Promise<{
       (block): block is ToolUseBlock => block.type === 'tool_use',
     )
 
+    // A turn that produced real output clears the empty-stop rescue guard, so
+    // a later spurious empty stop can be rescued again (see the backstop in
+    // the no-tool branch below).
+    if (turnText.length > 0 || toolUses.length > 0) {
+      pendingEmptyStopRescue = false
+    }
+
     for (const hook of lifecycleHooks) {
       await hook.afterAssistantMessage?.(makeHookContext())
     }
@@ -911,6 +941,37 @@ export async function query(params: QueryParams): Promise<{
           continue
         }
       }
+      // Empty-stop backstop (dogfood 5/29 Bug 2). The model ended the turn
+      // with no text and no tool call while a todo is still in_progress. An
+      // empty turn is never a finished state — observed with gpt-codex-mid
+      // ending empty right after narrating "I'll dispatch coder next" and
+      // marking the step in_progress (row 99 of the 5/28 main-group
+      // transcript: stopReason end_turn, content []). The system-prompt todo
+      // reminder asks the model to keep going, but a turn that emits zero
+      // tokens can't be steered by prompt text. Inject one neutral
+      // continuation nudge and re-enter the loop so the model either takes
+      // the next concrete step or, if it is genuinely blocked, surfaces the
+      // blocker to the user in real words. Runs only after the late-
+      // interjection rescue above (a real user message, when present, revives
+      // the loop on its own and is preferred). `pendingEmptyStopRescue` caps
+      // this at one nudge per consecutive empty stop so a model that keeps
+      // returning empty cannot loop forever.
+      if (
+        turnText.length === 0 &&
+        !pendingEmptyStopRescue &&
+        getTodos().some(todo => todo.status === 'in_progress')
+      ) {
+        pendingEmptyStopRescue = true
+        messages.push(
+          createUserMessage(EMPTY_STOP_RESCUE_REMINDER, getLastUuid(messages)),
+        )
+        await flushTranscript()
+        process.stderr.write(
+          'query: empty end_turn with in_progress todo — injected continuation nudge\n',
+        )
+        continue
+      }
+
       const extractionSnapshot = [...messages]
       if (!invocation.ephemeral) {
         await flushSessionMemoryUpdate(extractionSnapshot)
