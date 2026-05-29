@@ -152,6 +152,9 @@ function buildBuiltinCommands(): ReplCommand[] {
     agentAdvisory:
       'When the user wants to leave standing feedback for the admin (bug report / ' +
       'feature request / preference) that should outlive this conversation.',
+    agentUsage: [
+      '/feedback <text>   Record standing feedback for the admin. <text> is taken verbatim to end of line.',
+    ].join('\n'),
     async handler(args, ctx) {
       const text = args.trim()
       if (!text) {
@@ -216,6 +219,11 @@ function buildBuiltinCommands(): ReplCommand[] {
     description: t('cmd.model.desc'),
     agentAdvisory:
       'When the user explicitly asks to switch model or compare model behavior.',
+    agentUsage: [
+      '/model                 Show the current model and list every selectable model alias.',
+      '/model <name>          Switch to a model alias (use a name from the bare-/model list).',
+      '/model --clear-cache   Clear the current model\'s capability-probe cache (combine with <name> to clear that one).',
+    ].join('\n'),
     async handler(args, ctx) {
       const rawParts = args.trim().split(/\s+/).filter(Boolean)
       const clearCache = rawParts.includes('--clear-cache')
@@ -297,6 +305,10 @@ function buildBuiltinCommands(): ReplCommand[] {
     description: t('cmd.mode.desc'),
     agentAdvisory:
       'When the user wants to change permission posture (default / autoEdit / planMode / yolo).',
+    agentUsage: [
+      '/mode                        Show the mode menu, the current mode, and the user\'s ceiling.',
+      '/mode <read|ask|auto|yolo>   Set permission posture. read=read-only; ask=confirm writes/exec (default); auto=writes+web silent, commands still ask; yolo=all silent except ask/deny rules. Capped by the user\'s ceiling.',
+    ].join('\n'),
     async handler(args, ctx) {
       const trimmed = args.trim()
       const userId = getCurrentUserId()

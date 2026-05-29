@@ -76,12 +76,16 @@ describe('ShowSlashCatalog tool', () => {
     assert.match(output, /\n\n\/rules  /)
   })
 
-  it('uses multi-line agentUsage when present and one-line usage as fallback', async () => {
+  it('renders the full multi-line agentUsage for each advisory command', async () => {
     const output = await callCatalogAs('alice')
 
     assert.match(output, /^    \/secret set <NAME> <VALUE>/m)
     assert.match(output, /^    \/secret enable <NAME>/m)
-    assert.match(output, /^    \/model <name>$/m)
+    // Bug 6 regression: bare /model lists selectable models, so the catalog
+    // must document that form — not just `/model <name>` — or the agent can
+    // neither name the available models nor tell the user how to list them.
+    assert.match(output, /^    \/model {2,}Show the current model and list/m)
+    assert.match(output, /^    \/model <name> {2,}Switch to a model alias/m)
   })
 
   it('passes through backticks, quotes, and dollar signs in advisory and usage text', async () => {
