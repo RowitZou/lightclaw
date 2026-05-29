@@ -203,7 +203,13 @@ function currentCallerMayManage(task: BackgroundTaskEntry): boolean {
 export const dispatchTool = buildTool({
   name: 'Dispatch',
   whenToUse: `Delegate a focused task to a worker; optionally on a schedule (5 分钟后 / tonight at 9 / 每周一早上报告).`,
-  shouldDefer: true,
+  // Dispatch is the orchestrator's core per-turn verb — inline, not deferred.
+  // Behind ToolSearch it carried a round-trip cost (search → wait a turn →
+  // call) that the model routinely sidestepped by just doing the work itself,
+  // suppressing delegation. Inlining removes that activation energy. The
+  // management trio below (List/Cancel/Update) stays deferred: post-hoc, low
+  // per-turn frequency.
+  alwaysLoad: true,
   description: DISPATCH_DESCRIPTION,
   searchHint: 'delegate dispatch agent subagent background schedule reminder worker research explore web 并行 派发 后台 定时',
   domain: 'host',

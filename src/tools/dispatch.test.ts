@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { getAllTools } from '../tools.js'
+import { builtinTools, getAllTools } from '../tools.js'
+import { partitionTools } from './is-deferred.js'
 import { dispatchTool, listDispatchesTool, updateDispatchTool } from './dispatch.js'
 
 describe('Dispatch tool family', () => {
@@ -90,5 +91,20 @@ describe('Dispatch tool family', () => {
     }) as Record<string, unknown>
 
     assert.equal(Object.hasOwn(parsed, retiredKey), false)
+  })
+
+  it('Dispatch is inline; its management trio stays deferred', () => {
+    // Dispatch is the orchestrator's core per-turn verb. Keeping it behind
+    // ToolSearch (shouldDefer) imposed a search → wait → call round-trip that
+    // suppressed delegation, so it is alwaysLoad. The post-hoc management tools
+    // are genuinely low-frequency and stay deferred. This pins both sides so a
+    // future tag churn can't silently re-defer Dispatch.
+    const { alwaysLoaded, deferred } = partitionTools(builtinTools)
+    const inlineNames = new Set(alwaysLoaded.map(tool => tool.name))
+    const deferredNames = new Set(deferred.map(tool => tool.name))
+    assert.equal(inlineNames.has('Dispatch'), true)
+    for (const name of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+      assert.equal(deferredNames.has(name), true)
+    }
   })
 })
