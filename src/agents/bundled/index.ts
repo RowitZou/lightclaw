@@ -112,7 +112,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'coder',
     whenToUse:
-      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test. Dispatch when the task is bounded to code change in the current repo. It plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
+      'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test — and set up or repair the project around the code: install dependencies, configure the build / toolchain / runtime environment, and get typecheck / tests / build passing. Dispatch when the task centers on code or the environment that code runs in. It plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
@@ -129,7 +129,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'archivist',
     whenToUse:
-      'Cross-domain organization on the user\'s local system and Feishu workspace: deduplicate / classify / age out / index / clean up files on disk, runtime environments (conda envs, pip packages, virtualenvs, npm caches), or Feishu workspace structure (create classification folders, move docs, delete unneeded). Dispatch when the task is bounded to organizing existing resources (no new content authoring, no env setup from scratch). Creating Feishu documents or writing doc content is feishuSecretary\'s territory; archivist only restructures and prunes.',
+      'Cross-domain organization on the user\'s local system and Feishu workspace: deduplicate / classify / age out / index / clean up files on disk, runtime environments (conda envs, pip packages, virtualenvs, npm caches), or Feishu workspace structure (create classification folders, move docs, delete unneeded). Dispatch it not only when the user explicitly asks to organize, but also on your own initiative when you notice the workspace accumulating cruft in the course of other work — leftover scratch / temp / downloaded files once a task lands, duplicates, stale artifacts, a cluttered tree. Treat tidying as low-priority upkeep: fold it in after the user\'s actual request is done, never ahead of it, and keep it light rather than reorganizing everything. Scope is organizing existing resources, not authoring: creating Feishu documents or writing doc content is feishuSecretary\'s territory, and building or installing a runtime environment from scratch is coder\'s — archivist only restructures and prunes (including pruning already-installed envs: stale conda envs, pip caches).',
     description:
       'Cross-domain archivist (local fs + runtime envs + Feishu structure operations: create folder / move / delete).',
     tools: [
@@ -163,7 +163,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'reviewer',
     whenToUse:
-      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch when the task is "find issues" (not "fix them"). It reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
+      'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch it as a quality gate before anything substantial reaches the user — on your own initiative, even when the user did not explicitly ask for a review — to find issues (not fix them). It reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
     tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
