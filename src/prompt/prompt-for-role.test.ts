@@ -19,7 +19,7 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '6319a79591eb6aa4a7f2bf3a38da9d1c7c7e483b02be7ba40225a05eb28c1817',
+  main: '88f0d5b923fbc3035b63492e1dbae236c527477229c2420e529a35f2af7a316b',
   generalist: '14b0bd7afbba78f38d956785effcbb33aabf1862ee36d8461e4b7371c7f31140',
   localExplorer: '5a0282508c69778e44c1aefd9308458ae33f39175bc0ea90e2bd6ae4ded3ba05',
   webSearcher: 'a723541d40c7f6bedf5e4c3c95105634384f41ada8d274d1605f9a8ff1a33a3c',

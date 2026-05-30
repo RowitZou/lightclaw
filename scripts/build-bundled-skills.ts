@@ -28,6 +28,7 @@ interface BuiltSkill {
   source: 'builtin'
   filePath: string
   body: string
+  autoLoad?: boolean
 }
 
 async function main(): Promise<void> {
@@ -89,6 +90,8 @@ async function main(): Promise<void> {
       ? rolesRaw.map(value => String(value).trim()).filter(Boolean)
       : []
 
+    const autoLoad = frontmatter.auto_load === 'true' ? true : undefined
+
     skills.push({
       name,
       description,
@@ -98,6 +101,7 @@ async function main(): Promise<void> {
       source: 'builtin',
       filePath: `builtin:${name}`,
       body: body.trim(),
+      autoLoad,
     })
   }
 

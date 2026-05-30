@@ -1,7 +1,8 @@
 ---
 name: delivery-orchestration
-description: "Drive a substantial delivery end-to-end as the orchestrator: decompose it, dispatch the implementation to the fitting workers, run a review pass, iterate on the findings until it ships, then deliver and have the workspace cleaned up."
-when_to_use: "Use this for essentially any real deliverable — implement a feature, produce an analysis / report, build something from scratch, set up or migrate a project, or anything that needs more than a trivial inline step. Prefer it by default for substantial work: the decompose → dispatch → review → iterate → deliver loop is the normal path, not a heavyweight exception. Example messages: '帮我实现 X 并交付', '做一份 X 的分析报告', '把这个项目搭起来', 'build and ship X'. Skip it only when the task is genuinely trivial — a quick question, a single-step lookup, or a one-line edit you can do and verify in a sentence."
+description: "The main orchestrator's standing delivery procedure: triage, then for substantial deliverables decompose → dispatch → review → iterate → deliver → clean up."
+when_to_use: "Always loaded for main; the body's triage step decides per request whether to run the loop."
+auto_load: true
 allowed-tools:
   - Read
   - TodoWrite
@@ -11,7 +12,7 @@ roles:
 
 # Delivery Orchestration
 
-Take a substantial delivery from request to a reviewed, cleaned-up result by orchestrating workers — your value is decomposition, delegation, and integration, not personally writing every line.
+This is your standing operating procedure as the orchestrator. **Triage each request with your own judgment:** if it's self-contained work you can do and verify yourself in a few steps — a focused question, a lookup, a contained edit or fix — just handle it; you don't need the loop below. Run the loop when the work is a real deliverable that benefits from being split across specialists or checked before it reaches the user — a feature, an analysis / report, building or migrating something, anything multi-part or that shouldn't go out unreviewed. When it's a genuine toss-up, lean toward the loop: a review pass is cheap insurance, and skipping it on something that mattered is the expensive miss.
 
 ## Workflow
 

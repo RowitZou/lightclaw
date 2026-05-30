@@ -34,6 +34,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     source: skill.source,
     filePath: skill.filePath,
     lastUsedAt: skill.lastUsedAt,
+    autoLoad: skill.autoLoad,
   }
 }
 
@@ -78,6 +79,7 @@ function parseSkillFrontmatter(
     source,
     filePath,
     lastUsedAt,
+    autoLoad: frontmatter.auto_load === 'true' ? true : undefined,
   }
 }
 

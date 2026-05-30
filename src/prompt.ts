@@ -19,8 +19,10 @@ import {
 } from './state.js'
 import {
   listRegisteredSkills,
+  loadRegisteredSkill,
   refreshSkillRegistry,
 } from './skill/registry.js'
+import { skillDirFor } from './skill/skill-dir.js'
 import { filterSkillsForRole } from './skill/role-validation.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
@@ -107,7 +109,10 @@ export type SystemPromptRenderOptions = {
 }
 
 function formatSkillsSection(role: Role): string {
-  const skills = filterSkillsForRole(listRegisteredSkills(), role)
+  // Auto-loaded skills are injected as a workflow section (see
+  // formatAutoLoadedWorkflowSections); they are not load-on-demand, so listing
+  // them here — with a now-moot when_to_use trigger — would be misleading.
+  const skills = filterSkillsForRole(listRegisteredSkills(), role).filter(skill => !skill.autoLoad)
   if (skills.length === 0) {
     return 'None.'
   }
@@ -118,6 +123,28 @@ function formatSkillsSection(role: Role): string {
       return `- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`
     })
     .join('\n')
+}
+
+// Auto-loaded skills (frontmatter `auto_load: true`) are the role's primary
+// always-on workflow: the framework injects the body on turn 1 instead of
+// waiting for the model to call UseSkill, so the procedure is reliably in
+// context. The skill text stays in its own file (persona / workflow stay
+// separated); only the loading becomes automatic.
+async function formatAutoLoadedWorkflowSections(role: Role): Promise<string[]> {
+  const autoSkills = filterSkillsForRole(listRegisteredSkills(), role).filter(skill => skill.autoLoad)
+  const sections: string[] = []
+  for (const skill of autoSkills) {
+    const loaded = await loadRegisteredSkill(skill.name)
+    const body = loaded?.body.trim()
+    if (!body) {
+      continue
+    }
+    // Resolve the asset-dir placeholder to the non-runtime fallback (matches
+    // registry.ts); the always-on workflow body is read as guidance, not
+    // entered as a tool-gated skill invocation.
+    sections.push(body.replaceAll('${LIGHTCLAW_SKILL_DIR}', skillDirFor(skill)))
+  }
+  return sections
 }
 
 // Tool catalog: name only. Full description / parameter schema travels via
@@ -422,6 +449,10 @@ async function buildRolePromptParts(
   const skillsSection = formatRoleSkillsSection(policy.skills, role)
   if (skillsSection) {
     preTodoSections.push(skillsSection)
+  }
+
+  for (const workflowSection of await formatAutoLoadedWorkflowSections(role)) {
+    preTodoSections.push(workflowSection)
   }
 
   const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools)
