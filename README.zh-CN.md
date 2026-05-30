@@ -62,11 +62,14 @@ pnpm dev                  # tsx src/cli.ts —— 免构建，迭代最快
 ## 使用
 
 ```bash
-lightclaw                 # 拉起 daemon：启用的 channel + 终端 admin 控制台
-lightclaw --home <dir>    # 临时切 home    lightclaw --config <file>  # 外部只读配置
+lightclaw                         # 拉起 daemon：启用的 channel + 终端 admin 控制台
+lightclaw --home <dir>            # 临时切 home
+lightclaw --config <file>         # 外部只读配置
+lightclaw run "...长任务..."       # 终端一次性 dogfood turn
+lightclaw run --stdin             # 从 stdin 读取一次性 prompt
 ```
 
-终端不跑 agent——和 agent 对话走飞书。常用 slash（终端与飞书共用，`admin` / `飞书` 标注例外）：
+终端 admin 控制台不跑交互式 agent session；一次性长任务可用 `lightclaw run`，常驻对话仍走飞书。常用 slash（终端与飞书共用，`admin` / `飞书` 标注例外）：
 
 | 命令 | 说明 |
 |---|---|
