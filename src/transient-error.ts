@@ -32,6 +32,39 @@ const TRANSIENT_ERROR_CODES = new Set([
 // reproduces them (and a re-run is expensive), so they stay fatal.
 const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
 
+// Provider context-window-overflow errors. The single source of truth for the
+// "input is bigger than the model's window" concept, consumed in two places:
+//   1. isTransientError() treats it as FATAL — re-sending the same oversized
+//      input just reproduces the error, so a plain retry is a wasted round-trip
+//      (and on metered providers a wasted ~context-window of billed input).
+//   2. The prompt-too-long-retry hook keys on the SAME matcher to run a
+//      compaction-then-retry instead of giving up.
+// Message-substring match because providers do not all attach a structured
+// code: Anthropic says "prompt is too long", OpenAI/codex says "exceeds the
+// context window of this model" / "maximum context length is N tokens". A
+// provider-specific allowlist that only covered the Anthropic phrasing let the
+// codex family slip past the hook (the safety net silently no-op'd) AND fall
+// through to the isTransientError default-retry — the 2026-05-30 dogfood
+// 250k-input double-overflow on gpt-codex-mid.
+const CONTEXT_OVERFLOW_PATTERN =
+  /prompt is too long|input is too long|input length|exceeds the context window|context window|context length|exceeds maximum context|maximum context length/i
+
+/**
+ * True when the error is a provider "input exceeds the model context window"
+ * signal. Shared by isTransientError (→ fatal) and the prompt-too-long-retry
+ * hook (→ compact-then-retry). Inspects the error message across the cause
+ * chain.
+ */
+export function isContextOverflowError(error: unknown): boolean {
+  for (const node of queryErrorChain(error)) {
+    const detail = node instanceof Error ? node.message : String(node)
+    if (CONTEXT_OVERFLOW_PATTERN.test(detail)) {
+      return true
+    }
+  }
+  return false
+}
+
 export class IdleStreamError extends Error {
   readonly kind: 'ttfb' | 'inter-event'
   readonly idleMs: number
@@ -116,6 +149,13 @@ export function isTransientError(error: unknown): boolean {
   }
   const detail = error instanceof Error ? error.message : String(error)
   if (FATAL_MESSAGE_PATTERN.test(detail)) {
+    return false
+  }
+  // Context-window overflow is deterministic: the same oversized input fails
+  // again. The prompt-too-long-retry hook (which compacts THEN retries) runs
+  // before this classifier in query.ts; if it could not recover, a plain retry
+  // here would only re-send the identical input and waste a round-trip.
+  if (isContextOverflowError(error)) {
     return false
   }
   for (const node of queryErrorChain(error)) {

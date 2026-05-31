@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { IdleStreamError, isTransientError } from './transient-error.js'
+import {
+  IdleStreamError,
+  isContextOverflowError,
+  isTransientError,
+} from './transient-error.js'
 
 describe('isTransientError', () => {
   it('classifies network / undici / 5xx errors as transient', () => {
@@ -43,6 +47,50 @@ describe('isTransientError', () => {
     assert.equal(isTransientError(new Error('Request was aborted')), false)
     // Deterministic — a whole-query re-run only reproduces it.
     assert.equal(isTransientError(new Error('Exceeded maximum tool turns (50).')), false)
+    // Context-window overflow is deterministic — re-sending the same oversized
+    // input fails again, so a plain retry is a wasted round-trip. The codex
+    // phrasing (2026-05-30 dogfood) used to default to transient (retry).
+    assert.equal(
+      isTransientError(
+        new Error(
+          'Your input exceeds the context window of this model. Please adjust your input and try again.',
+        ),
+      ),
+      false,
+    )
+    // Anthropic phrasing must stay fatal here too.
+    assert.equal(isTransientError(new Error('prompt is too long: 250000 tokens')), false)
+  })
+
+  it('recognizes context-window overflow across provider phrasings', () => {
+    // OpenAI / codex (2026-05-30 dogfood gpt-codex-mid double-overflow).
+    assert.equal(
+      isContextOverflowError(
+        new Error(
+          'Your input exceeds the context window of this model. Please adjust your input and try again.',
+        ),
+      ),
+      true,
+    )
+    // OpenAI Chat Completions variant.
+    assert.equal(
+      isContextOverflowError(
+        new Error("This model's maximum context length is 128000 tokens."),
+      ),
+      true,
+    )
+    // Anthropic.
+    assert.equal(isContextOverflowError(new Error('prompt is too long')), true)
+    // Carried on the cause chain.
+    assert.equal(
+      isContextOverflowError(
+        new Error('wrapped', { cause: new Error('exceeds the context window') }),
+      ),
+      true,
+    )
+    // Unrelated errors must not match.
+    assert.equal(isContextOverflowError(new Error('ECONNRESET')), false)
+    assert.equal(isContextOverflowError(new Error('Request was aborted')), false)
   })
 
   it('defaults a genuinely unrecognized error to transient (retry)', () => {
