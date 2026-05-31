@@ -1,26 +1,16 @@
 import type { Hook } from './types.js'
 import { runCompaction } from './auto-compact.js'
-
-function isPromptTooLongError(err: unknown): boolean {
-  if (!err) {
-    return false
-  }
-  const message = err instanceof Error ? err.message : String(err)
-  const lower = message.toLowerCase()
-  return (
-    lower.includes('prompt is too long')
-    || lower.includes('input is too long')
-    || lower.includes('input length')
-    || lower.includes('context length')
-    || lower.includes('exceeds maximum context')
-    || lower.includes('maximum context length')
-  )
-}
+import { isContextOverflowError } from '../../transient-error.js'
 
 export const promptTooLongRetryHook: Hook = {
   name: 'prompt-too-long-retry',
   async onStreamError(error, ctx) {
-    if (!isPromptTooLongError(error)) {
+    // isContextOverflowError covers both the Anthropic ("prompt is too long")
+    // and OpenAI/codex ("exceeds the context window of this model") phrasings
+    // from the single matcher in transient-error.ts. The earlier local
+    // allowlist only matched the Anthropic family, so a codex context-overflow
+    // skipped compaction here and then fell through to a useless plain retry.
+    if (!isContextOverflowError(error)) {
       return { kind: 'rethrow' }
     }
     const compacted = await runCompaction(ctx, true)

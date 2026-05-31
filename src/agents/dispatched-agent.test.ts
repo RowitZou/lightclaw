@@ -184,6 +184,66 @@ test('worker ALS sessionId aligns with chainState path末端 + chainState rides 
   }
 })
 
+test('dispatched worker does NOT inherit the requester enabledSecrets (main-only)', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+      // Requester (main) holds a live secret; bash.ts would inject it as
+      // ExecInput.env for main's own turns.
+      enabledSecrets: new Map([['GH_TOKEN', 'ghp_secret_value']]),
+    })
+    const chainState = makeChainState('dispatch-secret')
+
+    let observedSecrets: ReadonlyMap<string, string> | undefined
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'do worker work',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        observedSecrets = await import('../session-context.js')
+          .then(m => m.getCurrentSessionContext()?.enabledSecrets)
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    // The worker's ALS context must NOT carry the requester's secrets — the
+    // spread of currentCtx into childCtx is explicitly overridden to undefined,
+    // so bash.ts's getCurrentEnabledSecrets() yields nothing inside the worker.
+    assert.equal(observedSecrets, undefined)
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('runDispatchedAgent persists a fresh fork transcript with zero context boundary', async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
   setLightclawHomeOverride(tempDir)

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
+import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { memoryWriteAtTool } from './memory-write-at.js'
 
@@ -12,10 +13,17 @@ let memoryDir = ''
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(path.join(tmpdir(), 'lightclaw-memory-write-at-'))
+  // Isolate lightclawHome so the audit writer's default `<home>/audit` path
+  // resolves under tmpRoot instead of the real `~/.lightclaw` — otherwise a
+  // host whose $HOME is unwritable for the running uid (e.g. the rlaunch
+  // worker: PID1=root, exec setpriv'd to a non-root uid) fails every mutation
+  // test with EACCES on mkdir '/root/.lightclaw'.
+  setLightclawHomeOverride(path.join(tmpRoot, 'home'))
   memoryDir = path.join(tmpRoot, 'memory', 'alice')
 })
 
 afterEach(async () => {
+  setLightclawHomeOverride(undefined)
   await rm(tmpRoot, { recursive: true, force: true })
 })
 
