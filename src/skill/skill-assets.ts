@@ -32,6 +32,7 @@ export async function materializeSkillAssets(
       const dst = path.join(dstRoot, rel)
       try {
         await runtime.fs.writeFile(dst, await fs.readFile(file))
+        await preserveExecutableBit(file, dst, runtime)
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
@@ -42,6 +43,17 @@ export async function materializeSkillAssets(
   }
 
   return dstRoot
+}
+
+async function preserveExecutableBit(src: string, dst: string, runtime: Runtime): Promise<void> {
+  if (!runtime.fs.chmod) {
+    return
+  }
+  const stat = await fs.stat(src)
+  if ((stat.mode & 0o111) === 0) {
+    return
+  }
+  await runtime.fs.chmod(dst, stat.mode & 0o777)
 }
 
 async function dirHasFiles(root: string): Promise<boolean> {

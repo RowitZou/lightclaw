@@ -162,6 +162,10 @@ export class DockerRuntime implements Runtime {
         await this.assertWorkspaceQuota()
         return bindMountData.writeFile(pathname, content)
       },
+      chmod: async (pathname, mode) => {
+        await this.ensureRunning()
+        return bindMountData.chmod(pathname, mode)
+      },
       stat: async pathname => {
         await this.ensureRunning()
         return bindMountData.stat(pathname)
@@ -339,6 +343,13 @@ export class DockerRuntime implements Runtime {
       })
       if (result.exitCode !== 0) {
         throw new Error(`writeFile ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
+      }
+    },
+    chmod: async (pathname, mode) => {
+      const containerPath = this.toContainerPath(pathname)
+      const result = await this.exec({ command: `chmod ${mode.toString(8)} ${shellQuote(containerPath)}` })
+      if (result.exitCode !== 0) {
+        throw new Error(`chmod ${pathname}: ${result.stderr.trim() || result.stdout.trim()}`)
       }
     },
     stat: async (pathname): Promise<RuntimeStat> => {

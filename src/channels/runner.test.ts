@@ -100,6 +100,29 @@ afterEach(() => {
   }
 })
 
+describe('ChannelRunner terminal routing', () => {
+  it('accepts approved terminal senders instead of silently dropping them', async () => {
+    await createUser('alice')
+    await addLink('alice', 'terminal:alice')
+
+    const strategy = installFakeStrategy('terminal')
+    const runner = new ChannelRunner(strategy)
+    await runner.handleMessage({
+      channel: 'terminal',
+      eventId: 'event-terminal-alice',
+      chatId: 'terminal-run',
+      senderOpenId: 'alice',
+      senderKey: 'terminal:alice',
+      chatType: 'p2p',
+      messageId: 'msg-terminal-alice',
+      text: '/help',
+      synthetic: true,
+    })
+
+    assert.equal(strategy.replies.length + strategy.notices.length, 1)
+  })
+})
+
 describe('ChannelRunner multi-user concurrency', () => {
   it('does not block a second fake sender behind another sender typing delay', async () => {
     await createUser('alice')

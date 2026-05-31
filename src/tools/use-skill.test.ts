@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -42,9 +42,12 @@ describe('UseSkill asset materialization', () => {
       })
       const scriptDir = path.join(userSkillsRoot('alice'), 'asset-skill', 'scripts')
       await mkdir(scriptDir, { recursive: true })
-      await writeFile(path.join(scriptDir, 'hello.sh'), '#!/bin/sh\necho hi\n', 'utf8')
+      const scriptPath = path.join(scriptDir, 'hello.sh')
+      await writeFile(scriptPath, '#!/bin/sh\necho hi\n', 'utf8')
+      await chmod(scriptPath, 0o755)
 
       const writes: Array<{ path: string; content: string }> = []
+      const chmods: Array<{ path: string; mode: number }> = []
       const runtime = {
         workspaceRoot: '/workspace',
         fs: {
@@ -53,6 +56,9 @@ describe('UseSkill asset materialization', () => {
               path: pathname,
               content: Buffer.isBuffer(content) ? content.toString('utf8') : content,
             })
+          },
+          async chmod(pathname: string, mode: number): Promise<void> {
+            chmods.push({ path: pathname, mode })
           },
         },
       } as unknown as Runtime
@@ -86,6 +92,12 @@ describe('UseSkill asset materialization', () => {
         {
           path: '/workspace/.lightclaw/skill-run/asset-skill/scripts/hello.sh',
           content: '#!/bin/sh\necho hi\n',
+        },
+      ])
+      assert.deepEqual(chmods, [
+        {
+          path: '/workspace/.lightclaw/skill-run/asset-skill/scripts/hello.sh',
+          mode: 0o755,
         },
       ])
     })

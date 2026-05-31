@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -134,6 +134,9 @@ export class LocalRuntime implements Runtime {
       const resolved = this.absolutize(pathname)
       await mkdir(path.dirname(resolved), { recursive: true })
       await writeFile(resolved, content)
+    },
+    chmod: async (pathname, mode) => {
+      await chmod(this.absolutize(pathname), mode)
     },
     stat: async (pathname): Promise<RuntimeStat> => {
       const result = await stat(this.absolutize(pathname))

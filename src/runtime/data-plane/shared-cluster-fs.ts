@@ -29,6 +29,11 @@ export class SharedClusterFsData implements DataPlane {
     })
   }
 
+  async chmod(workerPath: string, mode: number): Promise<void> {
+    const hostPath = this.hostPath(workerPath)
+    return this.guard('chmod', () => fsp.chmod(hostPath, mode))
+  }
+
   async stat(workerPath: string): Promise<RuntimeStat> {
     const hostPath = this.hostPath(workerPath)
     const result = await this.guard('stat', () => fsp.stat(hostPath))

@@ -8,6 +8,7 @@ import { DataPlaneNotApplicableError, LayeredDataPlane } from './layered.js'
 function fakePlane(input: {
   kind: DataPlane['kind']
   readFile?: (path: string) => Promise<Buffer>
+  chmod?: (path: string, mode: number) => Promise<void>
   stat?: (path: string) => Promise<RuntimeStat>
 }): DataPlane {
   return {
@@ -16,6 +17,7 @@ function fakePlane(input: {
     reliability: input.kind === 'exec-relay' ? 'depends-on-control-plane' : 'fs-semantic',
     readFile: input.readFile ?? (async () => Buffer.from('ok')),
     writeFile: async () => {},
+    ...(input.chmod ? { chmod: input.chmod } : {}),
     stat: input.stat ?? (async () => ({
       size: 2,
       isFile: true,
@@ -91,6 +93,46 @@ test('LayeredDataPlane refuses large reads through exec-relay fallback', async (
     /refusing to read .* via exec-relay/,
   )
   assert.equal(readCalled, false)
+})
+
+test('LayeredDataPlane chmod uses the first chmod-capable applicable layer', async () => {
+  const calls: Array<{ layer: string; path: string; mode: number }> = []
+  const data = new LayeredDataPlane([
+    fakePlane({ kind: 'bind-mount' }),
+    fakePlane({
+      kind: 'exec-relay',
+      chmod: async (pathname, mode) => {
+        calls.push({ layer: 'exec-relay', path: pathname, mode })
+      },
+    }),
+  ], policy)
+
+  await data.chmod('/workspace/bin/run.sh', 0o755)
+
+  assert.deepEqual(calls, [
+    { layer: 'exec-relay', path: '/workspace/bin/run.sh', mode: 0o755 },
+  ])
+})
+
+test('LayeredDataPlane blocks chmod on read-only mounts before any layer runs', async () => {
+  const roPolicy = new MountTablePathPolicy([
+    { host: '/host/ro', worker: '/opt/ro', mode: 'ro' },
+  ])
+  let chmodCalled = false
+  const data = new LayeredDataPlane([
+    fakePlane({
+      kind: 'bind-mount',
+      chmod: async () => {
+        chmodCalled = true
+      },
+    }),
+  ], roPolicy)
+
+  await assert.rejects(
+    () => data.chmod('/opt/ro/foo.sh', 0o755),
+    /Cannot chmod read-only mount/,
+  )
+  assert.equal(chmodCalled, false)
 })
 
 test('LayeredDataPlane blocks writes to read-only mounts before any layer runs', async () => {

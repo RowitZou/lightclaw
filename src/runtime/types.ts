@@ -63,6 +63,7 @@ export type DataPlane = {
   readonly reliability: 'fs-semantic' | 'protocol-multiplex' | 'depends-on-control-plane'
   readFile(pathname: string): Promise<Buffer>
   writeFile(pathname: string, content: Buffer | string): Promise<void>
+  chmod?(pathname: string, mode: number): Promise<void>
   stat(pathname: string): Promise<RuntimeStat>
   readdir(pathname: string): Promise<string[]>
   /**

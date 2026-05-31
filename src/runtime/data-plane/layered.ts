@@ -53,6 +53,18 @@ export class LayeredDataPlane implements DataPlane {
     return this.tryLayers('write', pathname, layer => layer.writeFile(pathname, content))
   }
 
+  async chmod(pathname: string, mode: number): Promise<void> {
+    if (!this.policy.isAllowed(pathname, 'write')) {
+      throw new Error(`Cannot chmod read-only mount: ${pathname}`)
+    }
+    return this.tryLayers('chmod', pathname, async layer => {
+      if (!layer.chmod) {
+        throw new DataPlaneNotApplicableError(`${layer.kind} cannot chmod ${pathname}`)
+      }
+      return layer.chmod(pathname, mode)
+    })
+  }
+
   async stat(pathname: string): Promise<RuntimeStat> {
     return this.tryLayers('stat', pathname, layer => layer.stat(pathname))
   }

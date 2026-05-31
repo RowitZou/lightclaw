@@ -21,6 +21,10 @@ export class BindMountData implements DataPlane {
     await fsp.writeFile(hostPath, content)
   }
 
+  async chmod(workerPath: string, mode: number): Promise<void> {
+    await fsp.chmod(this.hostPath(workerPath), mode)
+  }
+
   async stat(workerPath: string): Promise<RuntimeStat> {
     const result = await fsp.stat(this.hostPath(workerPath))
     return {

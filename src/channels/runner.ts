@@ -2100,7 +2100,7 @@ export function isLikelySlashCommand(text: string): boolean {
 }
 
 function isPairableChannel(channel: string): channel is ChannelKind {
-  return channel === 'feishu'
+  return channel === 'feishu' || channel === 'terminal'
 }
 
 // Up to 3 attempts total per inbound message: the first attempt + 2 retries.

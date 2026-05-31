@@ -16,7 +16,7 @@ import {
   resolveStartupHome,
   syncExternalConfig,
 } from './config-bootstrap.js'
-import { initializeApp } from './init.js'
+import { initializeApp, stopNetworkBridgeSafely } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { runConfigWizard } from './config-wizard.js'
@@ -83,6 +83,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // cli.ts await it here is the deterministic path.
   await getRuntimePool().releaseAll().catch(error => {
     process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
+  })
+  await stopNetworkBridgeSafely().catch(error => {
+    process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
   })
   process.exit(0)
 }
@@ -249,6 +252,7 @@ async function main(): Promise<void> {
       sessionId: 'terminal-run',
       currentUserId,
       channel: 'terminal',
+      watchUserDefinedAgents: false,
     })
     configForShutdown = config
     await runWithSessionContext(sessionContext, async () => {
@@ -270,6 +274,9 @@ async function main(): Promise<void> {
         })
         await getRuntimePool().releaseAll().catch(error => {
           process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
+        })
+        await stopNetworkBridgeSafely().catch(error => {
+          process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
         })
       }
     })
@@ -327,6 +334,9 @@ async function main(): Promise<void> {
       })
       await getRuntimePool().releaseAll().catch(error => {
         process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
+      })
+      await stopNetworkBridgeSafely().catch(error => {
+        process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
       })
     }
   })

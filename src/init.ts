@@ -58,6 +58,7 @@ type CommonStateInput = {
 type InitializeAppInput = CommonStateInput & {
   mcpEnabled?: boolean
   hooksEnabled?: boolean
+  watchUserDefinedAgents?: boolean
 }
 
 export class LocalRuntimeAdminOnlyError extends Error {
@@ -113,7 +114,11 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   startImagePrefetchIfNeeded(resolvedConfig)
   const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   initializeAgents()
-  await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
+  await initializeUserDefinedAgents({
+    home: lightclawHome(),
+    failOnError: true,
+    watch: input?.watchUserDefinedAgents ?? true,
+  })
   registerBusSubscribers()
   getBackgroundTaskScheduler().start(resolvedConfig)
   getBackgroundExecWatcher().start(resolvedConfig)
@@ -274,6 +279,16 @@ export function beginQuery(): AbortSignal {
   return controller.signal
 }
 
+export async function stopNetworkBridgeSafely(): Promise<void> {
+  const bridge = getNetworkBridge()
+  if (!bridge) return
+  try {
+    await bridge.stop()
+  } finally {
+    setNetworkBridge(null)
+  }
+}
+
 function resolveConfig(
   config: LightClawConfig,
   input: InitializeAppInput | undefined,
@@ -375,7 +390,7 @@ function installSignalHandlers(sessionContext: SessionContext): void {
       runtimePoolReleaseSafely(),
       backgroundExecWatcherStopSafely(),
       workerHealthCheckerStopSafely(),
-      networkBridgeStopSafely(),
+      stopNetworkBridgeSafely(),
     ]).finally(() => process.exit(exitCode))
 
     // Hard cap if cleanup hangs (e.g. docker daemon unresponsive). Sized
@@ -400,16 +415,6 @@ async function workerHealthCheckerStopSafely(): Promise<void> {
 
 async function backgroundExecWatcherStopSafely(): Promise<void> {
   getBackgroundExecWatcher().stop()
-}
-
-async function networkBridgeStopSafely(): Promise<void> {
-  const bridge = getNetworkBridge()
-  if (!bridge) return
-  try {
-    await bridge.stop()
-  } finally {
-    setNetworkBridge(null)
-  }
 }
 
 async function runtimeStopSafely(sessionContext: SessionContext): Promise<void> {
