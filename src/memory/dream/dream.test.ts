@@ -17,6 +17,7 @@ import type { RunSubagentResult } from '../../agents/run-subagent.js'
 type SubagentResult = RunSubagentResult
 import type { LightClawConfig } from '../../config.js'
 import { userSkillsRoot } from '../../identity/paths.js'
+import { setLightclawHomeOverride } from '../../paths.js'
 import { createSessionContext, runWithSessionContext } from '../../session-context.js'
 import { memoryDeleteTool } from '../../tools/memory-delete.js'
 import { memoryMoveTool } from '../../tools/memory-move.js'
@@ -48,6 +49,12 @@ beforeEach(() => {
   tmpMemoryDir = path.join(tmpRoot, 'memory', 'alice')
   savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
   process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
+  // Isolate lightclawHome under tmpRoot so the curator tools' audit writer
+  // (`<home>/audit`) and skill-aging paths resolve here instead of the real
+  // `~/.lightclaw` — otherwise a host whose $HOME is unwritable for the
+  // running uid (e.g. the rlaunch worker) fails the curator-mutation tests
+  // with EACCES on mkdir '/root/.lightclaw'.
+  setLightclawHomeOverride(tmpRoot)
   resetAutoDreamStateForTest()
   setRunSubagentForTest(null)
 })
@@ -58,6 +65,7 @@ afterEach(() => {
   } else {
     process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
   }
+  setLightclawHomeOverride(undefined)
   resetAutoDreamStateForTest()
   setRunSubagentForTest(null)
   rmSync(tmpRoot, { recursive: true, force: true })
