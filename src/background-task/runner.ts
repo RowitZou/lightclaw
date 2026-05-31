@@ -14,7 +14,6 @@ import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-to
 import { runDispatchedAgent } from '../agents/dispatched-agent.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
-import { loadEnabledSecrets } from '../secrets/store.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
   createSessionContext,
@@ -101,7 +100,11 @@ export async function runBackgroundTaskFire(input: {
       sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
-      enabledSecrets: loadEnabledSecrets(input.task.ownerCanonicalUser),
+      // No enabledSecrets: a background fire is a dispatched worker, and
+      // runDispatchedAgent's childCtx strips secrets for every dispatched
+      // stack (secrets are main-only — see dispatched-agent.ts). Loading them
+      // here would be dead weight that misleadingly implies bg fires can use
+      // them, when the childCtx that actually runs the agent loop clears it.
       sessionId,
       channel: 'feishu',
       permissionMode,

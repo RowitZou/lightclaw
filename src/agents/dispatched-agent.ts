@@ -221,6 +221,19 @@ export async function runDispatchedAgent(
         chainState: params.chainState,
         discoveredTools: new Map(),
         turnCounter: 0,
+        // Per-user runtime secrets (Phase 18) are main-only. Dispatched
+        // workers — blocking, background, and internal — must not inherit the
+        // requester's `enabledSecrets`: their prompt never renders the
+        // `## Available Secrets` section (buildSubagentPromptContent does not
+        // pass enabledSecrets), so the worker model has no language for a
+        // secret, yet the spread of currentCtx above would still leave the
+        // value live in `bash.ts`'s `ExecInput.env` injection. That mismatch
+        // ("the env has $GH_TOKEN but the agent was never told") is the gap
+        // closed here: secret-bearing actions (e.g. authenticated git push)
+        // funnel through main, consistent with Notify / user-facing cards
+        // being main-only. Stripping at the single childCtx chokepoint covers
+        // every dispatched stack.
+        enabledSecrets: undefined,
         // Framework-internal roles (memoryExtractor / memoryCurator) work
         // purely on daemon-side data — the memory tree and session
         // transcripts. Pin them to a host-direct runtime so their
