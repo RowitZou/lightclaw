@@ -8,7 +8,7 @@ Usage: rjob-wrapper.sh <command> [args...]
 Safe commands:
   list [rjob list args...]
   get <job> [rjob get args...]
-  logs <job> [--tail N] [rjob logs args...]
+  logs {job|replica} <name> [-n N] [rjob logs args...]
   events <job> [rjob events args...]
   submit --predict-only [rjob submit args...]
   download-logs <job> [rjob download-logs args...]
@@ -55,19 +55,12 @@ while [[ $# -gt 0 ]]; do
       confirm_destructive=1
       shift
       ;;
-    --tail)
-      [[ "$command_name" == "logs" ]] || fail "--tail is only managed by wrapper for logs"
-      [[ $# -ge 2 ]] || fail "--tail requires a numeric value"
-      [[ "$2" =~ ^[0-9]+$ ]] || fail "--tail must be numeric"
-      explicit_tail=1
-      args+=("$1" "$2")
-      shift 2
-      ;;
-    --tail=*)
-      [[ "$command_name" == "logs" ]] || fail "--tail is only managed by wrapper for logs"
-      value=${1#--tail=}
-      [[ "$value" =~ ^[0-9]+$ ]] || fail "--tail must be numeric"
-      explicit_tail=1
+    -n|--tail-lines|--tail-lines=*)
+      # rjob logs uses -n / --tail-lines (NOT --tail). Record that the caller
+      # supplied an explicit tail so we don't also inject the default below;
+      # the value (for the `-n N` / `--tail-lines N` forms) flows through the
+      # generic passthrough branch as the next argument.
+      [[ "$command_name" == "logs" ]] && explicit_tail=1
       args+=("$1")
       shift
       ;;
@@ -97,7 +90,7 @@ fi
 if [[ "$command_name" == "logs" && "$explicit_tail" == "0" ]]; then
   default_tail=${RJOB_WRAPPER_DEFAULT_LOG_TAIL:-200}
   [[ "$default_tail" =~ ^[0-9]+$ ]] || fail "RJOB_WRAPPER_DEFAULT_LOG_TAIL must be numeric"
-  args=(--tail "$default_tail" "${args[@]}")
+  args=(--tail-lines "$default_tail" "${args[@]}")
 fi
 
 if [[ "$command_name" == "submit" ]]; then
@@ -130,8 +123,13 @@ fi
 
 if [[ -r /etc/profile.d/ssh-init.sh ]]; then
   set +e
-  # shellcheck disable=SC1091
-  source /etc/profile.d/ssh-init.sh
+  # Strip CR before sourcing: some kubebrain ml-base images ship this script
+  # with CRLF line endings, which makes its `. <(...)` process substitution
+  # resolve to `/dev/fd/63\r` and fail at line 4 on every call (the env it
+  # imports is usually already present in the worker, so the only damage was
+  # a scary 2-line error on each rjob command). tr -d '\r' makes it robust.
+  # shellcheck disable=SC1090
+  source <(tr -d '\r' < /etc/profile.d/ssh-init.sh)
   ssh_init_status=$?
   set -e
   if [[ "$ssh_init_status" -ne 0 ]]; then

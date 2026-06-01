@@ -27,6 +27,7 @@ Use the local `rjob` CLI for cluster batch training jobs while keeping LightClaw
 - If `rjob` is not on PATH, the wrapper fails and stops. Report that this environment lacks the cluster toolchain; do not install, reconfigure, or substitute another mechanism without the user's go-ahead.
 - Before every `rjob` call, initialize the kubebrain SSH environment with `source /etc/profile.d/ssh-init.sh`. Prefer the bundled wrapper, which does this automatically: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh`.
 - Keep environment-specific values out of source and memory unless the user explicitly provides them for the current job: namespace, charged group, image, GPFS/workspace paths, secrets, and credentials.
+- Authentication is automatic — `rjob` reads the worker's kubebrain credentials and environment itself, so never ask for or store a token/accesskey. Read commands (`list`/`get`/`logs`/`events`) need no inputs (namespace defaults from the environment). A real `submit` requires job-specific values you must collect from the user: `--image`, resources (`--cpu`/`--gpu`/`--memory` in MB), the command after `--`, and any data/output paths. See `references/command-mapping.md` ("Auth and required inputs") for the full breakdown.
 
 ## References
 
@@ -41,7 +42,7 @@ Run commands through:
 ${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh <command> [args...]
 ```
 
-The wrapper sources `/etc/profile.d/ssh-init.sh`, rejects unsupported subcommands, passes arguments as an argv array, refuses obvious shell metacharacters/control newlines, injects a bounded `logs --tail 200` default when no tail is supplied, and blocks real `submit`, `stop`, and `delete` unless an explicit confirmation flag or environment variable is present.
+The wrapper sources `/etc/profile.d/ssh-init.sh`, rejects unsupported subcommands, passes arguments as an argv array, refuses obvious shell metacharacters/control newlines, injects a bounded `logs --tail-lines 200` default when no `-n`/`--tail-lines` is supplied, and blocks real `submit`, `stop`, and `delete` unless an explicit confirmation flag or environment variable is present. See `references/command-mapping.md` for the exact per-subcommand syntax — follow it rather than guessing rjob's argument shapes.
 
 ## Command workflow
 
@@ -59,7 +60,7 @@ Safe read-only mappings:
 
 - List: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh list [rjob list flags]`
 - Get: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh get <job> [flags]`
-- Logs: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh logs <job> --tail <N> [flags]`; omit `--tail` only when the wrapper default of 200 lines is acceptable.
+- Logs: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh logs job <job> -n <N> [flags]`; the first positional must be `job` or `replica` (not the name alone). Tail flag is `-n`/`--tail-lines`; omit it only when the wrapper default of 200 lines is acceptable.
 - Events: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh events <job> [flags]`
 - Download logs: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh download-logs <job> [flags]`; choose a workspace destination and avoid overwriting existing artifacts without confirmation.
 
