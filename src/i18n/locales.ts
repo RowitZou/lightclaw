@@ -508,7 +508,7 @@ export const LOCALES = {
       'rlaunch 动态挂载是 per-user 的，worker 路径与 host 路径相同。\n' +
       '默认模式是 --ro（LightClaw 文件 API 拒绝写入；Bash 写入仍取决于 GPFS ACL）。',
     'mount.requiresRlaunchRuntime': '/mount 需要一个活跃的 rlaunch runtime。',
-    'mount.onlyRlaunch': '/mount 仅在 runtime.backend = "rlaunch" 时可用。',
+    'mount.onlyRlaunch': '/mount 仅在 runtime.backend = "cluster" 时可用。',
     'mount.noIdentity': 'LightClaw 当前没有可用身份；/mount 需要已配对的渠道用户。',
     'mount.list.empty': '该用户没有 rlaunch 动态挂载。',
     'mount.list.header': 'rlaunch 动态挂载：',
@@ -579,7 +579,7 @@ export const LOCALES = {
     // ---- Runtime: docker ----
     'runtime.docker.startFailed': '启动 Docker 沙箱容器失败：{detail}',
     'runtime.docker.imageNotReady': 'Docker 镜像 {image} 尚未就绪，正在 {state}。',
-    'runtime.docker.notRunning': 'Docker daemon 不可用。请先启动 Docker 或将 runtime.backend 改为 "local" / "rlaunch"。',
+    'runtime.docker.notRunning': 'Docker daemon 不可用。请先启动 Docker 或将 runtime.backend 改为 "local" / "cluster"。',
     'runtime.docker.containerLost': 'Docker 容器 {name} 失联，正在重建。',
 
     // ---- Runtime: rlaunch ----
@@ -1095,7 +1095,7 @@ export const LOCALES = {
       'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.\n' +
       'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
     'mount.requiresRlaunchRuntime': '/mount requires an active rlaunch runtime.',
-    'mount.onlyRlaunch': '/mount is only available when runtime.backend = "rlaunch".',
+    'mount.onlyRlaunch': '/mount is only available when runtime.backend = "cluster".',
     'mount.noIdentity': 'No active LightClaw identity; /mount requires a paired channel user.',
     'mount.list.empty': 'No dynamic rlaunch mounts for this user.',
     'mount.list.header': 'Dynamic rlaunch mounts:',
@@ -1166,7 +1166,7 @@ export const LOCALES = {
     // ---- Runtime: docker ----
     'runtime.docker.startFailed': 'Failed to start Docker sandbox container: {detail}',
     'runtime.docker.imageNotReady': 'Docker image {image} not ready, currently {state}.',
-    'runtime.docker.notRunning': 'Docker daemon unavailable. Start Docker, or switch runtime.backend to "local" / "rlaunch".',
+    'runtime.docker.notRunning': 'Docker daemon unavailable. Start Docker, or switch runtime.backend to "local" / "cluster".',
     'runtime.docker.containerLost': 'Docker container {name} lost; recreating.',
 
     // ---- Runtime: rlaunch ----

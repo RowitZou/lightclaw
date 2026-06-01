@@ -697,7 +697,7 @@ describe('config: endpoints + models registry', () => {
   })
 })
 
-describe('config: runtime.docker.security', () => {
+describe('config: runtime.dockerSettings.security', () => {
   it('uses the OpenClaw-style hardening defaults when section is omitted', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
@@ -706,7 +706,7 @@ describe('config: runtime.docker.security', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.runtime.docker.security, {
+    assert.deepEqual(cfg.runtime.dockerSettings.security, {
       capDrop: ['ALL'],
       capAdd: ['DAC_OVERRIDE', 'CHOWN', 'SETUID', 'SETGID'],
       noNewPrivileges: true,
@@ -726,7 +726,7 @@ describe('config: runtime.docker.security', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        docker: {
+        dockerSettings: {
           security: {
             capAdd: ['DAC_OVERRIDE', 'CHOWN'],
             readOnlyRootfs: true,
@@ -740,7 +740,7 @@ describe('config: runtime.docker.security', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.runtime.docker.security, {
+    assert.deepEqual(cfg.runtime.dockerSettings.security, {
       capDrop: ['ALL'],
       capAdd: ['DAC_OVERRIDE', 'CHOWN'],
       noNewPrivileges: true,
@@ -760,7 +760,7 @@ describe('config: runtime.docker.security', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        docker: {
+        dockerSettings: {
           security: {
             storageOptSize: null,
             workspaceQuotaMb: 0,
@@ -769,8 +769,8 @@ describe('config: runtime.docker.security', () => {
       },
     })
     const cfg = getConfig()
-    assert.equal(cfg.runtime.docker.security.storageOptSize, null)
-    assert.equal(cfg.runtime.docker.security.workspaceQuotaMb, null)
+    assert.equal(cfg.runtime.dockerSettings.security.storageOptSize, null)
+    assert.equal(cfg.runtime.dockerSettings.security.workspaceQuotaMb, null)
   })
 
   it('rejects invalid security values', () => {
@@ -780,7 +780,7 @@ describe('config: runtime.docker.security', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        docker: {
+        dockerSettings: {
           security: { pidsLimit: -1 },
         },
       },
@@ -795,7 +795,7 @@ describe('config: runtime.docker.security', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        docker: {
+        dockerSettings: {
           security: { storageOptSize: '32 gigs' },
         },
       },
@@ -810,7 +810,7 @@ describe('config: runtime.docker.security', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        docker: {
+        dockerSettings: {
           security: { workspaceQuotaMb: -1 },
         },
       },
@@ -819,7 +819,7 @@ describe('config: runtime.docker.security', () => {
   })
 })
 
-describe('config: runtime.rlaunch.gpfsMounts', () => {
+describe('config: runtime.clusterSettings.gpfsMounts', () => {
   it('parses multiple gpfs mount rules and strips trailing slashes', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
@@ -827,8 +827,9 @@ describe('config: runtime.rlaunch.gpfsMounts', () => {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        backend: 'rlaunch',
-        rlaunch: {
+        driver: 'brainpp',
+        backend: 'cluster',
+        clusterSettings: {
           image: 'registry/image:tag',
           chargedGroup: 'hs_cpu',
           namespace: 'ailab-hs',
@@ -840,21 +841,22 @@ describe('config: runtime.rlaunch.gpfsMounts', () => {
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.runtime.rlaunch.gpfsMounts, [
+    assert.deepEqual(cfg.runtime.clusterSettings.gpfsMounts, [
       { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' },
       { hostPrefix: '/mnt/shared-storage-gpfs2', mountPrefix: 'gpfs://gpfs2' },
     ])
   })
 
-  it('requires gpfsMounts when runtime.backend is rlaunch', () => {
+  it('requires gpfsMounts when runtime.backend is cluster', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
         opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
       runtime: {
-        backend: 'rlaunch',
-        rlaunch: {
+        driver: 'brainpp',
+        backend: 'cluster',
+        clusterSettings: {
           image: 'registry/image:tag',
           chargedGroup: 'hs_cpu',
           namespace: 'ailab-hs',
@@ -862,5 +864,39 @@ describe('config: runtime.rlaunch.gpfsMounts', () => {
       },
     })
     assert.throws(() => getConfig(), /gpfsMounts is required/)
+  })
+
+  it('requires runtime.driver when runtime.backend is cluster', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        backend: 'cluster',
+        clusterSettings: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsMounts: [
+            { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1/' },
+          ],
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /runtime\.driver = "brainpp" is required/)
+  })
+
+  it('rejects legacy runtime.backend = rlaunch with a migration hint', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        backend: 'rlaunch',
+      },
+    })
+    assert.throws(() => getConfig(), /renamed from "rlaunch" to "cluster"/)
   })
 })

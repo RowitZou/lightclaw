@@ -79,10 +79,10 @@ async function runApprovalPreheat(
 ): Promise<void> {
   const config = getConfig()
   const backend = config.runtime.backend
-  if (backend !== 'docker' && backend !== 'rlaunch') {
+  if (backend !== 'docker' && backend !== 'cluster') {
     return
   }
-  if (backend === 'rlaunch' && !config.runtime.rlaunch.preheatOnApproval) {
+  if (backend === 'cluster' && !config.runtime.clusterSettings.preheatOnApproval) {
     return
   }
 

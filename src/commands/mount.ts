@@ -34,7 +34,7 @@ export async function runMountCommand(
   if (action === 'help' || action === '--help' || action === '-h') {
     return `${t('mount.usage')}\n`
   }
-  if (ctx.config.runtime.backend !== 'rlaunch') {
+  if (ctx.config.runtime.backend !== 'cluster') {
     return `${t('mount.onlyRlaunch')}\n`
   }
   if (!ctx.userId) {
@@ -225,7 +225,7 @@ async function validateMountPath(
   mode: RlaunchMountMode,
 ): Promise<string | null> {
   try {
-    userMountToRuntimeMount({ path: mountPath, mode }, ctx.config.runtime.rlaunch)
+    userMountToRuntimeMount({ path: mountPath, mode }, ctx.config.runtime.clusterSettings)
   } catch (error) {
     return `${error instanceof Error ? error.message : String(error)}\n`
   }
@@ -256,11 +256,11 @@ function validateMountTable(
   mounts: readonly UserRlaunchMount[],
 ): string | null {
   try {
-    const workspace = workspaceToGpfsMount(ctx.userId, ctx.config.runtime.rlaunch)
+    const workspace = workspaceToGpfsMount(ctx.userId, ctx.config.runtime.clusterSettings)
     new MountTablePathPolicy([
       { host: workspace.hostPath, worker: '/workspace', mode: 'rw' },
       ...mounts.map(mount => {
-        const runtimeMount = userMountToRuntimeMount(mount, ctx.config.runtime.rlaunch)
+        const runtimeMount = userMountToRuntimeMount(mount, ctx.config.runtime.clusterSettings)
         return {
           host: runtimeMount.hostPath,
           worker: runtimeMount.workerPath,

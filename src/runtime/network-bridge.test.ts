@@ -209,7 +209,7 @@ describe('pool config builders with network.mode=host', () => {
       runtime: {
         backend: 'docker',
         network,
-        docker: {
+        dockerSettings: {
           idleTimeoutMs: 1_800_000,
           memoryLimit: '4g',
           cpuLimit: 4,
@@ -228,7 +228,7 @@ describe('pool config builders with network.mode=host', () => {
             tmpfsOptions: 'rw,nosuid,size=512m',
           },
         },
-        rlaunch: {
+        clusterSettings: {
           image: 'registry/x:tag',
           chargedGroup: 'hs_cpu',
           namespace: 'ailab-hs',
@@ -266,7 +266,7 @@ describe('pool config builders with network.mode=host', () => {
 
   it('admin docker.env wins over auto-injected bridge env', () => {
     const c = makeConfig(networkHost)
-    c.runtime.docker.env = { http_proxy: 'http://override:1' }
+    c.runtime.dockerSettings.env = { http_proxy: 'http://override:1' }
     const cfg = buildDockerRuntimeConfig('alice', '/tmp/ws', c, 'deadbeef')
     assert.equal(cfg.env.http_proxy, 'http://override:1')
     assert.equal(cfg.env.HTTPS_PROXY, 'http://127.0.0.1:18080', 'other keys still default')

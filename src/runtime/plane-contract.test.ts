@@ -224,7 +224,7 @@ describe('Runtime plane contract — RlaunchRuntime', () => {
     try {
       const tracker = new WorkerReadinessTracker('alice')
       const runtime = new RlaunchRuntime(makeConfig(hostRoot), tracker)
-      assertContract(runtime, 'rlaunch')
+      assertContract(runtime, 'cluster')
       assert.equal(runtime.control.kind, 'brainctl-exec')
       // First layer is shared-cluster-fs; LayeredDataPlane.kind reflects it.
       assert.equal(runtime.data.kind, 'shared-cluster-fs')

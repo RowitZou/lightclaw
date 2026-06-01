@@ -155,20 +155,20 @@ function startImagePrefetchIfNeeded(config: LightClawConfig): void {
   if (config.runtime.backend !== 'docker') return
   const image = resolveDockerImage(config)
   getImageReadiness().startPrefetch(image, {
-    inspectOnly: !config.runtime.docker.autoPull,
+    inspectOnly: !config.runtime.dockerSettings.autoPull,
   })
 }
 
 function startRlaunchPreheatIfNeeded(config: LightClawConfig): void {
-  if (config.runtime.backend !== 'rlaunch') return
+  if (config.runtime.backend !== 'cluster') return
   const pool = getRuntimePool()
-  if (config.runtime.rlaunch.preheatOnStartup) {
+  if (config.runtime.clusterSettings.preheatOnStartup) {
     void runRlaunchStartupPreheat(pool, config).catch(error => {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(`[rlaunch-preheat] aborted: ${detail}\n`)
     })
   }
-  workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.rlaunch.healthCheckIntervalMs)
+  workerHealthChecker ??= new WorkerHealthChecker(pool, config.runtime.clusterSettings.healthCheckIntervalMs)
   workerHealthChecker.start()
 }
 

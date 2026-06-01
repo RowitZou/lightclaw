@@ -46,7 +46,7 @@ export class RuntimePool {
     workspaceHostPath?: string,
     tracker?: ImageReadinessTracker,
   ): Runtime {
-    this.idleTimeoutMs = config.runtime.docker.idleTimeoutMs
+    this.idleTimeoutMs = config.runtime.dockerSettings.idleTimeoutMs
     const key = runtimeKey(userId, workspaceHostPath)
     const existing = this.runtimes.get(key)
     if (existing?.kind === config.runtime.backend) {
@@ -115,9 +115,9 @@ export class RuntimePool {
     config: LightClawConfig,
     workspaceHostPath?: string,
   ): RlaunchRuntime {
-    if (config.runtime.backend !== 'rlaunch') {
+    if (config.runtime.backend !== 'cluster') {
       throw new Error(
-        'RuntimePool.swapRlaunchRuntime requires runtime.backend = "rlaunch"',
+        'RuntimePool.swapRlaunchRuntime requires runtime.backend = "cluster"',
       )
     }
     const key = runtimeKey(userId, workspaceHostPath)
@@ -167,7 +167,7 @@ export class RuntimePool {
       this.runtimes.delete(userId)
     }
 
-    if (config.runtime.backend === 'rlaunch') {
+    if (config.runtime.backend === 'cluster') {
       const record = readWorkerState()[userId]
       if (record) {
         summary.rlaunchWorker ??= record.name
@@ -214,7 +214,7 @@ export class RuntimePool {
   }
 
   async sweepOrphans(config: LightClawConfig): Promise<void> {
-    if (config.runtime.backend === 'rlaunch') {
+    if (config.runtime.backend === 'cluster') {
       await this.sweepRlaunchOrphans(config)
       return
     }
@@ -269,7 +269,7 @@ export class RuntimePool {
     // Namespaces to scan — start from the configured one, then union in any
     // namespace seen in state in case admin pivoted rlaunch.namespace and
     // left workers behind.
-    const namespacesToScan = new Set<string>([config.runtime.rlaunch.namespace])
+    const namespacesToScan = new Set<string>([config.runtime.clusterSettings.namespace])
 
     for (const [canonical, record] of Object.entries(state)) {
       namespacesToScan.add(record.namespace)
@@ -403,9 +403,13 @@ export class RuntimePool {
         tracker,
       })
     }
-    if (config.runtime.backend === 'rlaunch') {
+    if (config.runtime.backend === 'cluster') {
+      if (config.runtime.driver !== 'brainpp') {
+        throw new Error('runtime.driver = "brainpp" is required for cluster runtime backend')
+      }
       return createRuntime({
-        kind: 'rlaunch',
+        kind: 'cluster',
+        driver: config.runtime.driver,
         config: buildRlaunchRuntimeConfig(userId, workspaceHostPath, config, this.deploymentHash),
         tracker: new WorkerReadinessTracker(userId),
       })
@@ -422,8 +426,8 @@ function runtimeKey(userId: string, workspaceHostPath?: string): string {
 }
 
 export function resolveDockerImage(config: LightClawConfig): string {
-  return config.runtime.docker.imageOverride ??
-    config.runtime.docker.image ??
+  return config.runtime.dockerSettings.imageOverride ??
+    config.runtime.dockerSettings.image ??
     defaultImageRef()
 }
 
@@ -433,7 +437,7 @@ export function buildDockerRuntimeConfig(
   config: LightClawConfig,
   deploymentHash = computeDeploymentHash(),
 ): DockerRuntimeConfig {
-  const docker = config.runtime.docker
+  const docker = config.runtime.dockerSettings
   const network = config.runtime.network
   // mode=host puts the container in the host's net namespace and routes its
   // proxy env through the in-process NetworkBridge over loopback. Admin env
@@ -465,7 +469,7 @@ export function buildRlaunchRuntimeConfig(
   config: LightClawConfig,
   deploymentHash = computeDeploymentHash(),
 ): RlaunchRuntimeConfig {
-  const rlaunch = config.runtime.rlaunch
+  const rlaunch = config.runtime.clusterSettings
   const network = config.runtime.network
   const gpfs = workspaceToGpfsMount(userId, rlaunch)
   const extraMounts = resolveUserRlaunchRuntimeMounts(userId, rlaunch)

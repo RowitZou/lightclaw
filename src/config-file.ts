@@ -282,8 +282,9 @@ export type ConfigFileShape = {
     discoveredToolsTtlTurns?: number
   }
   runtime?: {
+    driver?: 'brainpp' | null
     backend?: string
-    docker?: {
+    dockerSettings?: {
       image?: string
       imageOverride?: string
       idleTimeoutMs?: number
@@ -318,7 +319,7 @@ export type ConfigFileShape = {
         workspaceQuotaMb?: number | null
       }
     }
-    rlaunch?: {
+    clusterSettings?: {
       image?: string
       chargedGroup?: string
       namespace?: string

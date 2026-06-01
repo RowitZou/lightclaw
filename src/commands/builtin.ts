@@ -496,7 +496,7 @@ function buildBuiltinCommands(): ReplCommand[] {
           return
         }
         tracker.startPrefetch(image, {
-          inspectOnly: !ctx.config.runtime.docker.autoPull,
+          inspectOnly: !ctx.config.runtime.dockerSettings.autoPull,
         })
         ctx.output.write(`${t('sandbox.prefetch.started', { image })}\n`)
         return

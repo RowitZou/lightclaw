@@ -99,8 +99,11 @@ const EXEC_SCRATCH_SUBDIR = '.lightclaw/exec'
 // on the gpfs mount. See `Runtime.scratchRoot`.
 const WORKER_SCRATCH_DIR = '/scratch'
 
+// Cluster runtime implementation for runtime.driver = "brainpp". The public
+// backend kind is vendor-neutral ("cluster"); the real CLI names below stay
+// rlaunch/brainctl because they are Brain++ components.
 export class RlaunchRuntime implements Runtime {
-  readonly kind = 'rlaunch' as const
+  readonly kind = 'cluster' as const
   readonly isolated = true
   readonly securityProfile = 'cluster-isolated' as const
   readonly workspaceRoot: string

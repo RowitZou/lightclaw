@@ -41,7 +41,12 @@ export type CreateRuntimeOptions =
       noProxy?: readonly string[]
     }
   | { kind: 'docker'; config: DockerRuntimeConfig; tracker: ImageReadinessTracker }
-  | { kind: 'rlaunch'; config: RlaunchRuntimeConfig; tracker: WorkerReadinessTracker }
+  | {
+      kind: 'cluster'
+      driver: 'brainpp'
+      config: RlaunchRuntimeConfig
+      tracker: WorkerReadinessTracker
+    }
 
 export function createRuntime(options: CreateRuntimeOptions): Runtime {
   switch (options.kind) {
@@ -53,7 +58,10 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
       )
     case 'docker':
       return new DockerRuntime(options.config, options.tracker)
-    case 'rlaunch':
-      return new RlaunchRuntime(options.config, options.tracker)
+    case 'cluster':
+      switch (options.driver) {
+        case 'brainpp':
+          return new RlaunchRuntime(options.config, options.tracker)
+      }
   }
 }

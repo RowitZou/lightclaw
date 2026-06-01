@@ -361,9 +361,10 @@ export type LightClawConfig = {
   hooks: HooksConfig
   tools: ToolsConfig
   runtime: {
+    driver: RuntimeDriver
     backend: RuntimeKind
-    docker: DockerRuntimeSettings
-    rlaunch: RlaunchRuntimeSettings
+    dockerSettings: DockerRuntimeSettings
+    clusterSettings: RlaunchRuntimeSettings
     network: NetworkBridgeSettings
   }
   attachments: AttachmentsConfig
@@ -414,12 +415,14 @@ export type DispatchConfig = {
 }
 
 type ConfigFileDockerMount = NonNullable<
-  NonNullable<ConfigFileShape['runtime']>['docker']
+  NonNullable<ConfigFileShape['runtime']>['dockerSettings']
 >['mounts'] extends Array<infer T> | undefined ? T : never
 
-type ConfigFileRlaunch = NonNullable<
-  NonNullable<ConfigFileShape['runtime']>['rlaunch']
+type ConfigFileCluster = NonNullable<
+  NonNullable<ConfigFileShape['runtime']>['clusterSettings']
 >
+
+export type RuntimeDriver = 'brainpp' | null
 
 const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
@@ -750,18 +753,38 @@ function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined
     return undefined
   }
 
-  if (value === 'local' || value === 'docker' || value === 'rlaunch') {
+  if (value === 'local' || value === 'docker' || value === 'cluster') {
     return value
+  }
+
+  if (value === 'rlaunch') {
+    throw new Error(
+      'runtime.backend has been renamed from "rlaunch" to "cluster". ' +
+      'Set runtime.backend = "cluster" and runtime.driver = "brainpp".',
+    )
   }
 
   if (value === 'rjob') {
     throw new Error(
       'runtime.backend "rjob" is not a runtime backend. rjob is a batch-job CLI surfaced ' +
-      'through the cluster-job skill, not a sandbox backend. Use "rlaunch" for cluster runtime sandboxing.',
+      'through the cluster-job skill, not a sandbox backend. Use "cluster" for cluster runtime sandboxing.',
     )
   }
 
   throw new Error(`Unknown runtime backend: ${value}`)
+}
+
+function parseRuntimeDriver(value: unknown): RuntimeDriver | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (value === null) {
+    return null
+  }
+  if (value === 'brainpp') {
+    return value
+  }
+  throw new Error(`Unknown runtime driver: ${String(value)}`)
 }
 
 function parsePrivateMachine(value: string | undefined): RlaunchRuntimeSettings['privateMachine'] | undefined {
@@ -779,25 +802,25 @@ function parseImagePullPolicy(value: string | undefined): RlaunchRuntimeSettings
 }
 
 function validateRlaunchGpfsMounts(
-  mounts: ConfigFileRlaunch['gpfsMounts'] | undefined,
+  mounts: ConfigFileCluster['gpfsMounts'] | undefined,
 ): RlaunchGpfsMountRule[] {
   if (mounts === undefined) {
     return []
   }
   if (!Array.isArray(mounts)) {
-    throw new Error('runtime.rlaunch.gpfsMounts must be an array.')
+    throw new Error('runtime.clusterSettings.gpfsMounts must be an array.')
   }
   return mounts.map((mount, index) => {
     if (!mount || typeof mount !== 'object' || Array.isArray(mount)) {
-      throw new Error(`runtime.rlaunch.gpfsMounts[${index}] must be an object.`)
+      throw new Error(`runtime.clusterSettings.gpfsMounts[${index}] must be an object.`)
     }
     const hostPrefix = typeof mount.hostPrefix === 'string' ? mount.hostPrefix.trim() : ''
     const mountPrefix = typeof mount.mountPrefix === 'string' ? mount.mountPrefix.trim() : ''
     if (!hostPrefix) {
-      throw new Error(`runtime.rlaunch.gpfsMounts[${index}].hostPrefix is required.`)
+      throw new Error(`runtime.clusterSettings.gpfsMounts[${index}].hostPrefix is required.`)
     }
     if (!mountPrefix) {
-      throw new Error(`runtime.rlaunch.gpfsMounts[${index}].mountPrefix is required.`)
+      throw new Error(`runtime.clusterSettings.gpfsMounts[${index}].mountPrefix is required.`)
     }
     return { hostPrefix, mountPrefix }
   })
@@ -811,21 +834,21 @@ function validateDockerMounts(
   }
 
   if (!Array.isArray(mounts)) {
-    throw new Error('runtime.docker.mounts must be an array.')
+    throw new Error('runtime.dockerSettings.mounts must be an array.')
   }
 
   return mounts.map((mount, index) => {
     if (!mount || typeof mount !== 'object') {
-      throw new Error(`runtime.docker.mounts[${index}] must be an object.`)
+      throw new Error(`runtime.dockerSettings.mounts[${index}] must be an object.`)
     }
     if (!mount.host || !mount.container) {
-      throw new Error(`runtime.docker.mounts[${index}] requires host and container.`)
+      throw new Error(`runtime.dockerSettings.mounts[${index}] requires host and container.`)
     }
     if (!mount.container.startsWith('/')) {
-      throw new Error(`runtime.docker.mounts[${index}].container must be absolute.`)
+      throw new Error(`runtime.dockerSettings.mounts[${index}].container must be absolute.`)
     }
     if (mount.mode !== 'rw' && mount.mode !== 'ro') {
-      throw new Error(`runtime.docker.mounts[${index}].mode must be "rw" or "ro".`)
+      throw new Error(`runtime.dockerSettings.mounts[${index}].mode must be "rw" or "ro".`)
     }
     return {
       host: path.resolve(expandHomePath(mount.host)),
@@ -836,22 +859,22 @@ function validateDockerMounts(
 }
 
 function resolveDockerSecurity(
-  fileSecurity: NonNullable<NonNullable<ConfigFileShape['runtime']>['docker']>['security'] | undefined,
+  fileSecurity: NonNullable<NonNullable<ConfigFileShape['runtime']>['dockerSettings']>['security'] | undefined,
 ): DockerSecuritySettings {
   if (!fileSecurity) {
     return { ...DEFAULT_DOCKER_SECURITY, ulimits: { ...DEFAULT_DOCKER_SECURITY.ulimits } }
   }
   if (typeof fileSecurity !== 'object' || Array.isArray(fileSecurity)) {
-    throw new Error('runtime.docker.security must be an object.')
+    throw new Error('runtime.dockerSettings.security must be an object.')
   }
   const validateStringArray = (value: unknown, field: string, fallback: string[]): string[] => {
     if (value === undefined) return [...fallback]
     if (!Array.isArray(value)) {
-      throw new Error(`runtime.docker.security.${field} must be an array of strings.`)
+      throw new Error(`runtime.dockerSettings.security.${field} must be an array of strings.`)
     }
     return value.map((entry, idx) => {
       if (typeof entry !== 'string' || !entry.trim()) {
-        throw new Error(`runtime.docker.security.${field}[${idx}] must be a non-empty string.`)
+        throw new Error(`runtime.dockerSettings.security.${field}[${idx}] must be a non-empty string.`)
       }
       return entry.trim()
     })
@@ -859,15 +882,15 @@ function resolveDockerSecurity(
   const validateUlimits = (value: unknown): Record<string, string> => {
     if (value === undefined) return { ...DEFAULT_DOCKER_SECURITY.ulimits }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('runtime.docker.security.ulimits must be an object of name -> "soft:hard".')
+      throw new Error('runtime.dockerSettings.security.ulimits must be an object of name -> "soft:hard".')
     }
     const out: Record<string, string> = {}
     for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
       if (!name) {
-        throw new Error('runtime.docker.security.ulimits has an empty key.')
+        throw new Error('runtime.dockerSettings.security.ulimits has an empty key.')
       }
       if (typeof raw !== 'string' || !raw.trim()) {
-        throw new Error(`runtime.docker.security.ulimits.${name} must be a non-empty string.`)
+        throw new Error(`runtime.dockerSettings.security.ulimits.${name} must be a non-empty string.`)
       }
       out[name] = raw.trim()
     }
@@ -877,14 +900,14 @@ function resolveDockerSecurity(
     if (fileSecurity.pidsLimit === undefined) return DEFAULT_DOCKER_SECURITY.pidsLimit
     if (fileSecurity.pidsLimit === null) return null
     if (typeof fileSecurity.pidsLimit !== 'number' || !Number.isFinite(fileSecurity.pidsLimit) || fileSecurity.pidsLimit <= 0) {
-      throw new Error('runtime.docker.security.pidsLimit must be a positive number or null.')
+      throw new Error('runtime.dockerSettings.security.pidsLimit must be a positive number or null.')
     }
     return Math.floor(fileSecurity.pidsLimit)
   })()
   const tmpfsOptions = (() => {
     if (fileSecurity.tmpfsOptions === undefined) return DEFAULT_DOCKER_SECURITY.tmpfsOptions
     if (typeof fileSecurity.tmpfsOptions !== 'string' || !fileSecurity.tmpfsOptions.trim()) {
-      throw new Error('runtime.docker.security.tmpfsOptions must be a non-empty string.')
+      throw new Error('runtime.dockerSettings.security.tmpfsOptions must be a non-empty string.')
     }
     return fileSecurity.tmpfsOptions.trim()
   })()
@@ -892,11 +915,11 @@ function resolveDockerSecurity(
     if (fileSecurity.storageOptSize === undefined) return DEFAULT_DOCKER_SECURITY.storageOptSize
     if (fileSecurity.storageOptSize === null) return null
     if (typeof fileSecurity.storageOptSize !== 'string' || !fileSecurity.storageOptSize.trim()) {
-      throw new Error('runtime.docker.security.storageOptSize must be a non-empty string (e.g. "32g") or null.')
+      throw new Error('runtime.dockerSettings.security.storageOptSize must be a non-empty string (e.g. "32g") or null.')
     }
     if (!/^\d+(?:\.\d+)?[kmgtKMGT]?b?$/.test(fileSecurity.storageOptSize.trim())) {
       throw new Error(
-        'runtime.docker.security.storageOptSize must look like a docker size (e.g. "32g", "10240m", "1t").',
+        'runtime.dockerSettings.security.storageOptSize must look like a docker size (e.g. "32g", "10240m", "1t").',
       )
     }
     return fileSecurity.storageOptSize.trim()
@@ -910,7 +933,7 @@ function resolveDockerSecurity(
       fileSecurity.workspaceQuotaMb < 0
     ) {
       throw new Error(
-        'runtime.docker.security.workspaceQuotaMb must be a non-negative number (MiB) or null.',
+        'runtime.dockerSettings.security.workspaceQuotaMb must be a non-negative number (MiB) or null.',
       )
     }
     // 0 == disabled, normalize to null so downstream only checks one shape.
@@ -1559,8 +1582,17 @@ export function getConfig(): LightClawConfig {
     parseRuntimeBackend(process.env.LIGHTCLAW_RUNTIME_BACKEND) ??
     parseRuntimeBackend(fileConfig.runtime?.backend) ??
     'local'
-  const dockerConfig = fileConfig.runtime?.docker ?? {}
-  const rlaunchFileConfig = fileConfig.runtime?.rlaunch ?? {}
+  const runtimeDriver =
+    parseRuntimeDriver(process.env.LIGHTCLAW_RUNTIME_DRIVER) ??
+    parseRuntimeDriver(fileConfig.runtime?.driver) ??
+    null
+  if (runtimeBackend === 'cluster' && runtimeDriver === null) {
+    throw new Error(
+      'runtime.driver = "brainpp" is required when runtime.backend = "cluster".',
+    )
+  }
+  const dockerConfig = fileConfig.runtime?.dockerSettings ?? {}
+  const clusterFileConfig = fileConfig.runtime?.clusterSettings ?? {}
   const dockerIdleTimeoutMs = Math.max(
     60_000,
     Math.floor(
@@ -1573,7 +1605,7 @@ export function getConfig(): LightClawConfig {
   const dockerTmpfs = Array.isArray(dockerConfig.tmpfs) && dockerConfig.tmpfs.length > 0
     ? dockerConfig.tmpfs.filter(item => typeof item === 'string' && item.startsWith('/'))
     : ['/tmp']
-  const rlaunchConfig = resolveRlaunchRuntimeSettings(runtimeBackend, rlaunchFileConfig)
+  const clusterConfig = resolveClusterSettings(runtimeBackend, clusterFileConfig)
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
 
   // — dispatch —
@@ -1708,8 +1740,9 @@ export function getConfig(): LightClawConfig {
         ?? 5,
     },
     runtime: {
+      driver: runtimeDriver,
       backend: runtimeBackend,
-      docker: {
+      dockerSettings: {
         ...(dockerConfig.image ? { image: dockerConfig.image } : {}),
         ...(process.env.LIGHTCLAW_DOCKER_IMAGE || dockerConfig.imageOverride
           ? { imageOverride: process.env.LIGHTCLAW_DOCKER_IMAGE ?? dockerConfig.imageOverride }
@@ -1724,7 +1757,7 @@ export function getConfig(): LightClawConfig {
         autoPull: dockerConfig.autoPull ?? true,
         security: resolveDockerSecurity(dockerConfig.security),
       },
-      rlaunch: rlaunchConfig,
+      clusterSettings: clusterConfig,
       network: networkConfig,
     },
   }
@@ -1902,9 +1935,9 @@ function resolveToolCatalogConfig(fileConfig: ConfigFileShape): ToolCatalogConfi
   }
 }
 
-function resolveRlaunchRuntimeSettings(
+function resolveClusterSettings(
   backend: RuntimeKind,
-  fileConfig: ConfigFileRlaunch,
+  fileConfig: ConfigFileCluster,
 ): RlaunchRuntimeSettings {
   const required = (field: 'image' | 'chargedGroup' | 'namespace'): string => {
     const value = field === 'namespace'
@@ -1913,9 +1946,9 @@ function resolveRlaunchRuntimeSettings(
     if (value && value.trim()) {
       return value.trim()
     }
-    if (backend === 'rlaunch') {
+    if (backend === 'cluster') {
       throw new Error(
-        `runtime.rlaunch.${field} is required when runtime.backend = "rlaunch". ` +
+        `runtime.clusterSettings.${field} is required when runtime.backend = "cluster". ` +
         `Set it in ${path.join(lightclawHome(), 'config.json')}.`,
       )
     }
@@ -1923,13 +1956,13 @@ function resolveRlaunchRuntimeSettings(
   }
 
   // gpfs prefix resolution: `gpfsMounts` is a table of host→gpfs rules and is
-  // the single source of truth. The rlaunch backend requires at least one
-  // rule; path translation picks the longest matching hostPrefix. Non-rlaunch
+  // the single source of truth. The cluster backend requires at least one
+  // rule; path translation picks the longest matching hostPrefix. Non-cluster
   // backends may leave it empty.
   const gpfsMounts = dedupeRlaunchGpfsMounts(validateRlaunchGpfsMounts(fileConfig.gpfsMounts))
-  if (backend === 'rlaunch' && gpfsMounts.length === 0) {
+  if (backend === 'cluster' && gpfsMounts.length === 0) {
     throw new Error(
-      'runtime.rlaunch.gpfsMounts is required when runtime.backend = "rlaunch". ' +
+      'runtime.clusterSettings.gpfsMounts is required when runtime.backend = "cluster". ' +
       `Set it in ${path.join(lightclawHome(), 'config.json')}.`,
     )
   }

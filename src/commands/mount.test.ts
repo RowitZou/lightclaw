@@ -194,8 +194,9 @@ function makeConfig(
 ): LightClawConfig {
   return {
     runtime: {
-      backend: 'rlaunch',
-      rlaunch: {
+      driver: 'brainpp',
+      backend: 'cluster',
+      clusterSettings: {
         gpfsMounts: [
           { hostPrefix: gpfsRoot, mountPrefix: 'gpfs://gpfs1' },
           ...extraGpfsMounts,

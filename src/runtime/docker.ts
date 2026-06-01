@@ -246,7 +246,7 @@ export class DockerRuntime implements Runtime {
             '管理员已禁用自动镜像拉取，需要联系管理员准备 sandbox 后才能用工具。' +
             '当前我可以处理聊天类话题。',
           adminMessage:
-            `runtime.docker.autoPull = false 已禁用自动拉取，且本地无 ${this.cfg.image}；` +
+            `runtime.dockerSettings.autoPull = false 已禁用自动拉取，且本地无 ${this.cfg.image}；` +
             `请手动 docker pull ${this.cfg.image} 或将 autoPull 设回 true。`,
         }
       }
@@ -423,7 +423,7 @@ export class DockerRuntime implements Runtime {
       const usedMb = Math.round(used / 1024 / 1024)
       throw new Error(
         `workspace quota exceeded: ${usedMb} MiB used > ${limitMb} MiB limit at ${this.workspaceRoot}. ` +
-        `Clean up files or raise runtime.docker.security.workspaceQuotaMb.`,
+        `Clean up files or raise runtime.dockerSettings.security.workspaceQuotaMb.`,
       )
     }
   }

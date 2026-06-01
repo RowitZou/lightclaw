@@ -50,7 +50,7 @@ export function formatPullError(message: string): string {
   if (/manifest unknown|not found|repository .* not found|image .* not found/i.test(trimmed)) {
     return [
       '镜像不存在。如果你刚升级 LightClaw，可能 GHCR 上还没有对应版本；',
-      '可在 config 里设 runtime.docker.imageOverride: "ghcr.io/rowitzou/lightclaw-sandbox:latest"',
+      '可在 config 里设 runtime.dockerSettings.imageOverride: "ghcr.io/rowitzou/lightclaw-sandbox:latest"',
       '或本地 docker build -t lightclaw-sandbox:dev <repo> 后将其作为 imageOverride。',
       '如果是本地 build，确认 docker image ls 能看到对应 tag。',
       `原始错误：${trimmed}`,

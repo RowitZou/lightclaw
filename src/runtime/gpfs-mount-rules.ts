@@ -37,7 +37,7 @@ export function resolveGpfsMountRule(
   const rule = matches[0]
   if (!rule) {
     throw new Error(
-      `rlaunch mount path must be under one of runtime.rlaunch.gpfsMounts hostPrefix values ` +
+      `rlaunch mount path must be under one of runtime.clusterSettings.gpfsMounts hostPrefix values ` +
       `(${rules.map(item => item.hostPrefix).join(', ')}); got ${hostPath}`,
     )
   }
@@ -51,19 +51,19 @@ export function normalizeGpfsMountRules(
   const byHostPrefix = new Map<string, string>()
   const addRule = (rule: RlaunchGpfsMountRule): void => {
     if (!rule.hostPrefix.trim()) {
-      throw new Error('runtime.rlaunch.gpfsMounts hostPrefix must be a non-empty string.')
+      throw new Error('runtime.clusterSettings.gpfsMounts hostPrefix must be a non-empty string.')
     }
     const hostPrefix = normalizeHostPath(rule.hostPrefix)
     const mountPrefix = rule.mountPrefix.replace(/\/+$/, '')
     if (!mountPrefix) {
-      throw new Error('runtime.rlaunch.gpfsMounts mountPrefix must be a non-empty string.')
+      throw new Error('runtime.clusterSettings.gpfsMounts mountPrefix must be a non-empty string.')
     }
     byHostPrefix.set(hostPrefix, mountPrefix)
   }
 
   const configuredRules = rlaunchConfig.gpfsMounts ?? []
   if (configuredRules.length === 0) {
-    throw new Error('runtime.rlaunch.gpfsMounts must contain at least one rule.')
+    throw new Error('runtime.clusterSettings.gpfsMounts must contain at least one rule.')
   }
   for (const rule of configuredRules) {
     addRule(rule)
