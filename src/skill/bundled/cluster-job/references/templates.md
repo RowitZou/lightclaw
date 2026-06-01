@@ -4,7 +4,7 @@
 
 1. Translate the user's request into a job draft: command, code location, resource needs, image, namespace/group, output/log location, and stop condition.
 2. Ask for missing environment-specific values instead of guessing. Source must not contain hardcoded namespace, charged group, image, GPFS path, or secret values.
-3. Run `submit --predict-only ...` through the wrapper.
+3. Run `submit --predict-only true ...` through the wrapper (the preview flag takes a value; `--dry-run true` is the spec-preview alternative). A real submit also needs `--image` and the resource flags.
 4. Summarize the predicted job spec and resource impact.
 5. Ask for explicit confirmation before a real `submit`.
 6. After submission, return the job name and the exact read-only follow-ups: `get`, `logs --tail N`, `events`, and `download-logs`.

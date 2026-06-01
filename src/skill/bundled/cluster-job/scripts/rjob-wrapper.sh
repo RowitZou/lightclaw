@@ -101,12 +101,24 @@ if [[ "$command_name" == "logs" && "$explicit_tail" == "0" ]]; then
 fi
 
 if [[ "$command_name" == "submit" ]]; then
-  predict_only=0
+  # A real submit creates a job; a preview does not. rjob's preview flags
+  # (--predict-only / --dry-run) each take a VALUE, so only a truthy value
+  # counts as a preview. Anything else needs explicit confirmation.
+  preview_only=0
+  prev=""
   for arg in "${args[@]}"; do
-    [[ "$arg" == "--predict-only" ]] && predict_only=1
+    val=""
+    case "$arg" in
+      --predict-only=*|--dry-run=*) val=${arg#*=} ;;
+    esac
+    [[ "$prev" == "--predict-only" || "$prev" == "--dry-run" ]] && val=$arg
+    case "${val,,}" in
+      true|1|yes|on) preview_only=1 ;;
+    esac
+    prev=$arg
   done
-  if [[ "$predict_only" == "0" && "$confirm_submit" != "1" ]]; then
-    fail "refusing real submit without --confirm-submit or RJOB_WRAPPER_CONFIRM_SUBMIT=1; run submit --predict-only first and ask the user to confirm"
+  if [[ "$preview_only" == "0" && "$confirm_submit" != "1" ]]; then
+    fail "refusing real submit without --confirm-submit or RJOB_WRAPPER_CONFIRM_SUBMIT=1; first preview with 'submit --predict-only true ...' (resource feasibility) or 'submit --dry-run true ...', then ask the user to confirm. A real submit also requires --image and the job's resource args."
   fi
 fi
 
@@ -130,7 +142,7 @@ else
 fi
 
 if ! command -v rjob >/dev/null 2>&1; then
-  fail "rjob CLI not found on PATH in this runtime. rjob is provided by the internal Brain++ 'brainpp' Python package (not on public PyPI) and only works where the cluster toolchain is installed -- typically the H-cluster dev host under the local runtime backend; the default docker/rlaunch sandbox images do not ship it. If this environment has access to the Brain++ pip index, install with: pip3 install brainpp (it provides the 'rjob' command). Otherwise tell the user this environment cannot run cluster jobs and stop."
+  fail "rjob CLI not found on PATH in this runtime. rjob is provided by the internal Brain++ 'brainpp' Python package (not on public PyPI). It is present on the H-cluster dev host and in the Brain++ ml-base worker image (so it works under both the local and rlaunch backends), but a plain docker image (e.g. debian-slim) does not ship it. If this environment has the Brain++ pip index configured, install with: pip3 install brainpp (it provides the 'rjob' command). Otherwise tell the user this environment cannot run cluster jobs and stop."
 fi
 
 exec rjob "$command_name" "${args[@]}"

@@ -22,7 +22,7 @@ Use the local `rjob` CLI for batch/cluster training jobs while keeping LightClaw
 
 - `rjob` is for H-cluster batch jobs: submit training/evaluation jobs, inspect status, tail logs, read scheduling events, stop/delete jobs, clone/patch specs, and download logs.
 - `rjob` is not a LightClaw `RuntimeKind` backend. Do not route interactive runtime, sandbox, shell, or agent execution through `rjob`; use `rlaunch` for that.
-- `rjob` is an environment-conditional capability: it needs the internal Brain++ `rjob` CLI on PATH, which only exists where the cluster toolchain is installed — typically the H-cluster dev host under the local runtime backend. The default docker/rlaunch sandbox images do not ship it. If it is missing, the wrapper fails with an install hint; tell the user this environment cannot run cluster jobs and stop rather than improvising an alternative.
+- `rjob` is an environment-conditional capability: it needs the internal Brain++ `rjob` CLI on PATH (provided by the `brainpp` package; not on public PyPI). It is present on the H-cluster dev host and in the Brain++ ml-base worker image, so it works under both the local and rlaunch backends; a plain docker image without the cluster toolchain does not have it. If it is missing, the wrapper fails with an install hint; tell the user this environment cannot run cluster jobs and stop rather than improvising an alternative.
 - Before every `rjob` call, initialize the kubebrain SSH environment with `source /etc/profile.d/ssh-init.sh`. Prefer the bundled wrapper, which does this automatically: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh`.
 - Keep environment-specific values out of source and memory unless the user explicitly provides them for the current job: namespace, charged group, image, GPFS/workspace paths, secrets, and credentials.
 
@@ -65,13 +65,13 @@ Safe read-only mappings:
 
 ### 3. Dry-run submissions first
 
-For new submissions, first run:
+For new submissions, first preview without creating a job. rjob's preview flags take a value, so pass `true` explicitly:
 
 ```bash
-${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh submit --predict-only [submit args...]
+${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh submit --predict-only true [submit args...]
 ```
 
-Summarize the predicted job name/spec, resources, image, command, mounts/paths, and any missing or risky values. Do not perform a real submit yet.
+`--predict-only true` checks whether the cluster has enough resources for the job; `--dry-run true` is a developer-debug preview of the rendered spec. Use whichever the user needs (or both). A real submit requires the full args including `--image` and the resource flags (`--cpu` / `--memory` / `--gpu` / `--charged-group`), so confirm those are present here. Summarize the predicted resources, image, command, mounts/paths, and any missing or risky values. Do not perform a real submit yet.
 
 **Success criteria**: The user has reviewed the predicted job and understands what will run and what resources it will consume.
 
