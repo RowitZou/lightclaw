@@ -4,7 +4,7 @@ import path from 'node:path'
 import { getAllAgents } from '../../agents/registry.js'
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { AgentType, Role } from '../../agents/types.js'
-import type { LightClawConfig } from '../../config.js'
+import type { LightClawConfig, RuntimeDriver } from '../../config.js'
 import { userSkillsRoot } from '../../identity/paths.js'
 import { listActiveCanonicalUsers } from '../../identity/store.js'
 import { ageUserSkills } from '../../skill/skill-aging.js'
@@ -323,6 +323,7 @@ async function executeAutoDreamInner(params: {
         skillCuratorLastSuccess,
         runSkillCurator: subTaskDue.skillCurator,
         runSkillConsolidator: subTaskDue.skillConsolidator,
+        runtimeDriver: params.config.runtime?.driver ?? null,
         maxTurns: params.config.memory.curator.maxTurns,
       })
       if (subTaskDue.skillCurator
@@ -453,6 +454,7 @@ async function runSkillDreamPasses(params: {
   skillCuratorLastSuccess: number
   runSkillCurator: boolean
   runSkillConsolidator: boolean
+  runtimeDriver: RuntimeDriver
   maxTurns?: number
 }): Promise<SkillDreamOutcome> {
   let skillCuratorSucceeded = true
@@ -486,6 +488,7 @@ async function runSkillDreamPasses(params: {
               cwd: params.cwd,
               userId: params.userId,
               role,
+              runtimeDriver: params.runtimeDriver,
             }),
           }),
           canonicalUserOverride: params.userId,

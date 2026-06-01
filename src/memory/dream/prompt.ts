@@ -2,6 +2,7 @@ import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { Role } from '../../agents/types.js'
+import type { RuntimeDriver } from '../../config.js'
 import { userSkillsRoot } from '../../identity/paths.js'
 import { discoverSkillsForUser, loadSkillBody } from '../../skill/loader.js'
 import { filterSkillsForRole } from '../../skill/role-validation.js'
@@ -106,9 +107,12 @@ export async function gatherDreamVisibleSkills(params: {
   cwd: string
   userId: string
   role: Role
+  runtimeDriver?: RuntimeDriver
 }): Promise<DreamSkillSummary[]> {
   const skills = await discoverSkillsForUser(params.cwd, params.userId)
-  return filterSkillsForRole(skills, params.role).map(toDreamSkillSummary)
+  return filterSkillsForRole(skills, params.role, {
+    runtimeDriver: params.runtimeDriver ?? null,
+  }).map(toDreamSkillSummary)
 }
 
 export async function gatherDreamUserSkillsFull(params: {

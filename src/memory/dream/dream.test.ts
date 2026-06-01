@@ -28,7 +28,7 @@ import {
   setExtractionInProgressForTest,
 } from '../extract.js'
 import { consolidationLockPath, readSubTaskLastSuccess } from './lock.js'
-import { buildDreamPrompt, gatherDreamMemoryTree } from './prompt.js'
+import { buildDreamPrompt, gatherDreamMemoryTree, gatherDreamVisibleSkills } from './prompt.js'
 import {
   drainPendingDream,
   executeAutoDream,
@@ -568,6 +568,58 @@ describe('autoDream runner', () => {
         true,
       )
       assert.ok(await readSubTaskLastSuccess(tmpMemoryDir, 'skillAging') > 0)
+    } finally {
+      if (prevHome === undefined) {
+        delete process.env.LIGHTCLAW_HOME
+      } else {
+        process.env.LIGHTCLAW_HOME = prevHome
+      }
+    }
+  })
+
+  it('gatherDreamVisibleSkills gates a requires-driver skill by runtimeDriver', async () => {
+    const prevHome = process.env.LIGHTCLAW_HOME
+    process.env.LIGHTCLAW_HOME = tmpRoot
+    try {
+      // A per-user skill scoped to `coder` that requires the brainpp driver.
+      // Unique name (no bundled collision) so it loads as a user skill and is
+      // name-allowed for coder via its `roles` frontmatter.
+      const skillsRoot = userSkillsRoot('alice')
+      const skillDir = path.join(skillsRoot, 'dream-driver-probe')
+      mkdirSync(skillDir, { recursive: true })
+      writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: dream-driver-probe\ndescription: cluster batch jobs.\n' +
+          'requires-driver: brainpp\nroles:\n  - coder\n---\n\nBody.\n',
+        'utf8',
+      )
+      const coder: Role = {
+        agentType: 'coder',
+        kind: 'worker',
+        whenToUse: 'code',
+        tools: ['Read'],
+        systemPrompt: 'system',
+      }
+
+      // driver=null (no cluster): the brainpp skill is gated out of the
+      // curator's visible set. driver='brainpp': it surfaces. Pre-fix
+      // gatherDreamVisibleSkills dropped the gate and always behaved as null,
+      // so the brainpp case would fail.
+      const hidden = await gatherDreamVisibleSkills({
+        cwd: tmpRoot,
+        userId: 'alice',
+        role: coder,
+        runtimeDriver: null,
+      })
+      assert.equal(hidden.some(skill => skill.name === 'dream-driver-probe'), false)
+
+      const visible = await gatherDreamVisibleSkills({
+        cwd: tmpRoot,
+        userId: 'alice',
+        role: coder,
+        runtimeDriver: 'brainpp',
+      })
+      assert.equal(visible.some(skill => skill.name === 'dream-driver-probe'), true)
     } finally {
       if (prevHome === undefined) {
         delete process.env.LIGHTCLAW_HOME
