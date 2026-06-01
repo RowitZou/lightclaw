@@ -42,7 +42,6 @@ export type CreateRuntimeOptions =
     }
   | { kind: 'docker'; config: DockerRuntimeConfig; tracker: ImageReadinessTracker }
   | { kind: 'rlaunch'; config: RlaunchRuntimeConfig; tracker: WorkerReadinessTracker }
-  | { kind: 'rjob' }
 
 export function createRuntime(options: CreateRuntimeOptions): Runtime {
   switch (options.kind) {
@@ -56,10 +55,5 @@ export function createRuntime(options: CreateRuntimeOptions): Runtime {
       return new DockerRuntime(options.config, options.tracker)
     case 'rlaunch':
       return new RlaunchRuntime(options.config, options.tracker)
-    case 'rjob':
-      throw new Error(
-        'Runtime backend "rjob" is not implemented. Use rlaunch for runtime sandbox; ' +
-        'rjob is reserved for batch training jobs via the cluster-job skill.',
-      )
   }
 }

@@ -1,4 +1,4 @@
-export type RuntimeKind = 'local' | 'docker' | 'rlaunch' | 'rjob'
+export type RuntimeKind = 'local' | 'docker' | 'rlaunch'
 
 export type ExecInput = {
   command: string

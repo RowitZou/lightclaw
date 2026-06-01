@@ -410,7 +410,8 @@ export class RuntimePool {
         tracker: new WorkerReadinessTracker(userId),
       })
     }
-    return createRuntime({ kind: 'rjob' })
+    const exhaustive: never = config.runtime.backend
+    throw new Error(`Unsupported runtime backend: ${String(exhaustive)}`)
   }
 }
 

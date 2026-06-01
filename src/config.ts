@@ -750,8 +750,15 @@ function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined
     return undefined
   }
 
-  if (value === 'local' || value === 'docker' || value === 'rlaunch' || value === 'rjob') {
+  if (value === 'local' || value === 'docker' || value === 'rlaunch') {
     return value
+  }
+
+  if (value === 'rjob') {
+    throw new Error(
+      'runtime.backend "rjob" is not a runtime backend. rjob is a batch-job CLI surfaced ' +
+      'through the cluster-job skill, not a sandbox backend. Use "rlaunch" for cluster runtime sandboxing.',
+    )
   }
 
   throw new Error(`Unknown runtime backend: ${value}`)

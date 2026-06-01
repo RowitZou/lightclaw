@@ -129,4 +129,8 @@ else
   printf 'rjob-wrapper: warning: /etc/profile.d/ssh-init.sh not readable; continuing with current environment\n' >&2
 fi
 
+if ! command -v rjob >/dev/null 2>&1; then
+  fail "rjob CLI not found on PATH in this runtime. rjob is provided by the internal Brain++ 'brainpp' Python package (not on public PyPI) and only works where the cluster toolchain is installed -- typically the H-cluster dev host under the local runtime backend; the default docker/rlaunch sandbox images do not ship it. If this environment has access to the Brain++ pip index, install with: pip3 install brainpp (it provides the 'rjob' command). Otherwise tell the user this environment cannot run cluster jobs and stop."
+fi
+
 exec rjob "$command_name" "${args[@]}"
