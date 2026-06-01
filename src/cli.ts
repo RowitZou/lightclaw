@@ -1,12 +1,9 @@
 import { existsSync } from 'node:fs'
-import { stdin as processStdin } from 'node:process'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { loadChannelConfig } from './channels/config.js'
 import { resumePendingTurns } from './channels/feishu/resume.js'
 import { listChannels } from './channels/registry.js'
-import { runTerminalOneShot } from './channels/terminal-run.js'
 import type { ChannelHandle } from './channels/types.js'
 import { drainPendingBackgroundTasks, getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import {
@@ -16,7 +13,7 @@ import {
   resolveStartupHome,
   syncExternalConfig,
 } from './config-bootstrap.js'
-import { initializeApp, stopNetworkBridgeSafely } from './init.js'
+import { initializeApp } from './init.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { runConfigWizard } from './config-wizard.js'
@@ -34,15 +31,10 @@ import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
 import { VERSION } from './version.js'
 
-type CliCommand =
-  | { kind: 'daemon' }
-  | { kind: 'run'; promptParts: string[]; stdin: boolean }
-
 type CliArgs = {
   help: boolean
   home?: string
   config?: string
-  command: CliCommand
   error?: string
 }
 
@@ -84,9 +76,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
   await getRuntimePool().releaseAll().catch(error => {
     process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
   })
-  await stopNetworkBridgeSafely().catch(error => {
-    process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
-  })
   process.exit(0)
 }
 
@@ -97,8 +86,8 @@ process.on('SIGTERM', () => {
   void gracefulShutdown('SIGTERM')
 })
 
-export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { help: false, command: { kind: 'daemon' } }
+function parseArgs(argv: string[]): CliArgs {
+  const args: CliArgs = { help: false }
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -127,10 +116,6 @@ export function parseArgs(argv: string[]): CliArgs {
       continue
     }
 
-    if (arg === 'run') {
-      return parseRunArgs(argv.slice(index + 1), args)
-    }
-
     return {
       ...args,
       error: arg.startsWith('-') ? `unknown flag: ${arg}` : `unknown argument: ${arg}`,
@@ -140,31 +125,6 @@ export function parseArgs(argv: string[]): CliArgs {
   return args
 }
 
-function parseRunArgs(argv: string[], base: CliArgs): CliArgs {
-  const promptParts: string[] = []
-  let readStdin = false
-
-  for (const arg of argv) {
-    if (arg === '--stdin') {
-      readStdin = true
-      continue
-    }
-    if (arg === '--help' || arg === '-h') {
-      return { ...base, help: true, command: { kind: 'run', promptParts, stdin: readStdin } }
-    }
-    if (arg.startsWith('-')) {
-      return { ...base, error: `unknown run flag: ${arg}` }
-    }
-    promptParts.push(arg)
-  }
-
-  if (promptParts.length === 0 && !readStdin) {
-    return { ...base, error: 'run requires a prompt or --stdin' }
-  }
-
-  return { ...base, command: { kind: 'run', promptParts, stdin: readStdin } }
-}
-
 function printHelp(): void {
   console.log(`LightClaw v${VERSION}
 
@@ -172,21 +132,15 @@ Usage:
   lightclaw
   lightclaw --home <dir>
   lightclaw --config <file>
-  lightclaw run <prompt...>
-  lightclaw run --stdin [prompt...]
 
 Starts the LightClaw daemon: the enabled channels (Feishu) plus a
-slash-only terminal admin console. Use \`lightclaw run\` for a one-shot
-long-task dogfood turn from the terminal.
+slash-only terminal admin console. The agent is reached through the
+channels — the terminal no longer runs an interactive agent session.
 
 Options:
   -h, --help      Show help
       --home      Override LightClaw home directory (default ~/.lightclaw)
       --config    Read an external config file and sync it into <home>/config.json
-
-Run command:
-  run <prompt...>       Execute one normal LightClaw turn and print replies to stdout
-  run --stdin [prompt]  Append stdin to the argv prompt before executing
 
 Environment:
   LIGHTCLAW_HOME             Coarse data root (sessions / memory / config / identity / workspaces / state)
@@ -243,45 +197,8 @@ async function main(): Promise<void> {
   // subscription, all of which assume a single owner.
   acquireProcessLock()
 
-  await ensureAdminInitialized({ interactive: args.command.kind !== 'run' })
+  await ensureAdminInitialized({ interactive: true })
   const currentUserId = await resolveTerminalUserId()
-
-  if (args.command.kind === 'run') {
-    const runCommand = args.command
-    const { config, sessionContext } = await initializeApp({
-      sessionId: 'terminal-run',
-      currentUserId,
-      channel: 'terminal',
-      watchUserDefinedAgents: false,
-    })
-    configForShutdown = config
-    await runWithSessionContext(sessionContext, async () => {
-      await initializeHooks(config)
-      await initializeMcp(config)
-      try {
-        const prompt = await resolveRunPrompt(runCommand)
-        await runTerminalOneShot(prompt)
-      } finally {
-        await drainPendingExtraction(60_000)
-        await drainPendingDream(60_000)
-        await releaseConsolidationLocksOnShutdown(config).catch(error => {
-          process.stderr.write(`consolidate-lock release failed: ${String(error)}\n`)
-        })
-        await drainPendingBackgroundTasks(60_000)
-        await getBackgroundTaskScheduler().stop()
-        await cleanupMcp().catch(error => {
-          process.stderr.write(`mcp cleanup failed: ${String(error)}\n`)
-        })
-        await getRuntimePool().releaseAll().catch(error => {
-          process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
-        })
-        await stopNetworkBridgeSafely().catch(error => {
-          process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
-        })
-      }
-    })
-    return
-  }
 
   // Order matters: initializeApp must run BEFORE startEnabledChannels so the
   // channel runner doesn't try to bootstrap the app itself (without a
@@ -335,39 +252,7 @@ async function main(): Promise<void> {
       await getRuntimePool().releaseAll().catch(error => {
         process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
       })
-      await stopNetworkBridgeSafely().catch(error => {
-        process.stderr.write(`network bridge stop failed: ${String(error)}\n`)
-      })
     }
-  })
-}
-
-async function resolveRunPrompt(command: Extract<CliCommand, { kind: 'run' }>): Promise<{
-  prompt: string
-  source: 'argv' | 'stdin' | 'argv+stdin'
-}> {
-  const argvPrompt = command.promptParts.join(' ').trim()
-  if (!command.stdin) {
-    return { prompt: argvPrompt, source: 'argv' }
-  }
-  const stdinPrompt = await readStdinText()
-  const prompt = [argvPrompt, stdinPrompt.trim()].filter(Boolean).join('\n\n')
-  return {
-    prompt,
-    source: argvPrompt ? 'argv+stdin' : 'stdin',
-  }
-}
-
-function readStdinText(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    processStdin.setEncoding('utf8')
-    processStdin.on('data', chunk => {
-      data += chunk
-    })
-    processStdin.on('end', () => resolve(data))
-    processStdin.on('error', reject)
-    processStdin.resume()
   })
 }
 
@@ -388,18 +273,11 @@ async function startEnabledChannels(): Promise<ChannelHandle[]> {
   return handles
 }
 
-export function isCliEntrypoint(metaUrl = import.meta.url, argvPath = process.argv[1]): boolean {
-  if (!argvPath) return false
-  return path.resolve(argvPath) === fileURLToPath(metaUrl)
-}
-
-if (isCliEntrypoint()) {
-  main().catch(error => {
-    if (error instanceof LightClawAlreadyRunningError) {
-      console.error(error.message)
-    } else {
-      console.error(error instanceof Error ? error.message : String(error))
-    }
-    process.exitCode = 1
-  })
-}
+main().catch(error => {
+  if (error instanceof LightClawAlreadyRunningError) {
+    console.error(error.message)
+  } else {
+    console.error(error instanceof Error ? error.message : String(error))
+  }
+  process.exitCode = 1
+})

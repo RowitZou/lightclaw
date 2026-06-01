@@ -552,7 +552,7 @@ export class ChannelRunner {
         const sessionContext = createEmptySessionContext({
           sessionId,
           currentUserId: userId,
-          channel: this.strategy.channelId as 'feishu' | 'terminal',
+          channel: 'feishu',
           resourceGrantTarget: this.strategy.resolveResourceGrantTarget?.(effectiveMessage),
         })
         const approver = this.strategy.createPermissionApprover?.(
@@ -570,7 +570,7 @@ export class ChannelRunner {
         await runWithSessionContext(sessionContext, async () => {
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
-          channel: this.strategy.channelId as 'feishu' | 'terminal',
+          channel: 'feishu',
           model: meta?.model,
           sessionId,
           resumedFrom: meta ? sessionId : null,
@@ -698,7 +698,7 @@ export class ChannelRunner {
           getActiveTools: () =>
             filterToolsByRoleVisibility(
               getMainRole(),
-              getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools(this.strategy.channelId as 'feishu' | 'terminal')),
+              getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools('feishu')),
             ),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
@@ -990,7 +990,7 @@ export class ChannelRunner {
               messages,
               tools: filterToolsByRoleVisibility(
                 getMainRole(),
-                getEnabledTools(provider, getAllTools(this.strategy.channelId as 'feishu' | 'terminal')),
+                getEnabledTools(provider, getAllTools('feishu')),
               ),
               ...(forceFallbackInToolResultKinds.size > 0
                 ? { forceFallbackInToolResult: forceFallbackInToolResultKinds }
@@ -1580,7 +1580,7 @@ export class ChannelRunner {
 
     const ctx = createSessionContext({
       cwd,
-      channel: this.strategy.channelId as 'feishu' | 'terminal',
+      channel: 'feishu',
       model: prefs.model ?? resolveRoleModel(getMainRole(), config),
       sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(userId, config),
@@ -1601,7 +1601,7 @@ export class ChannelRunner {
     const provider = getMainRoleRoute(config).provider
     const tools = filterToolsByRoleVisibility(
       getMainRole(),
-      getEnabledTools(provider, getAllTools(this.strategy.channelId as 'feishu' | 'terminal')),
+      getEnabledTools(provider, getAllTools('feishu')),
     )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
@@ -2100,7 +2100,7 @@ export function isLikelySlashCommand(text: string): boolean {
 }
 
 function isPairableChannel(channel: string): channel is ChannelKind {
-  return channel === 'feishu' || channel === 'terminal'
+  return channel === 'feishu'
 }
 
 // Up to 3 attempts total per inbound message: the first attempt + 2 retries.

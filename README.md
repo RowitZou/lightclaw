@@ -62,14 +62,11 @@ Sibling files in the same dir: `permissions.json` (permission rules), `mcp.json`
 ## Usage
 
 ```bash
-lightclaw                         # start the daemon: enabled channels + terminal admin console
-lightclaw --home <dir>            # temp home
-lightclaw --config <file>         # external read-only config
-lightclaw run "...long task..."    # one-shot terminal dogfood turn
-lightclaw run --stdin             # read the one-shot prompt from stdin
+lightclaw                 # start the daemon: enabled channels + terminal admin console
+lightclaw --home <dir>    # temp home    lightclaw --config <file>  # external read-only config
 ```
 
-The terminal admin console does not run an interactive agent session; use `lightclaw run` for one one-shot turn, or talk to the daemon over Feishu. Common slash commands (shared by terminal and Feishu, except where tagged `admin` / `feishu`):
+The terminal does not run the agent — talk to the agent over Feishu. Common slash commands (shared by terminal and Feishu, except where tagged `admin` / `feishu`):
 
 | Command | What it does |
 |---|---|
