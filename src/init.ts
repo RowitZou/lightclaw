@@ -20,6 +20,7 @@ import { getMemoryDir } from './memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from './permission/storage.js'
 import type { PermissionMode } from './permission/types.js'
 import { NetworkBridge } from './runtime/network-bridge.js'
+import { brainppDockerImageProbe } from './runtime/image-readiness.js'
 import { resolveDockerImage } from './runtime/pool.js'
 import { WorkerHealthChecker } from './runtime/worker-health-checker.js'
 import {
@@ -156,6 +157,9 @@ function startImagePrefetchIfNeeded(config: LightClawConfig): void {
   const image = resolveDockerImage(config)
   getImageReadiness().startPrefetch(image, {
     inspectOnly: !config.runtime.dockerSettings.autoPull,
+    ...(config.runtime.driver === 'brainpp'
+      ? { probe: brainppDockerImageProbe() }
+      : {}),
   })
 }
 

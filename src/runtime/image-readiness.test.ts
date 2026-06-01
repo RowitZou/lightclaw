@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isImageMissingError, isTransientPullError } from './image-readiness.js'
+import {
+  brainppDockerImageProbe,
+  isImageMissingError,
+  isTransientPullError,
+} from './image-readiness.js'
 
 test('isTransientPullError matches GHCR auth-probe EOF', () => {
   assert.equal(
@@ -55,4 +59,15 @@ test('isImageMissingError still catches the classic wording', () => {
   assert.equal(isImageMissingError('manifest unknown'), true)
   assert.equal(isImageMissingError('repository ghcr.io/x/y not found'), true)
   assert.equal(isImageMissingError('Get "https://ghcr.io/v2/": EOF'), false)
+})
+
+test('brainppDockerImageProbe checks rjob and keeps remediation local', () => {
+  const probe = brainppDockerImageProbe()
+
+  assert.equal(probe.key, 'brainpp-rjob')
+  assert.match(probe.command, /command -v rjob/)
+  assert.match(
+    probe.failureMessage('lightclaw-sandbox:brainpp', 'missing'),
+    /image has not been uploaded/i,
+  )
 })

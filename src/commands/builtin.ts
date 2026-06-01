@@ -30,6 +30,7 @@ import {
 } from '../permission/storage.js'
 import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
+import { brainppDockerImageProbe } from '../runtime/image-readiness.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
 import { clearPrechargeForModel } from '../provider/index.js'
@@ -497,6 +498,9 @@ function buildBuiltinCommands(): ReplCommand[] {
         }
         tracker.startPrefetch(image, {
           inspectOnly: !ctx.config.runtime.dockerSettings.autoPull,
+          ...(ctx.config.runtime.driver === 'brainpp'
+            ? { probe: brainppDockerImageProbe() }
+            : {}),
         })
         ctx.output.write(`${t('sandbox.prefetch.started', { image })}\n`)
         return

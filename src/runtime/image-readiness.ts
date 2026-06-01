@@ -10,6 +10,13 @@ export type ImageReadinessSnapshot = {
   pullDurationMs?: number
 }
 
+export type ImageReadinessProbe = {
+  key: string
+  label: string
+  command: string
+  failureMessage: (image: string, detail: string) => string
+}
+
 const IMAGE_MISSING_PATTERNS = [
   /unable to find image/i,
   /pull access denied/i,
@@ -79,6 +86,21 @@ export function formatPullError(message: string): string {
   return trimmed
 }
 
+export function brainppDockerImageProbe(): ImageReadinessProbe {
+  return {
+    key: 'brainpp-rjob',
+    label: 'Brain++ rjob CLI',
+    command: 'command -v rjob >/dev/null 2>&1',
+    failureMessage: (image, detail) => [
+      `Docker sandbox image ${image} is missing the Brain++ rjob CLI required by runtime.driver = "brainpp".`,
+      'Build a brainpp-preinstalled sandbox image with the internal pip index, for example:',
+      'DOCKER_BUILDKIT=1 docker build --secret id=pip_conf,src=/etc/pip.conf -t lightclaw-sandbox:brainpp .',
+      'Then set runtime.dockerSettings.imageOverride to that local tag. The image has not been uploaded.',
+      `Probe detail: ${detail}`,
+    ].join('\n'),
+  }
+}
+
 async function dockerImageInspect(image: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const child = spawn('docker', ['image', 'inspect', image], {
@@ -129,6 +151,38 @@ async function dockerPullStreaming(image: string): Promise<void> {
   })
 }
 
+async function dockerRunProbe(image: string, probe: ImageReadinessProbe): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', [
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--entrypoint',
+      'bash',
+      image,
+      '-lc',
+      probe.command,
+    ], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: process.env,
+    })
+    let stderr = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.once('error', reject)
+    child.once('exit', code => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      const detail = stderr.trim() || `${probe.label} probe exited with code ${code ?? 'unknown'}`
+      reject(new Error(detail))
+    })
+  })
+}
+
 export class ImageReadinessTracker {
   private _state: ImageReadinessState = 'not-attempted'
   private _image?: string
@@ -136,6 +190,7 @@ export class ImageReadinessTracker {
   private _pullStartedAt?: number
   private _pullCompletedAt?: number
   private _pullPromise?: Promise<void>
+  private _probe?: ImageReadinessProbe
   // Dedup admin push: key = `${channelId}::${image}::${state}`
   private notifiedAdmins = new Set<string>()
   // Listeners (stderr banner + admin push). Triggered when state changes.
@@ -179,15 +234,17 @@ export class ImageReadinessTracker {
    * image isn't present locally the tracker lands in 'failed' with a marker
    * lastError so isAvailable() can render the autoPull-disabled UX.
    */
-  startPrefetch(image: string, options: { inspectOnly?: boolean } = {}): void {
-    if (this._image && this._image !== image) {
+  startPrefetch(image: string, options: { inspectOnly?: boolean; probe?: ImageReadinessProbe } = {}): void {
+    const probe = options.probe
+    if (this._image && (this._image !== image || this._probe?.key !== probe?.key)) {
       this.reset()
     }
     this._image = image
+    this._probe = probe
     if (this._state === 'pulling' || this._state === 'ready') {
       return
     }
-    this._pullPromise = this.runPrefetch(image, options.inspectOnly ?? false).catch(() => {
+    this._pullPromise = this.runPrefetch(image, options.inspectOnly ?? false, probe).catch(() => {
       /* runPrefetch records state itself; swallow rejection from outer promise */
     })
   }
@@ -217,12 +274,13 @@ export class ImageReadinessTracker {
     if (this._state !== 'failed' && this._state !== 'not-attempted') return
     if (!this._image) return
     const image = this._image
+    const probe = this._probe
     this._state = 'not-attempted'
     this._lastError = undefined
     this._pullStartedAt = undefined
     this._pullCompletedAt = undefined
     this._pullPromise = undefined
-    this.startPrefetch(image)
+    this.startPrefetch(image, { probe })
   }
 
   /**
@@ -258,6 +316,7 @@ export class ImageReadinessTracker {
     this._pullStartedAt = undefined
     this._pullCompletedAt = undefined
     this._pullPromise = undefined
+    this._probe = undefined
     this.notifiedAdmins.clear()
   }
 
@@ -272,7 +331,11 @@ export class ImageReadinessTracker {
     }
   }
 
-  private async runPrefetch(image: string, inspectOnly: boolean): Promise<void> {
+  private async runPrefetch(
+    image: string,
+    inspectOnly: boolean,
+    probe?: ImageReadinessProbe,
+  ): Promise<void> {
     this._state = 'pulling'
     this._pullStartedAt = Date.now()
     this._pullCompletedAt = undefined
@@ -283,6 +346,7 @@ export class ImageReadinessTracker {
     try {
       const exists = await dockerImageInspect(image)
       if (exists) {
+        if (probe && !await this.runProbe(image, probe)) return
         this._state = 'ready'
         this._pullCompletedAt = Date.now()
         this.emit()
@@ -312,6 +376,7 @@ export class ImageReadinessTracker {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         await dockerPullStreaming(image)
+        if (probe && !await this.runProbe(image, probe)) return
         this._state = 'ready'
         this._pullCompletedAt = Date.now()
         const tookSec = Math.round(
@@ -340,6 +405,21 @@ export class ImageReadinessTracker {
     this._pullCompletedAt = Date.now()
     process.stderr.write(`✗ Sandbox image pull failed: ${this._lastError}\n`)
     this.emit()
+  }
+
+  private async runProbe(image: string, probe: ImageReadinessProbe): Promise<boolean> {
+    try {
+      await dockerRunProbe(image, probe)
+      return true
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      this._state = 'failed'
+      this._lastError = probe.failureMessage(image, detail)
+      this._pullCompletedAt = Date.now()
+      process.stderr.write(`✗ Sandbox image readiness probe failed: ${this._lastError}\n`)
+      this.emit()
+      return false
+    }
   }
 }
 

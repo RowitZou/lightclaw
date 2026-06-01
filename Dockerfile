@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils sed gawk grep \
       ripgrep git curl ca-certificates \
+      sudo \
       python3 python3-pip \
       poppler-utils \
       build-essential \
@@ -46,6 +47,29 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir \
       "python-docx>=1.1,<2" \
       "python-pptx>=1.0,<2"
 
+# Brain++ is an internal package. Build with BuildKit and pass the internal
+# pip config as a secret, for example:
+#   DOCKER_BUILDKIT=1 docker build --secret id=pip_conf,src=/etc/pip.conf -t lightclaw-sandbox:brainpp .
+RUN --mount=type=secret,id=pip_conf,target=/etc/pip.conf,required=false \
+    python3 -m pip install --break-system-packages --no-cache-dir brainpp
+
+# rjob expects the kubebrain ssh environment to be initialized from the
+# container's process-1 environment. This script is intentionally generic:
+# deployment-specific KUBEBRAIN_* values are injected through docker env.
+RUN cat > /etc/profile.d/ssh-init.sh <<'EOF' \
+    && chmod 0644 /etc/profile.d/ssh-init.sh
+#!/usr/bin/env bash
+# import environment from process 1
+# shellcheck disable=SC1090
+if [ "$(id -u)" = "0" ]; then
+  _lightclaw_strings_cmd="strings"
+else
+  _lightclaw_strings_cmd="sudo strings"
+fi
+. <(echo "export $($_lightclaw_strings_cmd /proc/1/environ | grep -v HOME | grep -v LS_COLORS | grep -v TERM | tr '\n' ' ')")
+unset _lightclaw_strings_cmd
+EOF
+
 # Layer 4: Node 22 LTS + pnpm 10 (covers lightclaw self-debug and Node-flavored
 # user scripts; tarball install avoids nvm rc-file overhead and apt repo coupling)
 ARG NODE_VERSION=22.11.0
@@ -71,6 +95,7 @@ RUN jq --version && yq --version \
     && pdftotext -v 2>&1 | head -1 \
     && pdftoppm -v 2>&1 | head -1 \
     && python3 -c "import numpy, pandas, scipy, matplotlib, requests, yaml, tqdm, pyarrow, jsonlines, dotenv, openpyxl, docx, pptx, PIL" \
+    && command -v rjob \
     && node --version && pnpm --version \
     && rg --version | head -1
 
