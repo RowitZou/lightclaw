@@ -40,7 +40,9 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           isError: true,
         }
       }
-      if (role && skill && !isSkillCompatibleWithRole(skill, role)) {
+      if (role && skill && !isSkillCompatibleWithRole(skill, role, {
+        runtimeDriver: context.config?.runtime.driver ?? null,
+      })) {
         return {
           output: `Unknown skill: ${input.name}`,
           isError: true,

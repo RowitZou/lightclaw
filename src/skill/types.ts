@@ -1,4 +1,5 @@
 export type SkillSource = 'builtin' | 'user'
+export type SkillRequiredDriver = 'brainpp'
 
 export type SkillMeta = {
   name: string
@@ -6,6 +7,7 @@ export type SkillMeta = {
   whenToUse?: string
   allowedTools?: string[]
   roles: string[]
+  requiresDriver?: SkillRequiredDriver
   source: SkillSource
   filePath: string
   /**

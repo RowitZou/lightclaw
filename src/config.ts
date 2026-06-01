@@ -767,7 +767,7 @@ function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined
   if (value === 'rjob') {
     throw new Error(
       'runtime.backend "rjob" is not a runtime backend. rjob is a batch-job CLI surfaced ' +
-      'through the cluster-job skill, not a sandbox backend. Use "cluster" for cluster runtime sandboxing.',
+      'through the brainpp-batch-job skill, not a sandbox backend. Use "cluster" for cluster runtime sandboxing.',
     )
   }
 

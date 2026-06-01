@@ -1,8 +1,13 @@
 import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
+import type { RuntimeDriver } from '../config.js'
 import type { SkillMeta } from './types.js'
 
 const MAIN_GENERALIST_PAIR = new Set(['main', 'generalist'])
+
+export type SkillRuntimeGate = {
+  runtimeDriver?: RuntimeDriver
+}
 
 export function isSkillNameAllowedForRole(skill: SkillMeta, role: Role): boolean {
   if (skill.source === 'user') {
@@ -18,7 +23,21 @@ export function isSkillNameAllowedForRole(skill: SkillMeta, role: Role): boolean
   return skills.includes('*') || skills.includes(skill.name)
 }
 
-export function isSkillCompatibleWithRole(skill: SkillMeta, role: Role): boolean {
+export function isSkillCompatibleWithRuntime(
+  skill: SkillMeta,
+  gate: SkillRuntimeGate = {},
+): boolean {
+  return !skill.requiresDriver || skill.requiresDriver === (gate.runtimeDriver ?? null)
+}
+
+export function isSkillCompatibleWithRole(
+  skill: SkillMeta,
+  role: Role,
+  gate: SkillRuntimeGate = {},
+): boolean {
+  if (!isSkillCompatibleWithRuntime(skill, gate)) {
+    return false
+  }
   if (!isSkillNameAllowedForRole(skill, role)) {
     return false
   }
@@ -28,12 +47,19 @@ export function isSkillCompatibleWithRole(skill: SkillMeta, role: Role): boolean
   return skill.allowedTools.every(toolName => isToolVisibleToRole(role, toolName))
 }
 
-export function filterSkillsForRole(skills: SkillMeta[], role: Role): SkillMeta[] {
+export function filterSkillsForRole(
+  skills: SkillMeta[],
+  role: Role,
+  gate: SkillRuntimeGate = {},
+): SkillMeta[] {
   return skills.filter(skill => {
+    if (!isSkillCompatibleWithRuntime(skill, gate)) {
+      return false
+    }
     if (!isSkillNameAllowedForRole(skill, role)) {
       return false
     }
-    if (isSkillCompatibleWithRole(skill, role)) {
+    if (isSkillCompatibleWithRole(skill, role, gate)) {
       return true
     }
     const requiredTools = skill.allowedTools?.join(', ') ?? ''

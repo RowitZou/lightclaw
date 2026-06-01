@@ -25,6 +25,7 @@ interface BuiltSkill {
   whenToUse?: string
   allowedTools?: string[]
   roles: string[]
+  requiresDriver?: 'brainpp'
   source: 'builtin'
   filePath: string
   body: string
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
       : []
 
     const autoLoad = frontmatter.auto_load === 'true' ? true : undefined
+    const requiresDriver = parseRequiredDriver(skillMdPath, frontmatter['requires-driver'])
 
     skills.push({
       name,
@@ -98,6 +100,7 @@ async function main(): Promise<void> {
       whenToUse,
       allowedTools,
       roles,
+      requiresDriver,
       source: 'builtin',
       filePath: `builtin:${name}`,
       body: body.trim(),
@@ -117,6 +120,27 @@ async function main(): Promise<void> {
   ].join('\n')
 
   await writeFile(outFile, header, 'utf8')
+}
+
+function parseRequiredDriver(
+  skillMdPath: string,
+  value: string | string[] | undefined,
+): 'brainpp' | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    throw new Error(
+      `bundled SKILL.md ${skillMdPath} frontmatter "requires-driver" must be one of: brainpp`,
+    )
+  }
+  const driver = value.trim()
+  if (driver !== 'brainpp') {
+    throw new Error(
+      `bundled SKILL.md ${skillMdPath} frontmatter "requires-driver" must be one of: brainpp`,
+    )
+  }
+  return driver
 }
 
 main().catch((err: unknown) => {

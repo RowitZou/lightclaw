@@ -1,7 +1,8 @@
 ---
-name: cluster-job
-description: "Use local rjob safely for H-cluster batch training jobs: submit, inspect, monitor, stop/delete with confirmation, and collect logs."
-when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for H-cluster batch jobs via rjob. Examples: 'submit this training job to H cluster', 'tail logs for my rjob', 'stop that cluster job after I confirm'. Do not use for LightClaw runtime sandboxes; rlaunch remains the runtime/sandbox backend."
+name: brainpp-batch-job
+description: "Submit and manage cluster batch training jobs via rjob: submit, inspect, monitor, stop/delete with confirmation, and collect logs."
+when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job after I confirm'. This is for batch jobs, not interactive sandboxes."
+requires-driver: brainpp
 allowed-tools:
   - Bash
   - Read
@@ -14,15 +15,16 @@ roles:
   - coder
 ---
 
-# Cluster Job
+# Brain++ Batch Job
 
-Use the local `rjob` CLI for batch/cluster training jobs while keeping LightClaw runtime sandbox work on `rlaunch`.
+Use the local `rjob` CLI for cluster batch training jobs while keeping LightClaw interactive sandbox work on the configured runtime backend.
 
 ## Positioning
 
-- `rjob` is for H-cluster batch jobs: submit training/evaluation jobs, inspect status, tail logs, read scheduling events, stop/delete jobs, clone/patch specs, and download logs.
-- `rjob` is not a LightClaw `RuntimeKind` backend. Do not route interactive runtime, sandbox, shell, or agent execution through `rjob`; use `rlaunch` for that.
-- `rjob` is an environment-conditional capability: it needs the internal Brain++ `rjob` CLI on PATH (provided by the `brainpp` package; not on public PyPI). It is present on the H-cluster dev host and in the Brain++ ml-base worker image, so it works under both the local and rlaunch backends; a plain docker image without the cluster toolchain does not have it. If it is missing, the wrapper fails with an install hint; tell the user this environment cannot run cluster jobs and stop rather than improvising an alternative.
+- `rjob` is a batch-job tool for training/evaluation jobs: submit jobs, inspect status, tail logs, read scheduling events, stop/delete jobs, clone/patch specs, and download logs.
+- `rjob` is not an interactive sandbox backend. Interactive sandbox execution is controlled by `runtime.backend` (`local` / `docker` / `cluster`) and is orthogonal to this skill.
+- This skill appears only when the deployment platform is configured with `runtime.driver = "brainpp"`; the harness enforces that through the skill's driver gate. It depends on the Brain++ toolchain (`rjob` on PATH, provided by the internal `brainpp` package; not on public PyPI), which is present on the H-cluster dev host, Brain++ ml-base worker image, or a brainpp-preinstalled sandbox image.
+- If `rjob` is not on PATH, the wrapper fails and stops. Report that this environment lacks the cluster toolchain; do not install, reconfigure, or substitute another mechanism without the user's go-ahead.
 - Before every `rjob` call, initialize the kubebrain SSH environment with `source /etc/profile.d/ssh-init.sh`. Prefer the bundled wrapper, which does this automatically: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh`.
 - Keep environment-specific values out of source and memory unless the user explicitly provides them for the current job: namespace, charged group, image, GPFS/workspace paths, secrets, and credentials.
 

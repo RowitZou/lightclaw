@@ -262,6 +262,46 @@ describe('discoverSkillsForUser', () => {
       )
     })
   })
+
+  it('parses requires-driver and rejects unknown drivers', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'brainpp-flow',
+        [
+          'name: brainpp-flow',
+          'description: Needs Brain++.',
+          'roles:',
+          '  - main',
+          'requires-driver: brainpp',
+        ].join('\n'),
+      )
+
+      const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.equal(
+        skills.find(skill => skill.name === 'brainpp-flow')?.requiresDriver,
+        'brainpp',
+      )
+    })
+
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'slurm-flow',
+        [
+          'name: slurm-flow',
+          'description: Unknown driver.',
+          'roles:',
+          '  - main',
+          'requires-driver: slurm',
+        ].join('\n'),
+      )
+      await assert.rejects(
+        discoverSkillsForUser(process.cwd(), 'alice'),
+        /requires-driver" must be one of: brainpp/,
+      )
+    })
+  })
 })
 
 describe('recordSkillUsage', () => {

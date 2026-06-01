@@ -142,7 +142,7 @@ else
 fi
 
 if ! command -v rjob >/dev/null 2>&1; then
-  fail "rjob CLI not found on PATH in this runtime. rjob is provided by the internal Brain++ 'brainpp' Python package (not on public PyPI). It is present on the H-cluster dev host and in the Brain++ ml-base worker image (so it works under both the local and rlaunch backends), but a plain docker image (e.g. debian-slim) does not ship it. If this environment has the Brain++ pip index configured, install with: pip3 install brainpp (it provides the 'rjob' command). Otherwise tell the user this environment cannot run cluster jobs and stop."
+  fail "rjob CLI not found on PATH in this runtime. rjob is provided by the internal Brain++ 'brainpp' Python package (not on public PyPI). It is present where runtime.driver = brainpp is configured and the brainpp toolchain is installed (H-cluster dev host, Brain++ ml-base worker image, or a brainpp-preinstalled sandbox image). If this environment has the Brain++ pip index configured, install with: pip3 install brainpp (it provides the 'rjob' command). Otherwise tell the user this environment cannot run cluster jobs and stop."
 fi
 
 exec rjob "$command_name" "${args[@]}"

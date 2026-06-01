@@ -6,6 +6,7 @@ import type { Role } from '../agents/types.js'
 import type { SkillMeta } from './types.js'
 import {
   filterSkillsForRole,
+  isSkillCompatibleWithRuntime,
   isSkillCompatibleWithRole,
   isSkillNameAllowedForRole,
 } from './role-validation.js'
@@ -96,6 +97,33 @@ test('missing role.skills hides the skill even when tools are present', () => {
 
   assert.equal(isSkillNameAllowedForRole(meta, worker), false)
   assert.equal(isSkillCompatibleWithRole(meta, worker), false)
+})
+
+test('requires-driver gates skill compatibility independently of backend', () => {
+  const meta = skill({
+    name: 'brainpp-batch-job',
+    requiresDriver: 'brainpp',
+    allowedTools: ['Bash'],
+  })
+  const main = role({ tools: ['Bash'], skills: ['brainpp-batch-job'] })
+
+  assert.equal(isSkillCompatibleWithRuntime(meta, { runtimeDriver: null }), false)
+  assert.equal(isSkillCompatibleWithRole(meta, main, { runtimeDriver: null }), false)
+  assert.equal(isSkillCompatibleWithRuntime(meta, { runtimeDriver: 'brainpp' }), true)
+  assert.equal(isSkillCompatibleWithRole(meta, main, { runtimeDriver: 'brainpp' }), true)
+})
+
+test('filterSkillsForRole drops requires-driver skills when runtime.driver is null', () => {
+  const filtered = filterSkillsForRole(
+    [
+      skill({ name: 'remember' }),
+      skill({ name: 'brainpp-batch-job', requiresDriver: 'brainpp' }),
+    ],
+    role({ tools: ['Read'], skills: ['remember', 'brainpp-batch-job'] }),
+    { runtimeDriver: null },
+  )
+
+  assert.deepEqual(filtered.map(item => item.name), ['remember'])
 })
 
 test('named role skills allow only matching skill names', () => {
@@ -205,7 +233,7 @@ test('coder and reviewer no longer expose scaffold verification skills', () => {
 
   assert.ok(coder)
   assert.ok(reviewer)
-  assert.deepEqual(coder.skills, ['remember', 'coding-workflow', 'cluster-job'])
+  assert.deepEqual(coder.skills, ['remember', 'coding-workflow', 'brainpp-batch-job'])
   assert.deepEqual(reviewer.skills, ['remember', 'pre-delivery-review-workflow'])
 })
 

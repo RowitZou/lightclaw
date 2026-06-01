@@ -31,6 +31,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     whenToUse: skill.whenToUse,
     allowedTools: skill.allowedTools,
     roles: skill.roles,
+    requiresDriver: skill.requiresDriver,
     source: skill.source,
     filePath: skill.filePath,
     lastUsedAt: skill.lastUsedAt,
@@ -64,6 +65,7 @@ function parseSkillFrontmatter(
     typeof lastUsedAtRaw === 'string' && lastUsedAtRaw.trim().length > 0
       ? lastUsedAtRaw.trim()
       : undefined
+  const requiresDriver = parseSkillRequiredDriver(filePath, frontmatter['requires-driver'])
 
   return {
     name,
@@ -76,11 +78,35 @@ function parseSkillFrontmatter(
       ? frontmatter['allowed-tools'].map(value => value.trim()).filter(Boolean)
       : undefined,
     roles,
+    requiresDriver,
     source,
     filePath,
     lastUsedAt,
     autoLoad: frontmatter.auto_load === 'true' ? true : undefined,
   }
+}
+
+function parseSkillRequiredDriver(
+  filePath: string,
+  value: string | string[] | undefined,
+): SkillMeta['requiresDriver'] {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    throw new Error(
+      `Skill ${filePath} frontmatter "requires-driver" must be one of: brainpp. ` +
+      `Got: ${JSON.stringify(value)}.`,
+    )
+  }
+  const driver = value.trim()
+  if (driver !== 'brainpp') {
+    throw new Error(
+      `Skill ${filePath} frontmatter "requires-driver" must be one of: brainpp. ` +
+      `Got: ${JSON.stringify(value)}.`,
+    )
+  }
+  return driver
 }
 
 function parseSkillRoles(

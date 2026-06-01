@@ -108,11 +108,15 @@ export type SystemPromptRenderOptions = {
   discoveredCatalogTools?: Tool[]
 }
 
-function formatSkillsSection(role: Role): string {
+function formatSkillsSection(role: Role, config: LightClawConfig): string {
   // Auto-loaded skills are injected as a workflow section (see
   // formatAutoLoadedWorkflowSections); they are not load-on-demand, so listing
   // them here — with a now-moot when_to_use trigger — would be misleading.
-  const skills = filterSkillsForRole(listRegisteredSkills(), role).filter(skill => !skill.autoLoad)
+  const skills = filterSkillsForRole(
+    listRegisteredSkills(),
+    role,
+    { runtimeDriver: config.runtime?.driver ?? null },
+  ).filter(skill => !skill.autoLoad)
   if (skills.length === 0) {
     return 'None.'
   }
@@ -130,8 +134,12 @@ function formatSkillsSection(role: Role): string {
 // waiting for the model to call UseSkill, so the procedure is reliably in
 // context. The skill text stays in its own file (persona / workflow stay
 // separated); only the loading becomes automatic.
-async function formatAutoLoadedWorkflowSections(role: Role): Promise<string[]> {
-  const autoSkills = filterSkillsForRole(listRegisteredSkills(), role).filter(skill => skill.autoLoad)
+async function formatAutoLoadedWorkflowSections(role: Role, config: LightClawConfig): Promise<string[]> {
+  const autoSkills = filterSkillsForRole(
+    listRegisteredSkills(),
+    role,
+    { runtimeDriver: config.runtime?.driver ?? null },
+  ).filter(skill => skill.autoLoad)
   const sections: string[] = []
   for (const skill of autoSkills) {
     const loaded = await loadRegisteredSkill(skill.name)
@@ -446,12 +454,12 @@ async function buildRolePromptParts(
     preTodoSections.push(formatAskUserQuestionNudge())
   }
 
-  const skillsSection = formatRoleSkillsSection(policy.skills, role)
+  const skillsSection = formatRoleSkillsSection(policy.skills, role, input.config)
   if (skillsSection) {
     preTodoSections.push(skillsSection)
   }
 
-  for (const workflowSection of await formatAutoLoadedWorkflowSections(role)) {
+  for (const workflowSection of await formatAutoLoadedWorkflowSections(role, input.config)) {
     preTodoSections.push(workflowSection)
   }
 
@@ -528,12 +536,16 @@ function formatEnvironmentSection(
   return lines.join('\n')
 }
 
-function formatRoleSkillsSection(skills: readonly string[], role: Role): string {
+function formatRoleSkillsSection(
+  skills: readonly string[],
+  role: Role,
+  config: LightClawConfig,
+): string {
   if (skills.length === 0) {
     return ''
   }
 
-  const body = formatSkillsSection({ ...role, skills: [...skills] })
+  const body = formatSkillsSection({ ...role, skills: [...skills] }, config)
   if (body === 'None.') {
     return ''
   }

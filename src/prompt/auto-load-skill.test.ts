@@ -8,7 +8,7 @@ import { setLightclawHomeOverride } from '../paths.js'
 import { buildSubagentPrompt, buildSystemPromptTemplate, renderSystemPrompt } from '../prompt.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { Tool } from '../tool.js'
-import type { LightClawConfig } from '../config.js'
+import type { LightClawConfig, RuntimeDriver } from '../config.js'
 import { BUNDLED_AGENTS } from '../agents/bundled/index.js'
 import type { Role } from '../agents/types.js'
 
@@ -43,13 +43,14 @@ function fakeTool(name: string): Tool {
   } as Tool
 }
 
-function config(): LightClawConfig {
+function config(driver: RuntimeDriver = null): LightClawConfig {
   return {
     defaultModel: 'claude-sonnet-4-6',
     models: { 'claude-sonnet-4-6': { endpoint: 'newapi', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' } },
     endpoints: { newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' } },
     paths: { sessions: path.join(tmpRoot, 'sessions') },
     memory: { recall: { enabled: false, topN: 3 }, session: { enabled: false } },
+    runtime: { driver, backend: 'local' },
   } as unknown as LightClawConfig
 }
 
@@ -71,7 +72,7 @@ const BODY_MARKER = 'standing operating procedure as the orchestrator'
 test('auto-loaded workflow skill body is injected into main, not listed in Available Skills', async () => {
   const ctx = baseCtx()
   await runWithSessionContext(ctx, async () => {
-    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
+    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
     const template = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
       autoMemory: false, config: config(), queryText: '', sessionId: undefined,
     })
@@ -98,5 +99,27 @@ test('auto-loaded skill scoped to its roles — coder does not get delivery-orch
     const tools = ['Read', 'Write', 'Edit', 'Bash', 'TodoWrite', 'UseSkill'].map(fakeTool)
     const prompt = await buildSubagentPrompt(tools, config(), '/workspace', '/scratch', coder, ctx.cwd, ctx.sessionId)
     assert.doesNotMatch(prompt, new RegExp(BODY_MARKER))
+  })
+})
+
+test('driver-gated skill is hidden unless runtime.driver matches', async () => {
+  const ctx = baseCtx()
+  await runWithSessionContext(ctx, async () => {
+    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
+    const withoutBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
+      autoMemory: false, config: config(null), queryText: '', sessionId: undefined,
+    })
+    assert.doesNotMatch(
+      renderSystemPrompt(withoutBrainpp, [], { tools: mainTools }),
+      /^- brainpp-batch-job:/m,
+    )
+
+    const withBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
+      autoMemory: false, config: config('brainpp'), queryText: '', sessionId: undefined,
+    })
+    assert.match(
+      renderSystemPrompt(withBrainpp, [], { tools: mainTools }),
+      /^- brainpp-batch-job:/m,
+    )
   })
 })

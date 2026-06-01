@@ -19,12 +19,12 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '7a729688f473bc5cc253ee46a82256f639306d921e14e73eeddb3982d31a1bf6',
-  generalist: '9ac3eeb34dd80b9f9a739d5f971663300bcf32397de299b9c95ebaf90316b980',
+  main: '833d1a8b7425951d7c14fe9dc409be0f40cd1d90f8bdceeab9f1e83587b7cf61',
+  generalist: '9f725f95d1ff5ec77cb66aad06c5c2672012ebe28a39ea7c83c0f1d6ac4f92d5',
   localExplorer: '5a0282508c69778e44c1aefd9308458ae33f39175bc0ea90e2bd6ae4ded3ba05',
   webSearcher: 'a723541d40c7f6bedf5e4c3c95105634384f41ada8d274d1605f9a8ff1a33a3c',
   feishuSecretary: 'ce74fcdde8b57ec27fd26b549509db3ec46a56060b6edf4a5ca37edc0f72b3d9',
-  coder: '97b5b756a58e0907436d53d2c584724beacc28947f17cf1a9f2c234ccf5608ac',
+  coder: '4ac14b750b16e7f63f7297f00031d920e4c2f583679a586f63aa8693bac5bb6a',
   archivist: 'f97d7dbd0fdef6b7dfdf3b5c631d1554c37f598df06ab7129921e0164ce7f8fe',
   reviewer: '4a28b9f4fa7ca2ac4c523c6032aa26169dca25acf738efea2ae1713b6fb8dd1f',
   memoryExtractor: '4a67ded8194ab5d62961e1f868f460a215c5664b52ac3ad777e9e7da2c36b5b1',

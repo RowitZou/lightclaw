@@ -62,7 +62,7 @@ describe('bundled skill ↔ role contract manifest', () => {
     for (const role of BUNDLED_AGENTS) {
       for (const skill of bundledSkills) {
         if (!isSkillNameAllowedForRole(skill, role)) continue
-        if (isSkillCompatibleWithRole(skill, role)) continue
+        if (isSkillCompatibleWithRole(skill, role, { runtimeDriver: 'brainpp' })) continue
         const required = skill.allowedTools?.join(',') ?? ''
         mismatches.push(
           `role="${role.agentType}" lists skill="${skill.name}" but skill requires tools [${required}] ` +
@@ -84,18 +84,20 @@ describe('bundled skill ↔ role contract manifest', () => {
     const manifest: Record<string, string[]> = {}
     for (const role of BUNDLED_AGENTS) {
       const visible = bundledSkills
-        .filter(s => isSkillNameAllowedForRole(s, role) && isSkillCompatibleWithRole(s, role))
+        .filter(s => isSkillNameAllowedForRole(s, role) && isSkillCompatibleWithRole(s, role, {
+          runtimeDriver: 'brainpp',
+        }))
         .map(s => s.name)
         .sort()
       manifest[role.agentType] = visible
     }
     assert.deepEqual(manifest, {
-      main: ['cluster-job', 'delivery-orchestration', 'remember', 'skillify'],
-      generalist: ['cluster-job', 'remember'],
+      main: ['brainpp-batch-job', 'delivery-orchestration', 'remember', 'skillify'],
+      generalist: ['brainpp-batch-job', 'remember'],
       localExplorer: ['local-exploration-workflow'],
       webSearcher: ['web-research-workflow'],
       feishuSecretary: ['feishu-doc-workflow'],
-      coder: ['cluster-job', 'coding-workflow', 'remember'],
+      coder: ['brainpp-batch-job', 'coding-workflow', 'remember'],
       archivist: ['archive-workflow', 'remember'],
       reviewer: ['pre-delivery-review-workflow', 'remember'],
       memoryExtractor: [],
@@ -103,6 +105,22 @@ describe('bundled skill ↔ role contract manifest', () => {
       skillCurator: [],
       skillConsolidator: [],
     })
+  })
+
+  it('hides Brain++-gated bundled skills when runtime.driver is null', () => {
+    const manifest: Record<string, string[]> = {}
+    for (const role of BUNDLED_AGENTS) {
+      const visible = bundledSkills
+        .filter(s => isSkillNameAllowedForRole(s, role) && isSkillCompatibleWithRole(s, role, {
+          runtimeDriver: null,
+        }))
+        .map(s => s.name)
+        .sort()
+      manifest[role.agentType] = visible
+    }
+    assert.equal(manifest.main.includes('brainpp-batch-job'), false)
+    assert.equal(manifest.generalist.includes('brainpp-batch-job'), false)
+    assert.equal(manifest.coder.includes('brainpp-batch-job'), false)
   })
 })
 
