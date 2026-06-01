@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 import type { ChannelFileSendOutput } from '../../session-context.js'
 import type {
@@ -179,12 +180,17 @@ export class FeishuSender {
 
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
+      // One idempotency key per chunk (each chunk is a distinct Feishu
+      // message). Reused on enqueue so a chunk that landed in-process but
+      // whose response was lost is deduped, not duplicated, on drain.
+      const uuid = randomUUID()
       try {
         const response = await this.sendReplyOrCreate({
           chatId: message.chatId,
           replyToMessageId: replyTo,
           ...(message.threadId ? { threadId: message.threadId } : {}),
           text: chunk,
+          uuid,
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
@@ -194,16 +200,17 @@ export class FeishuSender {
         }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
-          payload: { kind: 'text', text: chunk },
+          payload: { kind: 'text', text: chunk, uuid },
           ctx,
         })) {
           // Enqueue remaining chunks too — same recipient, no replyTo
           // chain (Feishu reply target was the original inbound; we
-          // can't reuse a chunk's message_id we never received).
+          // can't reuse a chunk's message_id we never received). Each
+          // follow-up chunk was never sent in-process, so it gets a fresh key.
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
               recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
-              payload: { kind: 'text', text: chunks[j]! },
+              payload: { kind: 'text', text: chunks[j]!, uuid: randomUUID() },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
             })
@@ -232,6 +239,7 @@ export class FeishuSender {
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
       const card = buildMarkdownCard(chunk)
+      const uuid = randomUUID()
       try {
         const response = await this.sendReplyOrCreate({
           chatId: message.chatId,
@@ -239,6 +247,7 @@ export class FeishuSender {
           ...(message.threadId ? { threadId: message.threadId } : {}),
           msgType: 'interactive',
           content: JSON.stringify(card),
+          uuid,
         })
         replyTo = response.data?.message_id ?? replyTo
       } catch (err) {
@@ -248,13 +257,13 @@ export class FeishuSender {
         }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
-          payload: { kind: 'card', card },
+          payload: { kind: 'card', card, uuid },
           ctx,
         })) {
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
               recipient: this.replyRecipient(message.chatId, replyTo, message.threadId),
-              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!), uuid: randomUUID() },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
             })
@@ -272,6 +281,7 @@ export class FeishuSender {
     ctx: SendNoticeContext = {},
   ): Promise<{ messageId?: string }> {
     const replyTarget = this.replyTargetFor(message)
+    const uuid = randomUUID()
     try {
       const response = await this.sendReplyOrCreate({
         chatId: message.chatId,
@@ -279,6 +289,7 @@ export class FeishuSender {
         ...(message.threadId ? { threadId: message.threadId } : {}),
         msgType: 'interactive',
         content: JSON.stringify(card),
+        uuid,
       })
       const messageId = response.data?.message_id
       return messageId ? { messageId } : {}
@@ -289,7 +300,7 @@ export class FeishuSender {
       }
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: this.replyRecipient(message.chatId, replyTarget, message.threadId),
-        payload: { kind: 'card', card: card as Record<string, unknown> },
+        payload: { kind: 'card', card: card as Record<string, unknown>, uuid },
         ctx,
       })) {
         return {}
@@ -313,6 +324,7 @@ export class FeishuSender {
     card: InteractiveCard,
     ctx: SendNoticeContext = {},
   ): Promise<{ chatId?: string; messageId?: string }> {
+    const uuid = randomUUID()
     try {
       const response = await this.withMessageRetry(
         'create interactive (open_id)',
@@ -323,6 +335,7 @@ export class FeishuSender {
             receive_id: openId,
             msg_type: 'interactive',
             content: JSON.stringify(card),
+            uuid,
           },
           })
           assertOk(response, 'Feishu create message (open_id) failed')
@@ -337,7 +350,7 @@ export class FeishuSender {
     } catch (err) {
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: { type: 'open_id', openId },
-        payload: { kind: 'card', card: card as Record<string, unknown> },
+        payload: { kind: 'card', card: card as Record<string, unknown>, uuid },
         ctx,
       })) {
         return {}
@@ -355,6 +368,7 @@ export class FeishuSender {
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
       const card = buildMarkdownCard(chunk)
+      const uuid = randomUUID()
       try {
         const response = await this.withMessageRetry(
           'create markdown (open_id)',
@@ -365,6 +379,7 @@ export class FeishuSender {
               receive_id: openId,
               msg_type: 'interactive',
               content: JSON.stringify(card),
+              uuid,
             },
             })
             assertOk(response, 'Feishu create markdown message (open_id) failed')
@@ -374,13 +389,13 @@ export class FeishuSender {
       } catch (err) {
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: { type: 'open_id', openId },
-          payload: { kind: 'card', card },
+          payload: { kind: 'card', card, uuid },
           ctx,
         })) {
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
               recipient: { type: 'open_id', openId },
-              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!), uuid: randomUUID() },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
             })
@@ -407,12 +422,14 @@ export class FeishuSender {
     for (let i = 0; i < chunks.length; i += 1) {
       const chunk = chunks[i]!
       const card = buildMarkdownCard(chunk)
+      const uuid = randomUUID()
       try {
         await this.sendReplyOrCreate({
           chatId,
           ...(threadId ? { threadId } : {}),
           msgType: 'interactive',
           content: JSON.stringify(card),
+          uuid,
         })
       } catch (err) {
         if (isTopicCreateRefused(err)) {
@@ -421,13 +438,13 @@ export class FeishuSender {
         }
         if (await this.maybeEnqueueOnTransient(err, {
           recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
-          payload: { kind: 'card', card },
+          payload: { kind: 'card', card, uuid },
           ctx,
         })) {
           for (let j = i + 1; j < chunks.length; j += 1) {
             await this.enqueue({
               recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
-              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!) },
+              payload: { kind: 'card', card: buildMarkdownCard(chunks[j]!), uuid: randomUUID() },
               ctx,
               lastError: 'follow-up chunk enqueued after preceding chunk failed',
             })
@@ -451,12 +468,14 @@ export class FeishuSender {
     ctx: SendNoticeContext = {},
     threadId?: string,
   ): Promise<{ messageId?: string }> {
+    const uuid = randomUUID()
     try {
       const response = await this.sendReplyOrCreate({
         chatId,
         ...(threadId ? { threadId } : {}),
         msgType: 'interactive',
         content: JSON.stringify(card),
+        uuid,
       })
       const messageId = response.data?.message_id
       return messageId ? { messageId } : {}
@@ -467,7 +486,7 @@ export class FeishuSender {
       }
       if (await this.maybeEnqueueOnTransient(err, {
         recipient: { type: 'create', chatId, ...(threadId ? { threadId } : {}) },
-        payload: { kind: 'card', card: card as Record<string, unknown> },
+        payload: { kind: 'card', card: card as Record<string, unknown>, uuid },
         ctx,
       })) {
         return {}
@@ -516,6 +535,7 @@ export class FeishuSender {
           ...(message.threadId ? { threadId: message.threadId } : {}),
           msgType: 'file',
           content: JSON.stringify({ file_key: fileKey }),
+          uuid: randomUUID(),
         })
         return { kind: 'im-attachment' }
       } catch (error) {
@@ -646,9 +666,22 @@ export class FeishuSender {
     text?: string
     msgType?: 'text' | 'interactive' | 'file'
     content?: string
+    /**
+     * Send idempotency key. ONE key per logical message — reused across every
+     * `withMessageRetry` attempt below AND shared between the `reply` path and
+     * its `create` fallback. Feishu dedups `data.uuid` for 1h, so a request
+     * that landed server-side but whose response was lost (ECONNRESET / read
+     * timeout — the corp-proxy flap that triggered the 2026-06-01 duplicate
+     * "记下了" spam) is collapsed on the retry instead of creating a second
+     * chat message. Callers pass their own key so the queued-then-drained
+     * path (`replayPendingNotice`) can replay under the original key; omitted
+     * → generated here (covers any caller that does not own a durable key).
+     */
+    uuid?: string
   }): Promise<SendResponse> {
     const msgType = input.msgType ?? 'text'
     const content = input.content ?? JSON.stringify({ text: input.text ?? '' })
+    const uuid = input.uuid ?? randomUUID()
     if (input.replyToMessageId) {
       try {
         const response = await this.withMessageRetry(
@@ -659,6 +692,7 @@ export class FeishuSender {
             data: {
               msg_type: msgType,
               content,
+              uuid,
             },
             })
             if (!shouldFallbackFromReply(response)) {
@@ -706,6 +740,7 @@ export class FeishuSender {
             receive_id: input.chatId,
             msg_type: msgType,
             content,
+            uuid,
           },
         })
         assertOk(response, 'Feishu create message failed')
@@ -793,6 +828,12 @@ export class FeishuSender {
       ? JSON.stringify({ text: notice.payload.text })
       : JSON.stringify(notice.payload.card)
     const msgType = notice.payload.kind === 'text' ? 'text' : 'interactive'
+    // Replay under the SAME idempotency key the original send used (carried on
+    // the notice). If one of that send's in-process attempts had actually
+    // landed before being enqueued as "failed", Feishu dedups this replay
+    // instead of posting a second copy. Pre-this-change notices lack the key;
+    // they fall back to a fresh one (legacy no-cross-phase-dedup behavior).
+    const uuid = notice.payload.uuid ?? randomUUID()
 
     if (notice.recipient.type === 'open_id') {
       const response = await this.withMessageRetry(
@@ -804,6 +845,7 @@ export class FeishuSender {
             receive_id: notice.recipient.type === 'open_id' ? notice.recipient.openId : '',
             msg_type: msgType,
             content,
+            uuid,
           },
           })
           assertOk(response, 'Feishu drain replay (open_id) failed')
@@ -819,6 +861,7 @@ export class FeishuSender {
       ...(recipient.threadId ? { threadId: recipient.threadId } : {}),
       msgType,
       content,
+      uuid,
     })
   }
 

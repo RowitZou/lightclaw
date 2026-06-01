@@ -28,8 +28,16 @@ export type PendingRecipient =
   | { type: 'open_id'; openId: string }
 
 export type PendingPayload =
-  | { kind: 'text'; text: string }
-  | { kind: 'card'; card: Record<string, unknown> }
+  // `uuid` is the Feishu send idempotency key (`im.message.create`/`reply`
+  // `data.uuid`, 1h server-side dedup window). It is carried on the queued
+  // notice so a notice that was enqueued AFTER its in-process send attempts
+  // exhausted — but where one of those attempts had actually landed
+  // server-side (lost response) — replays under the SAME key on drain and
+  // Feishu collapses it instead of posting a duplicate. Absent on pre-this
+  // -change notices; those just replay with a fresh key (no cross-phase
+  // dedup, the legacy behavior).
+  | { kind: 'text'; text: string; uuid?: string }
+  | { kind: 'card'; card: Record<string, unknown>; uuid?: string }
 
 export type PendingNotice = {
   id: string

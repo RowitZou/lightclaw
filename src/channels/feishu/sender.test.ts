@@ -383,3 +383,121 @@ test('reply→create fallback keeps receive_id_type=chat_id when no threadId is 
   assert.deepEqual(createCalls[0]!.params, { receive_id_type: 'chat_id' })
   assert.equal(createCalls[0]!.data.receive_id, 'oc_chat')
 })
+
+// --- Send idempotency (2026-06-01 duplicate "记下了" spam) ---
+// Root cause: im.message.reply/create were retried on transient errors
+// (ECONNRESET / read timeout — a request that LANDED server-side but whose
+// response was lost) WITHOUT a uuid, so each retry created a fresh chat
+// message. One flaky-network ack fanned out into ~7 reply copies + N create
+// copies. Fix: one stable `data.uuid` per logical message, reused across
+// every retry and shared between the reply path and its create fallback, so
+// Feishu's 1h server-side dedup collapses the re-sends.
+
+const uuidOf = (input: unknown): unknown =>
+  (input as { data?: { uuid?: unknown } }).data?.uuid
+
+test('a logical send reuses ONE idempotency uuid across reply retries and the create fallback', async () => {
+  const replyUuids: unknown[] = []
+  const createUuids: unknown[] = []
+  const transient = new Error('socket hang up') as Error & { code: string }
+  transient.code = 'ECONNRESET'
+  const client = {
+    im: {
+      message: {
+        reply: async (input: unknown) => {
+          replyUuids.push(uuidOf(input))
+          throw transient
+        },
+        create: async (input: unknown) => {
+          createUuids.push(uuidOf(input))
+          return { code: 0, data: { message_id: 'om_created' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1, attempts: 3 })
+  await sender.sendInteractiveCard(baseMessage, { elements: [] })
+
+  // Every reply retry carries a uuid, and it is the SAME value every time —
+  // that is what lets Feishu dedup the re-sent-after-lost-response copies.
+  // Pre-fix every uuid was `undefined`, so this whole block fails.
+  assert.equal(replyUuids.length, 3)
+  for (const u of replyUuids) assert.equal(typeof u, 'string')
+  assert.equal(new Set(replyUuids).size, 1)
+  // The create fallback shares the SAME key, so a reply that actually landed
+  // (lost response) is deduped rather than duplicated as a second message.
+  assert.equal(createUuids.length, 1)
+  assert.equal(createUuids[0], replyUuids[0])
+})
+
+test('distinct logical sends use distinct idempotency uuids (legit messages are not collapsed)', async () => {
+  const createUuids: unknown[] = []
+  const client = {
+    im: {
+      message: {
+        reply: async () => { throw new Error('should not be called') },
+        create: async (input: unknown) => {
+          createUuids.push(uuidOf(input))
+          return { code: 0, data: { message_id: 'om_created' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
+  const synthetic = { ...baseMessage, synthetic: true } as NormalizedChannelMessage
+  await sender.sendInteractiveCard(synthetic, { elements: [] })
+  await sender.sendInteractiveCard(synthetic, { elements: [] })
+
+  assert.equal(createUuids.length, 2)
+  for (const u of createUuids) assert.equal(typeof u, 'string')
+  assert.notEqual(createUuids[0], createUuids[1])
+})
+
+test('a drained pending notice replays under the ORIGINAL idempotency uuid', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'lightclaw-sender-idem-test-'))
+  try {
+    const transient = new Error('Client network socket disconnected') as Error & { code: string }
+    transient.code = 'ECONNRESET'
+    const createUuids: unknown[] = []
+    let failCreate = true
+    const client = {
+      im: {
+        message: {
+          reply: async () => { throw transient },
+          create: async (input: unknown) => {
+            createUuids.push(uuidOf(input))
+            if (failCreate) throw transient
+            return { code: 0, data: { message_id: 'om_created' } }
+          },
+        },
+        file: { create: async () => null },
+      },
+    } as unknown as FeishuClient
+    const store = new PendingQueueStore(dir)
+    const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1, attempts: 2 })
+    sender.attachPendingStore(store)
+
+    await sender.sendInteractiveCardToOpenId('ou_recipient', { elements: [] }, {
+      purpose: 'welcome',
+    })
+    const inProcessUuid = createUuids[0]
+    assert.equal(typeof inProcessUuid, 'string')
+    assert.ok(createUuids.every(u => u === inProcessUuid))
+
+    const alive = await store.loadAlive()
+    assert.equal(alive.length, 1)
+    assert.equal(alive[0]!.payload.uuid, inProcessUuid)
+
+    createUuids.length = 0
+    failCreate = false
+    await sender.sendForDrain(alive[0]!)
+    assert.equal(createUuids.length, 1)
+    assert.equal(createUuids[0], inProcessUuid)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
