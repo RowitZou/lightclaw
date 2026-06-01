@@ -99,9 +99,16 @@ const EXEC_SCRATCH_SUBDIR = '.lightclaw/exec'
 // on the gpfs mount. See `Runtime.scratchRoot`.
 const WORKER_SCRATCH_DIR = '/scratch'
 
-// Cluster runtime implementation for runtime.driver = "brainpp". The public
-// backend kind is vendor-neutral ("cluster"); the real CLI names below stay
-// rlaunch/brainctl because they are Brain++ components.
+// Cluster runtime implementation for runtime.driver = "brainpp".
+//
+// Keep the split explicit:
+// - Brain++ driver seam: rlaunch/brainctl argv construction, worker-name
+//   parsing, and Brain++ control-plane error classification.
+// - Reusable remote-worker skeleton: lifecycle, pooling, retry shell,
+//   mount/data-plane layering, scratch provisioning, and host-mount fast paths.
+//
+// Do not extract a generic ClusterDriver yet. This file is the seam marker for
+// the second cluster implementation to prove the right interface shape.
 export class RlaunchRuntime implements Runtime {
   readonly kind = 'cluster' as const
   readonly isolated = true
@@ -1013,7 +1020,11 @@ export class RlaunchRuntime implements Runtime {
     // would be root-owned and unreadable by the non-root daemon, and their
     // output is small / log-only anyway.
     if (input.privileged === true) {
-      return runProcess('brainctl', this.brainctlExecArgs(this.wrapCommand(input)), {
+      return runProcess('brainctl', buildBrainppExecArgs({
+        namespace: this.cfg.namespace,
+        workerName: this.workerName,
+        wrappedCommand: this.wrapCommand(input),
+      }), {
         abortSignal: input.abortSignal,
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
@@ -1028,7 +1039,11 @@ export class RlaunchRuntime implements Runtime {
     const errFile = path.posix.join(scratchDir, `${id}.err`)
     const brainctlResult = await runProcess(
       'brainctl',
-      this.brainctlExecArgs(this.wrapCommand(input, { outFile, errFile })),
+      buildBrainppExecArgs({
+        namespace: this.cfg.namespace,
+        workerName: this.workerName,
+        wrappedCommand: this.wrapCommand(input, { outFile, errFile }),
+      }),
       {
         abortSignal: input.abortSignal,
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -1042,14 +1057,6 @@ export class RlaunchRuntime implements Runtime {
       errFile,
       input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
     )
-  }
-
-  private brainctlExecArgs(wrapped: string): string[] {
-    return [
-      '-n', this.cfg.namespace,
-      'exec', `process/${this.workerName}`,
-      '--', 'bash', '-c', wrapped,
-    ]
   }
 
   /** Container-path scratch dir for exec output-capture files and exec-relay
@@ -1171,18 +1178,11 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private launchArgs(input: { detach: boolean; predictOnly: boolean }): string[] {
-    return buildLaunchArgs(this.cfg, input)
+    return buildBrainppLaunchArgs(this.cfg, input)
   }
 
   private async processPhase(name: string): Promise<ProcessState> {
-    const result = await runProcess('brainctl', [
-      '-n',
-      this.cfg.namespace,
-      'get',
-      'process',
-      name,
-      '--no-headers',
-    ], {
+    const result = await runProcess('brainctl', buildBrainppGetProcessArgs(this.cfg.namespace, name), {
       timeoutMs: DEFAULT_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'brainctl process inspect terminated',
@@ -1198,12 +1198,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private async stopWorker(name: string): Promise<void> {
-    const result = await runProcess('brainctl', [
-      '-n',
-      this.cfg.namespace,
-      'stop',
-      `process/${name}`,
-    ], {
+    const result = await runProcess('brainctl', buildBrainppStopProcessArgs(this.cfg.namespace, name), {
       timeoutMs: DEFAULT_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'brainctl stop process terminated',
@@ -1214,45 +1209,11 @@ export class RlaunchRuntime implements Runtime {
   }
 
   private isWorkerLostError(result: ExecResult): boolean {
-    if (result.exitCode === 0) return false
-    // POSIX shell "command not found" is exit 127. The 'not found' substring
-    // below would otherwise trip on `bash: line 1: rg: command not found`
-    // (rlaunch ml-base image ships without ripgrep, jq, yq, etc.) and
-    // respawn the worker once per Glob/Grep call. 127 is unique to in-shell
-    // command resolution; brainctl control-plane / kubelet faults surface
-    // as non-127 exits (typically 1, or 137 on SIGKILL).
-    if (result.exitCode === 127) return false
-    // 2026-05-15 dogfood: scope the substring scan to brainctl/k8s error
-    // envelopes only. The earlier whole-output scan covered both stderr and
-    // stdout and tripped on any user-program output containing 'not found'
-    // — e.g. a Python heredoc that `raise SystemExit('runner query block
-    // start not found')` then exited non-zero — and respawned a perfectly
-    // healthy worker. Real brainctl/k8s failures always start an stderr
-    // line with `error:` (Stopped worker: `error: cannot exec into a
-    // container in an unavailable process: Stopped`) or `Error from server`
-    // (NotFound / kubelet ws faults: `Error from server (NotFound): ...`).
-    // User programs almost never use those exact line prefixes, so
-    // requiring them as line anchors removes the false-positive surface
-    // without weakening real worker-death detection.
-    const envelopeLines = result.stderr
-      .split('\n')
-      .filter(line => /^(error:|Error from server)/i.test(line))
-      .join('\n')
-      .toLowerCase()
-    return (
-      envelopeLines.includes('not found') ||
-      envelopeLines.includes('connection refused') ||
-      envelopeLines.includes('unable to upgrade connection') ||
-      envelopeLines.includes('unavailable process') ||
-      envelopeLines.includes('cannot exec into a container')
-    )
+    return isBrainppWorkerLostExecFailure(result)
   }
 
   private isNotFoundOrForbidden(result: ExecResult): boolean {
-    const msg = `${result.stderr}\n${result.stdout}`.toLowerCase()
-    return msg.includes('notfound') ||
-      msg.includes('not found') ||
-      msg.includes('forbidden')
+    return isBrainppNotFoundOrForbidden(result)
   }
 
   private toContainerPath(pathname: string): string {
@@ -1394,6 +1355,45 @@ export function buildLaunchArgs(
   cfg: RlaunchRuntimeConfig,
   input: { detach: boolean; predictOnly: boolean },
 ): string[] {
+  return buildBrainppLaunchArgs(cfg, input)
+}
+
+export function buildBrainppExecArgs(input: {
+  namespace: string
+  workerName: string
+  wrappedCommand: string
+}): string[] {
+  return [
+    '-n', input.namespace,
+    'exec', `process/${input.workerName}`,
+    '--', 'bash', '-c', input.wrappedCommand,
+  ]
+}
+
+export function buildBrainppGetProcessArgs(namespace: string, name: string): string[] {
+  return [
+    '-n',
+    namespace,
+    'get',
+    'process',
+    name,
+    '--no-headers',
+  ]
+}
+
+export function buildBrainppStopProcessArgs(namespace: string, name: string): string[] {
+  return [
+    '-n',
+    namespace,
+    'stop',
+    `process/${name}`,
+  ]
+}
+
+export function buildBrainppLaunchArgs(
+  cfg: RlaunchRuntimeConfig,
+  input: { detach: boolean; predictOnly: boolean },
+): string[] {
   const args = [
     '--gpu',
     String(cfg.gpu),
@@ -1443,6 +1443,38 @@ export function buildLaunchArgs(
     'sleep infinity',
   )
   return args
+}
+
+export function isBrainppWorkerLostExecFailure(result: ExecResult): boolean {
+  if (result.exitCode === 0) return false
+  // POSIX shell "command not found" is exit 127. The 'not found' substring
+  // below would otherwise trip on `bash: line 1: rg: command not found`
+  // (rlaunch ml-base image ships without ripgrep, jq, yq, etc.) and respawn
+  // the worker once per Glob/Grep call. 127 is unique to in-shell command
+  // resolution; brainctl control-plane / kubelet faults surface as non-127
+  // exits (typically 1, or 137 on SIGKILL).
+  if (result.exitCode === 127) return false
+  // Scope the substring scan to brainctl/k8s error envelopes only. Whole-output
+  // scans false-positive on user-program text containing "not found".
+  const envelopeLines = result.stderr
+    .split('\n')
+    .filter(line => /^(error:|Error from server)/i.test(line))
+    .join('\n')
+    .toLowerCase()
+  return (
+    envelopeLines.includes('not found') ||
+    envelopeLines.includes('connection refused') ||
+    envelopeLines.includes('unable to upgrade connection') ||
+    envelopeLines.includes('unavailable process') ||
+    envelopeLines.includes('cannot exec into a container')
+  )
+}
+
+export function isBrainppNotFoundOrForbidden(result: ExecResult): boolean {
+  const msg = `${result.stderr}\n${result.stdout}`.toLowerCase()
+  return msg.includes('notfound') ||
+    msg.includes('not found') ||
+    msg.includes('forbidden')
 }
 
 export function parseWorkerName(output: string): string | null {

@@ -7,8 +7,13 @@ import path from 'node:path'
 import { setLightclawHomeOverride } from '../paths.js'
 import { workspaceToGpfsMount } from '../identity/paths.js'
 import {
+  buildBrainppExecArgs,
+  buildBrainppGetProcessArgs,
+  buildBrainppStopProcessArgs,
   buildLaunchArgs,
   composeExecScript,
+  isBrainppNotFoundOrForbidden,
+  isBrainppWorkerLostExecFailure,
   parseExitMarker,
   parseWorkerName,
   RlaunchRuntime,
@@ -38,6 +43,58 @@ describe('parseWorkerName', () => {
 
   it('ignores logs when no worker name exists', () => {
     assert.equal(parseWorkerName('Launching detach mode...\nfailed'), null)
+  })
+})
+
+describe('Brain++ driver seam helpers', () => {
+  it('builds brainctl argv for exec/get/stop without runtime state', () => {
+    assert.deepEqual(
+      buildBrainppExecArgs({
+        namespace: 'ailab-hs',
+        workerName: 'worker-a',
+        wrappedCommand: 'echo ok',
+      }),
+      ['-n', 'ailab-hs', 'exec', 'process/worker-a', '--', 'bash', '-c', 'echo ok'],
+    )
+    assert.deepEqual(
+      buildBrainppGetProcessArgs('ailab-hs', 'worker-a'),
+      ['-n', 'ailab-hs', 'get', 'process', 'worker-a', '--no-headers'],
+    )
+    assert.deepEqual(
+      buildBrainppStopProcessArgs('ailab-hs', 'worker-a'),
+      ['-n', 'ailab-hs', 'stop', 'process/worker-a'],
+    )
+  })
+
+  it('classifies Brain++ worker-lost envelopes without matching user output', () => {
+    assert.equal(isBrainppWorkerLostExecFailure({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Error from server (NotFound): process worker-a not found',
+    }), true)
+    assert.equal(isBrainppWorkerLostExecFailure({
+      exitCode: 1,
+      stdout: 'runner query block start not found',
+      stderr: '',
+    }), false)
+    assert.equal(isBrainppWorkerLostExecFailure({
+      exitCode: 127,
+      stdout: '',
+      stderr: 'bash: rg: command not found',
+    }), false)
+  })
+
+  it('classifies Brain++ get-process missing or forbidden responses', () => {
+    assert.equal(isBrainppNotFoundOrForbidden({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Error from server (Forbidden): cannot get process',
+    }), true)
+    assert.equal(isBrainppNotFoundOrForbidden({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'temporary api outage',
+    }), false)
   })
 })
 
