@@ -22,6 +22,7 @@ Use the local `rjob` CLI for batch/cluster training jobs while keeping LightClaw
 
 - `rjob` is for H-cluster batch jobs: submit training/evaluation jobs, inspect status, tail logs, read scheduling events, stop/delete jobs, clone/patch specs, and download logs.
 - `rjob` is not a LightClaw `RuntimeKind` backend. Do not route interactive runtime, sandbox, shell, or agent execution through `rjob`; use `rlaunch` for that.
+- `rjob` is an environment-conditional capability: it needs the internal Brain++ `rjob` CLI on PATH, which only exists where the cluster toolchain is installed — typically the H-cluster dev host under the local runtime backend. The default docker/rlaunch sandbox images do not ship it. If it is missing, the wrapper fails with an install hint; tell the user this environment cannot run cluster jobs and stop rather than improvising an alternative.
 - Before every `rjob` call, initialize the kubebrain SSH environment with `source /etc/profile.d/ssh-init.sh`. Prefer the bundled wrapper, which does this automatically: `${LIGHTCLAW_SKILL_DIR}/scripts/rjob-wrapper.sh`.
 - Keep environment-specific values out of source and memory unless the user explicitly provides them for the current job: namespace, charged group, image, GPFS/workspace paths, secrets, and credentials.
 
@@ -45,6 +46,8 @@ The wrapper sources `/etc/profile.d/ssh-init.sh`, rejects unsupported subcommand
 ### 1. Understand the job request
 
 Identify whether the user wants to list, inspect, monitor, submit, stop/delete, clone/patch, download logs, or analyze failure. For submit-like requests, collect the command, code/data location, image, namespace/group, resource requirements, output/log destination, and any deadline or stop condition. Ask for missing environment-specific values instead of guessing.
+
+Preflight the environment on the first command: any wrapper call already checks that `rjob` is on PATH and fails with an install hint when it is absent. If that happens, report that this environment lacks the cluster toolchain and stop — do not attempt to install it or substitute another mechanism without the user's go-ahead.
 
 **Success criteria**: You know the intended rjob operation and have the minimum job identifiers or submit parameters needed to run a safe command.
 
