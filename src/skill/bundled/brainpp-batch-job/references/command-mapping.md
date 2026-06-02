@@ -93,8 +93,8 @@ Common options (run `rjob submit --help` for the full list):
 | `-P` / `--replica <n>` | Replica count of the task |
 | `-r` / `--restart-policy <p>` | Task restart policy (normal task: `Never` only) |
 | `--namespace <ns>` | Namespace |
-| `--task-type {normal,idle}` | Task type (default `normal`) |
-| `--priority <1-9>` | Priority for normal tasks |
+| `--task-type {normal,idle}` | Priority lane (default `normal`). `normal` = normal priority, lands under the **常规任务** (regular) UI tab. `idle` = low priority, preemptible, lands under the **闲时任务** (idle) UI tab. The two tabs are separate, so the user cannot find the job unless you tell them which lane you submitted. |
+| `--priority <1-9>` | Fine-grained priority within a `normal` task |
 | `--predict-only true` / `--dry-run true` | Preview, do not create |
 
 Preview example:

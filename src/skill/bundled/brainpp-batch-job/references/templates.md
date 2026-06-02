@@ -12,7 +12,7 @@ Exact command shapes are in `command-mapping.md`. This file is the end-to-end fl
      -- <command line>
    ```
    `--predict-only true` checks resource feasibility; `--dry-run true` renders the spec instead. Run whichever (or both) the user needs.
-3. **Summarize** the predicted resources, image, command, and mounts/paths back to the user. Flag anything missing or risky.
+3. **Summarize** the predicted resources, image, command, mounts/paths, **and the task type** back to the user. State plainly whether it is a `normal` (normal-priority, `常规任务` tab) or `idle` (low-priority, preemptible, `闲时任务` tab) job — the two land under different UI tabs, so the user cannot find the submitted job unless you say which. Flag anything missing or risky.
 4. **Get the user's confirmation, then submit for real** — re-run the same command with the `--predict-only true` preview flag removed:
    ```
    rjob submit --name <job> --image <img> \
@@ -28,12 +28,14 @@ rjob submit --predict-only true --name demo-train --image <img> \
   -- python train.py --epochs 10
 ```
 
-### Idle / sleep test job (no GPU)
+### Low-priority (idle) sleep / smoke-test job (no GPU)
 ```
 rjob submit --predict-only true --name idle-probe --image <img> \
   --task-type idle --cpu 1 --memory 1024 --gpu 0 --charged-group <group> --namespace <ns> \
   -- sleep 3600
 ```
+`--task-type idle` puts the job in the **low-priority lane** — it is preemptible and shows under the **闲时任务** UI tab, not 常规任务. Use it for throwaway smoke tests; use `normal` (omit `--task-type`, the default) for real training. Whichever you pick, tell the user the lane so they look under the right tab.
+
 Note the `-- sleep 3600`: the command after `--` is what runs inside the job. `submit ... sleep 3600` (no `--`) fails.
 
 ## Monitor / debug flow

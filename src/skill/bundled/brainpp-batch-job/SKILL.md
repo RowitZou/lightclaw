@@ -61,7 +61,7 @@ Identify whether the user wants to list, inspect, monitor, submit, stop/delete, 
 
 ### 3. Preview submissions, then confirm
 
-Preview with `submit --predict-only true ...` (resource feasibility) or `--dry-run true ...` (rendered spec) — both take a `true` value, and the job command goes after `--`. Summarize predicted resources, image, command, and mounts/paths. Do not perform a real submit yet.
+Preview with `submit --predict-only true ...` (resource feasibility) or `--dry-run true ...` (rendered spec) — both take a `true` value, and the job command goes after `--`. Summarize predicted resources, image, command, mounts/paths, and the **task type**. Always state which priority lane you are submitting: `--task-type normal` (default, normal priority → `常规任务` tab) or `idle` (low priority, preemptible → `闲时任务` tab). They live under different UI tabs, so the user cannot find the job unless you tell them the lane. Do not perform a real submit yet.
 
 **Human checkpoint**: get the user's explicit confirmation, then run the real `submit` (same args, drop the preview flag). Return the job name plus `get` / bounded `logs` / `events` / `download-logs` follow-ups.
 
