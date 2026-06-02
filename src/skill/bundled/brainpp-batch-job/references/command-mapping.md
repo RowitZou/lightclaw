@@ -186,4 +186,4 @@ rjob patch <job> [--task_name <t>] [-P <replicas>] [--auto-restart <v>] [--names
 - Multi-replica distributed jobs need `--gang-start true` (and usually `--host-network true` + RDMA via `--custom-resources`). Without `--gang-start`, replicas can't discover each other.
 - The tail flag is `-n` / `--tail-lines`, never `--tail`.
 - There is no `kubectl` / `kubebrain` CLI in this skill — only the `rjob` subcommands above. Don't invent commands; if something isn't covered, run `rjob <subcommand> --help`.
-- On first use, confirm the toolchain with `rjob list --help` — it verifies `rjob` is on PATH with bounded output. If it returns command-not-found, this environment lacks the Brain++ toolchain — report it and stop rather than improvising. Don't prefix existence checks with `command -v` / `which` / `env`.
+- If `rjob` is missing (`command -v rjob` empty), this environment lacks the Brain++ toolchain — report it and stop rather than improvising.
