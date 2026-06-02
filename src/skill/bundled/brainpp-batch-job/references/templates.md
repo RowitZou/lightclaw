@@ -66,6 +66,8 @@ rjob submit --predict-only true --name <job> --image <img> \
 3. `logs job <job> -n 200` — always pass `-n` to bound output; raise it only when needed.
 4. `download-logs <job> --action create --wait` then `--action download --task-id <id> --output <workspace-path>` — full artifact, only when needed.
 
+**Empty logs right after submit are normal — check phase before calling it an error.** If `logs` returns nothing (or a "no logs yet" message), first read `get` / `events`: a replica that is `pending`, scheduling, pulling its image, or just-`active` hasn't produced output yet. That's the startup state, not a failure — report "still starting, re-checking shortly" and poll `logs` again after a short wait. Only treat it as a problem once the phase is `Failed` / `Stopped`, the replica is restart-looping, or `events` shows a real error (quota / image-pull / mount).
+
 ## Failure triage checklist
 
 For a `Failed` / `Stopped` / stuck job, in order:
