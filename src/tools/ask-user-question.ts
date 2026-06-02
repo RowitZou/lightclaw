@@ -57,7 +57,11 @@ yourself.`
 export const askUserQuestionTool = buildTool<AskUserQuestionInput, AskUserQuestionOutput>({
   name: 'AskUserQuestion',
   whenToUse: 'Ask the user to choose among real unresolved options or provide a missing user-only fact.',
-  shouldDefer: true,
+  // Inline (not deferred): asking the user a structured question is a core
+  // interaction primitive. Deferring it (schema only loadable via ToolSearch)
+  // pushed the model toward plain-text questions instead of the card, so it
+  // stays in the always-loaded catalog whenever it is visible (feishu + main).
+  alwaysLoad: true,
   channelOnly: true,
   channelScope: ['feishu'],
   description: ASK_USER_DESCRIPTION,
