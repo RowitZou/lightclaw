@@ -62,6 +62,7 @@ But all four become worth remembering the moment the user names or changes one �
 - **This accumulates into several candidate configs, not one.** The user may run one kind of task with image A and another with image B; keep both as distinct options. Deduplicate only exact repeats (same config, same purpose) — never collapse genuinely different choices into one.
 - **Before asking, pick the fit from the library.** Match the current task against what you've recorded and reuse the config whose purpose fits, reporting which one you chose. When several could apply, lean on the user's more recent or more specific preference.
 - **Ask only when several genuinely fit and the choice matters** — surface the candidates and let the user choose (via `AskUserQuestion` if you have it, otherwise return the choice to the requester). Don't ask when one config clearly fits.
+- **A missing image (nothing on record) is a blocker — ask, do not hunt.** If no recorded config covers an image for this kind of task, ask the user which image to use. Do NOT try to discover one yourself: don't probe the registry, try tags, read the image the sandbox itself runs, or copy another job's image. A wrong image wastes a real submit, and the user already knows which image they want. The same goes for any other no-default value you have nothing on record for — ask, don't go looking.
 - Record configs, never credentials. A token / accesskey / password must never enter memory.
 
 ## When you're genuinely blocked
@@ -69,7 +70,7 @@ But all four become worth remembering the moment the user names or changes one �
 A blocker is a required value that nothing on record covers and you cannot reasonably infer — not a routine "should I go ahead". When you hit one:
 
 - If you can ask the user directly (you have `AskUserQuestion`), do — give concrete options and a safe default.
-- Otherwise, put the open question in your result so the requester can resolve it. Don't stall, and don't guess an environment-specific value.
+- Otherwise, put the open question in your result so the requester can resolve it. Don't stall, don't guess an environment-specific value, and don't go probing to discover one (e.g. hunting for a usable image) — surface the question and let the user answer.
 
 ## Command workflow
 
