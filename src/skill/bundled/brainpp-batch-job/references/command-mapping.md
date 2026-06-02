@@ -86,25 +86,61 @@ Common options (run `rjob submit --help` for the full list):
 | Flag | Meaning |
 | --- | --- |
 | `--name <job-name>` | Job name; omitted → auto `<user>-<timestamp>` |
-| `--image <image>` | Container image (**required** for a real submit) |
+| `--image <image>` | Container image (**required** for a real submit). `--image=<v>` and `--image <v>` both work. |
 | `--cpu <n>` | CPU cores |
-| `--gpu <n>` | GPU count |
+| `--gpu <n>` | GPU count (per replica) |
 | `--memory <MB>` | Memory in **megabytes** |
-| `--charged-group <group>` | Charged quota group |
-| `--group <group>` | User quota group |
-| `-P` / `--replica <n>` | Replica count of the task |
-| `-r` / `--restart-policy <p>` | Task restart policy (normal task: `Never` only) |
-| `--namespace <ns>` | Namespace |
+| `--charged-group <group>` | Charged quota group (defaults from env) |
+| `--group <group>` | User quota group (defaults from env) |
+| `-P` / `--replica <n>` | Replica count of the task (each replica = one pod / node) |
+| `-r` / `--restart-policy <p>` | Restart policy. normal task: `Never` only. idle task: `Never` or `RestartJobOnFailure`. |
+| `--namespace <ns>` | Namespace (defaults from env) |
 | `--task-type {normal,idle}` | Priority lane (default `normal`). `normal` = normal priority, lands under the **常规任务** (regular) UI tab. `idle` = low priority, preemptible, lands under the **闲时任务** (idle) UI tab. The two tabs are separate, so the user cannot find the job unless you tell them which lane you submitted. |
-| `--priority <1-9>` | Fine-grained priority within a `normal` task |
+| `--priority <1-9>` | Fine-grained priority within a `normal` task (default 5; not for idle tasks) |
+| `-e <K=V>` / `--env <K=V>` / `--set-env <K=V>` | Environment variable inside the job. Repeatable / space-separated: `-e A=1 B=2`. |
+| `--mount=<src>:<dst>` | Mount a storage path into **each replica** (repeatable). For this cluster the source is a GPFS volume — see the mounts section below. |
+| `--gang-start true` | Inject every replica's IP into pod env. **Required for multi-replica distributed jobs** (so ranks can find each other). |
+| `--host-network true` | Pod uses the host network namespace (common for multi-node + RDMA). |
+| `--custom-resources <k>=<v>` | Extra scheduler resources (repeatable). RDMA / InfiniBand for distributed training, e.g. `--custom-resources rdma/mlnx_shared=8`. |
+| `--private-machine <v>` | Target a private machine pool (e.g. `group`). |
+| `--auto-restart <false\|true\|always>` | Auto-restart a failed job. `true` = long-running multi-node job; `always` = endless (e.g. pretraining). Default `false`. |
+| `--enable-self-health true` | Auto-heal on node failure / hang (re-pulls the job). **Not supported for idle tasks.** |
+| `--share-host-shm True` | Mount host `/dev/shm` into the container — **required by the checkpoint engine**. |
+| `--positive-tags <t>` / `--negative-tags <t>` | Machine features the worker MUST / MUST NOT have (repeatable). |
 | `--predict-only true` / `--dry-run true` | Preview, do not create |
 
-Preview example (`--namespace` / `--charged-group` omitted — they default from the env):
+Single-replica preview (`--namespace` / `--charged-group` omitted — they default from the env):
 ```
 rjob submit --predict-only true --name demo --image <img> \
   --cpu 8 --memory 16384 --gpu 0 -- python train.py
 ```
 Real submit: the same line with the `--predict-only true` preview flag removed. No confirmation step — submit, then report the config back.
+
+### Environment variables, mounts, and the command
+
+- **The command after `--` is run as a single argv.** For a multi-step command (activate an env, `cd`, then run), wrap it in `bash -c "..."`:
+  ```
+  rjob submit ... -- bash -c "source ~/.bashrc && conda activate myenv && cd /path/to/proj && python train.py --foo bar"
+  ```
+  A bare `-- source ... && python ...` does **not** work — only `bash -c` gives you a shell that understands `&&` / `source` / `cd`.
+- **`-e K=V` sets env vars** the job sees (e.g. `-e DISTRIBUTED_JOB=true`). Repeatable.
+- **`--mount=<src>:<dst>` mounts storage into each replica** (repeatable, one per path). On this cluster the source is a **GPFS volume** in the form `gpfs://<vol>/<subpath>`, mounted at a container path:
+  ```
+  --mount=gpfs://gpfs1/<your-dir>:/mnt/shared-storage-user/<your-dir>
+  --mount=gpfs://gpfs2/<shared-dataset>:/mnt/shared-storage-gpfs2/<shared-dataset>
+  ```
+  The specific volumes / paths are environment- and job-specific — take them from the user (or your config library), don't invent them.
+
+### Distributed / multi-node training flags
+
+For a job that spans multiple replicas / nodes (GPU-heavy training):
+- `-P <n>` — number of replicas (nodes).
+- `--gang-start true` — **required** so all replicas start together and each pod learns the others' IPs.
+- `--host-network true` — pod uses host networking.
+- `--custom-resources rdma/mlnx_shared=8` (and any other `--custom-resources k=v` the cluster needs) — RDMA / InfiniBand for inter-node collective ops.
+- `--auto-restart true` for a long multi-node run; `--enable-self-health true` to auto-heal on node failure.
+
+See `templates.md` for a full distributed example.
 
 ---
 
@@ -145,6 +181,9 @@ rjob patch <job> [--task_name <t>] [-P <replicas>] [--auto-restart <v>] [--names
 
 - `logs` needs `job`/`replica` as the first positional. `events` defaults to job, `--replica` for a replica.
 - `submit` needs `--` before the command, and `--predict-only`/`--dry-run` need a `true` value.
+- A multi-step job command (`source` / `conda activate` / `cd` / `&&`) must be wrapped: `-- bash -c "..."`. A bare `-- a && b` does not run `b` in the job.
+- `--mount`, `-e`, and `--custom-resources` are **repeatable** — pass one per entry. The mount source on this cluster is `gpfs://<vol>/<path>`.
+- Multi-replica distributed jobs need `--gang-start true` (and usually `--host-network true` + RDMA via `--custom-resources`). Without `--gang-start`, replicas can't discover each other.
 - The tail flag is `-n` / `--tail-lines`, never `--tail`.
 - There is no `kubectl` / `kubebrain` CLI in this skill — only the `rjob` subcommands above. Don't invent commands; if something isn't covered, run `rjob <subcommand> --help`.
 - If `rjob` is missing (`command -v rjob` empty), this environment lacks the Brain++ toolchain — report it and stop rather than improvising.

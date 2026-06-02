@@ -36,6 +36,29 @@ rjob submit --predict-only true --name idle-probe --image <img> \
 
 Note the `-- sleep 3600`: the command after `--` is what runs inside the job. `submit ... sleep 3600` (no `--`) fails.
 
+### Distributed / multi-GPU training job (multi-replica + RDMA)
+
+For training that spans several full GPU nodes. The extras over the single-command job are: `-P <replicas>`, `--gang-start true` (replicas discover each other), `--host-network true`, RDMA via `--custom-resources`, one `--mount=` per storage path, `-e` env vars, and a `bash -c` compound command. All the `<...>` values are environment-/job-specific — take them from the user or your config library, don't invent them.
+
+```
+rjob submit --predict-only true --name <job> --image <img> \
+  -P 2 --gpu 8 --cpu 64 --memory 819200 \
+  --gang-start true --host-network true --private-machine group \
+  -e DISTRIBUTED_JOB=true \
+  --custom-resources rdma/mlnx_shared=8 \
+  --custom-resources mellanox.com/mlnx_rdma=1 \
+  --mount=gpfs://gpfs1/<your-dir>:/mnt/shared-storage-user/<your-dir> \
+  --mount=gpfs://gpfs2/<dataset>:/mnt/shared-storage-gpfs2/<dataset> \
+  -- bash -c "source <env-setup> && conda activate <env> && cd <proj-dir> && python <train-script> <args>"
+```
+
+- `-P` is the replica (node) count; `--gpu 8` is **per replica** → 2 nodes × 8 GPU here.
+- `--gang-start true` is **required** for multi-replica: it starts all replicas together and injects every replica's IP into pod env so ranks can find each other. `--custom-resources rdma/...` exposes the RDMA / InfiniBand devices collective ops need.
+- Repeat `--mount=<src>:<dst>` once per path; `-e K=V` once per env var.
+- The run command goes through `bash -c "..."` so `source` / `conda activate` / `cd` / `&&` actually work — a bare `-- a && b` would not run `b`.
+- For a long run add `--auto-restart true` (and `--enable-self-health true` to auto-heal on node failure; note self-health is not available for idle tasks).
+- Drop `--predict-only true` to submit for real, then report the full config (image / replicas / GPU / mounts / env / command / lane) back to the user.
+
 ## Monitor / debug flow
 
 1. `get <job>` — phase, replica names, resource requests, recent status.
