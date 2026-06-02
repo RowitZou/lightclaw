@@ -8,6 +8,7 @@ import {
   isHighRiskRule,
   isHighRiskRulePattern,
 } from './high-risk.js'
+import { suggestBashRules } from './suggestions.js'
 import type {
   PermissionAskInput,
   PermissionRuleValue,
@@ -552,5 +553,42 @@ describe('§1.4 — pre-existing pipe-to-shell stays covered', () => {
     assert.equal(commandContainsHighRiskBash('wget -O- url | bash'), true)
     assert.equal(commandContainsHighRiskBash('bash <(curl https://x.sh)'), true)
     assert.equal(commandContainsHighRiskBash('curl x | sudo bash'), true)
+  })
+})
+
+describe('rjob delete is high-risk; other rjob subcommands are not', () => {
+  it('flags the rjob delete command (incl. chained / ssh-init prefix)', () => {
+    assert.equal(commandContainsHighRiskBash('rjob delete myjob'), true)
+    assert.equal(
+      commandContainsHighRiskBash(
+        'source /etc/profile.d/ssh-init.sh; rjob delete myjob',
+      ),
+      true,
+    )
+  })
+
+  it('does NOT flag read-only / non-destructive rjob subcommands', () => {
+    assert.equal(commandContainsHighRiskBash('rjob list'), false)
+    assert.equal(commandContainsHighRiskBash('rjob get myjob'), false)
+    assert.equal(commandContainsHighRiskBash('rjob logs job myjob -n 20'), false)
+    assert.equal(commandContainsHighRiskBash('rjob stop myjob'), false)
+    assert.equal(commandContainsHighRiskBash('rjob submit --name x -- sleep 3600'), false)
+    // a job literally named "delete" passed to a read subcommand stays safe
+    assert.equal(commandContainsHighRiskBash('rjob get delete'), false)
+  })
+
+  it('flags the Bash(rjob delete:*) rule but not other rjob rules', () => {
+    assert.equal(isHighRiskRule(ruleValue('Bash', 'rjob delete:*')), true)
+    assert.equal(isHighRiskRule(ruleValue('Bash', 'rjob list:*')), false)
+    assert.equal(isHighRiskRule(ruleValue('Bash', 'rjob:*')), false)
+  })
+
+  it('suggester subcommand-scopes rjob so an allow on list cannot cover delete', () => {
+    assert.deepEqual(suggestBashRules('rjob delete myjob'), [
+      { toolName: 'Bash', ruleContent: 'rjob delete:*' },
+    ])
+    assert.deepEqual(suggestBashRules('rjob list'), [
+      { toolName: 'Bash', ruleContent: 'rjob list:*' },
+    ])
   })
 })

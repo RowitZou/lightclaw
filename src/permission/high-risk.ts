@@ -272,8 +272,17 @@ function isHighRiskBashSegment(segment: string): boolean {
   // normalization.
   if (isHighRiskHeadToken(tokens[0]!)) return true
 
-  // Wrapper commands carry the real command in their arguments.
   const head = normalizeBashHead(tokens[0]!)
+
+  // `rjob delete` irreversibly removes a cluster job. Plain `rjob`
+  // (list / get / logs / events / submit / stop) is fine, so gate the
+  // specific destructive subcommand rather than the head. rjob's grammar
+  // always puts the subcommand first, so tokens[1] is authoritative.
+  if (head === 'rjob' && tokens.length > 1 && normalizeBashHead(tokens[1]!) === 'delete') {
+    return true
+  }
+
+  // Wrapper commands carry the real command in their arguments.
   if (WRAPPER_HEADS.has(head) && isHighRiskWrapperArgs(head, tokens)) {
     return true
   }
@@ -327,6 +336,15 @@ function isHighRiskBashContent(content: string | undefined): boolean {
   const tokens = head.split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return false
   if (isHighRiskHeadToken(tokens[0]!)) return true
+  // `Bash(rjob delete:*)` — the destructive cluster subcommand. Mirrors the
+  // command-path gate so the "always allow" button is hidden for it.
+  if (
+    normalizeBashHead(tokens[0]!) === 'rjob' &&
+    tokens.length > 1 &&
+    normalizeBashHead(tokens[1]!) === 'delete'
+  ) {
+    return true
+  }
   // A persisted `Bash(<wrapper>:*)` rule is itself high-risk: unlike the raw
   // command path (where we can scan the wrapper's args), a broad wrapper rule
   // lets the wrapped command be anything.

@@ -142,6 +142,9 @@ const MULTI_COMMAND_TOOLS = new Set([
   'make',
   'aws', 'gcloud', 'az', 'terraform', 'ansible', 'pulumi',
   'systemctl', 'service', 'journalctl',
+  // cluster batch-job CLI: subcommand-scope its rules so an "allow always"
+  // on `rjob list` does not also cover the high-risk `rjob delete`.
+  'rjob',
 ])
 
 const SUBCOMMAND_SHAPE = /^[A-Za-z][A-Za-z0-9_-]*$/
