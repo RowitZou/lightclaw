@@ -1,7 +1,7 @@
 ---
 name: brainpp-batch-job
 description: "Submit and manage cluster batch training jobs via rjob: submit, inspect, monitor, stop/delete, and collect logs."
-when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job after I confirm'. This is for batch jobs, not interactive sandboxes."
+when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job'. This is for batch jobs, not interactive sandboxes."
 requires-driver: brainpp
 allowed-tools:
   - Bash
@@ -9,6 +9,7 @@ allowed-tools:
   - Write
   - Grep
   - Glob
+  - MemoryWrite
 roles:
   - main
   - generalist
@@ -32,7 +33,6 @@ Use the `rjob` CLI for cluster batch training jobs while keeping LightClaw inter
 
   Authentication is automatic — `rjob` reads the worker's kubebrain credentials and environment itself. Never ask for or store a token/accesskey.
 - If `rjob` is not on PATH, this environment lacks the cluster toolchain. Report that and stop; do not install, reconfigure, or substitute another mechanism without the user's go-ahead.
-- Keep environment-specific values out of source and memory unless the user explicitly provides them for the current job: namespace, charged group, image, GPFS/workspace paths, secrets, and credentials.
 - **Get the exact rjob syntax from the reference — do not guess it.** `references/command-mapping.md` lists every subcommand's real arguments (e.g. `logs` needs a `job`/`replica` positional, `submit`'s job command goes after a literal `--`, preview flags take a `true` value, the tail flag is `-n`/`--tail-lines`). Read it before constructing a command.
 
 ## References
@@ -40,38 +40,58 @@ Use the `rjob` CLI for cluster batch training jobs while keeping LightClaw inter
 - Command mapping (exact syntax + auth/required inputs): `${LIGHTCLAW_SKILL_DIR}/references/command-mapping.md`
 - Templates and troubleshooting: `${LIGHTCLAW_SKILL_DIR}/references/templates.md`
 
-## Safety: you are the manager, the user is the approver
+## Posture: act on your own judgment, report after
 
-There is no wrapper enforcing confirmation — `rjob` runs directly. Safety is your responsibility plus the permission layer:
+You run cluster jobs the way a competent operator would — submit, monitor, stop, clone, patch, collect logs — and carry the task through without pausing for permission at each step. LightClaw is built for long-horizon autonomous work: default to executing, and reserve interrupting the user for a genuine blocker.
 
-- **`submit` creates a job and spends resources.** Always preview first (`--predict-only true` and/or `--dry-run true`), summarize the predicted spec to the user, and get the user's explicit go-ahead before a real submit. Never submit a real job off your own judgment.
-- **`stop` halts a job; `delete` removes it irreversibly.** Show the target with `get <job>` and confirm the exact job name with the user first. A real `rjob delete` additionally triggers a confirmation prompt the user must approve each time — do not try to work around it.
-- **`clone` / `patch` mutate a spec.** Inspect and explain the change before applying; never turn a clone into a real submit without the preview + confirm flow.
-- Keep log/output bounded (use `-n` on `logs`); collect full artifacts only when the user needs them. Never put credentials into job specs, command lines, logs, or git remotes.
+- **Submit on your own judgment once the spec is complete.** Use `--predict-only true` / `--dry-run true` when you want to catch an infeasible spec before spending — then submit; you do not wait for a click between preview and submit. Don't ask "shall I submit?" when nothing is actually unresolved.
+- **After every submit, report the full job config back.** Name, image, namespace, charged/quota group, mount / GPFS paths, resources, command, and the task-type lane (`normal` → normal priority → `常规任务` tab / `idle` → low priority, preemptible → `闲时任务` tab). The user did not approve it beforehand, so they must always see exactly what ran and which tab to find it under.
+- **`delete` is the one hard gate, and the permission layer owns it.** A real `rjob delete` surfaces a confirmation card the user approves each time — that approval *is* the gate. Never add your own delete confirmation, and never try to route around the card. `stop` / `clone` / `patch` you run directly, then report what changed.
+- Keep log/output bounded (`-n` on `logs`); collect full artifacts only when needed. Never put a token / accesskey / credential in a command line, log, memory, or git remote.
+
+## Build a config library — remember the user's choices, pick the fit
+
+Two of the job inputs have an environment default, two don't:
+
+- **`namespace` and `charged/quota group` default from the kubebrain worker environment** — `rjob` fills them when you omit `--namespace` / `--charged-group`, so you don't need them to submit.
+- **`image` and `mount / GPFS paths` have no environment default** — they describe what a particular job needs, which the environment can't know.
+
+But all four become worth remembering the moment the user names or changes one — that choice carries a preference. Use `MemoryWrite` to build a **library of the configs the user has actually used**, and pick from it instead of re-asking:
+
+- **Record every config the user gives or changes** — the image they pick, mounts they add or drop, and any namespace / group they name (even though those default, naming a specific one is a stated preference). Tie each record to *what it was for*: the kind of task, the project, or the reason the user gave — so it reads as "for `<this kind of work>`, the user used `<image / mounts / namespace / group>`".
+- **This accumulates into several candidate configs, not one.** The user may run one kind of task with image A and another with image B; keep both as distinct options. Deduplicate only exact repeats (same config, same purpose) — never collapse genuinely different choices into one.
+- **Before asking, pick the fit from the library.** Match the current task against what you've recorded and reuse the config whose purpose fits, reporting which one you chose. When several could apply, lean on the user's more recent or more specific preference.
+- **Ask only when several genuinely fit and the choice matters** — surface the candidates and let the user choose (via `AskUserQuestion` if you have it, otherwise return the choice to the requester). Don't ask when one config clearly fits.
+- Record configs, never credentials. A token / accesskey / password must never enter memory.
+
+## When you're genuinely blocked
+
+A blocker is a required value that nothing on record covers and you cannot reasonably infer — not a routine "should I go ahead". When you hit one:
+
+- If you can ask the user directly (you have `AskUserQuestion`), do — give concrete options and a safe default.
+- Otherwise, put the open question in your result so the requester can resolve it. Don't stall, and don't guess an environment-specific value.
 
 ## Command workflow
 
 ### 1. Understand the job request
 
-Identify whether the user wants to list, inspect, monitor, submit, stop/delete, clone/patch, download logs, or analyze a failure. For submit-like requests, collect the command, code/data location, image, namespace/group, resource requirements, output/log destination, and any deadline or stop condition. Ask for missing environment-specific values instead of guessing. On the first call, if `rjob` is missing, report the environment lacks the cluster toolchain and stop.
+Identify whether the user wants to list, inspect, monitor, submit, stop/delete, clone/patch, download logs, or analyze a failure. For submit-like requests, assemble the spec — command, code/data location, image, resource requirements, mounts, output/log destination, and any deadline or stop condition. Namespace and charged/quota group default from the worker environment — leave them off unless the user wants a non-default one. For image / mounts / resources, pick the fitting config from your library first (see below) and ask only for what nothing on record covers. On the first call, if `rjob` is missing, report the environment lacks the cluster toolchain and stop.
 
 ### 2. Use read-only commands freely, with bounded output
 
 `list`, `get`, `logs` (with `-n`), `events`, and `download-logs` are safe to run as needed. Keep output bounded and summarize concisely. See `command-mapping.md` for exact syntax (notably `logs {job|replica} <name>`).
 
-### 3. Preview submissions, then confirm
+### 3. Submit on your judgment, then report
 
-Preview with `submit --predict-only true ...` (resource feasibility) or `--dry-run true ...` (rendered spec) — both take a `true` value, and the job command goes after `--`. Summarize predicted resources, image, command, mounts/paths, and the **task type**. Always state which priority lane you are submitting: `--task-type normal` (default, normal priority → `常规任务` tab) or `idle` (low priority, preemptible → `闲时任务` tab). They live under different UI tabs, so the user cannot find the job unless you tell them the lane. Do not perform a real submit yet.
+Optionally preview (`submit --predict-only true ...` for resource feasibility, `--dry-run true ...` for the rendered spec — both take a `true` value, the job command goes after `--`) to catch a bad spec before spending. Then run the real `submit` — there is no confirmation gate. Afterward, report the full config: resources, image, namespace, charged/quota group, mount / GPFS paths, command, and the task-type lane (`normal` → `常规任务` tab / `idle` → `闲时任务` tab), plus the `get` / bounded `logs` / `events` / `download-logs` follow-ups. Then record the config the user chose as a library option (see "Build a config library").
 
-**Human checkpoint**: get the user's explicit confirmation, then run the real `submit` (same args, drop the preview flag). Return the job name plus `get` / bounded `logs` / `events` / `download-logs` follow-ups.
+### 4. Stop or delete the right job
 
-### 4. Confirm before stop or delete
+Use `get` / `list` to pin the exact job name, then run `stop` / `delete` directly. `delete` surfaces the permission card the user must approve — that approval is the gate; you add none of your own.
 
-Show `get <job>`, confirm the exact job + action with the user, then run `stop` / `delete`. `delete` will surface a permission confirmation the user must approve.
+### 5. Clone and patch are spec edits
 
-### 5. Treat clone and patch as caution operations
-
-Use `clone` / `patch` only to reuse or alter an existing spec; inspect and explain the delta and confirm risky changes before applying.
+Use `clone` / `patch` to reuse or alter an existing spec, then report the delta. A `clone` is not a `submit` — don't silently turn it into one.
 
 ### 6. Analyze failures in order
 

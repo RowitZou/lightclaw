@@ -2,37 +2,35 @@
 
 Exact command shapes are in `command-mapping.md`. This file is the end-to-end flow and copy-paste templates. Every `rjob ...` below runs through `rjob ...`.
 
-## Submit flow (the only safe order)
+## Submit flow
 
-1. **Collect the spec.** From the user: the command to run, image, resources (`--cpu` / `--gpu` / `--memory` in MB), namespace, charged/quota group, code/data location, and where logs/output should land. Ask for anything missing — do not guess env-specific values.
-2. **Preview** with a value-bearing flag and the `--` command separator:
+You submit on your own judgment — there is no per-submit confirmation step. The order is: assemble the spec, optionally sanity-check it, submit, report everything back, remember what had no default.
+
+1. **Assemble the spec.** Image, mounts / GPFS paths, resources (`--cpu` / `--gpu` / `--memory` in MB), the command (after `--`), and where logs/output land. Pull image / mounts from what you have on record first; ask the user only for what nothing on record covers. **Namespace and charged/quota group default from the worker environment** — leave `--namespace` / `--charged-group` off unless the user wants a non-default one.
+2. **Preview (optional, your own sanity check — not a user gate).** `--predict-only true` checks resource feasibility; `--dry-run true` renders the spec. Run one when you want to catch a bad spec before spending:
    ```
    rjob submit --predict-only true --name <job> --image <img> \
-     --cpu <n> --gpu <n> --memory <MB> --charged-group <group> --namespace <ns> \
-     -- <command line>
+     --cpu <n> --gpu <n> --memory <MB> -- <command line>
    ```
-   `--predict-only true` checks resource feasibility; `--dry-run true` renders the spec instead. Run whichever (or both) the user needs.
-3. **Summarize** the predicted resources, image, command, mounts/paths, **and the task type** back to the user. State plainly whether it is a `normal` (normal-priority, `常规任务` tab) or `idle` (low-priority, preemptible, `闲时任务` tab) job — the two land under different UI tabs, so the user cannot find the submitted job unless you say which. Flag anything missing or risky.
-4. **Get the user's confirmation, then submit for real** — re-run the same command with the `--predict-only true` preview flag removed:
+3. **Submit.** Run the real `submit` (same command, drop the `--predict-only true` flag):
    ```
    rjob submit --name <job> --image <img> \
-     --cpu <n> --gpu <n> --memory <MB> --charged-group <group> --namespace <ns> \
-     -- <command line>
+     --cpu <n> --gpu <n> --memory <MB> -- <command line>
    ```
-5. **Hand back** the job name plus the follow-ups: `get <job>`, `logs job <job> -n <N>`, `events <job>`, `download-logs <job> --action create --wait`.
+4. **Report the full config to the user.** The job name plus image, the effective namespace + charged/quota group, mounts / GPFS paths, resources, command, and the **task-type lane** — `normal` (normal priority → `常规任务` tab) or `idle` (low priority, preemptible → `闲时任务` tab). They did not approve it beforehand, so they must see exactly what ran and which tab to find it under. Hand back the follow-ups: `get <job>`, `logs job <job> -n <N>`, `events <job>`, `download-logs <job> --action create --wait`.
+5. **Add the config to your library** — the image / mounts (and any namespace / group the user named) for this kind of work — via `MemoryWrite`, so it becomes a candidate you can reuse and pick from next time. Keep distinct task→config choices as separate options; dedupe only exact repeats. See "Build a config library" in `SKILL.md`.
 
 ### Minimal single-command job
 ```
 rjob submit --predict-only true --name demo-train --image <img> \
-  --cpu 8 --memory 16384 --gpu 1 --charged-group <group> --namespace <ns> \
-  -- python train.py --epochs 10
+  --cpu 8 --memory 16384 --gpu 1 -- python train.py --epochs 10
 ```
+`--namespace` / `--charged-group` are omitted on purpose: `rjob` fills them from the worker environment. Add them only to override the env default.
 
 ### Low-priority (idle) sleep / smoke-test job (no GPU)
 ```
 rjob submit --predict-only true --name idle-probe --image <img> \
-  --task-type idle --cpu 1 --memory 1024 --gpu 0 --charged-group <group> --namespace <ns> \
-  -- sleep 3600
+  --task-type idle --cpu 1 --memory 1024 --gpu 0 -- sleep 3600
 ```
 `--task-type idle` puts the job in the **low-priority lane** — it is preemptible and shows under the **闲时任务** UI tab, not 常规任务. Use it for throwaway smoke tests; use `normal` (omit `--task-type`, the default) for real training. Whichever you pick, tell the user the lane so they look under the right tab.
 
@@ -60,7 +58,7 @@ Report the likely cause, the evidence line, and the next safe action. Don't dump
 ## Safety rules
 
 - This skill is for **batch jobs only**. Interactive sandbox / shell work is the runtime backend's job (`runtime.backend`), not rjob — they are orthogonal.
-- Never run a real `submit`, `stop`, or `delete` without explicit user confirmation — that is your responsibility (there is no wrapper). `rjob delete` additionally surfaces a permission prompt the user must approve; never try to route around it.
-- Treat `clone` / `patch` as spec edits — inspect and explain the change first.
+- Run `submit` / `stop` / `clone` / `patch` on your own judgment, then report what you did. `delete` is the one hard gate — a real `rjob delete` surfaces a permission card the user must approve each time; that approval is the gate, so never add your own and never try to route around the card.
+- Treat `clone` / `patch` as spec edits — apply, then report the delta; a `clone` is not a `submit`.
 - Keep log reads bounded unless the user asks for a full artifact.
-- Keep namespace, charged group, image, GPFS paths, and any credentials out of source and memory; take them per-job from the user.
+- Credentials (tokens / accesskeys / passwords) never enter a command line, log, or memory. Image, mounts, and namespace/group overrides are config, not secrets — record them (see `SKILL.md`) so you stop re-asking.

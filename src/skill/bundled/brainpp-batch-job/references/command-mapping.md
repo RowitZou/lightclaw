@@ -6,11 +6,11 @@ Run `rjob` directly via `Bash`, prefixed so the kubebrain SSH environment is ini
 source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || true; rjob <subcommand> [args...]
 ```
 
-Authentication is automatic (the worker carries the kubebrain credentials). The examples below show the bare `rjob <subcommand>` for readability — apply the `source ...; ` prefix in the actual `Bash` call. There is no wrapper enforcing anything: **you** are responsible for previewing + confirming destructive actions with the user (see the safety rules in `SKILL.md`), and `rjob delete` additionally surfaces a permission confirmation.
+Authentication is automatic (the worker carries the kubebrain credentials). The examples below show the bare `rjob <subcommand>` for readability — apply the `source ...; ` prefix in the actual `Bash` call. You run these on your own judgment and report what you did (see the posture in `SKILL.md`); the only hard gate is `rjob delete`, which surfaces a permission card the user must approve.
 
 `<job>` below means the job's `metadata.name` (the long id like `myuser-20260601-ab12c`, the first column of `list`), **not** the human showname. Filter by showname with `--name <showname>` instead.
 
-`--namespace <ns>` is environment-specific. Take it from the user or deployment config; never hardcode a namespace, charged group, image, or GPFS path in source or memory.
+`--namespace <ns>` defaults from the kubebrain worker environment — pass it only to target a non-default namespace. Never hardcode a namespace, charged group, image, or path into source; the agent may remember a *working* image / mount / override in memory (configs are not secrets — credentials are, and those never go in memory).
 
 ---
 
@@ -20,14 +20,16 @@ Authentication is automatic (the worker carries the kubebrain credentials). The 
 
 **Read commands (`list` / `get` / `logs` / `events`): no inputs required.** Namespace defaults from the worker environment; pass `--namespace <ns>` only to target a different one.
 
-**`submit` — collect these per job (they are job-specific and not hardcoded):**
-- `--image <image>` — container image (**required**).
+**`submit` — these are job-specific (no environment default):**
+- `--image <image>` — container image (**required**; the environment can't default it because it describes what the job needs to run).
 - `--cpu <n>` / `--gpu <n>` / `--memory <MB>` — resource requests (**required**).
 - the command to run, after the `--` separator.
-- code / data / output paths the command needs.
-- `--charged-group <group>` and `--namespace <ns>` usually default from the worker's kubebrain environment — provide them explicitly only to override, or if a submit fails asking for them.
+- code / data / output paths and any mounts the command needs.
 
-Ask the user for any missing `submit` value instead of guessing; never invent an image, group, namespace, or path.
+**These default from the kubebrain worker environment** (`KUBEBRAIN_NAMESPACE` / `KUBEBRAIN_QUOTA_GROUP`):
+- `--namespace <ns>` and `--charged-group <group>` / `--group <group>` — omit them and `rjob` fills them in; pass one only to override the env default.
+
+For the no-default values (image / mounts / resources), pick the fitting config from your recorded library — the configs the user has used for this kind of work — and ask only for what nothing on record covers; don't invent an image or a path. Record any image / mount / namespace / group the user names or changes as a new candidate option (see "Build a config library" in `SKILL.md`).
 
 ---
 
@@ -69,7 +71,7 @@ rjob download-logs <job> --action {create|list|get|delete|download} [--task-id <
 
 ---
 
-## Submit (creates a job — preview first, then confirm)
+## Submit (creates a job — submit on your judgment, then report)
 
 ```
 rjob submit [job options] [task/resource options] -- <command line>
@@ -77,7 +79,7 @@ rjob submit [job options] [task/resource options] -- <command line>
 
 - **The job's command goes after a literal `--` separator.** `submit ... sleep 3600` fails with `unrecognized arguments`; write `submit ... -- sleep 3600`.
 - **Preview flags take a VALUE**: `--predict-only true` (checks resource feasibility) or `--dry-run true` (renders the spec for developer inspection). Bare `--predict-only` is wrong.
-- A real submit creates a job and spends resources. **Preview first, then get the user's explicit confirmation** before running the real submit (the same command with the preview flag removed). Never submit a real job on your own judgment.
+- A real submit creates a job and spends resources. Preview first only as your own sanity check when a spec looks risky — there is no confirmation gate, so submit on your own judgment, then report the full config (image / namespace / group / mounts / resources / command / task-type lane) back to the user.
 
 Common options (run `rjob submit --help` for the full list):
 
@@ -97,16 +99,16 @@ Common options (run `rjob submit --help` for the full list):
 | `--priority <1-9>` | Fine-grained priority within a `normal` task |
 | `--predict-only true` / `--dry-run true` | Preview, do not create |
 
-Preview example:
+Preview example (`--namespace` / `--charged-group` omitted — they default from the env):
 ```
 rjob submit --predict-only true --name demo --image <img> \
-  --cpu 8 --memory 16384 --gpu 0 --charged-group <group> --namespace <ns> -- python train.py
+  --cpu 8 --memory 16384 --gpu 0 -- python train.py
 ```
-Real submit (only after the user confirms): the same line with the `--predict-only true` preview flag removed.
+Real submit: the same line with the `--predict-only true` preview flag removed. No confirmation step — submit, then report the config back.
 
 ---
 
-## Destructive commands (confirm with the user first)
+## Destructive commands (delete is gated by the permission card)
 
 ### stop — stop a running job
 ```
@@ -118,8 +120,8 @@ rjob stop <job>... [--name <showname>] [--force] [--force-all] [--namespace <ns>
 rjob delete <job>... [--name <showname>] [--force-all] [--namespace <ns>]
 ```
 
-- Show `get <job>` and confirm the exact job name + action with the user **before** running stop/delete. Prefer `stop` if the user only wants to halt work; `delete` removes the record irreversibly.
-- `rjob delete` is classified high-risk: it surfaces a permission confirmation the user must approve each time, and that approval can never be granted "always". Do not try to route around it — there is no bypass to reach for.
+- Pin the exact job with `get` / `list`, then run `stop` / `delete` directly. Prefer `stop` if the user only wants to halt work; `delete` removes the record irreversibly.
+- `rjob delete` is classified high-risk: it surfaces a permission confirmation the user must approve each time, and that approval can never be granted "always". That card is the gate — don't add your own, and don't try to route around it (there is no bypass to reach for).
 
 ---
 
@@ -135,7 +137,7 @@ rjob clone <job> [--name <new-name>] [--auto-restart <v>] [--stop-original <v>] 
 rjob patch <job> [--task_name <t>] [-P <replicas>] [--auto-restart <v>] [--namespace <ns>]
 ```
 
-- Treat both as spec mutations: explain what will change and confirm before applying anything that affects a live job. A `clone` is not a submit — do not turn it into one without the dry-run + confirm flow.
+- Treat both as spec mutations: apply, then report what changed. A `clone` is not a `submit` — don't silently turn it into one.
 
 ---
 
