@@ -592,3 +592,40 @@ describe('rjob delete is high-risk; other rjob subcommands are not', () => {
     ])
   })
 })
+
+describe('command -v / -V lookup form is NOT high-risk (2026-06-02)', () => {
+  it('suggester scopes `command -v X` to Bash(command -v:*), not broad Bash(command:*)', () => {
+    assert.deepEqual(suggestBashRules('command -v rjob'), [
+      { toolName: 'Bash', ruleContent: 'command -v:*' },
+    ])
+    assert.deepEqual(suggestBashRules('command -V python'), [
+      { toolName: 'Bash', ruleContent: 'command -V:*' },
+    ])
+  })
+
+  it('the scoped Bash(command -v:*) rule is NOT high-risk', () => {
+    assert.equal(isHighRiskRulePattern('Bash(command -v:*)'), false)
+    assert.equal(isHighRiskRulePattern('Bash(command -V:*)'), false)
+  })
+
+  it('an existence probe does not poison the whole grant', () => {
+    // The real dogfood command: a `command -v rjob` existence check chained with
+    // the actual work. Pre-fix the `command` segment suggested the broad
+    // Bash(command:*) rule (high-risk), hiding the "always allow" button and
+    // re-prompting every call.
+    const rules = suggestBashRules(
+      'source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || true; command -v rjob && rjob --help | head -80',
+    )
+    assert.equal(containsHighRiskRule(rules), false)
+  })
+
+  it('raw scan does not flag `command -v <name>` even when the name is a high-risk head', () => {
+    assert.equal(commandContainsHighRiskBash('command -v rm'), false)
+    assert.equal(commandContainsHighRiskBash('command -V sudo'), false)
+  })
+
+  it('still flags the dangerous run-bypassing form `command <cmd>` and the broad rule', () => {
+    assert.equal(commandContainsHighRiskBash('command rm -rf foo'), true)
+    assert.equal(isHighRiskRulePattern('Bash(command:*)'), true)
+  })
+})

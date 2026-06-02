@@ -171,6 +171,14 @@ export function extractSegmentHead(segment: string): string | null {
 
   const head1 = tokens[0]!
   const head2 = tokens[1]
+  // `command -v X` / `command -V X` is the read-only lookup form of the
+  // `command` builtin (prints a path / description, never runs X). Scope its
+  // rule to `command -v` / `command -V` so an "allow always" grant cannot widen
+  // to the dangerous `command <cmd>` (run-bypassing-function) form. See
+  // high-risk.ts for the matching classifier carve-out.
+  if (head1 === 'command' && (head2 === '-v' || head2 === '-V')) {
+    return `${head1} ${head2}`
+  }
   if (
     head2 &&
     MULTI_COMMAND_TOOLS.has(head1) &&

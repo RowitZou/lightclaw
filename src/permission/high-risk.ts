@@ -309,6 +309,11 @@ function isHighRiskBashSegment(segment: string): boolean {
  * (`xargs grep rm` → high-risk) only costs an "allow once" click.
  */
 function isHighRiskWrapperArgs(head: string, tokens: string[]): boolean {
+  // `command -v X` / `command -V X` is a lookup, not an exec — it never runs X,
+  // so the looked-up name (even `rm` / `sudo`) is not a wrapped command.
+  if (head === 'command' && (tokens[1] === '-v' || tokens[1] === '-V')) {
+    return false
+  }
   if (head === 'find') {
     for (let i = 1; i < tokens.length - 1; i++) {
       if (/^-(exec|execdir|ok|okdir)$/.test(tokens[i]!)) {
@@ -344,6 +349,17 @@ function isHighRiskBashContent(content: string | undefined): boolean {
     normalizeBashHead(tokens[1]!) === 'delete'
   ) {
     return true
+  }
+  // `Bash(command -v:*)` / `Bash(command -V:*)` — the read-only lookup form. It
+  // only ever prints a path / description, never runs the wrapped command, so a
+  // persisted grant is safe (unlike the bare `Bash(command:*)` wrapper rule,
+  // which stays high-risk below). Mirrors the suggester scoping in bash-parse.ts.
+  if (
+    normalizeBashHead(tokens[0]!) === 'command' &&
+    tokens.length > 1 &&
+    (tokens[1] === '-v' || tokens[1] === '-V')
+  ) {
+    return false
   }
   // A persisted `Bash(<wrapper>:*)` rule is itself high-risk: unlike the raw
   // command path (where we can scan the wrapper's args), a broad wrapper rule
