@@ -17,7 +17,7 @@ import { LayeredDataPlane } from './data-plane/layered.js'
 import { SharedClusterFsData } from './data-plane/shared-cluster-fs.js'
 import { sandboxBackstopTimeoutMs, wrapSandboxCommandWithTimeout } from './exec-wrap.js'
 import { assertMountsAccessible, MountTablePathPolicy } from './path-policy/mount-table.js'
-import { runProcess, shellQuote } from './process.js'
+import { runProcess, shellQuote, withoutProxyEnv } from './process.js'
 import { formatRlaunchError, translateRlaunchError } from './rlaunch-errors.js'
 import {
   deleteWorkerRecord,
@@ -1026,6 +1026,7 @@ export class RlaunchRuntime implements Runtime {
         wrappedCommand: this.wrapCommand(input),
       }), {
         abortSignal: input.abortSignal,
+        env: withoutProxyEnv(),
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxBufferBytes: input.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
         limitMessage: 'rlaunch worker exec terminated',
@@ -1046,6 +1047,7 @@ export class RlaunchRuntime implements Runtime {
       }),
       {
         abortSignal: input.abortSignal,
+        env: withoutProxyEnv(),
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxBufferBytes: BRAINCTL_MARKER_BUFFER_BYTES,
         limitMessage: 'rlaunch worker exec terminated',
@@ -1139,6 +1141,7 @@ export class RlaunchRuntime implements Runtime {
   private async spawnWorker(): Promise<string> {
     const args = this.launchArgs({ detach: true, predictOnly: false })
     const result = await runProcess('rlaunch', args, {
+      env: withoutProxyEnv(),
       timeoutMs: START_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'rlaunch worker launch terminated',
@@ -1162,6 +1165,7 @@ export class RlaunchRuntime implements Runtime {
       detach: false,
       predictOnly: true,
     }), {
+      env: withoutProxyEnv(),
       timeoutMs: DEFAULT_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'rlaunch predict terminated',
@@ -1183,6 +1187,7 @@ export class RlaunchRuntime implements Runtime {
 
   private async processPhase(name: string): Promise<ProcessState> {
     const result = await runProcess('brainctl', buildBrainppGetProcessArgs(this.cfg.namespace, name), {
+      env: withoutProxyEnv(),
       timeoutMs: DEFAULT_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'brainctl process inspect terminated',
@@ -1199,6 +1204,7 @@ export class RlaunchRuntime implements Runtime {
 
   private async stopWorker(name: string): Promise<void> {
     const result = await runProcess('brainctl', buildBrainppStopProcessArgs(this.cfg.namespace, name), {
+      env: withoutProxyEnv(),
       timeoutMs: DEFAULT_TIMEOUT_MS,
       maxBufferBytes: DEFAULT_MAX_BUFFER_BYTES,
       limitMessage: 'brainctl stop process terminated',

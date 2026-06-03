@@ -6,7 +6,29 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { runProcess } from './process.js'
+import { runProcess, withoutProxyEnv } from './process.js'
+
+describe('withoutProxyEnv', () => {
+  it('removes proxy variables while preserving other process environment', () => {
+    const env = withoutProxyEnv({
+      PATH: '/usr/bin',
+      KUBEBRAIN_SITE: 'h',
+      http_proxy: 'http://proxy:1091',
+      https_proxy: 'http://proxy:1091',
+      all_proxy: 'http://proxy:1091',
+      HTTP_PROXY: 'http://proxy:1091',
+      HTTPS_PROXY: 'http://proxy:1091',
+      ALL_PROXY: 'http://proxy:1091',
+      NO_PROXY: '.pjlab.org.cn',
+    })
+
+    assert.deepEqual(env, {
+      PATH: '/usr/bin',
+      KUBEBRAIN_SITE: 'h',
+      NO_PROXY: '.pjlab.org.cn',
+    })
+  })
+})
 
 function isRunning(pid: number): boolean {
   try {
