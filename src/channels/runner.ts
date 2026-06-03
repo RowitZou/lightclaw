@@ -571,7 +571,11 @@ export class ChannelRunner {
         const { config: appConfig, sessionContext: resolvedContext } = await resetSessionContext({
           cwd: workspace,
           channel: 'feishu',
-          model: meta?.model,
+          // Do not source model from session meta: that froze an old default
+          // across restarts and split the streamed model from the `/model`
+          // display path. resetSessionContext now re-derives it each message as
+          // `prefs.model ?? config.defaultModel`; explicit `/model <m>` still
+          // wins because it writes the per-identity preference.
           sessionId,
           resumedFrom: meta ? sessionId : null,
           compactionCount: meta?.compactionCount,

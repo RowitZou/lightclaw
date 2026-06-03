@@ -8,10 +8,14 @@ import {
   installFakeStrategy,
   makeFakeFeishuMessage,
 } from '../__tests__/concurrency-helpers.js'
-import { createUser, addLink } from '../identity/store.js'
+import { createUser, addLink, setAdmin } from '../identity/store.js'
+import { setIdentityPreference } from '../identity/preferences.js'
+import { saveMeta } from '../session/storage.js'
+import { setStreamChatForTest } from '../query.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setLang } from '../i18n/index.js'
 import { setAbortControllerForSession } from '../state.js'
+import type { StreamEvent } from '../types.js'
 import { ensureChainAbortPropagationSubscription, resetChainAbortPropagationForTest } from '../agents/hooks/chain-abort-propagation.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
@@ -1478,5 +1482,120 @@ describe('ChannelRunner finally — background-task fire-and-forget contract', (
       'after end_turn. Background tasks are fire-and-forget here; the CLI ' +
       'exit path (cli.ts SIGINT/SIGTERM/finally) drains them at shutdown.',
     )
+  })
+})
+
+describe('ChannelRunner model resolution (config default vs frozen meta)', () => {
+  // Regression for the model-meta-unfreeze fix: editing config.defaultModel +
+  // restarting must reach an existing session. Pre-fix, runner.handleMessage
+  // passed `model: meta?.model` into resetSessionContext, so a session whose
+  // meta.json froze an older model (e.g. created when defaultModel was a
+  // different model) kept streaming under that frozen model while `/model`
+  // reported the freshly-synced config.defaultModel: a display-vs-actual
+  // split. The model is now re-derived every turn as
+  // `prefs.model ?? config.defaultModel`, so a config edit takes effect and an
+  // explicit `/model` preference still wins.
+  const NO_MEMORY = 'LIGHTCLAW_NO_MEMORY'
+  let savedNoMemory: string | undefined
+
+  function writeLocalTwoModelConfig(): void {
+    writeFileSync(
+      path.join(tmpHome, 'config.json'),
+      JSON.stringify({
+        endpoints: { fake: { apiKey: 'sk-fake' } },
+        models: {
+          fake: { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'claude-fake' },
+          other: { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'claude-other' },
+        },
+        defaultModel: 'fake',
+        autoMemory: false,
+        hooksEnabled: false,
+        mcpEnabled: false,
+        // local backend needs no docker/cluster control plane; admin-only, so
+        // the test user is set as admin below.
+        runtime: { backend: 'local' },
+      }),
+    )
+  }
+
+  // Drive one DM turn to completion and return the model id the turn actually
+  // streamed under (the `model` query() passes to streamChat and the provider).
+  // The fake stream ends the turn immediately, so no tool calls / network run.
+  // LIGHTCLAW_NO_MEMORY=1 (set in beforeEach) suppresses the recall selector so
+  // the main turn is the only streamChat call.
+  async function modelUsedForTurn(sessionId: string): Promise<string | undefined> {
+    let capturedModel: string | undefined
+    setStreamChatForTest((async function* (args: { model?: string }): AsyncGenerator<StreamEvent> {
+      if (capturedModel === undefined) capturedModel = args.model
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'ok' }],
+      }
+    }) as unknown as Parameters<typeof setStreamChatForTest>[0])
+
+    const runner = new ChannelRunner(installFakeStrategy('feishu'))
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'hello there',
+        sessionId,
+        chatType: 'p2p',
+        chatId: sessionId,
+      }),
+    )
+    return capturedModel
+  }
+
+  beforeEach(() => {
+    savedNoMemory = process.env[NO_MEMORY]
+    process.env[NO_MEMORY] = '1'
+    writeLocalTwoModelConfig()
+  })
+
+  afterEach(() => {
+    setStreamChatForTest(null)
+    if (savedNoMemory === undefined) {
+      delete process.env[NO_MEMORY]
+    } else {
+      process.env[NO_MEMORY] = savedNoMemory
+    }
+  })
+
+  it('ignores a frozen meta.model and streams under config.defaultModel', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    await setAdmin('alice')
+
+    const sessionId = 'feishu:dm:oc_modelfrozen'
+    // A session created back when defaultModel was a different model: 'other'
+    // is frozen in meta.json. Editing config.defaultModel to 'fake' + restart
+    // does NOT rewrite this meta.
+    await saveMeta(sessionId, {
+      sessionId,
+      model: 'other',
+      cwd: '/tmp',
+      createdAt: 1,
+      lastActiveAt: 1,
+      messageCount: 0,
+      compactionCount: 0,
+      userId: 'alice',
+    })
+
+    const used = await modelUsedForTurn(sessionId)
+    // Pre-fix this was 'other' (meta.model flowed into appConfig.defaultModel).
+    assert.equal(used, 'fake')
+  })
+
+  it('lets an explicit /model preference win over the config default', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    await setAdmin('alice')
+    // `/model other` persists this preference; it must outrank config.defaultModel.
+    setIdentityPreference({ canonicalUser: 'alice', key: 'model', value: 'other' })
+
+    const used = await modelUsedForTurn('feishu:dm:oc_modelpref')
+    assert.equal(used, 'other')
   })
 })
