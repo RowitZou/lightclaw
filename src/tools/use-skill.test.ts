@@ -11,6 +11,10 @@ import type { ToolCallContext } from '../tool.js'
 import { writeUserSkill } from '../skill/loader.js'
 import { useSkillTool } from './use-skill.js'
 
+const emptyRuntime = {
+  workspaceRoot: '/workspace',
+} as unknown as Runtime
+
 async function withTempHome(fn: (home: string) => Promise<void>): Promise<void> {
   const home = await mkdtemp(path.join(tmpdir(), 'lightclaw-use-skill-'))
   const prev = process.env.LIGHTCLAW_HOME
@@ -26,6 +30,76 @@ async function withTempHome(fn: (home: string) => Promise<void>): Promise<void> 
     await rm(home, { recursive: true, force: true })
   }
 }
+
+async function callUseSkill(home: string, name: string): Promise<string> {
+  const ctx = createSessionContext({
+    cwd: process.cwd(),
+    model: 'claude-sonnet-4-6',
+    sessionsDir: path.join(home, 'sessions'),
+    memoryDir: path.join(home, 'memory', 'alice'),
+    currentUserId: 'alice',
+    runtime: emptyRuntime,
+  })
+
+  return await runWithSessionContext(ctx, async () => {
+    const result = await useSkillTool.call(
+      { name },
+      {
+        cwd: process.cwd(),
+        abortSignal: new AbortController().signal,
+        runtime: emptyRuntime,
+      } satisfies ToolCallContext,
+    )
+
+    assert.equal(result.isError, undefined)
+    return result.output
+  })
+}
+
+describe('UseSkill transcript output', () => {
+  it('wraps the loaded skill invocation in a skill-content tag', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'plain-skill',
+        markdown:
+          '---\n' +
+          'name: plain-skill\n' +
+          'description: Plain skill.\n' +
+          '---\n\n' +
+          'Follow the plain skill steps.\n',
+      })
+
+      const output = await callUseSkill(home, 'plain-skill')
+
+      assert.match(output, /^<skill-content name="plain-skill">\n/)
+      assert.match(output, /Use the skill "plain-skill" and follow its instructions for this task\./)
+      assert.match(output, /Follow the plain skill steps\./)
+      assert.match(output, /\n<\/skill-content>$/)
+    })
+  })
+
+  it('escapes inner skill-content close tags before wrapping', async () => {
+    await withTempHome(async home => {
+      await writeUserSkill({
+        userId: 'alice',
+        name: 'closing-tag-skill',
+        markdown:
+          '---\n' +
+          'name: closing-tag-skill\n' +
+          'description: Contains a literal close tag.\n' +
+          '---\n\n' +
+          'Mention </skill-content> as plain text.\n',
+      })
+
+      const output = await callUseSkill(home, 'closing-tag-skill')
+
+      assert.equal(output.match(/<\/skill-content>/g)?.length, 1)
+      assert.match(output, /Mention <\\\/skill-content> as plain text\./)
+      assert.match(output, /^<skill-content name="closing-tag-skill">[\s\S]*<\/skill-content>$/)
+    })
+  })
+})
 
 describe('UseSkill asset materialization', () => {
   it('copies skill scripts into the runtime workspace and points SKILL_DIR there', async () => {

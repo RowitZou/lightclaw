@@ -309,6 +309,23 @@ export function buildCompactPrompt(messages: Message[]): string {
   return ['Conversation:', serializedMessages].join('\n')
 }
 
+const SKILL_CONTENT_RE =
+  /<skill-content name="([a-z0-9][a-z0-9-]{0,63})">[\s\S]*?<\/skill-content>/g
+
+export function stripSkillContentForCompaction(text: string): { text: string; roster: string[] } {
+  const seen = new Set<string>()
+  const roster: string[] = []
+  const stripped = text.replace(SKILL_CONTENT_RE, (_match, name: string) => {
+    if (!seen.has(name)) {
+      seen.add(name)
+      roster.push(name)
+    }
+    return `[skill "${name}" was loaded here; its instructions are omitted from this summary and can be reloaded via UseSkill]`
+  })
+
+  return { text: stripped, roster }
+}
+
 /**
  * Strip the `<analysis>` drafting scratchpad and unwrap `<summary>` tags from
  * the model output, leaving the bare structured summary. Mirrors Claude
@@ -339,14 +356,38 @@ export function formatCompactSummary(raw: string): string {
  * because lightclaw stores the compact boundary as a single `system`
  * message rather than a synthesized user message.
  */
-function formatCompactBoundaryText(summary: string): string {
+function formatReloadableSkillsBlock(roster: string[]): string {
+  return [
+    '<reloadable-skills>',
+    'The full instructions for these skills were loaded earlier in this conversation and elided from the summary above. If you need their exact steps again, call UseSkill with the skill name:',
+    ...roster.map(name => `- ${name}`),
+    '</reloadable-skills>',
+  ].join('\n')
+}
+
+function formatCompactBoundaryText(summary: string, roster: string[] = []): string {
   const header = [
     'This session continues from a previous conversation that was compacted to fit context.',
     'The structured summary below covers the earlier portion. Continue from where you left off — '
     + 'do NOT recap what is in the summary, do NOT acknowledge the summary, and do NOT retry '
     + 'steps marked failed in the "Errors and fixes" section.',
   ].join('\n')
-  return `${header}\n\n${summary}`
+  const body = roster.length > 0
+    ? `${summary}\n\n${formatReloadableSkillsBlock(roster)}`
+    : summary
+  return `${header}\n\n${body}`
+}
+
+type SummaryRequester = (
+  prompt: string,
+  systemPrompt: string,
+  config: LightClawConfig,
+) => Promise<{ summary: string; usage: UsageStats }>
+
+let compactSummaryRequesterForTest: SummaryRequester | null = null
+
+export function setCompactSummaryRequesterForTest(requester: SummaryRequester | null): void {
+  compactSummaryRequesterForTest = requester
 }
 
 async function requestSummary(
@@ -413,13 +454,15 @@ export async function compactConversation(
   // the original summary and freeze any inaccuracies it carried in.
   const hasExistingCompactBoundary = toCompress.some(m => m.type === 'system')
   const systemPrompt = getCompactSystemPrompt(hasExistingCompactBoundary)
-  const userPrompt = buildCompactPrompt(toCompress)
-  const { summary: rawSummary, usage } = await requestSummary(
+  const rawPrompt = buildCompactPrompt(toCompress)
+  const { text: userPrompt, roster } = stripSkillContentForCompaction(rawPrompt)
+  const summaryRequester = compactSummaryRequesterForTest ?? requestSummary
+  const { summary: rawSummary, usage } = await summaryRequester(
     userPrompt,
     systemPrompt,
     params.config,
   )
-  const summary = formatCompactBoundaryText(formatCompactSummary(rawSummary))
+  const summary = formatCompactBoundaryText(formatCompactSummary(rawSummary), roster)
 
   // P1: keep SessionMemory glued to the compact boundary so the next system
   // prompt build still sees the freshly-frozen task skeleton even before the

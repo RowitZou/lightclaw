@@ -12,6 +12,11 @@ import { getCurrentSessionContext } from '../session-context.js'
 import { getCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
+function wrapSkillContent(name: string, content: string): string {
+  const sanitizedContent = content.replaceAll('</skill-content>', '<\\/skill-content>')
+  return `<skill-content name="${name}">\n${sanitizedContent}\n</skill-content>`
+}
+
 export const useSkillTool = buildTool({
   name: 'UseSkill',
   whenToUse: `Load a named skill from the Available Skills list and apply its instructions inline.`,
@@ -66,7 +71,7 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
       }
 
       return {
-        output: content,
+        output: wrapSkillContent(skill.name, content),
       }
     } catch (error) {
       return {

@@ -17,6 +17,23 @@ export type RunProcessOptions = {
   forceKillGraceMs?: number
 }
 
+const PROXY_ENV_KEYS = [
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+] as const
+
+export function withoutProxyEnv(env: NodeJS.ProcessEnv = nodeProcess.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env }
+  for (const key of PROXY_ENV_KEYS) {
+    delete out[key]
+  }
+  return out
+}
+
 // SIGTERM gives the child a chance to flush and exit cleanly; if it ignores
 // the signal (e.g. brainctl wedged on a ws frame waiting on a black-holed
 // upstream) we force-kill so the caller's promise can resolve. 5s is long

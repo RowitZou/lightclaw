@@ -21,7 +21,7 @@ import {
 } from './index.js'
 import { dockerCmdRaw } from './docker.js'
 import type { ImageReadinessTracker } from './image-readiness.js'
-import { runProcess } from './process.js'
+import { runProcess, withoutProxyEnv } from './process.js'
 import { deleteWorkerRecord, readWorkerState } from './rlaunch-state.js'
 import {
   resolveUserRlaunchRuntimeMounts,
@@ -309,6 +309,7 @@ export class RuntimePool {
       'get', 'process',
       '-o', 'json',
     ], {
+      env: withoutProxyEnv(),
       timeoutMs: 30_000,
       maxBufferBytes: 16 * 1024 * 1024,
       limitMessage: 'brainctl get process terminated',
@@ -712,6 +713,7 @@ async function stopRlaunchProcess(
     '-n', namespace,
     'stop', `process/${name}`,
   ], {
+    env: withoutProxyEnv(),
     timeoutMs: 30_000,
     maxBufferBytes: 1024 * 1024,
     limitMessage: 'brainctl stop process terminated',
