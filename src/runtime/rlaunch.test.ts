@@ -1005,8 +1005,13 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
     // Stub out the heavy lifecycle calls that the retry path would otherwise
     // hit. ensureRunning short-circuits because we pre-set workerName.
+    // bringToReady is stubbed too so the respawn path's provisioning drive
+    // (waitUntilRunning + chown/scratch/staging) does not fire extra
+    // brainctl execs and skew the call-count assertions in this block — the
+    // dedicated provisioning-on-respawn assertion lives in its own describe.
     ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
     ;(runtime as unknown as { waitUntilRunning: () => Promise<void> }).waitUntilRunning = async () => {}
+    ;(runtime as unknown as { bringToReady: () => Promise<void> }).bringToReady = async () => {}
     ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-alpha'
     setWorkerLostRetryDelayMsForTests(1) // 1ms keeps the suite snappy
   })
@@ -1269,6 +1274,92 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     assert.ok(result.stderr.includes('connection refused'),
       'original failed result is returned verbatim on abort')
     assert.equal(startCalls, 0, 'respawn must NOT happen on abort')
+  })
+})
+
+describe('RlaunchRuntime provisions helpers after worker-lost respawn', () => {
+  // Regression (2026-06-04): the exec worker-lost retry path used to run the
+  // retry command after bare start() + waitUntilRunning(), skipping the
+  // chown/scratch/helper-staging that only hung off ensureRunning(). The
+  // ml-base image ships no ripgrep, so the freshly respawned worker served
+  // Grep/Glob with `rg: command not found` until some later call happened to
+  // flow through ensureRunning. The retry path now drives bringToReady(), so
+  // the respawned worker is provisioned before its first command.
+  let hostRoot: string
+  let runtime: RlaunchRuntime
+
+  type ExecMock = (input: ExecInput) => Promise<ExecResult>
+
+  beforeEach(() => {
+    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-respawn-provision-test-'))
+    const config: RlaunchRuntimeConfig = {
+      canonicalUser: 'alice',
+      deploymentHash: 'abc12345',
+      image: 'registry/x:tag',
+      chargedGroup: 'hs_cpu',
+      namespace: 'ailab-hs',
+      cpu: 1,
+      memoryMb: 1024,
+      gpu: 0,
+      privateMachine: 'group',
+      positiveTags: [],
+      workerGcTimeHours: 1,
+      imagePullPolicy: 'IfNotPresent',
+      maxWaitDuration: '5m',
+      predictBeforeStart: false,
+      workspaceHostPath: hostRoot,
+      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
+      workspaceContainerPath: '/workspace',
+      env: {},
+      daemonUid: 1000,
+      daemonGid: 1000,
+    }
+    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
+    // ensureRunning is the on-demand gate before the FIRST command; stub it so
+    // this test isolates the RESPAWN path's provisioning. waitUntilRunning is
+    // stubbed so bringToReady()'s wait is instant. bringToReady itself is left
+    // real so it actually invokes ensureProvisioned (the spy below).
+    ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
+    ;(runtime as unknown as { waitUntilRunning: () => Promise<void> }).waitUntilRunning = async () => {}
+    ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-alpha'
+    setWorkerLostRetryDelayMsForTests(1)
+  })
+
+  afterEach(() => {
+    rmSync(hostRoot, { recursive: true, force: true })
+    setWorkerLostRetryDelayMsForTests(1000)
+  })
+
+  it('runs provisioning on the respawned worker before the retry command', async () => {
+    const notFoundStderr =
+      'Error from server (NotFound): processes.workspace.brainpp.cn "ws-test-alpha" not found'
+    let call = 0
+    ;(runtime as unknown as { runBrainctlExec: ExecMock }).runBrainctlExec = async () => {
+      const idx = call++
+      // First two calls (original + 1s retry) report the worker gone, forcing
+      // a respawn; the third runs on the new worker and succeeds.
+      if (idx < 2) return { stdout: '', stderr: notFoundStderr, exitCode: 1 }
+      return { stdout: 'ok on new worker', stderr: '', exitCode: 0 }
+    }
+    ;(runtime as unknown as { start: (reason: string) => Promise<void> }).start = async () => {
+      ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-beta'
+    }
+    // Spy on the real provisioning entry, recording which worker it targeted.
+    const provisionedWorkers: string[] = []
+    ;(runtime as unknown as { ensureProvisioned: () => Promise<void> }).ensureProvisioned = async () => {
+      provisionedWorkers.push(
+        (runtime as unknown as { workerName: string | null }).workerName ?? '<none>',
+      )
+    }
+
+    const result = await runtime.exec({ command: 'rg --files' })
+
+    assert.equal(result.exitCode, 0, 'retry command runs on the respawned worker')
+    assert.deepEqual(
+      provisionedWorkers,
+      ['ws-test-beta'],
+      'the respawned worker must be provisioned (chown/scratch/staging) before its first command',
+    )
   })
 })
 

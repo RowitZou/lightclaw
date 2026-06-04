@@ -161,6 +161,12 @@ export class RlaunchRuntime implements Runtime {
    *  respawned worker (whose node-local /scratch was wiped) re-provisions. */
   private scratchDirReadyFor: string | null = null
   private inflightScratchDir: Promise<void> | null = null
+  /** Arms the fire-and-forget background provisioning drive per worker so the
+   *  preheat / respawn / health-restart paths (which call `start()`, never the
+   *  on-demand `ensureRunning()`) still stage helpers without blocking
+   *  `start()`'s fast-return contract. Re-armed when the workerName changes
+   *  (respawn); un-armed if the drive errors so a later `start()` can retry. */
+  private provisionDriveFor: string | null = null
   /** Sticky negative cache for the host-mount fast-write path. Set to true
    *  on the first failed attempt (typically EACCES / ENOENT on the host-side
    *  mount prefix, indicating the daemon doesn't have a local view of gpfs)
@@ -356,6 +362,11 @@ export class RlaunchRuntime implements Runtime {
         process.stderr.write(
           `[rlaunch] reused worker ${record.name} for ${this.cfg.canonicalUser} (phase=${phase})\n`,
         )
+        // A reused record on a fresh RlaunchRuntime instance (daemon restart /
+        // mount swap) has empty provisioning memos: re-probe in the background
+        // so a worker that came back without `rg` (fresh ml-base) self-heals
+        // before the user's first tool call instead of on it.
+        this.kickBackgroundProvisioning()
         return
       }
       process.stderr.write(
@@ -404,6 +415,10 @@ export class RlaunchRuntime implements Runtime {
       `[rlaunch] spawned worker ${newName} for ${this.cfg.canonicalUser} ` +
       `(reason: ${spawnReason}; image=${this.cfg.image})\n`,
     )
+    // Stage chown + scratch + helpers in the background so a freshly-spawned
+    // ml-base worker (no ripgrep/jq/poppler baked in) is provisioned before
+    // the first Grep/Glob, without blocking start()'s fast-return contract.
+    this.kickBackgroundProvisioning()
   }
 
   async isAvailable(): Promise<RuntimeAvailability> {
@@ -544,7 +559,12 @@ export class RlaunchRuntime implements Runtime {
     await deleteWorkerRecord(this.cfg.canonicalUser)
     this.workerName = null
     await this.start('worker-lost on exec after 1s retry, retrying')
-    await this.waitUntilRunning()
+    // bringToReady (not bare waitUntilRunning): the respawned worker is a fresh
+    // ml-base pod with no chown / scratch / ripgrep, so provision it before
+    // running the retry command — otherwise the very next Grep/Glob lands on an
+    // unstaged worker and returns `rg: command not found`. Coalesces with the
+    // background drive start() kicked off, via the per-worker ensure* memos.
+    await this.bringToReady()
     const retry = await this.runBrainctlExec(wrapped)
     return {
       ...retry,
@@ -768,15 +788,75 @@ export class RlaunchRuntime implements Runtime {
     if (!this.workerName) {
       await this.start()
     }
+    await this.bringToReady()
+  }
+
+  /**
+   * Drive a brought-up worker to fully provisioned: wait for the cluster to
+   * report phase=running, then run the one-time chown + scratch + helper
+   * staging bootstrap. Split out of `ensureRunning` so EVERY path that stands
+   * a worker up — the on-demand exec / data-plane gate here, the exec
+   * worker-lost retry, and the background drive `_startOnce` kicks off for
+   * preheat / deploymentHash respawn / health-restart — guarantees a
+   * provisioned worker, not just the on-demand path.
+   *
+   * Why this split exists: `start()` / `_startOnce()` only SCHEDULE the worker
+   * (the `wait-ready` contract deliberately returns before phase=running), and
+   * staging used to hang solely off `ensureRunning`. A worker stood up by any
+   * path that bypassed `ensureRunning` (preheat's `start()`, the worker-lost
+   * retry's bare `start()+waitUntilRunning()`, `restartUnhealthy`) served
+   * Grep/Glob with no `rg` — the ml-base image ships none — until some later
+   * call happened to flow through `ensureRunning`, surfacing as
+   * `rg not found in this runtime; Glob cannot operate`.
+   *
+   * Idempotent + cheap to re-enter: the three ensure* helpers are memoized per
+   * workerName and inflight-guarded, so the background drive and any concurrent
+   * synchronous drive coalesce onto the same apt / pip work rather than
+   * doubling it.
+   */
+  private async bringToReady(): Promise<void> {
     await this.waitUntilRunning()
-    // chown BEFORE staging: stageHelpersOnce runs apt which itself drops a
-    // few files under /var/cache/apt etc. inside the container, but those
-    // are container-local (not gpfs-backed) and unaffected by the chown.
-    // The chown only targets the workspace mount, which is exactly the
-    // surface the daemon's shared-cluster-fs reads/writes.
+    await this.ensureProvisioned()
+  }
+
+  /**
+   * One-time worker provisioning, ordered chown → scratch → helper staging.
+   * chown BEFORE staging: stageHelpersOnce runs apt which itself drops a few
+   * files under /var/cache/apt etc. inside the container, but those are
+   * container-local (not gpfs-backed) and unaffected by the chown. The chown
+   * only targets the workspace mount, which is exactly the surface the
+   * daemon's shared-cluster-fs reads/writes.
+   */
+  private async ensureProvisioned(): Promise<void> {
     await this.ensureWorkspaceChowned()
     await this.ensureScratchDir()
     await this.ensureHelpersStaged()
+  }
+
+  /**
+   * Fire-and-forget: drive a just-(re)created worker to provisioned in the
+   * background so the preheat / deploymentHash-respawn / health-restart paths
+   * (all of which go through `start()`, never `ensureRunning()`) stage helpers
+   * without blocking `start()` — the `wait-ready` contract requires `start()`
+   * to return before phase=running. Guarded per workerName so concurrent
+   * `start()` callers don't stack redundant drives; a respawn (new workerName)
+   * re-arms it. Errors are swallowed-with-log: the next real exec / data-plane
+   * call awaits `bringToReady()` synchronously and retries provisioning if this
+   * lost the race or failed (the ensure* memos only latch on success).
+   */
+  private kickBackgroundProvisioning(): void {
+    const name = this.workerName
+    if (!name || this.provisionDriveFor === name) return
+    this.provisionDriveFor = name
+    void this.bringToReady().catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `[rlaunch] background provisioning for ${name} did not complete ` +
+        `(tools provision lazily on first use): ${detail}\n`,
+      )
+      // Un-arm so a later start() for the same worker can retry the drive.
+      if (this.provisionDriveFor === name) this.provisionDriveFor = null
+    })
   }
 
   /**
@@ -915,6 +995,15 @@ export class RlaunchRuntime implements Runtime {
       return
     }
 
+    // Observability: staging is otherwise silent on success, which made a
+    // "worker ready but Grep/Glob say rg-not-found" deployment impossible to
+    // diagnose from logs. One line in, one line out brackets the ~5-60s apt +
+    // pip window so admins can confirm staging actually ran on this worker.
+    process.stderr.write(
+      `[rlaunch] staging helpers on ${this.workerName ?? '<unknown>'} ` +
+      `(apt: poppler-utils ripgrep jq; pip: Pillow openpyxl python-docx python-pptx)\n`,
+    )
+
     // Apt deps for the rlaunch ml-base image (ubuntu 22.04 + ML libs, no dev tooling).
     // Confirmed missing in 2026-05-13 dep audit on a fresh worker:
     //   - poppler-utils → pdftotext + pdftoppm + pdfinfo (Read tool's PDF text + visual paths)
@@ -974,6 +1063,9 @@ export class RlaunchRuntime implements Runtime {
     }
 
     this.helpersStagedFor = this.workerName
+    process.stderr.write(
+      `[rlaunch] helper staging complete on ${this.workerName ?? '<unknown>'}\n`,
+    )
   }
 
   private async waitUntilRunning(): Promise<void> {
