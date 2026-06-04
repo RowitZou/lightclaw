@@ -117,6 +117,36 @@ export function _setRunSubagentForTest(impl?: RunSubagentFn): void {
   runSubagentImpl = impl ?? runSubagent
 }
 
+// Tool outputs (Bash dumps, JSON listings, directory walks) are the bulk of a
+// tool-heavy turn's bytes but are rarely the source of a durable memory — the
+// facts the extractor needs live in the user / assistant text. One
+// GPU-availability turn on the 2026-06-04 official deployment rendered a ~100 KB
+// extraction input (18 Bash rounds of raw cluster dumps), which maxed out the
+// 100 K slice in buildExtractPrompt and inflated the memoryExtractor subagent's
+// token cost for a single distilled entry. Each tool_result is therefore
+// collapsed to head + tail before it reaches the extractor. Claude Code achieves
+// the same effect upstream by offloading large tool results to disk and feeding
+// its SessionMemory / compact summarizers a ~2 KB head preview
+// (toolResultStorage.ts); LightClaw has no such offload on the extraction path.
+// Head + tail (vs CC's head-only preview) because this truncation is
+// destructive — there is no on-disk full copy to Read back — and command tails
+// commonly carry the result line / error.
+const TOOL_RESULT_HEAD_CHARS = 1500
+const TOOL_RESULT_TAIL_CHARS = 500
+
+export function truncateToolOutputForExtract(text: string): string {
+  const max = TOOL_RESULT_HEAD_CHARS + TOOL_RESULT_TAIL_CHARS
+  if (text.length <= max) {
+    return text
+  }
+  const omitted = text.length - max
+  return (
+    `${text.slice(0, TOOL_RESULT_HEAD_CHARS)}\n` +
+    `[… ${omitted} chars omitted for memory extraction …]\n` +
+    `${text.slice(text.length - TOOL_RESULT_TAIL_CHARS)}`
+  )
+}
+
 export function messageToText(message: Message): string {
   if (message.type === 'system') {
     return `[system-summary]\n${message.message.summary}`
@@ -149,7 +179,7 @@ export function messageToText(message: Message): string {
         return `document: ${block.source.mediaType}`
       }
       const prefix = block.is_error ? 'error' : 'ok'
-      return `${prefix}: ${toolResultContentToText(block.content)}`
+      return `${prefix}: ${truncateToolOutputForExtract(toolResultContentToText(block.content))}`
     }),
   ].join('\n')
 }

@@ -9,6 +9,7 @@ import { memoryExtractorPrompt } from '../agents/bundled/memoryExtractor.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { persistForkTranscript } from '../agents/fork-transcript.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
+import type { UserMessage } from '../types.js'
 import type { MemoryEntry } from './types.js'
 import {
   _resetExtractionStateForTest,
@@ -22,6 +23,7 @@ import {
   messageToText,
   setExtractionInProgressForTest,
   triggerForkExtract,
+  truncateToolOutputForExtract,
 } from './extract.js'
 import { writeMemoryFile } from './auto-memory.js'
 
@@ -56,6 +58,51 @@ test('messageToText renders assistant text and tool_use', () => {
     timestamp: 20,
   })
   assert.match(messageToText(message), /Tool use: Read/)
+})
+
+test('truncateToolOutputForExtract leaves short output unchanged', () => {
+  // Small tool results (the common case) must pass through byte-identical —
+  // truncation only kicks in for the oversized cluster-dump class.
+  const small = 'NAME STATUS\nailab-hs-hs-gpu Open\n'
+  assert.equal(truncateToolOutputForExtract(small), small)
+})
+
+test('messageToText collapses a large tool_result to head + tail (extraction input budget)', () => {
+  // Regression guard for the 2026-06-04 official-deployment finding: one
+  // GPU-availability turn (~18 Bash rounds of raw cluster dumps) rendered a
+  // ~100 KB memoryExtractor input, inflating the subagent's token cost for a
+  // single distilled entry. A large tool_result must reach the extractor as
+  // head + tail only, not in full.
+  const bigToolOutput =
+    'HEAD_MARKER_brainctl_get_nodes' + 'x'.repeat(49_000) + 'TAIL_MARKER_exit_code_0'
+  const message: UserMessage = {
+    type: 'user',
+    uuid: 'u-tool-result',
+    parentUuid: null,
+    timestamp: 30,
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 't-nodes',
+          content: bigToolOutput,
+          is_error: false,
+        },
+      ],
+    },
+  }
+
+  const rendered = messageToText(message)
+  // Head and tail survive (the salient lines), the bulk is dropped.
+  assert.match(rendered, /HEAD_MARKER_brainctl_get_nodes/)
+  assert.match(rendered, /TAIL_MARKER_exit_code_0/)
+  assert.match(rendered, /chars omitted for memory extraction/)
+  // Far smaller than the raw ~49 KB dump — the whole point of the budget.
+  assert.ok(
+    rendered.length < 4_000,
+    `expected collapsed render, got ${rendered.length} chars`,
+  )
 })
 
 test('buildExtractPrompt invokes MemoryWrite and renders existing memories', () => {
