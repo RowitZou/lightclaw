@@ -9,6 +9,7 @@ import type { Runtime } from '../runtime/index.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { ToolCallContext } from '../tool.js'
 import { writeUserSkill } from '../skill/loader.js'
+import { stripSkillContentForCompaction } from '../session/compact.js'
 import { useSkillTool } from './use-skill.js'
 
 const emptyRuntime = {
@@ -97,6 +98,41 @@ describe('UseSkill transcript output', () => {
       assert.equal(output.match(/<\/skill-content>/g)?.length, 1)
       assert.match(output, /Mention <\\\/skill-content> as plain text\./)
       assert.match(output, /^<skill-content name="closing-tag-skill">[\s\S]*<\/skill-content>$/)
+    })
+  })
+
+  // Cross-file contract guard: PR1 (this tool's tag shape) and PR2
+  // (compaction's deterministic strip) live in different modules and are
+  // otherwise tested in isolation. They are coupled only by the exact tag
+  // shape — `compact.ts`'s SKILL_CONTENT_RE expects `name="..."` immediately
+  // followed by `>`. If anyone later adds a second attribute to the tag (e.g.
+  // the deferred `args`-in-pointer refinement), the regex silently stops
+  // matching, bodies stop being elided, and no isolated test goes red. This
+  // drives the REAL UseSkill output through the REAL strip to pin the seam.
+  describe('compaction-strip contract', () => {
+    it('produces a tag shape that compaction deterministically strips', async () => {
+      await withTempHome(async home => {
+        await writeUserSkill({
+          userId: 'alice',
+          name: 'guard-skill',
+          markdown:
+            '---\n' +
+            'name: guard-skill\n' +
+            'description: Guards the UseSkill->compaction tag contract.\n' +
+            '---\n\n' +
+            'GUARD-BODY-MARKER: the exact fragile recipe that must not leak.\n',
+        })
+
+        const output = await callUseSkill(home, 'guard-skill')
+
+        const { text, roster } = stripSkillContentForCompaction(output)
+        assert.doesNotMatch(text, /GUARD-BODY-MARKER/)
+        assert.match(
+          text,
+          /\[skill "guard-skill" was loaded here; its instructions are omitted from this summary and can be reloaded via UseSkill\]/,
+        )
+        assert.deepEqual(roster, ['guard-skill'])
+      })
     })
   })
 })
