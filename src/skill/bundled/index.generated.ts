@@ -35,7 +35,7 @@ export const bundledSkills: LoadedSkill[] = [
   {
     "name": "brainpp-batch-job",
     "description": "Submit and manage cluster batch training jobs via rjob: submit, inspect, monitor, stop/delete, and collect logs.",
-    "whenToUse": "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job'. This is for batch jobs, not interactive sandboxes.",
+    "whenToUse": "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs, or whenever the request mentions the rjob command. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job', 'use rjob to list a directory'. This is for batch jobs, not interactive sandboxes.",
     "allowedTools": [
       "Bash",
       "Read",
