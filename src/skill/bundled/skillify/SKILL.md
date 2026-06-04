@@ -64,6 +64,8 @@ Before asking anything, work out from the transcript:
 - Whether any step is a fixed, deterministic procedure (parsing, formatting,
   a set API-call sequence) that runs more reliably as a script than as prose —
   those become a `scripts/` helper.
+- Whether any step is already covered by a skill you can see — those become a
+  `UseSkill('<name>')` call in the body, not steps you re-encode.
 
 ### Step 2: Decide whether to ask — and only ask what's truly unresolved
 
@@ -176,6 +178,13 @@ confirm it works — only then pass its verified contents to `SkillWrite`'s
 you tested it — so keep it self-contained: take input via arguments or stdin,
 and don't hardcode absolute paths. If the body invokes a script, list its
 interpreter in `allowed-tools` (e.g. `Bash(python:*)`).
+
+**Reusing an existing skill (optional).** When a step is something a saved
+skill already does, don't re-encode it — have the body call `UseSkill('<name>')`
+there so that skill's procedure runs inline. Compose instead of copying its
+steps, for the same reason you'd call a shared helper rather than paste it: when
+either skill changes they stay in sync. Only reuse a skill you can see and that
+cleanly covers the step; if it only half-fits, write the step out directly.
 
 Save via `SkillWrite` — the SKILL.md as `markdown`, any helpers as `files`.
 The save location is fixed; don't ask the user about it.
