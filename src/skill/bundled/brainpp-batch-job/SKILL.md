@@ -1,7 +1,7 @@
 ---
 name: brainpp-batch-job
 description: "Submit and manage cluster batch training jobs via rjob: submit, inspect, monitor, stop/delete, and collect logs."
-when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs, or whenever the request mentions the rjob command. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job', 'use rjob to list a directory'. This is for batch jobs, not interactive sandboxes."
+when_to_use: "Use when the user wants to submit, inspect, monitor, stop, debug, clone, patch, or download logs for cluster batch training jobs, or whenever the request mentions the rjob command, or when a task needs more CPU / memory / GPU than your own execution environment has (see Environment Info) — run it as a cluster job rather than inline. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'stop that cluster job', 'use rjob to list a directory', 'run this GPU job'. This is for batch jobs, not interactive sandboxes."
 requires-driver: brainpp
 allowed-tools:
   - Bash
@@ -24,6 +24,7 @@ Use the `rjob` CLI for cluster batch training jobs while keeping LightClaw inter
 
 - `rjob` is a batch-job tool for training/evaluation jobs: submit jobs, inspect status, tail logs, read scheduling events, stop/delete jobs, clone/patch specs, and download logs.
 - `rjob` is not an interactive sandbox backend. Interactive sandbox execution is controlled by `runtime.backend` (`local` / `docker` / `cluster`) and is orthogonal to this skill.
+- rjob runs your work on a dedicated cluster allocation. Your own execution environment is modest — see **Environment Info** for its CPU / memory / GPU. Submit resource-heavy or GPU-bound work to rjob instead of running it inline via Bash; keep inline Bash for light, quick steps.
 - This skill appears only when the deployment platform is configured with `runtime.driver = "brainpp"`; the harness enforces that through the skill's driver gate. It depends on the Brain++ toolchain (`rjob` on PATH, provided by the internal `brainpp` package; not on public PyPI), which is present on the H-cluster dev host, Brain++ ml-base worker image, or a brainpp-preinstalled sandbox image.
 - **Run `rjob` directly via `Bash`.** Prefix each call so the kubebrain SSH environment is initialized (harmless when it is already loaded):
 

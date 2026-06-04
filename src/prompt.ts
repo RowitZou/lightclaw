@@ -1,3 +1,4 @@
+import { cpus, totalmem } from 'node:os'
 import { platform } from 'node:process'
 
 import { getAllAgents, getMainRole } from './agents/registry.js'
@@ -499,6 +500,25 @@ async function buildRolePromptParts(
   }
 }
 
+function formatComputeLine(config: LightClawConfig): string {
+  const hostCores = cpus().length
+  const hostGb = Math.round(totalmem() / 1024 ** 3)
+  const rt = config.runtime
+  if (rt?.backend === 'cluster') {
+    const cs = rt.clusterSettings
+    return `Available compute: ${cs.cpu} CPU cores, ${Math.round(cs.memoryMb / 1024)} GB memory, ${cs.gpu} GPU.`
+  }
+  if (rt?.backend === 'docker') {
+    const ds = rt.dockerSettings
+    const cores = ds.cpuLimit && ds.cpuLimit > 0 ? ds.cpuLimit : hostCores
+    const memory =
+      ds.memoryLimit && ds.memoryLimit.trim().length > 0 ? ds.memoryLimit : `${hostGb} GB`
+    return `Available compute: ${cores} CPU cores, ${memory} memory.`
+  }
+  // local (or a config without an explicit runtime backend): the daemon host's own resources
+  return `Available compute: ${hostCores} CPU cores, ${hostGb} GB memory.`
+}
+
 function formatEnvironmentSection(
   role: Role,
   environmentRoot: string,
@@ -531,6 +551,7 @@ function formatEnvironmentSection(
     `Current LightClaw user: ${getCurrentUserId() ?? 'unbound'}`,
     formatCurrentDateLine(),
     `Platform: ${platform}`,
+    formatComputeLine(config),
     `Model: ${resolveRoleModel(role, config)}`,
   )
   return lines.join('\n')

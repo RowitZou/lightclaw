@@ -19,18 +19,18 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { Tool } from '../tool.js'
 
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '833d1a8b7425951d7c14fe9dc409be0f40cd1d90f8bdceeab9f1e83587b7cf61',
-  generalist: '9f725f95d1ff5ec77cb66aad06c5c2672012ebe28a39ea7c83c0f1d6ac4f92d5',
-  localExplorer: '5a0282508c69778e44c1aefd9308458ae33f39175bc0ea90e2bd6ae4ded3ba05',
-  webSearcher: 'a723541d40c7f6bedf5e4c3c95105634384f41ada8d274d1605f9a8ff1a33a3c',
-  feishuSecretary: 'ce74fcdde8b57ec27fd26b549509db3ec46a56060b6edf4a5ca37edc0f72b3d9',
-  coder: '4ac14b750b16e7f63f7297f00031d920e4c2f583679a586f63aa8693bac5bb6a',
-  archivist: 'f97d7dbd0fdef6b7dfdf3b5c631d1554c37f598df06ab7129921e0164ce7f8fe',
-  reviewer: '4a28b9f4fa7ca2ac4c523c6032aa26169dca25acf738efea2ae1713b6fb8dd1f',
-  memoryExtractor: '4a67ded8194ab5d62961e1f868f460a215c5664b52ac3ad777e9e7da2c36b5b1',
-  memoryCurator: '5a6917fbbbe3c4482785fbc85c97580bad481364aa8fc08c8462d50588a2fc18',
-  skillCurator: '0924d182c4269d3bd20a369621f253de6146a3ab3b9e90ebe43fb5b3afec465c',
-  skillConsolidator: 'f8323502fa56851aefa73e24b7dc84e875f20fac3a5bc26c87ed93102b1c72a6',
+  main: '8d94e9ca0f1d5833d14ab398411673ed1e4365c33fc8e9f8d5e8766b9e351ddd',
+  generalist: '61a1b9d3c6103b866c49f19c01b8986e77fcf4997c52acb3780c571b0386e343',
+  localExplorer: '614bf6f8fd33e03516a3ca0f5b3981209ddf256c95f80de81db08ddffd21510a',
+  webSearcher: '2bdade767b305c51dd7a55f093069fec1389e4fb8ddffbef14d0ec81cff5d1ab',
+  feishuSecretary: '32c7059334fe7872cb1824a65587d2bdedc14f11674530a32806be61cdf63958',
+  coder: '61cd81f9146de779b22a6d2ea8f2ebd3618cf105c1e6f5927c5692d929268d48',
+  archivist: '40c2ef1c25a6e9462e9c72a263035136992aa421a17614625a36743afc0b5675',
+  reviewer: 'c3150868c118c604e9258bd29bcfb44408f7ad87eea9fcd65bc2f100f70a4fb8',
+  memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
+  memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
+  skillCurator: 'ab03657f4928dc10024ff72b73c05186f7efc0bc25b4f277f45c6acfbc57eada',
+  skillConsolidator: '76f9deff8e136931ec291c7b54026db2e4bf8181a52320e69eaaeaeafeb3d19f',
 }
 
 let tmpRoot: string
@@ -155,6 +155,10 @@ function snapshotConfig(): LightClawConfig {
     memory: {
       recall: { enabled: false, topN: 3 },
       session: { enabled: false },
+    },
+    runtime: {
+      backend: 'cluster',
+      clusterSettings: { cpu: 8, memoryMb: 16384, gpu: 0 },
     },
   } as unknown as LightClawConfig
 }
