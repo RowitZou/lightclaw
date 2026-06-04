@@ -6,16 +6,16 @@ Exact command shapes are in `command-mapping.md`. This file is the end-to-end fl
 
 You submit on your own judgment — there is no per-submit confirmation step. The order is: assemble the spec, optionally sanity-check it, submit, report everything back, remember what had no default.
 
-1. **Assemble the spec.** Image, mounts / GPFS paths, resources (`--cpu` / `--gpu` / `--memory` in MB), the command (after `--`), and where logs/output land. Pull image / mounts from what you have on record first; ask the user only for what nothing on record covers. **Namespace and charged/quota group default from the worker environment** — leave `--namespace` / `--charged-group` off unless the user wants a non-default one.
+1. **Assemble the spec.** Image, mounts / GPFS paths, resources (`--cpu` / `--gpu` / `--memory` in MB), the command (after `--`), and where logs/output land. Pull image / mounts from what you have on record first; ask the user only for what nothing on record covers. **Namespace and charged/quota group default from the worker environment** — leave `--namespace` / `--charged-group` off unless the user wants a non-default one. For a **normal** task also include `--private-machine=group` by default (schedules onto your quota group's private machines; without it a normal job can be denied for quota and never start) — idle tasks omit it.
 2. **Preview (optional, your own sanity check — not a user gate).** `--predict-only true` checks resource feasibility; `--dry-run true` renders the spec. Run one when you want to catch a bad spec before spending:
    ```
    rjob submit --predict-only true --name <job> --image <img> \
-     --cpu <n> --gpu <n> --memory <MB> -- <command line>
+     --private-machine=group --cpu <n> --gpu <n> --memory <MB> -- <command line>
    ```
 3. **Submit.** Run the real `submit` (same command, drop the `--predict-only true` flag):
    ```
    rjob submit --name <job> --image <img> \
-     --cpu <n> --gpu <n> --memory <MB> -- <command line>
+     --private-machine=group --cpu <n> --gpu <n> --memory <MB> -- <command line>
    ```
 4. **Report the full config to the user.** The job name plus image, the effective namespace + charged/quota group, mounts / GPFS paths, resources, command, and the **task-type lane** — `normal` (normal priority → `常规任务` tab) or `idle` (low priority, preemptible → `闲时任务` tab). They did not approve it beforehand, so they must see exactly what ran and which tab to find it under. Hand back the follow-ups: `get <job>`, `logs job <job> -n <N>`, `events <job>`, `download-logs <job> --action create --wait`.
 5. **Add the config to your library** — the image / mounts (and any namespace / group the user named) for this kind of work — via `MemoryWrite`, so it becomes a candidate you can reuse and pick from next time. Keep distinct task→config choices as separate options; dedupe only exact repeats. See "Build a config library" in `SKILL.md`.
@@ -23,16 +23,16 @@ You submit on your own judgment — there is no per-submit confirmation step. Th
 ### Minimal single-command job
 ```
 rjob submit --predict-only true --name demo-train --image <img> \
-  --cpu 8 --memory 16384 --gpu 1 -- python train.py --epochs 10
+  --private-machine=group --cpu 8 --memory 16384 --gpu 1 -- python train.py --epochs 10
 ```
-`--namespace` / `--charged-group` are omitted on purpose: `rjob` fills them from the worker environment. Add them only to override the env default.
+`--namespace` / `--charged-group` are omitted on purpose: `rjob` fills them from the worker environment. Add them only to override the env default. `--private-machine=group` is the normal-task default (drop it only for idle tasks).
 
 ### Low-priority (idle) sleep / smoke-test job (no GPU)
 ```
 rjob submit --predict-only true --name idle-probe --image <img> \
   --task-type idle --cpu 1 --memory 1024 --gpu 0 -- sleep 3600
 ```
-`--task-type idle` puts the job in the **low-priority lane** — it is preemptible and shows under the **闲时任务** UI tab, not 常规任务. Use it for throwaway smoke tests; use `normal` (omit `--task-type`, the default) for real training. Whichever you pick, tell the user the lane so they look under the right tab.
+`--task-type idle` puts the job in the **low-priority lane** — it is preemptible and shows under the **闲时任务** UI tab, not 常规任务. Use it for throwaway smoke tests; use `normal` (omit `--task-type`, the default) for real training. Whichever you pick, tell the user the lane so they look under the right tab. (Idle tasks need no `--private-machine` / quota group; normal tasks take `--private-machine=group` by default.)
 
 Note the `-- sleep 3600`: the command after `--` is what runs inside the job. `submit ... sleep 3600` (no `--`) fails.
 
@@ -72,7 +72,7 @@ rjob submit --predict-only true --name <job> --image <img> \
 
 For a `Failed` / `Stopped` / stuck job, in order:
 
-- **Scheduling / quota** → `events`: pending, insufficient resources, quota denied.
+- **Scheduling / quota** → `events`: pending, insufficient resources, quota denied. For a **normal** task denied with `insufficient group quota`, the usual fix is `--private-machine=group` (it was sent to the shared pool) — re-submit with it before concluding the cluster is out of quota; idle tasks don't use it.
 - **Image** → `events`: image-pull errors, wrong tag, registry auth.
 - **Mounts / paths** → `events` + `logs`: GPFS/workspace path not found, permission denied.
 - **Command / args** → `logs`: the program's own stderr; compare against the submitted `-- <command>`.
