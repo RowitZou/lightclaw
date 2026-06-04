@@ -14,6 +14,7 @@ import {
   syncExternalConfig,
 } from './config-bootstrap.js'
 import { initializeApp } from './init.js'
+import { flushLogTee, installStderrTee } from './logger.js'
 import { initializeHooks } from './hooks/index.js'
 import { ensureAdminInitialized, resolveTerminalUserId } from './init-wizard.js'
 import { runConfigWizard } from './config-wizard.js'
@@ -76,6 +77,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   await getRuntimePool().releaseAll().catch(error => {
     process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
   })
+  // Flush the stderr tee so the shutdown drain lines land in the log file
+  // before process.exit cuts the event loop.
+  await flushLogTee().catch(() => {})
   process.exit(0)
 }
 
@@ -146,6 +150,7 @@ Environment:
   LIGHTCLAW_HOME             Coarse data root (sessions / memory / config / identity / workspaces / state)
                             External config may also set a "home" field when --home/LIGHTCLAW_HOME are absent.
   LIGHTCLAW_WORKSPACE_ROOT   Per-user workspace root (overrides <home>/workspaces)
+  LIGHTCLAW_LOGS_DIR         Daemon stderr log dir (default <home>/logs; day-rotated)
   LIGHTCLAW_NO_MEMORY=1      Disable auto-memory extraction and memory index injection
   LIGHTCLAW_NO_MCP=1         Disable MCP client startup and MCP tool injection
   LIGHTCLAW_NO_HOOKS=1       Disable hook loading
@@ -179,6 +184,16 @@ async function main(): Promise<void> {
   } else if (args.home) {
     setLightclawHomeOverride(args.home)
   }
+
+  // Mirror the daemon's stderr (startup, channel events, error / crash
+  // traces) to a day-rotated file under paths.logs (default <home>/logs/).
+  // On a remote / shared-storage deployment this makes the operational log
+  // readable off the box, the same way session transcripts already are; a
+  // locally-attached tmux still sees the live stderr stream unchanged.
+  // Installed here, right after home is finalized, so config-wizard /
+  // process-lock / channel-startup output is captured too.
+  const logFile = installStderrTee()
+  process.stderr.write(`[lightclaw] v${VERSION} logging to ${logFile}\n`)
 
   const homeConfigPath = path.join(lightclawHome(), 'config.json')
   if (!args.config && !existsSync(homeConfigPath)) {
@@ -252,6 +267,8 @@ async function main(): Promise<void> {
       await getRuntimePool().releaseAll().catch(error => {
         process.stderr.write(`runtime pool release failed: ${String(error)}\n`)
       })
+      // Flush the stderr tee so the clean-exit drain lines land on disk.
+      await flushLogTee().catch(() => {})
     }
   })
 }
@@ -273,11 +290,15 @@ async function startEnabledChannels(): Promise<ChannelHandle[]> {
   return handles
 }
 
-main().catch(error => {
+main().catch(async error => {
   if (error instanceof LightClawAlreadyRunningError) {
     console.error(error.message)
   } else {
     console.error(error instanceof Error ? error.message : String(error))
   }
+  // A startup crash (bad config, lock contention, mount probe failure) is
+  // exactly what a remote operator needs in the log file — flush the tee
+  // before the process winds down so the trace is not lost.
+  await flushLogTee().catch(() => {})
   process.exitCode = 1
 })

@@ -52,6 +52,9 @@ export type ConfigFilePathsSection = {
    *  `audit/memory-writes/<date>.jsonl`, `audit/feishu-writes/<date>.jsonl`).
    *  Env override: LIGHTCLAW_AUDIT_DIR. */
   audit?: string
+  /** Daemon log root for the stderr tee (`<logs>/<YYYY-MM-DD>.log`).
+   *  Env override: LIGHTCLAW_LOGS_DIR. Defaults to `<lightclawHome>/logs`. */
+  logs?: string
   /** Admin hooks discovery directory (single admin-owned tree). */
   hooks?: string
   /** Admin MCP config file path. */

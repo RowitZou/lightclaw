@@ -265,6 +265,7 @@ export type PathsConfig = {
   memory: string
   apiLogs: string
   audit: string
+  logs: string
   hooks?: string
   mcpConfig?: string
   permissionAudit?: string
@@ -1048,6 +1049,22 @@ export function resolveAuditDir(): string {
   return path.resolve(expandHomePath(configuredPath))
 }
 
+// Daemon log root for the stderr tee (`src/logger.ts`). Mirrors
+// `resolveAuditDir()` shape — env override first, then `paths.logs` from
+// config.json, then `<lightclawHome>/logs` default. When `<home>` is on
+// shared (gpfs) storage the day-rotated `<logs>/<YYYY-MM-DD>.log` files are
+// readable off the deployment box, the same way session transcripts are.
+export function resolveLogsDir(): string {
+  const fileConfig = loadConfigFile()
+  const fromFile = fileConfig.paths?.logs
+  const configuredPath =
+    process.env.LIGHTCLAW_LOGS_DIR ??
+    fromFile ??
+    path.join(lightclawHome(), 'logs')
+
+  return path.resolve(expandHomePath(configuredPath))
+}
+
 function assertModelName(
   value: unknown,
   field: string,
@@ -1650,6 +1667,7 @@ export function getConfig(): LightClawConfig {
       memory: memoryDir,
       apiLogs: apiLogsDirRaw,
       audit: resolveAuditDir(),
+      logs: resolveLogsDir(),
       ...(hooksUserPath ? { hooks: expandOptionalPath(hooksUserPath)! } : {}),
       ...(mcpConfigUserPath ? { mcpConfig: expandOptionalPath(mcpConfigUserPath)! } : {}),
       ...(permissionAuditPath ? { permissionAudit: permissionAuditPath } : {}),
