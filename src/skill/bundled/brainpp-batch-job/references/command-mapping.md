@@ -106,7 +106,7 @@ Common options (run `rjob submit --help` for the full list), grouped by purpose:
 | Flag | Meaning |
 | --- | --- |
 | `--private-machine group` | **Add to normal tasks by default.** Schedules onto your quota group's private machines; a normal job without it can be denied for quota and never start. Idle tasks don't need it. `group` and `yes` are equivalent. |
-| `--host-network true` | Pod uses the host network namespace (common for multi-node + RDMA). |
+| `--host-network` | Pod uses the host network namespace (common for multi-node + RDMA). **Bare switch — no value** (`--host-network true` is rejected). |
 | `--positive-tags <t>` / `--negative-tags <t>` | Machine features the worker MUST / MUST NOT have (repeatable). |
 
 **Replicas / distributed** (see the distributed section below)
@@ -114,7 +114,7 @@ Common options (run `rjob submit --help` for the full list), grouped by purpose:
 | Flag | Meaning |
 | --- | --- |
 | `-P <n>` / `--replica <n>` | Replica count (each replica = one pod / node). |
-| `--gang-start true` | Start all replicas together and inject every replica's IP into pod env. **Required for multi-replica jobs** (so ranks find each other). |
+| `--gang-start` | Start all replicas together and inject every replica's IP into pod env. **Required for multi-replica jobs** (so ranks find each other). **Bare switch — no value** (`--gang-start true` is rejected). |
 | `--custom-resources <k>=<v>` | Extra scheduler resources (repeatable). RDMA / InfiniBand for distributed, e.g. `--custom-resources rdma/mlnx_shared=8`. |
 
 **Reliability / restart**
@@ -168,8 +168,8 @@ Preview the same line by adding `--predict-only true`; submit for real by removi
 
 For a job that spans multiple replicas / nodes (GPU-heavy training):
 - `-P <n>` — number of replicas (nodes).
-- `--gang-start true` — **required** so all replicas start together and each pod learns the others' IPs.
-- `--host-network true` — pod uses host networking.
+- `--gang-start` — **required** so all replicas start together and each pod learns the others' IPs. Bare switch — no value.
+- `--host-network` — pod uses host networking. Bare switch — no value.
 - `--custom-resources rdma/mlnx_shared=8` (and any other `--custom-resources k=v` the cluster needs) — RDMA / InfiniBand for inter-node collective ops.
 - `--auto-restart true` for a long multi-node run; `--enable-self-health true` to auto-heal on node failure.
 
@@ -216,7 +216,9 @@ rjob patch <job> [--task_name <t>] [-P <replicas>] [--auto-restart <v>] [--names
 - `submit` needs `--` before the command, and `--predict-only`/`--dry-run` need a `true` value.
 - A multi-step job command (`source` / `conda activate` / `cd` / `&&`) must be wrapped: `-- bash -c "..."`. A bare `-- a && b` does not run `b` in the job.
 - `--mount`, `-e`, and `--custom-resources` are **repeatable** — pass one per entry. The mount source is `gpfs://<vol>/<path>`.
-- Multi-replica distributed jobs need `--gang-start true` (and usually `--host-network true` + RDMA via `--custom-resources`). Without `--gang-start`, replicas can't discover each other.
+- Multi-replica distributed jobs need `--gang-start` (and usually `--host-network` + RDMA via `--custom-resources`). Without `--gang-start`, replicas can't discover each other.
+- **Switch vs value — don't add a stray `true`.** Bare switches (take NO value): `--gang-start`, `--host-network` — writing `--gang-start true` fails with `unrecognized arguments: true`. Value-taking (MUST have a value): `--predict-only` / `--dry-run` / `--auto-restart` / `--enable-self-health` (`true`/`false`) / `--share-host-shm`. **Don't trust `rjob --help`'s metavar to decide** — this CLI shows a metavar (e.g. `GANG_START`) even for bare switches; when unsure, test the form with `--dry-run true` first.
+- **Duration values are Go-format** (`s`/`m`/`h`, no "days"): write `24h` / `720h`, never `1d` / `30d` / a bare number of seconds. Applies to `--auto-delete-duration` and any other duration flag.
 - A normal task stuck in `Inqueue` / `Pending` whose `events` show `insufficient group quota` usually just needs `--private-machine=group` (it went to the shared pool) — add it and re-submit before concluding the cluster is out of quota. Idle tasks don't use it.
 - The tail flag is `-n` / `--tail-lines`, never `--tail`.
 - There is no `kubectl` / `kubebrain` CLI in this skill — only the `rjob` subcommands above. Don't invent commands; if something isn't covered, run `rjob <subcommand> --help`.
