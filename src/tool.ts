@@ -7,7 +7,7 @@ import type { Runtime } from './runtime/index.js'
 import type { UserToolResultBlock } from './types.js'
 import type { ChannelKey } from './channel-types.js'
 import type { ChainState } from './signal-bus/chain-state.js'
-import type { LightClawConfig } from './config.js'
+import type { LightClawConfig, RuntimeDriver } from './config.js'
 
 export type ToolCallContext = {
   cwd: string
@@ -69,6 +69,8 @@ export type Tool<TInput = unknown, TOutput = unknown> = {
   channelScope?: readonly ChannelKey[]
   /** Channel-only tools are hidden when no channel context exists. */
   channelOnly?: boolean
+  /** Hide this tool unless the deployment runtime driver matches. */
+  requiresDriver?: RuntimeDriver
   /**
    * Internal-only tools are excluded from user-facing catalogs and ToolSearch.
    * They may be included explicitly for framework-managed internal roles.
@@ -115,6 +117,7 @@ export function buildTool<TInput, TOutput>(input: {
   concurrencySafe?: boolean
   channelScope?: readonly ChannelKey[]
   channelOnly?: boolean
+  requiresDriver?: RuntimeDriver
   internalOnly?: boolean
   alwaysLoad?: boolean
   shouldDefer?: boolean

@@ -230,6 +230,20 @@ test('SkillWrite and skillify are main-only', async () => {
   )
 })
 
+test('BrainppCluster is visible only to cluster-capable roles', () => {
+  const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'] })
+  const generalist = role({ agentType: 'generalist', kind: 'worker', tools: ['*'] })
+  const coder = role({ agentType: 'coder', kind: 'worker', tools: ['Read', 'Bash'] })
+  const archivist = role({ agentType: 'archivist', kind: 'worker', tools: ['*'] })
+  const reviewer = role({ agentType: 'reviewer', kind: 'worker', tools: ['Bash'] })
+
+  assert.equal(isToolVisibleToRole(main, 'BrainppCluster'), true)
+  assert.equal(isToolVisibleToRole(generalist, 'BrainppCluster'), true)
+  assert.equal(isToolVisibleToRole(coder, 'BrainppCluster'), true)
+  assert.equal(isToolVisibleToRole(archivist, 'BrainppCluster'), false)
+  assert.equal(isToolVisibleToRole(reviewer, 'BrainppCluster'), false)
+})
+
 test('bundled dispatch matrix matches the role-to-role topology', () => {
   const matrix: Record<string, string[] | null> = {
     main: ['*'],

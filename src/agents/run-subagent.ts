@@ -62,6 +62,7 @@ export async function runSubagent(params: {
       provider,
       getAllTools(getCurrentSessionContext()?.channel, {
         includeInternal: agent.kind === 'internal',
+        runtimeDriver: config.runtime.driver,
       }),
     ),
   )

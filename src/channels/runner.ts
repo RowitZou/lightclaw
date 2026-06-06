@@ -702,7 +702,10 @@ export class ChannelRunner {
           getActiveTools: () =>
             filterToolsByRoleVisibility(
               getMainRole(),
-              getEnabledTools(getMainRoleRoute(appConfig).provider, getAllTools('feishu')),
+              getEnabledTools(
+                getMainRoleRoute(appConfig).provider,
+                getAllTools('feishu', { runtimeDriver: appConfig.runtime.driver }),
+              ),
             ),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
@@ -994,7 +997,7 @@ export class ChannelRunner {
               messages,
               tools: filterToolsByRoleVisibility(
                 getMainRole(),
-                getEnabledTools(provider, getAllTools('feishu')),
+                getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: appConfig.runtime.driver })),
               ),
               ...(forceFallbackInToolResultKinds.size > 0
                 ? { forceFallbackInToolResult: forceFallbackInToolResultKinds }
@@ -1605,7 +1608,7 @@ export class ChannelRunner {
     const provider = getMainRoleRoute(config).provider
     const tools = filterToolsByRoleVisibility(
       getMainRole(),
-      getEnabledTools(provider, getAllTools('feishu')),
+      getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
     )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true

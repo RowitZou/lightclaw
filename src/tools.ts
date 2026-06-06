@@ -42,10 +42,12 @@ import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
 import { webFetchTool } from './tools/web-fetch.js'
 import { webSearchTool } from './tools/web-search.js'
+import { brainppClusterTool } from './tools/cluster-job.js'
 import { getMcpTools } from './mcp/index.js'
 import type { Provider } from './provider/types.js'
 import type { Tool } from './tool.js'
 import type { ChannelKey } from './channel-types.js'
+import type { RuntimeDriver } from './config.js'
 
 export const builtinTools = [
   bashTool,
@@ -80,6 +82,7 @@ export const builtinTools = [
   todoWriteTool,
   webFetchTool,
   webSearchTool,
+  brainppClusterTool,
   dispatchTool,
   listDispatchesTool,
   cancelDispatchTool,
@@ -90,11 +93,12 @@ export const builtinTools = [
 
 export function getAllTools(
   channel?: ChannelKey,
-  options?: { includeInternal?: boolean },
+  options?: { includeInternal?: boolean; runtimeDriver?: RuntimeDriver },
 ): Tool[] {
   const all = [...builtinTools, ...getMcpTools()]
   return all.filter(tool =>
     (options?.includeInternal || !tool.internalOnly) &&
+    isToolVisibleForDriver(tool, options?.runtimeDriver ?? null) &&
     (!tool.channelOnly || channel !== undefined) &&
     (!channel || isToolVisibleInChannel(tool, channel)),
   )
@@ -102,6 +106,10 @@ export function getAllTools(
 
 export function isToolVisibleInChannel(tool: Tool, channel: ChannelKey): boolean {
   return tool.channelScope === undefined || tool.channelScope.includes(channel)
+}
+
+export function isToolVisibleForDriver(tool: Tool, runtimeDriver: RuntimeDriver): boolean {
+  return tool.requiresDriver === undefined || tool.requiresDriver === runtimeDriver
 }
 
 export function getEnabledTools(

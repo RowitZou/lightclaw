@@ -30,6 +30,8 @@ const FEISHU_RESERVED_TOOLS = new Set([
   'FeishuDelete',
 ])
 
+const BRAINPP_CLUSTER_TOOL_ROLES = new Set(['main', 'generalist', 'coder'])
+
 export function deriveCanUseTool(role: Role): CanUseToolFn {
   return async tool => {
     const visibility = checkRoleToolVisibility(role, tool.name)
@@ -92,6 +94,16 @@ function checkRoleToolVisibility(
     return {
       allowed: false,
       reason: `${toolName} is reserved for Feishu-specialized roles.`,
+    }
+  }
+
+  if (toolName === 'BrainppCluster') {
+    if (BRAINPP_CLUSTER_TOOL_ROLES.has(role.agentType)) {
+      return { allowed: true }
+    }
+    return {
+      allowed: false,
+      reason: 'BrainppCluster is reserved for cluster-capable roles.',
     }
   }
 

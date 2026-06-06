@@ -12,6 +12,7 @@ import { notifyTool } from './notify.js'
 import { showSlashCatalogTool } from './show-slash-catalog.js'
 import { skillDeleteTool } from './skill-delete.js'
 import { skillWriteTool } from './skill-write.js'
+import { brainppClusterTool } from './cluster-job.js'
 import {
   BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE,
   BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE,
@@ -27,6 +28,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
     ShowSlashCatalog: hash(showSlashCatalogTool.description),
     SkillDelete: hash(skillDeleteTool.description),
     SkillWrite: hash(skillWriteTool.description),
+    BrainppCluster: hash(brainppClusterTool.description),
     BackgroundTaskResultBlockMain: hash(BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE),
     BackgroundTaskResultBlockWorker: hash(BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE),
   }
@@ -60,6 +62,9 @@ const EXPECTED = {
   // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
   // and references/, plus overwrite as whole-skill replacement.
   SkillWrite: 'd5ebf7d6cf38704524bf34e4bc3dfcb255faade7843370a0b56470644414c7bb',
+  // Phase 41 PR1: read-only cluster inspection tool. The description stays
+  // mechanism-only and does not name the underlying cluster CLIs.
+  BrainppCluster: '4f2dd697a87c05d041acc43d96d0184cb4c1c24005eeb1270bce936391bc7e15',
   // Main template rewritten 2026-05-19 to push the default toward an
   // unattended-agent posture: surface every result via plain reply, take
   // autonomous follow-up when the path is clear, reserve Notify for the

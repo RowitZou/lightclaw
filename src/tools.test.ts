@@ -48,6 +48,14 @@ describe('channel-aware tool visibility', () => {
       assert.equal(internal.includes(name), true)
     }
   })
+
+  it('hides Brain++ driver-gated tools unless runtime.driver matches', () => {
+    const noDriver = getAllTools(undefined, { runtimeDriver: null }).map(tool => tool.name)
+    const brainpp = getAllTools(undefined, { runtimeDriver: 'brainpp' }).map(tool => tool.name)
+
+    assert.equal(noDriver.includes('BrainppCluster'), false)
+    assert.equal(brainpp.includes('BrainppCluster'), true)
+  })
 })
 
 function fakeTool(input: Partial<Tool> & { name: string }): Tool {

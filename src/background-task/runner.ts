@@ -81,7 +81,7 @@ export async function runBackgroundTaskFire(input: {
     const role = getAgent(input.task.role) ?? getAgent('generalist') ?? getMainRole()
     const tools = filterToolsByRoleVisibility(
       role,
-      getEnabledTools(provider, getAllTools('feishu')),
+      getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
     )
     // Docker backend requires the tracker; local / rlaunch ignore it. Pass it
     // unconditionally so a task fire under any backend gets a valid runtime —
