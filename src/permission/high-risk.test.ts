@@ -100,6 +100,21 @@ describe('isHighRiskRule', () => {
   })
 })
 
+describe('BrainppCluster high-risk confirmations', () => {
+  it('treats cluster delete confirmation as one-shot high risk', () => {
+    assert.equal(
+      isHighRiskAsk(ask({
+        toolName: 'BrainppClusterDeleteConfirm',
+        riskLevel: 'write',
+        input: { operation: 'delete', job: 'demo-123' },
+        inputPreview: 'delete demo-123',
+        suggestedRules: [{ toolName: 'BrainppClusterDeleteConfirm' }],
+      })),
+      true,
+    )
+  })
+})
+
 describe('containsHighRiskRule (chained spec)', () => {
   it('TRUE when any rule in the group is high-risk — the headline spec', () => {
     // `cd /tmp && rm -rf foo` → suggester emits [Bash(cd:*), Bash(rm:*)]

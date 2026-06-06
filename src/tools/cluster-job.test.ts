@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
 import type { ExecInput, ExecResult, Runtime } from '../runtime/index.js'
+import { matchToolContent } from '../permission/matchers.js'
 import {
   brainppClusterTool,
   type CapacityOutput,
@@ -143,6 +144,172 @@ describe('BrainppCluster output redaction', () => {
   })
 })
 
+describe('BrainppCluster submit', () => {
+  it('builds a submit command with curated flags and an automatic /workspace mount', async () => {
+    const commands: string[] = []
+    const result = await brainppClusterTool.call({
+      operation: 'submit',
+      name: 'demo-train',
+      image: 'registry.example.com/demo:latest',
+      command: 'echo hi && python train.py',
+      gpu: 1,
+      cpu: 8,
+      memoryMB: 32768,
+      replicas: 2,
+      gangStart: true,
+      customResources: { 'rdma/hca': 1 },
+      env: { WANDB_MODE: 'offline' },
+      predictOnly: true,
+      dryRun: true,
+      extraArgs: ['--priority', '3'],
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'job/demo-train created\n', stderr: '', exitCode: 0 }
+      }, '/mnt/shared-storage-user/ailab-hs/user/lightclaw'),
+      config: fakeConfig(),
+    })
+
+    assert.equal(commands.length, 1)
+    const command = commands[0]
+    assert.match(command, /rjob submit/)
+    assert.match(command, /--name 'demo-train'/)
+    assert.match(command, /--image 'registry\.example\.com\/demo:latest'/)
+    assert.match(command, /--gpu 1/)
+    assert.match(command, /--cpu 8/)
+    assert.match(command, /--memory 32768/)
+    assert.match(command, /-P 2/)
+    assert.match(command, /--gang-start(?:\s|$)/)
+    assert.doesNotMatch(command, /--gang-start true/)
+    assert.match(command, /--share-host-shm True/)
+    assert.match(command, /--private-machine=group/)
+    assert.match(command, /--custom-resources 'rdma\/hca=1'/)
+    assert.match(command, /-e 'WANDB_MODE=offline'/)
+    assert.match(command, /--predict-only true/)
+    assert.match(command, /--dry-run true/)
+    assert.match(command, /--mount='gpfs:\/\/gpfs1\/ailab-hs\/user\/lightclaw:\/workspace'/)
+    assert.match(command, /-- bash -lc 'echo hi && python train\.py'/)
+
+    const output = result.output as any
+    assert.equal(output.operation, 'submit')
+    assert.equal(output.name, 'demo-train')
+    assert.equal(output.image, 'registry.example.com/demo:latest')
+    assert.equal(output.namespace, 'ailab-hs')
+    assert.equal(output.group, 'hs_gpu')
+    assert.equal(output.mounts.autoWorkspace, 'gpfs://gpfs1/ailab-hs/user/lightclaw:/workspace')
+    assert.equal(output.resources.gpu, 1)
+    assert.equal(output.taskLane, 'normal')
+  })
+
+  it('fails fast when /workspace cannot be translated to a configured GPFS mount', async () => {
+    await assert.rejects(
+      () => brainppClusterTool.call({
+        operation: 'submit',
+        name: 'demo-train',
+        image: 'registry.example.com/demo:latest',
+        command: 'python train.py',
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 }), '/tmp/lightclaw'),
+        config: fakeConfig(),
+      }),
+      /runtime\.clusterSettings\.gpfsMounts/,
+    )
+  })
+})
+
+describe('BrainppCluster delete', () => {
+  it('requires a one-shot virtual confirmation before deleting a job', async () => {
+    const commands: string[] = []
+    const asks: Array<{ toolName: string; input: unknown }> = []
+    const result = await brainppClusterTool.call({
+      operation: 'delete',
+      job: 'demo-123',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'deleted demo-123\n', stderr: '', exitCode: 0 }
+      }),
+      canUseTool: async (tool, input) => {
+        asks.push({ toolName: tool.name, input })
+        return { behavior: 'allow' }
+      },
+    })
+
+    assert.deepEqual(asks.map(item => item.toolName), ['BrainppClusterDeleteConfirm'])
+    assert.deepEqual(asks[0]?.input, { operation: 'delete', job: 'demo-123' })
+    assert.equal(commands.length, 1)
+    assert.match(commands[0], /rjob delete 'demo-123'/)
+
+    const output = result.output as any
+    assert.equal(output.operation, 'delete')
+    assert.equal(output.target, 'demo-123')
+  })
+
+  it('does not delete when the virtual confirmation is denied', async () => {
+    const commands: string[] = []
+    const result = await brainppClusterTool.call({
+      operation: 'delete',
+      job: 'demo-123',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }),
+      canUseTool: async () => ({ behavior: 'deny', reason: 'not today' }),
+    })
+
+    assert.equal(commands.length, 0)
+    assert.equal(result.isError, true)
+    assert.match((result.output as any).stderr, /not today/)
+  })
+})
+
+describe('BrainppCluster stop', () => {
+  it('stops a job with rjob stop', async () => {
+    const commands: string[] = []
+    const result = await brainppClusterTool.call({
+      operation: 'stop',
+      job: 'demo-123',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'stopped demo-123\n', stderr: '', exitCode: 0 }
+      }),
+    })
+
+    assert.equal(commands.length, 1)
+    assert.match(commands[0], /rjob stop 'demo-123'/)
+    const output = result.output as any
+    assert.equal(output.operation, 'stop')
+    assert.equal(output.target, 'demo-123')
+  })
+})
+
+describe('BrainppCluster permission suggestions', () => {
+  it('scopes grantable rules by operation', () => {
+    const rules = brainppClusterTool.suggestPermissionRules?.({
+      operation: 'submit',
+      name: 'demo',
+      image: 'image:tag',
+      command: 'echo hi',
+    } as any) ?? []
+
+    assert.deepEqual(rules, [{ toolName: 'BrainppCluster', ruleContent: 'operation:submit' }])
+    assert.equal(matchToolContent('BrainppCluster', 'operation:submit', { operation: 'submit' }), true)
+    assert.equal(matchToolContent('BrainppCluster', 'operation:submit', { operation: 'delete' }), false)
+  })
+})
+
 function queue(
   name: string,
   capability: Record<string, string>,
@@ -155,7 +322,10 @@ function queue(
   }
 }
 
-function fakeRuntime(exec: (input: ExecInput) => Promise<ExecResult>): Runtime {
+function fakeRuntime(
+  exec: (input: ExecInput) => Promise<ExecResult>,
+  hostWorkspace = '/mnt/shared-storage-user/ailab-hs/user/lightclaw',
+): Runtime {
   return {
     kind: 'local',
     isolated: false,
@@ -164,7 +334,13 @@ function fakeRuntime(exec: (input: ExecInput) => Promise<ExecResult>): Runtime {
     securityProfile: 'host-trusted',
     control: null as never,
     data: null as never,
-    paths: null as never,
+    paths: {
+      mountTable: [{ host: hostWorkspace, worker: '/workspace', mode: 'rw' }],
+      toHostPath: (workerPath: string) => workerPath === '/workspace' ? hostWorkspace : null,
+      toWorkerPath: (hostPath: string) => hostPath === hostWorkspace ? '/workspace' : null,
+      isShared: () => true,
+      isAllowed: () => true,
+    },
     fs: null as never,
     start: async () => {},
     stop: async () => {},
@@ -172,4 +348,21 @@ function fakeRuntime(exec: (input: ExecInput) => Promise<ExecResult>): Runtime {
     isAvailable: async () => ({ ok: true }),
     exec,
   }
+}
+
+function fakeConfig() {
+  return {
+    runtime: {
+      clusterSettings: {
+        namespace: 'ailab-hs',
+        chargedGroup: 'hs_gpu',
+        gpfsMounts: [
+          {
+            hostPrefix: '/mnt/shared-storage-user/ailab-hs/user',
+            mountPrefix: 'gpfs://gpfs1/ailab-hs/user',
+          },
+        ],
+      },
+    },
+  } as any
 }

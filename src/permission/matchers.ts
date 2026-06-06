@@ -121,6 +121,10 @@ export function matchToolContent(
       return typeof record.file_path === 'string'
         ? matchPath(ruleContent, record.file_path)
         : false
+    case 'BrainppCluster':
+      return typeof record.operation === 'string'
+        ? matchString(ruleContent, `operation:${record.operation}`)
+        : false
     default:
       return typeof record.content === 'string'
         ? matchString(ruleContent, record.content)

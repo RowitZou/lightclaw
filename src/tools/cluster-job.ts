@@ -1,7 +1,9 @@
 import { z } from 'zod'
 
-import { buildTool, type ToolCallContext } from '../tool.js'
 import { getConfig } from '../config.js'
+import { getPermissionApprover, getPermissionMode } from '../state.js'
+import { buildGpfsMountStringFromRules } from '../runtime/gpfs-mount-rules.js'
+import { buildTool, type Tool, type ToolCallContext } from '../tool.js'
 
 const COMMAND_PREFIX = 'source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || true; '
 const MAX_TEXT_CHARS = 30_000
@@ -38,12 +40,49 @@ const eventsInput = z.object({
   replica: z.boolean().optional().describe('Set when the target is a replica name rather than a job name.'),
 })
 
+const submitInput = z.object({
+  operation: z.literal('submit'),
+  name: z.string().min(1).describe('Human-readable job name.'),
+  image: z.string().min(1).describe('Container image to run.'),
+  command: z.string().min(1).describe('Command to run inside the job. Multi-step commands are wrapped with bash -lc.'),
+  taskType: z.enum(['normal', 'idle']).optional().describe('Task lane. Defaults to normal.'),
+  gpu: z.number().int().min(0).optional(),
+  cpu: z.number().int().min(1).optional(),
+  memoryMB: z.number().int().min(1).optional().describe('Memory in MiB.'),
+  replicas: z.number().int().min(1).optional(),
+  gangStart: z.boolean().optional(),
+  hostNetwork: z.boolean().optional(),
+  customResources: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  shareHostShm: z.boolean().optional().describe('Defaults to true.'),
+  autoRestart: z.string().min(1).optional().describe('Go duration such as 24h or 720h.'),
+  enableSelfHealth: z.boolean().optional(),
+  priority: z.number().int().optional(),
+  predictOnly: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+  privateMachine: z.boolean().optional().describe('Normal lane defaults to group-private scheduling. Set false only when explicitly requested.'),
+  extraArgs: z.array(z.string().min(1)).optional().describe('Last-resort pass-through for flags not yet modeled by this tool.'),
+})
+
+const stopInput = z.object({
+  operation: z.literal('stop'),
+  job: z.string().min(1),
+})
+
+const deleteInput = z.object({
+  operation: z.literal('delete'),
+  job: z.string().min(1),
+})
+
 const inputSchema = z.discriminatedUnion('operation', [
   capacityInput,
+  submitInput,
   listInput,
   getInput,
   logsInput,
   eventsInput,
+  stopInput,
+  deleteInput,
 ])
 
 type ClusterJobInput = z.infer<typeof inputSchema>
@@ -73,7 +112,7 @@ export type CapacityOutput = {
 }
 
 type TextOutput = {
-  operation: 'list' | 'get' | 'logs' | 'events'
+  operation: 'submit' | 'list' | 'get' | 'logs' | 'events' | 'stop' | 'delete'
   command: string
   stdout: string
   stderr: string
@@ -83,6 +122,19 @@ type TextOutput = {
   phase?: string
   status?: string
   target?: string
+  name?: string
+  image?: string
+  namespace?: string
+  group?: string
+  taskLane?: 'normal' | 'idle'
+  mounts?: { autoWorkspace: string }
+  resources?: {
+    gpu?: number
+    cpu?: number
+    memoryMB?: number
+    replicas?: number
+    custom?: Record<string, string | number>
+  }
 }
 
 export type ClusterJobOutput = CapacityOutput | TextOutput
@@ -93,17 +145,29 @@ export const brainppClusterTool = buildTool<ClusterJobInput, ClusterJobOutput>({
   shouldDefer: true,
   requiresDriver: 'brainpp',
   description: [
-    'Inspect batch jobs on the cluster and check cluster GPU / CPU / memory availability.',
-    'Read-only operations in this version: capacity, list, get, logs, events.',
-    'Capacity is reported for your own group by default.',
+    'Submit and manage batch jobs on the cluster, and check cluster GPU / CPU / memory',
+    'availability — operations: capacity, submit, list, get, logs, events, stop, delete.',
+    'Your sandbox /workspace is automatically mounted into every job at the same /workspace',
+    'path, so anything you prepare there (code, a conda env, data) is available to the job',
+    'without re-uploading. Capacity is reported for your own group by default.',
   ].join(' '),
   domain: 'environment',
   riskLevel: 'safe',
   inputSchema,
+  suggestPermissionRules(input) {
+    if (input.operation === 'delete') {
+      return [{ toolName: 'BrainppClusterDeleteConfirm' }]
+    }
+    return [{ toolName: 'BrainppCluster', ruleContent: `operation:${input.operation}` }]
+  },
   async call(input, context) {
     switch (input.operation) {
       case 'capacity':
         return { output: await getCapacity(input, context) }
+      case 'submit': {
+        const output = await runSubmit(input, context)
+        return { output, isError: output.exitCode !== 0 }
+      }
       case 'list': {
         const output = await runList(input, context)
         return { output, isError: output.exitCode !== 0 }
@@ -120,6 +184,29 @@ export const brainppClusterTool = buildTool<ClusterJobInput, ClusterJobOutput>({
         const output = await runEvents(input, context)
         return { output, isError: output.exitCode !== 0 }
       }
+      case 'stop': {
+        const output = await runStop(input, context)
+        return { output, isError: output.exitCode !== 0 }
+      }
+      case 'delete': {
+        const permission = await requireDeleteConfirmation(input, context)
+        if (permission) {
+          return {
+            output: {
+              operation: 'delete',
+              command: 'cluster delete',
+              stdout: '',
+              stderr: permission,
+              exitCode: 1,
+              truncated: false,
+              target: input.job,
+            },
+            isError: true,
+          }
+        }
+        const output = await runDelete(input, context)
+        return { output, isError: output.exitCode !== 0 }
+      }
     }
   },
   formatResult(output, toolUseId, isError) {
@@ -131,6 +218,21 @@ export const brainppClusterTool = buildTool<ClusterJobInput, ClusterJobOutput>({
     }
   },
 })
+
+const brainppClusterDeleteConfirmTool: Tool = {
+  name: 'BrainppClusterDeleteConfirm',
+  description: 'Confirm deleting a cluster job. This virtual confirmation is one-shot and must not be persisted.',
+  source: 'builtin',
+  domain: 'environment',
+  riskLevel: 'write',
+  inputSchema: deleteInput,
+  async call() {
+    throw new Error('BrainppClusterDeleteConfirm is a virtual permission tool.')
+  },
+  formatResult() {
+    throw new Error('BrainppClusterDeleteConfirm is a virtual permission tool.')
+  },
+}
 
 async function getCapacity(
   input: Extract<ClusterJobInput, { operation: 'capacity' }>,
@@ -186,6 +288,41 @@ function resolveCapacityGroup(explicit: string | undefined, context: ToolCallCon
     'Cannot determine your cluster group: no group argument, runtime.clusterSettings.namespace, ' +
     'or KUBEBRAIN_NAMESPACE is set. Pass the group explicitly.',
   )
+}
+
+async function runSubmit(
+  input: Extract<ClusterJobInput, { operation: 'submit' }>,
+  context: ToolCallContext,
+): Promise<TextOutput> {
+  const autoWorkspaceMount = buildAutoWorkspaceMount(context)
+  const command = buildSubmitCommand(input, autoWorkspaceMount)
+  const result = await execClusterCommand(command, context, {
+    timeoutMs: 60_000,
+    maxBufferBytes: 2 * 1024 * 1024,
+  })
+  const text = presentText(result.stdout)
+  const clusterSettings = context.config?.runtime.clusterSettings
+  return {
+    operation: 'submit',
+    command: redactInternalCommand(command),
+    stdout: text.text,
+    stderr: presentText(result.stderr).text,
+    exitCode: result.exitCode,
+    truncated: text.truncated,
+    name: input.name,
+    image: input.image,
+    namespace: clusterSettings?.namespace,
+    group: clusterSettings?.chargedGroup,
+    taskLane: input.taskType ?? 'normal',
+    mounts: { autoWorkspace: autoWorkspaceMount },
+    resources: {
+      ...(input.gpu !== undefined ? { gpu: input.gpu } : {}),
+      ...(input.cpu !== undefined ? { cpu: input.cpu } : {}),
+      ...(input.memoryMB !== undefined ? { memoryMB: input.memoryMB } : {}),
+      ...(input.replicas !== undefined ? { replicas: input.replicas } : {}),
+      ...(input.customResources ? { custom: input.customResources } : {}),
+    },
+  }
 }
 
 async function runList(
@@ -292,6 +429,42 @@ async function runEvents(
   }
 }
 
+async function runStop(
+  input: Extract<ClusterJobInput, { operation: 'stop' }>,
+  context: ToolCallContext,
+): Promise<TextOutput> {
+  const command = `rjob stop ${shellQuote(input.job)}`
+  const result = await execClusterCommand(command, context)
+  const text = presentText(result.stdout)
+  return {
+    operation: 'stop',
+    command: redactInternalCommand(command),
+    stdout: text.text,
+    stderr: presentText(result.stderr).text,
+    exitCode: result.exitCode,
+    truncated: text.truncated,
+    target: input.job,
+  }
+}
+
+async function runDelete(
+  input: Extract<ClusterJobInput, { operation: 'delete' }>,
+  context: ToolCallContext,
+): Promise<TextOutput> {
+  const command = `rjob delete ${shellQuote(input.job)}`
+  const result = await execClusterCommand(command, context)
+  const text = presentText(result.stdout)
+  return {
+    operation: 'delete',
+    command: redactInternalCommand(command),
+    stdout: text.text,
+    stderr: presentText(result.stderr).text,
+    exitCode: result.exitCode,
+    truncated: text.truncated,
+    target: input.job,
+  }
+}
+
 async function execClusterCommand(
   command: string,
   context: ToolCallContext,
@@ -304,6 +477,134 @@ async function execClusterCommand(
     maxBufferBytes: options.maxBufferBytes ?? 1024 * 1024,
     abortSignal: context.abortSignal,
   })
+}
+
+function buildSubmitCommand(
+  input: Extract<ClusterJobInput, { operation: 'submit' }>,
+  autoWorkspaceMount: string,
+): string {
+  const lane = input.taskType ?? 'normal'
+  const parts = ['rjob submit']
+  pushFlagValue(parts, '--name', input.name)
+  pushFlagValue(parts, '--image', input.image)
+  if (lane === 'idle') {
+    pushFlagValue(parts, '--task-type', 'idle')
+  }
+  if (lane === 'normal' && input.privateMachine !== false) {
+    parts.push('--private-machine=group')
+  }
+  pushFlagValue(parts, '--cpu', input.cpu)
+  pushFlagValue(parts, '--memory', input.memoryMB)
+  pushFlagValue(parts, '--gpu', input.gpu)
+  if (input.replicas !== undefined) {
+    pushFlagValue(parts, '-P', input.replicas)
+  }
+  if (input.gangStart) {
+    parts.push('--gang-start')
+  }
+  if (input.hostNetwork) {
+    parts.push('--host-network')
+  }
+  for (const [name, value] of Object.entries(input.customResources ?? {})) {
+    pushFlagValue(parts, '--custom-resources', `${name}=${value}`)
+  }
+  for (const [name, value] of Object.entries(input.env ?? {})) {
+    pushFlagValue(parts, '-e', `${name}=${value}`)
+  }
+  if (input.shareHostShm !== false) {
+    parts.push('--share-host-shm', 'True')
+  }
+  pushFlagValue(parts, '--auto-restart', input.autoRestart)
+  if (input.enableSelfHealth) {
+    parts.push('--enable-self-health', 'true')
+  }
+  if (lane === 'normal') {
+    pushFlagValue(parts, '--priority', input.priority)
+  }
+  if (input.predictOnly) {
+    parts.push('--predict-only', 'true')
+  }
+  if (input.dryRun) {
+    parts.push('--dry-run', 'true')
+  }
+  parts.push(`--mount=${shellQuote(autoWorkspaceMount)}`)
+  for (const arg of input.extraArgs ?? []) {
+    parts.push(shellQuote(arg))
+  }
+  parts.push('--', 'bash', '-lc', shellQuote(input.command))
+  return parts.join(' ')
+}
+
+function pushFlagValue(
+  parts: string[],
+  flag: string,
+  value: string | number | undefined,
+): void {
+  if (value === undefined) {
+    return
+  }
+  parts.push(flag, typeof value === 'number' ? String(value) : shellQuote(value))
+}
+
+function buildAutoWorkspaceMount(context: ToolCallContext): string {
+  const clusterSettings = context.config?.runtime.clusterSettings
+  if (!clusterSettings) {
+    throw new Error('runtime.clusterSettings.gpfsMounts is required for BrainppCluster submit auto-mount.')
+  }
+  const workspaceHostPath =
+    context.runtime.paths.toHostPath('/workspace') ??
+    context.runtime.paths.toHostPath(context.runtime.workspaceRoot)
+  if (!workspaceHostPath) {
+    throw new Error('Unable to resolve runtime /workspace to a host path for BrainppCluster submit auto-mount.')
+  }
+  return buildGpfsMountStringFromRules(workspaceHostPath, '/workspace', clusterSettings)
+}
+
+async function requireDeleteConfirmation(
+  input: Extract<ClusterJobInput, { operation: 'delete' }>,
+  context: ToolCallContext,
+): Promise<string | null> {
+  const askBody = { operation: input.operation, job: input.job }
+  const approver = safePermissionApprover()
+  if (approver) {
+    const decision = await approver.ask({
+      toolName: 'BrainppClusterDeleteConfirm',
+      riskLevel: 'write',
+      input: askBody,
+      inputPreview: JSON.stringify(askBody, null, 2),
+      mode: safePermissionMode(),
+      signal: context.abortSignal,
+      suggestedRules: [{ toolName: 'BrainppClusterDeleteConfirm' }],
+    })
+    return decision.behavior === 'allow'
+      ? null
+      : `BrainppCluster delete denied: ${decision.reason}`
+  }
+
+  if (context.canUseTool) {
+    const decision = await context.canUseTool(brainppClusterDeleteConfirmTool, askBody)
+    return decision.behavior === 'allow'
+      ? null
+      : `BrainppCluster delete denied: ${decision.reason}`
+  }
+
+  return 'BrainppCluster delete confirmation is unavailable in this session.'
+}
+
+function safePermissionApprover() {
+  try {
+    return getPermissionApprover()
+  } catch {
+    return undefined
+  }
+}
+
+function safePermissionMode() {
+  try {
+    return getPermissionMode()
+  } catch {
+    return 'default'
+  }
 }
 
 export function parseCapacity(stdout: string, group: string): CapacityOutput {
@@ -529,6 +830,33 @@ export function formatClusterJobOutput(output: ClusterJobOutput): string {
     `Command: ${output.command}`,
     `Exit code: ${output.exitCode}`,
   ]
+  if (output.name) lines.push(`Name: ${output.name}`)
+  if (output.image) lines.push(`Image: ${output.image}`)
+  if (output.namespace) lines.push(`Namespace: ${output.namespace}`)
+  if (output.group) lines.push(`Group: ${output.group}`)
+  if (output.taskLane) lines.push(`Task lane: ${output.taskLane}`)
+  if (output.mounts?.autoWorkspace) {
+    lines.push(`Auto workspace mount: ${output.mounts.autoWorkspace}`)
+  }
+  if (output.resources) {
+    const resources = [
+      output.resources.gpu !== undefined ? `gpu=${output.resources.gpu}` : '',
+      output.resources.cpu !== undefined ? `cpu=${output.resources.cpu}` : '',
+      output.resources.memoryMB !== undefined ? `memoryMB=${output.resources.memoryMB}` : '',
+      output.resources.replicas !== undefined ? `replicas=${output.resources.replicas}` : '',
+    ].filter(Boolean)
+    if (output.resources.custom) {
+      for (const [name, value] of Object.entries(output.resources.custom)) {
+        resources.push(`${name}=${value}`)
+      }
+    }
+    if (resources.length > 0) {
+      lines.push(`Resources: ${resources.join(', ')}`)
+    }
+  }
+  if (output.operation === 'submit') {
+    lines.push('Config-library hint: after a successful job, record the image, resources, mounts, and command recipe for reuse.')
+  }
   if (output.target) lines.push(`Target: ${output.target}`)
   if (output.phase) lines.push(`Phase: ${output.phase}`)
   if (output.status === 'still_starting') {

@@ -166,7 +166,8 @@ export function isHighRiskAsk(ask: PermissionAskInput): boolean {
   if (
     ask.toolName === 'FeishuDeleteConfirm' ||
     ask.toolName === 'FeishuReplaceDocConfirm' ||
-    ask.toolName === 'FeishuSheetDestructiveConfirm'
+    ask.toolName === 'FeishuSheetDestructiveConfirm' ||
+    ask.toolName === 'BrainppClusterDeleteConfirm'
   ) {
     return true
   }
