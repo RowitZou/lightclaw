@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { buildTool, type ToolCallContext } from '../tool.js'
+import { getConfig } from '../config.js'
 
 const COMMAND_PREFIX = 'source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || true; '
 const MAX_TEXT_CHARS = 30_000
@@ -64,7 +65,7 @@ type CapacityQueue = {
   mem: MemoryAmount
 }
 
-type CapacityOutput = {
+export type CapacityOutput = {
   operation: 'capacity'
   group: string
   lane: CapacityQueue | null
@@ -135,6 +136,7 @@ async function getCapacity(
   input: Extract<ClusterJobInput, { operation: 'capacity' }>,
   context: ToolCallContext,
 ): Promise<CapacityOutput> {
+  const group = resolveCapacityGroup(input.group, context)
   let lastError = ''
   for (let attempt = 1; attempt <= CAPACITY_RETRIES; attempt += 1) {
     const result = await execClusterCommand('brainctl get queues -o json', context, {
@@ -150,12 +152,40 @@ async function getCapacity(
       continue
     }
     try {
-      return parseCapacity(result.stdout, input.group ?? process.env.KUBEBRAIN_NAMESPACE ?? 'current')
+      return parseCapacity(result.stdout, group)
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
     }
   }
   throw new Error(`Unable to read cluster capacity after ${CAPACITY_RETRIES} attempts: ${lastError}`)
+}
+
+/**
+ * Resolve which group's queues to report. The cluster namespace is a
+ * deployment-declared value (`runtime.clusterSettings.namespace`), NOT the
+ * daemon's ambient `process.env` — the daemon and the worker that runs the
+ * query can have different environments, and a silent fallback that matches no
+ * queue would return an empty (wrong) capacity. Resolution order: explicit
+ * argument → config namespace → ambient env (valid only for the local backend,
+ * where the daemon shell is the same shell the command runs in) → fail loud.
+ */
+function resolveCapacityGroup(explicit: string | undefined, context: ToolCallContext): string {
+  if (explicit) {
+    return explicit
+  }
+  const config = context.config ?? getConfig()
+  const fromConfig = config.runtime.clusterSettings?.namespace?.trim()
+  if (fromConfig) {
+    return fromConfig
+  }
+  const fromEnv = process.env.KUBEBRAIN_NAMESPACE?.trim()
+  if (fromEnv) {
+    return fromEnv
+  }
+  throw new Error(
+    'Cannot determine your cluster group: no group argument, runtime.clusterSettings.namespace, ' +
+    'or KUBEBRAIN_NAMESPACE is set. Pass the group explicitly.',
+  )
 }
 
 async function runList(
@@ -171,12 +201,12 @@ async function runList(
   }
   const command = parts.join(' ')
   const result = await execClusterCommand(command, context)
-  const text = truncateText(result.stdout)
+  const text = presentText(result.stdout)
   return {
     operation: 'list',
     command: redactInternalCommand(command),
     stdout: text.text,
-    stderr: truncateText(result.stderr).text,
+    stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
     truncated: text.truncated,
     jobs: parseListJobs(result.stdout),
@@ -189,12 +219,12 @@ async function runGet(
 ): Promise<TextOutput> {
   const command = `rjob get ${shellQuote(input.job)}`
   const result = await execClusterCommand(command, context)
-  const text = truncateText(result.stdout)
+  const text = presentText(result.stdout)
   return {
     operation: 'get',
     command: redactInternalCommand(command),
     stdout: text.text,
-    stderr: truncateText(result.stderr).text,
+    stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
     truncated: text.truncated,
     phase: parseJobPhase(result.stdout),
@@ -227,12 +257,12 @@ async function runLogs(
   const result = await execClusterCommand(command, context, {
     maxBufferBytes: 2 * 1024 * 1024,
   })
-  const text = truncateText(result.stdout)
+  const text = presentText(result.stdout)
   return {
     operation: 'logs',
     command: redactInternalCommand(command),
     stdout: text.text,
-    stderr: truncateText(result.stderr).text,
+    stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
     truncated: text.truncated,
     phase,
@@ -250,12 +280,12 @@ async function runEvents(
     input.replica ? '--replica' : '',
   ].filter(Boolean).join(' ')
   const result = await execClusterCommand(command, context)
-  const text = truncateText(result.stdout)
+  const text = presentText(result.stdout)
   return {
     operation: 'events',
     command: redactInternalCommand(command),
     stdout: text.text,
-    stderr: truncateText(result.stderr).text,
+    stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
     truncated: text.truncated,
     target: input.job,
@@ -321,16 +351,41 @@ function pickCapacityLane(queues: CapacityQueue[]): CapacityQueue | null {
   return queues.find(queue => queue.cpu.alloc > 0 || queue.mem.alloc > 0) ?? queues[0] ?? null
 }
 
+/**
+ * Whether a queue actually schedules GPUs. CPU / aggregate queues carry a GPU
+ * `cap` ceiling with zero alloc (a "phantom" ceiling); presenting their
+ * `cap - alloc` as free GPUs invites the model to sum them and over-report. A
+ * real GPU lane has GPUs allocated, or is named for GPUs with GPU capacity.
+ */
+function isGpuLaneQueue(queue: CapacityQueue): boolean {
+  return queue.gpu.alloc > 0 || (/gpu/i.test(queue.name) && queue.gpu.cap > 0)
+}
+
 function resource(cap: unknown, alloc: unknown): ResourceAmount {
-  const capValue = Number(String(cap ?? '0'))
-  const allocValue = Number(String(alloc ?? '0'))
-  const safeCap = Number.isFinite(capValue) ? capValue : 0
-  const safeAlloc = Number.isFinite(allocValue) ? allocValue : 0
+  const safeCap = parseCountQuantity(cap)
+  const safeAlloc = parseCountQuantity(alloc)
   return {
     cap: safeCap,
     alloc: safeAlloc,
     free: Math.max(0, safeCap - safeAlloc),
   }
+}
+
+/**
+ * Parse a k8s count quantity (gpu / cpu). Bare integers are whole units
+ * (`"96"` gpu, `"2304"` cpu cores); a trailing `m` is millicores
+ * (`"500m"` → 0.5 cores). Without this, `Number("500m")` is NaN and a
+ * millicore-expressed cpu queue would silently read as 0.
+ */
+function parseCountQuantity(value: unknown): number {
+  const raw = String(value ?? '0').trim()
+  const milli = raw.match(/^([0-9]+(?:\.[0-9]+)?)m$/)
+  if (milli) {
+    const n = Number(milli[1])
+    return Number.isFinite(n) ? n / 1000 : 0
+  }
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : 0
 }
 
 function memoryResource(cap: unknown, alloc: unknown): MemoryAmount {
@@ -415,6 +470,22 @@ function truncateText(value: string): { text: string; truncated: boolean } {
   }
 }
 
+/**
+ * Redact the underlying CLI names from any text shown to the model. The tool is
+ * the only sanctioned cluster interface; agents are not told `rjob` / `brainctl`
+ * exist, but a command's own error output (`rjob: error: ...`) would otherwise
+ * leak them. Redact then truncate, so the truncation boundary lands on cleaned
+ * text. The raw result is still used for parsing (phase / jobs / queue JSON)
+ * before this runs.
+ */
+export function redactCli(value: string): string {
+  return value.replace(/\brjob\b/gi, 'cluster').replace(/\bbrainctl\b/gi, 'cluster')
+}
+
+function presentText(value: string): { text: string; truncated: boolean } {
+  return truncateText(redactCli(value))
+}
+
 function formatCommandFailure(result: { stdout: string; stderr: string; exitCode: number }): string {
   return `exit ${result.exitCode}; stdout=${result.stdout.slice(0, 200)}; stderr=${result.stderr.slice(0, 200)}`
 }
@@ -426,19 +497,26 @@ function redactInternalCommand(command: string): string {
   return 'cluster command'
 }
 
-function formatClusterJobOutput(output: ClusterJobOutput): string {
+export function formatClusterJobOutput(output: ClusterJobOutput): string {
   if (output.operation === 'capacity') {
-    const lines = [
-      `Cluster capacity for group: ${output.group}`,
-      output.lane
-        ? `Selected lane: ${output.lane.name}`
-        : 'Selected lane: none',
-      '',
-      'Queues:',
-    ]
-    for (const queue of output.queues) {
+    const lines = [`Cluster capacity for group: ${output.group}`]
+    if (output.lane) {
       lines.push(
-        `- ${queue.name}: gpu ${queue.gpu.free}/${queue.gpu.cap} free, ` +
+        `GPU lane: ${output.lane.name} — ${output.lane.gpu.free}/${output.lane.gpu.cap} GPU free, ` +
+        `${output.lane.cpu.free}/${output.lane.cpu.cap} CPU free, ` +
+        `${output.lane.mem.free}/${output.lane.mem.cap} MiB free`,
+      )
+    } else {
+      lines.push('GPU lane: none found for this group')
+    }
+    lines.push(
+      '',
+      'Queues (GPU shown only for actual GPU lanes; CPU/aggregate queues carry a GPU ceiling they cannot schedule, so it is omitted):',
+    )
+    for (const queue of output.queues) {
+      const gpuPart = isGpuLaneQueue(queue) ? `gpu ${queue.gpu.free}/${queue.gpu.cap} free, ` : ''
+      lines.push(
+        `- ${queue.name}: ${gpuPart}` +
         `cpu ${queue.cpu.free}/${queue.cpu.cap} free, ` +
         `mem ${queue.mem.free}/${queue.mem.cap} MiB free`,
       )
