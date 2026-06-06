@@ -261,6 +261,7 @@
     "memory":    "<abs-path>",              // default <home>/memory     [env: LIGHTCLAW_MEMORY_DIR]
     "audit":     "<abs-path>",              // default <home>/audit      [env: LIGHTCLAW_AUDIT_DIR]
     "apiLogs":   "<abs-path>",              // default <home>/api-logs   [env: LIGHTCLAW_API_LOGS_DIR]
+    "logs":      "<abs-path>",              // default <home>/logs       [env: LIGHTCLAW_LOGS_DIR]
     "hooks":     "<abs-path>",              // admin hooks dir, default <home>/hooks
     "mcpConfig": "<abs-path>",              // admin MCP config file, default <home>/mcp.json
     "permissionAudit": "<abs-path>",        // permission audit log file [env: LIGHTCLAW_PERMISSION_AUDIT_LOG]
@@ -275,7 +276,8 @@
   // runtime — sandbox backend where Bash / Read / Write actually run.
   // ──────────────────────────────────────────────────────────────────────
   "runtime": {
-    "backend": "local",                     // "local"(admin only) | "docker" | "rlaunch"  [env: LIGHTCLAW_RUNTIME_BACKEND]
+    "backend": "local",                     // "local"(admin only) | "docker" | "cluster"  [env: LIGHTCLAW_RUNTIME_BACKEND]
+    "driver": null,                         // null | "brainpp"; required when backend="cluster" (kubebrain)
 
     // network — in-process forward proxy bridge. Enable when docker host mode /
     // cluster pods can't reach the internet directly; shared by all three
@@ -285,16 +287,16 @@
       "proxy": null,                        // bridge upstream proxy URL; null/empty=direct. Does not inherit env
       "noProxy": [],                        // direct-connect allowlist (CIDR / .suffix / exact hostname)
       "port": 18080,                        // bridge listen port
-      "bindHost": "0.0.0.0",                // listen interface (rlaunch injects host IP into the pod)
+      "bindHost": "0.0.0.0",                // listen interface (the cluster driver injects the host IP into the pod)
       // Source-IP allowlist (NOT a destination filter), keeps the bridge from
       // being an open proxy. Cluster deploys must add the pod CIDR
       // (kubebrain uses 100.64.0.0/10).
       "acl": ["127.0.0.0/8", "100.100.0.0/16", "172.17.0.0/16"]
     },
 
-    // docker — active when backend="docker". One long-lived container per
-    // canonical user.
-    "docker": {
+    // dockerSettings — active when backend="docker". One long-lived container
+    // per canonical user.
+    "dockerSettings": {
       "imageOverride": "<custom-image>",    // override the default image [env: LIGHTCLAW_DOCKER_IMAGE]
                                             // default ghcr.io/rowitzou/lightclaw-sandbox:<version>
       "idleTimeoutMs": 1800000,             // auto-stop when idle, default 30min [env: LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS]
@@ -321,11 +323,11 @@
       }
     },
 
-    // rlaunch — active when backend="rlaunch" (kubebrain cluster). One cluster
-    // worker per canonical user. These values come from the cluster admin;
-    // LightClaw ships no defaults (image/chargedGroup/namespace/gpfsMounts are
-    // required on the rlaunch backend).
-    "rlaunch": {
+    // clusterSettings — active when backend="cluster" (kubebrain cluster,
+    // driver="brainpp"). One cluster worker per canonical user. These values
+    // come from the cluster admin; LightClaw ships no defaults
+    // (image/chargedGroup/namespace/gpfsMounts are required on the cluster backend).
+    "clusterSettings": {
       "image": "<cluster-image>",
       "chargedGroup": "<charged-group>",
       "namespace": "<namespace>",           // defaults to env KUBEBRAIN_NAMESPACE
@@ -344,7 +346,7 @@
       "healthCheckIntervalMs": 300000,
       "preheatOnStartup": true,
       "preheatOnApproval": true,
-      "env": {}                            // injected into the worker via rlaunch --set-env
+      "env": {}                            // injected into the cluster worker's env
     }
   },
 
@@ -363,6 +365,8 @@
       "domain": "feishu",                   // "feishu" | "lark"
       "proxy": "<http://proxy-host:port>",  // Feishu SDK outbound proxy [env: FEISHU_PROXY]
       "transport": "ws",                    // "ws"(default, no public ingress) | "webhook" [env: LIGHTCLAW_FEISHU_TRANSPORT]
+      "cwd": "<abs-path>",                   // working dir for this channel's agent (default: per-user workspace)
+      "permissionMode": "auto",             // overrides top-level permissionMode for Feishu [env: LIGHTCLAW_FEISHU_PERMISSION_MODE]
       // allowUsers / allowChats: a dimension is only checked when its list is
       // non-empty; both empty = drop all inbound. Open a dimension with ["*"].
       "allowUsers": [],
@@ -381,6 +385,7 @@
         "intervalMinutes": 60
       },
       "cloudSpace": {
+        "rootFolderToken": "<folder-token>",      // pin the bot-drive root folder; omit to auto-create on cold start
         "uploadsFolderName": "LightClaw Uploads"  // cloud-drive subfolder name for large-file fallback uploads
       },
       "webhook": {                          // only used when transport="webhook"
