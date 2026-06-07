@@ -847,6 +847,36 @@ describe('config: runtime.clusterSettings.gpfsMounts', () => {
     ])
   })
 
+  it('parses distributed RDMA resources for multi-node submit defaults', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      runtime: {
+        driver: 'brainpp',
+        backend: 'cluster',
+        clusterSettings: {
+          image: 'registry/image:tag',
+          chargedGroup: 'hs_cpu',
+          namespace: 'ailab-hs',
+          gpfsMounts: [
+            { hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1/' },
+          ],
+          distributedRdmaResources: {
+            'rdma/mlnx_shared': 8,
+            'mellanox.com/mlnx_rdma': '1',
+          },
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.runtime.clusterSettings.distributedRdmaResources, {
+      'rdma/mlnx_shared': 8,
+      'mellanox.com/mlnx_rdma': '1',
+    })
+  })
+
   it('requires gpfsMounts when runtime.backend is cluster', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },

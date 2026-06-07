@@ -25,18 +25,18 @@ const listInput = z.object({
 
 const getInput = z.object({
   operation: z.literal('get'),
-  job: z.string().min(1),
+  job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
 })
 
 const logsInput = z.object({
   operation: z.literal('logs'),
-  job: z.string().min(1),
+  job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
   tailLines: z.number().int().min(1).max(1000).optional().describe('Bounded tail line count. Default 200.'),
 })
 
 const eventsInput = z.object({
   operation: z.literal('events'),
-  job: z.string().min(1),
+  job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
   replica: z.boolean().optional().describe('Set when the target is a replica name rather than a job name.'),
 })
 
@@ -45,33 +45,37 @@ const submitInput = z.object({
   name: z.string().min(1).describe('Human-readable job name.'),
   image: z.string().min(1).describe('Container image to run.'),
   command: z.string().min(1).describe('Command to run inside the job. Multi-step commands are wrapped with bash -lc.'),
+  namespace: z.string().min(1).optional().describe(
+    "Kubernetes namespace. Defaults to your environment's; set only to target a different namespace.",
+  ),
+  chargedGroup: z.string().min(1).optional().describe(
+    "Charged / quota group. Defaults to your environment's; set only to target a different group.",
+  ),
+  mounts: z.array(z.string().min(1).refine(path => path.startsWith('/'), {
+    message: 'mount paths must be absolute',
+  })).optional().describe(
+    'Extra cluster storage to mount, one path per entry (e.g. a shared dataset or weights directory). Your /workspace is mounted automatically; list additional paths here and each is mapped into the job at the same path.',
+  ),
   taskType: z.enum(['normal', 'idle']).optional().describe('Task lane. Defaults to normal.'),
-  gpu: z.number().int().min(0).optional(),
-  cpu: z.number().int().min(1).optional(),
-  memoryMB: z.number().int().min(1).optional().describe('Memory in MiB.'),
-  replicas: z.number().int().min(1).optional(),
-  gangStart: z.boolean().optional(),
-  hostNetwork: z.boolean().optional(),
-  customResources: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
-  env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-  shareHostShm: z.boolean().optional().describe('Defaults to true.'),
-  autoRestart: z.string().min(1).optional().describe('Go duration such as 24h or 720h.'),
-  enableSelfHealth: z.boolean().optional(),
-  priority: z.number().int().optional(),
-  predictOnly: z.boolean().optional(),
-  dryRun: z.boolean().optional(),
-  privateMachine: z.boolean().optional().describe('Normal lane defaults to group-private scheduling. Set false only when explicitly requested.'),
-  extraArgs: z.array(z.string().min(1)).optional().describe('Last-resort pass-through for flags not yet modeled by this tool.'),
+  gpu: z.number().int().min(0).optional().describe('GPUs requested per replica.'),
+  cpu: z.number().int().min(1).optional().describe('CPU cores requested.'),
+  memoryMB: z.number().int().min(1).optional().describe('Memory in MB.'),
+  replicas: z.number().int().min(1).optional().describe('Replica (node) count. Use >1 only for distributed multi-node jobs.'),
+  env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional().describe('Environment variables set inside the job.'),
+  priority: z.number().int().min(1).max(9).optional().describe('Fine-grained priority within a normal task; 1 = lowest, raise to move up the queue. Not used for idle tasks.'),
+  predictOnly: z.boolean().optional().describe('Preview resource feasibility without creating the job — spends no allocation.'),
+  dryRun: z.boolean().optional().describe('Render the job spec for inspection without creating the job — spends no allocation.'),
+  extraArgs: z.array(z.string().min(1)).optional().describe('Raw additional flags, appended verbatim, for options not modeled above. Normally empty.'),
 })
 
 const stopInput = z.object({
   operation: z.literal('stop'),
-  job: z.string().min(1),
+  job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
 })
 
 const deleteInput = z.object({
   operation: z.literal('delete'),
-  job: z.string().min(1),
+  job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
 })
 
 const inputSchema = z.discriminatedUnion('operation', [
@@ -127,12 +131,13 @@ type TextOutput = {
   namespace?: string
   group?: string
   taskLane?: 'normal' | 'idle'
-  mounts?: { autoWorkspace: string }
+  mounts?: { autoWorkspace: boolean; extra: string[] }
   resources?: {
     gpu?: number
     cpu?: number
     memoryMB?: number
     replicas?: number
+    priority?: number
     custom?: Record<string, string | number>
   }
 }
@@ -147,9 +152,11 @@ export const brainppClusterTool = buildTool<ClusterJobInput, ClusterJobOutput>({
   description: [
     'Submit and manage batch jobs on the cluster, and check cluster GPU / CPU / memory',
     'availability — operations: capacity, submit, list, get, logs, events, stop, delete.',
-    'Your sandbox /workspace is automatically mounted into every job at the same /workspace',
-    'path, so anything you prepare there (code, a conda env, data) is available to the job',
-    'without re-uploading. Capacity is reported for your own group by default.',
+    'Your /workspace is auto-mounted into every job at the same /workspace path, so',
+    'anything you prepare there (code, an env, data) is already in the job without',
+    "re-uploading. Before using this tool, load the brainpp-batch-job skill — it holds",
+    "the workflow and the decisions (when to put work on the cluster, how to set the",
+    "parameters, what to confirm with the user) that these bare operations don't.",
   ].join(' '),
   domain: 'environment',
   riskLevel: 'safe',
@@ -294,36 +301,42 @@ async function runSubmit(
   input: Extract<ClusterJobInput, { operation: 'submit' }>,
   context: ToolCallContext,
 ): Promise<TextOutput> {
+  const clusterSettings = (context.config ?? getConfig()).runtime.clusterSettings
   const autoWorkspaceMount = buildAutoWorkspaceMount(context)
-  const command = buildSubmitCommand(input, autoWorkspaceMount)
+  if (!clusterSettings) {
+    throw new Error('runtime.clusterSettings is required for BrainppCluster submit.')
+  }
+  const extraMounts = buildExtraMounts(input.mounts ?? [], clusterSettings)
+  const command = buildSubmitCommand(input, autoWorkspaceMount, extraMounts, clusterSettings)
   const result = await execClusterCommand(command, context, {
     timeoutMs: 60_000,
     maxBufferBytes: 2 * 1024 * 1024,
   })
   const text = presentText(result.stdout)
-  const clusterSettings = (context.config ?? getConfig()).runtime.clusterSettings
+  const redactedCommand = redactSubmitCommand(command, [autoWorkspaceMount, ...extraMounts])
+  const distributedResources = (input.replicas ?? 1) > 1
+    ? clusterSettings.distributedRdmaResources
+    : undefined
   return {
     operation: 'submit',
-    // Redact the resolved gpfs workspace path: the agent never sees /workspace's
-    // real host/gpfs location (that is the whole point of auto-mount), and seeing
-    // it would let it construct sibling paths for an out-of-bounds mount.
-    command: redactInternalCommand(command.replaceAll(autoWorkspaceMount, '<your /workspace, auto-mounted>')),
+    command: redactedCommand,
     stdout: text.text,
     stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
     truncated: text.truncated,
     name: input.name,
     image: input.image,
-    namespace: clusterSettings?.namespace,
-    group: clusterSettings?.chargedGroup,
+    namespace: input.namespace ?? clusterSettings.namespace,
+    group: input.chargedGroup ?? clusterSettings.chargedGroup,
     taskLane: input.taskType ?? 'normal',
-    mounts: { autoWorkspace: autoWorkspaceMount },
+    mounts: { autoWorkspace: true, extra: input.mounts ?? [] },
     resources: {
       ...(input.gpu !== undefined ? { gpu: input.gpu } : {}),
       ...(input.cpu !== undefined ? { cpu: input.cpu } : {}),
       ...(input.memoryMB !== undefined ? { memoryMB: input.memoryMB } : {}),
       ...(input.replicas !== undefined ? { replicas: input.replicas } : {}),
-      ...(input.customResources ? { custom: input.customResources } : {}),
+      ...((input.taskType ?? 'normal') === 'normal' ? { priority: input.priority ?? 1 } : {}),
+      ...(distributedResources ? { custom: distributedResources } : {}),
     },
   }
 }
@@ -485,15 +498,21 @@ async function execClusterCommand(
 function buildSubmitCommand(
   input: Extract<ClusterJobInput, { operation: 'submit' }>,
   autoWorkspaceMount: string,
+  extraMounts: readonly string[],
+  clusterSettings: NonNullable<ReturnType<typeof getConfig>['runtime']['clusterSettings']>,
 ): string {
   const lane = input.taskType ?? 'normal'
+  const replicas = input.replicas ?? 1
+  const isDistributed = replicas > 1
   const parts = ['rjob submit']
   pushFlagValue(parts, '--name', input.name)
   pushFlagValue(parts, '--image', input.image)
+  pushFlagValue(parts, '--namespace', input.namespace)
+  pushFlagValue(parts, '--charged-group', input.chargedGroup)
   if (lane === 'idle') {
     pushFlagValue(parts, '--task-type', 'idle')
   }
-  if (lane === 'normal' && input.privateMachine !== false) {
+  if (lane === 'normal') {
     parts.push('--private-machine=group')
   }
   pushFlagValue(parts, '--cpu', input.cpu)
@@ -502,27 +521,19 @@ function buildSubmitCommand(
   if (input.replicas !== undefined) {
     pushFlagValue(parts, '-P', input.replicas)
   }
-  if (input.gangStart) {
+  if (isDistributed) {
     parts.push('--gang-start')
-  }
-  if (input.hostNetwork) {
     parts.push('--host-network')
-  }
-  for (const [name, value] of Object.entries(input.customResources ?? {})) {
-    pushFlagValue(parts, '--custom-resources', `${name}=${value}`)
+    for (const [name, value] of Object.entries(clusterSettings.distributedRdmaResources ?? {})) {
+      pushFlagValue(parts, '--custom-resources', `${name}=${value}`)
+    }
   }
   for (const [name, value] of Object.entries(input.env ?? {})) {
     pushFlagValue(parts, '-e', `${name}=${value}`)
   }
-  if (input.shareHostShm !== false) {
-    parts.push('--share-host-shm', 'True')
-  }
-  pushFlagValue(parts, '--auto-restart', input.autoRestart)
-  if (input.enableSelfHealth) {
-    parts.push('--enable-self-health', 'true')
-  }
+  parts.push('--share-host-shm', 'True')
   if (lane === 'normal') {
-    pushFlagValue(parts, '--priority', input.priority)
+    pushFlagValue(parts, '--priority', input.priority ?? 1)
   }
   if (input.predictOnly) {
     parts.push('--predict-only', 'true')
@@ -531,6 +542,9 @@ function buildSubmitCommand(
     parts.push('--dry-run', 'true')
   }
   parts.push(`--mount=${shellQuote(autoWorkspaceMount)}`)
+  for (const mount of extraMounts) {
+    parts.push(`--mount=${shellQuote(mount)}`)
+  }
   assertSafeExtraArgs(input.extraArgs ?? [])
   for (const arg of input.extraArgs ?? []) {
     parts.push(shellQuote(arg))
@@ -539,13 +553,19 @@ function buildSubmitCommand(
   return parts.join(' ')
 }
 
+function buildExtraMounts(
+  paths: readonly string[],
+  clusterSettings: NonNullable<ReturnType<typeof getConfig>['runtime']['clusterSettings']>,
+): string[] {
+  return paths.map(path => buildGpfsMountStringFromRules(path, path, clusterSettings))
+}
+
 /**
  * extraArgs is a pass-through for flags the tool does not model — NOT a way to
- * override the flags the tool owns for safety. Mounts (auto `/workspace` only),
- * namespace, and charged group are tool-controlled; letting extraArgs carry
- * `--mount=gpfs://<any path>` would re-open the arbitrary-gpfs-mount boundary
- * that auto-mount closes (e.g. mounting another group's data or the secrets
- * tree into a job). Reject those flags up front.
+ * override the flags the tool owns for safety. Mounts, namespace, and charged
+ * group are first-line typed parameters; letting extraArgs carry a second copy
+ * would re-open the boundary around how paths and account routing are modeled.
+ * Reject those flags up front.
  */
 const BLOCKED_EXTRA_ARG_FLAGS = new Set([
   '--mount',
@@ -560,7 +580,7 @@ function assertSafeExtraArgs(extraArgs: readonly string[]): void {
     if (BLOCKED_EXTRA_ARG_FLAGS.has(flag)) {
       throw new Error(
         `extraArgs may not set ${flag}. Mounts, namespace, and charged group are controlled by the tool; ` +
-        `/workspace is auto-mounted and other paths are out of scope.`,
+        `/workspace is auto-mounted, and extra mounts must go through mounts[].`,
       )
     }
   }
@@ -829,6 +849,14 @@ function redactInternalCommand(command: string): string {
   return 'cluster command'
 }
 
+function redactSubmitCommand(command: string, mounts: readonly string[]): string {
+  let redacted = command
+  for (const mount of mounts) {
+    redacted = redacted.replaceAll(mount, '<cluster storage mount>')
+  }
+  return redactInternalCommand(redacted)
+}
+
 export function formatClusterJobOutput(output: ClusterJobOutput): string {
   if (output.operation === 'capacity') {
     const lines = [`Cluster capacity for group: ${output.group}`]
@@ -869,12 +897,16 @@ export function formatClusterJobOutput(output: ClusterJobOutput): string {
   if (output.mounts?.autoWorkspace) {
     lines.push('Auto workspace mount: your /workspace is mounted into the job at /workspace')
   }
+  if (output.mounts?.extra && output.mounts.extra.length > 0) {
+    lines.push(`Extra mounts: ${output.mounts.extra.join(', ')}`)
+  }
   if (output.resources) {
     const resources = [
       output.resources.gpu !== undefined ? `gpu=${output.resources.gpu}` : '',
       output.resources.cpu !== undefined ? `cpu=${output.resources.cpu}` : '',
       output.resources.memoryMB !== undefined ? `memoryMB=${output.resources.memoryMB}` : '',
       output.resources.replicas !== undefined ? `replicas=${output.resources.replicas}` : '',
+      output.resources.priority !== undefined ? `priority=${output.resources.priority}` : '',
     ].filter(Boolean)
     if (output.resources.custom) {
       for (const [name, value] of Object.entries(output.resources.custom)) {

@@ -145,23 +145,25 @@ describe('BrainppCluster output redaction', () => {
 })
 
 describe('BrainppCluster submit', () => {
-  it('builds a submit command with curated flags and an automatic /workspace mount', async () => {
+  it('builds a submit command with first-line flags, inferred distributed flags, and mounts', async () => {
     const commands: string[] = []
     const result = await brainppClusterTool.call({
       operation: 'submit',
       name: 'demo-train',
       image: 'registry.example.com/demo:latest',
       command: 'echo hi && python train.py',
+      namespace: 'ailab-exp',
+      chargedGroup: 'hs_gpu',
+      mounts: ['/mnt/shared-storage-user/ailab-hs/user/datasets'],
       gpu: 1,
       cpu: 8,
       memoryMB: 32768,
       replicas: 2,
-      gangStart: true,
-      customResources: { 'rdma/hca': 1 },
       env: { WANDB_MODE: 'offline' },
       predictOnly: true,
       dryRun: true,
-      extraArgs: ['--priority', '3'],
+      priority: 3,
+      extraArgs: ['--restart-policy=restartjobonfailure'],
     } as any, {
       cwd: '/workspace',
       abortSignal: new AbortController().signal,
@@ -177,30 +179,118 @@ describe('BrainppCluster submit', () => {
     assert.match(command, /rjob submit/)
     assert.match(command, /--name 'demo-train'/)
     assert.match(command, /--image 'registry\.example\.com\/demo:latest'/)
+    assert.match(command, /--namespace 'ailab-exp'/)
+    assert.match(command, /--charged-group 'hs_gpu'/)
     assert.match(command, /--gpu 1/)
     assert.match(command, /--cpu 8/)
     assert.match(command, /--memory 32768/)
     assert.match(command, /-P 2/)
     assert.match(command, /--gang-start(?:\s|$)/)
     assert.doesNotMatch(command, /--gang-start true/)
+    assert.match(command, /--host-network(?:\s|$)/)
     assert.match(command, /--share-host-shm True/)
     assert.match(command, /--private-machine=group/)
-    assert.match(command, /--custom-resources 'rdma\/hca=1'/)
+    assert.match(command, /--custom-resources 'rdma\/mlnx_shared=8'/)
+    assert.match(command, /--custom-resources 'mellanox\.com\/mlnx_rdma=1'/)
     assert.match(command, /-e 'WANDB_MODE=offline'/)
+    assert.match(command, /--priority 3/)
     assert.match(command, /--predict-only true/)
     assert.match(command, /--dry-run true/)
     assert.match(command, /--mount='gpfs:\/\/gpfs1\/ailab-hs\/user\/lightclaw:\/workspace'/)
+    assert.match(command, /--mount='gpfs:\/\/gpfs1\/ailab-hs\/user\/datasets:\/mnt\/shared-storage-user\/ailab-hs\/user\/datasets'/)
+    assert.match(command, /--restart-policy=restartjobonfailure/)
     assert.match(command, /-- bash -lc 'echo hi && python train\.py'/)
 
     const output = result.output as any
     assert.equal(output.operation, 'submit')
     assert.equal(output.name, 'demo-train')
     assert.equal(output.image, 'registry.example.com/demo:latest')
-    assert.equal(output.namespace, 'ailab-hs')
+    assert.equal(output.namespace, 'ailab-exp')
     assert.equal(output.group, 'hs_gpu')
-    assert.equal(output.mounts.autoWorkspace, 'gpfs://gpfs1/ailab-hs/user/lightclaw:/workspace')
+    assert.equal(output.mounts.autoWorkspace, true)
+    assert.deepEqual(output.mounts.extra, ['/mnt/shared-storage-user/ailab-hs/user/datasets'])
     assert.equal(output.resources.gpu, 1)
+    assert.equal(output.resources.priority, 3)
+    assert.deepEqual(output.resources.custom, {
+      'rdma/mlnx_shared': 8,
+      'mellanox.com/mlnx_rdma': 1,
+    })
     assert.equal(output.taskLane, 'normal')
+  })
+
+  it('does not infer distributed flags for single-replica jobs and defaults normal priority to 1', async () => {
+    const commands: string[] = []
+    const result = await brainppClusterTool.call({
+      operation: 'submit',
+      name: 'demo-single',
+      image: 'image:tag',
+      command: 'echo hi',
+      replicas: 1,
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    })
+
+    assert.equal(commands.length, 1)
+    assert.doesNotMatch(commands[0], /--gang-start/)
+    assert.doesNotMatch(commands[0], /--host-network/)
+    assert.doesNotMatch(commands[0], /--custom-resources/)
+    assert.match(commands[0], /--priority 1/)
+    const output = result.output as any
+    assert.equal(output.resources.priority, 1)
+    assert.equal(output.resources.custom, undefined)
+  })
+
+  it('does not pass priority for idle-lane jobs', async () => {
+    const commands: string[] = []
+    await brainppClusterTool.call({
+      operation: 'submit',
+      name: 'demo-idle',
+      image: 'image:tag',
+      command: 'echo hi',
+      taskType: 'idle',
+      priority: 9,
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    })
+
+    assert.equal(commands.length, 1)
+    assert.match(commands[0], /--task-type 'idle'/)
+    assert.doesNotMatch(commands[0], /--priority/)
+    assert.doesNotMatch(commands[0], /--private-machine=group/)
+  })
+
+  it('does not emit namespace or charged group unless explicitly provided', async () => {
+    const commands: string[] = []
+    await brainppClusterTool.call({
+      operation: 'submit',
+      name: 'demo-defaults',
+      image: 'image:tag',
+      command: 'echo hi',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: 'created\n', stderr: '', exitCode: 0 }
+      }),
+      config: fakeConfig(),
+    })
+
+    assert.equal(commands.length, 1)
+    assert.doesNotMatch(commands[0], /--namespace/)
+    assert.doesNotMatch(commands[0], /--charged-group/)
   })
 
   it('fails fast when /workspace cannot be translated to a configured GPFS mount', async () => {
@@ -338,6 +428,26 @@ describe('BrainppCluster submit extraArgs guard', () => {
   })
 })
 
+describe('BrainppCluster submit mounts', () => {
+  it('rejects extra mount paths outside configured GPFS prefixes', async () => {
+    await assert.rejects(
+      () => brainppClusterTool.call({
+        operation: 'submit',
+        name: 'demo',
+        image: 'image:tag',
+        command: 'echo hi',
+        mounts: ['/not/shared/data'],
+      } as any, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+        config: fakeConfig(),
+      }),
+      /runtime\.clusterSettings\.gpfsMounts/,
+    )
+  })
+})
+
 describe('BrainppCluster submit output redaction', () => {
   it('does not leak the resolved gpfs workspace path to the model', async () => {
     const result = await brainppClusterTool.call({
@@ -416,6 +526,10 @@ function fakeConfig() {
             mountPrefix: 'gpfs://gpfs1/ailab-hs/user',
           },
         ],
+        distributedRdmaResources: {
+          'rdma/mlnx_shared': 8,
+          'mellanox.com/mlnx_rdma': 1,
+        },
       },
     },
   } as any

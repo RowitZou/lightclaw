@@ -62,9 +62,9 @@ const EXPECTED = {
   // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
   // and references/, plus overwrite as whole-skill replacement.
   SkillWrite: 'd5ebf7d6cf38704524bf34e4bc3dfcb255faade7843370a0b56470644414c7bb',
-  // Phase 41 PR2: cluster inspection + job submit/manage tool. The description
-  // stays mechanism-only and does not name the underlying cluster CLIs.
-  BrainppCluster: 'f6c62cf852b89b3542d4310a1390cd6d72fc36c4ce933fe172cd041abf5ba23f',
+  // Phase 41 PR3: description stays mechanism-only, drops sandbox wording, and
+  // points the model to load brainpp-batch-job for workflow/judgment.
+  BrainppCluster: '0019d560d6c86acc7fbb803c0f44bc836f1d94d1063e8cd51b05c0a3d56981fa',
   // Main template rewritten 2026-05-19 to push the default toward an
   // unattended-agent posture: surface every result via plain reply, take
   // autonomous follow-up when the path is clear, reserve Notify for the

@@ -80,6 +80,7 @@ export type RlaunchRuntimeSettings = {
   privateMachine: 'group' | 'yes' | 'no' | 'project' | 'tenant'
   positiveTags: string[]
   gpfsMounts: RlaunchGpfsMountRule[]
+  distributedRdmaResources?: Record<string, string | number>
   imagePullPolicy: 'IfNotPresent' | 'Always' | 'Never'
   maxWaitDuration: string
   workerGcTimeHours: number
@@ -825,6 +826,31 @@ function validateRlaunchGpfsMounts(
     }
     return { hostPrefix, mountPrefix }
   })
+}
+
+function validateDistributedRdmaResources(
+  resources: ConfigFileCluster['distributedRdmaResources'] | undefined,
+): Record<string, string | number> | undefined {
+  if (resources === undefined) {
+    return undefined
+  }
+  if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+    throw new Error('runtime.clusterSettings.distributedRdmaResources must be an object.')
+  }
+  const normalized: Record<string, string | number> = {}
+  for (const [name, value] of Object.entries(resources)) {
+    const key = name.trim()
+    if (!key) {
+      throw new Error('runtime.clusterSettings.distributedRdmaResources has an empty key.')
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new Error(
+        `runtime.clusterSettings.distributedRdmaResources.${name} must be a string or number.`,
+      )
+    }
+    normalized[key] = typeof value === 'string' ? value.trim() : value
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 function validateDockerMounts(
@@ -1978,6 +2004,7 @@ function resolveClusterSettings(
   // rule; path translation picks the longest matching hostPrefix. Non-cluster
   // backends may leave it empty.
   const gpfsMounts = dedupeRlaunchGpfsMounts(validateRlaunchGpfsMounts(fileConfig.gpfsMounts))
+  const distributedRdmaResources = validateDistributedRdmaResources(fileConfig.distributedRdmaResources)
   if (backend === 'cluster' && gpfsMounts.length === 0) {
     throw new Error(
       'runtime.clusterSettings.gpfsMounts is required when runtime.backend = "cluster". ' +
@@ -1997,6 +2024,7 @@ function resolveClusterSettings(
       ? fileConfig.positiveTags.filter(tag => typeof tag === 'string' && tag.trim()).map(tag => tag.trim())
       : [],
     gpfsMounts,
+    distributedRdmaResources,
     imagePullPolicy: parseImagePullPolicy(fileConfig.imagePullPolicy) ?? 'IfNotPresent',
     maxWaitDuration: fileConfig.maxWaitDuration ?? '5m',
     workerGcTimeHours: clampNumber(Number(fileConfig.workerGcTimeHours ?? 24), 0.25, 168),

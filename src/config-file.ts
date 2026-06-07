@@ -335,6 +335,7 @@ export type ConfigFileShape = {
         hostPrefix?: string
         mountPrefix?: string
       }>
+      distributedRdmaResources?: Record<string, string | number>
       imagePullPolicy?: string
       maxWaitDuration?: string
       workerGcTimeHours?: number

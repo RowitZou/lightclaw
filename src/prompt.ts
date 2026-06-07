@@ -4,7 +4,7 @@ import { platform } from 'node:process'
 import { getAllAgents, getMainRole } from './agents/registry.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
 import type { Role, RoleKind } from './agents/types.js'
-import type { LightClawConfig } from './config.js'
+import type { LightClawConfig, RuntimeDriver } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
@@ -451,7 +451,7 @@ async function buildRolePromptParts(
   }
 
   if (policy.kind === 'orchestrator') {
-    preTodoSections.push(formatChannelContextSection())
+    preTodoSections.push(formatChannelContextSection(input.config.runtime?.driver ?? null))
     preTodoSections.push(formatAskUserQuestionNudge())
   }
 
@@ -577,14 +577,21 @@ function formatRoleSkillsSection(
   ].join('\n')
 }
 
-function formatChannelContextSection(): string {
-  return [
+function formatChannelContextSection(runtimeDriver: RuntimeDriver): string {
+  const lines = [
     '## Channel Context',
     '',
     'This session runs in the Feishu channel. User messages may include channel-specific framing around the text: a `[<senderName>]` prefix in group chats, a `<quoted-message>` block when the user reply-quotes a previous message, and an attachment list below the text with local paths. Read all of it before deciding what the user is asking.',
     '',
     'You have a private Feishu cloud-space folder dedicated to this user. For multi-step or specialized Feishu work (cloud-doc lifecycle, workspace organization), lean on delegation — the Reachable Workers section lists who has the relevant capability.',
-  ].join('\n')
+  ]
+  if (runtimeDriver === 'brainpp') {
+    lines.push(
+      '',
+      "For cluster batch-job work, keep the user-facing decisions on yourself — you're the one who can ask — and don't block on the long wait: once a job is running, track it with a background watcher rather than a poll loop, so you stay responsive. A quick check (capacity / status / a log tail) just run inline; you can hand a fully-specified job (decisions already settled) to a worker to keep your context clean, but the decisions stay with you.",
+    )
+  }
+  return lines.join('\n')
 }
 
 function formatAskUserQuestionNudge(): string {

@@ -123,3 +123,25 @@ test('driver-gated skill is hidden unless runtime.driver matches', async () => {
     )
   })
 })
+
+test('brainpp driver adds cluster batch-job guidance to main channel context only when gated', async () => {
+  const ctx = baseCtx()
+  await runWithSessionContext(ctx, async () => {
+    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
+    const withoutBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
+      autoMemory: false, config: config(null), queryText: '', sessionId: undefined,
+    })
+    assert.doesNotMatch(
+      renderSystemPrompt(withoutBrainpp, [], { tools: mainTools }),
+      /For cluster batch-job work, keep the user-facing decisions on yourself/,
+    )
+
+    const withBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
+      autoMemory: false, config: config('brainpp'), queryText: '', sessionId: undefined,
+    })
+    assert.match(
+      renderSystemPrompt(withBrainpp, [], { tools: mainTools }),
+      /For cluster batch-job work, keep the user-facing decisions on yourself/,
+    )
+  })
+})
