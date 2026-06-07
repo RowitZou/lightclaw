@@ -382,18 +382,49 @@ function prefixMemoryIndex(raw: string, relativeDir: string): string {
     .join('\n')
 }
 
-export async function rebuildMemoryIndex(memoryDir: string): Promise<void> {
-  await ensureMemoryDir(memoryDir)
-  const entries = await scanMemoryFiles(memoryDir)
-  const lines = entries.map(
-    entry => `- [${entry.type}] ${entry.filename}: ${entry.description}`,
+// Per-directory FIFO lock chain. `safeWriteFile` makes the *publish* atomic (no
+// torn bytes), but `rebuildMemoryIndex`'s scan→publish is not: the same per-user
+// tier dir sees main + extract + dream trigger rebuilds concurrently
+// (writeMemoryFile / deleteMemoryFile / MemoryWriteAt / MemoryMove / MemoryDelete).
+// Two unsynchronized rebuilders can each scan, then publish in an order where the
+// earlier scan's snapshot lands last — dropping a just-written entry from the
+// index until the next unrelated write rebuilds it. A single daemon owns each
+// home, so an in-process lock keyed by resolved dir path is sufficient; no
+// cross-process file lock is needed. Keyed by dir, so different tiers
+// (root / _shared / <role>) never contend with each other.
+const indexRebuildChains = new Map<string, Promise<unknown>>()
+
+// Exported for the serialization regression test; not part of the public memory
+// API otherwise — production callers go through rebuildMemoryIndex.
+export function withIndexRebuildLock<T>(memoryDir: string, fn: () => Promise<T>): Promise<T> {
+  const key = path.resolve(memoryDir)
+  const prev = indexRebuildChains.get(key) ?? Promise.resolve()
+  // Run `fn` after the predecessor settles (resolve OR reject — a failed rebuild
+  // must not wedge the chain). The caller still sees fn's own rejection via `run`.
+  const run = prev.then(fn, fn)
+  // Store a non-rejecting tail so the next waiter chains cleanly regardless of
+  // this op's outcome.
+  indexRebuildChains.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
   )
-  const nextContent = lines.length > 0 ? `${lines.join('\n')}\n` : ''
-  // Atomic write. MEMORY.md is rebuilt on every memory write (writeMemoryFile
-  // / deleteMemoryFile / MemoryWriteAt / MemoryMove / MemoryDelete), so the
-  // same per-user dir sees main + extract + dream all trigger rebuildIndex
-  // concurrently. A raw writeFile can interleave bytes between two rebuilders
-  // and leave MEMORY.md with a malformed line or a stale tail; safeWriteFile
-  // makes the publish atomic (last writer wins cleanly).
-  safeWriteFile(path.join(memoryDir, MEMORY_INDEX_FILE), nextContent)
+  return run
+}
+
+export async function rebuildMemoryIndex(memoryDir: string): Promise<void> {
+  await withIndexRebuildLock(memoryDir, async () => {
+    await ensureMemoryDir(memoryDir)
+    const entries = await scanMemoryFiles(memoryDir)
+    const lines = entries.map(
+      entry => `- [${entry.type}] ${entry.filename}: ${entry.description}`,
+    )
+    const nextContent = lines.length > 0 ? `${lines.join('\n')}\n` : ''
+    // safeWriteFile keeps the publish atomic; the lock above keeps the
+    // surrounding scan→publish serialized per dir so a concurrent rebuilder
+    // cannot lost-update this index.
+    safeWriteFile(path.join(memoryDir, MEMORY_INDEX_FILE), nextContent)
+  })
 }
