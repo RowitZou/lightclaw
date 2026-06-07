@@ -10,6 +10,7 @@ import {
 } from './openai-auth.js'
 import type { ApiMessage } from './types.js'
 import type { StreamEvent, StreamStopEvent } from '../types.js'
+import { isTransientError } from '../transient-error.js'
 
 describe('openai-auth: convertMessagesToResponsesInput', () => {
   it('converts a plain user message to input_text', () => {
@@ -300,6 +301,44 @@ describe('openai-auth: convertToolsToResponsesShape', () => {
   it('emits an empty array for no tools', () => {
     const out = convertToolsToResponsesShape([])
     assert.equal(out.length, 0)
+  })
+
+  // Regression for the 2026-06-07 `official` outage: a tool whose input_schema
+  // serialized to a top-level `oneOf` with no `type` (zod discriminatedUnion,
+  // e.g. BrainppCluster) was passed to codex verbatim → Responses 400
+  // `invalid_function_parameters: ... got 'type: "None"'`, retried as transient.
+  it('normalizes a top-level oneOf tool schema to type:object', () => {
+    const out = convertToolsToResponsesShape([
+      {
+        name: 'BrainppCluster',
+        description: 'cluster ops',
+        input_schema: {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          oneOf: [
+            {
+              type: 'object',
+              properties: { operation: { type: 'string', const: 'capacity' } },
+              required: ['operation'],
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              properties: {
+                operation: { type: 'string', const: 'submit' },
+                name: { type: 'string' },
+              },
+              required: ['operation', 'name'],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+    ])
+    assert.equal(out.length, 1)
+    const params = out[0].parameters as Record<string, unknown>
+    assert.equal(params.type, 'object')
+    assert.equal(params.oneOf, undefined)
+    assert.ok(params.properties && 'name' in (params.properties as object))
   })
 })
 
@@ -699,6 +738,33 @@ describe('openai-auth: formatOpenAIAuthError', () => {
       error.message,
       'vision failed status=400: code=invalid_request_error, type=invalid_request_error, param=input[0].content[1].image_url, message=Invalid image.',
     )
+  })
+
+  // Regression for the retry-misclassification half of the 2026-06-07 outage:
+  // the formatted error must carry the HTTP status as a STRUCTURED field, not
+  // only as text in the message — otherwise isTransientError()'s httpStatusOf()
+  // can't see the 400 and a deterministic client error gets retried 3x as a
+  // "transient" blip.
+  it('attaches a structured status so a 400 is classified fatal, not transient', () => {
+    const error = formatOpenAIAuthError('OpenAI Responses streamChat request failed', {
+      status: 400,
+      error: {
+        code: 'invalid_function_parameters',
+        type: 'invalid_request_error',
+        param: 'tools[11].parameters',
+        message: "Invalid schema for function 'BrainppCluster'",
+      },
+    })
+    assert.equal((error as Error & { status?: number }).status, 400)
+    assert.equal(isTransientError(error), false)
+  })
+
+  it('preserves the original SDK error on the cause chain', () => {
+    const sdkError = { status: 503, message: 'upstream unavailable' }
+    const error = formatOpenAIAuthError('OpenAI Responses streamChat request failed', sdkError)
+    assert.equal((error as Error).cause, sdkError)
+    // 503 stays transient — retrying an upstream 5xx is correct.
+    assert.equal(isTransientError(error), true)
   })
 })
 

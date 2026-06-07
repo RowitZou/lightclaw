@@ -15,6 +15,7 @@ import {
   type UserToolResultBlock,
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
+import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
@@ -217,7 +218,9 @@ function convertTools(tools: StreamChatParams['tools']): ChatCompletionTool[] {
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.input_schema as Record<string, unknown>,
+      parameters: normalizeToolParametersForOpenAI(
+        tool.input_schema as Record<string, unknown>,
+      ),
     },
   }))
 }

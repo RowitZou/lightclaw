@@ -22,6 +22,7 @@ import {
   type UserToolResultBlock,
 } from '../types.js'
 import { dropOrphanToolResults } from './orphan-tool-result.js'
+import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
@@ -290,7 +291,9 @@ export function convertToolsToResponsesShape(
     type: 'function',
     name: tool.name,
     description: tool.description,
-    parameters: tool.input_schema as Record<string, unknown>,
+    parameters: normalizeToolParametersForOpenAI(
+      tool.input_schema as Record<string, unknown>,
+    ),
     strict: false,
   }))
 }
@@ -358,16 +361,25 @@ function errorDetail(value: unknown): string | null {
 export function formatOpenAIAuthError(prefix: string, error: unknown): Error {
   if (!isRecord(error)) {
     return error instanceof Error
-      ? new Error(`${prefix}: ${error.message}`)
+      ? new Error(`${prefix}: ${error.message}`, { cause: error })
       : new Error(`${prefix}: ${String(error)}`)
   }
 
-  const status = typeof error.status === 'number' ? ` status=${error.status}` : ''
+  const statusNum = typeof error.status === 'number' ? error.status : undefined
+  const status = statusNum !== undefined ? ` status=${statusNum}` : ''
   const bodyDetail = errorDetail(error.error)
   const message =
     bodyDetail ??
     (typeof error.message === 'string' ? error.message : String(error))
-  return new Error(`${prefix}${status}: ${message}`)
+  // Carry the HTTP status as a structured field (not just text in the message)
+  // so isTransientError()'s httpStatusOf() can classify a deterministic 4xx as
+  // fatal instead of retrying it as a transient blip. `cause` preserves the
+  // original SDK error for the cause-chain walk and for debugging.
+  const wrapped = new Error(`${prefix}${status}: ${message}`, { cause: error })
+  if (statusNum !== undefined) {
+    ;(wrapped as Error & { status?: number }).status = statusNum
+  }
+  return wrapped
 }
 
 function mapResponsesUsage(usage: unknown): UsageStats {
