@@ -335,6 +335,18 @@ export async function query(params: QueryParams): Promise<{
     if (
       !config.memory.extractor.enabled
       || !config.memory.session.enabled
+      // Framework-internal roles (memoryExtractor / memoryCurator / skillCurator
+      // / skillConsolidator) are post-turn maintenance passes with no chainState,
+      // so childCtx.sessionId falls back to the triggering turn's sessionId
+      // (dispatched-agent.ts). Writing session-memory under that shared id
+      // clobbers the triggering session's own working-memory file — observed
+      // when an auto-dream skillCurator pass overwrote a still-monitoring
+      // background watcher's session-memory.md. These runs are one-shot,
+      // fresh-context, and never resumed, so their session-memory is never read
+      // back across runs; skip the write entirely rather than corrupt the
+      // triggering session. (A rare mid-run compaction falls back to the
+      // compaction summary itself for context.)
+      || rolePolicy.kind === 'internal'
     ) {
       return
     }

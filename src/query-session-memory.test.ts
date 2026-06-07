@@ -37,6 +37,18 @@ const TEST_ROLE: Role = {
   hooks: [],
 }
 
+// A framework-internal maintenance role (auto-dream curator family). Internal
+// roles run as post-turn passes under the triggering turn's sessionId, so they
+// must not write session-memory there.
+const INTERNAL_ROLE: Role = {
+  agentType: 'memoryCurator',
+  kind: 'internal',
+  whenToUse: 'test',
+  systemPrompt: 'test',
+  tools: ['*'],
+  hooks: [],
+}
+
 // One tool turn with heavy token usage so the 20000-token session-memory
 // threshold is crossed every turn — the 5-tool-call threshold is then the gate
 // that fires the update. The leading sleep spaces turns apart in wall-clock so
@@ -97,7 +109,11 @@ function makePingTool(onCall?: () => void) {
   })
 }
 
-function runQuery(sessionId: string, tools: ReturnType<typeof buildTool>[]) {
+function runQuery(
+  sessionId: string,
+  tools: ReturnType<typeof buildTool>[],
+  role: Role = TEST_ROLE,
+) {
   const ctx = createSessionContext({
     cwd: '/tmp',
     model: 'test-model',
@@ -110,7 +126,7 @@ function runQuery(sessionId: string, tools: ReturnType<typeof buildTool>[]) {
   })
   return runWithSessionContext(ctx, () =>
     query({
-      role: TEST_ROLE,
+      role,
       invocation: { systemPromptOverride: 'test system prompt' },
       messages: [createUserMessage('hello', null)],
       tools,
@@ -241,5 +257,45 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     ])
     assert.equal(result.stopReason, 'end_turn')
     assert.equal(updaterCalls, 0, 'a sub-threshold turn must not fire a session-memory update')
+  })
+
+  // Internal maintenance roles (memoryExtractor / memoryCurator / skillCurator /
+  // skillConsolidator) run as post-turn passes with no chainState, so their
+  // ALS sessionId falls back to the triggering turn's sessionId. Writing
+  // session-memory there clobbers the triggering session's own working-memory
+  // file (observed: an auto-dream skillCurator pass overwrote a still-monitoring
+  // background watcher's session-memory.md). These one-shot, never-resumed runs
+  // must not write session-memory at all.
+  it('skips session-memory for framework-internal roles even when thresholds are crossed', async () => {
+    let updaterCalls = 0
+    setSessionMemoryUpdaterForTest(() => {
+      updaterCalls += 1
+      return Promise.resolve({ updated: true })
+    })
+
+    // Baseline: the same threshold-crossing turns DO fire the updater for a
+    // non-internal role, proving the thresholds are actually crossed here.
+    fakeStreamChat([...Array.from({ length: 6 }, () => heavyToolUseTurn), endTurn])
+    await runQuery('feishu:dm:internal-baseline', [makePingTool()], TEST_ROLE)
+    assert.ok(
+      updaterCalls > 0,
+      'baseline: a non-internal role writes session-memory once thresholds are crossed',
+    )
+
+    // The fix: an internal role under identical threshold-crossing turns must
+    // not write session-memory (it shares the triggering session's id).
+    updaterCalls = 0
+    fakeStreamChat([...Array.from({ length: 6 }, () => heavyToolUseTurn), endTurn])
+    const result = await runQuery(
+      'feishu:dm:internal-clobber',
+      [makePingTool()],
+      INTERNAL_ROLE,
+    )
+    assert.equal(result.stopReason, 'end_turn')
+    assert.equal(
+      updaterCalls,
+      0,
+      'an internal role must not write session-memory under the triggering session',
+    )
   })
 })
