@@ -310,6 +310,60 @@ describe('BrainppCluster permission suggestions', () => {
   })
 })
 
+describe('BrainppCluster submit extraArgs guard', () => {
+  it('rejects boundary-overriding flags (mount/namespace/group) in extraArgs', async () => {
+    for (const evil of [
+      '--mount=gpfs://gpfs1/ailab-hs/other/secret:/stolen',
+      '--namespace=ailab-other',
+      '--charged-group=other',
+      '--group=other',
+    ]) {
+      await assert.rejects(
+        () => brainppClusterTool.call({
+          operation: 'submit',
+          name: 'demo',
+          image: 'image:tag',
+          command: 'echo hi',
+          extraArgs: [evil],
+        } as any, {
+          cwd: '/workspace',
+          abortSignal: new AbortController().signal,
+          runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+          config: fakeConfig(),
+        }),
+        /extraArgs may not set/,
+        `expected rejection for ${evil}`,
+      )
+    }
+  })
+})
+
+describe('BrainppCluster submit output redaction', () => {
+  it('does not leak the resolved gpfs workspace path to the model', async () => {
+    const result = await brainppClusterTool.call({
+      operation: 'submit',
+      name: 'demo',
+      image: 'image:tag',
+      command: 'echo hi',
+    } as any, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async () => ({ stdout: 'created\n', stderr: '', exitCode: 0 })),
+      config: fakeConfig(),
+    })
+
+    const out = result.output as ClusterJobOutput
+    if (out.operation === 'capacity') {
+      assert.fail('expected a submit (text) output')
+    }
+    // Pre-fix the resolved gpfs path leaked via output.command's --mount and via
+    // the rendered "Auto workspace mount:" line. The executed command still
+    // carries the real mount (the job needs it) — only the model-facing surfaces redact.
+    assert.doesNotMatch(out.command, /gpfs:\/\/gpfs1\/ailab-hs\/user/)
+    assert.doesNotMatch(formatClusterJobOutput(out), /gpfs:\/\/gpfs1\/ailab-hs\/user/)
+  })
+})
+
 function queue(
   name: string,
   capability: Record<string, string>,

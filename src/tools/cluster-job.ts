@@ -301,10 +301,13 @@ async function runSubmit(
     maxBufferBytes: 2 * 1024 * 1024,
   })
   const text = presentText(result.stdout)
-  const clusterSettings = context.config?.runtime.clusterSettings
+  const clusterSettings = (context.config ?? getConfig()).runtime.clusterSettings
   return {
     operation: 'submit',
-    command: redactInternalCommand(command),
+    // Redact the resolved gpfs workspace path: the agent never sees /workspace's
+    // real host/gpfs location (that is the whole point of auto-mount), and seeing
+    // it would let it construct sibling paths for an out-of-bounds mount.
+    command: redactInternalCommand(command.replaceAll(autoWorkspaceMount, '<your /workspace, auto-mounted>')),
     stdout: text.text,
     stderr: presentText(result.stderr).text,
     exitCode: result.exitCode,
@@ -528,11 +531,39 @@ function buildSubmitCommand(
     parts.push('--dry-run', 'true')
   }
   parts.push(`--mount=${shellQuote(autoWorkspaceMount)}`)
+  assertSafeExtraArgs(input.extraArgs ?? [])
   for (const arg of input.extraArgs ?? []) {
     parts.push(shellQuote(arg))
   }
   parts.push('--', 'bash', '-lc', shellQuote(input.command))
   return parts.join(' ')
+}
+
+/**
+ * extraArgs is a pass-through for flags the tool does not model — NOT a way to
+ * override the flags the tool owns for safety. Mounts (auto `/workspace` only),
+ * namespace, and charged group are tool-controlled; letting extraArgs carry
+ * `--mount=gpfs://<any path>` would re-open the arbitrary-gpfs-mount boundary
+ * that auto-mount closes (e.g. mounting another group's data or the secrets
+ * tree into a job). Reject those flags up front.
+ */
+const BLOCKED_EXTRA_ARG_FLAGS = new Set([
+  '--mount',
+  '--namespace',
+  '--charged-group',
+  '--group',
+])
+
+function assertSafeExtraArgs(extraArgs: readonly string[]): void {
+  for (const arg of extraArgs) {
+    const flag = arg.split('=', 1)[0].trim()
+    if (BLOCKED_EXTRA_ARG_FLAGS.has(flag)) {
+      throw new Error(
+        `extraArgs may not set ${flag}. Mounts, namespace, and charged group are controlled by the tool; ` +
+        `/workspace is auto-mounted and other paths are out of scope.`,
+      )
+    }
+  }
 }
 
 function pushFlagValue(
@@ -547,7 +578,7 @@ function pushFlagValue(
 }
 
 function buildAutoWorkspaceMount(context: ToolCallContext): string {
-  const clusterSettings = context.config?.runtime.clusterSettings
+  const clusterSettings = (context.config ?? getConfig()).runtime.clusterSettings
   if (!clusterSettings) {
     throw new Error('runtime.clusterSettings.gpfsMounts is required for BrainppCluster submit auto-mount.')
   }
@@ -836,7 +867,7 @@ export function formatClusterJobOutput(output: ClusterJobOutput): string {
   if (output.group) lines.push(`Group: ${output.group}`)
   if (output.taskLane) lines.push(`Task lane: ${output.taskLane}`)
   if (output.mounts?.autoWorkspace) {
-    lines.push(`Auto workspace mount: ${output.mounts.autoWorkspace}`)
+    lines.push('Auto workspace mount: your /workspace is mounted into the job at /workspace')
   }
   if (output.resources) {
     const resources = [
