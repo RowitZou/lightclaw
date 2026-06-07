@@ -202,8 +202,24 @@ export function serializeFrontmatter(
     lines.push(`${key}: ${serializeValue(value)}`)
   }
 
-  lines.push('---', '', body.trimEnd())
+  lines.push('---', '', stripLeadingMemoryFrontmatter(body).trimEnd())
   return `${lines.join('\n').trimEnd()}\n`
+}
+
+/** Strip a leading frontmatter block from a memory body before we prepend our
+ *  own. Callers sometimes pass a `body` that already opens with a memory
+ *  frontmatter block — most notably MemoryWriteAt during consolidation, where
+ *  the curator copies a source file verbatim while merging. Without this the
+ *  serialized file carries two stacked `---...---` headers and the second one
+ *  leaks into the rendered body. Only strip when the leading block is itself a
+ *  memory frontmatter (carries `type`/`description`), so content that
+ *  legitimately opens with a `---` thematic break is left intact. */
+function stripLeadingMemoryFrontmatter(body: string): string {
+  const parsed = parseFrontmatter(body)
+  if ('type' in parsed.frontmatter || 'description' in parsed.frontmatter) {
+    return parsed.body
+  }
+  return body
 }
 
 export async function scanMemoryFiles(memoryDir: string): Promise<MemoryEntry[]> {

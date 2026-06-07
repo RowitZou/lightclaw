@@ -410,6 +410,25 @@ async function runLogs(
   const result = await execClusterCommand(command, context, {
     maxBufferBytes: 2 * 1024 * 1024,
   })
+  // Defense-in-depth for the isStartingPhase guard above: even with correct
+  // phase parsing, a pod can be between scheduled and log-readable when the
+  // upstream `rjob logs` CLI throws (observed: `TypeError: 'NoneType' object
+  // is not iterable`). Surfacing that raw Python traceback reads to the model
+  // as a hard failure; treat a not-ready crash as the transient still-starting
+  // case instead so the model retries rather than giving up on the job.
+  if (result.exitCode !== 0 && looksLikeLogsNotReady(result.stdout, result.stderr)) {
+    return {
+      operation: 'logs',
+      command: 'cluster logs',
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      truncated: false,
+      phase,
+      status: 'still_starting',
+      target: input.job,
+    }
+  }
   const text = presentText(result.stdout)
   return {
     operation: 'logs',
@@ -421,6 +440,15 @@ async function runLogs(
     phase,
     target: input.job,
   }
+}
+
+/** The upstream cluster CLI does not handle a not-yet-readable log stream
+ *  gracefully — it crashes (`TypeError: 'NoneType' object is not iterable`)
+ *  or reports no pod rather than returning empty. Detect that shape so the
+ *  logs handler can present it as a transient "still starting" state. */
+function looksLikeLogsNotReady(stdout: string, stderr: string): boolean {
+  const text = `${stdout}\n${stderr}`
+  return /NoneType\b|is not iterable|no pods?\b|no log(?:s| stream)|not started/i.test(text)
 }
 
 async function runEvents(
@@ -819,11 +847,23 @@ function parseListJobs(stdout: string): string[] {
 }
 
 function parseJobPhase(stdout: string): string | undefined {
-  const phaseLine = stdout.match(/\b(?:phase|status)\s*[:=]\s*([A-Za-z_ -]+)/i)?.[1]
+  // Strip `{...}` / `[...]` spans before matching. The cluster `get` summary
+  // embeds a replica-count dict like
+  // `{'active': 0, 'succeeded': 0, 'failed': 0, 'pending': 1}`; a bare keyword
+  // scan would latch onto `succeeded`/`failed` *inside* that dict and
+  // misreport an Inqueue job (which carries no top-level status keyword the
+  // older list recognized) as SUCCEEDED. That false terminal then defeats the
+  // isStartingPhase guard in runLogs and drives a logs fetch against a pod that
+  // has not started — the upstream CLI then throws. The authoritative status
+  // word (`Inqueue` / `Running` / `Failed` / `Succeeded`) lives outside braces.
+  const scanText = stdout.replace(/[{[][^{}[\]]*[}\]]/g, ' ')
+  const phaseLine = scanText.match(/\b(?:phase|status)\s*[:=]\s*([A-Za-z_ -]+)/i)?.[1]
   if (phaseLine) {
     return normalizePhase(phaseLine)
   }
-  const known = stdout.match(/\b(RUNNING|STARTING|PENDING|SCHEDULING|CREATING|SUCCEEDED|SUCCESS|FAILED|STOPPED|DELETED)\b/i)?.[1]
+  const known = scanText.match(
+    /\b(RUNNING|STARTING|PENDING|SCHEDULING|CREATING|INQUEUE|QUEUED|SUCCEEDED|SUCCESS|FAILED|STOPPED|DELETED)\b/i,
+  )?.[1]
   return known ? normalizePhase(known) : undefined
 }
 
@@ -832,7 +872,7 @@ function normalizePhase(value: string): string {
 }
 
 function isStartingPhase(phase: string): boolean {
-  return ['STARTING', 'PENDING', 'SCHEDULING', 'CREATING'].includes(phase.toUpperCase())
+  return ['STARTING', 'PENDING', 'SCHEDULING', 'CREATING', 'INQUEUE', 'QUEUED'].includes(phase.toUpperCase())
 }
 
 function truncateText(value: string): { text: string; truncated: boolean } {

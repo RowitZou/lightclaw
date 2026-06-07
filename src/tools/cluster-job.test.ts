@@ -66,6 +66,79 @@ describe('BrainppCluster logs', () => {
   })
 })
 
+describe('BrainppCluster phase parsing', () => {
+  // Real `rjob get` shape for a queued job: the status word `Inqueue` is the
+  // only top-level signal, and the replica-count dict carries `'succeeded': 0`.
+  const inqueueStdout =
+    "06-07 22:34:30 [INFO] cluster demo-q (showname=demo-q): Inqueue\n" +
+    "06-07 22:34:30 [INFO]   |- task t0: 1 replicas " +
+    "{'active': 0, 'succeeded': 0, 'failed': 0, 'created_failed': 0, 'pending': 1, 'stopped': 0}\n"
+
+  it('does not misread an Inqueue job as SUCCEEDED from the replica-count dict', async () => {
+    const result = await brainppClusterTool.call({
+      operation: 'get',
+      job: 'demo-q',
+    }, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async () => ({ stdout: inqueueStdout, stderr: '', exitCode: 0 })),
+    })
+
+    const output = result.output as Exclude<ClusterJobOutput, CapacityOutput>
+    assert.notEqual(output.phase, 'SUCCEEDED')
+    assert.equal(output.phase, 'INQUEUE')
+  })
+
+  it('treats a queued job as still starting and never fetches logs', async () => {
+    const commands: string[] = []
+    const result = await brainppClusterTool.call({
+      operation: 'logs',
+      job: 'demo-q',
+      tailLines: 50,
+    }, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        commands.push(input.command)
+        return { stdout: inqueueStdout, stderr: '', exitCode: 0 }
+      }),
+    })
+
+    const output = result.output as Exclude<ClusterJobOutput, CapacityOutput>
+    assert.equal(commands.length, 1, 'only the get probe should run, no logs fetch')
+    assert.equal(output.status, 'still_starting')
+  })
+
+  it('presents an upstream not-ready logs crash as still starting, not a hard failure', async () => {
+    const runningStdout =
+      "06-07 22:39:38 [INFO] cluster demo-r (showname=demo-r): Running\n" +
+      "06-07 22:39:38 [INFO]   |- task t0: 1 replicas {'active': 1, 'succeeded': 0, 'failed': 0}\n"
+    const result = await brainppClusterTool.call({
+      operation: 'logs',
+      job: 'demo-r',
+      tailLines: 50,
+    }, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        if (/rjob get/.test(input.command)) {
+          return { stdout: runningStdout, stderr: '', exitCode: 0 }
+        }
+        return {
+          stdout: "Traceback (most recent call last):\n  ...\n" +
+            "TypeError: 'NoneType' object is not iterable\n",
+          stderr: '',
+          exitCode: 1,
+        }
+      }),
+    })
+
+    const output = result.output as Exclude<ClusterJobOutput, CapacityOutput>
+    assert.equal(output.status, 'still_starting')
+    assert.equal(output.exitCode, 0)
+  })
+})
+
 describe('BrainppCluster capacity group resolution', () => {
   it('scopes to config clusterSettings.namespace, not ambient env or a silent default', async () => {
     const payload = JSON.stringify({

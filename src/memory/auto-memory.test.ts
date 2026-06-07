@@ -9,6 +9,7 @@ import {
   loadMemoryIndex,
   parseFrontmatter,
   scanMemoryFilesInDirs,
+  serializeFrontmatter,
   writeMemoryFile,
 } from './auto-memory.js'
 import { resolveReadableMemoryDirsForRole } from './scope.js'
@@ -156,5 +157,36 @@ describe('parseFrontmatter', () => {
     )
     assert.equal(frontmatter.description, 'hello world')
     assert.equal(frontmatter.name, 'foo')
+  })
+})
+
+describe('serializeFrontmatter frontmatter dedup', () => {
+  const countDelimiters = (out: string): number =>
+    out.split('\n').filter(line => line.trim() === '---').length
+
+  it('does not stack a second frontmatter block when the body already carries one', () => {
+    // Reproduces the MemoryWriteAt consolidation double-frontmatter: the caller
+    // passes a body that already opens with its own type/description block.
+    const body = '---\ntype: project\ndescription: existing one\n---\n\nThe real memory body.'
+    const out = serializeFrontmatter({ type: 'project', description: 'canonical one' }, body)
+
+    assert.equal(countDelimiters(out), 2, 'expected exactly one opening + one closing delimiter')
+    assert.match(out, /description: canonical one/)
+    assert.doesNotMatch(out, /description: existing one/)
+    assert.match(out, /The real memory body\./)
+  })
+
+  it('leaves a body without frontmatter untouched', () => {
+    const out = serializeFrontmatter({ type: 'project', description: 'x' }, 'Plain body, no frontmatter.')
+    assert.equal(countDelimiters(out), 2)
+    assert.match(out, /Plain body, no frontmatter\./)
+  })
+
+  it('does not strip a leading thematic-break that is not memory frontmatter', () => {
+    // A body that opens with `---` but no type/description must be preserved —
+    // only a genuine duplicated memory frontmatter block is stripped.
+    const body = '---\nsome heading rule\n---\nkept body'
+    const out = serializeFrontmatter({ type: 'project', description: 'x' }, body)
+    assert.match(out, /some heading rule/)
   })
 })
