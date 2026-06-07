@@ -557,7 +557,30 @@ function buildExtraMounts(
   paths: readonly string[],
   clusterSettings: NonNullable<ReturnType<typeof getConfig>['runtime']['clusterSettings']>,
 ): string[] {
-  return paths.map(path => buildGpfsMountStringFromRules(path, path, clusterSettings))
+  return paths.map(path => translateGpfsMount(path, path, clusterSettings, path))
+}
+
+/**
+ * Translate a path to a `<gpfs URI>:<workerPath>` mount string, re-messaging the
+ * underlying helper's failure so the model never sees internal backend / config
+ * identifiers (the raw helper names `rlaunch` and
+ * `runtime.clusterSettings.gpfsMounts` — the same class of internal name the rest
+ * of this tool deliberately redacts via `redactCli`). Keep the genuinely useful
+ * part — the set of valid cluster storage roots — so the agent can fix its path.
+ */
+function translateGpfsMount(
+  hostPath: string,
+  workerPath: string,
+  clusterSettings: NonNullable<ReturnType<typeof getConfig>['runtime']['clusterSettings']>,
+  displayName: string,
+): string {
+  try {
+    return buildGpfsMountStringFromRules(hostPath, workerPath, clusterSettings)
+  } catch {
+    const roots = clusterSettings.gpfsMounts.map(rule => rule.hostPrefix).filter(Boolean)
+    const rootHint = roots.length > 0 ? ` (known cluster storage roots: ${roots.join(', ')})` : ''
+    throw new Error(`Cannot mount ${displayName}: it is not under a known cluster storage root${rootHint}.`)
+  }
 }
 
 /**
@@ -608,7 +631,7 @@ function buildAutoWorkspaceMount(context: ToolCallContext): string {
   if (!workspaceHostPath) {
     throw new Error('Unable to resolve runtime /workspace to a host path for BrainppCluster submit auto-mount.')
   }
-  return buildGpfsMountStringFromRules(workspaceHostPath, '/workspace', clusterSettings)
+  return translateGpfsMount(workspaceHostPath, '/workspace', clusterSettings, 'your /workspace')
 }
 
 async function requireDeleteConfirmation(

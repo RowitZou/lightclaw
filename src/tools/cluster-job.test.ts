@@ -306,7 +306,14 @@ describe('BrainppCluster submit', () => {
         runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 }), '/tmp/lightclaw'),
         config: fakeConfig(),
       }),
-      /runtime\.clusterSettings\.gpfsMounts/,
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        assert.match(message, /Cannot mount your \/workspace/)
+        // Same anti-leak property as the extra-mounts path: no internal names.
+        assert.doesNotMatch(message, /rlaunch/i)
+        assert.doesNotMatch(message, /runtime\.clusterSettings/)
+        return true
+      },
     )
   })
 })
@@ -429,7 +436,7 @@ describe('BrainppCluster submit extraArgs guard', () => {
 })
 
 describe('BrainppCluster submit mounts', () => {
-  it('rejects extra mount paths outside configured GPFS prefixes', async () => {
+  it('rejects extra mount paths outside configured GPFS prefixes with a clean, leak-free message', async () => {
     await assert.rejects(
       () => brainppClusterTool.call({
         operation: 'submit',
@@ -443,7 +450,17 @@ describe('BrainppCluster submit mounts', () => {
         runtime: fakeRuntime(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
         config: fakeConfig(),
       }),
-      /runtime\.clusterSettings\.gpfsMounts/,
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        // Names the bad path and the valid roots so the agent can self-correct.
+        assert.match(message, /Cannot mount \/not\/shared\/data/)
+        assert.match(message, /known cluster storage root/)
+        // Must NOT leak internal backend / config identifiers to the model
+        // (same class of internal name the rest of the tool redacts via redactCli).
+        assert.doesNotMatch(message, /rlaunch/i)
+        assert.doesNotMatch(message, /runtime\.clusterSettings/)
+        return true
+      },
     )
   })
 })
