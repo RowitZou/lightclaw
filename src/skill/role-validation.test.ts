@@ -233,7 +233,7 @@ test('coder and reviewer no longer expose scaffold verification skills', () => {
 
   assert.ok(coder)
   assert.ok(reviewer)
-  assert.deepEqual(coder.skills, ['remember', 'coding-workflow', 'brainpp-batch-job'])
+  assert.deepEqual(coder.skills, ['remember', 'coding-workflow', 'brainpp-batch-job', 'build-environment'])
   assert.deepEqual(reviewer.skills, ['remember', 'pre-delivery-review-workflow'])
 })
 

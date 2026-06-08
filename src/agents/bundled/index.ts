@@ -18,7 +18,7 @@ export const BUNDLED_AGENTS: Role[] = [
     name: 'main',
     whenToUse: 'Primary user-facing orchestrator.',
     tools: ['*'],
-    skills: ['remember', 'skillify', 'delivery-orchestration', 'brainpp-batch-job'],
+    skills: ['remember', 'skillify', 'delivery-orchestration', 'brainpp-batch-job', 'build-environment'],
     mcpServers: ['*'],
     // Main reaches every worker, including user-defined roles loaded from
     // `<lightclawHome>/roles/<name>/ROLE.md`. `isDispatchTargetReachable`
@@ -42,7 +42,7 @@ export const BUNDLED_AGENTS: Role[] = [
     // are listed alongside Dispatch as a self-documenting "dispatcher
     // capability" cluster even though wildcard would also reach them.
     tools: ['*', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['remember', 'brainpp-batch-job'],
+    skills: ['remember', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
@@ -116,7 +116,7 @@ export const BUNDLED_AGENTS: Role[] = [
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
     tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'UpdateDispatch'],
-    skills: ['remember', 'coding-workflow', 'brainpp-batch-job'],
+    skills: ['remember', 'coding-workflow', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
     kind: 'worker',
