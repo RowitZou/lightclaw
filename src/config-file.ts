@@ -36,6 +36,10 @@ export type ConfigFileModel = {
   upstreamModel?: string
   /** Optional Responses API reasoning effort for reasoning-capable models. */
   reasoningEffort?: string
+  /** Optional per-model output-token ceiling (`max_tokens`). Falls back to the
+   *  global `maxOutputTokens`. Lives per-model because the hard API ceiling is
+   *  model-specific (e.g. Sonnet/Haiku 64K vs Opus 128K). */
+  maxOutputTokens?: number
 }
 
 export type ConfigFilePathsSection = {
@@ -193,6 +197,9 @@ export type ConfigFileShape = {
     maxTurns?: unknown
   }>
   contextWindow?: number
+  /** Global default output-token ceiling (`max_tokens`) for the main agent
+   *  loop. Per-model `models.<name>.maxOutputTokens` overrides it. */
+  maxOutputTokens?: number
   /** Permission policy mode. Top-level flat field (not nested) because the
    *  permission concept currently has only this one knob — `ruleFiles` /
    *  `auditLog` are paths and live under `paths.*`. */

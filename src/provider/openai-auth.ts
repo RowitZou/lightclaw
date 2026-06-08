@@ -504,6 +504,12 @@ export function createOpenAIAuthProvider(
         ...(params.reasoningEffort
           ? { reasoning: { effort: params.reasoningEffort, summary: 'auto' } }
           : {}),
+        // Output ceiling, unified with the anthropic / openai providers. The
+        // caller (api.ts) always resolves a value, so Codex no longer runs
+        // uncapped against the model default.
+        ...(params.maxTokens !== undefined
+          ? { max_output_tokens: params.maxTokens }
+          : {}),
         stream: true,
         store: false,
         prompt_cache_key: getSessionId(),

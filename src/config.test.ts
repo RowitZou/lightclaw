@@ -37,6 +37,7 @@ const ENV_KEYS = [
   'LIGHTCLAW_DEFERRED_LOADING_THRESHOLD',
   'LIGHTCLAW_PERMISSION_MODE',
   'LIGHTCLAW_PERMISSION_CEILING',
+  'LIGHTCLAW_MAX_OUTPUT_TOKENS',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -121,6 +122,55 @@ describe('config: endpoints + models registry', () => {
       },
     })
     assert.throws(() => getConfig(), /reasoningEffort must be one of/)
+  })
+
+  it('defaults maxOutputTokens to 64000 and parses per-model override', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' },
+        opus: {
+          endpoint: 'a',
+          schema: 'anthropic',
+          upstreamModel: 'claude-opus-4-7',
+          maxOutputTokens: 128000,
+        },
+      },
+      defaultModel: 'sonnet',
+    })
+    const cfg = getConfig()
+    assert.equal(cfg.maxOutputTokens, 64000)
+    assert.equal(cfg.models.sonnet.maxOutputTokens, undefined)
+    assert.equal(cfg.models.opus.maxOutputTokens, 128000)
+  })
+
+  it('file-level maxOutputTokens overrides the default', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      maxOutputTokens: 32000,
+    })
+    assert.equal(getConfig().maxOutputTokens, 32000)
+  })
+
+  it('LIGHTCLAW_MAX_OUTPUT_TOKENS overrides file + default', () => {
+    process.env.LIGHTCLAW_MAX_OUTPUT_TOKENS = '100000'
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      maxOutputTokens: 32000,
+    })
+    assert.equal(getConfig().maxOutputTokens, 100000)
+  })
+
+  it('rejects invalid per-model maxOutputTokens', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        bad: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x', maxOutputTokens: -5 },
+      },
+    })
+    assert.throws(() => getConfig(), /maxOutputTokens must be a positive integer/)
   })
 
   it('throws when defaultModel is not configured', () => {

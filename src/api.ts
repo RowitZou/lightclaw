@@ -38,6 +38,25 @@ export interface ApiLogContext {
   attempt?: number
 }
 
+/**
+ * Resolve the wire `max_tokens` for one streamChat call. Precedence:
+ *   1. caller-explicit (`explicit`) — sub-LLM callers (compact / recall /
+ *      session-memory / web-fetch summarize) pass their own small caps and
+ *      must keep them;
+ *   2. per-model ceiling (`models.<name>.maxOutputTokens`) — lets Opus push to
+ *      128K while Sonnet stays at the global default;
+ *   3. global `config.maxOutputTokens` (default 64000).
+ * The main agent loop passes no explicit value, so it picks up (2) or (3) —
+ * the fix for the old hardcoded provider fallback of 8192.
+ */
+export function resolveWireMaxTokens(
+  explicit: number | undefined,
+  entry: { maxOutputTokens?: number },
+  config: { maxOutputTokens: number },
+): number {
+  return explicit ?? entry.maxOutputTokens ?? config.maxOutputTokens
+}
+
 export async function* streamChat(
   params: StreamChatParams & {
     config?: LightClawConfig
@@ -119,6 +138,7 @@ export async function* streamChat(
     messages: finalizedMessages,
     model: entry.upstreamModel,
     reasoningEffort: rest.reasoningEffort ?? entry.reasoningEffort,
+    maxTokens: resolveWireMaxTokens(rest.maxTokens, entry, config),
   }
 
   const logger = getActiveApiLogger()

@@ -327,6 +327,9 @@ export type ModelEntry = {
   upstreamModel: string
   /** Optional Responses API reasoning effort. */
   reasoningEffort?: ReasoningEffort
+  /** Optional per-model output-token ceiling. Overrides the global
+   *  `maxOutputTokens`; falls back to it when unset. */
+  maxOutputTokens?: number
 }
 
 export type LightClawConfig = {
@@ -344,6 +347,9 @@ export type LightClawConfig = {
   endpoints: Record<string, EndpointConfig>
   roles?: Record<string, RoleConfig>
   contextWindow: number
+  /** Global output-token ceiling (`max_tokens`) for the main agent loop, used
+   *  when a model has no per-model `maxOutputTokens`. */
+  maxOutputTokens: number
   /** Permission policy mode. Flat top-level field — the permission concept
    *  has only this single knob (rule files / audit log live under paths). */
   permissionMode: PermissionMode
@@ -427,6 +433,14 @@ type ConfigFileCluster = NonNullable<
 export type RuntimeDriver = 'brainpp' | null
 
 const DEFAULT_CONTEXT_WINDOW = 200_000
+// Output-token ceiling for the main agent loop. 64K is Anthropic's documented
+// streaming default and sits at/under the hard ceiling of every model in the
+// default deployment (Sonnet 4.6 / Haiku 4.5 = 64K, Opus 4.x = 128K). LightClaw
+// always streams, so there is no SDK HTTP-timeout risk from a large value; it is
+// a ceiling the model never sees, billed at actual output, so raising it only
+// stops mid-turn truncation. Push a single model past 64K via per-model
+// `models.<name>.maxOutputTokens` (e.g. Opus → 128000).
+const DEFAULT_MAX_OUTPUT_TOKENS = 64_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
 const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000
@@ -636,6 +650,19 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
   )
 }
 
+function parseMaxOutputTokens(
+  value: unknown,
+  label: string,
+): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer.`)
+  }
+  return value
+}
+
 function parseDeferredLoadingMode(value: string | undefined): ToolCatalogConfig['deferredLoading'] | undefined {
   if (value === undefined) {
     return undefined
@@ -740,11 +767,16 @@ function resolveModels(
       )
     }
     const reasoningEffort = parseReasoningEffort(raw.reasoningEffort)
+    const maxOutputTokens = parseMaxOutputTokens(
+      raw.maxOutputTokens,
+      `models["${displayName}"].maxOutputTokens`,
+    )
     out[displayName] = {
       endpoint,
       schema,
       upstreamModel,
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     }
   }
   return out
@@ -1252,6 +1284,14 @@ export function getConfig(): LightClawConfig {
         DEFAULT_CONTEXT_WINDOW,
     ),
   )
+  const maxOutputTokens = Math.max(
+    1,
+    Math.floor(
+      parseNumber(process.env.LIGHTCLAW_MAX_OUTPUT_TOKENS) ??
+        fileConfig.maxOutputTokens ??
+        DEFAULT_MAX_OUTPUT_TOKENS,
+    ),
+  )
 
   // — compact —
   const autoCompact =
@@ -1684,6 +1724,7 @@ export function getConfig(): LightClawConfig {
     endpoints,
     ...(roles ? { roles } : {}),
     contextWindow,
+    maxOutputTokens,
     permissionMode,
     permissionCeiling,
     apiLogsEnabled,
