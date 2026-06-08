@@ -1009,6 +1009,54 @@ describe('formatChannelUserText', () => {
     assert.equal(text, 'hello')
   })
 
+  it('falls back to (no text) for an empty DM message so no empty content block reaches the wire', async () => {
+    // Regression: a DM whose only content was the bot @-mention (stripped
+    // before this function runs) arrives here with empty `text` and gets no
+    // `[sender]` prefix (DMs don't). The pre-fix branch returned '', which
+    // became a {type:'text', text:''} block and a provider 400 on empty
+    // content. The guard must yield a non-empty, non-whitespace string.
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => '张三'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_dm',
+        senderOpenId: 'ou_alice',
+        chatType: 'p2p',
+        messageId: 'om',
+        text: '',
+      },
+      null,
+    )
+
+    assert.equal(text, '(no text)')
+    assert.ok(text.trim().length > 0, 'empty inbound must not produce empty model-facing text')
+  })
+
+  it('keeps the group sender prefix when the body is empty (no (no text) fallback)', async () => {
+    // The empty-mention group path relies on the `[sender] ` prefix making the
+    // text non-empty, so the (no text) guard must NOT fire for groups.
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => '张三'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_group',
+        senderOpenId: 'ou_alice',
+        chatType: 'group',
+        messageId: 'om',
+        text: '',
+      },
+      null,
+    )
+
+    assert.equal(text, '[张三] ')
+  })
+
   it('renders quoted text before the current message', async () => {
     const strategy = installFakeStrategy('feishu')
     strategy.resolveSenderName = async () => 'Bob'

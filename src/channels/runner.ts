@@ -2210,7 +2210,18 @@ export async function formatChannelUserText(
       ? [materialized]
       : []
   if (list.length === 0) {
-    return `${prefix}${body}`
+    // A message that passed the inbound gate can still normalize to empty
+    // text: a DM whose only content was the bot @-mention (stripped before we
+    // get here) leaves `body` empty, and DMs get no `[sender]` prefix to
+    // backfill it the way groups do (see the prefix above). Returning '' here
+    // would put a `{type:'text', text:''}` block on the wire via
+    // createUserMessage, which Anthropic / OpenAI reject with a 400 on empty
+    // content. Fall back to the same `(no text)` breadcrumb the attachment
+    // branch below uses so the model still gets a turn and replies naturally
+    // (the empty-mention greeting path), matching group behavior. `.trim()`
+    // also guards a whitespace-only residue.
+    const text = `${prefix}${body}`
+    return text.trim().length > 0 ? text : '(no text)'
   }
   // Reference-identity Set so we can label each path inline-vs-pending in O(1).
   // The encoder hands back the same MaterializedAttachment objects it received.
