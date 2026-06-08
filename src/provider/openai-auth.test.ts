@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildResponsesRequestBody,
   convertMessagesToResponsesInput,
   convertToolsToResponsesShape,
   createOpenAIAuthProvider,
@@ -815,5 +816,36 @@ describe('openai-auth: recycleConnections (transient-retry hygiene)', () => {
     // The `if (proxyDispatcher)` guard inside recycleConnections must
     // tolerate `undefined`; without the guard, `undefined.close()` throws.
     assert.doesNotThrow(() => provider.recycleConnections?.())
+  })
+})
+
+describe('openai-auth: buildResponsesRequestBody', () => {
+  it('never forwards max_output_tokens to the Codex wire, even when a cap is given', () => {
+    // Regression: the Codex ChatGPT-backend Responses endpoint rejects
+    // `max_output_tokens` with a bare 400 (no body). api.ts always resolves a
+    // cap now (global maxOutputTokens default), so this provider receives a
+    // maxTokens — it must drop it rather than put it on the wire. Pre-fix the
+    // builder emitted `max_output_tokens: 64000` and every gpt-5.5 turn 400'd.
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      reasoningEffort: 'high',
+      maxTokens: 64000,
+      promptCacheKey: 'feishu:dm:oc_test',
+    })
+
+    assert.ok(
+      !('max_output_tokens' in body),
+      'Codex body must not carry max_output_tokens',
+    )
+    // The rest of the request still has to be well-formed.
+    assert.equal(body.model, 'gpt-5.5')
+    assert.equal(body.instructions, 'sys')
+    assert.equal(body.stream, true)
+    assert.equal(body.store, false)
+    assert.equal(body.prompt_cache_key, 'feishu:dm:oc_test')
+    assert.deepEqual(body.reasoning, { effort: 'high', summary: 'auto' })
   })
 })

@@ -412,6 +412,47 @@ export type OpenAIAuthProviderOptions = {
   authProviderName?: string
 }
 
+/**
+ * Build the Codex Responses API request body. Exported for test.
+ *
+ * `maxTokens` is accepted so the signature mirrors the other providers, but
+ * it is intentionally NOT forwarded as `max_output_tokens`: the Codex
+ * ChatGPT-backend Responses endpoint rejects that field with a bare
+ * `400 (no body)` (2026-06-08 incident — every gpt-5.5 turn 400'd the moment
+ * the global maxOutputTokens default started reaching this provider). Codex
+ * ran uncapped for months without truncation problems; the backend enforces
+ * its own output ceiling. The other providers (anthropic / openai) still send
+ * their cap — only this Codex path drops it.
+ */
+export function buildResponsesRequestBody(args: {
+  model: string
+  instructions: string
+  input: ResponseCreateParamsStreaming['input']
+  tools: ResponseCreateParamsStreaming['tools']
+  reasoningEffort?: StreamChatParams['reasoningEffort']
+  maxTokens?: number
+  promptCacheKey: string
+}): ResponseCreateParamsStreaming {
+  const hasTools = Array.isArray(args.tools) && args.tools.length > 0
+  return {
+    model: args.model,
+    instructions: args.instructions,
+    input: args.input,
+    ...(hasTools
+      ? { tools: args.tools, tool_choice: 'auto', parallel_tool_calls: true }
+      : {}),
+    ...(args.reasoningEffort
+      ? { reasoning: { effort: args.reasoningEffort, summary: 'auto' } }
+      : {}),
+    // NB: max_output_tokens is deliberately NOT set here — see the function
+    // doc comment. The Codex Responses backend 400s on it; `args.maxTokens`
+    // is accepted only to keep the signature uniform with the other providers.
+    stream: true,
+    store: false,
+    prompt_cache_key: args.promptCacheKey,
+  }
+}
+
 export function createOpenAIAuthProvider(
   endpoint: OAuthEndpoint,
   opts: OpenAIAuthProviderOptions = {},
@@ -494,26 +535,15 @@ export function createOpenAIAuthProvider(
       // a single ~1.5K block (2026-05-26 dogfood). Stickiness across
       // OpenAI's per-shard caches is anchored separately via the
       // `prompt_cache_key` field.
-      const body: ResponseCreateParamsStreaming = {
+      const body = buildResponsesRequestBody({
         model: params.model,
         instructions: params.system,
         input,
-        ...(tools.length > 0
-          ? { tools, tool_choice: 'auto', parallel_tool_calls: true }
-          : {}),
-        ...(params.reasoningEffort
-          ? { reasoning: { effort: params.reasoningEffort, summary: 'auto' } }
-          : {}),
-        // Output ceiling, unified with the anthropic / openai providers. The
-        // caller (api.ts) always resolves a value, so Codex no longer runs
-        // uncapped against the model default.
-        ...(params.maxTokens !== undefined
-          ? { max_output_tokens: params.maxTokens }
-          : {}),
-        stream: true,
-        store: false,
-        prompt_cache_key: getSessionId(),
-      }
+        tools,
+        reasoningEffort: params.reasoningEffort,
+        maxTokens: params.maxTokens,
+        promptCacheKey: getSessionId(),
+      })
 
       let stream: Awaited<ReturnType<typeof client.responses.create>>
       try {
