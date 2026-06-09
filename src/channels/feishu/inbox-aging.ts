@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { listActiveCanonicalUsers } from '../../identity/store.js'
 import { workspaceFor } from '../../identity/paths.js'
+import { sweepAllTerminalTaskRuns } from '../../taskrun/store.js'
 
 const DEFAULT_TTL_DAYS = 7
 const DEFAULT_INTERVAL_MINUTES = 60
@@ -256,6 +257,24 @@ export async function runInboxAgingSweepOnce(
       ? `[inbox-aging] swept ${users.length} user(s), removed ${totalRemoved} file(s) (${formatBytes(totalBytes)})\n`
       : `[inbox-aging] swept ${users.length} user(s), 0 removed\n`,
   )
+
+  // Piggyback durable TaskRun retention on the same per-user interval. Terminal
+  // run dirs older than the inbox TTL are reaped; crashed (non-terminal) runs
+  // are preserved for later reconciliation. Best-effort — a sweep failure must
+  // never disturb the inbox aging result.
+  try {
+    const { removed } = await sweepAllTerminalTaskRuns({
+      ttlMs: config.ttlDays * 24 * 60 * 60 * 1000,
+    })
+    if (removed > 0) {
+      process.stderr.write(`[taskrun] retention swept ${removed} terminal run(s)\n`)
+    }
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] retention sweep failed: ${error instanceof Error ? error.message : String(error)}\n`,
+    )
+  }
+
   return results
 }
 

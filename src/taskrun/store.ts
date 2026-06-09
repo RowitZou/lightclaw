@@ -318,3 +318,36 @@ export async function sweepTerminalTaskRuns(
   }))
   return { removed }
 }
+
+// Enumerate every per-user identity dir and sweep its terminal task runs. This
+// is the retention entry point the per-user maintenance lane (inbox-aging) calls
+// on its interval; non-terminal (crashed) runs are always preserved by the
+// per-user sweep so a later watchdog can still reconcile them. Best-effort per
+// user — one user's unreadable taskruns dir never aborts the rest.
+export async function sweepAllTerminalTaskRuns(
+  options: SweepTaskRunsOptions = {},
+): Promise<{ removed: number }> {
+  const usersRoot = path.join(lightclawHome(), 'identity', 'per-user')
+  let users
+  try {
+    users = await readdir(usersRoot, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 }
+    throw error
+  }
+  let removed = 0
+  await Promise.all(users.map(async user => {
+    if (!user.isDirectory()) return
+    try {
+      const result = await sweepTerminalTaskRuns(user.name, options)
+      removed += result.removed
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun] retention sweep failed for ${user.name}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
+  }))
+  return { removed }
+}

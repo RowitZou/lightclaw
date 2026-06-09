@@ -11,6 +11,7 @@ import {
   listTaskRuns,
   markFinished,
   markStarted,
+  sweepAllTerminalTaskRuns,
   sweepTerminalTaskRuns,
 } from './store.js'
 
@@ -121,6 +122,60 @@ describe('TaskRun store', () => {
       assert.equal(result.removed, 1)
       assert.equal(await getTaskRun(done.id), null)
       assert.notEqual(await getTaskRun(running.id), null)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('sweeps terminal runs across every user and preserves crashed runs', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-sweep-all-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const aliceDone = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Alice done task',
+        chainId: 'chain-a',
+        depth: 1,
+        now: 1,
+      })
+      await markFinished(aliceDone.id, { ok: true, summary: 'done' }, 2, 'alice')
+      const bobDone = await createTaskRun({
+        ownerCanonicalUser: 'bob',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Bob done task',
+        chainId: 'chain-b',
+        depth: 1,
+        now: 1,
+      })
+      await markFinished(bobDone.id, { ok: false, error: 'boom' }, 2, 'bob')
+      const bobCrashed = await createTaskRun({
+        ownerCanonicalUser: 'bob',
+        role: 'webSearcher',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Bob crashed task',
+        chainId: 'chain-b',
+        depth: 1,
+        now: 1,
+      })
+      await markStarted(bobCrashed.id, 'bg-bob', 2, 'bob')
+
+      const result = await sweepAllTerminalTaskRuns({ ttlMs: 100, now: 10_000 })
+
+      // Both users' terminal runs reaped; the crashed (non-terminal) run kept.
+      assert.equal(result.removed, 2)
+      assert.equal(await getTaskRun(aliceDone.id, 'alice'), null)
+      assert.equal(await getTaskRun(bobDone.id, 'bob'), null)
+      assert.notEqual(await getTaskRun(bobCrashed.id, 'bob'), null)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
