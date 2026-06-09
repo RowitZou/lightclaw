@@ -25,6 +25,7 @@ import {
   rewriteTranscript,
   touchMeta,
 } from '../session/storage.js'
+import { markStarted } from '../taskrun/store.js'
 import type { BackgroundTaskEntry, FireOutcome, PermissionDenialDetail } from './types.js'
 
 type QueryFn = typeof query
@@ -38,9 +39,11 @@ export async function runBackgroundTaskFire(input: {
   task: BackgroundTaskEntry
   fireUuid: string
   signal: AbortSignal
+  taskRunId?: string
 }): Promise<FireOutcome> {
   const sessionId = buildBackgroundTaskSessionId(input.task, input.fireUuid)
   try {
+    await markTaskRunStartedBestEffort(input.taskRunId, input.task.ownerCanonicalUser, sessionId)
     if (input.signal.aborted) {
       return {
         kind: 'failure',
@@ -125,6 +128,7 @@ export async function runBackgroundTaskFire(input: {
       onPermissionDenial(detail) {
         permissionDenials.push(detail)
       },
+      currentTaskRunId: input.taskRunId,
     })
 
     const router = getSignalRouter()
@@ -159,6 +163,7 @@ export async function runBackgroundTaskFire(input: {
         label: 'background_task',
         signal: input.signal,
         chainState: input.task.chainState,
+        currentTaskRunId: input.taskRunId,
         canonicalUser: input.task.ownerCanonicalUser,
         // Incremental transcript persistence: flush each completed tool
         // round-trip as it lands so a crash mid-fire leaves a partial
@@ -208,6 +213,23 @@ export async function runBackgroundTaskFire(input: {
       transient: isTransientFireError(error),
       attempt: 1,
     }
+  }
+}
+
+async function markTaskRunStartedBestEffort(
+  taskRunId: string | undefined,
+  ownerCanonicalUser: string,
+  sessionId: string,
+): Promise<void> {
+  if (!taskRunId) return
+  try {
+    await markStarted(taskRunId, sessionId, Date.now(), ownerCanonicalUser)
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to mark background run ${taskRunId} started: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
   }
 }
 

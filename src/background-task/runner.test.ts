@@ -9,6 +9,7 @@ import { setAdmin } from '../identity/store.js'
 import { createAssistantMessage } from '../messages.js'
 import { loadTranscript } from '../session/storage.js'
 import { requireSessionContext } from '../session-context.js'
+import { createTaskRun, getTaskRun } from '../taskrun/store.js'
 import {
   clearChannelRunner,
   registerChannelRunner,
@@ -178,6 +179,44 @@ describe('runBackgroundTaskFire', () => {
     })
 
     assert.equal(observed.isBackgroundTask, true)
+  })
+
+  it('marks the provided TaskRun as running for the bg fire session', async () => {
+    let observedTaskRunId: string | undefined
+    setBackgroundTaskQueryForTest(async () => {
+      observedTaskRunId = requireSessionContext().currentTaskRunId
+      return {
+        messages: [],
+        assistantText: 'ok',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: {},
+      }
+    })
+    const run = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 'feishu:dm:oc_alice',
+      mode: 'background',
+      objective: 'check the workspace',
+      title: 'Workspace check',
+      chainId: 'chain-bg-runner',
+      depth: 1,
+    })
+
+    await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-taskrun',
+      signal: new AbortController().signal,
+      taskRunId: run.id,
+    })
+
+    const loaded = await getTaskRun(run.id, 'alice')
+    assert.ok(loaded)
+    assert.equal(loaded.status, 'running')
+    assert.match(loaded.currentSessionId ?? '', /^bg-alice-alice-task1-fire-taskrun/)
+    assert.equal(observedTaskRunId, run.id)
   })
 
   it('injects the active channel approver into bg-fire SessionContext', async () => {

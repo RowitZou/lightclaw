@@ -94,6 +94,10 @@ export type SessionContext = {
   // role-aware signal publishers (progress, future events) can resolve
   // attribution and route through the chain root sessionId.
   chainState?: ChainState
+  // Durable TaskRun currently executing in this session. A worker that dispatches
+  // a child uses this id as the child's parentRunId; main turns leave it unset
+  // until later phases introduce top-level goal task runs.
+  currentTaskRunId?: string
 }
 
 export const sessionContextStorage = new AsyncLocalStorage<SessionContext>()
@@ -158,6 +162,7 @@ export function createSessionContext(input: {
   runtime?: Runtime
   isBackgroundTask?: boolean
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
+  currentTaskRunId?: string
 }): SessionContext {
   return {
     sessionId: input.sessionId ?? randomUUID(),
@@ -194,6 +199,7 @@ export function createSessionContext(input: {
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
     onPermissionDenial: input.onPermissionDenial,
+    currentTaskRunId: input.currentTaskRunId,
   }
 }
 

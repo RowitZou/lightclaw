@@ -77,6 +77,10 @@ export type BackgroundTaskEntry = {
    *  entries lack it and the management tools fall back to `originSessionId`,
    *  which carries the same "created from" session. */
   callerSessionId?: string
+  /** Parent durable TaskRun captured when a worker schedules a background
+   *  dispatch. The scheduler later creates one TaskRun per fire and uses this
+   *  value to restore lineage without changing bg-tasks scheduling semantics. */
+  parentTaskRunId?: string
   chainState?: ChainState
 }
 
@@ -99,7 +103,7 @@ export type FireOutcome =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId' | 'parentTaskRunId'>>
     }
   | {
       version: 2
@@ -122,5 +126,6 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   originSessionId: z.string().optional(),
   callerRole: z.string().optional(),
   callerSessionId: z.string().optional(),
+  parentTaskRunId: z.string().optional(),
   chainState: z.any().optional(),
 })

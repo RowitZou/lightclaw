@@ -35,6 +35,7 @@ export async function runSubagent(params: {
   // child agent Role, but MemoryWrite's physical binding sees this owner Role.
   currentRoleOverride?: Role
   chainState?: ChainState
+  currentTaskRunId?: string
   // Inline content blocks (image / pdf) appended to the worker's first user
   // message alongside the prompt text. Caller is expected to validate paths
   // and run the encoding pipeline (see tools/dispatch-attachments.ts).
@@ -91,6 +92,7 @@ export async function runSubagent(params: {
       currentRoleOverride: params.currentRoleOverride,
       canonicalUser: cacheUserKey,
       chainState: params.chainState,
+      currentTaskRunId: params.currentTaskRunId,
       canUseToolOverride: params.canUseToolOverride,
       ...(subagentMaxTurns !== undefined ? { maxTurns: subagentMaxTurns } : {}),
       label:

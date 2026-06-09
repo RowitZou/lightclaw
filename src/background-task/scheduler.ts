@@ -17,6 +17,7 @@ import { computeTaskNextRunAt } from './schedule-calc.js'
 import { runBackgroundTaskFire } from './runner.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
+import { createTaskRun, markFinished } from '../taskrun/store.js'
 
 type HeapItem = {
   taskId: string
@@ -27,6 +28,7 @@ type QueueItem = {
   taskId: string
   fireUuid: string
   attempt: number
+  taskRunId?: string
 }
 
 const RETRY_BASE_MS = 2000
@@ -44,6 +46,59 @@ export function setRunBackgroundTaskFireForTest(
   impl: RunBackgroundTaskFireFn | null,
 ): void {
   runBackgroundTaskFireImpl = impl ?? runBackgroundTaskFire
+}
+
+async function createBackgroundTaskRunBestEffort(
+  canonicalUser: string,
+  task: BackgroundTaskEntry,
+  fireUuid: string,
+): Promise<string | undefined> {
+  try {
+    const run = await createTaskRun({
+      ownerCanonicalUser: canonicalUser,
+      role: task.role,
+      callerRole: task.callerRole ?? 'main',
+      callerSessionId: task.callerSessionId ?? task.originSessionId ?? '',
+      mode: 'background',
+      objective: task.prompt,
+      title: task.label,
+      parentRunId: task.parentTaskRunId ?? null,
+      chainId: task.chainState?.chainId ?? `background-${task.id}`,
+      depth: task.chainState?.depth ?? 1,
+    })
+    return run.id
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to create background run for ${task.id} fire ${fireUuid}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return undefined
+  }
+}
+
+async function markBackgroundTaskRunFinishedBestEffort(
+  canonicalUser: string,
+  taskRunId: string | undefined,
+  outcome: FireOutcome,
+): Promise<void> {
+  if (!taskRunId) return
+  try {
+    await markFinished(
+      taskRunId,
+      outcome.kind === 'success'
+        ? { ok: true, summary: outcome.summary.slice(0, 500) }
+        : { ok: false, error: outcome.reason.slice(0, 500) },
+      Date.now(),
+      canonicalUser,
+    )
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to mark background run ${taskRunId} finished: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
 
 /**
@@ -247,7 +302,7 @@ export class BackgroundTaskScheduler {
     }
     this.markClaimed(canonicalUser, item.taskId)
     if (this.canFireNow(canonicalUser)) {
-      this.fire(canonicalUser, task, item.fireUuid, item.attempt)
+      this.fire(canonicalUser, task, item.fireUuid, item.attempt, item.taskRunId)
       return
     }
     const queue = this.fifoQueueByUser.get(canonicalUser) ?? []
@@ -287,6 +342,7 @@ export class BackgroundTaskScheduler {
     task: BackgroundTaskEntry,
     fireUuid: string,
     attempt: number,
+    taskRunId?: string,
   ): void {
     this.runningCountByUser.set(
       canonicalUser,
@@ -310,29 +366,46 @@ export class BackgroundTaskScheduler {
       this.dequeue(canonicalUser)
     }
 
-    const promise = runBackgroundTaskFireImpl({
-      task,
-      fireUuid,
-      signal: controller.signal,
-    })
+    const taskRunPromise = taskRunId
+      ? Promise.resolve(taskRunId)
+      : createBackgroundTaskRunBestEffort(canonicalUser, task, fireUuid)
+    const promise = taskRunPromise
+      .then(runId => runBackgroundTaskFireImpl({
+        task,
+        fireUuid,
+        signal: controller.signal,
+        ...(runId ? { taskRunId: runId } : {}),
+      }).then(outcome => ({ outcome, taskRunId: runId })))
       .then(
-        outcome =>
-          ({
-            ...outcome,
-            ...(outcome.kind === 'failure' ? { attempt } : {}),
-          }) as FireOutcome,
-        (error: unknown): FireOutcome => ({
-          kind: 'failure',
-          reason: error instanceof Error ? error.message : String(error),
-          transient: true,
-          attempt,
+        result => ({
+          outcome: {
+            ...result.outcome,
+            ...(result.outcome.kind === 'failure' ? { attempt } : {}),
+          } as FireOutcome,
+          taskRunId: result.taskRunId,
+        }),
+        (error: unknown): { outcome: FireOutcome; taskRunId: string | undefined } => ({
+          outcome: {
+            kind: 'failure',
+            reason: error instanceof Error ? error.message : String(error),
+            transient: true,
+            attempt,
+          },
+          taskRunId: undefined,
         }),
       )
-      .then(outcome => {
+      .then(({ outcome, taskRunId: settledTaskRunId }) => {
         // Release the slot the instant the agent run settles — before, not
         // after, completion handling. dequeue() chains the next queued task.
         releaseSlot()
-        return this.onFireComplete(canonicalUser, task, fireUuid, outcome, attempt)
+        return this.onFireComplete(
+          canonicalUser,
+          task,
+          fireUuid,
+          outcome,
+          attempt,
+          settledTaskRunId,
+        )
       })
       .catch(error => {
         process.stderr.write(
@@ -360,7 +433,7 @@ export class BackgroundTaskScheduler {
     }
     const task = getBackgroundTask(canonicalUser, next.taskId)
     if (task?.enabled) {
-      this.fire(canonicalUser, task, next.fireUuid, next.attempt)
+      this.fire(canonicalUser, task, next.fireUuid, next.attempt, next.taskRunId)
     } else {
       // Task vanished / disabled while queued — release its claim.
       this.unmarkClaimed(canonicalUser, next.taskId)
@@ -373,6 +446,7 @@ export class BackgroundTaskScheduler {
     fireUuid: string,
     outcome: FireOutcome,
     attempt: number,
+    taskRunId?: string,
   ): Promise<void> {
     const retryMax = this.config?.dispatch.scheduler.fireRetryMaxAttempts ?? 3
     if (outcome.kind === 'failure' && outcome.transient && attempt < retryMax) {
@@ -382,6 +456,7 @@ export class BackgroundTaskScheduler {
           taskId: task.id,
           fireUuid,
           attempt: attempt + 1,
+          ...(taskRunId ? { taskRunId } : {}),
         })
       }, delayMs).unref?.()
       // Stay claimed across the retry — the re-enqueue above re-marks it, but
@@ -392,6 +467,7 @@ export class BackgroundTaskScheduler {
     // Terminal outcome — this run will not fire again. Release the claim so a
     // recurring task can be rescheduled and the claimed-set does not leak.
     this.unmarkClaimed(canonicalUser, task.id)
+    await markBackgroundTaskRunFinishedBestEffort(canonicalUser, taskRunId, outcome)
 
     const firedAt = new Date().toISOString()
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {

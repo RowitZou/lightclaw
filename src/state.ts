@@ -122,6 +122,10 @@ export function getCurrentChainState(): import('./signal-bus/chain-state.js').Ch
   return currentState().chainState
 }
 
+export function getCurrentTaskRunId(): string | undefined {
+  return currentState().currentTaskRunId
+}
+
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
 }

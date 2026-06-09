@@ -19,7 +19,7 @@ import {
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type BackgroundTaskEntry, type ScheduleSpec } from '../background-task/types.js'
-import { getCurrentRole, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
+import { getCurrentRole, getCurrentTaskRunId, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
 import {
@@ -36,6 +36,7 @@ import {
   type ChainState,
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
+import { createTaskRun, markFinished, markStarted } from '../taskrun/store.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
@@ -173,6 +174,86 @@ function validateFutureOneshot(schedule: ScheduleSpec): string | null {
     ].join('\n')
   }
   return null
+}
+
+async function createDispatchTaskRunBestEffort(input: {
+  ownerCanonicalUser: string
+  role: string
+  callerRole: string
+  callerSessionId: string
+  mode: DispatchMode
+  objective: string
+  title?: string
+  parentRunId?: string
+  chainState: ChainState
+  startedSessionId: string
+}): Promise<string | undefined> {
+  let runId: string
+  try {
+    const run = await createTaskRun({
+      ownerCanonicalUser: input.ownerCanonicalUser,
+      role: input.role,
+      callerRole: input.callerRole,
+      callerSessionId: input.callerSessionId,
+      mode: input.mode,
+      objective: input.objective,
+      title: input.title,
+      parentRunId: input.parentRunId ?? null,
+      chainId: input.chainState.chainId,
+      depth: input.chainState.depth,
+    })
+    runId = run.id
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to create dispatch run: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return undefined
+  }
+  try {
+    await markStarted(
+      runId,
+      input.startedSessionId,
+      Date.now(),
+      input.ownerCanonicalUser,
+    )
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to mark dispatch run ${runId} started: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
+  return runId
+}
+
+async function markDispatchTaskRunFinishedBestEffort(input: {
+  ownerCanonicalUser: string
+  taskRunId: string | undefined
+  ok: boolean
+  summary?: string
+  error?: string
+}): Promise<void> {
+  if (!input.taskRunId) return
+  try {
+    await markFinished(
+      input.taskRunId,
+      {
+        ok: input.ok,
+        ...(input.summary ? { summary: input.summary.slice(0, 500) } : {}),
+        ...(input.error ? { error: input.error.slice(0, 500) } : {}),
+      },
+      Date.now(),
+      input.ownerCanonicalUser,
+    )
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to mark dispatch run ${input.taskRunId} finished: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
 
 // --- Caller ownership for dispatch management tools (Phase 12) --------------
@@ -360,6 +441,18 @@ export async function executeDispatch(
   })
 
   if (input.mode === 'blocking') {
+    const taskRunId = await createDispatchTaskRunBestEffort({
+      ownerCanonicalUser: userId,
+      role: input.role,
+      callerRole: callerRole.agentType,
+      callerSessionId: sessionId,
+      mode: 'blocking',
+      objective: finalDispatchPrompt,
+      title: input.label,
+      parentRunId: getCurrentTaskRunId(),
+      chainState: effectiveChildChainState,
+      startedSessionId: childSessionId,
+    })
     const router = getSignalRouter()
     router.registerChainSession(
       effectiveChildChainState.chainId,
@@ -367,19 +460,37 @@ export async function executeDispatch(
       effectiveChildChainState,
       userId,
     )
-    const result = await runSubagent({
-      agentType: internalRole,
-      prompt: finalDispatchPrompt,
-      signal: context.abortSignal,
-      canonicalUserOverride: userId,
-      chainState: effectiveChildChainState,
-      ...(attachments.inlineBlocks.length > 0
-        ? { dispatchAttachmentBlocks: attachments.inlineBlocks }
-        : {}),
-    }).finally(() => {
+    let result
+    try {
+      result = await runSubagent({
+        agentType: internalRole,
+        prompt: finalDispatchPrompt,
+        signal: context.abortSignal,
+        canonicalUserOverride: userId,
+        chainState: effectiveChildChainState,
+        currentTaskRunId: taskRunId,
+        ...(attachments.inlineBlocks.length > 0
+          ? { dispatchAttachmentBlocks: attachments.inlineBlocks }
+          : {}),
+      })
+    } catch (error) {
+      await markDispatchTaskRunFinishedBestEffort({
+        ownerCanonicalUser: userId,
+        taskRunId,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    } finally {
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
-    })
+    }
     if (result.kind === 'failure') {
+      await markDispatchTaskRunFinishedBestEffort({
+        ownerCanonicalUser: userId,
+        taskRunId,
+        ok: false,
+        error: formatWorkerFailureForToolResult(result.envelope),
+      })
       await appendDispatchAudit({
         at: new Date().toISOString(),
         chainId: effectiveChildChainState.chainId,
@@ -395,6 +506,12 @@ export async function executeDispatch(
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
+    await markDispatchTaskRunFinishedBestEffort({
+      ownerCanonicalUser: userId,
+      taskRunId,
+      ok: true,
+      summary: result.finalText || '(dispatched role returned empty text)',
+    })
     await appendDispatchAudit({
       at: new Date().toISOString(),
       chainId: effectiveChildChainState.chainId,
@@ -431,6 +548,7 @@ export async function executeDispatch(
     originSessionId: sessionId,
     callerRole: callerRole.agentType,
     callerSessionId: sessionId,
+    parentTaskRunId: getCurrentTaskRunId(),
     chainState: effectiveChildChainState,
   }
   addBackgroundTask(userId, entry)

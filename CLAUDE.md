@@ -380,6 +380,17 @@
 - Dispatched workers are one-shot, fresh-context workers. They never inherit a previous worker transcript; continuation across runs belongs in the caller-authored prompt or memory layer, where the manager can filter what matters instead of replaying raw prior turns.
 - Background completion delivery is manager-facing, not user-direct. Success, ordinary failure, and permission-denied outcomes all flow through the same background-result signal and are interpreted by the receiving main/worker manager.
 
+# LightClaw TaskRun Notes (collab-phase1 PR1, 2026-06-09)
+
+- `src/taskrun/store.ts` is the durable TaskRun ledger. Each run lives at `<lightclawHome>/identity/per-user/<canonical>/taskruns/<id>/` with append-only `events.jsonl` plus derived `meta.json`; `meta` is only a snapshot of events and may gain derived fields later without migrating the event stream.
+- PR1 writes only lifecycle events: `created`, `started`, and `finished`. Future progress, artifact, message, checkpoint, pause, and watchdog data must be added as new event kinds, not by changing the PR1 lifecycle schema.
+- TaskRun persistence is best-effort. Dispatch and scheduler callers catch store failures, write one stderr diagnostic, and keep the original dispatch/background behavior unchanged.
+- Blocking Dispatch creates a TaskRun just before the worker starts, marks it `running` with the chain leaf sessionId, and marks it `done` / `failed` when `runSubagent()` returns. The worker's `SessionContext.currentTaskRunId` is set so nested Dispatch can use it as `parentRunId`.
+- Background Dispatch still uses the existing `bg-tasks.json` scheduler plane. The scheduler creates one TaskRun per fire, passes its id into `runBackgroundTaskFire()`, and marks terminal outcome after retry handling. Recurring / interval tasks therefore get one durable run per fire, not one run per schedule entry.
+- `BackgroundTaskEntry.parentTaskRunId` is optional lineage metadata captured at schedule time when a worker creates a background dispatch. It does not change scheduling, list/update/cancel semantics, or the v2 store shape for older entries.
+- Crashes are intentionally honest: if a process dies after `started` but before `finished`, the run remains `status:'running'` with `currentSessionId` set. PR1 does not reconcile or wake anything; PR3's watchdog consumes this non-terminal record.
+- Terminal TaskRun directories may be swept after the default 7 day TTL; non-terminal directories are never swept by PR1 so crash records remain available for later reconciliation.
+
 # LightClaw User-Defined Role Notes (Phase 7.5, 2026-05-18)
 
 - Admin-owned roles can be appended from `<lightclawHome>/roles/<name>/ROLE.md`. The file is YAML frontmatter plus a Markdown body. Required fields are `name`, `whenToUse`, `description`, `tools`, and the body system prompt; optional fields include `skills`, `hooks`, `reachableRoles`, `kind`, `outputContract`, `mcpServers`, and `maxTurns`.

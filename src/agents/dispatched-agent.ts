@@ -49,6 +49,7 @@ export type DispatchedAgentParams = {
   currentRoleOverride?: Role
   canonicalUser?: string
   chainState?: ChainState
+  currentTaskRunId?: string
   canUseToolOverride?: CanUseToolFn
   queryImpl?: typeof query
   // Optional cap on tool-use turns for this dispatch. Memory extraction passes a
@@ -219,6 +220,7 @@ export async function runDispatchedAgent(
         currentRole: params.role,
         sessionId: chainSessionId ?? currentCtx.sessionId,
         chainState: params.chainState,
+        currentTaskRunId: params.currentTaskRunId,
         discoveredTools: new Map(),
         turnCounter: 0,
         // Per-user runtime secrets (Phase 18) are main-only. Dispatched

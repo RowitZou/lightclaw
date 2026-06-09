@@ -13,6 +13,7 @@ import {
 } from './scheduler.js'
 import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
+import { listTaskRuns } from '../taskrun/store.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -201,6 +202,34 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(remaining?.length ?? 0, 0, 'queue must be empty after tick drains it')
   })
 
+  it('creates one durable TaskRun per background fire and marks terminal outcome', async () => {
+    const task = { ...fakeTask(), id: 'taskrun-fire', notifyOn: 'failure' as const }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const seenTaskRunIds: string[] = []
+    setRunBackgroundTaskFireForTest(async ({ taskRunId }) => {
+      assert.ok(taskRunId)
+      seenTaskRunIds.push(taskRunId)
+      return { kind: 'success', summary: 'fire ok', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'taskrun-fire')
+    await scheduler.drain()
+    scheduler.fireImmediate('alice', 'taskrun-fire')
+    await scheduler.drain()
+
+    assert.equal(new Set(seenTaskRunIds).size, 2)
+    const runs = await listTaskRuns('alice', { scope: 'all' })
+    assert.equal(runs.length, 2)
+    for (const run of runs) {
+      assert.equal(run.status, 'done')
+      assert.equal(run.mode, 'background')
+      assert.equal(run.role, 'generalist')
+      assert.equal(run.outcome?.summary, 'fire ok')
+      assert.equal(run.currentSessionId, null)
+    }
+  })
+
   it('does not double-fire a schedule:now oneshot that is heap-scheduled and fired directly', async () => {
     // dispatch.ts schedule:'now' path: addBackgroundTask + notifyTaskChanged
     // (heap-schedules the oneshot at now+~1s) + fireImmediate (fires it now).
@@ -282,6 +311,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
     scheduler.fireImmediate('alice', 'claimed-task') // claims + fires
     scheduler.notifyTaskChanged('alice', 'claimed-task') // rebuild must exclude the claimed oneshot
+    await new Promise(resolve => setTimeout(resolve, 10))
 
     const heap = (scheduler as unknown as {
       heapByUser: Map<string, unknown[]>
