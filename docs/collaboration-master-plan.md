@@ -330,3 +330,99 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 6. 命名:对消费方用「requester / reader」措辞,避免「parent / 主 agent」字样;工具命名跟 Dispatch family。
 
 走完才进详细工程设计,不是这份稿列了就一定做。
+
+---
+
+## 十三、附议:Mailbox 作为第三 durable 面(讨论用补遗,不进 Phase 0–3)
+
+> **本节是 §五 通信形态的一条延伸讨论稿,触发于一个开放问题:agent 之间的通信能不能从工单解耦?** §五 选择了「沿树边走、main 是唯一交换机」的强保守路径,理由是死锁可判性 + context 卫生(见 §六.3)。但 agent 通信在团队协作场景下可能是个重要的未来设计;本节给出一个**与 §五 并存、向后兼容**的提案,以备讨论后取舍。
+>
+> **本节不进 Phase 0–3 路线图**,先记下,待协作者讨论。
+
+### 13.1 问题归约:不是「解不解耦」,是「TaskRun 不当通信 durability 层之后,谁当」
+
+直觉上「解耦工单和通信」会让人想到:加一条 sibling 边、worker 之间能 message。但这条直觉碰两个硬问题:
+
+- **通信进行中、所在工单结束了,怎么找那个 agent?**(对应 §五.2 的 episodic 模型:agent 用完即弃)
+- **没有暖 session,通信怎么进行?**
+
+只要还把「通信 = 找到一个 agent 说话」,这俩问题就无解。**真正的答案是换一层 durability** —— 通信不挂在 TaskRun 上,也不挂在某个具体 agent 上,挂在 **role 自己的邮箱**上。
+
+### 13.2 三个 durable 面(在 §四 工单 + §十一 memory 之外加一面)
+
+| 面 | 持有谁的状态 | 生命周期 | 寻址单位 |
+|---|---|---|---|
+| **TaskRun**(§四) | 「正在做的活」 | per-task,有终态 | task id |
+| **Mailbox**(本节) | 「这个员工的邮箱」 | 同 role + canonical user,无终态 | `(canonical, role)` |
+| **Memory**(现有 L1/L2/L3) | 「这个员工的长期事实」 | 永久 | role 的 L3 / L1 / L2 |
+
+Mailbox 落盘位置候选:`<lightclawHome>/identity/per-user/<canonical>/mailbox/<role>/inbox.jsonl` —— append-only,跟 TaskRun 事件日志同构,但**不归属任何一张 TaskRun**。
+
+### 13.3 两个硬问题的答案
+
+**Q1: 通信中 TaskRun 结束了怎么找 agent?**
+**答:不找 agent,address role。** A 写消息给 `role:reviewer@user:foo` → 落进 reviewer 的 inbox。原本那个 reviewer agent 已经下班、永远不会被叫醒,但 reviewer 这个**角色**永远在。reviewer 下次因任何原因被实例化(新 TaskRun / 看门狗驱动「有未读」唤醒 / 用户点名),新的 reviewer 从 inbox 读邮件、从自己的 L3 memory 续上身份,看到 A 的留言。
+
+**这是真正的「员工」**:员工换了一茬,邮箱号没换。完美对齐 §五.2「数字交接班」,只是把 durability 从 TaskRun 抬到 role。
+
+**Q2: 没暖 session,通信怎么办?**
+**答:把通信定义为 messaging 不是 RPC,问题消失。** 「没暖 session 通信难」的下意识假设是同步对话。换成异步邮箱:延迟从「毫秒」变成「下次激活」,对绝大多数团队协作场景够用 —— 人类团队是邮件 + Slack DM,不是电话。冻住等回复的是 RPC,那是机器协议,不是人类协作。
+
+### 13.4 死锁怎么办(原本死锁可判性依赖「兄弟边不存在」)
+
+> **硬规则:peer 通信只送、不等。任何 agent 都不能 pause 在 peer 回复上。**
+
+- 想发 → 写进对方 inbox,自己继续推进或正常下班
+- 想要回复 → 回复来时作为 *interjection* 进入收信方的下一次激活,不再「等」
+- **父子上行下行仍走 §六 的 typed-await**(树形 wait,无环可判);**peer 边只承载非阻塞消息**
+
+死锁砍在源头:**wait-for 图里没有 peer 边**,§六.3 的死锁可判性**作为不变量被保留**,但 peer 通信被允许穿过这层结构。换句话说:**消息走 peer,等待只走树。**
+
+人类公司就是这条规则:Slack 给同事发消息你不冻在那等,继续干别的;他回了再处理。
+
+### 13.5 两档寻址(给团队协作留口)
+
+「address role」需要再细一层。真团队场景里你可能想 point 给「A 派出去的那个 coder」,不是任意 coder:
+
+1. **`role:<X>`** —— 默认。任意 X role 都行,下次激活拿到。**team-broadcast / 长程异步沟通**用这个。
+2. **`role:<X>#task:<id>`** —— 定向。只有当前正在跑 TaskRun `<id>` 的那个 X 关心(直接进它 interjection);如果它已下班,**优雅退化为 `role:<X>`**,投进 inbox,新激活时框架在抬头注明「这条原本是 task `<id>` 的」。
+
+档 2 是档 1 的一个 routing hint,不是新机制。
+
+### 13.6 唤醒策略(约束 C 不放过)
+
+Mailbox 引入新唤醒源:「我有未读邮件,要不要叫醒 role」。若每封邮件都唤醒一次 = LLM 烧钱地狱。规则:
+
+- **不主动叫醒 role 仅为了读邮件。** 邮件等下次自然激活时一起处理。
+- **例外:`urgent` 标记**(类似 `Notify` severity)—— 才合成一次冷激活。
+- **看门狗周期扫 mailbox**:超时未处理的 `urgent` 升级给 main 或用户(复用 §八 升级路径)。
+
+这条规则把通信对 token 成本的影响压到接近零,严格对齐约束 C。
+
+### 13.7 实现代价
+
+- **每次 role 激活都得 drain mailbox**:冷激活 prompt 多一段「未读邮件」。长期不被激活的 role 邮件会堆。需要:
+  - 容量上限 + LRU 截断
+  - agent 在 final-text 里说「邮件 X、Y 我处理了」 → 框架标记 read
+  - **mailbox aging**(同 inbox-aging 那套)
+- **新 audit 类**:peer-message-sent / peer-message-read,跟现有四类 audit 并列。
+- **新 signal kind 或复用**:倾向复用 `notification`,加 `kind:'peer-message'` payload。
+
+### 13.8 一个未决问题(留给协作者)
+
+**Memory 和 mailbox 的边界。** mailbox 是「未处理沟通」,memory 是「已沉淀事实」。但「我跟 coder 上次讨论的设计决定」放哪?既不是未处理沟通(已 read),也不一定升格 memory(可能只对这段协作有意义)。候选:
+
+- **(a)** mailbox 永远保留已 read,role 自己回查 —— 成本:context 膨胀
+- **(b)** read 后自动 archive 到 L3 memory —— 成本:memory 噪声
+- **(c)** role L3 下加 `conversations/<peer-role>.md`,由 autoDream 把 `mailbox → conversation → memory` 三段流转 —— 成本:多一层,且依赖 autoDream 跨 role 视野(目前 per-user)
+
+倾向 (c)(跟现有 curator 一致),但 autoDream 跨 role 视野是隐性 dep。
+
+### 13.9 与 §五 / §六 的取舍
+
+本节**与 §五 互斥但不矛盾**:
+
+- 若**不**采纳:§五 保持现状,通信沿树边、main 唯一交换机,死锁可判性靠树结构。
+- 若采纳:§五 不变(父子边继续 typed-await + 严格 join),**仅新增 peer 边**,通过「只送不等」把新边的死锁风险砍在源头。两套机制叠加,§五 的不变量全部保留。
+
+**Phase 编号建议(若立项):不属于 Phase 0–3。** 最早 **Phase 4** 起,且需要先验证 Phase 3 的厚 checkpoint + 冷重建在实战里站得住,再讨论是否引入 peer-channel —— 因为 mailbox 的「下次激活才读」严重依赖 §七 的厚 checkpoint 让冷重建廉价。**Phase 3 是 mailbox 的前置 dep**。
