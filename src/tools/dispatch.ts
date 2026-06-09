@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
-import { formatWorkerFailureForToolResult, runSubagent } from '../agents/run-subagent.js'
+import {
+  formatWorkerFailureForToolResult,
+  runSubagent,
+  type RunSubagentResult,
+} from '../agents/run-subagent.js'
 import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
@@ -36,7 +40,8 @@ import {
   type ChainState,
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
-import { createTaskRun, markFinished, markStarted } from '../taskrun/store.js'
+import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
+import { appendArtifact, createTaskRun, markFinished, markStarted } from '../taskrun/store.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
@@ -142,6 +147,13 @@ const dispatchScheduleSchema = z.union([z.literal('now'), scheduleSpecSchema]).d
 
 function shortId(): string {
   return randomUUID().slice(0, 8)
+}
+
+type RunSubagentFn = typeof runSubagent
+let runSubagentImpl: RunSubagentFn = runSubagent
+
+export function setRunSubagentForDispatchTest(impl: RunSubagentFn | null): void {
+  runSubagentImpl = impl ?? runSubagent
 }
 
 function internalRoleFor(role: DispatchRole, mode: DispatchMode): AgentType {
@@ -253,6 +265,30 @@ async function markDispatchTaskRunFinishedBestEffort(input: {
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+  }
+}
+
+async function appendDispatchArtifactsBestEffort(input: {
+  ownerCanonicalUser: string
+  taskRunId: string | undefined
+  finalText: string
+}): Promise<void> {
+  if (!input.taskRunId) return
+  for (const artifact of extractArtifactDeclarationsFromText(input.finalText)) {
+    try {
+      await appendArtifact(
+        input.taskRunId,
+        artifact,
+        Date.now(),
+        input.ownerCanonicalUser,
+      )
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun] failed to append artifact for ${input.taskRunId}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
   }
 }
 
@@ -460,9 +496,9 @@ export async function executeDispatch(
       effectiveChildChainState,
       userId,
     )
-    let result
+    let result: RunSubagentResult
     try {
-      result = await runSubagent({
+      result = await runSubagentImpl({
         agentType: internalRole,
         prompt: finalDispatchPrompt,
         signal: context.abortSignal,
@@ -506,6 +542,11 @@ export async function executeDispatch(
       }).catch(() => {})
       return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
     }
+    await appendDispatchArtifactsBestEffort({
+      ownerCanonicalUser: userId,
+      taskRunId,
+      finalText: result.finalText,
+    })
     await markDispatchTaskRunFinishedBestEffort({
       ownerCanonicalUser: userId,
       taskRunId,

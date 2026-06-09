@@ -6,8 +6,12 @@ import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  appendArtifact,
+  appendProgress,
   createTaskRun,
   getTaskRun,
+  getTaskRunEvents,
+  listChildTaskRuns,
   listTaskRuns,
   markFinished,
   markStarted,
@@ -176,6 +180,100 @@ describe('TaskRun store', () => {
       assert.equal(await getTaskRun(aliceDone.id, 'alice'), null)
       assert.equal(await getTaskRun(bobDone.id, 'bob'), null)
       assert.notEqual(await getTaskRun(bobCrashed.id, 'bob'), null)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('appends progress and artifact events and derives their meta pointers', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-events-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Create a report artifact',
+        chainId: 'chain-events',
+        depth: 1,
+        now: 10,
+      })
+
+      await appendProgress(run.id, { phase: 'todo', label: 'Draft report' }, 20, 'alice')
+      await appendArtifact(
+        run.id,
+        { path: '/workspace/reports/demo.md', kind: 'file', label: 'Demo report' },
+        30,
+        'alice',
+      )
+      await appendArtifact(
+        run.id,
+        { path: '/workspace/reports/demo.md', kind: 'file', label: 'Duplicate' },
+        40,
+        'alice',
+      )
+
+      const loaded = await getTaskRun(run.id, 'alice')
+      assert.ok(loaded)
+      assert.deepEqual(loaded.latestProgress, {
+        phase: 'todo',
+        label: 'Draft report',
+        ts: 20,
+      })
+      assert.deepEqual(loaded.artifactPaths, ['/workspace/reports/demo.md'])
+
+      const events = await getTaskRunEvents(run.id, { limit: 2 }, 'alice')
+      assert.deepEqual(events.map(event => event.kind), ['artifact', 'artifact'])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('lists direct child task runs by parent run id', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-children-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'reviewer',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Review a patch',
+        chainId: 'chain-tree',
+        depth: 1,
+        now: 10,
+      })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'reviewer',
+        callerSessionId: 's-reviewer',
+        mode: 'blocking',
+        objective: 'Apply the patch',
+        parentRunId: parent.id,
+        chainId: 'chain-tree',
+        depth: 2,
+        now: 20,
+      })
+      await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'webSearcher',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Unrelated lookup',
+        chainId: 'chain-other',
+        depth: 1,
+        now: 30,
+      })
+
+      const children = await listChildTaskRuns(parent.id, 'alice')
+      assert.deepEqual(children.map(run => run.id), [child.id])
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

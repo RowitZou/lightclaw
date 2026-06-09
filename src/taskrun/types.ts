@@ -35,6 +35,14 @@ export type TaskRunMeta = {
   terminalAt?: number
   updatedAt: number
   lastEventSeq: number
+  latestProgress?: TaskRunProgressSnapshot
+  artifactPaths?: string[]
+}
+
+export type TaskRunProgressSnapshot = {
+  phase?: string
+  label: string
+  ts: number
 }
 
 export type TaskRunCreatedEvent = {
@@ -65,10 +73,30 @@ export type TaskRunFinishedEvent = {
   error?: string
 }
 
+export type TaskRunProgressEvent = {
+  seq: number
+  ts: number
+  kind: 'progress'
+  phase?: string
+  label: string
+}
+
+export type TaskRunArtifactEvent = {
+  seq: number
+  ts: number
+  kind: 'artifact'
+  path?: string
+  token?: string
+  artifactKind?: string
+  label?: string
+}
+
 export type TaskRunEvent =
   | TaskRunCreatedEvent
   | TaskRunStartedEvent
   | TaskRunFinishedEvent
+  | TaskRunProgressEvent
+  | TaskRunArtifactEvent
   | ({
       seq: number
       ts: number

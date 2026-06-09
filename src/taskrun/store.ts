@@ -8,11 +8,13 @@ import { sanitizePathSegment } from '../identity/paths.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { lightclawHome } from '../paths.js'
 import type {
+  TaskRunArtifactEvent,
   TaskRunEvent,
   TaskRunFinishedEvent,
   TaskRunMeta,
   TaskRunMode,
   TaskRunOutcome,
+  TaskRunProgressEvent,
   TaskRunStartedEvent,
 } from './types.js'
 
@@ -41,6 +43,10 @@ type ListTaskRunsOptions = {
 type SweepTaskRunsOptions = {
   ttlMs?: number
   now?: number
+}
+
+type GetTaskRunEventsOptions = {
+  limit?: number
 }
 
 const runLocks = new Map<string, Promise<void>>()
@@ -210,6 +216,44 @@ export async function markFinished(
   return appendEvent(id, 'finished', outcome, now, ownerCanonicalUser)
 }
 
+export async function appendProgress(
+  id: string,
+  progress: { phase?: string; label: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(
+    id,
+    'progress',
+    {
+      ...(progress.phase ? { phase: progress.phase } : {}),
+      label: progress.label,
+    },
+    now,
+    ownerCanonicalUser,
+  )
+}
+
+export async function appendArtifact(
+  id: string,
+  artifact: { path?: string; token?: string; kind?: string; label?: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(
+    id,
+    'artifact',
+    {
+      ...(artifact.path ? { path: artifact.path } : {}),
+      ...(artifact.token ? { token: artifact.token } : {}),
+      ...(artifact.kind ? { artifactKind: artifact.kind } : {}),
+      ...(artifact.label ? { label: artifact.label } : {}),
+    },
+    now,
+    ownerCanonicalUser,
+  )
+}
+
 function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
   const next: TaskRunMeta = {
     ...meta,
@@ -237,6 +281,25 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       },
     }
   }
+  if (isProgressEvent(event)) {
+    return {
+      ...next,
+      latestProgress: {
+        ...(event.phase ? { phase: event.phase } : {}),
+        label: event.label,
+        ts: event.ts,
+      },
+    }
+  }
+  if (isArtifactEvent(event)) {
+    const handle = event.path ?? event.token
+    if (!handle) return next
+    const existing = next.artifactPaths ?? []
+    return {
+      ...next,
+      artifactPaths: existing.includes(handle) ? existing : [...existing, handle],
+    }
+  }
   return next
 }
 
@@ -246,6 +309,14 @@ function isStartedEvent(event: TaskRunEvent): event is TaskRunStartedEvent {
 
 function isFinishedEvent(event: TaskRunEvent): event is TaskRunFinishedEvent {
   return event.kind === 'finished' && typeof (event as { ok?: unknown }).ok === 'boolean'
+}
+
+function isProgressEvent(event: TaskRunEvent): event is TaskRunProgressEvent {
+  return event.kind === 'progress' && typeof (event as { label?: unknown }).label === 'string'
+}
+
+function isArtifactEvent(event: TaskRunEvent): event is TaskRunArtifactEvent {
+  return event.kind === 'artifact'
 }
 
 export async function getTaskRun(
@@ -269,6 +340,31 @@ export async function getTaskRun(
     if (meta) return meta
   }
   return null
+}
+
+export async function getTaskRunEvents(
+  id: string,
+  options: GetTaskRunEventsOptions = {},
+  ownerCanonicalUser?: string,
+): Promise<TaskRunEvent[]> {
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta) return []
+  let raw: string
+  try {
+    raw = await readFile(eventsPath(meta.ownerCanonicalUser, id), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  const events = raw
+    .split('\n')
+    .filter(line => line.trim().length > 0)
+    .map(line => JSON.parse(line) as TaskRunEvent)
+  const limit = options.limit
+  if (limit === undefined || limit <= 0 || events.length <= limit) {
+    return events
+  }
+  return events.slice(-limit)
 }
 
 export async function listTaskRuns(
@@ -300,6 +396,16 @@ export async function listTaskRuns(
   }
   metas.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
   return metas
+}
+
+export async function listChildTaskRuns(
+  parentRunId: string,
+  ownerCanonicalUser: string,
+): Promise<TaskRunMeta[]> {
+  const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  return runs
+    .filter(run => run.parentRunId === parentRunId)
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
 }
 
 export async function sweepTerminalTaskRuns(

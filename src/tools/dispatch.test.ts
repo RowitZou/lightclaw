@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, it } from 'node:test'
 
+import type { Role } from '../agents/types.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import { setLightclawHomeOverride } from '../paths.js'
+import { getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
-import { dispatchTool, listDispatchesTool, updateDispatchTool } from './dispatch.js'
+import {
+  dispatchTool,
+  executeDispatch,
+  listDispatchesTool,
+  setRunSubagentForDispatchTest,
+  updateDispatchTool,
+} from './dispatch.js'
 
 describe('Dispatch tool family', () => {
   it('registers all dispatch tools in the builtin catalog', () => {
@@ -107,4 +120,77 @@ describe('Dispatch tool family', () => {
       assert.equal(deferredNames.has(name), true)
     }
   })
+
+  it('records blocking dispatch TaskRun progress and finish-time artifacts end to end', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-taskrun-'))
+    setLightclawHomeOverride(tmpHome)
+    setRunSubagentForDispatchTest(async params => ({
+      kind: 'success',
+      finalText: [
+        'Implemented the report.',
+        'Artifact: /workspace/out/report.md',
+        `TaskRun seen: ${params.currentTaskRunId ?? 'missing'}`,
+      ].join('\n'),
+      stopReason: 'end_turn',
+    }))
+    try {
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Create the report artifact and return the path.',
+            schedule: 'now',
+            mode: 'blocking',
+            label: 'Create report',
+          },
+          {
+            cwd: '/tmp/lightclaw-dispatch-taskrun',
+            abortSignal: new AbortController().signal,
+            runtime: { workspaceRoot: '/tmp/lightclaw-dispatch-taskrun' } as never,
+          },
+        ),
+      )
+
+      assert.equal(output.isError, undefined)
+      const runs = await listTaskRuns('alice', { scope: 'all' })
+      assert.equal(runs.length, 1)
+      assert.equal(runs[0]?.status, 'done')
+      assert.equal(runs[0]?.artifactPaths?.includes('/workspace/out/report.md'), true)
+      const events = await getTaskRunEvents(runs[0]!.id, { limit: 10 }, 'alice')
+      assert.deepEqual(events.map(event => event.kind), [
+        'created',
+        'started',
+        'artifact',
+        'finished',
+      ])
+    } finally {
+      setRunSubagentForDispatchTest(null)
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
 })
+
+function session(roleName: string) {
+  return createSessionContext({
+    cwd: '/tmp/lightclaw-dispatch-taskrun',
+    model: 'fake-model',
+    sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+    memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+    sessionId: 'main-session',
+    currentUserId: 'alice',
+    currentRole: role(roleName, roleName === 'main' ? 'orchestrator' : 'worker'),
+  })
+}
+
+function role(agentType: string, kind: Role['kind']): Role {
+  return {
+    agentType,
+    name: agentType,
+    kind,
+    whenToUse: 'test',
+    systemPrompt: '',
+    tools: ['*'],
+    hooks: ['*'],
+  }
+}

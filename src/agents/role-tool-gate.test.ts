@@ -163,6 +163,29 @@ test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () =
   assert.equal(isToolVisibleToRole(internal, 'Read'), false)
 })
 
+test('TaskInspect is visible to bundled user-facing roles', () => {
+  for (const agentType of [
+    'main',
+    'generalist',
+    'localExplorer',
+    'webSearcher',
+    'feishuSecretary',
+    'coder',
+    'archivist',
+    'reviewer',
+  ]) {
+    const agent = BUNDLED_AGENTS.find(item => item.agentType === agentType)
+    assert.ok(agent, `${agentType} not found in BUNDLED_AGENTS`)
+    assert.equal(isToolVisibleToRole(agent, 'TaskInspect'), true, `${agentType} should see TaskInspect`)
+  }
+})
+
+test('TaskInspect is not implicitly visible to internal roles', () => {
+  const memoryExtractor = BUNDLED_AGENTS.find(agent => agent.agentType === 'memoryExtractor')
+  assert.ok(memoryExtractor)
+  assert.equal(isToolVisibleToRole(memoryExtractor, 'TaskInspect'), false)
+})
+
 test('memoryCurator role exposes only memory curation tools and reads', () => {
   const autoDream = BUNDLED_AGENTS.find(agent => agent.agentType === 'memoryCurator')
   assert.ok(autoDream)

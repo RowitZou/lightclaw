@@ -11,6 +11,7 @@ import {
 } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setTodos } from '../state.js'
+import { createTaskRun, getTaskRun, getTaskRunEvents } from '../taskrun/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
@@ -129,6 +130,73 @@ test('TodoWrite emits progress with chainPath when triggered by a dispatched wor
   assert.equal(signal.to.kind === 'role' ? signal.to.sessionId : null, 'main-session')
   assert.deepEqual(signal.payload.chainPath, ['main', 'webSearcher'])
   assert.equal(signal.chainId, 'chain-x')
+})
+
+test('TodoWrite also records durable TaskRun progress when currentTaskRunId is present', async () => {
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'webSearcher',
+    callerRole: 'main',
+    callerSessionId: 'main-session',
+    mode: 'blocking',
+    objective: 'Fetch a list',
+    chainId: 'chain-taskrun-progress',
+    depth: 1,
+    now: 10,
+  })
+  const workerCtx = createSessionContext({
+    cwd: '/tmp/lightclaw-todo-test',
+    model: 'fake-model',
+    sessionsDir: '/tmp/lightclaw-todo-test/sessions',
+    memoryDir: '/tmp/lightclaw-todo-test/memory',
+    sessionId: 'dispatched-progress',
+    currentUserId: 'alice',
+    currentRole: workerRole('webSearcher'),
+    currentTaskRunId: run.id,
+  })
+
+  await runWithSessionContext(workerCtx, async () => {
+    setTodos([{ content: 'fetch list', activeForm: 'fetching', status: 'in_progress' }])
+    await todoWriteTool.call(
+      { todos: [{ content: 'fetch list', activeForm: 'fetching', status: 'completed' }] },
+      {
+        cwd: '/tmp/lightclaw-todo-test',
+        abortSignal: new AbortController().signal,
+        runtime: { workspaceRoot: '/tmp/lightclaw-todo-test' } as never,
+      },
+    )
+  })
+
+  const loaded = await getTaskRun(run.id, 'alice')
+  assert.equal(loaded?.latestProgress?.label, 'fetch list')
+  const events = await getTaskRunEvents(run.id, { limit: 5 }, 'alice')
+  assert.equal(events.some(event => event.kind === 'progress'), true)
+})
+
+test('TodoWrite skips durable progress when no currentTaskRunId is present', async () => {
+  const ctx = createSessionContext({
+    cwd: '/tmp/lightclaw-todo-test',
+    model: 'fake-model',
+    sessionsDir: '/tmp/lightclaw-todo-test/sessions',
+    memoryDir: '/tmp/lightclaw-todo-test/memory',
+    sessionId: 'main-no-run',
+    currentUserId: 'alice',
+    currentRole: mainRole(),
+  })
+
+  await runWithSessionContext(ctx, async () => {
+    setTodos([{ content: 'one', activeForm: 'doing one', status: 'in_progress' }])
+    await todoWriteTool.call(
+      { todos: [{ content: 'one', activeForm: 'doing one', status: 'completed' }] },
+      {
+        cwd: '/tmp/lightclaw-todo-test',
+        abortSignal: new AbortController().signal,
+        runtime: { workspaceRoot: '/tmp/lightclaw-todo-test' } as never,
+      },
+    )
+  })
+
+  assert.deepEqual(await getTaskRunEvents('missing', { limit: 5 }, 'alice'), [])
 })
 
 function mainRole(): Role {

@@ -17,7 +17,8 @@ import { computeTaskNextRunAt } from './schedule-calc.js'
 import { runBackgroundTaskFire } from './runner.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
-import { createTaskRun, markFinished } from '../taskrun/store.js'
+import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
+import { appendArtifact, createTaskRun, markFinished } from '../taskrun/store.js'
 
 type HeapItem = {
   taskId: string
@@ -84,6 +85,11 @@ async function markBackgroundTaskRunFinishedBestEffort(
 ): Promise<void> {
   if (!taskRunId) return
   try {
+    if (outcome.kind === 'success') {
+      for (const artifact of extractArtifactDeclarationsFromText(outcome.summary)) {
+        await appendArtifact(taskRunId, artifact, Date.now(), canonicalUser)
+      }
+    }
     await markFinished(
       taskRunId,
       outcome.kind === 'success'

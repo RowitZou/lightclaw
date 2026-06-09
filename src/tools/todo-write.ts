@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { buildTool } from '../tool.js'
 import {
   getCurrentChainState,
+  getCurrentTaskRunId,
+  getCurrentUserId,
   getCurrentRole,
   getSessionId,
   getTodos,
@@ -10,6 +12,7 @@ import {
 } from '../state.js'
 import { persistTodos, validateTodos } from '../todos/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { appendProgress } from '../taskrun/store.js'
 
 const lastProgressEmitBySession = new Map<string, number>()
 
@@ -108,6 +111,10 @@ async function maybeEmitProgress(
     : [triggerRoleId]
   const rootSessionId = chainState?.path[0]?.sessionId ?? triggerSessionId
   const chainId = chainState?.chainId ?? rootSessionId
+  await recordTaskRunProgressBestEffort(
+    completed[completed.length - 1].content,
+    now,
+  )
   await getSignalRouter().publish({
     kind: 'progress',
     from: { kind: 'role', id: triggerRoleId, sessionId: triggerSessionId },
@@ -124,4 +131,23 @@ async function maybeEmitProgress(
     timing: { emittedAt: now },
     chainId,
   })
+}
+
+async function recordTaskRunProgressBestEffort(label: string, now: number): Promise<void> {
+  const taskRunId = getCurrentTaskRunId()
+  if (!taskRunId) return
+  try {
+    await appendProgress(
+      taskRunId,
+      { phase: 'todo', label },
+      now,
+      getCurrentUserId(),
+    )
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to append progress for ${taskRunId}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
