@@ -13,7 +13,7 @@ import {
 } from './scheduler.js'
 import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
-import { listTaskRuns } from '../taskrun/store.js'
+import { getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -228,6 +228,30 @@ describe('BackgroundTaskScheduler fire completion', () => {
       assert.equal(run.outcome?.summary, 'fire ok')
       assert.equal(run.currentSessionId, null)
     }
+  })
+
+  it('records finish-time artifacts on a successful bg fire and keeps finished as the last event', async () => {
+    const task = { ...fakeTask(), id: 'taskrun-artifact', notifyOn: 'failure' as const }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async () => ({
+      kind: 'success',
+      summary: 'Saved the report to /workspace/out/report.md',
+      transcriptPath: '/tmp/x',
+    }))
+
+    scheduler.fireImmediate('alice', 'taskrun-artifact')
+    await scheduler.drain()
+
+    const [run] = await listTaskRuns('alice', { scope: 'all' })
+    assert.ok(run)
+    // Terminal mark lands even though artifact recording runs first — artifact
+    // best-effort must never gate markFinished.
+    assert.equal(run.status, 'done')
+    assert.equal(run.artifactPaths?.includes('/workspace/out/report.md'), true)
+    const events = await getTaskRunEvents(run.id, {}, 'alice')
+    assert.ok(events.some(event => event.kind === 'artifact'))
+    assert.equal(events.at(-1)?.kind, 'finished')
   })
 
   it('does not double-fire a schedule:now oneshot that is heap-scheduled and fired directly', async () => {

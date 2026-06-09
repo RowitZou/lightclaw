@@ -84,12 +84,16 @@ async function markBackgroundTaskRunFinishedBestEffort(
   outcome: FireOutcome,
 ): Promise<void> {
   if (!taskRunId) return
+  // Artifact recording is a best-effort breadcrumb and MUST NOT be able to
+  // block the terminal mark — markFinished is the critical fact PR3's watchdog
+  // reconciles against. Isolate each append in its own try/catch (mirrors
+  // dispatch.ts) so an artifact write failure never leaves a finished bg fire
+  // falsely stuck at status:'running'. Artifacts stay before the finished event
+  // so `finished` remains the last event in the stream.
+  if (outcome.kind === 'success') {
+    await appendBackgroundArtifactsBestEffort(canonicalUser, taskRunId, outcome.summary)
+  }
   try {
-    if (outcome.kind === 'success') {
-      for (const artifact of extractArtifactDeclarationsFromText(outcome.summary)) {
-        await appendArtifact(taskRunId, artifact, Date.now(), canonicalUser)
-      }
-    }
     await markFinished(
       taskRunId,
       outcome.kind === 'success'
@@ -104,6 +108,24 @@ async function markBackgroundTaskRunFinishedBestEffort(
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+  }
+}
+
+async function appendBackgroundArtifactsBestEffort(
+  canonicalUser: string,
+  taskRunId: string,
+  summary: string,
+): Promise<void> {
+  for (const artifact of extractArtifactDeclarationsFromText(summary)) {
+    try {
+      await appendArtifact(taskRunId, artifact, Date.now(), canonicalUser)
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun] failed to append artifact for ${taskRunId}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
   }
 }
 
