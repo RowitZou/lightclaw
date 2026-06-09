@@ -128,6 +128,12 @@ LightClaw remembers three things: **your project** (drop a `LIGHTCLAW.md` at the
 
 ---
 
+## Design notes
+
+- [Multi-agent collaboration design (draft, in discussion)](./docs/collaboration-master-plan.md) — turning delegated work from one-shot RPC into durable, observable, resumable **task runs** (an agent is an *employee*, not a *function*). Design-stage, not yet implemented; comments / PRs on this branch welcome.
+
+---
+
 ## License
 
 MIT

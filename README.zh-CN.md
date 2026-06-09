@@ -128,6 +128,12 @@ LightClaw 帮你记三件事：**你的项目**（仓库根放 `LIGHTCLAW.md` �
 
 ---
 
+## 设计文档
+
+- [Multi-Agent 协作机制设计稿（草稿，讨论中）](./docs/collaboration-master-plan.md) —— 把「派活」从一次性 RPC 升级成可持久、可观察、可续跑的**工单（task run）**：agent 是*员工*不是*函数*。处于设计阶段、尚未实现；欢迎在本分支评论 / 提 PR。
+
+---
+
 ## License
 
 MIT
