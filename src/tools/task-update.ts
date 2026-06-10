@@ -28,11 +28,11 @@ import type { TaskRunMeta } from '../taskrun/types.js'
 const TASK_UPDATE_DESCRIPTION = [
   'Change a TaskRun state: deliver your own run, wait on a declared wake, cancel work, or settle (accept / reject) a delivered child run.',
   '',
-  "action='deliver' — conclude your own run. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. With a root runId (orchestrator) it declares the root delivered; the close is refused with an itemized list while the root still has open obligations — settle each, then retry.",
+  "action='deliver' — conclude a run you own. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. A goal root you opened closes directly instead — pass its runId; the close is refused with an itemized list while the root still has open obligations. Settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
   "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required); with runId, set a running direct child waiting.",
-  "action='cancel' — cancel work you own by TaskRun runId. Orchestrator may cancel runs inside this user's rooted trees; workers may cancel direct children. Queued / waiting runs are marked cancelled; running runs are hard-aborted before cancellation. A standing service root runId shuts down the whole service. A dispatch entry id is accepted for one compatibility window and is resolved to its backing run.",
+  "action='cancel' — cancel work you own by runId: your direct children, or any run inside goals you opened. Queued / waiting runs settle in place; running runs are stopped first; a standing service's root runId takes the whole service down, schedule included. A dispatch entry id is accepted for one compatibility window and resolved to its backing run.",
 ].join('\n')
 
 function describeObligationStatus(meta: TaskRunMeta): string {
@@ -182,51 +182,66 @@ export const taskUpdateTool = buildTool({
     const isOrchestrator = role?.kind === 'orchestrator'
 
     if (input.action === 'deliver') {
-      if (isOrchestrator) {
-        // Orchestrator delivery targets a root: close-with-settled-ledger.
-        if (!input.runId) {
-          return {
-            output: 'Delivering as orchestrator requires `runId` of the root TaskRun to close.',
-            isError: true,
-          }
+      // One meaning for every caller: conclude a run you own. The mechanics
+      // fork on the TARGET's structure, not on who is calling — a goal root
+      // (no requester above it) closes through the settled-ledger gate, an
+      // ordinary run parks at delivered awaiting its requester's verdict.
+      // Role only scopes which targets are yours.
+      if (input.runId) {
+        const target = await getTaskRun(input.runId, owner)
+        if (!target && input.runId !== getCurrentTaskRunId()) {
+          return { output: `TaskRun not found: ${input.runId}`, isError: true }
         }
-        const result = await closeRootTaskRun(input.runId, owner)
-        if (result.closed) {
-          return {
-            output: JSON.stringify({ runId: result.meta.id, status: result.meta.status }),
+        if (target && (target.kind ?? 'dispatch') === 'root') {
+          if (!isOrchestrator) {
+            return {
+              output: `TaskRun ${input.runId} is a goal root, not a run of yours; deliver concludes runs you own.`,
+              isError: true,
+            }
           }
+          const result = await closeRootTaskRun(input.runId, owner)
+          if (result.closed) {
+            return {
+              output: JSON.stringify({ runId: result.meta.id, status: result.meta.status }),
+            }
+          }
+          if (result.reason !== 'open-obligations') {
+            if (result.reason === 'not-found') {
+              return { output: `TaskRun not found: ${input.runId}`, isError: true }
+            }
+            if (result.reason === 'not-root') {
+              return { output: `TaskRun ${input.runId} is not a root TaskRun.`, isError: true }
+            }
+            return { output: `Root TaskRun ${input.runId} is already closed.` }
+          }
+          const lines = [
+            `Root TaskRun ${input.runId} still has unsettled obligations:`,
+            ...result.obligations.openRuns.map(run =>
+              `- ${run.id} [${describeObligationStatus(run)}] ${run.role} — ${run.title}`,
+            ),
+            ...result.obligations.pendingDispatchIds.map(id =>
+              `- dispatch ${id} [scheduled, not fired yet]`,
+            ),
+            '',
+            'Settle each first: TaskUpdate accept/reject delivered runs, TaskUpdate cancel scheduled/running work you no longer want, or wait for running work to deliver. Then retry.',
+          ]
+          return { output: lines.join('\n'), isError: true }
         }
-        if (result.reason !== 'open-obligations') {
-          if (result.reason === 'not-found') {
-            return { output: `TaskRun not found: ${input.runId}`, isError: true }
-          }
-          if (result.reason === 'not-root') {
-            return { output: `TaskRun ${input.runId} is not a root TaskRun.`, isError: true }
-          }
-          return { output: `Root TaskRun ${input.runId} is already closed.` }
-        }
-        const lines = [
-          `Root TaskRun ${input.runId} still has unsettled obligations:`,
-          ...result.obligations.openRuns.map(run =>
-            `- ${run.id} [${describeObligationStatus(run)}] ${run.role} — ${run.title}`,
-          ),
-          ...result.obligations.pendingDispatchIds.map(id =>
-            `- dispatch ${id} [scheduled, not fired yet]`,
-          ),
-          '',
-          'Settle each first: TaskUpdate accept/reject delivered runs, TaskUpdate cancel scheduled/running work you no longer want, or wait for running work to deliver. Then retry.',
-        ]
-        return { output: lines.join('\n'), isError: true }
       }
 
-      // Worker delivery targets its own current run only.
+      // No runId, or a non-root runId: this is delivering your own run.
       const own = getCurrentTaskRunId()
       if (!own) {
-        return { output: 'No current TaskRun to deliver.', isError: true }
+        return {
+          output: input.runId
+            ? `TaskRun ${input.runId} is not a root TaskRun, and you have no current run of your own to deliver.`
+            : 'No current TaskRun to deliver. To close a goal root, pass its runId.',
+          isError: true,
+        }
       }
       if (input.runId && input.runId !== own) {
         return {
-          output: `deliver applies to your own run only (${own}); it cannot target ${input.runId}.`,
+          output: `deliver concludes runs you own; your current run is ${own}, not ${input.runId}.`,
           isError: true,
         }
       }
