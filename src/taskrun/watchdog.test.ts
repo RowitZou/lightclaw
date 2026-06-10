@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import type { BackgroundTaskEntry } from '../background-task/types.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  appendEvent,
   appendProgress,
   createRootTaskRun,
   createTaskRun,
@@ -139,6 +140,114 @@ describe('TaskRun watchdog', () => {
       assert.equal(third.reported, true)
       assert.notEqual(third.fingerprint, first.fingerprint)
       assert.equal(delivered.length, 2)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('escalates after repeated reports for the same root fingerprint and resets after progress', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-budget-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:dm:oc_alice', {
+        objective: 'Coordinate task.',
+        title: 'Root task',
+        now: 100,
+      })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Implement task.',
+        parentRunId: root.id,
+        chainId: 'chain-1',
+        depth: 1,
+        now: 200,
+      })
+      await markStarted(child.id, 'bg-alice-child', 300, 'alice')
+      await markDelivered(child.id, { ok: true, summary: 'Ready.' }, 400, 'alice')
+
+      const first = await reconcileTaskRunsOnce('alice', {
+        now: 10_000,
+        deliveredGraceMs: 1,
+        reportFindings: async () => ({ ok: true, mode: 'queued' }),
+      })
+      assert.equal(first.reported, true)
+      const fingerprint = first.fingerprint!
+      await appendEvent(child.id, 'watchdog-report', {
+        fingerprint,
+        findingKind: 'unsettled-delivered',
+        rootRunId: root.id,
+      }, 10_001, 'alice')
+      await appendEvent(child.id, 'watchdog-report', {
+        fingerprint,
+        findingKind: 'unsettled-delivered',
+        rootRunId: root.id,
+      }, 10_002, 'alice')
+
+      let escalations = 0
+      let reports = 0
+      const escalated = await reconcileTaskRunsOnce('alice', {
+        now: 10_003,
+        deliveredGraceMs: 1,
+        budgetWindowMinutes: 30,
+        reportFindings: async () => {
+          reports += 1
+          return { ok: true, mode: 'queued' }
+        },
+        escalateFindings: async () => {
+          escalations += 1
+          return { ok: true, mode: 'synthetic' }
+        },
+      })
+      assert.equal(escalated.reported, false)
+      assert.deepEqual(escalated.escalatedRootRunIds, [root.id])
+      assert.equal(escalations, 1)
+      assert.equal(reports, 0)
+      assert.equal(
+        (await getTaskRunEvents(root.id, {}, 'alice')).some(event =>
+          event.kind === 'escalated' &&
+          (event as TaskRunEvent & { fingerprint?: string }).fingerprint === fingerprint,
+        ),
+        true,
+      )
+
+      const suppressed = await reconcileTaskRunsOnce('alice', {
+        now: 10_004,
+        deliveredGraceMs: 1,
+        reportFindings: async () => {
+          reports += 1
+          return { ok: true, mode: 'queued' }
+        },
+        escalateFindings: async () => {
+          escalations += 1
+          return { ok: true, mode: 'synthetic' }
+        },
+      })
+      assert.equal(suppressed.reported, false)
+      assert.equal(reports, 0)
+      assert.equal(escalations, 1)
+
+      await appendProgress(child.id, { label: 'state moved' }, 10_005, 'alice')
+      const resumed = await reconcileTaskRunsOnce('alice', {
+        now: 10_006,
+        deliveredGraceMs: 1,
+        reportFindings: async () => {
+          reports += 1
+          return { ok: true, mode: 'queued' }
+        },
+        escalateFindings: async () => {
+          escalations += 1
+          return { ok: true, mode: 'synthetic' }
+        },
+      })
+      assert.equal(resumed.reported, true)
+      assert.equal(reports, 1)
+      assert.equal(escalations, 1)
+      assert.notEqual(resumed.fingerprint, fingerprint)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

@@ -141,6 +141,15 @@ export type TaskRunWatchdogReportEvent = {
   rootRunId: string
 }
 
+export type TaskRunEscalatedEvent = {
+  seq: number
+  ts: number
+  kind: 'escalated'
+  fingerprint: string
+  reason: 'stalled-reconcile' | 'delivery-failed'
+  detail?: string
+}
+
 export type TaskRunEvent =
   | TaskRunCreatedEvent
   | TaskRunStartedEvent
@@ -149,6 +158,7 @@ export type TaskRunEvent =
   | TaskRunRejectedEvent
   | TaskRunCancelledEvent
   | TaskRunWatchdogReportEvent
+  | TaskRunEscalatedEvent
   | TaskRunFinishedEvent
   | TaskRunProgressEvent
   | TaskRunArtifactEvent
