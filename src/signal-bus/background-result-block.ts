@@ -66,14 +66,24 @@ export function formatBackgroundTaskResultBlock(input: {
   dispatchId: string
   result: string
   receiverRole: string
+  taskRunId?: string
 }): string {
   const template = input.receiverRole === 'main'
     ? BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE
     : BACKGROUND_TASK_RESULT_BLOCK_WORKER_TEMPLATE
+  // The taskRunId attribute is data the receiver needs to settle the run via
+  // TaskUpdate; template prose stays untouched (model-facing wording is
+  // finalized in the dedicated end-of-project prompt PR).
+  const dispatchIdAttr = `dispatchId="${escapeAttribute(input.dispatchId)}"`
   return template
     .replace('label="{label}"', `label="${escapeAttribute(input.label)}"`)
     .replace('outcome="{success|failed|permission-denied|aborted}"', `outcome="${input.outcome}"`)
-    .replace('dispatchId="{id}"', `dispatchId="${escapeAttribute(input.dispatchId)}"`)
+    .replace(
+      'dispatchId="{id}"',
+      input.taskRunId
+        ? `${dispatchIdAttr} taskRunId="${escapeAttribute(input.taskRunId)}"`
+        : dispatchIdAttr,
+    )
     .replace('{result text from the dispatched run}', input.result.trim() || '(empty result)')
 }
 

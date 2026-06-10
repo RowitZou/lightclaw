@@ -68,6 +68,10 @@ export type SignalPayload = {
         outcome: 'success' | 'failed' | 'permission-denied' | 'aborted'
         result: string
         priorPromptNotice?: string
+        // Durable TaskRun behind this fire — the receiver settles it
+        // (accept / reject) via TaskUpdate. Absent when the best-effort
+        // store write failed at dispatch/fire time.
+        taskRunId?: string
       }
     | {
         kind: 'background-exec-result'

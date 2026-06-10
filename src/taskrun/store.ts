@@ -281,6 +281,12 @@ export async function markDelivered(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
+  // Idempotent: a worker may have explicitly delivered its own run (TaskUpdate)
+  // before the framework's settle-on-return path fires — the first self-report
+  // wins and is never overwritten by the framework's derived outcome.
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta) return null
+  if (meta.status === 'delivered' || isTerminalStatus(meta.status)) return meta
   return appendEvent(
     id,
     'delivered',

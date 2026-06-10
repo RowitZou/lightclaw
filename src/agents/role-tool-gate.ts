@@ -5,9 +5,10 @@ import type { Role } from './types.js'
 
 const BLOCKED_WORKER_TOOLS = new Set([
   'Dispatch',
+  // Workers cannot create roots; TaskUpdate (deliver own / settle direct
+  // children) is intentionally NOT blocked — acceptance settles edge-by-edge
+  // up the tree, so workers need it for their own dispatched children.
   'TaskCreate',
-  'TaskAccept',
-  'TaskClose',
   // Notify is the user-facing escalation card. Reserved for the orchestrator
   // (main) so the agent-as-manager invariant holds: workers report back to
   // their requester via final-text, only main decides when to push a card

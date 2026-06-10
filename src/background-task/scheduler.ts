@@ -100,10 +100,10 @@ async function markBackgroundTaskRunTerminalBestEffort(
   try {
     if (task.schedule.kind === 'oneshot') {
       // Finite background work is delivered, not finished: the result still
-      // has to reach the requester and be accepted (TaskAccept / TaskClose
-      // settle it). A failed delivery leaves this run pinned at
-      // status:'delivered' so its open root stays visibly unsettled instead
-      // of silently closing over an orphaned result.
+      // has to reach the requester and be accepted (TaskUpdate settles it).
+      // A failed delivery leaves this run pinned at status:'delivered' so its
+      // open root stays visibly unsettled instead of silently closing over an
+      // orphaned result.
       await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
     } else {
       // Recurring / interval fires are standing services with no root to pin
@@ -537,7 +537,7 @@ export class BackgroundTaskScheduler {
       (task.notifyOn === 'success' && outcome.kind === 'success') ||
       (task.notifyOn === 'failure' && outcome.kind === 'failure')
     if (shouldNotify) {
-      await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome)
+      await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome, taskRunId)
     }
   }
 
@@ -547,6 +547,7 @@ export class BackgroundTaskScheduler {
     fireUuid: string,
     firedAt: string,
     outcome: FireOutcome,
+    taskRunId?: string,
   ): Promise<void> {
     const identity = await getIdentity(canonicalUser).catch(() => null)
     const ownerOpenId = identity?.channels.feishu[0]
@@ -590,6 +591,7 @@ export class BackgroundTaskScheduler {
       outcome: outcomeLabel,
       result: resultText,
       ...(priorPromptNotice ? { priorPromptNotice } : {}),
+      ...(taskRunId ? { taskRunId } : {}),
     }
 
     // Spawner-aware delivery: if a still-alive worker ancestor spawned this
