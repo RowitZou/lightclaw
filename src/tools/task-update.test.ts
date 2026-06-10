@@ -407,6 +407,81 @@ test('worker TaskUpdate cancel is limited to direct queued or paused children', 
   assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'cancelled')
 })
 
+test('a worker can shut down the standing service it created', async () => {
+  // A worker-created recurring service is a top-level standing root
+  // (parentRunId null), so the direct-child gate alone would lock the
+  // creator out of its own service — entry ownership must grant cancel,
+  // the way the retired CancelDispatch did.
+  const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
+  const root = await createStandingRootTaskRun('alice', {
+    objective: 'worker service',
+    role: 'coder',
+    callerRole: 'generalist',
+    callerSessionId: 'dispatched-worker',
+    chainId: 'chain-worker-svc',
+  })
+  const queued = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'generalist',
+    callerSessionId: 'dispatched-worker',
+    mode: 'background',
+    objective: 'worker service',
+    parentRunId: root.id,
+    chainId: 'chain-worker-svc',
+    depth: 1,
+  })
+  addBackgroundTask('alice', {
+    id: 'svc-worker',
+    ownerCanonicalUser: 'alice',
+    prompt: 'worker service',
+    role: 'coder',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'worker svc',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    callerRole: 'generalist',
+    callerSessionId: 'dispatched-worker',
+    standingRootRunId: root.id,
+    taskRunId: queued.id,
+  })
+
+  const shutdown = await runAsWorker(workerRun.id, () =>
+    taskUpdateTool.call({ action: 'cancel', runId: root.id }, toolContext()),
+  )
+  assert.equal(shutdown.isError, undefined)
+  assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'done')
+  assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'cancelled')
+})
+
+test('a worker cannot shut down a standing service it does not own', async () => {
+  const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
+  const root = await standingRoot()
+  addBackgroundTask('alice', {
+    id: 'svc-main',
+    ownerCanonicalUser: 'alice',
+    prompt: 'standing service',
+    role: 'coder',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'svc',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    standingRootRunId: root.id,
+  })
+
+  const denied = await runAsWorker(workerRun.id, () =>
+    taskUpdateTool.call({ action: 'cancel', runId: root.id }, toolContext()),
+  )
+  assert.equal(denied.isError, true)
+  assert.notEqual((await getTaskRun(root.id, 'alice'))?.status, 'done')
+})
+
 test('settling the last fire of a cancelled standing service closes its orphan root', async () => {
   // Stopping a standing service with a fire in flight: the close is refused by the
   // obligations gate, the entry is removed, and the fire later parks at

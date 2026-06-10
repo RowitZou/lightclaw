@@ -355,7 +355,16 @@ export const taskUpdateTool = buildTool({
         }
       } else {
         const own = getCurrentTaskRunId()
-        if (!own || target.parentRunId !== own) {
+        // A worker-created standing service is a top-level root
+        // (parentRunId null), so the direct-child edge alone would lock the
+        // creator out of its own service — entry ownership grants the cancel,
+        // the way the retired CancelDispatch did.
+        const ownsService =
+          target.standing === true &&
+          (target.kind ?? 'dispatch') === 'root' &&
+          findBackingDispatches(owner, target.id)
+            .some(entry => taskCallerSession(entry) === getSessionId())
+        if (!ownsService && (!own || target.parentRunId !== own)) {
           return {
             output: `TaskRun ${target.id} is not a direct child of your current run; you can only cancel work you dispatched.`,
             isError: true,
