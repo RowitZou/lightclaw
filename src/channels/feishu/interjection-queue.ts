@@ -44,6 +44,10 @@ export class InterjectionQueue {
     return this.inFlightSessions.has(sessionId)
   }
 
+  getInflightSessionIds(): Set<string> {
+    return new Set(this.inFlightSessions)
+  }
+
   /**
    * Map a messageId back to the sessionId whose in-flight turn it opened, or
    * undefined if it is not the opener of any current in-flight turn. Used by

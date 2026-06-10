@@ -5,6 +5,7 @@ import { registerCodexAuthProvider } from './auth/codex/index.js'
 import { ensureOAuthModelsUsable } from './auth/codex/startup.js'
 import { getBackgroundTaskScheduler } from './background-task/scheduler.js'
 import { getBackgroundExecWatcher } from './background-exec/watcher.js'
+import { getTaskRunWatchdog } from './taskrun/watchdog.js'
 import { loadChannelConfig } from './channels/config.js'
 import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
@@ -117,6 +118,7 @@ export async function initializeApp(input?: InitializeAppInput): Promise<Session
   await initializeUserDefinedAgents({ home: lightclawHome(), failOnError: true, watch: true })
   registerBusSubscribers()
   getBackgroundTaskScheduler().start(resolvedConfig)
+  getTaskRunWatchdog().start(resolvedConfig)
   getBackgroundExecWatcher().start(resolvedConfig)
   installSignalHandlers(sessionContext)
   getRuntimePool().startReaper()

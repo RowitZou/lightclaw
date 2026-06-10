@@ -177,6 +177,7 @@ export class BackgroundTaskScheduler {
   // (2026-05-20 dogfood double-fire). Claimed oneshots are skipped by tick()
   // and excluded from heap rebuilds.
   private readonly claimedByUser = new Map<string, Set<string>>()
+  private readonly activeTaskRunIdsByUser = new Map<string, Set<string>>()
   private readonly inFlight = new Set<Promise<void>>()
   private pollerTimer: NodeJS.Timeout | null = null
   private config: LightClawConfig | null = null
@@ -227,6 +228,10 @@ export class BackgroundTaskScheduler {
       fireUuid: randomUUID(),
       attempt: 1,
     })
+  }
+
+  getActiveTaskRunIds(canonicalUser: string): Set<string> {
+    return new Set(this.activeTaskRunIdsByUser.get(canonicalUser) ?? [])
   }
 
   private rebuildAll(): void {
@@ -373,6 +378,26 @@ export class BackgroundTaskScheduler {
     return this.claimedByUser.get(canonicalUser)?.has(taskId) ?? false
   }
 
+  private markActiveTaskRun(canonicalUser: string, taskRunId: string | undefined): void {
+    if (!taskRunId) return
+    let active = this.activeTaskRunIdsByUser.get(canonicalUser)
+    if (!active) {
+      active = new Set()
+      this.activeTaskRunIdsByUser.set(canonicalUser, active)
+    }
+    active.add(taskRunId)
+  }
+
+  private unmarkActiveTaskRun(canonicalUser: string, taskRunId: string | undefined): void {
+    if (!taskRunId) return
+    const active = this.activeTaskRunIdsByUser.get(canonicalUser)
+    if (!active) return
+    active.delete(taskRunId)
+    if (active.size === 0) {
+      this.activeTaskRunIdsByUser.delete(canonicalUser)
+    }
+  }
+
   private fire(
     canonicalUser: string,
     task: BackgroundTaskEntry,
@@ -407,16 +432,22 @@ export class BackgroundTaskScheduler {
     // through the queue item and reuse the same run either way.
     const presetTaskRunId = taskRunId
       ?? (task.schedule.kind === 'oneshot' ? task.taskRunId : undefined)
+    this.markActiveTaskRun(canonicalUser, presetTaskRunId)
+    let activeTaskRunId = presetTaskRunId
     const taskRunPromise = presetTaskRunId
       ? Promise.resolve<string | undefined>(presetTaskRunId)
       : createBackgroundTaskRunBestEffort(canonicalUser, task, fireUuid)
     const promise = taskRunPromise
-      .then(runId => runBackgroundTaskFireImpl({
-        task,
-        fireUuid,
-        signal: controller.signal,
-        ...(runId ? { taskRunId: runId } : {}),
-      }).then(outcome => ({ outcome, taskRunId: runId })))
+      .then(runId => {
+        activeTaskRunId = runId
+        this.markActiveTaskRun(canonicalUser, runId)
+        return runBackgroundTaskFireImpl({
+          task,
+          fireUuid,
+          signal: controller.signal,
+          ...(runId ? { taskRunId: runId } : {}),
+        }).then(outcome => ({ outcome, taskRunId: runId }))
+      })
       .then(
         result => ({
           outcome: {
@@ -458,6 +489,7 @@ export class BackgroundTaskScheduler {
       .finally(() => {
         // Safety net: releaseSlot already ran on every normal path above.
         releaseSlot()
+        this.unmarkActiveTaskRun(canonicalUser, activeTaskRunId)
         this.inFlight.delete(promise)
       })
     this.inFlight.add(promise)

@@ -132,6 +132,15 @@ export type TaskRunCancelledEvent = {
   reason?: string
 }
 
+export type TaskRunWatchdogReportEvent = {
+  seq: number
+  ts: number
+  kind: 'watchdog-report'
+  fingerprint: string
+  findingKind: 'stranded' | 'unsettled-delivered'
+  rootRunId: string
+}
+
 export type TaskRunEvent =
   | TaskRunCreatedEvent
   | TaskRunStartedEvent
@@ -139,6 +148,7 @@ export type TaskRunEvent =
   | TaskRunAcceptedEvent
   | TaskRunRejectedEvent
   | TaskRunCancelledEvent
+  | TaskRunWatchdogReportEvent
   | TaskRunFinishedEvent
   | TaskRunProgressEvent
   | TaskRunArtifactEvent

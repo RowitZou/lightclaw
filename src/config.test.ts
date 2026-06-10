@@ -642,6 +642,46 @@ describe('config: endpoints + models registry', () => {
     })
   })
 
+  it('defaults taskrun watchdog config', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.taskrun.watchdog, {
+      intervalMinutes: 5,
+      deliveredGraceMs: 120_000,
+      budgetWindowMinutes: 30,
+      deliveryRetryMaxAttempts: 3,
+    })
+  })
+
+  it('parses taskrun watchdog overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        opus: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      taskrun: {
+        watchdog: {
+          intervalMinutes: 0,
+          deliveredGraceMs: 12_345,
+          budgetWindowMinutes: 9,
+          deliveryRetryMaxAttempts: 4,
+        },
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.taskrun.watchdog, {
+      intervalMinutes: 0,
+      deliveredGraceMs: 12_345,
+      budgetWindowMinutes: 9,
+      deliveryRetryMaxAttempts: 4,
+    })
+  })
+
   it('defaults memoryNudge on with a 20-turn cadence', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },

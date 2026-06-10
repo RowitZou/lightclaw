@@ -363,6 +363,7 @@ export type LightClawConfig = {
   streamIdle: StreamIdleConfig
   memory: MemoryConfig
   compact: CompactConfig
+  taskrun: TaskRunConfig
   dispatch: DispatchConfig
   subLLM: SubLLMConfig
   mcp: McpConfig
@@ -422,6 +423,17 @@ export type DispatchConfig = {
   scheduler: DispatchSchedulerConfig
 }
 
+export type TaskRunWatchdogConfig = {
+  intervalMinutes: number
+  deliveredGraceMs: number
+  budgetWindowMinutes: number
+  deliveryRetryMaxAttempts: number
+}
+
+export type TaskRunConfig = {
+  watchdog: TaskRunWatchdogConfig
+}
+
 type ConfigFileDockerMount = NonNullable<
   NonNullable<ConfigFileShape['runtime']>['dockerSettings']
 >['mounts'] extends Array<infer T> | undefined ? T : never
@@ -473,6 +485,13 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: 3,
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
+}
+
+const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
+  intervalMinutes: 5,
+  deliveredGraceMs: 120_000,
+  budgetWindowMinutes: 30,
+  deliveryRetryMaxAttempts: 3,
 }
 
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
@@ -1692,6 +1711,7 @@ export function getConfig(): LightClawConfig {
   const networkConfig = resolveNetworkBridgeSettings(fileConfig.runtime?.network ?? {})
 
   // — dispatch —
+  const taskrun = resolveTaskRunConfig(fileConfig)
   const dispatch = resolveDispatchConfig(fileConfig)
 
   // — sub-LLM pins —
@@ -1770,6 +1790,7 @@ export function getConfig(): LightClawConfig {
         },
       },
     },
+    taskrun,
     dispatch,
     subLLM,
     mcp: {
@@ -1956,6 +1977,43 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
     maxChainDepthCeiling: ceiling,
     ephemeralSessionTtlMs,
     scheduler,
+  }
+}
+
+function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
+  const watchdog = fileConfig.taskrun?.watchdog ?? {}
+  const intervalRaw = Number(watchdog.intervalMinutes)
+  const graceRaw = Number(watchdog.deliveredGraceMs)
+  const budgetWindowRaw = Number(watchdog.budgetWindowMinutes)
+  const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
+
+  return {
+    watchdog: {
+      intervalMinutes: Math.max(
+        0,
+        Math.floor(Number.isFinite(intervalRaw)
+          ? intervalRaw
+          : DEFAULT_TASKRUN_WATCHDOG.intervalMinutes),
+      ),
+      deliveredGraceMs: Math.max(
+        0,
+        Math.floor(Number.isFinite(graceRaw)
+          ? graceRaw
+          : DEFAULT_TASKRUN_WATCHDOG.deliveredGraceMs),
+      ),
+      budgetWindowMinutes: Math.max(
+        1,
+        Math.floor(Number.isFinite(budgetWindowRaw)
+          ? budgetWindowRaw
+          : DEFAULT_TASKRUN_WATCHDOG.budgetWindowMinutes),
+      ),
+      deliveryRetryMaxAttempts: Math.max(
+        1,
+        Math.floor(Number.isFinite(retryRaw)
+          ? retryRaw
+          : DEFAULT_TASKRUN_WATCHDOG.deliveryRetryMaxAttempts),
+      ),
+    },
   }
 }
 

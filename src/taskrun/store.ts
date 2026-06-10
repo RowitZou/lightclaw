@@ -83,6 +83,33 @@ function taskRunsRoot(ownerCanonicalUser: string): string {
   )
 }
 
+export async function listTaskRunOwners(): Promise<string[]> {
+  const usersRoot = path.join(lightclawHome(), 'identity', 'per-user')
+  let users
+  try {
+    users = await readdir(usersRoot, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  const owners: string[] = []
+  for (const user of users) {
+    if (!user.isDirectory()) continue
+    try {
+      const taskruns = await readdir(path.join(usersRoot, user.name, 'taskruns'), {
+        withFileTypes: true,
+      })
+      if (taskruns.some(entry => entry.isDirectory())) {
+        owners.push(user.name)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+  }
+  return owners.sort()
+}
+
 function taskRunDir(ownerCanonicalUser: string, id: string): string {
   return path.join(taskRunsRoot(ownerCanonicalUser), sanitizePathSegment(id))
 }

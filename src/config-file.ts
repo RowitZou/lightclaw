@@ -241,6 +241,14 @@ export type ConfigFileShape = {
    *  `microCompact`. Legacy top-level keys still accepted with deprecation
    *  warning. */
   compact?: ConfigFileCompactSection
+  taskrun?: {
+    watchdog?: {
+      intervalMinutes?: number
+      deliveredGraceMs?: number
+      budgetWindowMinutes?: number
+      deliveryRetryMaxAttempts?: number
+    }
+  }
   dispatch?: {
     maxChainDepth?: number
     maxChainDepthCeiling?: number
