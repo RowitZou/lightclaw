@@ -42,10 +42,12 @@ import {
 import { t } from '../i18n/index.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
+  acceptTaskRun,
   appendArtifact,
   createTaskRun,
   getTaskRun,
-  markFinished,
+  markCancelled,
+  markDelivered,
   markStarted,
 } from '../taskrun/store.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
@@ -216,6 +218,16 @@ async function resolveDispatchParentTaskRun(input: {
   | { ok: true; parentRunId: string | undefined }
   | { ok: false; message: string }
 > {
+  // Recurring / interval dispatches are standing services regardless of who
+  // creates them: they never attach into a root's tree. Attaching a worker's
+  // recurring service under its run would make the root's obligations never
+  // drain (each future fire lands a fresh in-tree run).
+  if (
+    input.schedule !== 'now' &&
+    (input.schedule.kind === 'recurring' || input.schedule.kind === 'interval')
+  ) {
+    return { ok: true, parentRunId: undefined }
+  }
   if (isFiniteMainDispatch(input.callerKind, input.schedule)) {
     if (!input.task) {
       return {
@@ -298,16 +310,20 @@ async function createDispatchTaskRunBestEffort(input: {
   return runId
 }
 
-async function markDispatchTaskRunFinishedBestEffort(input: {
+// Blocking delivery is inline: the caller is frozen in the tool call and
+// receives the final text directly, so delivery + acceptance collapse into the
+// return — recorded honestly as delivered -> accepted(auto) -> finished.
+async function settleBlockingTaskRunBestEffort(input: {
   ownerCanonicalUser: string
   taskRunId: string | undefined
+  acceptedByRole: string
   ok: boolean
   summary?: string
   error?: string
 }): Promise<void> {
   if (!input.taskRunId) return
   try {
-    await markFinished(
+    await markDelivered(
       input.taskRunId,
       {
         ok: input.ok,
@@ -317,12 +333,55 @@ async function markDispatchTaskRunFinishedBestEffort(input: {
       Date.now(),
       input.ownerCanonicalUser,
     )
+    await acceptTaskRun(
+      input.taskRunId,
+      { byRole: input.acceptedByRole, auto: true },
+      Date.now(),
+      input.ownerCanonicalUser,
+    )
   } catch (error) {
     process.stderr.write(
-      `[taskrun] failed to mark dispatch run ${input.taskRunId} finished: ${
+      `[taskrun] failed to settle blocking run ${input.taskRunId}: ${
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+  }
+}
+
+// Oneshot background dispatches get their durable run at dispatch time
+// (status 'queued') so scheduled-but-not-fired work is visible in the tree
+// and counts as a root obligation; the scheduler only marks it started.
+async function createQueuedDispatchTaskRunBestEffort(input: {
+  ownerCanonicalUser: string
+  role: string
+  callerRole: string
+  callerSessionId: string
+  objective: string
+  title?: string
+  parentRunId?: string
+  chainState: ChainState
+}): Promise<string | undefined> {
+  try {
+    const run = await createTaskRun({
+      ownerCanonicalUser: input.ownerCanonicalUser,
+      role: input.role,
+      callerRole: input.callerRole,
+      callerSessionId: input.callerSessionId,
+      mode: 'background',
+      objective: input.objective,
+      title: input.title,
+      parentRunId: input.parentRunId ?? null,
+      chainId: input.chainState.chainId,
+      depth: input.chainState.depth,
+    })
+    return run.id
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to create queued dispatch run: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return undefined
   }
 }
 
@@ -583,9 +642,10 @@ export async function executeDispatch(
           : {}),
       })
     } catch (error) {
-      await markDispatchTaskRunFinishedBestEffort({
+      await settleBlockingTaskRunBestEffort({
         ownerCanonicalUser: userId,
         taskRunId,
+        acceptedByRole: callerRole.agentType,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -594,9 +654,10 @@ export async function executeDispatch(
       router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
     }
     if (result.kind === 'failure') {
-      await markDispatchTaskRunFinishedBestEffort({
+      await settleBlockingTaskRunBestEffort({
         ownerCanonicalUser: userId,
         taskRunId,
+        acceptedByRole: callerRole.agentType,
         ok: false,
         error: formatWorkerFailureForToolResult(result.envelope),
       })
@@ -620,9 +681,10 @@ export async function executeDispatch(
       taskRunId,
       finalText: result.finalText,
     })
-    await markDispatchTaskRunFinishedBestEffort({
+    await settleBlockingTaskRunBestEffort({
       ownerCanonicalUser: userId,
       taskRunId,
+      acceptedByRole: callerRole.agentType,
       ok: true,
       summary: result.finalText || '(dispatched role returned empty text)',
     })
@@ -648,6 +710,18 @@ export async function executeDispatch(
     return { output: scheduleError, isError: true }
   }
   const now = new Date().toISOString()
+  const bgTaskRunId = normalizedSchedule.kind === 'oneshot'
+    ? await createQueuedDispatchTaskRunBestEffort({
+        ownerCanonicalUser: userId,
+        role: input.role,
+        callerRole: callerRole.agentType,
+        callerSessionId: sessionId,
+        objective: input.prompt,
+        title: input.label,
+        parentRunId: parentTaskRun.parentRunId,
+        chainState: effectiveChildChainState,
+      })
+    : undefined
   const entry = {
     id: dispatchId,
     ownerCanonicalUser: userId,
@@ -663,6 +737,7 @@ export async function executeDispatch(
     callerRole: callerRole.agentType,
     callerSessionId: sessionId,
     ...(parentTaskRun.parentRunId ? { parentTaskRunId: parentTaskRun.parentRunId } : {}),
+    ...(bgTaskRunId ? { taskRunId: bgTaskRunId } : {}),
     chainState: effectiveChildChainState,
   }
   addBackgroundTask(userId, entry)
@@ -791,6 +866,19 @@ export const cancelDispatchTool = buildTool({
     const removed = removeBackgroundTask(userId, input.id)
     notifyBackgroundTaskChanged(userId, input.id)
     if (removed) {
+      if (owned?.taskRunId) {
+        // Dispatch-time queued runs must be settled on cancel, or the
+        // never-to-fire run pins its root open forever.
+        try {
+          await markCancelled(owned.taskRunId, 'cancelled via CancelDispatch', Date.now(), userId)
+        } catch (error) {
+          process.stderr.write(
+            `[taskrun] failed to mark run ${owned.taskRunId} cancelled: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          )
+        }
+      }
       appendCompletedTaskRecord(userId, {
         id: input.id,
         outcome: 'cancelled',

@@ -13,7 +13,7 @@ import {
 } from './scheduler.js'
 import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
-import { getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import { createTaskRun, getTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -202,7 +202,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(remaining?.length ?? 0, 0, 'queue must be empty after tick drains it')
   })
 
-  it('creates one durable TaskRun per background fire and marks terminal outcome', async () => {
+  it('creates one durable TaskRun per recurring fire and marks terminal outcome', async () => {
     const task = { ...fakeTask(), id: 'taskrun-fire', notifyOn: 'failure' as const }
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
@@ -230,7 +230,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     }
   })
 
-  it('records finish-time artifacts on a successful bg fire and keeps finished as the last event', async () => {
+  it('records finish-time artifacts on a successful recurring fire and keeps finished as the last event', async () => {
     const task = { ...fakeTask(), id: 'taskrun-artifact', notifyOn: 'failure' as const }
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
@@ -252,6 +252,52 @@ describe('BackgroundTaskScheduler fire completion', () => {
     const events = await getTaskRunEvents(run.id, {}, 'alice')
     assert.ok(events.some(event => event.kind === 'artifact'))
     assert.equal(events.at(-1)?.kind, 'finished')
+  })
+
+  it('reuses the dispatch-time queued run for oneshot fires and parks it at delivered', async () => {
+    const preset = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Write the scheduled report.',
+      chainId: 'chain-oneshot',
+      depth: 1,
+    })
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      id: 'oneshot-delivered',
+      notifyOn: 'failure',
+      schedule: { kind: 'oneshot', at: new Date(Date.now() + 60_000).toISOString() },
+      taskRunId: preset.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async ({ taskRunId }) => {
+      // The fire must reuse the dispatch-time queued run, not create a new one.
+      assert.equal(taskRunId, preset.id)
+      return {
+        kind: 'success',
+        summary: 'Saved the report to /workspace/out/report.md',
+        transcriptPath: '/tmp/x',
+      }
+    })
+
+    scheduler.fireImmediate('alice', 'oneshot-delivered')
+    await scheduler.drain()
+
+    const runs = await listTaskRuns('alice', { scope: 'all' })
+    assert.deepEqual(runs.map(run => run.id), [preset.id])
+    const run = await getTaskRun(preset.id, 'alice')
+    // Finite background work parks at delivered (awaiting acceptance), NOT a
+    // terminal state — a failed delivery stays visible instead of closing.
+    assert.equal(run?.status, 'delivered')
+    assert.equal(run?.terminalAt, undefined)
+    assert.equal(run?.outcome?.ok, true)
+    const events = await getTaskRunEvents(preset.id, {}, 'alice')
+    assert.ok(events.some(event => event.kind === 'artifact'))
+    assert.equal(events.at(-1)?.kind, 'delivered')
   })
 
   it('does not double-fire a schedule:now oneshot that is heap-scheduled and fired directly', async () => {

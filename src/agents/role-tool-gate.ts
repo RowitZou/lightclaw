@@ -6,6 +6,8 @@ import type { Role } from './types.js'
 const BLOCKED_WORKER_TOOLS = new Set([
   'Dispatch',
   'TaskCreate',
+  'TaskAccept',
+  'TaskClose',
   // Notify is the user-facing escalation card. Reserved for the orchestrator
   // (main) so the agent-as-manager invariant holds: workers report back to
   // their requester via final-text, only main decides when to push a card

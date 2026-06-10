@@ -38,6 +38,8 @@ import { showSlashCatalogTool } from './tools/show-slash-catalog.js'
 import { skillDeleteTool } from './tools/skill-delete.js'
 import { skillWriteTool } from './tools/skill-write.js'
 import { sleepTool } from './tools/sleep.js'
+import { taskAcceptTool } from './tools/task-accept.js'
+import { taskCloseTool } from './tools/task-close.js'
 import { taskCreateTool } from './tools/task-create.js'
 import { taskInspectTool } from './tools/task-inspect.js'
 import { todoWriteTool } from './tools/todo-write.js'
@@ -80,6 +82,8 @@ export const builtinTools = [
   skillDeleteTool,
   skillWriteTool,
   sleepTool,
+  taskAcceptTool,
+  taskCloseTool,
   taskCreateTool,
   taskInspectTool,
   useSkillTool,

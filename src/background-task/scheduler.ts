@@ -18,7 +18,7 @@ import { runBackgroundTaskFire } from './runner.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
-import { appendArtifact, createTaskRun, markFinished } from '../taskrun/store.js'
+import { appendArtifact, createTaskRun, markDelivered, markFinished } from '../taskrun/store.js'
 
 type HeapItem = {
   taskId: string
@@ -78,33 +78,41 @@ async function createBackgroundTaskRunBestEffort(
   }
 }
 
-async function markBackgroundTaskRunFinishedBestEffort(
+async function markBackgroundTaskRunTerminalBestEffort(
   canonicalUser: string,
+  task: BackgroundTaskEntry,
   taskRunId: string | undefined,
   outcome: FireOutcome,
 ): Promise<void> {
   if (!taskRunId) return
   // Artifact recording is a best-effort breadcrumb and MUST NOT be able to
-  // block the terminal mark — markFinished is the critical fact PR3's watchdog
-  // reconciles against. Isolate each append in its own try/catch (mirrors
-  // dispatch.ts) so an artifact write failure never leaves a finished bg fire
-  // falsely stuck at status:'running'. Artifacts stay before the finished event
-  // so `finished` remains the last event in the stream.
+  // block the terminal mark — the delivered/finished event is the critical
+  // fact the watchdog reconciles against. Isolate each append in its own
+  // try/catch (mirrors dispatch.ts) so an artifact write failure never leaves
+  // a settled bg fire falsely stuck at status:'running'. Artifacts stay before
+  // the delivered/finished event so it remains the last event in the stream.
   if (outcome.kind === 'success') {
     await appendBackgroundArtifactsBestEffort(canonicalUser, taskRunId, outcome.summary)
   }
+  const runOutcome = outcome.kind === 'success'
+    ? { ok: true, summary: outcome.summary.slice(0, 500) }
+    : { ok: false, error: outcome.reason.slice(0, 500) }
   try {
-    await markFinished(
-      taskRunId,
-      outcome.kind === 'success'
-        ? { ok: true, summary: outcome.summary.slice(0, 500) }
-        : { ok: false, error: outcome.reason.slice(0, 500) },
-      Date.now(),
-      canonicalUser,
-    )
+    if (task.schedule.kind === 'oneshot') {
+      // Finite background work is delivered, not finished: the result still
+      // has to reach the requester and be accepted (TaskAccept / TaskClose
+      // settle it). A failed delivery leaves this run pinned at
+      // status:'delivered' so its open root stays visibly unsettled instead
+      // of silently closing over an orphaned result.
+      await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
+    } else {
+      // Recurring / interval fires are standing services with no root to pin
+      // and no acceptance step — terminal on completion, as before.
+      await markFinished(taskRunId, runOutcome, Date.now(), canonicalUser)
+    }
   } catch (error) {
     process.stderr.write(
-      `[taskrun] failed to mark background run ${taskRunId} finished: ${
+      `[taskrun] failed to mark background run ${taskRunId} terminal: ${
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
@@ -394,8 +402,13 @@ export class BackgroundTaskScheduler {
       this.dequeue(canonicalUser)
     }
 
-    const taskRunPromise = taskRunId
-      ? Promise.resolve(taskRunId)
+    // Oneshot entries carry their dispatch-time queued run; recurring /
+    // interval entries create one run per fire. Retries pass taskRunId back
+    // through the queue item and reuse the same run either way.
+    const presetTaskRunId = taskRunId
+      ?? (task.schedule.kind === 'oneshot' ? task.taskRunId : undefined)
+    const taskRunPromise = presetTaskRunId
+      ? Promise.resolve<string | undefined>(presetTaskRunId)
       : createBackgroundTaskRunBestEffort(canonicalUser, task, fireUuid)
     const promise = taskRunPromise
       .then(runId => runBackgroundTaskFireImpl({
@@ -495,7 +508,7 @@ export class BackgroundTaskScheduler {
     // Terminal outcome — this run will not fire again. Release the claim so a
     // recurring task can be rescheduled and the claimed-set does not leak.
     this.unmarkClaimed(canonicalUser, task.id)
-    await markBackgroundTaskRunFinishedBestEffort(canonicalUser, taskRunId, outcome)
+    await markBackgroundTaskRunTerminalBestEffort(canonicalUser, task, taskRunId, outcome)
 
     const firedAt = new Date().toISOString()
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {

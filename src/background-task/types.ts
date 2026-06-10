@@ -81,6 +81,12 @@ export type BackgroundTaskEntry = {
    *  dispatch. The scheduler later creates one TaskRun per fire and uses this
    *  value to restore lineage without changing bg-tasks scheduling semantics. */
   parentTaskRunId?: string
+  /** Durable TaskRun created at dispatch time for oneshot background
+   *  dispatches (create-on-dispatch). The scheduler marks this run started at
+   *  fire time instead of creating a fresh one; CancelDispatch marks it
+   *  cancelled so a pending queued run cannot pin its root open forever.
+   *  Recurring / interval entries never carry it (one run per fire). */
+  taskRunId?: string
   chainState?: ChainState
 }
 
@@ -103,7 +109,7 @@ export type FireOutcome =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId' | 'parentTaskRunId'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId' | 'parentTaskRunId' | 'taskRunId'>>
     }
   | {
       version: 2
@@ -127,5 +133,6 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   callerRole: z.string().optional(),
   callerSessionId: z.string().optional(),
   parentTaskRunId: z.string().optional(),
+  taskRunId: z.string().optional(),
   chainState: z.any().optional(),
 })

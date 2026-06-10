@@ -6,19 +6,23 @@ import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import {
+  acceptTaskRun,
   appendArtifact,
   appendProgress,
+  closeRootTaskRun,
   createRootTaskRun,
   createTaskRun,
-  finalizeSettledRoots,
   getTaskRun,
   getTaskRunEvents,
   getRootObligations,
   listChildTaskRuns,
   listOpenRootTaskRuns,
   listTaskRuns,
+  markCancelled,
+  markDelivered,
   markFinished,
   markStarted,
+  rejectTaskRun,
   sweepAllTerminalTaskRuns,
   sweepTerminalTaskRuns,
 } from './store.js'
@@ -285,7 +289,117 @@ describe('TaskRun store', () => {
     }
   })
 
-  it('creates root task runs, tracks obligations, and finalizes only when settled', async () => {
+  it('moves a delivered run to terminal only through acceptance', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-delivered-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Produce the report',
+        chainId: 'chain-deliver',
+        depth: 1,
+        now: 10,
+      })
+      await markStarted(run.id, 'bg-fire', 20, 'alice')
+      await markDelivered(run.id, { ok: true, summary: 'report written' }, 30, 'alice')
+
+      const delivered = await getTaskRun(run.id, 'alice')
+      assert.equal(delivered?.status, 'delivered')
+      assert.equal(delivered?.deliveredAt, 30)
+      assert.equal(delivered?.terminalAt, undefined)
+      assert.equal(delivered?.currentSessionId, null)
+      assert.equal(delivered?.outcome?.summary, 'report written')
+
+      const accepted = await acceptTaskRun(run.id, { byRole: 'main' }, 40, 'alice')
+      assert.equal(accepted?.status, 'done')
+      assert.equal(accepted?.terminalAt, 40)
+      assert.equal(accepted?.outcome?.summary, 'report written')
+
+      const events = await getTaskRunEvents(run.id, {}, 'alice')
+      assert.deepEqual(
+        events.map(event => event.kind),
+        ['created', 'started', 'delivered', 'accepted', 'finished'],
+      )
+
+      // Acceptance is single-shot: a settled run cannot be re-accepted.
+      assert.equal(await acceptTaskRun(run.id, { byRole: 'main' }, 50, 'alice'), null)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('records rejection feedback and closes the rejected run as failed', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-reject-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Produce the report',
+        chainId: 'chain-reject',
+        depth: 1,
+        now: 10,
+      })
+      await markStarted(run.id, 'bg-fire', 20, 'alice')
+      await markDelivered(run.id, { ok: true, summary: 'first draft' }, 30, 'alice')
+
+      const rejected = await rejectTaskRun(
+        run.id,
+        { byRole: 'main', feedback: 'Missing the cost section.' },
+        40,
+        'alice',
+      )
+      assert.equal(rejected?.status, 'failed')
+      assert.match(rejected?.outcome?.error ?? '', /Missing the cost section/)
+
+      const events = await getTaskRunEvents(run.id, {}, 'alice')
+      assert.deepEqual(
+        events.map(event => event.kind),
+        ['created', 'started', 'delivered', 'rejected', 'finished'],
+      )
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels a queued run into a terminal state', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-cancel-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Scheduled work that gets cancelled',
+        chainId: 'chain-cancel',
+        depth: 1,
+        now: 10,
+      })
+      const cancelled = await markCancelled(run.id, 'cancelled via CancelDispatch', 20, 'alice')
+      assert.equal(cancelled?.status, 'cancelled')
+      assert.equal(cancelled?.terminalAt, 20)
+      // Cancelling an already-terminal run is a no-op that keeps the state.
+      const again = await markCancelled(run.id, 'again', 30, 'alice')
+      assert.equal(again?.status, 'cancelled')
+      assert.equal(again?.terminalAt, 20)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('closes a root only when every obligation is settled, listing delivered runs until accepted', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-root-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -297,8 +411,6 @@ describe('TaskRun store', () => {
       assert.equal(root.kind, 'root')
       assert.equal(root.parentRunId, null)
       assert.equal(root.rootRunId, root.id)
-      assert.equal(root.role, 'main')
-      assert.equal(root.callerRole, 'main')
       assert.equal(root.currentSessionId, 's-main')
 
       assert.deepEqual(
@@ -311,27 +423,97 @@ describe('TaskRun store', () => {
         role: 'coder',
         callerRole: 'main',
         callerSessionId: 's-main',
-        mode: 'blocking',
+        mode: 'background',
         objective: 'Implement the feature',
         parentRunId: root.id,
         chainId: 'chain-root',
         depth: 1,
         now: 20,
       })
-      await markStarted(child.id, 'dispatched-child', 30, 'alice')
+      await markStarted(child.id, 'bg-child', 30, 'alice')
 
-      assert.deepEqual(await getRootObligations(root.id, 'alice'), {
-        openRunIds: [child.id],
-        pendingDispatchIds: [],
-      })
-      await finalizeSettledRoots('alice', 's-main', 40)
-      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
+      const running = await getRootObligations(root.id, 'alice')
+      assert.deepEqual(running.openRunIds, [child.id])
+      assert.deepEqual(running.pendingDispatchIds, [])
 
-      await markFinished(child.id, { ok: true, summary: 'done' }, 50, 'alice')
-      await finalizeSettledRoots('alice', 's-main', 60)
+      const blockedOnRunning = await closeRootTaskRun(root.id, 'alice', 40)
+      assert.equal(blockedOnRunning.closed, false)
+
+      // The delivered-but-unaccepted child keeps pinning the root open —
+      // this is the orphan-visibility property: an undelivered result can
+      // never be papered over by closing its root.
+      await markDelivered(child.id, { ok: true, summary: 'done' }, 50, 'alice')
+      const blockedOnDelivered = await closeRootTaskRun(root.id, 'alice', 60)
+      assert.equal(blockedOnDelivered.closed, false)
+      assert.ok(
+        blockedOnDelivered.closed === false &&
+        blockedOnDelivered.reason === 'open-obligations' &&
+        blockedOnDelivered.obligations.openRuns[0]?.status === 'delivered',
+      )
+
+      await acceptTaskRun(child.id, { byRole: 'main' }, 70, 'alice')
+      const closed = await closeRootTaskRun(root.id, 'alice', 80)
+      assert.equal(closed.closed, true)
       const finalized = await getTaskRun(root.id, 'alice')
       assert.equal(finalized?.status, 'done')
-      assert.equal(finalized?.terminalAt, 60)
+      assert.equal(finalized?.terminalAt, 80)
+
+      // Closing an already-closed root reports already-terminal.
+      const reclose = await closeRootTaskRun(root.id, 'alice', 90)
+      assert.ok(reclose.closed === false && reclose.reason === 'already-terminal')
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('never sweeps terminal nodes out of a tree that still has live runs', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-sweep-tree-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 's-main', {
+        objective: 'Long-running goal',
+        now: 1,
+      })
+      const middle = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Mid-tree node, long finished',
+        parentRunId: root.id,
+        chainId: 'chain-tree-sweep',
+        depth: 1,
+        now: 1,
+      })
+      await markFinished(middle.id, { ok: true, summary: 'done early' }, 2, 'alice')
+      const leaf = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 's-worker',
+        mode: 'background',
+        objective: 'Still-delivered leaf under the finished middle node',
+        parentRunId: middle.id,
+        chainId: 'chain-tree-sweep',
+        depth: 2,
+        now: 1,
+      })
+      await markDelivered(leaf.id, { ok: true, summary: 'awaiting acceptance' }, 2, 'alice')
+
+      // The middle node is terminal and long past TTL, but its tree still has
+      // a live (delivered) leaf: sweeping it would break parentRunId
+      // reachability and drop the leaf from the root's obligations.
+      const guarded = await sweepTerminalTaskRuns('alice', { ttlMs: 100, now: 10_000 })
+      assert.equal(guarded.removed, 0)
+      const stillCounted = await getRootObligations(root.id, 'alice')
+      assert.deepEqual(stillCounted.openRunIds, [leaf.id])
+
+      await acceptTaskRun(leaf.id, { byRole: 'main' }, 10_001, 'alice')
+      await closeRootTaskRun(root.id, 'alice', 10_002)
+      const swept = await sweepTerminalTaskRuns('alice', { ttlMs: 100, now: 100_000 })
+      assert.equal(swept.removed, 3)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
@@ -379,11 +561,11 @@ describe('TaskRun store', () => {
         callerSessionId: 's-main',
       })
 
-      assert.deepEqual(await getRootObligations(root.id, 'alice'), {
-        openRunIds: [],
-        pendingDispatchIds: ['alice-after'],
-      })
-      await finalizeSettledRoots('alice', 's-main', 20)
+      const obligations = await getRootObligations(root.id, 'alice')
+      assert.deepEqual(obligations.openRunIds, [])
+      assert.deepEqual(obligations.pendingDispatchIds, ['alice-after'])
+      const blocked = await closeRootTaskRun(root.id, 'alice', 20)
+      assert.equal(blocked.closed, false)
       assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
     } finally {
       setLightclawHomeOverride(undefined)

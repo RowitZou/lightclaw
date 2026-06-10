@@ -7,10 +7,12 @@ import { describe, it } from 'node:test'
 import type { Role } from '../agents/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
-import { createRootTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
 import {
+  cancelDispatchTool,
   dispatchTool,
   executeDispatch,
   listDispatchesTool,
@@ -160,6 +162,7 @@ describe('Dispatch tool family', () => {
       const runs = await listTaskRuns('alice', { scope: 'all' })
       const child = runs.find(run => run.id !== root.id)
       assert.ok(child)
+      // Blocking return is inline delivery: delivered + auto-accepted + done.
       assert.equal(child.status, 'done')
       assert.equal(child.artifactPaths?.includes('/workspace/out/report.md'), true)
       const events = await getTaskRunEvents(child.id, { limit: 10 }, 'alice')
@@ -167,8 +170,12 @@ describe('Dispatch tool family', () => {
         'created',
         'started',
         'artifact',
+        'delivered',
+        'accepted',
         'finished',
       ])
+      const accepted = events.find(event => event.kind === 'accepted')
+      assert.equal((accepted as { auto?: boolean } | undefined)?.auto, true)
     } finally {
       setRunSubagentForDispatchTest(null)
       setLightclawHomeOverride(undefined)
@@ -266,6 +273,106 @@ describe('Dispatch tool family', () => {
       assert.equal(output.isError, undefined)
       const runs = await listTaskRuns('alice', { scope: 'all' })
       assert.deepEqual(runs.map(run => run.id), [root.id])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('creates the queued run at dispatch time for oneshot background dispatches', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-bg-queued-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate a scheduled report.',
+        title: 'Scheduled report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Write the report in five minutes from now.',
+            schedule: { kind: 'after', afterMinutes: 5 },
+            mode: 'background',
+            label: 'Scheduled report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(output.isError, undefined)
+      // The not-yet-fired dispatch is already visible as a queued run in the
+      // tree and pins the root open as an obligation.
+      const runs = await listTaskRuns('alice', { scope: 'all' })
+      const queued = runs.find(run => run.id !== root.id)
+      assert.ok(queued)
+      assert.equal(queued.status, 'queued')
+      assert.equal(queued.parentRunId, root.id)
+      assert.equal(queued.rootRunId, root.id)
+      const obligations = await getRootObligations(root.id, 'alice')
+      assert.deepEqual(obligations.openRunIds, [queued.id])
+      assert.deepEqual(obligations.pendingDispatchIds, [])
+
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      assert.equal(getBackgroundTask('alice', dispatchId)?.taskRunId, queued.id)
+
+      // Cancelling the pending dispatch settles the queued run, releasing the
+      // root for close — a never-to-fire run must not pin its root forever.
+      const cancelOutput = await runWithSessionContext(session('main'), () =>
+        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+      )
+      assert.equal(cancelOutput.isError, undefined)
+      assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'cancelled')
+      const closed = await closeRootTaskRun(root.id, 'alice')
+      assert.equal(closed.closed, true)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps worker recurring dispatches top-level instead of attaching them to the worker run', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-worker-recurring-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const workerSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'dispatched-worker',
+        currentUserId: 'alice',
+        currentRole: {
+          ...role('generalist', 'worker'),
+          tools: ['*', 'Dispatch'],
+          reachableRoles: ['coder'],
+        },
+        currentTaskRunId: 'tr_worker_run',
+      })
+      const output = await runWithSessionContext(workerSession, () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Poll the long-running job status every half hour.',
+            schedule: { kind: 'interval', everyMinutes: 30 },
+            mode: 'background',
+            label: 'Status poller',
+          },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(output.isError, undefined)
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry)
+      // A standing service never attaches into a root's tree — attaching it
+      // under the worker run would keep the root's obligations from draining.
+      assert.equal(entry.parentTaskRunId, undefined)
+      assert.equal(entry.taskRunId, undefined)
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

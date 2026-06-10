@@ -7,6 +7,10 @@ export type TaskRunStatus =
   | 'running'
   | 'blocked'
   | 'paused'
+  // Worker-side conclusion reported, awaiting the caller's acceptance.
+  // NOT terminal: a delivered run keeps pinning its root open until it is
+  // accepted / rejected, which is what keeps an undelivered result visible.
+  | 'delivered'
   | 'done'
   | 'failed'
   | 'cancelled'
@@ -35,6 +39,7 @@ export type TaskRunMeta = {
   outcome?: TaskRunOutcome
   createdAt: number
   startedAt?: number
+  deliveredAt?: number
   terminalAt?: number
   updatedAt: number
   lastEventSeq: number
@@ -95,9 +100,45 @@ export type TaskRunArtifactEvent = {
   label?: string
 }
 
+export type TaskRunDeliveredEvent = {
+  seq: number
+  ts: number
+  kind: 'delivered'
+  ok: boolean
+  summary?: string
+  error?: string
+}
+
+export type TaskRunAcceptedEvent = {
+  seq: number
+  ts: number
+  kind: 'accepted'
+  byRole: string
+  auto?: boolean
+}
+
+export type TaskRunRejectedEvent = {
+  seq: number
+  ts: number
+  kind: 'rejected'
+  byRole: string
+  feedback: string
+}
+
+export type TaskRunCancelledEvent = {
+  seq: number
+  ts: number
+  kind: 'cancelled'
+  reason?: string
+}
+
 export type TaskRunEvent =
   | TaskRunCreatedEvent
   | TaskRunStartedEvent
+  | TaskRunDeliveredEvent
+  | TaskRunAcceptedEvent
+  | TaskRunRejectedEvent
+  | TaskRunCancelledEvent
   | TaskRunFinishedEvent
   | TaskRunProgressEvent
   | TaskRunArtifactEvent

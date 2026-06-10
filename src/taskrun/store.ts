@@ -10,6 +10,8 @@ import { getCurrentSessionContext } from '../session-context.js'
 import { lightclawHome } from '../paths.js'
 import type {
   TaskRunArtifactEvent,
+  TaskRunCancelledEvent,
+  TaskRunDeliveredEvent,
   TaskRunEvent,
   TaskRunFinishedEvent,
   TaskRunKind,
@@ -58,10 +60,16 @@ type CreateRootTaskRunInput = {
   now?: number
 }
 
-type RootObligations = {
+export type RootObligations = {
+  openRuns: TaskRunMeta[]
   openRunIds: string[]
   pendingDispatchIds: string[]
 }
+
+export type CloseRootResult =
+  | { closed: true; meta: TaskRunMeta }
+  | { closed: false; reason: 'not-found' | 'not-root' | 'already-terminal' }
+  | { closed: false; reason: 'open-obligations'; obligations: RootObligations }
 
 const runLocks = new Map<string, Promise<void>>()
 
@@ -267,6 +275,89 @@ export async function markFinished(
   return appendEvent(id, 'finished', outcome, now, ownerCanonicalUser)
 }
 
+export async function markDelivered(
+  id: string,
+  outcome: TaskRunOutcome,
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(
+    id,
+    'delivered',
+    {
+      ok: outcome.ok,
+      ...(outcome.summary ? { summary: outcome.summary } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    },
+    now,
+    ownerCanonicalUser,
+  )
+}
+
+export async function acceptTaskRun(
+  id: string,
+  input: { byRole: string; auto?: boolean },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta || meta.status !== 'delivered') return null
+  await appendEvent(
+    id,
+    'accepted',
+    { byRole: input.byRole, ...(input.auto ? { auto: true } : {}) },
+    now,
+    meta.ownerCanonicalUser,
+  )
+  return markFinished(
+    id,
+    {
+      ok: meta.outcome?.ok ?? true,
+      ...(meta.outcome?.summary ? { summary: meta.outcome.summary } : {}),
+      ...(meta.outcome?.error ? { error: meta.outcome.error } : {}),
+    },
+    now,
+    meta.ownerCanonicalUser,
+  )
+}
+
+export async function rejectTaskRun(
+  id: string,
+  input: { byRole: string; feedback: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta || meta.status !== 'delivered') return null
+  await appendEvent(
+    id,
+    'rejected',
+    { byRole: input.byRole, feedback: input.feedback },
+    now,
+    meta.ownerCanonicalUser,
+  )
+  // V1 stopgap: a rejected run closes as failed and the caller re-dispatches
+  // with the feedback. "Keep the run open and resume its session" is the
+  // collab-phase3 upgrade; the rejected event preserves the fact either way.
+  return markFinished(
+    id,
+    { ok: false, error: `Rejected by ${input.byRole}: ${input.feedback}` },
+    now,
+    meta.ownerCanonicalUser,
+  )
+}
+
+export async function markCancelled(
+  id: string,
+  reason?: string,
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta || isTerminalStatus(meta.status)) return meta
+  return appendEvent(id, 'cancelled', reason ? { reason } : {}, now, meta.ownerCanonicalUser)
+}
+
 export async function appendProgress(
   id: string,
   progress: { phase?: string; label: string },
@@ -319,6 +410,27 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       startedAt: next.startedAt ?? event.ts,
     }
   }
+  if (isDeliveredEvent(event)) {
+    return {
+      ...next,
+      status: 'delivered',
+      currentSessionId: null,
+      deliveredAt: event.ts,
+      outcome: {
+        ok: event.ok,
+        ...(event.summary ? { summary: event.summary } : {}),
+        ...(event.error ? { error: event.error } : {}),
+      },
+    }
+  }
+  if (isCancelledEvent(event)) {
+    return {
+      ...next,
+      status: 'cancelled',
+      currentSessionId: null,
+      terminalAt: event.ts,
+    }
+  }
   if (isFinishedEvent(event)) {
     return {
       ...next,
@@ -356,6 +468,14 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
 
 function isStartedEvent(event: TaskRunEvent): event is TaskRunStartedEvent {
   return event.kind === 'started' && typeof (event as { sessionId?: unknown }).sessionId === 'string'
+}
+
+function isDeliveredEvent(event: TaskRunEvent): event is TaskRunDeliveredEvent {
+  return event.kind === 'delivered' && typeof (event as { ok?: unknown }).ok === 'boolean'
+}
+
+function isCancelledEvent(event: TaskRunEvent): event is TaskRunCancelledEvent {
+  return event.kind === 'cancelled'
 }
 
 function isFinishedEvent(event: TaskRunEvent): event is TaskRunFinishedEvent {
@@ -479,7 +599,7 @@ export async function getRootObligations(
 ): Promise<RootObligations> {
   const root = await getTaskRun(rootRunId, ownerCanonicalUser)
   if (!root || taskRunKind(root) !== 'root') {
-    return { openRunIds: [], pendingDispatchIds: [] }
+    return { openRuns: [], openRunIds: [], pendingDispatchIds: [] }
   }
 
   const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
@@ -495,51 +615,52 @@ export async function getRootObligations(
     }
   }
 
-  const openRunIds = runs
+  const openRuns = runs
     .filter(run =>
       run.id !== root.id &&
       subtreeIds.has(run.id) &&
       !isTerminalStatus(run.status),
     )
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-    .map(run => run.id)
+  const openRunIds = openRuns.map(run => run.id)
 
+  // Oneshot entries now create their queued run at dispatch time and are
+  // covered by openRuns through it; this scan only backstops legacy entries
+  // persisted before dispatch-time creation (no taskRunId on the entry).
   const pendingDispatchIds = loadBackgroundTasks(ownerCanonicalUser)
     .filter(task =>
       task.enabled &&
       task.schedule.kind === 'oneshot' &&
+      task.taskRunId === undefined &&
       task.parentTaskRunId !== undefined &&
       subtreeIds.has(task.parentTaskRunId),
     )
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .map(task => task.id)
 
-  return { openRunIds, pendingDispatchIds }
+  return { openRuns, openRunIds, pendingDispatchIds }
 }
 
-export async function finalizeSettledRoots(
+export async function closeRootTaskRun(
+  rootRunId: string,
   ownerCanonicalUser: string,
-  mainSessionId: string,
   now = Date.now(),
-): Promise<{ finalized: string[] }> {
-  const roots = await listOpenRootTaskRuns(ownerCanonicalUser, mainSessionId)
-  const finalized: string[] = []
-  for (const root of roots) {
-    const obligations = await getRootObligations(root.id, ownerCanonicalUser)
-    if (obligations.openRunIds.length > 0 || obligations.pendingDispatchIds.length > 0) {
-      continue
-    }
-    const next = await markFinished(
-      root.id,
-      { ok: true, summary: 'Task completed.' },
-      now,
-      ownerCanonicalUser,
-    )
-    if (next) {
-      finalized.push(root.id)
-    }
+): Promise<CloseRootResult> {
+  const root = await getTaskRun(rootRunId, ownerCanonicalUser)
+  if (!root) return { closed: false, reason: 'not-found' }
+  if (taskRunKind(root) !== 'root') return { closed: false, reason: 'not-root' }
+  if (isTerminalStatus(root.status)) return { closed: false, reason: 'already-terminal' }
+  const obligations = await getRootObligations(rootRunId, ownerCanonicalUser)
+  if (obligations.openRunIds.length > 0 || obligations.pendingDispatchIds.length > 0) {
+    return { closed: false, reason: 'open-obligations', obligations }
   }
-  return { finalized }
+  const meta = await markFinished(
+    root.id,
+    { ok: true, summary: 'Delivered by main.' },
+    now,
+    ownerCanonicalUser,
+  )
+  return meta ? { closed: true, meta } : { closed: false, reason: 'not-found' }
 }
 
 export async function sweepTerminalTaskRuns(
@@ -549,10 +670,17 @@ export async function sweepTerminalTaskRuns(
   const ttlMs = options.ttlMs ?? DEFAULT_TASKRUN_TTL_MS
   const now = options.now ?? Date.now()
   const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  // A tree with any non-terminal run must keep ALL its nodes: sweeping a
+  // terminal mid-tree node breaks parentRunId reachability, so obligations /
+  // TaskInspect would silently lose live descendants under an open root.
+  const liveTreeRootIds = new Set(
+    runs.filter(run => !isTerminalStatus(run.status)).map(run => run.rootRunId),
+  )
   let removed = 0
   await Promise.all(runs.map(async run => {
     if (run.terminalAt === undefined) return
     if (now - run.terminalAt <= ttlMs) return
+    if (liveTreeRootIds.has(run.rootRunId)) return
     await rm(taskRunDir(ownerCanonicalUser, run.id), { recursive: true, force: true })
     removed += 1
   }))
