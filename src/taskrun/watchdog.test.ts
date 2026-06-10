@@ -71,7 +71,7 @@ describe('TaskRun watchdog', () => {
       meta({ id: 'tr_service', kind: 'root', standing: true, status: 'running', updatedAt: 1_000 }),
     ]
     const findings = detectTaskRunFindings(runs, {
-      now: 2_000 + 900_001,
+      now: 2_000 + 60_001,
       deliveredGraceMs: 0,
       activeSessionIds: new Set(['live-session']),
       inFlightMainSessionIds: new Set(),
@@ -91,7 +91,7 @@ describe('TaskRun watchdog', () => {
       meta({ id: 'tr_scheduled_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
     ]
     const findings = detectTaskRunFindings(runs, {
-      now: 1_000 + 900_001,
+      now: 1_000 + 60_001,
       deliveredGraceMs: 0,
       activeSessionIds: new Set(),
       inFlightMainSessionIds: new Set(),

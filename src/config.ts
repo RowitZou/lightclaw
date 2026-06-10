@@ -503,7 +503,7 @@ const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   intervalMinutes: 5,
   deliveredGraceMs: 120_000,
   waitingGraceMs: 21_600_000,
-  rootIdleGraceMs: 900_000,
+  rootIdleGraceMs: 60_000,
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
 }

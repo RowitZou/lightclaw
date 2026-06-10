@@ -95,7 +95,7 @@ export async function reconcileTaskRunsOnce(
   const now = deps.now ?? Date.now()
   const deliveredGraceMs = deps.deliveredGraceMs ?? 120_000
   const waitingGraceMs = deps.waitingGraceMs ?? 21_600_000
-  const rootIdleGraceMs = deps.rootIdleGraceMs ?? 900_000
+  const rootIdleGraceMs = deps.rootIdleGraceMs ?? 60_000
   const runs = deps.listRuns
     ? await deps.listRuns(ownerCanonicalUser)
     : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
@@ -277,7 +277,7 @@ export function detectTaskRunFindings(
   },
 ): TaskRunWatchdogFinding[] {
   const waitingGraceMs = input.waitingGraceMs ?? 21_600_000
-  const rootIdleGraceMs = input.rootIdleGraceMs ?? 900_000
+  const rootIdleGraceMs = input.rootIdleGraceMs ?? 60_000
   const runById = new Map(runs.map(run => [run.id, run]))
   const scheduledTaskRunIds = new Set(
     input.backgroundEntries
