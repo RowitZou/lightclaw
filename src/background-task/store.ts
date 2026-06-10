@@ -124,6 +124,9 @@ export type BackgroundTaskPatch = Partial<
     | 'enabled'
     | 'lastFiredAt'
     | 'pendingPriorPromptNotice'
+    | 'parentTaskRunId'
+    | 'standingRootRunId'
+    | 'taskRunId'
   >
 >
 

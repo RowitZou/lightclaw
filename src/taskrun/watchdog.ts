@@ -220,9 +220,9 @@ export function detectTaskRunFindings(
   },
 ): TaskRunWatchdogFinding[] {
   const runById = new Map(runs.map(run => [run.id, run]))
-  const enabledTaskRunIds = new Set(
+  const scheduledTaskRunIds = new Set(
     input.backgroundEntries
-      .filter(entry => entry.enabled && entry.taskRunId)
+      .filter(entry => entry.taskRunId)
       .map(entry => entry.taskRunId!),
   )
   const findings: TaskRunWatchdogFinding[] = []
@@ -236,9 +236,9 @@ export function detectTaskRunFindings(
       const hasActiveSession = run.currentSessionId
         ? input.activeSessionIds.has(run.currentSessionId)
         : false
-      const hasEnabledBackgroundEntry = enabledTaskRunIds.has(run.id)
+      const hasScheduledBackgroundEntry = scheduledTaskRunIds.has(run.id)
       const hasSchedulerClaim = input.schedulerTaskRunIds.has(run.id)
-      if (!hasActiveSession && !hasEnabledBackgroundEntry && !hasSchedulerClaim) {
+      if (!hasActiveSession && !hasScheduledBackgroundEntry && !hasSchedulerClaim) {
         findings.push(toFinding(run, runById, {
           kind: 'stranded',
           since: run.startedAt ?? run.createdAt,

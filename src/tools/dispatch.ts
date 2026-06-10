@@ -44,6 +44,8 @@ import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   acceptTaskRun,
   appendArtifact,
+  closeRootTaskRun,
+  createStandingRootTaskRun,
   createTaskRun,
   getTaskRun,
   markCancelled,
@@ -209,6 +211,10 @@ function isFiniteMainDispatch(
   return schedule === 'now' || schedule.kind === 'after' || schedule.kind === 'oneshot'
 }
 
+function isStandingSchedule(schedule: DispatchSchedule): boolean {
+  return schedule !== 'now' && (schedule.kind === 'recurring' || schedule.kind === 'interval')
+}
+
 async function resolveDispatchParentTaskRun(input: {
   callerKind: 'orchestrator' | 'worker' | 'internal'
   schedule: DispatchSchedule
@@ -222,10 +228,7 @@ async function resolveDispatchParentTaskRun(input: {
   // creates them: they never attach into a root's tree. Attaching a worker's
   // recurring service under its run would make the root's obligations never
   // drain (each future fire lands a fresh in-tree run).
-  if (
-    input.schedule !== 'now' &&
-    (input.schedule.kind === 'recurring' || input.schedule.kind === 'interval')
-  ) {
+  if (isStandingSchedule(input.schedule)) {
     return { ok: true, parentRunId: undefined }
   }
   if (isFiniteMainDispatch(input.callerKind, input.schedule)) {
@@ -385,6 +388,50 @@ async function createQueuedDispatchTaskRunBestEffort(input: {
   }
 }
 
+async function createStandingDispatchTaskRunsBestEffort(input: {
+  ownerCanonicalUser: string
+  role: string
+  callerRole: string
+  callerSessionId: string
+  objective: string
+  title?: string
+  chainState: ChainState
+}): Promise<{ standingRootRunId?: string; taskRunId?: string }> {
+  let root: TaskRunMeta
+  try {
+    root = await createStandingRootTaskRun(input.ownerCanonicalUser, {
+      role: input.role,
+      callerRole: input.callerRole,
+      callerSessionId: input.callerSessionId,
+      objective: input.objective,
+      title: input.title,
+      chainId: input.chainState.chainId,
+    })
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to create standing root run: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return {}
+  }
+
+  const taskRunId = await createQueuedDispatchTaskRunBestEffort({
+    ownerCanonicalUser: input.ownerCanonicalUser,
+    role: input.role,
+    callerRole: input.callerRole,
+    callerSessionId: input.callerSessionId,
+    objective: input.objective,
+    title: input.title,
+    parentRunId: root.id,
+    chainState: input.chainState,
+  })
+  return {
+    standingRootRunId: root.id,
+    ...(taskRunId ? { taskRunId } : {}),
+  }
+}
+
 async function appendDispatchArtifactsBestEffort(input: {
   ownerCanonicalUser: string
   taskRunId: string | undefined
@@ -432,6 +479,40 @@ function currentCallerMayManage(task: BackgroundTaskEntry): boolean {
   const role = getCurrentRole()
   if (!role || role.kind === 'orchestrator') return true
   return taskCallerSession(task) === getSessionId()
+}
+
+async function cancelQueuedTaskRunBestEffort(
+  ownerCanonicalUser: string,
+  taskRunId: string | undefined,
+): Promise<void> {
+  if (!taskRunId) return
+  try {
+    const meta = await getTaskRun(taskRunId, ownerCanonicalUser)
+    if (meta?.status !== 'queued') return
+    await markCancelled(taskRunId, 'cancelled via CancelDispatch', Date.now(), ownerCanonicalUser)
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to mark run ${taskRunId} cancelled: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
+}
+
+async function closeStandingRootBestEffort(
+  ownerCanonicalUser: string,
+  rootRunId: string | undefined,
+): Promise<void> {
+  if (!rootRunId) return
+  try {
+    await closeRootTaskRun(rootRunId, ownerCanonicalUser)
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to close standing root ${rootRunId}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
 
 export const dispatchTool = buildTool({
@@ -710,6 +791,17 @@ export async function executeDispatch(
     return { output: scheduleError, isError: true }
   }
   const now = new Date().toISOString()
+  const standingRuns = isStandingSchedule(schedule)
+    ? await createStandingDispatchTaskRunsBestEffort({
+        ownerCanonicalUser: userId,
+        role: input.role,
+        callerRole: callerRole.agentType,
+        callerSessionId: sessionId,
+        objective: input.prompt,
+        title: input.label,
+        chainState: effectiveChildChainState,
+      })
+    : {}
   const bgTaskRunId = normalizedSchedule.kind === 'oneshot'
     ? await createQueuedDispatchTaskRunBestEffort({
         ownerCanonicalUser: userId,
@@ -721,7 +813,7 @@ export async function executeDispatch(
         parentRunId: parentTaskRun.parentRunId,
         chainState: effectiveChildChainState,
       })
-    : undefined
+    : standingRuns.taskRunId
   const entry = {
     id: dispatchId,
     ownerCanonicalUser: userId,
@@ -736,7 +828,12 @@ export async function executeDispatch(
     originSessionId: sessionId,
     callerRole: callerRole.agentType,
     callerSessionId: sessionId,
-    ...(parentTaskRun.parentRunId ? { parentTaskRunId: parentTaskRun.parentRunId } : {}),
+    ...(standingRuns.standingRootRunId
+      ? { parentTaskRunId: standingRuns.standingRootRunId }
+      : parentTaskRun.parentRunId
+        ? { parentTaskRunId: parentTaskRun.parentRunId }
+        : {}),
+    ...(standingRuns.standingRootRunId ? { standingRootRunId: standingRuns.standingRootRunId } : {}),
     ...(bgTaskRunId ? { taskRunId: bgTaskRunId } : {}),
     chainState: effectiveChildChainState,
   }
@@ -866,19 +963,11 @@ export const cancelDispatchTool = buildTool({
     const removed = removeBackgroundTask(userId, input.id)
     notifyBackgroundTaskChanged(userId, input.id)
     if (removed) {
-      if (owned?.taskRunId) {
-        // Dispatch-time queued runs must be settled on cancel, or the
-        // never-to-fire run pins its root open forever.
-        try {
-          await markCancelled(owned.taskRunId, 'cancelled via CancelDispatch', Date.now(), userId)
-        } catch (error) {
-          process.stderr.write(
-            `[taskrun] failed to mark run ${owned.taskRunId} cancelled: ${
-              error instanceof Error ? error.message : String(error)
-            }\n`,
-          )
-        }
-      }
+      // Dispatch-time queued runs must be settled on cancel, or the
+      // never-to-fire run pins its root open forever. In-flight fires are
+      // allowed to finish; only queued future work is cancelled here.
+      await cancelQueuedTaskRunBestEffort(userId, owned?.taskRunId)
+      await closeStandingRootBestEffort(userId, owned?.standingRootRunId)
       appendCompletedTaskRecord(userId, {
         id: input.id,
         outcome: 'cancelled',
@@ -926,6 +1015,16 @@ export const updateDispatchTool = buildTool({
     if (schedule) {
       const scheduleError = validateFutureOneshot(schedule)
       if (scheduleError) return { output: scheduleError, isError: true }
+      if (existing) {
+        const wasStanding = existing.schedule.kind === 'recurring' || existing.schedule.kind === 'interval'
+        const willBeStanding = schedule.kind === 'recurring' || schedule.kind === 'interval'
+        if (wasStanding !== willBeStanding) {
+          return {
+            output: 'Changing a dispatch between finite and recurring/interval standing-service shapes is not supported. Cancel it and create a fresh Dispatch so the TaskRun root/child ledger is rebuilt correctly.',
+            isError: true,
+          }
+        }
+      }
     }
     const promptChanged =
       input.prompt !== undefined && existing !== null && existing.prompt !== input.prompt

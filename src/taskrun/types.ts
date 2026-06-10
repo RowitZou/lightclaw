@@ -24,6 +24,7 @@ export type TaskRunOutcome = {
 export type TaskRunMeta = {
   id: string
   kind?: TaskRunKind
+  standing?: boolean
   parentRunId: string | null
   rootRunId: string
   chainId: string
@@ -58,6 +59,7 @@ export type TaskRunCreatedEvent = {
   ts: number
   kind: 'created'
   taskRunKind?: TaskRunKind
+  standing?: boolean
   objective: string
   role: string
   callerRole: string

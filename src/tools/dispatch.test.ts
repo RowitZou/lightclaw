@@ -248,7 +248,7 @@ describe('Dispatch tool family', () => {
     }
   })
 
-  it('keeps main recurring and interval dispatches top-level instead of attaching them to roots', async () => {
+  it('creates a standing root and queued child for main recurring dispatches without attaching to a user root', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-recurring-root-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -271,8 +271,32 @@ describe('Dispatch tool family', () => {
       )
 
       assert.equal(output.isError, undefined)
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry)
       const runs = await listTaskRuns('alice', { scope: 'all' })
-      assert.deepEqual(runs.map(run => run.id), [root.id])
+      const standing = runs.find(run => run.id === entry.standingRootRunId)
+      const child = runs.find(run => run.id === entry.taskRunId)
+      assert.ok(standing)
+      assert.ok(child)
+      assert.equal(standing.kind, 'root')
+      assert.equal(standing.standing, true)
+      assert.equal(standing.parentRunId, null)
+      assert.equal(standing.rootRunId, standing.id)
+      assert.equal(child.parentRunId, standing.id)
+      assert.equal(child.rootRunId, standing.id)
+      assert.equal(child.status, 'queued')
+      assert.equal(entry.parentTaskRunId, standing.id)
+      assert.deepEqual((await getRootObligations(root.id, 'alice')).openRunIds, [])
+      assert.equal((await closeRootTaskRun(root.id, 'alice')).closed, true)
+
+      const cancelOutput = await runWithSessionContext(session('main'), () =>
+        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+      )
+      assert.equal(cancelOutput.isError, undefined)
+      assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'cancelled')
+      assert.equal((await getTaskRun(standing.id, 'alice'))?.status, 'done')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
@@ -333,7 +357,7 @@ describe('Dispatch tool family', () => {
     }
   })
 
-  it('keeps worker recurring dispatches top-level instead of attaching them to the worker run', async () => {
+  it('creates worker recurring dispatches as standing roots instead of attaching them to the worker run', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-worker-recurring-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -369,10 +393,18 @@ describe('Dispatch tool family', () => {
       assert.ok(dispatchId)
       const entry = getBackgroundTask('alice', dispatchId)
       assert.ok(entry)
-      // A standing service never attaches into a root's tree — attaching it
-      // under the worker run would keep the root's obligations from draining.
-      assert.equal(entry.parentTaskRunId, undefined)
-      assert.equal(entry.taskRunId, undefined)
+      // A standing service gets its own root. Attaching it under the worker
+      // run would keep that worker's root obligations from draining.
+      assert.ok(entry.standingRootRunId)
+      assert.ok(entry.taskRunId)
+      assert.equal(entry.parentTaskRunId, entry.standingRootRunId)
+      const standing = await getTaskRun(entry.standingRootRunId, 'alice')
+      const child = await getTaskRun(entry.taskRunId, 'alice')
+      assert.equal(standing?.kind, 'root')
+      assert.equal(standing?.standing, true)
+      assert.equal(standing?.parentRunId, null)
+      assert.equal(child?.parentRunId, standing?.id)
+      assert.notEqual(child?.parentRunId, 'tr_worker_run')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

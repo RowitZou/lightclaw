@@ -520,7 +520,7 @@ describe('TaskRun store', () => {
     }
   })
 
-  it('counts pending oneshot dispatches as root obligations but ignores recurring services', async () => {
+  it('counts pending oneshot dispatches as root obligations but ignores legacy recurring services without standing roots', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-root-bg-'))
     setLightclawHomeOverride(tmpHome)
     try {

@@ -13,7 +13,16 @@ import {
 } from './scheduler.js'
 import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
-import { createTaskRun, getTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import {
+  acceptTaskRun,
+  closeRootTaskRun,
+  createStandingRootTaskRun,
+  createTaskRun,
+  getRootObligations,
+  getTaskRun,
+  getTaskRunEvents,
+  listTaskRuns,
+} from '../taskrun/store.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -202,7 +211,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(remaining?.length ?? 0, 0, 'queue must be empty after tick drains it')
   })
 
-  it('creates one durable TaskRun per recurring fire and marks terminal outcome', async () => {
+  it('keeps legacy recurring fires terminal when no standing root is recorded', async () => {
     const task = { ...fakeTask(), id: 'taskrun-fire', notifyOn: 'failure' as const }
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
@@ -228,6 +237,63 @@ describe('BackgroundTaskScheduler fire completion', () => {
       assert.equal(run.outcome?.summary, 'fire ok')
       assert.equal(run.currentSessionId, null)
     }
+  })
+
+  it('parks standing recurring fires at delivered and creates the next queued child', async () => {
+    const root = await createStandingRootTaskRun('alice', {
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      objective: 'Check the workspace on a schedule.',
+      title: 'Workspace check',
+      chainId: 'chain-standing',
+    })
+    const first = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'check the workspace and summarize anything important',
+      title: 'Workspace check',
+      parentRunId: root.id,
+      chainId: 'chain-standing',
+      depth: 1,
+    })
+    const task = {
+      ...fakeTask(),
+      id: 'standing-fire',
+      notifyOn: 'failure' as const,
+      parentTaskRunId: root.id,
+      standingRootRunId: root.id,
+      taskRunId: first.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async ({ taskRunId }) => {
+      assert.equal(taskRunId, first.id)
+      return { kind: 'success', summary: 'standing fire ok', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'standing-fire')
+    await scheduler.drain()
+    flushLastFiredAt()
+
+    const delivered = await getTaskRun(first.id, 'alice')
+    assert.equal(delivered?.status, 'delivered')
+    assert.equal(delivered?.outcome?.summary, 'standing fire ok')
+    const [entry] = loadBackgroundTasks('alice')
+    assert.ok(entry)
+    assert.equal(entry.standingRootRunId, root.id)
+    assert.notEqual(entry.taskRunId, first.id)
+    const next = await getTaskRun(entry.taskRunId!, 'alice')
+    assert.equal(next?.status, 'queued')
+    assert.equal(next?.parentRunId, root.id)
+    const obligations = await getRootObligations(root.id, 'alice')
+    assert.deepEqual(obligations.openRunIds.sort(), [first.id, entry.taskRunId!].sort())
+
+    await acceptTaskRun(first.id, { byRole: 'main' }, Date.now(), 'alice')
+    assert.equal((await closeRootTaskRun(root.id, 'alice')).closed, false)
   })
 
   it('records finish-time artifacts on a successful recurring fire and keeps finished as the last event', async () => {

@@ -27,6 +27,7 @@ const DEFAULT_TASKRUN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 type CreateTaskRunInput = {
   id?: string
   kind?: TaskRunKind
+  standing?: boolean
   ownerCanonicalUser: string
   role: string
   callerRole: string
@@ -57,6 +58,16 @@ type GetTaskRunEventsOptions = {
 type CreateRootTaskRunInput = {
   objective: string
   title?: string
+  now?: number
+}
+
+type CreateStandingRootTaskRunInput = {
+  objective: string
+  title?: string
+  role: string
+  callerRole: string
+  callerSessionId: string
+  chainId: string
   now?: number
 }
 
@@ -199,6 +210,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
   const meta: TaskRunMeta = {
     id,
     kind: input.kind ?? 'dispatch',
+    ...(input.standing ? { standing: true } : {}),
     parentRunId,
     rootRunId,
     chainId: input.chainId,
@@ -220,6 +232,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     ts: now,
     kind: 'created',
     taskRunKind: input.kind ?? 'dispatch',
+    ...(input.standing ? { standing: true } : {}),
     objective: input.objective,
     role: input.role,
     callerRole: input.callerRole,
@@ -256,6 +269,33 @@ export async function createRootTaskRun(
   return await markStarted(
     run.id,
     mainSessionId,
+    input.now ?? Date.now(),
+    ownerCanonicalUser,
+  ) ?? run
+}
+
+export async function createStandingRootTaskRun(
+  ownerCanonicalUser: string,
+  input: CreateStandingRootTaskRunInput,
+): Promise<TaskRunMeta> {
+  const run = await createTaskRun({
+    ownerCanonicalUser,
+    kind: 'root',
+    standing: true,
+    role: input.role,
+    callerRole: input.callerRole,
+    callerSessionId: input.callerSessionId,
+    mode: 'background',
+    objective: input.objective,
+    title: input.title,
+    parentRunId: null,
+    chainId: input.chainId,
+    depth: 0,
+    now: input.now,
+  })
+  return await markStarted(
+    run.id,
+    input.callerSessionId,
     input.now ?? Date.now(),
     ownerCanonicalUser,
   ) ?? run
@@ -620,6 +660,7 @@ export async function listOpenRootTaskRuns(
   return runs
     .filter(run =>
       taskRunKind(run) === 'root' &&
+      run.standing !== true &&
       run.callerSessionId === mainSessionId &&
       !isTerminalStatus(run.status),
     )

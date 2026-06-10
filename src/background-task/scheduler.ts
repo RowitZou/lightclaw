@@ -98,16 +98,17 @@ async function markBackgroundTaskRunTerminalBestEffort(
     ? { ok: true, summary: outcome.summary.slice(0, 500) }
     : { ok: false, error: outcome.reason.slice(0, 500) }
   try {
-    if (task.schedule.kind === 'oneshot') {
-      // Finite background work is delivered, not finished: the result still
-      // has to reach the requester and be accepted (TaskUpdate settles it).
-      // A failed delivery leaves this run pinned at status:'delivered' so its
-      // open root stays visibly unsettled instead of silently closing over an
-      // orphaned result.
+    if (task.schedule.kind === 'oneshot' || task.standingRootRunId) {
+      // Finite background work and standing-service fires are delivered, not
+      // finished: the result still has to reach the requester and be accepted
+      // (TaskUpdate settles it). For standing services, completion handling
+      // immediately creates the next queued child so the standing root keeps a
+      // future obligation until CancelDispatch stops it.
       await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
     } else {
-      // Recurring / interval fires are standing services with no root to pin
-      // and no acceptance step — terminal on completion, as before.
+      // Legacy recurring / interval entries created before standing roots had
+      // no acceptance parent. Keep them terminal-on-completion for backward
+      // compatibility; new entries carry standingRootRunId and use delivered.
       await markFinished(taskRunId, runOutcome, Date.now(), canonicalUser)
     }
   } catch (error) {
@@ -134,6 +135,39 @@ async function appendBackgroundArtifactsBestEffort(
         }\n`,
       )
     }
+  }
+}
+
+async function createNextStandingTaskRunBestEffort(
+  canonicalUser: string,
+  task: BackgroundTaskEntry,
+): Promise<string | undefined> {
+  if (!task.standingRootRunId) return undefined
+  try {
+    const run = await createTaskRun({
+      ownerCanonicalUser: canonicalUser,
+      role: task.role,
+      callerRole: task.callerRole ?? 'main',
+      callerSessionId: task.callerSessionId ?? task.originSessionId ?? '',
+      mode: 'background',
+      objective: task.prompt,
+      title: task.label,
+      parentRunId: task.standingRootRunId,
+      chainId: task.chainState?.chainId ?? `background-${task.id}`,
+      depth: task.chainState?.depth ?? 1,
+    })
+    updateBackgroundTask(canonicalUser, task.id, {
+      parentTaskRunId: task.standingRootRunId,
+      taskRunId: run.id,
+    })
+    return run.id
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to create next standing run for ${task.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return undefined
   }
 }
 
@@ -427,11 +461,11 @@ export class BackgroundTaskScheduler {
       this.dequeue(canonicalUser)
     }
 
-    // Oneshot entries carry their dispatch-time queued run; recurring /
-    // interval entries create one run per fire. Retries pass taskRunId back
-    // through the queue item and reuse the same run either way.
-    const presetTaskRunId = taskRunId
-      ?? (task.schedule.kind === 'oneshot' ? task.taskRunId : undefined)
+    // New entries carry their dispatch-time queued run in taskRunId. Legacy
+    // recurring / interval entries may lack it and still create one per fire.
+    // Retries pass taskRunId back through the queue item and reuse the same
+    // run either way.
+    const presetTaskRunId = taskRunId ?? task.taskRunId
     this.markActiveTaskRun(canonicalUser, presetTaskRunId)
     let activeTaskRunId = presetTaskRunId
     const taskRunPromise = presetTaskRunId
@@ -555,7 +589,13 @@ export class BackgroundTaskScheduler {
       })
       removeBackgroundTask(canonicalUser, task.id)
     } else {
-      if (task.schedule.kind === 'oneshot') {
+      if (task.standingRootRunId) {
+        const latest = getBackgroundTask(canonicalUser, task.id)
+        if (latest) {
+          await createNextStandingTaskRunBestEffort(canonicalUser, latest)
+        }
+        updateLastFiredAt(canonicalUser, task.id, firedAt)
+      } else if (task.schedule.kind === 'oneshot') {
         updateBackgroundTask(canonicalUser, task.id, {
           lastFiredAt: firedAt,
         })
@@ -628,8 +668,9 @@ export class BackgroundTaskScheduler {
 
     // Spawner-aware delivery: if a still-alive worker ancestor spawned this
     // bg dispatch, return the result to that worker instead of main. See
-    // `resolveLiveWorkerSpawner` for the walk-up semantics.
-    if (task.chainState) {
+    // `resolveLiveWorkerSpawner` for the walk-up semantics. Standing services
+    // are top-level roots, so their fire results go to main for acceptance.
+    if (task.chainState && !task.standingRootRunId) {
       const liveSessions = new Set(
         getSignalRouter().sessionIdsForChain(task.chainState.chainId),
       )

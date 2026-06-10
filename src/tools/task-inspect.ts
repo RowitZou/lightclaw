@@ -93,6 +93,7 @@ function formatRunSummary(meta: TaskRunMeta) {
   return {
     id: meta.id,
     kind: meta.kind ?? 'dispatch',
+    standing: meta.standing ?? false,
     title: meta.title,
     role: meta.role,
     callerRole: meta.callerRole,

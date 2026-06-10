@@ -38,7 +38,10 @@ describe('TaskRun watchdog', () => {
       activeSessionIds: new Set(['live-session']),
       inFlightMainSessionIds: new Set(),
       schedulerTaskRunIds: new Set(['tr_running_claimed']),
-      backgroundEntries: [backgroundEntry('dispatch-1', 'tr_queued_scheduled')],
+      backgroundEntries: [
+        backgroundEntry('dispatch-1', 'tr_queued_scheduled'),
+        { ...backgroundEntry('dispatch-2', 'tr_queued_paused'), enabled: false },
+      ],
       eventsByRun: eventsFor(runs),
     })
 
@@ -49,6 +52,34 @@ describe('TaskRun watchdog', () => {
         ['tr_running_dead', 'stranded'],
       ].sort(),
     )
+  })
+
+  it('does not report a paused standing dispatch queued child as stranded', () => {
+    const runs = [
+      meta({ id: 'tr_standing_root', kind: 'root', standing: true, status: 'running' }),
+      meta({
+        id: 'tr_paused_child',
+        status: 'queued',
+        parentRunId: 'tr_standing_root',
+        rootRunId: 'tr_standing_root',
+      }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 0,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [{
+        ...backgroundEntry('dispatch-paused', 'tr_paused_child'),
+        enabled: false,
+        standingRootRunId: 'tr_standing_root',
+        parentTaskRunId: 'tr_standing_root',
+      }],
+      eventsByRun: eventsFor(runs),
+    })
+
+    assert.deepEqual(findings, [])
   })
 
   it('reports delivered runs only after grace and when the receiver is idle', () => {
@@ -280,6 +311,7 @@ function meta(input: Partial<TaskRunMeta> & { id: string; status: TaskRunMeta['s
   return {
     id: input.id,
     kind: input.kind ?? 'dispatch',
+    ...(input.standing ? { standing: input.standing } : {}),
     parentRunId: input.parentRunId ?? null,
     rootRunId: input.rootRunId ?? input.id,
     chainId: input.chainId ?? 'chain-1',
