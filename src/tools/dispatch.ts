@@ -878,9 +878,12 @@ export const updateScheduleTool = buildTool({
     }
     if (existing?.schedule.kind === 'oneshot' && existing.taskRunId) {
       const run = await getTaskRun(existing.taskRunId, userId)
-      if (run?.status === 'running') {
+      // A paused fire has already fired and consumed the entry's prompt; a
+      // one-shot has no future fires for the update to apply to.
+      if (run?.status === 'running' || run?.status === 'paused') {
+        const state = run.status === 'running' ? 'already running' : 'already fired and is paused'
         return {
-          output: `TaskRun ${run.id} is already running. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use MessageDispatch for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
+          output: `TaskRun ${run.id} is ${state}. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use MessageDispatch for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
           isError: true,
         }
       }

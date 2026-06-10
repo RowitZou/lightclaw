@@ -335,6 +335,12 @@ export async function markStarted(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
+  // Terminal verdicts are final: a late fire path (e.g. a scheduler item whose
+  // backing run was cancelled before fire time) must not flip the run back to
+  // running via the unconditional started reducer.
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta) return null
+  if (isTerminalStatus(meta.status)) return meta
   return appendEvent(id, 'started', { sessionId }, now, ownerCanonicalUser)
 }
 

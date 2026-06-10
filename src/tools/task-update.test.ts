@@ -322,6 +322,51 @@ test('TaskUpdate cancel accepts a dispatch entry id and removes the backing sche
   assert.equal(getBackgroundTask('alice', 'dispatch-entry-1'), null)
 })
 
+test('TaskUpdate cancel refuses the queued next fire of a standing service', async () => {
+  const root = await standingRoot()
+  const queued = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Next fire of the standing service',
+    parentRunId: root.id,
+    chainId: 'chain-standing-next-fire',
+    depth: 1,
+  })
+  addBackgroundTask('alice', {
+    id: 'standing-service-2',
+    ownerCanonicalUser: 'alice',
+    prompt: 'Run every hour.',
+    role: 'coder',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'standing service',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    originSessionId: 's-main',
+    standingRootRunId: root.id,
+    parentTaskRunId: root.id,
+    taskRunId: queued.id,
+  })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: queued.id }, toolContext()),
+  )
+
+  // The schedule would fire this run anyway (or recreate it), silently undoing
+  // the cancel — refuse and route to the standing root / UpdateSchedule.
+  assert.equal(result.isError, true)
+  assert.match(result.output, /standing service/)
+  assert.match(result.output, new RegExp(root.id))
+  assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'queued')
+  assert.ok(getBackgroundTask('alice', 'standing-service-2'))
+})
+
 test('TaskUpdate cancel on a standing root shuts down the whole service', async () => {
   const root = await standingRoot()
   const fire = await startedRun({ callerRole: 'main', parentRunId: root.id })

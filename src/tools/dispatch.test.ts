@@ -9,7 +9,7 @@ import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAbortControllerForSession } from '../state.js'
-import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markStarted } from '../taskrun/store.js'
+import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markPaused, markStarted } from '../taskrun/store.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -348,6 +348,56 @@ describe('Dispatch tool family', () => {
       assert.equal(rejected.isError, true)
       assert.match(rejected.output, /already running/)
       assert.match(rejected.output, /TaskUpdate cancel/)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('UpdateSchedule refuses a paused in-flight one-shot fire', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-update-schedule-paused-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate a scheduled report.',
+        title: 'Scheduled report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Write the report later today.',
+            schedule: { kind: 'after', afterMinutes: 5 },
+            mode: 'background',
+            label: 'Scheduled report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry?.taskRunId)
+      await markStarted(entry.taskRunId, 'bg-update-schedule-paused', Date.now(), 'alice')
+      await markPaused(entry.taskRunId, { reason: 'user-stop' }, Date.now(), 'alice')
+
+      // A paused fire has already consumed the entry's prompt; updating the
+      // schedule would not touch the in-flight shift and a one-shot has no
+      // future fires to apply it to.
+      const rejected = await runWithSessionContext(session('main'), () =>
+        updateScheduleTool.call(
+          {
+            id: dispatchId,
+            label: 'too late',
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(rejected.isError, true)
+      assert.match(rejected.output, /already fired/)
+      assert.match(rejected.output, /TaskUpdate cancel/)
+      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'paused')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

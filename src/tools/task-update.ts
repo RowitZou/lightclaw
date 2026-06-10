@@ -372,6 +372,18 @@ export const taskUpdateTool = buildTool({
         }
       }
       const backing = findBackingDispatches(owner, target.id)
+      const standingCurrentChild = backing.find(
+        entry => entry.standingRootRunId && entry.taskRunId === target.id,
+      )
+      if (standingCurrentChild && target.status === 'queued') {
+        // The schedule still backs this run: at fire time it would either
+        // re-fire the cancelled run or recreate the slot, silently undoing the
+        // cancel. Route to the verbs that actually stop the service.
+        return {
+          output: `TaskRun ${target.id} is the next scheduled fire of standing service ${standingCurrentChild.standingRootRunId}. Cancelling a single upcoming fire is not supported. Cancel the standing root (TaskUpdate { action:'cancel', runId:'${standingCurrentChild.standingRootRunId}' }) to shut the service down, or UpdateSchedule { id:'${standingCurrentChild.id}', enabled:false } to pause future fires.`,
+          isError: true,
+        }
+      }
       if (target.standing === true && (target.kind ?? 'dispatch') === 'root') {
         for (const entry of backing) {
           if (!currentCallerMayManageDispatch(entry)) {

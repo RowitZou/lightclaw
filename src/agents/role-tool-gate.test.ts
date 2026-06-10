@@ -153,8 +153,6 @@ test('orchestrator roles with wildcard tools do not restrict tool presence', asy
 
   assert.equal((await gate(tool('Dispatch'), {})).behavior, 'allow')
   assert.equal((await gate(tool('Notify'), {})).behavior, 'allow')
-  assert.equal((await gate(tool('WebFetch'), {})).behavior, 'deny')
-  assert.equal((await gate(tool('WebSearch'), {})).behavior, 'deny')
 })
 
 test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () => {
@@ -195,17 +193,6 @@ test('retired Dispatch management names are hidden even from wildcard roles', as
       assert.equal(isToolVisibleToRole(role({ kind, tools: ['*'], reachableRoles: ['coder'] }), retired), false)
     }
   }
-})
-
-test('main routes web retrieval through webSearcher instead of direct Web tools', () => {
-  const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
-  const webSearcher = BUNDLED_AGENTS.find(agent => agent.agentType === 'webSearcher')
-  assert.ok(main)
-  assert.ok(webSearcher)
-  assert.equal(isToolVisibleToRole(main, 'WebFetch'), false)
-  assert.equal(isToolVisibleToRole(main, 'WebSearch'), false)
-  assert.equal(isToolVisibleToRole(webSearcher, 'WebFetch'), true)
-  assert.equal(isToolVisibleToRole(webSearcher, 'WebSearch'), true)
 })
 
 test('TaskInspect is not implicitly visible to internal roles', () => {

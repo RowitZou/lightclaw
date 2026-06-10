@@ -42,11 +42,6 @@ const RETIRED_TOOLS = new Set([
   'UpdateDispatch',
 ])
 
-const MAIN_BLOCKED_TOOLS = new Set([
-  'WebFetch',
-  'WebSearch',
-])
-
 export function deriveCanUseTool(role: Role): CanUseToolFn {
   return async tool => {
     const visibility = checkRoleToolVisibility(role, tool.name)
@@ -93,13 +88,6 @@ function checkRoleToolVisibility(
     return {
       allowed: false,
       reason: `${toolName} has been retired; use TaskInspect, TaskUpdate, or UpdateSchedule.`,
-    }
-  }
-
-  if (policy.kind === 'orchestrator' && MAIN_BLOCKED_TOOLS.has(toolName)) {
-    return {
-      allowed: false,
-      reason: `${toolName} is reserved for web-specialized worker roles.`,
     }
   }
 

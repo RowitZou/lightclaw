@@ -400,6 +400,36 @@ describe('TaskRun store', () => {
     }
   })
 
+  it('does not resurrect a terminal run via a late started event', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-no-resurrect-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Cancelled before its fire path reached it',
+        chainId: 'chain-no-resurrect',
+        depth: 1,
+        now: 10,
+      })
+      const cancelled = await markCancelled(run.id, 'cancelled via TaskUpdate', 20, 'alice')
+      assert.equal(cancelled?.status, 'cancelled')
+      // A late fire path calling markStarted must not flip the run back to
+      // running — the cancel verdict is terminal.
+      const started = await markStarted(run.id, 'bg-late-fire', 30, 'alice')
+      assert.equal(started?.status, 'cancelled')
+      assert.equal(started?.currentSessionId, null)
+      assert.equal(started?.lastEventSeq, cancelled?.lastEventSeq)
+      assert.equal(started?.terminalAt, 20)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
   it('pauses a running run and refuses late delivered overwrite', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-pause-'))
     setLightclawHomeOverride(tmpHome)
