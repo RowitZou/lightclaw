@@ -2,11 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
-import {
-  formatWorkerFailureForToolResult,
-  runSubagent,
-  type RunSubagentResult,
-} from '../agents/run-subagent.js'
+import { formatWorkerFailureForToolResult } from '../agents/run-subagent.js'
 import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
@@ -24,22 +20,18 @@ import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedu
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type BackgroundTaskEntry, type ScheduleSpec } from '../background-task/types.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { wakeOrInterject } from '../channels/feishu/wake-or-interject.js'
+import { getIdentity } from '../identity/store.js'
 import {
   abortInFlightForSession,
   getCurrentRole,
   getCurrentTaskRunId,
-  getRuntime,
   getSessionId,
   requireCurrentUserId,
 } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
-import {
-  DispatchAttachmentError,
-  prepareDispatchAttachments,
-  type DispatchAttachmentResult,
-} from './dispatch-attachments.js'
-import type { DispatchMode, DispatchRole, DispatchSchedule } from '../signal-bus/types.js'
+import type { DispatchRole, DispatchSchedule } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { ChainGuardError, assertChainGuards } from '../signal-bus/chain-guard.js'
 import {
@@ -48,26 +40,19 @@ import {
   type ChainState,
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
-import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
-  acceptTaskRun,
-  appendArtifact,
   closeRootTaskRun,
   createStandingRootTaskRun,
   createTaskRun,
+  appendEvent,
   getTaskRun,
   markCancelled,
-  markDelivered,
-  markStarted,
+  markPaused,
 } from '../taskrun/store.js'
+import { resumeRunWithBlock } from '../taskrun/resume.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
-const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
-
-## schedule × mode — the two-step decision
-
-Step 1: WHEN do I need this work to happen? → schedule
-Step 2: Given the WHEN, do I block this turn waiting, or fire-and-forget? → mode
+const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
 
 schedule (default 'now'):
 - 'now' — fire immediately.
@@ -76,15 +61,7 @@ schedule (default 'now'):
 - { kind: 'recurring', daysOfWeek: [0..6], hour, minute } — weekly schedule.
 - { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.
 
-mode (required, pick one):
-- 'blocking' — your current turn waits for the dispatched role to finish; you get its final-text summary as the tool result and can use it in your reply. ONLY valid when schedule='now'.
-- 'background' — Dispatch returns immediately with a dispatch id; the actual work happens later (or now, but asynchronously). When the work finishes, the result lands back in your context as a \`<background-task-result>\` block (drained at the next tool boundary if you're in-flight; delivered via a fresh continuation turn if you're idle) — you can then decide whether and how to surface it to the user. REQUIRED for any schedule other than 'now', and also valid for schedule='now' when you want to fire-and-forget.
-
-Mode choice when schedule='now' — ask: do I need this result to write my current reply, and will it return quickly?
-- blocking — you need the answer to shape this reply AND it returns fast (research before answering, code exploration before an edit). Your turn waits, so a long blocking call freezes the session — the user's follow-ups just queue until it returns. Keep blocking for fast work; several short independent lookups can run as parallel blocking calls in one message (see ## Parallelism).
-- background — you don't need the result in this reply, OR the work is long-running (deep research, large refactor, long build / test — anything that would hold the turn for minutes). Dispatch returns an id immediately and your turn ends, so the session stays responsive; the result returns later as a <background-task-result> to surface or act on. You can tell the user it's running and that you'll report back.
-
-Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatch cannot wait for tomorrow's fire to finish.
+When you need the result before continuing, dispatch it with schedule='now' and then pause your own TaskRun with TaskUpdate action='pause' wake.kind='child-join'. The framework resumes your run when the child delivers.
 
 ## When NOT to use Dispatch
 
@@ -93,9 +70,9 @@ Mode choice when schedule≠'now': mode MUST be 'background'. A blocking dispatc
 - You can answer from your own context.
 - The work is small enough to do in this turn yourself (each dispatch fork is relatively expensive).
 
-## Parallelism (blocking mode only)
+## Parallelism
 
-When several independent sub-tasks must all feed your current reply, dispatch them as parallel blocking calls in a single assistant message and synthesize the results — faster than one at a time, and each sub-task's reading stays out of your own context. Example: to compare how three modules handle errors, send three Dispatch calls in one message (one localExplorer per module, each scoped to one file set), then combine the findings in your reply. (Long-running independent work goes to background instead — see mode choice above.)
+When several independent sub-tasks must all feed your next step, dispatch them as separate background calls and pause on the child or children you need. Each sub-task's reading stays out of your own context.
 
 Only parallelize tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
 
@@ -117,16 +94,9 @@ For schedule≠'now' (background) dispatches, additional rules:
   Bad:  "After 1 minute, get the current Beijing time and send it to me." / "到时间后获取北京时间发给我。"
 - The dispatched role's own \`tools\` list IS the authorization for the fire — pick a role whose tool surface fits the task. If a fire hits a high-risk input mid-execution (rm / sudo / writes to /etc / ...), the user will see a one-shot permission card; everything else auto-approves under the role's scope.
 
-## attachments (optional)
+## attachments
 
-attachments: <absolute workspace path>[] — image / pdf files provided inline to the dispatched role's first user message, so the worker sees the bytes natively without having to Read them again.
-
-- Every path must be absolute and resolve inside the current workspace. Non-existent paths and directories are rejected.
-- Supported inline kinds: jpg / png / gif / webp / pdf. Other types stay path-only and the worker will need to Read them.
-- Oversize files (caps in attachments config) and providers without matching capability fall back to path-only with no error — the path still appears in the worker's prompt so it can decide to Read.
-- Only valid with mode='blocking'. Background dispatches must include the path in the prompt and let the worker Read it at fire time.
-
-Use when the work hinges on bytes you already have (an image the user just sent, a downloaded PDF). Skip when the worker would walk the file anyway as part of broader exploration.
+Background dispatches do not carry inline attachment bytes. Put workspace paths in the prompt and ask the worker to Read them at fire time.
 
 ## Disambiguating user-intended time
 
@@ -140,7 +110,7 @@ Dispatched roles return a single final-text summary. Tool results from inside th
 
 A background dispatch outlives the turn that starts it, and its \`<background-task-result>\` only returns to you if you are still running when it finishes. If you hand back your result first, the dispatch keeps running without you and its result later surfaces with no record of why it exists. So when you finish with a background dispatch still in flight — one you started, or one a role you dispatched reported starting — name it in what you hand back: what it is doing, and that its result will arrive separately.`
 
-const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed). Blocking dispatches are not included — those return synchronously and you already have their result.
+const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed).
 
 Use to monitor what's running before deciding to dispatch new work that might overlap, before CancelDispatch / UpdateDispatch when you know what to target, or when answering a user question that requires reasoning over current delegated state.
 
@@ -156,11 +126,11 @@ To temporarily disable rather than delete, use UpdateDispatch with \`enabled: fa
 
 Idempotent: cancelling a dispatch that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`
 
-const MESSAGE_DISPATCH_DESCRIPTION = `Send a message to a currently running background dispatch without aborting it.
+const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
-Use this for soft direction changes, added context, or redirecting the worker's next steps while it is still active. The message is delivered as an interjection at the worker's next tool boundary. It does not cancel, pause, reschedule, or otherwise mutate the dispatch entry.
+With \`to\`, target a direct child TaskRun: running children receive an interjection; paused children resume with the message; queued / delivered / terminal children return guidance.
 
-Run ListDispatches first if you do not know the dispatch id. MessageDispatch only works while the dispatch's current TaskRun is running; queued future work can be updated with UpdateDispatch, and hard stop uses CancelDispatch.`
+Without \`to\`, ask your parent for input. \`default\` is required: the run pauses as awaiting-reply and will continue with the default if the parent cannot answer in time.`
 
 const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -174,18 +144,15 @@ function shortId(): string {
   return randomUUID().slice(0, 8)
 }
 
-type RunSubagentFn = typeof runSubagent
-let runSubagentImpl: RunSubagentFn = runSubagent
-
-export function setRunSubagentForDispatchTest(impl: RunSubagentFn | null): void {
-  runSubagentImpl = impl ?? runSubagent
+function internalRoleFor(role: DispatchRole): AgentType {
+  return role
 }
 
-function internalRoleFor(role: DispatchRole, mode: DispatchMode): AgentType {
-  if (role === 'generalist') {
-    return mode === 'blocking' ? 'generalist' : 'background_task'
-  }
-  return role
+export function setRunSubagentForDispatchTest(
+  _impl: ((params: { currentTaskRunId?: string }) => unknown) | null,
+): void {
+  // Blocking Dispatch was retired in collab-phase3 PR16. This test seam is
+  // retained as a no-op until older tests are fully rewritten around bg+pause.
 }
 
 function normalizeSchedule(schedule: DispatchSchedule): ScheduleSpec {
@@ -275,96 +242,6 @@ async function resolveDispatchParentTaskRun(input: {
   return { ok: true, parentRunId: getCurrentTaskRunId() }
 }
 
-async function createDispatchTaskRunBestEffort(input: {
-  ownerCanonicalUser: string
-  role: string
-  callerRole: string
-  callerSessionId: string
-  mode: DispatchMode
-  objective: string
-  title?: string
-  parentRunId?: string
-  chainState: ChainState
-  startedSessionId: string
-}): Promise<string | undefined> {
-  let runId: string
-  try {
-    const run = await createTaskRun({
-      ownerCanonicalUser: input.ownerCanonicalUser,
-      role: input.role,
-      callerRole: input.callerRole,
-      callerSessionId: input.callerSessionId,
-      mode: input.mode,
-      objective: input.objective,
-      title: input.title,
-      parentRunId: input.parentRunId ?? null,
-      chainId: input.chainState.chainId,
-      depth: input.chainState.depth,
-    })
-    runId = run.id
-  } catch (error) {
-    process.stderr.write(
-      `[taskrun] failed to create dispatch run: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-    return undefined
-  }
-  try {
-    await markStarted(
-      runId,
-      input.startedSessionId,
-      Date.now(),
-      input.ownerCanonicalUser,
-    )
-  } catch (error) {
-    process.stderr.write(
-      `[taskrun] failed to mark dispatch run ${runId} started: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-  }
-  return runId
-}
-
-// Blocking delivery is inline: the caller is frozen in the tool call and
-// receives the final text directly, so delivery + acceptance collapse into the
-// return — recorded honestly as delivered -> accepted(auto) -> finished.
-async function settleBlockingTaskRunBestEffort(input: {
-  ownerCanonicalUser: string
-  taskRunId: string | undefined
-  acceptedByRole: string
-  ok: boolean
-  summary?: string
-  error?: string
-}): Promise<void> {
-  if (!input.taskRunId) return
-  try {
-    await markDelivered(
-      input.taskRunId,
-      {
-        ok: input.ok,
-        ...(input.summary ? { summary: input.summary.slice(0, 500) } : {}),
-        ...(input.error ? { error: input.error.slice(0, 500) } : {}),
-      },
-      Date.now(),
-      input.ownerCanonicalUser,
-    )
-    await acceptTaskRun(
-      input.taskRunId,
-      { byRole: input.acceptedByRole, auto: true },
-      Date.now(),
-      input.ownerCanonicalUser,
-    )
-  } catch (error) {
-    process.stderr.write(
-      `[taskrun] failed to settle blocking run ${input.taskRunId}: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-  }
-}
-
 // Oneshot background dispatches get their durable run at dispatch time
 // (status 'queued') so scheduled-but-not-fired work is visible in the tree
 // and counts as a root obligation; the scheduler only marks it started.
@@ -443,30 +320,6 @@ async function createStandingDispatchTaskRunsBestEffort(input: {
   return {
     standingRootRunId: root.id,
     ...(taskRunId ? { taskRunId } : {}),
-  }
-}
-
-async function appendDispatchArtifactsBestEffort(input: {
-  ownerCanonicalUser: string
-  taskRunId: string | undefined
-  finalText: string
-}): Promise<void> {
-  if (!input.taskRunId) return
-  for (const artifact of extractArtifactDeclarationsFromText(input.finalText)) {
-    try {
-      await appendArtifact(
-        input.taskRunId,
-        artifact,
-        Date.now(),
-        input.ownerCanonicalUser,
-      )
-    } catch (error) {
-      process.stderr.write(
-        `[taskrun] failed to append artifact for ${input.taskRunId}: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      )
-    }
   }
 }
 
@@ -571,11 +424,10 @@ export const dispatchTool = buildTool({
     role: z.string().min(1),
     prompt: z.string().min(10),
     schedule: dispatchScheduleSchema,
-    mode: z.enum(['blocking', 'background']),
     task: z.string().min(1).optional(),
     label: z.string().min(2).max(80).optional(),
     attachments: z.array(z.string().min(1)).optional(),
-  }),
+  }).strict(),
   async call(input, context) {
     return executeDispatch(input, context)
   },
@@ -586,7 +438,7 @@ export async function executeDispatch(
     role: DispatchRole
     prompt: string
     schedule?: DispatchSchedule
-    mode: DispatchMode
+    mode?: unknown
     task?: string
     label?: string
     attachments?: string[]
@@ -594,13 +446,12 @@ export async function executeDispatch(
   context: ToolCallContext,
 ) {
   const schedule = input.schedule ?? 'now'
-  if (input.mode === 'blocking' && schedule !== 'now') {
+  if (input.mode === 'blocking') {
     return {
-      output: "blocking dispatch cannot be scheduled - pick schedule='now' for blocking, or mode='background' for scheduled work",
+      output: 'Dispatch.mode has been retired. Dispatch is background-only; use TaskUpdate pause(child-join) when you need the result before continuing.',
       isError: true,
     }
   }
-
   const userId = requireCurrentUserId()
   const sessionId = getSessionId()
   const callerRole = getCurrentRole() ?? getAgent('main')
@@ -630,12 +481,12 @@ export async function executeDispatch(
       isError: true,
     }
   }
-  const internalRole = internalRoleFor(input.role, input.mode)
+  const internalRole = internalRoleFor(input.role)
   const dispatchId = `${userId}-${shortId()}`
   const startedAt = Date.now()
   const parentChainState = context.chainState ??
     createRootChainState(userId, callerRole, sessionId)
-  const childSessionId = input.mode === 'blocking' ? `dispatched-${dispatchId}` : dispatchId
+  const childSessionId = dispatchId
   const effectiveChildChainState = deriveChildChainState(
     parentChainState,
     calleeRole,
@@ -660,7 +511,7 @@ export async function executeDispatch(
         caller: { role: callerRole.agentType, sessionId },
         callee: { role: input.role, internalRole, sessionId: childSessionId },
         schedule,
-        mode: input.mode,
+        mode: 'background',
         outcome: 'rejected-by-guard',
         durationMs: Date.now() - startedAt,
         finalTextPreview: error.message,
@@ -675,35 +526,17 @@ export async function executeDispatch(
     throw error
   }
 
-  if (input.mode === 'background' && input.attachments && input.attachments.length > 0) {
+  if (input.attachments && input.attachments.length > 0) {
     return {
       output: [
-        'attachments are currently supported only for blocking Dispatch.',
-        'Background dispatch fires through the scheduler path; inline bytes cannot follow the task into a future fresh fork.',
-        'Use mode="blocking", or include the workspace paths in the prompt and let the worker open them with Read at fire time.',
+        'Dispatch is background-only and cannot carry inline attachment bytes.',
+        'Include the workspace paths in the prompt and let the worker open them with Read at fire time.',
       ].join('\n'),
       isError: true,
     }
   }
 
-  let attachments: DispatchAttachmentResult = { inlineBlocks: [], breadcrumb: '' }
-  if (input.attachments && input.attachments.length > 0) {
-    try {
-      attachments = await prepareDispatchAttachments({
-        attachments: input.attachments,
-        runtime: getRuntime(),
-        config: getConfig(),
-        calleeRole,
-      })
-    } catch (error) {
-      if (error instanceof DispatchAttachmentError) {
-        return { output: error.message, isError: true }
-      }
-      throw error
-    }
-  }
-
-  const finalDispatchPrompt = input.prompt + attachments.breadcrumb
+  const finalDispatchPrompt = input.prompt
 
   await getSignalRouter().publish({
     kind: 'dispatch',
@@ -714,7 +547,7 @@ export async function executeDispatch(
       internalRole,
       prompt: finalDispatchPrompt,
       schedule,
-      mode: input.mode,
+      mode: 'background',
       ...(input.label ? { label: input.label } : {}),
       chainState: effectiveChildChainState,
     },
@@ -722,102 +555,6 @@ export async function executeDispatch(
     chainId: effectiveChildChainState.chainId,
     parentDispatchId: effectiveChildChainState.parentDispatchId,
   })
-
-  if (input.mode === 'blocking') {
-    const taskRunId = await createDispatchTaskRunBestEffort({
-      ownerCanonicalUser: userId,
-      role: input.role,
-      callerRole: callerRole.agentType,
-      callerSessionId: sessionId,
-      mode: 'blocking',
-      objective: finalDispatchPrompt,
-      title: input.label,
-      parentRunId: parentTaskRun.parentRunId,
-      chainState: effectiveChildChainState,
-      startedSessionId: childSessionId,
-    })
-    const router = getSignalRouter()
-    router.registerChainSession(
-      effectiveChildChainState.chainId,
-      childSessionId,
-      effectiveChildChainState,
-      userId,
-    )
-    let result: RunSubagentResult
-    try {
-      result = await runSubagentImpl({
-        agentType: internalRole,
-        prompt: finalDispatchPrompt,
-        signal: context.abortSignal,
-        canonicalUserOverride: userId,
-        chainState: effectiveChildChainState,
-        currentTaskRunId: taskRunId,
-        ...(attachments.inlineBlocks.length > 0
-          ? { dispatchAttachmentBlocks: attachments.inlineBlocks }
-          : {}),
-      })
-    } catch (error) {
-      await settleBlockingTaskRunBestEffort({
-        ownerCanonicalUser: userId,
-        taskRunId,
-        acceptedByRole: callerRole.agentType,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      throw error
-    } finally {
-      router.unregisterChainSession(effectiveChildChainState.chainId, childSessionId)
-    }
-    if (result.kind === 'failure') {
-      await settleBlockingTaskRunBestEffort({
-        ownerCanonicalUser: userId,
-        taskRunId,
-        acceptedByRole: callerRole.agentType,
-        ok: false,
-        error: formatWorkerFailureForToolResult(result.envelope),
-      })
-      await appendDispatchAudit({
-        at: new Date().toISOString(),
-        chainId: effectiveChildChainState.chainId,
-        parentDispatchId: effectiveChildChainState.parentDispatchId,
-        caller: { role: callerRole.agentType, sessionId },
-        callee: { role: input.role, internalRole, sessionId: childSessionId },
-        schedule,
-        mode: input.mode,
-        outcome: 'failed',
-        durationMs: Date.now() - startedAt,
-        finalTextPreview: formatWorkerFailureForToolResult(result.envelope).slice(0, 200),
-        chainState: effectiveChildChainState,
-      }).catch(() => {})
-      return { output: formatWorkerFailureForToolResult(result.envelope), isError: true }
-    }
-    await appendDispatchArtifactsBestEffort({
-      ownerCanonicalUser: userId,
-      taskRunId,
-      finalText: result.finalText,
-    })
-    await settleBlockingTaskRunBestEffort({
-      ownerCanonicalUser: userId,
-      taskRunId,
-      acceptedByRole: callerRole.agentType,
-      ok: true,
-      summary: result.finalText || '(dispatched role returned empty text)',
-    })
-    await appendDispatchAudit({
-      at: new Date().toISOString(),
-      chainId: effectiveChildChainState.chainId,
-      parentDispatchId: effectiveChildChainState.parentDispatchId,
-      caller: { role: callerRole.agentType, sessionId },
-      callee: { role: input.role, internalRole, sessionId: childSessionId },
-      schedule,
-      mode: input.mode,
-      outcome: 'success',
-      durationMs: Date.now() - startedAt,
-      finalTextPreview: (result.finalText || '').slice(0, 200),
-      chainState: effectiveChildChainState,
-    }).catch(() => {})
-    return { output: result.finalText || '(dispatched role returned empty text)' }
-  }
 
   const normalizedSchedule = normalizeSchedule(schedule)
   const scheduleError = validateFutureOneshot(normalizedSchedule)
@@ -883,7 +620,7 @@ export async function executeDispatch(
     caller: { role: callerRole.agentType, sessionId },
     callee: { role: input.role, internalRole, sessionId: entry.id },
     schedule,
-    mode: input.mode,
+    mode: 'background',
     outcome: 'success',
     durationMs: Date.now() - startedAt,
     finalTextPreview: `scheduled ${entry.id}`,
@@ -893,7 +630,6 @@ export async function executeDispatch(
     output: [
       `Dispatch scheduled: ${entry.id} (${entry.label})`,
       `Role: ${input.role}`,
-      `Mode: ${input.mode}`,
       `Next run: ${describeNextRun(computeTaskNextRunAt(entry))}`,
     ].join('\n'),
   }
@@ -1024,64 +760,241 @@ export const cancelDispatchTool = buildTool({
 
 export const messageDispatchTool = buildTool({
   name: 'MessageDispatch',
-  whenToUse: `Send a soft mid-flight instruction to a running background dispatch without cancelling it.`,
+  whenToUse: `Send a message to a child TaskRun, or ask your parent a question with a default.`,
   shouldDefer: true,
   description: MESSAGE_DISPATCH_DESCRIPTION,
-  searchHint: 'message dispatch interject redirect running background worker 插嘴 转向 下行 消息',
+  searchHint: 'message dispatch interject ask answer resume paused worker 插嘴 提问 回答 续班次',
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
-    id: z.string().min(1),
+    id: z.string().min(1).optional(),
+    to: z.string().min(1).optional(),
     message: z.string().min(1),
+    options: z.array(z.string().min(1)).optional(),
+    default: z.string().min(1).optional(),
   }),
   async call(input) {
     const userId = requireCurrentUserId()
-    const owned = getBackgroundTask(userId, input.id)
-    if (owned && !currentCallerMayManage(owned)) {
+    const target = input.to ?? input.id
+    if (!target) {
+      return askParentFromCurrentRun({
+        owner: userId,
+        message: input.message,
+        options: input.options,
+        defaultAnswer: input.default,
+      })
+    }
+    const resolved = await resolveMessageTargetRun(userId, target)
+    if (!resolved.ok) return { output: resolved.message, isError: true }
+    const run = resolved.run
+    if (!currentCallerMayMessageRun(run)) {
       return {
-        output: `Dispatch ${input.id} was created by ${taskCallerRole(owned)} in a different session and is outside your scope. You can only message dispatches you created. Report it back to your requester instead of retrying.`,
+        output: `TaskRun ${run.id} is outside your messaging scope. Message only direct children you dispatched.`,
         isError: true,
       }
     }
-    if (!owned) {
-      const prior = getCompletedTaskRecord(userId, input.id)
-      if (prior) {
-        const verb = prior.outcome === 'cancelled'
-          ? 'cancelled'
-          : prior.outcome === 'aborted'
-            ? 'aborted'
-            : 'finished'
-        return {
-          output: `Dispatch ${input.id} already ${verb} at ${prior.completedAt}; cannot message it.`,
-          isError: true,
-        }
-      }
-      return { output: `Dispatch not found: ${input.id}`, isError: true }
-    }
-    const run = owned.taskRunId ? await getTaskRun(owned.taskRunId, userId) : null
-    if (!run || run.status !== 'running' || !run.currentSessionId) {
+    if (run.status === 'running' && run.currentSessionId) {
+      const now = Date.now()
+      channelInterjectionQueue.push(run.currentSessionId, {
+        messageId: `message-dispatch-${run.id}-${now}`,
+        senderOpenId: `taskrun:${run.id}`,
+        text: wrapMessageDispatch(input.message.trim()),
+        arrivedAt: now,
+        source: 'user',
+      })
       return {
-        output: `Dispatch ${input.id} is not currently running; use UpdateDispatch for queued future work or CancelDispatch for a hard stop.`,
-        isError: true,
+        output: `Message queued for TaskRun ${run.id}; the worker will receive it at the next tool boundary.`,
       }
     }
-    const now = Date.now()
-    channelInterjectionQueue.push(run.currentSessionId, {
-      messageId: `message-dispatch-${input.id}-${now}`,
-      senderOpenId: `dispatch:${input.id}`,
-      text: [
-        '<message-dispatch>',
-        input.message.trim(),
-        '</message-dispatch>',
-      ].join('\n'),
-      arrivedAt: now,
-      source: 'user',
-    })
-    return {
-      output: `Message queued for dispatch ${input.id}; the worker will receive it at the next tool boundary.`,
+    if (run.status === 'paused') {
+      if (run.pauseReason === 'awaiting-reply') {
+        await appendEvent(run.id, 'answered', {
+          byRole: getCurrentRole()?.agentType ?? 'main',
+          answer: input.message.trim(),
+        }, Date.now(), userId)
+      }
+      const resumed = await resumeRunWithBlock(run.id, {
+        via: run.pauseReason === 'awaiting-reply' ? 'answer' : 'message',
+        reason: run.pauseReason === 'awaiting-reply' ? 'parent answer' : 'message to paused run',
+        body: wrapMessageDispatch(input.message.trim()),
+      }, userId)
+      return resumed.ok
+        ? { output: `TaskRun ${run.id} resumed with your message.` }
+        : { output: `TaskRun ${run.id} could not be resumed: ${resumed.message}`, isError: true }
     }
+    if (run.status === 'queued') {
+      return { output: `TaskRun ${run.id} is queued; use UpdateDispatch to change the queued prompt.`, isError: true }
+    }
+    if (run.status === 'delivered') {
+      return { output: `TaskRun ${run.id} is delivered; accept or reject it with TaskUpdate.`, isError: true }
+    }
+    return { output: `TaskRun ${run.id} is ${run.status} and cannot receive messages.`, isError: true }
   },
 })
+
+async function resolveMessageTargetRun(
+  owner: string,
+  target: string,
+): Promise<{ ok: true; run: TaskRunMeta } | { ok: false; message: string }> {
+  const run = await getTaskRun(target, owner)
+  if (run) return { ok: true, run }
+  const entry = getBackgroundTask(owner, target)
+  if (entry?.taskRunId) {
+    const entryRun = await getTaskRun(entry.taskRunId, owner)
+    if (entryRun) {
+      return {
+        ok: true,
+        run: entryRun,
+      }
+    }
+  }
+  const prior = getCompletedTaskRecord(owner, target)
+  if (prior) {
+    const verb = prior.outcome === 'cancelled'
+      ? 'cancelled'
+      : prior.outcome === 'aborted'
+        ? 'aborted'
+        : 'finished'
+    return { ok: false, message: `Dispatch ${target} already ${verb} at ${prior.completedAt}; cannot message it.` }
+  }
+  return { ok: false, message: `TaskRun or dispatch not found: ${target}` }
+}
+
+function currentCallerMayMessageRun(run: TaskRunMeta): boolean {
+  const role = getCurrentRole()
+  if (!role || role.kind === 'orchestrator') {
+    return true
+  }
+  return run.parentRunId === getCurrentTaskRunId()
+}
+
+async function askParentFromCurrentRun(input: {
+  owner: string
+  message: string
+  options?: string[]
+  defaultAnswer?: string
+}) {
+  const defaultAnswer = input.defaultAnswer?.trim()
+  if (!defaultAnswer) {
+    return { output: 'Asking your parent requires `default` so the run can continue if no reply arrives.', isError: true }
+  }
+  const ownId = getCurrentTaskRunId()
+  if (!ownId) return { output: 'No current TaskRun is active for this ask.', isError: true }
+  const own = await getTaskRun(ownId, input.owner)
+  if (!own) return { output: `TaskRun not found: ${ownId}`, isError: true }
+  if (!own.parentRunId) return { output: 'This TaskRun has no parent to ask.', isError: true }
+  const parent = await getTaskRun(own.parentRunId, input.owner)
+  if (!parent) return { output: `Parent TaskRun not found: ${own.parentRunId}`, isError: true }
+  const timeoutAt = Date.now() + getConfig().taskrun.ask.timeoutMs
+  await appendEvent(own.id, 'asked', {
+    question: input.message.trim(),
+    default: defaultAnswer,
+    ...(input.options?.length ? { options: input.options } : {}),
+  }, Date.now(), input.owner)
+  const paused = await markPaused(
+    own.id,
+    {
+      reason: 'awaiting-reply',
+      wake: {
+        kind: 'parent-reply',
+        timeoutAt,
+        default: defaultAnswer,
+        ...(input.options?.length ? { options: input.options } : {}),
+      },
+    },
+    Date.now(),
+    input.owner,
+  )
+  if (paused?.status !== 'paused') {
+    return { output: `TaskRun ${own.id} could not pause for parent reply.`, isError: true }
+  }
+  scheduleAskTimeout(input.owner, own.id, timeoutAt, defaultAnswer)
+  const askBlock = [
+    `<taskrun-ask childRunId="${own.id}">`,
+    input.message.trim(),
+    input.options?.length ? `options=${JSON.stringify(input.options)}` : '',
+    `default=${JSON.stringify(defaultAnswer)}`,
+    '</taskrun-ask>',
+  ].filter(Boolean).join('\n')
+  if (parent.status === 'running' && parent.currentSessionId) {
+    channelInterjectionQueue.push(parent.currentSessionId, {
+      messageId: `taskrun-ask-${own.id}-${Date.now()}`,
+      senderOpenId: `taskrun:${own.id}`,
+      text: askBlock,
+      arrivedAt: Date.now(),
+      source: 'user',
+    })
+    return { output: `Asked parent TaskRun ${parent.id}; waiting for reply.` }
+  }
+  if (parent.status === 'paused') {
+    const resumed = await resumeRunWithBlock(parent.id, {
+      via: 'message',
+      reason: `child ${own.id} asked parent`,
+      body: askBlock,
+    }, input.owner)
+    return resumed.ok
+      ? { output: `Asked and resumed parent TaskRun ${parent.id}; waiting for reply.` }
+      : { output: `Parent could not be resumed, continuing with default: ${defaultAnswer}` }
+  }
+  if ((parent.kind ?? 'dispatch') === 'root') {
+    const identity = await getIdentity(input.owner).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (ownerOpenId) {
+      const delivered = await wakeOrInterject({
+        targetSessionId: parent.callerSessionId,
+        block: askBlock,
+        ownerOpenId,
+        messageId: `taskrun-ask-${own.id}-${Date.now()}`,
+        emittedAt: Date.now(),
+        source: 'background-task',
+        logPrefix: '[taskrun-ask]',
+      })
+      if (delivered.ok) return { output: `Asked main via ${delivered.mode}; waiting for reply.` }
+    }
+  }
+  await appendEvent(own.id, 'answered', {
+    auto: true,
+    reason: 'parent-unavailable',
+    answer: defaultAnswer,
+  }, Date.now(), input.owner)
+  const resumed = await resumeRunWithBlock(own.id, {
+    via: 'answer',
+    reason: 'parent unavailable; using default answer',
+    body: wrapMessageDispatch(defaultAnswer),
+  }, input.owner)
+  return resumed.ok
+    ? { output: `Parent unavailable; continued with default answer.` }
+    : { output: `Parent unavailable and default resume failed: ${resumed.message}`, isError: true }
+}
+
+function scheduleAskTimeout(owner: string, runId: string, timeoutAt: number, defaultAnswer: string): void {
+  setTimeout(() => {
+    void (async () => {
+      const run = await getTaskRun(runId, owner)
+      if (run?.status !== 'paused' || run.pauseReason !== 'awaiting-reply') return
+      await appendEvent(runId, 'answered', {
+        auto: true,
+        reason: 'timeout',
+        answer: defaultAnswer,
+      }, Date.now(), owner)
+      await resumeRunWithBlock(runId, {
+        via: 'answer',
+        reason: 'parent reply timed out; using default answer',
+        body: wrapMessageDispatch(defaultAnswer),
+      }, owner)
+    })().catch(error => {
+      process.stderr.write(`[taskrun] ask timeout failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  }, Math.max(0, timeoutAt - Date.now())).unref?.()
+}
+
+function wrapMessageDispatch(message: string): string {
+  return [
+    '<message-dispatch>',
+    message,
+    '</message-dispatch>',
+  ].join('\n')
+}
 
 export const updateDispatchTool = buildTool({
   name: 'UpdateDispatch',

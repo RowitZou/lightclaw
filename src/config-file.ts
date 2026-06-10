@@ -242,6 +242,12 @@ export type ConfigFileShape = {
    *  warning. */
   compact?: ConfigFileCompactSection
   taskrun?: {
+    resume?: {
+      maxGapMs?: number
+    }
+    ask?: {
+      timeoutMs?: number
+    }
     watchdog?: {
       intervalMinutes?: number
       deliveredGraceMs?: number

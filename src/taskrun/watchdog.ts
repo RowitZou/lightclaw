@@ -20,7 +20,11 @@ import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
 const WATCHDOG_EVENT_KINDS = new Set(['watchdog-report', 'escalated'])
 
-export type TaskRunWatchdogFindingKind = 'stranded' | 'unsettled-delivered' | 'paused-overdue'
+export type TaskRunWatchdogFindingKind =
+  | 'stranded'
+  | 'unsettled-delivered'
+  | 'paused-overdue'
+  | 'dead-wake-source'
 
 export type TaskRunWatchdogFinding = {
   runId: string
@@ -158,6 +162,42 @@ export async function reconcileTaskRunsOnce(
     }
   }
 
+  const parentDelivery = await deliverParentFirstFindings({
+    ownerCanonicalUser,
+    findings: reportableFindings,
+    runs,
+    fingerprint,
+    activeSessionIds: deps.activeSessionIds ?? new Set(),
+  })
+  if (parentDelivery.delivered.length > 0) {
+    await Promise.all(parentDelivery.delivered.map(finding =>
+      appendEvent(
+        finding.runId,
+        'watchdog-report',
+        {
+          fingerprint,
+          findingKind: finding.kind,
+          rootRunId: finding.rootRunId,
+        },
+        now,
+        ownerCanonicalUser,
+      ),
+    ))
+    const remaining = parentDelivery.remaining
+    if (remaining.length === 0) {
+      return {
+        ownerCanonicalUser,
+        findings,
+        fingerprint,
+        reported: true,
+        deduped: false,
+        escalatedRootRunIds: escalation.escalatedRootRunIds,
+        delivery: { ok: true, mode: 'interjection' },
+      }
+    }
+    reportableFindings.splice(0, reportableFindings.length, ...remaining)
+  }
+
   const block = formatTaskRunReconcileBlock(ownerCanonicalUser, reportableFindings, fingerprint)
   const delivery = deps.reportFindings
     ? await deps.reportFindings(ownerCanonicalUser, reportableFindings, block, fingerprint)
@@ -267,7 +307,23 @@ export function detectTaskRunFindings(
     }
     if (run.status === 'paused' && pausedGraceMs > 0) {
       const pausedAt = run.pausedAt ?? run.updatedAt
-      if (input.now - pausedAt > pausedGraceMs) {
+      if (run.wake && !run.wake.consumed) {
+        if (isDeadWakeSource(run.wake, runById, input.backgroundEntries, input.now)) {
+          findings.push(toFinding(run, runById, {
+            kind: 'dead-wake-source',
+            since: pausedAt,
+            now: input.now,
+            lastStateEventSeq,
+          }))
+        }
+        continue
+      }
+      if (
+        (run.pauseReason === undefined ||
+          run.pauseReason === 'user-stop' ||
+          run.pauseReason === 'requester-pause') &&
+        input.now - pausedAt > pausedGraceMs
+      ) {
         findings.push(toFinding(run, runById, {
           kind: 'paused-overdue',
           since: pausedAt,
@@ -280,6 +336,74 @@ export function detectTaskRunFindings(
   return findings.sort((a, b) =>
     a.since - b.since || a.runId.localeCompare(b.runId),
   )
+}
+
+async function deliverParentFirstFindings(input: {
+  ownerCanonicalUser: string
+  findings: TaskRunWatchdogFinding[]
+  runs: TaskRunMeta[]
+  fingerprint: string
+  activeSessionIds: Set<string>
+}): Promise<{ delivered: TaskRunWatchdogFinding[]; remaining: TaskRunWatchdogFinding[] }> {
+  const runById = new Map(input.runs.map(run => [run.id, run]))
+  const delivered: TaskRunWatchdogFinding[] = []
+  const remaining: TaskRunWatchdogFinding[] = []
+  const grouped = new Map<string, TaskRunWatchdogFinding[]>()
+  for (const finding of input.findings) {
+    const run = runById.get(finding.runId)
+    const parent = run?.parentRunId ? runById.get(run.parentRunId) : null
+    if (
+      parent &&
+      parent.kind !== 'root' &&
+      parent.status === 'running' &&
+      parent.currentSessionId &&
+      input.activeSessionIds.has(parent.currentSessionId)
+    ) {
+      const list = grouped.get(parent.id) ?? []
+      list.push(finding)
+      grouped.set(parent.id, list)
+    } else {
+      remaining.push(finding)
+    }
+  }
+  for (const [parentId, findings] of grouped) {
+    const parent = runById.get(parentId)
+    if (!parent?.currentSessionId) {
+      remaining.push(...findings)
+      continue
+    }
+    const block = formatTaskRunReconcileBlock(input.ownerCanonicalUser, findings, input.fingerprint)
+    channelInterjectionQueue.push(parent.currentSessionId, {
+      messageId: `taskrun-reconcile-parent-${parent.id}-${Date.now()}`,
+      senderOpenId: `taskrun-watchdog:${parent.id}`,
+      text: block,
+      arrivedAt: Date.now(),
+      source: 'background-task',
+    })
+    delivered.push(...findings)
+  }
+  return { delivered, remaining }
+}
+
+function isDeadWakeSource(
+  wake: NonNullable<TaskRunMeta['wake']>,
+  runById: Map<string, TaskRunMeta>,
+  entries: BackgroundTaskEntry[],
+  now: number,
+): boolean {
+  if (wake.kind === 'child-join') {
+    const child = runById.get(wake.runId)
+    return !child || isTerminal(child.status)
+  }
+  if (wake.kind === 'timer') {
+    if (wake.at > now) return false
+    if (!wake.dispatchId) return true
+    return !entries.some(entry => entry.id === wake.dispatchId)
+  }
+  if (wake.kind === 'parent-reply') {
+    return wake.timeoutAt <= now
+  }
+  return false
 }
 
 export function formatTaskRunReconcileBlock(

@@ -603,8 +603,8 @@ function formatAskUserQuestionNudge(): string {
 
 function formatDispatchModeSection(): string {
   return [
-    '## Dispatch Mode',
-    'Pick the dispatch mode by whether you need the result to write your current reply. Need it now and it is quick → blocking (fan out several short independent sub-tasks as parallel blocking calls in one message, then synthesize). Don\'t need it now, or it is long-running (deep research, large refactor, long build) → background, so the session stays responsive instead of freezing behind a multi-minute call; the result comes back later as a <background-task-result> for you to surface.',
+    '## Dispatch',
+    'Dispatch is background-only. When delegated work matters to your current answer, dispatch the worker and then pause with TaskUpdate using a child-join wake so your session can resume when the child delivers. For fire-and-follow-later work, keep going and surface the <background-task-result> when it arrives.',
   ].join('\n')
 }
 

@@ -334,7 +334,7 @@ describe('TaskRun store', () => {
     }
   })
 
-  it('records rejection feedback and closes the rejected run as failed', async () => {
+  it('records rejection feedback and keeps the rejected run open for resume', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-reject-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -358,13 +358,13 @@ describe('TaskRun store', () => {
         40,
         'alice',
       )
-      assert.equal(rejected?.status, 'failed')
-      assert.match(rejected?.outcome?.error ?? '', /Missing the cost section/)
+      assert.equal(rejected?.status, 'running')
+      assert.equal(rejected?.outcome, undefined)
 
       const events = await getTaskRunEvents(run.id, {}, 'alice')
       assert.deepEqual(
         events.map(event => event.kind),
-        ['created', 'started', 'delivered', 'rejected', 'finished'],
+        ['created', 'started', 'delivered', 'rejected'],
       )
     } finally {
       setLightclawHomeOverride(undefined)

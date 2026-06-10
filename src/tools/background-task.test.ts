@@ -38,7 +38,6 @@ describe('Dispatch background mode', () => {
         role: 'generalist',
         prompt: 'check the workspace and summarize anything important',
         schedule: { kind: 'oneshot', at: '2020-01-01T00:00:00.000Z' },
-        mode: 'background',
         label: 'Old task',
         task: root.id,
       }, fakeContext())
@@ -63,7 +62,6 @@ describe('Dispatch background mode', () => {
         role: 'generalist',
         prompt: 'simple smoke test that fires once after a short delay',
         schedule: { kind: 'after', afterMinutes: 1 },
-        mode: 'background',
         label: '1-minute test',
         task: root.id,
       }, fakeContext())
@@ -97,7 +95,6 @@ describe('Dispatch background mode', () => {
         role: 'generalist',
         prompt: 'half-minute fire to verify fractional afterMinutes works',
         schedule: { kind: 'after', afterMinutes: 0.5 },
-        mode: 'background',
         label: '30s fire',
         task: root.id,
       }, fakeContext())
@@ -119,7 +116,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'check the workspace and summarize anything important',
       schedule: { kind: 'interval', everyMinutes: 60 },
-      mode: 'background',
       label: 'Workspace check',
     }, fakeContext()))
     assert.equal(created.isError, undefined)
@@ -148,7 +144,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'remind me at 8am that the daily standup is starting',
       schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 8, minute: 0 },
-      mode: 'background',
       label: 'Daily standup',
     }, fakeContext()))
     assert.equal(created.isError, undefined)
@@ -171,7 +166,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'check the workspace and summarize anything important',
       schedule: { kind: 'interval', everyMinutes: 60 },
-      mode: 'background',
       label: 'Workspace check',
     }, fakeContext()))
     assert.equal(created.isError, undefined)
@@ -193,7 +187,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'send me a check-in message at 10am every weekday',
       schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 10, minute: 0 },
-      mode: 'background',
       label: 'Check-in',
     }, fakeContext()))
     assert.equal(created.isError, undefined)
@@ -242,7 +235,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'send me a check-in message at 10am every weekday',
       schedule: { kind: 'recurring', daysOfWeek: [1, 2, 3, 4, 5], hour: 10, minute: 0 },
-      mode: 'background',
       label: 'Check-in',
     }, fakeContext()))
     assert.equal(created.isError, undefined)
@@ -285,7 +277,6 @@ describe('Dispatch background mode', () => {
       role: 'generalist',
       prompt: 'watch the deploy and ping me back if anything goes red',
       schedule: { kind: 'interval', everyMinutes: 30 },
-      mode: 'background',
       label: 'Watch deploy',
     }, fakeContext()))
     assert.equal(result.isError, undefined)

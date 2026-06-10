@@ -432,6 +432,12 @@ export type TaskRunWatchdogConfig = {
 }
 
 export type TaskRunConfig = {
+  resume: {
+    maxGapMs: number
+  }
+  ask: {
+    timeoutMs: number
+  }
   watchdog: TaskRunWatchdogConfig
 }
 
@@ -495,6 +501,8 @@ const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
 }
+const DEFAULT_TASKRUN_RESUME_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
+const DEFAULT_TASKRUN_ASK_TIMEOUT_MS = 600_000
 
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   // Bundled dispatch matrix has paths of node-length 4 (depth 3), e.g.
@@ -1983,7 +1991,11 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
 }
 
 function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
+  const resume = fileConfig.taskrun?.resume ?? {}
+  const ask = fileConfig.taskrun?.ask ?? {}
   const watchdog = fileConfig.taskrun?.watchdog ?? {}
+  const resumeGapRaw = Number(resume.maxGapMs)
+  const askTimeoutRaw = Number(ask.timeoutMs)
   const intervalRaw = Number(watchdog.intervalMinutes)
   const graceRaw = Number(watchdog.deliveredGraceMs)
   const pausedGraceRaw = Number(watchdog.pausedGraceMs)
@@ -1991,6 +2003,22 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
   const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
 
   return {
+    resume: {
+      maxGapMs: Math.max(
+        0,
+        Math.floor(Number.isFinite(resumeGapRaw)
+          ? resumeGapRaw
+          : DEFAULT_TASKRUN_RESUME_MAX_GAP_MS),
+      ),
+    },
+    ask: {
+      timeoutMs: Math.max(
+        1,
+        Math.floor(Number.isFinite(askTimeoutRaw)
+          ? askTimeoutRaw
+          : DEFAULT_TASKRUN_ASK_TIMEOUT_MS),
+      ),
+    },
     watchdog: {
       intervalMinutes: Math.max(
         0,

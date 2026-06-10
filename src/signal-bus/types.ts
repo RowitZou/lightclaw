@@ -10,7 +10,7 @@ import type { ChainState } from './chain-state.js'
 // worker names without a zod enum reject. Bundled worker names live in
 // `BUNDLED_AGENT_TYPES` (`agents/types.ts`).
 export type DispatchRole = AgentType
-export type DispatchMode = 'blocking' | 'background'
+export type DispatchMode = 'background'
 export type DispatchSchedule = 'now' | ScheduleSpec
 
 export type AgentSignalKind =

@@ -33,11 +33,11 @@ describe('Dispatch tool family', () => {
     assert.equal(names.has('UpdateDispatch'), true)
   })
 
-  it('requires mode but accepts open role strings (orchestrator / internal / unknown rejected at runtime)', () => {
-    // mode is required by the schema
+  it('rejects retired mode while accepting open role strings', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'generalist',
       prompt: 'Do a focused task for me.',
+      mode: 'background',
     }).success, false)
     // role is z.string().min(1) so user-defined names (or any string) parse;
     // runtime executeDispatch rejects orchestrator / internal / unknown roles.
@@ -45,50 +45,43 @@ describe('Dispatch tool family', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'paper-coordinator',
       prompt: 'Do a focused task for me.',
-      mode: 'blocking',
     }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'main',
       prompt: 'Do a focused task for me.',
-      mode: 'blocking',
     }).success, true)
   })
 
-  it('accepts now-blocking and scheduled-background shapes', () => {
+  it('accepts now and scheduled background shapes', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'webSearcher',
       prompt: 'Research one current fact and report briefly.',
       schedule: 'now',
-      mode: 'blocking',
     }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'generalist',
       prompt: 'Check this later and report back.',
       schedule: { kind: 'after', afterMinutes: 5 },
-      mode: 'background',
       allowed_tools: ['Read(*)'],
-    }).success, true)
+    }).success, false)
   })
 
-  it('accepts an optional attachments array of absolute paths', () => {
+  it('accepts an optional attachments array of absolute paths at schema level', () => {
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'webSearcher',
       prompt: 'Translate this PDF excerpt.',
       schedule: 'now',
-      mode: 'blocking',
       attachments: ['/tmp/ws/.lightclaw/inbox/c/foo.pdf'],
     }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'webSearcher',
       prompt: 'No attachments here.',
       schedule: 'now',
-      mode: 'blocking',
     }).success, true)
     assert.equal(dispatchTool.inputSchema?.safeParse({
       role: 'webSearcher',
       prompt: 'Empty string entries are rejected.',
       schedule: 'now',
-      mode: 'blocking',
       attachments: [''],
     }).success, false)
   })
@@ -101,15 +94,14 @@ describe('Dispatch tool family', () => {
 
   it('keeps the retired context-inheritance field out of the Dispatch schema output', () => {
     const retiredKey = 'resume' + 'From'
-    const parsed = dispatchTool.inputSchema?.parse({
+    const parsed = dispatchTool.inputSchema?.safeParse({
       role: 'webSearcher',
       prompt: 'Research one current fact and report briefly.',
       schedule: 'now',
-      mode: 'blocking',
       [retiredKey]: 'last',
-    }) as Record<string, unknown>
+    })
 
-    assert.equal(Object.hasOwn(parsed, retiredKey), false)
+    assert.equal(parsed?.success, false)
   })
 
   it('Dispatch is inline; its management quartet stays deferred', () => {
@@ -127,129 +119,22 @@ describe('Dispatch tool family', () => {
     }
   })
 
-  it('records blocking dispatch TaskRun progress and finish-time artifacts end to end', async () => {
-    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-taskrun-'))
-    setLightclawHomeOverride(tmpHome)
-    setRunSubagentForDispatchTest(async params => ({
-      kind: 'success',
-      finalText: [
-        'Implemented the report.',
-        'Artifact: /workspace/out/report.md',
-        `TaskRun seen: ${params.currentTaskRunId ?? 'missing'}`,
-      ].join('\n'),
-      stopReason: 'end_turn',
-    }))
-    try {
-      const root = await createRootTaskRun('alice', 'main-session', {
-        objective: 'Coordinate report creation.',
-        title: 'Coordinate report',
-      })
-      const output = await runWithSessionContext(session('main'), () =>
-        executeDispatch(
-          {
-            role: 'coder',
-            prompt: 'Create the report artifact and return the path.',
-            schedule: 'now',
-            mode: 'blocking',
-            label: 'Create report',
-            task: root.id,
-          },
-          {
-            cwd: '/tmp/lightclaw-dispatch-taskrun',
-            abortSignal: new AbortController().signal,
-            runtime: { workspaceRoot: '/tmp/lightclaw-dispatch-taskrun' } as never,
-          },
-        ),
-      )
+  it('rejects retired blocking mode at execute time', async () => {
+    const output = await runWithSessionContext(session('main'), () =>
+      executeDispatch(
+        {
+          role: 'coder',
+          prompt: 'Create the report artifact and return the path.',
+          schedule: 'now',
+          mode: 'blocking',
+          label: 'Create report',
+        },
+        toolContext(),
+      ),
+    )
 
-      assert.equal(output.isError, undefined)
-      const runs = await listTaskRuns('alice', { scope: 'all' })
-      const child = runs.find(run => run.id !== root.id)
-      assert.ok(child)
-      // Blocking return is inline delivery: delivered + auto-accepted + done.
-      assert.equal(child.status, 'done')
-      assert.equal(child.artifactPaths?.includes('/workspace/out/report.md'), true)
-      const events = await getTaskRunEvents(child.id, { limit: 10 }, 'alice')
-      assert.deepEqual(events.map(event => event.kind), [
-        'created',
-        'started',
-        'artifact',
-        'delivered',
-        'accepted',
-        'finished',
-      ])
-      const accepted = events.find(event => event.kind === 'accepted')
-      assert.equal((accepted as { auto?: boolean } | undefined)?.auto, true)
-    } finally {
-      setRunSubagentForDispatchTest(null)
-      setLightclawHomeOverride(undefined)
-      rmSync(tmpHome, { recursive: true, force: true })
-    }
-  })
-
-  it('requires main blocking dispatches to attach to a root TaskRun', async () => {
-    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-root-required-'))
-    setLightclawHomeOverride(tmpHome)
-    try {
-      const output = await runWithSessionContext(session('main'), () =>
-        executeDispatch(
-          {
-            role: 'coder',
-            prompt: 'Create the report artifact and return the path.',
-            schedule: 'now',
-            mode: 'blocking',
-            label: 'Create report',
-          },
-          toolContext(),
-        ),
-      )
-
-      assert.equal(output.isError, true)
-      assert.match(output.output, /TaskCreate/)
-    } finally {
-      setLightclawHomeOverride(undefined)
-      rmSync(tmpHome, { recursive: true, force: true })
-    }
-  })
-
-  it('attaches main blocking dispatches to the provided root TaskRun', async () => {
-    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-root-'))
-    setLightclawHomeOverride(tmpHome)
-    setRunSubagentForDispatchTest(async () => ({
-      kind: 'success',
-      finalText: 'Finished child task.',
-      stopReason: 'end_turn',
-    }))
-    try {
-      const root = await createRootTaskRun('alice', 'main-session', {
-        objective: 'Coordinate the report.',
-        title: 'Coordinate report',
-      })
-      const output = await runWithSessionContext(session('main'), () =>
-        executeDispatch(
-          {
-            role: 'coder',
-            prompt: 'Create the report artifact and return the path.',
-            schedule: 'now',
-            mode: 'blocking',
-            label: 'Create report',
-            task: root.id,
-          },
-          toolContext(),
-        ),
-      )
-
-      assert.equal(output.isError, undefined)
-      const runs = await listTaskRuns('alice', { scope: 'all' })
-      const child = runs.find(run => run.id !== root.id)
-      assert.ok(child)
-      assert.equal(child.parentRunId, root.id)
-      assert.equal(child.rootRunId, root.id)
-    } finally {
-      setRunSubagentForDispatchTest(null)
-      setLightclawHomeOverride(undefined)
-      rmSync(tmpHome, { recursive: true, force: true })
-    }
+    assert.equal(output.isError, true)
+    assert.match(output.output, /mode has been retired/i)
   })
 
   it('creates a standing root and queued child for main recurring dispatches without attaching to a user root', async () => {

@@ -37,7 +37,6 @@ test('executeDispatch rejects unknown role with a clear tool error', async () =>
       role: 'nonexistent-role',
       prompt: 'Try to call a role that was never registered.',
       schedule: 'now',
-      mode: 'blocking',
     }, toolContext()),
   )
 
@@ -51,7 +50,6 @@ test('executeDispatch rejects orchestrator dispatch targets at runtime', async (
       role: 'main',
       prompt: 'Try to dispatch the orchestrator role.',
       schedule: 'now',
-      mode: 'blocking',
     }, toolContext()),
   )
 
@@ -65,7 +63,6 @@ test('executeDispatch rejects internal dispatch targets at runtime', async () =>
       role: 'memoryExtractor',
       prompt: 'Try to dispatch an internal role.',
       schedule: 'now',
-      mode: 'blocking',
     }, toolContext()),
   )
 
@@ -93,7 +90,6 @@ test('main with reachableRoles ["*"] reaches a registered user-defined worker', 
         role: 'paper-coordinator',
         prompt: 'Skim the latest PDF and list section headings.',
         schedule: 'now',
-        mode: 'blocking',
       }, toolContext()),
     )
   } catch (err) {
@@ -124,7 +120,6 @@ test('executeDispatch rejects unreachable worker before running a subagent', asy
       role: 'generalist',
       prompt: 'Try to route to a non-reachable worker.',
       schedule: 'now',
-      mode: 'blocking',
     }, toolContext()),
   )
 
@@ -151,7 +146,6 @@ test('executeDispatch rejects dispatches beyond max chain depth', async () => {
       role: 'coder',
       prompt: 'Try one more nested dispatch.',
       schedule: 'now',
-      mode: 'blocking',
     }, toolContext({ chainState })),
   )
 
@@ -166,7 +160,6 @@ test('executeDispatch drops retired context-inheritance fields on background dis
       role: 'webSearcher',
       prompt: 'Run this research in the background.',
       schedule: { kind: 'after', afterMinutes: 5 },
-      mode: 'background',
       [retiredKey]: 'last',
     }, toolContext()),
   )
@@ -183,14 +176,13 @@ test('executeDispatch rejects background attachments instead of dropping them at
       role: 'webSearcher',
       prompt: 'Look at the attached image in the background.',
       schedule: 'now',
-      mode: 'background',
       attachments: ['/tmp/will-not-be-read.jpg'],
     }, toolContext()),
   )
 
   assert.equal(output.isError, true)
-  assert.match(output.output, /supported only for blocking Dispatch/)
-  assert.match(output.output, /inline bytes cannot follow/)
+  assert.match(output.output, /background-only/)
+  assert.match(output.output, /cannot carry inline attachment bytes/)
 })
 
 test('background dispatch records the caller role and session', async () => {
@@ -205,7 +197,6 @@ test('background dispatch records the caller role and session', async () => {
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
         task: root.id,
       }, toolContext())
     },
@@ -224,7 +215,6 @@ test('CancelDispatch refuses a worker targeting another session dispatch', async
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   const [created] = loadBackgroundTasks('alice')
@@ -249,7 +239,6 @@ test('CancelDispatch allows a worker to cancel its own dispatch', async () => {
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   const [created] = loadBackgroundTasks('alice')
@@ -273,7 +262,6 @@ test('CancelDispatch lets main cancel a worker-created dispatch', async () => {
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   const [created] = loadBackgroundTasks('alice')
@@ -296,7 +284,6 @@ test('UpdateDispatch refuses a worker targeting another session dispatch', async
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   const [created] = loadBackgroundTasks('alice')
@@ -352,7 +339,6 @@ test('ListDispatches default scope lists only the caller own dispatches', async 
         role: 'webSearcher',
         prompt: 'Run research one in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   await runWithSessionContext(
@@ -362,7 +348,6 @@ test('ListDispatches default scope lists only the caller own dispatches', async 
         role: 'webSearcher',
         prompt: 'Run research two in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
 
@@ -385,7 +370,6 @@ test('ListDispatches scope all lists every dispatch for the user from main', asy
         role: 'webSearcher',
         prompt: 'Run research one in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
   await runWithSessionContext(
@@ -395,7 +379,6 @@ test('ListDispatches scope all lists every dispatch for the user from main', asy
         role: 'webSearcher',
         prompt: 'Run research two in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
-        mode: 'background',
       }, toolContext()),
   )
 

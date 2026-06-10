@@ -8,7 +8,7 @@ const TASK_CREATE_DESCRIPTION = [
   'Create a root TaskRun for a user-facing objective before dispatching finite worker tasks.',
   '',
   'This tool only creates the root. It does not dispatch workers or change your plan.',
-  'Use the returned `runId` as `Dispatch.task` when launching blocking, now, after, or oneshot dispatches from main.',
+  'Use the returned `runId` as `Dispatch.task` when launching now, after, or oneshot dispatches from main.',
 ].join('\n')
 
 export const taskCreateTool = buildTool({

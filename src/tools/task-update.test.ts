@@ -108,7 +108,7 @@ test('worker accepts its own delivered child but not siblings or undelivered run
   assert.equal(notDelivered.isError, true)
 })
 
-test('worker reject requires feedback and closes the child as failed', async () => {
+test('worker reject requires feedback and keeps the child open for resume', async () => {
   const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
   const child = await startedRun({ callerRole: 'coder', parentRunId: workerRun.id })
   await markDelivered(child.id, { ok: true, summary: 'first draft' }, Date.now(), 'alice')
@@ -125,10 +125,11 @@ test('worker reject requires feedback and closes the child as failed', async () 
       toolContext(),
     ),
   )
-  assert.equal(rejected.isError, undefined)
+  assert.equal(rejected.isError, true)
+  assert.match(rejected.output, /automatic resume failed/i)
   const meta = await getTaskRun(child.id, 'alice')
-  assert.equal(meta?.status, 'failed')
-  assert.match(meta?.outcome?.error ?? '', /Missing the cost section/)
+  assert.equal(meta?.status, 'running')
+  assert.equal(meta?.outcome, undefined)
 })
 
 test('orchestrator deliver closes a root only when its ledger is settled', async () => {

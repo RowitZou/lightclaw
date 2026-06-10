@@ -2,23 +2,27 @@ import { z } from 'zod'
 
 import { loadBackgroundTasks } from '../background-task/store.js'
 import {
+  appendCheckpoint,
   acceptTaskRun,
   closeRootTaskRun,
   getTaskRun,
   markCancelled,
   markDelivered,
+  markPaused,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { getCurrentRole, getCurrentTaskRunId, requireCurrentUserId } from '../state.js'
+import { resumeRunWithBlock } from '../taskrun/resume.js'
+import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const TASK_UPDATE_DESCRIPTION = [
-  'Change a TaskRun state: deliver your own run, or settle (accept / reject) a delivered child run.',
+  'Change a TaskRun state: deliver your own run, pause work, or settle (accept / reject) a delivered child run.',
   '',
   "action='deliver' — conclude your own run. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. With a root runId (orchestrator) it declares the root delivered; the close is refused with an itemized list while the root still has open obligations — settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
-  "action='reject' — requires feedback; records it and closes the delivered run as failed. Re-dispatch with that feedback if the work should continue.",
+  "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
+  "action='pause' — without runId, pause your own run with a checkpoint and wake rule; with runId, pause a running direct child.",
   "action='cancel' — cancel queued or paused work you own. Orchestrator may cancel runs inside this chat's rooted trees; workers may cancel their direct queued / paused children. Running work is not cancelled here; use CancelDispatch for an in-flight background dispatch.",
 ].join('\n')
 
@@ -63,10 +67,21 @@ export const taskUpdateTool = buildTool({
   riskLevel: 'safe',
   inputSchema: z.object({
     runId: z.string().min(1).optional(),
-    action: z.enum(['deliver', 'accept', 'reject', 'cancel']),
+    action: z.enum(['deliver', 'accept', 'reject', 'cancel', 'pause']),
     ok: z.boolean().optional(),
     summary: z.string().min(1).optional(),
     feedback: z.string().min(1).optional(),
+    checkpoint: z.string().min(1).max(8192).optional(),
+    wake: z.union([
+      z.object({
+        kind: z.literal('child-join'),
+        runId: z.string().min(1),
+      }),
+      z.object({
+        kind: z.literal('timer'),
+        afterMinutes: z.number().int().min(1).max(7 * 24 * 60),
+      }),
+    ]).optional(),
   }),
   async call(input) {
     const owner = requireCurrentUserId()
@@ -145,7 +160,70 @@ export const taskUpdateTool = buildTool({
       if (!delivered) {
         return { output: `TaskRun ${own} could not be delivered.`, isError: true }
       }
+      await resumeParentForChildJoinBestEffort(owner, delivered)
       return { output: JSON.stringify({ runId: delivered.id, status: delivered.status }) }
+    }
+
+    if (input.action === 'pause') {
+      if (input.runId) {
+        const target = await getTaskRun(input.runId, owner)
+        if (!target) return { output: `TaskRun not found: ${input.runId}`, isError: true }
+        if (target.status !== 'running' || !target.currentSessionId) {
+          return { output: `TaskRun ${input.runId} is ${target.status}, not a running run.`, isError: true }
+        }
+        if (isOrchestrator) {
+          const root = await getTaskRun(target.rootRunId, owner)
+          if (!root || (root.kind ?? 'dispatch') !== 'root') {
+            return { output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`, isError: true }
+          }
+        } else {
+          const own = getCurrentTaskRunId()
+          if (!own || target.parentRunId !== own) {
+            return { output: `TaskRun ${input.runId} is not a direct child of your current run.`, isError: true }
+          }
+        }
+        abortInFlightForSession(target.currentSessionId)
+        const paused = await markPaused(
+          target.id,
+          { reason: 'requester-pause', bySessionId: getSessionId() },
+          Date.now(),
+          owner,
+        )
+        return paused?.status === 'paused'
+          ? { output: JSON.stringify({ runId: paused.id, status: paused.status, reason: paused.pauseReason }) }
+          : { output: `TaskRun ${target.id} could not be paused.`, isError: true }
+      }
+
+      const own = getCurrentTaskRunId()
+      if (!own) return { output: 'No current TaskRun to pause.', isError: true }
+      const checkpoint = input.checkpoint?.trim()
+      if (!checkpoint) return { output: 'pause requires `checkpoint` so the run can be resumed safely.', isError: true }
+      if (!input.wake) return { output: 'pause requires `wake` (child-join or timer).', isError: true }
+      const meta = await getTaskRun(own, owner)
+      if (!meta) return { output: `TaskRun not found: ${own}`, isError: true }
+      if (meta.status !== 'running') {
+        return { output: `TaskRun ${own} is ${meta.status}, not running.`, isError: true }
+      }
+      await appendCheckpoint(own, checkpoint, Date.now(), owner)
+      const wake = input.wake.kind === 'child-join'
+        ? { kind: 'child-join' as const, runId: input.wake.runId }
+        : { kind: 'timer' as const, at: Date.now() + input.wake.afterMinutes * 60_000 }
+      const paused = await markPaused(
+        own,
+        {
+          reason: input.wake.kind,
+          wake,
+        },
+        Date.now(),
+        owner,
+      )
+      if (paused?.status !== 'paused') {
+        return { output: `TaskRun ${own} could not be paused.`, isError: true }
+      }
+      if (wake.kind === 'timer') {
+        scheduleTaskRunTimerWake(owner, paused.id, wake.at)
+      }
+      return { output: JSON.stringify({ runId: paused.id, status: paused.status, wake }) }
     }
 
     if (input.action === 'cancel') {
@@ -250,10 +328,62 @@ export const taskUpdateTool = buildTool({
         isError: true,
       }
     }
+    if (input.action === 'reject') {
+      const resumed = await resumeRunWithBlock(input.runId, {
+        via: 'reject',
+        reason: `rejected by ${byRole}`,
+        body: [
+          '<taskrun-reject-feedback>',
+          feedback,
+          '</taskrun-reject-feedback>',
+        ].join('\n'),
+      }, owner)
+      if (!resumed.ok) {
+        return {
+          output: `TaskRun ${input.runId} was rejected, but automatic resume failed: ${resumed.message}`,
+          isError: true,
+        }
+      }
+    }
     await closeOrphanStandingRootBestEffort(owner, settled.rootRunId)
     return { output: JSON.stringify({ runId: settled.id, status: settled.status }) }
   },
 })
+
+function scheduleTaskRunTimerWake(owner: string, runId: string, at: number): void {
+  const delay = Math.max(0, at - Date.now())
+  setTimeout(() => {
+    void resumeRunWithBlock(runId, {
+      via: 'timer',
+      reason: 'taskrun timer wake',
+      body: '<taskrun-timer-wake />',
+    }, owner).catch(error => {
+      process.stderr.write(`[taskrun] timer wake failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  }, delay).unref?.()
+}
+
+async function resumeParentForChildJoinBestEffort(owner: string, child: TaskRunMeta): Promise<void> {
+  if (!child.parentRunId) return
+  const parent = await getTaskRun(child.parentRunId, owner)
+  if (parent?.status !== 'paused') return
+  if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return
+  const summary = child.outcome?.summary ?? child.outcome?.error ?? child.title
+  const resumed = await resumeRunWithBlock(parent.id, {
+    via: 'child-join',
+    reason: `child ${child.id} delivered`,
+    body: [
+      '<taskrun-child-result>',
+      `runId=${child.id}`,
+      `status=${child.status}`,
+      summary,
+      '</taskrun-child-result>',
+    ].join('\n'),
+  }, owner)
+  if (!resumed.ok) {
+    process.stderr.write(`[taskrun] child-join resume failed for ${parent.id}: ${resumed.message}\n`)
+  }
+}
 
 export const __toolDescriptionForSnapshot = {
   TaskUpdate: TASK_UPDATE_DESCRIPTION,

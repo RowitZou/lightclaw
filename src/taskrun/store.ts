@@ -19,8 +19,12 @@ import type {
   TaskRunMode,
   TaskRunOutcome,
   TaskRunPausedEvent,
+  TaskRunPauseReason,
   TaskRunProgressEvent,
+  TaskRunRebuiltEvent,
+  TaskRunResumedEvent,
   TaskRunStartedEvent,
+  TaskRunWakeSpec,
 } from './types.js'
 
 const DEFAULT_TASKRUN_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -371,7 +375,7 @@ export async function markDelivered(
 
 export async function markPaused(
   id: string,
-  input: { reason: 'user-stop'; bySessionId: string },
+  input: { reason: TaskRunPauseReason; bySessionId?: string; wake?: TaskRunWakeSpec },
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
@@ -381,9 +385,60 @@ export async function markPaused(
   return appendEvent(
     id,
     'paused',
-    { reason: input.reason, bySessionId: input.bySessionId },
+    {
+      reason: input.reason,
+      ...(input.bySessionId ? { bySessionId: input.bySessionId } : {}),
+      ...(input.wake ? { wake: input.wake } : {}),
+    },
     now,
     meta.ownerCanonicalUser,
+  )
+}
+
+export async function appendCheckpoint(
+  id: string,
+  checkpoint: string,
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(id, 'checkpoint', { checkpoint }, now, ownerCanonicalUser)
+}
+
+export async function markResumed(
+  id: string,
+  input: { via: TaskRunResumedEvent['via']; sessionId: string; reason?: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(
+    id,
+    'resumed',
+    {
+      via: input.via,
+      sessionId: input.sessionId,
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+    now,
+    ownerCanonicalUser,
+  )
+}
+
+export async function markRebuilt(
+  id: string,
+  input: { via: TaskRunRebuiltEvent['via']; sessionId: string; reason?: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  return appendEvent(
+    id,
+    'rebuilt',
+    {
+      via: input.via,
+      sessionId: input.sessionId,
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+    now,
+    ownerCanonicalUser,
   )
 }
 
@@ -422,19 +477,10 @@ export async function rejectTaskRun(
 ): Promise<TaskRunMeta | null> {
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta || meta.status !== 'delivered') return null
-  await appendEvent(
+  return appendEvent(
     id,
     'rejected',
     { byRole: input.byRole, feedback: input.feedback },
-    now,
-    meta.ownerCanonicalUser,
-  )
-  // V1 stopgap: a rejected run closes as failed and the caller re-dispatches
-  // with the feedback. "Keep the run open and resume its session" is the
-  // collab-phase3 upgrade; the rejected event preserves the fact either way.
-  return markFinished(
-    id,
-    { ok: false, error: `Rejected by ${input.byRole}: ${input.feedback}` },
     now,
     meta.ownerCanonicalUser,
   )
@@ -506,7 +552,26 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       ...next,
       status: 'running',
       currentSessionId: event.sessionId,
+      lastSessionId: event.sessionId,
       startedAt: next.startedAt ?? event.ts,
+    }
+  }
+  if (isResumedEvent(event) || isRebuiltEvent(event)) {
+    return {
+      ...next,
+      status: 'running',
+      currentSessionId: event.sessionId,
+      lastSessionId: event.sessionId,
+      wake: consumeWake(next.wake),
+    }
+  }
+  if (isRejectedEvent(event)) {
+    return {
+      ...next,
+      status: 'running',
+      currentSessionId: next.currentSessionId ?? next.lastSessionId ?? null,
+      deliveredAt: undefined,
+      outcome: undefined,
     }
   }
   if (isDeliveredEvent(event)) {
@@ -537,6 +602,13 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       currentSessionId: null,
       pausedAt: event.ts,
       pauseReason: event.reason,
+      ...(event.wake ? { wake: event.wake } : {}),
+    }
+  }
+  if (isCheckpointEvent(event)) {
+    return {
+      ...next,
+      checkpoint: event.checkpoint,
     }
   }
   if (isFinishedEvent(event)) {
@@ -582,12 +654,39 @@ function isDeliveredEvent(event: TaskRunEvent): event is TaskRunDeliveredEvent {
   return event.kind === 'delivered' && typeof (event as { ok?: unknown }).ok === 'boolean'
 }
 
+function isRejectedEvent(event: TaskRunEvent): event is import('./types.js').TaskRunRejectedEvent {
+  return event.kind === 'rejected' && typeof (event as { feedback?: unknown }).feedback === 'string'
+}
+
 function isCancelledEvent(event: TaskRunEvent): event is TaskRunCancelledEvent {
   return event.kind === 'cancelled'
 }
 
 function isPausedEvent(event: TaskRunEvent): event is TaskRunPausedEvent {
-  return event.kind === 'paused' && (event as { reason?: unknown }).reason === 'user-stop'
+  if (event.kind !== 'paused') return false
+  const reason = (event as { reason?: unknown }).reason
+  return reason === 'user-stop' ||
+    reason === 'requester-pause' ||
+    reason === 'child-join' ||
+    reason === 'timer' ||
+    reason === 'awaiting-reply'
+}
+
+function isResumedEvent(event: TaskRunEvent): event is TaskRunResumedEvent {
+  return event.kind === 'resumed' && typeof (event as { sessionId?: unknown }).sessionId === 'string'
+}
+
+function isRebuiltEvent(event: TaskRunEvent): event is TaskRunRebuiltEvent {
+  return event.kind === 'rebuilt' && typeof (event as { sessionId?: unknown }).sessionId === 'string'
+}
+
+function isCheckpointEvent(event: TaskRunEvent): event is import('./types.js').TaskRunCheckpointEvent {
+  return event.kind === 'checkpoint' && typeof (event as { checkpoint?: unknown }).checkpoint === 'string'
+}
+
+function consumeWake(wake: TaskRunWakeSpec | undefined): TaskRunWakeSpec | undefined {
+  if (!wake) return undefined
+  return { ...wake, consumed: true } as TaskRunWakeSpec
 }
 
 function isFinishedEvent(event: TaskRunEvent): event is TaskRunFinishedEvent {
