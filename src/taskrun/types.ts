@@ -40,6 +40,8 @@ export type TaskRunMeta = {
   outcome?: TaskRunOutcome
   createdAt: number
   startedAt?: number
+  pausedAt?: number
+  pauseReason?: 'user-stop'
   deliveredAt?: number
   terminalAt?: number
   updatedAt: number
@@ -134,12 +136,20 @@ export type TaskRunCancelledEvent = {
   reason?: string
 }
 
+export type TaskRunPausedEvent = {
+  seq: number
+  ts: number
+  kind: 'paused'
+  reason: 'user-stop'
+  bySessionId: string
+}
+
 export type TaskRunWatchdogReportEvent = {
   seq: number
   ts: number
   kind: 'watchdog-report'
   fingerprint: string
-  findingKind: 'stranded' | 'unsettled-delivered'
+  findingKind: 'stranded' | 'unsettled-delivered' | 'paused-overdue'
   rootRunId: string
 }
 
@@ -159,6 +169,7 @@ export type TaskRunEvent =
   | TaskRunAcceptedEvent
   | TaskRunRejectedEvent
   | TaskRunCancelledEvent
+  | TaskRunPausedEvent
   | TaskRunWatchdogReportEvent
   | TaskRunEscalatedEvent
   | TaskRunFinishedEvent

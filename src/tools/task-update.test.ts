@@ -17,6 +17,7 @@ import {
   getTaskRun,
   getTaskRunEvents,
   markDelivered,
+  markPaused,
   markStarted,
 } from '../taskrun/store.js'
 import { getAllTools } from '../tools.js'
@@ -195,6 +196,94 @@ test('orchestrator settles delivered descendants inside its rooted trees, not th
   )
   assert.equal(outside.isError, true)
   assert.equal((await getTaskRun(freeForest.id, 'alice'))?.status, 'delivered')
+})
+
+test('TaskUpdate cancel lets orchestrator clear queued and paused work inside this chat tree', async () => {
+  const root = await createRootTaskRun('alice', 's-main', {
+    objective: 'Rooted goal',
+  })
+  const queued = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Queued child',
+    parentRunId: root.id,
+    chainId: 'chain-cancel',
+    depth: 1,
+  })
+  const paused = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  await markPaused(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, Date.now(), 'alice')
+
+  const queuedResult = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: queued.id }, toolContext()),
+  )
+  assert.equal(queuedResult.isError, undefined)
+  assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'cancelled')
+
+  const pausedResult = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: paused.id }, toolContext()),
+  )
+  assert.equal(pausedResult.isError, undefined)
+  assert.equal((await getTaskRun(paused.id, 'alice'))?.status, 'cancelled')
+})
+
+test('TaskUpdate cancel rejects running work and other chat roots', async () => {
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'This chat' })
+  const running = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  const runningResult = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: running.id }, toolContext()),
+  )
+  assert.equal(runningResult.isError, true)
+  assert.equal((await getTaskRun(running.id, 'alice'))?.status, 'running')
+
+  const otherRoot = await createRootTaskRun('alice', 's-other', { objective: 'Other chat' })
+  const otherPaused = await startedRun({ callerRole: 'main', parentRunId: otherRoot.id })
+  await markPaused(otherPaused.id, { reason: 'user-stop', bySessionId: 's-other' }, Date.now(), 'alice')
+  const outside = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: otherPaused.id }, toolContext()),
+  )
+  assert.equal(outside.isError, true)
+  assert.equal((await getTaskRun(otherPaused.id, 'alice'))?.status, 'paused')
+})
+
+test('worker TaskUpdate cancel is limited to direct queued or paused children', async () => {
+  const worker = await startedRun({ callerRole: 'main', parentRunId: null })
+  const child = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'generalist',
+    callerSessionId: 'dispatched-worker',
+    mode: 'background',
+    objective: 'Queued child',
+    parentRunId: worker.id,
+    chainId: 'chain-worker-cancel',
+    depth: 2,
+  })
+  const sibling = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Queued sibling',
+    parentRunId: null,
+    chainId: 'chain-worker-cancel',
+    depth: 1,
+  })
+
+  const denied = await runAsWorker(worker.id, () =>
+    taskUpdateTool.call({ action: 'cancel', runId: sibling.id }, toolContext()),
+  )
+  assert.equal(denied.isError, true)
+  assert.equal((await getTaskRun(sibling.id, 'alice'))?.status, 'queued')
+
+  const cancelled = await runAsWorker(worker.id, () =>
+    taskUpdateTool.call({ action: 'cancel', runId: child.id }, toolContext()),
+  )
+  assert.equal(cancelled.isError, undefined)
+  assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'cancelled')
 })
 
 test('settling the last fire of a cancelled standing service closes its orphan root', async () => {

@@ -11,7 +11,7 @@ import {
   resolveLiveWorkerSpawner,
   setRunBackgroundTaskFireForTest,
 } from './scheduler.js'
-import { flushLastFiredAt, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
+import { flushLastFiredAt, getCompletedTaskRecord, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import {
   acceptTaskRun,
@@ -22,6 +22,8 @@ import {
   getTaskRun,
   getTaskRunEvents,
   listTaskRuns,
+  markPaused,
+  markStarted,
 } from '../taskrun/store.js'
 
 describe('resolveLiveWorkerSpawner', () => {
@@ -294,6 +296,124 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
     await acceptTaskRun(first.id, { byRole: 'main' }, Date.now(), 'alice')
     assert.equal((await closeRootTaskRun(root.id, 'alice')).closed, false)
+  })
+
+  it('does not overwrite a stopped standing fire and still creates the next queued child', async () => {
+    const root = await createStandingRootTaskRun('alice', {
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      objective: 'Check the workspace on a schedule.',
+      title: 'Workspace check',
+      chainId: 'chain-standing-abort',
+    })
+    const first = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'check the workspace and summarize anything important',
+      title: 'Workspace check',
+      parentRunId: root.id,
+      chainId: 'chain-standing-abort',
+      depth: 1,
+    })
+    await markStarted(first.id, 'bg-standing-abort', 10, 'alice')
+    await markPaused(first.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+    const task = {
+      ...fakeTask(),
+      id: 'standing-aborted-fire',
+      notifyOn: 'always' as const,
+      parentTaskRunId: root.id,
+      standingRootRunId: root.id,
+      taskRunId: first.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+          taskRunId?: string,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    await onFireComplete('alice', task, 'fire-abort', {
+      kind: 'failure',
+      reason: 'Subagent was aborted by /stop.',
+      transient: false,
+      attempt: 1,
+    }, 1, first.id)
+    flushLastFiredAt()
+
+    const paused = await getTaskRun(first.id, 'alice')
+    assert.equal(paused?.status, 'paused')
+    assert.equal(paused?.outcome, undefined)
+    const [entry] = loadBackgroundTasks('alice')
+    assert.ok(entry)
+    assert.notEqual(entry.taskRunId, first.id)
+    const next = await getTaskRun(entry.taskRunId!, 'alice')
+    assert.equal(next?.status, 'queued')
+    assert.equal(next?.parentRunId, root.id)
+    const events = await getTaskRunEvents(first.id, {}, 'alice')
+    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
+  })
+
+  it('consumes an aborted oneshot without retrying or overwriting its paused run', async () => {
+    const preset = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Write the scheduled report.',
+      chainId: 'chain-oneshot-abort',
+      depth: 1,
+    })
+    await markStarted(preset.id, 'bg-oneshot-abort', 10, 'alice')
+    await markPaused(preset.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      id: 'oneshot-aborted',
+      notifyOn: 'always',
+      schedule: { kind: 'oneshot', at: new Date(Date.now() + 60_000).toISOString() },
+      taskRunId: preset.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+          taskRunId?: string,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    await onFireComplete('alice', task, 'fire-abort', {
+      kind: 'failure',
+      reason: 'Subagent was aborted by /stop.',
+      transient: true,
+      attempt: 1,
+    }, 1, preset.id)
+
+    assert.deepEqual(loadBackgroundTasks('alice'), [])
+    assert.equal(getCompletedTaskRecord('alice', task.id)?.outcome, 'aborted')
+    const run = await getTaskRun(preset.id, 'alice')
+    assert.equal(run?.status, 'paused')
+    assert.equal(run?.outcome, undefined)
+    const events = await getTaskRunEvents(preset.id, {}, 'alice')
+    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
   })
 
   it('records finish-time artifacts on a successful recurring fire and keeps finished as the last event', async () => {

@@ -2,12 +2,10 @@ import { createHash } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
-import { getChannelRunner } from '../channels/feishu/runner-registry.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
-import { parseFeishuSessionId } from '../channels/feishu/routing.js'
 import { buildSystemNoticeCard } from '../channels/feishu/system-notice.js'
-import type { NormalizedChannelMessage } from '../channels/types.js'
+import { wakeOrInterject } from '../channels/feishu/wake-or-interject.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
 import type { BackgroundTaskEntry } from '../background-task/types.js'
 import { getBackgroundTaskScheduler } from '../background-task/scheduler.js'
@@ -22,7 +20,7 @@ import type { TaskRunEvent, TaskRunMeta } from './types.js'
 
 const WATCHDOG_EVENT_KINDS = new Set(['watchdog-report', 'escalated'])
 
-export type TaskRunWatchdogFindingKind = 'stranded' | 'unsettled-delivered'
+export type TaskRunWatchdogFindingKind = 'stranded' | 'unsettled-delivered' | 'paused-overdue'
 
 export type TaskRunWatchdogFinding = {
   runId: string
@@ -58,6 +56,7 @@ export type TaskRunReconcileResult = {
 export type ReconcileTaskRunsDeps = {
   now?: number
   deliveredGraceMs?: number
+  pausedGraceMs?: number
   budgetWindowMinutes?: number
   wakeBudgetReportLimit?: number
   activeSessionIds?: Set<string>
@@ -89,6 +88,7 @@ export async function reconcileTaskRunsOnce(
 ): Promise<TaskRunReconcileResult> {
   const now = deps.now ?? Date.now()
   const deliveredGraceMs = deps.deliveredGraceMs ?? 120_000
+  const pausedGraceMs = deps.pausedGraceMs ?? 21_600_000
   const runs = deps.listRuns
     ? await deps.listRuns(ownerCanonicalUser)
     : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
@@ -103,6 +103,7 @@ export async function reconcileTaskRunsOnce(
   const findings = detectTaskRunFindings(runs, {
     now,
     deliveredGraceMs,
+    pausedGraceMs,
     activeSessionIds: deps.activeSessionIds ?? new Set(),
     inFlightMainSessionIds: deps.inFlightMainSessionIds ?? new Set(),
     schedulerTaskRunIds: deps.schedulerTaskRunIds ?? new Set(),
@@ -212,6 +213,7 @@ export function detectTaskRunFindings(
   input: {
     now: number
     deliveredGraceMs: number
+    pausedGraceMs?: number
     activeSessionIds: Set<string>
     inFlightMainSessionIds: Set<string>
     schedulerTaskRunIds: Set<string>
@@ -219,6 +221,7 @@ export function detectTaskRunFindings(
     eventsByRun: Map<string, TaskRunEvent[]>
   },
 ): TaskRunWatchdogFinding[] {
+  const pausedGraceMs = input.pausedGraceMs ?? 21_600_000
   const runById = new Map(runs.map(run => [run.id, run]))
   const scheduledTaskRunIds = new Set(
     input.backgroundEntries
@@ -256,6 +259,18 @@ export function detectTaskRunFindings(
         findings.push(toFinding(run, runById, {
           kind: 'unsettled-delivered',
           since: deliveredAt,
+          now: input.now,
+          lastStateEventSeq,
+        }))
+      }
+      continue
+    }
+    if (run.status === 'paused' && pausedGraceMs > 0) {
+      const pausedAt = run.pausedAt ?? run.updatedAt
+      if (input.now - pausedAt > pausedGraceMs) {
+        findings.push(toFinding(run, runById, {
+          kind: 'paused-overdue',
+          since: pausedAt,
           now: input.now,
           lastStateEventSeq,
         }))
@@ -332,46 +347,15 @@ async function wakeTaskRunReconcileOwner(
 
   const emittedAt = Date.now()
   const messageId = `taskrun-reconcile-${emittedAt}`
-  if (channelInterjectionQueue.hasInflightFor(mainSessionId)) {
-    channelInterjectionQueue.push(mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: ownerOpenId,
-      arrivedAt: emittedAt,
-      source: 'background-task',
-    })
-    return { ok: true, mode: 'interjection' }
-  }
-
-  const parsed = parseFeishuSessionId(mainSessionId)
-  const runner = getChannelRunner()
-  if (!parsed || !runner) {
-    channelInterjectionQueue.push(mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: ownerOpenId,
-      arrivedAt: emittedAt,
-      source: 'background-task',
-    })
-    process.stderr.write(
-      `[taskrun-watchdog] queued reconcile for ${mainSessionId}; synthetic turn unavailable\n`,
-    )
-    return { ok: true, mode: 'queued' }
-  }
-
-  const synthetic: NormalizedChannelMessage = {
-    channel: 'feishu',
-    eventId: messageId,
+  return wakeOrInterject({
+    targetSessionId: mainSessionId,
+    block,
+    ownerOpenId,
     messageId,
-    chatId: parsed.chatId,
-    chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
-    ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
-    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : ownerOpenId,
-    text: block,
-    synthetic: true,
-  }
-  await runner.handleMessage(synthetic)
-  return { ok: true, mode: 'synthetic' }
+    emittedAt,
+    source: 'background-task',
+    logPrefix: '[taskrun-watchdog]',
+  })
 }
 
 async function sendTaskRunEscalationNotice(
@@ -686,6 +670,7 @@ export class TaskRunWatchdog {
   ): Promise<TaskRunReconcileResult> {
     const result = await reconcileTaskRunsOnce(owner, {
       deliveredGraceMs: config.taskrun.watchdog.deliveredGraceMs,
+      pausedGraceMs: config.taskrun.watchdog.pausedGraceMs,
       budgetWindowMinutes: config.taskrun.watchdog.budgetWindowMinutes,
       activeSessionIds: getSignalRouter().getAllActiveSessionIds(),
       inFlightMainSessionIds: channelInterjectionQueue.getInflightSessionIds(),

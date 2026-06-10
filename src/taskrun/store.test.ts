@@ -21,6 +21,7 @@ import {
   markCancelled,
   markDelivered,
   markFinished,
+  markPaused,
   markStarted,
   rejectTaskRun,
   sweepAllTerminalTaskRuns,
@@ -393,6 +394,100 @@ describe('TaskRun store', () => {
       const again = await markCancelled(run.id, 'again', 30, 'alice')
       assert.equal(again?.status, 'cancelled')
       assert.equal(again?.terminalAt, 20)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('pauses a running run and refuses late delivered overwrite', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-pause-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Work that gets stopped',
+        chainId: 'chain-pause',
+        depth: 1,
+        now: 10,
+      })
+      await markStarted(run.id, 'dispatched-coder', 20, 'alice')
+      const paused = await markPaused(
+        run.id,
+        { reason: 'user-stop', bySessionId: 's-main' },
+        30,
+        'alice',
+      )
+      assert.equal(paused?.status, 'paused')
+      assert.equal(paused?.pausedAt, 30)
+      assert.equal(paused?.pauseReason, 'user-stop')
+      assert.equal(paused?.currentSessionId, null)
+
+      const delivered = await markDelivered(
+        run.id,
+        { ok: true, summary: 'late finish' },
+        40,
+        'alice',
+      )
+      assert.equal(delivered?.status, 'paused')
+      assert.equal(delivered?.outcome, undefined)
+      const events = await getTaskRunEvents(run.id, {}, 'alice')
+      assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels queued and paused runs while running requires explicit abort semantics', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-cancel-gates-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const queued = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Queued work',
+        chainId: 'chain-cancel-queued',
+        depth: 1,
+      })
+      const paused = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Paused work',
+        chainId: 'chain-cancel-paused',
+        depth: 1,
+      })
+      await markStarted(paused.id, 'dispatched-paused', 10, 'alice')
+      await markPaused(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+      const running = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'Running work',
+        chainId: 'chain-cancel-running',
+        depth: 1,
+      })
+      await markStarted(running.id, 'dispatched-running', 10, 'alice')
+
+      assert.equal((await markCancelled(queued.id, 'drop queued', 30, 'alice'))?.status, 'cancelled')
+      assert.equal((await markCancelled(paused.id, 'drop paused', 30, 'alice'))?.status, 'cancelled')
+      assert.equal((await markCancelled(running.id, 'plain cancel', 30, 'alice'))?.status, 'running')
+      assert.equal(
+        (await markCancelled(running.id, 'abort running', 40, 'alice', { allowRunning: true }))?.status,
+        'cancelled',
+      )
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

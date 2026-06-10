@@ -196,7 +196,7 @@ export function flushLastFiredAt(): void {
 
 const COMPLETED_INDEX_VERSION = 1
 
-export type CompletedTaskOutcome = 'success' | 'failure' | 'cancelled'
+export type CompletedTaskOutcome = 'success' | 'failure' | 'cancelled' | 'aborted'
 
 export interface CompletedTaskRecord {
   version: typeof COMPLETED_INDEX_VERSION
@@ -284,6 +284,7 @@ export function getCompletedTaskRecord(
       candidate.outcome !== 'success'
       && candidate.outcome !== 'failure'
       && candidate.outcome !== 'cancelled'
+      && candidate.outcome !== 'aborted'
     ) {
       continue
     }

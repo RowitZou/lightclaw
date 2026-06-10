@@ -2,6 +2,7 @@ import {
   cancelDispatchTool,
   dispatchTool,
   listDispatchesTool,
+  messageDispatchTool,
   updateDispatchTool,
 } from './tools/dispatch.js'
 import { askUserQuestionTool } from './tools/ask-user-question.js'
@@ -92,6 +93,7 @@ export const builtinTools = [
   dispatchTool,
   listDispatchesTool,
   cancelDispatchTool,
+  messageDispatchTool,
   updateDispatchTool,
   notifyTool,
   askUserQuestionTool,

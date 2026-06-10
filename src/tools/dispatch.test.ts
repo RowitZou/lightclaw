@@ -5,9 +5,11 @@ import path from 'node:path'
 import { describe, it } from 'node:test'
 
 import type { Role } from '../agents/types.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
-import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import { setAbortControllerForSession } from '../state.js'
+import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markStarted } from '../taskrun/store.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -16,6 +18,7 @@ import {
   dispatchTool,
   executeDispatch,
   listDispatchesTool,
+  messageDispatchTool,
   setRunSubagentForDispatchTest,
   updateDispatchTool,
 } from './dispatch.js'
@@ -26,6 +29,7 @@ describe('Dispatch tool family', () => {
     assert.equal(names.has('Dispatch'), true)
     assert.equal(names.has('ListDispatches'), true)
     assert.equal(names.has('CancelDispatch'), true)
+    assert.equal(names.has('MessageDispatch'), true)
     assert.equal(names.has('UpdateDispatch'), true)
   })
 
@@ -108,7 +112,7 @@ describe('Dispatch tool family', () => {
     assert.equal(Object.hasOwn(parsed, retiredKey), false)
   })
 
-  it('Dispatch is inline; its management trio stays deferred', () => {
+  it('Dispatch is inline; its management quartet stays deferred', () => {
     // Dispatch is the orchestrator's core per-turn verb. Keeping it behind
     // ToolSearch (shouldDefer) imposed a search → wait → call round-trip that
     // suppressed delegation, so it is alwaysLoad. The post-hoc management tools
@@ -118,7 +122,7 @@ describe('Dispatch tool family', () => {
     const inlineNames = new Set(alwaysLoaded.map(tool => tool.name))
     const deferredNames = new Set(deferred.map(tool => tool.name))
     assert.equal(inlineNames.has('Dispatch'), true)
-    for (const name of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+    for (const name of ['ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch']) {
       assert.equal(deferredNames.has(name), true)
     }
   })
@@ -352,6 +356,99 @@ describe('Dispatch tool family', () => {
       const closed = await closeRootTaskRun(root.id, 'alice')
       assert.equal(closed.closed, true)
     } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('CancelDispatch hard-aborts a running background fire and marks its run cancelled', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-cancel-running-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate a running report.',
+        title: 'Running report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Write the report in five minutes from now.',
+            schedule: { kind: 'after', afterMinutes: 5 },
+            mode: 'background',
+            label: 'Running report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(output.isError, undefined)
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry?.taskRunId)
+      await markStarted(entry.taskRunId, 'bg-running-dispatch', Date.now(), 'alice')
+      const ctrl = new AbortController()
+      setAbortControllerForSession('bg-running-dispatch', ctrl)
+
+      const cancelOutput = await runWithSessionContext(session('main'), () =>
+        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+      )
+
+      assert.equal(cancelOutput.isError, undefined)
+      assert.match(cancelOutput.output, /aborted its in-flight fire/)
+      assert.equal(ctrl.signal.aborted, true)
+      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'cancelled')
+      assert.equal(getBackgroundTask('alice', dispatchId), null)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('MessageDispatch queues a soft interjection for a running dispatch', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-message-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate a running report.',
+        title: 'Running report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Write the report in five minutes from now.',
+            schedule: { kind: 'after', afterMinutes: 5 },
+            mode: 'background',
+            label: 'Running report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry?.taskRunId)
+      await markStarted(entry.taskRunId, 'bg-message-dispatch', Date.now(), 'alice')
+
+      const result = await runWithSessionContext(session('main'), () =>
+        messageDispatchTool.call(
+          { id: dispatchId, message: 'Switch to checking the smaller dataset first.' },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(result.isError, undefined)
+      const [queued] = channelInterjectionQueue.drain('bg-message-dispatch')
+      assert.ok(queued)
+      assert.match(queued.text, /<message-dispatch>/)
+      assert.match(queued.text, /smaller dataset/)
+      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'running')
+      assert.ok(getBackgroundTask('alice', dispatchId))
+    } finally {
+      channelInterjectionQueue.drain('bg-message-dispatch')
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }

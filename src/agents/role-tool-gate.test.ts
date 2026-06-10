@@ -301,8 +301,8 @@ test('bundled dispatch matrix matches the role-to-role topology', () => {
       true,
       `${agentType} should have Dispatch visible`,
     )
-    // Dispatch family is bound: List/Cancel/Update all visible to dispatchers.
-    for (const mgmt of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+    // Dispatch family is bound: List/Cancel/Message/Update all visible to dispatchers.
+    for (const mgmt of ['ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch']) {
       assert.equal(
         isToolVisibleToRole(agent, mgmt),
         true,

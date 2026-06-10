@@ -1,7 +1,5 @@
 import { channelInterjectionQueue } from '../../channels/feishu/interjection-queue.js'
-import { getChannelRunner } from '../../channels/feishu/runner-registry.js'
-import { parseFeishuSessionId } from '../../channels/feishu/routing.js'
-import type { NormalizedChannelMessage } from '../../channels/types.js'
+import { wakeOrInterject } from '../../channels/feishu/wake-or-interject.js'
 import { formatBackgroundExecResultBlock } from '../../background-exec/result-block.js'
 import { getSignalRouter } from '../../signal-bus/router.js'
 import type { AgentSignal } from '../../signal-bus/types.js'
@@ -73,43 +71,13 @@ async function handleBackgroundExecResultSignal(signal: AgentSignal): Promise<vo
     return
   }
 
-  if (channelInterjectionQueue.hasInflightFor(sessionId)) {
-    channelInterjectionQueue.push(sessionId, {
-      text: block,
-      messageId,
-      senderOpenId: payload.ownerOpenId,
-      arrivedAt: signal.timing.emittedAt,
-      source: 'background-task',
-    })
-    return
-  }
-
-  const parsed = parseFeishuSessionId(sessionId)
-  const runner = getChannelRunner()
-  if (!parsed || !runner) {
-    channelInterjectionQueue.push(sessionId, {
-      text: block,
-      messageId,
-      senderOpenId: payload.ownerOpenId,
-      arrivedAt: signal.timing.emittedAt,
-      source: 'background-task',
-    })
-    process.stderr.write(
-      `[background-exec] queued background-exec-result for ${sessionId}; synthetic turn unavailable\n`,
-    )
-    return
-  }
-
-  const synthetic: NormalizedChannelMessage = {
-    channel: 'feishu',
-    eventId: messageId,
+  await wakeOrInterject({
+    targetSessionId: sessionId,
+    block,
+    ownerOpenId: payload.ownerOpenId,
     messageId,
-    chatId: parsed.chatId,
-    chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
-    ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
-    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : payload.ownerOpenId,
-    text: block,
-    synthetic: true,
-  }
-  await runner.handleMessage(synthetic)
+    emittedAt: signal.timing.emittedAt,
+    source: 'background-task',
+    logPrefix: '[background-exec]',
+  })
 }

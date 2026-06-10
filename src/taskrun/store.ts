@@ -18,6 +18,7 @@ import type {
   TaskRunMeta,
   TaskRunMode,
   TaskRunOutcome,
+  TaskRunPausedEvent,
   TaskRunProgressEvent,
   TaskRunStartedEvent,
 } from './types.js'
@@ -354,6 +355,7 @@ export async function markDelivered(
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta) return null
   if (meta.status === 'delivered' || isTerminalStatus(meta.status)) return meta
+  if (meta.status === 'paused') return meta
   return appendEvent(
     id,
     'delivered',
@@ -364,6 +366,24 @@ export async function markDelivered(
     },
     now,
     ownerCanonicalUser,
+  )
+}
+
+export async function markPaused(
+  id: string,
+  input: { reason: 'user-stop'; bySessionId: string },
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  const meta = await getTaskRun(id, ownerCanonicalUser)
+  if (!meta || meta.status === 'paused' || isTerminalStatus(meta.status)) return meta
+  if (meta.status !== 'running' && meta.status !== 'blocked') return meta
+  return appendEvent(
+    id,
+    'paused',
+    { reason: input.reason, bySessionId: input.bySessionId },
+    now,
+    meta.ownerCanonicalUser,
   )
 }
 
@@ -425,9 +445,15 @@ export async function markCancelled(
   reason?: string,
   now = Date.now(),
   ownerCanonicalUser?: string,
+  options: { allowRunning?: boolean } = {},
 ): Promise<TaskRunMeta | null> {
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta || isTerminalStatus(meta.status)) return meta
+  const cancellable =
+    meta.status === 'queued' ||
+    meta.status === 'paused' ||
+    (options.allowRunning === true && meta.status === 'running')
+  if (!cancellable) return meta
   return appendEvent(id, 'cancelled', reason ? { reason } : {}, now, meta.ownerCanonicalUser)
 }
 
@@ -504,6 +530,15 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       terminalAt: event.ts,
     }
   }
+  if (isPausedEvent(event)) {
+    return {
+      ...next,
+      status: 'paused',
+      currentSessionId: null,
+      pausedAt: event.ts,
+      pauseReason: event.reason,
+    }
+  }
   if (isFinishedEvent(event)) {
     return {
       ...next,
@@ -549,6 +584,10 @@ function isDeliveredEvent(event: TaskRunEvent): event is TaskRunDeliveredEvent {
 
 function isCancelledEvent(event: TaskRunEvent): event is TaskRunCancelledEvent {
   return event.kind === 'cancelled'
+}
+
+function isPausedEvent(event: TaskRunEvent): event is TaskRunPausedEvent {
+  return event.kind === 'paused' && (event as { reason?: unknown }).reason === 'user-stop'
 }
 
 function isFinishedEvent(event: TaskRunEvent): event is TaskRunFinishedEvent {

@@ -653,6 +653,7 @@ describe('config: endpoints + models registry', () => {
     assert.deepEqual(cfg.taskrun.watchdog, {
       intervalMinutes: 5,
       deliveredGraceMs: 120_000,
+      pausedGraceMs: 21_600_000,
       budgetWindowMinutes: 30,
       deliveryRetryMaxAttempts: 3,
     })
@@ -668,6 +669,7 @@ describe('config: endpoints + models registry', () => {
         watchdog: {
           intervalMinutes: 0,
           deliveredGraceMs: 12_345,
+          pausedGraceMs: 67_890,
           budgetWindowMinutes: 9,
           deliveryRetryMaxAttempts: 4,
         },
@@ -677,6 +679,7 @@ describe('config: endpoints + models registry', () => {
     assert.deepEqual(cfg.taskrun.watchdog, {
       intervalMinutes: 0,
       deliveredGraceMs: 12_345,
+      pausedGraceMs: 67_890,
       budgetWindowMinutes: 9,
       deliveryRetryMaxAttempts: 4,
     })

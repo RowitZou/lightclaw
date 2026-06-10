@@ -6,6 +6,7 @@ import {
   cancelDispatchTool,
   dispatchTool,
   listDispatchesTool,
+  messageDispatchTool,
   updateDispatchTool,
 } from './dispatch.js'
 import { notifyTool } from './notify.js'
@@ -23,6 +24,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
     Dispatch: hash(dispatchTool.description),
     ListDispatches: hash(listDispatchesTool.description),
     CancelDispatch: hash(cancelDispatchTool.description),
+    MessageDispatch: hash(messageDispatchTool.description),
     UpdateDispatch: hash(updateDispatchTool.description),
     Notify: hash(notifyTool.description),
     ShowSlashCatalog: hash(showSlashCatalogTool.description),
@@ -52,7 +54,8 @@ const EXPECTED = {
   // the new `scope` param (default lists only the caller's own dispatches;
   // `scope: 'all'` is main-orchestrator-only) and the `caller` output field.
   ListDispatches: '246a6e8ae95d21feef8d8ed908bd58aa469c0ac6e71a1f8b4535699da0baba73',
-  CancelDispatch: 'cab41843f426e403d9fc0362c0cdb5b5a4093a78c68fa0ffbb19c77771d5df07',
+  CancelDispatch: '385bb0b744cf584b6bd7b7f4c71dcc1d60323893529e31e2d9ad1f655b219965',
+  MessageDispatch: '192a4fce0eb37ca453f303e6b477981d5ef624eba42eab769516c22dd89a6d88',
   UpdateDispatch: '0257356cfbea31368f649f245cf39b0df21b015c3abfa78fc82afdc7ef3cbc54',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
   // Phase 18 PR6: main-only tool for discovering channel slash commands
@@ -69,9 +72,9 @@ const EXPECTED = {
   // unattended-agent posture: surface every result via plain reply, take
   // autonomous follow-up when the path is clear, reserve Notify for the
   // narrow cases where the user genuinely must intervene. Outcome=aborted
-  // section dropped — /stop and CancelDispatch do not abort in-flight bg
-  // fires (chain-abort-propagation skips bg-* sessions), so the path was
-  // unreachable through user actions. 2026-05-20: opening sentence widened
+  // prose stays dropped: collab-phase2 PR9/PR10 abort paths suppress delivery
+  // before this block is rendered, so the model-facing fallback is enough for
+  // any legacy/internal aborted envelope. 2026-05-20: opening sentence widened
   // so it reads correctly when the receiver is not the role that scheduled
   // the dispatch (orphan result fell back up the chain to main).
   BackgroundTaskResultBlockMain: 'e4ba103c86e31fb009680b50f9e6cdaff3f1461796b02334bdd943f6bca7b9fb',

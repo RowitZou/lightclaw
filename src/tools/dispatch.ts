@@ -23,7 +23,15 @@ import {
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
 import { getBackgroundTaskScheduler, notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
 import { scheduleSpecSchema, type BackgroundTaskEntry, type ScheduleSpec } from '../background-task/types.js'
-import { getCurrentRole, getCurrentTaskRunId, getRuntime, getSessionId, requireCurrentUserId } from '../state.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import {
+  abortInFlightForSession,
+  getCurrentRole,
+  getCurrentTaskRunId,
+  getRuntime,
+  getSessionId,
+  requireCurrentUserId,
+} from '../state.js'
 import { buildTool } from '../tool.js'
 import type { ToolCallContext } from '../tool.js'
 import {
@@ -140,13 +148,19 @@ By default this lists only dispatches you created. Pass \`scope: 'all'\` to list
 
 Returns each dispatch's id, label, role, caller (the agent that scheduled it), schedule shape, next run time, current enabled state, and (if \`include_history: true\`) the last fire timestamp. Past fire outcomes are not in this output — each fire's result was already delivered to you via wake at the time it completed.`
 
-const CANCEL_DISPATCH_DESCRIPTION = `Cancel a scheduled background dispatch by id. An already in-flight fire is allowed to finish; only future runs are stopped.
+const CANCEL_DISPATCH_DESCRIPTION = `Cancel a background dispatch by id. Future runs are stopped, and an already in-flight fire is hard-aborted if its TaskRun is currently running.
 
 Use when you decide a previously-dispatched run is no longer needed — the user explicitly says "stop that one", the plan has changed and the work is moot, or you're reassessing scope and want to free the slot. Run ListDispatches first if you don't have the exact id.
 
 To temporarily disable rather than delete, use UpdateDispatch with \`enabled: false\` (preserves history; can be re-enabled later).
 
 Idempotent: cancelling a dispatch that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`
+
+const MESSAGE_DISPATCH_DESCRIPTION = `Send a message to a currently running background dispatch without aborting it.
+
+Use this for soft direction changes, added context, or redirecting the worker's next steps while it is still active. The message is delivered as an interjection at the worker's next tool boundary. It does not cancel, pause, reschedule, or otherwise mutate the dispatch entry.
+
+Run ListDispatches first if you do not know the dispatch id. MessageDispatch only works while the dispatch's current TaskRun is running; queued future work can be updated with UpdateDispatch, and hard stop uses CancelDispatch.`
 
 const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -484,18 +498,38 @@ function currentCallerMayManage(task: BackgroundTaskEntry): boolean {
 async function cancelQueuedTaskRunBestEffort(
   ownerCanonicalUser: string,
   taskRunId: string | undefined,
-): Promise<void> {
-  if (!taskRunId) return
+): Promise<{ cancelled: boolean; abortedSessionId?: string }> {
+  if (!taskRunId) return { cancelled: false }
   try {
     const meta = await getTaskRun(taskRunId, ownerCanonicalUser)
-    if (meta?.status !== 'queued') return
-    await markCancelled(taskRunId, 'cancelled via CancelDispatch', Date.now(), ownerCanonicalUser)
+    if (!meta) return { cancelled: false }
+    if (meta.status !== 'queued' && meta.status !== 'paused' && meta.status !== 'running') {
+      return { cancelled: false }
+    }
+    let abortedSessionId: string | undefined
+    if (meta.status === 'running' && meta.currentSessionId) {
+      if (abortInFlightForSession(meta.currentSessionId)) {
+        abortedSessionId = meta.currentSessionId
+      }
+    }
+    const cancelled = await markCancelled(
+      taskRunId,
+      'cancelled via CancelDispatch',
+      Date.now(),
+      ownerCanonicalUser,
+      { allowRunning: meta.status === 'running' },
+    )
+    return {
+      cancelled: cancelled?.status === 'cancelled',
+      ...(abortedSessionId ? { abortedSessionId } : {}),
+    }
   } catch (error) {
     process.stderr.write(
       `[taskrun] failed to mark run ${taskRunId} cancelled: ${
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+    return { cancelled: false }
   }
 }
 
@@ -522,7 +556,7 @@ export const dispatchTool = buildTool({
   // Behind ToolSearch it carried a round-trip cost (search → wait a turn →
   // call) that the model routinely sidestepped by just doing the work itself,
   // suppressing delegation. Inlining removes that activation energy. The
-  // management trio below (List/Cancel/Update) stays deferred: post-hoc, low
+  // management quartet below (List/Cancel/Message/Update) stays deferred: post-hoc, low
   // per-turn frequency.
   alwaysLoad: true,
   description: DISPATCH_DESCRIPTION,
@@ -964,16 +998,20 @@ export const cancelDispatchTool = buildTool({
     notifyBackgroundTaskChanged(userId, input.id)
     if (removed) {
       // Dispatch-time queued runs must be settled on cancel, or the
-      // never-to-fire run pins its root open forever. In-flight fires are
-      // allowed to finish; only queued future work is cancelled here.
-      await cancelQueuedTaskRunBestEffort(userId, owned?.taskRunId)
+      // never-to-fire run pins its root open forever. Running fires are
+      // hard-aborted through their TaskRun currentSessionId before cancellation.
+      const cancelResult = await cancelQueuedTaskRunBestEffort(userId, owned?.taskRunId)
       await closeStandingRootBestEffort(userId, owned?.standingRootRunId)
       appendCompletedTaskRecord(userId, {
         id: input.id,
         outcome: 'cancelled',
         completedAt: new Date().toISOString(),
       })
-      return { output: `Cancelled dispatch ${input.id}.` }
+      return {
+        output: cancelResult.abortedSessionId
+          ? `Cancelled dispatch ${input.id} and aborted its in-flight fire.`
+          : `Cancelled dispatch ${input.id}.`,
+      }
     }
     const prior = getCompletedTaskRecord(userId, input.id)
     if (prior) {
@@ -981,6 +1019,67 @@ export const cancelDispatchTool = buildTool({
       return { output: `Dispatch ${input.id} already ${verb} at ${prior.completedAt}. Cancel is a no-op.` }
     }
     return { output: `Dispatch not found: ${input.id}`, isError: true }
+  },
+})
+
+export const messageDispatchTool = buildTool({
+  name: 'MessageDispatch',
+  whenToUse: `Send a soft mid-flight instruction to a running background dispatch without cancelling it.`,
+  shouldDefer: true,
+  description: MESSAGE_DISPATCH_DESCRIPTION,
+  searchHint: 'message dispatch interject redirect running background worker 插嘴 转向 下行 消息',
+  domain: 'host',
+  riskLevel: 'write',
+  inputSchema: z.object({
+    id: z.string().min(1),
+    message: z.string().min(1),
+  }),
+  async call(input) {
+    const userId = requireCurrentUserId()
+    const owned = getBackgroundTask(userId, input.id)
+    if (owned && !currentCallerMayManage(owned)) {
+      return {
+        output: `Dispatch ${input.id} was created by ${taskCallerRole(owned)} in a different session and is outside your scope. You can only message dispatches you created. Report it back to your requester instead of retrying.`,
+        isError: true,
+      }
+    }
+    if (!owned) {
+      const prior = getCompletedTaskRecord(userId, input.id)
+      if (prior) {
+        const verb = prior.outcome === 'cancelled'
+          ? 'cancelled'
+          : prior.outcome === 'aborted'
+            ? 'aborted'
+            : 'finished'
+        return {
+          output: `Dispatch ${input.id} already ${verb} at ${prior.completedAt}; cannot message it.`,
+          isError: true,
+        }
+      }
+      return { output: `Dispatch not found: ${input.id}`, isError: true }
+    }
+    const run = owned.taskRunId ? await getTaskRun(owned.taskRunId, userId) : null
+    if (!run || run.status !== 'running' || !run.currentSessionId) {
+      return {
+        output: `Dispatch ${input.id} is not currently running; use UpdateDispatch for queued future work or CancelDispatch for a hard stop.`,
+        isError: true,
+      }
+    }
+    const now = Date.now()
+    channelInterjectionQueue.push(run.currentSessionId, {
+      messageId: `message-dispatch-${input.id}-${now}`,
+      senderOpenId: `dispatch:${input.id}`,
+      text: [
+        '<message-dispatch>',
+        input.message.trim(),
+        '</message-dispatch>',
+      ].join('\n'),
+      arrivedAt: now,
+      source: 'user',
+    })
+    return {
+      output: `Message queued for dispatch ${input.id}; the worker will receive it at the next tool boundary.`,
+    }
   },
 })
 
@@ -1060,5 +1159,6 @@ export const __toolDescriptionForSnapshot = {
   Dispatch: DISPATCH_DESCRIPTION,
   ListDispatches: LIST_DISPATCHES_DESCRIPTION,
   CancelDispatch: CANCEL_DISPATCH_DESCRIPTION,
+  MessageDispatch: MESSAGE_DISPATCH_DESCRIPTION,
   UpdateDispatch: UPDATE_DISPATCH_DESCRIPTION,
 }

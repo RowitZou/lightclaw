@@ -7,6 +7,7 @@ import {
   appendCompletedTaskRecord,
   flushLastFiredAt,
   getBackgroundTask,
+  getCompletedTaskRecord,
   listAllUsersWithBackgroundTasks,
   loadBackgroundTasks,
   removeBackgroundTask,
@@ -556,7 +557,8 @@ export class BackgroundTaskScheduler {
     taskRunId?: string,
   ): Promise<void> {
     const retryMax = this.config?.dispatch.scheduler.fireRetryMaxAttempts ?? 3
-    if (outcome.kind === 'failure' && outcome.transient && attempt < retryMax) {
+    const outcomeLabel = outcomeKindForBackgroundResult(outcome)
+    if (outcomeLabel !== 'aborted' && outcome.kind === 'failure' && outcome.transient && attempt < retryMax) {
       const delayMs = RETRY_BASE_MS * 2 ** (attempt - 1)
       setTimeout(() => {
         this.enqueueOrFire(canonicalUser, {
@@ -574,6 +576,30 @@ export class BackgroundTaskScheduler {
     // Terminal outcome — this run will not fire again. Release the claim so a
     // recurring task can be rescheduled and the claimed-set does not leak.
     this.unmarkClaimed(canonicalUser, task.id)
+    if (outcomeLabel === 'aborted') {
+      const firedAt = new Date().toISOString()
+      if (task.standingRootRunId) {
+        const latest = getBackgroundTask(canonicalUser, task.id)
+        if (latest) {
+          await createNextStandingTaskRunBestEffort(canonicalUser, latest)
+        }
+        updateLastFiredAt(canonicalUser, task.id, firedAt)
+      } else if (task.schedule.kind === 'oneshot') {
+        const prior = getCompletedTaskRecord(canonicalUser, task.id)
+        if (prior?.outcome !== 'cancelled') {
+          appendCompletedTaskRecord(canonicalUser, {
+            id: task.id,
+            outcome: 'aborted',
+            completedAt: firedAt,
+            ...(outcome.kind === 'failure' ? { summary: outcome.reason } : {}),
+          })
+        }
+        removeBackgroundTask(canonicalUser, task.id)
+      } else {
+        updateLastFiredAt(canonicalUser, task.id, firedAt)
+      }
+      return
+    }
     await markBackgroundTaskRunTerminalBestEffort(canonicalUser, task, taskRunId, outcome)
 
     const firedAt = new Date().toISOString()

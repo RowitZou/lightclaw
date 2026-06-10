@@ -426,6 +426,7 @@ export type DispatchConfig = {
 export type TaskRunWatchdogConfig = {
   intervalMinutes: number
   deliveredGraceMs: number
+  pausedGraceMs: number
   budgetWindowMinutes: number
   deliveryRetryMaxAttempts: number
 }
@@ -490,6 +491,7 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
 const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   intervalMinutes: 5,
   deliveredGraceMs: 120_000,
+  pausedGraceMs: 21_600_000,
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
 }
@@ -1984,6 +1986,7 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
   const watchdog = fileConfig.taskrun?.watchdog ?? {}
   const intervalRaw = Number(watchdog.intervalMinutes)
   const graceRaw = Number(watchdog.deliveredGraceMs)
+  const pausedGraceRaw = Number(watchdog.pausedGraceMs)
   const budgetWindowRaw = Number(watchdog.budgetWindowMinutes)
   const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
 
@@ -2000,6 +2003,12 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
         Math.floor(Number.isFinite(graceRaw)
           ? graceRaw
           : DEFAULT_TASKRUN_WATCHDOG.deliveredGraceMs),
+      ),
+      pausedGraceMs: Math.max(
+        0,
+        Math.floor(Number.isFinite(pausedGraceRaw)
+          ? pausedGraceRaw
+          : DEFAULT_TASKRUN_WATCHDOG.pausedGraceMs),
       ),
       budgetWindowMinutes: Math.max(
         1,

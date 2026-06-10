@@ -5,10 +5,11 @@ import {
   acceptTaskRun,
   closeRootTaskRun,
   getTaskRun,
+  markCancelled,
   markDelivered,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { getCurrentRole, getCurrentTaskRunId, requireCurrentUserId } from '../state.js'
+import { getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
@@ -18,6 +19,7 @@ const TASK_UPDATE_DESCRIPTION = [
   "action='deliver' — conclude your own run. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. With a root runId (orchestrator) it declares the root delivered; the close is refused with an itemized list while the root still has open obligations — settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and closes the delivered run as failed. Re-dispatch with that feedback if the work should continue.",
+  "action='cancel' — cancel queued or paused work you own. Orchestrator may cancel runs inside this chat's rooted trees; workers may cancel their direct queued / paused children. Running work is not cancelled here; use CancelDispatch for an in-flight background dispatch.",
 ].join('\n')
 
 function describeObligationStatus(meta: TaskRunMeta): string {
@@ -61,7 +63,7 @@ export const taskUpdateTool = buildTool({
   riskLevel: 'safe',
   inputSchema: z.object({
     runId: z.string().min(1).optional(),
-    action: z.enum(['deliver', 'accept', 'reject']),
+    action: z.enum(['deliver', 'accept', 'reject', 'cancel']),
     ok: z.boolean().optional(),
     summary: z.string().min(1).optional(),
     feedback: z.string().min(1).optional(),
@@ -146,6 +148,53 @@ export const taskUpdateTool = buildTool({
       return { output: JSON.stringify({ runId: delivered.id, status: delivered.status }) }
     }
 
+    if (input.action === 'cancel') {
+      if (!input.runId) {
+        return { output: 'cancel requires `runId` of the queued or paused run.', isError: true }
+      }
+      const target = await getTaskRun(input.runId, owner)
+      if (!target) {
+        return { output: `TaskRun not found: ${input.runId}`, isError: true }
+      }
+      if (target.status !== 'queued' && target.status !== 'paused') {
+        return {
+          output: `TaskRun ${input.runId} is ${target.status}, not queued or paused. Running work must be stopped with CancelDispatch; delivered work needs accept/reject.`,
+          isError: true,
+        }
+      }
+      if (isOrchestrator) {
+        const root = await getTaskRun(target.rootRunId, owner)
+        if (!root || (root.kind ?? 'dispatch') !== 'root' || root.callerSessionId !== getSessionId()) {
+          return {
+            output: `TaskRun ${input.runId} is outside this chat's rooted task trees.`,
+            isError: true,
+          }
+        }
+      } else {
+        const own = getCurrentTaskRunId()
+        if (!own || target.parentRunId !== own) {
+          return {
+            output: `TaskRun ${input.runId} is not a direct child of your current run; you can only cancel queued / paused work you dispatched.`,
+            isError: true,
+          }
+        }
+      }
+      const cancelled = await markCancelled(
+        input.runId,
+        `cancelled by ${byRole} via TaskUpdate`,
+        Date.now(),
+        owner,
+      )
+      if (!cancelled || cancelled.status !== 'cancelled') {
+        return {
+          output: `TaskRun ${input.runId} could not be cancelled (its state changed underneath).`,
+          isError: true,
+        }
+      }
+      await closeOrphanStandingRootBestEffort(owner, cancelled.rootRunId)
+      return { output: JSON.stringify({ runId: cancelled.id, status: cancelled.status }) }
+    }
+
     // accept / reject — verdict on a delivered child.
     if (!input.runId) {
       return { output: `${input.action} requires \`runId\` of the delivered run.`, isError: true }
@@ -173,7 +222,7 @@ export const taskUpdateTool = buildTool({
       // delivered run inside its own rooted trees. Tightens back to strict
       // parent-edge adjacency once parents are re-animatable (collab-phase3).
       const root = await getTaskRun(target.rootRunId, owner)
-      if (!root || (root.kind ?? 'dispatch') !== 'root') {
+      if (!root || (root.kind ?? 'dispatch') !== 'root' || root.callerSessionId !== getSessionId()) {
         return {
           output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`,
           isError: true,

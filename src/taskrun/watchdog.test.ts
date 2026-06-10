@@ -104,6 +104,41 @@ describe('TaskRun watchdog', () => {
     )
   })
 
+  it('reports paused runs only after the paused grace window', () => {
+    const runs = [
+      meta({ id: 'tr_paused_old', status: 'paused', pausedAt: 1_000 }),
+      meta({ id: 'tr_paused_grace', status: 'paused', pausedAt: 9_500 }),
+      meta({ id: 'tr_running', status: 'running', currentSessionId: 'live' }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 1_000,
+      pausedGraceMs: 1_000,
+      activeSessionIds: new Set(['live']),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+
+    assert.deepEqual(
+      findings.map(finding => [finding.runId, finding.kind]),
+      [['tr_paused_old', 'paused-overdue']],
+    )
+
+    const disabled = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 1_000,
+      pausedGraceMs: 0,
+      activeSessionIds: new Set(['live']),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(disabled, [])
+  })
+
   it('dedupes by durable watchdog-report fingerprint and reports again after state advances', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-'))
     setLightclawHomeOverride(tmpHome)
@@ -327,6 +362,8 @@ function meta(input: Partial<TaskRunMeta> & { id: string; status: TaskRunMeta['s
     ...(input.outcome ? { outcome: input.outcome } : {}),
     createdAt: now,
     ...(input.startedAt !== undefined ? { startedAt: input.startedAt } : {}),
+    ...(input.pausedAt !== undefined ? { pausedAt: input.pausedAt } : {}),
+    ...(input.pauseReason !== undefined ? { pauseReason: input.pauseReason } : {}),
     ...(input.deliveredAt !== undefined ? { deliveredAt: input.deliveredAt } : {}),
     ...(input.terminalAt !== undefined ? { terminalAt: input.terminalAt } : {}),
     updatedAt: input.updatedAt ?? input.deliveredAt ?? input.startedAt ?? now,

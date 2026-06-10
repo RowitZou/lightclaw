@@ -65,6 +65,7 @@ import { getSignalRouter, type ChainTreeNode, type ChainView } from '../signal-b
 import type { ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
+import { stopActiveTaskRunsForSession } from '../taskrun/stop.js'
 
 export function createBuiltinReplRegistry(
   opts?: { includeChannelOnly?: boolean },
@@ -139,7 +140,13 @@ function buildBuiltinCommands(): ReplCommand[] {
       // ctx.sessionId is the terminal session id in REPL and the Feishu
       // Phase 26 sessionId for channel slash dispatch — both map directly
       // to the controller `beginQuery()` registered.
-      const aborted = abortInFlightForSession(ctx.sessionId)
+      const userId = ctx.userId ?? getCurrentUserId()
+      const ledgerStop = userId
+        ? await stopActiveTaskRunsForSession(userId, ctx.sessionId)
+        : { pausedRunIds: [], abortedSessionIds: [] }
+      const aborted = abortInFlightForSession(ctx.sessionId) ||
+        ledgerStop.pausedRunIds.length > 0 ||
+        ledgerStop.abortedSessionIds.length > 0
       ctx.output.write(
         `${aborted ? t('stop.aborted') : t('stop.nothing')}\n`,
       )

@@ -1,7 +1,5 @@
 import { channelInterjectionQueue } from '../../channels/feishu/interjection-queue.js'
-import { getChannelRunner } from '../../channels/feishu/runner-registry.js'
-import { parseFeishuSessionId } from '../../channels/feishu/routing.js'
-import type { NormalizedChannelMessage } from '../../channels/types.js'
+import { wakeOrInterject } from '../../channels/feishu/wake-or-interject.js'
 import { formatBackgroundTaskResultBlock } from '../../signal-bus/background-result-block.js'
 import { getSignalRouter } from '../../signal-bus/router.js'
 import type { AgentSignal } from '../../signal-bus/types.js'
@@ -76,43 +74,13 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
   // Main receiver: legacy path.
   const mainSessionId = receiverSessionId
 
-  if (channelInterjectionQueue.hasInflightFor(mainSessionId)) {
-    channelInterjectionQueue.push(mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: payload.ownerOpenId,
-      arrivedAt: signal.timing.emittedAt,
-      source: 'background-task',
-    })
-    return
-  }
-
-  const parsed = parseFeishuSessionId(mainSessionId)
-  const runner = getChannelRunner()
-  if (!parsed || !runner) {
-    channelInterjectionQueue.push(mainSessionId, {
-      text: block,
-      messageId,
-      senderOpenId: payload.ownerOpenId,
-      arrivedAt: signal.timing.emittedAt,
-      source: 'background-task',
-    })
-    process.stderr.write(
-      `[background-task] queued background-result for ${mainSessionId}; synthetic turn unavailable\n`,
-    )
-    return
-  }
-
-  const synthetic: NormalizedChannelMessage = {
-    channel: 'feishu',
-    eventId: messageId,
+  await wakeOrInterject({
+    targetSessionId: mainSessionId,
+    block,
+    ownerOpenId: payload.ownerOpenId,
     messageId,
-    chatId: parsed.chatId,
-    chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
-    ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
-    senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : payload.ownerOpenId,
-    text: block,
-    synthetic: true,
-  }
-  await runner.handleMessage(synthetic)
+    emittedAt: signal.timing.emittedAt,
+    source: 'background-task',
+    logPrefix: '[background-task]',
+  })
 }

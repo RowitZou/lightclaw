@@ -74,6 +74,8 @@ import {
 import { getAllTools, getEnabledTools } from '../tools.js'
 import type { Message, SessionMeta, UserContentBlock } from '../types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { stopActiveTaskRunsForSession } from '../taskrun/stop.js'
+import { formatStopNoticeReminder, readAndClearStopNotice } from '../taskrun/stop-notice.js'
 
 import { assertSessionIdShape, channelSessionLock } from './session-lock.js'
 import {
@@ -386,7 +388,8 @@ export class ChannelRunner {
       // (Phase 26 formula). A /stop typed in a group never aborts the DM
       // session's in-flight turn and vice versa.
       const targetSessionId = this.strategy.resolveSessionId(message, userId)
-      const aborted = (await getSignalRouter().publish({
+      const ledgerStop = await stopActiveTaskRunsForSession(userId, targetSessionId)
+      const busAborted = (await getSignalRouter().publish({
         kind: 'notification',
         from: { kind: 'user', id: message.senderOpenId },
         to: { kind: 'role', id: 'main', sessionId: targetSessionId, broadcast: 'chain' },
@@ -394,6 +397,7 @@ export class ChannelRunner {
         timing: { emittedAt: Date.now() },
         chainId: targetSessionId,
       })).some(value => typeof value === 'number' ? value > 0 : Boolean(value))
+      const aborted = busAborted || ledgerStop.abortedSessionIds.length > 0 || ledgerStop.pausedRunIds.length > 0
       await this.sendNotice(
         message,
         'info',
@@ -735,17 +739,24 @@ export class ChannelRunner {
           return
         }
 
+        const stopNotice = !message.resumeExisting
+          ? readAndClearStopNotice(userId, mainSessionId)
+          : null
+        const effectiveUserText = stopNotice
+          ? `${formatStopNoticeReminder(stopNotice)}\n\n${userText}`
+          : userText
+
         // If anything was encoded inline, build a content array (text + image
         // / document blocks). Otherwise stay on the legacy string content
         // shape — keeps transcripts compact for plain text turns.
         const userMessageContent = inlineEncoding.inlineBlocks.length > 0
           ? [
-              ...(userText.length > 0
-                ? [{ type: 'text' as const, text: userText }]
+              ...(effectiveUserText.length > 0
+                ? [{ type: 'text' as const, text: effectiveUserText }]
                 : []),
               ...inlineEncoding.inlineBlocks,
             ]
-          : userText
+          : effectiveUserText
         const userMessage = createUserMessage(userMessageContent, getLastUuid(messages))
         // Crash-resume synthetic messages carry the whole interrupted
         // conversation in the loaded transcript already, so do NOT append a
