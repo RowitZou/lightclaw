@@ -252,6 +252,7 @@ export type ConfigFileShape = {
       intervalMinutes?: number
       deliveredGraceMs?: number
       waitingGraceMs?: number
+      rootIdleGraceMs?: number
       budgetWindowMinutes?: number
       deliveryRetryMaxAttempts?: number
     }

@@ -427,6 +427,7 @@ export type TaskRunWatchdogConfig = {
   intervalMinutes: number
   deliveredGraceMs: number
   waitingGraceMs: number
+  rootIdleGraceMs: number
   budgetWindowMinutes: number
   deliveryRetryMaxAttempts: number
 }
@@ -498,6 +499,7 @@ const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   intervalMinutes: 5,
   deliveredGraceMs: 120_000,
   waitingGraceMs: 21_600_000,
+  rootIdleGraceMs: 900_000,
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
 }
@@ -2002,6 +2004,7 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
   const waitingGraceRaw = Number(
     watchdog.waitingGraceMs ?? (watchdog as { pausedGraceMs?: number }).pausedGraceMs,
   )
+  const rootIdleGraceRaw = Number(watchdog.rootIdleGraceMs)
   const budgetWindowRaw = Number(watchdog.budgetWindowMinutes)
   const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
 
@@ -2040,6 +2043,12 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
         Math.floor(Number.isFinite(waitingGraceRaw)
           ? waitingGraceRaw
           : DEFAULT_TASKRUN_WATCHDOG.waitingGraceMs),
+      ),
+      rootIdleGraceMs: Math.max(
+        0,
+        Math.floor(Number.isFinite(rootIdleGraceRaw)
+          ? rootIdleGraceRaw
+          : DEFAULT_TASKRUN_WATCHDOG.rootIdleGraceMs),
       ),
       budgetWindowMinutes: Math.max(
         1,

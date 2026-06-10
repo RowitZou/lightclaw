@@ -60,6 +60,64 @@ describe('TaskRun watchdog', () => {
     )
   })
 
+  it('reports an open goal root with zero in-flight obligations as idle-root', () => {
+    const runs = [
+      meta({ id: 'tr_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
+      meta({ id: 'tr_done_child', status: 'done', parentRunId: 'tr_goal', rootRunId: 'tr_goal', updatedAt: 2_000 }),
+      // a root with a live child is not idle
+      meta({ id: 'tr_busy_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
+      meta({ id: 'tr_live_child', status: 'running', currentSessionId: 'live-session', parentRunId: 'tr_busy_goal', rootRunId: 'tr_busy_goal', updatedAt: 2_000 }),
+      // standing service roots are never idle-reported
+      meta({ id: 'tr_service', kind: 'root', standing: true, status: 'running', updatedAt: 1_000 }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 2_000 + 900_001,
+      deliveredGraceMs: 0,
+      activeSessionIds: new Set(['live-session']),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(
+      findings.map(finding => [finding.runId, finding.kind]),
+      [['tr_goal', 'idle-root']],
+    )
+  })
+
+  it('does not report idle-root inside the grace window or with a pending dispatch', () => {
+    const runs = [
+      meta({ id: 'tr_fresh_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
+      meta({ id: 'tr_scheduled_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 1_000 + 900_001,
+      deliveredGraceMs: 0,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [
+        (() => {
+          const { taskRunId: _omit, ...rest } = backgroundEntry('dispatch-goal', 'tr_elsewhere')
+          return { ...rest, parentTaskRunId: 'tr_scheduled_goal' }
+        })(),
+      ],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(findings.map(finding => [finding.runId, finding.kind]), [['tr_fresh_goal', 'idle-root']])
+
+    const freshFindings = detectTaskRunFindings(runs, {
+      now: 1_000 + 100,
+      deliveredGraceMs: 0,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(freshFindings, [])
+  })
+
   it('does not report a paused standing dispatch queued child as stranded', () => {
     const runs = [
       meta({ id: 'tr_standing_root', kind: 'root', standing: true, status: 'running' }),

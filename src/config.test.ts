@@ -654,6 +654,7 @@ describe('config: endpoints + models registry', () => {
       intervalMinutes: 5,
       deliveredGraceMs: 120_000,
       waitingGraceMs: 21_600_000,
+      rootIdleGraceMs: 900_000,
       budgetWindowMinutes: 30,
       deliveryRetryMaxAttempts: 3,
     })
@@ -670,6 +671,7 @@ describe('config: endpoints + models registry', () => {
           intervalMinutes: 0,
           deliveredGraceMs: 12_345,
           waitingGraceMs: 67_890,
+          rootIdleGraceMs: 23_456,
           budgetWindowMinutes: 9,
           deliveryRetryMaxAttempts: 4,
         },
@@ -680,6 +682,7 @@ describe('config: endpoints + models registry', () => {
       intervalMinutes: 0,
       deliveredGraceMs: 12_345,
       waitingGraceMs: 67_890,
+      rootIdleGraceMs: 23_456,
       budgetWindowMinutes: 9,
       deliveryRetryMaxAttempts: 4,
     })

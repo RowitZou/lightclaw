@@ -25,6 +25,7 @@ export type TaskRunWatchdogFindingKind =
   | 'unsettled-delivered'
   | 'waiting-overdue'
   | 'dead-wake-source'
+  | 'idle-root'
 
 export type TaskRunWatchdogFinding = {
   runId: string
@@ -61,6 +62,7 @@ export type ReconcileTaskRunsDeps = {
   now?: number
   deliveredGraceMs?: number
   waitingGraceMs?: number
+  rootIdleGraceMs?: number
   budgetWindowMinutes?: number
   wakeBudgetReportLimit?: number
   activeSessionIds?: Set<string>
@@ -93,6 +95,7 @@ export async function reconcileTaskRunsOnce(
   const now = deps.now ?? Date.now()
   const deliveredGraceMs = deps.deliveredGraceMs ?? 120_000
   const waitingGraceMs = deps.waitingGraceMs ?? 21_600_000
+  const rootIdleGraceMs = deps.rootIdleGraceMs ?? 900_000
   const runs = deps.listRuns
     ? await deps.listRuns(ownerCanonicalUser)
     : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
@@ -116,6 +119,7 @@ export async function reconcileTaskRunsOnce(
     now,
     deliveredGraceMs,
     waitingGraceMs,
+    rootIdleGraceMs,
     activeSessionIds: deps.activeSessionIds ?? new Set(),
     inFlightMainSessionIds: deps.inFlightMainSessionIds ?? new Set(),
     schedulerTaskRunIds: deps.schedulerTaskRunIds ?? new Set(),
@@ -269,9 +273,11 @@ export function detectTaskRunFindings(
     backgroundEntries: BackgroundTaskEntry[]
     eventsByRun: Map<string, TaskRunEvent[]>
     failedWakeRunIds?: Set<string>
+    rootIdleGraceMs?: number
   },
 ): TaskRunWatchdogFinding[] {
   const waitingGraceMs = input.waitingGraceMs ?? 21_600_000
+  const rootIdleGraceMs = input.rootIdleGraceMs ?? 900_000
   const runById = new Map(runs.map(run => [run.id, run]))
   const scheduledTaskRunIds = new Set(
     input.backgroundEntries
@@ -345,6 +351,36 @@ export function detectTaskRunFindings(
         }))
       }
     }
+  }
+  // idle-root: an open goal with zero in-flight obligations and nothing
+  // scheduled is the orchestrator-side mirror of a stranded run — nobody is
+  // moving toward an open goal. Pure liveness (the ledger alone decides);
+  // standing service roots are excluded (they always hold a queued child by
+  // construction, and their lifecycle is the cancel path's business).
+  for (const run of runs) {
+    if ((run.kind ?? 'dispatch') !== 'root' || run.standing === true || isTerminal(run.status)) {
+      continue
+    }
+    if (rootIdleGraceMs <= 0) continue
+    const descendants = runs.filter(r => r.rootRunId === run.id && r.id !== run.id)
+    if (descendants.some(r => !isTerminal(r.status))) continue
+    const hasPendingDispatch = input.backgroundEntries.some(entry =>
+      entry.parentTaskRunId === run.id || entry.standingRootRunId === run.id ||
+      (entry.taskRunId !== undefined && descendants.some(r => r.id === entry.taskRunId)),
+    )
+    if (hasPendingDispatch) continue
+    const lastActivity = Math.max(run.updatedAt, ...descendants.map(r => r.updatedAt))
+    if (input.now - lastActivity <= rootIdleGraceMs) continue
+    const receiverBusy = input.inFlightMainSessionIds.has(run.callerSessionId)
+      || input.activeSessionIds.has(run.callerSessionId)
+    if (receiverBusy) continue
+    const events = input.eventsByRun.get(run.id) ?? []
+    findings.push(toFinding(run, runById, {
+      kind: 'idle-root',
+      since: lastActivity,
+      now: input.now,
+      lastStateEventSeq: lastStateEventSeqFor(events),
+    }))
   }
   return findings.sort((a, b) =>
     a.since - b.since || a.runId.localeCompare(b.runId),
@@ -893,6 +929,7 @@ export class TaskRunWatchdog {
     const result = await reconcileTaskRunsOnce(owner, {
       deliveredGraceMs: config.taskrun.watchdog.deliveredGraceMs,
       waitingGraceMs: config.taskrun.watchdog.waitingGraceMs,
+      rootIdleGraceMs: config.taskrun.watchdog.rootIdleGraceMs,
       budgetWindowMinutes: config.taskrun.watchdog.budgetWindowMinutes,
       activeSessionIds: getSignalRouter().getAllActiveSessionIds(),
       inFlightMainSessionIds: channelInterjectionQueue.getInflightSessionIds(),
