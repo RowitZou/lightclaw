@@ -626,7 +626,7 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.deepEqual(cfg.dispatch.scheduler, {
-      maxConcurrentRunsPerUser: 3,
+      maxConcurrentRunsPerUser: 100,
       startupCatchupIntervalMs: 60_000,
       fireRetryMaxAttempts: 3,
     })
@@ -635,7 +635,7 @@ describe('config: endpoints + models registry', () => {
       maxChainDepthCeiling: 5,
       ephemeralSessionTtlMs: 72 * 60 * 60 * 1000,
       scheduler: {
-        maxConcurrentRunsPerUser: 3,
+        maxConcurrentRunsPerUser: 100,
         startupCatchupIntervalMs: 60_000,
         fireRetryMaxAttempts: 3,
       },
@@ -785,7 +785,7 @@ describe('config: endpoints + models registry', () => {
       maxChainDepthCeiling: 6,
       ephemeralSessionTtlMs: 12_345,
       scheduler: {
-        maxConcurrentRunsPerUser: 3,
+        maxConcurrentRunsPerUser: 100,
         startupCatchupIntervalMs: 60_000,
         fireRetryMaxAttempts: 3,
       },

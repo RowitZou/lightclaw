@@ -395,7 +395,7 @@ export class BackgroundTaskScheduler {
   }
 
   private canFireNow(canonicalUser: string): boolean {
-    const max = this.config?.dispatch.scheduler.maxConcurrentRunsPerUser ?? 3
+    const max = this.config?.dispatch.scheduler.maxConcurrentRunsPerUser ?? 100
     return (this.runningCountByUser.get(canonicalUser) ?? 0) < max
   }
 

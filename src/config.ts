@@ -490,7 +490,11 @@ const DEFAULT_CURATOR: CuratorConfig = {
 }
 
 const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
-  maxConcurrentRunsPerUser: 3,
+  // Effectively uncapped for real use (2026-06-10): parallel fan-out is the
+  // collaboration model's core move and the old cap of 3 throttled it. Kept
+  // finite as a runaway backstop (a dispatch-storm bug should queue, not
+  // fork-bomb the host).
+  maxConcurrentRunsPerUser: 100,
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
 }
