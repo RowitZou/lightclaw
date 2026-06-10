@@ -1775,7 +1775,14 @@ export class ChannelRunner {
       // so even if the card push fails the text is durable on disk for
       // post-approval replay. Updates pending.json in-place; does not
       // touch createdAt/ttlMs (TTL still measures from initial application).
-      await updatePendingApplicantText(senderKey, message.text, message.chatId, message.chatType)
+      await updatePendingApplicantText(
+        senderKey,
+        message.text,
+        message.chatId,
+        message.chatType,
+        message.threadId,
+        message.messageId,
+      )
       await this.strategy.renderPairingWaitingCard!({
         message,
         code: existing.code,
@@ -1842,7 +1849,14 @@ export class ChannelRunner {
       // call until 2026-05-08, which silently broke replay for the very
       // first @ that bootstraps an admin's own pairing — exactly the
       // dogfood scenario admin self-pairing uses.
-      await updatePendingApplicantText(senderKey, message.text, message.chatId, message.chatType)
+      await updatePendingApplicantText(
+        senderKey,
+        message.text,
+        message.chatId,
+        message.chatType,
+        message.threadId,
+        message.messageId,
+      )
       const freshnessLabel = result.created
         ? t('channel.pairing.freshnessNew')
         : t('channel.pairing.freshnessReuse')

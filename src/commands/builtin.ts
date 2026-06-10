@@ -1083,6 +1083,8 @@ export async function userApprove(args: string[]): Promise<string> {
     applicantText: entry.lastApplicantText,
     applicantChatId: entry.lastApplicantChatId,
     applicantChatType: entry.lastApplicantChatType,
+    applicantThreadId: entry.lastApplicantThreadId,
+    applicantMessageId: entry.lastApplicantMessageId,
   })
   const created_or_updated = created.ok ? t('user.approve.created', { name }) : t('user.approve.updated', { name })
   return `${created_or_updated}\n${t('user.approve.linked', { link, name })}\n`

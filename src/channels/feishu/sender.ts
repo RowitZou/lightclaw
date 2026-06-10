@@ -764,12 +764,16 @@ export class FeishuSender {
   /**
    * Resolve the message_id we should pass to im.message.reply for this
    * inbound. Synthetic messages (post-approval replay) carry a fake
-   * messageId the platform never saw; reply API returns 400 on it. Skip
-   * the reply attempt entirely and force the create path by returning
-   * undefined.
+   * messageId the platform never saw; reply API returns 400 on it. When
+   * the synthetic message carries a real `replyAnchorMessageId` (the
+   * applicant's original inbound), reply against THAT — in a topic group
+   * it is the only routing that lands in the original topic, since
+   * im.message.create cannot target a thread and would open a new topic
+   * per send. Anchor-less synthetic messages keep forcing the create
+   * path by returning undefined.
    */
   private replyTargetFor(message: NormalizedChannelMessage): string | undefined {
-    return message.synthetic ? undefined : message.messageId
+    return message.synthetic ? message.replyAnchorMessageId : message.messageId
   }
 
   /**

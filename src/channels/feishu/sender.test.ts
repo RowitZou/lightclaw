@@ -135,6 +135,79 @@ test('FeishuSender falls back to create when the reply target is invalid (code 9
   assert.equal(createCalls, 1)
 })
 
+test('FeishuSender replies against replyAnchorMessageId for synthetic messages', async () => {
+  // Post-approval replay messages are synthetic (fabricated messageId the
+  // platform never saw) but may carry the applicant's REAL original
+  // messageId as replyAnchorMessageId. The sender must reply against the
+  // anchor — in a topic group, im.message.reply is the only routing that
+  // lands in the original topic; im.message.create would open a NEW topic
+  // per message (2026-06-10 dogfood).
+  let repliedTo: string | undefined
+  let createCalls = 0
+  const client = {
+    im: {
+      message: {
+        reply: async (input: { path: { message_id: string } }) => {
+          repliedTo = input.path.message_id
+          return { code: 0, data: { message_id: 'om_replied' } }
+        },
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_created' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig)
+  const syntheticWithAnchor: NormalizedChannelMessage = {
+    ...baseMessage,
+    messageId: 'replay-fake-id',
+    threadId: 'omt_topic_1',
+    replyAnchorMessageId: 'om_original_at',
+    synthetic: true,
+  }
+  await sender.sendInteractiveCard(syntheticWithAnchor, { elements: [] })
+
+  assert.equal(repliedTo, 'om_original_at', 'reply anchored on the real original message')
+  assert.equal(createCalls, 0, 'no create fallback — create would open a new topic')
+})
+
+test('FeishuSender anchor-less synthetic messages keep the create path', async () => {
+  // Old pending.json shapes have no stashed messageId; the replay message
+  // then has no anchor and must not attempt im.message.reply against its
+  // fabricated messageId (the platform would 400).
+  let replyCalls = 0
+  let createCalls = 0
+  const client = {
+    im: {
+      message: {
+        reply: async () => {
+          replyCalls += 1
+          return { code: 0 }
+        },
+        create: async () => {
+          createCalls += 1
+          return { code: 0, data: { message_id: 'om_created' } }
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig)
+  const syntheticNoAnchor: NormalizedChannelMessage = {
+    ...baseMessage,
+    messageId: 'replay-fake-id',
+    synthetic: true,
+  }
+  await sender.sendInteractiveCard(syntheticNoAnchor, { elements: [] })
+
+  assert.equal(replyCalls, 0, 'fabricated messageId never hits the reply API')
+  assert.equal(createCalls, 1)
+})
+
 test('FeishuSender retries Feishu rate-limit envelopes on create message', async () => {
   let createCalls = 0
   const client = {

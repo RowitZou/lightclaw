@@ -29,6 +29,7 @@ export function makeFakeFeishuMessage(opts: {
   sessionId?: string
   chatType?: string
   chatId?: string
+  threadId?: string
 }): NormalizedChannelMessage {
   const sessionPart = opts.sessionId ?? opts.sender
   return {
@@ -40,6 +41,7 @@ export function makeFakeFeishuMessage(opts: {
     messageId: `msg-${sessionPart}`,
     text: opts.text,
     ...(opts.chatType !== undefined ? { chatType: opts.chatType } : {}),
+    ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
   }
 }
 

@@ -44,6 +44,8 @@ type ApplicationState =
       applicantText?: string
       applicantChatId?: string
       applicantChatType?: string
+      applicantThreadId?: string
+      applicantMessageId?: string
     }
   | {
       kind: 'submitting'
@@ -54,6 +56,8 @@ type ApplicationState =
       applicantText?: string
       applicantChatId?: string
       applicantChatType?: string
+      applicantThreadId?: string
+      applicantMessageId?: string
     }
   | {
       kind: 'submitted'
@@ -136,6 +140,11 @@ export class PairingCardCoordinator {
       applicantText: input.applicantText,
       applicantChatId: input.applicantChatId,
       applicantChatType: input.applicantChatType,
+      // Thread routing + reply anchor come straight off the inbound message
+      // (the runner's hook input carries chatId/chatType explicitly, but the
+      // message is the source of truth for both of these).
+      applicantThreadId: message.threadId,
+      applicantMessageId: message.messageId,
     })
     await this.pushApplicantCard(
       message,
@@ -315,6 +324,8 @@ export class PairingCardCoordinator {
       applicantText: current.applicantText,
       applicantChatId: current.applicantChatId,
       applicantChatType: current.applicantChatType,
+      applicantThreadId: current.applicantThreadId,
+      applicantMessageId: current.applicantMessageId,
     })
 
     try {
@@ -340,6 +351,8 @@ export class PairingCardCoordinator {
         current.applicantText ?? '',
         current.applicantChatId,
         current.applicantChatType,
+        current.applicantThreadId,
+        current.applicantMessageId,
       ).catch(error => {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
@@ -439,13 +452,15 @@ export class PairingCardCoordinator {
       return toast('error', reason)
     }
 
-    // entry.lastApplicantText / lastApplicantChatId / lastApplicantChatType
-    // were already promoted from in-memory state to pending.json by
-    // applyConfirm, so the durable DB values are canonical here.
+    // entry.lastApplicant* fields were already promoted from in-memory
+    // state to pending.json by applyConfirm, so the durable DB values are
+    // canonical here.
     preheatAndWelcomeOnApproval(canonical, link, {
       applicantText: entry.lastApplicantText,
       applicantChatId: entry.lastApplicantChatId,
       applicantChatType: entry.lastApplicantChatType,
+      applicantThreadId: entry.lastApplicantThreadId,
+      applicantMessageId: entry.lastApplicantMessageId,
     })
     this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(

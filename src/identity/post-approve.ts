@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import type { NormalizedChannelMessage } from '../channels/types.js'
 import { getConfig } from '../config.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import { isAdmin } from './store.js'
@@ -32,6 +33,22 @@ export type PreheatOptions = {
    * vs `feishu:group:<chatId>:<senderOpenId>`). Defaults to 'p2p'.
    */
   applicantChatType?: string
+  /**
+   * Feishu topic-group thread id of the original @. Two duties on replay:
+   * sessionId routing (`feishu:group:<chatId>:<threadId>:<sender>` must
+   * match the user's future in-topic inbounds, or the transcript splits)
+   * and outbound thread targeting. Only meaningful with applicantChatId.
+   */
+  applicantThreadId?: string
+  /**
+   * Real platform messageId of the original @. Rides the synthetic replay
+   * message as `replyAnchorMessageId` so every outbound in the replay turn
+   * goes through `im.message.reply` against the user's actual message —
+   * in a topic group that is the ONLY way to land in the original topic
+   * (`im.message.create` cannot target a thread and opens a NEW topic per
+   * message; 2026-06-10 dogfood).
+   */
+  applicantMessageId?: string
 }
 
 // Fire-and-forget preheat promises tracked here so callers can drain on
@@ -213,33 +230,65 @@ async function runApprovalPreheat(
     )
     return
   }
-  // Construct a minimal NormalizedChannelMessage matching what the
-  // user's actual @bot looked like. chatType drives the Phase 26
-  // sessionId formula so the replay turn lands in the same transcript
-  // future inbounds will continue. eventId / messageId have a 'replay-'
-  // prefix for grep-ability; dedup is bypassed because we never went
-  // through feishu-channel onMessage.
   process.stderr.write(
-    `[preheat-on-approval] ${name}: replaying pre-approval text (${applicantText.length} chars) ${replayingTo}=${replayChatId} type=${replayChatType}\n`,
+    `[preheat-on-approval] ${name}: replaying pre-approval text (${applicantText.length} chars) ${replayingTo}=${replayChatId} type=${replayChatType}${opts.applicantThreadId ? ` thread=${opts.applicantThreadId}` : ''}\n`,
   )
-  await runner.handleMessage({
-    channel: 'feishu',
-    eventId: `replay-${randomUUID()}`,
-    chatId: replayChatId,
-    senderOpenId: openId,
+  await runner.handleMessage(synthesizeReplayMessage({
+    openId,
     senderKey: link,
+    chatId: replayChatId,
     chatType: replayChatType,
-    messageId: `replay-${randomUUID()}`,
     text: applicantText,
-    // The platform never saw this message; reply / reaction APIs would
-    // 400 on the synthetic messageId. Channel adapters short-circuit
-    // those affordances when this flag is set (sender skips reply path
-    // and creates against chat_id; typing skips messageReaction).
-    synthetic: true,
-  }).catch(error => {
+    // Thread routing + reply anchor only make sense for an origin-chat
+    // replay; the stash writes them together with chatId, so anchor
+    // present ⇒ origin chat present. The DM-fallback path (old
+    // pending.json shapes) carries neither.
+    threadId: replayingTo === 'origin' ? opts.applicantThreadId : undefined,
+    anchorMessageId: replayingTo === 'origin' ? opts.applicantMessageId : undefined,
+  })).catch(error => {
     const detail = error instanceof Error ? error.message : String(error)
     process.stderr.write(`[preheat-on-approval] ${name}: replay failed: ${detail}\n`)
   })
+}
+
+/**
+ * Construct the minimal synthetic NormalizedChannelMessage the post-approval
+ * replay feeds into ChannelRunner.handleMessage, matching what the user's
+ * actual @bot looked like. chatType AND threadId drive the Phase 26
+ * sessionId formula (`feishu:group:<chatId>[:<threadId>]:<sender>`) so the
+ * replay turn lands in the same transcript the user's future inbounds will
+ * continue — omitting threadId for a topic-group origin splits the
+ * transcript AND forces every outbound onto `im.message.create`, which
+ * opens a new topic per message. `replyAnchorMessageId` carries the real
+ * messageId of the original @ so the sender can reply against it
+ * (`im.message.reply` resolves the topic off the anchor). eventId /
+ * messageId keep the 'replay-' prefix for grep-ability; dedup is bypassed
+ * because the message never went through feishu-channel onMessage. The
+ * synthetic flag still short-circuits typing reactions and tells the
+ * sender the messageId itself is not replyable.
+ */
+export function synthesizeReplayMessage(input: {
+  openId: string
+  senderKey: SenderKey
+  chatId: string
+  chatType: string
+  text: string
+  threadId?: string
+  anchorMessageId?: string
+}): NormalizedChannelMessage {
+  return {
+    channel: 'feishu',
+    eventId: `replay-${randomUUID()}`,
+    chatId: input.chatId,
+    senderOpenId: input.openId,
+    senderKey: input.senderKey,
+    chatType: input.chatType,
+    messageId: `replay-${randomUUID()}`,
+    text: input.text,
+    ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.anchorMessageId ? { replyAnchorMessageId: input.anchorMessageId } : {}),
+    synthetic: true,
+  }
 }
 
 async function preheatFeishuWorkspace(name: string, openId: string): Promise<void> {

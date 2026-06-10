@@ -1400,6 +1400,53 @@ describe('ChannelRunner pairing branch', () => {
     assert.equal(pending[0].lastApplicantChatType, 'group', 'origin chatType stashed for routing')
   })
 
+  it('bootstrap fallback stashes threadId + messageId for topic-group replay routing', async () => {
+    // A topic-group @ carries threadId; without stashing it the replay
+    // session drops the thread segment (transcript split from the user's
+    // future in-topic messages) and every outbound in the replay turn
+    // goes through im.message.create, opening a NEW topic per message
+    // (2026-06-10 dogfood). The real messageId is stashed alongside as
+    // the reply anchor — im.message.reply against it is the only send
+    // that lands in the original topic.
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+
+    const harness = makePairingStrategy()
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_user',
+        text: '帮我分析这篇论文',
+        chatId: 'oc_topic_group',
+        chatType: 'group',
+        threadId: 'omt_thread_1',
+      }),
+    )
+
+    const { listPending } = await import('../identity/pairing.js')
+    const pending = await listPending()
+    assert.equal(pending.length, 1, 'bootstrap fallback created the pending entry')
+    assert.equal(pending[0].lastApplicantThreadId, 'omt_thread_1', 'origin threadId stashed')
+    assert.equal(pending[0].lastApplicantMessageId, 'msg-ou_user', 'origin messageId stashed as reply anchor')
+
+    // A later DM from the same pending applicant re-routes the stash:
+    // threadId must CLEAR (the latest inbound is not in a topic) so the
+    // replay does not chase a topic the user has left.
+    const { updatePendingApplicantText } = await import('../identity/pairing.js')
+    await updatePendingApplicantText(
+      'feishu:ou_user',
+      'follow-up in dm',
+      'oc_dm_chat',
+      'p2p',
+      undefined,
+      'om_dm_msg',
+    )
+    const updated = await listPending()
+    assert.equal(updated[0].lastApplicantThreadId, undefined, 'stale threadId cleared on non-topic inbound')
+    assert.equal(updated[0].lastApplicantMessageId, 'om_dm_msg', 'anchor follows the latest inbound')
+  })
+
   it('falls back to in-chat notice when sendNoticeToOpenId hook is absent (legacy strategy)', async () => {
     // Channels without a "send to specific user without an inbound" surface
     // (or future test stubs that omit the hook) keep an in-chat response so
