@@ -441,12 +441,15 @@ async function deliverParentFirstFindings(input: {
   for (const finding of input.findings) {
     const run = runById.get(finding.runId)
     const parent = run?.parentRunId ? runById.get(run.parentRunId) : null
+    // Acceptance settles edge-by-edge: the direct parent is the first nudge
+    // target whenever it can still act — live (interjection) or revivable
+    // (resume a shift to settle its child in place). queued never started and
+    // terminal can never act again; those findings fall through to main.
     if (
       parent &&
       parent.kind !== 'root' &&
-      parent.status === 'running' &&
-      parent.currentSessionId &&
-      input.activeSessionIds.has(parent.currentSessionId)
+      parent.status !== 'queued' &&
+      !isTerminal(parent.status)
     ) {
       const list = grouped.get(parent.id) ?? []
       list.push(finding)
@@ -455,19 +458,45 @@ async function deliverParentFirstFindings(input: {
       remaining.push(finding)
     }
   }
+  const { getLastResumeFailure, isResumePending, scheduleResumeRunWithBlock } = await import(
+    './resume-schedule.js'
+  )
   for (const [parentId, findings] of grouped) {
     const parent = runById.get(parentId)
-    if (!parent?.currentSessionId) {
+    if (!parent) {
       remaining.push(...findings)
       continue
     }
     const block = formatTaskRunReconcileBlock(input.ownerCanonicalUser, findings, input.fingerprint)
-    channelInterjectionQueue.push(parent.currentSessionId, {
-      messageId: `taskrun-reconcile-parent-${parent.id}-${Date.now()}`,
-      senderOpenId: `taskrun-watchdog:${parent.id}`,
-      text: block,
-      arrivedAt: Date.now(),
-      source: 'background-task',
+    const live = parent.status === 'running' &&
+      parent.currentSessionId &&
+      input.activeSessionIds.has(parent.currentSessionId)
+    if (live) {
+      channelInterjectionQueue.push(parent.currentSessionId!, {
+        messageId: `taskrun-reconcile-parent-${parent.id}-${Date.now()}`,
+        senderOpenId: `taskrun-watchdog:${parent.id}`,
+        text: block,
+        arrivedAt: Date.now(),
+        source: 'background-task',
+      })
+      delivered.push(...findings)
+      continue
+    }
+    // Not live: revive a shift so the parent settles its children in place.
+    // A parent whose own resume already failed cannot be the nudge target —
+    // its findings go up one level to main with the rest.
+    if (isResumePending(parent.id)) {
+      delivered.push(...findings)
+      continue
+    }
+    if (getLastResumeFailure(parent.id)) {
+      remaining.push(...findings)
+      continue
+    }
+    scheduleResumeRunWithBlock(input.ownerCanonicalUser, parent.id, {
+      via: 'message',
+      reason: 'watchdog reconcile: settle your delivered/stranded children',
+      body: block,
     })
     delivered.push(...findings)
   }

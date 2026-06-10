@@ -230,6 +230,68 @@ describe('TaskRun watchdog', () => {
     }
   })
 
+  it('revives a non-live parent to settle its delivered child instead of escalating to main', async () => {
+    // Acceptance is edge-by-edge: when the direct parent is not live but can
+    // still act, the nudge resumes the parent's shift; main only receives the
+    // finding when the parent is queued/terminal or its resume already failed.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-parent-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Coordinate the probes.',
+        parentRunId: null,
+        chainId: 'chain-parent-first',
+        depth: 1,
+        now: 100,
+      })
+      await markStarted(parent.id, 'bg-parent', 200, 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'bg-parent',
+        mode: 'background',
+        objective: 'Probe one corner.',
+        parentRunId: parent.id,
+        chainId: 'chain-parent-first',
+        depth: 2,
+        now: 300,
+      })
+      await markStarted(child.id, 'bg-child', 400, 'alice')
+      await markDelivered(child.id, { ok: true, summary: 'probe done' }, 500, 'alice')
+      await markPaused(parent.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 9_900, 'alice')
+
+      const resumeCalls: Array<{ runId: string; via: string }> = []
+      setResumeRunnerForTest(async (runId, block) => {
+        resumeCalls.push({ runId, via: block.via })
+        return { ok: true, run: (await import('./store.js').then(m => m.getTaskRun(runId, 'alice')))!, mode: 'resume', assistantText: '' }
+      })
+      let mainDeliveries = 0
+      const result = await reconcileTaskRunsOnce('alice', {
+        now: 10_000,
+        deliveredGraceMs: 1,
+        reportFindings: async () => {
+          mainDeliveries += 1
+          return { ok: true, mode: 'queued' }
+        },
+      })
+      await drainScheduledResumesForTest()
+
+      assert.equal(result.reported, true)
+      assert.equal(mainDeliveries, 0)
+      assert.deepEqual(resumeCalls, [{ runId: parent.id, via: 'message' }])
+    } finally {
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
   it('dedupes by durable watchdog-report fingerprint and reports again after state advances', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-'))
     setLightclawHomeOverride(tmpHome)
