@@ -229,7 +229,7 @@ test('TaskUpdate cancel lets orchestrator clear queued and paused work inside th
   assert.equal((await getTaskRun(paused.id, 'alice'))?.status, 'cancelled')
 })
 
-test('TaskUpdate cancel rejects running work and other chat roots', async () => {
+test('TaskUpdate cancel rejects running work but reaches roots from other chats of the same user', async () => {
   const root = await createRootTaskRun('alice', 's-main', { objective: 'This chat' })
   const running = await startedRun({ callerRole: 'main', parentRunId: root.id })
   const runningResult = await runAsMain(() =>
@@ -238,14 +238,29 @@ test('TaskUpdate cancel rejects running work and other chat roots', async () => 
   assert.equal(runningResult.isError, true)
   assert.equal((await getTaskRun(running.id, 'alice'))?.status, 'running')
 
+  // The watchdog batches findings per owner and may wake main in whichever
+  // chat resolves first — the disposition verbs must reach every root of the
+  // user, or cross-chat findings nag until escalation with no settle path.
   const otherRoot = await createRootTaskRun('alice', 's-other', { objective: 'Other chat' })
   const otherPaused = await startedRun({ callerRole: 'main', parentRunId: otherRoot.id })
   await markPaused(otherPaused.id, { reason: 'user-stop', bySessionId: 's-other' }, Date.now(), 'alice')
-  const outside = await runAsMain(() =>
+  const crossChat = await runAsMain(() =>
     taskUpdateTool.call({ action: 'cancel', runId: otherPaused.id }, toolContext()),
   )
-  assert.equal(outside.isError, true)
-  assert.equal((await getTaskRun(otherPaused.id, 'alice'))?.status, 'paused')
+  assert.equal(crossChat.isError, undefined)
+  assert.equal((await getTaskRun(otherPaused.id, 'alice'))?.status, 'cancelled')
+})
+
+test('orchestrator settles delivered runs under another chat root of the same user', async () => {
+  const otherRoot = await createRootTaskRun('alice', 's-other', { objective: 'Other chat goal' })
+  const delivered = await startedRun({ callerRole: 'main', parentRunId: otherRoot.id })
+  await markDelivered(delivered.id, { ok: true, summary: 'done elsewhere' }, Date.now(), 'alice')
+
+  const accepted = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'accept', runId: delivered.id }, toolContext()),
+  )
+  assert.equal(accepted.isError, undefined)
+  assert.equal((await getTaskRun(delivered.id, 'alice'))?.status, 'done')
 })
 
 test('worker TaskUpdate cancel is limited to direct queued or paused children', async () => {

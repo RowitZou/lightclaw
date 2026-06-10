@@ -9,7 +9,7 @@ import {
   markDelivered,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
+import { getCurrentRole, getCurrentTaskRunId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
@@ -163,10 +163,14 @@ export const taskUpdateTool = buildTool({
         }
       }
       if (isOrchestrator) {
+        // User-scoped, not chat-scoped: the watchdog batches findings per
+        // owner and may wake main in any chat, so disposition verbs must
+        // reach every root of the user or cross-chat findings have no settle
+        // path. Chat isolation applies to /stop (execution), not the ledger.
         const root = await getTaskRun(target.rootRunId, owner)
-        if (!root || (root.kind ?? 'dispatch') !== 'root' || root.callerSessionId !== getSessionId()) {
+        if (!root || (root.kind ?? 'dispatch') !== 'root') {
           return {
-            output: `TaskRun ${input.runId} is outside this chat's rooted task trees.`,
+            output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`,
             isError: true,
           }
         }
@@ -222,7 +226,7 @@ export const taskUpdateTool = buildTool({
       // delivered run inside its own rooted trees. Tightens back to strict
       // parent-edge adjacency once parents are re-animatable (collab-phase3).
       const root = await getTaskRun(target.rootRunId, owner)
-      if (!root || (root.kind ?? 'dispatch') !== 'root' || root.callerSessionId !== getSessionId()) {
+      if (!root || (root.kind ?? 'dispatch') !== 'root') {
         return {
           output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`,
           isError: true,
