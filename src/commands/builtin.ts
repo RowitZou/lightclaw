@@ -143,9 +143,9 @@ function buildBuiltinCommands(): ReplCommand[] {
       const userId = ctx.userId ?? getCurrentUserId()
       const ledgerStop = userId
         ? await stopActiveTaskRunsForSession(userId, ctx.sessionId)
-        : { pausedRunIds: [], abortedSessionIds: [] }
+        : { waitingRunIds: [], abortedSessionIds: [] }
       const aborted = abortInFlightForSession(ctx.sessionId) ||
-        ledgerStop.pausedRunIds.length > 0 ||
+        ledgerStop.waitingRunIds.length > 0 ||
         ledgerStop.abortedSessionIds.length > 0
       ctx.output.write(
         `${aborted ? t('stop.aborted') : t('stop.nothing')}\n`,

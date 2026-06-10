@@ -71,7 +71,7 @@ export async function resumeRunWithBlock(
       arrivedAt: Date.now(),
       source: 'background-task',
     })
-    if (run.status === 'paused') {
+    if (run.status === 'waiting') {
       await markResumed(run.id, { via: block.via, reason: block.reason, sessionId: liveSessionId }, Date.now(), run.ownerCanonicalUser)
     }
     return {
@@ -94,7 +94,7 @@ export async function resumeRunWithBlock(
   }
   const now = Date.now()
   const lastSessionId = run.lastSessionId ?? run.currentSessionId
-  const gapSince = run.pausedAt ?? run.deliveredAt ?? run.updatedAt
+  const gapSince = run.waitingAt ?? run.deliveredAt ?? run.updatedAt
   const withinGap = config.taskrun.resume.maxGapMs === 0 || now - gapSince <= config.taskrun.resume.maxGapMs
   const transcript = lastSessionId ? await loadTranscript(lastSessionId) : []
   const canResume = lastSessionId && transcript.length > 0 && withinGap
@@ -220,7 +220,7 @@ export async function wakeParentForChildJoinBestEffort(
 ): Promise<void> {
   if (!child.parentRunId) return
   const parent = await getTaskRun(child.parentRunId, ownerCanonicalUser)
-  if (parent?.status !== 'paused') return
+  if (parent?.status !== 'waiting') return
   if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return
   const summary = child.outcome?.summary ?? child.outcome?.error ?? child.title
   const { scheduleResumeRunWithBlock } = await import('./resume-schedule.js')

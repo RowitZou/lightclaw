@@ -23,7 +23,7 @@ const WATCHDOG_EVENT_KINDS = new Set(['watchdog-report', 'escalated'])
 export type TaskRunWatchdogFindingKind =
   | 'stranded'
   | 'unsettled-delivered'
-  | 'paused-overdue'
+  | 'waiting-overdue'
   | 'dead-wake-source'
 
 export type TaskRunWatchdogFinding = {
@@ -60,7 +60,7 @@ export type TaskRunReconcileResult = {
 export type ReconcileTaskRunsDeps = {
   now?: number
   deliveredGraceMs?: number
-  pausedGraceMs?: number
+  waitingGraceMs?: number
   budgetWindowMinutes?: number
   wakeBudgetReportLimit?: number
   activeSessionIds?: Set<string>
@@ -92,7 +92,7 @@ export async function reconcileTaskRunsOnce(
 ): Promise<TaskRunReconcileResult> {
   const now = deps.now ?? Date.now()
   const deliveredGraceMs = deps.deliveredGraceMs ?? 120_000
-  const pausedGraceMs = deps.pausedGraceMs ?? 21_600_000
+  const waitingGraceMs = deps.waitingGraceMs ?? 21_600_000
   const runs = deps.listRuns
     ? await deps.listRuns(ownerCanonicalUser)
     : await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
@@ -115,7 +115,7 @@ export async function reconcileTaskRunsOnce(
   const findings = detectTaskRunFindings(runs, {
     now,
     deliveredGraceMs,
-    pausedGraceMs,
+    waitingGraceMs,
     activeSessionIds: deps.activeSessionIds ?? new Set(),
     inFlightMainSessionIds: deps.inFlightMainSessionIds ?? new Set(),
     schedulerTaskRunIds: deps.schedulerTaskRunIds ?? new Set(),
@@ -262,7 +262,7 @@ export function detectTaskRunFindings(
   input: {
     now: number
     deliveredGraceMs: number
-    pausedGraceMs?: number
+    waitingGraceMs?: number
     activeSessionIds: Set<string>
     inFlightMainSessionIds: Set<string>
     schedulerTaskRunIds: Set<string>
@@ -271,7 +271,7 @@ export function detectTaskRunFindings(
     failedWakeRunIds?: Set<string>
   },
 ): TaskRunWatchdogFinding[] {
-  const pausedGraceMs = input.pausedGraceMs ?? 21_600_000
+  const waitingGraceMs = input.waitingGraceMs ?? 21_600_000
   const runById = new Map(runs.map(run => [run.id, run]))
   const scheduledTaskRunIds = new Set(
     input.backgroundEntries
@@ -315,8 +315,8 @@ export function detectTaskRunFindings(
       }
       continue
     }
-    if (run.status === 'paused' && pausedGraceMs > 0) {
-      const pausedAt = run.pausedAt ?? run.updatedAt
+    if (run.status === 'waiting' && waitingGraceMs > 0) {
+      const waitingAt = run.waitingAt ?? run.updatedAt
       if (run.wake && !run.wake.consumed) {
         // A live or due declared wake is the framework's business (the
         // reconcile loop executes due wakes itself); it surfaces to main only
@@ -324,7 +324,7 @@ export function detectTaskRunFindings(
         if (input.failedWakeRunIds?.has(run.id)) {
           findings.push(toFinding(run, runById, {
             kind: 'dead-wake-source',
-            since: pausedAt,
+            since: waitingAt,
             now: input.now,
             lastStateEventSeq,
           }))
@@ -332,14 +332,14 @@ export function detectTaskRunFindings(
         continue
       }
       if (
-        (run.pauseReason === undefined ||
-          run.pauseReason === 'user-stop' ||
-          run.pauseReason === 'requester-pause') &&
-        input.now - pausedAt > pausedGraceMs
+        (run.waitReason === undefined ||
+          run.waitReason === 'user-stop' ||
+          run.waitReason === 'requester-hold') &&
+        input.now - waitingAt > waitingGraceMs
       ) {
         findings.push(toFinding(run, runById, {
-          kind: 'paused-overdue',
-          since: pausedAt,
+          kind: 'waiting-overdue',
+          since: waitingAt,
           now: input.now,
           lastStateEventSeq,
         }))
@@ -369,7 +369,7 @@ async function executeDueWakesBestEffort(
     './resume-schedule.js'
   )
   for (const run of runs) {
-    if (run.status !== 'paused' || !run.wake || run.wake.consumed) continue
+    if (run.status !== 'waiting' || !run.wake || run.wake.consumed) continue
     if (isResumePending(run.id)) continue
     if (getLastResumeFailure(run.id)) {
       failed.add(run.id)
@@ -892,7 +892,7 @@ export class TaskRunWatchdog {
   ): Promise<TaskRunReconcileResult> {
     const result = await reconcileTaskRunsOnce(owner, {
       deliveredGraceMs: config.taskrun.watchdog.deliveredGraceMs,
-      pausedGraceMs: config.taskrun.watchdog.pausedGraceMs,
+      waitingGraceMs: config.taskrun.watchdog.waitingGraceMs,
       budgetWindowMinutes: config.taskrun.watchdog.budgetWindowMinutes,
       activeSessionIds: getSignalRouter().getAllActiveSessionIds(),
       inFlightMainSessionIds: channelInterjectionQueue.getInflightSessionIds(),

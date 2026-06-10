@@ -12,7 +12,7 @@ import { resumeRunWithBlock } from './resume.js'
 import {
   createTaskRun,
   getTaskRun,
-  markPaused,
+  markWaiting,
   markStarted,
 } from './store.js'
 
@@ -46,7 +46,7 @@ test('resume joins a still-in-flight session as an interjection instead of start
     depth: 1,
   })
   await markStarted(run.id, 'bg-live-session', Date.now(), 'alice')
-  await markPaused(run.id, { reason: 'user-stop', bySessionId: 's-main' }, Date.now(), 'alice')
+  await markWaiting(run.id, { reason: 'user-stop', bySessionId: 's-main' }, Date.now(), 'alice')
   channelInterjectionQueue.markInFlight('bg-live-session')
   try {
     const ctx = createSessionContext({

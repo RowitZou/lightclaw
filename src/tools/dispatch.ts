@@ -41,7 +41,7 @@ import {
   createTaskRun,
   appendEvent,
   getTaskRun,
-  markPaused,
+  markWaiting,
   markResumed,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
@@ -56,7 +56,7 @@ schedule (default 'now'):
 - { kind: 'recurring', daysOfWeek: [0..6], hour, minute } — weekly schedule.
 - { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.
 
-When you need the result before continuing, dispatch it with schedule='now' and then pause your own TaskRun with TaskUpdate action='pause' wake.kind='child-join'. The framework resumes your run when the child delivers.
+When you need the result before continuing, dispatch it with schedule='now' and then set your own TaskRun waiting with TaskUpdate action='wait' wake.kind='child-join'. Your run picks back up when the child delivers.
 
 ## When NOT to use Dispatch
 
@@ -67,7 +67,7 @@ When you need the result before continuing, dispatch it with schedule='now' and 
 
 ## Parallelism
 
-When several independent sub-tasks must all feed your next step, dispatch them as separate background calls and pause on the child or children you need. Each sub-task's reading stays out of your own context.
+When several independent sub-tasks must all feed your next step, dispatch them as separate background calls and wait on the child or children you need. Each sub-task's reading stays out of your own context.
 
 Only parallelize tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
 
@@ -107,9 +107,9 @@ A background dispatch outlives the turn that starts it, and its \`<background-ta
 
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
-With \`to\`, target a direct child TaskRun: running children receive an interjection; paused children resume with the message; queued / delivered / terminal children return guidance.
+With \`to\`, target a direct child TaskRun: running children receive an interjection; waiting children pick back up with the message; queued / delivered / terminal children return guidance.
 
-Without \`to\`, ask your parent for input. \`default\` is required: the run pauses as awaiting-reply and will continue with the default if the parent cannot answer in time.`
+Without \`to\`, ask your parent for input. \`default\` is required: the run waits as awaiting-reply and will continue with the default if the parent cannot answer in time.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -375,7 +375,7 @@ export async function executeDispatch(
   const schedule = input.schedule ?? 'now'
   if (input.mode === 'blocking') {
     return {
-      output: 'Dispatch.mode has been retired. Dispatch is background-only; use TaskUpdate pause(child-join) when you need the result before continuing.',
+      output: 'Dispatch.mode has been retired. Dispatch is background-only; use TaskUpdate wait(child-join) when you need the result before continuing.',
       isError: true,
     }
   }
@@ -600,7 +600,7 @@ export const messageDispatchTool = buildTool({
   whenToUse: `Send a message to a child TaskRun, or ask your parent a question with a default.`,
   shouldDefer: true,
   description: MESSAGE_DISPATCH_DESCRIPTION,
-  searchHint: 'message dispatch interject ask answer resume paused worker 插嘴 提问 回答 续班次',
+  searchHint: 'message dispatch interject ask answer resume waiting paused worker 插嘴 提问 回答 续班次',
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -643,8 +643,8 @@ export const messageDispatchTool = buildTool({
         output: `Message queued for TaskRun ${run.id}; the worker will receive it at the next tool boundary.`,
       }
     }
-    if (run.status === 'paused') {
-      if (run.pauseReason === 'awaiting-reply') {
+    if (run.status === 'waiting') {
+      if (run.waitReason === 'awaiting-reply') {
         await appendEvent(run.id, 'answered', {
           byRole: getCurrentRole()?.agentType ?? 'main',
           answer: input.message.trim(),
@@ -653,8 +653,8 @@ export const messageDispatchTool = buildTool({
       // Detached: the resumed shift can take minutes; the speaker must not
       // sit inside it (that would be blocking dispatch by another name).
       scheduleResumeRunWithBlock(userId, run.id, {
-        via: run.pauseReason === 'awaiting-reply' ? 'answer' : 'message',
-        reason: run.pauseReason === 'awaiting-reply' ? 'parent answer' : 'message to paused run',
+        via: run.waitReason === 'awaiting-reply' ? 'answer' : 'message',
+        reason: run.waitReason === 'awaiting-reply' ? 'parent answer' : 'message to waiting run',
         body: wrapMessageDispatch(input.message.trim()),
       })
       return { output: `TaskRun ${run.id} resume scheduled with your message.` }
@@ -728,7 +728,7 @@ async function askParentFromCurrentRun(input: {
     default: defaultAnswer,
     ...(input.options?.length ? { options: input.options } : {}),
   }, Date.now(), input.owner)
-  const paused = await markPaused(
+  const paused = await markWaiting(
     own.id,
     {
       reason: 'awaiting-reply',
@@ -742,8 +742,8 @@ async function askParentFromCurrentRun(input: {
     Date.now(),
     input.owner,
   )
-  if (paused?.status !== 'paused') {
-    return { output: `TaskRun ${own.id} could not pause for parent reply.`, isError: true }
+  if (paused?.status !== 'waiting') {
+    return { output: `TaskRun ${own.id} could not start waiting for parent reply.`, isError: true }
   }
   scheduleAskTimeout(input.owner, own.id, timeoutAt, defaultAnswer)
   const askBlock = [
@@ -763,7 +763,7 @@ async function askParentFromCurrentRun(input: {
     })
     return { output: `Asked parent TaskRun ${parent.id}. End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
   }
-  if (parent.status === 'paused') {
+  if (parent.status === 'waiting') {
     // Detached: waking the parent runs its whole next shift.
     scheduleResumeRunWithBlock(input.owner, parent.id, {
       via: 'message',
@@ -790,7 +790,7 @@ async function askParentFromCurrentRun(input: {
   }
   // Parent unreachable: settle the ask in place. The asking turn is still
   // running — do NOT resume our own session (that would start a second agent
-  // loop racing this one on the same transcript). Un-pause the ledger and
+  // loop racing this one on the same transcript). Clear the waiting state and
   // hand the default back through the tool result so this turn continues.
   await appendEvent(own.id, 'answered', {
     auto: true,
@@ -809,7 +809,7 @@ function scheduleAskTimeout(owner: string, runId: string, timeoutAt: number, def
   setTimeout(() => {
     void (async () => {
       const run = await getTaskRun(runId, owner)
-      if (run?.status !== 'paused' || run.pauseReason !== 'awaiting-reply') return
+      if (run?.status !== 'waiting' || run.waitReason !== 'awaiting-reply') return
       await appendEvent(runId, 'answered', {
         auto: true,
         reason: 'timeout',
@@ -878,10 +878,10 @@ export const updateScheduleTool = buildTool({
     }
     if (existing?.schedule.kind === 'oneshot' && existing.taskRunId) {
       const run = await getTaskRun(existing.taskRunId, userId)
-      // A paused fire has already fired and consumed the entry's prompt; a
+      // A waiting fire has already fired and consumed the entry's prompt; a
       // one-shot has no future fires for the update to apply to.
-      if (run?.status === 'running' || run?.status === 'paused') {
-        const state = run.status === 'running' ? 'already running' : 'already fired and is paused'
+      if (run?.status === 'running' || run?.status === 'waiting') {
+        const state = run.status === 'running' ? 'already running' : 'already fired and is waiting'
         return {
           output: `TaskRun ${run.id} is ${state}. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use MessageDispatch for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
           isError: true,

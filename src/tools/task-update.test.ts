@@ -23,7 +23,7 @@ import {
   getTaskRun,
   getTaskRunEvents,
   markDelivered,
-  markPaused,
+  markWaiting,
   markStarted,
 } from '../taskrun/store.js'
 import { getAllTools } from '../tools.js'
@@ -240,7 +240,7 @@ test('TaskUpdate cancel lets orchestrator clear queued and paused work inside th
     depth: 1,
   })
   const paused = await startedRun({ callerRole: 'main', parentRunId: root.id })
-  await markPaused(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, Date.now(), 'alice')
+  await markWaiting(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, Date.now(), 'alice')
 
   const queuedResult = await runAsMain(() =>
     taskUpdateTool.call({ action: 'cancel', runId: queued.id }, toolContext()),
@@ -272,7 +272,7 @@ test('TaskUpdate cancel aborts running work and reaches roots from other chats o
   // user, or cross-chat findings nag until escalation with no settle path.
   const otherRoot = await createRootTaskRun('alice', 's-other', { objective: 'Other chat' })
   const otherPaused = await startedRun({ callerRole: 'main', parentRunId: otherRoot.id })
-  await markPaused(otherPaused.id, { reason: 'user-stop', bySessionId: 's-other' }, Date.now(), 'alice')
+  await markWaiting(otherPaused.id, { reason: 'user-stop', bySessionId: 's-other' }, Date.now(), 'alice')
   const crossChat = await runAsMain(() =>
     taskUpdateTool.call({ action: 'cancel', runId: otherPaused.id }, toolContext()),
   )

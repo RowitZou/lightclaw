@@ -16,7 +16,7 @@ import {
   getTaskRun,
   markCancelled,
   markDelivered,
-  markPaused,
+  markWaiting,
   rejectTaskRun,
 } from '../taskrun/store.js'
 import { wakeParentForChildJoinBestEffort } from '../taskrun/resume.js'
@@ -26,13 +26,13 @@ import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const TASK_UPDATE_DESCRIPTION = [
-  'Change a TaskRun state: deliver your own run, pause work, cancel work, or settle (accept / reject) a delivered child run.',
+  'Change a TaskRun state: deliver your own run, wait on a declared wake, cancel work, or settle (accept / reject) a delivered child run.',
   '',
   "action='deliver' — conclude your own run. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. With a root runId (orchestrator) it declares the root delivered; the close is refused with an itemized list while the root still has open obligations — settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
-  "action='pause' — without runId, pause your own run with a checkpoint and wake rule; with runId, pause a running direct child.",
-  "action='cancel' — cancel work you own by TaskRun runId. Orchestrator may cancel runs inside this user's rooted trees; workers may cancel direct children. Queued / paused runs are marked cancelled; running runs are hard-aborted before cancellation. A standing service root runId shuts down the whole service. A dispatch entry id is accepted for one compatibility window and is resolved to its backing run.",
+  "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required); with runId, set a running direct child waiting.",
+  "action='cancel' — cancel work you own by TaskRun runId. Orchestrator may cancel runs inside this user's rooted trees; workers may cancel direct children. Queued / waiting runs are marked cancelled; running runs are hard-aborted before cancellation. A standing service root runId shuts down the whole service. A dispatch entry id is accepted for one compatibility window and is resolved to its backing run.",
 ].join('\n')
 
 function describeObligationStatus(meta: TaskRunMeta): string {
@@ -159,7 +159,7 @@ export const taskUpdateTool = buildTool({
   riskLevel: 'safe',
   inputSchema: z.object({
     runId: z.string().min(1).optional(),
-    action: z.enum(['deliver', 'accept', 'reject', 'cancel', 'pause']),
+    action: z.enum(['deliver', 'accept', 'reject', 'cancel', 'wait']),
     ok: z.boolean().optional(),
     summary: z.string().min(1).optional(),
     feedback: z.string().min(1).optional(),
@@ -256,7 +256,7 @@ export const taskUpdateTool = buildTool({
       return { output: JSON.stringify({ runId: delivered.id, status: delivered.status }) }
     }
 
-    if (input.action === 'pause') {
+    if (input.action === 'wait') {
       if (input.runId) {
         const target = await getTaskRun(input.runId, owner)
         if (!target) return { output: `TaskRun not found: ${input.runId}`, isError: true }
@@ -275,22 +275,22 @@ export const taskUpdateTool = buildTool({
           }
         }
         abortInFlightForSession(target.currentSessionId)
-        const paused = await markPaused(
+        const waitingRun = await markWaiting(
           target.id,
-          { reason: 'requester-pause', bySessionId: getSessionId() },
+          { reason: 'requester-hold', bySessionId: getSessionId() },
           Date.now(),
           owner,
         )
-        return paused?.status === 'paused'
-          ? { output: JSON.stringify({ runId: paused.id, status: paused.status, reason: paused.pauseReason }) }
-          : { output: `TaskRun ${target.id} could not be paused.`, isError: true }
+        return waitingRun?.status === 'waiting'
+          ? { output: JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, reason: waitingRun.waitReason }) }
+          : { output: `TaskRun ${target.id} could not be set waiting.`, isError: true }
       }
 
       const own = getCurrentTaskRunId()
-      if (!own) return { output: 'No current TaskRun to pause.', isError: true }
+      if (!own) return { output: 'No current TaskRun to set waiting.', isError: true }
       const checkpoint = input.checkpoint?.trim()
-      if (!checkpoint) return { output: 'pause requires `checkpoint` so the run can be resumed safely.', isError: true }
-      if (!input.wake) return { output: 'pause requires `wake` (child-join or timer).', isError: true }
+      if (!checkpoint) return { output: 'wait requires `checkpoint` so the run can be picked back up safely.', isError: true }
+      if (!input.wake) return { output: 'wait requires `wake` (child-join or timer).', isError: true }
       const meta = await getTaskRun(own, owner)
       if (!meta) return { output: `TaskRun not found: ${own}`, isError: true }
       if (meta.status !== 'running') {
@@ -300,7 +300,7 @@ export const taskUpdateTool = buildTool({
       const wake = input.wake.kind === 'child-join'
         ? { kind: 'child-join' as const, runId: input.wake.runId }
         : { kind: 'timer' as const, at: Date.now() + input.wake.afterMinutes * 60_000 }
-      const paused = await markPaused(
+      const waitingRun = await markWaiting(
         own,
         {
           reason: input.wake.kind,
@@ -309,14 +309,14 @@ export const taskUpdateTool = buildTool({
         Date.now(),
         owner,
       )
-      if (paused?.status !== 'paused') {
-        return { output: `TaskRun ${own} could not be paused.`, isError: true }
+      if (waitingRun?.status !== 'waiting') {
+        return { output: `TaskRun ${own} could not be set waiting.`, isError: true }
       }
       if (wake.kind === 'timer') {
-        scheduleTaskRunTimerWake(owner, paused.id, wake.at)
+        scheduleTaskRunTimerWake(owner, waitingRun.id, wake.at)
       }
       return {
-        output: `${JSON.stringify({ runId: paused.id, status: paused.status, wake })}\nPause recorded. End your turn now — the framework resumes this run when the wake fires, injecting what arrived.`,
+        output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded. End your turn now — the run picks back up when the wake fires, with what arrived in hand.`,
       }
     }
 
@@ -380,7 +380,7 @@ export const taskUpdateTool = buildTool({
         // re-fire the cancelled run or recreate the slot, silently undoing the
         // cancel. Route to the verbs that actually stop the service.
         return {
-          output: `TaskRun ${target.id} is the next scheduled fire of standing service ${standingCurrentChild.standingRootRunId}. Cancelling a single upcoming fire is not supported. Cancel the standing root (TaskUpdate { action:'cancel', runId:'${standingCurrentChild.standingRootRunId}' }) to shut the service down, or UpdateSchedule { id:'${standingCurrentChild.id}', enabled:false } to pause future fires.`,
+          output: `TaskRun ${target.id} is the next scheduled fire of standing service ${standingCurrentChild.standingRootRunId}. Cancelling a single upcoming fire is not supported. Cancel the standing root (TaskUpdate { action:'cancel', runId:'${standingCurrentChild.standingRootRunId}' }) to shut the service down, or UpdateSchedule { id:'${standingCurrentChild.id}', enabled:false } to suspend future fires.`,
           isError: true,
         }
       }

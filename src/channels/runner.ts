@@ -397,7 +397,7 @@ export class ChannelRunner {
         timing: { emittedAt: Date.now() },
         chainId: targetSessionId,
       })).some(value => typeof value === 'number' ? value > 0 : Boolean(value))
-      const aborted = busAborted || ledgerStop.abortedSessionIds.length > 0 || ledgerStop.pausedRunIds.length > 0
+      const aborted = busAborted || ledgerStop.abortedSessionIds.length > 0 || ledgerStop.waitingRunIds.length > 0
       await this.sendNotice(
         message,
         'info',

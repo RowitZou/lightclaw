@@ -7,7 +7,7 @@ import { identityRoot, sanitizePathSegment } from '../identity/paths.js'
 export type StopNotice = {
   stoppedAt: number
   rootRunIds: string[]
-  pausedRunIds: string[]
+  waitingRunIds: string[]
 }
 
 function stopNoticePath(ownerCanonicalUser: string): string {
@@ -61,18 +61,21 @@ export function readAndClearStopNotice(
   if (!notice) return null
   delete store[chatSessionId]
   writeStore(ownerCanonicalUser, store)
-  return notice
+  // pausedRunIds is the pre-rename field; a notice written before the wait
+  // rename may still carry it.
+  const legacy = notice as StopNotice & { pausedRunIds?: string[] }
+  return { ...notice, waitingRunIds: notice.waitingRunIds ?? legacy.pausedRunIds ?? [] }
 }
 
 export function formatStopNoticeReminder(notice: StopNotice): string {
   const rootList = notice.rootRunIds.length > 0 ? notice.rootRunIds.join(', ') : '(none)'
-  const pausedList = notice.pausedRunIds.length > 0 ? notice.pausedRunIds.join(', ') : '(none)'
+  const waitingList = notice.waitingRunIds.length > 0 ? notice.waitingRunIds.join(', ') : '(none)'
   return [
     '<system-reminder>',
     'The previous user turn in this chat was interrupted by /stop.',
     `Stopped root TaskRuns: ${rootList}.`,
-    `Paused runs awaiting disposition: ${pausedList}.`,
-    'For each stopped root, compare the user\'s new message against the paused ledger: continue by redispatching the needed work, cancel stale queued/paused runs with TaskUpdate cancel, or ask the user if the intended disposition is ambiguous.',
+    `Runs waiting for disposition: ${waitingList}.`,
+    'For each stopped root, compare the user\'s new message against the waiting ledger: message a waiting run to continue it, cancel stale queued/waiting runs with TaskUpdate cancel, or ask the user if the intended disposition is ambiguous.',
     '</system-reminder>',
   ].join('\n')
 }

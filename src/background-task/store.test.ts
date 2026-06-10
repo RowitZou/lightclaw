@@ -146,11 +146,11 @@ describe('background-task store', () => {
     addBackgroundTask('alice', fakeTask('alice', 'task-1'))
     const updated = updateBackgroundTask('alice', 'task-1', {
       enabled: false,
-      label: 'paused',
+      label: 'waiting',
     })
     assert.ok(updated)
     assert.equal(updated?.enabled, false)
-    assert.equal(updated?.label, 'paused')
+    assert.equal(updated?.label, 'waiting')
     assert.equal(updated?.notifyOn, 'always')
     assert.equal(updated?.notifyTo, 'user')
     assert.equal(updateBackgroundTask('alice', 'never', { enabled: true }), null)

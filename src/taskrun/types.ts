@@ -6,7 +6,7 @@ export type TaskRunStatus =
   | 'queued'
   | 'running'
   | 'blocked'
-  | 'paused'
+  | 'waiting'
   // Worker-side conclusion reported, awaiting the caller's acceptance.
   // NOT terminal: a delivered run keeps pinning its root open until it is
   // accepted / rejected, which is what keeps an undelivered result visible.
@@ -43,8 +43,8 @@ export type TaskRunMeta = {
   wake?: TaskRunWakeSpec
   createdAt: number
   startedAt?: number
-  pausedAt?: number
-  pauseReason?: TaskRunPauseReason
+  waitingAt?: number
+  waitReason?: TaskRunWaitReason
   deliveredAt?: number
   terminalAt?: number
   updatedAt: number
@@ -53,9 +53,9 @@ export type TaskRunMeta = {
   artifactPaths?: string[]
 }
 
-export type TaskRunPauseReason =
+export type TaskRunWaitReason =
   | 'user-stop'
-  | 'requester-pause'
+  | 'requester-hold'
   | 'child-join'
   | 'timer'
   | 'awaiting-reply'
@@ -158,11 +158,11 @@ export type TaskRunCancelledEvent = {
   reason?: string
 }
 
-export type TaskRunPausedEvent = {
+export type TaskRunWaitingEvent = {
   seq: number
   ts: number
-  kind: 'paused'
-  reason: TaskRunPauseReason
+  kind: 'waiting'
+  reason: TaskRunWaitReason
   bySessionId?: string
   wake?: TaskRunWakeSpec
 }
@@ -190,7 +190,7 @@ export type TaskRunWatchdogReportEvent = {
   ts: number
   kind: 'watchdog-report'
   fingerprint: string
-  findingKind: 'stranded' | 'unsettled-delivered' | 'paused-overdue' | 'dead-wake-source'
+  findingKind: 'stranded' | 'unsettled-delivered' | 'waiting-overdue' | 'dead-wake-source'
   rootRunId: string
 }
 
@@ -211,7 +211,7 @@ export type TaskRunEvent =
   | TaskRunRejectedEvent
   | TaskRunCheckpointEvent
   | TaskRunCancelledEvent
-  | TaskRunPausedEvent
+  | TaskRunWaitingEvent
   | TaskRunResumedEvent
   | TaskRunRebuiltEvent
   | TaskRunWatchdogReportEvent

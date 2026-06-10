@@ -1,11 +1,11 @@
 import { abortInFlightForSession } from '../state.js'
-import { listTaskRuns, markPaused } from './store.js'
+import { listTaskRuns, markWaiting } from './store.js'
 import type { TaskRunMeta } from './types.js'
 import { writeStopNotice } from './stop-notice.js'
 
 export type StopTaskRunsResult = {
   rootRunIds: string[]
-  pausedRunIds: string[]
+  waitingRunIds: string[]
   abortedSessionIds: string[]
 }
 
@@ -48,7 +48,7 @@ export async function stopActiveTaskRunsForSession(
       .map(run => run.id),
   )
   const subtreeIds = collectSubtreeIds(runs, rootIds)
-  const pausedRunIds: string[] = []
+  const waitingRunIds: string[] = []
   const abortedSessionIds: string[] = []
   for (const run of runs) {
     if (!subtreeIds.has(run.id)) continue
@@ -56,26 +56,26 @@ export async function stopActiveTaskRunsForSession(
     if (run.currentSessionId && abortInFlightForSession(run.currentSessionId)) {
       abortedSessionIds.push(run.currentSessionId)
     }
-    const paused = await markPaused(
+    const waiting = await markWaiting(
       run.id,
       { reason: 'user-stop', bySessionId: chatSessionId },
       now,
       ownerCanonicalUser,
     )
-    if (paused?.status === 'paused') {
-      pausedRunIds.push(paused.id)
+    if (waiting?.status === 'waiting') {
+      waitingRunIds.push(waiting.id)
     }
   }
   const result: StopTaskRunsResult = {
     rootRunIds: [...rootIds].sort(),
-    pausedRunIds: [...new Set(pausedRunIds)].sort(),
+    waitingRunIds: [...new Set(waitingRunIds)].sort(),
     abortedSessionIds: [...new Set(abortedSessionIds)].sort(),
   }
-  if (result.rootRunIds.length > 0 || result.pausedRunIds.length > 0) {
+  if (result.rootRunIds.length > 0 || result.waitingRunIds.length > 0) {
     writeStopNotice(ownerCanonicalUser, chatSessionId, {
       stoppedAt: now,
       rootRunIds: result.rootRunIds,
-      pausedRunIds: result.pausedRunIds,
+      waitingRunIds: result.waitingRunIds,
     })
   }
   return result

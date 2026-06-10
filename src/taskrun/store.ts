@@ -18,8 +18,8 @@ import type {
   TaskRunMeta,
   TaskRunMode,
   TaskRunOutcome,
-  TaskRunPausedEvent,
-  TaskRunPauseReason,
+  TaskRunWaitingEvent,
+  TaskRunWaitReason,
   TaskRunProgressEvent,
   TaskRunRebuiltEvent,
   TaskRunResumedEvent,
@@ -177,12 +177,35 @@ async function withRunLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
 async function loadMetaFile(ownerCanonicalUser: string, id: string): Promise<TaskRunMeta | null> {
   try {
     const raw = await readFile(metaPath(ownerCanonicalUser, id), 'utf8')
-    return JSON.parse(raw) as TaskRunMeta
+    return normalizeLegacyMeta(JSON.parse(raw) as TaskRunMeta)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null
     }
     throw error
+  }
+}
+
+/** Meta files persisted before the wait rename carry status 'paused' and the
+ *  pausedAt / pauseReason field spellings; normalize on read (the next write
+ *  persists the new shape). */
+function normalizeLegacyMeta(meta: TaskRunMeta): TaskRunMeta {
+  const legacy = meta as TaskRunMeta & {
+    pausedAt?: number
+    pauseReason?: string
+  }
+  const legacyStatus = legacy.status as string
+  if (legacyStatus !== 'paused' && legacy.pausedAt === undefined && legacy.pauseReason === undefined) {
+    return meta
+  }
+  const waitReason = (legacy.waitReason ?? legacy.pauseReason) as TaskRunMeta['waitReason']
+  return {
+    ...meta,
+    status: legacyStatus === 'paused' ? 'waiting' : legacy.status,
+    ...(legacy.waitingAt ?? legacy.pausedAt ? { waitingAt: legacy.waitingAt ?? legacy.pausedAt } : {}),
+    ...(waitReason
+      ? { waitReason: (waitReason as string) === 'requester-pause' ? 'requester-hold' : waitReason }
+      : {}),
   }
 }
 
@@ -365,7 +388,7 @@ export async function markDelivered(
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta) return null
   if (meta.status === 'delivered' || isTerminalStatus(meta.status)) return meta
-  if (meta.status === 'paused') return meta
+  if (meta.status === 'waiting') return meta
   return appendEvent(
     id,
     'delivered',
@@ -379,18 +402,18 @@ export async function markDelivered(
   )
 }
 
-export async function markPaused(
+export async function markWaiting(
   id: string,
-  input: { reason: TaskRunPauseReason; bySessionId?: string; wake?: TaskRunWakeSpec },
+  input: { reason: TaskRunWaitReason; bySessionId?: string; wake?: TaskRunWakeSpec },
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
   const meta = await getTaskRun(id, ownerCanonicalUser)
-  if (!meta || meta.status === 'paused' || isTerminalStatus(meta.status)) return meta
+  if (!meta || meta.status === 'waiting' || isTerminalStatus(meta.status)) return meta
   if (meta.status !== 'running' && meta.status !== 'blocked') return meta
   return appendEvent(
     id,
-    'paused',
+    'waiting',
     {
       reason: input.reason,
       ...(input.bySessionId ? { bySessionId: input.bySessionId } : {}),
@@ -503,7 +526,7 @@ export async function markCancelled(
   if (!meta || isTerminalStatus(meta.status)) return meta
   const cancellable =
     meta.status === 'queued' ||
-    meta.status === 'paused' ||
+    meta.status === 'waiting' ||
     (options.allowRunning === true && meta.status === 'running')
   if (!cancellable) return meta
   return appendEvent(id, 'cancelled', reason ? { reason } : {}, now, meta.ownerCanonicalUser)
@@ -601,13 +624,13 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       terminalAt: event.ts,
     }
   }
-  if (isPausedEvent(event)) {
+  if (isWaitingEvent(event)) {
     return {
       ...next,
-      status: 'paused',
+      status: 'waiting',
       currentSessionId: null,
-      pausedAt: event.ts,
-      pauseReason: event.reason,
+      waitingAt: event.ts,
+      waitReason: normalizeWaitReason(event.reason),
       ...(event.wake ? { wake: event.wake } : {}),
     }
   }
@@ -668,14 +691,22 @@ function isCancelledEvent(event: TaskRunEvent): event is TaskRunCancelledEvent {
   return event.kind === 'cancelled'
 }
 
-function isPausedEvent(event: TaskRunEvent): event is TaskRunPausedEvent {
-  if (event.kind !== 'paused') return false
+function isWaitingEvent(event: TaskRunEvent): event is TaskRunWaitingEvent {
+  // 'paused' / 'requester-pause' are the pre-rename spellings still present in
+  // ledgers written before the wait rename; read them as waiting.
+  const kind = (event as { kind?: unknown }).kind
+  if (kind !== 'waiting' && kind !== 'paused') return false
   const reason = (event as { reason?: unknown }).reason
   return reason === 'user-stop' ||
+    reason === 'requester-hold' ||
     reason === 'requester-pause' ||
     reason === 'child-join' ||
     reason === 'timer' ||
     reason === 'awaiting-reply'
+}
+
+function normalizeWaitReason(reason: TaskRunWaitingEvent['reason']): TaskRunWaitingEvent['reason'] {
+  return (reason as string) === 'requester-pause' ? 'requester-hold' : reason
 }
 
 function isResumedEvent(event: TaskRunEvent): event is TaskRunResumedEvent {

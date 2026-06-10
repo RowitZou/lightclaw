@@ -426,7 +426,7 @@ export type DispatchConfig = {
 export type TaskRunWatchdogConfig = {
   intervalMinutes: number
   deliveredGraceMs: number
-  pausedGraceMs: number
+  waitingGraceMs: number
   budgetWindowMinutes: number
   deliveryRetryMaxAttempts: number
 }
@@ -497,7 +497,7 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
 const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   intervalMinutes: 5,
   deliveredGraceMs: 120_000,
-  pausedGraceMs: 21_600_000,
+  waitingGraceMs: 21_600_000,
   budgetWindowMinutes: 30,
   deliveryRetryMaxAttempts: 3,
 }
@@ -1998,7 +1998,10 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
   const askTimeoutRaw = Number(ask.timeoutMs)
   const intervalRaw = Number(watchdog.intervalMinutes)
   const graceRaw = Number(watchdog.deliveredGraceMs)
-  const pausedGraceRaw = Number(watchdog.pausedGraceMs)
+  // pausedGraceMs is the pre-rename key; accept it from older config files.
+  const waitingGraceRaw = Number(
+    watchdog.waitingGraceMs ?? (watchdog as { pausedGraceMs?: number }).pausedGraceMs,
+  )
   const budgetWindowRaw = Number(watchdog.budgetWindowMinutes)
   const retryRaw = Number(watchdog.deliveryRetryMaxAttempts)
 
@@ -2032,11 +2035,11 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
           ? graceRaw
           : DEFAULT_TASKRUN_WATCHDOG.deliveredGraceMs),
       ),
-      pausedGraceMs: Math.max(
+      waitingGraceMs: Math.max(
         0,
-        Math.floor(Number.isFinite(pausedGraceRaw)
-          ? pausedGraceRaw
-          : DEFAULT_TASKRUN_WATCHDOG.pausedGraceMs),
+        Math.floor(Number.isFinite(waitingGraceRaw)
+          ? waitingGraceRaw
+          : DEFAULT_TASKRUN_WATCHDOG.waitingGraceMs),
       ),
       budgetWindowMinutes: Math.max(
         1,

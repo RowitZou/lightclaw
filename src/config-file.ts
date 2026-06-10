@@ -251,7 +251,7 @@ export type ConfigFileShape = {
     watchdog?: {
       intervalMinutes?: number
       deliveredGraceMs?: number
-      pausedGraceMs?: number
+      waitingGraceMs?: number
       budgetWindowMinutes?: number
       deliveryRetryMaxAttempts?: number
     }

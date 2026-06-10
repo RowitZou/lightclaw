@@ -9,7 +9,7 @@ import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAbortControllerForSession } from '../state.js'
-import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markPaused, markStarted } from '../taskrun/store.js'
+import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -380,7 +380,7 @@ describe('Dispatch tool family', () => {
       const entry = getBackgroundTask('alice', dispatchId)
       assert.ok(entry?.taskRunId)
       await markStarted(entry.taskRunId, 'bg-update-schedule-paused', Date.now(), 'alice')
-      await markPaused(entry.taskRunId, { reason: 'user-stop' }, Date.now(), 'alice')
+      await markWaiting(entry.taskRunId, { reason: 'user-stop' }, Date.now(), 'alice')
 
       // A paused fire has already consumed the entry's prompt; updating the
       // schedule would not touch the in-flight shift and a one-shot has no
@@ -397,7 +397,7 @@ describe('Dispatch tool family', () => {
       assert.equal(rejected.isError, true)
       assert.match(rejected.output, /already fired/)
       assert.match(rejected.output, /TaskUpdate cancel/)
-      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'paused')
+      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'waiting')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

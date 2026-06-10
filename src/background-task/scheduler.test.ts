@@ -22,7 +22,7 @@ import {
   getTaskRun,
   getTaskRunEvents,
   listTaskRuns,
-  markPaused,
+  markWaiting,
   markStarted,
 } from '../taskrun/store.js'
 import {
@@ -138,7 +138,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
       chainId: 'chain-join',
       depth: 2,
     })
-    await markPaused(parent.id, {
+    await markWaiting(parent.id, {
       reason: 'child-join',
       wake: { kind: 'child-join', runId: child.id },
     }, 20, 'alice')
@@ -385,7 +385,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
       depth: 1,
     })
     await markStarted(first.id, 'bg-standing-abort', 10, 'alice')
-    await markPaused(first.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+    await markWaiting(first.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
     const task = {
       ...fakeTask(),
       id: 'standing-aborted-fire',
@@ -418,7 +418,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     flushLastFiredAt()
 
     const paused = await getTaskRun(first.id, 'alice')
-    assert.equal(paused?.status, 'paused')
+    assert.equal(paused?.status, 'waiting')
     assert.equal(paused?.outcome, undefined)
     const [entry] = loadBackgroundTasks('alice')
     assert.ok(entry)
@@ -427,7 +427,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(next?.status, 'queued')
     assert.equal(next?.parentRunId, root.id)
     const events = await getTaskRunEvents(first.id, {}, 'alice')
-    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
+    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'waiting'])
   })
 
   it('consumes an aborted oneshot without retrying or overwriting its paused run', async () => {
@@ -442,7 +442,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
       depth: 1,
     })
     await markStarted(preset.id, 'bg-oneshot-abort', 10, 'alice')
-    await markPaused(preset.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+    await markWaiting(preset.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
     const task: BackgroundTaskEntry = {
       ...fakeTask(),
       id: 'oneshot-aborted',
@@ -475,10 +475,10 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.deepEqual(loadBackgroundTasks('alice'), [])
     assert.equal(getCompletedTaskRecord('alice', task.id)?.outcome, 'aborted')
     const run = await getTaskRun(preset.id, 'alice')
-    assert.equal(run?.status, 'paused')
+    assert.equal(run?.status, 'waiting')
     assert.equal(run?.outcome, undefined)
     const events = await getTaskRunEvents(preset.id, {}, 'alice')
-    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
+    assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'waiting'])
   })
 
   it('records finish-time artifacts on a successful recurring fire and keeps finished as the last event', async () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -21,7 +21,7 @@ import {
   markCancelled,
   markDelivered,
   markFinished,
-  markPaused,
+  markWaiting,
   markStarted,
   rejectTaskRun,
   sweepAllTerminalTaskRuns,
@@ -446,15 +446,15 @@ describe('TaskRun store', () => {
         now: 10,
       })
       await markStarted(run.id, 'dispatched-coder', 20, 'alice')
-      const paused = await markPaused(
+      const paused = await markWaiting(
         run.id,
         { reason: 'user-stop', bySessionId: 's-main' },
         30,
         'alice',
       )
-      assert.equal(paused?.status, 'paused')
-      assert.equal(paused?.pausedAt, 30)
-      assert.equal(paused?.pauseReason, 'user-stop')
+      assert.equal(paused?.status, 'waiting')
+      assert.equal(paused?.waitingAt, 30)
+      assert.equal(paused?.waitReason, 'user-stop')
       assert.equal(paused?.currentSessionId, null)
 
       const delivered = await markDelivered(
@@ -463,10 +463,10 @@ describe('TaskRun store', () => {
         40,
         'alice',
       )
-      assert.equal(delivered?.status, 'paused')
+      assert.equal(delivered?.status, 'waiting')
       assert.equal(delivered?.outcome, undefined)
       const events = await getTaskRunEvents(run.id, {}, 'alice')
-      assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'paused'])
+      assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'waiting'])
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
@@ -498,7 +498,7 @@ describe('TaskRun store', () => {
         depth: 1,
       })
       await markStarted(paused.id, 'dispatched-paused', 10, 'alice')
-      await markPaused(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
+      await markWaiting(paused.id, { reason: 'user-stop', bySessionId: 's-main' }, 20, 'alice')
       const running = await createTaskRun({
         ownerCanonicalUser: 'alice',
         role: 'coder',
@@ -692,6 +692,44 @@ describe('TaskRun store', () => {
       const blocked = await closeRootTaskRun(root.id, 'alice', 20)
       assert.equal(blocked.closed, false)
       assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('reads pre-rename meta files: paused status and pauseReason normalize to waiting', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const dir = path.join(tmpHome, 'identity', 'per-user', 'alice', 'taskruns', 'tr_legacy')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({
+        id: 'tr_legacy',
+        kind: 'dispatch',
+        parentRunId: null,
+        rootRunId: 'tr_legacy',
+        chainId: 'chain-legacy',
+        depth: 1,
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        title: 'legacy paused run',
+        mode: 'background',
+        status: 'paused',
+        currentSessionId: null,
+        createdAt: 1,
+        updatedAt: 2,
+        lastEventSeq: 2,
+        pausedAt: 2,
+        pauseReason: 'requester-pause',
+      }), 'utf8')
+
+      const meta = await getTaskRun('tr_legacy', 'alice')
+      assert.equal(meta?.status, 'waiting')
+      assert.equal(meta?.waitingAt, 2)
+      assert.equal(meta?.waitReason, 'requester-hold')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

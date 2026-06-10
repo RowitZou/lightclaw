@@ -107,7 +107,7 @@ async function markBackgroundTaskRunTerminalBestEffort(
       // future obligation until TaskUpdate cancel stops its standing root.
       const delivered = await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
       // Settle-on-return is a delivery path too: a parent parked at
-      // paused(child-join) on this fire must be woken from here as well, not
+      // waiting(child-join) on this fire must be woken from here as well, not
       // only when the worker self-reports via TaskUpdate — most fires never
       // call it.
       if (delivered?.status === 'delivered') {

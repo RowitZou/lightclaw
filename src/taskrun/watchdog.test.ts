@@ -13,7 +13,7 @@ import {
   createTaskRun,
   getTaskRunEvents,
   markDelivered,
-  markPaused,
+  markWaiting,
   markStarted,
 } from './store.js'
 import {
@@ -112,14 +112,14 @@ describe('TaskRun watchdog', () => {
 
   it('reports paused runs only after the paused grace window', () => {
     const runs = [
-      meta({ id: 'tr_paused_old', status: 'paused', pausedAt: 1_000 }),
-      meta({ id: 'tr_paused_grace', status: 'paused', pausedAt: 9_500 }),
+      meta({ id: 'tr_paused_old', status: 'waiting', waitingAt: 1_000 }),
+      meta({ id: 'tr_paused_grace', status: 'waiting', waitingAt: 9_500 }),
       meta({ id: 'tr_running', status: 'running', currentSessionId: 'live' }),
     ]
     const findings = detectTaskRunFindings(runs, {
       now: 10_000,
       deliveredGraceMs: 1_000,
-      pausedGraceMs: 1_000,
+      waitingGraceMs: 1_000,
       activeSessionIds: new Set(['live']),
       inFlightMainSessionIds: new Set(),
       schedulerTaskRunIds: new Set(),
@@ -129,13 +129,13 @@ describe('TaskRun watchdog', () => {
 
     assert.deepEqual(
       findings.map(finding => [finding.runId, finding.kind]),
-      [['tr_paused_old', 'paused-overdue']],
+      [['tr_paused_old', 'waiting-overdue']],
     )
 
     const disabled = detectTaskRunFindings(runs, {
       now: 10_000,
       deliveredGraceMs: 1_000,
-      pausedGraceMs: 0,
+      waitingGraceMs: 0,
       activeSessionIds: new Set(['live']),
       inFlightMainSessionIds: new Set(),
       schedulerTaskRunIds: new Set(),
@@ -164,7 +164,7 @@ describe('TaskRun watchdog', () => {
         now: 100,
       })
       await markStarted(run.id, 'bg-timer', 200, 'alice')
-      await markPaused(run.id, {
+      await markWaiting(run.id, {
         reason: 'timer',
         wake: { kind: 'timer', at: 1_000 },
       }, 300, 'alice')
@@ -204,7 +204,7 @@ describe('TaskRun watchdog', () => {
         now: 100,
       })
       await markStarted(run.id, 'bg-timer-fail', 200, 'alice')
-      await markPaused(run.id, {
+      await markWaiting(run.id, {
         reason: 'timer',
         wake: { kind: 'timer', at: 1_000 },
       }, 300, 'alice')
@@ -264,7 +264,7 @@ describe('TaskRun watchdog', () => {
       })
       await markStarted(child.id, 'bg-child', 400, 'alice')
       await markDelivered(child.id, { ok: true, summary: 'probe done' }, 500, 'alice')
-      await markPaused(parent.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 9_900, 'alice')
+      await markWaiting(parent.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_alice' }, 9_900, 'alice')
 
       const resumeCalls: Array<{ runId: string; via: string }> = []
       setResumeRunnerForTest(async (runId, block) => {
@@ -515,8 +515,8 @@ function meta(input: Partial<TaskRunMeta> & { id: string; status: TaskRunMeta['s
     ...(input.outcome ? { outcome: input.outcome } : {}),
     createdAt: now,
     ...(input.startedAt !== undefined ? { startedAt: input.startedAt } : {}),
-    ...(input.pausedAt !== undefined ? { pausedAt: input.pausedAt } : {}),
-    ...(input.pauseReason !== undefined ? { pauseReason: input.pauseReason } : {}),
+    ...(input.waitingAt !== undefined ? { waitingAt: input.waitingAt } : {}),
+    ...(input.waitReason !== undefined ? { waitReason: input.waitReason } : {}),
     ...(input.deliveredAt !== undefined ? { deliveredAt: input.deliveredAt } : {}),
     ...(input.terminalAt !== undefined ? { terminalAt: input.terminalAt } : {}),
     updatedAt: input.updatedAt ?? input.deliveredAt ?? input.startedAt ?? now,
