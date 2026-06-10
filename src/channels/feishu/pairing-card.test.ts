@@ -275,11 +275,13 @@ describe('PairingCardCoordinator', () => {
     assert.equal(sender.openIdCards.length, 0)
   })
 
-  it('group-context application falls back to in-chat send when DM push fails', async () => {
-    // Privacy invariant: pairing cards target applicant DM. But Feishu DM
-    // push CAN fail (extremely rare; bot disabled / api outage). When it
-    // does, we'd rather leak the application card to the original chat
-    // than swallow the user's request and look unresponsive.
+  it('group-context DM-push failure sends a sanitized notice in-chat, never the real card', async () => {
+    // Privacy invariant: pairing cards target applicant DM. When the DM
+    // push fails on a group/topic-origin message, the in-chat fallback
+    // must NOT carry the real card — the application card has live
+    // confirm/cancel buttons any group member could click, and the
+    // waiting card carries the pairing code. The group gets a sanitized
+    // no-button notice instead (2026-06-10 topic-group dogfood leak).
     const sender = new FlakyDmSender()
     const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
     const groupMsg: NormalizedChannelMessage = {
@@ -294,7 +296,69 @@ describe('PairingCardCoordinator', () => {
 
     assert.equal(sender.openIdAttempts.length, 1, 'attempted DM push first')
     assert.equal(sender.openIdAttempts[0], 'ou_user')
-    assert.equal(sender.replyCards.length, 1, 'fell back to in-chat after DM failure')
+    assert.equal(sender.replyCards.length, 1, 'still responds in-chat after DM failure')
+    const inChat = JSON.stringify(sender.replyCards[0])
+    assert.doesNotMatch(inChat, /确认申请/, 'no clickable confirm button in group')
+    assert.doesNotMatch(inChat, /lightclaw_pairing/, 'no actionable card payload in group')
+    assert.match(inChat, /无法向你发送私聊消息/, 'sanitized dm-push-failed notice instead')
+
+    // Same gate for the waiting card — its body carries the pairing code.
+    await coord.sendWaitingCard(groupMsg, {
+      code: '123456',
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+    assert.equal(sender.replyCards.length, 2)
+    const waitingInChat = JSON.stringify(sender.replyCards[1])
+    assert.doesNotMatch(waitingInChat, /123456/, 'pairing code never lands in group')
+  })
+
+  it('dm-context DM-push failure still falls back to the real card in-chat', async () => {
+    // DM origin: the inbound chat IS the applicant's DM, so resending the
+    // real card there reaches the same (single-person) audience — no leak,
+    // and the applicant keeps a clickable card.
+    const sender = new FlakyDmSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    const dmMsg: NormalizedChannelMessage = {
+      ...fakeMessage('ou_user'),
+      chatType: 'p2p',
+    }
+    await coord.sendApplicationCard(dmMsg, {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+
+    assert.equal(sender.replyCards.length, 1)
+    assert.match(JSON.stringify(sender.replyCards[0]), /确认申请/, 'real card retained in DM fallback')
+  })
+
+  it('confirm/cancel clicks from a non-applicant operator are rejected', async () => {
+    // The card normally lives in the applicant's DM, but any card that ever
+    // reached a group must not let a bystander submit or cancel someone
+    // else's application.
+    await createUser('admin')
+    await setAdmin('admin')
+    await addLink('admin', 'feishu:ou_admin')
+    const sender = new FakeSender()
+    const coord = new PairingCardCoordinator(sender as unknown as FeishuSender)
+    await coord.sendApplicationCard(fakeMessage('ou_user'), {
+      applicantOpenId: 'ou_user',
+      applicantName: 'Alice',
+    })
+    const confirm = extractAction(cardForOpenId(sender, 'ou_user'), 'confirm')
+
+    const bystander = await coord.handleCardAction({ ...confirm, operatorOpenId: 'ou_bystander' })
+    assert.match(JSON.stringify(bystander), /只有申请人本人/)
+    assert.equal((await listPending()).length, 0, 'bystander click creates no pending entry')
+
+    const cancel = extractAction(cardForOpenId(sender, 'ou_user'), 'cancel')
+    const bystanderCancel = await coord.handleCardAction({ ...cancel, operatorOpenId: 'ou_bystander' })
+    assert.match(JSON.stringify(bystanderCancel), /只有申请人本人/)
+
+    // The applicant's own click still works.
+    const own = await coord.handleCardAction({ ...confirm, operatorOpenId: 'ou_user' })
+    assert.match(JSON.stringify(own), /等待管理员审批/)
+    assert.equal((await listPending()).length, 1)
   })
 
   it('evicts in-memory token state after the configured TTL elapses', async () => {

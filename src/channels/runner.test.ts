@@ -1402,20 +1402,43 @@ describe('ChannelRunner pairing branch', () => {
 
   it('falls back to in-chat notice when sendNoticeToOpenId hook is absent (legacy strategy)', async () => {
     // Channels without a "send to specific user without an inbound" surface
-    // (or future test stubs that omit the hook) keep the old behavior so the
-    // applicant is never silently ignored. This is the only allowed
-    // in-chat path for pairing notices in 2026-05-08+.
+    // (or future test stubs that omit the hook) keep an in-chat response so
+    // the applicant is never silently ignored — but the pairing-code
+    // payload only goes in-chat for DM origins. Group/unknown origins get
+    // the sanitized dmPushFailed line (2026-06-10 topic-group leak).
     await createUser('admin')
     const { setAdmin } = await import('../identity/store.js')
     await setAdmin('admin')
 
     const harness = makePairingStrategy({ hasNoticeToOpenIdHook: false })
     const runner = new ChannelRunner(harness.strategy)
-    await runner.handleMessage(makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello' }))
+    await runner.handleMessage(
+      makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello', chatType: 'p2p' }),
+    )
 
     assert.equal(harness.dmNotices.length, 0)
     assert.equal(harness.notices.length, 1, 'in-chat fallback when strategy lacks DM hook')
     assert.match(harness.notices[0].text, /配对码|approve/)
+  })
+
+  it('in-chat fallback from a group origin sanitizes the pairing notice', async () => {
+    // Same no-DM-hook degradation as above, but the applicant @-ed the bot
+    // in a group: the in-chat fallback must not echo the pairing code to
+    // every group member. The group sees only the dmPushFailed line.
+    await createUser('admin')
+    const { setAdmin } = await import('../identity/store.js')
+    await setAdmin('admin')
+
+    const harness = makePairingStrategy({ hasNoticeToOpenIdHook: false })
+    const runner = new ChannelRunner(harness.strategy)
+    await runner.handleMessage(
+      makeFakeFeishuMessage({ sender: 'ou_user', text: 'hello', chatType: 'group' }),
+    )
+
+    assert.equal(harness.dmNotices.length, 0)
+    assert.equal(harness.notices.length, 1, 'still responds in-chat')
+    assert.doesNotMatch(harness.notices[0].text, /配对码/, 'pairing code never echoes into the group')
+    assert.match(harness.notices[0].text, /无法向你发送私聊消息/)
   })
 
   it('routes bootstrap notice to DM even when strategy lacks the application card hook', async () => {

@@ -1718,7 +1718,8 @@ export class ChannelRunner {
    * — including groups, leaking applicant open_id / pairing code to every
    * group member. Falls through to in-chat sendNotice if the strategy hook
    * is missing or the DM push fails (so a degraded channel never just
-   * silently drops the response).
+   * silently drops the response) — but a non-DM origin only ever gets the
+   * sanitized dmPushFailed line in-chat, never the pairing-code payload.
    */
   private async sendApplicantNotice(
     message: NormalizedChannelMessage,
@@ -1741,6 +1742,10 @@ export class ChannelRunner {
           `${this.strategy.channelId}: applicant DM notice failed for ${applicantOpenId}: ${detail}; falling back to in-chat\n`,
         )
       }
+    }
+    if (isGroupLikeChannelMessage(message)) {
+      await this.sendNotice(message, 'error', t('channel.pairing.dmPushFailed'))
+      return
     }
     await this.sendNotice(message, kind, text)
   }
