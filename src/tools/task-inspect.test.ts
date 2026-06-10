@@ -62,6 +62,18 @@ test('TaskInspect reads a run with recent events and direct children', async () 
     depth: 2,
     now: 40,
   })
+  const grandchild = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'webSearcher',
+    callerRole: 'coder',
+    callerSessionId: 's-coder',
+    mode: 'background',
+    objective: 'Research one detail',
+    parentRunId: child.id,
+    chainId: 'chain-inspect',
+    depth: 3,
+    now: 50,
+  })
 
   const output = await runAs(mainRole(), 's-main', undefined, async () => {
     const result = await taskInspectTool.call(
@@ -80,6 +92,9 @@ test('TaskInspect reads a run with recent events and direct children', async () 
     'progress',
   ])
   assert.deepEqual(output.children.map((run: { id: string }) => run.id), [child.id])
+  assert.equal(output.tree.id, parent.id)
+  assert.deepEqual(output.tree.children.map((run: { id: string }) => run.id), [child.id])
+  assert.deepEqual(output.tree.children[0].children.map((run: { id: string }) => run.id), [grandchild.id])
 })
 
 test('TaskInspect lets a worker inspect its own subtree but not a sibling run', async () => {

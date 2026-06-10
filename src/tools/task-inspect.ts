@@ -16,14 +16,14 @@ const TASK_INSPECT_DESCRIPTION = [
   'Read durable TaskRun state for dispatched work.',
   '',
   'Input:',
-  '- `runId` optional. When provided, returns that run metadata, recent events, and direct child runs.',
+  '- `runId` optional. When provided, returns that run metadata, recent events, direct child runs, and the full descendant tree.',
   '- Omit `runId` to list TaskRuns related to your current session.',
   '',
   'Visibility:',
   '- The main orchestrator can inspect any TaskRun for the current user.',
   '- A worker can inspect only its current TaskRun and descendants.',
   '',
-  'Returns JSON with `meta`, `events`, and `children` for a specific run, or `runs` when listing.',
+  'Returns JSON with `meta`, `events`, `children`, and `tree` for a specific run, or `runs` when listing.',
 ].join('\n')
 
 export const taskInspectTool = buildTool({
@@ -80,16 +80,19 @@ export const taskInspectTool = buildTool({
 async function inspectRun(meta: TaskRunMeta, owner: string) {
   const events = await getTaskRunEvents(meta.id, { limit: RECENT_EVENT_LIMIT }, owner)
   const children = await listChildTaskRuns(meta.id, owner)
+  const tree = await buildRunTree(meta, owner)
   return {
     meta,
     events,
     children: children.map(formatRunSummary),
+    tree,
   }
 }
 
 function formatRunSummary(meta: TaskRunMeta) {
   return {
     id: meta.id,
+    kind: meta.kind ?? 'dispatch',
     title: meta.title,
     role: meta.role,
     callerRole: meta.callerRole,
@@ -101,6 +104,18 @@ function formatRunSummary(meta: TaskRunMeta) {
     artifactPaths: meta.artifactPaths ?? [],
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
+  }
+}
+
+type RunTree = ReturnType<typeof formatRunSummary> & {
+  children: RunTree[]
+}
+
+async function buildRunTree(meta: TaskRunMeta, owner: string): Promise<RunTree> {
+  const children = await listChildTaskRuns(meta.id, owner)
+  return {
+    ...formatRunSummary(meta),
+    children: await Promise.all(children.map(child => buildRunTree(child, owner))),
   }
 }
 
