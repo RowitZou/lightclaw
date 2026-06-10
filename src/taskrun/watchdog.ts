@@ -271,9 +271,13 @@ export function formatTaskRunReconcileBlock(
   ownerCanonicalUser: string,
   findings: TaskRunWatchdogFinding[],
   fingerprint: string,
+  options: { escalation?: 'stalled-reconcile' } = {},
 ): string {
+  const escalationAttr = options.escalation
+    ? ` escalation="${escapeAttribute(options.escalation)}"`
+    : ''
   const lines = [
-    `<taskrun-reconcile owner="${escapeAttribute(ownerCanonicalUser)}" fingerprint="${escapeAttribute(fingerprint)}">`,
+    `<taskrun-reconcile owner="${escapeAttribute(ownerCanonicalUser)}" fingerprint="${escapeAttribute(fingerprint)}"${escalationAttr}>`,
   ]
   for (const finding of findings) {
     const parts = [
@@ -689,8 +693,19 @@ export class TaskRunWatchdog {
       backgroundEntries: loadBackgroundTasks(owner),
       reportFindings: (_owner, findings, block) =>
         wakeTaskRunReconcileOwner(owner, findings, block, config),
-      escalateFindings: (_owner, findings, fingerprint, reason) =>
-        sendTaskRunEscalationNotice(owner, findings, fingerprint, reason),
+      // Layered escalation: "stuck despite repeated wakes" goes up exactly ONE
+      // level — a final escalation-marked wake to main, which decides whether
+      // to change approach, cancel, or report to the user through its own
+      // channel. The framework bypasses main with a direct owner DM only when
+      // main itself is unreachable (the delivery-failed path below).
+      escalateFindings: async (_owner, findings, fingerprint, reason) => {
+        const block = formatTaskRunReconcileBlock(owner, findings, fingerprint, {
+          escalation: reason,
+        })
+        const wake = await wakeTaskRunReconcileOwner(owner, findings, block, config)
+        if (wake.ok) return wake
+        return sendTaskRunEscalationNotice(owner, findings, fingerprint, reason, wake.reason)
+      },
     })
     await this.handleDeliveryFailure(owner, result, config)
     return result

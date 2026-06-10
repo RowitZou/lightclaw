@@ -17,6 +17,7 @@ import {
 } from './store.js'
 import {
   detectTaskRunFindings,
+  formatTaskRunReconcileBlock,
   reconcileTaskRunsOnce,
 } from './watchdog.js'
 import type { TaskRunEvent, TaskRunMeta } from './types.js'
@@ -252,6 +253,25 @@ describe('TaskRun watchdog', () => {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }
+  })
+
+  it('marks stalled escalation blocks so the wake goes up one level to main, not to a user DM', () => {
+    const run = meta({ id: 'tr_stuck', status: 'delivered', deliveredAt: 0, rootRunId: 'tr_root' })
+    const findings = detectTaskRunFindings([run], {
+      now: 300_000,
+      deliveredGraceMs: 120_000,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor([run]),
+    })
+    const block = formatTaskRunReconcileBlock('alice', findings, 'fp-1234', {
+      escalation: 'stalled-reconcile',
+    })
+    assert.match(block, /<taskrun-reconcile owner="alice" fingerprint="fp-1234" escalation="stalled-reconcile">/)
+    const plain = formatTaskRunReconcileBlock('alice', findings, 'fp-1234')
+    assert.doesNotMatch(plain, /escalation=/)
   })
 })
 
