@@ -85,6 +85,22 @@ describe('TaskRun watchdog', () => {
     )
   })
 
+  it('does not report idle-root while the owner turn is in flight (ask/permission cards hold the turn)', () => {
+    const runs = [
+      meta({ id: 'tr_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 1_000 + 60_001,
+      deliveredGraceMs: 0,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(['feishu:dm:oc_alice']),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(findings, [])
+  })
+
   it('does not report idle-root inside the grace window or with a pending dispatch', () => {
     const runs = [
       meta({ id: 'tr_fresh_goal', kind: 'root', status: 'running', updatedAt: 1_000 }),

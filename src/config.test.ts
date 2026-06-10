@@ -651,8 +651,8 @@ describe('config: endpoints + models registry', () => {
     })
     const cfg = getConfig()
     assert.deepEqual(cfg.taskrun.watchdog, {
-      intervalMinutes: 5,
-      deliveredGraceMs: 120_000,
+      intervalMinutes: 1,
+      deliveredGraceMs: 60_000,
       waitingGraceMs: 21_600_000,
       rootIdleGraceMs: 60_000,
       budgetWindowMinutes: 30,

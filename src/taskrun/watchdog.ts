@@ -93,7 +93,7 @@ export async function reconcileTaskRunsOnce(
   deps: ReconcileTaskRunsDeps = {},
 ): Promise<TaskRunReconcileResult> {
   const now = deps.now ?? Date.now()
-  const deliveredGraceMs = deps.deliveredGraceMs ?? 120_000
+  const deliveredGraceMs = deps.deliveredGraceMs ?? 60_000
   const waitingGraceMs = deps.waitingGraceMs ?? 21_600_000
   const rootIdleGraceMs = deps.rootIdleGraceMs ?? 60_000
   const runs = deps.listRuns

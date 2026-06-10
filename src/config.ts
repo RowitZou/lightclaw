@@ -500,8 +500,13 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
 }
 
 const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
-  intervalMinutes: 5,
-  deliveredGraceMs: 120_000,
+  // 2026-06-10 timeout audit: reminder latency should track real silence,
+  // not arbitrary padding — busy receivers are excluded by guard, so the
+  // only thing long graces bought was slower recovery. 1min scan + 1min
+  // graces = next-tick detection. Deliberate long waits (waitingGraceMs for
+  // user-stop holds, the ask default timeout, permission cards) stay long.
+  intervalMinutes: 1,
+  deliveredGraceMs: 60_000,
   waitingGraceMs: 21_600_000,
   rootIdleGraceMs: 60_000,
   budgetWindowMinutes: 30,
