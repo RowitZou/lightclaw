@@ -185,6 +185,8 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 **配套规则**:暂停**原子地写当下 checkpoint**(不写就挂起,挂起中被杀就从陈旧点恢复,不安全)。
 
+**落地分期(2026-06-10 拍板)**:agent 主动 pause 的工具面(TaskUpdate pause + 上述唤醒源 taxonomy)与 main 下行暂停活 worker **都推迟到 phase3 与 resume 同期**——没有续跑能力时给暂停动作就是陷阱(worker 暂停后只能干等被重派)。phase2 的 paused 状态**只由框架写**(/stop,§6.6);「训练监控不轮询」在 phase2 由常驻服务(§4.2 recurring 常驻根)覆盖。
+
 ### 6.3 搁浅 / 死锁检测(统一不变量)
 
 §6.1 + §6.2 合成一条干净的检测条件,统一了那几个异常:
@@ -213,8 +215,9 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 工单体系下唯一不走「正常结束 + 看门狗兜底」的洞是用户叫停,单独定语义:
 
-- **范围是树级**:/stop 硬中止 main 的 in-flight turn + 该用户名下所有**正在执行**的 worker 班次。**不动**还没 fire 的 queued 和 recurring 排程——那是未来的活,不是「正在执行」;要停排程走 CancelDispatch。
+- **范围是树级、边界是当前 chat(2026-06-10 拍板)**:/stop 硬中止当前 chat 对应 main 的 in-flight turn + 该 chat 名下**所有树**的在执行 worker 班次(含恰好在跑的服务 fire;DM/群/话题互不影响,与既有 per-session /stop 语义连续)。**不动**还没 fire 的 queued 和 recurring 排程——那是未来的活,不是「正在执行」;要停排程走 CancelDispatch。**多根不是按钮的分支条件,而是收尾的分账单位**:panic 按钮必须钝(不问、不猜、不分根),精确停某一棵树走对话面(「把 X 停掉」→ main 用 CancelDispatch / cancel);钝之所以可负担,正是因为账本——每个被打断的班次按根挂账,恢复逐根处置。
 - **收尾:停手≠销单**。被打断的 run 由框架记 **paused(reason: user-stop)**,留在根的义务账上——工单不结束、不自动销。与「交付≠结束」同一哲学:stop 表达「先停下」,不是「这活作废」。其 typed-await 唤醒源 = 用户的下一次发落(永远存在)+ 下条的长宽限定时,符合 §6.2。
+- **stop 后第一条用户消息带「盘根」系统提示(2026-06-10 补)**:/stop 之后,该 chat 的下一条用户入站消息前部注入一条给 main 看的系统提示——上一轮用户中断了操作、所有根已停;盘一遍名下所有根,按用户这条消息的意思逐根处置(要停的停、要继续的继续、不确定的问用户)。文本属 prompt 范畴,开发期用机制化占位,prompt 终稿 PR 定稿。
 - **两条出口**:① 用户接着说话 → main 对账上看到 paused(user-stop) 的工单,按新指示处置(phase3:resume 续班次原文续做;之前:带意见重派);② 用户放弃 → main 销单,cancel 级联整棵树(cancelled 是终态,义务随取消清零),根关账。
 - **超时回收兜底**:paused 不在 stranded 谓词里(只查 queued/running),用户刚喊停不会转头被看门狗催;但 paused(user-stop) 配一个**小时级长宽限**(可配),超时进 reconcile findings 唤 main 清账(续或销)——堵「停完忘了」导致的永久挂账。框架只提醒、不自动销单(语义决定留给 main / 用户)。
 - **落地排期 = phase2**(依赖 paused 状态语义,与 typed-await pause 同期)。
@@ -314,8 +317,8 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 |---|---|---|---|
 | **0(现在,独立)** | 修「孤儿结果」 | Bash 后台执行接同一套 live-ancestor→main delivery 语义。**纯 signal-bus 层,不依赖 store** —— 从「统一 store」里**拆出来先修**,别把干净 bugfix 拖进投机重构 | 已坐实真 bug / **低** |
 | **1** | durable 工单 + 可观察 | ① bg-tasks → 泛化 **TaskRun event-log store**(含 blocking 退化记录)② 通用 **publishProgress** ③ **TaskInspect** ④ 顶层工单(main 显式 `TaskCreate`)+ 强制挂靠 + 不变量 A ⑤ **交付→验收两段终态**(worker 终点 = delivered;bg 子工单经 main 验收;根由 main 宣告交付 + 清账 gate 关)⑥ 看门狗作为**检测器**(level-triggered reconcile + 启动全扫),逮搁浅 / 交付无人收 → 复用现有 crash-resume 唤醒 **main** / 升级给用户 | 真有「看不见 worker / 崩了丢活」痛点 / **低**(纯加法、不碰执行模型) |
-| **2** | 下行控制 + 精确 liveness | ① redirect / cancel / pause **活着的** worker(复用 interjection)② `CancelDispatch` 真 abort ③ 约束 C 的**唤醒路由**(没醒就唤醒、醒了就插嘴)④ **显式 pause = typed await + 唤醒源**(让合法暂停不误触发看门狗)⑤ **/stop 树级停止**(中止全树在执行班次 → paused(user-stop) 挂账 + 小时级超时回收,§6.6) | 真有「中途改方向 / 训练监控不轮询」痛点 / **中**(碰边界不碰复活) |
-| **3** | 上行问 + 交接续做 | ① **上行 ask + worker 级续跑合成一个 feature**(ask 必须住这,见下)② 续跑 = **工单键控 session resume 为主 + checkpoint 冷重建兜底**(§七),恢复注入对账;**打回-续班次的执行半边落这**(在此之前打回退化为「main 带验收意见重派」)③ 完整恢复状态机(两轴 / 窗内预算 / 两失败)④ **blocking 退役**(约束 A;skill composition dispatch-edge 同步 re-base,§十一)⑤ 看门狗催办改 **parent-first**(先唤直接父级续班次就地验收,§6.3) | 真有「长任务被打断 / 跨 session 续 / 崩溃恢复」痛点 / **高**(碰执行模型,复用 main 复活骨架) |
+| **2** | 下行控制 + 精确 liveness | ① redirect(message)/ cancel **活着的** worker(复用 interjection)② `CancelDispatch` 真 abort ③ 约束 C 的**唤醒路由**(没醒就唤醒、醒了就插嘴)④ **paused 状态只由框架写**(/stop 专用;agent 主动 pause 与下行暂停推迟 phase3,§6.2 落地分期)⑤ **/stop 树级停止**(当前 chat 全树 → paused(user-stop) 挂账 + 小时级超时回收 + 盘根系统提示占位,§6.6) | 真有「中途改方向 / 一键叫停」痛点 / **中**(碰边界不碰复活) |
+| **3** | 上行问 + 交接续做 | ① **上行 ask + worker 级续跑合成一个 feature**(ask 必须住这,见下)② 续跑 = **工单键控 session resume 为主 + checkpoint 冷重建兜底**(§七),恢复注入对账;**打回-续班次的执行半边落这**(在此之前打回退化为「main 带验收意见重派」)③ 完整恢复状态机(两轴 / 窗内预算 / 两失败)④ **blocking 退役**(约束 A;skill composition dispatch-edge 同步 re-base,§十一)⑤ 看门狗催办改 **parent-first**(先唤直接父级续班次就地验收,§6.3)⑥ **agent 主动 pause + 下行暂停活 worker**(typed-await 唤醒源 taxonomy 的工具面,§6.2 落地分期——resume 就位后暂停才有出口) | 真有「长任务被打断 / 跨 session 续 / 崩溃恢复」痛点 / **高**(碰执行模型,复用 main 复活骨架) |
 
 **为什么是这个顺序 —— 兼修一处自相矛盾**:原构想把「上行 ask」放 Phase 2、「checkpoint resume」放 Phase 3,但它自己又说「ask = resume 是同一台机器」。**这是自相矛盾**:因为老板(main)turn 驱动、随时不在线,「worker 问老板」天然依赖「worker 能下班再被叫回」—— **ask-parent 和 checkpoint-resume 是同一个 feature,必须同期**。所以本稿:Phase 2 只做**下行控制**(控制活 worker,复用 interjection,不需复活,易);**上行 ask 并入 Phase 3** 跟 resume 一起(难,需复活骨架)。Phase 0 先把「孤儿结果」这笔债独立还掉。Phase 1 纯加法、风险最低、且看门狗作「检测器」即可还掉大半 durability(逮孤儿/崩溃 → 唤醒 main / 升级),不必等 worker 级复活。(工程化时 **Phase 0 已砍**:根治本就在 Phase 1 的看门狗,实际触发概率低,真咬到再单独定点修。)
 
