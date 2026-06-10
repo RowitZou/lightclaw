@@ -30,11 +30,11 @@
 
 原构想是 vision 高度,漏了决定一切的硬约束。核验补全为三条:
 
-- **约束 A —— 只有 background 并发,blocking 没有 live parent。** blocking dispatch 是「你站着等他干完」,父此刻冻在 tool 里、不在跑。能被观察、被打断、能反向通信的只有 background。⇒ **协作机制主战场 = background dispatch**;blocking 退化为「无 live 交互的工单」(仍进 store,但只 2 写:起 + 止,见 §四)。**不引入新的 attached 模式**。
+- **约束 A —— 只有 background 并发(2026-06-10 修订:blocking 模式退役)。** blocking dispatch 是「你站着等他干完」:父冻在 tool 里不可被观察/打断/改方向——父若想喊停,必须等孙辈跑完才响应;且它是系统里唯一执行时长无上界的工具调用(其余工具超时均 ≤10 分钟)。工单保证了「父总可唤醒」之后,blocking 的存在理由消失:**「要结果再继续」= 派发 bg + pause(唤醒源:等子 join) + 续班次回灌结果**;并行 fan-out = 多个 bg + join。**退役落地排期 = phase3**(依赖 pause/resume 机制);落地前 blocking 维持现状语义(inline 自动验收)。退役后不再有任何 attached 模式。
 
 - **约束 B —— main 是 turn 驱动,不是常驻 daemon。** main 只在 user 入站 turn(或合成 turn)里活一个 turn,turn 之间不存在。⇒ **上行通信不能同步阻塞等待**(worker 挂着等一个可能永不上线的父 = 烧钱 + hang + 对抗 stream-idle watchdog)。正确形态是异步、store-mediated、靠唤醒回灌。
 
-- **约束 C —— 唤醒 main 是贵的(原构想没提)。** main 是 orchestrator(通常是最贵的模型),一次合成 turn = 一次满 context 的往返。一个派 5 worker、每个 3 里程碑 + 1 提问的任务,天真实现 = 20 次 orchestrator turn 只为协调。⇒ **scheduler 必须 coalesce + threshold,绝不 per-event 唤醒 main**。原构想的「用户侧只看 milestone/blocker」过滤要**同时作用在 main 的再唤醒上**:routine 进度静默累积进日志(按需查),只有 `needsAttention/blocker` 即时叫醒,其余攒批。**安静是默认,吵闹要够格。** 这条是框架可负担性的承重墙。
+- **约束 C —— 唤醒 main 是贵的,但解法是路由而非攒批(2026-06-10 修订)。** main 是 orchestrator(通常是最贵的模型),一次合成 turn = 一次满 context 往返,绝不能 per-event 唤醒。原构想设想 scheduler 侧 coalesce/threshold 的 lazy 攒批,**否决**——正确机制简单得多:**没醒就唤醒、醒了就插嘴**。main 在跑 → 事件走 interjection 在下个工具边界并入当前 turn(不开新 turn);main 不在 → 合成 turn 唤醒;唤醒已在途 → 后续事件自然变成那个 turn 的插嘴。「派 5 worker = 20 次 orchestrator turn」的担忧被这条路由天然消解:第一个事件唤醒 main 后,其余事件大概率落在它处理期间、全部并入。不引入任何定时窗口/lazy 机制。
 
 **设计常量(勿误判为缺口)**:worker 永不直接打扰用户(边界,非缺口);main 非常驻是设计(别为协作把它变 24/7 daemon);不做全局 artifact registry / blackboard(与「path-as-handle、无 sidecar registry」的现有立场冲突)。(原第四条「不复活旧 transcript」已于 2026-06-10 **显式反转**——工单机制消掉了当年删 resume 的前提,见 §七;「不常驻」不变,resume 是冷启动加载持久态的一种,不是保活。)
 
@@ -71,6 +71,8 @@
 ### 4.2 发起 / 判完成 / scope
 
 - **谁发起 —— 分两层**:子工单 **框架自动生成**(每次 Dispatch 顺手开,零仪式;**建档在「派发那一刻」而非「开跑那一刻」**——排期未跑的活也必须在档案系统里可见、可计入义务,否则它在 fire 前是隐形的)。顶层工单 **由 main 显式 `TaskCreate` 创建**(2026-06-09 修订,取代原稿「框架自动判断这轮是不是多步长程活、不靠额外建工单工具」——自动分类「这条消息是新目标还是上一个的补充」本质不可靠,该判断只有 main 有上下文能做;main 显式声明、框架其后机械维护,形状同 TodoWrite)。框架对 main 的派发**强制挂靠**到某张根工单(缺则拒、自愈纠正),没教也不出无根森林。
+
+- **定时服务 = 永不交付的常驻根(2026-06-10 修订,取代「recurring 不进树」例外)**:每个 recurring/interval 派发对应一张**常驻根工单**;每次定时触发生成一张子工单,走正常交付/验收;**该次交付结算的 hook 阶段原子地补建下一张 queued 子工单**——根名下永远有义务,关根 gate 永远拒绝,从构造上杜绝「main 先关根、之后孤儿 queued 冒出来」的竞态。停止服务 = 显式取消(取消排期 + cancelled 掉 queued 子 → 义务清零 → 关根)。这同时消灭了「树外 delivered 没人能收」的自由森林死角——一切皆有根。
 
 - **谁判完成 —— 两段式:交付,然后验收(2026-06-10 修订)**:worker 干完**自报状态**——「已交付」(成功或失败报告都算交付;**worker 返回 ≠ 成功**)或「已暂停」(等某唤醒源,§六)。**交付 ≠ 工单结束**:工单停在交付态,由**直接父验收**后才终态——worker 验收它派的子、main 验收根下直接子,**逐级栈式回收**,不攒到 main 统一清(2026-06-10 二次修订;过渡期例外:worker 一次性进程下班后没人收它的子,main 可越级验收自己根树下任何 delivered 后代,等 phase3「父总可唤醒」落地后收紧回严格相邻)。状态变更走**统一状态机工具**:agent 对**自己的**工单只能交付/暂停,对**直接子**只能验收/打回,且子须处于交付态;worker 知道工单的存在无妨,但不能建根、只能经这个受限工具改状态。通过关单;不过**打回**,工单不关、打回理由作为事件追加,子工单续班次接着做(§五/§七)。这套「员工自报 + 老板验收」给框架一个可对照面:声明了交付 = 在等验收;声明了暂停 = 在等唤醒源;**什么都没声明人就没了 = 异常**(崩/烂尾),看门狗处理。**根工单例外:main 宣告交付即关**——用户不操作工单系统、不做验收(体验优先),有意见就开新工单;但宣告交付必须**名下义务清零**,否则框架顶回、列清单让 main 先清账(§6.1 清账 gate)。**worker 判「我这块停了」,main 判「整件事成了」**——后半句从「判断」升级成了显式动作。
 
@@ -203,7 +205,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 > **不变量 B:子 agent 在「发出上行消息后、收到下行回复前」,不能把工单设为完成。**
 
-保证消息能送达。但**必须加超时**:父可能永远不回(父自己崩了 / 问题已作废)。超时 → 子带默认继续,或升级给用户(复用现有提问卡 / 审批卡的超时兜底那套)。否则子被永久钉死。
+保证消息能送达。但**必须加超时**:父可能永远不回(父自己崩了 / 问题已作废)。**超时默认 ~10 分钟,完全模仿提问卡的超时返默认机制**——发问的 agent 必须自带默认选项,超时即按默认续做(2026-06-10 定;前提已核实:全部工具执行超时 ≤10 分钟,blocking 退役后无例外)。否则子被永久钉死。
 
 ---
 
@@ -256,7 +258,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 唤醒本身会失败(API 没回来、runtime 不可用),必须有界 + 升级。但「重试一次不行就判死」太硬:**一个长任务一生会合法地暂停/恢复很多次**,用「一生总共 1 次」会误杀。正确判据是 OTP 的 **max-restart-intensity:单位时间窗内重启超 N 次**才算病态(如 5 分钟内崩 3 次)。病态的不是「恢复多」,是「短时间内反复恢复都推不动」。
 
-**分两种失败、两个预算**(都升级给用户 DM,但报的话不同,且都带工单现状 —— 最近 checkpoint、当时等谁、什么失败,让用户能接手):
+**分两种失败、两个预算,升级走逐层上报(2026-06-10 修订)**——对接面是分层的:用户只对 main、子只对父,**框架在 main 可达时绝不越过 main 直发用户**(小事不打扰老板,上一级也许就能解决:停掉换方案/重派)。「推不动」(窗内反复唤醒无推进)→ 最后一次**带升级标记的唤醒给 main**,由 main 决定换方案/取消/经自己的渠道报告用户,然后停手;**唯一的直发用户 DM 兜底 = main 本身不可达**(唤醒投递重试耗尽——这是运维面,不是 agent 通信面)。报文都带工单现状(最近 checkpoint、当时等谁、什么失败):
 
 | 失败 | 现象 | 处理 |
 |---|---|---|
@@ -310,7 +312,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 ## 十一、与现有机制的边界
 
 - **vs memory 层**:工单 / checkpoint = **进行中**任务的短期状态;memory = **沉淀后**的长期事实。连接点:后台 memory 整合(autoDream)消费工单 artifact / checkpoint,把稳定事实升级为 memory。**不要**让 checkpoint 重复 memory 职责,也不建第二个长期记忆。
-- **vs skill composition(Dispatch 底座):结论是「不用协调」。** skill 系统的 composition 设计把 blocking Dispatch 当「带返回值的调用」用(子 context 当栈帧、finalText 当返回值)。本设计 **刻意不动 blocking 语义**(只给它加 2 写退化记录、不改 finalText 拼回),协作全建在 background 路径上、是 blocking 的超集。两者只在 Dispatch 工具壳上相交,而壳的 blocking 行为不变,故 skill composition **不受影响**。
+- **vs skill composition(Dispatch 底座):结论是「不用协调」。** skill 系统的 composition 设计把 blocking Dispatch 当「带返回值的调用」用(子 context 当栈帧、finalText 当返回值)。~~本设计刻意不动 blocking 语义~~ **2026-06-10 修订:blocking 将于 phase3 退役**(约束 A),skill composition 的 `dispatch`-edge(把 blocking 当带返回值的调用)需 **re-base 为「bg 派发 + pause(等子 join) + 续班次回灌」**——语义等价(调用方拿到结果再继续)但可中断、可崩溃恢复;交叉依赖在 phase3 立项时一并处理。
 - **vs signal bus**:bus 是传输层,工单是状态层。progress / message / control / abort 全映射到现有 signal kinds,不新增传输。
 - **原构想里被否决/降级的点**:sibling 直接广播(被 main-集成点取代)、全局 blackboard 结构体(被 per-task artifact + memory 取代)、同步 `AgentWaitForMessage`(被异步唤醒取代)。
 
