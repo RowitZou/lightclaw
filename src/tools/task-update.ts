@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { loadBackgroundTasks } from '../background-task/store.js'
 import {
   acceptTaskRun,
   closeRootTaskRun,
@@ -23,6 +24,31 @@ function describeObligationStatus(meta: TaskRunMeta): string {
   if (meta.status === 'delivered') return 'delivered, awaiting acceptance'
   if (meta.status === 'queued') return 'scheduled, not fired yet'
   return meta.status
+}
+
+/** CancelDispatch can only close a standing-service root whose ledger is
+ *  already settled; with a fire still in flight (or parked at delivered) the
+ *  gate refuses, the entry is removed, and nothing revisits the root after
+ *  that. The verdict settling a child is the natural revisit: once no live
+ *  dispatch entry backs the root, retry the gated close — it succeeds exactly
+ *  when the last obligation settles. */
+async function closeOrphanStandingRootBestEffort(
+  owner: string,
+  rootRunId: string,
+): Promise<void> {
+  try {
+    const root = await getTaskRun(rootRunId, owner)
+    if (root?.standing !== true) return
+    if (root.status === 'done' || root.status === 'failed' || root.status === 'cancelled') return
+    if (loadBackgroundTasks(owner).some(entry => entry.standingRootRunId === rootRunId)) return
+    await closeRootTaskRun(rootRunId, owner)
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to close orphan standing root ${rootRunId}: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
 }
 
 export const taskUpdateTool = buildTool({
@@ -171,6 +197,7 @@ export const taskUpdateTool = buildTool({
         isError: true,
       }
     }
+    await closeOrphanStandingRootBestEffort(owner, settled.rootRunId)
     return { output: JSON.stringify({ runId: settled.id, status: settled.status }) }
   },
 })

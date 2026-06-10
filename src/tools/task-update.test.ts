@@ -8,9 +8,11 @@ import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import { addBackgroundTask } from '../background-task/store.js'
 import {
   acceptTaskRun,
   createRootTaskRun,
+  createStandingRootTaskRun,
   createTaskRun,
   getTaskRun,
   getTaskRunEvents,
@@ -194,6 +196,59 @@ test('orchestrator settles delivered descendants inside its rooted trees, not th
   assert.equal(outside.isError, true)
   assert.equal((await getTaskRun(freeForest.id, 'alice'))?.status, 'delivered')
 })
+
+test('settling the last fire of a cancelled standing service closes its orphan root', async () => {
+  // CancelDispatch with a fire in flight: the close is refused by the
+  // obligations gate, the entry is removed, and the fire later parks at
+  // delivered. The verdict on that fire must close the root, or it stays
+  // open forever (watchdog skips roots; the orchestrator gate skips standing).
+  const root = await standingRoot()
+  const fire = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  await markDelivered(fire.id, { ok: true, summary: 'last fire' }, Date.now(), 'alice')
+
+  const accepted = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'accept', runId: fire.id }, toolContext()),
+  )
+  assert.equal(accepted.isError, undefined)
+  assert.equal((await getTaskRun(fire.id, 'alice'))?.status, 'done')
+  assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'done')
+})
+
+test('settling a fire of a live standing service leaves the root open', async () => {
+  const root = await standingRoot()
+  addBackgroundTask('alice', {
+    id: 'svc-1',
+    ownerCanonicalUser: 'alice',
+    prompt: 'standing service',
+    role: 'coder',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'svc',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    standingRootRunId: root.id,
+  })
+  const fire = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  await markDelivered(fire.id, { ok: true, summary: 'a fire' }, Date.now(), 'alice')
+
+  const accepted = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'accept', runId: fire.id }, toolContext()),
+  )
+  assert.equal(accepted.isError, undefined)
+  assert.equal((await getTaskRun(fire.id, 'alice'))?.status, 'done')
+  assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
+})
+
+async function standingRoot() {
+  return await createStandingRootTaskRun('alice', {
+    objective: 'standing service',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    chainId: 'chain-standing',
+  })
+}
 
 async function startedRun(input: { callerRole: string; parentRunId: string | null }) {
   const run = await createTaskRun({
