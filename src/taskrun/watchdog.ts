@@ -104,6 +104,14 @@ export async function reconcileTaskRunsOnce(
     eventsByRun.set(run.id, events)
   }))
 
+  // A due wake is the framework's job, not main's: a timer that has fired, an
+  // ask past its timeout (declared default!), or an awaited child that
+  // settled without the deliver-hook landing (crash / cancel). Execute the
+  // declared wake — level-triggered, so this also re-arms every in-memory
+  // timer lost to a daemon restart. Only a wake whose resume already FAILED
+  // becomes a dead-wake-source finding for main.
+  const failedWakeRunIds = await executeDueWakesBestEffort(ownerCanonicalUser, runs, now)
+
   const findings = detectTaskRunFindings(runs, {
     now,
     deliveredGraceMs,
@@ -113,6 +121,7 @@ export async function reconcileTaskRunsOnce(
     schedulerTaskRunIds: deps.schedulerTaskRunIds ?? new Set(),
     backgroundEntries: deps.backgroundEntries ?? loadBackgroundTasks(ownerCanonicalUser),
     eventsByRun,
+    failedWakeRunIds,
   })
   if (findings.length === 0) {
     return {
@@ -259,6 +268,7 @@ export function detectTaskRunFindings(
     schedulerTaskRunIds: Set<string>
     backgroundEntries: BackgroundTaskEntry[]
     eventsByRun: Map<string, TaskRunEvent[]>
+    failedWakeRunIds?: Set<string>
   },
 ): TaskRunWatchdogFinding[] {
   const pausedGraceMs = input.pausedGraceMs ?? 21_600_000
@@ -308,7 +318,10 @@ export function detectTaskRunFindings(
     if (run.status === 'paused' && pausedGraceMs > 0) {
       const pausedAt = run.pausedAt ?? run.updatedAt
       if (run.wake && !run.wake.consumed) {
-        if (isDeadWakeSource(run.wake, runById, input.backgroundEntries, input.now)) {
+        // A live or due declared wake is the framework's business (the
+        // reconcile loop executes due wakes itself); it surfaces to main only
+        // after an execution attempt failed.
+        if (input.failedWakeRunIds?.has(run.id)) {
           findings.push(toFinding(run, runById, {
             kind: 'dead-wake-source',
             since: pausedAt,
@@ -336,6 +349,82 @@ export function detectTaskRunFindings(
   return findings.sort((a, b) =>
     a.since - b.since || a.runId.localeCompare(b.runId),
   )
+}
+
+/** Execute due declared wakes: a fired timer, an ask past its timeout (run
+ *  the declared default), or an awaited child that already settled without
+ *  the deliver-hook landing (crash between markDelivered and the wake, or a
+ *  cancelled child). Resumes are scheduled detached; level-triggered, so
+ *  in-memory timers lost to a daemon restart are re-armed from the ledger
+ *  here. Returns the run ids whose previous execution attempt failed —
+ *  those become dead-wake-source findings instead of silent retry loops. */
+async function executeDueWakesBestEffort(
+  ownerCanonicalUser: string,
+  runs: TaskRunMeta[],
+  now: number,
+): Promise<Set<string>> {
+  const failed = new Set<string>()
+  const runById = new Map(runs.map(run => [run.id, run]))
+  const { getLastResumeFailure, isResumePending, scheduleResumeRunWithBlock } = await import(
+    './resume-schedule.js'
+  )
+  for (const run of runs) {
+    if (run.status !== 'paused' || !run.wake || run.wake.consumed) continue
+    if (isResumePending(run.id)) continue
+    if (getLastResumeFailure(run.id)) {
+      failed.add(run.id)
+      continue
+    }
+    const wake = run.wake
+    try {
+      if (wake.kind === 'timer' && wake.at <= now) {
+        scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
+          via: 'timer',
+          reason: 'taskrun timer wake (reconcile re-arm)',
+          body: '<taskrun-timer-wake />',
+        })
+        continue
+      }
+      if (wake.kind === 'parent-reply' && wake.timeoutAt <= now) {
+        await appendEvent(run.id, 'answered', {
+          auto: true,
+          reason: 'timeout',
+          answer: wake.default,
+        }, now, ownerCanonicalUser)
+        scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
+          via: 'answer',
+          reason: 'parent reply timed out; using default answer (reconcile re-arm)',
+          body: wake.default,
+        })
+        continue
+      }
+      if (wake.kind === 'child-join') {
+        const child = runById.get(wake.runId)
+        const childSettled = !child || child.status === 'delivered' || isTerminal(child.status)
+        if (childSettled) {
+          scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
+            via: 'child-join',
+            reason: 'awaited child settled (reconcile re-arm)',
+            body: [
+              '<taskrun-child-result>',
+              `runId=${wake.runId}`,
+              `status=${child?.status ?? 'missing'}`,
+              child?.outcome?.summary ?? child?.outcome?.error ?? '(no outcome recorded)',
+              '</taskrun-child-result>',
+            ].join('\n'),
+          })
+        }
+      }
+    } catch (error) {
+      failed.add(run.id)
+      process.stderr.write(
+        `[taskrun-watchdog] due-wake execution failed for ${run.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
+  }
+  return failed
 }
 
 async function deliverParentFirstFindings(input: {
@@ -385,26 +474,6 @@ async function deliverParentFirstFindings(input: {
   return { delivered, remaining }
 }
 
-function isDeadWakeSource(
-  wake: NonNullable<TaskRunMeta['wake']>,
-  runById: Map<string, TaskRunMeta>,
-  entries: BackgroundTaskEntry[],
-  now: number,
-): boolean {
-  if (wake.kind === 'child-join') {
-    const child = runById.get(wake.runId)
-    return !child || isTerminal(child.status)
-  }
-  if (wake.kind === 'timer') {
-    if (wake.at > now) return false
-    if (!wake.dispatchId) return true
-    return !entries.some(entry => entry.id === wake.dispatchId)
-  }
-  if (wake.kind === 'parent-reply') {
-    return wake.timeoutAt <= now
-  }
-  return false
-}
 
 export function formatTaskRunReconcileBlock(
   ownerCanonicalUser: string,

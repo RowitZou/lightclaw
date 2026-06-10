@@ -33,7 +33,11 @@ test('wakeOrInterject queues into an in-flight session', async () => {
   }
 })
 
-test('wakeOrInterject merges later wake blocks into one pending synthetic turn', async () => {
+test('wakeOrInterject routes later wake blocks into the interjection queue while a synthetic turn is pending', async () => {
+  // Mutating the pending synthetic message text loses the block when the
+  // runner has already consumed the text but the session is not yet marked
+  // in-flight; the interjection queue has no such window — anything pushed
+  // before the turn begins is drained at its first tool boundary.
   const sessionId = 'feishu:dm:oc_wake_pending'
   const syntheticMessages: NormalizedChannelMessage[] = []
   let release!: () => void
@@ -70,7 +74,12 @@ test('wakeOrInterject merges later wake blocks into one pending synthetic turn',
     assert.deepEqual(second, { ok: true, mode: 'queued' })
     assert.equal(syntheticMessages.length, 1)
     assert.match(syntheticMessages[0]?.text ?? '', /<block>A<\/block>/)
-    assert.match(syntheticMessages[0]?.text ?? '', /<block>B<\/block>/)
+    // B must NOT ride on the consumed synthetic text — it lands in the
+    // interjection queue instead, where the new turn picks it up.
+    assert.doesNotMatch(syntheticMessages[0]?.text ?? '', /<block>B<\/block>/)
+    const queued = channelInterjectionQueue.drain(sessionId)
+    assert.equal(queued.length, 1)
+    assert.equal(queued[0]?.text, '<block>B</block>')
     release()
     assert.deepEqual(await first, { ok: true, mode: 'synthetic' })
   } finally {

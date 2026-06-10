@@ -48,8 +48,9 @@ import {
   getTaskRun,
   markCancelled,
   markPaused,
+  markResumed,
 } from '../taskrun/store.js'
-import { resumeRunWithBlock } from '../taskrun/resume.js'
+import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
@@ -813,14 +814,14 @@ export const messageDispatchTool = buildTool({
           answer: input.message.trim(),
         }, Date.now(), userId)
       }
-      const resumed = await resumeRunWithBlock(run.id, {
+      // Detached: the resumed shift can take minutes; the speaker must not
+      // sit inside it (that would be blocking dispatch by another name).
+      scheduleResumeRunWithBlock(userId, run.id, {
         via: run.pauseReason === 'awaiting-reply' ? 'answer' : 'message',
         reason: run.pauseReason === 'awaiting-reply' ? 'parent answer' : 'message to paused run',
         body: wrapMessageDispatch(input.message.trim()),
-      }, userId)
-      return resumed.ok
-        ? { output: `TaskRun ${run.id} resumed with your message.` }
-        : { output: `TaskRun ${run.id} could not be resumed: ${resumed.message}`, isError: true }
+      })
+      return { output: `TaskRun ${run.id} resume scheduled with your message.` }
     }
     if (run.status === 'queued') {
       return { output: `TaskRun ${run.id} is queued; use UpdateDispatch to change the queued prompt.`, isError: true }
@@ -924,17 +925,16 @@ async function askParentFromCurrentRun(input: {
       arrivedAt: Date.now(),
       source: 'user',
     })
-    return { output: `Asked parent TaskRun ${parent.id}; waiting for reply.` }
+    return { output: `Asked parent TaskRun ${parent.id}. End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
   }
   if (parent.status === 'paused') {
-    const resumed = await resumeRunWithBlock(parent.id, {
+    // Detached: waking the parent runs its whole next shift.
+    scheduleResumeRunWithBlock(input.owner, parent.id, {
       via: 'message',
       reason: `child ${own.id} asked parent`,
       body: askBlock,
-    }, input.owner)
-    return resumed.ok
-      ? { output: `Asked and resumed parent TaskRun ${parent.id}; waiting for reply.` }
-      : { output: `Parent could not be resumed, continuing with default: ${defaultAnswer}` }
+    })
+    return { output: `Asked parent TaskRun ${parent.id} (resume scheduled). End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
   }
   if ((parent.kind ?? 'dispatch') === 'root') {
     const identity = await getIdentity(input.owner).catch(() => null)
@@ -949,22 +949,24 @@ async function askParentFromCurrentRun(input: {
         source: 'background-task',
         logPrefix: '[taskrun-ask]',
       })
-      if (delivered.ok) return { output: `Asked main via ${delivered.mode}; waiting for reply.` }
+      if (delivered.ok) return { output: `Asked main via ${delivered.mode}. End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
     }
   }
+  // Parent unreachable: settle the ask in place. The asking turn is still
+  // running — do NOT resume our own session (that would start a second agent
+  // loop racing this one on the same transcript). Un-pause the ledger and
+  // hand the default back through the tool result so this turn continues.
   await appendEvent(own.id, 'answered', {
     auto: true,
     reason: 'parent-unavailable',
     answer: defaultAnswer,
   }, Date.now(), input.owner)
-  const resumed = await resumeRunWithBlock(own.id, {
+  await markResumed(own.id, {
     via: 'answer',
     reason: 'parent unavailable; using default answer',
-    body: wrapMessageDispatch(defaultAnswer),
-  }, input.owner)
-  return resumed.ok
-    ? { output: `Parent unavailable; continued with default answer.` }
-    : { output: `Parent unavailable and default resume failed: ${resumed.message}`, isError: true }
+    sessionId: getSessionId(),
+  }, Date.now(), input.owner)
+  return { output: `Parent unavailable — continue now with your default answer: ${defaultAnswer}` }
 }
 
 function scheduleAskTimeout(owner: string, runId: string, timeoutAt: number, defaultAnswer: string): void {
@@ -977,11 +979,11 @@ function scheduleAskTimeout(owner: string, runId: string, timeoutAt: number, def
         reason: 'timeout',
         answer: defaultAnswer,
       }, Date.now(), owner)
-      await resumeRunWithBlock(runId, {
+      scheduleResumeRunWithBlock(owner, runId, {
         via: 'answer',
         reason: 'parent reply timed out; using default answer',
         body: wrapMessageDispatch(defaultAnswer),
-      }, owner)
+      })
     })().catch(error => {
       process.stderr.write(`[taskrun] ask timeout failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`)
     })

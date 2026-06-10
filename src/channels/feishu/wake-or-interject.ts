@@ -36,8 +36,18 @@ export async function wakeOrInterject(input: {
 
   const pending = pendingWakeBySession.get(input.targetSessionId)
   if (pending) {
-    pending.blocks.push(input.block)
-    pending.message.text = pending.blocks.join('\n\n')
+    // Do NOT mutate the pending synthetic message's text: the runner may have
+    // already consumed it (built the user message) without the session being
+    // marked in-flight yet — a mutation in that window is silently lost. The
+    // interjection queue has no such window: items pushed before the turn
+    // begins are drained at its first tool boundary.
+    channelInterjectionQueue.push(input.targetSessionId, {
+      text: input.block,
+      messageId: input.messageId,
+      senderOpenId: input.ownerOpenId,
+      arrivedAt: input.emittedAt,
+      source: input.source ?? 'background-task',
+    })
     return { ok: true, mode: 'queued' }
   }
 

@@ -105,7 +105,15 @@ async function markBackgroundTaskRunTerminalBestEffort(
       // (TaskUpdate settles it). For standing services, completion handling
       // immediately creates the next queued child so the standing root keeps a
       // future obligation until CancelDispatch stops it.
-      await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
+      const delivered = await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
+      // Settle-on-return is a delivery path too: a parent parked at
+      // paused(child-join) on this fire must be woken from here as well, not
+      // only when the worker self-reports via TaskUpdate — most fires never
+      // call it.
+      if (delivered?.status === 'delivered') {
+        const { wakeParentForChildJoinBestEffort } = await import('../taskrun/resume.js')
+        await wakeParentForChildJoinBestEffort(canonicalUser, delivered)
+      }
     } else {
       // Legacy recurring / interval entries created before standing roots had
       // no acceptance parent. Keep them terminal-on-completion for backward

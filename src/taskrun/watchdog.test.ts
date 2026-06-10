@@ -13,8 +13,14 @@ import {
   createTaskRun,
   getTaskRunEvents,
   markDelivered,
+  markPaused,
   markStarted,
 } from './store.js'
+import {
+  drainScheduledResumesForTest,
+  resetResumeScheduleForTest,
+  setResumeRunnerForTest,
+} from './resume-schedule.js'
 import {
   detectTaskRunFindings,
   formatTaskRunReconcileBlock,
@@ -137,6 +143,91 @@ describe('TaskRun watchdog', () => {
       eventsByRun: eventsFor(runs),
     })
     assert.deepEqual(disabled, [])
+  })
+
+  it('executes due declared wakes itself instead of reporting them to main', async () => {
+    // A fired timer is the framework's job (this is also the restart re-arm:
+    // the in-process setTimeout died with the old daemon, the ledger did not).
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-wake-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Wait 30 minutes, then check the job.',
+        parentRunId: null,
+        chainId: 'chain-timer',
+        depth: 1,
+        now: 100,
+      })
+      await markStarted(run.id, 'bg-timer', 200, 'alice')
+      await markPaused(run.id, {
+        reason: 'timer',
+        wake: { kind: 'timer', at: 1_000 },
+      }, 300, 'alice')
+
+      const resumeCalls: Array<{ runId: string; via: string }> = []
+      setResumeRunnerForTest(async (runId, block) => {
+        resumeCalls.push({ runId, via: block.via })
+        return { ok: true, run: (await import('./store.js').then(m => m.getTaskRun(runId, 'alice')))!, mode: 'resume', assistantText: '' }
+      })
+
+      const result = await reconcileTaskRunsOnce('alice', { now: 10_000 })
+      await drainScheduledResumesForTest()
+
+      assert.deepEqual(resumeCalls, [{ runId: run.id, via: 'timer' }])
+      assert.deepEqual(result.findings, [])
+    } finally {
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('escalates a due wake as dead-wake-source only after its resume failed', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-deadwake-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Wait, then check.',
+        parentRunId: null,
+        chainId: 'chain-timer-fail',
+        depth: 1,
+        now: 100,
+      })
+      await markStarted(run.id, 'bg-timer-fail', 200, 'alice')
+      await markPaused(run.id, {
+        reason: 'timer',
+        wake: { kind: 'timer', at: 1_000 },
+      }, 300, 'alice')
+      setResumeRunnerForTest(async () => ({
+        ok: false,
+        reason: 'query-failed',
+        message: 'provider down',
+      }))
+
+      const first = await reconcileTaskRunsOnce('alice', { now: 10_000 })
+      assert.deepEqual(first.findings, [])
+      await drainScheduledResumesForTest()
+
+      const second = await reconcileTaskRunsOnce('alice', { now: 11_000 })
+      assert.deepEqual(
+        second.findings.map(finding => [finding.runId, finding.kind]),
+        [[run.id, 'dead-wake-source']],
+      )
+    } finally {
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
   })
 
   it('dedupes by durable watchdog-report fingerprint and reports again after state advances', async () => {

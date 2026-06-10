@@ -11,7 +11,8 @@ import {
   markPaused,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { resumeRunWithBlock } from '../taskrun/resume.js'
+import { wakeParentForChildJoinBestEffort } from '../taskrun/resume.js'
+import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
@@ -160,7 +161,7 @@ export const taskUpdateTool = buildTool({
       if (!delivered) {
         return { output: `TaskRun ${own} could not be delivered.`, isError: true }
       }
-      await resumeParentForChildJoinBestEffort(owner, delivered)
+      await wakeParentForChildJoinBestEffort(owner, delivered)
       return { output: JSON.stringify({ runId: delivered.id, status: delivered.status }) }
     }
 
@@ -223,7 +224,9 @@ export const taskUpdateTool = buildTool({
       if (wake.kind === 'timer') {
         scheduleTaskRunTimerWake(owner, paused.id, wake.at)
       }
-      return { output: JSON.stringify({ runId: paused.id, status: paused.status, wake }) }
+      return {
+        output: `${JSON.stringify({ runId: paused.id, status: paused.status, wake })}\nPause recorded. End your turn now — the framework resumes this run when the wake fires, injecting what arrived.`,
+      }
     }
 
     if (input.action === 'cancel') {
@@ -329,7 +332,10 @@ export const taskUpdateTool = buildTool({
       }
     }
     if (input.action === 'reject') {
-      const resumed = await resumeRunWithBlock(input.runId, {
+      // Detached on purpose: the rejected run's next shift can take minutes.
+      // Awaiting it here would freeze the rejecting caller inside the tool
+      // call — the exact shape retiring blocking dispatch removed.
+      scheduleResumeRunWithBlock(owner, input.runId, {
         via: 'reject',
         reason: `rejected by ${byRole}`,
         body: [
@@ -337,52 +343,24 @@ export const taskUpdateTool = buildTool({
           feedback,
           '</taskrun-reject-feedback>',
         ].join('\n'),
-      }, owner)
-      if (!resumed.ok) {
-        return {
-          output: `TaskRun ${input.runId} was rejected, but automatic resume failed: ${resumed.message}`,
-          isError: true,
-        }
-      }
+      })
     }
     await closeOrphanStandingRootBestEffort(owner, settled.rootRunId)
     return { output: JSON.stringify({ runId: settled.id, status: settled.status }) }
   },
 })
 
+// In-process promptness only; the durable half is the watchdog reconcile,
+// which re-arms due timer wakes from the ledger after a daemon restart.
 function scheduleTaskRunTimerWake(owner: string, runId: string, at: number): void {
   const delay = Math.max(0, at - Date.now())
   setTimeout(() => {
-    void resumeRunWithBlock(runId, {
+    scheduleResumeRunWithBlock(owner, runId, {
       via: 'timer',
       reason: 'taskrun timer wake',
       body: '<taskrun-timer-wake />',
-    }, owner).catch(error => {
-      process.stderr.write(`[taskrun] timer wake failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`)
     })
   }, delay).unref?.()
-}
-
-async function resumeParentForChildJoinBestEffort(owner: string, child: TaskRunMeta): Promise<void> {
-  if (!child.parentRunId) return
-  const parent = await getTaskRun(child.parentRunId, owner)
-  if (parent?.status !== 'paused') return
-  if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return
-  const summary = child.outcome?.summary ?? child.outcome?.error ?? child.title
-  const resumed = await resumeRunWithBlock(parent.id, {
-    via: 'child-join',
-    reason: `child ${child.id} delivered`,
-    body: [
-      '<taskrun-child-result>',
-      `runId=${child.id}`,
-      `status=${child.status}`,
-      summary,
-      '</taskrun-child-result>',
-    ].join('\n'),
-  }, owner)
-  if (!resumed.ok) {
-    process.stderr.write(`[taskrun] child-join resume failed for ${parent.id}: ${resumed.message}\n`)
-  }
 }
 
 export const __toolDescriptionForSnapshot = {

@@ -10,6 +10,11 @@ import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { addBackgroundTask } from '../background-task/store.js'
 import {
+  drainScheduledResumesForTest,
+  resetResumeScheduleForTest,
+  setResumeRunnerForTest,
+} from '../taskrun/resume-schedule.js'
+import {
   acceptTaskRun,
   createRootTaskRun,
   createStandingRootTaskRun,
@@ -31,6 +36,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetResumeScheduleForTest()
   setLightclawHomeOverride(undefined)
   rmSync(tmpHome, { recursive: true, force: true })
 })
@@ -119,17 +125,35 @@ test('worker reject requires feedback and keeps the child open for resume', asyn
   assert.equal(missing.isError, true)
   assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'delivered')
 
+  // The resumed shift can take minutes: reject must schedule it detached and
+  // return immediately, never sit inside it (blocking dispatch by another
+  // name). The stub runner stays parked on a gate while the tool returns.
+  const resumeCalls: Array<{ runId: string; via: string }> = []
+  let releaseResume!: () => void
+  const resumeGate = new Promise<void>(resolve => {
+    releaseResume = resolve
+  })
+  setResumeRunnerForTest(async (runId, block) => {
+    resumeCalls.push({ runId, via: block.via })
+    await resumeGate
+    const run = await getTaskRun(runId, 'alice')
+    return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
+  })
+
   const rejected = await runAsWorker(workerRun.id, () =>
     taskUpdateTool.call(
       { action: 'reject', runId: child.id, feedback: 'Missing the cost section.' },
       toolContext(),
     ),
   )
-  assert.equal(rejected.isError, true)
-  assert.match(rejected.output, /automatic resume failed/i)
+  assert.equal(rejected.isError, undefined)
   const meta = await getTaskRun(child.id, 'alice')
   assert.equal(meta?.status, 'running')
   assert.equal(meta?.outcome, undefined)
+
+  releaseResume()
+  await drainScheduledResumesForTest()
+  assert.deepEqual(resumeCalls, [{ runId: child.id, via: 'reject' }])
 })
 
 test('orchestrator deliver closes a root only when its ledger is settled', async () => {

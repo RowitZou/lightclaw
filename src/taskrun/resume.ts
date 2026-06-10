@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
 import { forkInvocationContext } from '../agents/invocation-context.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
@@ -35,7 +37,7 @@ export type ResumeRunBlock = {
 }
 
 export type ResumeRunResult =
-  | { ok: true; run: TaskRunMeta; mode: 'resume' | 'rebuild'; assistantText: string }
+  | { ok: true; run: TaskRunMeta; mode: 'resume' | 'rebuild' | 'interjection'; assistantText: string }
   | { ok: false; reason: 'not-found' | 'no-role' | 'no-session-context' | 'no-transcript' | 'no-checkpoint' | 'query-failed'; message: string }
 
 export async function resumeRunWithBlock(
@@ -51,6 +53,34 @@ export async function resumeRunWithBlock(
   if (!run) return { ok: false, reason: 'not-found', message: `TaskRun not found: ${runId}` }
   const role = getAgent(run.role)
   if (!role) return { ok: false, reason: 'no-role', message: `TaskRun role is not registered: ${run.role}` }
+
+  // Awake-already guard ("没醒就唤醒、醒了就插嘴" applied to workers): if the
+  // run's last session still has a turn in flight — e.g. a worker asked,
+  // parked at paused(awaiting-reply), and the answer arrived before its turn
+  // wound down — starting a second agent loop on the same session would race
+  // the live one on a single transcript. Join the live turn instead: deliver
+  // the block as an interjection and flip the ledger back to running; the
+  // live turn's settle-on-return takes it from there.
+  const liveSessionId = run.lastSessionId ?? run.currentSessionId
+  if (liveSessionId && isSessionTurnInFlight(liveSessionId)) {
+    const interjected = formatResumeBlock(run, block, 'resume')
+    channelInterjectionQueue.push(liveSessionId, {
+      messageId: `taskrun-resume-${run.id}-${Date.now()}`,
+      senderOpenId: `taskrun:${run.id}`,
+      text: interjected,
+      arrivedAt: Date.now(),
+      source: 'background-task',
+    })
+    if (run.status === 'paused') {
+      await markResumed(run.id, { via: block.via, reason: block.reason, sessionId: liveSessionId }, Date.now(), run.ownerCanonicalUser)
+    }
+    return {
+      ok: true,
+      run: (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run,
+      mode: 'interjection',
+      assistantText: '',
+    }
+  }
 
   let config: ReturnType<typeof getConfig>
   try {
@@ -171,6 +201,40 @@ export async function resumeRunWithBlock(
     await markDelivered(run.id, { ok: false, error: message.slice(0, 500) }, Date.now(), run.ownerCanonicalUser)
     return { ok: false, reason: 'query-failed', message }
   }
+}
+
+function isSessionTurnInFlight(sessionId: string): boolean {
+  return channelInterjectionQueue.hasInflightFor(sessionId) ||
+    getSignalRouter().getAllActiveSessionIds().has(sessionId)
+}
+
+/** Child reached delivered → if its parent is parked at paused(child-join)
+ *  waiting for exactly this child, hand the parent its result and resume the
+ *  shift. Called from BOTH delivery paths — TaskUpdate explicit deliver and
+ *  the scheduler's settle-on-return — or a parent awaiting a fire that never
+ *  self-reports would sleep forever. Detached: the delivering caller must not
+ *  sit inside the parent's whole next shift. */
+export async function wakeParentForChildJoinBestEffort(
+  ownerCanonicalUser: string,
+  child: TaskRunMeta,
+): Promise<void> {
+  if (!child.parentRunId) return
+  const parent = await getTaskRun(child.parentRunId, ownerCanonicalUser)
+  if (parent?.status !== 'paused') return
+  if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return
+  const summary = child.outcome?.summary ?? child.outcome?.error ?? child.title
+  const { scheduleResumeRunWithBlock } = await import('./resume-schedule.js')
+  scheduleResumeRunWithBlock(ownerCanonicalUser, parent.id, {
+    via: 'child-join',
+    reason: `child ${child.id} delivered`,
+    body: [
+      '<taskrun-child-result>',
+      `runId=${child.id}`,
+      `status=${child.status}`,
+      summary,
+      '</taskrun-child-result>',
+    ].join('\n'),
+  })
 }
 
 async function appendMessagesAfterSeed(sessionId: string, batch: Parameters<typeof appendMessage>[1][]): Promise<void> {

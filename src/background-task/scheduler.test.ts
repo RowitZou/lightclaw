@@ -25,6 +25,11 @@ import {
   markPaused,
   markStarted,
 } from '../taskrun/store.js'
+import {
+  drainScheduledResumesForTest,
+  resetResumeScheduleForTest,
+  setResumeRunnerForTest,
+} from '../taskrun/resume-schedule.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -101,8 +106,68 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
   afterEach(() => {
     setRunBackgroundTaskFireForTest(null)
+    resetResumeScheduleForTest()
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  it('wakes a parent paused on child-join when the fire delivers via settle-on-return', async () => {
+    // The deliver-hook must live on the scheduler delivery path too: most
+    // fires never call TaskUpdate deliver, and a parent parked on
+    // paused(child-join) would otherwise sleep until the watchdog re-arm.
+    const parent = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Coordinate, then wait for the probe.',
+      parentRunId: null,
+      chainId: 'chain-join',
+      depth: 1,
+    })
+    await markStarted(parent.id, 'bg-parent', 10, 'alice')
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'generalist',
+      callerSessionId: 'bg-parent',
+      mode: 'background',
+      objective: 'Probe the cluster.',
+      parentRunId: parent.id,
+      chainId: 'chain-join',
+      depth: 2,
+    })
+    await markPaused(parent.id, {
+      reason: 'child-join',
+      wake: { kind: 'child-join', runId: child.id },
+    }, 20, 'alice')
+
+    const resumeCalls: Array<{ runId: string; via: string }> = []
+    setResumeRunnerForTest(async (runId, block) => {
+      resumeCalls.push({ runId, via: block.via })
+      const run = await getTaskRun(runId, 'alice')
+      return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
+    })
+    const task = {
+      ...fakeTask(),
+      id: 'join-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+      notifyOn: 'failure' as const,
+      taskRunId: child.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async () => {
+      return { kind: 'success', summary: 'probe done', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'join-fire')
+    await scheduler.drain()
+    await drainScheduledResumesForTest()
+
+    assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'delivered')
+    assert.deepEqual(resumeCalls, [{ runId: parent.id, via: 'child-join' }])
   })
 
   it('does not autopause recurring tasks after failures', async () => {
