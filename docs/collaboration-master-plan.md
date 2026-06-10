@@ -1,6 +1,6 @@
 # LightClaw Multi-Agent 协作机制设计稿（讨论用）
 
-> **这是一份处于设计阶段的提案,用来和协作者讨论方向,尚未实现、尚未排期。** 欢迎在这个分支上直接评论 / 提 PR。
+> **这是一份设计提案,用来和协作者讨论方向。** 欢迎在这个分支上直接评论 / 提 PR。Phase 1 的工单底座已开始在本分支(`feature/collaboration`)上实现(TaskRun store / TaskInspect / TaskCreate / Dispatch 强制挂靠)。**2026-06-10 设计修订**:① 顶层工单由 main 显式 `TaskCreate` 创建(§4.2,取代原「框架自动判断」);② 工单终态改两段式「交付→验收」(§4.2/§6.1);③ 续做默认从「厚 checkpoint 冷重建」反转为「工单键控 session resume」(§七)。
 >
 > 目标一句话:**让每个 agent role 真正成为一个「员工」,而不是一个「工具」**。源头是一份早期的「Agent 间通信与可恢复协作机制」构想稿(下文称「原构想」),本稿是对它对照当前 LightClaw 架构做可行性核验、并把设计推到自洽后的结果。
 >
@@ -36,7 +36,7 @@
 
 - **约束 C —— 唤醒 main 是贵的(原构想没提)。** main 是 orchestrator(通常是最贵的模型),一次合成 turn = 一次满 context 的往返。一个派 5 worker、每个 3 里程碑 + 1 提问的任务,天真实现 = 20 次 orchestrator turn 只为协调。⇒ **scheduler 必须 coalesce + threshold,绝不 per-event 唤醒 main**。原构想的「用户侧只看 milestone/blocker」过滤要**同时作用在 main 的再唤醒上**:routine 进度静默累积进日志(按需查),只有 `needsAttention/blocker` 即时叫醒,其余攒批。**安静是默认,吵闹要够格。** 这条是框架可负担性的承重墙。
 
-**三个设计常量(勿误判为缺口)**:worker 永不直接打扰用户(边界,非缺口);不复活旧 transcript(此前已删,哲学一致);main 非常驻是设计(别为协作把它变 24/7 daemon);不做全局 artifact registry / blackboard(与「path-as-handle、无 sidecar registry」的现有立场冲突)。
+**设计常量(勿误判为缺口)**:worker 永不直接打扰用户(边界,非缺口);main 非常驻是设计(别为协作把它变 24/7 daemon);不做全局 artifact registry / blackboard(与「path-as-handle、无 sidecar registry」的现有立场冲突)。(原第四条「不复活旧 transcript」已于 2026-06-10 **显式反转**——工单机制消掉了当年删 resume 的前提,见 §七;「不常驻」不变,resume 是冷启动加载持久态的一种,不是保活。)
 
 ---
 
@@ -70,9 +70,9 @@
 
 ### 4.2 发起 / 判完成 / scope
 
-- **谁发起 —— 分两层**:子工单 **框架自动生成**(每次 Dispatch 顺手开,零仪式);顶层工单 **main 负责**,但不靠它额外调「建工单」工具 —— 自然触发是 main 判断「这是个多步/长程的活」(信号 = 它写了正经多步计划、或发起首个后台派发),框架就为这轮开顶层工单。一问一答的轻 turn 不开。
+- **谁发起 —— 分两层**:子工单 **框架自动生成**(每次 Dispatch 顺手开,零仪式;**建档在「派发那一刻」而非「开跑那一刻」**——排期未跑的活也必须在档案系统里可见、可计入义务,否则它在 fire 前是隐形的)。顶层工单 **由 main 显式 `TaskCreate` 创建**(2026-06-09 修订,取代原稿「框架自动判断这轮是不是多步长程活、不靠额外建工单工具」——自动分类「这条消息是新目标还是上一个的补充」本质不可靠,该判断只有 main 有上下文能做;main 显式声明、框架其后机械维护,形状同 TodoWrite)。框架对 main 的派发**强制挂靠**到某张根工单(缺则拒、自愈纠正),没教也不出无根森林。
 
-- **谁判完成 —— 分工干净**:每张**子**工单完没完是机械事实(worker 跑完返回 = 关闭,带成功/失败状态;**worker 返回 ≠ 成功**,可能报告失败);**整体目标**完没完是 **main 的判断**(看完所有子工单结果,决定还要不要补派/返工)。**worker 判「我这块停了」,main 判「整件事成了」。**
+- **谁判完成 —— 两段式:交付,然后验收(2026-06-10 修订)**:worker 干完**自报状态**——「已交付」(成功或失败报告都算交付;**worker 返回 ≠ 成功**)或「已暂停」(等某唤醒源,§六)。**交付 ≠ 工单结束**:工单停在交付态,由父(main)**验收**后才终态——通过关单;不过**打回**,工单不关、打回理由作为事件追加,子工单续班次接着做(§五/§七)。这套「员工自报 + 老板验收」给框架一个可对照面:声明了交付 = 在等验收;声明了暂停 = 在等唤醒源;**什么都没声明人就没了 = 异常**(崩/烂尾),看门狗处理。**根工单例外:main 宣告交付即关**——用户不操作工单系统、不做验收(体验优先),有意见就开新工单;但宣告交付必须**名下义务清零**,否则框架顶回、列清单让 main 先清账(§6.1 清账 gate)。**worker 判「我这块停了」,main 判「整件事成了」**——后半句从「判断」升级成了显式动作。
 
 - **scope —— 各管一块,worker 不需要全局状态**(正是现有「worker 从全新 prompt 起步、不继承父对话」哲学落到工单上):
   - **worker 视野 = 它自己那张子工单**(目标 / 进度 / 自己工作区产物 / 发给它的留言)。窄。
@@ -84,9 +84,9 @@
 
 - **身份**:id / 父工单 / 归哪个 role
 - **目标**:要干成什么(worker 的任务说明书)
-- **状态**:queued / running / blocked / paused / done / failed / cancelled
+- **状态**:queued / running / blocked / paused / **delivered(已交付待验收)** / done / failed / cancelled
 - **进度日志**:一条只追加的事件流(开始、某步完成、卡住、产出文件、收发留言都往这记)
-- **checkpoint**:最近一次「干到哪了 / 下一步」的快照 —— 崩了靠它重建(质量是关键,见 §七)
+- **checkpoint**:最近一次「干到哪了 / 下一步」的快照 —— **交接摘要 + 重建保险**(2026-06-10 起续做默认 resume 原 session,checkpoint 是 session 不可用时的兜底,见 §七)
 - **产物指针**:产出文件在工作区哪个路径(path-as-handle,无 registry)
 - **谁在跑**:当前哪个 session 在执行,还是没人 —— **看门狗的命门**
 - **唤醒源**(暂停时):在等谁(见 §六)
@@ -106,7 +106,7 @@
 | 失败类型 | 能否靠死活兜住 |
 |---|---|
 | **基建把活弄丢**(worker 崩 / daemon 重启 / 后台 fire 静默失败 / 孤儿结果) | **完全能。** 纯 liveness,跟模型判断无关,看门狗一抓一个准。孤儿结果、崩溃续跑全在此 |
-| **模型自己放弃/误判**(以为做完其实没做、烂尾) | **不能完全靠框架。** 内容对错框架判不了,只能做**结构性矛盾检查**(如「标完成但名下还有未关子工单」)+ 兜底升级给用户。真要确认对错得让模型跑验证,那是动作不是框架判断 |
+| **模型自己放弃/误判**(以为做完其实没做、烂尾) | **不能完全靠框架。** 内容对错框架判不了,只能做**结构性矛盾检查**(如「宣告交付但名下还有未关子工单」——已落为 §6.1 的清账 gate)+ 兜底升级给用户。真要确认对错得让模型跑验证,那是动作不是框架判断 |
 
 长程持续性的大头恰是第一类,那一类框架靠死活就客观兜底;第二类本就不是任何持久化机制能根治的。
 
@@ -135,7 +135,7 @@
 
 **核心:agent 之间不直接对话。「交流」= 往工单写一条消息事件 + 框架把收件人叫醒去读。** 不是独立子系统,就是工单事件日志多一种类型 + 又一次唤醒。方向只有两个,沿树边走:
 
-- **下行(main → worker,改方向/喊停)**:main 把消息写到 worker 工单。worker 还活着(后台并发)→ 下个工具边界 drain 进它的 interjection(管子现成);已下班/死了 → 没活人可发,**带新指令重新派一个**。
+- **下行(main → worker,改方向/喊停/验收·打回)**:main 把消息写到 worker 工单。worker 还活着(后台并发)→ 下个工具边界 drain 进它的 interjection(管子现成);已下班/死了 → 没活人可发,**带新指令重新派一个**。
 - **上行(worker → main,提问/求决策)**:worker 在自己工单写一条带 `needsAttention` 的问题。main turn 驱动、此刻不在线 → 框架**合成一个 turn 叫醒 main**(复用现有 background-result「事件叫醒 main」),main 决定、把答案写回下行。
 - **横向(worker ↔ worker):不存在直连。** B 要 A 的产出 → main 派 B 时揉进任务说明,或 B 被动读工作区里 A 的文件。**main 是唯一交换机。** 工单树只有父子边、没兄弟边,这个形状本身强制了它。
 
@@ -145,9 +145,9 @@
 
 反直觉但关键:**agent 不维持生命周期 —— 工单维持。agent 是故意「用完即弃」的。**
 
-一个 agent 的「一生」是**一连串短班次**,不是一段连续存在。每班次:框架从工单(目标 + 最近 checkpoint + 必要 context)**实例化一个全新 agent** → 干到一个自然停点(完成 / 卡住 / 被打断 / 主动下班 / 崩溃)→ 在工单留 checkpoint → **死掉、进程没了** → 某触发(答案到了 / 看门狗 / 新 user 消息 / 子工单完成)再开**一个新班次** → 全新 agent 读工单接着干。**连续性活在工单的持久状态里,每班次重新注入一个干净 agent。这就是数字交接班。**
+一个 agent 的「一生」是**一连串短班次**,不是一段连续存在。每班次:框架从工单(目标 + 最近 checkpoint + 必要 context)**实例化一个全新 agent** → 干到一个自然停点(完成 / 卡住 / 被打断 / 主动下班 / 崩溃)→ 在工单留 checkpoint → **死掉、进程没了** → 某触发(答案到了 / 看门狗 / 新 user 消息 / 子工单完成 / 被打回)再开**一个新班次** → 新班次**默认恢复该工单绑定的 session 续做**(transcript 在盘上,原文续命;太陈旧/损坏才从 checkpoint 冷重建——2026-06-10 修订,§七)。**连续性活在工单的持久状态里。这就是数字交接班 —— 交接的是工单档案,班次可以是同一本 transcript 续写,也可以是新本子从交接摘要起步。**
 
-为什么「用完即弃」是优点:常驻进程空等 = 烧钱 + 对抗 idle watchdog + 怕崩;无状态 + 从持久态重建 = 闲时零进程、崩了只重建一次、每班次 context 干净。这正是此前删掉 transcript-resume 的哲学。
+为什么「用完即弃」是优点:常驻进程空等 = 烧钱 + 对抗 idle watchdog + 怕崩;无状态 + 从持久态重建 = 闲时零进程、崩了只重建一次。「持久态」既包括工单档案,也包括工单绑定的 session transcript(§七)——「不常驻」与「resume」不冲突,resume 只是冷启动时加载哪份持久态的选择。
 
 main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发一班次,班次间靠 durable plan / 工单 / memory 续);**worker 现在是「一次性单班」**,唯一新增的是让它能在同一工单上跑**多个班次**(下班→续做),变得跟 main 一样 episodic。触发班次的事件(user turn / 合成 turn / interjection / 看门狗)**全是已有或要复用的唤醒机制**。
 
@@ -169,6 +169,8 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 这就是结构化并发 / join barrier(Kotlin coroutine、Trio nursery、Swift task group:父作用域不结束直到子任务结束)。它顺手把「标完成但子工单没关」那个结构异常变成**构造上不可能**。注意:**它跟「暂停的合法唤醒源」是同一条件的两面** —— 工单不能结束 ⟺ 它还挂着至少一个唤醒源。
 
+**「未结的子工单」含交付态(2026-06-10)**:delivered 非终态,已交付未验收的子照样钉着根不能关——这正是孤儿可见性的来源(结果投递失败时,子钉在 delivered、根关不掉,档案上明晃晃挂着一单没人收的货,而不是静默蒸发)。这条不变量有**两个触发点、同一个谓词**:① **清账 gate(turn 驱动)**——main 宣告根交付时,框架核名下义务,不清零就拒并列清单(哪几张、各在什么状态:在跑 / 排期未跑 / 已交付待验收),main 在同一 turn 里逐张验收、打回或取消——兜住「main 收到结果用了、忘了点验收」;② **看门狗周期对账(level-triggered,§6.3)**——兜住「结果根本没送到 main」那半:投递失败时 main 不知道有货、永远不会来宣告交付,只能靠周期扫出「交付超时无人验收且 main 无活动」再唤醒它。
+
 ### 6.2 显式暂停 = typed await + 唤醒源
 
 「没有 role 在跑」有歧义:可能是合法等待(等子工单 / 后台 bash / 定时任务 / 训练进展),也可能是崩了。消歧的标准解:**显式暂停状态,由 agent 自己设**(Temporal 那类「workflow 在 await 信号」vs「worker 死了」的区分)。
@@ -177,7 +179,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 > **一个暂停,只有当它声明的「唤醒源」真实存在、且仍可能触发时,才合法。**
 
-唤醒源 taxonomy:等某**子工单** join(合法 iff 该子工单存在且非终态,含「还没触发运行」)/ 等某**后台 bash**(iff 在跑)/ 等某**定时·cron** fire(iff 还会触发,**训练监控的不轮询关键 case** 落这:暂停并登记「30 分钟后叫我」,定时唤醒一次、看一眼、再睡,零轮询零烧 token)/ 等**父的下行回复**(不变量 B)/ 等**用户决策**(复用现有提问卡 / 审批卡,自带超时)。
+唤醒源 taxonomy:等某**子工单** join(合法 iff 该子工单存在且非终态,含「还没触发运行」)/ 等某**后台 bash**(iff 在跑)/ 等某**定时·cron** fire(iff 还会触发,**训练监控的不轮询关键 case** 落这:暂停并登记「30 分钟后叫我」,定时唤醒一次、看一眼、再睡,零轮询零烧 token)/ 等**父的下行回复**(不变量 B)/ 等**父的验收**(交付态本身就是一次 typed await:唤醒源 = 父的验收/打回,超时走 §6.5 逃生阀)/ 等**用户决策**(复用现有提问卡 / 审批卡,自带超时)。
 
 **配套规则**:暂停**原子地写当下 checkpoint**(不写就挂起,挂起中被杀就从陈旧点恢复,不安全)。
 
@@ -205,37 +207,31 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 ---
 
-## 七、暖 session vs 冷重建(重建时机)
+## 七、续命:session resume 为默认,checkpoint 换岗(2026-06-10 反转裁决)
 
-### 7.1 当初为何删 resume,在新设计下逐条对
+> 本节 2026-06-10 整体反转:原裁决「投资 checkpoint 质量、不跨 gap 保暖;transcript 回放只留 opt-in」替换为「**工单生命周期内 session 可恢复,续做默认 resume 原 session;checkpoint 降级为交接摘要 + 保险**」。这是对此前「删 transcript-resume」的**显式反转**——不是 drift,是当年的删除理由被工单机制逐条消掉了。
 
-| 当初删 resume 的理由 | 在新设计下还成立吗 |
+### 7.1 当年删 resume 的真账本,逐条重结
+
+| 当年删 resume 的理由 | 现在 |
 |---|---|
-| transcript 太长、context 爆 | **基本中和** —— 现有 auto-compact + turn 内压缩,暖 session 长了就压,不会无界涨 |
-| 烂尾后难安全续 | **被显式 pause 中和** —— 从 agent 自己声明的干净挂起点续,比复活死在随机位置的 transcript 安全得多 |
-| 工具状态 / repo 漂移 | **仍成立,且 gap 越长越严重** —— 唯一没被消掉的硬理由 |
+| **寻址错乱(真主因,2026-06-10 补全)**:没有工单,main 得靠自己记「派过谁、该续谁」,系统只能兜底 resume-latest,续错人就错乱 | **被工单根治**——交付物绑在工单上,工单档案记着对应 session,验收和打回都是对着某张工单的操作,「续谁」从猜测变成档案查询 |
+| transcript 太长、context 爆 | **被中和**——turn 末 compact / memory-extract hook 兜住,transcript 有界 |
+| 烂尾后难安全续 | **被显式状态中和**——delivered / paused 是干净续点;崩溃是唯一脏续点,走对账(§8.2) |
+| 工具状态 / repo 漂移 | **仍成立,唯一硬约束**——靠新鲜度闸门 + resume 注入对账提醒管理(§八) |
 
-结论:删 resume 的理由大半已被「工单 + 显式 pause + 成熟压缩」消掉,暖恢复今天比当初可行得多 —— 但还有两个物理现实绕不过。
+### 7.2 术语校准:「可恢复」≠「热」
 
-### 7.2 物理现实
+「热 session」混了两层。**进程 / prompt-cache 的热**是分钟级的(provider cache TTL),承诺不了也不必承诺;真正要承诺的是**可恢复性**——transcript 躺在盘上(append-only、crash-safe),随时能加载续聊,与缓存冷热无关(各家 AI 工具的「恢复历史会话」皆此类)。恢复时缓存多半已凉、要全量回放 token,**这个成本要认**;但对比「新 agent 从薄 checkpoint 重新盘一遍、还可能擦屁股重做」,回放通常更便宜**且保真**——尤其打回大多发生在交付后不久。崩溃也不再例外:盘上 transcript 仍在,走同一条恢复路,只是截到最后一致边界 + 注入对账提醒。
 
-- **崩溃无条件杀掉内存里的 session。** 崩后手上只有盘上的东西,**崩溃这一类暖 session 物理上不存在**,只能从持久态重建,没得选。
-- **provider 的 prompt cache 就几分钟 TTL。** 长暂停(训练几小时)后缓存早凉,「暖」恢复其实是「冷缓存回放整条 transcript」—— 省下的是 context、token 一分不少地重读、还背漂移风险。
+### 7.3 裁决:resume 为主,checkpoint 换岗
 
-⇒ 只在「短间隔、没崩」时 session 才真的暖;一旦跨崩溃或长暂停,暖就没了。
+- **session 生命周期挂在工单上**:工单非终态 → 其 session transcript 钉住不清;工单终态 → 进 TTL 清扫。与「非终态工单永不清」同构。
+- **活着的最便宜**:短 / 频繁 yield 时别杀 worker,保持 live(interjection 直达)。resume 是进程已没了之后的事。
+- **续做(打回 / 暂停唤醒 / 崩溃恢复)默认 resume 工单绑定的 session**——原文续命,context 无损,被打回的 worker 记得自己试过什么、为什么被打回。
+- **checkpoint 不删除,换两个岗**:① **对外交接用摘要**——交付报告是给 main 验收看的材料,main 不读子 transcript 来验收;② **保险**——session 太陈旧(长 gap 漂移)、损坏时,从 checkpoint 冷重建 + 对账。checkpoint 写砸一次不再致命,因为它不再是续命的唯一来源(原「全靠子 agent 自觉写厚」的单点解除)。
 
-### 7.3 裁决:投资 checkpoint 质量,而非跨 gap 保暖
-
-真痛点是「工单进度缺细节、新 session 要再盘一遍浪费轮数」。但**这不是「要暖 session」的论据,是「checkpoint 写得不够好」的论据。**
-
-新 agent 重新盘,是因为 checkpoint 太薄。解法不是拖着整条 transcript(贵 + 漂移 + 把刚删的 resume 连毛病请回来),而是**把 checkpoint 写厚**:哪些文件关键、当前假设、已确认的关键发现、有哪些坑、下一步 —— 由 agent **在 pause 那刻、带完整 context 主动蒸馏**出来,是高质量交接,不是事后有损压缩。
-
-> **厚 checkpoint + 冷重建 ≈ 暖 session 的收益(不重盘),却没有它的代价(无巨型 transcript 回放、无漂移、不把删掉的机制请回来)。** 这正是「数字交接班」比喻自己指向的:写一张好的交接条,不是交一整天的脑内日记。
-
-**裁决三条**:
-- **短/频繁 yield**:别杀 worker,保持 live(hot)。暖在这里真便宜真保真,现成机制(live worker + interjection)已能做。
-- **跨崩溃 / 长暂停(超 TTL)**:暖在物理上没了,**默认从工单 + 厚 checkpoint 冷重建**;工程投入放在「让 checkpoint 够厚」。
-- **整条 transcript 回放**:只留作个别「连续性极重要 + 间隔很短」场景的 opt-in,**不做默认**。
+> 一句话:**对外交接用摘要,对内续命用原文。**
 
 ---
 
@@ -252,9 +248,9 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 **「provider 挂了」属于轴 1,跟暖/冷无关**,触发的是 §8.3 的退避 + 有界重试 + 升级,**不是冷重建**。轴 1 先答「能不能跑」,能跑了轴 2 再答「nudge 还是 rebuild」。
 
-### 8.2 冷重建必带「对账提醒」
+### 8.2 跨 gap 恢复必带「对账提醒」
 
-崩溃/长暂停冷重建时,**注入一条对账指令**(不是泛泛「可能丢了」):checkpoint 声称「我建了 X、正要改 Y」→ 重建的 agent 必须先核 X 在不在、Y 改没改,再往下走。**跨崩溃做不到 exactly-once,只能 at-least-once + 重建后对账**,这条提醒是对账入口。checkpoint 频率是个旋钮(写得勤→丢得少、对账便宜,但开销大)。
+崩溃/长暂停后的任何恢复(resume 回放或 checkpoint 冷重建)都要**注入一条对账指令**(不是泛泛「可能丢了」):checkpoint 声称「我建了 X、正要改 Y」→ 重建的 agent 必须先核 X 在不在、Y 改没改,再往下走。**跨崩溃做不到 exactly-once,只能 at-least-once + 重建后对账**,这条提醒是对账入口。checkpoint 频率是个旋钮(写得勤→丢得少、对账便宜,但开销大)。
 
 ### 8.3 有界重试 = max-restart-intensity,不是「一次就判死」
 
@@ -275,7 +271,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 1. **是合法暂停吗?**(声明了 pause + 唤醒源还活着)→ 是:啥都不做,正常等。否:往下。
 2. **现在跑得起 agent 吗?**(provider/runtime 健康)→ **否:退避 + 有界重试唤醒,超窗升级「基建问题」**(别冷重建)。是:往下。
-3. **老 session 还暖还新吗?**(进程还活 + gap < TTL)→ 暖:同 session nudge(便宜;最好在 end_turn 那刻边触发抓住「想结束但工单没到终态又没声明 pause」,看门狗 level-triggered 兜底)。冷(崩了 / 进程没了 / 暂停超 TTL):**冷重建 from 厚 checkpoint + 注入对账提醒**。
+3. **工单绑定的 session 还可用吗?**(2026-06-10 轴 2 默认值反转,§七)进程还活 → 同 session nudge(最便宜;最好在 end_turn 边触发抓住「想结束但工单没到终态又没声明 pause」,看门狗 level-triggered 兜底)。进程没了但 transcript 完好、gap 不长、无大漂移 → **resume 原 session**(冷缓存回放 + 注入对账提醒)。太陈旧 / 损坏 / 漂移大 → **从 checkpoint 冷重建 + 对账**。
 4. **(横切)每次恢复记进「窗内 N 次」预算**,超了停手,带 checkpoint + 诊断升级给用户。
 
 ---
@@ -290,7 +286,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 | 问「到哪了」 | `/status` 已画派发链树、router 已登记 in-flight | 从**持久工单**读(现在查内存,崩了没)+ `TaskInspect` 入口 |
 | 工单档案本身 | bg-tasks 的 per-user 存储 + `transcript.jsonl + meta.json` 事件日志范式 | 把 bg-tasks **泛化成 TaskRun store**(覆盖 blocking 退化记录)。改造非重起 |
 | 上行问 + 下行控 | 两端管子全现成:给活 worker 递消息 = interjection 队列 + tool-boundary drain;叫醒不在线的 main = background-result 合成 turn;Cancel/Update 工具壳在 | Cancel 补**真 abort**(现在只删记录);接「worker 问 → 叫醒 main → 回答 → 回灌」这条线(新 subscriber,两头现成);约束 C 的**唤醒批处理** |
-| 崩了自己接着跑 | **最大资产**:crash-resume(启动扫描 + 残留 turn 续跑)已存在;「不复活 transcript、用持久态重建」已是既定哲学;query 重试 / transient-error 分类 / age·attempts 闸 | 现在只复活 **main**,抬到 **worker 级**;加 **checkpoint 结构** + **pause/唤醒源 typed-await 协议** + **看门狗 reconcile 循环** |
+| 崩了自己接着跑 | **最大资产**:crash-resume(启动扫描 + 残留 turn 续跑)已存在;session transcript 本身就是现成持久态(append-only、crash-safe);query 重试 / transient-error 分类 / age·attempts 闸 | 现在只复活 **main**,抬到 **worker 级** = **工单键控 session resume(主)+ checkpoint 冷重建(兜底)**(§七反转);加 **pause/唤醒源 typed-await 协议** + **看门狗 reconcile 循环** |
 | 边界 | `BLOCKED_WORKER_TOOLS` / `reachableRoles` / 四类 audit | **不用动** |
 | 传输 | signal bus(6 类信号) | **不新建,全映射上去** |
 
@@ -303,11 +299,11 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 | Phase | 一句话 | 关键交付 | 触发 / 风险 |
 |---|---|---|---|
 | **0(现在,独立)** | 修「孤儿结果」 | Bash 后台执行接同一套 live-ancestor→main delivery 语义。**纯 signal-bus 层,不依赖 store** —— 从「统一 store」里**拆出来先修**,别把干净 bugfix 拖进投机重构 | 已坐实真 bug / **低** |
-| **1** | durable 工单 + 可观察 | ① bg-tasks → 泛化 **TaskRun event-log store**(含 blocking 退化记录)② 通用 **publishProgress** ③ **TaskInspect** ④ 不变量 A(工单树完整性)⑤ 看门狗作为**检测器**(level-triggered reconcile + 启动全扫),逮搁浅 → 复用现有 crash-resume 唤醒 **main** / 升级给用户 | 真有「看不见 worker / 崩了丢活」痛点 / **低**(纯加法、不碰执行模型) |
+| **1** | durable 工单 + 可观察 | ① bg-tasks → 泛化 **TaskRun event-log store**(含 blocking 退化记录)② 通用 **publishProgress** ③ **TaskInspect** ④ 顶层工单(main 显式 `TaskCreate`)+ 强制挂靠 + 不变量 A ⑤ **交付→验收两段终态**(worker 终点 = delivered;bg 子工单经 main 验收;根由 main 宣告交付 + 清账 gate 关)⑥ 看门狗作为**检测器**(level-triggered reconcile + 启动全扫),逮搁浅 / 交付无人收 → 复用现有 crash-resume 唤醒 **main** / 升级给用户 | 真有「看不见 worker / 崩了丢活」痛点 / **低**(纯加法、不碰执行模型) |
 | **2** | 下行控制 + 精确 liveness | ① redirect / cancel / pause **活着的** worker(复用 interjection)② `CancelDispatch` 真 abort ③ 约束 C 的 **main 唤醒批处理** ④ **显式 pause = typed await + 唤醒源**(让合法暂停不误触发看门狗) | 真有「中途改方向 / 训练监控不轮询」痛点 / **中**(碰边界不碰复活) |
-| **3** | 上行问 + 交接续做 | ① **上行 ask + worker 级 checkpoint-resume 合成一个 feature**(ask 必须住这,见下)② 厚 checkpoint 冷重建 + 对账 ③ 完整恢复状态机(两轴 / 窗内预算 / 两失败) | 真有「长任务被打断 / 跨 session 续 / 崩溃恢复」痛点 / **高**(碰执行模型,复用 main 复活骨架) |
+| **3** | 上行问 + 交接续做 | ① **上行 ask + worker 级续跑合成一个 feature**(ask 必须住这,见下)② 续跑 = **工单键控 session resume 为主 + checkpoint 冷重建兜底**(§七),恢复注入对账;**打回-续班次的执行半边落这**(在此之前打回退化为「main 带验收意见重派」)③ 完整恢复状态机(两轴 / 窗内预算 / 两失败) | 真有「长任务被打断 / 跨 session 续 / 崩溃恢复」痛点 / **高**(碰执行模型,复用 main 复活骨架) |
 
-**为什么是这个顺序 —— 兼修一处自相矛盾**:原构想把「上行 ask」放 Phase 2、「checkpoint resume」放 Phase 3,但它自己又说「ask = resume 是同一台机器」。**这是自相矛盾**:因为老板(main)turn 驱动、随时不在线,「worker 问老板」天然依赖「worker 能下班再被叫回」—— **ask-parent 和 checkpoint-resume 是同一个 feature,必须同期**。所以本稿:Phase 2 只做**下行控制**(控制活 worker,复用 interjection,不需复活,易);**上行 ask 并入 Phase 3** 跟 resume 一起(难,需复活骨架)。Phase 0 先把「孤儿结果」这笔债独立还掉。Phase 1 纯加法、风险最低、且看门狗作「检测器」即可还掉大半 durability(逮孤儿/崩溃 → 唤醒 main / 升级),不必等 worker 级复活。
+**为什么是这个顺序 —— 兼修一处自相矛盾**:原构想把「上行 ask」放 Phase 2、「checkpoint resume」放 Phase 3,但它自己又说「ask = resume 是同一台机器」。**这是自相矛盾**:因为老板(main)turn 驱动、随时不在线,「worker 问老板」天然依赖「worker 能下班再被叫回」—— **ask-parent 和 checkpoint-resume 是同一个 feature,必须同期**。所以本稿:Phase 2 只做**下行控制**(控制活 worker,复用 interjection,不需复活,易);**上行 ask 并入 Phase 3** 跟 resume 一起(难,需复活骨架)。Phase 0 先把「孤儿结果」这笔债独立还掉。Phase 1 纯加法、风险最低、且看门狗作「检测器」即可还掉大半 durability(逮孤儿/崩溃 → 唤醒 main / 升级),不必等 worker 级复活。(工程化时 **Phase 0 已砍**:根治本就在 Phase 1 的看门狗,实际触发概率低,真咬到再单独定点修。)
 
 ---
 
