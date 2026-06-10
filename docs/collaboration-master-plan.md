@@ -320,6 +320,8 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 | **2** | 下行控制 + 精确 liveness | ① redirect(message)/ cancel **活着的** worker(复用 interjection)② `CancelDispatch` 真 abort ③ 约束 C 的**唤醒路由**(没醒就唤醒、醒了就插嘴)④ **paused 状态只由框架写**(/stop 专用;agent 主动 pause 与下行暂停推迟 phase3,§6.2 落地分期)⑤ **/stop 树级停止**(当前 chat 全树 → paused(user-stop) 挂账 + 小时级超时回收 + 盘根系统提示占位,§6.6) | 真有「中途改方向 / 一键叫停」痛点 / **中**(碰边界不碰复活) |
 | **3** | 上行问 + 交接续做 | ① **上行 ask + worker 级续跑合成一个 feature**(ask 必须住这,见下)② 续跑 = **工单键控 session resume 为主 + checkpoint 冷重建兜底**(§七),恢复注入对账;**打回-续班次的执行半边落这**(在此之前打回退化为「main 带验收意见重派」)③ 完整恢复状态机(两轴 / 窗内预算 / 两失败)④ **blocking 退役**(约束 A;skill composition dispatch-edge 同步 re-base,§十一)⑤ 看门狗催办改 **parent-first**(先唤直接父级续班次就地验收,§6.3)⑥ **agent 主动 pause + 下行暂停活 worker**(typed-await 唤醒源 taxonomy 的工具面,§6.2 落地分期——resume 就位后暂停才有出口) | 真有「长任务被打断 / 跨 session 续 / 崩溃恢复」痛点 / **高**(碰执行模型,复用 main 复活骨架) |
 
+**候选 phase 备忘(2026-06-10,未立项)**:飞书 channel UI 重设计——后台任务「正在执行」状态对用户的可见性呈现(消息流不适合呈现持续执行态,可能需要卡片/面板级方案)。**等 phase3 完成 + prompt 终稿 + dogfood 信号后再议**,不进当前任何 phase。
+
 **为什么是这个顺序 —— 兼修一处自相矛盾**:原构想把「上行 ask」放 Phase 2、「checkpoint resume」放 Phase 3,但它自己又说「ask = resume 是同一台机器」。**这是自相矛盾**:因为老板(main)turn 驱动、随时不在线,「worker 问老板」天然依赖「worker 能下班再被叫回」—— **ask-parent 和 checkpoint-resume 是同一个 feature,必须同期**。所以本稿:Phase 2 只做**下行控制**(控制活 worker,复用 interjection,不需复活,易);**上行 ask 并入 Phase 3** 跟 resume 一起(难,需复活骨架)。Phase 0 先把「孤儿结果」这笔债独立还掉。Phase 1 纯加法、风险最低、且看门狗作「检测器」即可还掉大半 durability(逮孤儿/崩溃 → 唤醒 main / 升级),不必等 worker 级复活。(工程化时 **Phase 0 已砍**:根治本就在 Phase 1 的看门狗,实际触发概率低,真咬到再单独定点修。)
 
 ---
