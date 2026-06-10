@@ -153,6 +153,8 @@ test('orchestrator roles with wildcard tools do not restrict tool presence', asy
 
   assert.equal((await gate(tool('Dispatch'), {})).behavior, 'allow')
   assert.equal((await gate(tool('Notify'), {})).behavior, 'allow')
+  assert.equal((await gate(tool('WebFetch'), {})).behavior, 'deny')
+  assert.equal((await gate(tool('WebSearch'), {})).behavior, 'deny')
 })
 
 test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () => {
@@ -183,6 +185,27 @@ test('TaskInspect is visible to bundled user-facing roles', () => {
     assert.ok(agent, `${agentType} not found in BUNDLED_AGENTS`)
     assert.equal(isToolVisibleToRole(agent, 'TaskInspect'), true, `${agentType} should see TaskInspect`)
   }
+})
+
+test('retired Dispatch management names are hidden even from wildcard roles', async () => {
+  for (const kind of ['orchestrator', 'worker'] as const) {
+    const gate = deriveCanUseTool(role({ kind, tools: ['*', 'Dispatch'], reachableRoles: ['coder'] }))
+    for (const retired of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+      assert.equal((await gate(tool(retired), {})).behavior, 'deny')
+      assert.equal(isToolVisibleToRole(role({ kind, tools: ['*'], reachableRoles: ['coder'] }), retired), false)
+    }
+  }
+})
+
+test('main routes web retrieval through webSearcher instead of direct Web tools', () => {
+  const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
+  const webSearcher = BUNDLED_AGENTS.find(agent => agent.agentType === 'webSearcher')
+  assert.ok(main)
+  assert.ok(webSearcher)
+  assert.equal(isToolVisibleToRole(main, 'WebFetch'), false)
+  assert.equal(isToolVisibleToRole(main, 'WebSearch'), false)
+  assert.equal(isToolVisibleToRole(webSearcher, 'WebFetch'), true)
+  assert.equal(isToolVisibleToRole(webSearcher, 'WebSearch'), true)
 })
 
 test('TaskInspect is not implicitly visible to internal roles', () => {
@@ -301,12 +324,20 @@ test('bundled dispatch matrix matches the role-to-role topology', () => {
       true,
       `${agentType} should have Dispatch visible`,
     )
-    // Dispatch family is bound: List/Cancel/Message/Update all visible to dispatchers.
-    for (const mgmt of ['ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch']) {
+    // Dispatch family is bound: Message/UpdateSchedule visible to dispatchers;
+    // listing and cancellation now live on TaskInspect / TaskUpdate.
+    for (const mgmt of ['MessageDispatch', 'UpdateSchedule']) {
       assert.equal(
         isToolVisibleToRole(agent, mgmt),
         true,
         `${agentType} should have ${mgmt} visible (Dispatch family binding)`,
+      )
+    }
+    for (const retired of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+      assert.equal(
+        isToolVisibleToRole(agent, retired),
+        false,
+        `${agentType} should not see retired ${retired}`,
       )
     }
   }

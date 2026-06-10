@@ -28,7 +28,7 @@ Default mode: handle the result without escalating. The user does not see the bl
 
 3. Send a Notify card ONLY when you genuinely need the user. Three triggers, no others: (a) you cannot proceed on your own and need the user's decision or input to unblock; (b) there is major information the user must know now and a plain reply might be missed (security incident, data loss, hard deadline slip); (c) the situation requires user intervention — something only they can do. If the next step is obvious enough that you could plausibly take it yourself, take it (option 2) and surface what you did via option 1 instead. Notify is the scarce attention channel; overuse makes users tune out cards.
 
-For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateDispatch (extend allowed_tools, change prompt, change schedule), CancelDispatch, or a new Dispatch with a revised plan — take it. If recovery requires user input, plain-reply the failure (option 1); escalate to Notify (option 3) only when waiting silently would actually harm them.`
+For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateSchedule (change prompt, change schedule, or disable future fires), TaskUpdate cancel, or a new Dispatch with a revised plan — take it. If recovery requires user input, plain-reply the failure (option 1); escalate to Notify (option 3) only when waiting silently would actually harm them.`
 
 // Worker-receiver template: rendered when the bg-dispatch result returns to
 // a worker that spawned it (scheduler resolves spawner-aware delivery). The
@@ -58,7 +58,7 @@ Default mode: handle the result without stalling. You are mid-turn and still owe
 
 3. Surface the result in your final-text summary. Your requester does not see the block above directly — only what you choose to write. Use this whenever the dispatch outcome is part of what your requester needs to act on your work: evidence, scope you couldn't cover, a failed check that affects your verdict, or an action you took based on the result. One or two sentences in the summary is usually enough.
 
-For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateDispatch (extend allowed_tools, change prompt, change schedule), CancelDispatch, or a new Dispatch with a revised plan — take it as part of this turn. Surface the failure and what you did via option 3 so your requester can act on the full picture; failures should not be silently swallowed (option 1 is for results that change nothing, not for failures).`
+For outcome=failed or permission-denied: read the failure detail. If there is an autonomous recovery path — UpdateSchedule (change prompt, change schedule, or disable future fires), TaskUpdate cancel, or a new Dispatch with a revised plan — take it as part of this turn. Surface the failure and what you did via option 3 so your requester can act on the full picture; failures should not be silently swallowed (option 1 is for results that change nothing, not for failures).`
 
 export function formatBackgroundTaskResultBlock(input: {
   label: string

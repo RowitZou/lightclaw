@@ -12,7 +12,8 @@ import {
   loadBackgroundTasks,
 } from '../background-task/store.js'
 import { createRootTaskRun } from '../taskrun/store.js'
-import { cancelDispatchTool, dispatchTool, updateDispatchTool } from './dispatch.js'
+import { dispatchTool, updateScheduleTool } from './dispatch.js'
+import { taskUpdateTool } from './task-update.js'
 
 let tmpHome: string
 
@@ -123,7 +124,7 @@ describe('Dispatch background mode', () => {
     assert.equal(task.label, 'Workspace check')
     assert.equal(task.notifyTo, 'agent')
 
-    const updated = await withUser(async () => updateDispatchTool.call({
+    const updated = await withUser(async () => updateScheduleTool.call({
       id: task.id,
       enabled: false,
       label: 'Paused check',
@@ -132,14 +133,15 @@ describe('Dispatch background mode', () => {
     assert.equal(loadBackgroundTasks('alice')[0].enabled, false)
     assert.equal(loadBackgroundTasks('alice')[0].label, 'Paused check')
 
-    const cancelled = await withUser(async () => cancelDispatchTool.call({
-      id: task.id,
+    const cancelled = await withUser(async () => taskUpdateTool.call({
+      action: 'cancel',
+      runId: task.id,
     }, fakeContext()))
     assert.equal(cancelled.isError, undefined)
     assert.deepEqual(loadBackgroundTasks('alice'), [])
   })
 
-  it('UpdateDispatch changes the prompt and stores the prior prompt as a one-shot notice', async () => {
+  it('UpdateSchedule changes the prompt and stores the prior prompt as a one-shot notice', async () => {
     const created = await withUser(async () => dispatchTool.call({
       role: 'generalist',
       prompt: 'remind me at 8am that the daily standup is starting',
@@ -149,7 +151,7 @@ describe('Dispatch background mode', () => {
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
 
-    const updated = await withUser(async () => updateDispatchTool.call({
+    const updated = await withUser(async () => updateScheduleTool.call({
       id: task.id,
       prompt: 'remind me at 8am, but route the result back to the main agent so it can summarize for me',
     }, fakeContext()))
@@ -161,7 +163,7 @@ describe('Dispatch background mode', () => {
     assert.equal(reloaded.pendingPriorPromptNotice, 'remind me at 8am that the daily standup is starting')
   })
 
-  it('UpdateDispatch accepts a prompt change and stashes the prior prompt notice', async () => {
+  it('UpdateSchedule accepts a prompt change and stashes the prior prompt notice', async () => {
     const created = await withUser(async () => dispatchTool.call({
       role: 'generalist',
       prompt: 'check the workspace and summarize anything important',
@@ -171,7 +173,7 @@ describe('Dispatch background mode', () => {
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
 
-    const updated = await withUser(async () => updateDispatchTool.call({
+    const updated = await withUser(async () => updateScheduleTool.call({
       id: task.id,
       prompt: 'check the workspace, run pytest, and surface any failing tests with a one-line summary',
     }, fakeContext()))
@@ -182,7 +184,7 @@ describe('Dispatch background mode', () => {
     assert.match(reloaded.pendingPriorPromptNotice ?? '', /summarize anything important/)
   })
 
-  it('UpdateDispatch does not set the prior-prompt notice when the new prompt equals the existing one', async () => {
+  it('UpdateSchedule does not set the prior-prompt notice when the new prompt equals the existing one', async () => {
     const created = await withUser(async () => dispatchTool.call({
       role: 'generalist',
       prompt: 'send me a check-in message at 10am every weekday',
@@ -193,7 +195,7 @@ describe('Dispatch background mode', () => {
     const [task] = loadBackgroundTasks('alice')
 
     // Re-passing the same prompt string should be a no-op for the notice.
-    const updated = await withUser(async () => updateDispatchTool.call({
+    const updated = await withUser(async () => updateScheduleTool.call({
       id: task.id,
       prompt: 'send me a check-in message at 10am every weekday',
       label: 'Renamed check-in',
@@ -204,7 +206,7 @@ describe('Dispatch background mode', () => {
     assert.equal(reloaded.pendingPriorPromptNotice, undefined)
   })
 
-  it('CancelDispatch is idempotent on already-finished oneshot (Bug 7)', async () => {
+  it('TaskUpdate cancel is idempotent on already-finished oneshot dispatch ids (Bug 7)', async () => {
     // Simulate the scheduler having recorded a successful oneshot and pruned it
     // from the store: store load returns empty, but the completed-tasks index
     // remembers the id.
@@ -214,23 +216,25 @@ describe('Dispatch background mode', () => {
       completedAt: '2026-05-13T14:09:14.000Z',
       summary: 'fetched stock price summary',
     })
-    const cancelled = await withUser(async () => cancelDispatchTool.call({
-      id: 'zouyicheng-3c120e85',
+    const cancelled = await withUser(async () => taskUpdateTool.call({
+      action: 'cancel',
+      runId: 'zouyicheng-3c120e85',
     }, fakeContext()))
     assert.equal(cancelled.isError, undefined)
     assert.match(cancelled.output, /already finished/)
     assert.match(cancelled.output, /2026-05-13T14:09:14\.000Z/)
   })
 
-  it('CancelDispatch still surfaces is_error for a truly unknown id', async () => {
-    const result = await withUser(async () => cancelDispatchTool.call({
-      id: 'never-existed-deadbeef',
+  it('TaskUpdate cancel still surfaces is_error for a truly unknown id', async () => {
+    const result = await withUser(async () => taskUpdateTool.call({
+      action: 'cancel',
+      runId: 'never-existed-deadbeef',
     }, fakeContext()))
     assert.equal(result.isError, true)
     assert.match(result.output, /not found/)
   })
 
-  it('CancelDispatch appends a cancelled record on the live-task path so a re-cancel reads as idempotent', async () => {
+  it('TaskUpdate cancel appends a cancelled record on the live-task path so a re-cancel reads as idempotent', async () => {
     const created = await withUser(async () => dispatchTool.call({
       role: 'generalist',
       prompt: 'send me a check-in message at 10am every weekday',
@@ -240,30 +244,32 @@ describe('Dispatch background mode', () => {
     assert.equal(created.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
 
-    const firstCancel = await withUser(async () => cancelDispatchTool.call({
-      id: task.id,
+    const firstCancel = await withUser(async () => taskUpdateTool.call({
+      action: 'cancel',
+      runId: task.id,
     }, fakeContext()))
     assert.equal(firstCancel.isError, undefined)
-    assert.match(firstCancel.output, /Cancelled dispatch/)
+    assert.match(firstCancel.output, new RegExp(task.id))
     assert.deepEqual(loadBackgroundTasks('alice'), [])
 
     const record = getCompletedTaskRecord('alice', task.id)
     assert.equal(record?.outcome, 'cancelled')
 
-    const reCancel = await withUser(async () => cancelDispatchTool.call({
-      id: task.id,
+    const reCancel = await withUser(async () => taskUpdateTool.call({
+      action: 'cancel',
+      runId: task.id,
     }, fakeContext()))
     assert.equal(reCancel.isError, undefined)
     assert.match(reCancel.output, /already cancelled/)
   })
 
-  it('UpdateDispatch on a finished task surfaces is_error with the actionable hint', async () => {
+  it('UpdateSchedule on a finished task surfaces is_error with the actionable hint', async () => {
     appendCompletedTaskRecord('alice', {
       id: 'zouyicheng-3c120e85',
       outcome: 'success',
       completedAt: '2026-05-13T14:09:14.000Z',
     })
-    const result = await withUser(async () => updateDispatchTool.call({
+    const result = await withUser(async () => updateScheduleTool.call({
       id: 'zouyicheng-3c120e85',
       enabled: false,
     }, fakeContext()))
@@ -299,6 +305,15 @@ async function withUser<T>(fn: () => Promise<T>): Promise<T> {
     memoryDir: path.join(tmpHome, 'memory', 'alice'),
     currentUserId: 'alice',
     sessionId: 'test-session',
+    currentRole: {
+      agentType: 'main',
+      name: 'main',
+      kind: 'orchestrator',
+      whenToUse: 'test',
+      systemPrompt: '',
+      tools: ['*'],
+      hooks: ['*'],
+    },
     permissionMode: 'default',
   })
   return runWithSessionContext(ctx, fn)

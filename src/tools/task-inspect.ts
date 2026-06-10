@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
 import type { TaskRunMeta } from '../taskrun/types.js'
+import { computeTaskNextRunAt } from '../background-task/schedule-calc.js'
+import { loadBackgroundTasks } from '../background-task/store.js'
+import type { BackgroundTaskEntry } from '../background-task/types.js'
 import { getCurrentRole, getCurrentTaskRunId, requireCurrentUserId } from '../state.js'
 import {
   getTaskRun,
@@ -69,10 +72,11 @@ export const taskInspectTool = buildTool({
     }
 
     const runs = await listTaskRuns(owner)
+    const dispatches = loadBackgroundTasks(owner)
     return {
       output: runs.length === 0
         ? 'No TaskRuns related to the current session.'
-        : JSON.stringify({ runs: runs.map(formatRunSummary) }, null, 2),
+        : JSON.stringify({ runs: runs.map(run => formatRunSummary(run, dispatches)) }, null, 2),
     }
   },
 })
@@ -80,17 +84,21 @@ export const taskInspectTool = buildTool({
 async function inspectRun(meta: TaskRunMeta, owner: string) {
   const events = await getTaskRunEvents(meta.id, { limit: RECENT_EVENT_LIMIT }, owner)
   const children = await listChildTaskRuns(meta.id, owner)
-  const tree = await buildRunTree(meta, owner)
+  const dispatches = loadBackgroundTasks(owner)
+  const tree = await buildRunTree(meta, owner, dispatches)
   return {
-    meta,
+    meta: formatRunSummary(meta, dispatches),
     events,
-    children: children.map(formatRunSummary),
+    children: children.map(child => formatRunSummary(child, dispatches)),
     tree,
   }
 }
 
-function formatRunSummary(meta: TaskRunMeta) {
-  return {
+function formatRunSummary(meta: TaskRunMeta, dispatches: BackgroundTaskEntry[] = []) {
+  const backing = dispatches.find(entry =>
+    entry.taskRunId === meta.id || entry.standingRootRunId === meta.id,
+  )
+  const base = {
     id: meta.id,
     kind: meta.kind ?? 'dispatch',
     standing: meta.standing ?? false,
@@ -106,17 +114,30 @@ function formatRunSummary(meta: TaskRunMeta) {
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
   }
+  if (!backing) return base
+  return {
+    ...base,
+    schedule: backing.schedule,
+    nextRunAt: computeTaskNextRunAt(backing)?.toISOString() ?? null,
+    enabled: backing.enabled,
+    label: backing.label,
+    dispatchId: backing.id,
+  }
 }
 
 type RunTree = ReturnType<typeof formatRunSummary> & {
   children: RunTree[]
 }
 
-async function buildRunTree(meta: TaskRunMeta, owner: string): Promise<RunTree> {
+async function buildRunTree(
+  meta: TaskRunMeta,
+  owner: string,
+  dispatches: BackgroundTaskEntry[],
+): Promise<RunTree> {
   const children = await listChildTaskRuns(meta.id, owner)
   return {
-    ...formatRunSummary(meta),
-    children: await Promise.all(children.map(child => buildRunTree(child, owner))),
+    ...formatRunSummary(meta, dispatches),
+    children: await Promise.all(children.map(child => buildRunTree(child, owner, dispatches))),
   }
 }
 

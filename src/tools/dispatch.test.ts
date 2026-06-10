@@ -14,23 +14,23 @@ import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
 import {
-  cancelDispatchTool,
   dispatchTool,
   executeDispatch,
-  listDispatchesTool,
   messageDispatchTool,
   setRunSubagentForDispatchTest,
-  updateDispatchTool,
+  updateScheduleTool,
 } from './dispatch.js'
+import { taskUpdateTool } from './task-update.js'
 
 describe('Dispatch tool family', () => {
   it('registers all dispatch tools in the builtin catalog', () => {
     const names = new Set(getAllTools().map(tool => tool.name))
     assert.equal(names.has('Dispatch'), true)
-    assert.equal(names.has('ListDispatches'), true)
-    assert.equal(names.has('CancelDispatch'), true)
     assert.equal(names.has('MessageDispatch'), true)
-    assert.equal(names.has('UpdateDispatch'), true)
+    assert.equal(names.has('UpdateSchedule'), true)
+    assert.equal(names.has('ListDispatches'), false)
+    assert.equal(names.has('CancelDispatch'), false)
+    assert.equal(names.has('UpdateDispatch'), false)
   })
 
   it('rejects retired mode while accepting open role strings', () => {
@@ -86,10 +86,9 @@ describe('Dispatch tool family', () => {
     }).success, false)
   })
 
-  it('keeps notify fields out of Dispatch and UpdateDispatch schemas', () => {
+  it('keeps notify fields out of Dispatch and UpdateSchedule schemas', () => {
     assert.equal(dispatchTool.description.includes('notify_to'), false)
-    assert.equal(updateDispatchTool.description.includes('notify_to'), false)
-    assert.equal(listDispatchesTool.description.includes('notify_to'), false)
+    assert.equal(updateScheduleTool.description.includes('notify_to'), false)
   })
 
   it('keeps the retired context-inheritance field out of the Dispatch schema output', () => {
@@ -104,7 +103,7 @@ describe('Dispatch tool family', () => {
     assert.equal(parsed?.success, false)
   })
 
-  it('Dispatch is inline; its management quartet stays deferred', () => {
+  it('Dispatch is inline; its management tools stay deferred', () => {
     // Dispatch is the orchestrator's core per-turn verb. Keeping it behind
     // ToolSearch (shouldDefer) imposed a search → wait → call round-trip that
     // suppressed delegation, so it is alwaysLoad. The post-hoc management tools
@@ -114,8 +113,12 @@ describe('Dispatch tool family', () => {
     const inlineNames = new Set(alwaysLoaded.map(tool => tool.name))
     const deferredNames = new Set(deferred.map(tool => tool.name))
     assert.equal(inlineNames.has('Dispatch'), true)
-    for (const name of ['ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch']) {
+    for (const name of ['MessageDispatch', 'UpdateSchedule']) {
       assert.equal(deferredNames.has(name), true)
+    }
+    for (const removed of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
+      assert.equal(deferredNames.has(removed), false)
+      assert.equal(inlineNames.has(removed), false)
     }
   })
 
@@ -181,7 +184,7 @@ describe('Dispatch tool family', () => {
       assert.equal((await closeRootTaskRun(root.id, 'alice')).closed, true)
 
       const cancelOutput = await runWithSessionContext(session('main'), () =>
-        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+        taskUpdateTool.call({ action: 'cancel', runId: standing.id }, toolContext()),
       )
       assert.equal(cancelOutput.isError, undefined)
       assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'cancelled')
@@ -234,7 +237,7 @@ describe('Dispatch tool family', () => {
       // Cancelling the pending dispatch settles the queued run, releasing the
       // root for close — a never-to-fire run must not pin its root forever.
       const cancelOutput = await runWithSessionContext(session('main'), () =>
-        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+        taskUpdateTool.call({ action: 'cancel', runId: queued.id }, toolContext()),
       )
       assert.equal(cancelOutput.isError, undefined)
       assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'cancelled')
@@ -246,7 +249,7 @@ describe('Dispatch tool family', () => {
     }
   })
 
-  it('CancelDispatch hard-aborts a running background fire and marks its run cancelled', async () => {
+  it('TaskUpdate cancel hard-aborts a running background fire and marks its run cancelled', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-cancel-running-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -277,14 +280,115 @@ describe('Dispatch tool family', () => {
       setAbortControllerForSession('bg-running-dispatch', ctrl)
 
       const cancelOutput = await runWithSessionContext(session('main'), () =>
-        cancelDispatchTool.call({ id: dispatchId }, toolContext()),
+        taskUpdateTool.call({ action: 'cancel', runId: entry.taskRunId }, toolContext()),
       )
 
       assert.equal(cancelOutput.isError, undefined)
-      assert.match(cancelOutput.output, /aborted its in-flight fire/)
+      assert.match(cancelOutput.output, /"status":"cancelled"/)
       assert.equal(ctrl.signal.aborted, true)
       assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'cancelled')
       assert.equal(getBackgroundTask('alice', dispatchId), null)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('UpdateSchedule updates queued one-shot dispatches but refuses an already running one-shot fire', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-update-schedule-oneshot-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate a scheduled report.',
+        title: 'Scheduled report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Write the report later today.',
+            schedule: { kind: 'after', afterMinutes: 5 },
+            mode: 'background',
+            label: 'Scheduled report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry?.taskRunId)
+
+      const updated = await runWithSessionContext(session('main'), () =>
+        updateScheduleTool.call(
+          {
+            id: dispatchId,
+            prompt: 'Write the revised report later today.',
+            enabled: false,
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(updated.isError, undefined)
+      assert.match(updated.output, /Updated schedule/)
+      assert.equal(getBackgroundTask('alice', dispatchId)?.enabled, false)
+      assert.equal(getBackgroundTask('alice', dispatchId)?.pendingPriorPromptNotice, 'Write the report later today.')
+
+      await markStarted(entry.taskRunId, 'bg-update-schedule-running', Date.now(), 'alice')
+      const rejected = await runWithSessionContext(session('main'), () =>
+        updateScheduleTool.call(
+          {
+            id: dispatchId,
+            label: 'too late',
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(rejected.isError, true)
+      assert.match(rejected.output, /already running/)
+      assert.match(rejected.output, /TaskUpdate cancel/)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('UpdateSchedule updates future fires of a recurring dispatch while a fire is running', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-update-schedule-recurring-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Check status every hour.',
+            schedule: { kind: 'interval', everyMinutes: 60 },
+            mode: 'background',
+            label: 'Status poller',
+          },
+          toolContext(),
+        ),
+      )
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry?.taskRunId)
+      await markStarted(entry.taskRunId, 'bg-update-recurring-running', Date.now(), 'alice')
+
+      const updated = await runWithSessionContext(session('main'), () =>
+        updateScheduleTool.call(
+          {
+            id: dispatchId,
+            schedule: { kind: 'interval', everyMinutes: 120 },
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(updated.isError, undefined)
+      assert.match(updated.output, /currently running fire is unchanged/)
+      assert.deepEqual(getBackgroundTask('alice', dispatchId)?.schedule, { kind: 'interval', everyMinutes: 120 })
+      assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'running')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

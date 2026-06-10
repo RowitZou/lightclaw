@@ -39,9 +39,9 @@ export type BackgroundTaskEntry = {
   ownerCanonicalUser: string
   prompt: string
   /** AgentType of the dispatched worker role (e.g. 'generalist',
-   *  'webSearcher', or a user-defined role). Surfaced by ListDispatches
-   *  so the LLM can tell which role each scheduled / background task
-   *  runs as. Pre-Phase-8 stored tasks lack this field; the loader
+   *  'webSearcher', or a user-defined role). Surfaced through TaskInspect's
+   *  backing schedule metadata so the LLM can tell which role each scheduled /
+   *  background task runs as. Pre-Phase-8 stored tasks lack this field; the loader
    *  injects 'generalist' as the legacy default before zod parse so
    *  old on-disk entries continue to parse cleanly. */
   role: string
@@ -52,7 +52,7 @@ export type BackgroundTaskEntry = {
   enabled: boolean
   createdAt: string
   lastFiredAt?: string
-  // Set by UpdateDispatch when prompt is changed: holds the prior
+  // Set by UpdateSchedule when prompt is changed: holds the prior
   // prompt so the NEXT completion delivery can surface "prompt was changed
   // before this fire (old: ...)" once and then clear. Consumed by
   // scheduler.deliverCompletion at delivery time. NOT a chain: a second
@@ -73,7 +73,7 @@ export type BackgroundTaskEntry = {
    *  before this field existed are treated as main-created. */
   callerRole?: string
   /** Session the dispatch was created from = the ownership key for
-   *  ListDispatches / CancelDispatch / UpdateDispatch. Optional: legacy
+   *  UpdateSchedule and compatibility TaskUpdate cancel by entry id. Optional: legacy
    *  entries lack it and the management tools fall back to `originSessionId`,
    *  which carries the same "created from" session. */
   callerSessionId?: string

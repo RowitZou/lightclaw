@@ -36,6 +36,17 @@ const FEISHU_RESERVED_TOOLS = new Set([
 
 const BRAINPP_CLUSTER_TOOL_ROLES = new Set(['main', 'generalist', 'coder'])
 
+const RETIRED_TOOLS = new Set([
+  'ListDispatches',
+  'CancelDispatch',
+  'UpdateDispatch',
+])
+
+const MAIN_BLOCKED_TOOLS = new Set([
+  'WebFetch',
+  'WebSearch',
+])
+
 export function deriveCanUseTool(role: Role): CanUseToolFn {
   return async tool => {
     const visibility = checkRoleToolVisibility(role, tool.name)
@@ -78,6 +89,20 @@ function checkRoleToolVisibility(
   const policy = resolveRolePolicy(role)
 
   const tools = policy.tools as readonly string[]
+  if (RETIRED_TOOLS.has(toolName)) {
+    return {
+      allowed: false,
+      reason: `${toolName} has been retired; use TaskInspect, TaskUpdate, or UpdateSchedule.`,
+    }
+  }
+
+  if (policy.kind === 'orchestrator' && MAIN_BLOCKED_TOOLS.has(toolName)) {
+    return {
+      allowed: false,
+      reason: `${toolName} is reserved for web-specialized worker roles.`,
+    }
+  }
+
   const explicitlyReachableDispatch =
     toolName === 'Dispatch' &&
     tools.includes('Dispatch') &&

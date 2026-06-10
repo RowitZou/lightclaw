@@ -41,7 +41,7 @@ export const BUNDLED_AGENTS: Role[] = [
     // literal name in tools, not the wildcard). The management tools
     // are listed alongside Dispatch as a self-documenting "dispatcher
     // capability" cluster even though wildcard would also reach them.
-    tools: ['*', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch'],
+    tools: ['*', 'Dispatch', 'MessageDispatch', 'UpdateSchedule'],
     skills: ['remember', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
@@ -98,10 +98,8 @@ export const BUNDLED_AGENTS: Role[] = [
       'TodoWrite',
       'TaskInspect',
       'Dispatch',
-      'ListDispatches',
-      'CancelDispatch',
       'MessageDispatch',
-      'UpdateDispatch',
+      'UpdateSchedule',
       'UseSkill',
     ],
     skills: ['feishu-doc-workflow'],
@@ -117,7 +115,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test — and set up or repair the project around the code: install dependencies, configure the build / toolchain / runtime environment, and get typecheck / tests / build passing. Dispatch when the task centers on code or the environment that code runs in. It plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
-    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch'],
+    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill', 'Dispatch', 'MessageDispatch', 'UpdateSchedule'],
     skills: ['remember', 'coding-workflow', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
@@ -152,10 +150,8 @@ export const BUNDLED_AGENTS: Role[] = [
       'TaskInspect',
       'UseSkill',
       'Dispatch',
-      'ListDispatches',
-      'CancelDispatch',
       'MessageDispatch',
-      'UpdateDispatch',
+      'UpdateSchedule',
     ],
     skills: ['archive-workflow', 'remember'],
     reachableRoles: ['feishuSecretary', 'localExplorer', 'webSearcher'],
@@ -170,7 +166,7 @@ export const BUNDLED_AGENTS: Role[] = [
       'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch it as a quality gate before anything substantial reaches the user — on your own initiative, even when the user did not explicitly ask for a review — to find issues (not fix them). It reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
-    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill', 'Dispatch', 'ListDispatches', 'CancelDispatch', 'MessageDispatch', 'UpdateDispatch'],
+    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill', 'Dispatch', 'MessageDispatch', 'UpdateSchedule'],
     skills: ['remember', 'pre-delivery-review-workflow'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: reviewerPrompt,

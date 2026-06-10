@@ -104,7 +104,7 @@ async function markBackgroundTaskRunTerminalBestEffort(
       // finished: the result still has to reach the requester and be accepted
       // (TaskUpdate settles it). For standing services, completion handling
       // immediately creates the next queued child so the standing root keeps a
-      // future obligation until CancelDispatch stops it.
+      // future obligation until TaskUpdate cancel stops its standing root.
       const delivered = await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
       // Settle-on-return is a delivery path too: a parent parked at
       // paused(child-join) on this fire must be woken from here as well, not
@@ -612,7 +612,7 @@ export class BackgroundTaskScheduler {
 
     const firedAt = new Date().toISOString()
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
-      // Record before pruning so a late CancelDispatch call can tell
+      // Record before pruning so a late TaskUpdate cancel call can tell
       // "already finished" apart from "id never existed" (Bug 7 from
       // 2026-05-13 dogfood).
       appendCompletedTaskRecord(canonicalUser, {

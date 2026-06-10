@@ -387,7 +387,7 @@ describe('TaskRun store', () => {
         depth: 1,
         now: 10,
       })
-      const cancelled = await markCancelled(run.id, 'cancelled via CancelDispatch', 20, 'alice')
+      const cancelled = await markCancelled(run.id, 'cancelled via TaskUpdate', 20, 'alice')
       assert.equal(cancelled?.status, 'cancelled')
       assert.equal(cancelled?.terminalAt, 20)
       // Cancelling an already-terminal run is a no-op that keeps the state.

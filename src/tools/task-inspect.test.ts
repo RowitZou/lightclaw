@@ -5,6 +5,7 @@ import path from 'node:path'
 import test, { afterEach, beforeEach } from 'node:test'
 
 import type { Role } from '../agents/types.js'
+import { addBackgroundTask } from '../background-task/store.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
@@ -95,6 +96,50 @@ test('TaskInspect reads a run with recent events and direct children', async () 
   assert.equal(output.tree.id, parent.id)
   assert.deepEqual(output.tree.children.map((run: { id: string }) => run.id), [child.id])
   assert.deepEqual(output.tree.children[0].children.map((run: { id: string }) => run.id), [grandchild.id])
+})
+
+test('TaskInspect includes schedule details for runs backed by a dispatch entry', async () => {
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Prepare the later report',
+    title: 'Later report',
+    chainId: 'chain-schedule-inspect',
+    depth: 1,
+  })
+  const fireAt = new Date(Date.now() + 60_000).toISOString()
+  addBackgroundTask('alice', {
+    id: 'dispatch-schedule-1',
+    ownerCanonicalUser: 'alice',
+    prompt: 'Prepare the later report.',
+    role: 'coder',
+    schedule: { kind: 'oneshot', at: fireAt },
+    label: 'later report',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: false,
+    createdAt: new Date().toISOString(),
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    originSessionId: 's-main',
+    taskRunId: run.id,
+  })
+
+  const output = await runAs(mainRole(), 's-main', undefined, async () => {
+    const result = await taskInspectTool.call({ runId: run.id }, toolContext())
+    assert.equal(result.isError, undefined)
+    return JSON.parse(result.output)
+  })
+
+  assert.deepEqual(output.meta.schedule, { kind: 'oneshot', at: fireAt })
+  assert.equal(output.meta.dispatchId, 'dispatch-schedule-1')
+  assert.equal(output.meta.enabled, false)
+  assert.equal(output.meta.label, 'later report')
+  assert.equal(output.meta.nextRunAt, fireAt)
+  assert.equal(output.tree.dispatchId, 'dispatch-schedule-1')
 })
 
 test('TaskInspect lets a worker inspect its own subtree but not a sibling run', async () => {

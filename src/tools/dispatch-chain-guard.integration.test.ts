@@ -11,8 +11,9 @@ import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { addBackgroundTask, loadBackgroundTasks } from '../background-task/store.js'
-import { createRootTaskRun } from '../taskrun/store.js'
-import { cancelDispatchTool, executeDispatch, listDispatchesTool, updateDispatchTool } from './dispatch.js'
+import { createRootTaskRun, createTaskRun } from '../taskrun/store.js'
+import { executeDispatch, updateScheduleTool } from './dispatch.js'
+import { taskUpdateTool } from './task-update.js'
 
 let tmpRoot: string
 
@@ -207,9 +208,10 @@ test('background dispatch records the caller role and session', async () => {
   assert.equal(task?.callerSessionId, 'feishu:dm:c1')
 })
 
-test('CancelDispatch refuses a worker targeting another session dispatch', async () => {
+test('TaskUpdate cancel refuses a worker targeting another session dispatch entry id', async () => {
+  const workerRun = await createWorkerRun('dispatched-w1')
   await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1', currentTaskRunId: workerRun.id }),
     () =>
       executeDispatch({
         role: 'webSearcher',
@@ -222,7 +224,7 @@ test('CancelDispatch refuses a worker targeting another session dispatch', async
 
   const output = await runWithSessionContext(
     session('coder', [], { sessionId: 'dispatched-w2' }),
-    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+    () => taskUpdateTool.call({ action: 'cancel', runId: created.id }, toolContext()),
   )
 
   assert.equal(output.isError, true)
@@ -231,9 +233,10 @@ test('CancelDispatch refuses a worker targeting another session dispatch', async
   assert.equal(loadBackgroundTasks('alice').length, 1)
 })
 
-test('CancelDispatch allows a worker to cancel its own dispatch', async () => {
+test('TaskUpdate cancel allows a worker to cancel its own dispatch entry id', async () => {
+  const workerRun = await createWorkerRun('dispatched-w1')
   await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1', currentTaskRunId: workerRun.id }),
     () =>
       executeDispatch({
         role: 'webSearcher',
@@ -245,18 +248,23 @@ test('CancelDispatch allows a worker to cancel its own dispatch', async () => {
   assert.ok(created)
 
   const output = await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
-    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1', currentTaskRunId: workerRun.id }),
+    () => taskUpdateTool.call({ action: 'cancel', runId: created.id }, toolContext()),
   )
 
   assert.equal(output.isError, undefined)
-  assert.match(output.output, /Cancelled dispatch/)
+  assert.match(output.output, new RegExp(created.id))
   assert.equal(loadBackgroundTasks('alice').length, 0)
 })
 
-test('CancelDispatch lets main cancel a worker-created dispatch', async () => {
+test('TaskUpdate cancel lets main cancel a worker-created dispatch entry id', async () => {
+  const root = await createRootTaskRun('alice', 'feishu:dm:c1', {
+    objective: 'Coordinate worker-owned dispatch.',
+    title: 'Worker dispatch root',
+  })
+  const workerRun = await createWorkerRun('dispatched-w1', root.id)
   await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1', currentTaskRunId: workerRun.id }),
     () =>
       executeDispatch({
         role: 'webSearcher',
@@ -269,16 +277,17 @@ test('CancelDispatch lets main cancel a worker-created dispatch', async () => {
 
   const output = await runWithSessionContext(
     session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
-    () => cancelDispatchTool.call({ id: created.id }, toolContext()),
+    () => taskUpdateTool.call({ action: 'cancel', runId: created.id }, toolContext()),
   )
 
   assert.equal(output.isError, undefined)
-  assert.match(output.output, /Cancelled dispatch/)
+  assert.match(output.output, new RegExp(created.id))
 })
 
-test('UpdateDispatch refuses a worker targeting another session dispatch', async () => {
+test('UpdateSchedule refuses a worker targeting another session dispatch', async () => {
+  const workerRun = await createWorkerRun('dispatched-w1')
   await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
+    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1', currentTaskRunId: workerRun.id }),
     () =>
       executeDispatch({
         role: 'webSearcher',
@@ -291,7 +300,7 @@ test('UpdateDispatch refuses a worker targeting another session dispatch', async
 
   const output = await runWithSessionContext(
     session('coder', [], { sessionId: 'dispatched-w2' }),
-    () => updateDispatchTool.call({ id: created.id, enabled: false }, toolContext()),
+    () => updateScheduleTool.call({ id: created.id, enabled: false }, toolContext()),
   )
 
   assert.equal(output.isError, true)
@@ -300,7 +309,7 @@ test('UpdateDispatch refuses a worker targeting another session dispatch', async
   assert.equal(loadBackgroundTasks('alice')[0]?.enabled, true)
 })
 
-test('management ownership falls back to originSessionId for legacy dispatches', async () => {
+test('schedule ownership falls back to originSessionId for legacy dispatches', async () => {
   // A pre-Phase-12 entry carries originSessionId but no callerSessionId.
   addBackgroundTask('alice', {
     id: 'alice-legacy',
@@ -318,93 +327,23 @@ test('management ownership falls back to originSessionId for legacy dispatches',
 
   const denied = await runWithSessionContext(
     session('coder', [], { sessionId: 'dispatched-other' }),
-    () => cancelDispatchTool.call({ id: 'alice-legacy' }, toolContext()),
+    () => updateScheduleTool.call({ id: 'alice-legacy', enabled: false }, toolContext()),
   )
   assert.equal(denied.isError, true)
   assert.match(denied.output, /outside your scope/)
 
   const allowed = await runWithSessionContext(
     session('coder', [], { sessionId: 'dispatched-legacy' }),
-    () => cancelDispatchTool.call({ id: 'alice-legacy' }, toolContext()),
+    () => updateScheduleTool.call({ id: 'alice-legacy', enabled: false }, toolContext()),
   )
   assert.equal(allowed.isError, undefined)
-  assert.match(allowed.output, /Cancelled dispatch/)
-})
-
-test('ListDispatches default scope lists only the caller own dispatches', async () => {
-  await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
-    () =>
-      executeDispatch({
-        role: 'webSearcher',
-        prompt: 'Run research one in the background.',
-        schedule: { kind: 'after', afterMinutes: 5 },
-      }, toolContext()),
-  )
-  await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w2' }),
-    () =>
-      executeDispatch({
-        role: 'webSearcher',
-        prompt: 'Run research two in the background.',
-        schedule: { kind: 'after', afterMinutes: 5 },
-      }, toolContext()),
-  )
-
-  const output = await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
-    () => listDispatchesTool.call({ scope: 'mine' }, toolContext()),
-  )
-
-  const listed = JSON.parse(output.output) as Array<{ caller: string }>
-  assert.equal(listed.length, 1)
-  // Output surfaces the creating role.
-  assert.equal(listed[0]?.caller, 'generalist')
-})
-
-test('ListDispatches scope all lists every dispatch for the user from main', async () => {
-  await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
-    () =>
-      executeDispatch({
-        role: 'webSearcher',
-        prompt: 'Run research one in the background.',
-        schedule: { kind: 'after', afterMinutes: 5 },
-      }, toolContext()),
-  )
-  await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w2' }),
-    () =>
-      executeDispatch({
-        role: 'webSearcher',
-        prompt: 'Run research two in the background.',
-        schedule: { kind: 'after', afterMinutes: 5 },
-      }, toolContext()),
-  )
-
-  const output = await runWithSessionContext(
-    session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
-    () => listDispatchesTool.call({ scope: 'all' }, toolContext()),
-  )
-
-  const listed = JSON.parse(output.output) as unknown[]
-  assert.equal(listed.length, 2)
-})
-
-test('ListDispatches scope all is refused for a worker', async () => {
-  const output = await runWithSessionContext(
-    session('generalist', ['webSearcher'], { sessionId: 'dispatched-w1' }),
-    () => listDispatchesTool.call({ scope: 'all' }, toolContext()),
-  )
-
-  assert.equal(output.isError, true)
-  assert.match(output.output, /main orchestrator/)
+  assert.match(allowed.output, /Updated schedule/)
 })
 
 function session(
   agentType: string,
   reachableRoles: string[],
-  opts: { kind?: 'orchestrator' | 'worker'; sessionId?: string } = {},
+  opts: { kind?: 'orchestrator' | 'worker'; sessionId?: string; currentTaskRunId?: string } = {},
 ) {
   return createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),
@@ -421,6 +360,21 @@ function session(
       reachableRoles,
     },
     sessionId: opts.sessionId ?? 's-current',
+    currentTaskRunId: opts.currentTaskRunId,
+  })
+}
+
+function createWorkerRun(sessionId: string, parentRunId: string | null = null) {
+  return createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 'feishu:dm:c1',
+    mode: 'background',
+    objective: 'Worker parent run',
+    parentRunId,
+    chainId: `chain-${sessionId}`,
+    depth: 1,
   })
 }
 

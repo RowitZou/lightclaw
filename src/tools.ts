@@ -1,9 +1,7 @@
 import {
-  cancelDispatchTool,
   dispatchTool,
-  listDispatchesTool,
   messageDispatchTool,
-  updateDispatchTool,
+  updateScheduleTool,
 } from './tools/dispatch.js'
 import { askUserQuestionTool } from './tools/ask-user-question.js'
 import { notifyTool } from './tools/notify.js'
@@ -91,10 +89,8 @@ export const builtinTools = [
   webSearchTool,
   brainppClusterTool,
   dispatchTool,
-  listDispatchesTool,
-  cancelDispatchTool,
   messageDispatchTool,
-  updateDispatchTool,
+  updateScheduleTool,
   notifyTool,
   askUserQuestionTool,
 ]

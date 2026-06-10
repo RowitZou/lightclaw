@@ -8,7 +8,8 @@ import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
-import { addBackgroundTask } from '../background-task/store.js'
+import { setAbortControllerForSession } from '../state.js'
+import { addBackgroundTask, getBackgroundTask } from '../background-task/store.js'
 import {
   drainScheduledResumesForTest,
   resetResumeScheduleForTest,
@@ -254,14 +255,17 @@ test('TaskUpdate cancel lets orchestrator clear queued and paused work inside th
   assert.equal((await getTaskRun(paused.id, 'alice'))?.status, 'cancelled')
 })
 
-test('TaskUpdate cancel rejects running work but reaches roots from other chats of the same user', async () => {
+test('TaskUpdate cancel aborts running work and reaches roots from other chats of the same user', async () => {
   const root = await createRootTaskRun('alice', 's-main', { objective: 'This chat' })
   const running = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  const ctrl = new AbortController()
+  setAbortControllerForSession(`bg-${running.id}`, ctrl)
   const runningResult = await runAsMain(() =>
     taskUpdateTool.call({ action: 'cancel', runId: running.id }, toolContext()),
   )
-  assert.equal(runningResult.isError, true)
-  assert.equal((await getTaskRun(running.id, 'alice'))?.status, 'running')
+  assert.equal(runningResult.isError, undefined)
+  assert.equal(ctrl.signal.aborted, true)
+  assert.equal((await getTaskRun(running.id, 'alice'))?.status, 'cancelled')
 
   // The watchdog batches findings per owner and may wake main in whichever
   // chat resolves first — the disposition verbs must reach every root of the
@@ -274,6 +278,83 @@ test('TaskUpdate cancel rejects running work but reaches roots from other chats 
   )
   assert.equal(crossChat.isError, undefined)
   assert.equal((await getTaskRun(otherPaused.id, 'alice'))?.status, 'cancelled')
+})
+
+test('TaskUpdate cancel accepts a dispatch entry id and removes the backing schedule', async () => {
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'Scheduled goal' })
+  const queued = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'coder',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Queued child',
+    parentRunId: root.id,
+    chainId: 'chain-entry-cancel',
+    depth: 1,
+  })
+  addBackgroundTask('alice', {
+    id: 'dispatch-entry-1',
+    ownerCanonicalUser: 'alice',
+    prompt: 'Run this once later.',
+    role: 'coder',
+    schedule: { kind: 'oneshot', at: new Date(Date.now() + 60_000).toISOString() },
+    label: 'one-shot',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    originSessionId: 's-main',
+    parentTaskRunId: root.id,
+    taskRunId: queued.id,
+  })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: 'dispatch-entry-1' }, toolContext()),
+  )
+
+  assert.equal(result.isError, undefined)
+  assert.match(result.output, new RegExp(queued.id))
+  assert.match(result.output, /dispatch-entry-1/)
+  assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'cancelled')
+  assert.equal(getBackgroundTask('alice', 'dispatch-entry-1'), null)
+})
+
+test('TaskUpdate cancel on a standing root shuts down the whole service', async () => {
+  const root = await standingRoot()
+  const fire = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  const ctrl = new AbortController()
+  setAbortControllerForSession(`bg-${fire.id}`, ctrl)
+  addBackgroundTask('alice', {
+    id: 'standing-service-1',
+    ownerCanonicalUser: 'alice',
+    prompt: 'Run every hour.',
+    role: 'coder',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    label: 'standing service',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    originSessionId: 's-main',
+    standingRootRunId: root.id,
+    parentTaskRunId: root.id,
+    taskRunId: fire.id,
+  })
+
+  const result = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'cancel', runId: root.id }, toolContext()),
+  )
+
+  assert.equal(result.isError, undefined)
+  assert.equal(ctrl.signal.aborted, true)
+  assert.equal(getBackgroundTask('alice', 'standing-service-1'), null)
+  assert.equal((await getTaskRun(fire.id, 'alice'))?.status, 'cancelled')
+  assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'done')
 })
 
 test('orchestrator settles delivered runs under another chat root of the same user', async () => {
@@ -327,7 +408,7 @@ test('worker TaskUpdate cancel is limited to direct queued or paused children', 
 })
 
 test('settling the last fire of a cancelled standing service closes its orphan root', async () => {
-  // CancelDispatch with a fire in flight: the close is refused by the
+  // Stopping a standing service with a fire in flight: the close is refused by the
   // obligations gate, the entry is removed, and the fire later parks at
   // delivered. The verdict on that fire must close the root, or it stays
   // open forever (watchdog skips roots; the orchestrator gate skips standing).

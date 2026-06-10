@@ -1,6 +1,14 @@
 import { z } from 'zod'
 
-import { loadBackgroundTasks } from '../background-task/store.js'
+import {
+  appendCompletedTaskRecord,
+  getBackgroundTask,
+  getCompletedTaskRecord,
+  loadBackgroundTasks,
+  removeBackgroundTask,
+} from '../background-task/store.js'
+import { notifyBackgroundTaskChanged } from '../background-task/scheduler.js'
+import type { BackgroundTaskEntry } from '../background-task/types.js'
 import {
   appendCheckpoint,
   acceptTaskRun,
@@ -18,13 +26,13 @@ import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const TASK_UPDATE_DESCRIPTION = [
-  'Change a TaskRun state: deliver your own run, pause work, or settle (accept / reject) a delivered child run.',
+  'Change a TaskRun state: deliver your own run, pause work, cancel work, or settle (accept / reject) a delivered child run.',
   '',
   "action='deliver' — conclude your own run. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. With a root runId (orchestrator) it declares the root delivered; the close is refused with an itemized list while the root still has open obligations — settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
   "action='pause' — without runId, pause your own run with a checkpoint and wake rule; with runId, pause a running direct child.",
-  "action='cancel' — cancel queued or paused work you own. Orchestrator may cancel runs inside this chat's rooted trees; workers may cancel their direct queued / paused children. Running work is not cancelled here; use CancelDispatch for an in-flight background dispatch.",
+  "action='cancel' — cancel work you own by TaskRun runId. Orchestrator may cancel runs inside this user's rooted trees; workers may cancel direct children. Queued / paused runs are marked cancelled; running runs are hard-aborted before cancellation. A standing service root runId shuts down the whole service. A dispatch entry id is accepted for one compatibility window and is resolved to its backing run.",
 ].join('\n')
 
 function describeObligationStatus(meta: TaskRunMeta): string {
@@ -33,12 +41,10 @@ function describeObligationStatus(meta: TaskRunMeta): string {
   return meta.status
 }
 
-/** CancelDispatch can only close a standing-service root whose ledger is
- *  already settled; with a fire still in flight (or parked at delivered) the
- *  gate refuses, the entry is removed, and nothing revisits the root after
- *  that. The verdict settling a child is the natural revisit: once no live
- *  dispatch entry backs the root, retry the gated close — it succeeds exactly
- *  when the last obligation settles. */
+/** If a standing-service entry is gone while one of its fires is parked at
+ *  delivered, the verdict settling that child is the natural revisit: once no
+ *  live dispatch entry backs the root, retry the gated close — it succeeds
+ *  exactly when the last obligation settles. */
 async function closeOrphanStandingRootBestEffort(
   owner: string,
   rootRunId: string,
@@ -55,6 +61,91 @@ async function closeOrphanStandingRootBestEffort(
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+  }
+}
+
+function taskCallerSession(task: BackgroundTaskEntry): string | undefined {
+  return task.callerSessionId ?? task.originSessionId
+}
+
+function taskCallerRole(task: BackgroundTaskEntry): string {
+  return task.callerRole ?? 'main'
+}
+
+function currentCallerMayManageDispatch(task: BackgroundTaskEntry): boolean {
+  const role = getCurrentRole()
+  if (!role || role.kind === 'orchestrator') return true
+  return taskCallerSession(task) === getSessionId()
+}
+
+function isTerminalTaskRun(meta: TaskRunMeta): boolean {
+  return meta.status === 'done' || meta.status === 'failed' || meta.status === 'cancelled'
+}
+
+function findBackingDispatches(owner: string, runId: string): BackgroundTaskEntry[] {
+  return loadBackgroundTasks(owner).filter(entry =>
+    entry.taskRunId === runId || entry.standingRootRunId === runId,
+  )
+}
+
+async function resolveCancelTarget(
+  owner: string,
+  runIdOrDispatchId: string,
+): Promise<
+  | { ok: true; run: TaskRunMeta; compatibilityDispatchId?: string }
+  | { ok: false; output: string; isError?: true }
+> {
+  const direct = await getTaskRun(runIdOrDispatchId, owner)
+  if (direct) return { ok: true, run: direct }
+
+  const entry = getBackgroundTask(owner, runIdOrDispatchId)
+  if (entry) {
+    if (!currentCallerMayManageDispatch(entry)) {
+      return {
+        ok: false,
+        output: `Dispatch ${runIdOrDispatchId} was created by ${taskCallerRole(entry)} in a different session and is outside your scope. Cancel only TaskRuns you own; report it back to your requester instead of retrying.`,
+        isError: true,
+      }
+    }
+    const targetRunId = entry.standingRootRunId ?? entry.taskRunId
+    if (!targetRunId) {
+      return {
+        ok: false,
+        output: `Dispatch ${runIdOrDispatchId} has no backing TaskRun to cancel.`,
+        isError: true,
+      }
+    }
+    const run = await getTaskRun(targetRunId, owner)
+    if (!run) {
+      return {
+        ok: false,
+        output: `Dispatch ${runIdOrDispatchId} points to missing TaskRun ${targetRunId}.`,
+        isError: true,
+      }
+    }
+    return { ok: true, run, compatibilityDispatchId: runIdOrDispatchId }
+  }
+
+  const prior = getCompletedTaskRecord(owner, runIdOrDispatchId)
+  if (prior) {
+    const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
+    return {
+      ok: false,
+      output: `Dispatch ${runIdOrDispatchId} already ${verb} at ${prior.completedAt}. Cancel is a no-op.`,
+    }
+  }
+
+  return { ok: false, output: `TaskRun not found: ${runIdOrDispatchId}`, isError: true }
+}
+
+async function cancelDispatchEntry(owner: string, entry: BackgroundTaskEntry): Promise<void> {
+  if (removeBackgroundTask(owner, entry.id)) {
+    notifyBackgroundTaskChanged(owner, entry.id)
+    appendCompletedTaskRecord(owner, {
+      id: entry.id,
+      outcome: 'cancelled',
+      completedAt: new Date().toISOString(),
+    })
   }
 }
 
@@ -123,7 +214,7 @@ export const taskUpdateTool = buildTool({
             `- dispatch ${id} [scheduled, not fired yet]`,
           ),
           '',
-          'Settle each first: TaskUpdate accept/reject delivered runs, CancelDispatch scheduled work you no longer want, or wait for running work to deliver. Then retry.',
+          'Settle each first: TaskUpdate accept/reject delivered runs, TaskUpdate cancel scheduled/running work you no longer want, or wait for running work to deliver. Then retry.',
         ]
         return { output: lines.join('\n'), isError: true }
       }
@@ -231,15 +322,22 @@ export const taskUpdateTool = buildTool({
 
     if (input.action === 'cancel') {
       if (!input.runId) {
-        return { output: 'cancel requires `runId` of the queued or paused run.', isError: true }
+        return { output: 'cancel requires `runId` of the TaskRun to cancel.', isError: true }
       }
-      const target = await getTaskRun(input.runId, owner)
-      if (!target) {
-        return { output: `TaskRun not found: ${input.runId}`, isError: true }
-      }
-      if (target.status !== 'queued' && target.status !== 'paused') {
+      const resolved = await resolveCancelTarget(owner, input.runId)
+      if (!resolved.ok) {
         return {
-          output: `TaskRun ${input.runId} is ${target.status}, not queued or paused. Running work must be stopped with CancelDispatch; delivered work needs accept/reject.`,
+          output: resolved.output,
+          ...(resolved.isError ? { isError: true } : {}),
+        }
+      }
+      const target = resolved.run
+      if (isTerminalTaskRun(target)) {
+        return { output: `TaskRun ${target.id} is already ${target.status}. Cancel is a no-op.` }
+      }
+      if (target.status === 'delivered') {
+        return {
+          output: `TaskRun ${target.id} is delivered; accept or reject it with TaskUpdate instead of cancelling.`,
           isError: true,
         }
       }
@@ -251,7 +349,7 @@ export const taskUpdateTool = buildTool({
         const root = await getTaskRun(target.rootRunId, owner)
         if (!root || (root.kind ?? 'dispatch') !== 'root') {
           return {
-            output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`,
+            output: `TaskRun ${target.id} is not inside one of your rooted task trees.`,
             isError: true,
           }
         }
@@ -259,25 +357,103 @@ export const taskUpdateTool = buildTool({
         const own = getCurrentTaskRunId()
         if (!own || target.parentRunId !== own) {
           return {
-            output: `TaskRun ${input.runId} is not a direct child of your current run; you can only cancel queued / paused work you dispatched.`,
+            output: `TaskRun ${target.id} is not a direct child of your current run; you can only cancel work you dispatched.`,
             isError: true,
           }
         }
       }
+      const backing = findBackingDispatches(owner, target.id)
+      if (target.standing === true && (target.kind ?? 'dispatch') === 'root') {
+        for (const entry of backing) {
+          if (!currentCallerMayManageDispatch(entry)) {
+            return {
+              output: `Dispatch ${entry.id} was created by ${taskCallerRole(entry)} in a different session and is outside your scope. Report it back to your requester instead of retrying.`,
+              isError: true,
+            }
+          }
+        }
+        const childIds = backing.map(entry => entry.taskRunId).filter((id): id is string => Boolean(id))
+        for (const entry of backing) {
+          await cancelDispatchEntry(owner, entry)
+        }
+        const childResults: string[] = []
+        for (const childId of childIds) {
+          const child = await getTaskRun(childId, owner)
+          if (!child || isTerminalTaskRun(child)) continue
+          if (child.status === 'running' && child.currentSessionId) {
+            abortInFlightForSession(child.currentSessionId)
+          }
+          const childCancelled = await markCancelled(
+            child.id,
+            `cancelled by ${byRole} via TaskUpdate standing-service shutdown`,
+            Date.now(),
+            owner,
+            { allowRunning: true },
+          )
+          if (childCancelled?.status === 'cancelled') {
+            childResults.push(childCancelled.id)
+          }
+        }
+        const closed = await closeRootTaskRun(target.id, owner)
+        if (!closed.closed && closed.reason === 'open-obligations') {
+          return {
+            output: [
+              `Standing service ${target.id} was shut down, but its root still has unsettled obligations:`,
+              ...closed.obligations.openRuns.map(run =>
+                `- ${run.id} [${describeObligationStatus(run)}] ${run.role} — ${run.title}`,
+              ),
+            ].join('\n'),
+            isError: true,
+          }
+        }
+        return {
+          output: JSON.stringify({
+            runId: target.id,
+            status: (await getTaskRun(target.id, owner))?.status ?? target.status,
+            cancelledChildren: childResults,
+            ...(backing.length ? { dispatchIds: backing.map(entry => entry.id) } : {}),
+            ...(resolved.compatibilityDispatchId ? { compatibilityDispatchId: resolved.compatibilityDispatchId } : {}),
+          }),
+        }
+      }
+      for (const entry of backing) {
+        if (entry.standingRootRunId && entry.taskRunId === target.id) continue
+        if (!currentCallerMayManageDispatch(entry)) {
+          return {
+            output: `Dispatch ${entry.id} was created by ${taskCallerRole(entry)} in a different session and is outside your scope. Report it back to your requester instead of retrying.`,
+            isError: true,
+          }
+        }
+      }
+      for (const entry of backing) {
+        if (entry.standingRootRunId && entry.taskRunId === target.id) continue
+        await cancelDispatchEntry(owner, entry)
+      }
+      if (target.status === 'running' && target.currentSessionId) {
+        abortInFlightForSession(target.currentSessionId)
+      }
       const cancelled = await markCancelled(
-        input.runId,
+        target.id,
         `cancelled by ${byRole} via TaskUpdate`,
         Date.now(),
         owner,
+        { allowRunning: true },
       )
       if (!cancelled || cancelled.status !== 'cancelled') {
         return {
-          output: `TaskRun ${input.runId} could not be cancelled (its state changed underneath).`,
+          output: `TaskRun ${target.id} could not be cancelled (its state changed underneath).`,
           isError: true,
         }
       }
       await closeOrphanStandingRootBestEffort(owner, cancelled.rootRunId)
-      return { output: JSON.stringify({ runId: cancelled.id, status: cancelled.status }) }
+      return {
+        output: JSON.stringify({
+          runId: cancelled.id,
+          status: cancelled.status,
+          ...(backing.length ? { dispatchIds: backing.map(entry => entry.id) } : {}),
+          ...(resolved.compatibilityDispatchId ? { compatibilityDispatchId: resolved.compatibilityDispatchId } : {}),
+        }),
+      }
     }
 
     // accept / reject — verdict on a delivered child.

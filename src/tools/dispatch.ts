@@ -9,11 +9,8 @@ import { resolveRolePolicy } from '../agents/role-presets.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
 import {
   addBackgroundTask,
-  appendCompletedTaskRecord,
   getBackgroundTask,
   getCompletedTaskRecord,
-  loadBackgroundTasks,
-  removeBackgroundTask,
   updateBackgroundTask,
 } from '../background-task/store.js'
 import { computeTaskNextRunAt, describeNextRun } from '../background-task/schedule-calc.js'
@@ -23,7 +20,6 @@ import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.
 import { wakeOrInterject } from '../channels/feishu/wake-or-interject.js'
 import { getIdentity } from '../identity/store.js'
 import {
-  abortInFlightForSession,
   getCurrentRole,
   getCurrentTaskRunId,
   getSessionId,
@@ -41,12 +37,10 @@ import {
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
 import {
-  closeRootTaskRun,
   createStandingRootTaskRun,
   createTaskRun,
   appendEvent,
   getTaskRun,
-  markCancelled,
   markPaused,
   markResumed,
 } from '../taskrun/store.js'
@@ -111,31 +105,17 @@ Dispatched roles return a single final-text summary. Tool results from inside th
 
 A background dispatch outlives the turn that starts it, and its \`<background-task-result>\` only returns to you if you are still running when it finishes. If you hand back your result first, the dispatch keeps running without you and its result later surfaces with no record of why it exists. So when you finish with a background dispatch still in flight — one you started, or one a role you dispatched reported starting — name it in what you hand back: what it is doing, and that its result will arrive separately.`
 
-const LIST_DISPATCHES_DESCRIPTION = `List your active background dispatches (scheduled work you've delegated + recently failed).
-
-Use to monitor what's running before deciding to dispatch new work that might overlap, before CancelDispatch / UpdateDispatch when you know what to target, or when answering a user question that requires reasoning over current delegated state.
-
-By default this lists only dispatches you created. Pass \`scope: 'all'\` to list every background dispatch for the user, regardless of which agent scheduled it — available to the main orchestrator only.
-
-Returns each dispatch's id, label, role, caller (the agent that scheduled it), schedule shape, next run time, current enabled state, and (if \`include_history: true\`) the last fire timestamp. Past fire outcomes are not in this output — each fire's result was already delivered to you via wake at the time it completed.`
-
-const CANCEL_DISPATCH_DESCRIPTION = `Cancel a background dispatch by id. Future runs are stopped, and an already in-flight fire is hard-aborted if its TaskRun is currently running.
-
-Use when you decide a previously-dispatched run is no longer needed — the user explicitly says "stop that one", the plan has changed and the work is moot, or you're reassessing scope and want to free the slot. Run ListDispatches first if you don't have the exact id.
-
-To temporarily disable rather than delete, use UpdateDispatch with \`enabled: false\` (preserves history; can be re-enabled later).
-
-Idempotent: cancelling a dispatch that already finished (oneshot success was pruned) or was cancelled earlier returns a success "already finished/cancelled" message, not an error. Only a truly unknown id surfaces as is_error.`
-
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
 With \`to\`, target a direct child TaskRun: running children receive an interjection; paused children resume with the message; queued / delivered / terminal children return guidance.
 
 Without \`to\`, ask your parent for input. \`default\` is required: the run pauses as awaiting-reply and will continue with the default if the parent cannot answer in time.`
 
-const UPDATE_DISPATCH_DESCRIPTION = `Update fields of an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
+const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
-Use when you adjust delegated work as the situation evolves: refine the prompt as you learn more, change schedule to fit the user's new ask, pause with enabled=false. The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead.
+Use when you adjust a not-yet-fired one-shot dispatch or the future fires of a recurring / interval dispatch. It does not message or alter a fire that is already running: use MessageDispatch for soft course correction, or TaskUpdate cancel and then Dispatch again for hard replacement.
+
+The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead. Changing between finite one-shot and recurring/interval standing-service shapes is not supported.
 
 Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. Other fields you don't pass are left unchanged.`
 
@@ -349,60 +329,6 @@ function currentCallerMayManage(task: BackgroundTaskEntry): boolean {
   return taskCallerSession(task) === getSessionId()
 }
 
-async function cancelQueuedTaskRunBestEffort(
-  ownerCanonicalUser: string,
-  taskRunId: string | undefined,
-): Promise<{ cancelled: boolean; abortedSessionId?: string }> {
-  if (!taskRunId) return { cancelled: false }
-  try {
-    const meta = await getTaskRun(taskRunId, ownerCanonicalUser)
-    if (!meta) return { cancelled: false }
-    if (meta.status !== 'queued' && meta.status !== 'paused' && meta.status !== 'running') {
-      return { cancelled: false }
-    }
-    let abortedSessionId: string | undefined
-    if (meta.status === 'running' && meta.currentSessionId) {
-      if (abortInFlightForSession(meta.currentSessionId)) {
-        abortedSessionId = meta.currentSessionId
-      }
-    }
-    const cancelled = await markCancelled(
-      taskRunId,
-      'cancelled via CancelDispatch',
-      Date.now(),
-      ownerCanonicalUser,
-      { allowRunning: meta.status === 'running' },
-    )
-    return {
-      cancelled: cancelled?.status === 'cancelled',
-      ...(abortedSessionId ? { abortedSessionId } : {}),
-    }
-  } catch (error) {
-    process.stderr.write(
-      `[taskrun] failed to mark run ${taskRunId} cancelled: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-    return { cancelled: false }
-  }
-}
-
-async function closeStandingRootBestEffort(
-  ownerCanonicalUser: string,
-  rootRunId: string | undefined,
-): Promise<void> {
-  if (!rootRunId) return
-  try {
-    await closeRootTaskRun(rootRunId, ownerCanonicalUser)
-  } catch (error) {
-    process.stderr.write(
-      `[taskrun] failed to close standing root ${rootRunId}: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-  }
-}
-
 export const dispatchTool = buildTool({
   name: 'Dispatch',
   whenToUse: `Delegate a focused task to a worker; optionally on a schedule (5 分钟后 / tonight at 9 / 每周一早上报告).`,
@@ -410,7 +336,7 @@ export const dispatchTool = buildTool({
   // Behind ToolSearch it carried a round-trip cost (search → wait a turn →
   // call) that the model routinely sidestepped by just doing the work itself,
   // suppressing delegation. Inlining removes that activation energy. The
-  // management quartet below (List/Cancel/Message/Update) stays deferred: post-hoc, low
+  // remaining management tools below (Message/UpdateSchedule) stay deferred: post-hoc, low
   // per-turn frequency.
   alwaysLoad: true,
   description: DISPATCH_DESCRIPTION,
@@ -669,96 +595,6 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
   }
 }
 
-export const listDispatchesTool = buildTool({
-  name: 'ListDispatches',
-  whenToUse: `See active background dispatches before deciding to launch more, cancel, or update.`,
-  shouldDefer: true,
-  description: LIST_DISPATCHES_DESCRIPTION,
-  searchHint: 'list dispatches background tasks scheduled delegated state history 列出 后台 定时',
-  domain: 'host',
-  riskLevel: 'safe',
-  concurrencySafe: true,
-  inputSchema: z.object({
-    include_history: z.boolean().optional(),
-    scope: z.enum(['mine', 'all']).optional(),
-  }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    if (input.scope === 'all') {
-      const role = getCurrentRole()
-      if (role && role.kind !== 'orchestrator') {
-        return {
-          output: "scope:'all' is available only to the main orchestrator. Omit scope to list the dispatches you created.",
-          isError: true,
-        }
-      }
-    }
-    const currentSession = getSessionId()
-    const tasks = loadBackgroundTasks(userId)
-      .filter(task => input.scope === 'all' || taskCallerSession(task) === currentSession)
-      .map(task => ({
-        id: task.id,
-        label: task.label,
-        role: task.role,
-        caller: taskCallerRole(task),
-        schedule: task.schedule,
-        enabled: task.enabled,
-        nextRunAt: computeTaskNextRunAt(task)?.toISOString() ?? null,
-        lastFiredAt: task.lastFiredAt ?? null,
-        ...(input.include_history ? { lastFire: task.lastFiredAt ? { firedAt: task.lastFiredAt } : null } : {}),
-      }))
-    return { output: tasks.length === 0 ? 'No active background dispatches.' : JSON.stringify(tasks, null, 2) }
-  },
-})
-
-export const cancelDispatchTool = buildTool({
-  name: 'CancelDispatch',
-  whenToUse: `User says stop that one, or the plan changed and a scheduled dispatch is moot.`,
-  shouldDefer: true,
-  description: CANCEL_DISPATCH_DESCRIPTION,
-  searchHint: 'cancel stop dispatch background scheduled delegated 取消 停止 后台 定时',
-  domain: 'host',
-  riskLevel: 'write',
-  inputSchema: z.object({
-    id: z.string().min(1),
-  }),
-  async call(input) {
-    const userId = requireCurrentUserId()
-    const owned = getBackgroundTask(userId, input.id)
-    if (owned && !currentCallerMayManage(owned)) {
-      return {
-        output: `Dispatch ${input.id} was created by ${taskCallerRole(owned)} in a different session and is outside your scope. You can only cancel dispatches you created. Report it back to your requester instead of retrying.`,
-        isError: true,
-      }
-    }
-    const removed = removeBackgroundTask(userId, input.id)
-    notifyBackgroundTaskChanged(userId, input.id)
-    if (removed) {
-      // Dispatch-time queued runs must be settled on cancel, or the
-      // never-to-fire run pins its root open forever. Running fires are
-      // hard-aborted through their TaskRun currentSessionId before cancellation.
-      const cancelResult = await cancelQueuedTaskRunBestEffort(userId, owned?.taskRunId)
-      await closeStandingRootBestEffort(userId, owned?.standingRootRunId)
-      appendCompletedTaskRecord(userId, {
-        id: input.id,
-        outcome: 'cancelled',
-        completedAt: new Date().toISOString(),
-      })
-      return {
-        output: cancelResult.abortedSessionId
-          ? `Cancelled dispatch ${input.id} and aborted its in-flight fire.`
-          : `Cancelled dispatch ${input.id}.`,
-      }
-    }
-    const prior = getCompletedTaskRecord(userId, input.id)
-    if (prior) {
-      const verb = prior.outcome === 'cancelled' ? 'cancelled' : 'finished'
-      return { output: `Dispatch ${input.id} already ${verb} at ${prior.completedAt}. Cancel is a no-op.` }
-    }
-    return { output: `Dispatch not found: ${input.id}`, isError: true }
-  },
-})
-
 export const messageDispatchTool = buildTool({
   name: 'MessageDispatch',
   whenToUse: `Send a message to a child TaskRun, or ask your parent a question with a default.`,
@@ -824,7 +660,7 @@ export const messageDispatchTool = buildTool({
       return { output: `TaskRun ${run.id} resume scheduled with your message.` }
     }
     if (run.status === 'queued') {
-      return { output: `TaskRun ${run.id} is queued; use UpdateDispatch to change the queued prompt.`, isError: true }
+      return { output: `TaskRun ${run.id} is queued; use UpdateSchedule to change the queued prompt.`, isError: true }
     }
     if (run.status === 'delivered') {
       return { output: `TaskRun ${run.id} is delivered; accept or reject it with TaskUpdate.`, isError: true }
@@ -998,11 +834,11 @@ function wrapMessageDispatch(message: string): string {
   ].join('\n')
 }
 
-export const updateDispatchTool = buildTool({
-  name: 'UpdateDispatch',
+export const updateScheduleTool = buildTool({
+  name: 'UpdateSchedule',
   whenToUse: `Modify an active dispatch's prompt / schedule / label / enabled as the situation evolves.`,
   shouldDefer: true,
-  description: UPDATE_DISPATCH_DESCRIPTION,
+  description: UPDATE_SCHEDULE_DESCRIPTION,
   searchHint: 'update dispatch edit schedule prompt pause resume 修改 后台 定时',
   domain: 'host',
   riskLevel: 'write',
@@ -1040,6 +876,15 @@ export const updateDispatchTool = buildTool({
         }
       }
     }
+    if (existing?.schedule.kind === 'oneshot' && existing.taskRunId) {
+      const run = await getTaskRun(existing.taskRunId, userId)
+      if (run?.status === 'running') {
+        return {
+          output: `TaskRun ${run.id} is already running. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use MessageDispatch for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
+          isError: true,
+        }
+      }
+    }
     const promptChanged =
       input.prompt !== undefined && existing !== null && existing.prompt !== input.prompt
     const updated = updateBackgroundTask(userId, input.id, {
@@ -1063,8 +908,9 @@ export const updateDispatchTool = buildTool({
     }
     return {
       output: [
-        `Updated dispatch ${updated.id} (${updated.label}).`,
+        `Updated schedule ${updated.id} (${updated.label}).`,
         `Next run: ${describeNextRun(computeTaskNextRunAt(updated))}`,
+        ...(updated.standingRootRunId ? ['Any currently running fire is unchanged.'] : []),
       ].join('\n'),
     }
   },
@@ -1072,8 +918,6 @@ export const updateDispatchTool = buildTool({
 
 export const __toolDescriptionForSnapshot = {
   Dispatch: DISPATCH_DESCRIPTION,
-  ListDispatches: LIST_DISPATCHES_DESCRIPTION,
-  CancelDispatch: CANCEL_DISPATCH_DESCRIPTION,
   MessageDispatch: MESSAGE_DISPATCH_DESCRIPTION,
-  UpdateDispatch: UPDATE_DISPATCH_DESCRIPTION,
+  UpdateSchedule: UPDATE_SCHEDULE_DESCRIPTION,
 }
