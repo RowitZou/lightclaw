@@ -1,5 +1,7 @@
 export type TaskRunMode = 'blocking' | 'background'
 
+export type TaskRunKind = 'root' | 'dispatch'
+
 export type TaskRunStatus =
   | 'queued'
   | 'running'
@@ -17,6 +19,7 @@ export type TaskRunOutcome = {
 
 export type TaskRunMeta = {
   id: string
+  kind?: TaskRunKind
   parentRunId: string | null
   rootRunId: string
   chainId: string
@@ -49,6 +52,7 @@ export type TaskRunCreatedEvent = {
   seq: number
   ts: number
   kind: 'created'
+  taskRunKind?: TaskRunKind
   objective: string
   role: string
   callerRole: string

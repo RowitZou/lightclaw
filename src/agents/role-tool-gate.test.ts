@@ -28,6 +28,10 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
     behavior: 'deny',
     reason: 'Dispatch is not available to subagents.',
   })
+  assert.deepEqual(await gate(tool('TaskCreate'), {}), {
+    behavior: 'deny',
+    reason: 'TaskCreate is not available to subagents.',
+  })
   assert.deepEqual(await gate(tool('AskUserQuestion'), {}), {
     behavior: 'deny',
     reason: 'AskUserQuestion is not available to subagents.',
@@ -159,6 +163,7 @@ test('isToolVisibleToRole mirrors deriveCanUseTool without async dispatch', () =
   assert.equal(isToolVisibleToRole(worker, 'MemoryWrite'), true)
   assert.equal(isToolVisibleToRole(worker, 'TodoWrite'), true)
   assert.equal(isToolVisibleToRole(worker, 'Dispatch'), false)
+  assert.equal(isToolVisibleToRole(worker, 'TaskCreate'), false)
   assert.equal(isToolVisibleToRole(internal, 'MemoryWrite'), true)
   assert.equal(isToolVisibleToRole(internal, 'Read'), false)
 })

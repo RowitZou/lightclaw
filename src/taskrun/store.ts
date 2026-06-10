@@ -4,6 +4,7 @@ import { readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 import { safeWriteJson } from '../atomic-write.js'
+import { loadBackgroundTasks } from '../background-task/store.js'
 import { sanitizePathSegment } from '../identity/paths.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import { lightclawHome } from '../paths.js'
@@ -11,6 +12,7 @@ import type {
   TaskRunArtifactEvent,
   TaskRunEvent,
   TaskRunFinishedEvent,
+  TaskRunKind,
   TaskRunMeta,
   TaskRunMode,
   TaskRunOutcome,
@@ -22,6 +24,7 @@ const DEFAULT_TASKRUN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 type CreateTaskRunInput = {
   id?: string
+  kind?: TaskRunKind
   ownerCanonicalUser: string
   role: string
   callerRole: string
@@ -47,6 +50,17 @@ type SweepTaskRunsOptions = {
 
 type GetTaskRunEventsOptions = {
   limit?: number
+}
+
+type CreateRootTaskRunInput = {
+  objective: string
+  title?: string
+  now?: number
+}
+
+type RootObligations = {
+  openRunIds: string[]
+  pendingDispatchIds: string[]
 }
 
 const runLocks = new Map<string, Promise<void>>()
@@ -80,6 +94,14 @@ function createRunId(): string {
 function titleFromObjective(objective: string): string {
   const firstLine = objective.split('\n').map(line => line.trim()).find(Boolean)
   return (firstLine ?? 'Untitled task').slice(0, 120)
+}
+
+function isTerminalStatus(status: TaskRunMeta['status']): boolean {
+  return status === 'done' || status === 'failed' || status === 'cancelled'
+}
+
+function taskRunKind(meta: TaskRunMeta): TaskRunKind {
+  return meta.kind ?? 'dispatch'
 }
 
 async function withRunLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
@@ -141,6 +163,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
   const rootRunId = parent?.rootRunId ?? parentRunId ?? id
   const meta: TaskRunMeta = {
     id,
+    kind: input.kind ?? 'dispatch',
     parentRunId,
     rootRunId,
     chainId: input.chainId,
@@ -161,6 +184,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     seq: 0,
     ts: now,
     kind: 'created',
+    taskRunKind: input.kind ?? 'dispatch',
     objective: input.objective,
     role: input.role,
     callerRole: input.callerRole,
@@ -173,6 +197,33 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     writeMeta(meta)
   })
   return meta
+}
+
+export async function createRootTaskRun(
+  ownerCanonicalUser: string,
+  mainSessionId: string,
+  input: CreateRootTaskRunInput,
+): Promise<TaskRunMeta> {
+  const run = await createTaskRun({
+    ownerCanonicalUser,
+    kind: 'root',
+    role: 'main',
+    callerRole: 'main',
+    callerSessionId: mainSessionId,
+    mode: 'blocking',
+    objective: input.objective,
+    title: input.title,
+    parentRunId: null,
+    chainId: mainSessionId,
+    depth: 0,
+    now: input.now,
+  })
+  return await markStarted(
+    run.id,
+    mainSessionId,
+    input.now ?? Date.now(),
+    ownerCanonicalUser,
+  ) ?? run
 }
 
 export async function appendEvent(
@@ -406,6 +457,89 @@ export async function listChildTaskRuns(
   return runs
     .filter(run => run.parentRunId === parentRunId)
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+}
+
+export async function listOpenRootTaskRuns(
+  ownerCanonicalUser: string,
+  mainSessionId: string,
+): Promise<TaskRunMeta[]> {
+  const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  return runs
+    .filter(run =>
+      taskRunKind(run) === 'root' &&
+      run.callerSessionId === mainSessionId &&
+      !isTerminalStatus(run.status),
+    )
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+}
+
+export async function getRootObligations(
+  rootRunId: string,
+  ownerCanonicalUser: string,
+): Promise<RootObligations> {
+  const root = await getTaskRun(rootRunId, ownerCanonicalUser)
+  if (!root || taskRunKind(root) !== 'root') {
+    return { openRunIds: [], pendingDispatchIds: [] }
+  }
+
+  const runs = await listTaskRuns(ownerCanonicalUser, { scope: 'all' })
+  const subtreeIds = new Set<string>([root.id])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const run of runs) {
+      if (run.parentRunId && subtreeIds.has(run.parentRunId) && !subtreeIds.has(run.id)) {
+        subtreeIds.add(run.id)
+        changed = true
+      }
+    }
+  }
+
+  const openRunIds = runs
+    .filter(run =>
+      run.id !== root.id &&
+      subtreeIds.has(run.id) &&
+      !isTerminalStatus(run.status),
+    )
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .map(run => run.id)
+
+  const pendingDispatchIds = loadBackgroundTasks(ownerCanonicalUser)
+    .filter(task =>
+      task.enabled &&
+      task.schedule.kind === 'oneshot' &&
+      task.parentTaskRunId !== undefined &&
+      subtreeIds.has(task.parentTaskRunId),
+    )
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .map(task => task.id)
+
+  return { openRunIds, pendingDispatchIds }
+}
+
+export async function finalizeSettledRoots(
+  ownerCanonicalUser: string,
+  mainSessionId: string,
+  now = Date.now(),
+): Promise<{ finalized: string[] }> {
+  const roots = await listOpenRootTaskRuns(ownerCanonicalUser, mainSessionId)
+  const finalized: string[] = []
+  for (const root of roots) {
+    const obligations = await getRootObligations(root.id, ownerCanonicalUser)
+    if (obligations.openRunIds.length > 0 || obligations.pendingDispatchIds.length > 0) {
+      continue
+    }
+    const next = await markFinished(
+      root.id,
+      { ok: true, summary: 'Task completed.' },
+      now,
+      ownerCanonicalUser,
+    )
+    if (next) {
+      finalized.push(root.id)
+    }
+  }
+  return { finalized }
 }
 
 export async function sweepTerminalTaskRuns(

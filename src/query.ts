@@ -76,6 +76,7 @@ import type {
   UserToolResultBlock,
 } from './types.js'
 import type { AttachmentKind } from './provider/types.js'
+import { finalizeSettledRoots } from './taskrun/store.js'
 
 // streamChat indirection so unit tests can drive the query loop with a fake
 // event stream. Production code always uses the real implementation.
@@ -234,6 +235,24 @@ const EMPTY_STOP_RESCUE_REMINDER = [
   "You ended your turn without any output (no message, no tool call) while a todo item is still in_progress. An empty turn is never a finished state. Either take the next concrete step toward completing the in_progress work, or — if you genuinely cannot proceed without input — say so plainly and tell the user exactly what you need to continue. Do not end the turn empty again.",
   '</system-reminder>',
 ].join('\n')
+
+async function finalizeSettledRootsBestEffort(input: {
+  roleKind: Role['kind']
+  ephemeral: boolean
+}): Promise<void> {
+  if (input.ephemeral || input.roleKind !== 'orchestrator') return
+  const owner = getCurrentUserId()
+  if (!owner) return
+  try {
+    await finalizeSettledRoots(owner, getSessionId())
+  } catch (error) {
+    process.stderr.write(
+      `[taskrun] failed to finalize settled roots: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  }
+}
 
 export async function query(params: QueryParams): Promise<{
   messages: Message[]
@@ -991,6 +1010,10 @@ export async function query(params: QueryParams): Promise<{
           await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
         }
       }
+      await finalizeSettledRootsBestEffort({
+        roleKind: rolePolicy.kind,
+        ephemeral: invocation.ephemeral === true,
+      })
       const assistantText = assistantTexts.join('\n\n')
       await runHook('afterQuery', {
         sessionId: getSessionId(),

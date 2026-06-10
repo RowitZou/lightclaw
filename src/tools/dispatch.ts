@@ -41,7 +41,14 @@ import {
 } from '../signal-bus/chain-state.js'
 import { t } from '../i18n/index.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
-import { appendArtifact, createTaskRun, markFinished, markStarted } from '../taskrun/store.js'
+import {
+  appendArtifact,
+  createTaskRun,
+  getTaskRun,
+  markFinished,
+  markStarted,
+} from '../taskrun/store.js'
+import type { TaskRunMeta } from '../taskrun/types.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). You control WHEN it runs (schedule) and WHETHER you wait for the result (mode).
 
@@ -186,6 +193,57 @@ function validateFutureOneshot(schedule: ScheduleSpec): string | null {
     ].join('\n')
   }
   return null
+}
+
+function isTerminalTaskRun(meta: TaskRunMeta): boolean {
+  return meta.status === 'done' || meta.status === 'failed' || meta.status === 'cancelled'
+}
+
+function isFiniteMainDispatch(
+  callerKind: 'orchestrator' | 'worker' | 'internal',
+  schedule: DispatchSchedule,
+): boolean {
+  if (callerKind !== 'orchestrator') return false
+  return schedule === 'now' || schedule.kind === 'after' || schedule.kind === 'oneshot'
+}
+
+async function resolveDispatchParentTaskRun(input: {
+  callerKind: 'orchestrator' | 'worker' | 'internal'
+  schedule: DispatchSchedule
+  task?: string
+  ownerCanonicalUser: string
+}): Promise<
+  | { ok: true; parentRunId: string | undefined }
+  | { ok: false; message: string }
+> {
+  if (isFiniteMainDispatch(input.callerKind, input.schedule)) {
+    if (!input.task) {
+      return {
+        ok: false,
+        message: [
+          'Finite Dispatch from main must attach to a root TaskRun.',
+          'Create one with TaskCreate first, then retry Dispatch with `task` set to the returned `runId`.',
+        ].join('\n'),
+      }
+    }
+    const root = await getTaskRun(input.task, input.ownerCanonicalUser)
+    if (!root || root.kind !== 'root' || isTerminalTaskRun(root)) {
+      return {
+        ok: false,
+        message: [
+          `Dispatch.task does not reference an open root TaskRun: ${input.task}`,
+          'Create a fresh root with TaskCreate, or use an existing non-terminal root TaskRun for this user.',
+        ].join('\n'),
+      }
+    }
+    return { ok: true, parentRunId: root.id }
+  }
+
+  if (input.callerKind === 'orchestrator') {
+    return { ok: true, parentRunId: undefined }
+  }
+
+  return { ok: true, parentRunId: getCurrentTaskRunId() }
 }
 
 async function createDispatchTaskRunBestEffort(input: {
@@ -340,6 +398,7 @@ export const dispatchTool = buildTool({
     prompt: z.string().min(10),
     schedule: dispatchScheduleSchema,
     mode: z.enum(['blocking', 'background']),
+    task: z.string().min(1).optional(),
     label: z.string().min(2).max(80).optional(),
     attachments: z.array(z.string().min(1)).optional(),
   }),
@@ -354,6 +413,7 @@ export async function executeDispatch(
     prompt: string
     schedule?: DispatchSchedule
     mode: DispatchMode
+    task?: string
     label?: string
     attachments?: string[]
   },
@@ -380,6 +440,19 @@ export async function executeDispatch(
   if (calleeRole.kind !== 'worker') {
     return {
       output: `Cannot dispatch ${calleeRole.kind} role "${input.role}". Dispatch targets must be worker-kind roles.`,
+      isError: true,
+    }
+  }
+  const callerKind = callerRole.kind ?? 'worker'
+  const parentTaskRun = await resolveDispatchParentTaskRun({
+    callerKind,
+    schedule,
+    task: input.task,
+    ownerCanonicalUser: userId,
+  })
+  if (!parentTaskRun.ok) {
+    return {
+      output: parentTaskRun.message,
       isError: true,
     }
   }
@@ -485,7 +558,7 @@ export async function executeDispatch(
       mode: 'blocking',
       objective: finalDispatchPrompt,
       title: input.label,
-      parentRunId: getCurrentTaskRunId(),
+      parentRunId: parentTaskRun.parentRunId,
       chainState: effectiveChildChainState,
       startedSessionId: childSessionId,
     })
@@ -589,7 +662,7 @@ export async function executeDispatch(
     originSessionId: sessionId,
     callerRole: callerRole.agentType,
     callerSessionId: sessionId,
-    parentTaskRunId: getCurrentTaskRunId(),
+    ...(parentTaskRun.parentRunId ? { parentTaskRunId: parentTaskRun.parentRunId } : {}),
     chainState: effectiveChildChainState,
   }
   addBackgroundTask(userId, entry)

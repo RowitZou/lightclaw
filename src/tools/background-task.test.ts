@@ -11,6 +11,7 @@ import {
   getCompletedTaskRecord,
   loadBackgroundTasks,
 } from '../background-task/store.js'
+import { createRootTaskRun } from '../taskrun/store.js'
 import { cancelDispatchTool, dispatchTool, updateDispatchTool } from './dispatch.js'
 
 let tmpHome: string
@@ -31,13 +32,17 @@ afterEach(() => {
 
 describe('Dispatch background mode', () => {
   it('rejects oneshot schedules in the past with an actionable hint (Bug 3)', async () => {
-    const result = await withUser(async () => dispatchTool.call({
-      role: 'generalist',
-      prompt: 'check the workspace and summarize anything important',
-      schedule: { kind: 'oneshot', at: '2020-01-01T00:00:00.000Z' },
-      mode: 'background',
-      label: 'Old task',
-    }, fakeContext()))
+    const result = await withUser(async () => {
+      const root = await createTestRoot()
+      return dispatchTool.call({
+        role: 'generalist',
+        prompt: 'check the workspace and summarize anything important',
+        schedule: { kind: 'oneshot', at: '2020-01-01T00:00:00.000Z' },
+        mode: 'background',
+        label: 'Old task',
+        task: root.id,
+      }, fakeContext())
+    })
     assert.equal(result.isError, true)
     // Error body must carry: the rejected time, the server-side now, a
     // concrete tomorrow-same suggestion, and an 'after' shorthand pointer.
@@ -52,13 +57,17 @@ describe('Dispatch background mode', () => {
 
   it("normalizes { kind: 'after', afterMinutes } to { kind: 'oneshot', at } at spawn time", async () => {
     const before = Date.now()
-    const result = await withUser(async () => dispatchTool.call({
-      role: 'generalist',
-      prompt: 'simple smoke test that fires once after a short delay',
-      schedule: { kind: 'after', afterMinutes: 1 },
-      mode: 'background',
-      label: '1-minute test',
-    }, fakeContext()))
+    const result = await withUser(async () => {
+      const root = await createTestRoot()
+      return dispatchTool.call({
+        role: 'generalist',
+        prompt: 'simple smoke test that fires once after a short delay',
+        schedule: { kind: 'after', afterMinutes: 1 },
+        mode: 'background',
+        label: '1-minute test',
+        task: root.id,
+      }, fakeContext())
+    })
     const after = Date.now()
     assert.equal(result.isError, undefined)
 
@@ -82,13 +91,17 @@ describe('Dispatch background mode', () => {
 
   it('accepts fractional afterMinutes for sub-minute test fires', async () => {
     const before = Date.now()
-    const result = await withUser(async () => dispatchTool.call({
-      role: 'generalist',
-      prompt: 'half-minute fire to verify fractional afterMinutes works',
-      schedule: { kind: 'after', afterMinutes: 0.5 },
-      mode: 'background',
-      label: '30s fire',
-    }, fakeContext()))
+    const result = await withUser(async () => {
+      const root = await createTestRoot()
+      return dispatchTool.call({
+        role: 'generalist',
+        prompt: 'half-minute fire to verify fractional afterMinutes works',
+        schedule: { kind: 'after', afterMinutes: 0.5 },
+        mode: 'background',
+        label: '30s fire',
+        task: root.id,
+      }, fakeContext())
+    })
     assert.equal(result.isError, undefined)
     const [task] = loadBackgroundTasks('alice')
     assert.equal(task.schedule.kind, 'oneshot')
@@ -298,6 +311,13 @@ async function withUser<T>(fn: () => Promise<T>): Promise<T> {
     permissionMode: 'default',
   })
   return runWithSessionContext(ctx, fn)
+}
+
+function createTestRoot() {
+  return createRootTaskRun('alice', 'test-session', {
+    objective: 'Coordinate finite background dispatch.',
+    title: 'Finite dispatch',
+  })
 }
 
 function fakeContext(): Parameters<typeof dispatchTool.call>[1] {

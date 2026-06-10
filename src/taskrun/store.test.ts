@@ -8,16 +8,21 @@ import { setLightclawHomeOverride } from '../paths.js'
 import {
   appendArtifact,
   appendProgress,
+  createRootTaskRun,
   createTaskRun,
+  finalizeSettledRoots,
   getTaskRun,
   getTaskRunEvents,
+  getRootObligations,
   listChildTaskRuns,
+  listOpenRootTaskRuns,
   listTaskRuns,
   markFinished,
   markStarted,
   sweepAllTerminalTaskRuns,
   sweepTerminalTaskRuns,
 } from './store.js'
+import { addBackgroundTask } from '../background-task/store.js'
 
 describe('TaskRun store', () => {
   it('persists event-log-first task runs with a meta snapshot', async () => {
@@ -274,6 +279,112 @@ describe('TaskRun store', () => {
 
       const children = await listChildTaskRuns(parent.id, 'alice')
       assert.deepEqual(children.map(run => run.id), [child.id])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('creates root task runs, tracks obligations, and finalizes only when settled', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-root-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 's-main', {
+        objective: 'Ship the collab feature',
+        title: 'Ship collab',
+        now: 10,
+      })
+      assert.equal(root.kind, 'root')
+      assert.equal(root.parentRunId, null)
+      assert.equal(root.rootRunId, root.id)
+      assert.equal(root.role, 'main')
+      assert.equal(root.callerRole, 'main')
+      assert.equal(root.currentSessionId, 's-main')
+
+      assert.deepEqual(
+        (await listOpenRootTaskRuns('alice', 's-main')).map(run => run.id),
+        [root.id],
+      )
+
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'blocking',
+        objective: 'Implement the feature',
+        parentRunId: root.id,
+        chainId: 'chain-root',
+        depth: 1,
+        now: 20,
+      })
+      await markStarted(child.id, 'dispatched-child', 30, 'alice')
+
+      assert.deepEqual(await getRootObligations(root.id, 'alice'), {
+        openRunIds: [child.id],
+        pendingDispatchIds: [],
+      })
+      await finalizeSettledRoots('alice', 's-main', 40)
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
+
+      await markFinished(child.id, { ok: true, summary: 'done' }, 50, 'alice')
+      await finalizeSettledRoots('alice', 's-main', 60)
+      const finalized = await getTaskRun(root.id, 'alice')
+      assert.equal(finalized?.status, 'done')
+      assert.equal(finalized?.terminalAt, 60)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('counts pending oneshot dispatches as root obligations but ignores recurring services', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-root-bg-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 's-main', {
+        objective: 'Coordinate reminders',
+        title: 'Coordinate reminders',
+        now: 10,
+      })
+      addBackgroundTask('alice', {
+        id: 'alice-after',
+        ownerCanonicalUser: 'alice',
+        prompt: 'Run once later.',
+        role: 'coder',
+        schedule: { kind: 'oneshot', at: new Date(Date.now() + 60_000).toISOString() },
+        label: 'one-shot',
+        notifyOn: 'always',
+        notifyTo: 'agent',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        originSessionId: 's-main',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        parentTaskRunId: root.id,
+      })
+      addBackgroundTask('alice', {
+        id: 'alice-recurring',
+        ownerCanonicalUser: 'alice',
+        prompt: 'Run forever.',
+        role: 'coder',
+        schedule: { kind: 'interval', everyMinutes: 30 },
+        label: 'recurring',
+        notifyOn: 'always',
+        notifyTo: 'agent',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        originSessionId: 's-main',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+      })
+
+      assert.deepEqual(await getRootObligations(root.id, 'alice'), {
+        openRunIds: [],
+        pendingDispatchIds: ['alice-after'],
+      })
+      await finalizeSettledRoots('alice', 's-main', 20)
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

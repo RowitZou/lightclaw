@@ -7,7 +7,7 @@ import { describe, it } from 'node:test'
 import type { Role } from '../agents/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
-import { getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
+import { createRootTaskRun, getTaskRunEvents, listTaskRuns } from '../taskrun/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
 import {
@@ -134,6 +134,10 @@ describe('Dispatch tool family', () => {
       stopReason: 'end_turn',
     }))
     try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate report creation.',
+        title: 'Coordinate report',
+      })
       const output = await runWithSessionContext(session('main'), () =>
         executeDispatch(
           {
@@ -142,6 +146,7 @@ describe('Dispatch tool family', () => {
             schedule: 'now',
             mode: 'blocking',
             label: 'Create report',
+            task: root.id,
           },
           {
             cwd: '/tmp/lightclaw-dispatch-taskrun',
@@ -153,10 +158,11 @@ describe('Dispatch tool family', () => {
 
       assert.equal(output.isError, undefined)
       const runs = await listTaskRuns('alice', { scope: 'all' })
-      assert.equal(runs.length, 1)
-      assert.equal(runs[0]?.status, 'done')
-      assert.equal(runs[0]?.artifactPaths?.includes('/workspace/out/report.md'), true)
-      const events = await getTaskRunEvents(runs[0]!.id, { limit: 10 }, 'alice')
+      const child = runs.find(run => run.id !== root.id)
+      assert.ok(child)
+      assert.equal(child.status, 'done')
+      assert.equal(child.artifactPaths?.includes('/workspace/out/report.md'), true)
+      const events = await getTaskRunEvents(child.id, { limit: 10 }, 'alice')
       assert.deepEqual(events.map(event => event.kind), [
         'created',
         'started',
@@ -169,7 +175,111 @@ describe('Dispatch tool family', () => {
       rmSync(tmpHome, { recursive: true, force: true })
     }
   })
+
+  it('requires main blocking dispatches to attach to a root TaskRun', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-root-required-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Create the report artifact and return the path.',
+            schedule: 'now',
+            mode: 'blocking',
+            label: 'Create report',
+          },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(output.isError, true)
+      assert.match(output.output, /TaskCreate/)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('attaches main blocking dispatches to the provided root TaskRun', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-root-'))
+    setLightclawHomeOverride(tmpHome)
+    setRunSubagentForDispatchTest(async () => ({
+      kind: 'success',
+      finalText: 'Finished child task.',
+      stopReason: 'end_turn',
+    }))
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate the report.',
+        title: 'Coordinate report',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Create the report artifact and return the path.',
+            schedule: 'now',
+            mode: 'blocking',
+            label: 'Create report',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(output.isError, undefined)
+      const runs = await listTaskRuns('alice', { scope: 'all' })
+      const child = runs.find(run => run.id !== root.id)
+      assert.ok(child)
+      assert.equal(child.parentRunId, root.id)
+      assert.equal(child.rootRunId, root.id)
+    } finally {
+      setRunSubagentForDispatchTest(null)
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps main recurring and interval dispatches top-level instead of attaching them to roots', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-recurring-root-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'Coordinate finite work.',
+        title: 'Finite work',
+      })
+      const output = await runWithSessionContext(session('main'), () =>
+        executeDispatch(
+          {
+            role: 'coder',
+            prompt: 'Check this recurring status and report back.',
+            schedule: { kind: 'interval', everyMinutes: 30 },
+            mode: 'background',
+            label: 'Recurring status',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(output.isError, undefined)
+      const runs = await listTaskRuns('alice', { scope: 'all' })
+      assert.deepEqual(runs.map(run => run.id), [root.id])
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
 })
+
+function toolContext() {
+  return {
+    cwd: '/tmp/lightclaw-dispatch-taskrun',
+    abortSignal: new AbortController().signal,
+    runtime: { workspaceRoot: '/tmp/lightclaw-dispatch-taskrun' } as never,
+  }
+}
 
 function session(roleName: string) {
   return createSessionContext({

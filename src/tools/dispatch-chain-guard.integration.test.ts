@@ -11,6 +11,7 @@ import { setLightclawHomeOverride } from '../paths.js'
 import type { Runtime } from '../runtime/index.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { addBackgroundTask, loadBackgroundTasks } from '../background-task/store.js'
+import { createRootTaskRun } from '../taskrun/store.js'
 import { cancelDispatchTool, executeDispatch, listDispatchesTool, updateDispatchTool } from './dispatch.js'
 
 let tmpRoot: string
@@ -195,13 +196,19 @@ test('executeDispatch rejects background attachments instead of dropping them at
 test('background dispatch records the caller role and session', async () => {
   await runWithSessionContext(
     session('main', ['*'], { kind: 'orchestrator', sessionId: 'feishu:dm:c1' }),
-    () =>
-      executeDispatch({
+    async () => {
+      const root = await createRootTaskRun('alice', 'feishu:dm:c1', {
+        objective: 'Coordinate background research.',
+        title: 'Background research',
+      })
+      return executeDispatch({
         role: 'webSearcher',
         prompt: 'Run this research in the background.',
         schedule: { kind: 'after', afterMinutes: 5 },
         mode: 'background',
-      }, toolContext()),
+        task: root.id,
+      }, toolContext())
+    },
   )
 
   const [task] = loadBackgroundTasks('alice')
