@@ -108,9 +108,9 @@ A background dispatch outlives the turn that starts it, and its \`<background-ta
 
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
-With \`to\`, message a direct child TaskRun you dispatched. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject.
+With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A message changes what the work should do; it never checks on it — status is TaskInspect's job, and a check-in message only interrupts. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject.
 
-Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time.`
+Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time. Reserve it for forks only your requester can settle; routine judgment calls are yours.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -598,7 +598,7 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
 
 export const messageTool = buildTool({
   name: 'Message',
-  whenToUse: `Send a message to a child TaskRun, or ask your parent a question with a default.`,
+  whenToUse: `Send a message to a child TaskRun, or ask your requester a question with a default.`,
   shouldDefer: true,
   description: MESSAGE_DISPATCH_DESCRIPTION,
   searchHint: 'message dispatch interject ask answer resume waiting paused worker 插嘴 提问 回答 续班次',
