@@ -10,6 +10,8 @@ allowed-tools:
   - Grep
   - Glob
   - MemoryWrite
+  - TaskUpdate
+  - Message
 roles:
   - generalist
   - coder
@@ -92,7 +94,7 @@ A full run moves through three stages — launch, monitor, wrap up. Enter at the
 1. **Check status.** `get` for phase and replicas; `events` for the scheduling / quota / image-pull story.
 2. **Read the phase correctly.** Not running yet (pending / scheduling / pulling image) is normal startup, not failure — say "still starting" and re-check after a short wait. Once running, read bounded `logs` (`tailLines`) to gauge progress; raise the bound only when you need more.
 3. **Triage if stuck or failed**, in order: **scheduling / quota** (`events`; a genuinely full group shows in `capacity`) → **image** (pull error, wrong tag) → **mounts / paths** (`events` + `logs`) → **command / args** (`logs`, the program's own stderr) → **resources** (`get`; OOM). Network slow / stuck or a large download dragging are blockers (below).
-4. **For a long run, hand off to a watcher** instead of poll-looping — but only if you're running the job end to end. Set up a background watcher on an interval with a tightly-scoped prompt that does one thing — *check this job's status and report it, nothing else: no submit / change / stop, and spawn no further work* — and cancel it at a terminal state. (Handed only the monitoring step? Do one check and return — don't spawn a watcher.)
+4. **For a long run, set a timer and step away** instead of poll-looping — but only if you're running the job end to end. Declare a wait (TaskUpdate wait, timer wake — pick an interval matching the job's expected cadence, e.g. 30 minutes) with a checkpoint naming the job id and what to look at; each time you come back, check status once, and either declare the next wait or wrap up at a terminal state. (Handed only the monitoring step? Do one check and return — don't set up ongoing monitoring.)
 5. **Report.** See *Output conventions* — phase, progress, and any concern, in plain text; flag a must-not-miss moment (needs a decision, finished with an important result, blocked on the user) prominently rather than burying it in routine updates.
 
 ### Stage 3 — Wrap up or stop
@@ -124,7 +126,7 @@ Write job outputs under `/workspace` so they survive the job; for heavy intermed
 
 ## When you're genuinely blocked
 
-These are the points you cannot settle alone. Bring each to the user through an `AskUserQuestion` card — you MUST use the card when the tool is available; plain text is the wrong move. Every card carries concrete options **and a safe default: the action taken if the user doesn't respond.** If you don't have the tool, put the open question in your result for the requester. Don't stall, don't guess an environment-specific value, don't go probing.
+These are the points you cannot settle alone. Bring each to the user through an `AskUserQuestion` card — you MUST use the card when the tool is available; plain text is the wrong move. Every card carries concrete options **and a safe default: the action taken if the user doesn't respond.** If you don't have the card tool, ask your requester instead (Message with no `to`) with the same options and default — the answer comes back as the tool's return, so you keep working rather than parking the question in your final result. Don't stall, don't guess an environment-specific value, don't go probing.
 
 - **No usable image (none on record, or your candidate won't pull)** — an image is mandatory, and either nothing in your library covers it or the one(s) you tried won't pull (private-registry timeout, public-tag DNS / mirror failure, or any internal-resource access you can't confirm). Ask the user for a known-good internal image (or a prior successful job's spec); don't probe a registry, guess a public tag, or copy another job's. Default: **don't submit** — without a pullable image the job can't run, so if the user doesn't answer, stop.
 - **No usable environment (none, or missing a backend / library you can't supply)** — neither `/workspace` nor the image has a usable env, *or* the one you'd use is missing something the run needs (e.g., a rollout backend, a library) that you can't add yourself because it's the image's env or a user-provided one. Ask whether they have an env-bearing image or an existing env to point at. Default: **build a complete one yourself in `/workspace`** via `UseSkill('build-environment')` (in the target image).
