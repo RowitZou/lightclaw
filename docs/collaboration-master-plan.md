@@ -326,7 +326,7 @@ main / worker 区别只是程度:**main 现在就这样**(永不常驻,一触发
 
 **工具面收口(2026-06-10 已立项)**:账本升级为主管理面后,Dispatch 族与 Task 族出现真冗余(两个 cancel 互相转引、两个查询面各答一半)。prompt 终稿前收口:`ListDispatches` 并入 `TaskInspect`、`CancelDispatch` 并入 `TaskUpdate cancel`(框架按目标路由,常驻根 runId = 整服务下线)、`UpdateDispatch` 改名 **`UpdateSchedule`** 且只作用于未 fire 的排程(在途 fire 走 Message 引导或 cancel 重派)。收口后 agent 面六件:Dispatch / UpdateSchedule / Message(终名) / TaskCreate / TaskUpdate / TaskInspect——一个动词一个职责,复杂路由全在框架端(与通信归一同源的原则)。
 
-**候选 phase 备忘(2026-06-10,未立项)**:飞书 channel UI 重设计——后台任务「正在执行」状态对用户的可见性呈现(消息流不适合呈现持续执行态,可能需要卡片/面板级方案)。**等 phase3 完成 + prompt 终稿 + dogfood 信号后再议**,不进当前任何 phase。
+**collab-phase4(2026-06-11 已立项)**:飞书 channel UI 重设计——后台任务「正在执行」状态对用户的可见性呈现。原候选备忘的三前置(phase3 完成 + prompt 终稿 + dogfood 信号)已全部满足,2026-06-11 dogfood(一次多步任务连收 9 条记账碎碎念短消息)后立项。设计一句话:**每张根工单一张常驻飞书卡片(任务面板,patch 原地更新);消息流回归纯对话**——合成 turn 叙事改作 progress 事件进账本由卡片呈现,progress 转发与 worker 活动流两个消息 forwarder 退役,用户主动触达只剩显式动作(Notify/SendFile/AskUserQuestion)与看门狗升级 DM。纯展示层,不碰两原语与三约束。
 
 **为什么是这个顺序 —— 兼修一处自相矛盾**:原构想把「上行 ask」放 Phase 2、「checkpoint resume」放 Phase 3,但它自己又说「ask = resume 是同一台机器」。**这是自相矛盾**:因为老板(main)turn 驱动、随时不在线,「worker 问老板」天然依赖「worker 能下班再被叫回」—— **ask-parent 和 checkpoint-resume 是同一个 feature,必须同期**。所以本稿:Phase 2 只做**下行控制**(控制活 worker,复用 interjection,不需复活,易);**上行 ask 并入 Phase 3** 跟 resume 一起(难,需复活骨架)。Phase 0 先把「孤儿结果」这笔债独立还掉。Phase 1 纯加法、风险最低、且看门狗作「检测器」即可还掉大半 durability(逮孤儿/崩溃 → 唤醒 main / 升级),不必等 worker 级复活。(工程化时 **Phase 0 已砍**:根治本就在 Phase 1 的看门狗,实际触发概率低,真咬到再单独定点修。)
 
