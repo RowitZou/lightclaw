@@ -41,4 +41,4 @@ Procedure for taking a focused local-lookup request from probe selection to a co
 
 - Do not stop at a shallow first hit when one more probe would confirm the finding. Going one hop deeper on the SAME question is exactly what you are for.
 - Do not trust memory blindly. Environment changes invalidate stale entries; verify before quoting.
-- Do not save trivia to memory (one-off paths the user named explicitly, temporary task context) — only durable, reusable findings.
+- Do not save trivia to memory (one-off paths the request named explicitly, temporary task context) — only durable, reusable findings.

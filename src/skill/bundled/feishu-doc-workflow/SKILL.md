@@ -31,15 +31,15 @@ Procedure for taking a focused Feishu workspace request from URL/token resolutio
 2. The framework injects relevant prior memory automatically — check it first; you may already have a hint (e.g. "user's 'PR review notes' folder is at `<token>`", "monthly logs go under `/<year>/<month>/`") that saves discovery. But memory is a hint, not a fact — see #3.
 3. Verify memory-derived assumptions before relying on them. Feishu tokens can be moved or deleted, user preferences shift, folder structures evolve. If memory says "PR review notes folder is at `<token>`", a quick list-by-token confirms the token still resolves before you assume it. Memory shortens the lookup path; it does not skip verification.
 4. For read operations: pull the URL or token, return the content with citations to the source location.
-5. For write operations: confirm the target exists and is mutable; pick the right write path (editing existing docs / sheets vs creating new ones); execute. Permission grants are handled by the framework — if the result returns `permission_grants.errors`, fall back to a "tell the user to share manually" reply rather than asserting the link is ready.
-6. For workspace navigation: list folder children to discover; create subfolders inside the user workspace; relocate or rename via move; deletion is high-risk and asks the user each time.
+5. For write operations: confirm the target exists and is mutable; pick the right write path (editing existing docs / sheets vs creating new ones); execute. Permission grants are handled for you — if the result returns `permission_grants.errors`, report that the link needs manual sharing rather than asserting it is ready.
+6. For workspace navigation: list folder children to discover; create subfolders inside the user workspace; relocate or rename via move; deletion is high-risk and approval-gated each time.
 7. After every operation that mutates a resource, return the URL, token, and any new collaborator info so the reader can verify or share.
 
 ## Background on Feishu specifics
 
-- Pasted Feishu URLs in the request are explicit user share intent and bypass workspace ancestry checks. Tokens obtained by walking down from the user workspace (via list) are ancestry-cleared automatically. Do not write to a token you cannot prove is inside the current user's workspace — the framework rejects ancestry violations, and you should surface that as a clean "out-of-workspace" reply instead of looping.
+- Pasted Feishu URLs in the request are explicit user share intent and bypass workspace ancestry checks. Tokens obtained by walking down from the user workspace (via list) are ancestry-cleared automatically. Do not write to a token you cannot prove is inside the current user's workspace — such writes are rejected; surface that as a clean "out-of-workspace" reply instead of looping.
 - When the user attached a file via the channel inbox, it lives at `<workspaceRoot>/.lightclaw/inbox/<chatId>/<fileName>`; read it before deciding what to upload to Feishu.
-- Every mutating Feishu operation goes through the framework permission approver. Delete is high-risk by design — the approval card has no "always allow" button. Confirm in your reply that the user really wants the deletion before issuing it.
+- Every mutating Feishu operation passes an approval gate outside your turn. Delete is high-risk by design — its approval has no "always allow"; when the task calls for a deletion, issue it, and the gate decides.
 
 ## Output conventions
 
@@ -50,6 +50,6 @@ Procedure for taking a focused Feishu workspace request from URL/token resolutio
 
 ## Do not
 
-- Do not retry a deletion after a deny — denial is the user's decision.
+- Do not retry a deletion after a deny — a denial is a decision, not a retry cue.
 - Do not collapse multi-file outcomes into "done"; list each one so the reader can audit.
 - Do not trust memory blindly. Feishu workspace structures evolve (tokens move, folders reorganize, user preferences change); verify before relying on a memory-derived token or path.

@@ -56,7 +56,7 @@ describe('bundled skills (Phase 16 codegen output)', () => {
       '1. Gather project memory and auto-memory entries.',
       '2. Classify each item as keep, revise, promote to LIGHTCLAW.md, or delete.',
       '3. Explain why each action is appropriate.',
-      '4. Ask for confirmation before destructive cleanup if the user did not explicitly request it.',
+      '4. Confirm with your requester before destructive cleanup that was not explicitly requested.',
       '',
       '## Guidance',
       '- Preserve stable conventions and durable preferences.',

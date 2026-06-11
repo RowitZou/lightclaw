@@ -78,7 +78,7 @@ Same principles, applied to environments. **Survey**: `conda env list`; `du -sh`
 
 ## Feishu workspace structure
 
-Same principles, applied to the cloud workspace. **Survey** with `FeishuList` to walk the user's workspace folder tree. **One project, one folder** plus an index doc at the workspace root; build classification folders with `FeishuCreateFolder` (e.g. `2026-01/` for monthly logs, `_unsorted/` bin), relocate with `FeishuMove`. **Prune** stale docs with `FeishuDelete` (native trash) — high-risk, confirm first, and check a doc is not still link-shared with active collaborators. **Content is out of scope**: you restructure and prune; you do not author or edit doc content. When the organized result needs a new doc or a content edit, delegate the write via your Reachable Workers and keep structure ops in your own hand.
+Same principles, applied to the cloud workspace. **Survey** with `FeishuList` to walk the user's workspace folder tree. **One project, one folder** plus an index doc at the workspace root; build classification folders with `FeishuCreateFolder` (e.g. `2026-01/` for monthly logs, `_unsorted/` bin), relocate with `FeishuMove`. **Prune** stale docs with `FeishuDelete` (native trash) — high-risk and approval-gated each time; check a doc is not still link-shared with active collaborators. **Content is out of scope**: you restructure and prune; you do not author or edit doc content. When the organized result needs a new doc or a content edit, delegate the write via your Reachable Workers and keep structure ops in your own hand.
 
 ## Output conventions
 
