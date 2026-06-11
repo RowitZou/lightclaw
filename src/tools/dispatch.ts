@@ -57,7 +57,7 @@ schedule (default 'now'):
 - { kind: 'recurring', daysOfWeek: [0..6], hour, minute } — weekly schedule.
 - { kind: 'interval', everyMinutes: <integer ≥ 1>, anchorAt? } — repeats every N minutes.
 
-When you need the result before continuing, dispatch it with schedule='now' and then set your own TaskRun waiting with TaskUpdate action='wait' wake.kind='child-join'. Your run picks back up when the child delivers.
+When you need the result before continuing and your own work is tracked as a task run, dispatch with schedule='now' and wait on it (TaskUpdate action='wait', wake.kind='child-join') — your run picks back up when the child delivers. Otherwise simply finish your turn; the result returns to you on its own.
 
 ## When NOT to use Dispatch
 
@@ -68,7 +68,7 @@ When you need the result before continuing, dispatch it with schedule='now' and 
 
 ## Parallelism
 
-When several independent sub-tasks must all feed your next step, dispatch them as separate background calls and wait on the child or children you need. Each sub-task's reading stays out of your own context.
+When several independent sub-tasks must all feed your next step, dispatch them as separate background calls; results arrive as each finishes. Each sub-task's reading stays out of your own context.
 
 Only parallelize tasks that touch disjoint files / branches / resources — the runtime does not isolate fork file systems, and concurrent writes to the same path will race.
 
@@ -104,7 +104,7 @@ Dispatched roles return a single final-text summary. Tool results from inside th
 
 ## Reporting in-flight background dispatches
 
-A background dispatch outlives the turn that starts it, and its \`<background-task-result>\` only returns to you if you are still running when it finishes. If you hand back your result first, the dispatch keeps running without you and its result later surfaces with no record of why it exists. So when you finish with a background dispatch still in flight — one you started, or one a role you dispatched reported starting — name it in what you hand back: what it is doing, and that its result will arrive separately.`
+A background dispatch outlives the turn that starts it; its result reaches you when it lands, and the ledger keeps its record. Still, when you finish a reply or a delivery with work in flight — something you started, or something a role you dispatched reported starting — name it in what you hand back: what it is doing, and that its result arrives separately. The reader of your handback cannot see it coming otherwise.`
 
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 

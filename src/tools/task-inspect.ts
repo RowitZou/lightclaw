@@ -23,8 +23,7 @@ const TASK_INSPECT_DESCRIPTION = [
   '- Omit `runId` to list TaskRuns related to your current session.',
   '',
   'Visibility:',
-  '- The main orchestrator can inspect any TaskRun for the current user.',
-  '- A worker can inspect only its current TaskRun and descendants.',
+  '- You see your own scope: the runs you can act on, and everything dispatched under them.',
   '',
   'Returns JSON with `meta`, `events`, `children`, and `tree` for a specific run, or `runs` when listing.',
 ].join('\n')

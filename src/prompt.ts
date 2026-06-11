@@ -604,7 +604,7 @@ function formatAskUserQuestionNudge(): string {
 function formatDispatchModeSection(): string {
   return [
     '## Dispatch',
-    'Dispatch is background-only. When delegated work matters to your current answer, dispatch the worker and then wait with TaskUpdate using a child-join wake; you pick back up when the child delivers. For fire-and-follow-later work, keep going and surface the <background-task-result> when it arrives.',
+    'Dispatch is background-only. The call returns immediately; the result reaches you later as a <background-task-result>. When you need it before continuing and your own work is tracked as a task run, wait on the child (TaskUpdate wait, child-join wake) — you pick back up when it delivers. Otherwise finish your turn; the result returns to you on its own. For fire-and-follow-later work, keep going and fold each result in as it arrives.',
   ].join('\n')
 }
 
