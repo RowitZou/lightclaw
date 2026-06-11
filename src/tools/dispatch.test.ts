@@ -16,7 +16,7 @@ import { partitionTools } from './is-deferred.js'
 import {
   dispatchTool,
   executeDispatch,
-  messageDispatchTool,
+  messageTool,
   setRunSubagentForDispatchTest,
   updateScheduleTool,
 } from './dispatch.js'
@@ -26,7 +26,7 @@ describe('Dispatch tool family', () => {
   it('registers all dispatch tools in the builtin catalog', () => {
     const names = new Set(getAllTools().map(tool => tool.name))
     assert.equal(names.has('Dispatch'), true)
-    assert.equal(names.has('MessageDispatch'), true)
+    assert.equal(names.has('Message'), true)
     assert.equal(names.has('UpdateSchedule'), true)
     assert.equal(names.has('ListDispatches'), false)
     assert.equal(names.has('CancelDispatch'), false)
@@ -113,7 +113,7 @@ describe('Dispatch tool family', () => {
     const inlineNames = new Set(alwaysLoaded.map(tool => tool.name))
     const deferredNames = new Set(deferred.map(tool => tool.name))
     assert.equal(inlineNames.has('Dispatch'), true)
-    for (const name of ['MessageDispatch', 'UpdateSchedule']) {
+    for (const name of ['Message', 'UpdateSchedule']) {
       assert.equal(deferredNames.has(name), true)
     }
     for (const removed of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
@@ -445,7 +445,7 @@ describe('Dispatch tool family', () => {
     }
   })
 
-  it('MessageDispatch queues a soft interjection for a running dispatch', async () => {
+  it('Message queues a soft interjection for a running dispatch', async () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-message-'))
     setLightclawHomeOverride(tmpHome)
     try {
@@ -473,7 +473,7 @@ describe('Dispatch tool family', () => {
       await markStarted(entry.taskRunId, 'bg-message-dispatch', Date.now(), 'alice')
 
       const result = await runWithSessionContext(session('main'), () =>
-        messageDispatchTool.call(
+        messageTool.call(
           { id: dispatchId, message: 'Switch to checking the smaller dataset first.' },
           toolContext(),
         ),
@@ -627,7 +627,7 @@ describe('Message ask waits in place', () => {
         currentTaskRunId: child.id,
       })
       const askPromise = runWithSessionContext(childSession, () =>
-        messageDispatchTool.call(
+        messageTool.call(
           { message: 'Use 4 GPUs or wait for 8?', options: ['4', '8'], default: '4' },
           toolContext(),
         ),
@@ -651,7 +651,7 @@ describe('Message ask waits in place', () => {
         currentTaskRunId: parent.id,
       })
       const answered = await runWithSessionContext(parentSession, () =>
-        messageDispatchTool.call({ to: child.id, message: 'Take 8.' }, toolContext()),
+        messageTool.call({ to: child.id, message: 'Take 8.' }, toolContext()),
       )
       assert.equal(answered.isError, undefined)
       assert.match(answered.output, /reached TaskRun/)
@@ -715,7 +715,7 @@ describe('Message ask waits in place', () => {
         currentTaskRunId: child.id,
       })
       const result = await runWithSessionContext(childSession, () =>
-        messageDispatchTool.call(
+        messageTool.call(
           { message: 'Proceed with cleanup?', default: 'yes, conservative cleanup' },
           toolContext(),
         ),

@@ -326,7 +326,7 @@ test('bundled dispatch matrix matches the role-to-role topology', () => {
     )
     // Dispatch family is bound: Message/UpdateSchedule visible to dispatchers;
     // listing and cancellation now live on TaskInspect / TaskUpdate.
-    for (const mgmt of ['MessageDispatch', 'UpdateSchedule']) {
+    for (const mgmt of ['Message', 'UpdateSchedule']) {
       assert.equal(
         isToolVisibleToRole(agent, mgmt),
         true,

@@ -114,7 +114,7 @@ Without \`to\`, ask your requester for input and wait in place: the tool returns
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
-Use when you adjust a not-yet-fired one-shot dispatch or the future fires of a recurring / interval dispatch. It does not message or alter a fire that is already running: use MessageDispatch for soft course correction, or TaskUpdate cancel and then Dispatch again for hard replacement.
+Use when you adjust a not-yet-fired one-shot dispatch or the future fires of a recurring / interval dispatch. It does not message or alter a fire that is already running: use Message for soft course correction, or TaskUpdate cancel and then Dispatch again for hard replacement.
 
 The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead. Changing between finite one-shot and recurring/interval standing-service shapes is not supported.
 
@@ -596,8 +596,8 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
   }
 }
 
-export const messageDispatchTool = buildTool({
-  name: 'MessageDispatch',
+export const messageTool = buildTool({
+  name: 'Message',
   whenToUse: `Send a message to a child TaskRun, or ask your parent a question with a default.`,
   shouldDefer: true,
   description: MESSAGE_DISPATCH_DESCRIPTION,
@@ -647,7 +647,7 @@ export const messageDispatchTool = buildTool({
       channelInterjectionQueue.push(run.currentSessionId, {
         messageId: `message-dispatch-${run.id}-${now}`,
         senderOpenId: `taskrun:${run.id}`,
-        text: wrapMessageDispatch(input.message.trim()),
+        text: wrapMessage(input.message.trim()),
         arrivedAt: now,
         source: 'user',
       })
@@ -667,7 +667,7 @@ export const messageDispatchTool = buildTool({
       scheduleResumeRunWithBlock(userId, run.id, {
         via: run.waitReason === 'awaiting-reply' ? 'answer' : 'message',
         reason: run.waitReason === 'awaiting-reply' ? 'parent answer' : 'message to waiting run',
-        body: wrapMessageDispatch(input.message.trim()),
+        body: wrapMessage(input.message.trim()),
       })
       return { output: `TaskRun ${run.id} was waiting; your message starts its next shift with it in hand. Nothing to wait for here — its result will reach you the usual way.` }
     }
@@ -806,7 +806,7 @@ async function askParentFromCurrentRun(input: {
   return { output: `Answer from your requester: ${resolution.answer}` }
 }
 
-function wrapMessageDispatch(message: string): string {
+function wrapMessage(message: string): string {
   return [
     '<message-dispatch>',
     message,
@@ -863,7 +863,7 @@ export const updateScheduleTool = buildTool({
       if (run?.status === 'running' || run?.status === 'waiting') {
         const state = run.status === 'running' ? 'already running' : 'already fired and is waiting'
         return {
-          output: `TaskRun ${run.id} is ${state}. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use MessageDispatch for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
+          output: `TaskRun ${run.id} is ${state}. UpdateSchedule only changes queued one-shot dispatches or future recurring/interval fires. Use Message for a soft update, or TaskUpdate cancel and Dispatch again for a hard replacement.`,
           isError: true,
         }
       }
@@ -901,6 +901,6 @@ export const updateScheduleTool = buildTool({
 
 export const __toolDescriptionForSnapshot = {
   Dispatch: DISPATCH_DESCRIPTION,
-  MessageDispatch: MESSAGE_DISPATCH_DESCRIPTION,
+  Message: MESSAGE_DISPATCH_DESCRIPTION,
   UpdateSchedule: UPDATE_SCHEDULE_DESCRIPTION,
 }

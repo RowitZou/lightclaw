@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import {
   dispatchTool,
-  messageDispatchTool,
+  messageTool,
   updateScheduleTool,
 } from './dispatch.js'
 import { notifyTool } from './notify.js'
@@ -20,7 +20,7 @@ import {
 test('Phase 4 tool descriptions and background-result block match snapshot hashes', () => {
   const actual = {
     Dispatch: hash(dispatchTool.description),
-    MessageDispatch: hash(messageDispatchTool.description),
+    Message: hash(messageTool.description),
     UpdateSchedule: hash(updateScheduleTool.description),
     Notify: hash(notifyTool.description),
     ShowSlashCatalog: hash(showSlashCatalogTool.description),
@@ -38,12 +38,12 @@ const EXPECTED = {
   // mode is retired in favor of background Dispatch plus TaskUpdate pause
   // child-join when the caller needs to resume on the result.
   Dispatch: 'd55887198825dd0b931c2d4fadbcde5f3c1194f6436fc4c26ea33930b33ff358',
-  // Collab phase3 PR14: MessageDispatch now routes by TaskRun runId (`to`)
+  // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
-  MessageDispatch: '6bac802297ffd23baab791dc9ebd4d78cd048e178245c4abd32fa1bbb20d6274',
+  Message: '6bac802297ffd23baab791dc9ebd4d78cd048e178245c4abd32fa1bbb20d6274',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
-  UpdateSchedule: '13dba5ecc2ec4791452758971c34cca85a84c6d524f1fbc1b2dedc7350487e9c',
+  UpdateSchedule: '52339ad4eeb6658ecc9f638e2e34316c3b1171c3518b209fbbabf35eed3e0c4c',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
   // Phase 18 PR6: main-only tool for discovering channel slash commands
   // the user can run when setup must happen outside agent tools.

@@ -1,6 +1,6 @@
 import {
   dispatchTool,
-  messageDispatchTool,
+  messageTool,
   updateScheduleTool,
 } from './tools/dispatch.js'
 import { askUserQuestionTool } from './tools/ask-user-question.js'
@@ -89,7 +89,7 @@ export const builtinTools = [
   webSearchTool,
   brainppClusterTool,
   dispatchTool,
-  messageDispatchTool,
+  messageTool,
   updateScheduleTool,
   notifyTool,
   askUserQuestionTool,
