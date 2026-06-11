@@ -513,7 +513,11 @@ const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
   deliveryRetryMaxAttempts: 3,
 }
 const DEFAULT_TASKRUN_RESUME_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
-const DEFAULT_TASKRUN_ASK_TIMEOUT_MS = 600_000
+// 15min, not 10 (2026-06-10): an undecided fork can escalate level by level
+// up to the user, whose own question card times out at 10min — the asking
+// worker keeps 5min of headroom so it is not already running on its default
+// at the moment the user finally decides.
+const DEFAULT_TASKRUN_ASK_TIMEOUT_MS = 900_000
 
 export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   // Bundled dispatch matrix has paths of node-length 4 (depth 3), e.g.

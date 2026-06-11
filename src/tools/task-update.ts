@@ -330,8 +330,13 @@ export const taskUpdateTool = buildTool({
       if (wake.kind === 'timer') {
         scheduleTaskRunTimerWake(owner, waitingRun.id, wake.at)
       }
+      // The shift ends HERE, enforced: a run cannot be waiting while its
+      // session keeps executing. Aborting our own in-flight turn seals the
+      // shift; the aborted-outcome path leaves the waiting status untouched
+      // and the wake brings the next shift.
+      abortInFlightForSession(getSessionId())
       return {
-        output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded. End your turn now — the run picks back up when the wake fires, with what arrived in hand.`,
+        output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded — this shift ends here. You pick the task back up when the wake fires, with what arrived in hand.`,
       }
     }
 

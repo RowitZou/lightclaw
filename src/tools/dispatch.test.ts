@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, it } from 'node:test'
@@ -9,7 +9,7 @@ import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAbortControllerForSession } from '../state.js'
-import { closeRootTaskRun, createRootTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
+import { closeRootTaskRun, createRootTaskRun, createTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -579,3 +579,160 @@ function role(agentType: string, kind: Role['kind']): Role {
     hooks: ['*'],
   }
 }
+
+describe('Message ask waits in place', () => {
+  it('returns the requester answer inside the asking turn', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-ask-inturn-'))
+    setLightclawHomeOverride(tmpHome)
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      defaultModel: 'm',
+      taskrun: { ask: { timeoutMs: 5_000 } },
+    }))
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent work',
+        parentRunId: null,
+        chainId: 'chain-ask',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-session', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: parent.id,
+        chainId: 'chain-ask',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-session', Date.now(), 'alice')
+
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const askPromise = runWithSessionContext(childSession, () =>
+        messageDispatchTool.call(
+          { message: 'Use 4 GPUs or wait for 8?', options: ['4', '8'], default: '4' },
+          toolContext(),
+        ),
+      )
+      // The ask block lands in the parent session as an interjection.
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const [askEntry] = channelInterjectionQueue.drain('parent-session')
+      assert.ok(askEntry)
+      assert.match(askEntry.text, /taskrun-ask/)
+      // The run stays running while the ask is pending — no waiting state.
+      assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'running')
+
+      const parentSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'parent-session',
+        currentUserId: 'alice',
+        currentRole: role('generalist', 'worker'),
+        currentTaskRunId: parent.id,
+      })
+      const answered = await runWithSessionContext(parentSession, () =>
+        messageDispatchTool.call({ to: child.id, message: 'Take 8.' }, toolContext()),
+      )
+      assert.equal(answered.isError, undefined)
+      assert.match(answered.output, /reached TaskRun/)
+
+      const askResult = await askPromise
+      assert.equal(askResult.isError, undefined)
+      assert.match(askResult.output, /Take 8\./)
+      const events = await getTaskRunEvents(child.id, {}, 'alice')
+      assert.ok(events.some(event => event.kind === 'asked'))
+      assert.ok(events.some(event => event.kind === 'answered'))
+      assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'running')
+    } finally {
+      channelInterjectionQueue.drain('parent-session')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('returns the default after the timeout, still inside the turn', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-ask-timeout-'))
+    setLightclawHomeOverride(tmpHome)
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      defaultModel: 'm',
+      taskrun: { ask: { timeoutMs: 60 } },
+    }))
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent work',
+        parentRunId: null,
+        chainId: 'chain-ask-timeout',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-session-2', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-session-2',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: parent.id,
+        chainId: 'chain-ask-timeout',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-session-2', Date.now(), 'alice')
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-session-2',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const result = await runWithSessionContext(childSession, () =>
+        messageDispatchTool.call(
+          { message: 'Proceed with cleanup?', default: 'yes, conservative cleanup' },
+          toolContext(),
+        ),
+      )
+      assert.equal(result.isError, undefined)
+      assert.match(result.output, /default/)
+      assert.match(result.output, /conservative cleanup/)
+      const events = await getTaskRunEvents(child.id, {}, 'alice')
+      const answeredEvent = events.find(event => event.kind === 'answered')
+      assert.ok(answeredEvent)
+      assert.equal((answeredEvent as { reason?: string }).reason, 'timeout')
+      assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'running')
+    } finally {
+      channelInterjectionQueue.drain('parent-session-2')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+

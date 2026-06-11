@@ -45,6 +45,7 @@ import {
   markResumed,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
+import { answerPendingAsk, awaitAskAnswer } from '../taskrun/ask-registry.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
@@ -109,7 +110,7 @@ const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
 With \`to\`, target a direct child TaskRun: running children receive an interjection; waiting children pick back up with the message; queued / delivered / terminal children return guidance.
 
-Without \`to\`, ask your parent for input. \`default\` is required: the run waits as awaiting-reply and will continue with the default if the parent cannot answer in time.`
+Without \`to\`, ask your requester for input and wait in place: the tool returns the answer, or your required \`default\` after the timeout — your shift continues either way. A late answer still reaches you as an ordinary message.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -630,6 +631,17 @@ export const messageDispatchTool = buildTool({
         isError: true,
       }
     }
+    // An open ask takes priority: the answer settles the pending question
+    // in place instead of landing as an interjection.
+    if (answerPendingAsk(run.id, input.message.trim())) {
+      await appendEvent(run.id, 'answered', {
+        byRole: getCurrentRole()?.agentType ?? 'main',
+        answer: input.message.trim(),
+      }, Date.now(), userId)
+      return {
+        output: `Your answer reached TaskRun ${run.id}'s open question; it continues its shift with it. Nothing to wait for here — its result will reach you the usual way.`,
+      }
+    }
     if (run.status === 'running' && run.currentSessionId) {
       const now = Date.now()
       channelInterjectionQueue.push(run.currentSessionId, {
@@ -640,7 +652,7 @@ export const messageDispatchTool = buildTool({
         source: 'user',
       })
       return {
-        output: `Message queued for TaskRun ${run.id}; the worker will receive it at the next tool boundary.`,
+        output: `Delivered — TaskRun ${run.id} folds your message in at its next step and continues on its own. There is no reply to wait for here; its result will reach you the usual way, so carry on.`,
       }
     }
     if (run.status === 'waiting') {
@@ -657,7 +669,7 @@ export const messageDispatchTool = buildTool({
         reason: run.waitReason === 'awaiting-reply' ? 'parent answer' : 'message to waiting run',
         body: wrapMessageDispatch(input.message.trim()),
       })
-      return { output: `TaskRun ${run.id} resume scheduled with your message.` }
+      return { output: `TaskRun ${run.id} was waiting; your message starts its next shift with it in hand. Nothing to wait for here — its result will reach you the usual way.` }
     }
     if (run.status === 'queued') {
       return { output: `TaskRun ${run.id} is queued; use UpdateSchedule to change the queued prompt.`, isError: true }
@@ -722,30 +734,11 @@ async function askParentFromCurrentRun(input: {
   if (!own.parentRunId) return { output: 'This TaskRun has no parent to ask.', isError: true }
   const parent = await getTaskRun(own.parentRunId, input.owner)
   if (!parent) return { output: `Parent TaskRun not found: ${own.parentRunId}`, isError: true }
-  const timeoutAt = Date.now() + getConfig().taskrun.ask.timeoutMs
   await appendEvent(own.id, 'asked', {
     question: input.message.trim(),
     default: defaultAnswer,
     ...(input.options?.length ? { options: input.options } : {}),
   }, Date.now(), input.owner)
-  const paused = await markWaiting(
-    own.id,
-    {
-      reason: 'awaiting-reply',
-      wake: {
-        kind: 'parent-reply',
-        timeoutAt,
-        default: defaultAnswer,
-        ...(input.options?.length ? { options: input.options } : {}),
-      },
-    },
-    Date.now(),
-    input.owner,
-  )
-  if (paused?.status !== 'waiting') {
-    return { output: `TaskRun ${own.id} could not start waiting for parent reply.`, isError: true }
-  }
-  scheduleAskTimeout(input.owner, own.id, timeoutAt, defaultAnswer)
   const askBlock = [
     `<taskrun-ask childRunId="${own.id}">`,
     input.message.trim(),
@@ -753,6 +746,11 @@ async function askParentFromCurrentRun(input: {
     `default=${JSON.stringify(defaultAnswer)}`,
     '</taskrun-ask>',
   ].filter(Boolean).join('\n')
+
+  // The ask waits INSIDE this turn, bounded by the ask timeout — the run
+  // stays running and the answer (or the default) comes back as this tool's
+  // result. Late answers fall through to normal message routing.
+  let delivered = false
   if (parent.status === 'running' && parent.currentSessionId) {
     channelInterjectionQueue.push(parent.currentSessionId, {
       messageId: `taskrun-ask-${own.id}-${Date.now()}`,
@@ -761,22 +759,20 @@ async function askParentFromCurrentRun(input: {
       arrivedAt: Date.now(),
       source: 'user',
     })
-    return { output: `Asked parent TaskRun ${parent.id}. End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
-  }
-  if (parent.status === 'waiting') {
+    delivered = true
+  } else if (parent.status === 'waiting') {
     // Detached: waking the parent runs its whole next shift.
     scheduleResumeRunWithBlock(input.owner, parent.id, {
       via: 'message',
       reason: `child ${own.id} asked parent`,
       body: askBlock,
     })
-    return { output: `Asked parent TaskRun ${parent.id} (resume scheduled). End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
-  }
-  if ((parent.kind ?? 'dispatch') === 'root') {
+    delivered = true
+  } else if ((parent.kind ?? 'dispatch') === 'root') {
     const identity = await getIdentity(input.owner).catch(() => null)
     const ownerOpenId = identity?.channels.feishu[0]
     if (ownerOpenId) {
-      const delivered = await wakeOrInterject({
+      const wake = await wakeOrInterject({
         targetSessionId: parent.callerSessionId,
         block: askBlock,
         ownerOpenId,
@@ -785,45 +781,29 @@ async function askParentFromCurrentRun(input: {
         source: 'background-task',
         logPrefix: '[taskrun-ask]',
       })
-      if (delivered.ok) return { output: `Asked main via ${delivered.mode}. End your turn now — the framework resumes this run with the answer (or with your default after the timeout).` }
+      delivered = wake.ok
     }
   }
-  // Parent unreachable: settle the ask in place. The asking turn is still
-  // running — do NOT resume our own session (that would start a second agent
-  // loop racing this one on the same transcript). Clear the waiting state and
-  // hand the default back through the tool result so this turn continues.
-  await appendEvent(own.id, 'answered', {
-    auto: true,
-    reason: 'parent-unavailable',
-    answer: defaultAnswer,
-  }, Date.now(), input.owner)
-  await markResumed(own.id, {
-    via: 'answer',
-    reason: 'parent unavailable; using default answer',
-    sessionId: getSessionId(),
-  }, Date.now(), input.owner)
-  return { output: `Parent unavailable — continue now with your default answer: ${defaultAnswer}` }
-}
 
-function scheduleAskTimeout(owner: string, runId: string, timeoutAt: number, defaultAnswer: string): void {
-  setTimeout(() => {
-    void (async () => {
-      const run = await getTaskRun(runId, owner)
-      if (run?.status !== 'waiting' || run.waitReason !== 'awaiting-reply') return
-      await appendEvent(runId, 'answered', {
-        auto: true,
-        reason: 'timeout',
-        answer: defaultAnswer,
-      }, Date.now(), owner)
-      scheduleResumeRunWithBlock(owner, runId, {
-        via: 'answer',
-        reason: 'parent reply timed out; using default answer',
-        body: wrapMessageDispatch(defaultAnswer),
-      })
-    })().catch(error => {
-      process.stderr.write(`[taskrun] ask timeout failed for ${runId}: ${error instanceof Error ? error.message : String(error)}\n`)
-    })
-  }, Math.max(0, timeoutAt - Date.now())).unref?.()
+  if (!delivered) {
+    await appendEvent(own.id, 'answered', {
+      auto: true,
+      reason: 'parent-unavailable',
+      answer: defaultAnswer,
+    }, Date.now(), input.owner)
+    return { output: `Your requester cannot be reached right now — continue with your default: ${defaultAnswer}` }
+  }
+
+  const resolution = await awaitAskAnswer(own.id, defaultAnswer, getConfig().taskrun.ask.timeoutMs)
+  if (resolution.via === 'timeout') {
+    await appendEvent(own.id, 'answered', {
+      auto: true,
+      reason: 'timeout',
+      answer: defaultAnswer,
+    }, Date.now(), input.owner)
+    return { output: `No answer within the timeout — continue with your default: ${defaultAnswer}. If an answer arrives later it will reach you as a message.` }
+  }
+  return { output: `Answer from your requester: ${resolution.answer}` }
 }
 
 function wrapMessageDispatch(message: string): string {
