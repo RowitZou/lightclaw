@@ -417,7 +417,7 @@ async function executeDueWakesBestEffort(
         scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
           via: 'timer',
           reason: 'your declared timer fired',
-          body: '<taskrun-timer-wake />',
+          body: '<taskrun-timer-wake />\nYour timer wake fired. Check what you were waiting for; if it needs more time, declare a new wait — do not hold the turn open to watch it.',
         })
         continue
       }
@@ -447,6 +447,7 @@ async function executeDueWakesBestEffort(
               `status=${child?.status ?? 'missing'}`,
               child?.outcome?.summary ?? child?.outcome?.error ?? '(no outcome recorded)',
               '</taskrun-child-result>',
+              'Settle it (TaskUpdate accept / reject) and continue your task with the result.',
             ].join('\n'),
           })
         }
@@ -565,7 +566,34 @@ export function formatTaskRunReconcileBlock(
     lines.push(`- ${parts.join(' ')}`)
   }
   lines.push('</taskrun-reconcile>')
-  return lines.join('\n')
+  // Guidance lines assemble per the finding kinds actually present, so each
+  // recipient reads only dispositions it can act on (the idle-root line uses
+  // goal/root vocabulary and only ever reaches the orchestrator, because that
+  // finding kind is never routed to a worker parent).
+  const kinds = new Set(findings.map(finding => finding.kind))
+  const guidance: string[] = [
+    'Some of your delegated work is stuck or waiting on you — listed above with each run\'s state and how long it has waited. This is bookkeeping you own; settle it now before (or instead of) new work:',
+  ]
+  if (kinds.has('unsettled-delivered')) {
+    guidance.push('- delivered, awaiting your verdict → TaskUpdate accept, or reject with concrete feedback (the worker picks it back up with your feedback).')
+  }
+  if (kinds.has('stranded')) {
+    guidance.push('- stranded (nothing is working on it and nothing is scheduled to) → message it to continue if it should, or TaskUpdate cancel if it is moot.')
+  }
+  if (kinds.has('dead-wake-source')) {
+    guidance.push('- waiting on a wake that can no longer fire → its wait will never end on its own: message it to continue, or cancel it.')
+  }
+  if (kinds.has('waiting-overdue')) {
+    guidance.push('- waiting far longer than its declared wake should take → decide: continue it (message it), or cancel it.')
+  }
+  if (kinds.has('idle-root')) {
+    guidance.push('- an open goal with nothing moving under it → this goal is yours: dispatch its next stage, or close it (TaskUpdate deliver on its root) if it is actually done — or tell the user why it is parked.')
+  }
+  guidance.push('Settling these is what unblocks everything that depends on them. If an item repeats here, your last disposition did not move it — change the disposition rather than waiting for it to clear itself.')
+  if (options.escalation) {
+    guidance.push('This is an escalation: the same items have been reported to you repeatedly with no progress on the ledger. Change approach now — cancel what is moot, re-route what is stuck, or tell the user what is blocked through your own reply — this reminder will not repeat until something actually moves.')
+  }
+  return [lines.join('\n'), guidance.join('\n')].join('\n\n')
 }
 
 async function wakeTaskRunReconcileOwner(

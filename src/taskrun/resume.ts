@@ -234,6 +234,7 @@ export async function wakeParentForChildJoinBestEffort(
       `status=${child.status}`,
       summary,
       '</taskrun-child-result>',
+      'Settle it (TaskUpdate accept / reject) and continue your task with the result.',
     ].join('\n'),
   })
 }
@@ -257,9 +258,10 @@ function formatResumeBlock(run: TaskRunMeta, block: ResumeRunBlock, mode: 'resum
     `<taskrun-resume runId="${escapeAttr(run.id)}" via="${escapeAttr(block.via)}" mode="${mode}">`,
     `<reason>${block.reason}</reason>`,
     checkpoint ? `<checkpoint>${checkpoint}</checkpoint>` : '',
-    '<reconcile>Before continuing, verify the last claimed state against the workspace or artifacts, then proceed from the verified state.</reconcile>',
     block.body,
     '</taskrun-resume>',
+    '',
+    'You are picking your own task back up — everything above is your earlier work on it, and the block carries why you are back. Before continuing, reconcile: things may have changed while you were away (files, processes, the world). Verify the specific facts you previously reported or checkpointed before building on them. Then continue the task from where it stands, folding in what the block brought you.',
   ].filter(Boolean).join('\n')
 }
 

@@ -482,7 +482,7 @@ describe('Dispatch tool family', () => {
       assert.equal(result.isError, undefined)
       const [queued] = channelInterjectionQueue.drain('bg-message-dispatch')
       assert.ok(queued)
-      assert.match(queued.text, /<message-dispatch>/)
+      assert.match(queued.text, /<requester-message>/)
       assert.match(queued.text, /smaller dataset/)
       assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'running')
       assert.ok(getBackgroundTask('alice', dispatchId))

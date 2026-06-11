@@ -72,10 +72,14 @@ export function formatStopNoticeReminder(notice: StopNotice): string {
   const waitingList = notice.waitingRunIds.length > 0 ? notice.waitingRunIds.join(', ') : '(none)'
   return [
     '<system-reminder>',
-    'The previous user turn in this chat was interrupted by /stop.',
-    `Stopped root TaskRuns: ${rootList}.`,
-    `Runs waiting for disposition: ${waitingList}.`,
-    'For each stopped root, compare the user\'s new message against the waiting ledger: message a waiting run to continue it, cancel stale queued/waiting runs with TaskUpdate cancel, or ask the user if the intended disposition is ambiguous.',
+    'The previous turn in this chat was interrupted by the user\'s /stop. Everything that was executing is now stopped and waiting on the ledger:',
+    `- Stopped roots: ${rootList}`,
+    `- Runs waiting for disposition: ${waitingList}`,
+    'Read the user\'s message below against this ledger and disposition every waiting item — nothing resumes by itself:',
+    '- still wanted → message the waiting run to continue (its context is intact), with any course correction the user just gave;',
+    '- no longer wanted → TaskUpdate cancel;',
+    '- unclear → ask the user before acting.',
+    'Do not start new work for a stopped goal while its waiting runs sit undispositioned.',
     '</system-reminder>',
   ].join('\n')
 }

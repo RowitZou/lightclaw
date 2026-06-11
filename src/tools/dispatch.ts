@@ -649,7 +649,7 @@ export const messageTool = buildTool({
       channelInterjectionQueue.push(run.currentSessionId, {
         messageId: `message-dispatch-${run.id}-${now}`,
         senderOpenId: `taskrun:${run.id}`,
-        text: wrapMessage(input.message.trim()),
+        text: [wrapMessage(input.message.trim()), REQUESTER_MESSAGE_GUIDANCE].join('\n\n'),
         arrivedAt: now,
         source: 'user',
       })
@@ -810,11 +810,15 @@ async function askParentFromCurrentRun(input: {
 
 function wrapMessage(message: string): string {
   return [
-    '<message-dispatch>',
+    '<requester-message>',
     message,
-    '</message-dispatch>',
+    '</requester-message>',
   ].join('\n')
 }
+
+/** Trailing guidance for the interjection path only — a resumed shift gets
+ *  its bearings from the taskrun-resume prose instead. */
+const REQUESTER_MESSAGE_GUIDANCE = 'Your requester sent this mid-task — it arrived between your tool calls and may redirect, narrow, or add to what you\'re doing. Fold it in now: adjust your plan before your next action rather than finishing the old plan first. It does not cancel your task unless it says so.'
 
 export const updateScheduleTool = buildTool({
   name: 'UpdateSchedule',

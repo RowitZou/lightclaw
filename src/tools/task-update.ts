@@ -556,9 +556,11 @@ export const taskUpdateTool = buildTool({
         via: 'reject',
         reason: 'your requester rejected your delivery',
         body: [
+          'Your delivery was reviewed and sent back. Feedback:',
           '<taskrun-reject-feedback>',
           feedback,
           '</taskrun-reject-feedback>',
+          "Address the feedback and deliver again. Your earlier work stands — fix what was called out, don't redo what wasn't.",
         ].join('\n'),
       })
     }
@@ -575,7 +577,7 @@ function scheduleTaskRunTimerWake(owner: string, runId: string, at: number): voi
     scheduleResumeRunWithBlock(owner, runId, {
       via: 'timer',
       reason: 'your declared timer fired',
-      body: '<taskrun-timer-wake />',
+      body: '<taskrun-timer-wake />\nYour timer wake fired. Check what you were waiting for; if it needs more time, declare a new wait — do not hold the turn open to watch it.',
     })
   }, delay).unref?.()
 }
