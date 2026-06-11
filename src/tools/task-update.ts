@@ -291,7 +291,9 @@ export const taskUpdateTool = buildTool({
             return { output: `TaskRun ${input.runId} is not a direct child of your current run.`, isError: true }
           }
         }
-        abortInFlightForSession(target.currentSessionId)
+        if (target.currentSessionId !== getSessionId()) {
+          abortInFlightForSession(target.currentSessionId)
+        }
         const waitingRun = await markWaiting(
           target.id,
           { reason: 'requester-hold', bySessionId: getSessionId() },
@@ -423,7 +425,7 @@ export const taskUpdateTool = buildTool({
         for (const childId of childIds) {
           const child = await getTaskRun(childId, owner)
           if (!child || isTerminalTaskRun(child)) continue
-          if (child.status === 'running' && child.currentSessionId) {
+          if (child.status === 'running' && child.currentSessionId && child.currentSessionId !== getSessionId()) {
             abortInFlightForSession(child.currentSessionId)
           }
           const childCancelled = await markCancelled(
@@ -472,7 +474,11 @@ export const taskUpdateTool = buildTool({
         if (entry.standingRootRunId && entry.taskRunId === target.id) continue
         await cancelDispatchEntry(owner, entry)
       }
-      if (target.status === 'running' && target.currentSessionId) {
+      // A root opened in this very chat carries the caller's own session —
+      // aborting it would kill the cancelling turn mid-batch (dogfood
+      // 2026-06-11: cancelling a placeholder root aborted main's own turn,
+      // taking the parallel SendFile / Dispatch calls down with it).
+      if (target.status === 'running' && target.currentSessionId && target.currentSessionId !== getSessionId()) {
         abortInFlightForSession(target.currentSessionId)
       }
       const cancelled = await markCancelled(
