@@ -34,7 +34,12 @@ export const BUNDLED_AGENTS: Role[] = [
       'ShowSlashCatalog',
     ],
     skills: ['remember', 'skillify', 'delivery-orchestration'],
-    mcpServers: ['*'],
+    // Explicitly empty (PR19): no MCP server is configured today, and a
+    // wildcard here would silently hand main every tool of the first server
+    // anyone adds — including execution faces the M1 whitelist just removed.
+    // Adding an MCP server for main is a deliberate per-server grant, audited
+    // against the read-only-manager invariant at that moment.
+    mcpServers: [],
     // Main reaches every worker, including user-defined roles loaded from
     // `<lightclawHome>/roles/<name>/ROLE.md`. `isDispatchTargetReachable`
     // and `formatReachableRolesSection` expand '*' against the live registry
