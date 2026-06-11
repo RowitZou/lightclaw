@@ -9,6 +9,7 @@ allowed-tools:
   - Grep
   - Glob
   - MemoryWrite
+  - Message
 roles:
   - generalist
   - coder
@@ -26,8 +27,7 @@ Setting up an environment is a real engineering step, not a quick install. A wro
 ## Settle the plan in one pass, confirm it once, then build
 
 3. **Work out the whole plan up front, not by trial and error.** Before you install anything, read the project's own statement of what it needs — README / setup script, the ecosystem's manifest + lockfile, documented extras — and assemble as complete a plan as you can: which of the choices above are still open (reuse-vs-build, runtime version, compute target, base image) *and* the concrete package + version list. Hitting an unforeseen gap later and adding a dependency is fine; what you avoid is going in blind and discovering the whole set one failure at a time.
-4. **Confirm the whole plan once — in a single card.** Decide your recommended value for everything still open *and* the package list, and surface them **together in one `AskUserQuestion` card** (it carries several questions at once), each pre-set to your recommendation. One confirmation, not a habit of halting at each uncertainty: bundling the open points lets a long autonomous run keep moving while giving the user a single window to redirect a wrong call (the CPU-vs-GPU build, the wrong base env) before the expensive install. The recommendation you put up is what the user is signing off on — treat it as their standing approval, the agreed plan unless they choose otherwise; you don't re-ask each point. Once the plan is set, the extra deps you hit mid-install don't go back for confirmation — fix forward.
-   - **No card tool (you're a worker):** put the same plan — your chosen values and the package list — in your result for your requester rather than installing silently on a guess.
+4. **Confirm the whole plan once — in a single ask.** Decide your recommended value for everything still open *and* the package list, and put them to your requester together in one ask (Message with no `to`): the open points, your recommendation for each, and proceed-as-recommended as the default. One confirmation, not a habit of halting at each uncertainty: bundling the open points keeps a long autonomous run moving while giving a single window to redirect a wrong call (the CPU-vs-GPU build, the wrong base env) before the expensive install. The answer — or the default — comes back as the tool's return, and the confirmed plan is your standing approval; you don't re-ask each point. Once the plan is set, the extra deps you hit mid-install don't go back for confirmation — fix forward.
 5. **Use the right tool and a stable, isolated location — one env per compatible requirement set.** Pick the ecosystem's own isolation, in a named, self-contained location that can be reused — not a throwaway temp dir. If a project's requirements conflict with an existing env — it needs a different, incompatible version of a shared library — **don't fight to satisfy both in one env; stand up a separate one.** Environments are cheap; an afternoon lost to an unwinnable version-pin tug-of-war is not.
 6. **Install from the project's own instructions.** Follow the README / setup script and the ecosystem's manifest + lockfile, in the order they give — the plan from step 3 is *what* you install, the project's instructions are *how*. Don't hand-assemble the env from defaults when the project documents its own setup.
 
@@ -44,5 +44,5 @@ This skill ships executable, per-stack guides under `references/`. **List `${LIG
 
 - Do not assume the tool's default build / index — match the project and the machine (the compute target especially).
 - Do not discover the requirement set one failure at a time — work the plan out as fully as you can up front, then install from the project's own instructions.
-- Do not drip-feed confirmations — surface the open choices and the package list to your requester once, in a single card with recommended defaults, before the install (step 4); don't stop at each uncertainty.
+- Do not drip-feed confirmations — put the open choices and the package list to your requester once, in a single ask with recommended defaults, before the install (step 4); don't stop at each uncertainty.
 - Do not call an env ready on "it installed" — call it ready on the project's smoke plus a platform-visible check.
