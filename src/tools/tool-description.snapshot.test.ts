@@ -43,7 +43,7 @@ const EXPECTED = {
   Message: '60a6382670953b9df931dc653687069d7f1fb13dcd0199a920b11e069034f6c6',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
-  UpdateSchedule: '52339ad4eeb6658ecc9f638e2e34316c3b1171c3518b209fbbabf35eed3e0c4c',
+  UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',
   Notify: '4bc24f896080e4a15f85815ded7a92f56a1740645235785d29509788fe9ec4df',
   // Phase 18 PR6: main-only tool for discovering channel slash commands
   // the user can run when setup must happen outside agent tools.

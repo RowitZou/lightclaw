@@ -361,7 +361,7 @@ test('TaskUpdate cancel refuses the queued next fire of a standing service', asy
   // The schedule would fire this run anyway (or recreate it), silently undoing
   // the cancel — refuse and route to the standing root / UpdateSchedule.
   assert.equal(result.isError, true)
-  assert.match(result.output, /standing service/)
+  assert.match(result.output, /recurring service/)
   assert.match(result.output, new RegExp(root.id))
   assert.equal((await getTaskRun(queued.id, 'alice'))?.status, 'queued')
   assert.ok(getBackgroundTask('alice', 'standing-service-2'))

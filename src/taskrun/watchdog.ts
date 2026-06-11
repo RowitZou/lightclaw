@@ -416,7 +416,7 @@ async function executeDueWakesBestEffort(
       if (wake.kind === 'timer' && wake.at <= now) {
         scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
           via: 'timer',
-          reason: 'taskrun timer wake (reconcile re-arm)',
+          reason: 'your declared timer fired',
           body: '<taskrun-timer-wake />',
         })
         continue
@@ -429,7 +429,7 @@ async function executeDueWakesBestEffort(
         }, now, ownerCanonicalUser)
         scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
           via: 'answer',
-          reason: 'parent reply timed out; using default answer (reconcile re-arm)',
+          reason: 'no answer arrived in time; continue with your default',
           body: wake.default,
         })
         continue
@@ -440,7 +440,7 @@ async function executeDueWakesBestEffort(
         if (childSettled) {
           scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
             via: 'child-join',
-            reason: 'awaited child settled (reconcile re-arm)',
+            reason: 'the run you were waiting on has finished',
             body: [
               '<taskrun-child-result>',
               `runId=${wake.runId}`,
@@ -531,7 +531,7 @@ async function deliverParentFirstFindings(input: {
     }
     scheduleResumeRunWithBlock(input.ownerCanonicalUser, parent.id, {
       via: 'message',
-      reason: 'watchdog reconcile: settle your delivered/stranded children',
+      reason: 'delegated work of yours is waiting on your verdict',
       body: block,
     })
     delivered.push(...findings)

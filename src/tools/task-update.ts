@@ -31,8 +31,8 @@ const TASK_UPDATE_DESCRIPTION = [
   "action='deliver' — conclude a run you own. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. A goal root you opened closes directly instead — pass its runId; the close is refused with an itemized list while the root still has open obligations. Settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
-  "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required); with runId, set a running direct child waiting.",
-  "action='cancel' — cancel work you own by runId: your direct children, or any run inside goals you opened. Queued / waiting runs settle in place; running runs are stopped first; a standing service's root runId takes the whole service down, schedule included. A dispatch entry id is accepted for one compatibility window and resolved to its backing run.",
+  "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required): the last thing you do here — the task comes back to you when the wake fires. With runId, set a running direct child waiting.",
+  "action='cancel' — cancel work you own by runId: your direct children, or any run inside goals you opened. Queued / waiting runs settle in place; running runs are stopped first; a recurring service's root runId takes the whole service down, schedule included. A dispatch entry id works here too and resolves to its backing run.",
 ].join('\n')
 
 function describeObligationStatus(meta: TaskRunMeta): string {
@@ -336,7 +336,7 @@ export const taskUpdateTool = buildTool({
       // and the wake brings the next shift.
       abortInFlightForSession(getSessionId())
       return {
-        output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded — this shift ends here. You pick the task back up when the wake fires, with what arrived in hand.`,
+        output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded. The task comes back to you when the wake fires, with what arrived in hand.`,
       }
     }
 
@@ -400,7 +400,7 @@ export const taskUpdateTool = buildTool({
         // re-fire the cancelled run or recreate the slot, silently undoing the
         // cancel. Route to the verbs that actually stop the service.
         return {
-          output: `TaskRun ${target.id} is the next scheduled fire of standing service ${standingCurrentChild.standingRootRunId}. Cancelling a single upcoming fire is not supported. Cancel the standing root (TaskUpdate { action:'cancel', runId:'${standingCurrentChild.standingRootRunId}' }) to shut the service down, or UpdateSchedule { id:'${standingCurrentChild.id}', enabled:false } to suspend future fires.`,
+          output: `TaskRun ${target.id} is the next scheduled fire of recurring service ${standingCurrentChild.standingRootRunId}. Cancelling a single upcoming fire is not supported. Cancel the service's root (TaskUpdate { action:'cancel', runId:'${standingCurrentChild.standingRootRunId}' }) to shut the service down, or UpdateSchedule { id:'${standingCurrentChild.id}', enabled:false } to suspend future fires.`,
           isError: true,
         }
       }
@@ -426,7 +426,7 @@ export const taskUpdateTool = buildTool({
           }
           const childCancelled = await markCancelled(
             child.id,
-            `cancelled by ${byRole} via TaskUpdate standing-service shutdown`,
+            `cancelled by ${byRole} via TaskUpdate recurring-service shutdown`,
             Date.now(),
             owner,
             { allowRunning: true },
@@ -554,7 +554,7 @@ export const taskUpdateTool = buildTool({
       // call — the exact shape retiring blocking dispatch removed.
       scheduleResumeRunWithBlock(owner, input.runId, {
         via: 'reject',
-        reason: `rejected by ${byRole}`,
+        reason: 'your requester rejected your delivery',
         body: [
           '<taskrun-reject-feedback>',
           feedback,
@@ -574,7 +574,7 @@ function scheduleTaskRunTimerWake(owner: string, runId: string, at: number): voi
   setTimeout(() => {
     scheduleResumeRunWithBlock(owner, runId, {
       via: 'timer',
-      reason: 'taskrun timer wake',
+      reason: 'your declared timer fired',
       body: '<taskrun-timer-wake />',
     })
   }, delay).unref?.()

@@ -12,17 +12,17 @@ export const sleepTool = buildTool({
 
 Use this when:
 - The user explicitly asked you to wait / pause / rest.
-- You are waiting for something time-dependent (a background process to settle, a delay between API retries).
+- You are waiting for something time-dependent (a background process to settle, a delay between retries).
 - You need a delay before checking a condition.
 
 Do NOT use this:
-- To poll for a condition — diagnose the root cause or use Dispatch background mode for monitoring.
-- To pad the response — silence costs nothing, fake work costs an API round-trip.
-- For durations > 5 minutes — prompt cache TTL is 5 min, longer waits should go through Dispatch background mode instead. The runtime cap is 600 s (10 min) but use sparingly.
+- To poll for a condition — diagnose the root cause, or dispatch a monitor that reports back.
+- To pad the response — silence costs nothing; pretended work is not free.
+- For durations beyond a few minutes — a long wait should not be spent sleeping in place: schedule the follow-up (a scheduled dispatch, or a declared wait on your run) and let it come back to you. The cap is 600 s (10 min).
 
-Prefer this over \`Bash(sleep N)\` — Sleep is harness-side and does not hold a sandbox shell process, so concurrent tools keep working. /stop interrupts it instantly.
+Prefer this over \`Bash(sleep N)\` — Sleep does not occupy a shell, concurrent tools keep working, and /stop interrupts it instantly.
 
-Each wake-up still costs one model turn. Pick the duration honestly: 30 s reads cheap, 5 min costs a full API round-trip plus loses the prompt cache.`,
+A sleep is not free, and its cost grows with its length: pick the shortest duration the wait actually needs.`,
   domain: 'host',
   riskLevel: 'safe',
   concurrencySafe: true,

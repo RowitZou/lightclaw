@@ -116,7 +116,7 @@ const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existi
 
 Use when you adjust a not-yet-fired one-shot dispatch or the future fires of a recurring / interval dispatch. It does not message or alter a fire that is already running: use Message for soft course correction, or TaskUpdate cancel and then Dispatch again for hard replacement.
 
-The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead. Changing between finite one-shot and recurring/interval standing-service shapes is not supported.
+The \`role\` field is NOT mutable — a different role means a different task; cancel and re-dispatch instead. Changing between finite one-shot and recurring/interval service shapes is not supported.
 
 Changing prompt records the prior prompt and surfaces it once on the next fire's result block so you can see what was changed. Other fields you don't pass are left unchanged.`
 
@@ -666,7 +666,7 @@ export const messageTool = buildTool({
       // sit inside it (that would be blocking dispatch by another name).
       scheduleResumeRunWithBlock(userId, run.id, {
         via: run.waitReason === 'awaiting-reply' ? 'answer' : 'message',
-        reason: run.waitReason === 'awaiting-reply' ? 'parent answer' : 'message to waiting run',
+        reason: run.waitReason === 'awaiting-reply' ? 'your question was answered' : 'a message arrived for your task',
         body: wrapMessage(input.message.trim()),
       })
       return { output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.` }
@@ -764,7 +764,7 @@ async function askParentFromCurrentRun(input: {
     // Detached: waking the parent runs its whole next shift.
     scheduleResumeRunWithBlock(input.owner, parent.id, {
       via: 'message',
-      reason: `child ${own.id} asked parent`,
+      reason: `TaskRun ${own.id} asked you a question`,
       body: askBlock,
     })
     delivered = true
@@ -850,7 +850,7 @@ export const updateScheduleTool = buildTool({
         const willBeStanding = schedule.kind === 'recurring' || schedule.kind === 'interval'
         if (wasStanding !== willBeStanding) {
           return {
-            output: 'Changing a dispatch between finite and recurring/interval standing-service shapes is not supported. Cancel it and create a fresh Dispatch so the TaskRun root/child ledger is rebuilt correctly.',
+            output: 'Changing a dispatch between finite and recurring/interval service shapes is not supported. Cancel it and create a fresh Dispatch instead.',
             isError: true,
           }
         }
