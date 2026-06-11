@@ -103,24 +103,21 @@ test('auto-loaded skill scoped to its roles — coder does not get delivery-orch
 })
 
 test('driver-gated skill is hidden unless runtime.driver matches', async () => {
+  // PR19: main no longer carries the execution skills; coder is the
+  // driver-gated audience now.
   const ctx = baseCtx()
   await runWithSessionContext(ctx, async () => {
-    const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
-    const withoutBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config(null), queryText: '', sessionId: undefined,
+    // Populate the shared registry via a main build first.
+    await buildSystemPromptTemplate(['Read'].map(fakeTool), ctx.cwd, '/workspace', '/scratch', {
+      autoMemory: false, config: config(), queryText: '', sessionId: undefined,
     })
-    assert.doesNotMatch(
-      renderSystemPrompt(withoutBrainpp, [], { tools: mainTools }),
-      /^- brainpp-batch-job:/m,
-    )
+    const coder = BUNDLED_AGENTS.find(a => a.agentType === 'coder') as Role
+    const tools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'MemoryWrite', 'TodoWrite', 'UseSkill'].map(fakeTool)
+    const withoutBrainpp = await buildSubagentPrompt(tools, config(null), '/workspace', '/scratch', coder, ctx.cwd, ctx.sessionId)
+    assert.doesNotMatch(withoutBrainpp, /^- brainpp-batch-job:/m)
 
-    const withBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config('brainpp'), queryText: '', sessionId: undefined,
-    })
-    assert.match(
-      renderSystemPrompt(withBrainpp, [], { tools: mainTools }),
-      /^- brainpp-batch-job:/m,
-    )
+    const withBrainpp = await buildSubagentPrompt(tools, config('brainpp'), '/workspace', '/scratch', coder, ctx.cwd, ctx.sessionId)
+    assert.match(withBrainpp, /^- brainpp-batch-job:/m)
   })
 })
 

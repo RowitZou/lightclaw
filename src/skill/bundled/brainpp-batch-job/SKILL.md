@@ -11,7 +11,6 @@ allowed-tools:
   - Glob
   - MemoryWrite
 roles:
-  - main
   - generalist
   - coder
 ---

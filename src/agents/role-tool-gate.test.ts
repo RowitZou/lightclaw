@@ -424,7 +424,9 @@ function role(overrides: Partial<Role> = {}): Role {
   }
 }
 
-test('filterToolsByRoleVisibility drops Feishu tools from main wildcard catalog', () => {
+test('filterToolsByRoleVisibility keeps only the read-face Feishu tools on the main whitelist', () => {
+  // PR19 / M1: main is a read-only manager — no execution face (Bash), and
+  // only the Feishu READ face (D7: doc authoring is feishuSecretary's).
   const main = BUNDLED_AGENTS.find(a => a.agentType === 'main')!
   const input = [
     tool('Bash'),
@@ -436,7 +438,7 @@ test('filterToolsByRoleVisibility drops Feishu tools from main wildcard catalog'
     tool('FeishuCreateFile'),
   ]
   const visible = filterToolsByRoleVisibility(main, input).map(t => t.name)
-  assert.deepEqual(visible, ['Bash', 'Read', 'Dispatch'])
+  assert.deepEqual(visible, ['Read', 'Dispatch', 'FeishuRead', 'FeishuList'])
 })
 
 test('filterToolsByRoleVisibility drops user-escalation tools from worker even with wildcard tools', () => {

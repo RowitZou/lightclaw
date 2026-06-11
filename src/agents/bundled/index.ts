@@ -17,8 +17,23 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'main',
     name: 'main',
     whenToUse: 'Primary user-facing orchestrator.',
-    tools: ['*'],
-    skills: ['remember', 'skillify', 'delivery-orchestration', 'brainpp-batch-job', 'build-environment'],
+    // Read-only manager surface (PR19 / M1): read + inspect + ledger +
+    // dispatch family + presentation (SendFile / Notify / AskUserQuestion).
+    // No execution face (Bash / Write / Edit / web) — execution is dispatched;
+    // no Feishu WRITE face (D7) — doc authoring goes to feishuSecretary.
+    tools: [
+      'Read', 'Grep', 'Glob', 'ToolSearch',
+      'TodoWrite', 'MemoryRead', 'MemoryWrite', 'UseSkill',
+      'TaskCreate', 'TaskUpdate', 'TaskInspect',
+      'Dispatch', 'UpdateSchedule', 'Message',
+      'Sleep', 'AskUserQuestion', 'Notify', 'SendFile',
+      'FeishuRead', 'FeishuList',
+      // skillify needs the write half; SkillDelete stays withheld from the
+      // interactive surface (deletes are routed to the curation pipeline).
+      'SkillWrite',
+      'ShowSlashCatalog',
+    ],
+    skills: ['remember', 'skillify', 'delivery-orchestration'],
     mcpServers: ['*'],
     // Main reaches every worker, including user-defined roles loaded from
     // `<lightclawHome>/roles/<name>/ROLE.md`. `isDispatchTargetReachable`
@@ -35,7 +50,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'generalist',
     whenToUse:
-      'General-purpose worker for open-ended sub-tasks that mix capabilities — reading, editing, running commands, and searching in one flow — and don\'t fit a single specialist. Dispatch it when a task is too branchy for one narrow worker but you still want it off your own context; it plans its own steps, self-tracks via TodoWrite, and saves durable findings via MemoryWrite. When a task is purely code / local read / web lookup, the matching specialist is sharper.',
+      'The default executor for delegated work: implementation, fixes, investigations, multi-step operations, and anything mixing capabilities — reading, editing, running commands, searching — in one flow. Dispatch it whenever the work needs hands and no single narrow specialist obviously fits better; it plans its own steps, self-tracks via TodoWrite, and can sub-dispatch specialists for narrow pieces.',
     // Wildcard covers default tool surface; Dispatch must be explicit per the
     // BLOCKED_WORKER_TOOLS gate (`explicitlyReachableDispatch` requires the
     // literal name in tools, not the wildcard). The management tools

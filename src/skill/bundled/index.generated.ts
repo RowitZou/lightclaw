@@ -45,7 +45,6 @@ export const bundledSkills: LoadedSkill[] = [
       "MemoryWrite"
     ],
     "roles": [
-      "main",
       "generalist",
       "coder"
     ],
@@ -67,7 +66,6 @@ export const bundledSkills: LoadedSkill[] = [
       "MemoryWrite"
     ],
     "roles": [
-      "main",
       "generalist",
       "coder"
     ],

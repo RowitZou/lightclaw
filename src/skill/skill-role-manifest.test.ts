@@ -92,7 +92,7 @@ describe('bundled skill ↔ role contract manifest', () => {
       manifest[role.agentType] = visible
     }
     assert.deepEqual(manifest, {
-      main: ['brainpp-batch-job', 'build-environment', 'delivery-orchestration', 'remember', 'skillify'],
+      main: ['delivery-orchestration', 'remember', 'skillify'],
       generalist: ['brainpp-batch-job', 'build-environment', 'remember'],
       localExplorer: ['local-exploration-workflow'],
       webSearcher: ['web-research-workflow'],
