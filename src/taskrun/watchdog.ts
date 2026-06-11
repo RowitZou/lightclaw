@@ -65,6 +65,7 @@ export type ReconcileTaskRunsDeps = {
   waitingGraceMs?: number
   rootIdleGraceMs?: number
   budgetWindowMinutes?: number
+  reportReArmMs?: number
   wakeBudgetReportLimit?: number
   activeSessionIds?: Set<string>
   inFlightMainSessionIds?: Set<string>
@@ -164,9 +165,17 @@ export async function reconcileTaskRunsOnce(
     }
   }
 
-  const deduped = reportableFindings.every(finding =>
-    latestWatchdogFingerprint(eventsByRun.get(finding.runId) ?? []) === fingerprint,
-  )
+  // Dedup expires: an identical finding suppresses re-reporting only while
+  // the last report is fresh. A report can land in a turn that dies (or be
+  // recorded just before a restart) — dogfood 2026-06-11: an idle-root report
+  // outlived the killed turn it woke, and the recurring finding stayed
+  // silenced forever. Past the re-arm window, a still-standing finding
+  // reports again (and feeds the escalation budget).
+  const reportReArmMs = deps.reportReArmMs ?? 300_000
+  const deduped = reportableFindings.every(finding => {
+    const last = latestWatchdogReport(eventsByRun.get(finding.runId) ?? [])
+    return last !== undefined && last.fingerprint === fingerprint && now - last.ts < reportReArmMs
+  })
   if (deduped) {
     return {
       ownerCanonicalUser,
@@ -749,11 +758,11 @@ function fingerprintFindings(findings: TaskRunWatchdogFinding[]): string {
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
 
-function latestWatchdogFingerprint(events: TaskRunEvent[]): string | undefined {
+function latestWatchdogReport(events: TaskRunEvent[]): { fingerprint: string; ts: number } | undefined {
   for (let index = events.length - 1; index >= 0; index--) {
-    const event = events[index] as TaskRunEvent & { fingerprint?: unknown }
+    const event = events[index] as TaskRunEvent & { fingerprint?: unknown; ts?: number }
     if (event.kind === 'watchdog-report' && typeof event.fingerprint === 'string') {
-      return event.fingerprint
+      return { fingerprint: event.fingerprint, ts: typeof event.ts === 'number' ? event.ts : 0 }
     }
   }
   return undefined
