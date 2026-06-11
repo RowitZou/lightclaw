@@ -14,7 +14,9 @@ const TASK_CREATE_DESCRIPTION = [
 export const taskCreateTool = buildTool({
   name: 'TaskCreate',
   whenToUse: `Create a durable root TaskRun for a user-facing objective before attaching finite Dispatch work.`,
-  shouldDefer: true,
+  // Inline (not deferred): opening the goal root is the first ledger act of
+  // every delivery loop — the orchestrator must see it without a ToolSearch.
+  shouldDefer: false,
   description: TASK_CREATE_DESCRIPTION,
   searchHint: 'taskrun create root task objective dispatch parent 工单 创建 根任务',
   domain: 'host',

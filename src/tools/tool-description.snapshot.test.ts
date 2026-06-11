@@ -37,7 +37,7 @@ const EXPECTED = {
   // Collab phase3 PR16 (2026-06-10): Dispatch is background-only; blocking
   // mode is retired in favor of background Dispatch plus TaskUpdate pause
   // child-join when the caller needs to resume on the result.
-  Dispatch: 'f1021818c070b063277a7fd0b82482c2abf55fb9a1828a645de8abc7606b8429',
+  Dispatch: '1f5137bf1672c603bd99dad78adf72045a801efbbf8997428b7bd105692d3a49',
   // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
   Message: '4ff319d858a7d0fa1a1f97982d0c6b9b3636fe27709f1ff78f8f3ff67cdd557b',
@@ -64,12 +64,12 @@ const EXPECTED = {
   // any legacy/internal aborted envelope. 2026-05-20: opening sentence widened
   // so it reads correctly when the receiver is not the role that scheduled
   // the dispatch (orphan result fell back up the chain to main).
-  BackgroundTaskResultBlockMain: '772dab9338c3ca629d1b14243f4c54675857b4371327fd14162421e881be32eb',
+  BackgroundTaskResultBlockMain: '3ba567d2f720085833f1f09683623a5ee5d095b804d2482bc64bc4789d063a3d',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
   // (final-text only, no Notify equivalent). 2026-05-20: opening sentence
   // widened the same way as the main template for orphan-result accuracy.
-  BackgroundTaskResultBlockWorker: 'ad6803aae7a3a450444d5e01c25bdd065cfe79276c460ae7ef678c1a11dbbdd2',
+  BackgroundTaskResultBlockWorker: '938c37f1fa403d2bf4797a9b6f70a0c00f082053bc53f12f1bb4d7f5a9d47107',
 }
 
 function hash(value: string): string {

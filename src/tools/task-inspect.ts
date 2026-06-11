@@ -16,7 +16,7 @@ import { buildTool } from '../tool.js'
 const RECENT_EVENT_LIMIT = 20
 
 const TASK_INSPECT_DESCRIPTION = [
-  'Read durable TaskRun state for dispatched work.',
+  'Read durable TaskRun state for dispatched work — the single place to ask "where does X stand": runs, trees, and their schedules (next fire, enabled, shape). The ledger never forgets; trust it over your own recollection when reorienting.',
   '',
   'Input:',
   '- `runId` optional. When provided, returns that run metadata, recent events, direct child runs, and the full descendant tree.',

@@ -50,6 +50,8 @@ import type { TaskRunMeta } from '../taskrun/types.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
 
+\`task\` (optional): the goal root this dispatch belongs under — pass the root's runId. Work for a goal attaches under that goal's root; without \`task\` the dispatch attaches under your own run when you have one.
+
 schedule (default 'now'):
 - 'now' — fire immediately.
 - { kind: 'after', afterMinutes: <number> } — fire ONCE after N minutes from now. Use for short tests / reminders like "1 minute test" or "remind me in 5 minutes". This is NOT recurring. afterMinutes accepts fractional values (0.5 = 30 seconds).
@@ -816,7 +818,7 @@ function wrapMessage(message: string): string {
 
 export const updateScheduleTool = buildTool({
   name: 'UpdateSchedule',
-  whenToUse: `Modify an active dispatch's prompt / schedule / label / enabled as the situation evolves.`,
+  whenToUse: `Adjust a dispatch that has not fired yet: prompt / schedule / label / enabled.`,
   shouldDefer: true,
   description: UPDATE_SCHEDULE_DESCRIPTION,
   searchHint: 'update dispatch edit schedule prompt pause resume 修改 后台 定时',

@@ -24,10 +24,12 @@ afterEach(() => {
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
-test('TaskCreate is registered as a deferred safe host tool', () => {
+test('TaskCreate is registered as an inline safe host tool', () => {
+  // PR19 / D5: opening the goal root is the first ledger act of every
+  // delivery loop — TaskCreate is inline, not deferred behind ToolSearch.
   const tool = getAllTools().find(item => item.name === 'TaskCreate')
   assert.equal(tool, taskCreateTool)
-  assert.equal(taskCreateTool.shouldDefer, true)
+  assert.equal(taskCreateTool.shouldDefer, false)
   assert.equal(taskCreateTool.domain, 'host')
   assert.equal(taskCreateTool.riskLevel, 'safe')
 })
