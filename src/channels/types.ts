@@ -83,6 +83,10 @@ export type NormalizedChannelMessage = {
    * from a real inbound.
    */
   synthetic?: boolean
+  /** Set on post-query interjection replays: the message already passed the
+   *  channel's targeting gate (e.g. the group @-mention check) on first
+   *  arrival; replays must not be re-gated — the mention sidecar is gone. */
+  replayed?: boolean
   /**
    * Set only on the synthetic message the crash-resume scan feeds to
    * handleMessage. The session transcript already holds the interrupted

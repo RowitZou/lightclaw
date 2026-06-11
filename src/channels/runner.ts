@@ -281,6 +281,9 @@ export function buildLeftoverReplayMessage(
     // acceptable (Phase 28 quote context is best-effort).
     quotedMessage: undefined,
     synthetic: entry.source === 'background-task',
+    // Gate-approved on first arrival; the @-mention sidecar does not survive
+    // the queue, so re-gating drops real user questions (dogfood 2026-06-12).
+    replayed: true,
   }
 }
 
@@ -358,6 +361,7 @@ export class ChannelRunner {
     // sender.
     if (
       !message.synthetic &&
+      !message.replayed &&
       this.strategy.isMessageTargeted &&
       !this.strategy.isMessageTargeted(message)
     ) {
