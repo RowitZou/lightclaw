@@ -103,18 +103,17 @@ describe('Dispatch tool family', () => {
     assert.equal(parsed?.success, false)
   })
 
-  it('Dispatch is inline; its management tools stay deferred', () => {
-    // Dispatch is the orchestrator's core per-turn verb. Keeping it behind
-    // ToolSearch (shouldDefer) imposed a search → wait → call round-trip that
-    // suppressed delegation, so it is alwaysLoad. The post-hoc management tools
-    // are genuinely low-frequency and stay deferred. This pins both sides so a
-    // future tag churn can't silently re-defer Dispatch.
+  it('the delegation surface is inline end to end', () => {
+    // Dispatch is the core per-turn verb, and dogfood (2026-06-11) showed the
+    // rest of the loop — Message / UpdateSchedule / TaskUpdate / TaskInspect —
+    // paying the same search → wait → call round-trip on every settle. The
+    // whole six-verb surface is alwaysLoad now; this pins it so a future tag
+    // churn can't silently re-defer any of it.
     const { alwaysLoaded, deferred } = partitionTools(builtinTools)
     const inlineNames = new Set(alwaysLoaded.map(tool => tool.name))
     const deferredNames = new Set(deferred.map(tool => tool.name))
-    assert.equal(inlineNames.has('Dispatch'), true)
-    for (const name of ['Message', 'UpdateSchedule']) {
-      assert.equal(deferredNames.has(name), true)
+    for (const name of ['Dispatch', 'Message', 'UpdateSchedule', 'TaskCreate', 'TaskUpdate', 'TaskInspect']) {
+      assert.equal(inlineNames.has(name), true, `${name} should be inline`)
     }
     for (const removed of ['ListDispatches', 'CancelDispatch', 'UpdateDispatch']) {
       assert.equal(deferredNames.has(removed), false)

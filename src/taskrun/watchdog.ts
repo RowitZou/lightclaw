@@ -116,11 +116,13 @@ export async function reconcileTaskRunsOnce(
   // becomes a dead-wake-source finding for main.
   const failedWakeRunIds = await executeDueWakesBestEffort(ownerCanonicalUser, runs, now)
 
+  const { isResumePending } = await import('./resume-schedule.js')
   const findings = detectTaskRunFindings(runs, {
     now,
     deliveredGraceMs,
     waitingGraceMs,
     rootIdleGraceMs,
+    resumePendingRunIds: new Set(runs.filter(run => isResumePending(run.id)).map(run => run.id)),
     activeSessionIds: deps.activeSessionIds ?? new Set(),
     inFlightMainSessionIds: deps.inFlightMainSessionIds ?? new Set(),
     schedulerTaskRunIds: deps.schedulerTaskRunIds ?? new Set(),
@@ -271,6 +273,7 @@ export function detectTaskRunFindings(
     activeSessionIds: Set<string>
     inFlightMainSessionIds: Set<string>
     schedulerTaskRunIds: Set<string>
+    resumePendingRunIds?: Set<string>
     backgroundEntries: BackgroundTaskEntry[]
     eventsByRun: Map<string, TaskRunEvent[]>
     failedWakeRunIds?: Set<string>
@@ -298,7 +301,12 @@ export function detectTaskRunFindings(
         : false
       const hasScheduledBackgroundEntry = scheduledTaskRunIds.has(run.id)
       const hasSchedulerClaim = input.schedulerTaskRunIds.has(run.id)
-      if (!hasActiveSession && !hasScheduledBackgroundEntry && !hasSchedulerClaim) {
+      // A run whose next shift is already scheduled (reject-resume, message
+      // wake) is being worked, not stranded — the resume just hasn't opened
+      // its session yet. Dogfood 2026-06-11: a rejected run was reported
+      // stranded 49s after the reject.
+      const hasPendingResume = input.resumePendingRunIds?.has(run.id) ?? false
+      if (!hasActiveSession && !hasScheduledBackgroundEntry && !hasSchedulerClaim && !hasPendingResume) {
         findings.push(toFinding(run, runById, {
           kind: 'stranded',
           since: run.startedAt ?? run.createdAt,

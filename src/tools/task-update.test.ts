@@ -42,10 +42,10 @@ afterEach(() => {
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
-test('TaskUpdate is registered as a deferred safe host tool and visible to workers', () => {
+test('TaskUpdate is registered as an inline safe host tool and visible to workers', () => {
   const tool = getAllTools().find(item => item.name === 'TaskUpdate')
   assert.equal(tool, taskUpdateTool)
-  assert.equal(taskUpdateTool.shouldDefer, true)
+  assert.equal(taskUpdateTool.shouldDefer, false)
   assert.equal(taskUpdateTool.domain, 'host')
   assert.equal(taskUpdateTool.riskLevel, 'safe')
   // Acceptance settles edge-by-edge up the tree: workers need the tool for

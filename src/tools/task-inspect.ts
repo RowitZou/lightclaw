@@ -31,7 +31,9 @@ const TASK_INSPECT_DESCRIPTION = [
 export const taskInspectTool = buildTool({
   name: 'TaskInspect',
   whenToUse: `Inspect durable TaskRun progress, artifacts, lifecycle events, and direct child runs for delegated work.`,
-  shouldDefer: true,
+  // Inline: a core ledger verb of every delegation loop (D5 extended after
+  // dogfood showed repeated ToolSearch round-trips for it).
+  shouldDefer: false,
   description: TASK_INSPECT_DESCRIPTION,
   searchHint: 'taskrun task inspect progress artifact dispatch tree status 工单 进度 产出 查看',
   domain: 'host',

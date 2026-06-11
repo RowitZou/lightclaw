@@ -28,10 +28,10 @@ afterEach(() => {
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
-test('TaskInspect is registered as a deferred safe host read tool', () => {
+test('TaskInspect is registered as an inline safe host read tool', () => {
   const tool = getAllTools().find(item => item.name === 'TaskInspect')
   assert.equal(tool, taskInspectTool)
-  assert.equal(taskInspectTool.shouldDefer, true)
+  assert.equal(taskInspectTool.shouldDefer, false)
   assert.equal(taskInspectTool.domain, 'host')
   assert.equal(taskInspectTool.riskLevel, 'safe')
 })

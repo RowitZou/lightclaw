@@ -601,7 +601,7 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
 export const messageTool = buildTool({
   name: 'Message',
   whenToUse: `Send a message to a child TaskRun, or ask your requester a question with a default.`,
-  shouldDefer: true,
+  shouldDefer: false, // inline since dogfood: core delegation verb
   description: MESSAGE_DISPATCH_DESCRIPTION,
   searchHint: 'message dispatch interject ask answer resume waiting paused worker 插嘴 提问 回答 续班次',
   domain: 'host',
@@ -823,7 +823,7 @@ const REQUESTER_MESSAGE_GUIDANCE = 'Your requester sent this mid-task — it arr
 export const updateScheduleTool = buildTool({
   name: 'UpdateSchedule',
   whenToUse: `Adjust a dispatch that has not fired yet: prompt / schedule / label / enabled.`,
-  shouldDefer: true,
+  shouldDefer: false, // inline since dogfood: core delegation verb
   description: UPDATE_SCHEDULE_DESCRIPTION,
   searchHint: 'update dispatch edit schedule prompt pause resume 修改 后台 定时',
   domain: 'host',

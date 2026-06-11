@@ -152,7 +152,9 @@ async function cancelDispatchEntry(owner: string, entry: BackgroundTaskEntry): P
 export const taskUpdateTool = buildTool({
   name: 'TaskUpdate',
   whenToUse: `Move a TaskRun through its state machine — deliver your own run, or accept / reject a delivered child run.`,
-  shouldDefer: true,
+  // Inline: a core ledger verb of every delegation loop (D5 extended after
+  // dogfood showed repeated ToolSearch round-trips for it).
+  shouldDefer: false,
   description: TASK_UPDATE_DESCRIPTION,
   searchHint: 'taskrun state deliver accept reject settle close verdict 交付 验收 打回 关单 工单',
   domain: 'host',
