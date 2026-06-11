@@ -149,6 +149,7 @@ export async function resumeRunWithBlock(
     sessionId,
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
+    currentTaskRunId: run.id,
   })
   const childCtx = {
     ...currentCtx,

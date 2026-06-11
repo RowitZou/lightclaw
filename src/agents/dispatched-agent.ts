@@ -112,6 +112,7 @@ export async function runDispatchedAgent(
     sessionId: currentCtx?.sessionId,
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
+    currentTaskRunId: params.currentTaskRunId,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)
   const forkId = randomUUID().slice(0, 8)

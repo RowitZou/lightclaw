@@ -59,6 +59,8 @@ export type SubagentPromptContext = {
   sessionId?: string
   environmentRoot: string
   scratchRoot: string
+  /** Tracked task run this worker prompt is for — gates `## Your Task Run`. */
+  currentTaskRunId?: string
 }
 
 /**
@@ -191,7 +193,7 @@ function formatTodoSection(todos: TodoItem[]): string {
     '## Current Todo List',
     formatTodosForPrompt(todos),
     '',
-    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress. While items remain pending or in_progress, the work isn't finished — keep going rather than ending the turn, unless you're blocked or the user only asked for progress.",
+    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress. While items remain pending or in_progress, the work isn't finished — keep going rather than ending the turn, unless you're blocked, the user only asked for progress, or the in_progress item is blocked on something that will report back on its own — then stop the turn instead of holding it open to watch.",
     '</system-reminder>',
   ].join('\n')
 }
@@ -396,6 +398,9 @@ type RolePromptPartsInput = {
   environmentRoot: string
   scratchRoot: string
   sessionId?: string
+  /** Set when this prompt is for a worker executing a tracked task run —
+   *  gates the `## Your Task Run` section (N1). */
+  currentTaskRunId?: string
 }
 
 type RolePromptParts = {
@@ -433,6 +438,17 @@ async function buildRolePromptParts(
     ),
   )
 
+  // Concept-defining sections render directly after Environment, before any
+  // section that uses ledger nouns (skill bodies, Reachable Workers,
+  // Dispatch Mode): S4 for the orchestrator, N1 for a worker on a tracked run.
+  if (policy.kind === 'orchestrator' && hasTool(policy.tools, 'TaskInspect')) {
+    preTodoSections.push(formatTaskLedgerSection())
+  }
+  if (policy.kind === 'worker' && input.currentTaskRunId) {
+    const taskRunSection = formatYourTaskRunSection(policy.tools)
+    if (taskRunSection) preTodoSections.push(taskRunSection)
+  }
+
   if (projectMemory.trim().length > 0) {
     preTodoSections.push(['## Project Memory', projectMemory].join('\n\n'))
   }
@@ -467,9 +483,12 @@ async function buildRolePromptParts(
   const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools)
   if (reachableRolesSection) {
     preTodoSections.push(reachableRolesSection)
-    if (policy.kind === 'orchestrator') {
-      preTodoSections.push(formatDispatchModeSection())
-    }
+    // S3: each kind gets its own world-facts — no reader self-identification.
+    preTodoSections.push(
+      policy.kind === 'orchestrator'
+        ? formatDispatchModeSectionOrch()
+        : formatDispatchModeSectionWorker(),
+    )
   }
 
   const dataFlags = new Set<FragmentDataFlag>()
@@ -601,10 +620,70 @@ function formatAskUserQuestionNudge(): string {
   ].join('\n')
 }
 
-function formatDispatchModeSection(): string {
+function formatDispatchModeSectionOrch(): string {
   return [
-    '## Dispatch',
-    'Dispatch is background-only. The call returns immediately; the result reaches you later as a <background-task-result>. When you need it before continuing and your own work is tracked as a task run, wait on the child (TaskUpdate wait, child-join wake) — you pick back up when it delivers. Otherwise finish your turn; the result returns to you on its own. For fire-and-follow-later work, keep going and fold each result in as it arrives.',
+    '## Dispatch Mode',
+    'Dispatching is how you act: every dispatch runs in the background — the call returns immediately, the worker works on its own clock, and the result reaches you later as a <background-task-result>. Reach for it early and often; work you keep holding is work nothing is happening to.',
+    '- Independent pieces? Send them as separate dispatches in one message; results arrive as each finishes.',
+    '- More to do after dispatching — another request, another stage, a question you can answer yourself? Keep working; arriving results do not need you idle.',
+    '- Nothing actionable until a result lands? Tell the user where things stand and end your turn — the result comes back to you and the work continues from there. Do not poll, and do not hold the turn open to wait.',
+    '- Scheduled and recurring work uses the same tool with a schedule; each fire returns the same way.',
+  ].join('\n')
+}
+
+function formatDispatchModeSectionWorker(): string {
+  return [
+    '## Dispatch Mode',
+    'Specialist work belongs to specialists: handing a piece to the right worker gets a better result than grinding through it yourself, and keeps your own context on the main thread of your task. Every dispatch runs in the background — the call returns immediately, and the result reaches you later as a <background-task-result>.',
+    '- Independent pieces? Send them as separate dispatches in one message; results arrive as each finishes.',
+    '- More of your own work to do meanwhile? Keep at it and fold each result in as it arrives.',
+    '- Need a child\'s result to go further? Wait on it (TaskUpdate wait, wake on child-join) — you pick back up with the result in hand. Waiting on several: wait on the one you need first, settle everything that has landed when you return, and wait again if more are still out.',
+    '- Scheduled and recurring work uses the same tool with a schedule; each fire returns the same way.',
+  ].join('\n')
+}
+
+// S4 — the orchestrator's ledger panel. Renders right after Environment so
+// every later section (skill bodies, Dispatch Mode) can use these nouns.
+function formatTaskLedgerSection(): string {
+  return [
+    '## Task Ledger',
+    'Every piece of work you delegate is tracked as a task run — a durable record that never forgets and outlives this conversation; trust it over your own recollection. Runs form a tree per goal: TaskCreate opens the goal\'s root, and every dispatch for that goal attaches under it (pass the root\'s runId as `task`). A run\'s status says exactly what it needs from you: "running" needs nothing yet; "delivered" is finished work parked for YOUR verdict; "waiting" is parked until something it declared arrives; "queued" has not started. Every run under a root that is not yet closed is an open obligation of that root. Several goals can be open at once, each under its own root — work for an existing goal belongs under that goal\'s root, and only a genuinely new goal gets a new one.',
+    '- Settle delivered runs: TaskUpdate accept closes one; TaskUpdate reject (with feedback) sends the same worker back to it, everything it learned intact.',
+    '- TaskUpdate cancel closes queued, waiting, or running work you no longer want. A recurring service is a tree of its own; cancelling its root retires the whole service, schedule included.',
+    '- TaskUpdate wait with a running run\'s runId holds it: it stops where it is and waits, context intact.',
+    '- Message a running run to redirect or add context mid-flight — nothing comes back through the call; its result reaches you the usual way. Messaging a waiting run puts it back to work with your message in hand. A message changes what the work should do; it never checks on it — status is TaskInspect\'s job, and a check-in message only interrupts.',
+    '- TaskUpdate deliver on a root closes the goal — refused with the list of its open obligations while any remain.',
+    '- TaskInspect reads any run, tree, or schedule, with live progress; the user already sees progress without your help.',
+    '- Replies you handle without dispatching need no root.',
+  ].join('\n')
+}
+
+// N1 — the worker half of the ledger panel. Line-by-line tool gating: a role
+// never reads a verb it cannot use. Renders only on a tracked task run.
+function formatYourTaskRunSection(tools: readonly string[]): string | null {
+  const has = (name: string) => tools.includes('*') || tools.includes(name)
+  const lines: string[] = []
+  if (has('TaskUpdate')) {
+    lines.push('- TaskUpdate deliver hands your result (ok + summary) to your requester — the last thing you do here. If it comes back, it comes back with feedback: address what it names and deliver again.')
+    lines.push('- TaskUpdate wait stops your work here until what you name — a child run delivering, or a timer — brings it back to you. Leave a checkpoint: it is the first thing your continuation sees, so write what it needs to carry on.')
+  }
+  if (has('Message')) {
+    lines.push('- Message with no `to` puts a question to your requester: the tool returns the answer, or the default you stated if none arrives in time — so state a default you can act on.')
+  }
+  if (has('Message') && has('Dispatch')) {
+    lines.push('- Message with a `to` sends a message to a child run you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A message changes what the work should do; it never checks on it — status is TaskInspect\'s job, and a check-in message only interrupts.')
+  }
+  if (has('TaskUpdate') && has('Dispatch')) {
+    lines.push('- A running child can also be held — TaskUpdate wait with its runId stops it where it stands, context intact; a message puts it back to work.')
+  }
+  if (has('Dispatch')) {
+    lines.push('- Children you dispatch are obligations on your run, and their verdicts are yours: a delivered child waits for YOUR accept or reject. Accept closes it; reject with concrete feedback sends the same child back to the work, everything it learned intact — prefer that over dispatching afresh. Your own deliver is refused while any child sits unsettled.')
+  }
+  if (lines.length === 0) return null
+  return [
+    '## Your Task Run',
+    'This task is tracked as a task run — a durable record that outlives any one sitting. If the work comes back to you — with feedback on what you handed over, or with what you were waiting on — you continue the same run, everything you learned intact.',
+    ...lines,
   ].join('\n')
 }
 
@@ -683,16 +762,36 @@ const NOT_INTERNAL: FragmentCondition = { not: { kind: 'internal' } }
 // passing bullets are emitted. `id` is the unit `Role.sections` can override.
 const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
   {
+    id: 'disc.drive-orch',
+    when: { kind: 'orchestrator' },
+    header: 'Drive to delivery:',
+    bullets: [
+      { text: '- You are built for long-horizon goals: keep driving across turns, results, and interruptions until everything the user asked for is delivered. Driving means dispatching, judging results, and re-routing — not doing the steps yourself.' },
+      { text: '- Several goals are often open at once, each on its own clock, and your drive covers all of them: the newest message is where your attention goes, not where your obligations shrink to. A quiet goal — nothing delivered, nothing in flight, nothing scheduled to fire — is stalled on you: push it, or close it.' },
+      { text: '- A goal is finished when its outcome reached the user and its task root closed with a settled ledger — not when the last worker said "done".' },
+      { text: '- A turn ends when nothing is actionable until a result lands — not the moment you dispatch. Sweep first (unsettled results, unblocked stages, undispatched requests, anything the user should hear), tell the user where things stand, then end. Results, worker questions, and reminders about stalled work all reach you on their own and continue the work; nothing you delegated can be silently lost. Never poll.' },
+      { text: '- When a result falls short, reject with concrete feedback (the worker resumes with full context) or re-route to a different specialty. Escalate to the user only for decisions that are genuinely theirs.' },
+      { text: '- Never tell the user a goal is wrapped up while its ledger is still open.' },
+    ],
+  },
+  {
     id: 'disc.drive',
-    when: NOT_INTERNAL,
+    when: { kind: 'worker' },
     header: 'Drive to completion:',
     bullets: [
       { text: '- You are built for long-running work: keep going across many steps and turns until the request is actually fulfilled. The default is to continue, not to check in.' },
-      { text: '- Keep going until one of these is true, then stop and return to the requester:\n  - the work is genuinely done and verified;\n  - the requester tells you to stop, cancels, or redirects;\n  - a boundary or stop condition the requester set has been reached ("do X until Y", "stop once Z happens");\n  - a real ambiguity or missing fact would change the result, or you need input only the requester can give;\n  - the next move is a safety or genuinely irreversible decision that needs a human call;\n  - you are truly blocked with no path forward, and a focused retry hasn\'t opened one.' },
+      { text: '- Keep going until one of these is true, then stop and return to the requester:\n  - the work is genuinely done and verified;\n  - the requester tells you to stop, cancels, or redirects;\n  - a boundary or stop condition the requester set has been reached ("do X until Y", "stop once Z happens");\n  - a real ambiguity or missing fact would change the result, or you need input only the requester can give (ask upward first — see below);\n  - the next move is a safety or genuinely irreversible decision that needs a human call;\n  - you are truly blocked with no path forward, and a focused retry hasn\'t opened one.' },
       { text: '- Short of one of those, don\'t pause to ask "should I continue?", don\'t hand back a plan for approval, and don\'t stop at a partial result you could finish.' },
       { text: '- Before reporting something done, verify it against the request: check the result against what was asked and inspect what you produced. If you can\'t verify, say so plainly rather than implying success.' },
       { text: '- If an approach fails, diagnose the cause and try a focused fix before switching tactics or escalating. A weak or empty result means vary the query / path / source, not conclude. Don\'t abandon a viable approach after one failure.' },
       { text: '- Never call incomplete, unverified, or broken work done. If it\'s partial, keep going when the next step is clear. When you report it done, give the requester the full picture — what was delivered, where it lives, and how you verified it — not a bare "done". When you must stop without finishing, report what you completed, what\'s still left, and the specific blocker: where it is and the exact missing input, so the requester can act without re-discovering it.' },
+      { when: { tool: 'Sleep' }, text: '- A short, bounded wait — a build settling, a process flushing, five minutes or less — is a single Sleep, never a check loop. Polling changes nothing and costs effort; what you are waiting for does not arrive faster for being watched.' },
+      { when: { tool: 'TaskUpdate' }, text: '- Waiting is not quitting. When your next step depends on something that takes longer — declare the wait (TaskUpdate wait, with a wake): the task comes back to you with what you waited for in hand. Declaring a wait IS driving to completion; watching for it is not.' },
+      { when: { tool: 'Dispatch' }, text: '- Work you dispatched reports back on its own — never poll it. When you need a child\'s result to continue, wait on it (wake on child-join); when results can arrive whenever they arrive, just keep working and handle each as it comes.' },
+      { when: { tool: 'Message' }, text: '- When you hit input only your requester can give, don\'t stop and hand back a partial result: ask upward with your options and a default, and carry on with the answer. Stopping with questions is the last resort for work that cannot even pick a default.' },
+      { when: { tool: 'TaskUpdate' }, text: '- A good checkpoint names artifacts and verifiable facts ("wrote /path/x, tests pass except y; next: wire z"), not narrative ("made good progress"). It is read by whoever continues the work — possibly you, after a long gap — to decide what to verify before trusting it.' },
+      { text: '- Being resumed with feedback is a second shift on the same job, not a verdict on you and not a fresh start: address exactly what the feedback names, keep what it doesn\'t, and deliver again.' },
+      { when: { tool: 'TaskUpdate' }, text: '- Write your delivery summary for the reviewer who decides accept-or-reject without reading your transcript: what was done, where it lives, how you verified it — and what you\'d flag if you were the one judging.' },
     ],
   },
   {
@@ -780,8 +879,9 @@ const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
     id: 'cap.lean',
     header: 'Capabilities to lean on (when present):',
     bullets: [
-      { when: { allOf: [{ kind: 'orchestrator' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, route a sub-task to the worker whose specialty fits rather than handling it inline — your value is integrating their focused results, not doing every step yourself.' },
-      { when: { allOf: [{ kind: 'worker' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, you still do the work yourself by default — offload a sub-task to a worker only when it is heavy or clearly another specialty\'s, to keep your own context focused. Delegation is opt-in, not the default.' },
+      { when: { allOf: [{ kind: 'orchestrator' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, every piece of execution goes to the worker whose specialty fits — you have no execution tools, so "I\'ll just do this bit myself" is never on the table. Your value is the routing decision and the integration of focused results.' },
+      { when: { allOf: [{ kind: 'worker' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, the work is still yours by default — you own it end to end. But when a piece is genuinely heavy or clearly another specialty\'s, hand that piece off rather than grinding through it inline: it keeps your own context on the main thread of your task. What comes back is an input you verify and integrate — handing off a piece never hands off the responsibility, and farming out the whole task is not delegation, it is abdication.' },
+      { when: { allOf: [{ kind: 'orchestrator' }, { tool: 'AskUserQuestion' }] }, text: '- Two asking channels, two audiences: AskUserQuestion is for the user\'s own decisions; a worker\'s question for YOU arrives like any other report — answer it by messaging that run, don\'t forward it to the user unless the decision is genuinely the user\'s.' },
       { when: { allOf: [{ kind: 'orchestrator' }, { skill: 'build-environment' }] }, text: '- When you delegate building or repairing an environment, pin the exact packages and versions in the dispatch — a worker handed a precise spec builds straight through, one handed "set up the env" comes back to confirm. Settle the install decisions yourself (one card), then hand off.' },
       { when: { dataPresent: 'skills' }, text: '- When ## Available Skills is rendered above, prefer a skill that matches the current work over scripting the same flow from scratch — skills tend to align with project convention and save trial-and-error.' },
       { when: { tool: 'TodoWrite' }, text: '- When TodoWrite is in your tool catalog and a task needs three or more sequential steps, open with a TodoWrite to lay them out, and keep at most one item in_progress throughout. Skip TodoWrite for single-step tasks.' },
@@ -967,6 +1067,7 @@ async function buildSubagentPromptContent(
     sessionId: context.sessionId,
     environmentRoot: context.environmentRoot,
     scratchRoot: context.scratchRoot,
+    currentTaskRunId: context.currentTaskRunId,
   })
   const template: SystemPromptTemplate = {
     preTodos: prompt.preTodoSections.join('\n\n'),
