@@ -6,7 +6,7 @@ const MAX_DURATION_SECONDS = 600
 
 export const sleepTool = buildTool({
   name: 'Sleep',
-  whenToUse: `Brief in-turn pause (waiting for retry, letting a background process settle). Prefer over Bash sleep.`,
+  whenToUse: `Brief in-turn pause (waiting for retry, letting a background process settle).`,
   shouldDefer: true,
   description: `Wait for a specified duration. /stop interrupts it instantly.
 

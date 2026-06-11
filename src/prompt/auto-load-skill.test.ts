@@ -67,7 +67,7 @@ function baseCtx() {
 
 // A line that only exists in the delivery-orchestration skill BODY (not in any
 // persona / fragment), so its presence proves the body was injected.
-const BODY_MARKER = 'standing operating procedure as the orchestrator'
+const BODY_MARKER = 'standing operating procedure as the manager'
 
 test('auto-loaded workflow skill body is injected into main, not listed in Available Skills', async () => {
   const ctx = baseCtx()
@@ -130,7 +130,7 @@ test('brainpp driver adds cluster batch-job guidance to main channel context onl
     })
     assert.doesNotMatch(
       renderSystemPrompt(withoutBrainpp, [], { tools: mainTools }),
-      /For cluster batch-job work, keep the user-facing decisions on yourself/,
+      /For cluster batch-job work, the user-facing decisions stay with you/,
     )
 
     const withBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
@@ -138,7 +138,7 @@ test('brainpp driver adds cluster batch-job guidance to main channel context onl
     })
     assert.match(
       renderSystemPrompt(withBrainpp, [], { tools: mainTools }),
-      /For cluster batch-job work, keep the user-facing decisions on yourself/,
+      /For cluster batch-job work, the user-facing decisions stay with you/,
     )
   })
 })

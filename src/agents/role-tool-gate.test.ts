@@ -288,7 +288,9 @@ test('BrainppCluster is visible only to cluster-capable roles', () => {
   const archivist = role({ agentType: 'archivist', kind: 'worker', tools: ['*'] })
   const reviewer = role({ agentType: 'reviewer', kind: 'worker', tools: ['Bash'] })
 
-  assert.equal(isToolVisibleToRole(main, 'BrainppCluster'), true)
+  // PR19: the cluster tool carries submit/stop/delete — execution face,
+  // withheld from the read-only manager.
+  assert.equal(isToolVisibleToRole(main, 'BrainppCluster'), false)
   assert.equal(isToolVisibleToRole(generalist, 'BrainppCluster'), true)
   assert.equal(isToolVisibleToRole(coder, 'BrainppCluster'), true)
   assert.equal(isToolVisibleToRole(archivist, 'BrainppCluster'), false)

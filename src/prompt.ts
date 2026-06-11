@@ -183,7 +183,7 @@ function formatTodoSection(todos: TodoItem[]): string {
       '## Current Todo List',
       '(no todos yet)',
       '',
-      "This is the framework's snapshot of your todo state, not a fresh user instruction. When a task needs three or more sequential steps, open with a TodoWrite. At most one item in_progress.",
+      "This is a snapshot of your todo state, not a fresh user instruction. When a task needs three or more sequential steps, open with a TodoWrite. At most one item in_progress.",
       '</system-reminder>',
     ].join('\n')
   }
@@ -193,7 +193,7 @@ function formatTodoSection(todos: TodoItem[]): string {
     '## Current Todo List',
     formatTodosForPrompt(todos),
     '',
-    "This is the framework's snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress. While items remain pending or in_progress, the work isn't finished — keep going rather than ending the turn, unless you're blocked, the user only asked for progress, or the in_progress item is blocked on something that will report back on its own — then stop the turn instead of holding it open to watch.",
+    "This is a snapshot of your todo state, not a fresh user instruction. Keep advancing the in_progress item; update via TodoWrite as items change status. At most one item in_progress. While items remain pending or in_progress, the work isn't finished — keep going rather than ending the turn, unless you're blocked, the user only asked for progress, or the in_progress item is blocked on something that will report back on its own — then stop the turn instead of holding it open to watch.",
     '</system-reminder>',
   ].join('\n')
 }
@@ -607,7 +607,7 @@ function formatChannelContextSection(runtimeDriver: RuntimeDriver): string {
   if (runtimeDriver === 'brainpp') {
     lines.push(
       '',
-      "For cluster batch-job work, keep the user-facing decisions on yourself — you're the one who can ask — and don't block on the long wait: once a job is running, track it with a background watcher rather than a poll loop, so you stay responsive. A quick check (capacity / status / a log tail) just run inline; you can hand a fully-specified job (decisions already settled) to a worker to keep your context clean, but the decisions stay with you.",
+      "For cluster batch-job work, the user-facing decisions stay with you — gather the unpinned ones (image, paths, resources) into one card, then hand a fully-specified job to a worker that runs the cluster. Status questions about a job you delegated are the worker's to answer along the way; TaskInspect shows where the delegated work stands without asking anyone.",
     )
   }
   return lines.join('\n')
@@ -840,7 +840,7 @@ const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
     when: { allOf: [NOT_INTERNAL, { tool: 'MemoryRead' }] },
     header: 'Working with memory:',
     bullets: [
-      { text: '- Treat any memory the framework injects as a hint to verify, not an authoritative fact. The environment may have changed since it was saved — files move, conventions drift, preferences shift. Memory shortens the lookup; it doesn\'t skip verification.' },
+      { text: '- Treat any memory injected into your context as a hint to verify, not an authoritative fact. The environment may have changed since it was saved — files move, conventions drift, preferences shift. Memory shortens the lookup; it doesn\'t skip verification.' },
     ],
   },
   {
@@ -882,7 +882,7 @@ const DISCIPLINE_BLOCKS: DisciplineBlock[] = [
       { when: { allOf: [{ kind: 'orchestrator' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, every piece of execution goes to the worker whose specialty fits — you have no execution tools, so "I\'ll just do this bit myself" is never on the table. Your value is the routing decision and the integration of focused results.' },
       { when: { allOf: [{ kind: 'worker' }, { dataPresent: 'reachableWorkers' }] }, text: '- When ## Reachable Workers is rendered above, the work is still yours by default — you own it end to end. But when a piece is genuinely heavy or clearly another specialty\'s, hand that piece off rather than grinding through it inline: it keeps your own context on the main thread of your task. What comes back is an input you verify and integrate — handing off a piece never hands off the responsibility, and farming out the whole task is not delegation, it is abdication.' },
       { when: { allOf: [{ kind: 'orchestrator' }, { tool: 'AskUserQuestion' }] }, text: '- Two asking channels, two audiences: AskUserQuestion is for the user\'s own decisions; a worker\'s question for YOU arrives like any other report — answer it by messaging that run, don\'t forward it to the user unless the decision is genuinely the user\'s.' },
-      { when: { dataPresent: 'skills' }, text: '- When ## Available Skills is rendered above, prefer a skill that matches the current work over scripting the same flow from scratch — skills tend to align with project convention and save trial-and-error.' },
+      { when: { dataPresent: 'skills' }, text: '- When ## Available Skills is rendered above, prefer a skill that matches the current work over rebuilding the same flow from scratch — skills tend to align with project convention and save trial-and-error.' },
       { when: { tool: 'TodoWrite' }, text: '- When TodoWrite is in your tool catalog and a task needs three or more sequential steps, open with a TodoWrite to lay them out, and keep at most one item in_progress throughout. Skip TodoWrite for single-step tasks.' },
     ],
   },

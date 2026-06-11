@@ -34,7 +34,9 @@ const FEISHU_RESERVED_TOOLS = new Set([
   'FeishuDelete',
 ])
 
-const BRAINPP_CLUSTER_TOOL_ROLES = new Set(['main', 'generalist', 'coder'])
+// PR19: main is a read-only manager — the cluster tool carries submit /
+// stop / delete, so it stays with the executing roles only.
+const BRAINPP_CLUSTER_TOOL_ROLES = new Set(['generalist', 'coder'])
 
 const RETIRED_TOOLS = new Set([
   'ListDispatches',
