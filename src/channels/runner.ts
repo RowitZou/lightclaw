@@ -398,10 +398,18 @@ export class ChannelRunner {
         chainId: targetSessionId,
       })).some(value => typeof value === 'number' ? value > 0 : Boolean(value))
       const aborted = busAborted || ledgerStop.abortedSessionIds.length > 0 || ledgerStop.waitingRunIds.length > 0
+      const hasLedgerTally = ledgerStop.abortedSessionIds.length > 0 || ledgerStop.waitingRunIds.length > 0
       await this.sendNotice(
         message,
         'info',
-        aborted ? t('stop.aborted') : t('stop.nothing'),
+        aborted
+          ? (hasLedgerTally
+              ? t('stop.abortedWithLedger', {
+                  inFlight: String(ledgerStop.abortedSessionIds.length),
+                  waiting: String(ledgerStop.waitingRunIds.length),
+                })
+              : t('stop.aborted'))
+          : t('stop.nothing'),
         'plain_text',
       )
       return

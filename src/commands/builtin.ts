@@ -147,8 +147,16 @@ function buildBuiltinCommands(): ReplCommand[] {
       const aborted = abortInFlightForSession(ctx.sessionId) ||
         ledgerStop.waitingRunIds.length > 0 ||
         ledgerStop.abortedSessionIds.length > 0
+      const hasLedgerTally = ledgerStop.abortedSessionIds.length > 0 || ledgerStop.waitingRunIds.length > 0
       ctx.output.write(
-        `${aborted ? t('stop.aborted') : t('stop.nothing')}\n`,
+        `${aborted
+          ? (hasLedgerTally
+              ? t('stop.abortedWithLedger', {
+                  inFlight: String(ledgerStop.abortedSessionIds.length),
+                  waiting: String(ledgerStop.waitingRunIds.length),
+                })
+              : t('stop.aborted'))
+          : t('stop.nothing')}\n`,
       )
     },
   },

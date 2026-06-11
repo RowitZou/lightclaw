@@ -207,7 +207,12 @@ export const LOCALES = {
     // ---- /stop ----
     'stop.requireIdentity': '/stop 需要一个有效的身份。',
     'stop.aborted': '已中断。（进行中的 tool 调用已取消；已写入的文件不会回滚）',
+    'stop.abortedWithLedger': '已中断：停下 {inFlight} 项正在进行的工作，{waiting} 项任务已暂停待发落——你的下一条消息会决定它们继续还是取消。（已写入的文件不会回滚）',
     'stop.nothing': '当前没有进行中的请求。',
+
+    // ---- taskrun watchdog escalation DM ----
+    'watchdog.escalation.stalled': '任务看门狗：有 {count} 项委派工作经多次提醒仍未推进（指纹 {fingerprint}）。详情已记录在任务记录里；你可以直接给助手发消息让它处理，若此通知持续出现，请检查服务状态。',
+    'watchdog.escalation.deliveryFailed': '任务看门狗：有 {count} 项委派工作卡住，且无法唤醒助手处理（指纹 {fingerprint}）。详情已记录在任务记录里，助手恢复后会自动接手；若此通知持续出现，请检查服务状态。',
 
     // ---- /feedback ----
     'feedback.usage': '用法：/feedback <text>',
@@ -793,7 +798,12 @@ export const LOCALES = {
     // ---- /stop ----
     'stop.requireIdentity': '/stop requires an active identity.',
     'stop.aborted': 'Stopped. (in-flight tool calls cancelled; written files are not rolled back)',
+    'stop.abortedWithLedger': 'Stopped: {inFlight} piece(s) of work halted, {waiting} task(s) paused awaiting your call — your next message decides whether they continue or get cancelled. (written files are not rolled back)',
     'stop.nothing': 'Nothing in flight.',
+
+    // ---- taskrun watchdog escalation DM ----
+    'watchdog.escalation.stalled': 'Task watchdog: {count} piece(s) of delegated work have not moved despite repeated reminders (fingerprint {fingerprint}). Details are on the task record; you can message the assistant directly to deal with them. If this notice keeps appearing, check the service.',
+    'watchdog.escalation.deliveryFailed': 'Task watchdog: {count} piece(s) of delegated work are stuck and the assistant cannot be woken to handle them (fingerprint {fingerprint}). Details are on the task record; the assistant will pick them up automatically once it recovers. If this notice keeps appearing, check the service.',
 
     // ---- /feedback ----
     'feedback.usage': 'Usage: /feedback <text>',

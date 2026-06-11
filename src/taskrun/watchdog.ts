@@ -10,6 +10,7 @@ import { loadBackgroundTasks } from '../background-task/store.js'
 import type { BackgroundTaskEntry } from '../background-task/types.js'
 import { getBackgroundTaskScheduler } from '../background-task/scheduler.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { t } from '../i18n/index.js'
 import {
   appendEvent,
   getTaskRunEvents,
@@ -678,9 +679,13 @@ function formatTaskRunEscalationNotice(
   detail?: string,
 ): string {
   const lines = [
-    'TaskRun watchdog escalation',
-    `reason: ${reason}`,
-    `fingerprint: ${fingerprint}`,
+    t(
+      reason === 'delivery-failed'
+        ? 'watchdog.escalation.deliveryFailed'
+        : 'watchdog.escalation.stalled',
+      { count: String(findings.length), fingerprint },
+    ),
+    '',
   ]
   if (detail) lines.push(`detail: ${detail}`)
   for (const finding of findings) {
