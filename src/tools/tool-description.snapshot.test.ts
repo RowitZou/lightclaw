@@ -37,7 +37,7 @@ const EXPECTED = {
   // Collab phase3 PR16 (2026-06-10): Dispatch is background-only; blocking
   // mode is retired in favor of background Dispatch plus TaskUpdate pause
   // child-join when the caller needs to resume on the result.
-  Dispatch: '1f5137bf1672c603bd99dad78adf72045a801efbbf8997428b7bd105692d3a49',
+  Dispatch: 'cac7c18f30bb1fd7b9d4fce441181ce5304b23118b3ddb6fa3397207fbd7346b',
   // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
   Message: '4ff319d858a7d0fa1a1f97982d0c6b9b3636fe27709f1ff78f8f3ff67cdd557b',

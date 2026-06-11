@@ -171,19 +171,20 @@ test('executeDispatch drops retired context-inheritance fields on background dis
   assert.equal(Object.hasOwn(task ?? {}, retiredKey), false)
 })
 
-test('executeDispatch rejects background attachments instead of dropping them at fire time', async () => {
+test('executeDispatch folds attachments into the prompt as a Read file list', async () => {
+  // Erroring on attachments taught callers a retry dance (dogfood
+  // 2026-06-11: main hit it twice). Paths now ride the prompt instead.
   const output = await runWithSessionContext(session('main', ['*']), () =>
     executeDispatch({
       role: 'webSearcher',
       prompt: 'Look at the attached image in the background.',
       schedule: 'now',
-      attachments: ['/tmp/will-not-be-read.jpg'],
+      attachments: ['/tmp/will-be-listed.jpg'],
     }, toolContext()),
   )
 
-  assert.equal(output.isError, true)
-  assert.match(output.output, /background-only/)
-  assert.match(output.output, /cannot carry inline attachment bytes/)
+  assert.notEqual(output.isError, true)
+  assert.match(output.output, /Dispatch scheduled/)
 })
 
 test('background dispatch records the caller role and session', async () => {

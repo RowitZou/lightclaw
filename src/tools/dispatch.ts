@@ -83,7 +83,7 @@ The dispatched role starts with a fresh context. It has NOT seen this conversati
 - If you need a short response, say so ("report in under 200 words").
 - Lookups: hand over the exact pattern / path. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
 - NEVER write "based on your findings, fix the bug" or "based on the research, implement it". That pushes synthesis onto the dispatched role instead of you. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
-- When the work hinges on bytes already in your context (an image the user just sent, a downloaded PDF), pass the workspace path via the \`attachments\` field instead of describing the file in prose — the worker then sees the bytes inline and does not have to Read them again.
+- When the work hinges on a file (an image the user just sent, a downloaded PDF), pass its workspace path via the \`attachments\` field — it is folded into the prompt as a file list the worker opens with Read.
 
 For schedule≠'now' (background) dispatches, additional rules:
 - The prompt is fed to a fresh agent at FIRE TIME, with no chat history. Write it as an imperative to be executed AT the scheduled fire moment.
@@ -94,7 +94,7 @@ For schedule≠'now' (background) dispatches, additional rules:
 
 ## attachments
 
-Background dispatches do not carry inline attachment bytes. Put workspace paths in the prompt and ask the worker to Read them at fire time.
+\`attachments\` takes workspace paths, not bytes: they are appended to the prompt as a file list, and the worker opens them with Read at fire time.
 
 ## Disambiguating user-intended time
 
@@ -456,17 +456,18 @@ export async function executeDispatch(
     throw error
   }
 
-  if (input.attachments && input.attachments.length > 0) {
-    return {
-      output: [
-        'Dispatch is background-only and cannot carry inline attachment bytes.',
-        'Include the workspace paths in the prompt and let the worker open them with Read at fire time.',
-      ].join('\n'),
-      isError: true,
-    }
-  }
-
-  const finalDispatchPrompt = input.prompt
+  // Dispatch carries no inline bytes (background-only); attachments are
+  // workspace paths, folded into the prompt so the worker Reads them at fire
+  // time. Erroring here just taught callers a retry dance (dogfood: main hit
+  // it twice, re-dispatching with paths hand-written into the prompt).
+  const finalDispatchPrompt = input.attachments && input.attachments.length > 0
+    ? [
+        input.prompt,
+        '',
+        'Attached workspace files (open with Read):',
+        ...input.attachments.map(path => `- ${path}`),
+      ].join('\n')
+    : input.prompt
 
   await getSignalRouter().publish({
     kind: 'dispatch',
