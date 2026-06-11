@@ -1,0 +1,200 @@
+import { strict as assert } from 'node:assert'
+import { test } from 'node:test'
+
+import { setLang } from '../../i18n/index.js'
+import {
+  buildTaskCard,
+  TASK_CARD_MAX_CHILDREN,
+  TASK_CARD_MAX_CHILD_TIMELINE,
+  TASK_CARD_MAX_ROOT_TIMELINE,
+  TASK_CARD_MAX_TOTAL_TIMELINE,
+  type TaskCardChildView,
+  type TaskCardView,
+} from './task-card.js'
+
+const TS = new Date('2026-06-12T23:19:00').getTime()
+
+function baseView(overrides: Partial<TaskCardView> = {}): TaskCardView {
+  return {
+    root: {
+      id: 'run-abcdef123456',
+      title: 'alphaxiv 今日论文阅读',
+      objective: '检索 alphaxiv 今日 Top-2 论文，下载 PDF 并写飞书阅读笔记',
+      status: 'running',
+      updatedAt: TS,
+    },
+    children: [
+      {
+        id: 'run-child-1',
+        title: '创建论文阅读目录',
+        role: 'feishuSecretary',
+        status: 'done',
+        timeline: [{ at: TS, text: '目录已创建' }],
+      },
+      {
+        id: 'run-child-2',
+        title: '检索下载 Top-2 论文',
+        role: 'webSearcher',
+        status: 'running',
+        latestProgress: '正在下载第二篇 PDF',
+        timeline: [
+          { at: TS, text: '已确定 Top-2 候选' },
+          { at: TS + 60_000, text: '[webSearcher→localExplorer] 校验下载目录' },
+        ],
+      },
+    ],
+    rootTimeline: [
+      { at: TS, text: '目录已创建，但我要求补齐链接和 token' },
+      { at: TS + 120_000, text: '目录信息已补齐，已接收该步骤' },
+    ],
+    ...overrides,
+  }
+}
+
+function collectPanels(card: Record<string, unknown>): Record<string, unknown>[] {
+  const body = card.body as { elements: Record<string, unknown>[] }
+  return body.elements.filter(el => el.tag === 'collapsible_panel')
+}
+
+function panelText(panel: Record<string, unknown>): string {
+  const elements = panel.elements as Array<{ content: string }>
+  return elements.map(el => el.content).join('\n')
+}
+
+function panelTitle(panel: Record<string, unknown>): string {
+  const header = panel.header as { title: { content: string } }
+  return header.title.content
+}
+
+void test('buildTaskCard renders 2.0 schema with root panel and per-child sibling panels', () => {
+  setLang('cn')
+  const card = buildTaskCard(baseView())
+  assert.equal(card.schema, '2.0')
+  const header = card.header as { template: string; title: { content: string } }
+  assert.equal(header.template, 'blue')
+  assert.ok(header.title.content.includes('alphaxiv'))
+
+  const panels = collectPanels(card)
+  // 2 child panels + 1 root panel; panels are siblings, never nested.
+  assert.equal(panels.length, 3)
+  for (const panel of panels) {
+    assert.equal(panel.expanded, false)
+    const inner = panel.elements as Array<{ tag: string }>
+    assert.ok(inner.every(el => el.tag !== 'collapsible_panel'))
+  }
+  const rootPanel = panels[panels.length - 1]
+  assert.ok(panelTitle(rootPanel).includes('任务进程（2 条）'))
+  assert.ok(panelText(rootPanel).includes('23:19 目录已创建'))
+  // Breadcrumb-merged descendant line stays inside the direct child's panel.
+  assert.ok(panelText(panels[1]).includes('[webSearcher→localExplorer]'))
+})
+
+void test('buildTaskCard caps children and timelines with overflow lines', () => {
+  setLang('cn')
+  const children: TaskCardChildView[] = Array.from({ length: TASK_CARD_MAX_CHILDREN + 3 }, (_, i) => ({
+    id: `run-c${i}`,
+    title: `子任务 ${i}`,
+    role: 'generalist',
+    status: 'queued' as const,
+    timeline: [],
+  }))
+  const rootTimeline = Array.from({ length: TASK_CARD_MAX_ROOT_TIMELINE + 5 }, (_, i) => ({
+    at: TS + i * 1000,
+    text: `第 ${i} 步`,
+  }))
+  const card = buildTaskCard(baseView({ children, rootTimeline }))
+  const body = (card.body as { elements: Array<{ tag: string; content?: string }> }).elements
+  const overflow = body.find(el => el.content?.includes('另有 3 项子任务'))
+  assert.ok(overflow, 'children overflow line rendered')
+
+  const rootPanel = collectPanels(card)[0]
+  assert.ok(panelTitle(rootPanel).includes(`（${TASK_CARD_MAX_ROOT_TIMELINE + 5} 条）`))
+  const text = panelText(rootPanel)
+  assert.ok(text.includes('更早 5 条'))
+  // Tail is kept, head is dropped.
+  assert.ok(text.includes(`第 ${TASK_CARD_MAX_ROOT_TIMELINE + 4} 步`))
+  assert.ok(!text.includes('第 0 步\n'))
+})
+
+void test('buildTaskCard enforces the whole-card timeline budget by shrinking child panels first', () => {
+  setLang('cn')
+  const children: TaskCardChildView[] = Array.from({ length: 8 }, (_, i) => ({
+    id: `run-c${i}`,
+    title: `子任务 ${i}`,
+    role: 'generalist',
+    status: 'running' as const,
+    timeline: Array.from({ length: TASK_CARD_MAX_CHILD_TIMELINE }, (_, j) => ({
+      at: TS + j * 1000,
+      text: `c${i} 第 ${j} 步`,
+    })),
+  }))
+  const rootTimeline = Array.from({ length: TASK_CARD_MAX_ROOT_TIMELINE }, (_, i) => ({
+    at: TS + i * 1000,
+    text: `根第 ${i} 步`,
+  }))
+  const card = buildTaskCard(baseView({ children, rootTimeline }))
+  const panels = collectPanels(card)
+  let totalLines = 0
+  for (const panel of panels) {
+    totalLines += panelText(panel)
+      .split('\n')
+      .filter(line => /^\d{2}:\d{2} /.test(line)).length
+  }
+  assert.ok(
+    totalLines <= TASK_CARD_MAX_TOTAL_TIMELINE,
+    `total timeline lines ${totalLines} within budget`,
+  )
+  // Root narrative is trimmed last: it keeps its full cap.
+  const rootPanel = panels[panels.length - 1]
+  assert.ok(panelText(rootPanel).includes(`根第 ${TASK_CARD_MAX_ROOT_TIMELINE - 1} 步`))
+})
+
+void test('buildTaskCard renders terminal freeze footer and status template', () => {
+  setLang('cn')
+  const view = baseView()
+  view.root = { ...view.root, status: 'done', terminalAt: TS + 600_000 }
+  const card = buildTaskCard(view)
+  const header = card.header as { template: string }
+  assert.equal(header.template, 'green')
+  const body = (card.body as { elements: Array<{ content?: string }> }).elements
+  const footer = body[body.length - 1]
+  assert.ok(footer.content?.includes('结束于 23:29'))
+  assert.ok(footer.content?.includes('#run-abcd'))
+})
+
+void test('buildTaskCard renders standing service badge and schedule lines', () => {
+  setLang('cn')
+  const view = baseView()
+  view.root = {
+    ...view.root,
+    standing: true,
+    scheduleText: '每天 09:00',
+    nextRunAt: TS + 3_600_000,
+  }
+  const card = buildTaskCard(view)
+  const header = card.header as { subtitle: { content: string } }
+  assert.ok(header.subtitle.content.includes('定时服务'))
+  const body = (card.body as { elements: Array<{ content?: string }> }).elements
+  const scheduleLine = body.find(el => el.content?.includes('排程：每天 09:00'))
+  assert.ok(scheduleLine)
+  assert.ok(scheduleLine?.content?.includes('下次触发：'))
+})
+
+void test('buildTaskCard truncates long text and renders en locale', () => {
+  setLang('en')
+  try {
+    const view = baseView()
+    view.root = { ...view.root, objective: 'x'.repeat(400) }
+    const card = buildTaskCard(view)
+    const body = (card.body as { elements: Array<{ content?: string }> }).elements
+    const objective = body[0]
+    assert.ok(objective.content)
+    assert.ok(objective.content.length < 200)
+    assert.ok(objective.content.includes('…'))
+    assert.ok(objective.content.startsWith('**Goal**'))
+    const rootPanel = collectPanels(card).pop()
+    assert.ok(panelTitle(rootPanel as Record<string, unknown>).includes('Task journey (2)'))
+  } finally {
+    setLang('cn')
+  }
+})

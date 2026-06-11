@@ -130,6 +130,13 @@ function taskRunDir(ownerCanonicalUser: string, id: string): string {
   return path.join(taskRunsRoot(ownerCanonicalUser), sanitizePathSegment(id))
 }
 
+/** Directory of one TaskRun, for sidecar files that live beside the ledger
+ *  (e.g. the Feishu task-card binding). The ledger files themselves
+ *  (events.jsonl / meta.json) stay private to this module. */
+export function taskRunDirPath(ownerCanonicalUser: string, id: string): string {
+  return taskRunDir(ownerCanonicalUser, id)
+}
+
 function metaPath(ownerCanonicalUser: string, id: string): string {
   return path.join(taskRunDir(ownerCanonicalUser, id), 'meta.json')
 }
