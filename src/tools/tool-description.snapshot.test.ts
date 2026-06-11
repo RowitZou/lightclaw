@@ -40,7 +40,7 @@ const EXPECTED = {
   Dispatch: 'd55887198825dd0b931c2d4fadbcde5f3c1194f6436fc4c26ea33930b33ff358',
   // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
-  Message: '6bac802297ffd23baab791dc9ebd4d78cd048e178245c4abd32fa1bbb20d6274',
+  Message: '60a6382670953b9df931dc653687069d7f1fb13dcd0199a920b11e069034f6c6',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '52339ad4eeb6658ecc9f638e2e34316c3b1171c3518b209fbbabf35eed3e0c4c',

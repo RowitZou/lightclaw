@@ -108,9 +108,9 @@ A background dispatch outlives the turn that starts it, and its \`<background-ta
 
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
-With \`to\`, target a direct child TaskRun: running children receive an interjection; waiting children pick back up with the message; queued / delivered / terminal children return guidance.
+With \`to\`, message a direct child TaskRun you dispatched. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject.
 
-Without \`to\`, ask your requester for input and wait in place: the tool returns the answer, or your required \`default\` after the timeout — your shift continues either way. A late answer still reaches you as an ordinary message.`
+Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -639,7 +639,7 @@ export const messageTool = buildTool({
         answer: input.message.trim(),
       }, Date.now(), userId)
       return {
-        output: `Your answer reached TaskRun ${run.id}'s open question; it continues its shift with it. Nothing to wait for here — its result will reach you the usual way.`,
+        output: `Your answer reached TaskRun ${run.id}'s question. Nothing comes back through this call; whatever it produces reaches you the usual way.`,
       }
     }
     if (run.status === 'running' && run.currentSessionId) {
@@ -652,7 +652,7 @@ export const messageTool = buildTool({
         source: 'user',
       })
       return {
-        output: `Delivered — TaskRun ${run.id} folds your message in at its next step and continues on its own. There is no reply to wait for here; its result will reach you the usual way, so carry on.`,
+        output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.`,
       }
     }
     if (run.status === 'waiting') {
@@ -669,7 +669,7 @@ export const messageTool = buildTool({
         reason: run.waitReason === 'awaiting-reply' ? 'parent answer' : 'message to waiting run',
         body: wrapMessage(input.message.trim()),
       })
-      return { output: `TaskRun ${run.id} was waiting; your message starts its next shift with it in hand. Nothing to wait for here — its result will reach you the usual way.` }
+      return { output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.` }
     }
     if (run.status === 'queued') {
       return { output: `TaskRun ${run.id} is queued; use UpdateSchedule to change the queued prompt.`, isError: true }
