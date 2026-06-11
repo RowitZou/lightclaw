@@ -56,7 +56,10 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'localExplorer',
     whenToUse:
       'Fast read-only local exploration: files and directories, codebase contents, system state (processes, env vars, conda envs, disk usage, package versions), config files, log files. Read-only — no modifications.',
-    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill'],
+    // Message here is uplink-only by construction: no Dispatch means no
+    // children, and the downlink ownership guard rejects anything else.
+    // What it buys a leaf is the ask channel to its requester.
+    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'UseSkill'],
     skills: ['local-exploration-workflow'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: localExplorerPrompt,
@@ -67,7 +70,8 @@ export const BUNDLED_AGENTS: Role[] = [
     agentType: 'webSearcher',
     whenToUse:
       'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. It digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths, Grep over downloaded PDFs / HTMLs for specific facts when full read is too expensive), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
-    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'UseSkill'],
+    // Message: uplink-only ask channel, same as localExplorer.
+    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'UseSkill'],
     skills: ['web-research-workflow'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: webSearcherPrompt,
@@ -150,6 +154,8 @@ export const BUNDLED_AGENTS: Role[] = [
       'MemoryRead',
       'TodoWrite',
       'TaskInspect',
+      'TaskUpdate',
+      'Sleep',
       'UseSkill',
       'Dispatch',
       'Message',

@@ -343,6 +343,33 @@ test('bundled dispatch matrix matches the role-to-role topology', () => {
   }
 })
 
+test('Message is universal for non-internal roles and the dispatcher kit is complete', () => {
+  // Two roster invariants that have each been violated by omission before
+  // (4e1ad69 fixed coder/reviewer/feishuSecretary but missed archivist):
+  // 1. Every non-internal role can reach its requester — Message uplink is
+  //    the ask channel, and any dispatched role has a requester to ask.
+  // 2. A role that dispatches children must carry the full kit to manage
+  //    them: Message (downlink), UpdateSchedule (un-fired queue), TaskUpdate
+  //    (settle children / conclude own run), Sleep (bounded waits).
+  const DISPATCHER_KIT = ['Message', 'UpdateSchedule', 'TaskUpdate', 'Sleep']
+  for (const agent of BUNDLED_AGENTS) {
+    if (agent.kind === 'internal') continue
+    assert.equal(
+      isToolVisibleToRole(agent, 'Message'),
+      true,
+      `${agent.agentType} should have Message (every non-internal role can ask its requester)`,
+    )
+    if (!isToolVisibleToRole(agent, 'Dispatch')) continue
+    for (const tool of DISPATCHER_KIT) {
+      assert.equal(
+        isToolVisibleToRole(agent, tool),
+        true,
+        `${agent.agentType} dispatches children but lacks ${tool} (dispatcher kit incomplete)`,
+      )
+    }
+  }
+})
+
 test('every non-main bundled worker role is denied user-escalation and skill-write tools', () => {
   for (const agent of BUNDLED_AGENTS) {
     if (agent.agentType === 'main') {
