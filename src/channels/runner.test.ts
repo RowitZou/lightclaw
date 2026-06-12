@@ -1717,3 +1717,58 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     assert.equal(used, 'other')
   })
 })
+
+describe('buildLeftoverReplayMessage reply anchor (topic-group drop fix)', () => {
+  // Regression (2026-06-12 dogfood): a bg-result rescued into a synthetic
+  // replay turn had no reply anchor, so in topic groups its entire output
+  // hit the create path and was refused/dropped — the final "test passed"
+  // notification never reached the user. The just-ended turn's own genuine
+  // inbound message is the anchor.
+  it('anchors a bg-result replay to the original genuine inbound message', () => {
+    const original = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: 'original turn',
+      threadId: 'omt_topic',
+    })
+    const entry: InterjectionEntry = {
+      messageId: 'bg-x-1',
+      senderOpenId: 'ou_alice',
+      text: '<background-task-result>...</background-task-result>',
+      arrivedAt: 1,
+      source: 'background-task',
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.synthetic, true)
+    assert.equal(replay.replyAnchorMessageId, original.messageId)
+  })
+
+  it('propagates the anchor when the original opener was itself synthetic', () => {
+    const original: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'wake opener' }),
+      synthetic: true,
+      replyAnchorMessageId: 'om_recorded_anchor',
+    }
+    const entry: InterjectionEntry = {
+      messageId: 'bg-x-2',
+      senderOpenId: 'ou_alice',
+      text: '<background-task-result>...</background-task-result>',
+      arrivedAt: 1,
+      source: 'background-task',
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.replyAnchorMessageId, 'om_recorded_anchor')
+  })
+
+  it('leaves real-user leftover replays unanchored (they reply off their own real messageId)', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'original turn' })
+    const entry: InterjectionEntry = {
+      messageId: 'om_realuser456',
+      senderOpenId: 'ou_bob',
+      text: 'mid-flight follow-up',
+      arrivedAt: 1,
+      source: 'user',
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.replyAnchorMessageId, undefined)
+  })
+})

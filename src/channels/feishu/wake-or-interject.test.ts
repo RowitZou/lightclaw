@@ -86,3 +86,77 @@ test('wakeOrInterject routes later wake blocks into the interjection queue while
     clearChannelRunner(runner)
   }
 })
+
+test('topic-group wake synthetic carries the recorded inbound reply anchor', async () => {
+  const { recordInboundAnchor, clearInboundAnchorsForTest } = await import('../inbound-anchor.js')
+  const sessionId = 'feishu:group:oc_anchor:omt_topic1:ou_sender'
+  const captured: NormalizedChannelMessage[] = []
+  const runner = {
+    async handleMessage(message: NormalizedChannelMessage) {
+      captured.push(message)
+    },
+  } as unknown as ChannelRunner
+  registerChannelRunner(runner)
+  try {
+    recordInboundAnchor(sessionId, 'om_real_inbound')
+    const result = await wakeOrInterject({
+      targetSessionId: sessionId,
+      block: '<block>done</block>',
+      ownerOpenId: 'ou_owner',
+      messageId: 'bg-fake-id',
+      emittedAt: 10,
+      source: 'background-task',
+      logPrefix: '[test]',
+    })
+    assert.deepEqual(result, { ok: true, mode: 'synthetic' })
+    assert.equal(captured.length, 1)
+    // Without the anchor the sender can only create, which topic groups
+    // refuse — the wake output is dropped wholesale (2026-06-12 dogfood).
+    assert.equal(captured[0]?.replyAnchorMessageId, 'om_real_inbound')
+    assert.equal(captured[0]?.threadId, 'omt_topic1')
+    assert.equal(captured[0]?.synthetic, true)
+  } finally {
+    clearChannelRunner(runner)
+    clearInboundAnchorsForTest()
+  }
+})
+
+test('wake synthetic without a recorded anchor (or outside topic groups) carries none', async () => {
+  const { clearInboundAnchorsForTest, recordInboundAnchor } = await import('../inbound-anchor.js')
+  const captured: NormalizedChannelMessage[] = []
+  const runner = {
+    async handleMessage(message: NormalizedChannelMessage) {
+      captured.push(message)
+    },
+  } as unknown as ChannelRunner
+  registerChannelRunner(runner)
+  try {
+    // Topic group, nothing recorded → no anchor field.
+    await wakeOrInterject({
+      targetSessionId: 'feishu:group:oc_anchor2:omt_topic2:ou_sender',
+      block: '<block>x</block>',
+      ownerOpenId: 'ou_owner',
+      messageId: 'bg-1',
+      emittedAt: 10,
+      source: 'background-task',
+      logPrefix: '[test]',
+    })
+    assert.equal(captured[0]?.replyAnchorMessageId, undefined)
+    // DM with a recorded anchor → still no anchor (create works there and
+    // an anchored reply would quote a stale user message for no reason).
+    recordInboundAnchor('feishu:dm:oc_dm_anchor', 'om_dm_inbound')
+    await wakeOrInterject({
+      targetSessionId: 'feishu:dm:oc_dm_anchor',
+      block: '<block>y</block>',
+      ownerOpenId: 'ou_owner',
+      messageId: 'bg-2',
+      emittedAt: 10,
+      source: 'background-task',
+      logPrefix: '[test]',
+    })
+    assert.equal(captured[1]?.replyAnchorMessageId, undefined)
+  } finally {
+    clearChannelRunner(runner)
+    clearInboundAnchorsForTest()
+  }
+})

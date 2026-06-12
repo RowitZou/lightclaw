@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
+import { recordInboundAnchor } from './inbound-anchor.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
@@ -266,12 +267,22 @@ export function buildLeftoverReplayMessage(
   originalMessage: NormalizedChannelMessage,
   entry: InterjectionEntry,
 ): NormalizedChannelMessage {
+  // A bg-result replay is synthetic, so its output can only be sent as a
+  // reply when it carries an anchor — in topic groups an unanchored create
+  // is refused and the whole output is dropped. The turn that just ended
+  // has the perfect anchor at hand: its own genuine inbound message.
+  const replyAnchor = entry.source === 'background-task'
+    ? (originalMessage.synthetic
+        ? originalMessage.replyAnchorMessageId
+        : originalMessage.messageId)
+    : undefined
   return {
     ...originalMessage,
     eventId: `replay-${entry.messageId}`,
     messageId: entry.messageId,
     senderOpenId: entry.senderOpenId,
     text: entry.text,
+    ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
     ...(entry.pendingAttachments?.length
       ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
       : {}),
@@ -427,6 +438,12 @@ export class ChannelRunner {
     const sessionId = mainSessionId
     const effectiveMessage = message
     assertSessionIdShape(mainSessionId)
+    // Genuine inbound messages double as reply anchors for later
+    // framework-initiated wakes (the platform never saw a synthetic
+    // message, so without an anchor a topic-group wake cannot send at all).
+    if (!message.synthetic && message.messageId) {
+      recordInboundAnchor(mainSessionId, message.messageId)
+    }
     // Slash commands carry user-to-system meta intent (e.g. /mode, /rules
     // allow, /auth import, /user approve, /sandbox prefetch). Wrapping them
     // as `<user-interjection>` is wrong: the LLM treats the text as natural
