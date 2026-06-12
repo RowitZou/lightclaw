@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { recordInboundAnchor } from './inbound-anchor.js'
+import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { appendProgress } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
@@ -303,6 +304,22 @@ export function buildLeftoverReplayMessage(
 }
 
 /**
+ * In group chats the turn's final reply pings its addressee — without the
+ * @ the conclusion of a long task scrolls past unnoticed. DMs need no
+ * mention, and synthetic turns never reach this path with a real sender.
+ * `<at id=...></at>` is Feishu lark_md mention syntax (replies render as
+ * markdown cards). Exported for regression coverage.
+ */
+export function withFinalReplyMention(
+  message: NormalizedChannelMessage,
+  text: string,
+): string {
+  const isGroup = message.chatType !== undefined && message.chatType !== 'p2p'
+  if (!isGroup || message.synthetic || !message.senderOpenId) return text
+  return `<at id=${message.senderOpenId}></at> ${text}`
+}
+
+/**
  * Noise reduction (collab-phase4 PR22): a framework-initiated turn's
  * narration is bookkeeping, not conversation — it belongs on the task
  * card's timeline. Returns true when the text was appended to the turn's
@@ -476,6 +493,20 @@ export class ChannelRunner {
     const sessionId = mainSessionId
     const effectiveMessage = message
     assertSessionIdShape(mainSessionId)
+    // Interim narration (blocks the model emits between tool calls)
+    // collapses into one live turn card; only the turn's final reply goes
+    // out as a message. Synthetic turns never get a turn card: their
+    // narration either routes to the task card (rooted) or stays on the
+    // loud per-block message path (rootless fallback).
+    const turnCard = !effectiveMessage.synthetic
+      ? createTurnCardCollector({
+          target: {
+            chatId: effectiveMessage.chatId,
+            ...(effectiveMessage.threadId ? { threadId: effectiveMessage.threadId } : {}),
+            replyAnchorMessageId: effectiveMessage.messageId,
+          },
+        })
+      : null
     // Genuine inbound messages double as reply anchors for later
     // framework-initiated wakes (the platform never saw a synthetic
     // message, so without an anchor a topic-group wake cannot send at all).
@@ -948,10 +979,17 @@ export class ChannelRunner {
                 // for the whole tool loop to finish; the final reply at
                 // end-of-query is suppressed when this fired at least once
                 // (see streamedAtLeastOnce below).
-                onAssistantTurn: async (text: string) => {
-                  streamedAtLeastOnce = true
+                onAssistantTurn: async (text: string, meta?: { isFinal: boolean }) => {
                   if (await routeSyntheticNarration(effectiveMessage, text)) return
-                  await this.sendReply(replyTargetMessage, text)
+                  if (turnCard && meta?.isFinal === false) {
+                    turnCard.add(text)
+                    return
+                  }
+                  streamedAtLeastOnce = true
+                  await this.sendReply(
+                    replyTargetMessage,
+                    withFinalReplyMention(replyTargetMessage, text),
+                  )
                 },
                 interjectionRenderer: (entries, context) => [{
                   type: 'text',
@@ -1335,9 +1373,13 @@ export class ChannelRunner {
         if (!streamedAtLeastOnce) {
           const finalText = result.assistantText || t('channel.assistant.empty')
           if (!(await routeSyntheticNarration(effectiveMessage, finalText))) {
-            await this.sendReply(replyTargetMessage, finalText)
+            await this.sendReply(
+              replyTargetMessage,
+              withFinalReplyMention(replyTargetMessage, finalText),
+            )
           }
         }
+        turnCard?.finalize()
         })
       } catch (error) {
         if (error instanceof LocalRuntimeAdminOnlyError) {
@@ -1350,6 +1392,7 @@ export class ChannelRunner {
         }
         throw error
       } finally {
+        turnCard?.finalize({ interrupted: true })
         await this.stopTyping(message, typingToken)
       }
     })

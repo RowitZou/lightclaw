@@ -50,7 +50,14 @@ function settlementText(root: TaskRunMeta): string {
       : 'taskcard.delivery.cancelled'
   const titleLine = t(key, { title: root.title })
   const summary = root.outcome?.summary?.trim()
-  return summary ? `${titleLine}\n${summary}` : titleLine
+  // In group chats the settlement message pings the user who owns the
+  // task — it is the long task's conclusion and must not scroll past
+  // unnoticed. lark_md mention syntax; DMs carry no mention.
+  const parsed = parseFeishuSessionId(root.callerSessionId)
+  const mention = parsed?.kind === 'group' && parsed.senderOpenId
+    ? `<at id=${parsed.senderOpenId}></at> `
+    : ''
+  return summary ? `${mention}${titleLine}\n${summary}` : `${mention}${titleLine}`
 }
 
 function defaultIo(): TaskCardIo {

@@ -238,3 +238,30 @@ void describe('task-card pipeline', () => {
     assert.ok(progressed)
   })
 })
+
+void describe('settlement message group mention (PR25)', () => {
+  void it('pings the task owner when the root lives in a group chat', async () => {
+    const { io, calls } = makeFakeIo()
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+    const root = await createRootTaskRun(OWNER, TOPIC_SESSION, { objective: '群任务' })
+    await settle()
+    await markFinished(root.id, { ok: true, summary: '搞定了' }, Date.now(), OWNER)
+    await settle()
+    const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
+    assert.equal(texts.length, 1)
+    assert.ok(texts[0]!.text.startsWith('<at id=ou_sender></at> '))
+    assert.ok(texts[0]!.text.includes('搞定了'))
+  })
+
+  void it('DM settlements carry no mention', async () => {
+    const { io, calls } = makeFakeIo()
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+    const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '私聊任务' })
+    await settle()
+    await markFinished(root.id, { ok: true, summary: '搞定了' }, Date.now(), OWNER)
+    await settle()
+    const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
+    assert.equal(texts.length, 1)
+    assert.ok(!texts[0]!.text.includes('<at id='))
+  })
+})

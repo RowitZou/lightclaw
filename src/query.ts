@@ -869,11 +869,17 @@ export async function query(params: QueryParams): Promise<{
     // the model actually said, not just whatever the final turn happened to
     // emit.
     const turnText = collectAssistantText(stopEvent.content)
+    const toolUses = stopEvent.content.filter(
+      (block): block is ToolUseBlock => block.type === 'tool_use',
+    )
     if (turnText.length > 0) {
       assistantTexts.push(turnText)
       if (invocation.onAssistantTurn) {
         try {
-          await invocation.onAssistantTurn(turnText)
+          // A response that carries tool calls keeps the turn going — its
+          // text is interim narration. One without ends the turn — its text
+          // is the reply. Receivers route the two differently.
+          await invocation.onAssistantTurn(turnText, { isFinal: toolUses.length === 0 })
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
           process.stderr.write(
@@ -890,9 +896,6 @@ export async function query(params: QueryParams): Promise<{
     })
     messages.push(assistantMessage)
 
-    const toolUses = stopEvent.content.filter(
-      (block): block is ToolUseBlock => block.type === 'tool_use',
-    )
 
     // A turn that produced real output clears the empty-stop rescue guard, so
     // a later spurious empty stop can be rescued again (see the backstop in

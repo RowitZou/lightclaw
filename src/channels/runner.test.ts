@@ -27,6 +27,7 @@ import {
   applyAttachmentMaterialization,
   buildLeftoverReplayMessage,
   ChannelRunner,
+  withFinalReplyMention,
   formatChannelUserText,
   renderQuotedMessageBlock,
   type ChannelRunnerStrategy,
@@ -1770,5 +1771,24 @@ describe('buildLeftoverReplayMessage reply anchor (topic-group drop fix)', () =>
     }
     const replay = buildLeftoverReplayMessage(original, entry)
     assert.equal(replay.replyAnchorMessageId, undefined)
+  })
+})
+
+describe('withFinalReplyMention (PR25 group ping)', () => {
+  it('prefixes a lark_md mention for group finals and leaves DMs/synthetics alone', () => {
+    const group = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'q', chatType: 'group' })
+    assert.equal(
+      withFinalReplyMention(group, '答案在此'),
+      '<at id=ou_alice></at> 答案在此',
+    )
+    const dm = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'q', chatType: 'p2p' })
+    assert.equal(withFinalReplyMention(dm, '答案在此'), '答案在此')
+    const synthetic: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'q', chatType: 'group' }),
+      synthetic: true,
+    }
+    assert.equal(withFinalReplyMention(synthetic, '答案在此'), '答案在此')
+    const unknownType = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'q' })
+    assert.equal(withFinalReplyMention(unknownType, '答案在此'), '答案在此')
   })
 })

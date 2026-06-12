@@ -36,7 +36,7 @@ export type InvocationContext = {
   onTextDelta?(text: string): void
   onToolUse?(event: { name: string; input: Record<string, unknown> }): void
   onToolResult?(event: ToolExecutionEvent): void
-  onAssistantTurn?(text: string): Promise<void> | void
+  onAssistantTurn?(text: string, meta?: { isFinal: boolean }): Promise<void> | void
   onCompactStart?(): void
   onCompactEnd?(result: { removedCount: number; summaryTokens: number }): void
   onCompactError?(message: string): void
