@@ -1741,7 +1741,8 @@ export class ChannelRunner {
    * — including groups, leaking applicant open_id / pairing code to every
    * group member. Falls through to in-chat sendNotice if the strategy hook
    * is missing or the DM push fails (so a degraded channel never just
-   * silently drops the response).
+   * silently drops the response) — but a non-DM origin only ever gets the
+   * sanitized dmPushFailed line in-chat, never the pairing-code payload.
    */
   private async sendApplicantNotice(
     message: NormalizedChannelMessage,
@@ -1764,6 +1765,10 @@ export class ChannelRunner {
           `${this.strategy.channelId}: applicant DM notice failed for ${applicantOpenId}: ${detail}; falling back to in-chat\n`,
         )
       }
+    }
+    if (isGroupLikeChannelMessage(message)) {
+      await this.sendNotice(message, 'error', t('channel.pairing.dmPushFailed'))
+      return
     }
     await this.sendNotice(message, kind, text)
   }
@@ -1793,7 +1798,14 @@ export class ChannelRunner {
       // so even if the card push fails the text is durable on disk for
       // post-approval replay. Updates pending.json in-place; does not
       // touch createdAt/ttlMs (TTL still measures from initial application).
-      await updatePendingApplicantText(senderKey, message.text, message.chatId, message.chatType)
+      await updatePendingApplicantText(
+        senderKey,
+        message.text,
+        message.chatId,
+        message.chatType,
+        message.threadId,
+        message.messageId,
+      )
       await this.strategy.renderPairingWaitingCard!({
         message,
         code: existing.code,
@@ -1860,7 +1872,14 @@ export class ChannelRunner {
       // call until 2026-05-08, which silently broke replay for the very
       // first @ that bootstraps an admin's own pairing — exactly the
       // dogfood scenario admin self-pairing uses.
-      await updatePendingApplicantText(senderKey, message.text, message.chatId, message.chatType)
+      await updatePendingApplicantText(
+        senderKey,
+        message.text,
+        message.chatId,
+        message.chatType,
+        message.threadId,
+        message.messageId,
+      )
       const freshnessLabel = result.created
         ? t('channel.pairing.freshnessNew')
         : t('channel.pairing.freshnessReuse')

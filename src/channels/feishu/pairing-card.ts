@@ -20,6 +20,7 @@ import {
 import type { SenderKey } from '../../identity/types.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
+import { isFeishuGroupChatType } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { formatFeishuErrorForLog } from './resources/errors.js'
 
@@ -43,6 +44,8 @@ type ApplicationState =
       applicantText?: string
       applicantChatId?: string
       applicantChatType?: string
+      applicantThreadId?: string
+      applicantMessageId?: string
     }
   | {
       kind: 'submitting'
@@ -53,6 +56,8 @@ type ApplicationState =
       applicantText?: string
       applicantChatId?: string
       applicantChatType?: string
+      applicantThreadId?: string
+      applicantMessageId?: string
     }
   | {
       kind: 'submitted'
@@ -135,6 +140,11 @@ export class PairingCardCoordinator {
       applicantText: input.applicantText,
       applicantChatId: input.applicantChatId,
       applicantChatType: input.applicantChatType,
+      // Thread routing + reply anchor come straight off the inbound message
+      // (the runner's hook input carries chatId/chatType explicitly, but the
+      // message is the source of truth for both of these).
+      applicantThreadId: message.threadId,
+      applicantMessageId: message.messageId,
     })
     await this.pushApplicantCard(
       message,
@@ -182,15 +192,23 @@ export class PairingCardCoordinator {
 
   /**
    * Push an applicant-facing pairing card to the applicant's DM via
-   * `sendInteractiveCardToOpenId`, falling back to in-chat reply only when
-   * the DM push fails. Mirrors the Phase 26 pattern used by
-   * permission-card.sendApprovalPrompt: keep the card body out of any group
-   * the applicant happened to @-mention the bot in (which would otherwise
-   * leak applicant identity / pairing code to every group member).
+   * `sendInteractiveCardToOpenId`. Keep the card body out of any group the
+   * applicant happened to @-mention the bot in (which would otherwise leak
+   * the pairing code to every group member and expose clickable
+   * confirm/cancel buttons to people who are not the applicant).
    *
    * Feishu's `im.message.create` with `receive_id_type=open_id` auto-routes
    * to the bot↔user p2p chat without requiring the user to have initiated
    * a DM first, so first-contact-in-group flows still work.
+   *
+   * When the DM push fails, the in-chat fallback depends on where the
+   * applicant wrote from. DM origin: resend the real card in-chat (same
+   * audience, no leak). Group/topic origin: never drop the real card into
+   * the chat — send a sanitized no-button notice instead, so the applicant
+   * is not left staring at silence but the group sees no pairing code and
+   * no actionable buttons. 2026-06-10 dogfood: a topic-group first contact
+   * had its application card land in the group with live 确认申请/取消
+   * buttons any member could click.
    */
   private async pushApplicantCard(
     message: NormalizedChannelMessage,
@@ -205,6 +223,14 @@ export class PairingCardCoordinator {
       process.stderr.write(
         `pairing-card: DM push failed (${kind}) for ${applicantOpenId}: ${formatFeishuErrorForLog(error, 'sendInteractiveCardToOpenId')}; falling back to in-chat\n`,
       )
+      if (isFeishuGroupChatType(message.chatType)) {
+        await this.sender.sendInteractiveCard(message, buildTerminalCard({
+          template: 'red',
+          title: t('channel.pairing.application.title'),
+          body: t('channel.pairing.dmPushFailed'),
+        }))
+        return
+      }
       await this.sender.sendInteractiveCard(message, card)
     }
   }
@@ -219,10 +245,20 @@ export class PairingCardCoordinator {
       }))
     }
 
-    if (action.action === 'cancel') {
-      return this.applyCancel(action.applicationToken, state)
-    }
-    if (action.action === 'confirm') {
+    if (action.action === 'cancel' || action.action === 'confirm') {
+      // Applicant-only actions. A card normally lives in the applicant's
+      // DM where only they can click, but cards that ever reached a group
+      // (legacy fallback before the sanitized-notice fix, forwarded
+      // screenshots re-rendered, etc.) must not let a bystander submit or
+      // cancel someone else's application. operatorOpenId is best-effort
+      // on the wire; when the transport omits it we allow (DM-only cards
+      // make the applicant the only possible clicker).
+      if (!isApplicantOperator(action, state)) {
+        return toast('error', t('channel.pairing.application.notApplicant'))
+      }
+      if (action.action === 'cancel') {
+        return this.applyCancel(action.applicationToken, state)
+      }
       return this.applyConfirm(action.applicationToken, state)
     }
     if (action.action === 'approve') {
@@ -288,6 +324,8 @@ export class PairingCardCoordinator {
       applicantText: current.applicantText,
       applicantChatId: current.applicantChatId,
       applicantChatType: current.applicantChatType,
+      applicantThreadId: current.applicantThreadId,
+      applicantMessageId: current.applicantMessageId,
     })
 
     try {
@@ -313,6 +351,8 @@ export class PairingCardCoordinator {
         current.applicantText ?? '',
         current.applicantChatId,
         current.applicantChatType,
+        current.applicantThreadId,
+        current.applicantMessageId,
       ).catch(error => {
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(`pairing-card: stash applicant text failed: ${detail}\n`)
@@ -412,13 +452,15 @@ export class PairingCardCoordinator {
       return toast('error', reason)
     }
 
-    // entry.lastApplicantText / lastApplicantChatId / lastApplicantChatType
-    // were already promoted from in-memory state to pending.json by
-    // applyConfirm, so the durable DB values are canonical here.
+    // entry.lastApplicant* fields were already promoted from in-memory
+    // state to pending.json by applyConfirm, so the durable DB values are
+    // canonical here.
     preheatAndWelcomeOnApproval(canonical, link, {
       applicantText: entry.lastApplicantText,
       applicantChatId: entry.lastApplicantChatId,
       applicantChatType: entry.lastApplicantChatType,
+      applicantThreadId: entry.lastApplicantThreadId,
+      applicantMessageId: entry.lastApplicantMessageId,
     })
     this.setState(token, { kind: 'resolved', outcome: 'approved', code: state.code })
     void this.sender.sendInteractiveCardToOpenId(
@@ -491,6 +533,19 @@ export class PairingCardCoordinator {
     }
     return canonical
   }
+}
+
+function isApplicantOperator(
+  action: PairingCardAction,
+  state: ApplicationState,
+): boolean {
+  if (!action.operatorOpenId) {
+    return true
+  }
+  if (!('applicantOpenId' in state)) {
+    return true
+  }
+  return action.operatorOpenId === state.applicantOpenId
 }
 
 function buildApplicationCard(input: {

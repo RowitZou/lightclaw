@@ -45,6 +45,14 @@ export type NormalizedChannelMessage = {
   messageId: string
   /** Feishu topic-group thread id. Routes channel sessions. */
   threadId?: string
+  /** Real platform message id a synthetic message may carry so outbound
+   *  sends can anchor on `im.message.reply` instead of `im.message.create`.
+   *  Critical in topic groups, where create cannot target a thread (it
+   *  opens a NEW topic) while reply resolves the thread off the anchor.
+   *  Set by the post-approval replay path from the applicant's original
+   *  inbound; ignored for non-synthetic messages (their own messageId is
+   *  the reply target). */
+  replyAnchorMessageId?: string
   /** Feishu reply-chain root id. Metadata only; does not route sessions. */
   rootId?: string
   /** Feishu direct reply parent id. Used to enrich the turn with quoted context. */

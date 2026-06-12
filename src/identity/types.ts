@@ -58,6 +58,23 @@ export type PendingEntry = {
    * replay falls back to 'p2p' when absent.
    */
   lastApplicantChatType?: string
+  /**
+   * Feishu topic-group thread id of the applicant's most recent inbound.
+   * Without it a topic-group replay routes to the threadless
+   * `feishu:group:<chatId>:<sender>` session (splitting the transcript
+   * from the user's future in-topic messages) and every outbound in the
+   * replay turn goes through `im.message.create`, which opens a NEW
+   * topic per message (2026-06-10 dogfood). Missing on old pending.json
+   * files and on non-topic origins.
+   */
+  lastApplicantThreadId?: string
+  /**
+   * Real platform messageId of the applicant's most recent inbound.
+   * Replay carries it as `replyAnchorMessageId` on the synthetic message
+   * so outbound sends anchor on `im.message.reply` (which resolves the
+   * topic off the original message) instead of `im.message.create`.
+   */
+  lastApplicantMessageId?: string
 }
 
 export type PendingFile = Record<string, PendingEntry>

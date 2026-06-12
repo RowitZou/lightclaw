@@ -181,6 +181,8 @@ export async function updatePendingApplicantText(
   text: string,
   chatId?: string,
   chatType?: string,
+  threadId?: string,
+  messageId?: string,
 ): Promise<void> {
   const trimmed = text.trim()
   // Empty text is a valid case (group @-bot with no other content). We do
@@ -210,6 +212,19 @@ export async function updatePendingApplicantText(
     }
     if (chatType !== undefined && entry.lastApplicantChatType !== chatType) {
       entry.lastApplicantChatType = chatType
+      mutated = true
+    }
+    // threadId / messageId follow the routing fields as one unit: when the
+    // caller provides a chatId (i.e. this stash reflects a concrete inbound),
+    // overwrite both — INCLUDING clearing threadId when the latest inbound
+    // is not in a topic. Leaving a stale threadId from an earlier topic
+    // message would route the replay into a topic the user has left.
+    if (chatId !== undefined && entry.lastApplicantThreadId !== threadId) {
+      entry.lastApplicantThreadId = threadId
+      mutated = true
+    }
+    if (chatId !== undefined && messageId !== undefined && entry.lastApplicantMessageId !== messageId) {
+      entry.lastApplicantMessageId = messageId
       mutated = true
     }
     break
