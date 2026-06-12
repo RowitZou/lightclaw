@@ -874,18 +874,22 @@ export async function query(params: QueryParams): Promise<{
     )
     if (turnText.length > 0) {
       assistantTexts.push(turnText)
-      if (invocation.onAssistantTurn) {
-        try {
-          // A response that carries tool calls keeps the turn going — its
-          // text is interim narration. One without ends the turn — its text
-          // is the reply. Receivers route the two differently.
-          await invocation.onAssistantTurn(turnText, { isFinal: toolUses.length === 0 })
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          process.stderr.write(
-            `[query] onAssistantTurn callback failed: ${detail}\n`,
-          )
-        }
+    }
+    // A response that carries tool calls keeps the turn going — its text is
+    // interim narration. One without ends the turn — its text is the reply.
+    // Receivers route the two differently. A tool-bearing response fires the
+    // callback even with EMPTY text: that is the earliest moment the turn is
+    // known to be tool-using, and it is awaited BEFORE tool dispatch so a
+    // receiver can anchor per-turn UI ahead of anything the tools emit.
+    // An empty no-tool response stays silent (nothing to deliver).
+    if (invocation.onAssistantTurn && (turnText.length > 0 || toolUses.length > 0)) {
+      try {
+        await invocation.onAssistantTurn(turnText, { isFinal: toolUses.length === 0 })
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `[query] onAssistantTurn callback failed: ${detail}\n`,
+        )
       }
     }
     const assistantMessage = createAssistantMessage({

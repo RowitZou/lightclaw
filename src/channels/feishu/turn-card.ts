@@ -1,9 +1,12 @@
 // Turn card (collab-phase4 PR25): one live card per user-initiated turn
 // that needed tools. Interim narration — the blocks the model emits between
-// tool calls — collapses into a single panel that patches in place; the
-// turn's final reply goes out as a normal message (it is the conversation,
-// and a card patch fires no push notification). A turn that answers in one
-// shot produces no card at all.
+// tool calls — collapses into a single panel that patches in place, with
+// the newest entry pinned visible above the panel; the turn's final reply
+// goes out as a normal message (it is the conversation, and a card patch
+// fires no push notification). A turn that answers in one shot produces no
+// card at all. The card is created on the FIRST tool-bearing response even
+// before any narration text exists, so it lands in the chat timeline ahead
+// of any card a tool creates (e.g. the task card).
 
 import { t } from '../../i18n/index.js'
 
@@ -24,6 +27,22 @@ export function buildTurnCard(
   entries: TurnCardEntry[],
   opts: { interrupted?: boolean; finalized?: boolean } = {},
 ): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = []
+  if (entries.length === 0) {
+    // Eagerly-created card: the turn went straight to tool calls and no
+    // narration has landed yet. One status line, no empty panel.
+    const line = opts.interrupted
+      ? t('turncard.interrupted')
+      : opts.finalized
+        ? t('turncard.empty')
+        : t('turncard.starting')
+    elements.push({ tag: 'markdown', content: line })
+    return {
+      schema: '2.0',
+      config: { update_multi: true },
+      body: { elements },
+    }
+  }
   const shown = entries.slice(-TURN_CARD_MAX_ENTRIES)
   const dropped = entries.length - shown.length
   const lines = shown.map(entry => `**${formatClock(entry.at)}** ${entry.text}`)
@@ -33,18 +52,14 @@ export function buildTurnCard(
   if (opts.interrupted) {
     lines.push(t('turncard.interrupted'))
   }
-  const elements: Record<string, unknown>[] = []
-  // While the turn is live (or ended interrupted) the newest entry stays
-  // visible above the collapsed panel so the user can follow along without
-  // opening it. A clean finalize folds it back in — the final reply lands
-  // right after the card and a stale "latest" line would compete with it.
-  const latest = entries[entries.length - 1]
-  if (latest && (!opts.finalized || opts.interrupted)) {
-    elements.push({
-      tag: 'markdown',
-      content: `**${t('turncard.latest')} ${formatClock(latest.at)}** ${latest.text}`,
-    })
-  }
+  // The newest entry stays pinned above the collapsed panel — live it
+  // scrolls with each patch, and at rest the card still tells what
+  // happened last without opening the panel.
+  const latest = entries[entries.length - 1]!
+  elements.push({
+    tag: 'markdown',
+    content: `**${t('turncard.latest')} ${formatClock(latest.at)}** ${latest.text}`,
+  })
   elements.push({
     tag: 'collapsible_panel',
     expanded: false,

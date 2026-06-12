@@ -980,11 +980,16 @@ export class ChannelRunner {
                 // end-of-query is suppressed when this fired at least once
                 // (see streamedAtLeastOnce below).
                 onAssistantTurn: async (text: string, meta?: { isFinal: boolean }) => {
-                  if (await routeSyntheticNarration(effectiveMessage, text)) return
                   if (turnCard && meta?.isFinal === false) {
-                    turnCard.add(text)
+                    // Interim block — even an empty one (a response that went
+                    // straight to tool calls). Awaiting the first frame pins
+                    // the turn card into the chat timeline BEFORE any tool
+                    // fires its own card (e.g. TaskCreate's task card).
+                    await turnCard.add(text)
                     return
                   }
+                  if (text.length === 0) return
+                  if (await routeSyntheticNarration(effectiveMessage, text)) return
                   streamedAtLeastOnce = true
                   await this.sendReply(
                     replyTargetMessage,

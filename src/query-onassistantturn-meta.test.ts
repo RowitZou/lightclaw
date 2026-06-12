@@ -90,4 +90,59 @@ void describe('onAssistantTurn isFinal meta', () => {
       { text: 'here is the answer', isFinal: true },
     ])
   })
+
+  void it('fires with empty text when a response goes straight to tool calls', async () => {
+    const turns: Array<() => AsyncGenerator<StreamEvent>> = [
+      async function* () {
+        yield {
+          type: 'stop',
+          stopReason: 'tool_use',
+          usage: { input_tokens: 8, output_tokens: 4 },
+          content: [{ type: 'tool_use', id: 'tu_1', name: 'NoSuchTool', input: {} }],
+        }
+      },
+      async function* () {
+        yield {
+          type: 'stop',
+          stopReason: 'end_turn',
+          usage: { input_tokens: 8, output_tokens: 4 },
+          content: [{ type: 'text', text: 'done' }],
+        }
+      },
+    ]
+    let i = 0
+    setStreamChatForTest((() => turns[Math.min(i++, turns.length - 1)]!()) as never)
+
+    const seen: Array<{ text: string; isFinal: boolean | undefined }> = []
+    const ctx = createSessionContext({
+      cwd: '/tmp',
+      model: 'test-model',
+      sessionsDir: '/tmp/sessions',
+      memoryDir: '/tmp/memory',
+      sessionId: 'turnmeta-empty-test',
+      channel: 'feishu',
+      permissionMode: 'bypassPermissions',
+      runtime: {} as unknown as Runtime,
+    })
+    await runWithSessionContext(ctx, () =>
+      query({
+        role: TEST_ROLE,
+        invocation: {
+          systemPromptOverride: 'test system prompt',
+          onAssistantTurn: (text, meta) => {
+            seen.push({ text, isFinal: meta?.isFinal })
+          },
+        },
+        messages: [createUserMessage('do the thing', null)],
+        tools: [],
+      }),
+    )
+
+    // The empty interim callback is what lets the channel anchor its
+    // per-turn card before the first tool runs.
+    assert.deepEqual(seen, [
+      { text: '', isFinal: false },
+      { text: 'done', isFinal: true },
+    ])
+  })
 })

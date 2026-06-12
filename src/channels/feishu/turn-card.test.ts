@@ -70,7 +70,7 @@ void describe('turn card builder', () => {
     assert.ok(text.includes(`**11:22** 第 22 步\n\n**11:23** 第 23 步`))
   })
 
-  void it('keeps the newest entry visible outside the panel while live', () => {
+  void it('pins the newest entry above the panel, live and at rest', () => {
     setLang('cn')
     const entries = [
       { at: new Date('2026-06-12T11:00:00').getTime(), text: '第一步' },
@@ -82,14 +82,30 @@ void describe('turn card builder', () => {
     assert.ok(panelLines(live).includes('第二步'))
 
     const done = buildTurnCard(entries, { finalized: true })
-    assert.equal(latestLine(done), undefined, 'clean finalize folds the latest line back in')
+    assert.ok(
+      latestLine(done)!.includes('第二步'),
+      'finalized card keeps the latest line — at rest it is the only visible narration',
+    )
 
     const interrupted = buildTurnCard(entries, { finalized: true, interrupted: true })
-    assert.ok(
-      latestLine(interrupted)!.includes('第二步'),
-      'interrupted finalize keeps the latest line',
-    )
+    assert.ok(latestLine(interrupted)!.includes('第二步'))
     assert.ok(panelLines(interrupted).includes('本轮已中断'))
+  })
+
+  void it('renders a single status line before any narration lands', () => {
+    setLang('cn')
+    const live = buildTurnCard([])
+    const liveBody = (live.body as { elements: Array<{ tag: string; content?: string }> }).elements
+    assert.equal(liveBody.length, 1, 'no empty panel')
+    assert.ok(liveBody[0]!.content!.includes('处理中'))
+
+    const done = buildTurnCard([], { finalized: true })
+    const doneBody = (done.body as { elements: Array<{ content?: string }> }).elements
+    assert.ok(doneBody[0]!.content!.includes('本轮无过程记录'))
+
+    const aborted = buildTurnCard([], { finalized: true, interrupted: true })
+    const abortedBody = (aborted.body as { elements: Array<{ content?: string }> }).elements
+    assert.ok(abortedBody[0]!.content!.includes('本轮已中断'))
   })
 
   void it('appends the interrupted line when asked', () => {
@@ -160,7 +176,7 @@ void describe('turn card collector', () => {
     )
   })
 
-  void it('live frames carry the latest line; clean finalize drops it, interrupted keeps it', async () => {
+  void it('the latest line scrolls with patches and survives finalize', async () => {
     const { io, calls } = makeFakeIo()
     const collector = createTurnCardCollector({
       target: { chatId: 'oc_1' },
@@ -170,9 +186,16 @@ void describe('turn card collector', () => {
     collector.add('进行中')
     await delay(20)
     assert.ok(latestLine(calls[0]!.card)!.includes('进行中'))
+    collector.add('快好了')
+    await delay(30)
+    const livePatch = calls[calls.length - 1]!
+    assert.ok(latestLine(livePatch.card)!.includes('快好了'), 'latest line scrolled')
     collector.finalize()
     await delay(30)
-    assert.equal(latestLine(calls[calls.length - 1]!.card), undefined)
+    assert.ok(
+      latestLine(calls[calls.length - 1]!.card)!.includes('快好了'),
+      'latest line survives a clean finalize',
+    )
 
     const second = makeFakeIo()
     const aborted = createTurnCardCollector({
@@ -187,6 +210,27 @@ void describe('turn card collector', () => {
     const last = second.calls[second.calls.length - 1]!
     assert.ok(latestLine(last.card)!.includes('跑到一半'))
     assert.ok(panelLines(last.card).includes('本轮已中断'))
+  })
+
+  void it('an empty interim block begins the card and the first add is awaitable', async () => {
+    const { io, calls } = makeFakeIo()
+    const collector = createTurnCardCollector({
+      target: { chatId: 'oc_1', replyAnchorMessageId: 'om_user' },
+      io: io as never,
+      throttleMs: 10,
+    })
+    // The model's first response went straight to tool calls — no text yet.
+    await collector.add('')
+    assert.equal(calls.length, 1, 'card created synchronously with the awaited add')
+    assert.equal(calls[0]!.kind, 'create')
+    const body = (calls[0]!.card.body as { elements: Array<{ content?: string }> }).elements
+    assert.ok(body[0]!.content!.includes('处理中'))
+
+    collector.add('第一段叙述')
+    await delay(30)
+    const patch = calls[calls.length - 1]!
+    assert.equal(patch.kind, 'patch')
+    assert.ok(latestLine(patch.card)!.includes('第一段叙述'))
   })
 
   void it('a throwing io never escapes', async () => {
