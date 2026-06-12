@@ -28,8 +28,8 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   reviewer: 'c2eeaf309103d3090f674d26aacb51b0b2d05ac3df22d0e89f4b734015c8c0c2',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
-  skillCurator: 'c297902f55ba282ea884326006346f8964be29b4cc67ba8e46007e9d510e0f6a',
-  skillConsolidator: '1015d1b93a6df9b1c47420d1ef77e4fcddd53496cdfd1e73427b0353e92bba16',
+  skillCurator: 'f44bcdc7a2d0140024e95f7b36daf6492783780bc2f8c35128935b5ae472b003',
+  skillConsolidator: '87b5116b492f615854c887bd87968f1068403299e6d1a6fe5b2a9fb7da03306b',
 }
 
 let tmpRoot: string
