@@ -20,6 +20,7 @@ import {
   listTaskRuns,
   markCancelled,
   markDelivered,
+  onTaskRunEvent,
   markFinished,
   markWaiting,
   markStarted,
@@ -731,6 +732,51 @@ describe('TaskRun store', () => {
       assert.equal(meta?.waitingAt, 2)
       assert.equal(meta?.waitReason, 'requester-hold')
     } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('onTaskRunEvent in-process tap (collab-phase4 PR21)', () => {
+  it('fires for created and appended events with the post-write meta, and unsubscribes cleanly', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-tap-'))
+    setLightclawHomeOverride(tmpHome)
+    const seen: Array<{ kind: string; runId: string; status: string }> = []
+    const off = onTaskRunEvent((_owner, runId, event, meta) => {
+      seen.push({ kind: event.kind, runId, status: meta.status })
+    })
+    try {
+      const root = await createRootTaskRun('tapuser', 'session-tap', { objective: 'tap test' })
+      // Root birth is two writes: created (queued) then started (running).
+      assert.deepEqual(seen[0], { kind: 'created', runId: root.id, status: 'queued' })
+      assert.deepEqual(seen[1], { kind: 'started', runId: root.id, status: 'running' })
+      await appendProgress(root.id, { label: 'step 1' }, Date.now(), 'tapuser')
+      assert.equal(seen[2]?.kind, 'progress')
+      off()
+      await appendProgress(root.id, { label: 'step 2' }, Date.now(), 'tapuser')
+      assert.equal(seen.length, 3, 'unsubscribed listener no longer fires')
+    } finally {
+      off()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('a throwing listener never fails or rolls back the write', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-tap2-'))
+    setLightclawHomeOverride(tmpHome)
+    const off = onTaskRunEvent(() => {
+      throw new Error('listener exploded')
+    })
+    try {
+      const root = await createRootTaskRun('tapuser', 'session-tap', { objective: 'tap test' })
+      const next = await appendProgress(root.id, { label: 'survives' }, Date.now(), 'tapuser')
+      assert.ok(next, 'append returned post-write meta despite throwing listener')
+      const events = await getTaskRunEvents(root.id, {}, 'tapuser')
+      assert.ok(events.some(e => e.kind === 'progress'), 'event durably written')
+    } finally {
+      off()
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }

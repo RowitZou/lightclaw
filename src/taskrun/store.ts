@@ -234,6 +234,45 @@ function writeMeta(meta: TaskRunMeta): void {
   safeWriteJson(metaPath(meta.ownerCanonicalUser, meta.id), meta, { mode: 0o600 })
 }
 
+// In-process event tap. One daemon process owns a home (the same premise
+// the memory per-dir rebuild lock rests on), so an in-memory listener set
+// sees every ledger write. Listeners are observers only: they fire AFTER
+// the event and meta are durably written, each call is isolated in its
+// own try/catch, and a throwing listener can never fail or roll back the
+// write path.
+export type TaskRunEventListener = (
+  ownerCanonicalUser: string,
+  runId: string,
+  event: TaskRunEvent,
+  meta: TaskRunMeta,
+) => void
+
+const taskRunEventListeners = new Set<TaskRunEventListener>()
+
+export function onTaskRunEvent(listener: TaskRunEventListener): () => void {
+  taskRunEventListeners.add(listener)
+  return () => {
+    taskRunEventListeners.delete(listener)
+  }
+}
+
+function notifyTaskRunEvent(
+  ownerCanonicalUser: string,
+  runId: string,
+  event: TaskRunEvent,
+  meta: TaskRunMeta,
+): void {
+  for (const listener of taskRunEventListeners) {
+    try {
+      listener(ownerCanonicalUser, runId, event, meta)
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun] event listener failed for ${runId}: ${(error as Error).message}\n`,
+      )
+    }
+  }
+}
+
 export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunMeta> {
   const id = input.id ?? createRunId()
   const now = input.now ?? Date.now()
@@ -279,6 +318,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     await appendRawEvents(input.ownerCanonicalUser, id, [created])
     writeMeta(meta)
   })
+  notifyTaskRunEvent(input.ownerCanonicalUser, id, created, meta)
   return meta
 }
 
@@ -343,7 +383,7 @@ export async function appendEvent(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
-  return withRunLock(id, async () => {
+  const result = await withRunLock(id, async () => {
     const meta = await getTaskRun(id, ownerCanonicalUser)
     if (!meta) return null
     const event = {
@@ -355,8 +395,11 @@ export async function appendEvent(
     await appendRawEvents(meta.ownerCanonicalUser, id, [event])
     const next = reduceMeta(meta, event)
     writeMeta(next)
-    return next
+    return { event, next }
   })
+  if (!result) return null
+  notifyTaskRunEvent(result.next.ownerCanonicalUser, id, result.event, result.next)
+  return result.next
 }
 
 export async function markStarted(

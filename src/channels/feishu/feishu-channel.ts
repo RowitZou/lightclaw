@@ -34,6 +34,7 @@ import {
 import { AskUserScheduler } from './askuser-scheduler.js'
 import { registerSessionAbortHook } from '../../state.js'
 import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
+import { startTaskCardPipeline } from './task-card-subscriber.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
@@ -120,6 +121,12 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       // inbound message carrying the applicant's pre-approval text. Cleared
       // alongside the sender on stop().
       registerChannelRunner(runner)
+
+      // Per-root task cards follow the TaskRun ledger. The startup
+      // reconcile is fire-and-forget: it re-renders roots that moved while
+      // the daemon was down and must never delay channel start.
+      const taskCardPipeline = startTaskCardPipeline()
+      void taskCardPipeline.reconcileOnStart()
 
       const dedup = new FeishuDedup(
         path.join(lightclawHome(), 'state', 'feishu-dedup.json'),
@@ -246,6 +253,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             pendingDrainer.stop()
             disposeAskUserAbortHook()
             askUserScheduler.stop()
+            taskCardPipeline.stop()
             clearAskUserQuestionCoordinator(askUserCoordinator)
             clearFeishuSender(sender)
             clearFeishuClient(client)
@@ -268,6 +276,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
         stop: () => {
           pendingDrainer.stop()
           askUserScheduler.stop()
+          taskCardPipeline.stop()
           clearAskUserQuestionCoordinator(askUserCoordinator)
           clearFeishuSender(sender)
           clearFeishuClient(client)
