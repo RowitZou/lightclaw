@@ -237,3 +237,65 @@ function callContext(cwd: string): ToolCallContext {
     runtime: undefined as never,
   }
 }
+
+test('a non-internal caller may only save a skill for its own role', async () => {
+  await withTempHome(async home => {
+    const ctx = createSessionContext({
+      cwd: path.join(home, 'workspace'),
+      model: 'claude-sonnet-4-6',
+      sessionsDir: path.join(home, 'sessions'),
+      memoryDir: path.join(home, 'memory', 'alice'),
+      currentUserId: 'alice',
+      sessionId: 'skill-write-own-role',
+    })
+    ctx.currentRole = {
+      agentType: 'coder',
+      name: 'coder',
+      kind: 'worker',
+      tools: ['SkillWrite'],
+      skills: [],
+      mcpServers: [],
+      hooks: [],
+      outputContract: 'report',
+    } as never
+
+    await runWithSessionContext(ctx, async () => {
+      const crossRole = await skillWriteTool.call({
+        name: 'their-flow',
+        markdown:
+          '---\n' +
+          'name: their-flow\n' +
+          'description: a flow for someone else\n' +
+          'when_to_use: Use when testing.\n' +
+          'roles:\n  - generalist\n' +
+          '---\n\n# Their Flow\nBody.\n',
+      }, { cwd: ctx.cwd } as never)
+      if (crossRole.isError !== true) throw new Error('cross-role save must be refused')
+      if (!String(crossRole.output).includes('for yourself')) throw new Error(`unexpected: ${crossRole.output}`)
+
+      // Missing roles defaults to ['main'] for user skills — also refused for a coder caller.
+      const defaulted = await skillWriteTool.call({
+        name: 'default-flow',
+        markdown:
+          '---\n' +
+          'name: default-flow\n' +
+          'description: defaults to main\n' +
+          'when_to_use: Use when testing.\n' +
+          '---\n\n# Default Flow\nBody.\n',
+      }, { cwd: ctx.cwd } as never)
+      if (defaulted.isError !== true) throw new Error('roles-defaulted-to-main save must be refused for a worker')
+
+      const ownRole = await skillWriteTool.call({
+        name: 'my-flow',
+        markdown:
+          '---\n' +
+          'name: my-flow\n' +
+          'description: my own method\n' +
+          'when_to_use: Use when testing.\n' +
+          'roles:\n  - coder\n' +
+          '---\n\n# My Flow\nBody.\n',
+      }, { cwd: ctx.cwd } as never)
+      if (ownRole.isError === true) throw new Error(`own-role save should pass: ${ownRole.output}`)
+    })
+  })
+})

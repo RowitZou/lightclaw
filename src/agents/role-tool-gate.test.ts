@@ -36,9 +36,12 @@ test('worker roles apply allowlist plus worker-only blocked tools', async () => 
     behavior: 'deny',
     reason: 'AskUserQuestion is not available to subagents.',
   })
-  assert.deepEqual(await gate(tool('SkillWrite'), {}), {
+  // SkillWrite opened to workers 2026-06-12 (own-role capture; the tool
+  // stamps roles=[caller]); SkillDelete stays blocked.
+  assert.equal((await gate(tool('SkillWrite'), {})).behavior, 'allow')
+  assert.deepEqual(await gate(tool('SkillDelete'), {}), {
     behavior: 'deny',
-    reason: 'SkillWrite is not available to subagents.',
+    reason: 'SkillDelete is not available to subagents.',
   })
   assert.deepEqual(await gate(tool('ShowSlashCatalog'), {}), {
     behavior: 'deny',
@@ -252,33 +255,21 @@ test('Notify is reserved for main: blocked for every worker including wildcard /
   assert.equal((await orchestrator(tool('SkillWrite'), {})).behavior, 'allow')
 })
 
-test('SkillWrite and skillify are main-only', async () => {
-  const wildcardWorker = deriveCanUseTool(role({
-    kind: 'worker',
-    tools: ['*'],
-    skills: ['skillify'],
-  }))
-  assert.equal((await wildcardWorker(tool('SkillWrite'), {})).behavior, 'deny')
-
-  const main = BUNDLED_AGENTS.find(agent => agent.agentType === 'main')
-  assert.ok(main)
-  assert.equal(isToolVisibleToRole(main, 'SkillWrite'), true)
-  assert.equal(
-    filterSkillsForRole(bundledSkills, main).some(skill => skill.name === 'skillify'),
-    true,
-    'main should see skillify',
-  )
-
-  const worker = role({
-    kind: 'worker',
-    tools: ['*'],
-    skills: ['skillify'],
-  })
-  assert.equal(
-    filterSkillsForRole(bundledSkills, worker).some(skill => skill.name === 'skillify'),
-    false,
-    'worker should not see skillify because SkillWrite is blocked',
-  )
+test('SkillWrite and skillify reach every non-internal role; SkillDelete reaches none', async () => {
+  // 2026-06-12: each role captures its own methods (SkillWrite stamps
+  // roles=[caller]); skillify ships to the whole non-internal roster.
+  for (const agent of BUNDLED_AGENTS) {
+    if (agent.kind === 'internal') continue
+    assert.equal(isToolVisibleToRole(agent, 'SkillWrite'), true, `${agent.agentType} should see SkillWrite`)
+    assert.equal(
+      filterSkillsForRole(bundledSkills, agent).some(skill => skill.name === 'skillify'),
+      true,
+      `${agent.agentType} should see skillify`,
+    )
+    if (agent.kind === 'worker') {
+      assert.equal(isToolVisibleToRole(agent, 'SkillDelete'), false, `${agent.agentType} must not see SkillDelete`)
+    }
+  }
 })
 
 test('BrainppCluster is visible only to cluster-capable roles', () => {
@@ -387,11 +378,6 @@ test('every non-main bundled worker role is denied user-escalation and skill-wri
       `${agent.agentType} should be denied Notify`,
     )
     assert.equal(
-      isToolVisibleToRole(agent, 'SkillWrite'),
-      false,
-      `${agent.agentType} should be denied SkillWrite`,
-    )
-    assert.equal(
       isToolVisibleToRole(agent, 'SkillDelete'),
       false,
       `${agent.agentType} should be denied SkillDelete`,
@@ -449,7 +435,7 @@ test('filterToolsByRoleVisibility drops user-escalation tools from worker even w
   const visible = filterToolsByRoleVisibility(generalist, input).map(t => t.name)
   assert.equal(visible.includes('Notify'), false, 'worker must not see Notify')
   assert.equal(visible.includes('AskUserQuestion'), false, 'worker must not see AskUserQuestion')
-  assert.equal(visible.includes('SkillWrite'), false, 'worker must not see SkillWrite')
+  assert.equal(visible.includes('SkillWrite'), true, 'worker keeps SkillWrite (own-role capture, 2026-06-12)')
 })
 
 function tool(name: string): Tool {

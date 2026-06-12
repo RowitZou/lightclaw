@@ -153,7 +153,7 @@ test('per-user skill roles control name visibility', () => {
   )
 })
 
-test('main and generalist bridge per-user skill names but still respect tool compatibility', () => {
+test('per-user skills are visible exactly to the roles their frontmatter names (bridge retired)', () => {
   const mainSkill = skill({
     name: 'main-flow',
     source: 'user',
@@ -175,12 +175,16 @@ test('main and generalist bridge per-user skill names but still respect tool com
   const main = role({ agentType: 'main', kind: 'orchestrator', tools: ['*'] })
   const generalist = role({ agentType: 'generalist', kind: 'worker', tools: ['*'] })
 
-  assert.equal(isSkillNameAllowedForRole(mainSkill, generalist), true)
-  assert.equal(isSkillCompatibleWithRole(mainSkill, generalist), true)
-  assert.equal(isSkillNameAllowedForRole(mainNotifySkill, generalist), true)
-  assert.equal(isSkillCompatibleWithRole(mainNotifySkill, generalist), false)
-  assert.equal(isSkillNameAllowedForRole(generalistSkill, main), true)
-  assert.equal(isSkillCompatibleWithRole(generalistSkill, main), true)
+  // PR19 made the two surfaces orthogonal (manager vs executor); the old
+  // main<->generalist bridge only produced false-positive evaluations and
+  // per-turn skip noise.
+  assert.equal(isSkillNameAllowedForRole(mainSkill, generalist), false)
+  assert.equal(isSkillCompatibleWithRole(mainSkill, generalist), false)
+  assert.equal(isSkillNameAllowedForRole(mainNotifySkill, generalist), false)
+  assert.equal(isSkillNameAllowedForRole(generalistSkill, main), false)
+  assert.equal(isSkillCompatibleWithRole(generalistSkill, main), false)
+  assert.equal(isSkillNameAllowedForRole(mainSkill, main), true)
+  assert.equal(isSkillNameAllowedForRole(generalistSkill, generalist), true)
 })
 
 test('bundled skills keep literal role allowlist semantics', () => {
@@ -233,8 +237,8 @@ test('coder and reviewer no longer expose scaffold verification skills', () => {
 
   assert.ok(coder)
   assert.ok(reviewer)
-  assert.deepEqual(coder.skills, ['remember', 'coding-workflow', 'brainpp-batch-job', 'build-environment'])
-  assert.deepEqual(reviewer.skills, ['remember', 'pre-delivery-review-workflow'])
+  assert.deepEqual(coder.skills, ['remember', 'skillify', 'coding-workflow', 'brainpp-batch-job', 'build-environment'])
+  assert.deepEqual(reviewer.skills, ['remember', 'skillify', 'pre-delivery-review-workflow'])
 })
 
 test('main role exposes remember and skillify', () => {
@@ -263,7 +267,7 @@ test('archivist exposes archive-workflow and remember', () => {
   const archivist = BUNDLED_AGENTS.find(agent => agent.agentType === 'archivist')
 
   assert.ok(archivist)
-  assert.deepEqual(archivist.skills, ['archive-workflow', 'remember'])
+  assert.deepEqual(archivist.skills, ['archive-workflow', 'remember', 'skillify'])
 })
 
 function role(overrides: Partial<Role>): Role {

@@ -51,7 +51,7 @@ const EXPECTED = {
   SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
   // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
   // and references/, plus overwrite as whole-skill replacement.
-  SkillWrite: 'd5ebf7d6cf38704524bf34e4bc3dfcb255faade7843370a0b56470644414c7bb',
+  SkillWrite: 'bce57fd825ef50cccfb8d0bb48c73ae2d162bc6265aea0ad8a9952c0ad1bbbf4',
   // Phase 41 PR3: description stays mechanism-only, drops sandbox wording, and
   // points the model to load brainpp-batch-job for workflow/judgment.
   BrainppCluster: '0019d560d6c86acc7fbb803c0f44bc836f1d94d1063e8cd51b05c0a3d56981fa',

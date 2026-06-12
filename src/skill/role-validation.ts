@@ -3,7 +3,9 @@ import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import type { RuntimeDriver } from '../config.js'
 import type { SkillMeta } from './types.js'
 
-const MAIN_GENERALIST_PAIR = new Set(['main', 'generalist'])
+// PR19 retired the main<->generalist skill bridge: the two surfaces are
+// orthogonal now (manager vs executor), so a user skill is visible exactly
+// to the roles its frontmatter names.
 
 export type SkillRuntimeGate = {
   runtimeDriver?: RuntimeDriver
@@ -11,12 +13,7 @@ export type SkillRuntimeGate = {
 
 export function isSkillNameAllowedForRole(skill: SkillMeta, role: Role): boolean {
   if (skill.source === 'user') {
-    const roleName = String(role.agentType)
-    if (skill.roles.includes(roleName)) {
-      return true
-    }
-    return MAIN_GENERALIST_PAIR.has(roleName) &&
-      skill.roles.some(skillRole => MAIN_GENERALIST_PAIR.has(skillRole))
+    return skill.roles.includes(String(role.agentType))
   }
 
   const skills = (role.skills ?? []) as readonly string[]
@@ -47,6 +44,10 @@ export function isSkillCompatibleWithRole(
   return skill.allowedTools.every(toolName => isToolVisibleToRole(role, toolName))
 }
 
+// A mis-fitting skill is a config fact, not a per-turn event: log each
+// skill+role miss once per process, not on every prompt build.
+const loggedSkips = new Set<string>()
+
 export function filterSkillsForRole(
   skills: SkillMeta[],
   role: Role,
@@ -62,11 +63,15 @@ export function filterSkillsForRole(
     if (isSkillCompatibleWithRole(skill, role, gate)) {
       return true
     }
-    const requiredTools = skill.allowedTools?.join(', ') ?? ''
-    process.stderr.write(
-      `[skill] skipped "${skill.name}" for role "${role.agentType}": ` +
-      `requires tools [${requiredTools}] outside role tools\n`,
-    )
+    const skipKey = `${skill.name}\u0000${role.agentType}`
+    if (!loggedSkips.has(skipKey)) {
+      loggedSkips.add(skipKey)
+      const requiredTools = skill.allowedTools?.join(', ') ?? ''
+      process.stderr.write(
+        `[skill] skipped "${skill.name}" for role "${role.agentType}": ` +
+        `requires tools [${requiredTools}] outside role tools\n`,
+      )
+    }
     return false
   })
 }

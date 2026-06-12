@@ -19,7 +19,10 @@ const BLOCKED_WORKER_TOOLS = new Set([
   'Notify',
   'ShowSlashCatalog',
   'AskUserQuestion',
-  'SkillWrite',
+  // SkillWrite left this set 2026-06-12: every non-internal role captures its
+  // OWN methods (the tool enforces roles=[caller]); SkillDelete stays blocked
+  // — deletion routes through the curation pipeline, never an interactive
+  // agent.
   'SkillDelete',
 ])
 

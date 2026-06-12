@@ -1,10 +1,9 @@
 ---
 name: skillify
 description: "Capture a repeatable method — the how of a multi-step workflow — as a new skill. For one-off facts or preferences use `remember` instead."
-when_to_use: "Use when the user is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill') or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux."
+when_to_use: "Use when your requester is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill', a brief that says to capture the method) or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux."
 allowed-tools:
   - SkillWrite
-  - AskUserQuestion
   - Read
   - Grep
   - Glob
@@ -12,23 +11,29 @@ allowed-tools:
 
 # Skillify {{userDescriptionBlock}}
 
-You are capturing a repeatable workflow the user just established into a saved
-skill so you'll run it the same way next time.
+You are capturing a repeatable workflow your requester just established into a
+saved skill so you'll run it the same way next time.
+
+**You capture your own method only.** The skill you save is a procedure YOU
+executed, and its frontmatter `roles` names exactly you — the save is refused
+otherwise. When the repeatable flow spans work you dispatched, capture your
+half (the briefs you wrote, the acceptance criteria, the settle order) and
+have each dispatched role capture its own half: say so in the brief, or in
+reject feedback while its context is still warm.
 
 ## Product framing — read first
 
-The user talks to you on Feishu, not a terminal. They will never read the
-SKILL.md you produce; they don't know it has a name, a file path, or that
-"skills" exist as a system concept. The promise to them is simple: "I told
-the agent 'always do X this way' and it remembered."
+Your requester will never read the SKILL.md you produce; they don't know it
+has a name, a file path, or that "skills" exist as a system concept. The
+promise to them is simple: "I said 'always do X this way' and it remembered."
 
 So:
 - **You** pick the name, the file location, the tool list, and the body
   structure. None of that surfaces to the user.
 - **You** decide whether something varies next time and becomes \`$ARGUMENTS\`.
-- **The user** is consulted only about needs: *when* should this fire next
-  time, *what counts as done*, *what must never happen*, *where to pause for
-  confirmation*. Always in their domain language.
+- **Your requester** is consulted only about needs: *when* should this fire
+  next time, *what counts as done*, *what must never happen*, *where to pause
+  for confirmation*. Always in their domain language.
 
 Decide first, ask second.
 
@@ -39,7 +44,7 @@ Here is the session memory summary:
 {{sessionMemory}}
 </session_memory>
 
-Here are the user's messages during this session. Pay attention to how they
+Here are the requester's messages during this session. Pay attention to how they
 steered you — corrections become hard rules, repeated preferences become
 defaults:
 <user_messages>
@@ -51,16 +56,16 @@ defaults:
 ### Step 1: Analyze the session
 
 Before asking anything, work out from the transcript:
-- The repeatable process the user wants remembered
+- The repeatable process your requester wants remembered
 - Distinct steps, in order
-- Inputs the user supplied — which ones could vary next time? Those become
+- Inputs the requester supplied — which ones could vary next time? Those become
   \`$ARGUMENTS\`.
 - A success artifact for each step (not "wrote code" but "PR open with CI
   green")
-- Where the user corrected or steered you — these are constraints, not
+- Where the requester corrected or steered you — these are constraints, not
   nice-to-haves
 - Which tools were actually used
-- Anything that must NEVER happen (the user said "no", "don't", "stop")
+- Anything that must NEVER happen (the requester said "no", "don't", "stop")
 - Whether any step is a fixed, deterministic procedure (parsing, formatting,
   a set API-call sequence) that runs more reliably as a script than as prose —
   those become a `scripts/` helper.
@@ -69,13 +74,12 @@ Before asking anything, work out from the transcript:
 
 ### Step 2: Decide whether to ask — and only ask what's truly unresolved
 
-Default to *not* asking. Most workflows the user wants captured were
-demonstrated end-to-end in the session — you watched them do it, you have
-enough to write the skill. Asking turns a smooth "got it, saved"
-interaction into a quiz.
+Default to *not* asking. Most workflows worth capturing were demonstrated
+end-to-end in the session — you have enough to write the skill. Asking turns
+a smooth "got it, saved" interaction into a quiz.
 
 Ask only when, after Step 1's analysis, you genuinely cannot proceed
-without the user's input. Concrete cases that warrant asking:
+without your requester's input. Concrete cases that warrant asking:
 
 - **Ambiguous trigger**: the session showed one example, but the next
   invocation could come in multiple shapes and *which* shape changes how
@@ -83,7 +87,7 @@ without the user's input. Concrete cases that warrant asking:
 - **Branch you never saw**: the workflow has a fork (CI passed / failed,
   conflict / no conflict) and the session only walked one path — you need
   to know what the other path should do, or whether to halt for a human.
-- **Hidden constraint suspected**: the user corrected you mid-flow
+- **Hidden constraint suspected**: the requester corrected you mid-flow
   ("don't do X"), and you can't tell whether that was one-off or a
   standing rule worth encoding.
 - **Irreversible action without a confirmation cue**: a step is destructive
@@ -93,13 +97,14 @@ without the user's input. Concrete cases that warrant asking:
 If none apply, skip Step 2 entirely. Write the skill from what you
 observed.
 
-When you do ask, use \`AskUserQuestion\` (load it via ToolSearch first if it
-isn't in your tool list). Never plain text. Group related questions into a
-single call (up to 4). The user has a freeform slot per question — don't
-add your own "needs tweaking" placeholder option.
+When you do ask, use \`AskUserQuestion\` when it is in your tool catalog —
+group related questions into a single call (up to 4), never plain text, and
+don't add your own "needs tweaking" placeholder option. Without the card
+tool, ask upward instead (Message with no \`to\`), one bundled question with
+concrete options and a default.
 
-Phrase every option in the user's domain language ("when I drop a Linear
-ticket link"), not yours ("when the requester invokes …"). Use
+Phrase every option in your requester's domain language ("when I drop a
+Linear ticket link"), not yours. Use
 \`multiSelect: true\` when options aren't mutually exclusive. Never ask
 about names, file locations, allowed tools, or anything implementation-
 flavored — you decide those.
@@ -114,14 +119,17 @@ you'd follow anyway; every line gets re-read on each future run.
 You decide all of the following without asking:
 
 - **name**: short kebab-case slug derived from what the workflow does
-  (\`cherrypick-to-release\`, \`triage-linear-ticket\`). The user never sees this.
-- **description**: one line, in the user's domain language — this is what
-  the dispatcher matches against future requests.
+  (\`cherrypick-to-release\`, \`triage-linear-ticket\`). The requester never sees this.
+- **description**: one line, in the requester's domain language — this is what
+  future requests are matched against.
 - **when_to_use**: starts with "Use when…", encodes the trigger phrasings
-  the user picked (or that you inferred), includes 2-3 example user
-  messages.
-- **allowed-tools**: minimum tools you actually need from what you observed.
-  Use patterns (\`Bash(gh:*)\`, not bare \`Bash\`).
+  your requester used (or that you inferred), includes 2-3 example requests.
+- **roles**: exactly yourself — \`roles: [<your role>]\`. The save refuses
+  anything else; a method another role runs is theirs to capture.
+- **allowed-tools**: minimum tools you actually used, from your own tool
+  catalog. Use patterns (\`Bash(gh:*)\`, not bare \`Bash\`). Never list a tool
+  you only saw mentioned in a report — if you didn't call it, it doesn't
+  belong here.
 - **Arguments**: only if something genuinely varies next time. Single
   positional \`$ARGUMENTS\` — reference it in the body where it gets
   substituted.
@@ -137,8 +145,10 @@ Format:
 \`\`\`markdown
 ---
 name: {{kebab-slug}}
-description: {{one line, user's language}}
+description: {{one line, requester's language}}
 when_to_use: {{Use when… + trigger phrasings + 2-3 example messages}}
+roles:
+  - {{your own role}}
 allowed-tools:
   - {{tool pattern}}
   - {{tool pattern}}
@@ -187,17 +197,17 @@ either skill changes they stay in sync. Only reuse a skill you can see and that
 cleanly covers the step; if it only half-fits, write the step out directly.
 
 Save via `SkillWrite` — the SKILL.md as `markdown`, any helpers as `files`.
-The save location is fixed; don't ask the user about it.
+The save location is fixed; don't ask about it.
 
-### Step 4: Tell the user, in their language
+### Step 4: Tell your requester, in their language
 
 Do NOT print the SKILL.md. Do NOT mention the slug, the file path, or
-"skills" as a system concept. Just tell the user, in natural language, what
-they'll get next time. Something like:
+"skills" as a system concept. Just say, in natural language, what they'll
+get next time. Something like:
 
 > Got it — next time you {{trigger paraphrased}}, I'll {{step 1
 > paraphrased}}, then {{step 2}}, then {{step 3}}. {{If you added a
 > human checkpoint, mention it: "I'll check with you before merging."}}
 > If you want to tweak it later, just tell me.
 
-The save is invisible to the user; the promise is in plain language.
+The save is invisible to your requester; the promise is in plain language.

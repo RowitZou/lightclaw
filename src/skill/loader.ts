@@ -228,6 +228,9 @@ export async function writeUserSkill(input: {
   markdown: string
   overwrite?: boolean
   files?: SkillWriteFile[]
+  /** When set, the skill's frontmatter `roles` must be exactly this list —
+   *  non-internal callers may only write skills for themselves. */
+  enforcedRoles?: string[]
 }): Promise<SkillMeta> {
   const name = normalizeSkillName(input.name)
   if (getBundledSkillByName(name)) {
@@ -244,6 +247,16 @@ export async function writeUserSkill(input: {
   }
   if (meta.name !== name) {
     throw new Error(`Skill frontmatter name "${meta.name}" must match requested name "${name}".`)
+  }
+  if (input.enforcedRoles) {
+    const want = [...input.enforcedRoles].sort().join(',')
+    const got = [...meta.roles].sort().join(',')
+    if (want !== got) {
+      throw new Error(
+        `A skill you save must be for yourself: set frontmatter \`roles: [${input.enforcedRoles.join(', ')}]\`. ` +
+        `A method another role executes is that role's to capture — ask for it in the brief instead.`,
+      )
+    }
   }
   const files = validateSkillWriteFiles(skillDir, input.files ?? [])
 

@@ -62,7 +62,7 @@ export const BUNDLED_AGENTS: Role[] = [
     // are listed alongside Dispatch as a self-documenting "dispatcher
     // capability" cluster even though wildcard would also reach them.
     tools: ['*', 'Dispatch', 'Message', 'UpdateSchedule'],
-    skills: ['remember', 'brainpp-batch-job', 'build-environment'],
+    skills: ['remember', 'skillify', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: generalistPrompt,
     kind: 'worker',
@@ -79,8 +79,8 @@ export const BUNDLED_AGENTS: Role[] = [
     // Message here is uplink-only by construction: no Dispatch means no
     // children, and the downlink ownership guard rejects anything else.
     // What it buys a leaf is the ask channel to its requester.
-    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'ToolSearch', 'UseSkill'],
-    skills: ['local-exploration-workflow'],
+    tools: ['Bash', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'ToolSearch', 'SkillWrite', 'UseSkill'],
+    skills: ['local-exploration-workflow', 'skillify'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: localExplorerPrompt,
     kind: 'worker',
@@ -91,8 +91,8 @@ export const BUNDLED_AGENTS: Role[] = [
     whenToUse:
       'Web retrieval using WebFetch + WebSearch. Dispatch when you need current info from the web — a specific question, fact, or document. It digs as deep as needed to fully answer that one question (multi-hop search, cross-source verification, downloaded files surfaced with local paths, Grep over downloaded PDFs / HTMLs for specific facts when full read is too expensive), but does not drift into adjacent topics or interpret meaning. For lateral coverage across different topics, dispatch multiple separate web calls (in parallel when independent).',
     // Message: uplink-only ask channel, same as localExplorer.
-    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'ToolSearch', 'UseSkill'],
-    skills: ['web-research-workflow'],
+    tools: ['WebFetch', 'WebSearch', 'Read', 'Grep', 'Glob', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'Message', 'ToolSearch', 'SkillWrite', 'UseSkill'],
+    skills: ['web-research-workflow', 'skillify'],
     hooks: ['auto-compact', 'split-render', 'prompt-too-long-retry', 'memory-nudge', 'auto-memory-extract'],
     systemPrompt: webSearcherPrompt,
     kind: 'worker',
@@ -124,12 +124,13 @@ export const BUNDLED_AGENTS: Role[] = [
       'TaskUpdate',
       'Sleep',
       'ToolSearch',
+      'SkillWrite',
       'Dispatch',
       'Message',
       'UpdateSchedule',
       'UseSkill',
     ],
-    skills: ['feishu-doc-workflow'],
+    skills: ['feishu-doc-workflow', 'skillify'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: feishuSecretaryPrompt,
     kind: 'worker',
@@ -142,8 +143,8 @@ export const BUNDLED_AGENTS: Role[] = [
       'Coding heavy lifting: implement a feature, fix a bug, refactor a module, add a test — and set up or repair the project around the code: install dependencies, configure the build / toolchain / runtime environment, and get typecheck / tests / build passing. Dispatch when the task centers on code or the environment that code runs in. It plans, edits, runs verification (typecheck / tests / build), self-tracks multi-step progress via TodoWrite, persists durable project conventions via MemoryWrite (build commands, fixture locations, naming patterns), and reports back files touched + verification outcomes.',
     description:
       'Coding specialist (Read/Write/Edit/Grep/Glob/Bash + memory for project conventions).',
-    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'TaskUpdate', 'Sleep', 'ToolSearch', 'UseSkill', 'Dispatch', 'Message', 'UpdateSchedule'],
-    skills: ['remember', 'coding-workflow', 'brainpp-batch-job', 'build-environment'],
+    tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'TaskUpdate', 'Sleep', 'ToolSearch', 'SkillWrite', 'UseSkill', 'Dispatch', 'Message', 'UpdateSchedule'],
+    skills: ['remember', 'skillify', 'coding-workflow', 'brainpp-batch-job', 'build-environment'],
     reachableRoles: ['localExplorer', 'webSearcher'],
     systemPrompt: coderPrompt,
     kind: 'worker',
@@ -178,12 +179,13 @@ export const BUNDLED_AGENTS: Role[] = [
       'TaskUpdate',
       'Sleep',
       'ToolSearch',
+      'SkillWrite',
       'UseSkill',
       'Dispatch',
       'Message',
       'UpdateSchedule',
     ],
-    skills: ['archive-workflow', 'remember'],
+    skills: ['archive-workflow', 'remember', 'skillify'],
     reachableRoles: ['feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: archivistPrompt,
     kind: 'worker',
@@ -196,8 +198,8 @@ export const BUNDLED_AGENTS: Role[] = [
       'Pre-delivery sanity check: review a code change, written report, organized data, or any artifact the requester is about to hand to the user. Dispatch it as a quality gate before anything substantial reaches the user — on your own initiative, even when the user did not explicitly ask for a review — to find issues (not fix them). It reads the artifact end-to-end, runs cheap static checks (typecheck / lint / test), applies any persisted user-specific review standards from memory (verifying each is still current before failing on it), groups findings by severity (blocker / important / nit), and returns a structured report with a ship / fix-first / needs-more-info verdict.',
     description:
       'Pre-delivery review specialist (read-only artifact survey; memory for review standards; may dispatch coder ONCE per pass for small in-line fix, otherwise returns issues to requester).',
-    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'TaskUpdate', 'Sleep', 'ToolSearch', 'UseSkill', 'Dispatch', 'Message', 'UpdateSchedule'],
-    skills: ['remember', 'pre-delivery-review-workflow'],
+    tools: ['Read', 'Grep', 'Glob', 'Bash', 'FeishuRead', 'FeishuList', 'MemoryWrite', 'MemoryRead', 'TodoWrite', 'TaskInspect', 'TaskUpdate', 'Sleep', 'ToolSearch', 'SkillWrite', 'UseSkill', 'Dispatch', 'Message', 'UpdateSchedule'],
+    skills: ['remember', 'skillify', 'pre-delivery-review-workflow'],
     reachableRoles: ['coder', 'feishuSecretary', 'localExplorer', 'webSearcher'],
     systemPrompt: reviewerPrompt,
     kind: 'worker',

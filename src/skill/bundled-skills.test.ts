@@ -36,9 +36,10 @@ describe('bundled skills (Phase 16 codegen output)', () => {
   it('skillify frontmatter matches the pre-Phase-16 LoadedSkill shape', () => {
     const skillify = getBundledSkillByName('skillify')
     assert.ok(skillify, 'skillify skill must be present')
+    // AskUserQuestion left the list 2026-06-12: skillify ships to every
+    // non-internal role, and workers ask upward instead of via the card.
     assert.deepEqual(skillify!.allowedTools, [
       'SkillWrite',
-      'AskUserQuestion',
       'Read',
       'Grep',
       'Glob',
