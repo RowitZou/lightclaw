@@ -241,9 +241,25 @@ export async function writeUserSkill(input: {
   const root = userSkillsRoot(input.userId)
   const skillDir = path.join(root, name)
   const filePath = path.join(skillDir, 'SKILL.md')
-  const markdown = input.stampRoles
-    ? stampFrontmatterRoles(input.markdown, input.stampRoles)
-    : input.markdown
+  let markdown = input.markdown
+  if (input.stampRoles) {
+    // New skill: it lands as the caller's. Revision: the caller must already
+    // be among the skill's roles, and the existing roles are preserved as-is
+    // (a consolidator-merged skill keeps its union; a caller can neither
+    // shrink it nor hijack another role's skill body).
+    let stamp = input.stampRoles
+    const existingRoles = await readExistingUserSkillRoles(filePath)
+    if (existingRoles) {
+      if (!input.stampRoles.every(role => existingRoles.includes(role))) {
+        throw new Error(
+          `Skill "${name}" belongs to [${existingRoles.join(', ')}] and is not yours to revise — ` +
+          `ask that role for the change in a dispatch brief instead.`,
+        )
+      }
+      stamp = existingRoles
+    }
+    markdown = stampFrontmatterRoles(input.markdown, stamp)
+  }
   const parsed = parseFrontmatter(markdown)
   rejectShellInjection(filePath, parsed.body)
   const meta = parseSkillFrontmatter(filePath, 'user', parsed.frontmatter)
@@ -274,6 +290,17 @@ export async function writeUserSkill(input: {
     files,
   })
   return meta
+}
+
+async function readExistingUserSkillRoles(filePath: string): Promise<string[] | undefined> {
+  try {
+    const existing = await fs.readFile(filePath, 'utf8')
+    const parsed = parseFrontmatter(existing)
+    const meta = parseSkillFrontmatter(filePath, 'user', parsed.frontmatter)
+    return meta?.roles
+  } catch {
+    return undefined
+  }
 }
 
 /** Replace (or insert) the `roles:` entry inside the first frontmatter block

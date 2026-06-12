@@ -294,3 +294,49 @@ test('a non-internal caller may only save a skill for its own role', async () =>
     })
   })
 })
+
+test('revising an existing skill preserves its roles and refuses non-members', async () => {
+  await withTempHome(async home => {
+    const base = {
+      cwd: path.join(home, 'workspace'),
+      model: 'claude-sonnet-4-6',
+      sessionsDir: path.join(home, 'sessions'),
+      memoryDir: path.join(home, 'memory', 'alice'),
+      currentUserId: 'alice',
+    }
+    const asRole = (agentType: string) => {
+      const ctx = createSessionContext({ ...base, sessionId: `revise-${agentType}` })
+      ctx.currentRole = {
+        agentType, name: agentType, kind: 'worker',
+        tools: ['SkillWrite'], skills: [], mcpServers: [], hooks: [], outputContract: 'report',
+      } as never
+      return ctx
+    }
+    const skillPath = path.join(home, 'identity', 'per-user', 'alice', 'skills', 'shared-flow', 'SKILL.md')
+    // Seed a consolidator-style multi-role skill (internal callers are unstamped).
+    await mkdir(path.dirname(skillPath), { recursive: true })
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(skillPath,
+      '---\nname: shared-flow\ndescription: shared\nwhen_to_use: Use when testing.\nroles:\n  - coder\n  - generalist\n---\n\n# Shared\nv1.\n')
+
+    await runWithSessionContext(asRole('coder'), async () => {
+      const revised = await skillWriteTool.call({
+        name: 'shared-flow', overwrite: true,
+        markdown: '---\nname: shared-flow\ndescription: shared\nwhen_to_use: Use when testing.\n---\n\n# Shared\nv2 by coder.\n',
+      }, { cwd: base.cwd } as never)
+      if (revised.isError === true) throw new Error(`member revise should pass: ${revised.output}`)
+    })
+    const afterRevise = await readFile(skillPath, 'utf8')
+    if (!/roles:\n  - coder\n  - generalist/.test(afterRevise)) throw new Error(`union must survive:\n${afterRevise}`)
+    if (!afterRevise.includes('v2 by coder')) throw new Error('body must update')
+
+    await runWithSessionContext(asRole('reviewer'), async () => {
+      const hijack = await skillWriteTool.call({
+        name: 'shared-flow', overwrite: true,
+        markdown: '---\nname: shared-flow\ndescription: shared\nwhen_to_use: Use when testing.\n---\n\n# Shared\nv3 by reviewer.\n',
+      }, { cwd: base.cwd } as never)
+      if (hijack.isError !== true) throw new Error('non-member revise must be refused')
+      if (!String(hijack.output).includes('not yours to revise')) throw new Error(`unexpected: ${hijack.output}`)
+    })
+  })
+})
