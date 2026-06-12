@@ -10,6 +10,7 @@ import { setLang } from '../../i18n/index.js'
 import {
   appendProgress,
   createRootTaskRun,
+  createStandingRootTaskRun,
   createTaskRun,
   markFinished,
   markStarted,
@@ -26,6 +27,7 @@ const TOPIC_SESSION = 'feishu:group:oc_card_grp:omt_card_thread:ou_sender'
 type IoCall =
   | { kind: 'create'; target: TaskCardTarget; card: Record<string, unknown> }
   | { kind: 'patch'; messageId: string; card: Record<string, unknown> }
+  | { kind: 'sendText'; target: TaskCardTarget; text: string }
 
 function makeFakeIo(): { io: TaskCardIo; calls: IoCall[] } {
   const calls: IoCall[] = []
@@ -40,6 +42,9 @@ function makeFakeIo(): { io: TaskCardIo; calls: IoCall[] } {
       },
       async patch(messageId, card) {
         calls.push({ kind: 'patch', messageId, card })
+      },
+      async sendText(target, text) {
+        calls.push({ kind: 'sendText', target, text })
       },
     },
   }
@@ -113,22 +118,62 @@ void describe('task-card pipeline', () => {
     assert.ok(cardText(last.card).includes('已确定候选论文'))
   })
 
-  void it('freezes the card on root terminal and never renders that root again', async () => {
+  void it('freezes the card on root terminal, sends exactly one settlement message, then goes silent', async () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
 
     const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '一次性任务' })
     await settle()
-    await markFinished(root.id, { ok: true, summary: '完成' }, Date.now(), OWNER)
+    await markFinished(root.id, { ok: true, summary: '两篇论文笔记已写入飞书' }, Date.now(), OWNER)
     await settle()
 
     const binding = await readTaskCardBinding(OWNER, root.id)
     assert.ok(binding?.finalizedAt, 'terminal render stamped finalizedAt')
+    const settlements = calls.filter(c => c.kind === 'sendText') as Array<
+      Extract<IoCall, { kind: 'sendText' }>
+    >
+    assert.equal(settlements.length, 1, 'exactly one settlement message per root')
+    assert.ok(settlements[0].text.includes('✅'))
+    assert.ok(settlements[0].text.includes('两篇论文笔记已写入飞书'))
     const countAtFreeze = calls.length
 
     await appendProgress(root.id, { label: '迟到的事件' }, Date.now(), OWNER)
     await settle()
     assert.equal(calls.length, countAtFreeze, 'frozen card received no further frames')
+  })
+
+  void it('a standing service fires its children without settlement messages', async () => {
+    const { io, calls } = makeFakeIo()
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+
+    const root = await createStandingRootTaskRun(OWNER, {
+      objective: '定时巡检',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      chainId: 'chain-standing',
+    })
+    const child = await createTaskRun({
+      ownerCanonicalUser: OWNER,
+      parentRunId: root.id,
+      chainId: 'chain-s',
+      depth: 1,
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      objective: '本次巡检',
+      mode: 'background',
+    })
+    await markStarted(child.id, 'bg-s-1', Date.now(), OWNER)
+    await markFinished(child.id, { ok: true, summary: '巡检正常' }, Date.now(), OWNER)
+    await settle()
+    assert.equal(
+      calls.filter(c => c.kind === 'sendText').length,
+      0,
+      'per-fire child settlements are service heartbeats, not user messages',
+    )
+    const binding = await readTaskCardBinding(OWNER, root.id)
+    assert.equal(binding?.finalizedAt, undefined, 'live standing root never freezes')
   })
 
   void it('anchors topic-group cards to the recorded inbound message', async () => {
@@ -177,6 +222,9 @@ void describe('task-card pipeline', () => {
           throw new Error('feishu down')
         },
         async patch() {
+          throw new Error('feishu down')
+        },
+        async sendText() {
           throw new Error('feishu down')
         },
       },

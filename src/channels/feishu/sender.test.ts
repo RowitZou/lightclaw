@@ -23,7 +23,6 @@ const baseConfig: FeishuChannelConfig = {
   mediaEnabled: true,
   parentFetchTimeoutMs: 8000,
   typingReaction: false,
-  streamWorkerActivity: false,
   inboxAging: { enabled: false, ttlDays: 7, intervalMinutes: 60 },
   webhook: {
     host: '0.0.0.0',
@@ -374,7 +373,7 @@ test('reply→create fallback in a topic group refuses to send instead of creati
 
   const sender = new FeishuSender(client, baseConfig, { baseDelayMs: 1 })
   // Should resolve without throwing — the refusal is swallowed at the
-  // public sender entry, the same way worker-activity-stream / Notify
+  // public sender entry, the same way task-card / Notify
   // / askuser-card already swallow send failures.
   await sender.sendInteractiveCard(
     { ...baseMessage, chatType: 'group', threadId: 'omt_topic42' },

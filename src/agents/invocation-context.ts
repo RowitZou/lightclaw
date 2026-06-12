@@ -27,6 +27,9 @@ export type InterjectionEntry = {
   pendingAttachments?: InterjectionPendingAttachment[]
   attachmentPaths?: string[]
   source?: 'user' | 'background-task'
+  /** Root TaskRun behind a background-task entry; the rescue replay carries
+   *  it onto the synthetic turn so its narration lands on the task card. */
+  taskCardRoot?: { owner: string; rootRunId: string }
 }
 
 export type InvocationContext = {
@@ -113,7 +116,7 @@ export function forkInvocationContext(input: {
   // Optional per-assistant-turn callback. query.ts invokes it with the
   // worker's full collected text after each turn. Used by the read-only
   // observability stream that forwards worker activity to the chat that
-  // initiated the chain (see channels/feishu/worker-activity-stream.ts).
+  // initiated the chain (now the worker-progress forwarder in src/taskrun/worker-progress.ts).
   onAssistantTurn?: InvocationContext['onAssistantTurn']
   // Optional incremental transcript persistence callbacks (see
   // InvocationContext.persistMessages / rewriteMessages). Background fires

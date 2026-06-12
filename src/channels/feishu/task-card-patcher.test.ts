@@ -9,7 +9,9 @@ import {
 } from './task-card-patcher.js'
 
 void test('patcher coalesces rapid schedules into one flush per throttle window', async () => {
-  const patcher = new TaskCardPatcher(40)
+  // Generous window + early checkpoint so event-loop lag under a full
+  // parallel test run cannot blur the inside/outside-window boundary.
+  const patcher = new TaskCardPatcher(500)
   let flushes = 0
   let lastTag = ''
   for (let i = 0; i < 5; i += 1) {
@@ -18,7 +20,7 @@ void test('patcher coalesces rapid schedules into one flush per throttle window'
       lastTag = `job-${i}`
     })
   }
-  await delay(20)
+  await delay(50)
   // First schedule on a cold lane has no prior flush, so it fires fast,
   // but the five schedules collapse to a single (latest) job.
   assert.equal(flushes, 1)
@@ -30,9 +32,9 @@ void test('patcher coalesces rapid schedules into one flush per throttle window'
   patcher.schedule('root-1', async () => {
     flushes += 1
   })
-  await delay(15)
+  await delay(100)
   assert.equal(flushes, 1, 'second wave still inside throttle window')
-  await delay(60)
+  await delay(700)
   assert.equal(flushes, 2, 'trailing edge ran exactly one more flush')
 })
 

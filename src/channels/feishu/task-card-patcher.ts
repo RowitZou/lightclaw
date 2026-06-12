@@ -28,6 +28,8 @@ export type TaskCardTarget = {
 export type TaskCardIo = {
   create(target: TaskCardTarget, card: Record<string, unknown>): Promise<{ messageId?: string }>
   patch(messageId: string, card: Record<string, unknown>): Promise<void>
+  /** Plain message beside the card (the root's settlement summary). */
+  sendText(target: TaskCardTarget, text: string): Promise<void>
 }
 
 /** A flush job owns the whole render: read store state, build the card,
@@ -126,7 +128,11 @@ export class TaskCardPatcher {
 export function createSenderTaskCardIo(
   sender: Pick<
     FeishuSender,
-    'sendInteractiveCard' | 'sendInteractiveCardToChatId' | 'patchInteractiveCard'
+    | 'sendInteractiveCard'
+    | 'sendInteractiveCardToChatId'
+    | 'patchInteractiveCard'
+    | 'sendMarkdownText'
+    | 'sendMarkdownTextToChatId'
   >,
 ): TaskCardIo {
   return {
@@ -149,6 +155,22 @@ export function createSenderTaskCardIo(
     },
     async patch(messageId, card) {
       await sender.patchInteractiveCard(messageId, card)
+    },
+    async sendText(target, text) {
+      if (target.replyAnchorMessageId) {
+        const anchor = {
+          channel: 'feishu',
+          eventId: `taskcard-${randomUUID()}`,
+          chatId: target.chatId,
+          senderOpenId: '',
+          messageId: target.replyAnchorMessageId,
+          ...(target.threadId ? { threadId: target.threadId } : {}),
+          text: '',
+        } as NormalizedChannelMessage
+        await sender.sendMarkdownText(anchor, text)
+        return
+      }
+      await sender.sendMarkdownTextToChatId(target.chatId, text)
     },
   }
 }

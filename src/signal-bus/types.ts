@@ -63,6 +63,9 @@ export type SignalPayload = {
     | {
         kind: 'background-result'
         ownerOpenId: string
+        // Canonical owner of the backing TaskRun — lets receivers resolve
+        // the run's root without scanning every user's ledger.
+        ownerCanonicalUser?: string
         dispatchId: string
         label: string
         outcome: 'success' | 'failed' | 'permission-denied' | 'aborted'

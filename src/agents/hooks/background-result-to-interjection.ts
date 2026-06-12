@@ -1,5 +1,6 @@
 import { channelInterjectionQueue } from '../../channels/feishu/interjection-queue.js'
 import { wakeOrInterject } from '../../channels/feishu/wake-or-interject.js'
+import { getTaskRun } from '../../taskrun/store.js'
 import { formatBackgroundTaskResultBlock } from '../../signal-bus/background-result-block.js'
 import { getSignalRouter } from '../../signal-bus/router.js'
 import type { AgentSignal } from '../../signal-bus/types.js'
@@ -74,6 +75,21 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
   // Main receiver: legacy path.
   const mainSessionId = receiverSessionId
 
+  // Best-effort root resolution: a wake that knows its root routes the
+  // resulting turn's narration onto the task card instead of the chat.
+  let taskCardRoot: { owner: string; rootRunId: string } | undefined
+  if (payload.taskRunId && payload.ownerCanonicalUser) {
+    try {
+      const run = await getTaskRun(payload.taskRunId, payload.ownerCanonicalUser)
+      const root = run ? await getTaskRun(run.rootRunId, payload.ownerCanonicalUser) : null
+      if (root?.kind === 'root') {
+        taskCardRoot = { owner: payload.ownerCanonicalUser, rootRunId: root.id }
+      }
+    } catch {
+      // unresolved root → the turn keeps the message path
+    }
+  }
+
   await wakeOrInterject({
     targetSessionId: mainSessionId,
     block,
@@ -82,5 +98,6 @@ async function handleBackgroundResultSignal(signal: AgentSignal): Promise<void> 
     emittedAt: signal.timing.emittedAt,
     source: 'background-task',
     logPrefix: '[background-task]',
+    ...(taskCardRoot ? { taskCardRoot } : {}),
   })
 }

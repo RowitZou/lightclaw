@@ -6,7 +6,6 @@ import { backgroundResultToInterjectionHook } from './hooks/background-result-to
 import { backgroundExecResultToInterjectionHook } from './hooks/background-exec-result-to-interjection.js'
 import { chainAbortPropagationHook } from './hooks/chain-abort-propagation.js'
 import { deferredToolsHook } from './hooks/deferred-tools.js'
-import { forwardProgressToChannelHook } from './hooks/forward-progress-to-channel.js'
 import { memoryNudgeHook } from './hooks/memory-nudge.js'
 import { promptTooLongRetryHook } from './hooks/prompt-too-long-retry.js'
 import { splitRenderHook } from './hooks/split-render.js'
@@ -19,7 +18,6 @@ export const BUNDLED_HOOKS: Record<string, Hook> = {
   'prompt-too-long-retry': promptTooLongRetryHook,
   'memory-nudge': memoryNudgeHook,
   'auto-memory-extract': autoMemoryHook,
-  'forward-progress-to-channel': forwardProgressToChannelHook,
   'background-result-to-interjection': backgroundResultToInterjectionHook,
   'background-exec-result-to-interjection': backgroundExecResultToInterjectionHook,
   'chain-abort-propagation': chainAbortPropagationHook,

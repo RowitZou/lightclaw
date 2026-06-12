@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { recordInboundAnchor } from './inbound-anchor.js'
+import { appendProgress } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
@@ -283,6 +284,9 @@ export function buildLeftoverReplayMessage(
     senderOpenId: entry.senderOpenId,
     text: entry.text,
     ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
+    ...(entry.source === 'background-task' && entry.taskCardRoot
+      ? { taskCardRoot: entry.taskCardRoot }
+      : {}),
     ...(entry.pendingAttachments?.length
       ? { pendingAttachments: entry.pendingAttachments as PendingAttachment[] }
       : {}),
@@ -295,6 +299,40 @@ export function buildLeftoverReplayMessage(
     // Gate-approved on first arrival; the @-mention sidecar does not survive
     // the queue, so re-gating drops real user questions (dogfood 2026-06-12).
     replayed: true,
+  }
+}
+
+/**
+ * Noise reduction (collab-phase4 PR22): a framework-initiated turn's
+ * narration is bookkeeping, not conversation — it belongs on the task
+ * card's timeline. Returns true when the text was appended to the turn's
+ * root TaskRun as a progress event (the caller then skips the chat send).
+ * Anything that cannot land on a root — genuine user turns, wakes that
+ * resolved to no single root, a failed append — returns false and keeps
+ * the message path: better noisy than mute. Exported for regression
+ * coverage.
+ */
+export async function routeSyntheticNarration(
+  message: NormalizedChannelMessage,
+  text: string,
+): Promise<boolean> {
+  if (!message.synthetic || !message.taskCardRoot) return false
+  const trimmed = text.replace(/\s+/g, ' ').trim()
+  if (!trimmed) return true
+  const label = trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed
+  try {
+    const appended = await appendProgress(
+      message.taskCardRoot.rootRunId,
+      { label },
+      Date.now(),
+      message.taskCardRoot.owner,
+    )
+    return appended !== null
+  } catch (error) {
+    process.stderr.write(
+      `[task-card] narration reroute failed for ${message.taskCardRoot.rootRunId}: ${(error as Error).message}\n`,
+    )
+    return false
   }
 }
 
@@ -912,6 +950,7 @@ export class ChannelRunner {
                 // (see streamedAtLeastOnce below).
                 onAssistantTurn: async (text: string) => {
                   streamedAtLeastOnce = true
+                  if (await routeSyntheticNarration(effectiveMessage, text)) return
                   await this.sendReply(replyTargetMessage, text)
                 },
                 interjectionRenderer: (entries, context) => [{
@@ -1294,7 +1333,10 @@ export class ChannelRunner {
         // text in between) still anchors the fallback reply on the user's
         // latest input rather than the turn opener.
         if (!streamedAtLeastOnce) {
-          await this.sendReply(replyTargetMessage, result.assistantText || t('channel.assistant.empty'))
+          const finalText = result.assistantText || t('channel.assistant.empty')
+          if (!(await routeSyntheticNarration(effectiveMessage, finalText))) {
+            await this.sendReply(replyTargetMessage, finalText)
+          }
         }
         })
       } catch (error) {

@@ -21,6 +21,8 @@ import {
   type TaskCardIo,
 } from './task-card-patcher.js'
 import { buildTaskCard, TASK_RUN_TERMINAL_STATUSES } from './task-card.js'
+import { t } from '../../i18n/index.js'
+import type { TaskRunMeta } from '../../taskrun/types.js'
 import { deriveTaskCardView } from './task-card-view.js'
 import { parseFeishuSessionId } from './routing.js'
 import { getFeishuSender } from './sender-registry.js'
@@ -30,12 +32,25 @@ import {
   listTaskRuns,
   onTaskRunEvent,
 } from '../../taskrun/store.js'
-import type { TaskRunMeta } from '../../taskrun/types.js'
 
 export type TaskCardPipeline = {
   /** Re-render roots that moved while the process was down. */
   reconcileOnStart(): Promise<void>
   stop(): void
+}
+
+/** The root's conclusion is the one piece of a settlement turn that MUST
+ *  reach the user as a message — after PR22 the narration around it lives
+ *  on the card. Exactly one per root, sent with the freeze frame. */
+function settlementText(root: TaskRunMeta): string {
+  const key = root.status === 'done'
+    ? 'taskcard.delivery.done'
+    : root.status === 'failed'
+      ? 'taskcard.delivery.failed'
+      : 'taskcard.delivery.cancelled'
+  const titleLine = t(key, { title: root.title })
+  const summary = root.outcome?.summary?.trim()
+  return summary ? `${titleLine}\n${summary}` : titleLine
 }
 
 function defaultIo(): TaskCardIo {
@@ -49,6 +64,11 @@ function defaultIo(): TaskCardIo {
       const sender = getFeishuSender()
       if (!sender) return
       await createSenderTaskCardIo(sender).patch(messageId, card)
+    },
+    async sendText(target, text) {
+      const sender = getFeishuSender()
+      if (!sender) return
+      await createSenderTaskCardIo(sender).sendText(target, text)
     },
   }
 }
@@ -93,20 +113,39 @@ export function startTaskCardPipeline(
         card,
       )
       if (!created.messageId) return
-      await writeTaskCardBinding(owner, rootRunId, {
+      const target = {
         chatId: parsed.chatId,
         ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
         ...(replyAnchorMessageId ? { replyAnchorMessageId } : {}),
+      }
+      await writeTaskCardBinding(owner, rootRunId, {
+        ...target,
         messageId: created.messageId,
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
-      if (terminal) patcher.release(rootRunId)
+      if (terminal) {
+        await io.sendText(target, settlementText(root))
+        patcher.release(rootRunId)
+      }
       return
     }
 
     await io.patch(binding.messageId, card)
     if (terminal) {
+      // Stamp before sending: a crash in between loses one settlement
+      // message, while the reverse order would resend it on every
+      // startup reconcile until the stamp finally lands.
       await writeTaskCardBinding(owner, rootRunId, { ...binding, finalizedAt: Date.now() })
+      await io.sendText(
+        {
+          chatId: binding.chatId,
+          ...(binding.threadId ? { threadId: binding.threadId } : {}),
+          ...(binding.replyAnchorMessageId
+            ? { replyAnchorMessageId: binding.replyAnchorMessageId }
+            : {}),
+        },
+        settlementText(root),
+      )
       patcher.release(rootRunId)
     }
   }

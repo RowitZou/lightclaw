@@ -10,9 +10,8 @@
 import { randomUUID } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
-import { loadChannelConfig } from '../channels/config.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
-import { buildWorkerActivityForwarder } from '../channels/feishu/worker-activity-stream.js'
+import { buildWorkerProgressForwarder } from '../taskrun/worker-progress.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -130,23 +129,15 @@ export async function runDispatchedAgent(
   // that sessionId in the interjection queue; drain at every tool boundary
   // so receipt happens at the same cadence as user-driven interjections.
   const chainSessionId = params.chainState?.path.at(-1)?.sessionId
-  // Read-only Feishu observability stream: forward each worker assistant
-  // turn to the chat that initiated the chain. Returns undefined when the
-  // config flag is off, the chain root sessionId is not a Feishu session,
-  // or when there's no Feishu sender registered (terminal-only sessions).
-  // loadChannelConfig() is called once per worker construction (not per
-  // turn), which is acceptable given dispatch frequency.
-  //
-  // bg dispatch is fire-and-forget by design: caller already moved on, and
-  // streaming intermediate turns back to the originating chat re-couples
-  // the bg task to user attention (especially bad for scheduled fires at
-  // unattended hours). bg results come back via the wake / interjection
-  // path on completion; intermediate visibility belongs to blocking
-  // dispatch only.
-  const activityForwarder = params.chainState && params.mode !== 'bg'
-    ? buildWorkerActivityForwarder({
-        chainState: params.chainState,
-        enabled: loadChannelConfig().feishu.streamWorkerActivity,
+  // Worker observability (PR22): each assistant block lands as a throttled
+  // progress event on the worker's own TaskRun, rendered under that child's
+  // timeline on the task card. This replaced the per-block chat forwarder
+  // (worker-activity-stream), which had been dead since blocking dispatch
+  // retired and was disabled in topic groups anyway.
+  const activityForwarder = params.currentTaskRunId
+    ? buildWorkerProgressForwarder({
+        taskRunId: params.currentTaskRunId,
+        ...(params.canonicalUser ? { ownerCanonicalUser: params.canonicalUser } : {}),
       })
     : undefined
   // Default transcript persistence for dispatched workers. Callers that need a

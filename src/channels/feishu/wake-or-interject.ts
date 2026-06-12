@@ -23,6 +23,9 @@ export async function wakeOrInterject(input: {
   emittedAt: number
   source?: 'background-task'
   logPrefix: string
+  /** Root TaskRun this wake settles; rides the synthetic turn (and any
+   *  rescue replay) so its narration lands on the task card timeline. */
+  taskCardRoot?: { owner: string; rootRunId: string }
 }): Promise<WakeOrInterjectResult> {
   if (channelInterjectionQueue.hasInflightFor(input.targetSessionId)) {
     channelInterjectionQueue.push(input.targetSessionId, {
@@ -31,6 +34,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     return { ok: true, mode: 'interjection' }
   }
@@ -48,6 +52,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     return { ok: true, mode: 'queued' }
   }
@@ -61,6 +66,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     process.stderr.write(
       `${input.logPrefix} queued wake block for ${input.targetSessionId}; synthetic turn unavailable\n`,
@@ -84,6 +90,7 @@ export async function wakeOrInterject(input: {
     chatType: parsed.kind === 'dm' ? 'p2p' : 'group',
     ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
     ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
+    ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : input.ownerOpenId,
     text: input.block,
     synthetic: true,

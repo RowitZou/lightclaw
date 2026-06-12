@@ -651,6 +651,10 @@ async function wakeTaskRunReconcileOwner(
 
   const emittedAt = Date.now()
   const messageId = `taskrun-reconcile-${emittedAt}`
+  // A reconcile batch that concerns exactly one root can land the wake's
+  // narration on that root's task card; a multi-root batch has no single
+  // home and keeps the message path.
+  const rootIds = [...new Set(findings.map(finding => finding.rootRunId).filter(Boolean))]
   return wakeOrInterject({
     targetSessionId: mainSessionId,
     block,
@@ -659,6 +663,9 @@ async function wakeTaskRunReconcileOwner(
     emittedAt,
     source: 'background-task',
     logPrefix: '[taskrun-watchdog]',
+    ...(rootIds.length === 1
+      ? { taskCardRoot: { owner: ownerCanonicalUser, rootRunId: rootIds[0] } }
+      : {}),
   })
 }
 

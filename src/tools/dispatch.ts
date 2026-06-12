@@ -783,6 +783,7 @@ async function askParentFromCurrentRun(input: {
         emittedAt: Date.now(),
         source: 'background-task',
         logPrefix: '[taskrun-ask]',
+        taskCardRoot: { owner: input.owner, rootRunId: own.rootRunId },
       })
       delivered = wake.ok
     }

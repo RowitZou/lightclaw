@@ -692,6 +692,7 @@ export class BackgroundTaskScheduler {
     const payload = {
       kind: 'background-result' as const,
       ownerOpenId,
+      ownerCanonicalUser: canonicalUser,
       dispatchId: task.id,
       label: task.label,
       outcome: outcomeLabel,

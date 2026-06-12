@@ -89,7 +89,6 @@ function mergeFeishuConfig(input: ConfigFileChannelsSection['feishu']): FeishuCh
       parseBool(process.env.LIGHTCLAW_FEISHU_TYPING_REACTION) ??
       input?.typingReaction ??
       true,
-    streamWorkerActivity: input?.streamWorkerActivity ?? true,
     mediaEnabled: input?.mediaEnabled ?? true,
     parentFetchTimeoutMs:
       parsePositiveInt(process.env.LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS) ??

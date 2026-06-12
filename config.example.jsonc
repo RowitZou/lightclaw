@@ -373,7 +373,6 @@
       "allowChats": [],
       "requireMention": true,               // require @bot in groups
       "typingReaction": true,               // "thinking" reaction while working [env: LIGHTCLAW_FEISHU_TYPING_REACTION]
-      "streamWorkerActivity": true,         // forward sub-agent turns back to the triggering chat (with a chain prefix)
       "mediaEnabled": true,                 // receive images/audio/files
       "textChunkSize": 4000,                // reply chunk size (chars)
       "httpTimeoutMs": 30000,
