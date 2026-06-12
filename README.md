@@ -130,7 +130,7 @@ LightClaw remembers three things: **your project** (drop a `LIGHTCLAW.md` at the
 
 ## Design notes
 
-- [Multi-agent collaboration design](./docs/collaboration-master-plan.md) — delegated work is not a one-shot RPC but a durable, observable, resumable **task run** (an agent is an *employee*, not a *function*). Shipped in v0.3.0: the on-disk run ledger, deliver/accept settlement, watchdog + escalation, pause/resume on declared wakes, and the live Feishu task panel all come from this doc.
+- [Multi-agent collaboration design](https://github.com/RowitZou/lightclaw/blob/feature/collaboration/docs/collaboration-master-plan.md) — delegated work is not a one-shot RPC but a durable, observable, resumable **task run** (an agent is an *employee*, not a *function*). Shipped in v0.3.0: the on-disk run ledger, deliver/accept settlement, watchdog + escalation, pause/resume on declared wakes, and the live Feishu task panel all come from this doc (kept on the design branch, not in the release tree).
 
 ---
 

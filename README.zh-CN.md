@@ -130,7 +130,7 @@ LightClaw 帮你记三件事：**你的项目**（仓库根放 `LIGHTCLAW.md` �
 
 ## 设计文档
 
-- [Multi-Agent 协作机制设计](./docs/collaboration-master-plan.md) —— 「派活」不是一次性 RPC，而是可持久、可观察、可续跑的**工单（task run）**：agent 是*员工*不是*函数*。已在 v0.3.0 落地：落盘工单账本、交付/验收结算、watchdog + 升级、声明式唤醒的挂起/续跑、飞书实时任务面板都出自这份设计。
+- [Multi-Agent 协作机制设计](https://github.com/RowitZou/lightclaw/blob/feature/collaboration/docs/collaboration-master-plan.md) —— 「派活」不是一次性 RPC，而是可持久、可观察、可续跑的**工单（task run）**：agent 是*员工*不是*函数*。已在 v0.3.0 落地：落盘工单账本、交付/验收结算、watchdog + 升级、声明式唤醒的挂起/续跑、飞书实时任务面板都出自这份设计（设计稿保留在设计分支，不入发布树）。
 
 ---
 
