@@ -64,7 +64,7 @@ const EXPECTED = {
   // any legacy/internal aborted envelope. 2026-05-20: opening sentence widened
   // so it reads correctly when the receiver is not the role that scheduled
   // the dispatch (orphan result fell back up the chain to main).
-  BackgroundTaskResultBlockMain: '3ba567d2f720085833f1f09683623a5ee5d095b804d2482bc64bc4789d063a3d',
+  BackgroundTaskResultBlockMain: 'ddbb52b2768cb7bf7a5677998904b8e79b038ff5af1a798688b3fb2897f21d71',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
   // (final-text only, no Notify equivalent). 2026-05-20: opening sentence
