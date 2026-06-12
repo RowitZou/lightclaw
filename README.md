@@ -9,12 +9,12 @@ LightClaw is a **self-hosted, multi-user AI agent**. It runs as a long-lived dae
 ## Features
 
 <table>
-<tr><td><b>Feishu-native</b></td><td>@ it in a DM / group / topic to talk; every conversation scope is isolated. The terminal is a slash-only admin console — it does not run the agent.</td></tr>
+<tr><td><b>Feishu-native</b></td><td>@ it in a DM / group / topic to talk; every conversation scope is isolated. Working process renders as live-updating cards (a per-turn process card + a per-task panel tracking the whole task tree) instead of message spam; the message stream stays a conversation. The terminal is a slash-only admin console — it does not run the agent.</td></tr>
 <tr><td><b>Actually does things</b></td><td>Read/write/edit files, run shell (foreground + background long jobs), fetch the web, read PDF / Office, operate Feishu cloud docs — all in the sandbox.</td></tr>
 <tr><td><b>Multi-user + permissions</b></td><td>Admin pairs users; each gets an isolated workspace / memory / rules. Four permission modes + plain-language approval cards + per-user ceilings.</td></tr>
 <tr><td><b>Sandboxed</b></td><td>Tools run in a local / Docker / cluster (rlaunch) sandbox by default — handing the bot to someone is not handing them a shell.</td></tr>
 <tr><td><b>Long-horizon memory</b></td><td>Remembers you, your project, and the current task across sessions; flushes hard facts before auto-compaction, consolidates scattered notes in the background.</td></tr>
-<tr><td><b>Multi-agent</b></td><td>The main agent delegates to specialist sub-agents (coding / research / Feishu / review…) — fan out in parallel, run in the background, or schedule.</td></tr>
+<tr><td><b>Multi-agent</b></td><td>The main agent is a manager: it delegates to specialist sub-agents (coding / research / Feishu / review…) — fan out in parallel, run in the background, or schedule. Every delegation is a durable <b>task run</b>: it survives daemon restarts, pauses on declared wakes, and a watchdog revives whatever stalls.</td></tr>
 <tr><td><b>Model-flexible</b></td><td>Anthropic / OpenAI-compatible / Codex OAuth at once; pin different models per role (Claude for the main chat, a small model for memory extraction).</td></tr>
 <tr><td><b>Extensible</b></td><td>MCP servers, lifecycle hooks, admin-defined roles, and natural-language-triggered skills.</td></tr>
 </table>
@@ -130,7 +130,7 @@ LightClaw remembers three things: **your project** (drop a `LIGHTCLAW.md` at the
 
 ## Design notes
 
-- [Multi-agent collaboration design (draft, in discussion)](./docs/collaboration-master-plan.md) — turning delegated work from one-shot RPC into durable, observable, resumable **task runs** (an agent is an *employee*, not a *function*). Design-stage, not yet implemented; comments / PRs on this branch welcome.
+- [Multi-agent collaboration design](./docs/collaboration-master-plan.md) — delegated work is not a one-shot RPC but a durable, observable, resumable **task run** (an agent is an *employee*, not a *function*). Shipped in v0.3.0: the on-disk run ledger, deliver/accept settlement, watchdog + escalation, pause/resume on declared wakes, and the live Feishu task panel all come from this doc.
 
 ---
 

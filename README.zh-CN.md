@@ -9,12 +9,12 @@ LightClaw 是一个**自托管的多用户 AI Agent**。它作为常驻 daemon �
 ## 特性
 
 <table>
-<tr><td><b>飞书原生</b></td><td>私聊 / 群 / 话题里 @ 它就能对话，每个会话维度独立隔离；终端是纯 slash 的 admin 控制台，不跑 agent。</td></tr>
+<tr><td><b>飞书原生</b></td><td>私聊 / 群 / 话题里 @ 它就能对话，每个会话维度独立隔离。执行过程渲染成原地更新的卡片（每轮一张过程卡 + 每个任务一张全程任务面板），不刷屏，消息流保持纯对话；终端是纯 slash 的 admin 控制台，不跑 agent。</td></tr>
 <tr><td><b>真正动手</b></td><td>读写文件、跑 shell（前台 + 后台长任务）、抓网页、读 PDF / Office、操作飞书云文档——全在沙箱里完成。</td></tr>
 <tr><td><b>多用户 + 权限</b></td><td>admin 配对用户，每人独立 workspace / 记忆 / 规则；四档权限模式 + 人话确认卡 + per-user 上限。</td></tr>
 <tr><td><b>沙箱隔离</b></td><td>工具默认跑在本地 / Docker / 集群（rlaunch）沙箱里，碰不到主机其它部分——接给别人用不等于给他们 shell。</td></tr>
 <tr><td><b>长任务记忆</b></td><td>跨 session 记住你、你的项目、当前任务；自动压缩前先落盘，后台周期把散乱记忆整合成主题知识。</td></tr>
-<tr><td><b>多 Agent 协作</b></td><td>主 agent 把活派给专门子 agent（编码 / 调研 / 飞书 / 复审…），可并行扇出、后台跑、定时触发。</td></tr>
+<tr><td><b>多 Agent 协作</b></td><td>主 agent 是管理者：把活派给专门子 agent（编码 / 调研 / 飞书 / 复审…），可并行扇出、后台跑、定时触发。每次派活都是一张可持久的<b>工单（task run）</b>——daemon 重启不丢、可挂起等唤醒、卡住有 watchdog 拉起。</td></tr>
 <tr><td><b>模型灵活</b></td><td>同时接 Anthropic / OpenAI 兼容 / Codex OAuth，按角色钉不同模型（主对话走 Claude、记忆抽取走小模型）。</td></tr>
 <tr><td><b>可扩展</b></td><td>MCP server、生命周期 hook、admin 自定义角色、自然语言触发的 skill。</td></tr>
 </table>
@@ -130,7 +130,7 @@ LightClaw 帮你记三件事：**你的项目**（仓库根放 `LIGHTCLAW.md` �
 
 ## 设计文档
 
-- [Multi-Agent 协作机制设计稿（草稿，讨论中）](./docs/collaboration-master-plan.md) —— 把「派活」从一次性 RPC 升级成可持久、可观察、可续跑的**工单（task run）**：agent 是*员工*不是*函数*。处于设计阶段、尚未实现；欢迎在本分支评论 / 提 PR。
+- [Multi-Agent 协作机制设计](./docs/collaboration-master-plan.md) —— 「派活」不是一次性 RPC，而是可持久、可观察、可续跑的**工单（task run）**：agent 是*员工*不是*函数*。已在 v0.3.0 落地：落盘工单账本、交付/验收结算、watchdog + 升级、声明式唤醒的挂起/续跑、飞书实时任务面板都出自这份设计。
 
 ---
 

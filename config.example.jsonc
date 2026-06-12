@@ -181,9 +181,32 @@
     "maxChainDepthCeiling": 5,              // hard depth ceiling
     "ephemeralSessionTtlMs": 259200000,     // ephemeral dispatch session TTL, default 72h
     "scheduler": {                          // background task scheduling (Dispatch background/scheduled)
-      "maxConcurrentRunsPerUser": 3,        // concurrent fire cap per user, overflow queues FIFO
+      "maxConcurrentRunsPerUser": 100,      // concurrent fire cap per user, overflow queues FIFO (high backstop — parallel fan-out is the normal mode; lower it to throttle)
       "startupCatchupIntervalMs": 60000,    // stagger interval for catching up missed tasks after restart
       "fireRetryMaxAttempts": 3             // max attempts on transient failure
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // taskrun — durable task runs. Every piece of delegated work is a run in
+  // an on-disk ledger: it survives daemon restarts, can pause on a declared
+  // wake (timer / child-join / ask), and a watchdog revives whatever
+  // stalls. These knobs only tune the recovery cadence.
+  // ──────────────────────────────────────────────────────────────────────
+  "taskrun": {
+    "resume": {
+      "maxGapMs": 604800000                 // max session-gap a worker resumes across; beyond it rebuild from its checkpoint (default 7d)
+    },
+    "ask": {
+      "timeoutMs": 900000                   // ask-to-requester timeout; past it the asker continues on its declared default (default 15min)
+    },
+    "watchdog": {
+      "intervalMinutes": 1,                 // reconcile scan period; 0 disables the watchdog
+      "deliveredGraceMs": 60000,            // how long a delivered-but-unsettled result may sit before reporting
+      "waitingGraceMs": 21600000,           // how long a non-root waiting run may sit before reporting (default 6h, 0 disables)
+      "rootIdleGraceMs": 60000,             // how long an open root may sit with nothing live before reporting
+      "budgetWindowMinutes": 30,            // 3 same-fingerprint reports inside this window escalate once, then stop waking
+      "deliveryRetryMaxAttempts": 3         // failed report deliveries before falling back to a direct owner-DM notice
     }
   },
 
