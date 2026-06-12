@@ -201,7 +201,10 @@ export const taskUpdateTool = buildTool({
               isError: true,
             }
           }
-          const result = await closeRootTaskRun(input.runId, owner)
+          const result = await closeRootTaskRun(input.runId, owner, Date.now(), {
+            ...(input.ok !== undefined ? { ok: input.ok } : {}),
+            ...(input.summary ? { summary: input.summary.slice(0, 2000) } : {}),
+          })
           if (result.closed) {
             return {
               output: JSON.stringify({ runId: result.meta.id, status: result.meta.status }),

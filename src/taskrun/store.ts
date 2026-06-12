@@ -944,6 +944,7 @@ export async function closeRootTaskRun(
   rootRunId: string,
   ownerCanonicalUser: string,
   now = Date.now(),
+  outcome: { ok?: boolean; summary?: string } = {},
 ): Promise<CloseRootResult> {
   const root = await getTaskRun(rootRunId, ownerCanonicalUser)
   if (!root) return { closed: false, reason: 'not-found' }
@@ -953,9 +954,17 @@ export async function closeRootTaskRun(
   if (obligations.openRunIds.length > 0 || obligations.pendingDispatchIds.length > 0) {
     return { closed: false, reason: 'open-obligations', obligations }
   }
+  // The summary is the user-facing conclusion: the task-card settlement
+  // message renders it verbatim. It MUST be the caller's words — the old
+  // hardcoded 'Delivered by main.' placeholder silently discarded the
+  // orchestrator's full delivery report (links, results, caveats) the
+  // moment PR22 made this field user-visible.
   const meta = await markFinished(
     root.id,
-    { ok: true, summary: 'Delivered by main.' },
+    {
+      ok: outcome.ok ?? true,
+      ...(outcome.summary ? { summary: outcome.summary } : {}),
+    },
     now,
     ownerCanonicalUser,
   )

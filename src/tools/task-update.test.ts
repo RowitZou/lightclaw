@@ -25,6 +25,7 @@ import {
   markDelivered,
   markWaiting,
   markStarted,
+  closeRootTaskRun,
 } from '../taskrun/store.js'
 import { getAllTools } from '../tools.js'
 import { taskUpdateTool } from './task-update.js'
@@ -184,6 +185,30 @@ test('orchestrator deliver closes a root only when its ledger is settled', async
   )
   assert.equal(reclose.isError, undefined)
   assert.match(reclose.output, /already closed/)
+})
+
+test('orchestrator deliver preserves the caller summary on the closed root', async () => {
+  // Regression (2026-06-12 dogfood): closeRootTaskRun hardcoded
+  // 'Delivered by main.' and discarded the orchestrator's full delivery
+  // report — which the task-card settlement message renders to the user.
+  const root = await createRootTaskRun('alice', 's-main', {
+    objective: 'Deliver the paper reports',
+  })
+  const summary = '两篇报告已交付：https://feishu.cn/docx/xxx；流程已固化为 skill。'
+  const closed = await runAsMain(() =>
+    taskUpdateTool.call({ action: 'deliver', runId: root.id, ok: true, summary }, toolContext()),
+  )
+  assert.equal(closed.isError, undefined)
+  const meta = await getTaskRun(root.id, 'alice')
+  assert.equal(meta?.status, 'done')
+  assert.equal(meta?.outcome?.summary, summary)
+})
+
+test('framework-internal root closes carry no fabricated summary', async () => {
+  const root = await createRootTaskRun('alice', 's-main', { objective: 'bare close' })
+  const result = await closeRootTaskRun(root.id, 'alice')
+  assert.equal(result.closed, true)
+  assert.equal((await getTaskRun(root.id, 'alice'))?.outcome?.summary, undefined)
 })
 
 test('orchestrator deliver requires a root target', async () => {
