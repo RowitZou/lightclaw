@@ -228,9 +228,11 @@ export async function writeUserSkill(input: {
   markdown: string
   overwrite?: boolean
   files?: SkillWriteFile[]
-  /** When set, the skill's frontmatter `roles` must be exactly this list —
-   *  non-internal callers may only write skills for themselves. */
-  enforcedRoles?: string[]
+  /** When set, the written skill's frontmatter `roles` IS this list — any
+   *  roles the markdown carries are replaced before the file lands. A
+   *  non-internal caller saves skills for itself; it never needs to know
+   *  (or get right) its own system identifier. */
+  stampRoles?: string[]
 }): Promise<SkillMeta> {
   const name = normalizeSkillName(input.name)
   if (getBundledSkillByName(name)) {
@@ -239,7 +241,10 @@ export async function writeUserSkill(input: {
   const root = userSkillsRoot(input.userId)
   const skillDir = path.join(root, name)
   const filePath = path.join(skillDir, 'SKILL.md')
-  const parsed = parseFrontmatter(input.markdown)
+  const markdown = input.stampRoles
+    ? stampFrontmatterRoles(input.markdown, input.stampRoles)
+    : input.markdown
+  const parsed = parseFrontmatter(markdown)
   rejectShellInjection(filePath, parsed.body)
   const meta = parseSkillFrontmatter(filePath, 'user', parsed.frontmatter)
   if (!meta) {
@@ -248,16 +253,7 @@ export async function writeUserSkill(input: {
   if (meta.name !== name) {
     throw new Error(`Skill frontmatter name "${meta.name}" must match requested name "${name}".`)
   }
-  if (input.enforcedRoles) {
-    const want = [...input.enforcedRoles].sort().join(',')
-    const got = [...meta.roles].sort().join(',')
-    if (want !== got) {
-      throw new Error(
-        `A skill you save must be for yourself: set frontmatter \`roles: [${input.enforcedRoles.join(', ')}]\`. ` +
-        `A method another role executes is that role's to capture — ask for it in the brief instead.`,
-      )
-    }
-  }
+
   const files = validateSkillWriteFiles(skillDir, input.files ?? [])
 
   if (!input.overwrite) {
@@ -274,10 +270,25 @@ export async function writeUserSkill(input: {
   await writeStagedUserSkill({
     root,
     skillDir,
-    markdown: input.markdown,
+    markdown,
     files,
   })
   return meta
+}
+
+/** Replace (or insert) the `roles:` entry inside the first frontmatter block
+ *  so the on-disk skill always carries the caller's own role — the registry
+ *  re-parses SKILL.md from disk, so the stamp must live in the file. */
+function stampFrontmatterRoles(markdown: string, roles: string[]): string {
+  const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!match) return markdown // no frontmatter: parse fails downstream with the existing message
+  const block = match[1]
+  const cleaned = block
+    .replace(/^roles:[^\n]*(?:\n[ \t]+-[^\n]*)*/m, '')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/^\n+|\n+$/g, '')
+  const stamped = `${cleaned}\nroles:\n${roles.map(role => `  - ${role}`).join('\n')}`
+  return markdown.replace(match[0], `---\n${stamped}\n---`)
 }
 
 function validateSkillWriteFiles(

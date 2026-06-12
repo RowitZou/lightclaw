@@ -15,11 +15,11 @@ You are capturing a repeatable workflow your requester just established into a
 saved skill so you'll run it the same way next time.
 
 **You capture your own method only.** The skill you save is a procedure YOU
-executed, and its frontmatter `roles` names exactly you — the save is refused
-otherwise. When the repeatable flow spans work you dispatched, capture your
-half (the briefs you wrote, the acceptance criteria, the settle order) and
-have each dispatched role capture its own half: say so in the brief, or in
-reject feedback while its context is still warm.
+executed — the save records it as yours automatically. When the repeatable
+flow spans work you dispatched, capture your half (the briefs you wrote, the
+acceptance criteria, the settle order) and have each dispatched role capture
+its own half: say so in the brief, or in reject feedback while its context
+is still warm.
 
 ## Product framing — read first
 
@@ -124,8 +124,6 @@ You decide all of the following without asking:
   future requests are matched against.
 - **when_to_use**: starts with "Use when…", encodes the trigger phrasings
   your requester used (or that you inferred), includes 2-3 example requests.
-- **roles**: exactly yourself — \`roles: [<your role>]\`. The save refuses
-  anything else; a method another role runs is theirs to capture.
 - **allowed-tools**: minimum tools you actually used, from your own tool
   catalog. Use patterns (\`Bash(gh:*)\`, not bare \`Bash\`). Never list a tool
   you only saw mentioned in a report — if you didn't call it, it doesn't
@@ -147,8 +145,6 @@ Format:
 name: {{kebab-slug}}
 description: {{one line, requester's language}}
 when_to_use: {{Use when… + trigger phrasings + 2-3 example messages}}
-roles:
-  - {{your own role}}
 allowed-tools:
   - {{tool pattern}}
   - {{tool pattern}}

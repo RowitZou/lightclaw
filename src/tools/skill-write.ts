@@ -10,10 +10,11 @@ import { buildTool } from '../tool.js'
 
 const SKILL_WRITE_DESCRIPTION = `Save a skill to the current user's skill set. \`name\` is a short kebab-case
 identifier; \`markdown\` is the full SKILL.md (YAML frontmatter — name,
-description, when_to_use, roles, optional allowed-tools — then the workflow
-body). \`roles\` must name exactly yourself — a skill you save is a method YOU
-execute. A method another role runs is that role's to capture: ask for it in
-the dispatch brief (or reject feedback) instead of writing it for them.
+description, when_to_use, optional allowed-tools — then the workflow body).
+A skill you save is a method YOU execute — the save records it as yours
+automatically (you don't set \`roles\`; anything you put there is replaced).
+A method another role runs is that role's to capture: ask for it in the
+dispatch brief (or reject feedback) instead of writing it for them.
 
 \`files\` (optional) ships supporting files alongside SKILL.md: each path must
 sit under \`scripts/\` (deterministic helpers the body runs) or \`references/\`
@@ -80,7 +81,10 @@ export const skillWriteTool = buildTool({
     }
 
     const callerRole = getCurrentRole()
-    const enforcedRoles = callerRole && callerRole.kind !== 'internal'
+    // Hard-stamped, not requested: a non-internal caller cannot (and need
+    // not) know its own system identifier — whatever roles the markdown
+    // carries are replaced with the caller itself before the file lands.
+    const stampRoles = callerRole && callerRole.kind !== 'internal'
       ? [String(callerRole.agentType)]
       : undefined
     try {
@@ -90,7 +94,7 @@ export const skillWriteTool = buildTool({
         markdown: input.markdown,
         files: input.files,
         overwrite: input.overwrite,
-        enforcedRoles,
+        stampRoles,
       })
       await refreshSkillRegistry(context.cwd, userId)
       // Record this save as a consolidation survivor for the current run, so a

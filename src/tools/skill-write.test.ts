@@ -260,6 +260,8 @@ test('a non-internal caller may only save a skill for its own role', async () =>
     } as never
 
     await runWithSessionContext(ctx, async () => {
+      // Whatever roles the markdown carries (someone else's, or none at all —
+      // which would default to main), the file lands stamped with the caller.
       const crossRole = await skillWriteTool.call({
         name: 'their-flow',
         markdown:
@@ -270,32 +272,25 @@ test('a non-internal caller may only save a skill for its own role', async () =>
           'roles:\n  - generalist\n' +
           '---\n\n# Their Flow\nBody.\n',
       }, { cwd: ctx.cwd } as never)
-      if (crossRole.isError !== true) throw new Error('cross-role save must be refused')
-      if (!String(crossRole.output).includes('for yourself')) throw new Error(`unexpected: ${crossRole.output}`)
+      if (crossRole.isError === true) throw new Error(`stamped save should pass: ${crossRole.output}`)
+      const theirs = await readFile(
+        path.join(home, 'identity', 'per-user', 'alice', 'skills', 'their-flow', 'SKILL.md'), 'utf8')
+      if (!/roles:\n  - coder/.test(theirs)) throw new Error(`expected coder stamp, got:\n${theirs}`)
+      if (theirs.includes('generalist')) throw new Error('foreign role must be replaced')
 
-      // Missing roles defaults to ['main'] for user skills — also refused for a coder caller.
       const defaulted = await skillWriteTool.call({
         name: 'default-flow',
         markdown:
           '---\n' +
           'name: default-flow\n' +
-          'description: defaults to main\n' +
+          'description: no roles written\n' +
           'when_to_use: Use when testing.\n' +
           '---\n\n# Default Flow\nBody.\n',
       }, { cwd: ctx.cwd } as never)
-      if (defaulted.isError !== true) throw new Error('roles-defaulted-to-main save must be refused for a worker')
-
-      const ownRole = await skillWriteTool.call({
-        name: 'my-flow',
-        markdown:
-          '---\n' +
-          'name: my-flow\n' +
-          'description: my own method\n' +
-          'when_to_use: Use when testing.\n' +
-          'roles:\n  - coder\n' +
-          '---\n\n# My Flow\nBody.\n',
-      }, { cwd: ctx.cwd } as never)
-      if (ownRole.isError === true) throw new Error(`own-role save should pass: ${ownRole.output}`)
+      if (defaulted.isError === true) throw new Error(`defaulted save should pass: ${defaulted.output}`)
+      const mine = await readFile(
+        path.join(home, 'identity', 'per-user', 'alice', 'skills', 'default-flow', 'SKILL.md'), 'utf8')
+      if (!/roles:\n  - coder/.test(mine)) throw new Error(`expected coder stamp, got:\n${mine}`)
     })
   })
 })
