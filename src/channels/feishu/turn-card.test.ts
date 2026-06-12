@@ -36,8 +36,17 @@ function makeFakeIo(): {
 }
 
 function panelLines(card: Record<string, unknown>): string {
-  const body = card.body as { elements: Array<{ elements?: Array<{ content: string }> }> }
-  return body.elements[0]!.elements![0]!.content
+  const body = card.body as {
+    elements: Array<{ tag: string; elements?: Array<{ content: string }> }>
+  }
+  const panel = body.elements.find(el => el.tag === 'collapsible_panel')!
+  return panel.elements![0]!.content
+}
+
+function latestLine(card: Record<string, unknown>): string | undefined {
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> }
+  const first = body.elements[0]!
+  return first.tag === 'markdown' ? first.content : undefined
 }
 
 void describe('turn card builder', () => {
@@ -49,13 +58,38 @@ void describe('turn card builder', () => {
     }))
     const card = buildTurnCard(entries)
     assert.equal(card.schema, '2.0')
-    const panel = (card.body as { elements: Array<Record<string, unknown>> }).elements[0]!
-    assert.equal(panel.tag, 'collapsible_panel')
+    const panel = (card.body as { elements: Array<Record<string, unknown>> }).elements.find(
+      el => el.tag === 'collapsible_panel',
+    )!
     assert.equal(panel.expanded, false)
     const text = panelLines(card)
     assert.ok(text.includes('更早 4 条略'))
     assert.ok(text.includes(`第 ${TURN_CARD_MAX_ENTRIES + 3} 步`))
     assert.ok(!text.includes('第 0 步\n'))
+    // Bold clock + paragraph break between entries.
+    assert.ok(text.includes(`**11:22** 第 22 步\n\n**11:23** 第 23 步`))
+  })
+
+  void it('keeps the newest entry visible outside the panel while live', () => {
+    setLang('cn')
+    const entries = [
+      { at: new Date('2026-06-12T11:00:00').getTime(), text: '第一步' },
+      { at: new Date('2026-06-12T11:05:00').getTime(), text: '第二步' },
+    ]
+    const live = buildTurnCard(entries)
+    assert.ok(latestLine(live)!.includes('**最新 11:05** 第二步'))
+    // The panel still carries the full history including the latest entry.
+    assert.ok(panelLines(live).includes('第二步'))
+
+    const done = buildTurnCard(entries, { finalized: true })
+    assert.equal(latestLine(done), undefined, 'clean finalize folds the latest line back in')
+
+    const interrupted = buildTurnCard(entries, { finalized: true, interrupted: true })
+    assert.ok(
+      latestLine(interrupted)!.includes('第二步'),
+      'interrupted finalize keeps the latest line',
+    )
+    assert.ok(panelLines(interrupted).includes('本轮已中断'))
   })
 
   void it('appends the interrupted line when asked', () => {
@@ -124,6 +158,35 @@ void describe('turn card collector', () => {
       !calls.some(c => panelLines(c.card).includes('迟到的块')),
       'adds after finalize are ignored',
     )
+  })
+
+  void it('live frames carry the latest line; clean finalize drops it, interrupted keeps it', async () => {
+    const { io, calls } = makeFakeIo()
+    const collector = createTurnCardCollector({
+      target: { chatId: 'oc_1' },
+      io: io as never,
+      throttleMs: 10,
+    })
+    collector.add('进行中')
+    await delay(20)
+    assert.ok(latestLine(calls[0]!.card)!.includes('进行中'))
+    collector.finalize()
+    await delay(30)
+    assert.equal(latestLine(calls[calls.length - 1]!.card), undefined)
+
+    const second = makeFakeIo()
+    const aborted = createTurnCardCollector({
+      target: { chatId: 'oc_1' },
+      io: second.io as never,
+      throttleMs: 10,
+    })
+    aborted.add('跑到一半')
+    await delay(20)
+    aborted.finalize({ interrupted: true })
+    await delay(30)
+    const last = second.calls[second.calls.length - 1]!
+    assert.ok(latestLine(last.card)!.includes('跑到一半'))
+    assert.ok(panelLines(last.card).includes('本轮已中断'))
   })
 
   void it('a throwing io never escapes', async () => {

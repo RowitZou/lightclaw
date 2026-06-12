@@ -59,7 +59,7 @@ export function createTurnCardCollector(input: {
 
   async function flush(): Promise<void> {
     if (entries.length === 0) return
-    const card = buildTurnCard(entries, { interrupted })
+    const card = buildTurnCard(entries, { interrupted, finalized })
     if (!messageId) {
       const created = await io.create(input.target, card)
       if (created.messageId) messageId = created.messageId

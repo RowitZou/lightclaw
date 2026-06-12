@@ -130,7 +130,7 @@ function timelinePanel(
   const shown = entries.slice(-maxEntries)
   const dropped = entries.length - shown.length
   const lines = shown.map(
-    entry => `${formatClock(entry.at)} ${truncate(entry.text, TASK_CARD_TIMELINE_LINE_MAX_CHARS)}`,
+    entry => `**${formatClock(entry.at)}** ${truncate(entry.text, TASK_CARD_TIMELINE_LINE_MAX_CHARS)}`,
   )
   if (dropped > 0) {
     lines.unshift(t('taskcard.timeline.earlier', { count: String(dropped) }))
@@ -144,7 +144,9 @@ function timelinePanel(
         content: `**${t(titleKey, { count: String(entries.length) })}**`,
       },
     },
-    elements: [markdownElement(lines.join('\n'))],
+    // Blank line between entries — multi-line entries are hard to tell
+    // apart in lark_md without a paragraph break.
+    elements: [markdownElement(lines.join('\n\n'))],
   }
 }
 

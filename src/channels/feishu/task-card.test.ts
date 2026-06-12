@@ -84,7 +84,9 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
   }
   const rootPanel = panels[panels.length - 1]
   assert.ok(panelTitle(rootPanel).includes('任务进程（2 条）'))
-  assert.ok(panelText(rootPanel).includes('23:19 目录已创建'))
+  assert.ok(panelText(rootPanel).includes('**23:19** 目录已创建'))
+  // Entries are paragraph-separated so multi-line entries stay distinguishable.
+  assert.ok(panelText(rootPanel).includes('token\n\n**23:21** 目录信息已补齐'))
   // Breadcrumb-merged descendant line stays inside the direct child's panel.
   assert.ok(panelText(panels[1]).includes('[webSearcher→localExplorer]'))
 })
@@ -138,7 +140,7 @@ void test('buildTaskCard enforces the whole-card timeline budget by shrinking ch
   for (const panel of panels) {
     totalLines += panelText(panel)
       .split('\n')
-      .filter(line => /^\d{2}:\d{2} /.test(line)).length
+      .filter(line => /^\*\*\d{2}:\d{2}\*\* /.test(line)).length
   }
   assert.ok(
     totalLines <= TASK_CARD_MAX_TOTAL_TIMELINE,
