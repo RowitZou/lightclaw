@@ -171,12 +171,14 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.deepEqual(resumeCalls, [{ runId: parent.id, via: 'child-join' }])
   })
 
-  it('does NOT double-wake the child-join parent when the worker already self-delivered', async () => {
-    // When a worker self-delivers via TaskUpdate, its own deliver path already
-    // fired the child-join wake. The scheduler's settle-on-return markDelivered
-    // is then a no-op (run already delivered) and MUST NOT fire a second wake —
-    // the consumed guard is set only when the parent's resume starts (detached),
-    // so a duplicate wake here would schedule a duplicate parent resume.
+  it('wakes the child-join parent at turn-end with the fire result even when the worker self-delivered', async () => {
+    // A worker that self-delivers via TaskUpdate parks at delivered mid-turn
+    // with only a capped summary label. The wake is NOT fired inline from the
+    // deliver site anymore — it fires from the scheduler's turn-end
+    // settle-on-return, carrying the fire's full final reply. So the parent is
+    // still woken (exactly once — the deliver site no longer wakes, the
+    // scheduler is the sole waker), and what it receives is the fire result,
+    // not the worker's mid-turn label.
     const parent = await createTaskRun({
       ownerCanonicalUser: 'alice',
       role: 'generalist',
@@ -185,7 +187,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
       mode: 'background',
       objective: 'Coordinate, then wait for the probe.',
       parentRunId: null,
-      chainId: 'chain-dup',
+      chainId: 'chain-self',
       depth: 1,
     })
     await markStarted(parent.id, 'bg-parent', 10, 'alice')
@@ -197,26 +199,90 @@ describe('BackgroundTaskScheduler fire completion', () => {
       mode: 'background',
       objective: 'Probe the cluster.',
       parentRunId: parent.id,
-      chainId: 'chain-dup',
+      chainId: 'chain-self',
       depth: 2,
     })
     await markStarted(child.id, 'bg-child', 15, 'alice')
-    // The worker self-delivered (its own TaskUpdate deliver path owns that wake).
-    await markDelivered(child.id, { ok: true, summary: 'probe done by worker' }, 18, 'alice')
+    // The worker self-delivered with a short label (the summary is just a card
+    // label; the full result is its final reply).
+    await markDelivered(child.id, { ok: true, summary: 'probe done (label)' }, 18, 'alice')
     await markWaiting(parent.id, {
       reason: 'child-join',
       wake: { kind: 'child-join', runId: child.id },
     }, 20, 'alice')
 
-    const resumeCalls: Array<{ runId: string; via: string }> = []
+    const resumeCalls: Array<{ runId: string; via: string; body: string }> = []
     setResumeRunnerForTest(async (runId, block) => {
-      resumeCalls.push({ runId, via: block.via })
+      resumeCalls.push({ runId, via: block.via, body: block.body })
       const run = await getTaskRun(runId, 'alice')
       return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
     })
     const task = {
       ...fakeTask(),
-      id: 'dup-fire',
+      id: 'self-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+      notifyOn: 'failure' as const,
+      taskRunId: child.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const fullReply = `${'A'.repeat(600)}__FINAL_REPLY_TAIL__${'B'.repeat(40)}`
+    setRunBackgroundTaskFireForTest(async () => {
+      return { kind: 'success', summary: fullReply, transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'self-fire')
+    await scheduler.drain()
+    await drainScheduledResumesForTest()
+
+    assert.equal(resumeCalls.length, 1)
+    assert.equal(resumeCalls[0].runId, parent.id)
+    assert.equal(resumeCalls[0].via, 'child-join')
+    assert.ok(
+      resumeCalls[0].body.includes('__FINAL_REPLY_TAIL__'),
+      'child-join block must carry the full final reply, not the capped summary label',
+    )
+  })
+
+  it('child-join wake carries the fire full final reply, not the capped ledger summary', async () => {
+    const parent = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Coordinate, then wait for the deep analysis.',
+      parentRunId: null,
+      chainId: 'chain-full',
+      depth: 1,
+    })
+    await markStarted(parent.id, 'bg-parent', 10, 'alice')
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'generalist',
+      callerSessionId: 'bg-parent',
+      mode: 'background',
+      objective: 'Produce a long investigation note.',
+      parentRunId: parent.id,
+      chainId: 'chain-full',
+      depth: 2,
+    })
+    await markWaiting(parent.id, {
+      reason: 'child-join',
+      wake: { kind: 'child-join', runId: child.id },
+    }, 20, 'alice')
+
+    const resumeCalls: Array<{ runId: string; body: string }> = []
+    setResumeRunnerForTest(async (runId, block) => {
+      resumeCalls.push({ runId, body: block.body })
+      const run = await getTaskRun(runId, 'alice')
+      return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
+    })
+    const longReply = `${'X'.repeat(600)}__DEEP_ANALYSIS_TAIL__${'Y'.repeat(40)}`
+    const task = {
+      ...fakeTask(),
+      id: 'full-fire',
       schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
       notifyOn: 'failure' as const,
       taskRunId: child.id,
@@ -224,15 +290,128 @@ describe('BackgroundTaskScheduler fire completion', () => {
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
     setRunBackgroundTaskFireForTest(async () => {
-      return { kind: 'success', summary: 'probe done', transcriptPath: '/tmp/x' }
+      return { kind: 'success', summary: longReply, transcriptPath: '/tmp/x' }
     })
 
-    scheduler.fireImmediate('alice', 'dup-fire')
+    scheduler.fireImmediate('alice', 'full-fire')
     await scheduler.drain()
     await drainScheduledResumesForTest()
 
-    // The scheduler's settle-on-return must NOT have fired a second wake.
-    assert.deepEqual(resumeCalls, [])
+    assert.equal(resumeCalls.length, 1)
+    assert.ok(
+      resumeCalls[0].body.length > 500,
+      'the child-join block must not be capped at the 500-char ledger summary',
+    )
+    assert.ok(
+      resumeCalls[0].body.includes('__DEEP_ANALYSIS_TAIL__'),
+      'the child-join block must carry the uncapped final reply',
+    )
+    // The ledger summary stays capped (card label / TaskInspect), independent of
+    // the wake content — the two are deliberately different fidelities.
+    assert.equal((await getTaskRun(child.id, 'alice'))?.outcome?.summary?.length, 500)
+  })
+
+  it('suppresses the redundant bg-result notification when a child-join parent was woken', async () => {
+    const parent = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Coordinate, then wait for the probe.',
+      parentRunId: null,
+      chainId: 'chain-dedup',
+      depth: 1,
+    })
+    await markStarted(parent.id, 'bg-parent', 10, 'alice')
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'generalist',
+      callerSessionId: 'bg-parent',
+      mode: 'background',
+      objective: 'Probe the cluster.',
+      parentRunId: parent.id,
+      chainId: 'chain-dedup',
+      depth: 2,
+    })
+    await markWaiting(parent.id, {
+      reason: 'child-join',
+      wake: { kind: 'child-join', runId: child.id },
+    }, 20, 'alice')
+
+    const resumeCalls: string[] = []
+    setResumeRunnerForTest(async (runId, block) => {
+      resumeCalls.push(runId)
+      const run = await getTaskRun(runId, 'alice')
+      return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
+    })
+    const task = {
+      ...fakeTask(),
+      id: 'dedup-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+      notifyOn: 'always' as const,
+      taskRunId: child.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async () => {
+      return { kind: 'success', summary: 'probe done', transcriptPath: '/tmp/x' }
+    })
+    const deliverCalls: string[] = []
+    ;(scheduler as unknown as {
+      deliverCompletion: (...args: unknown[]) => Promise<void>
+    }).deliverCompletion = async () => {
+      deliverCalls.push('called')
+    }
+
+    scheduler.fireImmediate('alice', 'dedup-fire')
+    await scheduler.drain()
+    await drainScheduledResumesForTest()
+
+    assert.deepEqual(resumeCalls, [parent.id], 'the child-join parent must be woken')
+    assert.deepEqual(deliverCalls, [], 'the redundant bg-result notification must be suppressed')
+  })
+
+  it('still delivers the bg-result when no child-join parent is waiting', async () => {
+    // Fire-and-forget: nobody waited on this run, so the bg-result notification
+    // is the only delivery path and must fire normally — the suppression is
+    // scoped to runs whose explicit waiter already got the result inline.
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Standalone probe with no waiter.',
+      parentRunId: null,
+      chainId: 'chain-ff',
+      depth: 1,
+    })
+    const task = {
+      ...fakeTask(),
+      id: 'ff-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+      notifyOn: 'always' as const,
+      taskRunId: child.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async () => {
+      return { kind: 'success', summary: 'probe done', transcriptPath: '/tmp/x' }
+    })
+    const deliverCalls: string[] = []
+    ;(scheduler as unknown as {
+      deliverCompletion: (...args: unknown[]) => Promise<void>
+    }).deliverCompletion = async () => {
+      deliverCalls.push('called')
+    }
+
+    scheduler.fireImmediate('alice', 'ff-fire')
+    await scheduler.drain()
+    await drainScheduledResumesForTest()
+
+    assert.deepEqual(deliverCalls, ['called'], 'fire-and-forget must still deliver the bg-result')
   })
 
   it('does not autopause recurring tasks after failures', async () => {

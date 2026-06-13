@@ -19,7 +19,6 @@ import {
   markWaiting,
   rejectTaskRun,
 } from '../taskrun/store.js'
-import { wakeParentForChildJoinBestEffort } from '../taskrun/resume.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
@@ -272,7 +271,12 @@ export const taskUpdateTool = buildTool({
       if (!delivered) {
         return { output: `TaskRun ${own} could not be delivered.`, isError: true }
       }
-      await wakeParentForChildJoinBestEffort(owner, delivered)
+      // Deliver records the outcome and parks; it does NOT wake a child-join
+      // parent from here. Mid-turn this run has no final reply yet, only this
+      // capped summary label. The wake fires at the run's turn-end instead — the
+      // scheduler's settle-on-return for a fire, or resume.ts for a resumed run
+      // — where the full final reply exists, so a waiting parent gets the result
+      // in full rather than the label.
       return { output: JSON.stringify({ runId: delivered.id, status: delivered.status }) }
     }
 

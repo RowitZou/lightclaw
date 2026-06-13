@@ -22,9 +22,7 @@ import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
   createTaskRun,
-  getTaskRun,
   markDelivered,
-  markDeliveredWouldTransition,
   markFinished,
 } from '../taskrun/store.js'
 
@@ -86,13 +84,34 @@ async function createBackgroundTaskRunBestEffort(
   }
 }
 
+/** The fire's full result text. On success it is the worker's final reply
+ *  (uncapped); on failure the reason plus recovered partial artifacts and any
+ *  permission denials. Shared by the bg-result notification and the child-join
+ *  wake so both carry identical content. */
+function backgroundResultText(outcome: FireOutcome): string {
+  if (outcome.kind === 'success') return outcome.summary
+  return [
+    outcome.reason,
+    ...(outcome.partialArtifacts?.length
+      ? [
+          '',
+          'Files the worker had written before it failed (recovered from its partial transcript — verify before relying):',
+          ...outcome.partialArtifacts.map(p => `- ${p}`),
+        ]
+      : []),
+    ...(outcome.permissionDenials?.length
+      ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
+      : []),
+  ].join('\n')
+}
+
 async function markBackgroundTaskRunTerminalBestEffort(
   canonicalUser: string,
   task: BackgroundTaskEntry,
   taskRunId: string | undefined,
   outcome: FireOutcome,
-): Promise<void> {
-  if (!taskRunId) return
+): Promise<boolean> {
+  if (!taskRunId) return false
   // Artifact recording is a best-effort breadcrumb and MUST NOT be able to
   // block the terminal mark — the delivered/finished event is the critical
   // fact the watchdog reconciles against. Isolate each append in its own
@@ -112,33 +131,30 @@ async function markBackgroundTaskRunTerminalBestEffort(
       // (TaskUpdate settles it). For standing services, completion handling
       // immediately creates the next queued child so the standing root keeps a
       // future obligation until TaskUpdate cancel stops its standing root.
-      const beforeDeliver = await getTaskRun(taskRunId, canonicalUser)
       const delivered = await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
-      // Settle-on-return is a delivery path too: a parent parked at
-      // waiting(child-join) on this fire must be woken from here as well, not
-      // only when the worker self-reports via TaskUpdate — most fires never
-      // call it. But wake ONLY when THIS path performed the delivery
-      // transition. A worker that self-delivered via TaskUpdate already fired
-      // its own child-join wake (the resume.ts deliver path); the consumed
-      // guard that dedups the two is set when the parent's resume STARTS
-      // (detached via scheduleResumeRunWithBlock), so a second wake here can
-      // slip through before it lands and schedule a DUPLICATE parent resume.
-      // `markDelivered` is idempotent and returns the already-delivered meta in
-      // that case, so gating on the return status alone is not enough — gate
-      // on the run's status BEFORE markDelivered.
-      if (
-        delivered?.status === 'delivered' &&
-        beforeDeliver != null &&
-        markDeliveredWouldTransition(beforeDeliver.status)
-      ) {
+      // Settle-on-return is now the SOLE child-join waker for a fire: the
+      // TaskUpdate self-deliver path no longer wakes inline (mid-turn it has no
+      // final reply to hand over), so wake unconditionally from here — carrying
+      // the fire's full final reply, not the capped ledger summary. A fire has
+      // exactly one turn-end, so there is no second waker to double with; the
+      // parent's consumed guard still backstops a watchdog reconcile that races
+      // this live wake. Returns whether a child-join parent was actually woken
+      // so onFireComplete can suppress the now-redundant bg-result.
+      if (delivered?.status === 'delivered') {
         const { wakeParentForChildJoinBestEffort } = await import('../taskrun/resume.js')
-        await wakeParentForChildJoinBestEffort(canonicalUser, delivered)
+        return await wakeParentForChildJoinBestEffort(
+          canonicalUser,
+          delivered,
+          backgroundResultText(outcome),
+        )
       }
+      return false
     } else {
       // Legacy recurring / interval entries created before standing roots had
       // no acceptance parent. Keep them terminal-on-completion for backward
       // compatibility; new entries carry standingRootRunId and use delivered.
       await markFinished(taskRunId, runOutcome, Date.now(), canonicalUser)
+      return false
     }
   } catch (error) {
     process.stderr.write(
@@ -146,6 +162,7 @@ async function markBackgroundTaskRunTerminalBestEffort(
         error instanceof Error ? error.message : String(error)
       }\n`,
     )
+    return false
   }
 }
 
@@ -628,7 +645,12 @@ export class BackgroundTaskScheduler {
       }
       return
     }
-    await markBackgroundTaskRunTerminalBestEffort(canonicalUser, task, taskRunId, outcome)
+    const wokeChildJoinParent = await markBackgroundTaskRunTerminalBestEffort(
+      canonicalUser,
+      task,
+      taskRunId,
+      outcome,
+    )
 
     const firedAt = new Date().toISOString()
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
@@ -662,7 +684,12 @@ export class BackgroundTaskScheduler {
       task.notifyOn === 'always' ||
       (task.notifyOn === 'success' && outcome.kind === 'success') ||
       (task.notifyOn === 'failure' && outcome.kind === 'failure')
-    if (shouldNotify) {
+    // A child-join parent we just woke received this fire's full result inline
+    // via its resume; pushing the same result again as a bg-result notification
+    // would deliver it twice. The explicit wait wins — suppress the redundant
+    // notification. Fires with no waiting parent (the common fire-and-forget
+    // case) still notify normally.
+    if (shouldNotify && !wokeChildJoinParent) {
       await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome, taskRunId)
     }
   }
@@ -701,21 +728,7 @@ export class BackgroundTaskScheduler {
     }
 
     const outcomeLabel = outcomeKindForBackgroundResult(outcome)
-    const resultText = outcome.kind === 'success'
-      ? outcome.summary
-      : [
-          outcome.reason,
-          ...(outcome.partialArtifacts?.length
-            ? [
-                '',
-                'Files the worker had written before it failed (recovered from its partial transcript — verify before relying):',
-                ...outcome.partialArtifacts.map(p => `- ${p}`),
-              ]
-            : []),
-          ...(outcome.permissionDenials?.length
-            ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
-            : []),
-        ].join('\n')
+    const resultText = backgroundResultText(outcome)
     const payload = {
       kind: 'background-result' as const,
       ownerOpenId,

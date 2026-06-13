@@ -191,15 +191,29 @@ export async function resumeRunWithBlock(
         run.ownerCanonicalUser,
       )
     }
+    // Turn-end is where this run's full final reply exists, so a parent parked
+    // on child-join is woken from here — carrying the final text, not the capped
+    // ledger summary. Covers both the auto-deliver above and a worker that
+    // self-delivered mid-turn via TaskUpdate (status already 'delivered', so the
+    // markDelivered above no-ops, but the parent still needs the full result).
+    const settled = (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run
+    if (settled.status === 'delivered') {
+      await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, settled, result.assistantText)
+    }
     return {
       ok: true,
-      run: (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run,
+      run: settled,
       mode,
       assistantText: result.assistantText,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await markDelivered(run.id, { ok: false, error: message.slice(0, 500) }, Date.now(), run.ownerCanonicalUser)
+    const failed = await markDelivered(run.id, { ok: false, error: message.slice(0, 500) }, Date.now(), run.ownerCanonicalUser)
+    // A child-join parent must learn the run delivered-with-failure too; no
+    // resultText, so the wake falls back to the recorded error.
+    if (failed) {
+      await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, failed)
+    }
     return { ok: false, reason: 'query-failed', message }
   }
 }
@@ -211,19 +225,28 @@ function isSessionTurnInFlight(sessionId: string): boolean {
 
 /** Child reached delivered → if its parent is parked at paused(child-join)
  *  waiting for exactly this child, hand the parent its result and resume the
- *  shift. Called from BOTH delivery paths — TaskUpdate explicit deliver and
- *  the scheduler's settle-on-return — or a parent awaiting a fire that never
- *  self-reports would sleep forever. Detached: the delivering caller must not
- *  sit inside the parent's whole next shift. */
+ *  shift. Called from the child's turn-end delivery paths — the scheduler's
+ *  settle-on-return for a fire, and resume.ts for a resumed run — because that
+ *  is where the child's full final reply exists. Returns whether it actually
+ *  scheduled a parent resume, so the caller can suppress a now-redundant
+ *  bg-result notification to the same parent. Detached: the delivering caller
+ *  must not sit inside the parent's whole next shift.
+ *
+ *  `resultText` is the child's full final reply (the live delivery paths have
+ *  it in hand). The ledger `outcome.summary` is a capped card label and is only
+ *  the fallback for cold backstops — the watchdog reconcile — that have no live
+ *  final text. A parent that explicitly waited on this child is owed the full
+ *  reply, not the label. */
 export async function wakeParentForChildJoinBestEffort(
   ownerCanonicalUser: string,
   child: TaskRunMeta,
-): Promise<void> {
-  if (!child.parentRunId) return
+  resultText?: string,
+): Promise<boolean> {
+  if (!child.parentRunId) return false
   const parent = await getTaskRun(child.parentRunId, ownerCanonicalUser)
-  if (parent?.status !== 'waiting') return
-  if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return
-  const summary = child.outcome?.summary ?? child.outcome?.error ?? child.title
+  if (parent?.status !== 'waiting') return false
+  if (parent.wake?.kind !== 'child-join' || parent.wake.runId !== child.id || parent.wake.consumed) return false
+  const resultBody = resultText?.trim() || child.outcome?.summary || child.outcome?.error || child.title
   const { scheduleResumeRunWithBlock } = await import('./resume-schedule.js')
   scheduleResumeRunWithBlock(ownerCanonicalUser, parent.id, {
     via: 'child-join',
@@ -232,11 +255,12 @@ export async function wakeParentForChildJoinBestEffort(
       '<taskrun-child-result>',
       `runId=${child.id}`,
       `status=${child.status}`,
-      summary,
+      resultBody,
       '</taskrun-child-result>',
       'Settle it (TaskUpdate accept / reject) and continue your task with the result.',
     ].join('\n'),
   })
+  return true
 }
 
 async function appendMessagesAfterSeed(sessionId: string, batch: Parameters<typeof appendMessage>[1][]): Promise<void> {
