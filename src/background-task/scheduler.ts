@@ -19,7 +19,14 @@ import { runBackgroundTaskFire } from './runner.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
-import { appendArtifact, createTaskRun, markDelivered, markFinished } from '../taskrun/store.js'
+import {
+  appendArtifact,
+  createTaskRun,
+  getTaskRun,
+  markDelivered,
+  markDeliveredWouldTransition,
+  markFinished,
+} from '../taskrun/store.js'
 
 type HeapItem = {
   taskId: string
@@ -105,12 +112,25 @@ async function markBackgroundTaskRunTerminalBestEffort(
       // (TaskUpdate settles it). For standing services, completion handling
       // immediately creates the next queued child so the standing root keeps a
       // future obligation until TaskUpdate cancel stops its standing root.
+      const beforeDeliver = await getTaskRun(taskRunId, canonicalUser)
       const delivered = await markDelivered(taskRunId, runOutcome, Date.now(), canonicalUser)
       // Settle-on-return is a delivery path too: a parent parked at
       // waiting(child-join) on this fire must be woken from here as well, not
       // only when the worker self-reports via TaskUpdate — most fires never
-      // call it.
-      if (delivered?.status === 'delivered') {
+      // call it. But wake ONLY when THIS path performed the delivery
+      // transition. A worker that self-delivered via TaskUpdate already fired
+      // its own child-join wake (the resume.ts deliver path); the consumed
+      // guard that dedups the two is set when the parent's resume STARTS
+      // (detached via scheduleResumeRunWithBlock), so a second wake here can
+      // slip through before it lands and schedule a DUPLICATE parent resume.
+      // `markDelivered` is idempotent and returns the already-delivered meta in
+      // that case, so gating on the return status alone is not enough — gate
+      // on the run's status BEFORE markDelivered.
+      if (
+        delivered?.status === 'delivered' &&
+        beforeDeliver != null &&
+        markDeliveredWouldTransition(beforeDeliver.status)
+      ) {
         const { wakeParentForChildJoinBestEffort } = await import('../taskrun/resume.js')
         await wakeParentForChildJoinBestEffort(canonicalUser, delivered)
       }

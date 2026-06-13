@@ -158,6 +158,17 @@ function isTerminalStatus(status: TaskRunMeta['status']): boolean {
   return status === 'done' || status === 'failed' || status === 'cancelled'
 }
 
+/** Whether `markDelivered` would actually transition a run at this status into
+ *  `delivered` (vs. return it unchanged). True only for not-yet-concluded
+ *  states; a run that already self-delivered, is terminal, or was set waiting
+ *  (e.g. user-stop) is left as-is. Exported as the single source of truth so
+ *  callers that need to know "did THIS path perform the delivery" — notably the
+ *  scheduler's settle-on-return child-join wake — stay in lockstep with
+ *  `markDelivered`'s own idempotency condition. */
+export function markDeliveredWouldTransition(status: TaskRunMeta['status']): boolean {
+  return status !== 'delivered' && status !== 'waiting' && !isTerminalStatus(status)
+}
+
 function taskRunKind(meta: TaskRunMeta): TaskRunKind {
   return meta.kind ?? 'dispatch'
 }
@@ -437,8 +448,7 @@ export async function markDelivered(
   // wins and is never overwritten by the framework's derived outcome.
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta) return null
-  if (meta.status === 'delivered' || isTerminalStatus(meta.status)) return meta
-  if (meta.status === 'waiting') return meta
+  if (!markDeliveredWouldTransition(meta.status)) return meta
   return appendEvent(
     id,
     'delivered',

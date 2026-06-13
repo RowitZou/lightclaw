@@ -22,6 +22,7 @@ import {
   getTaskRun,
   getTaskRunEvents,
   listTaskRuns,
+  markDelivered,
   markWaiting,
   markStarted,
 } from '../taskrun/store.js'
@@ -168,6 +169,70 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
     assert.equal((await getTaskRun(child.id, 'alice'))?.status, 'delivered')
     assert.deepEqual(resumeCalls, [{ runId: parent.id, via: 'child-join' }])
+  })
+
+  it('does NOT double-wake the child-join parent when the worker already self-delivered', async () => {
+    // When a worker self-delivers via TaskUpdate, its own deliver path already
+    // fired the child-join wake. The scheduler's settle-on-return markDelivered
+    // is then a no-op (run already delivered) and MUST NOT fire a second wake —
+    // the consumed guard is set only when the parent's resume starts (detached),
+    // so a duplicate wake here would schedule a duplicate parent resume.
+    const parent = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'main',
+      callerSessionId: 's-main',
+      mode: 'background',
+      objective: 'Coordinate, then wait for the probe.',
+      parentRunId: null,
+      chainId: 'chain-dup',
+      depth: 1,
+    })
+    await markStarted(parent.id, 'bg-parent', 10, 'alice')
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice',
+      role: 'generalist',
+      callerRole: 'generalist',
+      callerSessionId: 'bg-parent',
+      mode: 'background',
+      objective: 'Probe the cluster.',
+      parentRunId: parent.id,
+      chainId: 'chain-dup',
+      depth: 2,
+    })
+    await markStarted(child.id, 'bg-child', 15, 'alice')
+    // The worker self-delivered (its own TaskUpdate deliver path owns that wake).
+    await markDelivered(child.id, { ok: true, summary: 'probe done by worker' }, 18, 'alice')
+    await markWaiting(parent.id, {
+      reason: 'child-join',
+      wake: { kind: 'child-join', runId: child.id },
+    }, 20, 'alice')
+
+    const resumeCalls: Array<{ runId: string; via: string }> = []
+    setResumeRunnerForTest(async (runId, block) => {
+      resumeCalls.push({ runId, via: block.via })
+      const run = await getTaskRun(runId, 'alice')
+      return { ok: true, run: run!, mode: 'resume', assistantText: 'resumed' }
+    })
+    const task = {
+      ...fakeTask(),
+      id: 'dup-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+      notifyOn: 'failure' as const,
+      taskRunId: child.id,
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    setRunBackgroundTaskFireForTest(async () => {
+      return { kind: 'success', summary: 'probe done', transcriptPath: '/tmp/x' }
+    })
+
+    scheduler.fireImmediate('alice', 'dup-fire')
+    await scheduler.drain()
+    await drainScheduledResumesForTest()
+
+    // The scheduler's settle-on-return must NOT have fired a second wake.
+    assert.deepEqual(resumeCalls, [])
   })
 
   it('does not autopause recurring tasks after failures', async () => {
