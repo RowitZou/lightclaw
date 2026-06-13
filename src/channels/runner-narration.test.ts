@@ -5,9 +5,13 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
-import { createRootTaskRun, getTaskRunEvents } from '../taskrun/store.js'
+import {
+  createRootTaskRun,
+  createStandingRootTaskRun,
+  getTaskRunEvents,
+} from '../taskrun/store.js'
 import { makeFakeFeishuMessage } from '../__tests__/concurrency-helpers.js'
-import { routeSyntheticNarration } from './runner.js'
+import { routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
 import type { NormalizedChannelMessage } from './types.js'
 
 let home: string
@@ -73,5 +77,70 @@ void describe('routeSyntheticNarration (PR22 noise reduction)', () => {
     assert.equal(await routeSyntheticNarration(message, '   \n  '), true)
     const events = await getTaskRunEvents(root.id, {}, 'alice')
     assert.equal(events.filter(e => e.kind === 'progress').length, 0)
+  })
+})
+
+void describe('routeSyntheticBlock (2026-06-13 standing-final ruling)', () => {
+  function syntheticFor(rootRunId: string): NormalizedChannelMessage {
+    return {
+      ...makeFakeFeishuMessage({ sender: 'ou_a', text: '<background-task-result/>' }),
+      synthetic: true,
+      taskCardRoot: { owner: 'alice', rootRunId },
+    }
+  }
+
+  async function progressCount(rootRunId: string): Promise<number> {
+    const events = await getTaskRunEvents(rootRunId, {}, 'alice')
+    return events.filter(e => e.kind === 'progress').length
+  }
+
+  void it('finite root: interim AND final blocks both stay on the card', async () => {
+    const root = await createRootTaskRun('alice', 'feishu:dm:oc_n', { objective: 'finite' })
+    const message = syntheticFor(root.id)
+    assert.equal(await routeSyntheticBlock(message, '中间叙述', false), 'card')
+    assert.equal(
+      await routeSyntheticBlock(message, '本轮收尾结论', true),
+      'card',
+      'a finite root settles later — its wake conclusions are intermediate results',
+    )
+    assert.equal(await progressCount(root.id), 2)
+  })
+
+  void it('standing root: interim stays on the card, the final report goes to chat', async () => {
+    const root = await createStandingRootTaskRun('alice', {
+      objective: '每日拉取并分析更新',
+      role: 'coder',
+      callerRole: 'main',
+      callerSessionId: 'feishu:group:oc_g:ou_a',
+      chainId: 'chain-test',
+    })
+    const message = syntheticFor(root.id)
+    assert.equal(await routeSyntheticBlock(message, '正在验收本次 fire', false), 'card')
+    assert.equal(
+      await routeSyntheticBlock(message, '今日更新日报如下：…', true),
+      'standing-chat',
+      'a standing service never settles — each fire\'s report is the only user outlet',
+    )
+    assert.equal(
+      await progressCount(root.id),
+      1,
+      'the final report must NOT be duplicated onto the card timeline',
+    )
+  })
+
+  void it('user turns and rootless wakes always route to chat', async () => {
+    const user = makeFakeFeishuMessage({ sender: 'ou_a', text: 'real words' })
+    assert.equal(await routeSyntheticBlock(user, 'reply', true), 'chat')
+    const rootless: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_a', text: 'wake' }),
+      synthetic: true,
+    }
+    assert.equal(await routeSyntheticBlock(rootless, 'reply', true), 'chat')
+    const deadRoot = syntheticFor('tr_missing')
+    assert.equal(
+      await routeSyntheticBlock(deadRoot, 'reply', true),
+      'chat',
+      'missing root meta falls back to the message path — better noisy than mute',
+    )
   })
 })

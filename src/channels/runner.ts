@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
-import { appendProgress } from '../taskrun/store.js'
+import { appendProgress, getTaskRun } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
@@ -306,16 +306,20 @@ export function buildLeftoverReplayMessage(
 /**
  * In group chats the turn's final reply pings its addressee — without the
  * @ the conclusion of a long task scrolls past unnoticed. DMs need no
- * mention, and synthetic turns never reach this path with a real sender.
- * `<at id=...></at>` is Feishu lark_md mention syntax (replies render as
- * markdown cards). Exported for regression coverage.
+ * mention. Synthetic turns are excluded by default (their finals normally
+ * live on the task card); `mentionSynthetic` opts a standing-service
+ * fire's report back in — it is addressed to the user just like a user
+ * turn's final reply. `<at id=...></at>` is Feishu lark_md mention syntax
+ * (replies render as markdown cards). Exported for regression coverage.
  */
 export function withFinalReplyMention(
   message: NormalizedChannelMessage,
   text: string,
+  opts: { mentionSynthetic?: boolean } = {},
 ): string {
   const isGroup = message.chatType !== undefined && message.chatType !== 'p2p'
-  if (!isGroup || message.synthetic || !message.senderOpenId) return text
+  if (!isGroup || !message.senderOpenId) return text
+  if (message.synthetic && !opts.mentionSynthetic) return text
   return `<at id=${message.senderOpenId}></at> ${text}`
 }
 
@@ -351,6 +355,48 @@ export async function routeSyntheticNarration(
     )
     return false
   }
+}
+
+/** True when this synthetic wake's root is a standing service
+ *  (recurring/interval). Lookup failures count as not-standing — the
+ *  finite-root card path is the safe default. */
+async function isStandingRootWake(message: NormalizedChannelMessage): Promise<boolean> {
+  if (!message.synthetic || !message.taskCardRoot) return false
+  try {
+    const meta = await getTaskRun(
+      message.taskCardRoot.rootRunId,
+      message.taskCardRoot.owner,
+    )
+    return meta?.standing === true
+  } catch (error) {
+    process.stderr.write(
+      `[task-card] standing-root lookup failed for ${message.taskCardRoot.rootRunId}: ${(error as Error).message}\n`,
+    )
+    return false
+  }
+}
+
+export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
+
+/**
+ * Where one assistant block of a turn goes (2026-06-13 ruling). Interim
+ * narration of a rooted synthetic wake stays on the root card's timeline.
+ * The FINAL block forks on the root's nature: a standing service
+ * (recurring/interval) never settles, so no settlement message will ever
+ * carry its per-fire results — each fire's closing report is the user's
+ * only outlet and goes out as a real message ('standing-chat', @ the user
+ * in groups). A finite root's wake conclusions are intermediate results —
+ * the card keeps them, and the settlement message on root close is the
+ * user-visible outlet. User turns and rootless wakes always 'chat'.
+ * Exported for regression coverage.
+ */
+export async function routeSyntheticBlock(
+  message: NormalizedChannelMessage,
+  text: string,
+  isFinal: boolean,
+): Promise<SyntheticBlockRoute> {
+  if (isFinal && (await isStandingRootWake(message))) return 'standing-chat'
+  return (await routeSyntheticNarration(message, text)) ? 'card' : 'chat'
 }
 
 /**
@@ -989,11 +1035,24 @@ export class ChannelRunner {
                     return
                   }
                   if (text.length === 0) return
-                  if (await routeSyntheticNarration(effectiveMessage, text)) return
+                  const route = await routeSyntheticBlock(
+                    effectiveMessage,
+                    text,
+                    meta?.isFinal !== false,
+                  )
+                  if (route === 'card') {
+                    // Each block already landed on the root timeline — the
+                    // end-of-query fallback must not replay the concatenation
+                    // on top of it.
+                    streamedAtLeastOnce = true
+                    return
+                  }
                   streamedAtLeastOnce = true
                   await this.sendReply(
                     replyTargetMessage,
-                    withFinalReplyMention(replyTargetMessage, text),
+                    withFinalReplyMention(replyTargetMessage, text, {
+                      mentionSynthetic: route === 'standing-chat',
+                    }),
                   )
                 },
                 interjectionRenderer: (entries, context) => [{
@@ -1377,10 +1436,13 @@ export class ChannelRunner {
         // latest input rather than the turn opener.
         if (!streamedAtLeastOnce) {
           const finalText = result.assistantText || t('channel.assistant.empty')
-          if (!(await routeSyntheticNarration(effectiveMessage, finalText))) {
+          const route = await routeSyntheticBlock(effectiveMessage, finalText, true)
+          if (route !== 'card') {
             await this.sendReply(
               replyTargetMessage,
-              withFinalReplyMention(replyTargetMessage, finalText),
+              withFinalReplyMention(replyTargetMessage, finalText, {
+                mentionSynthetic: route === 'standing-chat',
+              }),
             )
           }
         }

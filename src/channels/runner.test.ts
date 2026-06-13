@@ -1791,4 +1791,21 @@ describe('withFinalReplyMention (PR25 group ping)', () => {
     const unknownType = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'q' })
     assert.equal(withFinalReplyMention(unknownType, '答案在此'), '答案在此')
   })
+
+  it('mentionSynthetic opts a standing-service report back into the group ping', () => {
+    const synthetic: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'wake', chatType: 'group' }),
+      synthetic: true,
+    }
+    assert.equal(
+      withFinalReplyMention(synthetic, '每日报告', { mentionSynthetic: true }),
+      '<at id=ou_alice></at> 每日报告',
+    )
+    // DM standing reports stay bare — the DM push itself notifies.
+    const dm: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'wake', chatType: 'p2p' }),
+      synthetic: true,
+    }
+    assert.equal(withFinalReplyMention(dm, '每日报告', { mentionSynthetic: true }), '每日报告')
+  })
 })
