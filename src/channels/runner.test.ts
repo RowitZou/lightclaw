@@ -990,6 +990,59 @@ describe('formatChannelUserText', () => {
     assert.equal(text, '[张三] hello')
   })
 
+  it('does not prefix a framework synthetic turn (bg-result wake) with the sender name', async () => {
+    // A bg-result / taskrun wake is framework-authored block text, not user
+    // speech. Labeling it `[senderName]` reads to the model as "the user
+    // pasted this block". The in-flight interjection path already renders
+    // bg-results as raw block text; the synthetic-turn path must match.
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => '张三'
+    const block =
+      '<background-task-result label="x" outcome="success" dispatchId="d">done</background-task-result>'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_group',
+        senderOpenId: 'ou_alice',
+        chatType: 'group',
+        messageId: 'om',
+        text: block,
+        synthetic: true,
+        frameworkText: true,
+      },
+      null,
+    )
+
+    assert.equal(text, block)
+    assert.ok(!text.startsWith('['), 'a framework synthetic turn must not carry a [senderName] prefix')
+  })
+
+  it('still prefixes a synthetic group turn that is NOT framework text (post-approval replay)', async () => {
+    // The post-approval replay synthetic carries the user's real words and
+    // MUST keep the sender prefix — the frameworkText guard must not
+    // over-suppress synthetic turns that genuinely represent the user.
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSenderName = async () => '张三'
+    const text = await formatChannelUserText(
+      strategy,
+      {
+        channel: 'feishu',
+        eventId: 'evt',
+        chatId: 'oc_group',
+        senderOpenId: 'ou_alice',
+        chatType: 'group',
+        messageId: 'om',
+        text: 'my earlier question',
+        synthetic: true,
+      },
+      null,
+    )
+
+    assert.equal(text, '[张三] my earlier question')
+  })
+
   it('does not prefix Feishu DM messages', async () => {
     const strategy = installFakeStrategy('feishu')
     strategy.resolveSenderName = async () => '张三'

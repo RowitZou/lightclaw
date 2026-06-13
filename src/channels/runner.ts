@@ -2413,7 +2413,12 @@ export async function formatChannelUserText(
 ): Promise<string> {
   const mentionNames = buildMentionNameMap(message)
   let body = message.text
-  if (strategy.resolveSenderName && isGroupLikeChannelMessage(message)) {
+  // The `[senderName]` prefix labels who in the group spoke. A framework
+  // synthetic turn (bg-result / taskrun wake) has no human speaker — its text
+  // is a framework block handed to the agent — so it must NOT be labeled with
+  // the origin user's name (matches the in-flight interjection path, which
+  // renders bg-result entries as raw block text).
+  if (strategy.resolveSenderName && isGroupLikeChannelMessage(message) && !message.frameworkText) {
     const senderName = await strategy.resolveSenderName(message.senderOpenId, mentionNames)
     body = `[${senderName}] ${body}`
   }

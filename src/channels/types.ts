@@ -97,6 +97,16 @@ export type NormalizedChannelMessage = {
    * from a real inbound.
    */
   synthetic?: boolean
+  /** Set on a synthetic turn whose `text` is a framework-authored block
+   *  (a `<background-task-result>` / `<taskrun-*>` wake), NOT user speech.
+   *  Such turns must skip the group `[<senderName>]` prefix — the block is
+   *  the framework handing the agent a result, and labeling it with the
+   *  origin user's name reads to the model as "the user pasted this block"
+   *  (and is inconsistent with the in-flight interjection path, which renders
+   *  the same bg-result as raw block text, no sender label). Absent on genuine
+   *  user messages AND on the post-approval replay synthetic, which carries
+   *  the user's real words and SHOULD keep the sender prefix. */
+  frameworkText?: boolean
   /** Set on post-query interjection replays: the message already passed the
    *  channel's targeting gate (e.g. the group @-mention check) on first
    *  arrival; replays must not be re-gated — the mention sidecar is gone. */

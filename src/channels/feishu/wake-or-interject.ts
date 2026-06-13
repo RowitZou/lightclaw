@@ -94,6 +94,9 @@ export async function wakeOrInterject(input: {
     senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : input.ownerOpenId,
     text: input.block,
     synthetic: true,
+    // The block is a framework wake (bg-result / taskrun), not user speech —
+    // suppresses the group `[senderName]` prefix in formatChannelUserText.
+    frameworkText: true,
   }
   pendingWakeBySession.set(input.targetSessionId, {
     message: synthetic,
