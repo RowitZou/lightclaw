@@ -39,9 +39,14 @@ export type TaskCardPipeline = {
   stop(): void
 }
 
-/** The root's conclusion is the one piece of a settlement turn that MUST
- *  reach the user as a message — after PR22 the narration around it lives
- *  on the card. Exactly one per root, sent with the freeze frame. */
+/** The summary settlement message: title line + the run's deliver summary,
+ *  @-ing the owner in groups. Since the final-text-delivery change this is
+ *  NO LONGER sent on the live freeze frame — the user's conclusion is the
+ *  agent's own closing block, which `routeSyntheticBlock` (runner.ts) sends
+ *  to chat for a concluding wake. This text now serves two purposes: the
+ *  card's frozen label, and the crash backstop below — `reconcileOnStart`
+ *  sends it for a root that reached terminal while the daemon was down, where
+ *  no live turn ever delivered a conclusion. */
 function settlementText(root: TaskRunMeta): string {
   const key = root.status === 'done'
     ? 'taskcard.delivery.done'
@@ -131,7 +136,9 @@ export function startTaskCardPipeline(
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
       if (terminal) {
-        await io.sendText(target, settlementText(root))
+        // Freeze only. The user-facing conclusion is the agent's own closing
+        // block, sent by the runner at end-of-turn; the live path no longer
+        // sends the summary settlement (it would double with that block).
         patcher.release(rootRunId)
       }
       return
@@ -139,20 +146,8 @@ export function startTaskCardPipeline(
 
     await io.patch(binding.messageId, card)
     if (terminal) {
-      // Stamp before sending: a crash in between loses one settlement
-      // message, while the reverse order would resend it on every
-      // startup reconcile until the stamp finally lands.
+      // Stamp the freeze; no settlement send here (see the !binding branch).
       await writeTaskCardBinding(owner, rootRunId, { ...binding, finalizedAt: Date.now() })
-      await io.sendText(
-        {
-          chatId: binding.chatId,
-          ...(binding.threadId ? { threadId: binding.threadId } : {}),
-          ...(binding.replyAnchorMessageId
-            ? { replyAnchorMessageId: binding.replyAnchorMessageId }
-            : {}),
-        },
-        settlementText(root),
-      )
       patcher.release(rootRunId)
     }
   }
@@ -193,9 +188,25 @@ export function startTaskCardPipeline(
             continue
           }
           // Terminal while we were down: freeze the card once if it ever
-          // existed and missed its final frame.
+          // existed and missed its final frame. `!finalizedAt` also means
+          // no live end-of-turn settlement ran (the runner sets the freeze
+          // path in motion as part of the same terminal event it concludes
+          // on), so this is the crash backstop for the user-facing
+          // conclusion — send the summary settlement before freezing. A root
+          // finalized live already had its conclusion delivered by the runner
+          // and is skipped here, so this never double-sends on a clean run.
           const binding = await readTaskCardBinding(owner, root.id)
           if (binding && !binding.finalizedAt) {
+            await io.sendText(
+              {
+                chatId: binding.chatId,
+                ...(binding.threadId ? { threadId: binding.threadId } : {}),
+                ...(binding.replyAnchorMessageId
+                  ? { replyAnchorMessageId: binding.replyAnchorMessageId }
+                  : {}),
+              },
+              settlementText(root),
+            )
             schedule(owner, root.id, true)
           }
         }

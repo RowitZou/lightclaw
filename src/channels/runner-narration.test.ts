@@ -9,6 +9,7 @@ import {
   createRootTaskRun,
   createStandingRootTaskRun,
   getTaskRunEvents,
+  markFinished,
 } from '../taskrun/store.js'
 import { makeFakeFeishuMessage } from '../__tests__/concurrency-helpers.js'
 import { routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
@@ -80,7 +81,7 @@ void describe('routeSyntheticNarration (PR22 noise reduction)', () => {
   })
 })
 
-void describe('routeSyntheticBlock (2026-06-13 standing-final ruling)', () => {
+void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
   function syntheticFor(rootRunId: string): NormalizedChannelMessage {
     return {
       ...makeFakeFeishuMessage({ sender: 'ou_a', text: '<background-task-result/>' }),
@@ -94,16 +95,41 @@ void describe('routeSyntheticBlock (2026-06-13 standing-final ruling)', () => {
     return events.filter(e => e.kind === 'progress').length
   }
 
-  void it('finite root: interim AND final blocks both stay on the card', async () => {
+  void it('finite root STILL RUNNING: interim AND final blocks stay on the card', async () => {
     const root = await createRootTaskRun('alice', 'feishu:dm:oc_n', { objective: 'finite' })
     const message = syntheticFor(root.id)
     assert.equal(await routeSyntheticBlock(message, '中间叙述', false), 'card')
     assert.equal(
-      await routeSyntheticBlock(message, '本轮收尾结论', true),
+      await routeSyntheticBlock(message, '等其它 worker 的中途结论', true),
       'card',
-      'a finite root settles later — its wake conclusions are intermediate results',
+      'a finite root that has not settled yet — its wake conclusions are intermediate results, more children pending',
     )
     assert.equal(await progressCount(root.id), 2)
+  })
+
+  void it('finite root JUST WENT TERMINAL: the closing block goes to chat in full, not truncated onto the card', async () => {
+    // This is the reported-bug regression. The agent delivers the root (root
+    // → terminal) and THEN streams its synthesis as the final block. Before
+    // final-text-delivery that block routed to 'card' (appendProgress, sliced
+    // to 200 chars) and the user only ever saw the short deliver summary.
+    const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'spacex+tesla' })
+    const message = syntheticFor(root.id)
+    // interim narration before the deliver still belongs on the card
+    assert.equal(await routeSyntheticBlock(message, '正在合并结论', false), 'card')
+    // deliver lands first, root is now terminal
+    await markFinished(root.id, { ok: true, summary: '已交付' }, Date.now(), 'alice')
+    // the closing synthesis block is the conclusion → chat (@ the user in a group)
+    assert.equal(
+      await routeSyntheticBlock(message, '# 一、SpaceX 最新上市新闻 …（6000 字投研笔记）', true),
+      'standing-chat',
+      'a finite root the wake just drove terminal: the closing block is the deliverable and goes to chat in full',
+    )
+    // and it must NOT also be appended to the card timeline (only the interim was)
+    assert.equal(
+      await progressCount(root.id),
+      1,
+      'the closing synthesis must not be duplicated (truncated) onto the card',
+    )
   })
 
   void it('standing root: interim stays on the card, the final report goes to chat', async () => {

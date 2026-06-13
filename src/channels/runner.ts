@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
+import { TASK_RUN_TERMINAL_STATUSES } from './feishu/task-card.js'
 import { appendProgress, getTaskRun } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
@@ -357,20 +358,26 @@ export async function routeSyntheticNarration(
   }
 }
 
-/** True when this synthetic wake's root is a standing service
- *  (recurring/interval). Lookup failures count as not-standing — the
- *  finite-root card path is the safe default. */
-async function isStandingRootWake(message: NormalizedChannelMessage): Promise<boolean> {
+/** True when this synthetic wake's FINAL block is a conclusion, not interim
+ *  narration: the root is a standing service (recurring/interval, never
+ *  settles — each fire's closing block is its only report) OR a finite root
+ *  this wake just drove to a terminal state (the deliver landed before the
+ *  closing prose, so the block is the synthesis of finished work). A finite
+ *  root still running returns false — the card keeps its intermediate
+ *  blocks. Lookup failures count as not-concluding — the card path is the
+ *  safe default. */
+async function isConcludingWake(message: NormalizedChannelMessage): Promise<boolean> {
   if (!message.synthetic || !message.taskCardRoot) return false
   try {
     const meta = await getTaskRun(
       message.taskCardRoot.rootRunId,
       message.taskCardRoot.owner,
     )
-    return meta?.standing === true
+    if (!meta) return false
+    return meta.standing === true || TASK_RUN_TERMINAL_STATUSES.has(meta.status)
   } catch (error) {
     process.stderr.write(
-      `[task-card] standing-root lookup failed for ${message.taskCardRoot.rootRunId}: ${(error as Error).message}\n`,
+      `[task-card] concluding-wake lookup failed for ${message.taskCardRoot.rootRunId}: ${(error as Error).message}\n`,
     )
     return false
   }
@@ -379,23 +386,23 @@ async function isStandingRootWake(message: NormalizedChannelMessage): Promise<bo
 export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
 
 /**
- * Where one assistant block of a turn goes (2026-06-13 ruling). Interim
- * narration of a rooted synthetic wake stays on the root card's timeline.
- * The FINAL block forks on the root's nature: a standing service
- * (recurring/interval) never settles, so no settlement message will ever
- * carry its per-fire results — each fire's closing report is the user's
- * only outlet and goes out as a real message ('standing-chat', @ the user
- * in groups). A finite root's wake conclusions are intermediate results —
- * the card keeps them, and the settlement message on root close is the
- * user-visible outlet. User turns and rootless wakes always 'chat'.
- * Exported for regression coverage.
+ * Where one assistant block of a turn goes. Interim narration of a rooted
+ * synthetic wake stays on the root card's timeline. The FINAL block goes out
+ * as a real chat message ('standing-chat', @ the user in groups) when the
+ * wake is concluding — either a standing service fire (its per-fire report
+ * is the user's only outlet) or a finite root this wake just drove terminal
+ * (the deliver landed before this closing block, so the block is the
+ * synthesis of the finished work, not a mid-flight update). A finite root
+ * still running keeps its blocks on the card — they are intermediate
+ * results. User turns and rootless wakes always 'chat'. Exported for
+ * regression coverage.
  */
 export async function routeSyntheticBlock(
   message: NormalizedChannelMessage,
   text: string,
   isFinal: boolean,
 ): Promise<SyntheticBlockRoute> {
-  if (isFinal && (await isStandingRootWake(message))) return 'standing-chat'
+  if (isFinal && (await isConcludingWake(message))) return 'standing-chat'
   return (await routeSyntheticNarration(message, text)) ? 'card' : 'chat'
 }
 

@@ -118,7 +118,7 @@ void describe('task-card pipeline', () => {
     assert.ok(cardText(last.card).includes('已确定候选论文'))
   })
 
-  void it('freezes the card on root terminal, sends exactly one settlement message, then goes silent', async () => {
+  void it('freezes the card on root terminal WITHOUT a live settlement send, then goes silent', async () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
 
@@ -129,12 +129,15 @@ void describe('task-card pipeline', () => {
 
     const binding = await readTaskCardBinding(OWNER, root.id)
     assert.ok(binding?.finalizedAt, 'terminal render stamped finalizedAt')
-    const settlements = calls.filter(c => c.kind === 'sendText') as Array<
-      Extract<IoCall, { kind: 'sendText' }>
-    >
-    assert.equal(settlements.length, 1, 'exactly one settlement message per root')
-    assert.ok(settlements[0].text.includes('✅'))
-    assert.ok(settlements[0].text.includes('两篇论文笔记已写入飞书'))
+    // The live path no longer sends the summary settlement — the runner sends
+    // the agent's own closing block as the conclusion at end-of-turn. The
+    // pipeline only freezes the card here (otherwise the user gets both the
+    // full closing block AND a redundant summary).
+    assert.equal(
+      calls.filter(c => c.kind === 'sendText').length,
+      0,
+      'no live settlement send (the runner owns the conclusion)',
+    )
     const countAtFreeze = calls.length
 
     await appendProgress(root.id, { label: '迟到的事件' }, Date.now(), OWNER)
@@ -239,29 +242,78 @@ void describe('task-card pipeline', () => {
   })
 })
 
-void describe('settlement message group mention (PR25)', () => {
+// The user-facing settlement now has exactly two senders: the runner at
+// end-of-turn (the agent's closing block; not exercised here — see
+// runner-narration.test.ts) and the reconcile crash-backstop below, which
+// summary-settles a root that reached terminal while the daemon was down.
+// These cover the backstop's group-mention behavior + the no-double-send
+// guarantee that keeps a clean run (and a post-upgrade restart) from
+// re-announcing already-finalized roots.
+void describe('reconcile crash-backstop settlement', () => {
+  // Simulate the daemon-down terminal window: a card exists (binding written)
+  // but the root reached terminal with no live pipeline listening, so it was
+  // never frozen. The returned root id has a binding and !finalizedAt.
+  async function rootTerminalWhileDown(session: string, summary: string): Promise<string> {
+    const { io: io1 } = makeFakeIo()
+    const pipeline1 = startTaskCardPipeline({ io: io1, throttleMs: 10 })
+    const root = await createRootTaskRun(OWNER, session, { objective: '宕机窗口任务' })
+    await settle() // card created → binding written, finalizedAt still undefined
+    pipeline1.stop() // daemon goes down: the tap no longer hears events
+    await markFinished(root.id, { ok: true, summary }, Date.now(), OWNER)
+    return root.id
+  }
+
   void it('pings the task owner when the root lives in a group chat', async () => {
+    const rootId = await rootTerminalWhileDown(TOPIC_SESSION, '搞定了')
+
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
-    const root = await createRootTaskRun(OWNER, TOPIC_SESSION, { objective: '群任务' })
+    await pipeline.reconcileOnStart()
     await settle()
-    await markFinished(root.id, { ok: true, summary: '搞定了' }, Date.now(), OWNER)
-    await settle()
+
     const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
-    assert.equal(texts.length, 1)
+    assert.equal(texts.length, 1, 'reconcile sends the backstop settlement once')
     assert.ok(texts[0]!.text.startsWith('<at id=ou_sender></at> '))
     assert.ok(texts[0]!.text.includes('搞定了'))
+    const binding = await readTaskCardBinding(OWNER, rootId)
+    assert.ok(binding?.finalizedAt, 'reconcile froze the card after sending')
   })
 
   void it('DM settlements carry no mention', async () => {
+    await rootTerminalWhileDown(DM_SESSION, '搞定了')
+
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
-    const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '私聊任务' })
+    await pipeline.reconcileOnStart()
     await settle()
-    await markFinished(root.id, { ok: true, summary: '搞定了' }, Date.now(), OWNER)
-    await settle()
+
     const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
     assert.equal(texts.length, 1)
     assert.ok(!texts[0]!.text.includes('<at id='))
+  })
+
+  void it('does NOT re-send for a root already finalized live (no double, no upgrade spam)', async () => {
+    // Root finalized by the live path (finalizedAt set) — the runner already
+    // delivered its conclusion. A later reconcile (e.g. daemon restart) must
+    // stay silent: !finalizedAt is the gate.
+    const { io: liveIo } = makeFakeIo()
+    pipeline = startTaskCardPipeline({ io: liveIo, throttleMs: 10 })
+    const root = await createRootTaskRun(OWNER, TOPIC_SESSION, { objective: '已结清任务' })
+    await settle()
+    await markFinished(root.id, { ok: true, summary: '已交付' }, Date.now(), OWNER)
+    await settle()
+    const binding = await readTaskCardBinding(OWNER, root.id)
+    assert.ok(binding?.finalizedAt, 'live terminal render froze the card')
+    pipeline.stop()
+
+    const { io, calls } = makeFakeIo()
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+    await pipeline.reconcileOnStart()
+    await settle()
+    assert.equal(
+      calls.filter(c => c.kind === 'sendText').length,
+      0,
+      'finalized root is not re-announced on reconcile',
+    )
   })
 })
