@@ -26,6 +26,7 @@ import {
   touchMeta,
 } from '../session/storage.js'
 import { markStarted } from '../taskrun/store.js'
+import { collectPartialArtifactPaths } from './partial-artifacts.js'
 import type { BackgroundTaskEntry, FireOutcome, PermissionDenialDetail } from './types.js'
 
 type QueryFn = typeof query
@@ -207,11 +208,23 @@ export async function runBackgroundTaskFire(input: {
       transcriptPath: path.join(getSessionDir(sessionId), 'transcript.jsonl'),
     }
   } catch (error) {
+    // The fire crashed / was aborted mid-run. The incremental persist callback
+    // above flushed every completed tool round-trip to the bg-session
+    // transcript, so recover the files the worker had already written and hand
+    // them to the manager — a TTFB / idle abort otherwise throws away the
+    // partial work with nothing but the error string. Kept out of `reason` so
+    // the scheduler's abort classifier (which pattern-matches `reason`) stays
+    // exact; the scheduler folds these into the result text on the failure
+    // path. Best-effort: a missing/torn transcript yields none.
+    const partialArtifacts = await collectPartialArtifactPaths(sessionId).catch(
+      () => [],
+    )
     return {
       kind: 'failure',
       reason: error instanceof Error ? error.message : String(error),
       transient: isTransientFireError(error),
       attempt: 1,
+      ...(partialArtifacts.length ? { partialArtifacts } : {}),
     }
   }
 }

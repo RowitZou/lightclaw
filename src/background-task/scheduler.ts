@@ -685,6 +685,13 @@ export class BackgroundTaskScheduler {
       ? outcome.summary
       : [
           outcome.reason,
+          ...(outcome.partialArtifacts?.length
+            ? [
+                '',
+                'Files the worker had written before it failed (recovered from its partial transcript — verify before relying):',
+                ...outcome.partialArtifacts.map(p => `- ${p}`),
+              ]
+            : []),
           ...(outcome.permissionDenials?.length
             ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
             : []),

@@ -106,6 +106,12 @@ export type FireOutcome =
       transient: boolean
       attempt: number
       permissionDenials?: PermissionDenialDetail[]
+      // Local files the worker had already written before it failed,
+      // reconstructed from the partial transcript (see
+      // `collectPartialArtifactPaths`). Surfaced to the manager so a TTFB /
+      // idle abort that hard-kills the worker mid-run does not throw away the
+      // partial work. Omitted when nothing was flushed (e.g. turn-1 timeout).
+      partialArtifacts?: string[]
     }
 
 export type BackgroundTaskStoreFile =
