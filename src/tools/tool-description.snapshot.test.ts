@@ -64,7 +64,12 @@ const EXPECTED = {
   // any legacy/internal aborted envelope. 2026-05-20: opening sentence widened
   // so it reads correctly when the receiver is not the role that scheduled
   // the dispatch (orphan result fell back up the chain to main).
-  BackgroundTaskResultBlockMain: 'ddbb52b2768cb7bf7a5677998904b8e79b038ff5af1a798688b3fb2897f21d71',
+  // 2026-06-13 final-text-delivery re-frame: after the routing fix made a
+  // concluding wake's final block reach the user in full, the two lines that
+  // said "your deliver summary is sent to the user — write it for them" were
+  // factually wrong. Now: your final reply is the user-facing answer (write
+  // the full result there); the deliver summary is just a short card label.
+  BackgroundTaskResultBlockMain: '54ab39811c185dc875fb5a2f95593841ddb2069d6ea168e957e1633c4cde154a',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
   // (final-text only, no Notify equivalent). 2026-05-20: opening sentence

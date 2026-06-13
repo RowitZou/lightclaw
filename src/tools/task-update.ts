@@ -28,7 +28,7 @@ import type { TaskRunMeta } from '../taskrun/types.js'
 const TASK_UPDATE_DESCRIPTION = [
   'Change a TaskRun state: deliver your own run, wait on a declared wake, cancel work, or settle (accept / reject) a delivered child run.',
   '',
-  "action='deliver' — conclude a run you own. Without runId it targets your current run: records your outcome (ok + summary) and parks it at delivered, awaiting your requester's verdict. A goal root you opened closes directly instead — pass its runId; the close is refused with an itemized list while the root still has open obligations. Settle each, then retry.",
+  "action='deliver' — conclude a run you own. Without runId it targets your current run: records your outcome (ok, plus a one-line summary) and parks it at delivered, awaiting your requester's verdict. Your full result goes in your turn's final reply, not in summary — summary is just a short label. A goal root you opened closes directly instead — pass its runId; the close is refused with an itemized list while the root still has open obligations. Settle each, then retry.",
   "action='accept' — verdict on a delivered run you dispatched: closes it per its delivered outcome.",
   "action='reject' — requires feedback; records it and resumes the delivered run with that feedback.",
   "action='wait' — without runId, set your own run waiting on a declared wake (checkpoint required): the last thing you do here — the task comes back to you when the wake fires. With runId, set a running direct child waiting.",
