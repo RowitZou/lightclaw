@@ -137,7 +137,11 @@ export async function deriveTaskCardView(
   }
   for (const child of children) {
     child.timeline.sort((a, b) => a.at - b.at)
-    // Keep a bounded tail; the builder trims further for display.
+    // Record the real progress count (bounded only by EVENTS_READ_LIMIT) BEFORE
+    // trimming, so the card's "(N 条)" / "更早 N 条略" report the true total
+    // rather than the retained-window size. Keep a bounded tail; the builder
+    // trims further for display.
+    child.timelineTotal = child.timeline.length
     if (child.timeline.length > TASK_CARD_MAX_CHILD_TIMELINE * 3) {
       child.timeline = child.timeline.slice(-TASK_CARD_MAX_CHILD_TIMELINE * 3)
     }
@@ -158,6 +162,9 @@ export async function deriveTaskCardView(
     rootTimeline.push({ at: event.ts, text: label })
   }
   rootTimeline.sort((a, b) => a.at - b.at)
+  // Root reads the whole event file (no limit above), so this is the exact
+  // total — captured before trimming for the same reason as the child loop.
+  const rootTimelineTotal = rootTimeline.length
   if (rootTimeline.length > TASK_CARD_MAX_ROOT_TIMELINE * 3) {
     rootTimeline = rootTimeline.slice(-TASK_CARD_MAX_ROOT_TIMELINE * 3)
   }
@@ -192,5 +199,6 @@ export async function deriveTaskCardView(
     },
     children,
     rootTimeline,
+    rootTimelineTotal,
   }
 }

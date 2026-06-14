@@ -121,6 +121,42 @@ void test('buildTaskCard caps children and timelines with overflow lines', () =>
   assert.ok(!text.includes('第 0 步\n'))
 })
 
+void test('buildTaskCard counts reflect the true progress total, not the trimmed window', () => {
+  setLang('cn')
+  // The view deriver trims `timeline` / `rootTimeline` to a bounded tail but
+  // records the real count in `timelineTotal` / `rootTimelineTotal`. The panel
+  // title "(N 条)" and the "更早 N 条略" hint must report that true total — a
+  // long-running run that produced far more progress than the retained window
+  // must not appear frozen at the window size (the child-panel-stuck-at-30 bug).
+  const childTail = Array.from({ length: TASK_CARD_MAX_CHILD_TIMELINE }, (_, i) => ({
+    at: TS + i * 1000,
+    text: `子进度 ${i}`,
+  }))
+  const child: TaskCardChildView = {
+    id: 'run-long-child',
+    title: '长跑子任务',
+    role: 'coder',
+    status: 'running',
+    timeline: childTail,
+    timelineTotal: 55,
+  }
+  const rootTail = Array.from({ length: 8 }, (_, i) => ({ at: TS + i * 1000, text: `根进度 ${i}` }))
+  const card = buildTaskCard(
+    baseView({ children: [child], rootTimeline: rootTail, rootTimelineTotal: 42 }),
+  )
+  const panels = collectPanels(card)
+  const childPanel = panels[0]
+  const rootPanel = panels[panels.length - 1]
+
+  // Child: title reports the true 55, not the 10-entry retained tail; the
+  // "earlier omitted" count is total minus the shown window.
+  assert.ok(panelTitle(childPanel).includes('（55 条）'), panelTitle(childPanel))
+  assert.ok(panelText(childPanel).includes(`更早 ${55 - TASK_CARD_MAX_CHILD_TIMELINE} 条`))
+  // Root reads the whole event file, so its total is exact too.
+  assert.ok(panelTitle(rootPanel).includes('（42 条）'), panelTitle(rootPanel))
+  assert.ok(panelText(rootPanel).includes(`更早 ${42 - 8} 条`))
+})
+
 void test('buildTaskCard enforces the whole-card timeline budget by shrinking child panels first', () => {
   setLang('cn')
   const children: TaskCardChildView[] = Array.from({ length: 8 }, (_, i) => ({

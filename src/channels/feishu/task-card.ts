@@ -33,6 +33,11 @@ export type TaskCardChildView = {
   /** Progress tail for this child run (descendants merged in with a
    *  breadcrumb prefix by the view deriver). Oldest first. */
   timeline: TaskCardTimelineEntry[]
+  /** True progress-event count for this run before the view deriver trimmed
+   *  `timeline` to its bounded tail. Drives the panel's "(N 条)" title and
+   *  "更早 N 条略" hint so a long-running child reports its real total, not the
+   *  retained-window size. Omitted → fall back to `timeline.length`. */
+  timelineTotal?: number
 }
 
 export type TaskCardRootView = {
@@ -54,6 +59,10 @@ export type TaskCardView = {
   children: TaskCardChildView[]
   /** Root run's own progress tail (the orchestrator narrative). Oldest first. */
   rootTimeline: TaskCardTimelineEntry[]
+  /** True root progress-event count before `rootTimeline` was trimmed to its
+   *  bounded tail. Same role as `TaskCardChildView.timelineTotal`. Omitted →
+   *  fall back to `rootTimeline.length`. */
+  rootTimelineTotal?: number
 }
 
 // Display caps (dev-plan reference §R4). Code constants by design — no
@@ -147,9 +156,14 @@ function timelinePanel(
   titleKey: LocaleKey,
   entries: TaskCardTimelineEntry[],
   maxEntries: number,
+  // True progress total before the view deriver trimmed `entries` to a bounded
+  // tail. The title and "earlier N omitted" hint count against this so a long
+  // run reports its real total, not the retained window. The display array is
+  // still `entries` (already the most-recent tail); we only correct the counts.
+  totalCount: number = entries.length,
 ): Record<string, unknown> {
   const shown = entries.slice(-maxEntries)
-  const dropped = entries.length - shown.length
+  const dropped = Math.max(0, totalCount - shown.length)
   const lines = shown.map(
     entry => `**${formatClock(entry.at)}** ${truncate(entry.text, TASK_CARD_TIMELINE_LINE_MAX_CHARS)}`,
   )
@@ -162,7 +176,7 @@ function timelinePanel(
     header: {
       title: {
         tag: 'markdown',
-        content: `**${t(titleKey, { count: String(entries.length) })}**`,
+        content: `**${t(titleKey, { count: String(totalCount) })}**`,
       },
     },
     // Blank line between entries — multi-line entries are hard to tell
@@ -392,7 +406,14 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
         // Pass the ORIGINAL timeline + the budgeted cap so the panel's
         // "earlier N omitted" hint counts every dropped entry — both the
         // per-panel cap and the whole-card budget trim.
-        elements.push(timelinePanel('taskcard.timeline.child.title', child.timeline, timelineCap))
+        elements.push(
+          timelinePanel(
+            'taskcard.timeline.child.title',
+            child.timeline,
+            timelineCap,
+            child.timelineTotal ?? child.timeline.length,
+          ),
+        )
       }
     }
     // Both fold lines can coexist (e.g. a backlog of completed work plus a fresh
@@ -419,7 +440,12 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
   if (view.rootTimeline.length > 0) {
     elements.push(hrElement())
     elements.push(
-      timelinePanel('taskcard.timeline.root.title', view.rootTimeline, plan.rootTimelineCap),
+      timelinePanel(
+        'taskcard.timeline.root.title',
+        view.rootTimeline,
+        plan.rootTimelineCap,
+        view.rootTimelineTotal ?? view.rootTimeline.length,
+      ),
     )
   }
 
