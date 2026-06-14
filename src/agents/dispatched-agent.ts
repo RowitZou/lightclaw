@@ -17,6 +17,7 @@ import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
 import { getCurrentSessionContext, runWithSessionContext } from '../session-context.js'
 import { getDaemonLocalRuntime, getRuntime } from '../state.js'
+import { resolveDispatchedFireSecrets } from './dispatch-secrets.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import { forkInvocationContext } from './invocation-context.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
@@ -104,6 +105,18 @@ export async function runDispatchedAgent(
       params.dispatchAttachmentBlocks,
     ),
   ]
+  // Top-level secrets (Phase 18 follow-up, 2026-06-14): a background/scheduled
+  // fire dispatched DIRECTLY by main carries the owner's enabled secrets so
+  // owner-authorized actions (authenticated git push/clone, etc.) can run
+  // unattended. The gate lives in resolveDispatchedFireSecrets so the resume
+  // path can apply the identical predicate from the same chainState. The
+  // returned map feeds both the prompt's `## Available Secrets` section below
+  // and the childCtx env injection, so the two can never drift.
+  const inheritedSecrets = resolveDispatchedFireSecrets(
+    params.chainState,
+    params.role,
+    params.canonicalUser,
+  )
   const systemPrompt = await buildPromptForRole(params.role, {
     tools: params.tools,
     config: params.config,
@@ -112,6 +125,7 @@ export async function runDispatchedAgent(
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
     currentTaskRunId: params.currentTaskRunId,
+    enabledSecrets: inheritedSecrets,
   })
   const canUseTool = params.canUseToolOverride ?? deriveCanUseTool(params.role)
   const forkId = randomUUID().slice(0, 8)
@@ -215,19 +229,21 @@ export async function runDispatchedAgent(
         currentTaskRunId: params.currentTaskRunId,
         discoveredTools: new Map(),
         turnCounter: 0,
-        // Per-user runtime secrets (Phase 18) are main-only. Dispatched
-        // workers — blocking, background, and internal — must not inherit the
-        // requester's `enabledSecrets`: their prompt never renders the
-        // `## Available Secrets` section (buildSubagentPromptContent does not
-        // pass enabledSecrets), so the worker model has no language for a
-        // secret, yet the spread of currentCtx above would still leave the
-        // value live in `bash.ts`'s `ExecInput.env` injection. That mismatch
-        // ("the env has $GH_TOKEN but the agent was never told") is the gap
-        // closed here: secret-bearing actions (e.g. authenticated git push)
-        // funnel through main, consistent with Notify / user-facing cards
-        // being main-only. Stripping at the single childCtx chokepoint covers
-        // every dispatched stack.
-        enabledSecrets: undefined,
+        // Per-user runtime secrets (Phase 18). The childCtx is the single
+        // chokepoint that decides whether a dispatched stack sees secrets in
+        // `bash.ts`'s `getCurrentEnabledSecrets()`. The default is strip
+        // (`undefined`): a grandchild dispatched by a sub-worker, and every
+        // internal maintenance role, run with no secrets. The one exception is
+        // a top-level fire dispatched directly by main (`isTopLevelMainFire`
+        // above) — it carries the owner's enabled secrets, the same map the
+        // worker's `## Available Secrets` prompt section was rendered from, so
+        // the env injection and the prompt language are always consistent.
+        // This line ALWAYS sets the field explicitly (to the top-level grant or
+        // `undefined`), overriding whatever `...currentCtx` spread in — so an
+        // ineligible stack can never inherit a parent's secrets even when the
+        // parent ctx happens to carry them (e.g. an internal role dispatched
+        // from main's own session via run-subagent).
+        enabledSecrets: inheritedSecrets,
         // Framework-internal roles (memoryExtractor / memoryCurator) work
         // purely on daemon-side data — the memory tree and session
         // transcripts. Pin them to a host-direct runtime so their

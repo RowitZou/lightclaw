@@ -11,6 +11,8 @@ import type { Runtime } from '../runtime/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { rewriteTranscript } from '../session/storage.js'
+import { saveBackgroundTasks } from '../background-task/store.js'
+import { setEnabled, setUserSecret } from '../secrets/store.js'
 import { resumeRunWithBlock } from './resume.js'
 import {
   createTaskRun,
@@ -305,6 +307,147 @@ test('interjections that outlive a resumed turn are rescued, not dropped', async
   } finally {
     channelInterjectionQueue.unmarkInFlight(sessionId)
     channelInterjectionQueue.drain(sessionId)
+  }
+})
+
+async function seedWaitingRun(opts: {
+  home: string
+  sessionId: string
+  chainId: string
+  dispatcherRole: 'main' | 'generalist'
+}): Promise<{ runId: string }> {
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Clone the repo, then keep going.',
+    parentRunId: null,
+    chainId: opts.chainId,
+    depth: 1,
+  })
+  await markStarted(run.id, opts.sessionId, Date.now(), 'alice')
+  await rewriteTranscript(opts.sessionId, [createUserMessage('earlier work on the task')])
+  await markWaiting(run.id, { reason: 'awaiting-reply', bySessionId: 's-main' }, Date.now(), 'alice')
+  // The backing bg entry carries the SAME chainState the fire was dispatched
+  // with — its dispatcher node is what the resume gate reloads. main-dispatched
+  // → [main, generalist]; sub-worker-dispatched → [main, generalist, generalist].
+  const fireChain =
+    opts.dispatcherRole === 'main'
+      ? [
+          { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
+          { role: 'generalist', sessionId: opts.sessionId, dispatchId: 'fire', at: 2 },
+        ]
+      : [
+          { role: 'main', sessionId: 's-main', dispatchId: 'root', at: 1 },
+          { role: 'generalist', sessionId: 's-mid', dispatchId: 'mid', at: 2 },
+          { role: 'generalist', sessionId: opts.sessionId, dispatchId: 'fire', at: 3 },
+        ]
+  saveBackgroundTasks('alice', [{
+    id: 'bg-clone',
+    ownerCanonicalUser: 'alice',
+    prompt: 'clone',
+    role: 'generalist',
+    schedule: { kind: 'oneshot', at: new Date(Date.now() + 3_600_000).toISOString() },
+    label: 'clone repo',
+    notifyOn: 'always',
+    notifyTo: 'agent',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    taskRunId: run.id,
+    chainState: {
+      chainId: opts.chainId,
+      depth: fireChain.length - 1,
+      path: fireChain,
+      chainStartedAt: 1,
+    },
+  }])
+  return { runId: run.id }
+}
+
+async function observeResumeSecrets(home: string, runId: string): Promise<{
+  secrets: ReadonlyMap<string, string> | undefined
+  systemPrompt: string
+}> {
+  let secrets: ReadonlyMap<string, string> | undefined
+  let systemPrompt = ''
+  const ctx = createSessionContext({
+    cwd: home,
+    model: 'fake-model',
+    sessionsDir: path.join(home, 'sessions'),
+    memoryDir: path.join(home, 'memory'),
+    sessionId: 's-main',
+    currentUserId: 'alice',
+    runtime: fakeRuntime(home),
+  })
+  await runWithSessionContext(ctx, () =>
+    resumeRunWithBlock(runId, {
+      via: 'child-join',
+      reason: 'continue',
+      body: '<taskrun-child-result>done</taskrun-child-result>',
+    }, 'alice', async params => {
+      const m = await import('../session-context.js')
+      secrets = m.getCurrentSessionContext()?.enabledSecrets
+      systemPrompt = params.invocation.systemPromptOverride ?? ''
+      return {
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'continuing' }],
+            stopReason: 'end_turn',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          }),
+        ],
+        assistantText: 'continuing',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }
+    }),
+  )
+  return { secrets, systemPrompt }
+}
+
+test('a resumed top-level main fire re-grants the owner secrets (consistent across the wait boundary)', async () => {
+  writeMinimalConfig(tmpHome)
+  setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+  setEnabled('alice', 'GH_TOKEN', true)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-secret-main',
+    chainId: 'chain-resume-secret-main',
+    dispatcherRole: 'main',
+  })
+  try {
+    const { secrets, systemPrompt } = await observeResumeSecrets(tmpHome, runId)
+    assert.equal(secrets?.get('GH_TOKEN'), 'ghp_secret_value')
+    assert.ok(
+      systemPrompt.includes('## Available Secrets') && systemPrompt.includes('GH_TOKEN'),
+    )
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-secret-main')
+    channelInterjectionQueue.drain('taskrun-resume-secret-main')
+  }
+})
+
+test('a resumed sub-worker fire stays stripped (gate reloads the fire chainState)', async () => {
+  writeMinimalConfig(tmpHome)
+  setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+  setEnabled('alice', 'GH_TOKEN', true)
+  const { runId } = await seedWaitingRun({
+    home: tmpHome,
+    sessionId: 'taskrun-resume-secret-sub',
+    chainId: 'chain-resume-secret-sub',
+    dispatcherRole: 'generalist',
+  })
+  try {
+    const { secrets, systemPrompt } = await observeResumeSecrets(tmpHome, runId)
+    assert.equal(secrets, undefined)
+    assert.ok(!systemPrompt.includes('## Available Secrets'))
+  } finally {
+    channelInterjectionQueue.unmarkInFlight('taskrun-resume-secret-sub')
+    channelInterjectionQueue.drain('taskrun-resume-secret-sub')
   }
 })
 

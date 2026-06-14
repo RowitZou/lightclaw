@@ -5,6 +5,8 @@ import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
 import { forkInvocationContext } from '../agents/invocation-context.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
+import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
+import { loadBackgroundTasks } from '../background-task/store.js'
 import { buildPromptForRole } from '../prompt.js'
 import { getConfig } from '../config.js'
 import { resolveRoleModel } from '../model-resolution.js'
@@ -155,6 +157,22 @@ export async function resumeRunWithBlock(
       runtimeDriver: config.runtime.driver,
     })),
   )
+  // Re-grant top-level-fire secrets on resume using the SAME gate the initial
+  // fire used (resolveDispatchedFireSecrets). A TaskRunMeta carries no
+  // chainState, so reload it from the backing bg entry — that is the exact
+  // chainState dispatched-agent evaluated at fire time, so a resumed shift of a
+  // top-level main fire keeps `$GH_TOKEN` and a resumed sub-worker / internal
+  // shift stays stripped, with no separate predicate to drift. If the entry is
+  // gone (e.g. a swept oneshot) there is nothing to prove eligibility, so the
+  // safe fallback is no secrets.
+  const fireChainState = loadBackgroundTasks(run.ownerCanonicalUser)
+    .find(e => e.taskRunId === run.id || e.standingRootRunId === run.id)
+    ?.chainState
+  const resumedSecrets = resolveDispatchedFireSecrets(
+    fireChainState,
+    role,
+    run.ownerCanonicalUser,
+  )
   const systemPrompt = await buildPromptForRole(role, {
     tools,
     config,
@@ -163,6 +181,7 @@ export async function resumeRunWithBlock(
     environmentRoot: getRuntime().workspaceRoot,
     scratchRoot: getRuntime().scratchRoot,
     currentTaskRunId: run.id,
+    enabledSecrets: resumedSecrets,
   })
   const childCtx = {
     ...currentCtx,
@@ -171,7 +190,7 @@ export async function resumeRunWithBlock(
     currentTaskRunId: run.id,
     discoveredTools: new Map(),
     turnCounter: 0,
-    enabledSecrets: undefined,
+    enabledSecrets: resumedSecrets,
   }
   // The resumed turn now owns this run's inbox. Mark it in-flight so a message
   // arriving mid-turn — a user interjecting a resumed main, an agent Message

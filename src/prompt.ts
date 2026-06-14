@@ -61,6 +61,14 @@ export type SubagentPromptContext = {
   scratchRoot: string
   /** Tracked task run this worker prompt is for — gates `## Your Task Run`. */
   currentTaskRunId?: string
+  /**
+   * Runtime secrets injected into this worker's Bash env. Only top-level
+   * main-dispatched fires carry these (see `runDispatchedAgent`); when present
+   * the worker prompt renders the same `## Available Secrets` section main
+   * uses, so the model has language for `$NAME` instead of an env value it was
+   * never told about.
+   */
+  enabledSecrets?: ReadonlyMap<string, string>
 }
 
 /**
@@ -1073,7 +1081,10 @@ async function buildSubagentPromptContent(
     postTodos: prompt.postTodoSections.join('\n\n'),
     includeTodos: prompt.includeTodos,
   }
-  return renderSystemPrompt(template, [], { tools: context.tools })
+  return renderSystemPrompt(template, [], {
+    tools: context.tools,
+    enabledSecrets: context.enabledSecrets,
+  })
 }
 
 function buildDeferredToolsReminder(

@@ -10,6 +10,7 @@ import { createAssistantMessage, createUserMessage } from '../messages.js'
 import type { Runtime } from '../runtime/index.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import { setEnabled, setUserSecret } from '../secrets/store.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { buildDispatchedInitialMessages, runDispatchedAgent } from './dispatched-agent.js'
 import { parseForkTranscriptFile } from './fork-transcript.js'
@@ -184,60 +185,156 @@ test('worker ALS sessionId aligns with chainState path末端 + chainState rides 
   }
 })
 
-test('dispatched worker does NOT inherit the requester enabledSecrets (main-only)', async () => {
+/**
+ * Drive a single runDispatchedAgent and capture, from inside the worker's ALS
+ * scope (where bash.ts's getCurrentEnabledSecrets reads), both the live
+ * `enabledSecrets` map and the rendered worker systemPrompt. Asserting the ALS
+ * map — not a call count — is the real data-flow check: that map is exactly
+ * what `ExecInput.env` injection sees.
+ */
+async function runAndObserve(opts: {
+  tempDir: string
+  config: ReturnType<typeof getConfig>
+  role: Role
+  chainState: ChainState
+}): Promise<{
+  secrets: ReadonlyMap<string, string> | undefined
+  systemPrompt: string
+}> {
+  const ctx = createSessionContext({
+    cwd: opts.tempDir,
+    model: 'fake-model',
+    sessionsDir: path.join(opts.tempDir, 'sessions'),
+    memoryDir: path.join(opts.tempDir, 'memory', 'alice'),
+    currentUserId: 'alice',
+    currentRole: roleWithTools(['Dispatch']),
+    runtime: fakeRuntime(opts.tempDir),
+    sessionId: 'main-session',
+  })
+  let secrets: ReadonlyMap<string, string> | undefined
+  let systemPrompt = ''
+  await runWithSessionContext(ctx, async () => runDispatchedAgent({
+    dispatchPrompt: 'do worker work',
+    role: opts.role,
+    tools: [],
+    config: opts.config,
+    canonicalUser: 'alice',
+    chainState: opts.chainState,
+    label: 'subagent_worker',
+    queryImpl: async params => {
+      secrets = await import('../session-context.js')
+        .then(m => m.getCurrentSessionContext()?.enabledSecrets)
+      systemPrompt = params.invocation.systemPromptOverride ?? ''
+      return {
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'done' }],
+            stopReason: 'end_turn',
+            usage: emptyUsage(),
+          }),
+        ],
+        assistantText: 'done',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: emptyUsage(),
+      }
+    },
+  }))
+  return { secrets, systemPrompt }
+}
+
+// path = [main, generalist, leaf]: a grandchild dispatched by a sub-worker, so
+// the dispatcher node (path.at(-2)) is `generalist`, not the orchestrator.
+function makeDeepChainState(dispatchId: string): ChainState {
+  return {
+    chainId: 'chain-deep',
+    depth: 2,
+    path: [
+      { role: 'main', sessionId: 'parent', dispatchId: 'root', at: 1 },
+      { role: 'generalist', sessionId: 'mid', dispatchId: 'mid', at: 2 },
+      { role: 'test-worker', sessionId: 'child', dispatchId, at: 3 },
+    ],
+    parentDispatchId: 'mid',
+    chainStartedAt: 1,
+  }
+}
+
+test('top-level main-dispatched fire inherits the owner enabled secrets + renders the Available Secrets prompt section', async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
   setLightclawHomeOverride(tempDir)
   try {
     writeMinimalConfig(tempDir)
     const config = getConfig()
-    const ctx = createSessionContext({
-      cwd: tempDir,
-      model: 'fake-model',
-      sessionsDir: path.join(tempDir, 'sessions'),
-      memoryDir: path.join(tempDir, 'memory', 'alice'),
-      currentUserId: 'alice',
-      currentRole: roleWithTools(['Dispatch']),
-      runtime: fakeRuntime(tempDir),
-      sessionId: 'main-session',
-      // Requester (main) holds a live secret; bash.ts would inject it as
-      // ExecInput.env for main's own turns.
-      enabledSecrets: new Map([['GH_TOKEN', 'ghp_secret_value']]),
-    })
-    const chainState = makeChainState('dispatch-secret')
+    // Owner's enabled secret lives on disk (the real source loadEnabledSecrets
+    // reads), not just in the parent ctx.
+    setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+    setEnabled('alice', 'GH_TOKEN', true)
 
-    let observedSecrets: ReadonlyMap<string, string> | undefined
-    await runWithSessionContext(ctx, async () => runDispatchedAgent({
-      dispatchPrompt: 'do worker work',
-      role: roleWithTools([]),
-      tools: [],
+    // makeChainState dispatcher (path.at(-2)) is `main` → top-level fire.
+    const { secrets, systemPrompt } = await runAndObserve({
+      tempDir,
       config,
-      canonicalUser: 'alice',
-      chainState,
-      label: 'subagent_webSearcher',
-      queryImpl: async params => {
-        observedSecrets = await import('../session-context.js')
-          .then(m => m.getCurrentSessionContext()?.enabledSecrets)
-        return {
-          messages: [
-            ...params.messages,
-            createAssistantMessage({
-              content: [{ type: 'text', text: 'done' }],
-              stopReason: 'end_turn',
-              usage: emptyUsage(),
-            }),
-          ],
-          assistantText: 'done',
-          stopReason: 'end_turn',
-          didCompact: false,
-          usage: emptyUsage(),
-        }
-      },
-    }))
+      role: roleWithTools([]),
+      chainState: makeChainState('dispatch-secret'),
+    })
 
-    // The worker's ALS context must NOT carry the requester's secrets — the
-    // spread of currentCtx into childCtx is explicitly overridden to undefined,
-    // so bash.ts's getCurrentEnabledSecrets() yields nothing inside the worker.
-    assert.equal(observedSecrets, undefined)
+    assert.equal(secrets?.get('GH_TOKEN'), 'ghp_secret_value')
+    assert.ok(
+      systemPrompt.includes('## Available Secrets') && systemPrompt.includes('GH_TOKEN'),
+      'worker prompt must name the secret so the model has language for $GH_TOKEN',
+    )
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('a fire dispatched by a sub-worker (not main) does NOT inherit secrets', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+    setEnabled('alice', 'GH_TOKEN', true)
+
+    // dispatcher is `generalist` (a worker), so the secret must not propagate
+    // one level deeper than the fire main itself authorized.
+    const { secrets, systemPrompt } = await runAndObserve({
+      tempDir,
+      config,
+      role: roleWithTools([]),
+      chainState: makeDeepChainState('dispatch-deep'),
+    })
+
+    assert.equal(secrets, undefined)
+    assert.ok(!systemPrompt.includes('## Available Secrets'))
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('an internal role dispatched from main does NOT inherit secrets', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-agent-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    setUserSecret('alice', 'GH_TOKEN', 'ghp_secret_value')
+    setEnabled('alice', 'GH_TOKEN', true)
+
+    // Even with a main dispatcher, kind:'internal' short-circuits eligibility:
+    // maintenance roles work on daemon-side data and never need user secrets.
+    const { secrets } = await runAndObserve({
+      tempDir,
+      config,
+      role: internalRole(),
+      chainState: makeChainState('dispatch-internal'),
+    })
+
+    assert.equal(secrets, undefined)
   } finally {
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })
