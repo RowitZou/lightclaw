@@ -72,11 +72,11 @@ type ApplicationState =
 
 // Aligned with pairing.ts PAIRING_TTL_MS so an in-memory token outlives the
 // pending.json entry by no more than its own age. After eviction a stale
-// click (e.g. admin re-opening a 2-hour-old review card) hits the !current
+// click (e.g. admin re-opening a day-old review card) hits the !current
 // branch in handleCardAction and renders the "expired" terminal card —
 // which is the correct UX since the underlying pending.json entry has
 // long since been cleaned up by cleanExpiredPending.
-const TOKEN_EVICTION_TTL_MS = 60 * 60 * 1000
+const TOKEN_EVICTION_TTL_MS = 24 * 60 * 60 * 1000
 
 export class PairingCardCoordinator {
   private readonly byToken = new Map<string, ApplicationState>()

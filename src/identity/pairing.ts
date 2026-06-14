@@ -12,7 +12,7 @@ import type {
 
 const PAIRING_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const PAIRING_CODE_LENGTH = 8
-const PAIRING_TTL_MS = 60 * 60 * 1000
+const PAIRING_TTL_MS = 24 * 60 * 60 * 1000
 const PAIRING_RATE_LIMIT_MS = 10 * 60 * 1000
 
 export async function findExistingPending(

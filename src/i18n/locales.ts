@@ -327,7 +327,7 @@ export const LOCALES = {
     // ---- Channel runner ----
     'channel.pairing.welcome': '欢迎使用 LightClaw bot。',
     'channel.pairing.codeLine': '请管理员审批以下配对码：**{code}**',
-    'channel.pairing.freshness': '（{when} 的配对请求；配对码 1 小时内有效）',
+    'channel.pairing.freshness': '（{when} 的配对请求；配对码 24 小时内有效）',
     'channel.pairing.rateLimited': '配对请求过于频繁，请稍后再试或联系管理员。',
     'channel.pairing.freshnessNew': '新建',
     'channel.pairing.freshnessReuse': '复用',
@@ -955,7 +955,7 @@ export const LOCALES = {
     // ---- Channel runner ----
     'channel.pairing.welcome': 'Welcome to LightClaw bot.',
     'channel.pairing.codeLine': 'Please ask admin to approve the pairing code: **{code}**',
-    'channel.pairing.freshness': '({when} pairing request; valid for 1 hour)',
+    'channel.pairing.freshness': '({when} pairing request; valid for 24 hours)',
     'channel.pairing.rateLimited': 'Pairing requests are rate-limited; please try again later or contact admin.',
     'channel.pairing.freshnessNew': 'new',
     'channel.pairing.freshnessReuse': 'reused',
