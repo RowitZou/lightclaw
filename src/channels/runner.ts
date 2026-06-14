@@ -1119,6 +1119,12 @@ export class ChannelRunner {
                       mentionSynthetic: route === 'standing-chat',
                     }),
                   )
+                  // A chat reply just landed — the user now has a response, so
+                  // retire any interjection-ack emoji for this session.
+                  // Clear-on-reply (not at turn-end) keeps the "OnIt" up while a
+                  // turn is still working or parked on a dispatch, so it never
+                  // vanishes before the user is actually answered.
+                  await this.clearPendingAcks(mainSessionId)
                 },
                 interjectionRenderer: (entries, context) => [{
                   type: 'text',
@@ -1515,6 +1521,9 @@ export class ChannelRunner {
                 mentionSynthetic: route === 'standing-chat',
               }),
             )
+            // Single-shot final reply landed — retire the interjection acks too
+            // (same clear-on-reply contract as the streamed onAssistantTurn path).
+            await this.clearPendingAcks(mainSessionId)
           }
         }
         turnCard?.finalize()
@@ -1535,10 +1544,12 @@ export class ChannelRunner {
       }
     })
     } finally {
-      // Clear interjection-ack emoji reactions for this session now that the
-      // turn that absorbed them has ended — same transient lifecycle as the
-      // typing indicator. Best-effort; never throws.
-      await this.clearPendingAcks(mainSessionId)
+      // Interjection-ack emoji reactions are retired on reply (the
+      // clearPendingAcks calls in the onAssistantTurn / single-shot reply
+      // paths), NOT at turn-end: a turn that parks on a dispatch without
+      // replying must keep the "OnIt" up until the user is actually answered —
+      // possibly by a later channel turn. The typing indicator (stopTyping in
+      // the inner finally) stays turn-scoped; only the ack lifecycle changed.
       // Crash-resume: clear the in-flight-turn marker now that the turn has
       // finished in-process (success, failure, slash-return, or abort). Only
       // a hard daemon crash leaves it set for the startup resume scan.
