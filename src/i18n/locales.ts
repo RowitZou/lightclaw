@@ -282,7 +282,7 @@ export const LOCALES = {
 
     // ---- Permission feishu card ----
     'permission.feishu.title': 'LightClaw 工具调用申请',
-    'permission.feishu.titleHighRisk': 'LightClaw 高危操作申请',
+    'permission.feishu.titleHighRisk': 'LightClaw 敏感操作申请',
     'permission.feishu.fields.tool': '**工具**：{name}',
     'permission.feishu.fields.risk': '**风险**：{level}',
     'permission.feishu.fields.mode': '**模式**：{mode}',
@@ -910,7 +910,7 @@ export const LOCALES = {
 
     // ---- Permission feishu card ----
     'permission.feishu.title': 'LightClaw tool-call request',
-    'permission.feishu.titleHighRisk': 'LightClaw high-risk operation request',
+    'permission.feishu.titleHighRisk': 'LightClaw sensitive operation request',
     'permission.feishu.fields.tool': '**Tool**: {name}',
     'permission.feishu.fields.risk': '**Risk**: {level}',
     'permission.feishu.fields.mode': '**Mode**: {mode}',
