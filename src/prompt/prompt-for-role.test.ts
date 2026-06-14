@@ -18,15 +18,18 @@ import {
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import type { Tool } from '../tool.js'
 
+// ask-prompt cost-framing (2026-06-14): see role-prompt.snapshot.test.ts — same
+// non-internal roles shift, four internal roles stable. Hashes mirror that file
+// because both render byte-identical role prompts.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '7eba50d0b95bad29a05b14dffc826cf086ebd5a7eb1bf30b5444ae12a7e553e2',
-  generalist: 'a79d5d35e1c82e083a285b541d09f8627842bf40c60facb1c7522a4a0ec4c1c8',
-  localExplorer: 'c2a80e726b4509fa3645b1c81449f013c0ecd50fd0ec06124d7342fbd40dd4ae',
-  webSearcher: '3623f68a22e73f342c7b7ee11542058b71e61f0807236fa2d18e5912f65239a6',
-  feishuSecretary: '4d22f1f9e4465900bd600286d57aff73ca7911856db7668d20cce827217fa631',
-  coder: '52f0fa22b3f9d778db47a584a81d4e1a121f5f088206d90e79ed549bd4d13a4e',
-  archivist: 'b0b03b20bc42a7eeba810ea69929105d322ff1dd19d1a614af01529b73941073',
-  reviewer: 'c2eeaf309103d3090f674d26aacb51b0b2d05ac3df22d0e89f4b734015c8c0c2',
+  main: '3351bd47bf6913a43fb44319cbafec533995dfd5541cca6033f01df24ea13632',
+  generalist: '171e642a748c60b25ea7d78073950c2b336ee33dec4910ceb3400be8c050cf1b',
+  localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
+  webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',
+  feishuSecretary: '4f55dc17b119fbd492ed24dc3cb352e97531783c0aff0fb0a4571fdc0c0cf4b4',
+  coder: '01fccaa7eb188306bee91f62f87448d34167b5ee68acd0e781cbbfb6f8d35432',
+  archivist: '92f816d17e05fbd69d1c33906c90f6977ad1b1cdc46afe7e5a24b89ecaa1e6a6',
+  reviewer: '60c358d8a9cacdbe6e71ecfb0e3838b3f2f61908e28d447e906467c49d3562f1',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: 'f44bcdc7a2d0140024e95f7b36daf6492783780bc2f8c35128935b5ae472b003',

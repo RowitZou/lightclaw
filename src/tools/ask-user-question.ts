@@ -50,13 +50,16 @@ Each question has its own free-text slot for anything the options don't
 cover. Answers come back as \`selectedLabels\` plus an optional per-question
 \`otherText\`.
 
-Decide first, ask second. Don't use this to confirm a choice you already know,
-to ask permission to proceed, or to elicit something you can reasonably try
-yourself.`
+Weigh the cost, don't rank: when guessing wrong would send the work down an
+expensive or hard-to-undo path, a question now is judgment, not hesitation —
+ask it. When a default is cheap and easy to correct, take it and say what you
+assumed. Still skip the call for what you can settle yourself: confirming a
+choice you already know, asking mere permission to proceed, or eliciting what
+you can reasonably try and verify on your own.`
 
 export const askUserQuestionTool = buildTool<AskUserQuestionInput, AskUserQuestionOutput>({
   name: 'AskUserQuestion',
-  whenToUse: 'Ask the user to choose among real unresolved options or provide a missing user-only fact.',
+  whenToUse: 'Ask the user to choose among real unresolved options or provide a missing user-only fact — especially when guessing wrong would be costly to undo.',
   // Deferred (task-specific): a structured question is reached for only when a
   // real choice is unresolved, not every turn — the frequency criterion that
   // governs inline-vs-deferred. The earlier always-load was a misdiagnosis:

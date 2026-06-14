@@ -112,7 +112,7 @@ const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
 With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A message changes what the work should do; it never checks on it — status is TaskInspect's job, and a check-in message only interrupts. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject.
 
-Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time. Reserve it for forks only your requester can settle; routine judgment calls are yours.`
+Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time — so you keep moving either way. Use it for forks only your requester can settle, and reach for it early when guessing wrong would be expensive to undo; routine judgment calls you can default and verify are still yours.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 

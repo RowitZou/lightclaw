@@ -40,7 +40,10 @@ const EXPECTED = {
   Dispatch: 'cac7c18f30bb1fd7b9d4fce441181ce5304b23118b3ddb6fa3397207fbd7346b',
   // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
-  Message: '4ff319d858a7d0fa1a1f97982d0c6b9b3636fe27709f1ff78f8f3ff67cdd557b',
+  // ask-prompt cost-framing (2026-06-14): no-`to` ask description reframed
+  // from "reserve it / routine calls are yours" to a cost-of-wrong-guess
+  // judgment ("reach for it early when guessing wrong would be expensive").
+  Message: '3fe1897f6f248ac9de1cec47cd8b8a783c569292d9f128517f72ca07eab1adfb',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',
