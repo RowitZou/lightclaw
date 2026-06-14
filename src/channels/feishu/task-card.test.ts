@@ -8,6 +8,7 @@ import {
   TASK_CARD_MAX_CHILD_TIMELINE,
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
+  TASK_CARD_TIMELINE_LINE_MAX_CHARS,
   type TaskCardChildView,
   type TaskCardView,
 } from './task-card.js'
@@ -106,8 +107,10 @@ void test('buildTaskCard caps children and timelines with overflow lines', () =>
   }))
   const card = buildTaskCard(baseView({ children, rootTimeline }))
   const body = (card.body as { elements: Array<{ tag: string; content?: string }> }).elements
-  const overflow = body.find(el => el.content?.includes('另有 3 项子任务'))
-  assert.ok(overflow, 'children overflow line rendered')
+  // 53 queued (live) children, all tiny: 50 fit the panel-count backstop, the
+  // last 3 fold into the live summary line.
+  const overflow = body.find(el => el.content?.includes('另有 3 个子任务进行中'))
+  assert.ok(overflow, 'live children fold line rendered')
 
   const rootPanel = collectPanels(card)[0]
   assert.ok(panelTitle(rootPanel).includes(`（${TASK_CARD_MAX_ROOT_TIMELINE + 5} 条）`))
@@ -149,6 +152,55 @@ void test('buildTaskCard enforces the whole-card timeline budget by shrinking ch
   // Root narrative is trimmed last: it keeps its full cap.
   const rootPanel = panels[panels.length - 1]
   assert.ok(panelText(rootPanel).includes(`根第 ${TASK_CARD_MAX_ROOT_TIMELINE - 1} 步`))
+  // A child panel shrunk by the budget still announces the dropped entries — the
+  // hint counts whole-card budget trims, not just the per-panel cap.
+  const childPanels = panels.slice(0, -1)
+  assert.ok(
+    childPanels.some(p => panelText(p).includes('更早')),
+    'budget-trimmed child panel shows omission hint',
+  )
+})
+
+void test('buildTaskCard keeps live children, folds earliest-completed, and coexists both fold lines', () => {
+  setLang('cn')
+  // 30 in-flight + 20 completed, each one long timeline entry — enough to push
+  // the character budget past what fits, so the planner must fold.
+  const longText = 'x'.repeat(TASK_CARD_TIMELINE_LINE_MAX_CHARS)
+  const live: TaskCardChildView[] = Array.from({ length: 30 }, (_, i) => ({
+    id: `run-live-${i}`,
+    title: `运行子任务 ${i}`,
+    role: 'generalist',
+    status: 'running' as const,
+    timeline: [{ at: TS + 10_000 + i * 1000, text: `${longText} live ${i}` }],
+  }))
+  const done: TaskCardChildView[] = Array.from({ length: 20 }, (_, i) => ({
+    id: `run-done-${i}`,
+    title: `完成子任务 ${i}`,
+    role: 'generalist',
+    status: 'done' as const,
+    timeline: [{ at: TS + i * 1000, text: `${longText} done ${i}` }],
+  }))
+  const card = buildTaskCard(baseView({ children: [...done, ...live], rootTimeline: [] }))
+  const body = (card.body as { elements: Array<{ content?: string }> }).elements
+  const rows = body.filter(el => typeof el.content === 'string' && el.content!.includes(' · '))
+
+  // Live priority: every rendered status row is in-flight; no completed child
+  // takes a panel slot while live work is still waiting.
+  const shownStatusRows = rows.filter(el => /^[🔄✅]/u.test(el.content!))
+  assert.ok(shownStatusRows.length > 0)
+  assert.ok(
+    shownStatusRows.every(el => el.content!.startsWith('🔄')),
+    'completed children yield their slots to in-flight ones',
+  )
+
+  // Both fold lines coexist: some live overflowed AND all done folded.
+  assert.ok(body.some(el => el.content?.includes('个子任务进行中')), 'moreLive fold line')
+  assert.ok(body.some(el => el.content?.includes('已完成子任务已折叠')), 'earlierDone fold line')
+
+  // Roster histogram surfaces the true scope despite the folding.
+  const heading = body.find(el => el.content?.startsWith('**子任务**'))
+  assert.ok(heading?.content?.includes('🔄 30 进行中'))
+  assert.ok(heading?.content?.includes('✅ 20 已完成'))
 })
 
 void test('buildTaskCard renders terminal freeze footer and status template', () => {

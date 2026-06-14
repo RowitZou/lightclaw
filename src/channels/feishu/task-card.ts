@@ -59,13 +59,20 @@ export type TaskCardView = {
 // Display caps (dev-plan reference §R4). Code constants by design — no
 // config knob. The builder enforces them itself so every caller renders
 // the same bounded card regardless of how much tail the deriver passed.
-export const TASK_CARD_MAX_CHILDREN = 10
+//
+// MAX_CHILDREN is an absolute panel-count BACKSTOP, not the truncation gate.
+// The real gate is the character budget: children are admitted live-first then
+// recent-done-first until the budget fills (planChildren), and the rest fold
+// into summary lines (moreLive / earlierDone). This ceiling only bounds a
+// pathological tree (hundreds of subtasks) before the budget math runs — in
+// realistic cards the budget bites first.
+export const TASK_CARD_MAX_CHILDREN = 50
 export const TASK_CARD_MAX_ROOT_TIMELINE = 30
 export const TASK_CARD_MAX_CHILD_TIMELINE = 10
 // Timeline-line cap raised 200→400 and per-entry latest-progress 60→160 so the
 // expanded "执行过程" panel shows fuller content (the user reads detail there;
 // the title line stays short). Whole-card size is bounded by a CHARACTER budget
-// (applyTotalTimelineBudget), NOT a halved entry count — short lines (the common
+// (planChildren), NOT a halved entry count — short lines (the common
 // case, especially now that long content reaches chat) let many entries through,
 // so a card with many sub-tasks is not squeezed; only genuinely long lines trim
 // a panel. The entry count below is just an upper sanity bound. Truly long
@@ -171,56 +178,170 @@ function timelineEntryCost(entry: TaskCardTimelineEntry): number {
   return Math.min(text.length, TASK_CARD_TIMELINE_LINE_MAX_CHARS) + 8
 }
 
-/** Trim timelines so the whole card stays under BOTH the entry sanity cap and
- *  the character budget. Character-bounded (not entry-count-halved) so a card
- *  with many sub-tasks keeps its short lines — only a genuinely long total
- *  trims a panel. Child panels are shrunk round-robin from the largest first
- *  (≥1 line each); the root narrative — the panel the user opens first — is
- *  trimmed last, only if children can't free enough on their own. */
-function applyTotalTimelineBudget(view: TaskCardView): TaskCardView {
-  let root = [...view.rootTimeline]
-  const children = view.children.map(child => ({ ...child, timeline: [...child.timeline] }))
+// Non-timeline cost estimates (chars) the budget must also account for so the
+// whole card — not just timelines — stays under the proven-safe size.
+const PANEL_OVERHEAD = 16 // a collapsible panel's header / wrapper
+const FOLD_LINE_COST = 64 // a moreLive / earlierDone summary line
+const ROSTER_COST = 64 // the "Subtasks · 🔄 N · ✅ M" histogram line
+const CARD_FIXED_OVERHEAD = 256 // objective + footer + standing/hr scaffolding
 
-  const measure = (): { entries: number; chars: number } => {
-    let entries = Math.min(root.length, TASK_CARD_MAX_ROOT_TIMELINE)
-    let chars = root
-      .slice(-TASK_CARD_MAX_ROOT_TIMELINE)
-      .reduce((sum, e) => sum + timelineEntryCost(e), 0)
-    for (const child of children) {
-      entries += Math.min(child.timeline.length, TASK_CARD_MAX_CHILD_TIMELINE)
-      chars += child.timeline
-        .slice(-TASK_CARD_MAX_CHILD_TIMELINE)
-        .reduce((sum, e) => sum + timelineEntryCost(e), 0)
+/** Status row cost: icon + title (capped) + status word + latest-progress (capped). */
+function childRowCost(child: TaskCardChildView): number {
+  const progress = child.latestProgress
+    ? Math.min(child.latestProgress.length, TASK_CARD_PROGRESS_MAX_CHARS) + 3
+    : 0
+  return Math.min(child.title.length, TASK_CARD_TITLE_MAX_CHARS) + progress + 24
+}
+
+/** Most recent activity timestamp for ordering (last timeline entry, else 0). */
+function lastActivityAt(child: TaskCardChildView): number {
+  return child.timeline.length > 0 ? child.timeline[child.timeline.length - 1].at : 0
+}
+
+export type PlannedChild = {
+  child: TaskCardChildView
+  /** Effective timeline tail to render (≤ MAX_CHILD_TIMELINE). The panel still
+   *  receives the ORIGINAL timeline + this cap so its "earlier N omitted" hint
+   *  counts every dropped entry, budget trims included. */
+  timelineCap: number
+}
+
+export type TaskCardPlan = {
+  rootTimelineCap: number
+  shown: PlannedChild[]
+  /** In-flight children that did not fit — summarized in a moreLive line. */
+  foldedLive: TaskCardChildView[]
+  /** Completed children that did not fit — summarized in an earlierDone line. */
+  foldedDone: TaskCardChildView[]
+}
+
+/** Decide which children get a panel and how much timeline each (root included)
+ *  shows, all under ONE character budget — so subtask COUNT and timeline DETAIL
+ *  are both budget-driven, not fixed.
+ *
+ *  Phase 1 (membership): admit children in priority order — live (in-flight)
+ *  first by most-recent activity, then completed by most-recent completion —
+ *  each costed at its row + ONE timeline line, until the budget fills. Live wins
+ *  every slot it needs, so a flood of completed work yields to in-flight work
+ *  (and a shown child that later completes frees its slot to a folded live one on
+ *  the next render). What doesn't fit folds: live → foldedLive, done →
+ *  foldedDone; both lines coexist when both overflow. Earliest-completed fold
+ *  first (a DAG's earlier nodes are done by the time later ones run).
+ *
+ *  Phase 2 (detail): distribute the leftover budget across the admitted panels'
+ *  timelines + the root narrative, starting at full caps and shrinking the
+ *  largest first (root last — it's the panel opened first), so a few verbose
+ *  panels trim their tails rather than evicting a whole child. */
+function planChildren(view: TaskCardView): TaskCardPlan {
+  const live = view.children.filter(c => !TASK_RUN_TERMINAL_STATUSES.has(c.status))
+  const done = view.children.filter(c => TASK_RUN_TERMINAL_STATUSES.has(c.status))
+  const byActivityDesc = (a: TaskCardChildView, b: TaskCardChildView): number =>
+    lastActivityAt(b) - lastActivityAt(a)
+  const admitOrder = [...[...live].sort(byActivityDesc), ...[...done].sort(byActivityDesc)]
+
+  const rootCapMax = Math.min(view.rootTimeline.length, TASK_CARD_MAX_ROOT_TIMELINE)
+  const oneLineCost = (entries: TaskCardTimelineEntry[]): number =>
+    entries.length > 0 ? timelineEntryCost(entries[entries.length - 1]) + PANEL_OVERHEAD : 0
+  const rootMinCost = oneLineCost(view.rootTimeline)
+  const reserveFixed = CARD_FIXED_OVERHEAD + ROSTER_COST + 2 * FOLD_LINE_COST + rootMinCost
+
+  // Phase 1: membership at minimum (row + one timeline line) cost.
+  let remaining = TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET - reserveFixed
+  const admittedIds = new Set<string>()
+  for (const child of admitOrder) {
+    const minCost = childRowCost(child) + oneLineCost(child.timeline)
+    if (admittedIds.size >= 1 && minCost > remaining) break
+    if (admittedIds.size >= TASK_CARD_MAX_CHILDREN) break
+    admittedIds.add(child.id)
+    remaining -= minCost
+  }
+
+  // Render admitted children in their natural oldest-first order so completing a
+  // child doesn't reshuffle the panel — only real membership changes move rows.
+  const shownChildren = view.children.filter(c => admittedIds.has(c.id))
+  const foldedLive = live.filter(c => !admittedIds.has(c.id))
+  const foldedDone = done.filter(c => !admittedIds.has(c.id))
+
+  // Phase 2: grow timelines from the leftover budget, shrinking largest-first.
+  const rowSum = shownChildren.reduce((sum, c) => sum + childRowCost(c), 0)
+  const timelineBudget =
+    TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET - CARD_FIXED_OVERHEAD - ROSTER_COST - 2 * FOLD_LINE_COST - rowSum
+  let rootCap = rootCapMax
+  const caps = new Map<string, number>(
+    shownChildren.map(c => [c.id, Math.min(c.timeline.length, TASK_CARD_MAX_CHILD_TIMELINE)]),
+  )
+  const tailCost = (entries: TaskCardTimelineEntry[], cap: number): number =>
+    cap > 0 ? entries.slice(-cap).reduce((sum, e) => sum + timelineEntryCost(e), 0) + PANEL_OVERHEAD : 0
+  const measure = (): { chars: number; lines: number } => {
+    let chars = tailCost(view.rootTimeline, rootCap)
+    let lines = rootCap
+    for (const c of shownChildren) {
+      const cap = caps.get(c.id) ?? 0
+      chars += tailCost(c.timeline, cap)
+      lines += cap
     }
-    return { entries, chars }
+    return { chars, lines }
   }
   const over = (): boolean => {
-    const { entries, chars } = measure()
-    return entries > TASK_CARD_MAX_TOTAL_TIMELINE || chars > TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET
+    const { chars, lines } = measure()
+    return chars > timelineBudget || lines > TASK_CARD_MAX_TOTAL_TIMELINE
   }
-  if (!over()) return view
-
-  // Child panels first, round-robin from the largest, keep ≥1 line each.
   while (over()) {
-    let largest = -1
-    for (let i = 0; i < children.length; i += 1) {
-      const len = children[i].timeline.length
-      if (len > 1 && (largest === -1 || len > children[largest].timeline.length)) {
-        largest = i
-      }
+    let largest: TaskCardChildView | null = null
+    for (const c of shownChildren) {
+      const cap = caps.get(c.id) ?? 0
+      if (cap > 1 && (largest === null || cap > (caps.get(largest.id) ?? 0))) largest = c
     }
-    if (largest === -1) break
-    children[largest].timeline = children[largest].timeline.slice(1)
+    if (largest) caps.set(largest.id, (caps.get(largest.id) ?? 0) - 1)
+    else if (rootCap > 1) rootCap -= 1
+    else break // every panel already at one line; nothing more to give
   }
-  // Root last — only if shrinking every child to one line still left us over.
-  while (over() && root.length > 1) {
-    root = root.slice(1)
+
+  return {
+    rootTimelineCap: rootCap,
+    shown: shownChildren.map(c => ({ child: c, timelineCap: caps.get(c.id) ?? 0 })),
+    foldedLive,
+    foldedDone,
   }
-  return { ...view, rootTimeline: root, children }
+}
+
+/** Per-status counts in a stable display order, for the roster + fold breakdowns. */
+const ROSTER_ORDER: TaskRunStatus[] = [
+  'running',
+  'queued',
+  'blocked',
+  'waiting',
+  'delivered',
+  'done',
+  'failed',
+  'cancelled',
+]
+
+function statusCounts(children: TaskCardChildView[]): Map<TaskRunStatus, number> {
+  const counts = new Map<TaskRunStatus, number>()
+  for (const c of children) counts.set(c.status, (counts.get(c.status) ?? 0) + 1)
+  return counts
+}
+
+/** "🔄 3 进行中 · ✅ 12 已完成" — icon + count + status word per present status. */
+function rosterSegments(children: TaskCardChildView[]): string {
+  const counts = statusCounts(children)
+  return ROSTER_ORDER.filter(s => (counts.get(s) ?? 0) > 0)
+    .map(s => `${taskCardStatusStyle(s).icon} ${counts.get(s)} ${t(taskCardStatusStyle(s).wordKey)}`)
+    .join(' · ')
+}
+
+/** "🔄3 · ⏳2" — compact icon+count breakdown for a fold line. */
+function foldBreakdown(children: TaskCardChildView[]): string {
+  const counts = statusCounts(children)
+  return ROSTER_ORDER.filter(s => (counts.get(s) ?? 0) > 0)
+    .map(s => `${taskCardStatusStyle(s).icon}${counts.get(s)}`)
+    .join(' · ')
 }
 
 export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
-  const view = applyTotalTimelineBudget(input)
+  const view = input
+  const plan = planChildren(view)
   const { root } = view
   const style = taskCardStatusStyle(root.status)
   const terminal = TASK_RUN_TERMINAL_STATUSES.has(root.status)
@@ -246,9 +367,18 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
 
   if (view.children.length > 0) {
     elements.push(hrElement())
-    elements.push(markdownElement(`**${t('taskcard.children.heading')}**`))
-    const shownChildren = view.children.slice(0, TASK_CARD_MAX_CHILDREN)
-    for (const child of shownChildren) {
+    // Roster histogram appears only when something folded: it explains the true
+    // scope when rows are hidden, but stays out of the way of a card that shows
+    // every child.
+    const folding = plan.foldedLive.length > 0 || plan.foldedDone.length > 0
+    elements.push(
+      markdownElement(
+        folding
+          ? `**${t('taskcard.children.heading')}** · ${rosterSegments(view.children)}`
+          : `**${t('taskcard.children.heading')}**`,
+      ),
+    )
+    for (const { child, timelineCap } of plan.shown) {
       const childStyle = taskCardStatusStyle(child.status)
       const progress = child.latestProgress
         ? ` — ${truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)}`
@@ -258,16 +388,30 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
           `${childStyle.icon} ${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)} · ${t(childStyle.wordKey)}${progress}`,
         ),
       )
-      if (child.timeline.length > 0) {
-        elements.push(
-          timelinePanel('taskcard.timeline.child.title', child.timeline, TASK_CARD_MAX_CHILD_TIMELINE),
-        )
+      if (child.timeline.length > 0 && timelineCap > 0) {
+        // Pass the ORIGINAL timeline + the budgeted cap so the panel's
+        // "earlier N omitted" hint counts every dropped entry — both the
+        // per-panel cap and the whole-card budget trim.
+        elements.push(timelinePanel('taskcard.timeline.child.title', child.timeline, timelineCap))
       }
     }
-    const droppedChildren = view.children.length - shownChildren.length
-    if (droppedChildren > 0) {
+    // Both fold lines can coexist (e.g. a backlog of completed work plus a fresh
+    // burst of parallel dispatches): every folded part is announced in text.
+    if (plan.foldedLive.length > 0) {
       elements.push(
-        markdownElement(t('taskcard.children.overflow', { count: String(droppedChildren) })),
+        markdownElement(
+          t('taskcard.children.moreLive', {
+            count: String(plan.foldedLive.length),
+            breakdown: foldBreakdown(plan.foldedLive),
+          }),
+        ),
+      )
+    }
+    if (plan.foldedDone.length > 0) {
+      elements.push(
+        markdownElement(
+          t('taskcard.children.earlierDone', { count: String(plan.foldedDone.length) }),
+        ),
       )
     }
   }
@@ -275,7 +419,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
   if (view.rootTimeline.length > 0) {
     elements.push(hrElement())
     elements.push(
-      timelinePanel('taskcard.timeline.root.title', view.rootTimeline, TASK_CARD_MAX_ROOT_TIMELINE),
+      timelinePanel('taskcard.timeline.root.title', view.rootTimeline, plan.rootTimelineCap),
     )
   }
 
