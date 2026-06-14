@@ -5,6 +5,7 @@ import { streamChat } from '../api.js'
 import type { LightClawConfig } from '../config.js'
 import { collectAssistantText } from '../messages.js'
 import { resolveToolModuleModel } from '../model-resolution.js'
+import { serializeByKey } from './serialize-by-key.js'
 import { toolResultContentToText, type Message } from '../types.js'
 
 export const SESSION_MEMORY_FILENAME = 'session-memory.md'
@@ -193,7 +194,22 @@ export type SessionMemoryUpdateInput = {
   config: LightClawConfig
 }
 
-export async function updateSessionMemory(
+// Serialize session-memory writes per session. The end-turn flush is now
+// fire-and-forget (query.ts) so it can outlive its turn; without this a
+// lingering flush from turn N could run read→merge→write concurrently with
+// turn N+1's writes and clobber the shared `${target}.tmp` file. Per-sessionId
+// chaining guarantees in-order, non-overlapping writes (the later-enqueued,
+// newer snapshot always lands last) while different sessions never block each
+// other — mirrors Claude Code's `sequential(extractSessionMemory)` wrapper.
+export function updateSessionMemory(
+  input: SessionMemoryUpdateInput,
+): Promise<{ updated: boolean }> {
+  return serializeByKey(`session-memory:${input.sessionId}`, () =>
+    updateSessionMemoryInner(input),
+  )
+}
+
+async function updateSessionMemoryInner(
   input: SessionMemoryUpdateInput,
 ): Promise<{ updated: boolean }> {
   const existing = await readSessionMemory(input.sessionId, input.sessionsDir)

@@ -187,15 +187,24 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
       },
     )
 
-    // Let the loop run through every tool turn. With blocking mid-turn updates
-    // it would be stuck on update #1; instead it sails through all 10 turns
-    // and parks at the end_turn flush, which awaits the in-flight update.
+    // Let the loop run through every tool turn.
     const deadline = Date.now() + 3_000
     while (pingCalls < 10 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
-    await new Promise(resolve => setTimeout(resolve, 30))
 
+    // The end-turn session-memory flush is now FIRE-AND-FORGET: it must not
+    // hold the turn (and, on a channel, the in-flight marker that gates user
+    // interjections) for a slow post-turn LLM write. So the query RESOLVES
+    // without awaiting the still-gated update — the OLD behaviour blocked here
+    // until resolveFirstUpdate ran.
+    const result = await queryPromise
+    assert.equal(
+      queryResolved,
+      true,
+      'query resolves without awaiting the fire-and-forget end-turn flush',
+    )
+    assert.equal(result.stopReason, 'end_turn')
     assert.equal(
       pingCalls,
       10,
@@ -204,22 +213,19 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     assert.equal(
       updaterCalls,
       1,
-      'boundaries 6..10 crossed the threshold but coalesced into the in-flight update (single-flight)',
-    )
-    assert.equal(
-      queryResolved,
-      false,
-      'the end_turn flush is still awaiting the in-flight update',
+      'the backgrounded end_turn flush is still parked on update #1 (single-flight); update #2 has not started',
     )
 
+    // Release update #1; the backgrounded end_turn flush then runs update #2.
     resolveFirstUpdate({ updated: true })
-    const result = await queryPromise
-
-    assert.equal(result.stopReason, 'end_turn')
+    const flushDeadline = Date.now() + 3_000
+    while (updaterCalls < 2 && Date.now() < flushDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
     assert.equal(
       updaterCalls,
       2,
-      'end_turn flush ran a second update covering the messages produced while update #1 was in flight',
+      'the fire-and-forget end_turn flush ran a second update in the background, covering messages produced while update #1 was in flight',
     )
 
     // The crux: every non-system message must be summarized by exactly one

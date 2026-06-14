@@ -44,6 +44,7 @@ import {
   getSessionMemoryTokensSinceUpdate,
   getTodos,
   incrementSessionMemoryUpdateCount,
+  registerBackgroundTask,
   resetSessionMemoryCounters,
 } from './state.js'
 import {
@@ -993,7 +994,16 @@ export async function query(params: QueryParams): Promise<{
 
       const extractionSnapshot = [...messages]
       if (!invocation.ephemeral) {
-        await flushSessionMemoryUpdate(extractionSnapshot)
+        // Fire-and-forget the end-turn session-memory flush: do NOT hold the
+        // turn — and, on a channel, the in-flight marker that gates user
+        // interjections — for a post-turn session-memory LLM write (observed
+        // 40-60s on a reasoning sub-LLM). Mirrors Claude Code's
+        // `void executePostSamplingHooks`. updateSessionMemory serializes per
+        // session, so a flush that outlives this turn cannot race the next
+        // turn's write. registerBackgroundTask keeps it drainable at shutdown.
+        // Auto-compact (afterEndTurn) STAYS blocking below — the next turn
+        // needs the compacted transcript (Claude Code awaits compaction too).
+        registerBackgroundTask(flushSessionMemoryUpdate(extractionSnapshot))
         for (const hook of lifecycleHooks) {
           await hook.afterEndTurn?.(makeHookContext(extractionSnapshot), stopEvent.usage)
         }
