@@ -69,7 +69,13 @@ const EXPECTED = {
   // said "your deliver summary is sent to the user — write it for them" were
   // factually wrong. Now: your final reply is the user-facing answer (write
   // the full result there); the deliver summary is just a short card label.
-  BackgroundTaskResultBlockMain: '54ab39811c185dc875fb5a2f95593841ddb2069d6ea168e957e1633c4cde154a',
+  // 2026-06-14 recap addition: the default-mode paragraph now tells the agent
+  // to make its final reply a self-contained recap of the turn (deliverables,
+  // links, decisions), not just its last step — the mid-turn notes are
+  // breadcrumbs, the final reply is the account the user reads. Option 1 drops
+  // "when you finish the root" so it no longer reads as root-close-only (the
+  // routing fix also sends concluding/interjection finals to chat).
+  BackgroundTaskResultBlockMain: 'c863799131234b0e21f6cc492b31efecf1817b70ed991ea3be3e08fb5423ab2d',
   // Worker template rewritten in the same pass to mirror main's
   // unattended-agent posture inside the worker's narrower channel
   // (final-text only, no Notify equivalent). 2026-05-20: opening sentence
