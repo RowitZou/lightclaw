@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { channelInterjectionQueue, type InterjectionEntry } from '../channels/feishu/interjection-queue.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
 import { forkInvocationContext } from '../agents/invocation-context.js'
@@ -44,6 +44,7 @@ export async function resumeRunWithBlock(
   runId: string,
   block: ResumeRunBlock,
   ownerCanonicalUser?: string,
+  queryImpl: typeof query = query,
 ): Promise<ResumeRunResult> {
   const currentCtx = getCurrentSessionContext()
   if (!currentCtx) {
@@ -172,15 +173,33 @@ export async function resumeRunWithBlock(
     turnCounter: 0,
     enabledSecrets: undefined,
   }
+  // The resumed turn now owns this run's inbox. Mark it in-flight so a message
+  // arriving mid-turn — a user interjecting a resumed main, an agent Message
+  // interjecting a resumed worker — is queued and drained at this turn's tool
+  // boundaries (interjectionDrain above) instead of racing a second agent loop
+  // onto the same transcript: resume runs outside the channel's per-session
+  // lock, so this flag is the only thing serialising a concurrent channel turn
+  // against it. Marked here, after the prep I/O, so a throw before this point
+  // never leaks the flag; released — with leftover rescue — in the finally.
+  if (inboxSessionId) channelInterjectionQueue.markInFlight(inboxSessionId)
   try {
     const result = await runWithSessionContext(childCtx, async () =>
-      query({
+      queryImpl({
         role,
         invocation: forkInvocationContext({
           systemPrompt,
           canUseTool: deriveCanUseTool(role),
           cacheBreakpointMessageIndex: 0,
           currentRoleOverride: role,
+          // Drain interjections that arrived for this run's inbox at every tool
+          // boundary while the resumed turn runs — a user interjecting a
+          // resumed main, or an agent Message interjecting a resumed worker —
+          // exactly as a normal channel turn and a dispatched worker do. The
+          // inbox key is the run's chain-leaf / channel address, distinct from
+          // the transcript location; the markInFlight below pairs with it.
+          ...(inboxSessionId
+            ? { interjectionDrain: () => channelInterjectionQueue.drain(inboxSessionId) }
+            : {}),
           persistMessages: async (batch) => {
             await appendMessagesAfterSeed(sessionId, batch)
           },
@@ -227,6 +246,51 @@ export async function resumeRunWithBlock(
       await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, failed)
     }
     return { ok: false, reason: 'query-failed', message }
+  } finally {
+    if (inboxSessionId) {
+      const leftover = channelInterjectionQueue.unmarkInFlight(inboxSessionId)
+      if (leftover.length > 0) {
+        // Interjections that landed after this turn's last tool-boundary drain
+        // (during settle / parent-wake) would otherwise be dropped by
+        // unmarkInFlight. Re-deliver each — a channel inbox (resumed main) gets
+        // a fresh synthetic turn, a worker chain-leaf falls back to the queue
+        // for its next resume — mirroring the channel runner's post-query
+        // leftover rescue. Detached: never block this return on a replayed turn.
+        void rescueLeftoverInterjections(inboxSessionId, leftover)
+      }
+    }
+  }
+}
+
+/** Re-deliver interjections that outlived a resumed turn's last tool boundary
+ *  so unmarkInFlight does not silently drop them (the channel runner's Bug 9
+ *  rescue, applied to the resume path). wakeOrInterject routes by address: a
+ *  channel session starts a fresh synthetic turn, a worker chain-leaf queues
+ *  for its next resume. Best-effort and self-contained — a rescue failure must
+ *  never mask the resumed turn's own outcome. */
+async function rescueLeftoverInterjections(
+  inboxSessionId: string,
+  leftover: InterjectionEntry[],
+): Promise<void> {
+  const { wakeOrInterject } = await import('../channels/feishu/wake-or-interject.js')
+  for (const entry of leftover) {
+    try {
+      await wakeOrInterject({
+        targetSessionId: inboxSessionId,
+        block: entry.text,
+        ownerOpenId: entry.senderOpenId,
+        messageId: entry.messageId,
+        emittedAt: entry.arrivedAt,
+        logPrefix: '[taskrun-resume]',
+        ...(entry.taskCardRoot ? { taskCardRoot: entry.taskCardRoot } : {}),
+      })
+    } catch (error) {
+      process.stderr.write(
+        `[taskrun-resume] leftover interjection rescue failed for ${inboxSessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
   }
 }
 
