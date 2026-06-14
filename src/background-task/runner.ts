@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
+import { applyCredentialDegrade } from '../model-resolution.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
@@ -56,7 +57,10 @@ export async function runBackgroundTaskFire(input: {
 
     const config = getConfig()
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
-    const model = prefs.model ?? config.defaultModel
+    const model = applyCredentialDegrade(
+      prefs.model ?? config.defaultModel,
+      config,
+    )
     const permissionMode = prefs.permissionMode ?? config.permissionMode
     const permissionCeiling = await getUserPermissionCeiling(input.task.ownerCanonicalUser)
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))

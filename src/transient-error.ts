@@ -32,6 +32,19 @@ const TRANSIENT_ERROR_CODES = new Set([
 // reproduces them (and a re-run is expensive), so they stay fatal.
 const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
 
+// Credential / auth-config failures: the model's endpoint has no usable
+// credentials (missing, expired, or never imported). Re-sending the identical
+// request just reproduces the throw, so retrying wastes turns AND — because
+// these carry no HTTP status / socket code — they would otherwise fall through
+// to the default-retry branch and surface to the user as "network jitter,
+// resend to retry", advice that cannot fix a credential problem. The real fix
+// is `/auth import codex` (or restoring the API key), so classify as fatal and
+// let the channel render an actionable notice instead of the transient one.
+// 2026-06-14 dogfood: a Codex-pinned DM session bricked at boot (expired
+// tokens) and showed "本轮因网络抖动中断…可重发消息再试" for a config error.
+const CREDENTIAL_FAILURE_PATTERN =
+  /No .*credentials stored|credentials (?:are )?(?:missing|expired|unavailable|not (?:found|stored))|\/auth import|Run `codex login`|not authenticated|authentication (?:failed|required)/i
+
 // Provider context-window-overflow errors. The single source of truth for the
 // "input is bigger than the model's window" concept, consumed in two places:
 //   1. isTransientError() treats it as FATAL — re-sending the same oversized
@@ -59,6 +72,22 @@ export function isContextOverflowError(error: unknown): boolean {
   for (const node of queryErrorChain(error)) {
     const detail = node instanceof Error ? node.message : String(node)
     if (CONTEXT_OVERFLOW_PATTERN.test(detail)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * True when the error is a provider credential / auth-config failure (missing
+ * or expired API key / OAuth tokens). Shared by `isTransientError` (→ fatal,
+ * no retry) and the channel failure formatter (→ actionable "import/refresh
+ * credentials" notice instead of the generic "network jitter" one).
+ */
+export function isCredentialError(error: unknown): boolean {
+  for (const node of queryErrorChain(error)) {
+    const detail = node instanceof Error ? node.message : String(node)
+    if (CREDENTIAL_FAILURE_PATTERN.test(detail)) {
       return true
     }
   }
@@ -156,6 +185,12 @@ export function isTransientError(error: unknown): boolean {
   // before this classifier in query.ts; if it could not recover, a plain retry
   // here would only re-send the identical input and waste a round-trip.
   if (isContextOverflowError(error)) {
+    return false
+  }
+  // Missing / expired credentials are deterministic config errors: a retry
+  // re-sends the same request and fails the same way. Fatal so the channel
+  // surfaces an actionable notice rather than retrying + "resend to retry".
+  if (isCredentialError(error)) {
     return false
   }
   for (const node of queryErrorChain(error)) {

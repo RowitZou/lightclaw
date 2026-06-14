@@ -3,6 +3,10 @@ import {
   getAuthProvider,
   getCredentials,
 } from '../index.js'
+import {
+  clearCredentialDegrade,
+  setCredentialDegrade,
+} from './degrade-state.js'
 import type { LightClawConfig, ModelEntry } from '../../config.js'
 
 // Startup-time check + degrade for OAuth-backed models.
@@ -174,11 +178,22 @@ export async function ensureOAuthModelsUsable(
 
   try {
     await ensureCodexUsable()
+    // Credentials healthy — make sure no stale degrade verdict from an earlier
+    // failed boot lingers in this process.
+    clearCredentialDegrade()
     return
   } catch (err) {
     const reason =
       err instanceof Error ? err.message : `Unknown failure: ${String(err)}`
     const outcome = degradeOAuthModels(config, oauthModels, reason)
+    // The in-memory config mutation above is discarded by the per-message
+    // getConfig() disk reload; carry the verdict into model resolution so a
+    // session/preference pinned to a disabled model falls back instead of
+    // hitting the credential error every turn. Cleared on `/auth import codex`.
+    setCredentialDegrade({
+      disabledModels: outcome.disabledModels,
+      fallbackModel: outcome.fallbackModel,
+    })
     stderr.write(formatStderrWarning(outcome))
   }
 }

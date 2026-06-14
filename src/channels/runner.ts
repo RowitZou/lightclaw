@@ -36,7 +36,7 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { createAssistantMessage, createUserMessage, getLastUuid } from '../messages.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
-import { resolveRoleModel } from '../model-resolution.js'
+import { applyCredentialDegrade, resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getMainRole } from '../agents/registry.js'
@@ -54,7 +54,7 @@ import {
   saveMeta,
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
-import { ABORT_FAILURE_PATTERN, isTransientError } from '../transient-error.js'
+import { ABORT_FAILURE_PATTERN, isCredentialError, isTransientError } from '../transient-error.js'
 import {
   abortInFlightForSession,
   didConcludeRootThisTurn,
@@ -1901,7 +1901,10 @@ export class ChannelRunner {
     const ctx = createSessionContext({
       cwd,
       channel: 'feishu',
-      model: prefs.model ?? resolveRoleModel(getMainRole(), config),
+      model: applyCredentialDegrade(
+        prefs.model ?? resolveRoleModel(getMainRole(), config),
+        config,
+      ),
       sessionsDir: config.paths.sessions,
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
@@ -2516,13 +2519,21 @@ function formatNoticeFromFailure(detail: string, isTransient: boolean): string {
       t('channel.failure.transientHint'),
     ].join('\n')
   }
-  const category = classifyFailure(detail)
+  // Credential / auth-config failures are not retryable and "resend to retry"
+  // is wrong advice — surface the actionable import/refresh hint instead.
+  const isCredential = isCredentialError(detail)
+  const category = isCredential
+    ? t('channel.failure.cat.credentials')
+    : classifyFailure(detail)
+  const hint = isCredential
+    ? t('channel.failure.credentialHint')
+    : t('channel.failure.hint')
   const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
   return [
     t('channel.failure.title'),
     '',
     t('channel.failure.reason', { category }),
-    t('channel.failure.hint'),
+    hint,
     '',
     '```',
     head,

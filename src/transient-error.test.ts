@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import {
   IdleStreamError,
   isContextOverflowError,
+  isCredentialError,
   isTransientError,
 } from './transient-error.js'
 
@@ -91,6 +92,35 @@ describe('isTransientError', () => {
     // Unrelated errors must not match.
     assert.equal(isContextOverflowError(new Error('ECONNRESET')), false)
     assert.equal(isContextOverflowError(new Error('Request was aborted')), false)
+  })
+
+  it('classifies missing / expired credential errors as fatal (no retry)', () => {
+    // 2026-06-14 dogfood: a Codex-pinned DM bricked at boot (expired tokens).
+    // The provider throws this with no HTTP status / socket code, so pre-fix it
+    // fell through to the default-retry branch → wasted retries → user saw
+    // "network jitter, resend to retry" for a config error.
+    const codexMissing = new Error(
+      'No Codex credentials stored. Run `/auth import codex` to import from the official Codex CLI.',
+    )
+    assert.equal(isTransientError(codexMissing), false)
+    assert.equal(isCredentialError(codexMissing), true)
+    // Expired-token phrasing.
+    assert.equal(
+      isCredentialError(new Error('Codex CLI tokens are already expired. Re-run `codex login`.')),
+      true,
+    )
+    // Carried on the cause chain.
+    assert.equal(
+      isCredentialError(new Error('streamChat failed', { cause: codexMissing })),
+      true,
+    )
+    assert.equal(
+      isTransientError(new Error('streamChat failed', { cause: codexMissing })),
+      false,
+    )
+    // A plain network error must NOT be misread as a credential failure.
+    assert.equal(isCredentialError(new Error('ECONNRESET')), false)
+    assert.equal(isCredentialError(new Error('fetch failed')), false)
   })
 
   it('defaults a genuinely unrecognized error to transient (retry)', () => {

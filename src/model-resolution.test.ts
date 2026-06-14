@@ -5,10 +5,15 @@ import type { LightClawConfig } from './config.js'
 import { BUNDLED_AGENTS } from './agents/bundled/index.js'
 import type { Role } from './agents/types.js'
 import {
+  applyCredentialDegrade,
   resolveRoleMaxTurns,
   resolveRoleModel,
   resolveToolModuleModel,
 } from './model-resolution.js'
+import {
+  clearCredentialDegrade,
+  setCredentialDegrade,
+} from './auth/codex/degrade-state.js'
 
 const mainRole = role('main')
 const webRole = role('webSearcher')
@@ -95,6 +100,55 @@ describe('resolveRoleMaxTurns', () => {
   it('falls back to source role maxTurns, then undefined', () => {
     assert.equal(resolveRoleMaxTurns(extractRole, config()), undefined)
     assert.equal(resolveRoleMaxTurns(webRole, config()), undefined)
+  })
+})
+
+describe('applyCredentialDegrade', () => {
+  const cfg = () =>
+    config({
+      defaultModel: 'gpt-codex-deep',
+      models: {
+        'gpt-codex-deep': {},
+        'claude-sonnet-4-6': {},
+      },
+    } as unknown as Partial<LightClawConfig>)
+
+  it('is a no-op when no credential degrade is active', () => {
+    clearCredentialDegrade()
+    assert.equal(applyCredentialDegrade('gpt-codex-deep', cfg()), 'gpt-codex-deep')
+  })
+
+  it('redirects a disabled model to the degrade fallback', () => {
+    // 2026-06-14 dogfood: Codex creds expired at boot; a session pinned to
+    // gpt-codex-deep must fall back to the usable model instead of bricking.
+    setCredentialDegrade({
+      disabledModels: ['gpt-codex-deep'],
+      fallbackModel: 'claude-sonnet-4-6',
+    })
+    try {
+      assert.equal(applyCredentialDegrade('gpt-codex-deep', cfg()), 'claude-sonnet-4-6')
+      // A model NOT in the disabled set is untouched.
+      assert.equal(applyCredentialDegrade('claude-sonnet-4-6', cfg()), 'claude-sonnet-4-6')
+      // resolveRoleModel routes main's defaultModel through the degrade too —
+      // pre-fix the disabled model streamed and hit the credential error.
+      assert.equal(resolveRoleModel(role('main'), cfg()), 'claude-sonnet-4-6')
+    } finally {
+      clearCredentialDegrade()
+    }
+  })
+
+  it('returns the original model when the fallback is itself disabled', () => {
+    // Degenerate: degrade fallback also unusable and defaultModel disabled —
+    // let the original model through so the auth error surfaces (actionable).
+    setCredentialDegrade({
+      disabledModels: ['gpt-codex-deep', 'claude-sonnet-4-6'],
+      fallbackModel: 'claude-sonnet-4-6',
+    })
+    try {
+      assert.equal(applyCredentialDegrade('gpt-codex-deep', cfg()), 'gpt-codex-deep')
+    } finally {
+      clearCredentialDegrade()
+    }
   })
 })
 

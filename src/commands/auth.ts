@@ -4,6 +4,7 @@ import {
   purgeCodexFromConfig,
 } from '../auth/codex/auto-register.js'
 import { discoverDefaultCodexSlug } from '../auth/codex/models.js'
+import { clearCredentialDegrade } from '../auth/codex/degrade-state.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 
@@ -196,6 +197,9 @@ async function runAuthImport(
     // works without a daemon restart. ctx.config is captured at REPL boot
     // and channels keep references to the same object.
     refreshConfigAfterDiskWrite(liveConfig)
+    // Credentials just landed — lift any startup degrade so the previously
+    // disabled Codex models are selectable again without a restart.
+    clearCredentialDegrade()
   }
   lines.push('')
   lines.push(t('auth.codex.banRiskWarning'))
