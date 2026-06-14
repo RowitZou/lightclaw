@@ -1,4 +1,5 @@
 import type { InterjectionEntry } from '../../agents/invocation-context.js'
+import { traceInterjection, waitedMs } from './interjection-trace.js'
 
 export type { InterjectionEntry } from '../../agents/invocation-context.js'
 
@@ -19,6 +20,7 @@ export class InterjectionQueue {
     if (openerMessageId) {
       this.openerMessageBySession.set(sessionId, openerMessageId)
     }
+    traceInterjection('inflight-set', { session: sessionId, opener: openerMessageId })
   }
 
   /**
@@ -37,6 +39,18 @@ export class InterjectionQueue {
     this.openerMessageBySession.delete(sessionId)
     const leftover = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
+    traceInterjection('inflight-clear', { session: sessionId, leftover: leftover.length })
+    // Per-entry leftover trace: anything still queued at turn-end did NOT drain
+    // in-turn — its waitedMs is the time it sat through the turn (incl. any
+    // post-turn session-memory flush / compact holding the in-flight marker).
+    for (const entry of leftover) {
+      traceInterjection('leftover', {
+        session: sessionId,
+        msg: entry.messageId,
+        source: entry.source,
+        waitedMs: waitedMs(entry.arrivedAt),
+      })
+    }
     return leftover
   }
 
@@ -86,6 +100,17 @@ export class InterjectionQueue {
     const queue = this.queueBySession.get(sessionId) ?? []
     queue.push(entry)
     this.queueBySession.set(sessionId, queue)
+    // Every interjection form funnels through here — user → main, agent Message
+    // → worker, bg-result, taskrun resume-join — so one trace covers them all.
+    // `source` ('user' | 'background-task') + sessionId shape (channel session
+    // vs worker chain-leaf) distinguish which form it is.
+    traceInterjection('queued', {
+      session: sessionId,
+      msg: entry.messageId,
+      source: entry.source,
+      inflight: this.inFlightSessions.has(sessionId),
+      size: queue.length,
+    })
   }
 
   /**
@@ -116,11 +141,22 @@ export class InterjectionQueue {
     const queue = this.queueBySession.get(sessionId) ?? []
     queue.unshift(...entries)
     this.queueBySession.set(sessionId, queue)
+    traceInterjection('requeued', { session: sessionId, count: entries.length })
   }
 
   drain(sessionId: string): InterjectionEntry[] {
     const entries = this.queueBySession.get(sessionId) ?? []
     this.queueBySession.delete(sessionId)
+    // Only trace real drains (an empty drain fires at every tool boundary).
+    // waitedMs = how long the user's words sat before the model saw them.
+    for (const entry of entries) {
+      traceInterjection('drained', {
+        session: sessionId,
+        msg: entry.messageId,
+        source: entry.source,
+        waitedMs: waitedMs(entry.arrivedAt),
+      })
+    }
     return entries
   }
 

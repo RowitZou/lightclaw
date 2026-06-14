@@ -87,6 +87,7 @@ import {
   channelInterjectionQueue,
   type InterjectionEntry,
 } from './feishu/interjection-queue.js'
+import { traceInterjection, waitedMs } from './feishu/interjection-trace.js'
 import { channelPendingSlashQueue } from './feishu/pending-slash-queue.js'
 import { buildInterjectionBlock } from './feishu/interjection-prompt.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
@@ -1633,6 +1634,15 @@ export class ChannelRunner {
     leftover: InterjectionEntry[],
   ): Promise<void> {
     for (const entry of leftover) {
+      // msg + waitedMs correlate back to the earlier session-keyed 'queued' /
+      // 'leftover' traces; no sessionId needed here (and resolveSessionId wants
+      // a userId we don't carry on this path).
+      traceInterjection('rescued', {
+        msg: entry.messageId,
+        source: entry.source,
+        waitedMs: waitedMs(entry.arrivedAt),
+        via: 'channel-replay',
+      })
       const synthetic = buildLeftoverReplayMessage(originalMessage, entry)
       try {
         await this.handleMessage(synthetic)

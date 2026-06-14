@@ -273,7 +273,15 @@ async function rescueLeftoverInterjections(
   leftover: InterjectionEntry[],
 ): Promise<void> {
   const { wakeOrInterject } = await import('../channels/feishu/wake-or-interject.js')
+  const { traceInterjection, waitedMs } = await import('../channels/feishu/interjection-trace.js')
   for (const entry of leftover) {
+    traceInterjection('rescued', {
+      session: inboxSessionId,
+      msg: entry.messageId,
+      source: entry.source,
+      waitedMs: waitedMs(entry.arrivedAt),
+      via: 'resume-replay',
+    })
     try {
       await wakeOrInterject({
         targetSessionId: inboxSessionId,
