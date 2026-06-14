@@ -15,40 +15,57 @@
 import type { FeishuClient } from './client.js'
 import { classifyFeishuError } from './resources/errors.js'
 
-// Builtin Feishu emoji key. From the docs:
+// Builtin Feishu emoji keys. From the docs:
 // https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // "Typing" renders as the typing-indicator dots animation in the IM client.
 const TYPING_EMOJI = 'Typing'
+// Interjection-ack emoji: a lightweight "got it, I'll fold it in" reaction on
+// the user's mid-flight message, replacing the old text-line ack. "OnIt" is the
+// 🫡 / "我来处理" face — exact key validated against Feishu's accepted set at
+// dogfood; if it is rejected, the create fails-soft (null token) and the runner
+// falls back to the text ack. Swappable in one place.
+const ACK_EMOJI = 'OnIt'
 
 export type TypingState = {
   messageId: string
   reactionId: string | null
 }
 
-export type FeishuTypingReaction = {
+export type FeishuMessageReaction = {
   start(messageId: string): Promise<TypingState>
   stop(state: TypingState | null): Promise<void>
 }
 
-export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingReaction {
+// Back-compat alias: callers and tests still refer to the typing reaction shape.
+export type FeishuTypingReaction = FeishuMessageReaction
+
+// One add (start) + one delete (stop) of a single emoji reaction, fully
+// fail-soft — a missing reaction is purely cosmetic and must never block the
+// agent reply. Parametrized by emoji + a stderr label so the typing indicator
+// and the interjection ack share the exact same proven machinery.
+function createMessageReaction(
+  client: FeishuClient,
+  emojiType: string,
+  logLabel: string,
+): FeishuMessageReaction {
   return {
     async start(messageId) {
       try {
         const response = await client.im.messageReaction.create({
           path: { message_id: messageId },
-          data: { reaction_type: { emoji_type: TYPING_EMOJI } },
+          data: { reaction_type: { emoji_type: emojiType } },
         })
         const c = classifyFeishuError({ response: { status: response?.code === 429 ? 429 : 400, data: response } })
         if (c.kind === 'rate-limited') {
           process.stderr.write(
-            `feishu typing: add returned rate-limit (${response?.code ?? 'unknown'}), skipping further reactions for this turn\n`,
+            `feishu ${logLabel}: add returned rate-limit (${response?.code ?? 'unknown'}), skipping further reactions for this turn\n`,
           )
           return { messageId, reactionId: null }
         }
         return { messageId, reactionId: response?.data?.reaction_id ?? null }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`feishu typing: add failed for ${messageId}: ${detail}\n`)
+        process.stderr.write(`feishu ${logLabel}: add failed for ${messageId}: ${detail}\n`)
         return { messageId, reactionId: null }
       }
     },
@@ -64,7 +81,7 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
         const c = classifyFeishuError({ response: { status: response?.code === 429 ? 429 : 400, data: response } })
         if (c.kind === 'rate-limited') {
           process.stderr.write(
-            `feishu typing: delete returned rate-limit (${response?.code ?? 'unknown'}) for ${state.messageId}\n`,
+            `feishu ${logLabel}: delete returned rate-limit (${response?.code ?? 'unknown'}) for ${state.messageId}\n`,
           )
         }
       } catch (error) {
@@ -77,15 +94,23 @@ export function createFeishuTypingReaction(client: FeishuClient): FeishuTypingRe
         const kind = classifyFeishuError(error).kind
         if (kind === 'withdrawn-target' || kind === 'not-found') {
           process.stderr.write(
-            `feishu typing: delete skipped for ${state.messageId} (message gone: ${kind})\n`,
+            `feishu ${logLabel}: delete skipped for ${state.messageId} (message gone: ${kind})\n`,
           )
           return
         }
         const detail = error instanceof Error ? error.message : String(error)
         process.stderr.write(
-          `feishu typing: delete failed for ${state.messageId}/${state.reactionId}: ${detail}\n`,
+          `feishu ${logLabel}: delete failed for ${state.messageId}/${state.reactionId}: ${detail}\n`,
         )
       }
     },
   }
+}
+
+export function createFeishuTypingReaction(client: FeishuClient): FeishuMessageReaction {
+  return createMessageReaction(client, TYPING_EMOJI, 'typing')
+}
+
+export function createFeishuAckReaction(client: FeishuClient): FeishuMessageReaction {
+  return createMessageReaction(client, ACK_EMOJI, 'interjection-ack')
 }

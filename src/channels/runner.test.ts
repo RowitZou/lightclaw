@@ -684,6 +684,56 @@ describe('ChannelRunner in-flight slash routing', () => {
     releaseHold?.()
     await heldLock
   })
+
+  it('acks an in-flight interjection with an emoji reaction instead of a text reply', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelInterjectionQueue } = await import('./feishu/interjection-queue.js')
+    const { channelSessionLock } = await import('./session-lock.js')
+    const strategy = installFakeStrategy('feishu')
+    const ackCalls: string[] = []
+    strategy.ackInterjection = async message => {
+      ackCalls.push(message.messageId)
+      return { messageId: message.messageId, reactionId: 'rx-1' }
+    }
+    strategy.clearAck = async () => {}
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-alice-react-ack'
+    strategy.resolveSessionId = () => mainSessionId
+
+    channelInterjectionQueue.markInFlight(mainSessionId)
+    let releaseHold: (() => void) | undefined
+    const heldLock = channelSessionLock.runExclusive(
+      mainSessionId,
+      () => new Promise<void>(resolve => {
+        releaseHold = resolve
+      }),
+    )
+
+    const chatMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '顺便看一下天气',
+      chatId: mainSessionId,
+    })
+    await runner.handleMessage(chatMessage)
+
+    assert.deepEqual(ackCalls, [chatMessage.messageId], 'interjection acked via emoji reaction')
+    assert.equal(
+      strategy.replies.length,
+      0,
+      'reaction ack must not also send a text reply',
+    )
+    assert.equal(
+      channelInterjectionQueue.size(mainSessionId),
+      1,
+      'interjection is still queued',
+    )
+
+    channelInterjectionQueue.unmarkInFlight(mainSessionId)
+    releaseHold?.()
+    await heldLock
+  })
 })
 
 describe('applyAttachmentMaterialization', () => {

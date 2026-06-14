@@ -215,6 +215,16 @@ export type ChannelRunnerStrategy = {
   startTyping?(message: NormalizedChannelMessage): Promise<unknown>
   stopTyping?(message: NormalizedChannelMessage, token: unknown): Promise<void>
   /**
+   * Optional emoji acknowledgement for a mid-flight interjection: react on the
+   * user's message ("got it, I'll fold it in") instead of a text reply. The
+   * opaque token is held per-session and round-tripped to `clearAck` when the
+   * absorbing turn ends, so the reaction is a transient indicator (like
+   * `startTyping`/`stopTyping`), not a permanent mark. Channels without emoji
+   * reactions omit both; the runner falls back to a text ack.
+   */
+  ackInterjection?(message: NormalizedChannelMessage): Promise<unknown>
+  clearAck?(token: unknown): Promise<void>
+  /**
    * Push a system-notice text directly to a specific user's DM rather than
    * back to the chat the inbound message came from. Used by the bootstrap
    * pairing path (welcome / pairing-code / rate-limited) when admin has no
@@ -436,6 +446,12 @@ export async function routeSyntheticBlock(
 export class ChannelRunner {
   private locks = channelSessionLock
   private initialized = false
+  // Interjection-ack emoji reactions awaiting cleanup, keyed by the in-flight
+  // sessionId. An interjection enqueued by one handleMessage invocation reacts
+  // on the user's message and stashes the token here; the in-flight turn-owner
+  // (a different invocation) clears them all in its finally, so the reaction
+  // lives only for the turn that absorbs the interjection.
+  private pendingAckTokens = new Map<string, unknown[]>()
 
   constructor(private readonly strategy: ChannelRunnerStrategy) {}
 
@@ -642,10 +658,21 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: interjection queued for session ${mainSessionId} (size=${channelInterjectionQueue.size(mainSessionId)})\n`,
       )
-      // First-person ack ("记下了，我会...") reads as the bot speaking, so
-      // it belongs in the normal conversation stream rather than a
-      // third-person "LightClaw 提示" system notice card.
-      await this.sendReply(message, t('channel.interjection.acked'))
+      // Acknowledge the interjection with an emoji reaction on the user's
+      // message — a lightweight "got it, I'll fold it in" that doesn't clutter
+      // the conversation stream. The reaction is transient: the in-flight
+      // turn-owner clears it in its finally (see pendingAckTokens drain).
+      // Channels without emoji reactions (terminal) or a failed react fall back
+      // to the first-person text ack ("记下了，我会..."), which reads as the bot
+      // speaking and belongs in the normal stream.
+      const ackToken = await this.ackInterjection(message)
+      if (ackToken !== null && ackToken !== undefined) {
+        const tokens = this.pendingAckTokens.get(mainSessionId) ?? []
+        tokens.push(ackToken)
+        this.pendingAckTokens.set(mainSessionId, tokens)
+      } else {
+        await this.sendReply(message, t('channel.interjection.acked'))
+      }
       return
     }
     // Write slashes (/mode, /model, /rules allow, /auth import, ...) that
@@ -1508,6 +1535,10 @@ export class ChannelRunner {
       }
     })
     } finally {
+      // Clear interjection-ack emoji reactions for this session now that the
+      // turn that absorbed them has ended — same transient lifecycle as the
+      // typing indicator. Best-effort; never throws.
+      await this.clearPendingAcks(mainSessionId)
       // Crash-resume: clear the in-flight-turn marker now that the turn has
       // finished in-process (success, failure, slash-return, or abort). Only
       // a hard daemon crash leaves it set for the startup resume scan.
@@ -1916,6 +1947,43 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: stopTyping failed for ${message.messageId}: ${detail}\n`,
       )
+    }
+  }
+
+  private async ackInterjection(message: NormalizedChannelMessage): Promise<unknown> {
+    if (!this.strategy.ackInterjection) {
+      return null
+    }
+    try {
+      return await this.strategy.ackInterjection(message)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: ackInterjection failed for ${message.messageId}: ${detail}\n`,
+      )
+      return null
+    }
+  }
+
+  private async clearPendingAcks(sessionId: string): Promise<void> {
+    const tokens = this.pendingAckTokens.get(sessionId)
+    if (!tokens || tokens.length === 0) {
+      this.pendingAckTokens.delete(sessionId)
+      return
+    }
+    this.pendingAckTokens.delete(sessionId)
+    if (!this.strategy.clearAck) {
+      return
+    }
+    for (const token of tokens) {
+      try {
+        await this.strategy.clearAck(token)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `${this.strategy.channelId}: clearAck failed: ${detail}\n`,
+        )
+      }
     }
   }
 

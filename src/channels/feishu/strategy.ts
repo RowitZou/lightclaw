@@ -17,6 +17,7 @@ import { buildSystemNoticeCard } from './system-notice.js'
 import { fetchFeishuMediaPayload, materializeFeishuMedia } from './media.js'
 import {
   createFeishuTypingReaction,
+  createFeishuAckReaction,
   type TypingState,
 } from './typing-reaction.js'
 
@@ -31,6 +32,9 @@ export function createFeishuStrategy(
   botSelf: { openId?: string; name?: string } = {},
 ): ChannelRunnerStrategy {
   const typing = config.typingReaction ? createFeishuTypingReaction(client) : null
+  // Interjection ack reuses the same reaction config gate as typing: if emoji
+  // reactions are off, the runner falls back to the text ack.
+  const ack = config.typingReaction ? createFeishuAckReaction(client) : null
   const senderNames = createSenderNameResolver({
     fetchUserName: async openId => (await fetchFeishuUserInfo(client, openId))?.name,
   })
@@ -154,6 +158,20 @@ export function createFeishuStrategy(
           },
           stopTyping: (_message: NormalizedChannelMessage, token: unknown) =>
             typing.stop(token as TypingState | null),
+        }
+      : {}),
+    ...(ack
+      ? {
+          // Mid-flight interjection ack: react on the user's message instead
+          // of a text reply. Synthetic messages carry a fake messageId that
+          // messageReaction.create 400s on, so skip them (null token → no-op).
+          ackInterjection: (message: NormalizedChannelMessage) => {
+            if (message.synthetic) {
+              return Promise.resolve(null)
+            }
+            return ack.start(message.messageId)
+          },
+          clearAck: (token: unknown) => ack.stop(token as TypingState | null),
         }
       : {}),
     ...(permissions
