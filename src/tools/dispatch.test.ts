@@ -469,7 +469,17 @@ describe('Dispatch tool family', () => {
       assert.ok(dispatchId)
       const entry = getBackgroundTask('alice', dispatchId)
       assert.ok(entry?.taskRunId)
-      await markStarted(entry.taskRunId, 'bg-message-dispatch', Date.now(), 'alice')
+      // A background worker drains its interjection queue under its chain-leaf
+      // sessionId (its agent-loop ALS sessionId), NOT the per-shift bg-session
+      // its transcript persists under. Model that divergence: markStarted
+      // records the bg session as currentSessionId, while the worker actually
+      // reads `<chain-leaf>`. A Message to a running worker MUST land under the
+      // drain key, or it is silently orphaned (the 2026-06-14 dogfood bug:
+      // main's GPU correction never reached the worker).
+      const drainSessionId = entry.chainState!.path.at(-1)!.sessionId
+      const bgShiftSessionId = `bg-alice-${dispatchId}-fire-1`
+      assert.notEqual(drainSessionId, bgShiftSessionId)
+      await markStarted(entry.taskRunId, bgShiftSessionId, Date.now(), 'alice')
 
       const result = await runWithSessionContext(session('main'), () =>
         messageTool.call(
@@ -479,14 +489,15 @@ describe('Dispatch tool family', () => {
       )
 
       assert.equal(result.isError, undefined)
-      const [queued] = channelInterjectionQueue.drain('bg-message-dispatch')
-      assert.ok(queued)
+      // Nothing must land under the per-shift bg session — that key has no drainer.
+      assert.equal(channelInterjectionQueue.size(bgShiftSessionId), 0)
+      const [queued] = channelInterjectionQueue.drain(drainSessionId)
+      assert.ok(queued, 'interjection must land under the worker drain key, not the bg session')
       assert.match(queued.text, /<requester-message>/)
       assert.match(queued.text, /smaller dataset/)
       assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'running')
       assert.ok(getBackgroundTask('alice', dispatchId))
     } finally {
-      channelInterjectionQueue.drain('bg-message-dispatch')
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }

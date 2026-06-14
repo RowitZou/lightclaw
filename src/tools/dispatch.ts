@@ -251,6 +251,9 @@ async function createQueuedDispatchTaskRunBestEffort(input: {
       parentRunId: input.parentRunId ?? null,
       chainId: input.chainState.chainId,
       depth: input.chainState.depth,
+      ...(input.chainState.path.at(-1)?.sessionId
+        ? { interjectionSessionId: input.chainState.path.at(-1)!.sessionId }
+        : {}),
     })
     return run.id
   } catch (error) {
@@ -645,9 +648,10 @@ export const messageTool = buildTool({
         output: `Your answer reached TaskRun ${run.id}'s question. Nothing comes back through this call; whatever it produces reaches you the usual way.`,
       }
     }
-    if (run.status === 'running' && run.currentSessionId) {
+    const runInbox = run.interjectionSessionId ?? run.currentSessionId
+    if (run.status === 'running' && runInbox) {
       const now = Date.now()
-      channelInterjectionQueue.push(run.currentSessionId, {
+      channelInterjectionQueue.push(runInbox, {
         messageId: `message-dispatch-${run.id}-${now}`,
         senderOpenId: `taskrun:${run.id}`,
         text: [wrapMessage(input.message.trim()), REQUESTER_MESSAGE_GUIDANCE].join('\n\n'),
@@ -754,8 +758,9 @@ async function askParentFromCurrentRun(input: {
   // stays running and the answer (or the default) comes back as this tool's
   // result. Late answers fall through to normal message routing.
   let delivered = false
-  if (parent.status === 'running' && parent.currentSessionId) {
-    channelInterjectionQueue.push(parent.currentSessionId, {
+  const parentInbox = parent.interjectionSessionId ?? parent.currentSessionId
+  if (parent.status === 'running' && parentInbox) {
+    channelInterjectionQueue.push(parentInbox, {
       messageId: `taskrun-ask-${own.id}-${Date.now()}`,
       senderOpenId: `taskrun:${own.id}`,
       text: askBlock,

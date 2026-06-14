@@ -305,8 +305,15 @@ export function detectTaskRunFindings(
     const events = input.eventsByRun.get(run.id) ?? []
     const lastStateEventSeq = lastStateEventSeqFor(events)
     if (run.status === 'queued' || run.status === 'running') {
-      const hasActiveSession = run.currentSessionId
-        ? input.activeSessionIds.has(run.currentSessionId)
+      // A running worker registers its chain-leaf sessionId (its agent-loop
+      // ALS id) in the active set, NOT the bg-session its transcript persists
+      // under. Liveness must test that chain-leaf address — `currentSessionId`
+      // (the bg session) is never in activeSessionIds, so testing it would
+      // falsely strand every running background worker (currently masked only
+      // by the scheduler-claim / background-entry checks below).
+      const workerInbox = run.interjectionSessionId ?? run.currentSessionId
+      const hasActiveSession = workerInbox
+        ? input.activeSessionIds.has(workerInbox)
         : false
       const hasScheduledBackgroundEntry = scheduledTaskRunIds.has(run.id)
       const hasSchedulerClaim = input.schedulerTaskRunIds.has(run.id)
@@ -537,11 +544,16 @@ async function deliverParentFirstFindings(input: {
       continue
     }
     const block = formatTaskRunReconcileBlock(input.ownerCanonicalUser, findings, input.fingerprint)
+    // Deliver to the parent's chain-leaf drain key (where its agent loop reads
+    // interjections), not the bg-session its transcript lives under. For a
+    // background-worker parent the two diverge; pushing to currentSessionId
+    // would orphan the block under a key nothing drains.
+    const parentInbox = parent.interjectionSessionId ?? parent.currentSessionId
     const live = parent.status === 'running' &&
-      parent.currentSessionId &&
-      input.activeSessionIds.has(parent.currentSessionId)
+      parentInbox &&
+      input.activeSessionIds.has(parentInbox)
     if (live) {
-      channelInterjectionQueue.push(parent.currentSessionId!, {
+      channelInterjectionQueue.push(parentInbox!, {
         messageId: `taskrun-reconcile-parent-${parent.id}-${Date.now()}`,
         senderOpenId: `taskrun-watchdog:${parent.id}`,
         text: block,

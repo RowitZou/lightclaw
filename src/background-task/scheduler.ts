@@ -72,6 +72,9 @@ async function createBackgroundTaskRunBestEffort(
       parentRunId: task.parentTaskRunId ?? null,
       chainId: task.chainState?.chainId ?? `background-${task.id}`,
       depth: task.chainState?.depth ?? 1,
+      ...(task.chainState?.path.at(-1)?.sessionId
+        ? { interjectionSessionId: task.chainState.path.at(-1)!.sessionId }
+        : {}),
     })
     return run.id
   } catch (error) {
@@ -201,6 +204,9 @@ async function createNextStandingTaskRunBestEffort(
       parentRunId: task.standingRootRunId,
       chainId: task.chainState?.chainId ?? `background-${task.id}`,
       depth: task.chainState?.depth ?? 1,
+      ...(task.chainState?.path.at(-1)?.sessionId
+        ? { interjectionSessionId: task.chainState.path.at(-1)!.sessionId }
+        : {}),
     })
     updateBackgroundTask(canonicalUser, task.id, {
       parentTaskRunId: task.standingRootRunId,

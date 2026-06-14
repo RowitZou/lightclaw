@@ -43,6 +43,7 @@ type CreateTaskRunInput = {
   parentRunId?: string | null
   chainId: string
   depth: number
+  interjectionSessionId?: string
   now?: number
 }
 
@@ -308,6 +309,7 @@ export async function createTaskRun(input: CreateTaskRunInput): Promise<TaskRunM
     mode: input.mode,
     status: 'queued',
     currentSessionId: null,
+    ...(input.interjectionSessionId ? { interjectionSessionId: input.interjectionSessionId } : {}),
     createdAt: now,
     updatedAt: now,
     lastEventSeq: 0,

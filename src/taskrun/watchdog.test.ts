@@ -5,6 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { BackgroundTaskEntry } from '../background-task/types.js'
+import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   appendEvent,
@@ -414,6 +415,88 @@ describe('TaskRun watchdog', () => {
       assert.equal(mainDeliveries, 0)
       assert.deepEqual(resumeCalls, [{ runId: parent.id, via: 'message' }])
     } finally {
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('delivers a reconcile to a live background-worker parent at its chain-leaf inbox, not its bg session', async () => {
+    // A background worker drains interjections under its chain-leaf sessionId
+    // (the id it registers active), while its transcript persists under a
+    // bg-session. markStarted records the bg session as currentSessionId, so
+    // the two diverge. The watchdog must (a) treat the parent as LIVE off its
+    // chain-leaf address — not falsely strand it — and (b) push the reconcile
+    // block there, not to the bg session where nothing drains it.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-watchdog-live-bg-'))
+    setLightclawHomeOverride(tmpHome)
+    const parentLeaf = 'parent-chain-leaf'
+    const parentBgShift = 'bg-parent-shift-1'
+    try {
+      assert.notEqual(parentLeaf, parentBgShift)
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'Coordinate the probes.',
+        parentRunId: null,
+        chainId: 'chain-live-bg-parent',
+        depth: 1,
+        now: 100,
+        interjectionSessionId: parentLeaf,
+      })
+      await markStarted(parent.id, parentBgShift, 200, 'alice')
+      // A stranded child (running, its own session dead) under the live parent.
+      // unsettled-delivered would be suppressed here — its receiver is the live
+      // parent — so a stranded finding is what actually routes to a live parent.
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: parentLeaf,
+        mode: 'background',
+        objective: 'Probe one corner.',
+        parentRunId: parent.id,
+        chainId: 'chain-live-bg-parent',
+        depth: 2,
+        now: 300,
+      })
+      await markStarted(child.id, 'bg-child-dead-session', 400, 'alice')
+
+      const resumeCalls: Array<{ runId: string; via: string }> = []
+      setResumeRunnerForTest(async (runId, block) => {
+        resumeCalls.push({ runId, via: block.via })
+        return { ok: true, run: (await import('./store.js').then(m => m.getTaskRun(runId, 'alice')))!, mode: 'resume', assistantText: '' }
+      })
+
+      const result = await reconcileTaskRunsOnce('alice', {
+        now: 10_000,
+        deliveredGraceMs: 1,
+        // Only the chain leaf is registered active — exactly what the router
+        // reports for a running background worker.
+        activeSessionIds: new Set([parentLeaf]),
+        reportFindings: async () => ({ ok: true, mode: 'queued' }),
+      })
+      await drainScheduledResumesForTest()
+
+      // The stranded child is the finding; the live parent is its nudge target.
+      assert.equal(result.findings.some(f => f.runId === child.id), true)
+      // The parent itself must NOT be reported stranded — it is live off its leaf
+      // (the fix to detectTaskRunFindings; pre-fix it tested the bg session).
+      assert.equal(result.findings.some(f => f.runId === parent.id), false)
+      // Live parent is settled inline via interjection, not by reviving a shift.
+      assert.deepEqual(resumeCalls, [])
+      // Nothing under the bg-session key — it has no drainer.
+      assert.equal(channelInterjectionQueue.size(parentBgShift), 0)
+      const [queued] = channelInterjectionQueue.drain(parentLeaf)
+      assert.ok(queued, 'reconcile must land at the parent chain-leaf inbox, not the bg session')
+      assert.equal(queued.senderOpenId, `taskrun-watchdog:${parent.id}`)
+      assert.match(queued.text, /<taskrun-reconcile/)
+    } finally {
+      channelInterjectionQueue.drain(parentLeaf)
+      channelInterjectionQueue.drain(parentBgShift)
       resetResumeScheduleForTest()
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

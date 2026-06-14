@@ -55,16 +55,26 @@ export async function resumeRunWithBlock(
   if (!role) return { ok: false, reason: 'no-role', message: `TaskRun role is not registered: ${run.role}` }
 
   // Awake-already guard ("没醒就唤醒、醒了就插嘴" applied to workers): if the
-  // run's last session still has a turn in flight — e.g. a worker asked,
-  // parked at paused(awaiting-reply), and the answer arrived before its turn
-  // wound down — starting a second agent loop on the same session would race
-  // the live one on a single transcript. Join the live turn instead: deliver
-  // the block as an interjection and flip the ledger back to running; the
-  // live turn's settle-on-return takes it from there.
-  const liveSessionId = run.lastSessionId ?? run.currentSessionId
-  if (liveSessionId && isSessionTurnInFlight(liveSessionId)) {
+  // run's turn is still in flight — e.g. a worker asked, parked at
+  // paused(awaiting-reply), and the answer arrived before its turn wound down —
+  // starting a second agent loop on the same session would race the live one on
+  // a single transcript. Join the live turn instead: deliver the block as an
+  // interjection and flip the ledger back to running; the live turn's
+  // settle-on-return takes it from there.
+  //
+  // Two distinct session ids are at play and must not be conflated: the live
+  // ADDRESS (the worker's chain-leaf sessionId, where its agent loop reports
+  // active and drains interjections) and the transcript LOCATION (the
+  // bg-session its messages persist under). For a background worker these
+  // diverge — checking/pushing the transcript session would miss the in-flight
+  // turn (its chain leaf, not the bg session, is in the active set) and orphan
+  // the interjection, dropping us into the fresh-shift path that then races the
+  // still-running worker on its transcript.
+  const inboxSessionId = run.interjectionSessionId ?? run.lastSessionId ?? run.currentSessionId
+  const transcriptSessionId = run.lastSessionId ?? run.currentSessionId
+  if (inboxSessionId && isSessionTurnInFlight(inboxSessionId)) {
     const interjected = formatResumeBlock(run, block, 'resume')
-    channelInterjectionQueue.push(liveSessionId, {
+    channelInterjectionQueue.push(inboxSessionId, {
       messageId: `taskrun-resume-${run.id}-${Date.now()}`,
       senderOpenId: `taskrun:${run.id}`,
       text: interjected,
@@ -72,7 +82,9 @@ export async function resumeRunWithBlock(
       source: 'background-task',
     })
     if (run.status === 'waiting') {
-      await markResumed(run.id, { via: block.via, reason: block.reason, sessionId: liveSessionId }, Date.now(), run.ownerCanonicalUser)
+      // sessionId here feeds currentSessionId (the transcript locator), so it
+      // stays the transcript session, never the chain-leaf address.
+      await markResumed(run.id, { via: block.via, reason: block.reason, sessionId: transcriptSessionId ?? inboxSessionId }, Date.now(), run.ownerCanonicalUser)
     }
     return {
       ok: true,

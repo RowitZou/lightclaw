@@ -38,6 +38,16 @@ export type TaskRunMeta = {
   status: TaskRunStatus
   currentSessionId: string | null
   lastSessionId?: string
+  // The sessionId a running worker drains its interjection queue under — its
+  // chain-leaf sessionId, which is also its agent-loop ALS sessionId. Stable
+  // across shifts, unlike `currentSessionId` (the per-shift bg-session
+  // transcript locator). Requester/child messages to a running worker must
+  // target THIS, not `currentSessionId`: a background worker runs under the
+  // chain leaf while its transcript persists under a `bg-…-<fireUuid>`
+  // session, so the two diverge. Unset for chain-less runs, where the drain
+  // key falls back to `currentSessionId` (= the bg session) — matching the bg
+  // runner's own `chainState?.path.at(-1)?.sessionId ?? sessionId`.
+  interjectionSessionId?: string
   outcome?: TaskRunOutcome
   checkpoint?: string
   wake?: TaskRunWakeSpec
