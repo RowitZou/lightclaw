@@ -57,6 +57,7 @@ import { refreshSkillRegistry } from '../skill/registry.js'
 import { ABORT_FAILURE_PATTERN, isTransientError } from '../transient-error.js'
 import {
   abortInFlightForSession,
+  didConcludeRootThisTurn,
   getCompactionCount,
   getCurrentUserId,
   getCwd,
@@ -341,7 +342,11 @@ export async function routeSyntheticNarration(
   if (!message.synthetic || !message.taskCardRoot) return false
   const trimmed = text.replace(/\s+/g, ' ').trim()
   if (!trimmed) return true
-  const label = trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed
+  // Store a fuller label so the expanded "执行过程" panel shows more than a
+  // one-glance title. Bounded (matches the card timeline-line render cap) so a
+  // single entry can't bloat the card; truly long content reaches chat via the
+  // synthetic-block routing, not the card.
+  const label = trimmed.length > 400 ? `${trimmed.slice(0, 399)}…` : trimmed
   try {
     const appended = await appendProgress(
       message.taskCardRoot.rootRunId,
@@ -386,23 +391,39 @@ async function isConcludingWake(message: NormalizedChannelMessage): Promise<bool
 export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
 
 /**
- * Where one assistant block of a turn goes. Interim narration of a rooted
- * synthetic wake stays on the root card's timeline. The FINAL block goes out
- * as a real chat message ('standing-chat', @ the user in groups) when the
- * wake is concluding — either a standing service fire (its per-fire report
- * is the user's only outlet) or a finite root this wake just drove terminal
- * (the deliver landed before this closing block, so the block is the
- * synthesis of the finished work, not a mid-flight update). A finite root
- * still running keeps its blocks on the card — they are intermediate
- * results. User turns and rootless wakes always 'chat'. Exported for
- * regression coverage.
+ * Where one assistant block of a synthetic wake goes. Interim narration (a
+ * non-final text+tool turn) stays on the root card's timeline. The FINAL block
+ * (an end_turn text — the agent finished this handling) goes out as a real
+ * chat message ('standing-chat', @ the user in groups) when it carries
+ * something the user should see:
+ *  - a concluding wake (`isConcludingWake`: standing-service per-fire report,
+ *    or the wake's own root already terminal),
+ *  - the agent answered a user interjection this handling (`hadInterjection`),
+ *    OR
+ *  - the agent concluded a task this handling (`concludedRoot`: TaskUpdate
+ *    deliver fired — an incremental delivery, even while the wake's own root
+ *    stays open).
+ * `isConcludingWake` alone was too narrow: it keyed routing off the WAKE's
+ * root being terminal, so incremental deliveries and interjection answers
+ * written while roots were still open got carded and silenced (high-intensity
+ * multi-task dogfood, 2026-06-13). The two flags are additive — they only
+ * route MORE to chat, never less. User turns and rootless wakes always 'chat'.
+ * Exported for regression coverage.
  */
 export async function routeSyntheticBlock(
   message: NormalizedChannelMessage,
   text: string,
   isFinal: boolean,
+  opts?: { hadInterjection?: boolean; concludedRoot?: boolean },
 ): Promise<SyntheticBlockRoute> {
-  if (isFinal && (await isConcludingWake(message))) return 'standing-chat'
+  if (
+    isFinal &&
+    ((await isConcludingWake(message)) ||
+      opts?.hadInterjection === true ||
+      opts?.concludedRoot === true)
+  ) {
+    return 'standing-chat'
+  }
   return (await routeSyntheticNarration(message, text)) ? 'card' : 'chat'
 }
 
@@ -943,6 +964,12 @@ export class ChannelRunner {
         // Without this guard the user would get every intermediate body
         // twice (streamed once, then re-sent as the accumulated final).
         let streamedAtLeastOnce = false
+        // Set once this handling drained any user interjection. A synthetic
+        // wake's final block is then routed to chat — main is answering the
+        // user, so the answer must not be carded (the high-intensity dogfood
+        // silenced an interjected "现在各个项目进展如何?" because its answer was
+        // generated inside the synthetic query). Naturally per-handling.
+        let queryHadInterjection = false
         // Reply parent message anchor. Starts at the turn-start user message
         // (effectiveMessage). Each time interjectionDrain pulls new entries
         // we move the anchor to the most recent (last in the FIFO drain
@@ -1046,6 +1073,10 @@ export class ChannelRunner {
                     effectiveMessage,
                     text,
                     meta?.isFinal !== false,
+                    {
+                      hadInterjection: queryHadInterjection,
+                      concludedRoot: didConcludeRootThisTurn(),
+                    },
                   )
                   if (route === 'card') {
                     // Each block already landed on the root timeline — the
@@ -1092,6 +1123,9 @@ export class ChannelRunner {
                   if (drained.length === 0) {
                     return drained
                   }
+                  // This handling is now answering the user — route its final
+                  // synthetic-wake block to chat (see queryHadInterjection decl).
+                  queryHadInterjection = true
                   // Record drained entries so a transient retry path can
                   // requeue them at the head of the queue before
                   // rewriteTranscript wipes the user message that holds
@@ -1443,7 +1477,10 @@ export class ChannelRunner {
         // latest input rather than the turn opener.
         if (!streamedAtLeastOnce) {
           const finalText = result.assistantText || t('channel.assistant.empty')
-          const route = await routeSyntheticBlock(effectiveMessage, finalText, true)
+          const route = await routeSyntheticBlock(effectiveMessage, finalText, true, {
+            hadInterjection: queryHadInterjection,
+            concludedRoot: didConcludeRootThisTurn(),
+          })
           if (route !== 'card') {
             await this.sendReply(
               replyTargetMessage,

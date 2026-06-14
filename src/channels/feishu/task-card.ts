@@ -62,11 +62,25 @@ export type TaskCardView = {
 export const TASK_CARD_MAX_CHILDREN = 10
 export const TASK_CARD_MAX_ROOT_TIMELINE = 30
 export const TASK_CARD_MAX_CHILD_TIMELINE = 10
+// Timeline-line cap raised 200→400 and per-entry latest-progress 60→160 so the
+// expanded "执行过程" panel shows fuller content (the user reads detail there;
+// the title line stays short). Whole-card size is bounded by a CHARACTER budget
+// (applyTotalTimelineBudget), NOT a halved entry count — short lines (the common
+// case, especially now that long content reaches chat) let many entries through,
+// so a card with many sub-tasks is not squeezed; only genuinely long lines trim
+// a panel. The entry count below is just an upper sanity bound. Truly long
+// content is not the card's job — it reaches chat via the synthetic-block route.
 export const TASK_CARD_MAX_TOTAL_TIMELINE = 80
 export const TASK_CARD_OBJECTIVE_MAX_CHARS = 120
 export const TASK_CARD_TITLE_MAX_CHARS = 40
-export const TASK_CARD_PROGRESS_MAX_CHARS = 60
-export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 200
+export const TASK_CARD_PROGRESS_MAX_CHARS = 160
+export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
+// Total rendered timeline characters across ALL panels (root + children). Set
+// under the old proven-OK worst case (200×80 = 16000), so the whole card stays
+// safe vs Feishu's render-size limit whatever the exact threshold — while short
+// entries coexist freely (many sub-tasks each keep their lines until the total
+// genuinely fills up, then the largest panel is trimmed first, root last).
+export const TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET = 12000
 
 type StatusStyle = {
   icon: string
@@ -150,33 +164,59 @@ function timelinePanel(
   }
 }
 
-/** Trim timelines so the whole card stays under the total line budget.
- *  Root timeline is trimmed last — the orchestrator narrative is the
- *  panel the user opens first. */
-function applyTotalTimelineBudget(view: TaskCardView): TaskCardView {
-  const rootShown = Math.min(view.rootTimeline.length, TASK_CARD_MAX_ROOT_TIMELINE)
-  const childShown = view.children.map(
-    child => Math.min(child.timeline.length, TASK_CARD_MAX_CHILD_TIMELINE),
-  )
-  let total = rootShown + childShown.reduce((sum, n) => sum + n, 0)
-  if (total <= TASK_CARD_MAX_TOTAL_TIMELINE) return view
+/** Approximate rendered length of one timeline line: the whitespace-collapsed
+ *  text capped at the line cap, plus the `**HH:MM** ` clock/markdown overhead. */
+function timelineEntryCost(entry: TaskCardTimelineEntry): number {
+  const text = entry.text.replace(/\s+/g, ' ').trim()
+  return Math.min(text.length, TASK_CARD_TIMELINE_LINE_MAX_CHARS) + 8
+}
 
+/** Trim timelines so the whole card stays under BOTH the entry sanity cap and
+ *  the character budget. Character-bounded (not entry-count-halved) so a card
+ *  with many sub-tasks keeps its short lines — only a genuinely long total
+ *  trims a panel. Child panels are shrunk round-robin from the largest first
+ *  (≥1 line each); the root narrative — the panel the user opens first — is
+ *  trimmed last, only if children can't free enough on their own. */
+function applyTotalTimelineBudget(view: TaskCardView): TaskCardView {
+  let root = [...view.rootTimeline]
   const children = view.children.map(child => ({ ...child, timeline: [...child.timeline] }))
-  // Shrink child panels round-robin from the largest until the budget fits,
-  // keeping at least one line per non-empty panel.
-  while (total > TASK_CARD_MAX_TOTAL_TIMELINE) {
+
+  const measure = (): { entries: number; chars: number } => {
+    let entries = Math.min(root.length, TASK_CARD_MAX_ROOT_TIMELINE)
+    let chars = root
+      .slice(-TASK_CARD_MAX_ROOT_TIMELINE)
+      .reduce((sum, e) => sum + timelineEntryCost(e), 0)
+    for (const child of children) {
+      entries += Math.min(child.timeline.length, TASK_CARD_MAX_CHILD_TIMELINE)
+      chars += child.timeline
+        .slice(-TASK_CARD_MAX_CHILD_TIMELINE)
+        .reduce((sum, e) => sum + timelineEntryCost(e), 0)
+    }
+    return { entries, chars }
+  }
+  const over = (): boolean => {
+    const { entries, chars } = measure()
+    return entries > TASK_CARD_MAX_TOTAL_TIMELINE || chars > TASK_CARD_TIMELINE_TOTAL_CHARS_BUDGET
+  }
+  if (!over()) return view
+
+  // Child panels first, round-robin from the largest, keep ≥1 line each.
+  while (over()) {
     let largest = -1
     for (let i = 0; i < children.length; i += 1) {
-      const len = Math.min(children[i].timeline.length, TASK_CARD_MAX_CHILD_TIMELINE)
-      if (len > 1 && (largest === -1 || len > Math.min(children[largest].timeline.length, TASK_CARD_MAX_CHILD_TIMELINE))) {
+      const len = children[i].timeline.length
+      if (len > 1 && (largest === -1 || len > children[largest].timeline.length)) {
         largest = i
       }
     }
     if (largest === -1) break
     children[largest].timeline = children[largest].timeline.slice(1)
-    total -= 1
   }
-  return { ...view, children }
+  // Root last — only if shrinking every child to one line still left us over.
+  while (over() && root.length > 1) {
+    root = root.slice(1)
+  }
+  return { ...view, rootTimeline: root, children }
 }
 
 export function buildTaskCard(input: TaskCardView): Record<string, unknown> {

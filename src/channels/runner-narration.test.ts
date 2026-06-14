@@ -43,7 +43,7 @@ void describe('routeSyntheticNarration (PR22 noise reduction)', () => {
     const progress = events.filter(e => e.kind === 'progress') as Array<{ label: string }>
     assert.equal(progress.length, 1)
     assert.ok(progress[0].label.startsWith('测试结清叙述。'))
-    assert.ok(progress[0].label.length <= 200, 'narration truncated to the R4 cap')
+    assert.ok(progress[0].label.length <= 400, 'narration stored at the fuller card-line cap')
   })
 
   void it('keeps the message path for user turns, rootless wakes, and dead roots', async () => {
@@ -152,6 +152,53 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
       1,
       'the final report must NOT be duplicated onto the card timeline',
     )
+  })
+
+  void it('finite root still running, but this handling ANSWERED A USER INTERJECTION: final block → chat', async () => {
+    // High-intensity multi-task regression (2026-06-13): the user asked
+    // "现在各个项目进展如何?" while main was mid-handling a synthetic wake. The
+    // answer was generated as that wake's final block while roots were open, so
+    // isConcludingWake was false and it got carded + silenced. The interjection
+    // flag now routes it to chat regardless of the wake's root state.
+    const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'multi-task' })
+    const message = syntheticFor(root.id)
+    assert.equal(await routeSyntheticBlock(message, '当前进展如下：…', false), 'card', 'interim still cards')
+    assert.equal(
+      await routeSyntheticBlock(message, '当前进展如下：…', true, { hadInterjection: true }),
+      'standing-chat',
+      'the final block answering an interjected user question must reach chat even with the wake root open',
+    )
+    assert.equal(await progressCount(root.id), 1, 'only the interim block was carded')
+  })
+
+  void it('finite root still running, but this handling CONCLUDED A TASK: final block → chat', async () => {
+    // The paper-delivery regression: main delivered the alphaXiv root (a
+    // TaskUpdate deliver) WHILE handling the lightclaw-clone wake, then
+    // announced "论文任务已交付: <links>" as that wake's final block. The wake's
+    // own root (lightclaw) was still open → carded + silenced. concludedRoot
+    // routes the incremental delivery to chat.
+    const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'lightclaw wake' })
+    const message = syntheticFor(root.id)
+    assert.equal(
+      await routeSyntheticBlock(message, '论文任务已交付：https://…', true, { concludedRoot: true }),
+      'standing-chat',
+      'an incremental delivery announced under another wake reaches chat',
+    )
+    assert.equal(await progressCount(root.id), 0)
+  })
+
+  void it('finite root still running, NO interjection and NO conclusion: final block stays carded (noise reduction preserved)', async () => {
+    const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'pure interim' })
+    const message = syntheticFor(root.id)
+    assert.equal(
+      await routeSyntheticBlock(message, '还在等两路后台结果，暂时没有可交付的', true, {
+        hadInterjection: false,
+        concludedRoot: false,
+      }),
+      'card',
+      'a genuine still-waiting status with neither flag stays on the card — this is the noise we keep suppressing',
+    )
+    assert.equal(await progressCount(root.id), 1)
   })
 
   void it('user turns and rootless wakes always route to chat', async () => {

@@ -98,6 +98,13 @@ export type SessionContext = {
   // a child uses this id as the child's parentRunId; main turns leave it unset
   // until later phases introduce top-level goal task runs.
   currentTaskRunId?: string
+  /** Transient per-handling flag: set when this turn-sequence concluded a
+   *  TaskRun via TaskUpdate deliver (a root closed / a run delivered). The
+   *  channel runner reads it to route a synthetic-wake FINAL block to chat —
+   *  a conclusion the user should see even while OTHER roots stay open (the
+   *  wake's own root may not be terminal). Naturally per-handling: a fresh
+   *  SessionContext is created per inbound, so it starts unset. Best-effort. */
+  concludedRootThisTurn?: boolean
 }
 
 export const sessionContextStorage = new AsyncLocalStorage<SessionContext>()

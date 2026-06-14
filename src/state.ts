@@ -126,6 +126,19 @@ export function getCurrentTaskRunId(): string | undefined {
   return currentState().currentTaskRunId
 }
 
+/** TaskUpdate deliver marks the current handling as having concluded a run
+ *  (a root closed / a run delivered). The channel runner reads this to send a
+ *  synthetic-wake final block to chat. Tolerant + best-effort — never throw on
+ *  a missing context (a routing-quality signal must not break the turn). */
+export function markConcludedRootThisTurn(): void {
+  const ctx = getCurrentSessionContext()
+  if (ctx) ctx.concludedRootThisTurn = true
+}
+
+export function didConcludeRootThisTurn(): boolean {
+  return getCurrentSessionContext()?.concludedRootThisTurn === true
+}
+
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
 }

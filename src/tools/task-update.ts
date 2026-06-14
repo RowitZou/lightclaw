@@ -20,7 +20,7 @@ import {
   rejectTaskRun,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
-import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, requireCurrentUserId } from '../state.js'
+import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, markConcludedRootThisTurn, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
@@ -205,6 +205,11 @@ export const taskUpdateTool = buildTool({
             ...(input.summary ? { summary: input.summary.slice(0, 2000) } : {}),
           })
           if (result.closed) {
+            // A root closed this handling — the agent concluded a task. The
+            // channel runner routes its synthetic-wake final block to chat on
+            // this signal, so an incremental delivery (this root done while
+            // others run) reaches the user instead of the card.
+            markConcludedRootThisTurn()
             return {
               output: JSON.stringify({ runId: result.meta.id, status: result.meta.status }),
             }
@@ -271,6 +276,8 @@ export const taskUpdateTool = buildTool({
       if (!delivered) {
         return { output: `TaskRun ${own} could not be delivered.`, isError: true }
       }
+      // Concluded a run this handling — same chat-routing signal as root close.
+      markConcludedRootThisTurn()
       // Deliver records the outcome and parks; it does NOT wake a child-join
       // parent from here. Mid-turn this run has no final reply yet, only this
       // capped summary label. The wake fires at the run's turn-end instead — the
