@@ -742,8 +742,22 @@ export class ChannelRunner {
       // In-flight typing indicator: fire BEFORE any work so the user sees
       // a "we got it" signal even when meta load / runtime probe is slow.
       // The token is opaque (channel-defined) and gets handed back to
-      // stopTyping in the outer finally — we never inspect it here.
+      // stopTyping — we never inspect it here.
       const typingToken = await this.startTyping(message)
+      // Clear-on-reply, mirroring the interjection-ack lifecycle: retire the
+      // typing emoji the moment a chat reply actually lands, not when the
+      // whole turn winds down. A turn's end-of-query session-memory flush /
+      // compact can block for tens of seconds AFTER the reply was sent, so the
+      // turn-scoped inner-finally stop would otherwise leave the "Typing" emoji
+      // on the user's message long after they were already answered. The inner
+      // finally still calls this as an idempotent backstop for a turn that
+      // parks / errors / card-routes without ever sending a chat reply.
+      let typingStopped = false
+      const stopTypingOnce = async () => {
+        if (typingStopped) return
+        typingStopped = true
+        await this.stopTyping(message, typingToken)
+      }
       try {
         const meta = await loadMeta(sessionId)
         const messages = await loadTranscript(sessionId)
@@ -1121,11 +1135,14 @@ export class ChannelRunner {
                     }),
                   )
                   // A chat reply just landed — the user now has a response, so
-                  // retire any interjection-ack emoji for this session.
-                  // Clear-on-reply (not at turn-end) keeps the "OnIt" up while a
-                  // turn is still working or parked on a dispatch, so it never
-                  // vanishes before the user is actually answered.
+                  // retire any interjection-ack emoji for this session AND the
+                  // turn's typing emoji. Clear-on-reply (not at turn-end) keeps
+                  // the "OnIt" up while a turn is still working or parked on a
+                  // dispatch, so it never vanishes before the user is actually
+                  // answered; the typing emoji clears here so it does not linger
+                  // through the end-of-query session-memory flush / compact.
                   await this.clearPendingAcks(mainSessionId)
+                  await stopTypingOnce()
                 },
                 interjectionRenderer: (entries, context) => [{
                   type: 'text',
@@ -1522,9 +1539,11 @@ export class ChannelRunner {
                 mentionSynthetic: route === 'standing-chat',
               }),
             )
-            // Single-shot final reply landed — retire the interjection acks too
-            // (same clear-on-reply contract as the streamed onAssistantTurn path).
+            // Single-shot final reply landed — retire the interjection acks AND
+            // the typing emoji (same clear-on-reply contract as the streamed
+            // onAssistantTurn path).
             await this.clearPendingAcks(mainSessionId)
+            await stopTypingOnce()
           }
         }
         turnCard?.finalize()
@@ -1541,16 +1560,22 @@ export class ChannelRunner {
         throw error
       } finally {
         turnCard?.finalize({ interrupted: true })
-        await this.stopTyping(message, typingToken)
+        // Backstop: a turn that parked / errored / card-routed without ever
+        // sending a chat reply never hit stopTypingOnce above, so retire the
+        // typing emoji here. Idempotent — a turn that already replied is a
+        // no-op.
+        await stopTypingOnce()
       }
     })
     } finally {
-      // Interjection-ack emoji reactions are retired on reply (the
-      // clearPendingAcks calls in the onAssistantTurn / single-shot reply
-      // paths), NOT at turn-end: a turn that parks on a dispatch without
-      // replying must keep the "OnIt" up until the user is actually answered —
-      // possibly by a later channel turn. The typing indicator (stopTyping in
-      // the inner finally) stays turn-scoped; only the ack lifecycle changed.
+      // Both transient emoji reactions are now clear-on-reply (the
+      // clearPendingAcks + stopTypingOnce calls in the onAssistantTurn /
+      // single-shot reply paths), NOT at turn-end: the interjection "OnIt" ack
+      // stays up across a parked turn until the user is actually answered —
+      // possibly by a later channel turn — while the "Typing" emoji clears the
+      // moment its reply lands so it does not linger through the end-of-query
+      // session-memory flush / compact. The inner-finally stopTypingOnce is the
+      // idempotent backstop for a turn that never replied (park / error / card).
       // Crash-resume: clear the in-flight-turn marker now that the turn has
       // finished in-process (success, failure, slash-return, or abort). Only
       // a hard daemon crash leaves it set for the startup resume scan.
