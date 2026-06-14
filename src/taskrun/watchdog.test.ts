@@ -184,6 +184,60 @@ describe('TaskRun watchdog', () => {
     )
   })
 
+  it('does not report a delivered run while its own worker turn is still in flight', () => {
+    // The worker self-delivered mid-turn but is still producing its final
+    // reply; the turn-end bg-result will settle it. Reporting it now would make
+    // main settle the run before the worker actually finished.
+    const runs = [
+      meta({
+        id: 'tr_delivered_worker_live',
+        status: 'delivered',
+        deliveredAt: 1000,
+        updatedAt: 1000,
+        currentSessionId: 'bg-worker-live',
+        callerSessionId: 'feishu:dm:main',
+      }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 1_000,
+      activeSessionIds: new Set(['bg-worker-live']), // worker turn still running
+      inFlightMainSessionIds: new Set(), // receiver idle
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(findings.map(finding => [finding.runId, finding.kind]), [])
+  })
+
+  it('reports the delivered run as a fallback once its worker turn has ended', () => {
+    // Same run, now idle (turn ended): the guard releases and the stale
+    // delivered run surfaces so a genuinely-never-delivered bg-result is caught.
+    const runs = [
+      meta({
+        id: 'tr_delivered_worker_idle',
+        status: 'delivered',
+        deliveredAt: 1000,
+        updatedAt: 1000,
+        currentSessionId: 'bg-worker-done',
+        callerSessionId: 'feishu:dm:main',
+      }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 1_000,
+      activeSessionIds: new Set(), // worker turn ended — session no longer active
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(
+      findings.map(finding => [finding.runId, finding.kind]),
+      [['tr_delivered_worker_idle', 'unsettled-delivered']],
+    )
+  })
+
   it('reports paused runs only after the paused grace window', () => {
     const runs = [
       meta({ id: 'tr_paused_old', status: 'waiting', waitingAt: 1_000 }),

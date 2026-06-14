@@ -326,10 +326,24 @@ export function detectTaskRunFindings(
       continue
     }
     if (run.status === 'delivered') {
+      // A worker self-delivers (TaskUpdate deliver) mid-turn, then keeps
+      // producing its final reply; the bg-result that settles this run is only
+      // published at the worker's TURN-END. So a delivered run whose own
+      // session is still in flight is NOT stranded — its result is still being
+      // written. Skip it until the turn ends (its session goes idle); the
+      // turn-end bg-result then settles it within seconds, well inside the
+      // watchdog's minute-scale interval, so this reconcile stays a true
+      // fallback for a delivery that genuinely never landed. Without this the
+      // watchdog fired during the long deliver→turn-end gap and main settled
+      // the run before the worker had finished (2026-06-14 dogfood: a 3.7-min
+      // gap inflated by concurrent LLM latency).
+      const workerSessionActive = run.currentSessionId
+        ? input.activeSessionIds.has(run.currentSessionId)
+        : false
       const deliveredAt = run.deliveredAt ?? run.updatedAt
       const receiverBusy = input.inFlightMainSessionIds.has(run.callerSessionId)
         || input.activeSessionIds.has(run.callerSessionId)
-      if (input.now - deliveredAt > input.deliveredGraceMs && !receiverBusy) {
+      if (!workerSessionActive && input.now - deliveredAt > input.deliveredGraceMs && !receiverBusy) {
         findings.push(toFinding(run, runById, {
           kind: 'unsettled-delivered',
           since: deliveredAt,
