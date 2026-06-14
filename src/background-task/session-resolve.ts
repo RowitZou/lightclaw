@@ -42,6 +42,36 @@ export async function resolveOriginWakeSessionId(
   return meta ? originSessionId : null
 }
 
+/**
+ * Resolve the user-facing chat a bg-result should wake main in. Priority:
+ *   1. the dispatch's own origin session (the chat it was created from);
+ *   2. the chain root's session — main's ORIGINAL chat for the whole tree;
+ *   3. the most-recent active DM (legacy / deleted-origin last resort).
+ *
+ * Step 2 is what keeps an orphaned worker result in the chat the user is
+ * actually in. A grandchild dispatched by a worker carries an
+ * `originSessionId` that is its spawner's chain-leaf id (e.g. `alice-ab12cd`),
+ * which step 1 rejects as non-Feishu; without the chain-root step it would
+ * fall through to the most-recent-DM heuristic and surface a group test's
+ * result in a DM (2026-06-14 dogfood).
+ */
+export async function resolveMainWakeSessionId(input: {
+  originSessionId?: string
+  chainRootSessionId?: string
+  canonicalUser: string
+  sessionsDir: string
+}): Promise<string | null> {
+  if (input.originSessionId) {
+    const fromOrigin = await resolveOriginWakeSessionId(input.originSessionId, input.sessionsDir)
+    if (fromOrigin) return fromOrigin
+  }
+  if (input.chainRootSessionId && input.chainRootSessionId !== input.originSessionId) {
+    const fromRoot = await resolveOriginWakeSessionId(input.chainRootSessionId, input.sessionsDir)
+    if (fromRoot) return fromRoot
+  }
+  return await resolveWakeSessionId(input.canonicalUser, input.sessionsDir)
+}
+
 async function readMetaFromDir(
   sessionsDir: string,
   sessionId: string,

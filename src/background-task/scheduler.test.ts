@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { ChainState } from '../signal-bus/chain-state.js'
+import type { AgentSignal } from '../signal-bus/types.js'
+import { getSignalRouter } from '../signal-bus/router.js'
+import { addLink, createUser } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import type { TaskRunMeta } from '../taskrun/types.js'
 import {
   BackgroundTaskScheduler,
+  parentOwnsBackgroundResult,
   resolveLiveWorkerSpawner,
   setRunBackgroundTaskFireForTest,
 } from './scheduler.js'
@@ -886,6 +891,141 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
     resolveFire?.()
     await new Promise(resolve => setTimeout(resolve, 10))
+  })
+})
+
+describe('parentOwnsBackgroundResult', () => {
+  function run(over: Partial<TaskRunMeta>): TaskRunMeta {
+    return {
+      id: 'tr_x', parentRunId: null, rootRunId: 'tr_x', chainId: 'c', depth: 1,
+      ownerCanonicalUser: 'alice', role: 'generalist', callerRole: 'main',
+      callerSessionId: 's', title: 't', mode: 'background', status: 'running',
+      currentSessionId: null, createdAt: 0, updatedAt: 0, lastEventSeq: 0,
+      ...over,
+    }
+  }
+  it('an active (running/waiting) non-root worker parent owns the result', () => {
+    assert.equal(parentOwnsBackgroundResult(run({ status: 'running' })), true)
+    assert.equal(parentOwnsBackgroundResult(run({ status: 'waiting' })), true)
+  })
+  it('root / delivered / terminal / missing parents do NOT own it (main is the receiver)', () => {
+    assert.equal(parentOwnsBackgroundResult(run({ kind: 'root', status: 'running' })), false)
+    assert.equal(parentOwnsBackgroundResult(run({ status: 'delivered' })), false)
+    assert.equal(parentOwnsBackgroundResult(run({ status: 'done' })), false)
+    assert.equal(parentOwnsBackgroundResult(run({ status: 'cancelled' })), false)
+    assert.equal(parentOwnsBackgroundResult(null), false)
+    assert.equal(parentOwnsBackgroundResult(undefined), false)
+  })
+})
+
+describe('deliverCompletion main-vs-parent routing', () => {
+  let tmpHome: string
+  let sessionsDir: string
+  const GROUP = 'feishu:group:oc_g:ou_u'
+  const DM = 'feishu:dm:oc_dm'
+
+  beforeEach(async () => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-deliver-route-'))
+    setLightclawHomeOverride(tmpHome)
+    sessionsDir = path.join(tmpHome, 'sessions')
+    for (const [sid, ts] of [[GROUP, 100], [DM, 999]] as const) {
+      mkdirSync(path.join(sessionsDir, sid), { recursive: true })
+      writeFileSync(path.join(sessionsDir, sid, 'meta.json'), JSON.stringify({ userId: 'alice', lastActiveAt: ts }))
+    }
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_owner')
+  })
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  function schedulerWithSessions(): BackgroundTaskScheduler {
+    const s = new BackgroundTaskScheduler()
+    ;(s as unknown as { config: unknown }).config = {
+      runtime: { backend: 'docker' },
+      paths: { sessions: sessionsDir },
+      dispatch: { scheduler: { maxConcurrentRunsPerUser: 3, fireRetryMaxAttempts: 3 } },
+    }
+    return s
+  }
+
+  function grandchildTask(childRunId: string): BackgroundTaskEntry {
+    return {
+      ...fakeTask(),
+      id: 'leak-fire',
+      notifyOn: 'always',
+      schedule: { kind: 'oneshot', at: '2026-05-07T11:00:00.000Z' },
+      taskRunId: childRunId,
+      // originSessionId is the spawner WORKER's chain-leaf id — not a Feishu session.
+      originSessionId: 'alice-parentleaf',
+      chainState: {
+        chainId: 'chain-route', depth: 2,
+        path: [
+          { role: 'main', sessionId: GROUP, dispatchId: 'root', at: 0 },
+          { role: 'generalist', sessionId: 'alice-parentleaf', dispatchId: 'alice-parentleaf', at: 1 },
+          { role: 'webSearcher', sessionId: 'alice-childleaf', dispatchId: 'alice-childleaf', at: 2 },
+        ],
+        chainStartedAt: 0,
+      },
+    }
+  }
+
+  async function captureDeliver(task: BackgroundTaskEntry, childRunId: string): Promise<AgentSignal[]> {
+    const router = getSignalRouter()
+    const published: AgentSignal[] = []
+    const orig = router.publish.bind(router)
+    ;(router as unknown as { publish: (s: AgentSignal) => Promise<void> }).publish = async (s) => { published.push(s) }
+    try {
+      await (schedulerWithSessions() as unknown as {
+        deliverCompletion: (u: string, t: BackgroundTaskEntry, f: string, at: string, o: FireOutcome, r: string) => Promise<void>
+      }).deliverCompletion('alice', task, 'fire-1', new Date().toISOString(),
+        { kind: 'success', summary: 'ack', transcriptPath: '/tmp/x' }, childRunId)
+    } finally {
+      ;(router as unknown as { publish: typeof orig }).publish = orig
+    }
+    return published
+  }
+
+  it('suppresses the main bg-result when the child has an active (running) worker parent', async () => {
+    const parent = await createTaskRun({
+      ownerCanonicalUser: 'alice', role: 'generalist', callerRole: 'main',
+      callerSessionId: GROUP, mode: 'background', objective: 'coordinate',
+      parentRunId: null, chainId: 'chain-route', depth: 1,
+    })
+    await markStarted(parent.id, 'bg-parent', 10, 'alice') // status running
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice', role: 'webSearcher', callerRole: 'generalist',
+      callerSessionId: 'alice-parentleaf', mode: 'background', objective: 'probe',
+      parentRunId: parent.id, chainId: 'chain-route', depth: 2,
+    })
+    await markStarted(child.id, 'bg-child', 15, 'alice')
+
+    const published = await captureDeliver(grandchildTask(child.id), child.id)
+
+    // Owned by the running parent → settled via its child-join / watchdog, NOT main.
+    assert.equal(published.filter(s => s.to.kind === 'role' && s.to.id === 'main').length, 0)
+  })
+
+  it('routes a genuinely-orphaned result (root parent) to the chain-root GROUP, not a stray DM', async () => {
+    const root = await createTaskRun({
+      ownerCanonicalUser: 'alice', kind: 'root', role: 'main', callerRole: 'main',
+      callerSessionId: GROUP, mode: 'background', objective: 'goal',
+      parentRunId: null, chainId: 'chain-route', depth: 0,
+    })
+    const child = await createTaskRun({
+      ownerCanonicalUser: 'alice', role: 'webSearcher', callerRole: 'main',
+      callerSessionId: GROUP, mode: 'background', objective: 'probe',
+      parentRunId: root.id, chainId: 'chain-route', depth: 1,
+    })
+    await markStarted(child.id, 'bg-child', 15, 'alice')
+
+    const published = await captureDeliver(grandchildTask(child.id), child.id)
+
+    const mainPublishes = published.filter(s => s.to.kind === 'role' && s.to.id === 'main')
+    assert.equal(mainPublishes.length, 1)
+    // The chat is the chain-root GROUP, never the more-recent DM the old fallback picked.
+    assert.equal(mainPublishes[0]?.to.kind === 'role' && mainPublishes[0].to.sessionId, GROUP)
   })
 })
 

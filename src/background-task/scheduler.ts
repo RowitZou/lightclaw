@@ -22,9 +22,11 @@ import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
   createTaskRun,
+  getTaskRun,
   markDelivered,
   markFinished,
 } from '../taskrun/store.js'
+import type { TaskRunMeta } from '../taskrun/types.js'
 
 type HeapItem = {
   taskId: string
@@ -249,6 +251,24 @@ export function resolveLiveWorkerSpawner(
     }
   }
   return null
+}
+
+/**
+ * A bg-result belongs to main only when no live worker spawner caught it AND
+ * its direct parent is not itself a still-active worker. When the parent IS a
+ * non-root worker that is `running` or `waiting`, the result is the PARENT's
+ * obligation — its child-join wait and the watchdog reconcile settle it. The
+ * parent can be invisible to `resolveLiveWorkerSpawner` even while alive: a
+ * resumed shift does not register its chain session, and a parent between
+ * shifts (delivered→park gap) holds no session at all. Routing such a result
+ * to main double-delivers it (the parent settles it too) and lands it in the
+ * wrong chat. `delivered` / terminal / root parents are NOT owners — those
+ * results legitimately flow to main.
+ */
+export function parentOwnsBackgroundResult(parent: TaskRunMeta | null | undefined): boolean {
+  if (!parent) return false
+  if ((parent.kind ?? 'dispatch') === 'root') return false
+  return parent.status === 'running' || parent.status === 'waiting'
 }
 
 export class BackgroundTaskScheduler {
@@ -769,8 +789,27 @@ export class BackgroundTaskScheduler {
       }
     }
 
-    // No live worker ancestor → main is the receiver. Existing path: admin
-    // gate (LocalRuntime carve-out), origin/DM resolution, deliver to main.
+    // Durable-parent guard: a non-terminal worker parent still owns this child
+    // even when no live spawner was found (resumed shift → unregistered chain
+    // session; or the parent is between shifts). Its child-join wait + the
+    // watchdog reconcile settle the child; routing to main here would
+    // double-deliver and land in the wrong chat. See `parentOwnsBackgroundResult`.
+    if (taskRunId) {
+      const childRun = await getTaskRun(taskRunId, canonicalUser)
+      const parent = childRun?.parentRunId
+        ? await getTaskRun(childRun.parentRunId, canonicalUser)
+        : null
+      if (parentOwnsBackgroundResult(parent)) {
+        process.stderr.write(
+          `[background-task] ${task.id} fire ${fireUuid} result owned by active worker parent ${parent!.id} (${parent!.status}); suppressing redundant main delivery\n`,
+        )
+        return
+      }
+    }
+
+    // No live worker ancestor and no active worker parent → main is the
+    // receiver. Existing path: admin gate (LocalRuntime carve-out), origin/DM
+    // resolution, deliver to main.
     const adminId = this.config?.runtime.backend === 'local' ? await getAdmin() : null
     if (adminId !== null && adminId !== canonicalUser) {
       process.stderr.write(
@@ -785,14 +824,15 @@ export class BackgroundTaskScheduler {
       )
       return
     }
-    const { resolveOriginWakeSessionId, resolveWakeSessionId } = await import('./session-resolve.js')
-    let mainSessionId: string | null = null
-    if (task.originSessionId) {
-      mainSessionId = await resolveOriginWakeSessionId(task.originSessionId, sessionsDir)
-    }
-    if (!mainSessionId) {
-      mainSessionId = await resolveWakeSessionId(canonicalUser, sessionsDir)
-    }
+    const { resolveMainWakeSessionId } = await import('./session-resolve.js')
+    const mainSessionId = await resolveMainWakeSessionId({
+      ...(task.originSessionId ? { originSessionId: task.originSessionId } : {}),
+      ...(task.chainState?.path[0]?.sessionId
+        ? { chainRootSessionId: task.chainState.path[0].sessionId }
+        : {}),
+      canonicalUser,
+      sessionsDir,
+    })
     if (!mainSessionId) {
       process.stderr.write(
         `[background-task] ${task.id} fire ${fireUuid} background-result skipped: no usable origin/DM session for ${canonicalUser}\n`,
