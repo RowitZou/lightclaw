@@ -14,6 +14,7 @@ import { rewriteTranscript } from '../session/storage.js'
 import { saveBackgroundTasks } from '../background-task/store.js'
 import { setEnabled, setUserSecret } from '../secrets/store.js'
 import { resumeRunWithBlock } from './resume.js'
+import { resetWorkerProgressForTest } from './worker-progress.js'
 import {
   createTaskRun,
   getTaskRun,
@@ -304,6 +305,84 @@ test('interjections that outlive a resumed turn are rescued, not dropped', async
     const remaining = channelInterjectionQueue.drain(sessionId)
     assert.equal(remaining.length, 1)
     assert.equal(remaining[0]?.text, 'arrived too late to drain')
+  } finally {
+    channelInterjectionQueue.unmarkInFlight(sessionId)
+    channelInterjectionQueue.drain(sessionId)
+  }
+})
+
+test('a resumed shift forwards its assistant narration to the run progress timeline', async () => {
+  // Regression: the initial dispatched fire wires onAssistantTurn to the worker
+  // progress forwarder (runDispatchedAgent), so each assistant block lands on
+  // the task card's "执行过程" timeline. The resume path did NOT — so every
+  // shift after the first park (waiting → resumed) silently dropped its
+  // narration from the card, leaving only TodoWrite progress (appended from
+  // inside the tool). The card then froze at the pre-park narration while the
+  // worker kept running for minutes. The resumed invocation must carry
+  // onAssistantTurn, and a call to it must append a narration progress event.
+  resetWorkerProgressForTest()
+  writeMinimalConfig(tmpHome)
+  const sessionId = 'taskrun-resume-narration'
+  const run = await createTaskRun({
+    ownerCanonicalUser: 'alice',
+    role: 'generalist',
+    callerRole: 'main',
+    callerSessionId: 's-main',
+    mode: 'background',
+    objective: 'Resume and narrate.',
+    parentRunId: null,
+    chainId: 'chain-resume-narration',
+    depth: 1,
+  })
+  await markStarted(run.id, sessionId, Date.now(), 'alice')
+  await rewriteTranscript(sessionId, [createUserMessage('earlier work on the task')])
+  await markWaiting(run.id, { reason: 'awaiting-reply', bySessionId: 's-main' }, Date.now(), 'alice')
+
+  const narration = '我会复核探测作业的状态与日志，再继续创建环境入口。'
+  try {
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'fake-model',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 's-main',
+      currentUserId: 'alice',
+      runtime: fakeRuntime(tmpHome),
+    })
+    await runWithSessionContext(ctx, () =>
+      resumeRunWithBlock(run.id, {
+        via: 'child-join',
+        reason: 'continue',
+        body: '<taskrun-child-result>done</taskrun-child-result>',
+      }, 'alice', async params => {
+        // The whole point of the fix: the resumed invocation must expose the
+        // narration forwarder. Old code left this undefined.
+        assert.ok(params.invocation.onAssistantTurn, 'resumed invocation must wire onAssistantTurn')
+        await params.invocation.onAssistantTurn?.(narration, { isFinal: false })
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: narration }],
+              stopReason: 'end_turn',
+              usage: { input_tokens: 0, output_tokens: 0 },
+            }),
+          ],
+          assistantText: narration,
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }
+      }),
+    )
+    // The forwarder is fire-and-forget (void appendProgress(...).catch); let the
+    // append settle before reading the ledger.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const meta = await getTaskRun(run.id, 'alice')
+    // A narration progress event (no `phase`, unlike TodoWrite's phase:'todo')
+    // landed with the assistant block's text.
+    assert.equal(meta?.latestProgress?.label, narration)
+    assert.equal(meta?.latestProgress?.phase, undefined)
   } finally {
     channelInterjectionQueue.unmarkInFlight(sessionId)
     channelInterjectionQueue.drain(sessionId)

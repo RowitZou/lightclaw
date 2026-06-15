@@ -4,6 +4,7 @@ import { channelInterjectionQueue, type InterjectionEntry } from '../channels/fe
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
 import { forkInvocationContext } from '../agents/invocation-context.js'
+import { buildWorkerProgressForwarder } from './worker-progress.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
@@ -201,6 +202,18 @@ export async function resumeRunWithBlock(
   // against it. Marked here, after the prep I/O, so a throw before this point
   // never leaks the flag; released — with leftover rescue — in the finally.
   if (inboxSessionId) channelInterjectionQueue.markInFlight(inboxSessionId)
+  // Resumed shifts forward their assistant-block narration to this run's own
+  // progress timeline, exactly as the initial dispatched fire does in
+  // runDispatchedAgent. Without it, every shift after the first park (waiting →
+  // resumed) silently drops its narration from the task card — only TodoWrite
+  // progress (appended from inside the tool) would keep showing, leaving the
+  // card's "执行过程" timeline frozen at the pre-park narration. The throttle
+  // state in worker-progress.ts is keyed by taskRunId, so a fresh forwarder
+  // here shares the same throttle window as the original fire's forwarder.
+  const activityForwarder = buildWorkerProgressForwarder({
+    taskRunId: run.id,
+    ...(run.ownerCanonicalUser ? { ownerCanonicalUser: run.ownerCanonicalUser } : {}),
+  })
   try {
     const result = await runWithSessionContext(childCtx, async () =>
       queryImpl({
@@ -210,6 +223,7 @@ export async function resumeRunWithBlock(
           canUseTool: deriveCanUseTool(role),
           cacheBreakpointMessageIndex: 0,
           currentRoleOverride: role,
+          onAssistantTurn: activityForwarder,
           // Drain interjections that arrived for this run's inbox at every tool
           // boundary while the resumed turn runs — a user interjecting a
           // resumed main, or an agent Message interjecting a resumed worker —
