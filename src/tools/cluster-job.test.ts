@@ -8,10 +8,40 @@ import {
   brainppClusterTool,
   type CapacityOutput,
   type ClusterJobOutput,
+  CLUSTER_READ_OPERATIONS,
+  CLUSTER_WRITE_OPERATIONS,
   formatClusterJobOutput,
+  inputSchema,
   parseCapacity,
   redactCli,
 } from './cluster-job.js'
+
+describe('cluster operation read/write classification', () => {
+  it('partitions every operation into exactly one of read / write', () => {
+    const allOperations = inputSchema.options.map(option => option.shape.operation.value)
+
+    // No overlap.
+    for (const op of CLUSTER_READ_OPERATIONS) {
+      assert.ok(!CLUSTER_WRITE_OPERATIONS.has(op), `${op} is both read and write`)
+    }
+
+    // Every declared operation is classified (drift guard: adding a new
+    // operation to the schema without classifying it fails here, which is
+    // what keeps the role-tool-gate read-only tier correct).
+    for (const op of allOperations) {
+      const classified = CLUSTER_READ_OPERATIONS.has(op) || CLUSTER_WRITE_OPERATIONS.has(op)
+      assert.ok(classified, `operation ${op} is not classified as read or write`)
+    }
+
+    // No stale entries pointing at removed operations.
+    const known = new Set<string>(allOperations)
+    for (const op of [...CLUSTER_READ_OPERATIONS, ...CLUSTER_WRITE_OPERATIONS]) {
+      assert.ok(known.has(op), `classified operation ${op} no longer exists in the schema`)
+    }
+
+    assert.equal(CLUSTER_READ_OPERATIONS.size + CLUSTER_WRITE_OPERATIONS.size, allOperations.length)
+  })
+})
 
 describe('BrainppCluster capacity', () => {
   it('selects the allocated GPU lane and normalizes memory units', () => {

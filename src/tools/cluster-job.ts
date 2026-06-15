@@ -78,7 +78,7 @@ const deleteInput = z.object({
   job: z.string().min(1).describe('The job id to act on (from a prior list / get).'),
 })
 
-const inputSchema = z.discriminatedUnion('operation', [
+export const inputSchema = z.discriminatedUnion('operation', [
   capacityInput,
   submitInput,
   listInput,
@@ -90,6 +90,27 @@ const inputSchema = z.discriminatedUnion('operation', [
 ])
 
 type ClusterJobInput = z.infer<typeof inputSchema>
+
+/** Operations that only inspect cluster / job state — no allocation spent, no
+ *  job lifecycle change. Single source of truth for the role-tool-gate's
+ *  read-only cluster access tier (localExplorer). */
+export const CLUSTER_READ_OPERATIONS = new Set([
+  'capacity',
+  'list',
+  'get',
+  'logs',
+  'events',
+])
+
+/** Operations that create, stop, or remove cluster jobs. Reserved for
+ *  cluster-executor roles; read-only cluster roles are denied these at
+ *  `deriveCanUseTool` time. Keep in sync with the discriminated union above —
+ *  `cluster-job.test.ts` asserts every operation is classified exactly once. */
+export const CLUSTER_WRITE_OPERATIONS = new Set([
+  'submit',
+  'stop',
+  'delete',
+])
 
 type ResourceAmount = {
   cap: number

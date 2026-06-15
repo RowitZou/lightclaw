@@ -1,4 +1,5 @@
 import type { CanUseToolFn, Tool } from '../tool.js'
+import { CLUSTER_WRITE_OPERATIONS } from '../tools/cluster-job.js'
 import { resolveRolePolicy } from './role-presets.js'
 import type { ResolvedRolePolicy } from './role-presets.js'
 import type { Role } from './types.js'
@@ -41,6 +42,13 @@ const FEISHU_RESERVED_TOOLS = new Set([
 // stop / delete, so it stays with the executing roles only.
 const BRAINPP_CLUSTER_TOOL_ROLES = new Set(['generalist', 'coder'])
 
+// Roles that may inspect cluster / job state but not mutate it. The tool is
+// visible to them (so cluster-status checks route here instead of falling back
+// to raw `brainctl` / `rlaunch` via Bash), but write operations (submit / stop
+// / delete) are denied at `deriveCanUseTool` time. localExplorer's read-only
+// identity extends naturally to read-only cluster inspection.
+const BRAINPP_CLUSTER_READONLY_ROLES = new Set(['localExplorer'])
+
 const RETIRED_TOOLS = new Set([
   'ListDispatches',
   'CancelDispatch',
@@ -53,15 +61,30 @@ const MAIN_BLOCKED_TOOLS = new Set([
 ])
 
 export function deriveCanUseTool(role: Role): CanUseToolFn {
-  return async tool => {
+  return async (tool, input) => {
     const visibility = checkRoleToolVisibility(role, tool.name)
-    if (visibility.allowed) {
-      return { behavior: 'allow' }
+    if (!visibility.allowed) {
+      return {
+        behavior: 'deny',
+        reason: visibility.reason,
+      }
     }
-    return {
-      behavior: 'deny',
-      reason: visibility.reason,
+    // Read-only cluster roles see BrainppCluster but cannot run write
+    // operations. Enforced here (not in checkRoleToolVisibility) because the
+    // read/write split is per-operation and only the input carries it.
+    if (
+      tool.name === 'BrainppCluster' &&
+      BRAINPP_CLUSTER_READONLY_ROLES.has(role.agentType)
+    ) {
+      const operation = (input as { operation?: unknown } | null | undefined)?.operation
+      if (typeof operation === 'string' && CLUSTER_WRITE_OPERATIONS.has(operation)) {
+        return {
+          behavior: 'deny',
+          reason: `This role has read-only cluster access; '${operation}' is a write operation reserved for cluster-executor roles. Report back so the requester can re-dispatch the job submission to a cluster-executor role.`,
+        }
+      }
     }
+    return { behavior: 'allow' }
   }
 }
 
@@ -132,7 +155,13 @@ function checkRoleToolVisibility(
   }
 
   if (toolName === 'BrainppCluster') {
-    if (BRAINPP_CLUSTER_TOOL_ROLES.has(role.agentType)) {
+    if (
+      BRAINPP_CLUSTER_TOOL_ROLES.has(role.agentType) ||
+      BRAINPP_CLUSTER_READONLY_ROLES.has(role.agentType)
+    ) {
+      // Visible to full-access and read-only cluster roles alike; the
+      // read-only tier's write operations are denied per-operation in
+      // deriveCanUseTool, which sees the tool input.
       return { allowed: true }
     }
     return {

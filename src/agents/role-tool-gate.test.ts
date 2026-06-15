@@ -279,6 +279,8 @@ test('BrainppCluster is visible only to cluster-capable roles', () => {
   const archivist = role({ agentType: 'archivist', kind: 'worker', tools: ['*'] })
   const reviewer = role({ agentType: 'reviewer', kind: 'worker', tools: ['Bash'] })
 
+  const localExplorer = role({ agentType: 'localExplorer', kind: 'worker', tools: ['Read', 'Bash'] })
+
   // PR19: the cluster tool carries submit/stop/delete — execution face,
   // withheld from the read-only manager.
   assert.equal(isToolVisibleToRole(main, 'BrainppCluster'), false)
@@ -286,6 +288,43 @@ test('BrainppCluster is visible only to cluster-capable roles', () => {
   assert.equal(isToolVisibleToRole(coder, 'BrainppCluster'), true)
   assert.equal(isToolVisibleToRole(archivist, 'BrainppCluster'), false)
   assert.equal(isToolVisibleToRole(reviewer, 'BrainppCluster'), false)
+  // Read-only cluster tier: visible so cluster-status checks route here
+  // instead of falling back to raw brainctl/rlaunch via Bash.
+  assert.equal(isToolVisibleToRole(localExplorer, 'BrainppCluster'), true)
+})
+
+test('localExplorer cluster access is read-only — write operations are denied', async () => {
+  const gate = deriveCanUseTool(
+    role({ agentType: 'localExplorer', kind: 'worker', tools: ['Read', 'Bash'] }),
+  )
+
+  // Read operations pass.
+  for (const operation of ['capacity', 'list', 'get', 'logs', 'events']) {
+    assert.equal(
+      (await gate(tool('BrainppCluster'), { operation })).behavior,
+      'allow',
+      `read operation ${operation} must be allowed`,
+    )
+  }
+
+  // Write operations are denied with a re-dispatch hint.
+  for (const operation of ['submit', 'stop', 'delete']) {
+    const decision = await gate(tool('BrainppCluster'), { operation })
+    assert.equal(decision.behavior, 'deny', `write operation ${operation} must be denied`)
+    assert.match(
+      decision.behavior === 'deny' ? decision.reason : '',
+      /read-only cluster access/,
+    )
+  }
+})
+
+test('cluster-executor roles keep full read+write cluster access', async () => {
+  for (const agentType of ['generalist', 'coder']) {
+    const gate = deriveCanUseTool(role({ agentType, kind: 'worker', tools: ['*'] }))
+    assert.equal((await gate(tool('BrainppCluster'), { operation: 'get' })).behavior, 'allow')
+    assert.equal((await gate(tool('BrainppCluster'), { operation: 'submit' })).behavior, 'allow')
+    assert.equal((await gate(tool('BrainppCluster'), { operation: 'stop' })).behavior, 'allow')
+  }
 })
 
 test('bundled dispatch matrix matches the role-to-role topology', () => {
