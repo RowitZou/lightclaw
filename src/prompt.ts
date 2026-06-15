@@ -24,7 +24,7 @@ import {
   refreshSkillRegistry,
 } from './skill/registry.js'
 import { skillDirFor } from './skill/skill-dir.js'
-import { filterSkillsForRole } from './skill/role-validation.js'
+import { filterSkillsForRole, visibleOnDemandSkillsForRole } from './skill/role-validation.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -488,7 +488,7 @@ async function buildRolePromptParts(
     preTodoSections.push(workflowSection)
   }
 
-  const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools)
+  const reachableRolesSection = formatReachableRolesSection(policy.reachableRoles, input.tools, input.config)
   if (reachableRolesSection) {
     preTodoSections.push(reachableRolesSection)
     // S3: each kind gets its own world-facts — no reader self-identification.
@@ -930,22 +930,37 @@ function formatSharedOperatingDiscipline(facts: RoleFacts, role: Role): string {
   return rendered.join('\n\n')
 }
 
-function formatReachableRolesSection(reachableRoles: readonly string[], tools: readonly Tool[]): string {
+function formatReachableRolesSection(
+  reachableRoles: readonly string[],
+  tools: readonly Tool[],
+  config: LightClawConfig,
+): string {
   if (!hasLoadedTool(tools, 'Dispatch')) {
     return ''
   }
   const allAgents = getAllAgents()
+  const gate = { runtimeDriver: config.runtime?.driver ?? null }
   const lines = [
     '## Reachable Workers',
     'You can dispatch the following workers via Dispatch:',
   ]
+  const emit = (agent: Role) => {
+    // Name each worker's on-demand skills so the routing decision can lean on
+    // the capability the worker already owns instead of re-specifying its
+    // procedure in the dispatch prompt. ListRoleSkill expands what each does.
+    const skills = visibleOnDemandSkillsForRole(listRegisteredSkills(), agent, gate)
+    const skillNote = skills.length > 0
+      ? ` Skills it can invoke: ${skills.map(skill => skill.name).join(', ')}.`
+      : ''
+    lines.push(`- ${agent.agentType}: ${agent.whenToUse}${skillNote}`)
+  }
   if (reachableRoles.includes('*')) {
     // Wildcard expands to every registered worker (bundled + user-defined,
     // in registration order). main uses this to stay symmetric over the
     // user-defined role roster without an admin slash to re-list each role.
     for (const agent of allAgents) {
       if (agent.kind !== 'worker') continue
-      lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+      emit(agent)
     }
   } else {
     const agents = new Map(allAgents.map(agent => [agent.agentType, agent]))
@@ -954,10 +969,16 @@ function formatReachableRolesSection(reachableRoles: readonly string[], tools: r
       if (!agent || agent.kind !== 'worker') {
         continue
       }
-      lines.push(`- ${agent.agentType}: ${agent.whenToUse}`)
+      emit(agent)
     }
   }
-  return lines.length > 2 ? lines.join('\n') : ''
+  if (lines.length <= 2) {
+    return ''
+  }
+  lines.push(
+    'To see what a worker\'s skills do before delegating, call ListRoleSkill with its role name.',
+  )
+  return lines.join('\n')
 }
 
 function hasTool(tools: readonly string[], name: string): boolean {

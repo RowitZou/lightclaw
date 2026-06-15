@@ -131,6 +131,14 @@ function checkRoleToolVisibility(
     }
   }
 
+  // ListRoleSkill is bound to Dispatch scope: any role that can delegate may
+  // inspect the on-demand skills of the roles it can reach, so the binding
+  // tracks Dispatch automatically (main + every dispatcher worker + any
+  // future user-defined dispatcher) without per-role tool entries.
+  if (toolName === 'ListRoleSkill') {
+    return checkRoleToolVisibility(role, 'Dispatch')
+  }
+
   const explicitlyReachableDispatch =
     toolName === 'Dispatch' &&
     tools.includes('Dispatch') &&

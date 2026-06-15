@@ -101,6 +101,23 @@ test('worker Dispatch visibility requires explicit tool and reachable roles', as
   assert.equal(isToolVisibleToRole(noTargets, 'Dispatch'), false)
 })
 
+test('ListRoleSkill visibility tracks Dispatch visibility exactly', () => {
+  // Orchestrator: gets Dispatch via its whitelist, so gets ListRoleSkill too.
+  assert.equal(isToolVisibleToRole(role({ kind: 'orchestrator', tools: ['Dispatch'] }), 'ListRoleSkill'), true)
+
+  // Worker dispatcher (Dispatch + reachable targets) gets it; a leaf without
+  // Dispatch does not — no per-role tools entry required either way.
+  const dispatcher = role({ kind: 'worker', tools: ['Read', 'Dispatch'], reachableRoles: ['coder'] })
+  const leaf = role({ kind: 'worker', tools: ['Read'], reachableRoles: [] })
+  assert.equal(isToolVisibleToRole(dispatcher, 'ListRoleSkill'), true)
+  assert.equal(isToolVisibleToRole(leaf, 'ListRoleSkill'), false)
+
+  // A worker that lists ListRoleSkill but cannot Dispatch still cannot see it:
+  // the binding follows Dispatch, not a literal tools entry.
+  const noDispatch = role({ kind: 'worker', tools: ['Read', 'ListRoleSkill'], reachableRoles: [] })
+  assert.equal(isToolVisibleToRole(noDispatch, 'ListRoleSkill'), false)
+})
+
 test('bundled reviewer dispatches to producers (coder / feishuSecretary) + info workers (local / web), but not to peer organizers', () => {
   const reviewer = BUNDLED_AGENTS.find(agent => agent.agentType === 'reviewer')
   assert.ok(reviewer)

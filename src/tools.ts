@@ -40,6 +40,7 @@ import { sleepTool } from './tools/sleep.js'
 import { taskCreateTool } from './tools/task-create.js'
 import { taskInspectTool } from './tools/task-inspect.js'
 import { taskUpdateTool } from './tools/task-update.js'
+import { listRoleSkillTool } from './tools/list-role-skill.js'
 import { todoWriteTool } from './tools/todo-write.js'
 import { useSkillTool } from './tools/use-skill.js'
 import { webFetchTool } from './tools/web-fetch.js'
@@ -91,6 +92,7 @@ export const builtinTools = [
   dispatchTool,
   messageTool,
   updateScheduleTool,
+  listRoleSkillTool,
   notifyTool,
   askUserQuestionTool,
 ]

@@ -75,3 +75,17 @@ export function filterSkillsForRole(
     return false
   })
 }
+
+/** The skills a role invokes on demand via `UseSkill` — the load-on-demand
+ *  set a dispatcher reasons about when routing work. Excludes `autoLoad`
+ *  workflow skills (the framework injects those as the role's always-on
+ *  procedure; they are identity, not a capability to delegate toward). This
+ *  is the single source for both the `## Reachable Workers` skill-name line
+ *  and the `ListRoleSkill` tool, so the two never drift. */
+export function visibleOnDemandSkillsForRole(
+  skills: SkillMeta[],
+  role: Role,
+  gate: SkillRuntimeGate = {},
+): SkillMeta[] {
+  return filterSkillsForRole(skills, role, gate).filter(skill => !skill.autoLoad)
+}
