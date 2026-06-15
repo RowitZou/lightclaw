@@ -23,13 +23,16 @@ import type { Role } from './types.js'
 // up the shared line; the four internal roles are untouched (the line is gated
 // `kind !== 'internal'`), so their hashes are stable. (The main AskUserQuestion
 // nudge was left unchanged this pass.)
+// skill when_to_use (2026-06-15): brainpp-batch-job + build-environment
+// `when_to_use` reworded; both carry `roles: [generalist, coder]`, so their
+// rendered `## Available Skills` block — and only those two role hashes — shift.
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '3351bd47bf6913a43fb44319cbafec533995dfd5541cca6033f01df24ea13632',
-  generalist: '171e642a748c60b25ea7d78073950c2b336ee33dec4910ceb3400be8c050cf1b',
+  generalist: '5b5f144d65ab201e74c1959ed75a226a14b383f7cf7ff3bbe864a8a4893d9f59',
   localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
   webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',
   feishuSecretary: '4f55dc17b119fbd492ed24dc3cb352e97531783c0aff0fb0a4571fdc0c0cf4b4',
-  coder: '01fccaa7eb188306bee91f62f87448d34167b5ee68acd0e781cbbfb6f8d35432',
+  coder: '94ddad8dfbef739632508944e213d486f5ede7b96654121e636566a46a15f783',
   archivist: '92f816d17e05fbd69d1c33906c90f6977ad1b1cdc46afe7e5a24b89ecaa1e6a6',
   reviewer: '60c358d8a9cacdbe6e71ecfb0e3838b3f2f61908e28d447e906467c49d3562f1',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
