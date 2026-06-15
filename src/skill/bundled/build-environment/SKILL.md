@@ -1,7 +1,7 @@
 ---
 name: build-environment
 description: "How to build or repair a project's runtime environment correctly, for any stack — reuse first, read what the project actually needs (versions, platform, compute target, system deps), confirm the planned install, install the project's own way, and validate before anything depends on it."
-when_to_use: "Use when you must create, repair, or extend the environment a project or job runs in — installing its dependencies, toolchain, or runtime so its build / tests / imports pass. Covers Python / conda / venv, Node, Rust, JVM, system packages, and the like. Invoked on its own, or composed from another skill at the point an environment has to be built."
+when_to_use: "Use when you must create, repair, or extend the environment a project or job runs in — installing its dependencies, toolchain, or runtime so its build / tests / imports pass. Covers Python / conda / venv, Node, Rust, JVM, system packages, and the like. Invoked on its own, or composed from another skill at the point an environment has to be built. Whenever a cluster environment is involved, be sure to consult your cluster skill."
 allowed-tools:
   - Bash
   - Read
