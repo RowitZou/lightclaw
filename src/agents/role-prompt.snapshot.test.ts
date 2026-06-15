@@ -21,13 +21,15 @@ import type { Role } from './types.js'
 // the worker disc.drive Message bullet, and the shared "asking is appropriate"
 // line reframed to a cost-of-wrong-guess judgment. All non-internal roles pick
 // up the shared line; the four internal roles are untouched (the line is gated
-// `kind !== 'internal'`), so their hashes are stable. (The main AskUserQuestion
-// nudge was left unchanged this pass.)
+// `kind !== 'internal'`), so their hashes are stable.
+// ask-nudge coda (2026-06-15): the `## Structured User Questions` nudge —
+// orchestrator-only (`kind === 'orchestrator'`) — dropped "Decide first, ask
+// second." for the same cost-of-wrong-guess framing, so only `main` shifts.
 // skill when_to_use (2026-06-15): brainpp-batch-job + build-environment
 // `when_to_use` reworded; both carry `roles: [generalist, coder]`, so their
 // rendered `## Available Skills` block — and only those two role hashes — shift.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '3351bd47bf6913a43fb44319cbafec533995dfd5541cca6033f01df24ea13632',
+  main: '18511d255f6db57b3afd17b4811ca65d59fec860aa6de77a01f97f9b5ce34060',
   generalist: '5b5f144d65ab201e74c1959ed75a226a14b383f7cf7ff3bbe864a8a4893d9f59',
   localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
   webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',

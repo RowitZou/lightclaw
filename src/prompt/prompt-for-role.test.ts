@@ -22,7 +22,7 @@ import type { Tool } from '../tool.js'
 // non-internal roles shift, four internal roles stable. Hashes mirror that file
 // because both render byte-identical role prompts.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '3351bd47bf6913a43fb44319cbafec533995dfd5541cca6033f01df24ea13632',
+  main: '18511d255f6db57b3afd17b4811ca65d59fec860aa6de77a01f97f9b5ce34060',
   generalist: '5b5f144d65ab201e74c1959ed75a226a14b383f7cf7ff3bbe864a8a4893d9f59',
   localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
   webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',

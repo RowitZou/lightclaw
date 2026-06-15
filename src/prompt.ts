@@ -624,7 +624,7 @@ function formatChannelContextSection(runtimeDriver: RuntimeDriver): string {
 function formatAskUserQuestionNudge(): string {
   return [
     '## Structured User Questions',
-    'When user intent leaves a real choice unresolved — multiple reasonable directions, or a missing fact that materially changes the result — call AskUserQuestion (load it via ToolSearch first) rather than picking blind. Decide first, ask second.',
+    'When user intent leaves a real choice unresolved — multiple reasonable directions, or a missing fact that materially changes the result — call AskUserQuestion (load it via ToolSearch first) rather than picking blind. Weigh the cost of a wrong guess: when it would be expensive or hard to undo, ask before committing; when a default is cheap to correct, take it and note what you assumed.',
   ].join('\n')
 }
 
