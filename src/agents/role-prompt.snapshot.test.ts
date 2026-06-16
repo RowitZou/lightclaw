@@ -42,15 +42,22 @@ import type { Role } from './types.js'
 // dispatch brief PR5 (2026-06-16): self-maintenance prompts teach skillCurator
 // and skillConsolidator to create/preserve `dispatch_brief`; non-internal roles
 // are unchanged because skillify body content is loaded through UseSkill.
+// closing-reply prompt (2026-06-16): disc.response's terse "End-of-turn summary"
+// bullet was rewritten to "the reply you end your turn on is your deliverable"
+// (shared, NOT_INTERNAL → main + 7 workers), disc.drive-orch gained an
+// orchestrator-only closing-reply bullet (main only), and disc.drive gained a
+// worker-only "your final reply is what your requester receives" bullet (the 7
+// workers). The four internal roles render none of these blocks, so their
+// hashes are stable; main + all 7 user-dispatchable workers shift.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '60718b1f6f7bf80fb6587b9c7b22aef794703545c8e63b5e5ed2f48665ad3d29',
-  generalist: 'd2c71fcd453cc61371853406a926d33989cfe8d96a24790095a41505f1585dca',
-  localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
-  webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',
-  feishuSecretary: '17ec3f73042f8a8a14b1db6589554f0af45b7838a774bd3ddba7ca18b1fa0eb8',
-  coder: '9b5d1387c3ea1c6d40c8a2577fb35b07b51c2c8b43e1d7d1239997148ee87f02',
-  archivist: 'd408163601764f95867f683d63848468464d875a9b0d1481633e1472457291ad',
-  reviewer: '58b11ad609c1f88e8b29a063715ab4aced66a85c3bf31cf20831547f8cfc2067',
+  main: 'e3f37e5295da8aede187eb5d2ede2beb4d355b8aabb6d702d8dcacca343cd306',
+  generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
+  localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
+  webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',
+  feishuSecretary: '8664ad530699fe3e54c8eb4fe4ead374c98c06e4b298c35340d6bcfcf14f3687',
+  coder: 'f7550ffba64cb1842e5a36de0c3ee340b841d31d96f7bd93beeaa4261ce3ce80',
+  archivist: 'dec960886472290d3af4f2d1ca1925140679e21b1c013f08aa91c1976b8b8b60',
+  reviewer: 'f513323c17e5f96627efaeba018eb2b49201b0dc41023a8b1ad53e74939f5652',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: '22a81196c1a4d5b8fd8aa38266fc67a7750689916da58a15b93aeaadc3e8cd94',
