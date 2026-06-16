@@ -27,9 +27,34 @@ export type InterjectionEntry = {
   pendingAttachments?: InterjectionPendingAttachment[]
   attachmentPaths?: string[]
   source?: 'user' | 'background-task'
+  /** True when this entry is framework-minted, not a genuine platform inbound:
+   *  its `messageId` / `senderOpenId` are synthetic (`taskrun-ask-…` /
+   *  `taskrun:…` / `bg-…`) and the platform never saw them. Anchoring a reply
+   *  to one makes im.message.reply 400 (code 99992354) and renders an invalid
+   *  card at/person, so the reply-anchor + leftover-replay paths must treat
+   *  these as non-addressable. Independent of `source` — a `source:'user'`
+   *  taskrun-ask is still synthetic. Absent/false on real user interjections. */
+  synthetic?: boolean
   /** Root TaskRun behind a background-task entry; the rescue replay carries
    *  it onto the synthetic turn so its narration lands on the task card. */
   taskCardRoot?: { owner: string; rootRunId: string }
+}
+
+/**
+ * True when this interjection is framework-minted, not a genuine platform
+ * inbound — so its `messageId` / `senderOpenId` are non-addressable and a
+ * reply must never anchor on them. Two cases, both non-addressable:
+ *  - `source: 'background-task'` — bg-result / reconcile wakes (never a real
+ *    platform message by construction).
+ *  - `synthetic: true` — taskrun-ask / worker-reply, which are `source:'user'`
+ *    (the model reads them as questions/answers to settle) yet carry a
+ *    synthetic `taskrun-ask-…` id the platform never saw.
+ * Real user interjections are `source:'user'`/undefined AND not synthetic.
+ */
+export function isSyntheticInterjection(
+  entry: Pick<InterjectionEntry, 'synthetic' | 'source'>,
+): boolean {
+  return entry.synthetic === true || entry.source === 'background-task'
 }
 
 export type InvocationContext = {

@@ -553,6 +553,31 @@ describe('buildLeftoverReplayMessage synthetic-flag handling', () => {
     assert.equal(replay.senderOpenId, 'ou_bob')
   })
 
+  // Regression (dogfood 2026-06-16): a worker→main ask is enqueued
+  // `source:'user'` (so the model reads it as a question to settle) but with a
+  // synthetic `taskrun-ask-<id>` messageId + `taskrun:<id>` senderOpenId the
+  // platform never saw. The pre-fix code keyed the synthetic decision on
+  // `source`, so it marked this non-synthetic, the reply anchored on the fake
+  // id (im.message.reply 400 / code 99992354) AND the create-fallback card
+  // 400'd on the `taskrun:` at/person — the turn's answer was lost.
+  it('marks a taskrun-ask leftover synthetic despite source:"user", and anchors on the opener', () => {
+    const original = makeFakeFeishuMessage({ sender: 'ou_alice', text: 'look at the progress' })
+    const entry: InterjectionEntry = {
+      messageId: 'taskrun-ask-tr_abc-1779274961191',
+      senderOpenId: 'taskrun:tr_abc',
+      text: '<taskrun-ask childRunId="tr_abc">torch 2.10 or 2.11?</taskrun-ask>',
+      arrivedAt: 1779274961191,
+      source: 'user',
+      synthetic: true,
+    }
+    const replay = buildLeftoverReplayMessage(original, entry)
+    assert.equal(replay.synthetic, true, 'a synthetic entry must replay synthetic regardless of source')
+    // It must carry the opener's real id as the anchor so a topic-group
+    // synthetic create can still land — never the taskrun-ask fake id.
+    assert.equal(replay.replyAnchorMessageId, original.messageId)
+    assert.notEqual(replay.replyAnchorMessageId, entry.messageId)
+  })
+
   it('overrides an inherited synthetic flag: a real-user leftover off a synthetic opener stays non-synthetic', () => {
     const original: NormalizedChannelMessage = {
       ...makeFakeFeishuMessage({ sender: 'ou_alice', text: 'synthetic opener' }),

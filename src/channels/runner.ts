@@ -42,7 +42,7 @@ import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
-import { channelInvocationContext } from '../agents/invocation-context.js'
+import { channelInvocationContext, isSyntheticInterjection } from '../agents/invocation-context.js'
 import type { Runtime } from '../runtime/types.js'
 import {
   appendMessage,
@@ -283,11 +283,14 @@ export function buildLeftoverReplayMessage(
   originalMessage: NormalizedChannelMessage,
   entry: InterjectionEntry,
 ): NormalizedChannelMessage {
-  // A bg-result replay is synthetic, so its output can only be sent as a
-  // reply when it carries an anchor — in topic groups an unanchored create
-  // is refused and the whole output is dropped. The turn that just ended
-  // has the perfect anchor at hand: its own genuine inbound message.
-  const replyAnchor = entry.source === 'background-task'
+  // A framework-minted replay (bg-result / taskrun-ask / worker-reply) is
+  // synthetic, so its output can only be sent as a reply when it carries an
+  // anchor — in topic groups an unanchored create is refused and the whole
+  // output is dropped. The turn that just ended has the perfect anchor at
+  // hand: its own genuine inbound message. Keyed on `entry.synthetic`, NOT
+  // `source` — a taskrun-ask is `source:'user'` yet synthetic, and anchoring
+  // on its `taskrun-ask-…` id 400s exactly like a bg-result would.
+  const replyAnchor = isSyntheticInterjection(entry)
     ? (originalMessage.synthetic
         ? originalMessage.replyAnchorMessageId
         : originalMessage.messageId)
@@ -299,7 +302,7 @@ export function buildLeftoverReplayMessage(
     senderOpenId: entry.senderOpenId,
     text: entry.text,
     ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
-    ...(entry.source === 'background-task' && entry.taskCardRoot
+    ...(isSyntheticInterjection(entry) && entry.taskCardRoot
       ? { taskCardRoot: entry.taskCardRoot }
       : {}),
     ...(entry.pendingAttachments?.length
@@ -310,7 +313,7 @@ export function buildLeftoverReplayMessage(
     // entry itself was quoted, we lose that ancestry on replay, which is
     // acceptable (Phase 28 quote context is best-effort).
     quotedMessage: undefined,
-    synthetic: entry.source === 'background-task',
+    synthetic: isSyntheticInterjection(entry),
     // Gate-approved on first arrival; the @-mention sidecar does not survive
     // the queue, so re-gating drops real user questions (dogfood 2026-06-12).
     replayed: true,
@@ -1256,14 +1259,18 @@ export class ChannelRunner {
                     materialized.push(entry)
                   }
                   // Anchor the reply quote to the most recent *real user*
-                  // interjection. bg-result interjections carry a synthetic
-                  // messageId the platform never saw — anchoring the reply to
-                  // one makes im.message.reply 400 (code 99992354) and the
-                  // turn's reply is lost. Skip them; if the whole batch is
-                  // bg-results the anchor stays on the prior real message.
+                  // interjection. Framework-minted entries (bg-result,
+                  // taskrun-ask, worker-reply) carry a synthetic messageId +
+                  // senderOpenId the platform never saw — anchoring the reply
+                  // to one makes im.message.reply 400 (code 99992354) AND the
+                  // create-fallback card 400s on the `taskrun:…` at/person, so
+                  // the whole reply is lost (dogfood 2026-06-16). Skip on
+                  // `synthetic`, NOT `source`: a taskrun-ask is `source:'user'`
+                  // yet synthetic. If the whole batch is synthetic the anchor
+                  // stays on the prior real message.
                   const latestUserEntry = [...materialized]
                     .reverse()
-                    .find(entry => entry.source !== 'background-task')
+                    .find(entry => !isSyntheticInterjection(entry))
                   if (latestUserEntry) {
                     replyTargetMessage = {
                       ...effectiveMessage,

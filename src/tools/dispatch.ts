@@ -685,6 +685,7 @@ export const messageTool = buildTool({
         text: [wrapMessage(input.message.trim(), replyCode), REQUESTER_MESSAGE_GUIDANCE].join('\n\n'),
         arrivedAt: now,
         source: 'user',
+        synthetic: true,
       })
       return {
         output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.`,
@@ -795,24 +796,15 @@ async function askParentFromCurrentRun(input: {
   // result. Late answers fall through to normal message routing.
   let delivered = false
   const parentInbox = parent.interjectionSessionId ?? parent.currentSessionId
-  if (parent.status === 'running' && parentInbox) {
-    channelInterjectionQueue.push(parentInbox, {
-      messageId: `taskrun-ask-${own.id}-${Date.now()}`,
-      senderOpenId: `taskrun:${own.id}`,
-      text: askBlock,
-      arrivedAt: Date.now(),
-      source: 'user',
-    })
-    delivered = true
-  } else if (parent.status === 'waiting') {
-    // Detached: waking the parent runs its whole next shift.
-    scheduleResumeRunWithBlock(input.owner, parent.id, {
-      via: 'message',
-      reason: `TaskRun ${own.id} asked you a question`,
-      body: askBlock,
-    })
-    delivered = true
-  } else if ((parent.kind ?? 'dispatch') === 'root') {
+  if ((parent.kind ?? 'dispatch') === 'root') {
+    // The parent is main's standing work order. A running root does NOT mean
+    // main is mid-turn: main end_turns back to idle while the root stays
+    // `running`, so pushing onto its interjection queue would strand the ask
+    // until the user happens to open the next turn (dogfood 2026-06-16: a
+    // worker ask sat queued ~14min, unseen, until the user messaged). Route a
+    // root through wakeOrInterject regardless of running/waiting — it is the
+    // channel-rooted path that interjects when main is in-flight and spins a
+    // synthetic turn when main is idle.
     const identity = await getIdentity(input.owner).catch(() => null)
     const ownerOpenId = identity?.channels.feishu[0]
     if (ownerOpenId) {
@@ -828,6 +820,24 @@ async function askParentFromCurrentRun(input: {
       })
       delivered = wake.ok
     }
+  } else if (parent.status === 'running' && parentInbox) {
+    channelInterjectionQueue.push(parentInbox, {
+      messageId: `taskrun-ask-${own.id}-${Date.now()}`,
+      senderOpenId: `taskrun:${own.id}`,
+      text: askBlock,
+      arrivedAt: Date.now(),
+      source: 'user',
+      synthetic: true,
+    })
+    delivered = true
+  } else if (parent.status === 'waiting') {
+    // Detached: waking the parent runs its whole next shift.
+    scheduleResumeRunWithBlock(input.owner, parent.id, {
+      via: 'message',
+      reason: `TaskRun ${own.id} asked you a question`,
+      body: askBlock,
+    })
+    delivered = true
   }
 
   if (!delivered) {
@@ -879,23 +889,11 @@ async function replyToRequesterFromCurrentRun(input: {
 
   let delivered = false
   const parentInbox = parent.interjectionSessionId ?? parent.currentSessionId
-  if (parent.status === 'running' && parentInbox) {
-    channelInterjectionQueue.push(parentInbox, {
-      messageId: `worker-reply-${own.id}-${Date.now()}`,
-      senderOpenId: `taskrun:${own.id}`,
-      text: replyBlock,
-      arrivedAt: Date.now(),
-      source: 'user',
-    })
-    delivered = true
-  } else if (parent.status === 'waiting') {
-    scheduleResumeRunWithBlock(input.owner, parent.id, {
-      via: 'message',
-      reason: `TaskRun ${own.id} replied to your message`,
-      body: replyBlock,
-    })
-    delivered = true
-  } else if ((parent.kind ?? 'dispatch') === 'root') {
+  if ((parent.kind ?? 'dispatch') === 'root') {
+    // Same rationale as askParentFromCurrentRun: a root parent is main's
+    // standing work order whose `running` state does not imply an in-flight
+    // turn, so go through wakeOrInterject (interject if main is live, spin a
+    // synthetic turn if idle) instead of stranding the reply on its queue.
     const identity = await getIdentity(input.owner).catch(() => null)
     const ownerOpenId = identity?.channels.feishu[0]
     if (ownerOpenId) {
@@ -911,6 +909,23 @@ async function replyToRequesterFromCurrentRun(input: {
       })
       delivered = wake.ok
     }
+  } else if (parent.status === 'running' && parentInbox) {
+    channelInterjectionQueue.push(parentInbox, {
+      messageId: `worker-reply-${own.id}-${Date.now()}`,
+      senderOpenId: `taskrun:${own.id}`,
+      text: replyBlock,
+      arrivedAt: Date.now(),
+      source: 'user',
+      synthetic: true,
+    })
+    delivered = true
+  } else if (parent.status === 'waiting') {
+    scheduleResumeRunWithBlock(input.owner, parent.id, {
+      via: 'message',
+      reason: `TaskRun ${own.id} replied to your message`,
+      body: replyBlock,
+    })
+    delivered = true
   }
 
   if (!delivered) {

@@ -7,6 +7,7 @@ import { describe, it } from 'node:test'
 import type { Role } from '../agents/types.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import { addLink, createUser } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAbortControllerForSession } from '../state.js'
 import { closeRootTaskRun, createRootTaskRun, createTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
@@ -1073,6 +1074,78 @@ describe('Dispatch carries the Feishu chat-grant target into the background fire
       const entry = getBackgroundTask('alice', dispatchId)
       assert.ok(entry)
       assert.equal(entry.resourceGrantTarget, undefined)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('worker→main ask routing for a root parent', () => {
+  it('wakes an idle root through wakeOrInterject instead of stranding the ask on its queue', async () => {
+    // Regression (dogfood 2026-06-16): the parent is main's standing root work
+    // order. Its status is `running`, but main is idle between turns — nothing
+    // is draining its interjection queue. The pre-fix code took the
+    // `status==='running'` branch and pushed the ask as a `source:'user'`
+    // interjection that sat unseen ~14min until the user happened to message.
+    // A root must instead go through wakeOrInterject (which spins a synthetic
+    // turn when main is idle). With no channel runner registered in the test,
+    // wakeOrInterject falls back to a queued push stamped background-task +
+    // synthetic — the marker that distinguishes it from the stranding path.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-ask-root-'))
+    setLightclawHomeOverride(tmpHome)
+    const groupSession = 'feishu:group:oc_grp:ou_alice'
+    channelInterjectionQueue.drain(groupSession)
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      defaultModel: 'm',
+      taskrun: { ask: { timeoutMs: 300 } },
+    }))
+    try {
+      await createUser('alice')
+      await addLink('alice', 'feishu:ou_alice')
+      const root = await createRootTaskRun('alice', groupSession, {
+        objective: 'vLLM deploy',
+        title: 'vLLM deploy',
+      })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: groupSession,
+        mode: 'background',
+        objective: 'build job',
+        parentRunId: root.id,
+        chainId: 'chain-root-ask',
+        depth: 1,
+      })
+      await markStarted(child.id, 'child-session', Date.now(), 'alice')
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-ask-root',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-ask-root/sessions',
+        memoryDir: '/tmp/lightclaw-ask-root/memory',
+        sessionId: 'child-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const askPromise = runWithSessionContext(childSession, () =>
+        messageTool.call(
+          { message: 'torch 2.10 or 2.11?', options: ['2.10', '2.11'], default: '2.11' },
+          toolContext(),
+        ),
+      )
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const [entry] = channelInterjectionQueue.drain(groupSession)
+      assert.ok(entry, 'the ask must reach the root session queue')
+      assert.match(entry.text, /taskrun-ask/)
+      // The fix: a root ask takes the wakeOrInterject path (background-task +
+      // synthetic), NOT the running-push source:'user' branch that stranded it.
+      assert.equal(entry.source, 'background-task')
+      assert.equal(entry.synthetic, true)
+      await askPromise // resolves via the 300ms ask timeout with the default
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })

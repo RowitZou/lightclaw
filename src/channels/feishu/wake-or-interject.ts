@@ -34,6 +34,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      synthetic: true,
       ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     return { ok: true, mode: 'interjection' }
@@ -52,6 +53,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      synthetic: true,
       ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     return { ok: true, mode: 'queued' }
@@ -66,6 +68,7 @@ export async function wakeOrInterject(input: {
       senderOpenId: input.ownerOpenId,
       arrivedAt: input.emittedAt,
       source: input.source ?? 'background-task',
+      synthetic: true,
       ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
     })
     process.stderr.write(

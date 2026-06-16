@@ -85,6 +85,7 @@ export async function resumeRunWithBlock(
       text: interjected,
       arrivedAt: Date.now(),
       source: 'background-task',
+      synthetic: true,
     })
     if (run.status === 'waiting') {
       // sessionId here feeds currentSessionId (the transcript locator), so it
