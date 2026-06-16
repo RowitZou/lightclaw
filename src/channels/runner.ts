@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
+import { type TaskCardTarget } from './feishu/task-card-patcher.js'
 import { TASK_RUN_TERMINAL_STATUSES } from './feishu/task-card.js'
 import { appendProgress, getTaskRun } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
@@ -439,6 +440,35 @@ export async function routeSyntheticBlock(
 }
 
 /**
+ * The turn card target for a turn, or null when the turn must NOT get one. A
+ * turn card collects a turn's interim narration into one live card. It is
+ * created for *user-initiated* turns: genuine inbounds, and the post-approval
+ * replay — which carries the user's real first message and is flagged
+ * synthetic only so the platform-unseen `replay-<uuid>` messageId
+ * short-circuits reply/reaction APIs (the same reason it omits the
+ * frameworkText sender prefix). Framework wakes (`frameworkText`: bg-result /
+ * reconcile) and crash resumes (`resumeExisting`) are NOT fresh user turns:
+ * their narration folds into the task card when rooted, else the per-block
+ * message path. The card anchors on the real origin messageId — for a
+ * synthetic replay that is `replyAnchorMessageId`, never the platform-unseen
+ * `messageId` (mirrors `FeishuSender.replyTargetFor`); a replay with no anchor
+ * (DM-fallback shape) creates against the chat directly.
+ */
+export function turnCardTargetForMessage(
+  message: NormalizedChannelMessage,
+): TaskCardTarget | null {
+  if (message.frameworkText || message.resumeExisting) return null
+  const replyAnchor = message.synthetic
+    ? message.replyAnchorMessageId
+    : message.messageId
+  return {
+    chatId: message.chatId,
+    ...(message.threadId ? { threadId: message.threadId } : {}),
+    ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
+  }
+}
+
+/**
  * Generic, channel-agnostic message runner. Holds the per-session serial
  * lock, wires a message through resetSessionContext() + query({ role,
  * invocation }), persists the transcript, and delegates the reply back to
@@ -586,17 +616,13 @@ export class ChannelRunner {
     assertSessionIdShape(mainSessionId)
     // Interim narration (blocks the model emits between tool calls)
     // collapses into one live turn card; only the turn's final reply goes
-    // out as a message. Synthetic turns never get a turn card: their
-    // narration either routes to the task card (rooted) or stays on the
-    // loud per-block message path (rootless fallback).
-    const turnCard = !effectiveMessage.synthetic
-      ? createTurnCardCollector({
-          target: {
-            chatId: effectiveMessage.chatId,
-            ...(effectiveMessage.threadId ? { threadId: effectiveMessage.threadId } : {}),
-            replyAnchorMessageId: effectiveMessage.messageId,
-          },
-        })
+    // out as a message. A turn card is created for user-initiated turns
+    // (genuine inbounds + the post-approval replay); framework wakes and
+    // crash resumes route their narration to the task card (rooted) or the
+    // loud per-block message path instead. See `turnCardTargetForMessage`.
+    const turnCardTarget = turnCardTargetForMessage(effectiveMessage)
+    const turnCard = turnCardTarget
+      ? createTurnCardCollector({ target: turnCardTarget })
       : null
     // Genuine inbound messages double as reply anchors for later
     // framework-initiated wakes (the platform never saw a synthetic

@@ -30,6 +30,7 @@ import {
   withFinalReplyMention,
   formatChannelUserText,
   renderQuotedMessageBlock,
+  turnCardTargetForMessage,
   type ChannelRunnerStrategy,
 } from './runner.js'
 import type {
@@ -1062,6 +1063,95 @@ describe('applyAttachmentMaterialization', () => {
       1,
       'exactly one notice appended, not per-failure',
     )
+  })
+})
+
+describe('turnCardTargetForMessage', () => {
+  const base = {
+    channel: 'feishu' as const,
+    eventId: 'evt',
+    chatId: 'oc_group',
+    senderOpenId: 'ou_alice',
+    chatType: 'group',
+  }
+
+  it('gives a genuine inbound a turn card anchored on its own messageId', () => {
+    const target = turnCardTargetForMessage({
+      ...base,
+      messageId: 'om_real',
+      text: 'hello',
+    })
+    assert.deepEqual(target, { chatId: 'oc_group', replyAnchorMessageId: 'om_real' })
+  })
+
+  it('gives the post-approval replay a turn card anchored on the REAL origin id, not replay-<uuid>', () => {
+    // The replay carries the user's real first message. It is synthetic only
+    // so the platform-unseen replay-<uuid> short-circuits reply/reaction APIs
+    // — its narration must still collect into a turn card (matching what every
+    // later real inbound gets), anchored on the original @ message it carries.
+    const target = turnCardTargetForMessage({
+      ...base,
+      messageId: 'replay-1234',
+      replyAnchorMessageId: 'om_original_at',
+      text: '@LightClaw do the thing',
+      synthetic: true,
+    })
+    assert.ok(target, 'replay must get a turn card')
+    assert.equal(
+      target.replyAnchorMessageId,
+      'om_original_at',
+      'anchor on the real origin id the replay carries, never the platform-unseen replay-<uuid>',
+    )
+    assert.equal(target.chatId, 'oc_group')
+  })
+
+  it('creates against the chat (no anchor) for a DM-fallback replay that carries none', () => {
+    const target = turnCardTargetForMessage({
+      ...base,
+      chatType: 'p2p',
+      chatId: 'oc_dm',
+      messageId: 'replay-5678',
+      text: 'hi',
+      synthetic: true,
+    })
+    assert.deepEqual(target, { chatId: 'oc_dm' })
+  })
+
+  it('gives a framework wake (bg-result / reconcile) NO turn card', () => {
+    const target = turnCardTargetForMessage({
+      ...base,
+      messageId: 'wake-1',
+      replyAnchorMessageId: 'om_anchor',
+      text: '<background-task-result/>',
+      synthetic: true,
+      frameworkText: true,
+    })
+    assert.equal(target, null, 'framework wakes fold into the task card, not a fresh turn card')
+  })
+
+  it('gives a crash resume NO turn card', () => {
+    const target = turnCardTargetForMessage({
+      ...base,
+      messageId: 'resume-1',
+      text: '',
+      synthetic: true,
+      resumeExisting: true,
+    })
+    assert.equal(target, null, 'a crash resume continues existing work, it is not a fresh user turn')
+  })
+
+  it('carries threadId through for a topic-group turn', () => {
+    const target = turnCardTargetForMessage({
+      ...base,
+      messageId: 'om_real',
+      threadId: 'omt_topic',
+      text: 'hello',
+    })
+    assert.deepEqual(target, {
+      chatId: 'oc_group',
+      threadId: 'omt_topic',
+      replyAnchorMessageId: 'om_real',
+    })
   })
 })
 
