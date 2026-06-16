@@ -222,17 +222,19 @@ function summarizeToolInput(block: AssistantToolUseBlock): string {
 }
 
 // Dogfood 5/29 Bug 2 empty-stop backstop. Injected as a user message after a
-// contentless end_turn that left a todo in_progress. Neutral framing on
-// purpose: the harness cannot tell a spurious stop (next step was clear) from
-// a genuine block (needs user input), so it does not pre-decide — it refuses
-// the silent empty stop and hands control back, letting the model either take
-// the next step or articulate the blocker to the user in real words. Either
-// outcome beats a blank turn the user can't even see to respond to. English to
-// match the system-prompt todo reminder; this is a framework reminder, not the
-// user's words.
+// contentless end_turn that is never a finished state: a turn that left a todo
+// in_progress, OR a dispatched worker's turn (its final reply IS its delivery,
+// so an empty one hands its requester nothing). Neutral framing on purpose: the
+// harness cannot tell a spurious stop (next step was clear) from a genuine
+// block (needs input), so it does not pre-decide — it refuses the silent empty
+// stop and hands control back, letting the model either take the next step or
+// articulate the blocker in real words. Either outcome beats a blank turn that
+// reaches no one. Wording is trigger-neutral (no todo / no audience word) so it
+// reads correctly for both triggers. English to match the system-prompt todo
+// reminder; this is a framework reminder, not the user's words.
 const EMPTY_STOP_RESCUE_REMINDER = [
   '<system-reminder>',
-  "You ended your turn without any output (no message, no tool call) while a todo item is still in_progress. An empty turn is never a finished state. Either take the next concrete step toward completing the in_progress work, or — if you genuinely cannot proceed without input — say so plainly and tell the user exactly what you need to continue. Do not end the turn empty again.",
+  "You ended your turn without any output (no message, no tool call). An empty turn is never a finished state. Either take the next concrete step toward completing the work, or — if you genuinely cannot proceed without input — say so plainly and state exactly what you need to continue. Do not end the turn empty again.",
   '</system-reminder>',
 ].join('\n')
 
@@ -973,25 +975,28 @@ export async function query(params: QueryParams): Promise<{
           continue
         }
       }
-      // Empty-stop backstop (dogfood 5/29 Bug 2). The model ended the turn
-      // with no text and no tool call while a todo is still in_progress. An
-      // empty turn is never a finished state — observed with gpt-codex-mid
-      // ending empty right after narrating "I'll dispatch coder next" and
-      // marking the step in_progress (row 99 of the 5/28 main-group
-      // transcript: stopReason end_turn, content []). The system-prompt todo
-      // reminder asks the model to keep going, but a turn that emits zero
-      // tokens can't be steered by prompt text. Inject one neutral
-      // continuation nudge and re-enter the loop so the model either takes
-      // the next concrete step or, if it is genuinely blocked, surfaces the
-      // blocker to the user in real words. Runs only after the late-
-      // interjection rescue above (a real user message, when present, revives
-      // the loop on its own and is preferred). `pendingEmptyStopRescue` caps
-      // this at one nudge per consecutive empty stop so a model that keeps
-      // returning empty cannot loop forever.
+      // Empty-stop backstop (dogfood 5/29 Bug 2). The model ended the turn with
+      // no text and no tool call. An empty turn is never a finished state —
+      // observed with gpt-codex-mid ending empty right after narrating "I'll
+      // dispatch coder next" and marking the step in_progress (row 99 of the
+      // 5/28 main-group transcript: stopReason end_turn, content []). Two
+      // triggers rescue it: a todo still in_progress (the original case), OR a
+      // dispatched worker (kind 'worker') whose final reply IS its delivery to
+      // its requester — an empty one hands over nothing, with or without a todo.
+      // The system-prompt reminders ask the model to keep going, but a turn that
+      // emits zero tokens can't be steered by prompt text. Inject one neutral
+      // continuation nudge and re-enter the loop so the model either takes the
+      // next concrete step or, if it is genuinely blocked, surfaces the blocker
+      // in real words. Runs only after the late-interjection rescue above (a
+      // real user message, when present, revives the loop on its own and is
+      // preferred). `pendingEmptyStopRescue` caps this at one nudge per
+      // consecutive empty stop so a model that keeps returning empty cannot loop
+      // forever.
       if (
         turnText.length === 0 &&
         !pendingEmptyStopRescue &&
-        getTodos().some(todo => todo.status === 'in_progress')
+        (rolePolicy.kind === 'worker' ||
+          getTodos().some(todo => todo.status === 'in_progress'))
       ) {
         pendingEmptyStopRescue = true
         messages.push(

@@ -34,6 +34,16 @@ const TEST_ROLE: Role = {
   hooks: [],
 }
 
+// A dispatched worker, whose final reply is its delivery to its requester.
+const WORKER_ROLE: Role = {
+  agentType: 'generalist',
+  kind: 'worker',
+  whenToUse: 'test',
+  systemPrompt: 'test',
+  tools: ['*'],
+  hooks: [],
+}
+
 const IN_PROGRESS_TODO: TodoItem = {
   content: 'Install dependencies and configure the runtime',
   activeForm: 'Installing dependencies and configuring the runtime',
@@ -83,7 +93,7 @@ function installCountingStreamChat(
   return { invocations: () => i }
 }
 
-function runQuery(sessionId: string, seedTodos: TodoItem[]) {
+function runQuery(sessionId: string, seedTodos: TodoItem[], role: Role = TEST_ROLE) {
   const ctx = createSessionContext({
     cwd: '/tmp',
     model: 'test-model',
@@ -98,7 +108,7 @@ function runQuery(sessionId: string, seedTodos: TodoItem[]) {
     // Seed the todo state the way a prior TodoWrite turn would have left it.
     setTodos(seedTodos)
     return query({
-      role: TEST_ROLE,
+      role,
       invocation: { systemPromptOverride: 'test system prompt' },
       messages: [createUserMessage('configure the env please', null)],
       tools: [],
@@ -190,7 +200,9 @@ describe('query empty-stop backstop (dogfood 5/29 Bug 2)', () => {
     )
   })
 
-  it('does not fire when no todo is in_progress (no false positive on a plain empty turn)', async () => {
+  it('does not fire for a non-worker with no todo in_progress (no false positive on a plain empty turn)', async () => {
+    // TEST_ROLE is the orchestrator: neither trigger applies, so a plain empty
+    // turn ends the query. (Workers are covered by the next test.)
     const stream = installCountingStreamChat([emptyEndTurn])
 
     const result = await runQuery('feishu:dm:bug2-no-inprogress', [PENDING_TODO])
@@ -205,6 +217,31 @@ describe('query empty-stop backstop (dogfood 5/29 Bug 2)', () => {
       rescueMessageCount(result.messages),
       0,
       'no continuation nudge is injected',
+    )
+  })
+
+  it('rescues a dispatched worker that ends contentless even with no todo in_progress', async () => {
+    // A worker's final reply IS its delivery to its requester, so an empty
+    // end_turn hands over nothing. The widened backstop nudges it once even
+    // without an in_progress todo. Pre-widening (todo-only gate) this fell
+    // straight through to end_turn — stream invoked once, empty delivery.
+    const stream = installCountingStreamChat([
+      emptyEndTurn,
+      textEndTurn('Done — report written to /workspace/out.md'),
+    ])
+
+    const result = await runQuery('bug2-worker-empty', [], WORKER_ROLE)
+
+    assert.equal(
+      stream.invocations(),
+      2,
+      'the worker empty stop must re-enter the loop for a second turn',
+    )
+    assert.equal(result.assistantText, 'Done — report written to /workspace/out.md')
+    assert.equal(
+      rescueMessageCount(result.messages),
+      1,
+      'exactly one continuation nudge was injected for the worker empty stop',
     )
   })
 })
