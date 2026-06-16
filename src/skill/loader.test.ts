@@ -263,6 +263,28 @@ describe('discoverSkillsForUser', () => {
     })
   })
 
+  it('parses dispatch_brief and exposes it on SkillMeta', async () => {
+    await withTempHome(async () => {
+      await writeRawSkill(
+        userSkillsRoot('alice'),
+        'handoff-contract',
+        [
+          'name: handoff-contract',
+          'description: Carries manager-facing handoff requirements.',
+          'roles:',
+          '  - coder',
+          'dispatch_brief: Ask the requester to pick the image before dispatch; do not script setup commands.',
+        ].join('\n'),
+      )
+
+      const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      assert.equal(
+        skills.find(skill => skill.name === 'handoff-contract')?.dispatchBrief,
+        'Ask the requester to pick the image before dispatch; do not script setup commands.',
+      )
+    })
+  })
+
   it('parses requires-driver and rejects unknown drivers', async () => {
     await withTempHome(async () => {
       await writeRawSkill(
@@ -383,7 +405,29 @@ describe('writeUserSkill', () => {
       assert.equal(meta.source, 'user')
       assert.deepEqual(meta.allowedTools, ['Read', 'Write'])
       assert.deepEqual(meta.roles, ['main'])
+      assert.equal(meta.dispatchBrief, undefined)
       assert.equal((await stat(meta.filePath)).mode & 0o777, 0o600)
+    })
+  })
+
+  it('preserves dispatch_brief when writing a user skill', async () => {
+    await withTempHome(async () => {
+      const meta = await writeUserSkill({
+        userId: 'alice',
+        name: 'cluster-handoff',
+        markdown:
+          '---\n' +
+          'name: cluster-handoff\n' +
+          'description: Prepare cluster handoffs.\n' +
+          'dispatch_brief: Confirm image and GPU count before dispatch; leave job mechanics to the worker.\n' +
+          '---\n\n' +
+          'Steps here.\n',
+      })
+
+      assert.equal(
+        meta.dispatchBrief,
+        'Confirm image and GPU count before dispatch; leave job mechanics to the worker.',
+      )
     })
   })
 

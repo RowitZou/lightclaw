@@ -29,6 +29,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     name: skill.name,
     description: skill.description,
     whenToUse: skill.whenToUse,
+    dispatchBrief: skill.dispatchBrief,
     allowedTools: skill.allowedTools,
     roles: skill.roles,
     requiresDriver: skill.requiresDriver,
@@ -65,6 +66,11 @@ function parseSkillFrontmatter(
     typeof lastUsedAtRaw === 'string' && lastUsedAtRaw.trim().length > 0
       ? lastUsedAtRaw.trim()
       : undefined
+  const dispatchBriefRaw = frontmatter.dispatch_brief
+  const dispatchBrief =
+    typeof dispatchBriefRaw === 'string' && dispatchBriefRaw.trim().length > 0
+      ? dispatchBriefRaw.trim()
+      : undefined
   const requiresDriver = parseSkillRequiredDriver(filePath, frontmatter['requires-driver'])
 
   return {
@@ -74,6 +80,7 @@ function parseSkillFrontmatter(
       typeof frontmatter.when_to_use === 'string'
         ? frontmatter.when_to_use.trim()
         : undefined,
+    dispatchBrief,
     allowedTools: Array.isArray(frontmatter['allowed-tools'])
       ? frontmatter['allowed-tools'].map(value => value.trim()).filter(Boolean)
       : undefined,

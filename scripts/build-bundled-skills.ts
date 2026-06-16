@@ -23,6 +23,7 @@ interface BuiltSkill {
   name: string
   description: string
   whenToUse?: string
+  dispatchBrief?: string
   allowedTools?: string[]
   roles: string[]
   requiresDriver?: 'brainpp'
@@ -81,6 +82,12 @@ async function main(): Promise<void> {
         ? frontmatter.when_to_use.trim()
         : undefined
 
+    const dispatchBrief =
+      typeof frontmatter.dispatch_brief === 'string' &&
+      frontmatter.dispatch_brief.trim().length > 0
+        ? frontmatter.dispatch_brief.trim()
+        : undefined
+
     const allowedToolsRaw = frontmatter['allowed-tools']
     const allowedTools = Array.isArray(allowedToolsRaw)
       ? allowedToolsRaw.map(value => String(value).trim()).filter(Boolean)
@@ -98,6 +105,7 @@ async function main(): Promise<void> {
       name,
       description,
       whenToUse,
+      dispatchBrief,
       allowedTools,
       roles,
       requiresDriver,

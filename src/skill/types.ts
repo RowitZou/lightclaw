@@ -5,6 +5,11 @@ export type SkillMeta = {
   name: string
   description: string
   whenToUse?: string
+  /**
+   * Manager-facing contract for delegation. This is parsed from frontmatter
+   * `dispatch_brief`; prompt rendering intentionally happens elsewhere.
+   */
+  dispatchBrief?: string
   allowedTools?: string[]
   roles: string[]
   requiresDriver?: SkillRequiredDriver
