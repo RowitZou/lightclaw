@@ -693,9 +693,22 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: slash queued for in-flight session ${mainSessionId} (size=${channelPendingSlashQueue.size(mainSessionId)})\n`,
       )
-      // Same reasoning as the interjection ack above — first-person reply
-      // belongs in the conversation stream, not a system notice card.
-      await this.sendReply(message, t('channel.slash.queued'))
+      // Acknowledge with the same transient emoji reaction the bare-chat
+      // interjection branch uses (see above): "got it, I'll run it after the
+      // current step" without cluttering the conversation stream. The reaction
+      // is cleared by the in-flight turn-owner's finally (pendingAckTokens
+      // drain), keyed by mainSessionId, so a queued slash's ack clears on the
+      // next reply exactly like an interjection ack. Channels without emoji
+      // reactions (terminal) or a failed react fall back to the first-person
+      // text ack, which reads as the bot speaking and belongs in the stream.
+      const ackToken = await this.ackInterjection(message)
+      if (ackToken !== null && ackToken !== undefined) {
+        const tokens = this.pendingAckTokens.get(mainSessionId) ?? []
+        tokens.push(ackToken)
+        this.pendingAckTokens.set(mainSessionId, tokens)
+      } else {
+        await this.sendReply(message, t('channel.slash.queued'))
+      }
       return
     }
     // Phase 27: mark in-flight BEFORE entering the lock so any concurrent

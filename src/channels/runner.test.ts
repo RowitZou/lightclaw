@@ -629,6 +629,54 @@ describe('ChannelRunner in-flight slash routing', () => {
     }
   })
 
+  // Companion to the bare-chat interjection emoji ack: a write slash queued
+  // while the session is in flight is acked with the SAME transient emoji
+  // reaction, not a third-person text reply — so /mode auto mid-turn looks
+  // identical in the UI to dropping a chat interjection.
+  it('acks an in-flight queued slash with an emoji reaction instead of a text reply', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const { channelInterjectionQueue } = await import('./feishu/interjection-queue.js')
+    const { channelPendingSlashQueue } = await import('./feishu/pending-slash-queue.js')
+    const strategy = installFakeStrategy('feishu')
+    const ackCalls: string[] = []
+    strategy.ackInterjection = async message => {
+      ackCalls.push(message.messageId)
+      return { messageId: message.messageId, reactionId: 'rx-slash-1' }
+    }
+    strategy.clearAck = async () => {}
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-alice-slash-react-ack'
+    strategy.resolveSessionId = () => mainSessionId
+
+    channelInterjectionQueue.markInFlight(mainSessionId)
+
+    const slashMessage = makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      text: '/mode auto',
+      chatId: mainSessionId,
+    })
+    try {
+      await runner.handleMessage(slashMessage)
+
+      assert.deepEqual(ackCalls, [slashMessage.messageId], 'queued slash acked via emoji reaction')
+      assert.equal(
+        strategy.replies.length,
+        0,
+        'reaction ack must not also send a text reply',
+      )
+      assert.equal(
+        channelPendingSlashQueue.size(mainSessionId),
+        1,
+        'write slash is still queued in the pending-slash queue',
+      )
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(mainSessionId)
+      channelPendingSlashQueue.drain(mainSessionId)
+    }
+  })
+
   it('still queues bare chat as an interjection while in-flight', async () => {
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')
