@@ -89,3 +89,16 @@ export function visibleOnDemandSkillsForRole(
 ): SkillMeta[] {
   return filterSkillsForRole(skills, role, gate).filter(skill => !skill.autoLoad)
 }
+
+/** Auto-loaded workflow skills are omitted from ListRoleSkill, but their
+ *  manager-facing dispatch briefs still help the dispatcher phrase work for
+ *  the role. This helper intentionally exposes only metadata, never body. */
+export function visibleAutoLoadDispatchBriefsForRole(
+  skills: SkillMeta[],
+  role: Role,
+  gate: SkillRuntimeGate = {},
+): SkillMeta[] {
+  return filterSkillsForRole(skills, role, gate).filter(skill =>
+    skill.autoLoad && (skill.dispatchBrief?.trim().length ?? 0) > 0,
+  )
+}

@@ -24,7 +24,15 @@ import {
   refreshSkillRegistry,
 } from './skill/registry.js'
 import { skillDirFor } from './skill/skill-dir.js'
-import { filterSkillsForRole, visibleOnDemandSkillsForRole } from './skill/role-validation.js'
+import {
+  filterSkillsForRole,
+  visibleAutoLoadDispatchBriefsForRole,
+  visibleOnDemandSkillsForRole,
+} from './skill/role-validation.js'
+import {
+  DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER,
+  formatDispatchBriefForDelegation,
+} from './skill/dispatch-brief.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -940,6 +948,7 @@ function formatReachableRolesSection(
   }
   const allAgents = getAllAgents()
   const gate = { runtimeDriver: config.runtime?.driver ?? null }
+  const registeredSkills = listRegisteredSkills()
   const lines = [
     '## Reachable Workers',
     'You can dispatch the following workers via Dispatch:',
@@ -948,11 +957,17 @@ function formatReachableRolesSection(
     // Name each worker's on-demand skills so the routing decision can lean on
     // the capability the worker already owns instead of re-specifying its
     // procedure in the dispatch prompt. ListRoleSkill expands what each does.
-    const skills = visibleOnDemandSkillsForRole(listRegisteredSkills(), agent, gate)
+    const skills = visibleOnDemandSkillsForRole(registeredSkills, agent, gate)
     const skillNote = skills.length > 0
       ? ` Skills it can invoke: ${skills.map(skill => skill.name).join(', ')}.`
       : ''
     lines.push(`- ${agent.agentType}: ${agent.whenToUse}${skillNote}`)
+    for (const skill of visibleAutoLoadDispatchBriefsForRole(registeredSkills, agent, gate)) {
+      const brief = formatDispatchBriefForDelegation(skill.dispatchBrief ?? '')
+      if (brief) {
+        lines.push(brief)
+      }
+    }
   }
   if (reachableRoles.includes('*')) {
     // Wildcard expands to every registered worker (bundled + user-defined,
@@ -975,9 +990,7 @@ function formatReachableRolesSection(
   if (lines.length <= 2) {
     return ''
   }
-  lines.push(
-    'To see what a worker\'s skills do before delegating, call ListRoleSkill with its role name.',
-  )
+  lines.push(DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER)
   return lines.join('\n')
 }
 

@@ -3,6 +3,10 @@ import { z } from 'zod'
 import { getAgent, getAllAgents, getMainRole } from '../agents/registry.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
 import { isDispatchTargetReachable } from '../agents/role-tool-gate.js'
+import {
+  DISPATCH_BRIEF_LIST_ROLE_SKILL_DESCRIPTION,
+  formatDispatchBriefForDelegation,
+} from '../skill/dispatch-brief.js'
 import { listRegisteredSkills } from '../skill/registry.js'
 import { visibleOnDemandSkillsForRole } from '../skill/role-validation.js'
 import { getCurrentRole } from '../state.js'
@@ -16,7 +20,9 @@ const LIST_ROLE_SKILL_DESCRIPTION = [
   'Input:',
   '- `role` — a worker from your `## Reachable Workers` list.',
   '',
-  'Returns each invokable skill\'s name, one-line description, and when-to-use. Always-on workflow skills are omitted (they are the worker\'s built-in procedure, not a capability you route toward).',
+  'Returns each invokable skill\'s name, one-line description, and when-to-use.',
+  DISPATCH_BRIEF_LIST_ROLE_SKILL_DESCRIPTION,
+  'Always-on workflow skills are omitted (they are the worker\'s built-in procedure, not a capability you route toward).',
 ].join('\n')
 
 export const listRoleSkillTool = buildTool({
@@ -60,9 +66,16 @@ export const listRoleSkillTool = buildTool({
       return { output: `${target.agentType} has no on-demand skills to invoke.` }
     }
 
-    const lines = skills.map(skill => {
+    const lines = skills.flatMap(skill => {
       const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
-      return `- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`
+      const rendered = [`- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`]
+      if (skill.dispatchBrief) {
+        const brief = formatDispatchBriefForDelegation(skill.dispatchBrief)
+        if (brief) {
+          rendered.push(brief)
+        }
+      }
+      return rendered
     })
     return { output: `${target.agentType} can invoke these skills:\n${lines.join('\n')}` }
   },

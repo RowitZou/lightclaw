@@ -33,15 +33,18 @@ import type { Role } from './types.js'
 // every Dispatch-bearing role (main + the 5 dispatcher workers) shifts; the two
 // leaf workers (localExplorer / webSearcher) and the internal roles are
 // untouched because they render no Reachable Workers section.
+// dispatch brief rendering (2026-06-16): the Reachable Workers footer now tells
+// dispatchers to use ListRoleSkill for dispatch alignment, shifting the same
+// Dispatch-bearing role set while leaving leaf/internal prompts stable.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '1134bafcb47179340421d7647006de07eeffc136be6465ed66686f6cdf21f996',
-  generalist: 'b34b78d27bc66ca79caa037196f1d1fae3e32b2b37e175e16833a0e32b4bd6a0',
+  main: '67669be3f62bf087ca4ba141aafb58758b943f9519e9bf7e521dacd882f76a13',
+  generalist: '6442791e155512af2c04187a517d4ce17f306a70113003537bebd1ee3411ea3c',
   localExplorer: '14a9289883d48fdefcf69eac15c47d5a29cb9a6299ce941c11354d63e891a36d',
   webSearcher: 'ae8f1c75bc49d081eaee086444a016d5530b8b0bd159173ddf13f75cdb0f31bd',
-  feishuSecretary: '0fc0096c6ea0bf8ca8d9902ddd6409869507d8b6df280e5a4fc900db4b20758a',
-  coder: '51da6ef079c0ab70f65d334c56ad8ab4020f8373dd73788a1edc1b89d98ef974',
-  archivist: 'ac66df1b8826c2c0111370f62162895e223af7e3ff9399e04f6b1a06989bff2b',
-  reviewer: 'adf2b60fff9773252b0e789b86473f76be672e7d42a66dd3e47914270004ef6d',
+  feishuSecretary: '69644bfc90690c3bb3e5a30cfcfa50ac8ecde7b51207f3e09a91285519ddb469',
+  coder: 'feaf54b6aa666b732315f20f9497265d9a70f1571e226444c23aba04c955e42d',
+  archivist: '0b1c95cc7ae3f7737c8f305364b42eadc8f2397e96fd89515bd62f7d8207a31e',
+  reviewer: 'd14174be5bcbba15d11138db6d026cd9bab47e08fd1b05e996f11ddd78e09ad0',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: 'f44bcdc7a2d0140024e95f7b36daf6492783780bc2f8c35128935b5ae472b003',

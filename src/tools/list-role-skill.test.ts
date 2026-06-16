@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { afterEach, beforeEach } from 'node:test'
 
+import type { LightClawConfig } from '../config.js'
+import { userSkillsRoot } from '../identity/paths.js'
 import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import { buildSystemPromptTemplate, renderSystemPrompt } from '../prompt.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
+import type { Tool } from '../tool.js'
 import { getAllTools } from '../tools.js'
 import { listRoleSkillTool } from './list-role-skill.js'
 
@@ -52,6 +56,80 @@ test('main sees coder\'s on-demand skills including build-environment, but not t
   // brainpp-batch-job requires the brainpp driver; on a null-driver runtime it
   // is correctly hidden — same view the worker itself would have.
   assert.doesNotMatch(output.output, /brainpp-batch-job/)
+  // No skill without dispatch_brief grows a delegation hint line.
+  assert.doesNotMatch(output.output, /^  Before you delegate:/m)
+})
+
+test('ListRoleSkill renders on-demand dispatch briefs from skill metadata', async () => {
+  writeUserSkill('handoff-contract', [
+    'name: handoff-contract',
+    'description: Carries manager-facing handoff requirements.',
+    'roles:',
+    '  - coder',
+    'when_to_use: Use when the worker needs a precise delegation contract.',
+    'dispatch_brief: Ask the requester to pick the image before dispatch; do not script setup commands.',
+  ])
+  await refreshSkillRegistry(path.join(tmpHome, 'workspace'), 'alice')
+
+  const output = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'coder' }, toolContext(null)),
+  )
+  assert.equal(output.isError, undefined)
+  assert.match(
+    output.output,
+    /- handoff-contract: Carries manager-facing handoff requirements\. \| When to use: Use when the worker needs a precise delegation contract\.\n  Before you delegate: Ask the requester to pick the image before dispatch; do not script setup commands\./,
+  )
+})
+
+test('Reachable Workers renders always-on workflow dispatch briefs without leaking bodies', async () => {
+  writeUserSkill(
+    'archive-workflow-brief',
+    [
+      'name: archive-workflow-brief',
+      'description: Fixture workflow for archivist delegation.',
+      'roles:',
+      '  - archivist',
+      'auto_load: true',
+      'dispatch_brief: Confirm the archive target and retention boundary; leave file movement mechanics to the worker.',
+    ],
+    'DO_NOT_LEAK_WORKFLOW_BODY',
+  )
+
+  const prompt = await runAs(mainRole(), async () => {
+    const mainTools = ['Dispatch'].map(fakeTool)
+    const template = await buildSystemPromptTemplate(
+      mainTools,
+      path.join(tmpHome, 'workspace'),
+      '/workspace',
+      '/scratch',
+      {
+        autoMemory: false,
+        config: promptConfig(null),
+        queryText: '',
+        sessionId: undefined,
+      },
+    )
+    return renderSystemPrompt(template, [], { tools: mainTools })
+  })
+
+  assert.match(prompt, /- archivist:/)
+  assert.match(
+    prompt,
+    /  Before you delegate: Confirm the archive target and retention boundary; leave file movement mechanics to the worker\./,
+  )
+  assert.doesNotMatch(prompt, /DO_NOT_LEAK_WORKFLOW_BODY/)
+  assert.match(
+    prompt,
+    /To see what a worker's skills do — and how to align your dispatch with them before delegating — call ListRoleSkill with its role name\./,
+  )
+
+  await refreshSkillRegistry(path.join(tmpHome, 'workspace'), 'alice')
+  const listed = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'archivist' }, toolContext(null)),
+  )
+  assert.equal(listed.isError, undefined)
+  assert.doesNotMatch(listed.output, /archive-workflow-brief/)
+  assert.doesNotMatch(listed.output, /Confirm the archive target/)
 })
 
 test('the runtime driver gate is threaded: brainpp-batch-job shows on a brainpp runtime', async () => {
@@ -91,6 +169,63 @@ function toolContext(driver: 'brainpp' | null) {
     runtime: { workspaceRoot: '/tmp/lightclaw-list-role-skill' },
     config: { runtime: { driver } },
   } as never
+}
+
+function promptConfig(driver: 'brainpp' | null): LightClawConfig {
+  return {
+    defaultModel: 'fake-model',
+    models: {
+      'fake-model': {
+        endpoint: 'newapi',
+        schema: 'anthropic',
+        upstreamModel: 'fake-model',
+      },
+    },
+    endpoints: {
+      newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' },
+    },
+    paths: {
+      sessions: path.join(tmpHome, 'sessions'),
+    },
+    memory: {
+      recall: { enabled: false, topN: 3 },
+      session: { enabled: false },
+    },
+    runtime: { driver, backend: 'local' },
+  } as unknown as LightClawConfig
+}
+
+function fakeTool(name: string): Tool {
+  return {
+    name,
+    description: `${name} description`,
+    source: 'builtin',
+    domain: 'host',
+    riskLevel: 'safe',
+    async call() {
+      return { output: 'ok' }
+    },
+    formatResult(output, toolUseId) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: String(output),
+      }
+    },
+  }
+}
+
+function writeUserSkill(
+  name: string,
+  frontmatterLines: string[],
+  body = 'Fixture skill body.',
+): void {
+  const skillDir = path.join(userSkillsRoot('alice'), name)
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(
+    path.join(skillDir, 'SKILL.md'),
+    ['---', ...frontmatterLines, '---', '', body].join('\n'),
+  )
 }
 
 function runAs<T>(role: Role, fn: () => Promise<T>): Promise<T> {
