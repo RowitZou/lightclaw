@@ -207,8 +207,13 @@ export async function runBackgroundTaskFire(input: {
     }
 
     return {
+      // Hand the requester the worker's final reply only — not the full
+      // narration join (result.finalText) — so a delegated worker's progress
+      // chatter stays out of the requester's context (the delegation
+      // context-firewall). Falls back to the full text only when the run
+      // produced no final reply at all, so an empty hand-off never delivers "".
       kind: 'success',
-      summary: result.finalText || '(background task returned empty text)',
+      summary: result.finalReplyText || result.finalText || '(background task returned empty text)',
       transcriptPath: path.join(getSessionDir(sessionId), 'transcript.jsonl'),
     }
   } catch (error) {

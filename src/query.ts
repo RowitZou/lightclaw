@@ -250,6 +250,16 @@ export async function query(params: QueryParams): Promise<{
    * "(no response)" while the long body block-above gets dropped.
    */
   assistantText: string
+  /**
+   * The worker's final reply only — the last non-empty assistant turn. This is
+   * what a dispatched worker hands its requester (bg-result / child-join), so
+   * the requester's context sees the deliverable rather than the full narration
+   * trail. Prefers the clean no-tool end_turn when present; falls back to the
+   * last tool-bearing turn's text when the run ended without one, so a worker
+   * that wrote its result alongside a closing TaskUpdate-deliver and then ended
+   * empty still hands over that result instead of "".
+   */
+  finalReplyText: string
   stopReason: string | null
   didCompact: boolean
   usage: UsageStats
@@ -321,6 +331,7 @@ export async function query(params: QueryParams): Promise<{
   async function queryInner(): Promise<{
     messages: Message[]
     assistantText: string
+    finalReplyText: string
     stopReason: string | null
     didCompact: boolean
     usage: UsageStats
@@ -583,6 +594,7 @@ export async function query(params: QueryParams): Promise<{
     return {
       messages,
       assistantText: '',
+      finalReplyText: '',
       stopReason: 'hook_abort',
       didCompact,
       usage: totalUsage,
@@ -1021,6 +1033,7 @@ export async function query(params: QueryParams): Promise<{
       return {
         messages,
         assistantText,
+        finalReplyText: assistantTexts.at(-1) ?? '',
         stopReason,
         didCompact,
         usage: totalUsage,

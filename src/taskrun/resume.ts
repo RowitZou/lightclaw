@@ -250,19 +250,21 @@ export async function resumeRunWithBlock(
     if (latest?.status === 'running') {
       await markDelivered(
         run.id,
-        { ok: true, summary: (result.assistantText || '(resumed turn returned empty text)').slice(0, 500) },
+        { ok: true, summary: (result.finalReplyText || result.assistantText || '(resumed turn returned empty text)').slice(0, 500) },
         Date.now(),
         run.ownerCanonicalUser,
       )
     }
-    // Turn-end is where this run's full final reply exists, so a parent parked
-    // on child-join is woken from here — carrying the final text, not the capped
-    // ledger summary. Covers both the auto-deliver above and a worker that
-    // self-delivered mid-turn via TaskUpdate (status already 'delivered', so the
-    // markDelivered above no-ops, but the parent still needs the full result).
+    // Turn-end is where this run's final reply exists, so a parent parked on
+    // child-join is woken from here — carrying the worker's final reply (not the
+    // full narration join, and not the capped ledger summary). Covers both the
+    // auto-deliver above and a worker that self-delivered mid-turn via TaskUpdate
+    // (status already 'delivered', so the markDelivered above no-ops, but the
+    // parent still needs the result). Falls back to the full text only when the
+    // resumed turn produced no final reply.
     const settled = (await getTaskRun(run.id, run.ownerCanonicalUser)) ?? run
     if (settled.status === 'delivered') {
-      await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, settled, result.assistantText)
+      await wakeParentForChildJoinBestEffort(run.ownerCanonicalUser, settled, result.finalReplyText || result.assistantText)
     }
     return {
       ok: true,

@@ -73,6 +73,10 @@ export type DispatchedAgentParams = {
 
 export type DispatchedAgentResult = {
   finalText: string
+  /** The worker's final reply only (last non-empty turn) — what its requester
+   *  receives via bg-result / child-join, so the requester's context sees the
+   *  deliverable, not the full narration trail. See QueryResult.finalReplyText. */
+  finalReplyText: string
   stopReason: string | null
   usage: UsageStats
   messages: Message[]
@@ -294,6 +298,7 @@ export async function runDispatchedAgent(
 
     return {
       finalText: result.assistantText,
+      finalReplyText: result.finalReplyText,
       stopReason: result.stopReason,
       usage: result.usage,
       messages: result.messages,

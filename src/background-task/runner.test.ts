@@ -104,6 +104,7 @@ describe('runBackgroundTaskFire', () => {
     setBackgroundTaskQueryForTest(async () => ({
       messages: [],
       assistantText: 'experiment loss is 2.1, training stable',
+      finalReplyText: 'experiment loss is 2.1, training stable',
       stopReason: 'end_turn',
       didCompact: false,
       usage: {},
@@ -119,6 +120,61 @@ describe('runBackgroundTaskFire', () => {
     if (outcome.kind === 'success') {
       assert.equal(outcome.summary, 'experiment loss is 2.1, training stable')
       assert.match(outcome.transcriptPath, /transcript\.jsonl$/)
+    }
+  })
+
+  it('delivers only the worker final reply as summary, not the full narration join', async () => {
+    // PR2 delegation context-firewall: a dispatched worker hands its requester
+    // its final reply, NOT its whole narration trail. The mock returns a full
+    // join (assistantText, what the worker said across all turns) distinct from
+    // its last turn (finalReplyText); the fire outcome must carry only the
+    // final reply. Pre-PR2 the summary was result.finalText (the full join), so
+    // this assertion fails on the old code.
+    setBackgroundTaskQueryForTest(async () => ({
+      messages: [],
+      assistantText:
+        'step 1: reading the env\n\nstep 2: probing GPUs\n\nFINAL: env ready at /workspace/x',
+      finalReplyText: 'FINAL: env ready at /workspace/x',
+      stopReason: 'end_turn',
+      didCompact: false,
+      usage: {},
+    }))
+
+    const outcome = await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-firewall',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'success')
+    if (outcome.kind === 'success') {
+      assert.equal(outcome.summary, 'FINAL: env ready at /workspace/x')
+      assert.doesNotMatch(outcome.summary, /step 1|step 2/)
+    }
+  })
+
+  it('falls back to the full text as summary when the worker wrote no final reply', async () => {
+    // Empty finalReplyText (the run ended with no closing end-turn text) must
+    // not deliver "" — the full narration join is the backstop so the requester
+    // still receives the work.
+    setBackgroundTaskQueryForTest(async () => ({
+      messages: [],
+      assistantText: 'did the work but never wrote a closing line',
+      finalReplyText: '',
+      stopReason: 'end_turn',
+      didCompact: false,
+      usage: {},
+    }))
+
+    const outcome = await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-empty-final',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'success')
+    if (outcome.kind === 'success') {
+      assert.equal(outcome.summary, 'did the work but never wrote a closing line')
     }
   })
 
@@ -163,6 +219,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -188,6 +245,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -238,6 +296,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -268,6 +327,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'I could not run it.',
+        finalReplyText: 'I could not run it.',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -304,6 +364,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -402,6 +463,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -441,6 +503,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -475,6 +538,7 @@ describe('runBackgroundTaskFire', () => {
       return {
         messages: [],
         assistantText: 'ok',
+        finalReplyText: 'ok',
         stopReason: 'end_turn',
         didCompact: false,
         usage: {},
@@ -498,6 +562,7 @@ describe('runBackgroundTaskFire', () => {
     setBackgroundTaskQueryForTest(async () => ({
       messages: [],
       assistantText: 'should not run',
+      finalReplyText: 'should not run',
       stopReason: 'end_turn',
       didCompact: false,
       usage: {},
