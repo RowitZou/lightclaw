@@ -56,7 +56,16 @@ test('main sees coder\'s on-demand skills including build-environment, but not t
   // brainpp-batch-job requires the brainpp driver; on a null-driver runtime it
   // is correctly hidden — same view the worker itself would have.
   assert.doesNotMatch(output.output, /brainpp-batch-job/)
-  // No skill without dispatch_brief grows a delegation hint line.
+  // PR3: build-environment now carries its reviewed dispatch brief.
+  assert.match(output.output, /^  Before you delegate: .*CPU vs a specific accelerator/m)
+})
+
+test('skills without dispatch_brief do not grow delegation hint lines', async () => {
+  const output = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'localExplorer' }, toolContext(null)),
+  )
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /local-exploration-workflow/)
   assert.doesNotMatch(output.output, /^  Before you delegate:/m)
 })
 
@@ -138,6 +147,7 @@ test('the runtime driver gate is threaded: brainpp-batch-job shows on a brainpp 
   )
   assert.equal(output.isError, undefined)
   assert.match(output.output, /brainpp-batch-job/)
+  assert.match(output.output, /never have it invent, probe, or pull an image on its own/)
 })
 
 test('inspecting an unknown or non-worker role is refused', async () => {

@@ -2,6 +2,12 @@
 name: brainpp-batch-job
 description: "Workflow and judgment layer for the cluster job tool — the whole job lifecycle (launch, monitor, wrap up), the decisions and parameter choices at each stage, output conventions, and the blockers you escalate. Operations: capacity, submit, list, get, logs, events, stop, delete."
 when_to_use: "Use when the task is to submit, inspect, monitor, stop, or delete cluster batch training jobs, check cluster GPU / CPU / memory availability, or whenever a task needs more CPU / memory / GPU than your own environment has (see Environment Info) — run it as a cluster job rather than inline. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'how many GPUs are free in my group', 'stop that cluster job', 'run this GPU job'. This is for batch jobs."
+dispatch_brief: |
+  Whoever asked you can't reach the worker — so the inputs only they can settle are yours to pin down before you dispatch, not the worker's to discover. Three recur:
+  - the container image, and any ready-made environment it should carry or reuse;
+  - where the weights, datasets, or checkpoints live — a mountable cluster path to point the worker at, not to fetch;
+  - any GPU or resource figure that was fixed for you.
+  Ask up for any you can't decide yourself, then hand the worker the settled values as a complete instruction — and record them so you don't have to re-ask next time. The worker knows the whole procedure: you put forward the goal, those inputs, and what a successful run looks like, and leave how the job runs to it — don't script its steps. If it still needs something only the person who asked you can answer, pass that up rather than guessing — and never have it invent, probe, or pull an image on its own.
 requires-driver: brainpp
 allowed-tools:
   - Bash
@@ -53,7 +59,7 @@ Drive everything through these operations — don't hand-build cluster commands 
 - **Scope to the request first** (see *Scope to the request*), and let what's asked set how you carry it:
   - **A full job, end to end → long-horizon and autonomous.** Act on your own judgment and carry it through — submit, monitor, wrap up without waiting for a click, and **don't stop between stages**: a job left half-run mid-lifecycle is the failure to avoid.
   - **A single step or quick ask → do that one thing and return.** Answer the capacity check, the log tail, the stop — then stop; don't expand it into a launch or spin up monitoring nobody asked for.
-- Take avoidable failures off the table before you spend a submit: **have the image** (a precondition — from your library, or ask upward; never guess-and-pull one), then stage and validate the run — assets, environment, network, capacity (see *Prepare and stage before you submit*).
+- Take avoidable failures off the table before you spend a submit: **have the image** (a precondition — handed to you by your requester, from your library, or ask upward; never guess-and-pull one), then stage and validate the run — assets, environment, network, capacity (see *Prepare and stage before you submit*).
 - **The few things you genuinely can't settle — image, environment, network, capacity — are the exception to "don't stop".** Don't guess an environment-specific value just to keep moving: ask upward with a safe default (see *When you're genuinely blocked*), then carry on. Stopping there is part of the autonomy, not a break from it.
 - Report as you go, in plain text — what you ran, progress, the outcome. Reporting beats silence.
 - Reuse what worked from your config library, and record what you learn.
@@ -70,8 +76,8 @@ A full run moves through three stages — launch, monitor, wrap up. Enter at the
    - **A figure the task specifies (e.g. 8 GPUs) is a hard requirement — don't shrink it.** If it won't fit, that's a blocker.
    - **When the figure is yours to choose**, size it from the task; if your plan won't fit, you may scale down toward the minimum the task actually needs. Only if even that minimum won't fit → *(blocker)*.
 
-3. **Assemble the spec from your library; default or ask for what's missing.**
-   - **Image** — reuse from your library; nothing on record → *(blocker)*.
+3. **Assemble the spec — take what your requester handed you first, then your library; default or ask only for what's still missing.** If the dispatch already names the image, the cluster path to mount weights/datasets from, or a resource figure, use those as given — don't re-derive or second-guess them. The items below resolve only what wasn't specified:
+   - **Image** — use the one you were handed; else reuse from your library; nothing either way → *(blocker)*.
    - **Environment** — reuse a working env in `/workspace`, else the env the image ships; build one only if neither works (see *Prepare and stage*), don't jump to building when a usable one is there. A library the run needs but lacks splits by ownership: your own `/workspace` env → repair it (`UseSkill('build-environment')`); the image's env or one the task provided, which you can't change → *(blocker)*.
    - **Network** — apply a recorded proxy if you have one; if not, the cluster itself may have connectivity, so it's fine to proceed without one. The real job should only need the network for what you couldn't stage (see *Prepare and stage before you submit*) or what legitimately runs online (experiment logging, an API). But the moment a fetch keeps failing or dragging — the same request timing out and retrying — that is a *(blocker — see below)*, not a phase to wait out: surface it, don't keep retrying in place. A fetch that succeeds when you run it yourself does not mean the job can fetch it: the submitted job can sit on a different network from your own shell — often without the proxy your shell uses — so a download that works for you can time out inside the job. Don't carry your shell's connectivity over as an assumption about the job's.
    - **Resources** — from the task and what `capacity` showed.

@@ -278,6 +278,24 @@ describe('parseFrontmatter', () => {
     assert.equal(frontmatter.description, 'hello world')
     assert.equal(frontmatter.name, 'foo')
   })
+
+  it('parses literal block scalars for multiline skill frontmatter', () => {
+    const { frontmatter } = parseFrontmatter(
+      [
+        '---',
+        'name: cluster-flow',
+        'dispatch_brief: |',
+        '  First line.',
+        '  Second line.',
+        'roles:',
+        '  - coder',
+        '---',
+        'body',
+      ].join('\n'),
+    )
+    assert.equal(frontmatter.dispatch_brief, 'First line.\nSecond line.')
+    assert.deepEqual(frontmatter.roles, ['coder'])
+  })
 })
 
 describe('serializeFrontmatter frontmatter dedup', () => {

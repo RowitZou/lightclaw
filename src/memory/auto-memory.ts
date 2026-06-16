@@ -147,6 +147,30 @@ export function parseFrontmatter(content: string): {
       if (rawValue.length === 0) {
         frontmatter[key] = []
         currentKey = key
+      } else if (rawValue === '|' || rawValue === '|-' || rawValue === '|+') {
+        const blockLines: string[] = []
+        let nextIndex = index + 1
+        while (nextIndex < lines.length) {
+          const nextLine = lines[nextIndex] ?? ''
+          if (nextLine.trim() === '---') {
+            break
+          }
+          if (/^[A-Za-z0-9_-]+:\s*(.*)$/.test(nextLine)) {
+            break
+          }
+          blockLines.push(nextLine)
+          nextIndex += 1
+        }
+        const nonEmptyIndents = blockLines
+          .filter(blockLine => blockLine.trim().length > 0)
+          .map(blockLine => blockLine.match(/^\s*/)?.[0].length ?? 0)
+        const indent = nonEmptyIndents.length > 0 ? Math.min(...nonEmptyIndents) : 0
+        frontmatter[key] = blockLines
+          .map(blockLine => blockLine.slice(Math.min(indent, blockLine.length)))
+          .join('\n')
+          .replace(/\n+$/g, '')
+        currentKey = null
+        index = nextIndex - 1
       } else {
         const flowArray = parseFlowArray(rawValue)
         if (flowArray !== null) {

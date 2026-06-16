@@ -2,6 +2,9 @@
 name: build-environment
 description: "How to build or repair a project's runtime environment correctly, for any stack — reuse first, read what the project actually needs (versions, platform, compute target, system deps), confirm the planned install, install the project's own way, and validate before anything depends on it."
 when_to_use: "Use when you must create, repair, or extend the environment a project or job runs in — installing its dependencies, toolchain, or runtime so its build / tests / imports pass. Covers Python / conda / venv, Node, Rust, JVM, system packages, and the like. Invoked on its own, or composed from another skill at the point an environment has to be built. Whenever a cluster environment is involved, be sure to consult your cluster skill."
+dispatch_brief: |
+  The worker reads the project and the machine and derives most of the plan itself — you don't pre-decide the package list. What's yours to settle before you dispatch: which project to build the environment for, the machine or compute target it must run on (CPU vs a specific accelerator — the wrong one wastes the whole install), and any version or base image the requester fixed. Ask up for any you can't decide, hand them over as a complete instruction, and record what ends up working so you don't re-derive it next time.
+  Before the expensive install the worker confirms the whole plan once, with a recommended default, and that comes back up to you — answer it or relay it to whoever asked, then leave the install and validation to it. Don't script how it builds.
 allowed-tools:
   - Bash
   - Read
