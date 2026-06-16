@@ -115,6 +115,11 @@ export async function runBackgroundTaskFire(input: {
       // them, when the childCtx that actually runs the agent loop clears it.
       sessionId,
       channel: 'feishu',
+      // Carry the originating group's chat-grant target (captured at Dispatch
+      // time) so FeishuCreateFile inside this fire grants the group `view`
+      // instead of falling to bot-only ("chat":"skipped-not-group"). Undefined
+      // for DM / off-channel origins, which correctly skip the chat grant.
+      resourceGrantTarget: input.task.resourceGrantTarget,
       permissionMode,
       permissionCeiling,
       runtime,

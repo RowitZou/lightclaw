@@ -23,6 +23,7 @@ import { getIdentity } from '../identity/store.js'
 import {
   getCurrentRole,
   getCurrentTaskRunId,
+  getResourceGrantTarget,
   getSessionId,
   requireCurrentUserId,
 } from '../state.js'
@@ -535,6 +536,9 @@ export async function executeDispatch(
     originSessionId: sessionId,
     callerRole: callerRole.agentType,
     callerSessionId: sessionId,
+    // Carry the originating group's chat-grant target into the fire so a Feishu
+    // doc created by the background worker is shared with the group, not bot-only.
+    ...(getResourceGrantTarget() ? { resourceGrantTarget: getResourceGrantTarget() } : {}),
     ...(standingRuns.standingRootRunId
       ? { parentTaskRunId: standingRuns.standingRootRunId }
       : parentTaskRun.parentRunId

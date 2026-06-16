@@ -126,6 +126,16 @@ export function getCurrentTaskRunId(): string | undefined {
   return currentState().currentTaskRunId
 }
 
+/** The chat/sender a created cloud resource (Feishu doc) should be shared with.
+ *  Set per inbound channel message; inherited down a dispatch chain via the
+ *  childCtx spread. Read at Dispatch time so a background fire can carry the
+ *  originating group's chatId into its own fresh SessionContext — without it,
+ *  a doc created inside a background worker is granted only to the bot and
+ *  group members get 403 (see background-task/runner.ts createSessionContext). */
+export function getResourceGrantTarget(): import('./session-context.js').ResourceGrantTarget | undefined {
+  return getCurrentSessionContext()?.resourceGrantTarget
+}
+
 /** TaskUpdate deliver marks the current handling as having concluded a run
  *  (a root closed / a run delivered). The channel runner reads this to send a
  *  synthetic-wake final block to chat. Tolerant + best-effort — never throw on

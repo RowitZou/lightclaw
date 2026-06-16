@@ -753,3 +753,92 @@ describe('Message ask waits in place', () => {
     }
   })
 })
+
+describe('Dispatch carries the Feishu chat-grant target into the background fire', () => {
+  function groupSession(resourceGrantTarget?: { chatId?: string; senderOpenId?: string }) {
+    return createSessionContext({
+      cwd: '/tmp/lightclaw-dispatch-grant',
+      model: 'fake-model',
+      sessionsDir: '/tmp/lightclaw-dispatch-grant/sessions',
+      memoryDir: '/tmp/lightclaw-dispatch-grant/memory',
+      sessionId: 'feishu:group:oc_grp:ou_sender',
+      currentUserId: 'alice',
+      channel: 'feishu',
+      currentRole: role('main', 'orchestrator'),
+      resourceGrantTarget,
+    })
+  }
+
+  it('persists resourceGrantTarget so a doc created in the fire is shared with the group', async () => {
+    // Regression: before the fix the background fire built its SessionContext
+    // from scratch with no resourceGrantTarget, so FeishuCreateFile inside the
+    // fire skipped the chat-view grant ("chat":"skipped-not-group") and other
+    // group members got 403. The entry must carry the originating group's chatId.
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-grant-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'feishu:group:oc_grp:ou_sender', {
+        objective: 'Make a shared doc.',
+        title: 'Shared doc',
+      })
+      const grant = { chatId: 'oc_grp', senderOpenId: 'ou_sender' }
+      const output = await runWithSessionContext(groupSession(grant), () =>
+        executeDispatch(
+          {
+            role: 'feishuSecretary',
+            prompt: 'Create a doc summarizing X and share it here.',
+            schedule: 'now',
+            mode: 'background',
+            label: 'Create shared doc',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(output.isError, undefined)
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      // getBackgroundTask reads back through the store's zod parse — this proves
+      // the field survives the on-disk round-trip the fire actually loads from.
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry)
+      assert.deepEqual(entry.resourceGrantTarget, grant)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('omits resourceGrantTarget for a DM / off-channel origin (chat grant correctly skipped)', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-dispatch-grant-dm-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const root = await createRootTaskRun('alice', 'main-session', {
+        objective: 'DM task.',
+        title: 'DM task',
+      })
+      const output = await runWithSessionContext(groupSession(undefined), () =>
+        executeDispatch(
+          {
+            role: 'feishuSecretary',
+            prompt: 'Create a private doc for me.',
+            schedule: 'now',
+            mode: 'background',
+            label: 'Create private doc',
+            task: root.id,
+          },
+          toolContext(),
+        ),
+      )
+      assert.equal(output.isError, undefined)
+      const dispatchId = /Dispatch scheduled: (\S+)/.exec(output.output)?.[1]
+      assert.ok(dispatchId)
+      const entry = getBackgroundTask('alice', dispatchId)
+      assert.ok(entry)
+      assert.equal(entry.resourceGrantTarget, undefined)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})

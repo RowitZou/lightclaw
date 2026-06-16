@@ -77,6 +77,15 @@ export type BackgroundTaskEntry = {
    *  entries lack it and the management tools fall back to `originSessionId`,
    *  which carries the same "created from" session. */
   callerSessionId?: string
+  /** Chat/sender a created Feishu doc should be shared with, captured from the
+   *  dispatching SessionContext at schedule time (group origin → {chatId,
+   *  senderOpenId}; DM / off-channel → undefined). The fire's fresh
+   *  SessionContext has no inbound message to derive this from, so without
+   *  persisting it here a doc created inside a background fire is granted only
+   *  to the bot and other group members get 403 ("chat":"skipped-not-group").
+   *  Optional: entries persisted before this field lack it and fall back to the
+   *  prior bot-only behavior. */
+  resourceGrantTarget?: { chatId?: string; senderOpenId?: string }
   /** Parent durable TaskRun captured when a worker schedules a background
    *  dispatch. The scheduler later creates one TaskRun per fire and uses this
    *  value to restore lineage without changing bg-tasks scheduling semantics. */
@@ -117,7 +126,7 @@ export type FireOutcome =
 export type BackgroundTaskStoreFile =
   | {
       version: 1
-      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId' | 'parentTaskRunId' | 'standingRootRunId' | 'taskRunId'>>
+      tasks: Array<Omit<BackgroundTaskEntry, 'pendingPriorPromptNotice' | 'originSessionId' | 'chainState' | 'callerRole' | 'callerSessionId' | 'parentTaskRunId' | 'standingRootRunId' | 'taskRunId' | 'resourceGrantTarget'>>
     }
   | {
       version: 2
@@ -140,6 +149,12 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   originSessionId: z.string().optional(),
   callerRole: z.string().optional(),
   callerSessionId: z.string().optional(),
+  resourceGrantTarget: z
+    .object({
+      chatId: z.string().optional(),
+      senderOpenId: z.string().optional(),
+    })
+    .optional(),
   parentTaskRunId: z.string().optional(),
   standingRootRunId: z.string().optional(),
   taskRunId: z.string().optional(),
