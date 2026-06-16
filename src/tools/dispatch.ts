@@ -113,9 +113,11 @@ A background dispatch outlives the turn that starts it; its result reaches you w
 
 const MESSAGE_DISPATCH_DESCRIPTION = `Send a message across a TaskRun edge.
 
-With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A message changes what the work should do; it never checks on it — status is TaskInspect's job, and a check-in message only interrupts. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject.
+With \`to\`, message a direct child TaskRun you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A queued child takes UpdateSchedule instead, and a delivered one takes TaskUpdate accept / reject. To find out something about a running child's work, prefer TaskInspect — it reads progress without interrupting; message the child with your question only when TaskInspect can't tell you what you need, and it may reply with a short <worker-reply>.
 
-Without \`to\`, put a question to your requester: the tool returns the answer, or your required \`default\` if none arrives in time — so you keep moving either way. Use it for forks only your requester can settle, and reach for it early when guessing wrong would be expensive to undo; routine judgment calls you can default and verify are still yours.`
+Without \`to\`, you reach your requester two ways:
+- with \`default\` — put a question only they can settle: the tool returns their answer, or your required \`default\` if none arrives in time, so you keep moving either way. Reach for it early when guessing wrong would be expensive to undo; routine judgment calls you can default and verify are still yours.
+- with \`reply_code\` — reply to a message they sent you: when a <requester-message> you received carried a reply-code and they asked you for something, pass that code with your answer. Fire-and-forget — it reaches them, nothing comes back, you carry on. You can only reply to a message a requester actually sent; there is no code to invent otherwise.`
 
 const UPDATE_SCHEDULE_DESCRIPTION = `Update future scheduled fires for an existing background dispatch. Mutable fields: prompt, schedule, label, enabled.
 
@@ -611,10 +613,10 @@ function chainGuardMessage(error: ChainGuardError, reachableRoles: readonly stri
 
 export const messageTool = buildTool({
   name: 'Message',
-  whenToUse: `Send a message to a child TaskRun, or ask your requester a question with a default.`,
+  whenToUse: `Send a message to a child TaskRun you dispatched, ask your requester a decision (with a default), or reply to a requester's message (with its reply-code).`,
   shouldDefer: false, // inline since dogfood: core delegation verb
   description: MESSAGE_DISPATCH_DESCRIPTION,
-  searchHint: 'message dispatch interject ask answer resume waiting paused worker 插嘴 提问 回答 续班次',
+  searchHint: 'message dispatch interject ask answer report status info reply-code resume waiting paused worker 插嘴 提问 回答 回报 状态 信息 续班次',
   domain: 'host',
   riskLevel: 'write',
   inputSchema: z.object({
@@ -623,7 +625,7 @@ export const messageTool = buildTool({
     message: z.string().min(1),
     options: z.array(z.string().min(1)).optional(),
     default: z.string().min(1).optional(),
-    reply_code: z.string().min(1).optional(),
+    reply_code: z.string().min(1).optional().describe('The reply-code from a <requester-message reply-code="..."> block you received, to send your requester the information they asked you for. Required for such a reply; to ask them a decision instead, omit it and pass `default`.'),
   }),
   async call(input) {
     const userId = requireCurrentUserId()
@@ -955,7 +957,7 @@ function wrapMessage(message: string, replyCode?: string): string {
 
 /** Trailing guidance for the interjection path only — a resumed shift gets
  *  its bearings from the taskrun-resume prose instead. */
-const REQUESTER_MESSAGE_GUIDANCE = 'Your requester sent this mid-task — it arrived between your tool calls and may redirect, narrow, or add to what you\'re doing. Fold it in now: adjust your plan before your next action rather than finishing the old plan first. It does not cancel your task unless it says so.'
+const REQUESTER_MESSAGE_GUIDANCE = 'Your requester sent this mid-task — it arrived between your tool calls and may redirect, narrow, or add to what you\'re doing. Fold it in now: adjust your plan before your next action rather than finishing the old plan first. It does not cancel your task unless it says so. If it carries a reply-code and the requester is asking you for something, reply with Message (no `to`, that reply_code) — non-blocking, so answer and keep going.'
 
 export const updateScheduleTool = buildTool({
   name: 'UpdateSchedule',

@@ -23,7 +23,7 @@ import type { Tool } from '../tool.js'
 // dispatch brief PR2.1's no-inline Reachable Workers revision and PR5's
 // internal self-maintenance prompt updates.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: 'e3f37e5295da8aede187eb5d2ede2beb4d355b8aabb6d702d8dcacca343cd306',
+  main: '35392d1ed68cdf9008873f57a3c865c2ae3ca896ba9f194ed60f530de362d4d9',
   generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',

@@ -40,12 +40,17 @@ const EXPECTED = {
   // Dispatch-brief PR2.1 (2026-06-16): unfamiliar roles are routed through
   // ListRoleSkill before Dispatch so the caller learns what to settle first.
   Dispatch: 'd49f379e37e51831b1d94f5d1b0711c393260866b5ac39e359a4a1d853c6557b',
+  // Uplink short-reply (2026-06-16): Message gained the no-`to` `reply_code`
+  // mode (worker replies to a requester's message with the info it asked for),
+  // the `to` paragraph now prefers TaskInspect for status and notes the
+  // <worker-reply> that may come back, and the no-`to` ask path split into
+  // `default` (decision) vs `reply_code` (reply) bullets.
   // Collab phase3 PR14: Message now routes by TaskRun runId (`to`)
   // and supports ask/resume semantics instead of dispatch-entry-only nudges.
   // ask-prompt cost-framing (2026-06-14): no-`to` ask description reframed
   // from "reserve it / routine calls are yours" to a cost-of-wrong-guess
   // judgment ("reach for it early when guessing wrong would be expensive").
-  Message: '3fe1897f6f248ac9de1cec47cd8b8a783c569292d9f128517f72ca07eab1adfb',
+  Message: '578ee0cb31b5d7136cd34057c9003e4fff8cff4993fe96a311fa6d53529b18ec',
   // Collab PR17: UpdateDispatch renamed to UpdateSchedule and limited to
   // queued one-shots / future recurring fires.
   UpdateSchedule: '800382aa25b34e022148eacf42ac953b92df76149e93a456c658110563499a33',

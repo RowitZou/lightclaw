@@ -664,7 +664,8 @@ function formatTaskLedgerSection(): string {
     '- Settle delivered runs: TaskUpdate accept closes one; TaskUpdate reject (with feedback) sends the same worker back to it, everything it learned intact.',
     '- TaskUpdate cancel closes queued, waiting, or running work you no longer want. A recurring service is a tree of its own; cancelling its root retires the whole service, schedule included.',
     '- TaskUpdate wait with a running run\'s runId holds it: it stops where it is and waits, context intact.',
-    '- Message a running run to redirect or add context mid-flight — nothing comes back through the call; its result reaches you the usual way. Messaging a waiting run puts it back to work with your message in hand. A message changes what the work should do; it never checks on it — status is TaskInspect\'s job, and a check-in message only interrupts.',
+    '- Message a running run to redirect or add context mid-flight — nothing comes back through the call; its result reaches you the usual way. Messaging a waiting run puts it back to work with your message in hand. To find out where a run stands or any fact about its work, prefer TaskInspect — it reads progress without interrupting the worker. Only when TaskInspect can\'t tell you what you need, ask the worker itself with a message, which may come back as a short <worker-reply>.',
+    '- A child you messaged may answer with a <worker-reply> — the information you asked for, not a delivery. Read it and carry on; it does not settle the ledger and needs no accept / reject (only a delivered run / <background-task-result> does).',
     '- TaskUpdate deliver on a root closes the goal — refused with the list of its open obligations while any remain.',
     '- TaskInspect reads any run, tree, or schedule, with live progress; the user already sees progress without your help.',
     '- Replies you handle without dispatching need no root.',
@@ -681,10 +682,10 @@ function formatYourTaskRunSection(tools: readonly string[]): string | null {
     lines.push('- TaskUpdate wait stops your work here until what you name — a child run delivering, or a timer — brings it back to you. Leave a checkpoint: it is the first thing your continuation sees, so write what it needs to carry on.')
   }
   if (has('Message')) {
-    lines.push('- Message with no `to` puts a question to your requester: the tool returns the answer, or the default you stated if none arrives in time — so state a default you can act on.')
+    lines.push('- Message with no `to` reaches your requester two ways. With a `default`, it puts a question only they can settle — the tool returns their answer, or your default if none arrives, so state a default you can act on. With a `reply_code` from a <requester-message> they sent you, it answers that message with what they asked for — fire-and-forget, so reply and carry on.')
   }
   if (has('Message') && has('Dispatch')) {
-    lines.push('- Message with a `to` sends a message to a child run you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. A message changes what the work should do; it never checks on it — status is TaskInspect\'s job, and a check-in message only interrupts.')
+    lines.push('- Message with a `to` sends a message to a child run you dispatched — to redirect, narrow, or add something you learned. Nothing comes back through the call itself; whatever the child produces reaches you the usual way. To find out something about its work, prefer TaskInspect — it reads progress without interrupting; message the child only when TaskInspect can\'t tell you what you need, and it may answer with a short <worker-reply> — information you asked for, not a delivery, so read it and carry on.')
   }
   if (has('TaskUpdate') && has('Dispatch')) {
     lines.push('- A running child can also be held — TaskUpdate wait with its runId stops it where it stands, context intact; a message puts it back to work.')
