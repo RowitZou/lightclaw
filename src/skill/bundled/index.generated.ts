@@ -9,6 +9,7 @@ export const bundledSkills: LoadedSkill[] = [
     "name": "archive-workflow",
     "description": "Standard procedure when you operate as the archivist role: a structured methodology for organizing the user's accumulated work — separate project from project, index from detail, durable artifacts from one-off scratch — across local files, runtime environments, and Feishu workspace structure, with the memory and confirmation rules to follow before any move or delete.",
     "whenToUse": "Use as your first action when dispatched as the archivist role — the body holds the full archiving methodology you follow before any organize / dedupe / remove action. The archivist role prompt is intentionally identity-only and depends on this skill for procedure.",
+    "dispatchBrief": "Settle two things before you dispatch: the scope to organize — which files, sessions, or logs are in play — and the removal boundary, what may be cleared out versus what must be kept untouched; name the keep-only set explicitly rather than leaving it implied. A delete can be refused by the system; if one is, don't re-dispatch it. Hand over the scope and that boundary, and leave how it's classified, organized, and indexed to the worker.",
     "allowedTools": [
       "Read",
       "Write",
@@ -127,6 +128,7 @@ export const bundledSkills: LoadedSkill[] = [
     "name": "feishu-doc-workflow",
     "description": "Standard procedure when you operate as the feishuSecretary role: end-to-end Feishu cloud-doc and cloud-space operations workflow, output conventions, permission/ancestry rules, and memory-protocol guidance to follow before any read / write / move / delete.",
     "whenToUse": "Use as your first action when dispatched as the feishuSecretary role — the body holds the full workflow plus Feishu-specific facts (URL share intent, inbox file location, permission and ancestry rules) you should follow before any operation. The feishuSecretary role prompt is intentionally identity-only and depends on this skill for procedure.",
+    "dispatchBrief": "A delete here can be refused by the system; if one is, don't re-dispatch it — treat the refusal as final.",
     "allowedTools": [
       "Read",
       "Grep",
@@ -174,6 +176,7 @@ export const bundledSkills: LoadedSkill[] = [
     "name": "pre-delivery-review-workflow",
     "description": "Standard procedure when you operate as the reviewer role: end-to-end pre-delivery artifact survey, severity-tiered findings, and report format that goes with the role's identity.",
     "whenToUse": "Use as your first action when dispatched as the reviewer role — the body holds the full workflow you should follow before any tool call. The reviewer role prompt is intentionally identity-only and depends on this skill for procedure.",
+    "dispatchBrief": "Tell the reviewer what to weigh — correctness, completeness, privacy — and point it at the concrete acceptance signal to grade against, not a vague 'look it over'. It returns a verdict (ship / fix-first / needs-more-info). Leave how it surveys and tiers the issues to the worker.",
     "allowedTools": [
       "Read",
       "Grep",
@@ -212,6 +215,7 @@ export const bundledSkills: LoadedSkill[] = [
     "name": "skillify",
     "description": "Capture a repeatable method — the how of a multi-step workflow — as a new skill. For one-off facts or preferences use `remember` instead.",
     "whenToUse": "Use when your requester is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill', a brief that says to capture the method) or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux.",
+    "dispatchBrief": "Capturing a method as a skill: the requester settles only its shape, in their words — when it should fire next, what counts as done, what must never happen, where to pause. Its name, location, tools, and what varies are the worker's call, not the requester's. When the method you're capturing spanned work you dispatched, don't spin up a fresh role to write it up — the trace it must be written from lives with whoever ran each part, so have each of them capture its own half (asked for in its brief, or in reject feedback while its context is still warm) while you capture yours.",
     "allowedTools": [
       "SkillWrite",
       "Read",

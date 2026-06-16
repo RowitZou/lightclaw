@@ -2,6 +2,8 @@
 name: pre-delivery-review-workflow
 description: "Standard procedure when you operate as the reviewer role: end-to-end pre-delivery artifact survey, severity-tiered findings, and report format that goes with the role's identity."
 when_to_use: "Use as your first action when dispatched as the reviewer role — the body holds the full workflow you should follow before any tool call. The reviewer role prompt is intentionally identity-only and depends on this skill for procedure."
+dispatch_brief: |
+  Tell the reviewer what to weigh — correctness, completeness, privacy — and point it at the concrete acceptance signal to grade against, not a vague 'look it over'. It returns a verdict (ship / fix-first / needs-more-info). Leave how it surveys and tiers the issues to the worker.
 allowed-tools:
   - Read
   - Grep

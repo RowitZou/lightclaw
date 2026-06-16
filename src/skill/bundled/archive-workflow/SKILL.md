@@ -2,6 +2,8 @@
 name: archive-workflow
 description: "Standard procedure when you operate as the archivist role: a structured methodology for organizing the user's accumulated work — separate project from project, index from detail, durable artifacts from one-off scratch — across local files, runtime environments, and Feishu workspace structure, with the memory and confirmation rules to follow before any move or delete."
 when_to_use: "Use as your first action when dispatched as the archivist role — the body holds the full archiving methodology you follow before any organize / dedupe / remove action. The archivist role prompt is intentionally identity-only and depends on this skill for procedure."
+dispatch_brief: |
+  Settle two things before you dispatch: the scope to organize — which files, sessions, or logs are in play — and the removal boundary, what may be cleared out versus what must be kept untouched; name the keep-only set explicitly rather than leaving it implied. A delete can be refused by the system; if one is, don't re-dispatch it. Hand over the scope and that boundary, and leave how it's classified, organized, and indexed to the worker.
 allowed-tools:
   - Read
   - Write

@@ -86,6 +86,48 @@ describe('bundled skills (Phase 16 codegen output)', () => {
     )
   })
 
+  it('PR4 light skills carry the reviewed dispatch briefs without system-mechanism leakage', () => {
+    const expected = new Map([
+      [
+        'archive-workflow',
+        "Settle two things before you dispatch: the scope to organize — which files, sessions, or logs are in play — and the removal boundary, what may be cleared out versus what must be kept untouched; name the keep-only set explicitly rather than leaving it implied. A delete can be refused by the system; if one is, don't re-dispatch it. Hand over the scope and that boundary, and leave how it's classified, organized, and indexed to the worker.",
+      ],
+      [
+        'feishu-doc-workflow',
+        "A delete here can be refused by the system; if one is, don't re-dispatch it — treat the refusal as final.",
+      ],
+      [
+        'pre-delivery-review-workflow',
+        "Tell the reviewer what to weigh — correctness, completeness, privacy — and point it at the concrete acceptance signal to grade against, not a vague 'look it over'. It returns a verdict (ship / fix-first / needs-more-info). Leave how it surveys and tiers the issues to the worker.",
+      ],
+      [
+        'skillify',
+        "Capturing a method as a skill: the requester settles only its shape, in their words — when it should fire next, what counts as done, what must never happen, where to pause. Its name, location, tools, and what varies are the worker's call, not the requester's. When the method you're capturing spanned work you dispatched, don't spin up a fresh role to write it up — the trace it must be written from lives with whoever ran each part, so have each of them capture its own half (asked for in its brief, or in reject feedback while its context is still warm) while you capture yours.",
+      ],
+    ])
+
+    for (const [name, brief] of expected) {
+      const skill = getBundledSkillByName(name)
+      assert.ok(skill, `${name} skill must be present`)
+      assert.equal(skill!.dispatchBrief, brief)
+    }
+
+    assert.doesNotMatch(getBundledSkillByName('archive-workflow')!.dispatchBrief!, /approval gate/i)
+    assert.doesNotMatch(getBundledSkillByName('feishu-doc-workflow')!.dispatchBrief!, /approval|permission|workspace|URL|share/i)
+  })
+
+  it('skills without pre-dispatch contracts still omit dispatchBrief', () => {
+    for (const name of [
+      'coding-workflow',
+      'local-exploration-workflow',
+      'web-research-workflow',
+      'remember',
+      'delivery-orchestration',
+    ]) {
+      assert.equal(getBundledSkillByName(name)!.dispatchBrief, undefined)
+    }
+  })
+
   it('remember body byte-identical to the pre-Phase-16 join(\\n) form', () => {
     const expected = [
       '# Remember',

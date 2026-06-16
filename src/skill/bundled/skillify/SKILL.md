@@ -2,6 +2,8 @@
 name: skillify
 description: "Capture a repeatable method — the how of a multi-step workflow — as a new skill. For one-off facts or preferences use `remember` instead."
 when_to_use: "Use when your requester is establishing a repeatable METHOD you should run the same way next time — the *how* of a multi-step workflow. Explicit ('以后这么做', 'always do it this way', 'make this a skill', a brief that says to capture the method) or implicit when they wrap up a procedure with 'do it like this from now on'. Skip if they're only asking to remember a one-off fact or preference (use `remember` instead), or if the workflow is still being explored / debugged / in flux."
+dispatch_brief: |
+  Capturing a method as a skill: the requester settles only its shape, in their words — when it should fire next, what counts as done, what must never happen, where to pause. Its name, location, tools, and what varies are the worker's call, not the requester's. When the method you're capturing spanned work you dispatched, don't spin up a fresh role to write it up — the trace it must be written from lives with whoever ran each part, so have each of them capture its own half (asked for in its brief, or in reject feedback while its context is still warm) while you capture yours.
 allowed-tools:
   - SkillWrite
   - Read

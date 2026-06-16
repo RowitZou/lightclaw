@@ -2,6 +2,8 @@
 name: feishu-doc-workflow
 description: "Standard procedure when you operate as the feishuSecretary role: end-to-end Feishu cloud-doc and cloud-space operations workflow, output conventions, permission/ancestry rules, and memory-protocol guidance to follow before any read / write / move / delete."
 when_to_use: "Use as your first action when dispatched as the feishuSecretary role — the body holds the full workflow plus Feishu-specific facts (URL share intent, inbox file location, permission and ancestry rules) you should follow before any operation. The feishuSecretary role prompt is intentionally identity-only and depends on this skill for procedure."
+dispatch_brief: |
+  A delete here can be refused by the system; if one is, don't re-dispatch it — treat the refusal as final.
 allowed-tools:
   - Read
   - Grep

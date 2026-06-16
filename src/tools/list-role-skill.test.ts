@@ -68,13 +68,13 @@ test('ListRoleSkill accepts human-shaped role spelling variants', async () => {
   assert.match(output.output, /^localExplorer /)
 })
 
-test('skills without dispatch_brief do not grow delegation hint lines', async () => {
+test('workflow skills without dispatch_brief do not grow their own delegation hint lines', async () => {
   const output = await runAs(mainRole(), () =>
     listRoleSkillTool.call({ role: 'localExplorer' }, toolContext(null)),
   )
   assert.equal(output.isError, undefined)
   assert.match(output.output, /local-exploration-workflow/)
-  assert.doesNotMatch(output.output, /^  Before you delegate:/m)
+  assert.doesNotMatch(output.output, /- local-exploration-workflow:[^\n]*\n  Before you delegate:/)
 })
 
 test('ListRoleSkill renders on-demand dispatch briefs from skill metadata', async () => {
@@ -178,6 +178,47 @@ test('the runtime driver gate is threaded: brainpp-batch-job shows on a brainpp 
   assert.equal(output.isError, undefined)
   assert.match(output.output, /brainpp-batch-job/)
   assert.match(output.output, /never have it invent, probe, or pull an image on its own/)
+})
+
+test('ListRoleSkill renders the PR4 reviewed light dispatch briefs', async () => {
+  const archivist = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'archivist' }, toolContext(null)),
+  )
+  assert.equal(archivist.isError, undefined)
+  assert.match(
+    archivist.output,
+    /^  Before you delegate: Settle two things before you dispatch: the scope to organize/m,
+  )
+  assert.match(archivist.output, /A delete can be refused by the system; if one is, don't re-dispatch it\./)
+  assert.doesNotMatch(archivist.output, /approval gate/i)
+
+  const feishu = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'feishuSecretary' }, toolContext(null)),
+  )
+  assert.equal(feishu.isError, undefined)
+  assert.match(
+    feishu.output,
+    /^  Before you delegate: A delete here can be refused by the system; if one is, don't re-dispatch it — treat the refusal as final\./m,
+  )
+  const feishuBriefLine = feishu.output
+    .split('\n')
+    .find(line => line.startsWith('  Before you delegate:'))
+  assert.ok(feishuBriefLine)
+  assert.doesNotMatch(feishuBriefLine, /approval|permission|workspace|URL|share/i)
+
+  const reviewer = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'reviewer' }, toolContext(null)),
+  )
+  assert.equal(reviewer.isError, undefined)
+  assert.match(reviewer.output, /Tell the reviewer what to weigh — correctness, completeness, privacy/)
+  assert.match(reviewer.output, /Leave how it surveys and tiers the issues to the worker\./)
+
+  const localExplorer = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'localExplorer' }, toolContext(null)),
+  )
+  assert.equal(localExplorer.isError, undefined)
+  assert.match(localExplorer.output, /Capturing a method as a skill: the requester settles only its shape/)
+  assert.match(localExplorer.output, /don't spin up a fresh role to write it up/)
 })
 
 test('inspecting an unknown or non-worker role is refused', async () => {
