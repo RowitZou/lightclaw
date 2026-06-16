@@ -5,6 +5,7 @@ import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
 import { forkInvocationContext } from '../agents/invocation-context.js'
 import { buildWorkerProgressForwarder } from './worker-progress.js'
+import { clearReplyCodesForRun } from './reply-code-registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
@@ -282,6 +283,7 @@ export async function resumeRunWithBlock(
     }
     return { ok: false, reason: 'query-failed', message }
   } finally {
+    clearReplyCodesForRun(run.id)
     if (inboxSessionId) {
       const leftover = channelInterjectionQueue.unmarkInFlight(inboxSessionId)
       if (leftover.length > 0) {

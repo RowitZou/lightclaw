@@ -48,6 +48,7 @@ import {
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import { answerPendingAsk, awaitAskAnswer } from '../taskrun/ask-registry.js'
+import { consumeReplyCode, mintReplyCode } from '../taskrun/reply-code-registry.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
 const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). For a role you haven't worked with, call ListRoleSkill first to learn what to settle before dispatching to it. Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
@@ -622,11 +623,31 @@ export const messageTool = buildTool({
     message: z.string().min(1),
     options: z.array(z.string().min(1)).optional(),
     default: z.string().min(1).optional(),
+    reply_code: z.string().min(1).optional(),
   }),
   async call(input) {
     const userId = requireCurrentUserId()
     const target = input.to ?? input.id
     if (!target) {
+      if (input.reply_code && input.default) {
+        return {
+          output: 'Pass either `default` (ask a decision) or `reply_code` (reply with status), not both.',
+          isError: true,
+        }
+      }
+      if (input.reply_code) {
+        return replyToRequesterFromCurrentRun({
+          owner: userId,
+          message: input.message,
+          replyCode: input.reply_code,
+        })
+      }
+      if (!input.default?.trim()) {
+        return {
+          output: 'Provide `default` to ask your requester a decision, or `reply_code` to reply to a requester\'s message.',
+          isError: true,
+        }
+      }
       return askParentFromCurrentRun({
         owner: userId,
         message: input.message,
@@ -657,10 +678,11 @@ export const messageTool = buildTool({
     const runInbox = run.interjectionSessionId ?? run.currentSessionId
     if (run.status === 'running' && runInbox) {
       const now = Date.now()
+      const replyCode = mintReplyCode(run.id)
       channelInterjectionQueue.push(runInbox, {
         messageId: `message-dispatch-${run.id}-${now}`,
         senderOpenId: `taskrun:${run.id}`,
-        text: [wrapMessage(input.message.trim()), REQUESTER_MESSAGE_GUIDANCE].join('\n\n'),
+        text: [wrapMessage(input.message.trim(), replyCode), REQUESTER_MESSAGE_GUIDANCE].join('\n\n'),
         arrivedAt: now,
         source: 'user',
       })
@@ -677,10 +699,11 @@ export const messageTool = buildTool({
       }
       // Detached: the resumed shift can take minutes; the speaker must not
       // sit inside it (that would be blocking dispatch by another name).
+      const replyCode = mintReplyCode(run.id)
       scheduleResumeRunWithBlock(userId, run.id, {
         via: run.waitReason === 'awaiting-reply' ? 'answer' : 'message',
         reason: run.waitReason === 'awaiting-reply' ? 'your question was answered' : 'a message arrived for your task',
-        body: wrapMessage(input.message.trim()),
+        body: wrapMessage(input.message.trim(), replyCode),
       })
       return { output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.` }
     }
@@ -821,9 +844,88 @@ async function askParentFromCurrentRun(input: {
   return { output: `Answer from your requester: ${resolution.answer}` }
 }
 
-function wrapMessage(message: string): string {
+async function replyToRequesterFromCurrentRun(input: {
+  owner: string
+  message: string
+  replyCode: string
+}) {
+  const ownId = getCurrentTaskRunId()
+  if (!ownId) return { output: 'No current TaskRun is active for this reply.', isError: true }
+  if (!consumeReplyCode(ownId, input.replyCode)) {
+    return {
+      output: 'This reply needs a live reply-code from a requester message. You have none pending — it may have expired at this turn\'s end, or the requester never sent a message to reply to.',
+      isError: true,
+    }
+  }
+  const own = await getTaskRun(ownId, input.owner)
+  if (!own) return { output: `TaskRun not found: ${ownId}`, isError: true }
+  if (!own.parentRunId) return { output: 'This TaskRun has no requester to reply to.', isError: true }
+  const parent = await getTaskRun(own.parentRunId, input.owner)
+  if (!parent) return { output: `Requester TaskRun not found: ${own.parentRunId}`, isError: true }
+
+  const text = input.message.trim()
+  const replyBlock = [
+    `<worker-reply childRunId="${own.id}">`,
+    text,
+    '</worker-reply>',
+  ].join('\n')
+
+  let delivered = false
+  const parentInbox = parent.interjectionSessionId ?? parent.currentSessionId
+  if (parent.status === 'running' && parentInbox) {
+    channelInterjectionQueue.push(parentInbox, {
+      messageId: `worker-reply-${own.id}-${Date.now()}`,
+      senderOpenId: `taskrun:${own.id}`,
+      text: replyBlock,
+      arrivedAt: Date.now(),
+      source: 'user',
+    })
+    delivered = true
+  } else if (parent.status === 'waiting') {
+    scheduleResumeRunWithBlock(input.owner, parent.id, {
+      via: 'message',
+      reason: `TaskRun ${own.id} replied to your message`,
+      body: replyBlock,
+    })
+    delivered = true
+  } else if ((parent.kind ?? 'dispatch') === 'root') {
+    const identity = await getIdentity(input.owner).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (ownerOpenId) {
+      const wake = await wakeOrInterject({
+        targetSessionId: parent.callerSessionId,
+        block: replyBlock,
+        ownerOpenId,
+        messageId: `worker-reply-${own.id}-${Date.now()}`,
+        emittedAt: Date.now(),
+        source: 'background-task',
+        logPrefix: '[worker-reply]',
+        taskCardRoot: { owner: input.owner, rootRunId: own.rootRunId },
+      })
+      delivered = wake.ok
+    }
+  }
+
+  if (!delivered) {
+    return {
+      output: 'Your requester cannot be reached right now, so this reply was not delivered.',
+      isError: true,
+    }
+  }
+
+  await appendEvent(own.id, 'reported', {
+    byRole: getCurrentRole()?.agentType ?? own.role,
+    text,
+  }, Date.now(), input.owner)
+  return { output: `Reply sent to requester for TaskRun ${own.id}.` }
+}
+
+function wrapMessage(message: string, replyCode?: string): string {
+  const openTag = replyCode
+    ? `<requester-message reply-code="${replyCode}">`
+    : '<requester-message>'
   return [
-    '<requester-message>',
+    openTag,
     message,
     '</requester-message>',
   ].join('\n')

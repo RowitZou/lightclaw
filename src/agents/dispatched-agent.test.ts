@@ -21,6 +21,7 @@ import {
   loadMeta,
   loadTranscript,
 } from '../session/storage.js'
+import { consumeReplyCode, mintReplyCode, resetReplyCodeRegistryForTest } from '../taskrun/reply-code-registry.js'
 import type { Message } from '../types.js'
 
 function tool(name: string): Tool {
@@ -181,6 +182,59 @@ test('worker ALS sessionId aligns with chainState path末端 + chainState rides 
     assert.equal(observedChainState?.chainId, 'chain-a')
     assert.equal(observedChainState?.path.at(-1)?.sessionId, 'child')
   } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('dispatched worker shift clears unused reply-codes at turn end', async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-reply-code-'))
+  setLightclawHomeOverride(tempDir)
+  resetReplyCodeRegistryForTest()
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const runId = 'tr_reply_code_shift'
+    const code = mintReplyCode(runId)
+
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'finish quickly',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      currentTaskRunId: runId,
+      label: 'subagent_test-worker',
+      queryImpl: async params => ({
+        messages: [
+          ...params.messages,
+          createAssistantMessage({
+            content: [{ type: 'text', text: 'done' }],
+            stopReason: 'end_turn',
+            usage: emptyUsage(),
+          }),
+        ],
+        assistantText: 'done',
+        finalReplyText: 'done',
+        stopReason: 'end_turn',
+        didCompact: false,
+        usage: emptyUsage(),
+      }),
+    }))
+
+    assert.equal(consumeReplyCode(runId, code), false)
+  } finally {
+    resetReplyCodeRegistryForTest()
     setLightclawHomeOverride(undefined)
     rmSync(tempDir, { recursive: true, force: true })
   }

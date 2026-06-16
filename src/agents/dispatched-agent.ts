@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { clearReplyCodesForRun } from '../taskrun/reply-code-registry.js'
 import { buildWorkerProgressForwarder } from '../taskrun/worker-progress.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
@@ -306,6 +307,9 @@ export async function runDispatchedAgent(
       forkTranscriptPersisted: persistTask ?? Promise.resolve(null),
     }
   } finally {
+    if (params.currentTaskRunId) {
+      clearReplyCodesForRun(params.currentTaskRunId)
+    }
     if (!persistTask && forkTranscriptPath) {
       persistTask = persistForkTranscript(
         forkTranscriptPath,

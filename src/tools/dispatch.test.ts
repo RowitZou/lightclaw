@@ -10,6 +10,8 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import { setLightclawHomeOverride } from '../paths.js'
 import { setAbortControllerForSession } from '../state.js'
 import { closeRootTaskRun, createRootTaskRun, createTaskRun, getRootObligations, getTaskRun, getTaskRunEvents, listTaskRuns, markWaiting, markStarted } from '../taskrun/store.js'
+import { drainScheduledResumesForTest, resetResumeScheduleForTest, setResumeRunnerForTest } from '../taskrun/resume-schedule.js'
+import { consumeReplyCode, hasReplyCode, mintReplyCode, resetReplyCodeRegistryForTest } from '../taskrun/reply-code-registry.js'
 import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
@@ -501,7 +503,10 @@ describe('Dispatch tool family', () => {
       assert.equal(channelInterjectionQueue.size(bgShiftSessionId), 0)
       const [queued] = channelInterjectionQueue.drain(drainSessionId)
       assert.ok(queued, 'interjection must land under the worker drain key, not the bg session')
-      assert.match(queued.text, /<requester-message>/)
+      assert.match(queued.text, /<requester-message reply-code="rc_[0-9a-f]{8}">/)
+      const replyCode = /reply-code="([^"]+)"/.exec(queued.text)?.[1]
+      assert.ok(replyCode)
+      assert.equal(hasReplyCode(entry.taskRunId, replyCode), true)
       assert.match(queued.text, /smaller dataset/)
       assert.equal((await getTaskRun(entry.taskRunId, 'alice'))?.status, 'running')
       assert.ok(getBackgroundTask('alice', dispatchId))
@@ -750,6 +755,187 @@ describe('Message ask waits in place', () => {
       channelInterjectionQueue.drain('parent-session-2')
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Message reply-code uplink replies', () => {
+  it('routes a worker reply with a live reply-code to its running requester', async () => {
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-code-running-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent work',
+        parentRunId: null,
+        chainId: 'chain-reply',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-session', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: parent.id,
+        chainId: 'chain-reply',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-session', Date.now(), 'alice')
+      const replyCode = mintReplyCode(child.id)
+
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-session',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+      const result = await runWithSessionContext(childSession, () =>
+        messageTool.call(
+          { message: 'Environment is installed; job is still pending.', reply_code: replyCode },
+          toolContext(),
+        ),
+      )
+
+      assert.equal(result.isError, undefined)
+      assert.match(result.output, /Reply sent/)
+      assert.equal(consumeReplyCode(child.id, replyCode), false, 'code was consumed exactly once')
+      const [reply] = channelInterjectionQueue.drain('parent-session')
+      assert.ok(reply)
+      assert.match(reply.text, new RegExp(`<worker-reply childRunId="${child.id}">`))
+      assert.match(reply.text, /job is still pending/)
+      const events = await getTaskRunEvents(child.id, {}, 'alice')
+      assert.ok(events.some(event => event.kind === 'reported'))
+    } finally {
+      channelInterjectionQueue.drain('parent-session')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+
+  it('rejects invalid reply-code and default/reply-code ambiguity', async () => {
+    resetReplyCodeRegistryForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-code-invalid-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const parent = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'generalist',
+        callerRole: 'main',
+        callerSessionId: 's-main',
+        mode: 'background',
+        objective: 'parent work',
+        parentRunId: null,
+        chainId: 'chain-reply-invalid',
+        depth: 1,
+      })
+      await markStarted(parent.id, 'parent-session-invalid', Date.now(), 'alice')
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'generalist',
+        callerSessionId: 'parent-session-invalid',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: parent.id,
+        chainId: 'chain-reply-invalid',
+        depth: 2,
+      })
+      await markStarted(child.id, 'child-session-invalid', Date.now(), 'alice')
+      const childSession = createSessionContext({
+        cwd: '/tmp/lightclaw-dispatch-taskrun',
+        model: 'fake-model',
+        sessionsDir: '/tmp/lightclaw-dispatch-taskrun/sessions',
+        memoryDir: '/tmp/lightclaw-dispatch-taskrun/memory',
+        sessionId: 'child-session-invalid',
+        currentUserId: 'alice',
+        currentRole: role('coder', 'worker'),
+        currentTaskRunId: child.id,
+      })
+
+      const invalid = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Status', reply_code: 'rc_deadbeef' }, toolContext()),
+      )
+      assert.equal(invalid.isError, true)
+      assert.match(invalid.output, /live reply-code/)
+
+      const ambiguous = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Status', reply_code: 'rc_deadbeef', default: 'continue' }, toolContext()),
+      )
+      assert.equal(ambiguous.isError, true)
+      assert.match(ambiguous.output, /either `default`/)
+
+      const neither = await runWithSessionContext(childSession, () =>
+        messageTool.call({ message: 'Status' }, toolContext()),
+      )
+      assert.equal(neither.isError, true)
+      assert.match(neither.output, /Provide `default`/)
+    } finally {
+      channelInterjectionQueue.drain('parent-session-invalid')
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
+
+  it('mints a reply-code for a waiting run resume block', async () => {
+    resetReplyCodeRegistryForTest()
+    resetResumeScheduleForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-code-waiting-'))
+    setLightclawHomeOverride(tmpHome)
+    let capturedBody = ''
+    setResumeRunnerForTest(async (_runId, block) => {
+      capturedBody = block.body
+      return {
+        ok: true,
+        run: {} as never,
+        mode: 'resume',
+        assistantText: '',
+      }
+    })
+    try {
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'main-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: null,
+        chainId: 'chain-waiting-reply-code',
+        depth: 1,
+      })
+      await markStarted(child.id, 'child-session-waiting', Date.now(), 'alice')
+      await markWaiting(child.id, { reason: 'user-stop' }, Date.now(), 'alice')
+
+      const result = await runWithSessionContext(session('main'), () =>
+        messageTool.call({ to: child.id, message: 'What is the install status?' }, toolContext()),
+      )
+      await drainScheduledResumesForTest()
+
+      assert.equal(result.isError, undefined)
+      assert.match(capturedBody, /<requester-message reply-code="rc_[0-9a-f]{8}">/)
+      const replyCode = /reply-code="([^"]+)"/.exec(capturedBody)?.[1]
+      assert.ok(replyCode)
+      assert.equal(hasReplyCode(child.id, replyCode), true)
+    } finally {
+      setResumeRunnerForTest(null)
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
     }
   })
 })
