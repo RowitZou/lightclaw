@@ -39,6 +39,9 @@ import type { Role } from './types.js'
 // dispatch brief PR2.1 (2026-06-16): Reachable Workers stopped inlining briefs,
 // the footer became conditional-on-new-worker, and Dispatch Mode points new
 // role relationships through ListRoleSkill first. Same role set shifts.
+// dispatch brief PR5 (2026-06-16): self-maintenance prompts teach skillCurator
+// and skillConsolidator to create/preserve `dispatch_brief`; non-internal roles
+// are unchanged because skillify body content is loaded through UseSkill.
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '60718b1f6f7bf80fb6587b9c7b22aef794703545c8e63b5e5ed2f48665ad3d29',
   generalist: 'd2c71fcd453cc61371853406a926d33989cfe8d96a24790095a41505f1585dca',
@@ -50,8 +53,8 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   reviewer: '58b11ad609c1f88e8b29a063715ab4aced66a85c3bf31cf20831547f8cfc2067',
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
-  skillCurator: 'f44bcdc7a2d0140024e95f7b36daf6492783780bc2f8c35128935b5ae472b003',
-  skillConsolidator: '87b5116b492f615854c887bd87968f1068403299e6d1a6fe5b2a9fb7da03306b',
+  skillCurator: '22a81196c1a4d5b8fd8aa38266fc67a7750689916da58a15b93aeaadc3e8cd94',
+  skillConsolidator: '0544ecf1ddcf774ee5254d5a431e5d2cbd7e762625cc6c8e0e1f0aa705a3339a',
 }
 
 let tmpRoot: string

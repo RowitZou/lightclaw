@@ -10,7 +10,7 @@ import { buildTool } from '../tool.js'
 
 const SKILL_WRITE_DESCRIPTION = `Save a skill to the current user's skill set. \`name\` is a short kebab-case
 identifier; \`markdown\` is the full SKILL.md (YAML frontmatter — name,
-description, when_to_use, optional allowed-tools — then the workflow body).
+description, when_to_use, optional allowed-tools and dispatch_brief — then the workflow body).
 A skill you save is a method YOU execute — the save records it as yours
 automatically (you don't set \`roles\`; anything you put there is replaced).
 A method another role runs is that role's to capture: ask for it in the

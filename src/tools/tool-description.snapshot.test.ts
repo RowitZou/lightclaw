@@ -56,7 +56,9 @@ const EXPECTED = {
   SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
   // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
   // and references/, plus overwrite as whole-skill replacement.
-  SkillWrite: 'c69a923d3ffbd2fbbc86c7e85b245094a7cd071e9c4ed2bc14a2b3e1e648aa46',
+  // Dispatch-brief PR5: SkillWrite now lists optional dispatch_brief in
+  // frontmatter so skillify-authored skills can carry manager-facing contracts.
+  SkillWrite: '21c1aa4224b32599b208dab39731496a469b487c316b97b563c46c4cd431937a',
   // Phase 41 PR3: description stays mechanism-only, drops sandbox wording, and
   // points the model to load brainpp-batch-job for workflow/judgment.
   BrainppCluster: '0019d560d6c86acc7fbb803c0f44bc836f1d94d1063e8cd51b05c0a3d56981fa',

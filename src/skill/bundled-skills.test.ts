@@ -160,4 +160,15 @@ describe('bundled skills (Phase 16 codegen output)', () => {
     // codegen body.trim() not eating the leading bytes).
     assert.ok(skillify!.body.startsWith('# Skillify {{userDescriptionBlock}}'))
   })
+
+  it('skillify teaches authors when and how to write dispatch_brief', () => {
+    const skillify = getBundledSkillByName('skillify')
+    assert.ok(skillify, 'skillify skill must be present')
+    assert.ok(skillify!.body.includes(
+      "**`dispatch_brief` (optional).** Next time this method is requested it may not run in your hands: someone may delegate it to a worker. If, before that handoff, there's something they'd have to settle that the worker can't just discover — an external, costly, or irreversible resource to pin down, a step that can't be undone, or a decision only the person asking can make — capture it as a `dispatch_brief`: a short note addressed to whoever delegates, on what to settle first and what to leave to the worker. Same needs-not-implementation cut you drew above, aimed at the delegator. Say what to settle, never how the work runs.",
+    ))
+    assert.ok(skillify!.body.includes(
+      '{{dispatch_brief: | — only if a delegator must settle something first; addressed to the delegator, what-to-settle not how}}',
+    ))
+  })
 })

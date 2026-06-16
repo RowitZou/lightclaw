@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import { memoryCuratorPrompt } from './memoryCurator.js'
 import { skillConsolidatorPrompt } from './skillConsolidator.js'
+import { skillCuratorPrompt } from './skillCurator.js'
 
 /**
  * Lightweight semantic contracts for the two destructive-pair-emitting
@@ -23,6 +24,11 @@ import { skillConsolidatorPrompt } from './skillConsolidator.js'
  */
 
 describe('skillConsolidator prompt destructive-pair sequencing contract', () => {
+  it('carries dispatch_brief through merged skills instead of silently dropping it', () => {
+    assert.match(skillConsolidatorPrompt, /Carry\s+the\s+dispatch\s+brief\s+through\s+the\s+merge/i)
+    assert.match(skillConsolidatorPrompt, /Never\s+silently\s+drop\s+a\s+brief\s+a\s+merged-from\s+skill\s+carried/i)
+  })
+
   it('forbids treating a single skill as a merge candidate', () => {
     assert.match(
       skillConsolidatorPrompt,
@@ -64,6 +70,17 @@ describe('skillConsolidator prompt destructive-pair sequencing contract', () => 
       skillConsolidatorPrompt,
       /Never\s+say\s+"nothing\s+to\s+merge"\s+if\s+you\s+called\s+any\s+SkillWrite\s+or\s+SkillDelete/i,
     )
+  })
+})
+
+describe('skillCurator prompt dispatch brief contract', () => {
+  it('tells curators when to draft dispatch_brief for a new skill', () => {
+    assert.match(skillCuratorPrompt, /dispatch_brief\*\*: optional\. Add one if delegating this work would force the dispatcher to settle something a worker can't discover on its own/i)
+    assert.match(skillCuratorPrompt, /what to settle,\s+not how it runs/i)
+  })
+
+  it('includes dispatch_brief in the draft frontmatter template', () => {
+    assert.match(skillCuratorPrompt, /dispatch_brief:\s+\|/)
   })
 })
 

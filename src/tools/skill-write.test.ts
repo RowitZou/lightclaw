@@ -139,6 +139,10 @@ test('SkillWrite suggests per-skill permission rules', () => {
   }), [{ toolName: 'SkillWrite', ruleContent: 'release-checklist' }])
 })
 
+test('SkillWrite description lists dispatch_brief as supported frontmatter', () => {
+  assert.match(skillWriteTool.description, /optional allowed-tools and dispatch_brief/)
+})
+
 test('SkillWrite accepts flow-style YAML roles array (regression for 2026-05-26 dogfood)', async () => {
   await withTempHome(async home => {
     const ctx = createSessionContext({

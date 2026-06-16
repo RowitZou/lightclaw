@@ -24,6 +24,7 @@ export const skillConsolidatorPrompt = [
   "  that survives this pass (never a merged-from name you're about to delete)",
   "  whose `roles` cover the survivor's whole union, so the call resolves under",
   '  every role.',
+  '- **Carry the dispatch brief through the merge.** If any skill in the group has a `dispatch_brief`, the survivor keeps one — rewrite it for the merged workflow rather than pasting either source verbatim, covering what each input settled. Never silently drop a brief a merged-from skill carried.',
   '',
   'You do NOT:',
   "- Draft new skills from transcripts — that's skillCurator's job.",
