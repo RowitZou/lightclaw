@@ -64,6 +64,27 @@ void describe('worker progress forwarder (PR22)', () => {
     assert.equal(progress.length, 2)
   })
 
+  void it('stores narration fuller than the retired 200 cap so the card preview and expanded entry can differ', async () => {
+    const runId = await makeRun()
+    const forward = buildWorkerProgressForwarder({
+      ownerCanonicalUser: 'alice',
+      taskRunId: runId,
+      throttleMs: 0,
+    })
+    // A 400-char narration is exactly the card's expanded timeline-line cap.
+    // Under the retired 200-char source cap this stored only 200 chars, so the
+    // expanded "执行过程" panel had nothing more to show than the collapsed
+    // child-header preview — "expand to see more" was a no-op. The source now
+    // stores it whole, leaving the card's two render tiers room to differ.
+    const narration = 'y'.repeat(400)
+    forward(narration)
+    await delay(20)
+    const progress = (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress')
+    assert.equal(progress.length, 1)
+    const label = (progress[0] as { label: string }).label
+    assert.equal(label.length, 400, 'narration up to the expanded card cap is stored whole, not pre-truncated to 200')
+  })
+
   void it('ignores empty blocks and never throws on a missing run', async () => {
     const forward = buildWorkerProgressForwarder({
       ownerCanonicalUser: 'alice',

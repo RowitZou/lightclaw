@@ -89,7 +89,12 @@ export const TASK_CARD_MAX_CHILD_TIMELINE = 10
 export const TASK_CARD_MAX_TOTAL_TIMELINE = 80
 export const TASK_CARD_OBJECTIVE_MAX_CHARS = 120
 export const TASK_CARD_TITLE_MAX_CHARS = 40
-export const TASK_CARD_PROGRESS_MAX_CHARS = 160
+// The collapsed child-header preview ("title"). Kept well below the expanded
+// timeline-line cap so the two tiers visibly differ — a short one/two-line
+// teaser when collapsed, the fuller entry when expanded. This only bites once
+// the source (WORKER_PROGRESS_MAX_CHARS) stores more than this; before that cap
+// was raised, source-200 made preview and expanded read nearly identical.
+export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
 // Total rendered timeline characters across ALL panels (root + children). Set
 // under the old proven-OK worst case (200×80 = 16000), so the whole card stays

@@ -10,7 +10,15 @@
 import { appendProgress } from './store.js'
 
 export const WORKER_PROGRESS_THROTTLE_MS = 30_000
-export const WORKER_PROGRESS_MAX_CHARS = 200
+// Stored fuller than any single card surface shows so the card's two render
+// tiers can actually differ: the collapsed child-header preview truncates this
+// to TASK_CARD_PROGRESS_MAX_CHARS (~one line) while the expanded timeline entry
+// truncates it to TASK_CARD_TIMELINE_LINE_MAX_CHARS. When this cap was 200 —
+// below the expanded 400 cap — both tiers rendered the same ~160-200 chars and
+// "expand to see more" showed nothing more. This is still a progress
+// breadcrumb, not a delivery channel: a worker's full final report reaches the
+// user via chat full-text, not by enlarging this.
+export const WORKER_PROGRESS_MAX_CHARS = 600
 
 const lastAppendByRun = new Map<string, number>()
 
