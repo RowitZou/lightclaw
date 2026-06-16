@@ -171,6 +171,22 @@ test('executeDispatch drops retired context-inheritance fields on background dis
   assert.equal(Object.hasOwn(task ?? {}, retiredKey), false)
 })
 
+test('executeDispatch accepts human-shaped role spelling variants', async () => {
+  const output = await runWithSessionContext(session('main', ['*']), () =>
+    executeDispatch({
+      role: 'Local Explorer',
+      prompt: 'Inspect the workspace tree in the background.',
+      schedule: { kind: 'after', afterMinutes: 5 },
+    }, toolContext()),
+  )
+
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /Dispatch scheduled:/)
+  assert.match(output.output, /Role: localExplorer/)
+  const [task] = loadBackgroundTasks('alice')
+  assert.equal(task?.role, 'localExplorer')
+})
+
 test('executeDispatch folds attachments into the prompt as a Read file list', async () => {
   // Erroring on attachments taught callers a retry dance (dogfood
   // 2026-06-11: main hit it twice). Paths now ride the prompt instead.

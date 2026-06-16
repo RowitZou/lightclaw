@@ -5,6 +5,7 @@ import { DEFAULT_DISPATCH_CONFIG, getConfig } from '../config.js'
 import { formatWorkerFailureForToolResult } from '../agents/run-subagent.js'
 import type { AgentType, WorkerFailure } from '../agents/types.js'
 import { getAgent } from '../agents/registry.js'
+import { resolveAgentLenient } from '../agents/role-resolver.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
 import { appendDispatchAudit } from '../audit/dispatch.js'
 import {
@@ -48,7 +49,7 @@ import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
 import { answerPendingAsk, awaitAskAnswer } from '../taskrun/ask-registry.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 
-const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
+const DISPATCH_DESCRIPTION = `Dispatch a focused task to a specific role (see the ## Reachable Workers section above for what's available). For a role you haven't worked with, call ListRoleSkill first to learn what to settle before dispatching to it. Dispatch is asynchronous: it creates background work and returns a dispatch id immediately.
 
 \`task\` (optional): the goal root this dispatch belongs under — pass the root's runId. Work for a goal attaches under that goal's root; without \`task\` the dispatch attaches under your own run when you have one.
 
@@ -388,7 +389,7 @@ export async function executeDispatch(
   const userId = requireCurrentUserId()
   const sessionId = getSessionId()
   const callerRole = getCurrentRole() ?? getAgent('main')
-  const calleeRole = getAgent(input.role)
+  const calleeRole = resolveAgentLenient(input.role)
   if (!callerRole || !calleeRole) {
     return {
       output: `Unknown dispatch role: ${input.role}`,
@@ -397,10 +398,11 @@ export async function executeDispatch(
   }
   if (calleeRole.kind !== 'worker') {
     return {
-      output: `Cannot dispatch ${calleeRole.kind} role "${input.role}". Dispatch targets must be worker-kind roles.`,
+      output: `Cannot dispatch ${calleeRole.kind} role "${calleeRole.agentType}". Dispatch targets must be worker-kind roles.`,
       isError: true,
     }
   }
+  const targetRole = calleeRole.agentType as DispatchRole
   const callerKind = callerRole.kind ?? 'worker'
   const parentTaskRun = await resolveDispatchParentTaskRun({
     callerKind,
@@ -414,7 +416,7 @@ export async function executeDispatch(
       isError: true,
     }
   }
-  const internalRole = internalRoleFor(input.role)
+  const internalRole = internalRoleFor(targetRole)
   const dispatchId = `${userId}-${shortId()}`
   const startedAt = Date.now()
   const parentChainState = context.chainState ??
@@ -442,7 +444,7 @@ export async function executeDispatch(
         chainId: effectiveChildChainState.chainId,
         parentDispatchId: effectiveChildChainState.parentDispatchId,
         caller: { role: callerRole.agentType, sessionId },
-        callee: { role: input.role, internalRole, sessionId: childSessionId },
+        callee: { role: targetRole, internalRole, sessionId: childSessionId },
         schedule,
         mode: 'background',
         outcome: 'rejected-by-guard',
@@ -477,7 +479,7 @@ export async function executeDispatch(
     from: { kind: 'role', id: callerRole.agentType, sessionId },
     to: { kind: 'role', id: internalRole, sessionId: childSessionId },
     payload: {
-      role: input.role,
+      role: targetRole,
       internalRole,
       prompt: finalDispatchPrompt,
       schedule,
@@ -499,7 +501,7 @@ export async function executeDispatch(
   const standingRuns = isStandingSchedule(schedule)
     ? await createStandingDispatchTaskRunsBestEffort({
         ownerCanonicalUser: userId,
-        role: input.role,
+        role: targetRole,
         callerRole: callerRole.agentType,
         callerSessionId: sessionId,
         objective: input.prompt,
@@ -510,7 +512,7 @@ export async function executeDispatch(
   const bgTaskRunId = normalizedSchedule.kind === 'oneshot'
     ? await createQueuedDispatchTaskRunBestEffort({
         ownerCanonicalUser: userId,
-        role: input.role,
+        role: targetRole,
         callerRole: callerRole.agentType,
         callerSessionId: sessionId,
         objective: input.prompt,
@@ -523,9 +525,9 @@ export async function executeDispatch(
     id: dispatchId,
     ownerCanonicalUser: userId,
     prompt: input.prompt,
-    role: input.role,
+    role: targetRole,
     schedule: normalizedSchedule,
-    label: input.label ?? `${input.role} dispatch`,
+    label: input.label ?? `${targetRole} dispatch`,
     notifyOn: 'always' as const,
     notifyTo: 'agent' as const,
     enabled: true,
@@ -552,7 +554,7 @@ export async function executeDispatch(
     chainId: effectiveChildChainState.chainId,
     parentDispatchId: effectiveChildChainState.parentDispatchId,
     caller: { role: callerRole.agentType, sessionId },
-    callee: { role: input.role, internalRole, sessionId: entry.id },
+    callee: { role: targetRole, internalRole, sessionId: entry.id },
     schedule,
     mode: 'background',
     outcome: 'success',
@@ -563,7 +565,7 @@ export async function executeDispatch(
   return {
     output: [
       `Dispatch scheduled: ${entry.id} (${entry.label})`,
-      `Role: ${input.role}`,
+      `Role: ${targetRole}`,
       `Next run: ${describeNextRun(computeTaskNextRunAt(entry))}`,
     ].join('\n'),
   }

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
-import { getAgent, getAllAgents, getMainRole } from '../agents/registry.js'
+import { getAllAgents, getMainRole } from '../agents/registry.js'
+import { resolveAgentLenient } from '../agents/role-resolver.js'
 import { resolveRolePolicy } from '../agents/role-presets.js'
 import { isDispatchTargetReachable } from '../agents/role-tool-gate.js'
 import {
@@ -8,7 +9,10 @@ import {
   formatDispatchBriefForDelegation,
 } from '../skill/dispatch-brief.js'
 import { listRegisteredSkills } from '../skill/registry.js'
-import { visibleOnDemandSkillsForRole } from '../skill/role-validation.js'
+import {
+  visibleAutoLoadDispatchBriefsForRole,
+  visibleOnDemandSkillsForRole,
+} from '../skill/role-validation.js'
 import { getCurrentRole } from '../state.js'
 import { buildTool } from '../tool.js'
 
@@ -20,9 +24,7 @@ const LIST_ROLE_SKILL_DESCRIPTION = [
   'Input:',
   '- `role` — a worker from your `## Reachable Workers` list.',
   '',
-  'Returns each invokable skill\'s name, one-line description, and when-to-use.',
   DISPATCH_BRIEF_LIST_ROLE_SKILL_DESCRIPTION,
-  'Always-on workflow skills are omitted (they are the worker\'s built-in procedure, not a capability you route toward).',
 ].join('\n')
 
 export const listRoleSkillTool = buildTool({
@@ -43,7 +45,7 @@ export const listRoleSkillTool = buildTool({
     const callerRole = getCurrentRole() ?? getMainRole()
     const callerPolicy = resolveRolePolicy(callerRole)
 
-    const target = getAgent(input.role)
+    const target = resolveAgentLenient(input.role)
     if (!target || target.kind !== 'worker') {
       const reachable = reachableWorkerNames(callerPolicy.reachableRoles)
       return {
@@ -61,23 +63,35 @@ export const listRoleSkillTool = buildTool({
     }
 
     const gate = { runtimeDriver: context.config?.runtime.driver ?? null }
-    const skills = visibleOnDemandSkillsForRole(listRegisteredSkills(), target, gate)
-    if (skills.length === 0) {
-      return { output: `${target.agentType} has no on-demand skills to invoke.` }
+    const registeredSkills = listRegisteredSkills()
+    const standingBriefs = visibleAutoLoadDispatchBriefsForRole(registeredSkills, target, gate)
+      .map(skill => formatDispatchBriefForDelegation(skill.dispatchBrief ?? ''))
+      .filter(brief => brief.length > 0)
+    const skills = visibleOnDemandSkillsForRole(registeredSkills, target, gate)
+    if (standingBriefs.length === 0 && skills.length === 0) {
+      return { output: `${target.agentType} has no pre-dispatch brief or on-demand skills to invoke.` }
     }
 
-    const lines = skills.flatMap(skill => {
-      const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
-      const rendered = [`- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`]
-      if (skill.dispatchBrief) {
-        const brief = formatDispatchBriefForDelegation(skill.dispatchBrief)
-        if (brief) {
-          rendered.push(brief)
+    const sections: string[] = []
+    if (standingBriefs.length > 0) {
+      sections.push(`${target.agentType} standing contract:\n${standingBriefs.join('\n')}`)
+    }
+    if (skills.length > 0) {
+      const lines = skills.flatMap(skill => {
+        const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
+        const rendered = [`- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`]
+        if (skill.dispatchBrief) {
+          const brief = formatDispatchBriefForDelegation(skill.dispatchBrief)
+          if (brief) {
+            rendered.push(brief)
+          }
         }
-      }
-      return rendered
-    })
-    return { output: `${target.agentType} can invoke these skills:\n${lines.join('\n')}` }
+        return rendered
+      })
+      sections.push(`${target.agentType} can invoke these on-demand skills:\n${lines.join('\n')}`)
+    }
+
+    return { output: sections.join('\n\n') }
   },
 })
 

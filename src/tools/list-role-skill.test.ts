@@ -60,6 +60,14 @@ test('main sees coder\'s on-demand skills including build-environment, but not t
   assert.match(output.output, /^  Before you delegate: .*CPU vs a specific accelerator/m)
 })
 
+test('ListRoleSkill accepts human-shaped role spelling variants', async () => {
+  const output = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'Local Explorer' }, toolContext(null)),
+  )
+  assert.equal(output.isError, undefined)
+  assert.match(output.output, /^localExplorer /)
+})
+
 test('skills without dispatch_brief do not grow delegation hint lines', async () => {
   const output = await runAs(mainRole(), () =>
     listRoleSkillTool.call({ role: 'localExplorer' }, toolContext(null)),
@@ -90,7 +98,35 @@ test('ListRoleSkill renders on-demand dispatch briefs from skill metadata', asyn
   )
 })
 
-test('Reachable Workers renders always-on workflow dispatch briefs without leaking bodies', async () => {
+test('ListRoleSkill renders always-on workflow dispatch briefs as a standing contract without naming the workflow skill', async () => {
+  writeUserSkill(
+    'archive-workflow-brief',
+    [
+      'name: archive-workflow-brief',
+      'description: Fixture workflow for archivist delegation.',
+      'roles:',
+      '  - archivist',
+      'auto_load: true',
+      'dispatch_brief: Confirm the archive target and retention boundary; leave file movement mechanics to the worker.',
+    ],
+    'DO_NOT_LEAK_WORKFLOW_BODY',
+  )
+
+  await refreshSkillRegistry(path.join(tmpHome, 'workspace'), 'alice')
+
+  const listed = await runAs(mainRole(), () =>
+    listRoleSkillTool.call({ role: 'archivist' }, toolContext(null)),
+  )
+  assert.equal(listed.isError, undefined)
+  assert.match(
+    listed.output,
+    /^  Before you delegate: Confirm the archive target and retention boundary; leave file movement mechanics to the worker\./m,
+  )
+  assert.doesNotMatch(listed.output, /archive-workflow-brief/)
+  assert.doesNotMatch(listed.output, /DO_NOT_LEAK_WORKFLOW_BODY/)
+})
+
+test('Reachable Workers stays compact and points to ListRoleSkill instead of inlining dispatch briefs', async () => {
   writeUserSkill(
     'archive-workflow-brief',
     [
@@ -122,23 +158,17 @@ test('Reachable Workers renders always-on workflow dispatch briefs without leaki
   })
 
   assert.match(prompt, /- archivist:/)
-  assert.match(
-    prompt,
-    /  Before you delegate: Confirm the archive target and retention boundary; leave file movement mechanics to the worker\./,
-  )
+  assert.doesNotMatch(prompt, /^  Before you delegate:/m)
+  assert.doesNotMatch(prompt, /Confirm the archive target and retention boundary/)
   assert.doesNotMatch(prompt, /DO_NOT_LEAK_WORKFLOW_BODY/)
   assert.match(
     prompt,
-    /To see what a worker's skills do — and how to align your dispatch with them before delegating — call ListRoleSkill with its role name\./,
+    /If you haven't worked with a worker yet, call ListRoleSkill with its role name before delegating to it — it tells you what to settle with the requester up front and what the worker handles on its own\. Once you know a role, you needn't call it again before every dispatch\./,
   )
-
-  await refreshSkillRegistry(path.join(tmpHome, 'workspace'), 'alice')
-  const listed = await runAs(mainRole(), () =>
-    listRoleSkillTool.call({ role: 'archivist' }, toolContext(null)),
+  assert.match(
+    prompt,
+    /- Know the worker before you command it: for a role you haven't worked with yet, call ListRoleSkill for it first — it tells you what to settle before dispatching and what the worker handles itself, so you direct it well instead of blind\./,
   )
-  assert.equal(listed.isError, undefined)
-  assert.doesNotMatch(listed.output, /archive-workflow-brief/)
-  assert.doesNotMatch(listed.output, /Confirm the archive target/)
 })
 
 test('the runtime driver gate is threaded: brainpp-batch-job shows on a brainpp runtime', async () => {
@@ -170,6 +200,14 @@ test('a dispatcher cannot inspect a role outside its reachable set', async () =>
   )
   assert.equal(output.isError, true)
   assert.match(output.output, /not in your reachable workers/)
+})
+
+test('ListRoleSkill description frames the tool as a pre-dispatch brief and does not mention hidden workflow skills', () => {
+  assert.match(
+    listRoleSkillTool.description,
+    /Returns the worker's pre-dispatch brief: its standing contract — what to settle before delegating to it at all — plus, for each on-demand skill it can invoke, what to pin down first and what to leave to the worker\./,
+  )
+  assert.doesNotMatch(listRoleSkillTool.description, /Always-on workflow skills are omitted/)
 })
 
 function toolContext(driver: 'brainpp' | null) {

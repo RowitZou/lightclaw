@@ -26,13 +26,9 @@ import {
 import { skillDirFor } from './skill/skill-dir.js'
 import {
   filterSkillsForRole,
-  visibleAutoLoadDispatchBriefsForRole,
   visibleOnDemandSkillsForRole,
 } from './skill/role-validation.js'
-import {
-  DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER,
-  formatDispatchBriefForDelegation,
-} from './skill/dispatch-brief.js'
+import { DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER } from './skill/dispatch-brief.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -640,6 +636,7 @@ function formatDispatchModeSectionOrch(): string {
   return [
     '## Dispatch Mode',
     'Dispatching is how you act: every dispatch runs in the background — the call returns immediately, the worker works on its own clock, and the result reaches you later as a <background-task-result>. Reach for it early and often; work you keep holding is work nothing is happening to.',
+    "- Know the worker before you command it: for a role you haven't worked with yet, call ListRoleSkill for it first — it tells you what to settle before dispatching and what the worker handles itself, so you direct it well instead of blind.",
     '- Independent pieces? Send them as separate dispatches in one message; results arrive as each finishes.',
     '- More to do after dispatching — another request, another stage, a question you can answer yourself? Keep working; arriving results do not need you idle.',
     '- Nothing actionable until a result lands? Tell the user where things stand and end your turn — the result comes back to you and the work continues from there. Do not poll, and do not hold the turn open to wait.',
@@ -962,12 +959,6 @@ function formatReachableRolesSection(
       ? ` Skills it can invoke: ${skills.map(skill => skill.name).join(', ')}.`
       : ''
     lines.push(`- ${agent.agentType}: ${agent.whenToUse}${skillNote}`)
-    for (const skill of visibleAutoLoadDispatchBriefsForRole(registeredSkills, agent, gate)) {
-      const brief = formatDispatchBriefForDelegation(skill.dispatchBrief ?? '')
-      if (brief) {
-        lines.push(brief)
-      }
-    }
   }
   if (reachableRoles.includes('*')) {
     // Wildcard expands to every registered worker (bundled + user-defined,

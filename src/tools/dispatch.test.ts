@@ -14,6 +14,7 @@ import { getBackgroundTask } from '../background-task/store.js'
 import { builtinTools, getAllTools } from '../tools.js'
 import { partitionTools } from './is-deferred.js'
 import {
+  __toolDescriptionForSnapshot,
   dispatchTool,
   executeDispatch,
   messageTool,
@@ -84,6 +85,13 @@ describe('Dispatch tool family', () => {
       schedule: 'now',
       attachments: [''],
     }).success, false)
+  })
+
+  it('Dispatch description points unfamiliar workers through ListRoleSkill first', () => {
+    assert.match(
+      __toolDescriptionForSnapshot.Dispatch,
+      /For a role you haven't worked with, call ListRoleSkill first to learn what to settle before dispatching to it\./,
+    )
   })
 
   it('keeps notify fields out of Dispatch and UpdateSchedule schemas', () => {
@@ -745,4 +753,3 @@ describe('Message ask waits in place', () => {
     }
   })
 })
-
