@@ -318,8 +318,11 @@ function stampFrontmatterRoles(markdown: string, roles: string[]): string {
   if (!match) return markdown // no frontmatter: parse fails downstream with the existing message
   const block = match[1]
   const cleaned = block
-    .replace(/^roles:[^\n]*(?:\n[ \t]+-[^\n]*)*/m, '')
-    .replace(/\n{2,}/g, '\n')
+    // Drop the existing roles: block AND the line break that followed it, so no
+    // blank gap is left where it sat. A global `\n{2,}` collapse here would be
+    // wrong: it eats intentional blank lines inside a multi-line block scalar
+    // such as `dispatch_brief: |`, silently rewriting that field's content.
+    .replace(/^roles:[^\n]*(?:\n[ \t]+-[^\n]*)*\n?/m, '')
     .replace(/^\n+|\n+$/g, '')
   const stamped = `${cleaned}\nroles:\n${roles.map(role => `  - ${role}`).join('\n')}`
   return markdown.replace(match[0], `---\n${stamped}\n---`)

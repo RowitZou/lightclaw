@@ -431,6 +431,43 @@ describe('writeUserSkill', () => {
     })
   })
 
+  it('preserves a multi-line dispatch_brief through role stamping (blank lines survive)', async () => {
+    await withTempHome(async () => {
+      // Role stamping rewrites the frontmatter to swap `roles:`. A multi-line
+      // `dispatch_brief: |` with a paragraph break must come back byte-intact —
+      // regression for the `\n{2,}` collapse that used to eat the blank line.
+      const meta = await writeUserSkill({
+        userId: 'alice',
+        name: 'deploy-thing',
+        stampRoles: ['coder'],
+        markdown:
+          '---\n' +
+          'name: deploy-thing\n' +
+          'description: Deploy a thing.\n' +
+          'dispatch_brief: |\n' +
+          '  Settle the target and the rollback plan before you delegate:\n' +
+          '  - the cluster or namespace;\n' +
+          '  - whether a rollback is pre-approved.\n' +
+          '\n' +
+          "  A deploy can be refused; if so, don't re-dispatch it.\n" +
+          'roles:\n' +
+          '  - main\n' +
+          '---\n\n' +
+          'Steps here.\n',
+      })
+
+      assert.deepEqual(meta.roles, ['coder'])
+      assert.equal(
+        meta.dispatchBrief,
+        'Settle the target and the rollback plan before you delegate:\n' +
+          '- the cluster or namespace;\n' +
+          '- whether a rollback is pre-approved.\n' +
+          '\n' +
+          "A deploy can be refused; if so, don't re-dispatch it.",
+      )
+    })
+  })
+
   it('writes supporting scripts and references with private file permissions', async () => {
     await withTempHome(async () => {
       const meta = await writeUserSkill({
