@@ -691,7 +691,8 @@ export const messageTool = buildTool({
       }
     }
     if (run.status === 'waiting') {
-      if (run.waitReason === 'awaiting-reply') {
+      const isAnswer = run.waitReason === 'awaiting-reply'
+      if (isAnswer) {
         await appendEvent(run.id, 'answered', {
           byRole: getCurrentRole()?.agentType ?? 'main',
           answer: input.message.trim(),
@@ -699,10 +700,16 @@ export const messageTool = buildTool({
       }
       // Detached: the resumed shift can take minutes; the speaker must not
       // sit inside it (that would be blocking dispatch by another name).
-      const replyCode = mintReplyCode(run.id)
+      //
+      // An answer to the child's OWN question is the closing half of a round
+      // the child started — it grants no reply-code, so the exchange stays
+      // strictly one-question-one-answer and a child cannot keep chatting off
+      // the back of an answer. Only a genuine downward message (not an answer)
+      // mints a code the child may reply against.
+      const replyCode = isAnswer ? undefined : mintReplyCode(run.id)
       scheduleResumeRunWithBlock(userId, run.id, {
-        via: run.waitReason === 'awaiting-reply' ? 'answer' : 'message',
-        reason: run.waitReason === 'awaiting-reply' ? 'your question was answered' : 'a message arrived for your task',
+        via: isAnswer ? 'answer' : 'message',
+        reason: isAnswer ? 'your question was answered' : 'a message arrived for your task',
         body: wrapMessage(input.message.trim(), replyCode),
       })
       return { output: `Message delivered to TaskRun ${run.id}. Nothing comes back through this call; whatever it produces reaches you the usual way.` }

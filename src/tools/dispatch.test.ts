@@ -938,6 +938,57 @@ describe('Message reply-code uplink replies', () => {
       resetReplyCodeRegistryForTest()
     }
   })
+
+  it('answering a waiting awaiting-reply run mints NO reply-code', async () => {
+    resetReplyCodeRegistryForTest()
+    resetResumeScheduleForTest()
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-reply-code-answer-'))
+    setLightclawHomeOverride(tmpHome)
+    let capturedBody = ''
+    setResumeRunnerForTest(async (_runId, block) => {
+      capturedBody = block.body
+      return {
+        ok: true,
+        run: {} as never,
+        mode: 'resume',
+        assistantText: '',
+      }
+    })
+    try {
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'main-session',
+        mode: 'background',
+        objective: 'child work',
+        parentRunId: null,
+        chainId: 'chain-answer-no-code',
+        depth: 1,
+      })
+      await markStarted(child.id, 'child-session-answer', Date.now(), 'alice')
+      // The child asked its requester a question and parked awaiting the reply.
+      await markWaiting(child.id, { reason: 'awaiting-reply' }, Date.now(), 'alice')
+
+      const result = await runWithSessionContext(session('main'), () =>
+        messageTool.call({ to: child.id, message: 'Use the v2 image.' }, toolContext()),
+      )
+      await drainScheduledResumesForTest()
+
+      assert.equal(result.isError, undefined)
+      // The answer is the closing half of the round the child started: a bare
+      // <requester-message> with no reply-code, so the child cannot keep
+      // chatting off the back of being answered.
+      assert.match(capturedBody, /<requester-message>\n/)
+      assert.doesNotMatch(capturedBody, /reply-code=/)
+    } finally {
+      setResumeRunnerForTest(null)
+      resetResumeScheduleForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+      resetReplyCodeRegistryForTest()
+    }
+  })
 })
 
 describe('Dispatch carries the Feishu chat-grant target into the background fire', () => {
