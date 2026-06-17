@@ -446,7 +446,9 @@ export async function markStarted(
   const meta = await getTaskRun(id, ownerCanonicalUser)
   if (!meta) return null
   if (isTerminalStatus(meta.status)) return meta
-  return appendEvent(id, 'started', { sessionId }, now, ownerCanonicalUser)
+  const next = await appendEvent(id, 'started', { sessionId }, now, ownerCanonicalUser)
+  if (next?.status === 'running') await reactivateUserStoppedAncestors(next, now)
+  return next
 }
 
 export async function markFinished(
@@ -520,7 +522,7 @@ export async function markResumed(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
-  return appendEvent(
+  const next = await appendEvent(
     id,
     'resumed',
     {
@@ -531,6 +533,8 @@ export async function markResumed(
     now,
     ownerCanonicalUser,
   )
+  if (next?.status === 'running') await reactivateUserStoppedAncestors(next, now)
+  return next
 }
 
 export async function markRebuilt(
@@ -539,7 +543,7 @@ export async function markRebuilt(
   now = Date.now(),
   ownerCanonicalUser?: string,
 ): Promise<TaskRunMeta | null> {
-  return appendEvent(
+  const next = await appendEvent(
     id,
     'rebuilt',
     {
@@ -550,6 +554,48 @@ export async function markRebuilt(
     now,
     ownerCanonicalUser,
   )
+  if (next?.status === 'running') await reactivateUserStoppedAncestors(next, now)
+  return next
+}
+
+/** A /stop parks every running run in the calling chat's tree at
+ *  `waiting{reason:'user-stop'}` with NO wake descriptor — unlike child-join /
+ *  timer / awaiting-reply, a user-stopped run has no self-revival path, and a
+ *  user-stopped ROOT is not even reported by the watchdog (open roots are not
+ *  "stranded"). So once any descendant comes back to life — main re-engages a
+ *  child via `Message`, a queued child fires, a child-join wake lands — the
+ *  ancestor's user-stop is stale: nothing else will ever clear it, and the live
+ *  task card stays frozen at "等待中" while its subtree actively works.
+ *
+ *  Walk up from the reactivated run and flip each `waiting{user-stop}` ancestor
+ *  back to running, restoring its OWN lastSessionId (never the descendant's
+ *  session — the root's session is its channel turn, a child's is a bg session;
+ *  conflating them would mis-point a later /stop or cancel abort). Stop at the
+ *  first ancestor waiting for any OTHER reason: it owns a legitimate wake (or a
+ *  deliberate holder) and absorbs the subtree-active signal through its own
+ *  path, so reaching past it would corrupt that wait. */
+async function reactivateUserStoppedAncestors(
+  run: TaskRunMeta,
+  now: number,
+): Promise<void> {
+  const owner = run.ownerCanonicalUser
+  let parentId = run.parentRunId
+  // Tree-depth bound: a malformed parent cycle must not loop forever.
+  for (let hops = 0; parentId && hops < 64; hops++) {
+    const ancestor = await getTaskRun(parentId, owner)
+    if (!ancestor) break
+    if (ancestor.status !== 'waiting' || ancestor.waitReason !== 'user-stop') break
+    const sessionId = ancestor.lastSessionId ?? ancestor.currentSessionId
+    if (!sessionId) break
+    await appendEvent(
+      ancestor.id,
+      'resumed',
+      { via: 'descendant-active', reason: `descendant ${run.id} resumed`, sessionId },
+      now,
+      owner,
+    )
+    parentId = ancestor.parentRunId
+  }
 }
 
 export async function acceptTaskRun(

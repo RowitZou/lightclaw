@@ -205,7 +205,7 @@ export type TaskRunResumedEvent = {
   seq: number
   ts: number
   kind: 'resumed'
-  via: 'reject' | 'child-join' | 'timer' | 'answer' | 'message' | 'crash-recovery' | 'watchdog'
+  via: 'reject' | 'child-join' | 'timer' | 'answer' | 'message' | 'crash-recovery' | 'watchdog' | 'descendant-active'
   reason?: string
   sessionId: string
 }

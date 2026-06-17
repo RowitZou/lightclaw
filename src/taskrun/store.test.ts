@@ -25,6 +25,7 @@ import {
   markFinished,
   markWaiting,
   markStarted,
+  markResumed,
   rejectTaskRun,
   sweepAllTerminalTaskRuns,
   sweepTerminalTaskRuns,
@@ -737,6 +738,77 @@ describe('TaskRun store', () => {
       assert.equal(meta?.status, 'waiting')
       assert.equal(meta?.waitingAt, 2)
       assert.equal(meta?.waitReason, 'requester-hold')
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('re-activating a descendant un-stops only user-stop ancestors, never child-join waits', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-unstop-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      // A /stop parked this root + child at waiting{user-stop}; main then
+      // re-engages the child (markResumed via Message). The root must come back
+      // to running — otherwise its task card freezes at "等待中" forever while
+      // the child works.
+      const root = await createRootTaskRun('alice', 'feishu:group:oc_x:ou_y', {
+        objective: 'Deploy the service and report the endpoint.',
+        title: 'Deploy service',
+        now: 1,
+      })
+      const child = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:group:oc_x:ou_y',
+        mode: 'background',
+        objective: 'Submit the deployment job.',
+        parentRunId: root.id,
+        chainId: 'chain-unstop',
+        depth: 1,
+        now: 2,
+      })
+      await markStarted(child.id, 'bg-alice-deploy', 3, 'alice')
+      // /stop parks the whole tree.
+      await markWaiting(root.id, { reason: 'user-stop', bySessionId: 'feishu:group:oc_x:ou_y' }, 4, 'alice')
+      await markWaiting(child.id, { reason: 'user-stop', bySessionId: 'feishu:group:oc_x:ou_y' }, 4, 'alice')
+      assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'waiting')
+
+      // Control: a separate root parked on a legitimate child-join wait.
+      const joinRoot = await createRootTaskRun('alice', 'feishu:dm:oc_z', {
+        objective: 'Wait for a child to finish.',
+        title: 'Join root',
+        now: 5,
+      })
+      const joinChild = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_z',
+        mode: 'background',
+        objective: 'Child of the join root.',
+        parentRunId: joinRoot.id,
+        chainId: 'chain-join',
+        depth: 1,
+        now: 6,
+      })
+      await markStarted(joinChild.id, 'bg-alice-join', 7, 'alice')
+      await markWaiting(joinRoot.id, { reason: 'child-join' }, 8, 'alice')
+      await markWaiting(joinChild.id, { reason: 'user-stop', bySessionId: 'feishu:dm:oc_z' }, 9, 'alice')
+
+      // Re-engage both children.
+      await markResumed(child.id, { via: 'message', sessionId: 'bg-alice-deploy' }, 10, 'alice')
+      await markResumed(joinChild.id, { via: 'message', sessionId: 'bg-alice-join' }, 11, 'alice')
+
+      // user-stop root flips back to running, on its OWN channel session.
+      const reloadedRoot = await getTaskRun(root.id, 'alice')
+      assert.equal(reloadedRoot?.status, 'running')
+      assert.equal(reloadedRoot?.currentSessionId, 'feishu:group:oc_x:ou_y')
+
+      // child-join root is a legitimate park and must be left alone.
+      assert.equal((await getTaskRun(joinRoot.id, 'alice'))?.status, 'waiting')
+      assert.equal((await getTaskRun(joinRoot.id, 'alice'))?.waitReason, 'child-join')
     } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
