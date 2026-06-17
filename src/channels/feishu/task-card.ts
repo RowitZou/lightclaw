@@ -153,10 +153,29 @@ function shortRunId(id: string): string {
   return id.length <= 8 ? id : id.slice(0, 8)
 }
 
-// Thousands-grouped token count (e.g. 1234567 → "1,234,567"). Hand-rolled
+// Compact token count with a K/M/B/T suffix and 2 decimals (e.g. 468292 →
+// "468.29K", 1234567 → "1.23M"). Below 1000 it stays a bare integer. Hand-rolled
 // rather than toLocaleString to stay locale-/env-independent.
-function formatTokenCount(n: number): string {
-  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+function formatTokens(n: number): string {
+  const units: Array<[number, string]> = [
+    [1e12, 'T'],
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'K'],
+  ]
+  for (const [div, suffix] of units) {
+    if (Math.abs(n) >= div) return `${(n / div).toFixed(2)}${suffix}`
+  }
+  return String(Math.round(n))
+}
+
+// Cache hit rate = cached input ÷ all input-side tokens, as a 1-decimal percent.
+// `input` is the non-cached input, `cacheRead` the cache hits, `cacheCreate` the
+// tokens written to cache (misses). Empty input-side → "0.0%".
+function formatCacheHitRate(input: number, cacheRead: number, cacheCreate: number): string {
+  const inputSide = input + cacheRead + cacheCreate
+  const pct = inputSide > 0 ? (cacheRead / inputSide) * 100 : 0
+  return `${pct.toFixed(1)}%`
 }
 
 function markdownElement(content: string): Record<string, unknown> {
@@ -464,34 +483,37 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     )
   }
 
-  elements.push(hrElement())
-  const footerKey = terminal ? 'taskcard.footer.finished' : 'taskcard.footer.updated'
+  // Timestamp now lives in the header subtitle (next to the status word), so the
+  // footer carries only the run id and the token stats.
   const footerTs = terminal ? root.terminalAt ?? root.updatedAt : root.updatedAt
+  elements.push(hrElement())
   elements.push(
-    markdownElement(
-      t(footerKey, { time: formatClock(footerTs), id: shortRunId(root.id) }),
-    ),
+    markdownElement(t('taskcard.footer.id', { id: shortRunId(root.id) })),
   )
 
-  // Subtask token spend, in sync with the footer timestamp (the whole card is
+  // Subtask token spend, in sync with the header timestamp (the whole card is
   // re-derived on every update). Only the subtasks are summed — the main agent
-  // is excluded by the view deriver. The cache figure folds read + creation.
+  // is excluded by the view deriver. The cache figure folds read + creation, and
+  // the hit rate is cache reads over all input-side tokens.
   const tokens = view.subtaskTokens
   if (tokens && tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreate > 0) {
     elements.push(
       markdownElement(
         t('taskcard.footer.tokens', {
-          input: formatTokenCount(tokens.input),
-          output: formatTokenCount(tokens.output),
-          cache: formatTokenCount(tokens.cacheRead + tokens.cacheCreate),
+          input: formatTokens(tokens.input),
+          output: formatTokens(tokens.output),
+          cache: formatTokens(tokens.cacheRead + tokens.cacheCreate),
+          hit: formatCacheHitRate(tokens.input, tokens.cacheRead, tokens.cacheCreate),
         }),
       ),
     )
   }
 
-  const titleBadge = root.standing
+  const statusWord = root.standing
     ? `${t('taskcard.standing.badge')} · ${t(style.wordKey)}`
     : t(style.wordKey)
+  const headerTimeKey = terminal ? 'taskcard.header.finished' : 'taskcard.header.updated'
+  const subtitle = `${statusWord} · ${t(headerTimeKey, { time: formatClock(footerTs) })}`
 
   return {
     schema: '2.0',
@@ -506,7 +528,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
       },
       subtitle: {
         tag: 'plain_text',
-        content: titleBadge,
+        content: subtitle,
       },
     },
     body: {

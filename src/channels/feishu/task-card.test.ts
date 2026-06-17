@@ -239,17 +239,19 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
   assert.ok(heading?.content?.includes('✅ 20 已完成'))
 })
 
-void test('buildTaskCard renders terminal freeze footer and status template', () => {
+void test('buildTaskCard puts the terminal timestamp in the subtitle and the id in the footer', () => {
   setLang('cn')
   const view = baseView()
   view.root = { ...view.root, status: 'done', terminalAt: TS + 600_000 }
   const card = buildTaskCard(view)
-  const header = card.header as { template: string }
+  const header = card.header as { template: string; subtitle: { content: string } }
   assert.equal(header.template, 'green')
+  // Timestamp moved into the blue subtitle, after the status word.
+  assert.ok(header.subtitle.content.includes('结束于 23:29'))
   const body = (card.body as { elements: Array<{ content?: string }> }).elements
   const footer = body[body.length - 1]
-  assert.ok(footer.content?.includes('结束于 23:29'))
   assert.ok(footer.content?.includes('#run-abcd'))
+  assert.ok(!footer.content?.includes('结束于'), 'footer no longer carries the timestamp')
 })
 
 void test('buildTaskCard renders standing service badge and schedule lines', () => {

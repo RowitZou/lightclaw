@@ -80,7 +80,7 @@ describe('task card subtask token totals', () => {
     assert.equal(view.subtaskTokens, undefined)
   })
 
-  it('renders the token footer line after the updated/finished footer', () => {
+  it('renders the token line with unit suffixes + cache hit rate; time goes to the subtitle', () => {
     setLang('cn')
     const card = buildTaskCard({
       root: {
@@ -92,18 +92,46 @@ describe('task card subtask token totals', () => {
       },
       children: [],
       rootTimeline: [],
-      subtaskTokens: { input: 1234567, output: 2000, cacheRead: 300, cacheCreate: 100 },
+      // input 468292, output 8537, cacheRead 150000, cacheCreate 40976.
+      subtaskTokens: { input: 468292, output: 8537, cacheRead: 150000, cacheCreate: 40976 },
     })
+    const header = card.header as { subtitle: { content: string } }
+    assert.ok(header.subtitle.content.includes('进行中'), 'status word stays in subtitle')
+    assert.ok(header.subtitle.content.includes('更新于 23:19'), 'timestamp moved into the subtitle')
     const body = (card.body as { elements: Array<{ tag: string; content?: string }> }).elements
     const last = body[body.length - 1]
-    const updated = body[body.length - 2]
-    assert.ok(updated.content?.includes('更新于 23:19'), 'footer time line precedes the token line')
     assert.ok(last.content?.includes('任务消耗 token'), 'token line is last')
-    assert.ok(last.content?.includes('1,234,567'), 'input is thousands-grouped')
-    assert.ok(last.content?.includes('400'), 'cache folds read + creation (300 + 100)')
+    assert.ok(last.content?.includes('468.29K'), 'input gets a K suffix with 2 decimals')
+    assert.ok(last.content?.includes('8.54K'), 'output 8537 → 8.54K')
+    assert.ok(!last.content?.includes('8,537'), 'no thousands grouping anymore')
+    // 150000 + 40976 = 190976 → 190.98K
+    assert.ok(last.content?.includes('190.98K'), 'cache folds read + creation, K-suffixed')
+    // hit = 150000 / (468292 + 150000 + 40976) = 150000/659268 ≈ 22.8%
+    assert.ok(last.content?.includes('22.8%'), 'cache hit rate = reads / all input-side tokens')
   })
 
-  it('omits the token footer line when subtaskTokens is absent', () => {
+  it('scales units: < 1000 stays a bare integer, millions get an M suffix', () => {
+    setLang('cn')
+    const card = buildTaskCard({
+      root: {
+        id: 'run-x',
+        title: 'job',
+        objective: 'o',
+        status: 'running',
+        updatedAt: new Date('2026-06-12T23:19:00').getTime(),
+      },
+      children: [],
+      rootTimeline: [],
+      // input 12,345,678 → 12.35M; output 500 → 500 (no suffix); cache 0.
+      subtaskTokens: { input: 12345678, output: 500, cacheRead: 0, cacheCreate: 0 },
+    })
+    const body = (card.body as { elements: Array<{ content?: string }> }).elements
+    const last = body[body.length - 1]
+    assert.ok(last.content?.includes('12.35M'), 'millions → M')
+    assert.ok(/输出 500\b/.test(last.content ?? ''), 'sub-1000 stays a bare integer')
+  })
+
+  it('omits the token footer line when subtaskTokens is absent; footer is the id line', () => {
     setLang('cn')
     const card = buildTaskCard({
       root: {
@@ -118,7 +146,8 @@ describe('task card subtask token totals', () => {
     })
     const body = (card.body as { elements: Array<{ content?: string }> }).elements
     const last = body[body.length - 1]
-    assert.ok(last.content?.includes('更新于'), 'footer is the updated line, no token line appended')
-    assert.ok(!last.content?.includes('任务消耗'))
+    assert.ok(last.content?.includes('任务 #run-abcd'), 'footer is the id line')
+    assert.ok(!last.content?.includes('任务消耗'), 'no token line')
+    assert.ok(!last.content?.includes('更新于'), 'timestamp is in the subtitle, not the footer')
   })
 })
