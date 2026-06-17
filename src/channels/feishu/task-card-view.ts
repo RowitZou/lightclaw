@@ -33,7 +33,11 @@ async function progressTail(
   runId: string,
   prefix: string,
 ): Promise<TaskCardTimelineEntry[]> {
-  const events = await getTaskRunEvents(runId, { limit: EVENTS_READ_LIMIT }, owner)
+  const events = await getTaskRunEvents(
+    runId,
+    { limit: EVENTS_READ_LIMIT, kinds: ['progress'] },
+    owner,
+  )
   const entries: TaskCardTimelineEntry[] = []
   for (const event of events) {
     if (event.kind !== 'progress') continue
@@ -102,6 +106,18 @@ export async function deriveTaskCardView(
   const all = await listTaskRuns(owner, { scope: 'all' })
   const byId = new Map(all.map(run => [run.id, run]))
   const inTree = all.filter(run => run.rootRunId === root.id && run.id !== root.id)
+  // Subtask token spend = every descendant of the root (children, grandchildren,
+  // deeper — they all share this rootRunId), with the root itself excluded so
+  // the main agent's own tokens are never counted. `inTree` is exactly that set.
+  const subtaskTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
+  for (const run of inTree) {
+    const u = run.tokenUsage
+    if (!u) continue
+    subtaskTokens.input += u.input
+    subtaskTokens.output += u.output
+    subtaskTokens.cacheRead += u.cacheRead
+    subtaskTokens.cacheCreate += u.cacheCreate
+  }
   let directChildren = inTree
     .filter(run => run.parentRunId === root.id)
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
@@ -200,5 +216,8 @@ export async function deriveTaskCardView(
     children,
     rootTimeline,
     rootTimelineTotal,
+    ...(subtaskTokens.input + subtaskTokens.output + subtaskTokens.cacheRead + subtaskTokens.cacheCreate > 0
+      ? { subtaskTokens }
+      : {}),
   }
 }

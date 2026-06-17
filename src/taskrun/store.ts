@@ -24,6 +24,8 @@ import type {
   TaskRunRebuiltEvent,
   TaskRunResumedEvent,
   TaskRunStartedEvent,
+  TaskRunUsageEvent,
+  TaskRunUsageTotals,
   TaskRunWakeSpec,
 } from './types.js'
 import { clearReplyCodesForRun } from './reply-code-registry.js'
@@ -60,6 +62,10 @@ type SweepTaskRunsOptions = {
 
 type GetTaskRunEventsOptions = {
   limit?: number
+  // Restrict to these event kinds BEFORE `limit` is applied, so a tail read of
+  // (e.g.) progress events is not diluted by interleaved high-frequency `usage`
+  // events sharing the same stream.
+  kinds?: string[]
 }
 
 type CreateRootTaskRunInput = {
@@ -645,6 +651,34 @@ export async function appendArtifact(
   )
 }
 
+// Charge token usage to a run, accumulated into `meta.tokenUsage`. Called once
+// per query turn from `query.ts` with the turn's provider usage. Best-effort
+// like the rest of the ledger: a missing run / all-zero delta is a no-op. The
+// task card sums this over a root's descendants (the root itself excluded) to
+// report what the subtasks cost.
+export async function addTaskRunUsage(
+  id: string,
+  delta: TaskRunUsageTotals,
+  now = Date.now(),
+  ownerCanonicalUser?: string,
+): Promise<TaskRunMeta | null> {
+  if (delta.input === 0 && delta.output === 0 && delta.cacheRead === 0 && delta.cacheCreate === 0) {
+    return null
+  }
+  return appendEvent(
+    id,
+    'usage',
+    {
+      input: delta.input,
+      output: delta.output,
+      cacheRead: delta.cacheRead,
+      cacheCreate: delta.cacheCreate,
+    },
+    now,
+    ownerCanonicalUser,
+  )
+}
+
 function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
   const next: TaskRunMeta = {
     ...meta,
@@ -738,6 +772,18 @@ function reduceMeta(meta: TaskRunMeta, event: TaskRunEvent): TaskRunMeta {
       },
     }
   }
+  if (isUsageEvent(event)) {
+    const prior = next.tokenUsage ?? { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
+    return {
+      ...next,
+      tokenUsage: {
+        input: prior.input + event.input,
+        output: prior.output + event.output,
+        cacheRead: prior.cacheRead + event.cacheRead,
+        cacheCreate: prior.cacheCreate + event.cacheCreate,
+      },
+    }
+  }
   if (isArtifactEvent(event)) {
     const handle = event.path ?? event.token
     if (!handle) return next
@@ -813,6 +859,12 @@ function isArtifactEvent(event: TaskRunEvent): event is TaskRunArtifactEvent {
   return event.kind === 'artifact'
 }
 
+function isUsageEvent(event: TaskRunEvent): event is TaskRunUsageEvent {
+  return event.kind === 'usage'
+    && typeof (event as { input?: unknown }).input === 'number'
+    && typeof (event as { output?: unknown }).output === 'number'
+}
+
 export async function getTaskRun(
   id: string,
   ownerCanonicalUser?: string,
@@ -850,10 +902,14 @@ export async function getTaskRunEvents(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  const events = raw
+  let events = raw
     .split('\n')
     .filter(line => line.trim().length > 0)
     .map(line => JSON.parse(line) as TaskRunEvent)
+  if (options.kinds) {
+    const wanted = new Set(options.kinds)
+    events = events.filter(event => wanted.has(event.kind))
+  }
   const limit = options.limit
   if (limit === undefined || limit <= 0 || events.length <= limit) {
     return events

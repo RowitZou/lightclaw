@@ -17,7 +17,7 @@
 
 import { t } from '../../i18n/index.js'
 import type { LocaleKey } from '../../i18n/locales.js'
-import type { TaskRunStatus } from '../../taskrun/types.js'
+import type { TaskRunStatus, TaskRunUsageTotals } from '../../taskrun/types.js'
 
 export type TaskCardTimelineEntry = {
   at: number
@@ -63,6 +63,10 @@ export type TaskCardView = {
    *  bounded tail. Same role as `TaskCardChildView.timelineTotal`. Omitted →
    *  fall back to `rootTimeline.length`. */
   rootTimelineTotal?: number
+  /** Cumulative token spend of the subtasks (every descendant of the root,
+   *  the root / main turn excluded). Rendered as a footer line. Omitted when
+   *  no subtask has consumed any tokens yet — the line then does not render. */
+  subtaskTokens?: TaskRunUsageTotals
 }
 
 // Display caps (dev-plan reference §R4). Code constants by design — no
@@ -147,6 +151,12 @@ function formatClock(ts: number): string {
 
 function shortRunId(id: string): string {
   return id.length <= 8 ? id : id.slice(0, 8)
+}
+
+// Thousands-grouped token count (e.g. 1234567 → "1,234,567"). Hand-rolled
+// rather than toLocaleString to stay locale-/env-independent.
+function formatTokenCount(n: number): string {
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
 function markdownElement(content: string): Record<string, unknown> {
@@ -462,6 +472,22 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
       t(footerKey, { time: formatClock(footerTs), id: shortRunId(root.id) }),
     ),
   )
+
+  // Subtask token spend, in sync with the footer timestamp (the whole card is
+  // re-derived on every update). Only the subtasks are summed — the main agent
+  // is excluded by the view deriver. The cache figure folds read + creation.
+  const tokens = view.subtaskTokens
+  if (tokens && tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreate > 0) {
+    elements.push(
+      markdownElement(
+        t('taskcard.footer.tokens', {
+          input: formatTokenCount(tokens.input),
+          output: formatTokenCount(tokens.output),
+          cache: formatTokenCount(tokens.cacheRead + tokens.cacheCreate),
+        }),
+      ),
+    )
+  }
 
   const titleBadge = root.standing
     ? `${t('taskcard.standing.badge')} · ${t(style.wordKey)}`

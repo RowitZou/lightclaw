@@ -61,6 +61,9 @@ export type TaskRunMeta = {
   lastEventSeq: number
   latestProgress?: TaskRunProgressSnapshot
   artifactPaths?: string[]
+  // Cumulative tokens this run spent, reduced from `usage` events. Omitted
+  // until the first usage event lands (legacy runs / runs that never ran).
+  tokenUsage?: TaskRunUsageTotals
 }
 
 export type TaskRunWaitReason =
@@ -79,6 +82,17 @@ export type TaskRunProgressSnapshot = {
   phase?: string
   label: string
   ts: number
+}
+
+// Cumulative token usage charged to one run (its own agent loop, summed across
+// every turn / shift). A derived meta field reduced from `usage` events — see
+// `addTaskRunUsage`. The task card sums this over a root's descendants to show
+// what the subtasks cost (the root / main turn is excluded by the caller).
+export type TaskRunUsageTotals = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
 }
 
 export type TaskRunCreatedEvent = {
@@ -117,6 +131,16 @@ export type TaskRunProgressEvent = {
   kind: 'progress'
   phase?: string
   label: string
+}
+
+export type TaskRunUsageEvent = {
+  seq: number
+  ts: number
+  kind: 'usage'
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
 }
 
 export type TaskRunArtifactEvent = {
@@ -229,6 +253,7 @@ export type TaskRunEvent =
   | TaskRunFinishedEvent
   | TaskRunProgressEvent
   | TaskRunArtifactEvent
+  | TaskRunUsageEvent
   | ({
       seq: number
       ts: number

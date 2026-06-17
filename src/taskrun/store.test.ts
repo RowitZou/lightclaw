@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { setLightclawHomeOverride } from '../paths.js'
 import {
   acceptTaskRun,
+  addTaskRunUsage,
   appendArtifact,
   appendProgress,
   closeRootTaskRun,
@@ -820,6 +821,93 @@ describe('reply-code lifetime is run-terminal, not shift-end', () => {
       assert.equal(hasReplyCode(run.id, code), false, 'cleared at terminal')
     } finally {
       resetReplyCodeRegistryForTest()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('TaskRun token usage accounting', () => {
+  it('accumulates usage events into meta.tokenUsage across turns', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-usage-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'spend tokens',
+        chainId: 'chain-usage',
+        depth: 1,
+      })
+      await addTaskRunUsage(run.id, { input: 100, output: 20, cacheRead: 5, cacheCreate: 3 }, 1, 'alice')
+      await addTaskRunUsage(run.id, { input: 50, output: 10, cacheRead: 2, cacheCreate: 1 }, 2, 'alice')
+
+      const loaded = await getTaskRun(run.id, 'alice')
+      assert.ok(loaded)
+      assert.deepEqual(loaded.tokenUsage, { input: 150, output: 30, cacheRead: 7, cacheCreate: 4 })
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('is a no-op for an all-zero delta', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-usage-zero-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'no tokens',
+        chainId: 'chain-usage-zero',
+        depth: 1,
+      })
+      const result = await addTaskRunUsage(run.id, { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, 1, 'alice')
+      assert.equal(result, null)
+      const loaded = await getTaskRun(run.id, 'alice')
+      assert.equal(loaded?.tokenUsage, undefined)
+    } finally {
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+
+  it('getTaskRunEvents kinds filter applies before the tail limit so usage events do not dilute a progress read', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-usage-kinds-'))
+    setLightclawHomeOverride(tmpHome)
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'interleave usage and progress',
+        chainId: 'chain-usage-kinds',
+        depth: 1,
+      })
+      // Interleave: progress, usage, progress, usage, progress.
+      await appendProgress(run.id, { label: 'p1' }, 1, 'alice')
+      await addTaskRunUsage(run.id, { input: 1, output: 1, cacheRead: 0, cacheCreate: 0 }, 2, 'alice')
+      await appendProgress(run.id, { label: 'p2' }, 3, 'alice')
+      await addTaskRunUsage(run.id, { input: 1, output: 1, cacheRead: 0, cacheCreate: 0 }, 4, 'alice')
+      await appendProgress(run.id, { label: 'p3' }, 5, 'alice')
+
+      // A tail read of limit 2, kind-filtered to progress, must return the last
+      // TWO progress events — NOT diluted by the interleaved usage events. The
+      // old code (no kinds filter) would slice the raw tail and lose p2.
+      const tail = await getTaskRunEvents(run.id, { limit: 2, kinds: ['progress'] }, 'alice')
+      assert.deepEqual(
+        tail.map(e => (e as { label?: string }).label),
+        ['p2', 'p3'],
+      )
+    } finally {
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }

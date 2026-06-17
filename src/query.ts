@@ -36,6 +36,7 @@ import {
   addUsage,
   getAbortController,
   getCurrentEnabledSecrets,
+  getCurrentTaskRunId,
   getCurrentUserId,
   getCwd,
   getRuntime,
@@ -57,6 +58,7 @@ import {
   type TurnToolCatalog,
 } from './tools/deferred-loading.js'
 import { appendUsage } from './usage/storage.js'
+import { addTaskRunUsage } from './taskrun/store.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
   findToolByName,
@@ -874,6 +876,19 @@ export async function query(params: QueryParams): Promise<{
       cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
       cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
     })
+    // Charge this turn's tokens to the current TaskRun (best-effort), so the
+    // task card can sum what each subtask cost. The root / main turn run is
+    // excluded by the card aggregator, so attributing main's tokens here is
+    // harmless even when its turn carries a currentTaskRunId.
+    const usageTaskRunId = getCurrentTaskRunId()
+    if (usageTaskRunId) {
+      void addTaskRunUsage(usageTaskRunId, {
+        input: stopEvent.usage.input_tokens ?? 0,
+        output: stopEvent.usage.output_tokens ?? 0,
+        cacheRead: stopEvent.usage.cache_read_input_tokens ?? 0,
+        cacheCreate: stopEvent.usage.cache_creation_input_tokens ?? 0,
+      }).catch(() => {})
+    }
     addSessionMemoryTokens(
       (stopEvent.usage.input_tokens ?? 0) + (stopEvent.usage.output_tokens ?? 0),
     )
