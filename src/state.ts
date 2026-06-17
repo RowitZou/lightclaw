@@ -340,6 +340,24 @@ export function setAbortControllerForSession(
 }
 
 /**
+ * Unregister a session's abort controller once its turn settles, so the map
+ * does not grow one stale entry per finished background fire / resumed shift
+ * (channel sessionIds are reused turn-to-turn and just overwrite, but bg / run
+ * sessionIds are unique per fire). Deletes ONLY when the stored controller is
+ * still `controller` — a retry that re-registered a fresh controller under the
+ * same sessionId must not have its live entry removed by the prior attempt's
+ * cleanup.
+ */
+export function clearAbortControllerForSession(
+  sessionId: string,
+  controller: AbortController,
+): void {
+  if (abortControllerBySession.get(sessionId) === controller) {
+    abortControllerBySession.delete(sessionId)
+  }
+}
+
+/**
  * Abort the most-recently-installed in-flight controller for `sessionId`.
  * Returns true if a controller existed and was aborted; false if no entry
  * (no in-flight turn for that session) or it was already aborted.

@@ -15,7 +15,8 @@ import {
   updateLastFiredAt,
 } from './store.js'
 import { computeTaskNextRunAt } from './schedule-calc.js'
-import { runBackgroundTaskFire } from './runner.js'
+import { buildBackgroundTaskSessionId, runBackgroundTaskFire } from './runner.js'
+import { clearAbortControllerForSession, setAbortControllerForSession } from '../state.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
@@ -516,6 +517,15 @@ export class BackgroundTaskScheduler {
       (this.runningCountByUser.get(canonicalUser) ?? 0) + 1,
     )
     const controller = new AbortController()
+    // Register the fire's controller under the SAME sessionId markStarted will
+    // record as the run's currentSessionId, so /stop, TaskUpdate cancel, and
+    // requester-hold — all of which call abortInFlightForSession(currentSessionId)
+    // — actually reach this in-flight turn. Without this the controller was only
+    // a local variable: every abort-by-session on a running fire was a silent
+    // no-op, so /stop merely parked the ledger while the fire (including an
+    // in-flight destructive Bash) ran to completion (2026-06-17 dogfood).
+    const fireSessionId = buildBackgroundTaskSessionId(task, fireUuid)
+    setAbortControllerForSession(fireSessionId, controller)
 
     // The concurrency slot is held ONLY for the agent run itself. Completion
     // handling (record + result delivery) runs afterwards and must NOT keep
@@ -597,6 +607,7 @@ export class BackgroundTaskScheduler {
         releaseSlot()
         this.unmarkActiveTaskRun(canonicalUser, activeTaskRunId)
         this.inFlight.delete(promise)
+        clearAbortControllerForSession(fireSessionId, controller)
       })
     this.inFlight.add(promise)
   }

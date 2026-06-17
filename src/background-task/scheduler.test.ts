@@ -17,6 +17,8 @@ import {
   setRunBackgroundTaskFireForTest,
 } from './scheduler.js'
 import { flushLastFiredAt, getCompletedTaskRecord, loadBackgroundTasks, saveBackgroundTasks } from './store.js'
+import { buildBackgroundTaskSessionId } from './runner.js'
+import { abortInFlightForSession } from '../state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import {
   acceptTaskRun,
@@ -115,6 +117,35 @@ describe('BackgroundTaskScheduler fire completion', () => {
     resetResumeScheduleForTest()
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  it('registers the fire controller so /stop / cancel actually abort the running turn', async () => {
+    // The reported bug: the scheduler built an AbortController for the fire but
+    // never registered it, so abortInFlightForSession(currentSessionId) — the
+    // call /stop, TaskUpdate cancel, and requester-hold all make — was a no-op,
+    // and a /stop'd fire (incl. an in-flight destructive Bash) ran to completion.
+    const task = {
+      ...fakeTask(),
+      id: 'abort-fire',
+      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    let abortReached = false
+    let signalAborted = false
+    setRunBackgroundTaskFireForTest(async (input) => {
+      // Simulate /stop arriving mid-fire: abort the run by its currentSessionId,
+      // exactly as stopActiveTaskRunsForSession / TaskUpdate cancel do.
+      abortReached = abortInFlightForSession(buildBackgroundTaskSessionId(task, input.fireUuid))
+      signalAborted = input.signal.aborted
+      return { kind: 'failure', reason: 'aborted by user', transient: false, attempt: 1 }
+    })
+
+    scheduler.fireImmediate('alice', 'abort-fire')
+    await scheduler.drain()
+
+    assert.equal(abortReached, true, 'abortInFlightForSession must find the running fire\'s controller')
+    assert.equal(signalAborted, true, 'aborting it must propagate to the fire\'s in-flight signal')
   })
 
   it('wakes a parent paused on child-join when the fire delivers via settle-on-return', async () => {

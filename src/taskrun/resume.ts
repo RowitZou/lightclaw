@@ -22,7 +22,9 @@ import {
 } from '../session/storage.js'
 import { createUserMessage } from '../messages.js'
 import {
+  clearAbortControllerForSession,
   getRuntime,
+  setAbortControllerForSession,
 } from '../state.js'
 import type { TaskRunMeta, TaskRunResumedEvent } from './types.js'
 import {
@@ -185,6 +187,14 @@ export async function resumeRunWithBlock(
     currentTaskRunId: run.id,
     enabledSecrets: resumedSecrets,
   })
+  // A fresh controller per resumed shift, registered under `sessionId` — the
+  // same value markResumed/markRebuilt recorded as the run's currentSessionId,
+  // which /stop, TaskUpdate cancel, and requester-hold all abort via
+  // abortInFlightForSession(currentSessionId). query reads getAbortController()
+  // (childCtx.abortController) when invocation.signal is absent, so overriding
+  // it here makes the abort actually interrupt the resumed turn (and its
+  // in-flight tools) instead of being a no-op against an unregistered controller.
+  const abortController = new AbortController()
   const childCtx = {
     ...currentCtx,
     sessionId,
@@ -193,7 +203,9 @@ export async function resumeRunWithBlock(
     discoveredTools: new Map(),
     turnCounter: 0,
     enabledSecrets: resumedSecrets,
+    abortController,
   }
+  setAbortControllerForSession(sessionId, abortController)
   // The resumed turn now owns this run's inbox. Mark it in-flight so a message
   // arriving mid-turn — a user interjecting a resumed main, an agent Message
   // interjecting a resumed worker — is queued and drained at this turn's tool
@@ -283,6 +295,7 @@ export async function resumeRunWithBlock(
     }
     return { ok: false, reason: 'query-failed', message }
   } finally {
+    clearAbortControllerForSession(sessionId, abortController)
     if (inboxSessionId) {
       const leftover = channelInterjectionQueue.unmarkInFlight(inboxSessionId)
       if (leftover.length > 0) {
