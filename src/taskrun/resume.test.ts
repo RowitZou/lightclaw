@@ -176,6 +176,8 @@ test('a resumed turn marks its inbox in-flight and drains a queued interjection 
 
   let observedInflight = false
   let drainedTexts: string[] = []
+  let hadRenderer = false
+  let renderedTexts: string[] = []
   try {
     const ctx = createSessionContext({
       cwd: tmpHome,
@@ -195,6 +197,18 @@ test('a resumed turn marks its inbox in-flight and drains a queued interjection 
         observedInflight = channelInterjectionQueue.hasInflightFor(sessionId)
         const drained = (await params.invocation.interjectionDrain?.()) ?? []
         drainedTexts = drained.map(entry => entry.text)
+        // Draining is only half the delivery: without a renderer query.ts
+        // stamps metadata but the model never sees the text (the 2026-06-17
+        // resumed-shift blind spot). Assert the resume path wires a renderer
+        // that turns the drained entries into model-visible content blocks.
+        hadRenderer = typeof params.invocation.interjectionRenderer === 'function'
+        const blocks = params.invocation.interjectionRenderer?.(drained, {
+          originalUserText: '',
+          completedToolUses: [],
+        }) ?? []
+        renderedTexts = blocks
+          .filter(block => block.type === 'text')
+          .map(block => (block as { text: string }).text)
         return {
           messages: [
             ...params.messages,
@@ -217,6 +231,11 @@ test('a resumed turn marks its inbox in-flight and drains a queued interjection 
     assert.equal(observedInflight, true)
     // …and drained the queued interjection at the tool boundary.
     assert.deepEqual(drainedTexts, ['actually focus on the second dataset'])
+    // …AND wired a renderer so the drained text actually reaches the model as
+    // content, not just metadata. This is the regression guard for the
+    // resume.ts renderer blind spot.
+    assert.equal(hadRenderer, true, 'resumed run must wire an interjectionRenderer')
+    assert.deepEqual(renderedTexts, ['actually focus on the second dataset'])
     // Released after the turn.
     assert.equal(channelInterjectionQueue.hasInflightFor(sessionId), false)
   } finally {

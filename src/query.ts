@@ -274,6 +274,22 @@ export async function query(params: QueryParams): Promise<{
 }> {
   const config = params.config ?? getConfig()
   const invocation = params.invocation ?? emptyInvocationContext()
+  // Universal backstop for the drain-without-renderer blind spot (bit
+  // dispatched-agent, then resume.ts in 2026-06-17): the per-tool-boundary
+  // drain stamps metadata.interjectionEntries whenever it yields entries, but
+  // only `renderInterjectionContent` (the renderer) makes them visible to the
+  // model. A drain with no renderer therefore records "delivered" while the
+  // model never sees the message. forkInvocationContext couples the two so this
+  // is unrepresentable on the fork path; this catches any caller (channel
+  // runner, a future entry point) that builds an InvocationContext by hand.
+  if (invocation.interjectionDrain && !invocation.interjectionRenderer) {
+    throw new Error(
+      'InvocationContext wires interjectionDrain without interjectionRenderer: ' +
+        'drained interjections would be stamped to metadata but never shown to ' +
+        'the model. Pass forkInvocationContext({ interjection: { drain, renderer } }) ' +
+        'or set both fields.',
+    )
+  }
   const rolePolicy = resolveRolePolicy(params.role)
   // Re-resolved at the top of every turn (see the loop below) so a mid-turn
   // `/model` — applied by slashDrain at a tool boundary, which mutates

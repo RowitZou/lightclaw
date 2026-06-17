@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { channelInterjectionQueue, type InterjectionEntry } from '../channels/feishu/interjection-queue.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getAgent } from '../agents/registry.js'
-import { forkInvocationContext } from '../agents/invocation-context.js'
+import { forkInvocationContext, workerInterjectionRenderer } from '../agents/invocation-context.js'
 import { buildWorkerProgressForwarder } from './worker-progress.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
 import { resolveDispatchedFireSecrets } from '../agents/dispatch-secrets.js'
@@ -243,8 +243,18 @@ export async function resumeRunWithBlock(
           // exactly as a normal channel turn and a dispatched worker do. The
           // inbox key is the run's chain-leaf / channel address, distinct from
           // the transcript location; the markInFlight below pairs with it.
+          // drain + renderer are coupled: a drain without the renderer would
+          // stamp metadata.interjectionEntries but never show the message to the
+          // model — the resumed-shift blind spot (2026-06-17). A resumed worker
+          // runs its whole post-restart shift inside THIS loop, so every Message
+          // / bg-result / reconcile to it would otherwise be silently invisible.
           ...(inboxSessionId
-            ? { interjectionDrain: () => channelInterjectionQueue.drain(inboxSessionId) }
+            ? {
+                interjection: {
+                  drain: () => channelInterjectionQueue.drain(inboxSessionId),
+                  renderer: workerInterjectionRenderer(),
+                },
+              }
             : {}),
           persistMessages: async (batch) => {
             await appendMessagesAfterSeed(sessionId, batch)

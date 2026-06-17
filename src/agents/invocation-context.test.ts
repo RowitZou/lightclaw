@@ -6,6 +6,7 @@ import {
   emptyInvocationContext,
   forkInvocationContext,
   freshInvocationContext,
+  workerInterjectionRenderer,
 } from './invocation-context.js'
 import type { CanUseToolFn } from '../tool.js'
 
@@ -44,6 +45,38 @@ describe('InvocationContext factories', () => {
     assert.equal(context.cacheBreakpointMessageIndex, 3)
     assert.equal(context.signal, signal)
     assert.equal(context.subagentLabel, 'subagent_generalist')
+  })
+
+  it('wires interjection drain + renderer together so neither lands alone', () => {
+    const canUseTool: CanUseToolFn = async () => ({ behavior: 'allow' })
+    const drain = () => []
+    const context = forkInvocationContext({
+      systemPrompt: 'worker prompt',
+      canUseTool,
+      interjection: { drain, renderer: workerInterjectionRenderer() },
+    })
+
+    assert.equal(context.interjectionDrain, drain)
+    assert.equal(typeof context.interjectionRenderer, 'function')
+    // The renderer emits each drained entry's text raw (no <user-interjection>
+    // wrapper) — this is what makes a downlink message model-visible on the
+    // wire. A drain wired without it (the resume.ts blind spot) would stamp
+    // metadata but render nothing; the coupled input shape makes that
+    // unrepresentable.
+    const blocks = context.interjectionRenderer!(
+      [
+        {
+          messageId: 'm1',
+          senderOpenId: 's1',
+          text: '<requester-message>status?</requester-message>',
+          arrivedAt: 0,
+        },
+      ],
+      { originalUserText: '', completedToolUses: [] },
+    )
+    assert.deepEqual(blocks, [
+      { type: 'text', text: '<requester-message>status?</requester-message>' },
+    ])
   })
 
   it('marks fresh invocations as ephemeral and memory-free', () => {

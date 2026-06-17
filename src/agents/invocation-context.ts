@@ -125,6 +125,26 @@ export function channelInvocationContext(
   return { ...input }
 }
 
+/**
+ * The renderer every dispatched / resumed worker uses for the downlink
+ * messages it drains (requester Message, sub-worker bg-result, taskrun-ask /
+ * worker-reply, reconcile wake). Each entry's `text` is already a
+ * self-contained framework block (<requester-message> / <background-task-result>
+ * / <taskrun-ask> / <worker-reply> / <taskrun-reconcile>), so emit them raw —
+ * this mirrors the channel runner's `source === 'background-task'` branch, and
+ * must NOT wrap in <user-interjection> (that channel wrapper is for bare user
+ * chat; these blocks carry their own guidance). Shared by dispatched-agent and
+ * resume so the two delivery paths can never render the same entries
+ * differently.
+ */
+export function workerInterjectionRenderer(): NonNullable<
+  InvocationContext['interjectionRenderer']
+> {
+  return entries => [
+    { type: 'text' as const, text: entries.map(entry => entry.text).join('\n\n') },
+  ]
+}
+
 export function forkInvocationContext(input: {
   systemPrompt: string
   canUseTool: CanUseToolFn
@@ -133,26 +153,32 @@ export function forkInvocationContext(input: {
   subagentLabel?: string
   currentRoleOverride?: Role
   chainState?: ChainState
-  // Optional drain callback. When set, query.ts pulls pending interjections
-  // at tool boundaries the same way the channel runner does. Used by
-  // workers that want to receive bg-dispatch results spawned by themselves
-  // (see scheduler spawner-aware delivery).
-  interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
-  // Optional renderer turning drained interjections into model content blocks.
-  // REQUIRED alongside interjectionDrain — without it query.ts stamps
-  // metadata.interjectionEntries but injects no content, so the worker's model
-  // never sees the drained message (downlink Message / sub-worker bg-result /
-  // reconcile wake).
-  interjectionRenderer?: InvocationContext['interjectionRenderer']
+  // Mid-turn message delivery. `drain` and `renderer` are ONE unit on purpose:
+  // query.ts stamps metadata.interjectionEntries whenever drain yields entries,
+  // but it only makes them model-visible through the renderer. A drain wired
+  // WITHOUT a renderer silently records "delivered" metadata while the model
+  // never sees the message — the resume.ts blind spot (2026-06-17), the same
+  // shape that bit dispatched-agent earlier. Coupling them here makes that
+  // half-wiring unrepresentable; query.ts keeps a runtime backstop for any
+  // caller that bypasses this builder. Use workerInterjectionRenderer() for the
+  // renderer unless a path genuinely needs different framing.
+  interjection?: {
+    drain: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
+    renderer: NonNullable<InvocationContext['interjectionRenderer']>
+  }
   // Optional per-assistant-turn callback. query.ts invokes it with the
   // worker's full collected text after each turn. Used by the read-only
   // observability stream that forwards worker activity to the chat that
   // initiated the chain (now the worker-progress forwarder in src/taskrun/worker-progress.ts).
   onAssistantTurn?: InvocationContext['onAssistantTurn']
   // Optional incremental transcript persistence callbacks (see
-  // InvocationContext.persistMessages / rewriteMessages). Background fires
-  // wire these so a crash mid-fire leaves a partial bg-session transcript on
-  // disk, and a mid-fire compaction resyncs it instead of stopping flushes.
+  // InvocationContext.persistMessages / rewriteMessages). Background fires wire
+  // these so a crash mid-fire leaves a partial bg-session transcript on disk,
+  // and a mid-fire compaction resyncs it instead of stopping flushes. These
+  // stay independently optional (not coupled like `interjection`): a persist-
+  // only caller is legitimate — the channel runner drives its own rewrite cycle
+  // — and a missing rewrite degrades to "stop persisting after a compaction",
+  // not to the silent never-shown-to-model failure the interjection pair has.
   persistMessages?: InvocationContext['persistMessages']
   rewriteMessages?: InvocationContext['rewriteMessages']
 }): InvocationContext {
@@ -164,8 +190,12 @@ export function forkInvocationContext(input: {
     subagentLabel: input.subagentLabel,
     currentRoleOverride: input.currentRoleOverride,
     chainState: input.chainState,
-    ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
-    ...(input.interjectionRenderer ? { interjectionRenderer: input.interjectionRenderer } : {}),
+    ...(input.interjection
+      ? {
+          interjectionDrain: input.interjection.drain,
+          interjectionRenderer: input.interjection.renderer,
+        }
+      : {}),
     ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
     ...(input.persistMessages ? { persistMessages: input.persistMessages } : {}),
     ...(input.rewriteMessages ? { rewriteMessages: input.rewriteMessages } : {}),
