@@ -171,6 +171,21 @@ async function markBackgroundTaskRunTerminalBestEffort(
   }
 }
 
+/** True when the run is currently parked by a user /stop. Such a run's late
+ *  normal fire-completion must not autonomously wake its receiver — the user
+ *  stopped it on purpose; re-entry is the stop-notice on their next message. */
+async function isRunUserStopped(
+  canonicalUser: string,
+  taskRunId: string,
+): Promise<boolean> {
+  try {
+    const run = await getTaskRun(taskRunId, canonicalUser)
+    return run?.status === 'waiting' && run.waitReason === 'user-stop'
+  } catch {
+    return false
+  }
+}
+
 async function appendBackgroundArtifactsBestEffort(
   canonicalUser: string,
   taskRunId: string,
@@ -710,12 +725,24 @@ export class BackgroundTaskScheduler {
       task.notifyOn === 'always' ||
       (task.notifyOn === 'success' && outcome.kind === 'success') ||
       (task.notifyOn === 'failure' && outcome.kind === 'failure')
+    // A fire the user /stopped lands its run at waiting{user-stop}; the abort
+    // does not always interrupt an in-flight LLM turn, so the turn can run to a
+    // normal (non-aborted) completion afterward. markDelivered already declined
+    // to overwrite the user-stop, so this fire produced no real `delivered`
+    // result — and an autonomous bg-result wake here would re-enter idle main
+    // ~1min after the user stopped, which then resumes the worker and replies
+    // (2026-06-17 dogfood). The user explicitly stopped this; its late result
+    // waits in the ledger for the stop-notice on the user's NEXT message, the
+    // only sanctioned re-entry. Mirror the aborted-outcome suppression above.
+    const userStopped = taskRunId
+      ? await isRunUserStopped(canonicalUser, taskRunId)
+      : false
     // A child-join parent we just woke received this fire's full result inline
     // via its resume; pushing the same result again as a bg-result notification
     // would deliver it twice. The explicit wait wins — suppress the redundant
     // notification. Fires with no waiting parent (the common fire-and-forget
     // case) still notify normally.
-    if (shouldNotify && !wokeChildJoinParent) {
+    if (shouldNotify && !wokeChildJoinParent && !userStopped) {
       await this.deliverCompletion(canonicalUser, task, fireUuid, firedAt, outcome, taskRunId)
     }
   }
