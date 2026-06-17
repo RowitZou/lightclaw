@@ -18,10 +18,19 @@ export const LOCALES = {
     'common.usage': '用法：{usage}',
 
     // ---- Banner ----
-    'banner.greet': '你好，{name}。我在。',
-    'banner.greetAnonymous': 'LightClaw 已就绪。',
-    'banner.commands': '命令：{list}',
+    'banner.console': 'LightClaw · 管理控制台（{name}）',
+    'banner.consoleAnon': 'LightClaw · 管理控制台',
+    'banner.hint': '对话在飞书；此处仅运维 · /help 查看命令',
+    'banner.pending': '⚠ {count} 个配对申请待处理 —— /user pending',
+    'banner.firstRunIntro': '这里只跑运维 slash 命令，不与 agent 对话 —— 要和 agent 对话，请在飞书里找 bot。',
+    'banner.firstRunNext': '下一步：\n  · 在飞书添加 bot 并发消息，即可开始对话\n  · /user pending                       查看待审批的配对申请\n  · /user approve <code> [--as <名字>]  批准接入（--as 可把申请人并入指定的规范用户名，如管理员本人）\n  · /help                               查看全部命令',
     'banner.slashOnly': '终端是 slash 命令控制台，不接受自由对话；与 agent 对话请走飞书。输入 /help 查看可用命令。',
+
+    // ---- Init wizard ----
+    'wizard.notInitialized': 'LightClaw 尚未初始化，正在设置首位管理员。',
+    'wizard.adminNamePrompt': '管理员标识名（默认：{default}）：',
+    'wizard.created': '已创建管理员 {name}，并绑定 terminal:{link}。',
+    'wizard.invalidName': '无效的管理员标识名：{name}',
 
     // ---- /help ----
     'help.title': 'LightClaw 命令：',
@@ -652,10 +661,19 @@ export const LOCALES = {
     'common.usage': 'Usage: {usage}',
 
     // ---- Banner ----
-    'banner.greet': 'Hi {name}. I\'m here.',
-    'banner.greetAnonymous': 'LightClaw is ready.',
-    'banner.commands': 'Commands: {list}',
+    'banner.console': 'LightClaw · admin console ({name})',
+    'banner.consoleAnon': 'LightClaw · admin console',
+    'banner.hint': 'Chat lives in Feishu; this console is ops-only · type /help for commands',
+    'banner.pending': '⚠ {count} pairing request(s) awaiting review — /user pending',
+    'banner.firstRunIntro': 'This console runs ops slash commands only — it does not chat with the agent. To talk to the agent, message the bot in Feishu.',
+    'banner.firstRunNext': 'Next steps:\n  · Add the bot in Feishu and send it a message to start chatting\n  · /user pending                        Review pending pairing requests\n  · /user approve <code> [--as <name>]   Approve access (--as merges the applicant into the named canonical user, e.g. the admin)\n  · /help                                List all commands',
     'banner.slashOnly': 'The terminal is a slash-command console — it does not take freeform chat; reach the agent through Feishu. Type /help for the command list.',
+
+    // ---- Init wizard ----
+    'wizard.notInitialized': 'LightClaw is not initialized. Setting up the first admin.',
+    'wizard.adminNamePrompt': 'Admin canonical name (default: {default}): ',
+    'wizard.created': 'Created admin user {name} and linked terminal:{link}.',
+    'wizard.invalidName': 'Invalid admin identity name: {name}',
 
     // ---- /help ----
     'help.title': 'LightClaw commands:',

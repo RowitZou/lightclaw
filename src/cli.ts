@@ -212,7 +212,7 @@ async function main(): Promise<void> {
   // subscription, all of which assume a single owner.
   acquireProcessLock()
 
-  await ensureAdminInitialized({ interactive: true })
+  const { firstRun } = await ensureAdminInitialized({ interactive: true })
   const currentUserId = await resolveTerminalUserId()
 
   // Order matters: initializeApp must run BEFORE startEnabledChannels so the
@@ -241,7 +241,7 @@ async function main(): Promise<void> {
       )
     })
     try {
-      await startRepl({ config })
+      await startRepl({ config, firstRun })
     } finally {
       // Ctrl-D exits the admin console and unwinds here. (Ctrl-C / SIGTERM
       // go through gracefulShutdown / installSignalHandlers instead, which

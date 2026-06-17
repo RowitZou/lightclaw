@@ -8,11 +8,16 @@ import { t } from './i18n/index.js'
 import type { ReplContext } from './commands/registry.js'
 import { type LightClawConfig } from './config.js'
 import { isAdmin as checkIsAdmin } from './identity/store.js'
+import { listPending } from './identity/pairing.js'
 import { getCurrentUserId, getSessionId } from './state.js'
 import type { Message } from './types.js'
 
 type ReplParams = {
   config: LightClawConfig
+  // True only on the very first launch (the init wizard just created the
+  // admin). Drives the one-time orientation banner instead of the
+  // steady-state line.
+  firstRun?: boolean
 }
 
 /**
@@ -63,12 +68,25 @@ export async function startRepl(params: ReplParams): Promise<void> {
     persistMeta: async () => {},
   }
 
-  output.write(chalk.cyan(
-    `${currentUserId ? t('banner.greet', { name: currentUserId }) : t('banner.greetAnonymous')}\n`,
-  ))
-  output.write(chalk.gray(
-    `${t('banner.commands', { list: registry.bannerLine(currentUserIsAdmin) })}\n\n`,
-  ))
+  if (params.firstRun) {
+    // First launch: orient the freshly set-up admin (console is ops-only, the
+    // agent lives in Feishu) and point at the natural next actions.
+    output.write(chalk.cyan(`${t('banner.consoleAnon')}\n`))
+    output.write(chalk.gray(`${t('banner.firstRunIntro')}\n\n`))
+    output.write(chalk.gray(`${t('banner.firstRunNext')}\n\n`))
+  } else {
+    output.write(chalk.cyan(
+      `${currentUserId ? t('banner.console', { name: currentUserId }) : t('banner.consoleAnon')}\n`,
+    ))
+    output.write(chalk.gray(`${t('banner.hint')}\n`))
+    // High-value runtime signal: surface unhandled pairing requests up front
+    // so the admin doesn't have to poll /user pending to discover them.
+    const pending = await listPending().catch(() => [])
+    if (pending.length > 0) {
+      output.write(chalk.yellow(`${t('banner.pending', { count: pending.length })}\n`))
+    }
+    output.write('\n')
+  }
 
   while (true) {
     let line: string

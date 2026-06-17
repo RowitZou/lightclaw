@@ -87,10 +87,6 @@ export class ReplCommandRegistry {
     return this.commands.get(name)
   }
 
-  bannerLine(isAdmin = true): string {
-    return this.list(isAdmin).map(command => command.name).join(' ')
-  }
-
   async dispatch(
     line: string,
     ctx: ReplContext,
