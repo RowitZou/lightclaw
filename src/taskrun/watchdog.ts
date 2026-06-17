@@ -417,6 +417,28 @@ export function detectTaskRunFindings(
     if ((run.kind ?? 'dispatch') !== 'root' || run.standing === true || isTerminal(run.status)) {
       continue
     }
+    // A root parked by a deliberate hold — the human via /stop, or a requester
+    // hold — is a pending decision, not an idle goal. /stop parks the whole
+    // rooted tree, so the root itself lands in `waiting{user-stop}`; without
+    // this branch a stopped root whose only child already finished trips the
+    // 60s idle-root nudge and main asks the user "continue / pause / cancel?"
+    // ~1min after they stopped it (2026-06-17 dogfood). Route it to the same
+    // `held` finding the non-root path uses: the long waitingGraceMs grace plus
+    // the "don't silently restart a user-stop" guidance, never the idle-root
+    // "dispatch its next stage" nudge.
+    if (run.status === 'waiting' && (run.waitReason === 'user-stop' || run.waitReason === 'requester-hold')) {
+      const waitingAt = run.waitingAt ?? run.updatedAt
+      if (waitingGraceMs > 0 && input.now - waitingAt > waitingGraceMs) {
+        const events = input.eventsByRun.get(run.id) ?? []
+        findings.push(toFinding(run, runById, {
+          kind: 'held',
+          since: waitingAt,
+          now: input.now,
+          lastStateEventSeq: lastStateEventSeqFor(events),
+        }))
+      }
+      continue
+    }
     if (rootIdleGraceMs <= 0) continue
     const descendants = runs.filter(r => r.rootRunId === run.id && r.id !== run.id)
     if (descendants.some(r => !isTerminal(r.status))) continue

@@ -135,6 +135,47 @@ describe('TaskRun watchdog', () => {
     assert.deepEqual(freshFindings, [])
   })
 
+  it('does not report a user-stopped root as idle-root (held grace, not the 60s idle nudge)', () => {
+    // /stop parks the whole rooted tree, so the root lands in waiting{user-stop}
+    // and its only child is already done. The idle-root liveness check would
+    // otherwise fire ~60s later and main would nag the user "continue / pause /
+    // cancel?" right after they stopped it (2026-06-17 dogfood). A deliberate
+    // hold gets the long held grace instead, and surfaces as `held` (carrying
+    // the user-stop reason) only after waitingGraceMs — never idle-root.
+    const runs = [
+      meta({ id: 'tr_stopped_root', kind: 'root', status: 'waiting', waitingAt: 1_000, waitReason: 'user-stop' }),
+      meta({ id: 'tr_done_child', status: 'done', parentRunId: 'tr_stopped_root', rootRunId: 'tr_stopped_root', updatedAt: 900 }),
+    ]
+    // Past the 60s idle grace but well inside the held grace: no finding.
+    const quiet = detectTaskRunFindings(runs, {
+      now: 1_000 + 60_001,
+      deliveredGraceMs: 0,
+      waitingGraceMs: 21_600_000,
+      rootIdleGraceMs: 60_000,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(quiet, [])
+
+    // Past the held grace: surfaces as held with the user-stop reason, not idle-root.
+    const held = detectTaskRunFindings(runs, {
+      now: 1_000 + 60_001,
+      deliveredGraceMs: 0,
+      waitingGraceMs: 1_000,
+      rootIdleGraceMs: 60_000,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(held.map(f => [f.runId, f.kind]), [['tr_stopped_root', 'held']])
+    assert.equal(held[0]?.waitReason, 'user-stop')
+  })
+
   it('does not report a paused standing dispatch queued child as stranded', () => {
     const runs = [
       meta({ id: 'tr_standing_root', kind: 'root', standing: true, status: 'running' }),
