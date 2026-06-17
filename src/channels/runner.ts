@@ -409,20 +409,26 @@ export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
  * Where one assistant block of a synthetic wake goes. Interim narration (a
  * non-final text+tool turn) stays on the root card's timeline. The FINAL block
  * (an end_turn text — the agent finished this handling) goes out as a real
- * chat message ('standing-chat', @ the user in groups) when it carries
- * something the user should see:
- *  - a concluding wake (`isConcludingWake`: standing-service per-fire report,
- *    or the wake's own root already terminal),
- *  - the agent answered a user interjection this handling (`hadInterjection`),
- *    OR
- *  - the agent concluded a task this handling (`concludedRoot`: TaskUpdate
- *    deliver fired — an incremental delivery, even while the wake's own root
- *    stays open).
- * `isConcludingWake` alone was too narrow: it keyed routing off the WAKE's
- * root being terminal, so incremental deliveries and interjection answers
- * written while roots were still open got carded and silenced (high-intensity
- * multi-task dogfood, 2026-06-13). The two flags are additive — they only
- * route MORE to chat, never less. User turns and rootless wakes always 'chat'.
+ * chat message ('standing-chat', @ the user in groups) when it is USER-FACING:
+ * this handling produced something the user should see, not bookkeeping. Four
+ * signals, OR'd into one predicate — each is additive (only ever routes MORE
+ * to chat, never less), so adding a future signal can never silence an
+ * existing one:
+ *  - `userFacingWake` — the wake itself carries a worker's upward ask/reply
+ *    the user is waiting on (idle-wake path; the in-flight path is the
+ *    `hadInterjection` signal, since such a wake drains as an interjection),
+ *  - `hadInterjection` — this handling drained queued interjections (the agent
+ *    is answering the user),
+ *  - `concludedRoot` — this handling concluded a task (`TaskUpdate deliver` —
+ *    an incremental delivery, even while the wake's own root stays open),
+ *  - `isConcludingWake` — the wake's own root is a standing-service per-fire
+ *    report or already terminal (the expensive disk lookup; checked last so
+ *    the cheap in-memory flags short-circuit it).
+ * The first three close gaps `isConcludingWake` alone left: it keyed routing
+ * off the WAKE's root being terminal, so worker relays, incremental
+ * deliveries, and interjection answers written while roots were still open got
+ * carded and silenced (high-intensity multi-task dogfood 2026-06-13; worker
+ * upward-reply relay 2026-06-17). User turns and rootless wakes always 'chat'.
  * Exported for regression coverage.
  */
 export async function routeSyntheticBlock(
@@ -431,12 +437,13 @@ export async function routeSyntheticBlock(
   isFinal: boolean,
   opts?: { hadInterjection?: boolean; concludedRoot?: boolean },
 ): Promise<SyntheticBlockRoute> {
-  if (
+  const userFacingFinal =
     isFinal &&
-    ((await isConcludingWake(message)) ||
+    (message.userFacingWake === true ||
       opts?.hadInterjection === true ||
-      opts?.concludedRoot === true)
-  ) {
+      opts?.concludedRoot === true ||
+      (await isConcludingWake(message)))
+  if (userFacingFinal) {
     return 'standing-chat'
   }
   return (await routeSyntheticNarration(message, text)) ? 'card' : 'chat'

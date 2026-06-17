@@ -819,6 +819,9 @@ async function askParentFromCurrentRun(input: {
         source: 'background-task',
         logPrefix: '[taskrun-ask]',
         taskCardRoot: { owner: input.owner, rootRunId: own.rootRunId },
+        // A worker's question is content the user is waiting on — main's relay
+        // of it must reach chat, not be carded, even with the root still open.
+        userFacingWake: true,
       })
       delivered = wake.ok
     }
@@ -908,6 +911,9 @@ async function replyToRequesterFromCurrentRun(input: {
         source: 'background-task',
         logPrefix: '[worker-reply]',
         taskCardRoot: { owner: input.owner, rootRunId: own.rootRunId },
+        // A worker's reply is content the user is waiting on — main's relay of
+        // it must reach chat, not be carded, even with the root still open.
+        userFacingWake: true,
       })
       delivered = wake.ok
     }

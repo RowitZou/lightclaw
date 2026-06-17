@@ -26,6 +26,11 @@ export async function wakeOrInterject(input: {
   /** Root TaskRun this wake settles; rides the synthetic turn (and any
    *  rescue replay) so its narration lands on the task card timeline. */
   taskCardRoot?: { owner: string; rootRunId: string }
+  /** True when the block is a worker's upward ask/reply the user is waiting
+   *  on (not autonomous progress). Rides the idle synthetic turn so its final
+   *  block routes to chat in full; the in-flight path is covered separately by
+   *  the interjection drain. See `NormalizedChannelMessage.userFacingWake`. */
+  userFacingWake?: boolean
 }): Promise<WakeOrInterjectResult> {
   if (channelInterjectionQueue.hasInflightFor(input.targetSessionId)) {
     channelInterjectionQueue.push(input.targetSessionId, {
@@ -94,6 +99,7 @@ export async function wakeOrInterject(input: {
     ...(parsed.kind === 'group' && parsed.threadId ? { threadId: parsed.threadId } : {}),
     ...(replyAnchor ? { replyAnchorMessageId: replyAnchor } : {}),
     ...(input.taskCardRoot ? { taskCardRoot: input.taskCardRoot } : {}),
+    ...(input.userFacingWake ? { userFacingWake: true } : {}),
     senderOpenId: parsed.kind === 'group' ? parsed.senderOpenId : input.ownerOpenId,
     text: input.block,
     synthetic: true,

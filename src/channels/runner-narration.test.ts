@@ -187,6 +187,29 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
     assert.equal(await progressCount(root.id), 0)
   })
 
+  void it('finite root still running, but the wake is a WORKER UPWARD REPLY (userFacingWake): final block → chat', async () => {
+    // 2026-06-17 dogfood regression: a worker called MessageDispatch to reply
+    // UP to main (`<worker-reply>` routed to the root via wakeOrInterject).
+    // Main was idle, so the reply was the synthetic turn's OPENING block — not
+    // a drained interjection — and the root was still RUNNING (a vLLM job
+    // loading shards). isConcludingWake / hadInterjection / concludedRoot all
+    // false → main's relay ("通信通了，它回的是…") carded + truncated to 400 chars,
+    // so the user never saw the answer they were waiting on. userFacingWake
+    // routes the final relay to chat even with the root open.
+    const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'vllm bringup' })
+    const message: NormalizedChannelMessage = {
+      ...syntheticFor(root.id),
+      userFacingWake: true,
+    }
+    assert.equal(await routeSyntheticBlock(message, '正在解读执行者的回复', false), 'card', 'interim still cards')
+    assert.equal(
+      await routeSyntheticBlock(message, '通信通了，它回的是：vLLM 服务 job 已重新提交且 RUNNING…', true),
+      'standing-chat',
+      'the final relay of a worker upward reply must reach chat even with the wake root open',
+    )
+    assert.equal(await progressCount(root.id), 1, 'only the interim block was carded')
+  })
+
   void it('finite root still running, NO interjection and NO conclusion: final block stays carded (noise reduction preserved)', async () => {
     const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'pure interim' })
     const message = syntheticFor(root.id)

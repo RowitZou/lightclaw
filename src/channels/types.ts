@@ -107,6 +107,17 @@ export type NormalizedChannelMessage = {
    *  user messages AND on the post-approval replay synthetic, which carries
    *  the user's real words and SHOULD keep the sender prefix. */
   frameworkText?: boolean
+  /** Set on a synthetic wake whose block is a worker's UPWARD communication
+   *  the user is waiting on — a `<taskrun-ask>` or `<worker-reply>` routed to
+   *  a root (main's standing work order) via `wakeOrInterject`. Unlike an
+   *  autonomous progress tick (`<background-task-result>` / `<taskrun-reconcile>`),
+   *  this wake carries content main relays back to the user, so its FINAL block
+   *  must reach chat in full rather than be folded (and truncated) onto the task
+   *  card — even while the wake's own root stays open. `routeSyntheticBlock`
+   *  reads this for the idle-wake path; the in-flight path is already covered by
+   *  the interjection drain (`hadInterjection`). Absent on autonomous wakes and
+   *  genuine user messages. */
+  userFacingWake?: boolean
   /** Set on post-query interjection replays: the message already passed the
    *  channel's targeting gate (e.g. the group @-mention check) on first
    *  arrival; replays must not be re-gated — the mention sidecar is gone. */
