@@ -274,6 +274,49 @@ describe('requestPermission disk-fresh identity rules reload', () => {
   })
 })
 
+describe('requestPermission disk-fresh permission mode reload', () => {
+  // Cross-session yolo switch (2026-06-17): a background-task fire snapshots
+  // permissionMode once at fire start into its SessionContext and never
+  // rebuilds it. When the user flips `/mode bypassPermissions` in another
+  // session, the new mode lands on disk (preferences.json) but the running
+  // fire kept asking for approval under the old 'default' mode for its whole
+  // run. Mode must reload from disk per requestPermission, mirroring the
+  // identity-rules reload above — otherwise the bg fire never sees the switch.
+  it('picks up a permission-mode switch written to disk mid-run', async () => {
+    const { setIdentityPreference } = await import('../identity/preferences.js')
+    const ctx = createSessionContext({
+      cwd: tmpHome,
+      model: 'm',
+      sessionsDir: path.join(tmpHome, 'sessions'),
+      memoryDir: path.join(tmpHome, 'memory'),
+      sessionId: 'permission-index-test',
+      currentUserId: 'alice',
+      // Snapshot starts at 'default'; rm -rf would normally ASK (and here,
+      // with no approver, deny) — proving the snapshot mode is in force.
+      permissionMode: 'default',
+    })
+    return runWithSessionContext(ctx, async () => {
+      // Simulate `/mode bypassPermissions` in another session: the switch is
+      // persisted to disk but this context's snapshot is NOT updated.
+      setIdentityPreference({
+        canonicalUser: 'alice',
+        key: 'permissionMode',
+        value: 'bypassPermissions',
+      })
+      const decision = await requestPermission({
+        tool: fakeTool('Bash', 'execute'),
+        toolInput: { command: 'rm -rf /tmp/x' },
+        ctx: { isSubagent: false },
+      })
+      assert.equal(
+        decision.behavior,
+        'allow',
+        'fresh disk reload must surface the cross-session yolo switch on this same call',
+      )
+    })
+  })
+})
+
 async function withPermissionState<T>(fn: () => Promise<T>): Promise<T> {
   const ctx = createSessionContext({
     cwd: tmpHome,

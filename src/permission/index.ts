@@ -1,5 +1,6 @@
 import { isUserDefinedAgent } from '../agents/registry.js'
 import { getConfig } from '../config.js'
+import { loadIdentityPreferences } from '../identity/preferences.js'
 import { getCurrentRole } from '../state.js'
 import {
   getAllPermissionRules,
@@ -7,6 +8,7 @@ import {
   getPermissionApprover,
   getPermissionMode,
   setIdentityRules,
+  setPermissionMode,
 } from '../state.js'
 import type { Tool } from '../tool.js'
 import { recordAudit } from './audit.js'
@@ -27,10 +29,11 @@ export async function requestPermission(input: {
 }): Promise<PermissionDecision> {
   const { tool, toolInput, ctx } = input
   const config = getConfig()
-  const mode = getPermissionMode()
-  // Identity rules are persisted per-canonical-user but cached as an
-  // in-memory snapshot on each `SessionContext` (Phase 20 ALS isolation).
-  // A card-click `allow_rules` runs in the Feishu callback's own ALS
+  // Identity rules AND permission mode are persisted per-canonical-user but
+  // cached as an in-memory snapshot on each `SessionContext` (Phase 20 ALS
+  // isolation).
+  //
+  // Rules: a card-click `allow_rules` runs in the Feishu callback's own ALS
   // context, so it can `setIdentityRules` only on its own snapshot — the
   // long-running query() loop here never sees the new rule until the next
   // resetSessionContext, which in long turns causes the same kind of ASK
@@ -39,15 +42,35 @@ export async function requestPermission(input: {
   // sweeps already-pending tails (it reloads from disk), but the *next*
   // tool_use evaluatePermission call against this stale snapshot still
   // verdicts 'ask'. Reload from disk on every requestPermission so the
-  // freshly-installed rule takes effect immediately. Cost: one tiny JSON
-  // read per tool call; permissions.json is per-user and small. Mirror the
-  // refresh into the local in-memory snapshot too so callers that read it
-  // later in the same tool call (audit / suggester) see the current set.
+  // freshly-installed rule takes effect immediately. Mirror the refresh into
+  // the local in-memory snapshot too so callers that read it later in the
+  // same tool call (audit / suggester) see the current set.
+  //
+  // Mode: the same staleness hits `permissionMode` on a different surface.
+  // `/mode bypassPermissions` (yolo) in one session writes the new mode to
+  // preferences.json and to that session's snapshot only. A long-running
+  // turn in *another* session keeps the old mode for its whole run — most
+  // visibly a background-task fire, which snapshots the mode once at fire
+  // start (`runBackgroundTaskFire`) and never rebuilds its SessionContext,
+  // so it keeps rendering approval cards under the old mode after the user
+  // already switched to yolo elsewhere. Foreground turns rebuild context
+  // from disk each inbound message and self-heal next turn; a bg fire has no
+  // such rebuild point. Reload the persisted mode here too (same one-tiny-
+  // JSON-read cost as rules) so a cross-session switch lands at the next
+  // tool boundary. Only override when the file actually carries a mode — an
+  // absent key keeps the context snapshot, which already encodes the config
+  // default chosen at session creation. The ceiling clamp inside
+  // getPermissionMode() still caps the freshly-loaded mode.
   const userId = getCurrentUserId()
   if (userId) {
     const fresh = loadIdentityRules(userId)
     setIdentityRules(fresh)
+    const freshMode = loadIdentityPreferences(userId).permissionMode
+    if (freshMode) {
+      setPermissionMode(freshMode)
+    }
   }
+  const mode = getPermissionMode()
   let verdict = evaluatePermission({
     toolName: tool.name,
     toolSource: tool.source,
