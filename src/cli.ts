@@ -30,7 +30,7 @@ import {
 import { startRepl } from './repl.js'
 import { runWithSessionContext } from './session-context.js'
 import { getRuntimePool } from './state.js'
-import { VERSION } from './version.js'
+import { VERSION, getBuildId } from './version.js'
 
 type CliArgs = {
   help: boolean
@@ -130,7 +130,7 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 function printHelp(): void {
-  console.log(`LightClaw v${VERSION}
+  console.log(`LightClaw v${VERSION} (build ${getBuildId()})
 
 Usage:
   lightclaw
@@ -193,7 +193,7 @@ async function main(): Promise<void> {
   // Installed here, right after home is finalized, so config-wizard /
   // process-lock / channel-startup output is captured too.
   const logFile = installStderrTee()
-  process.stderr.write(`[lightclaw] v${VERSION} logging to ${logFile}\n`)
+  process.stderr.write(`[lightclaw] v${VERSION} (build ${getBuildId()}) logging to ${logFile}\n`)
 
   const homeConfigPath = path.join(lightclawHome(), 'config.json')
   if (!args.config && !existsSync(homeConfigPath)) {
