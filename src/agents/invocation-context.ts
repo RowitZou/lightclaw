@@ -138,6 +138,12 @@ export function forkInvocationContext(input: {
   // workers that want to receive bg-dispatch results spawned by themselves
   // (see scheduler spawner-aware delivery).
   interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
+  // Optional renderer turning drained interjections into model content blocks.
+  // REQUIRED alongside interjectionDrain — without it query.ts stamps
+  // metadata.interjectionEntries but injects no content, so the worker's model
+  // never sees the drained message (downlink Message / sub-worker bg-result /
+  // reconcile wake).
+  interjectionRenderer?: InvocationContext['interjectionRenderer']
   // Optional per-assistant-turn callback. query.ts invokes it with the
   // worker's full collected text after each turn. Used by the read-only
   // observability stream that forwards worker activity to the chat that
@@ -159,6 +165,7 @@ export function forkInvocationContext(input: {
     currentRoleOverride: input.currentRoleOverride,
     chainState: input.chainState,
     ...(input.interjectionDrain ? { interjectionDrain: input.interjectionDrain } : {}),
+    ...(input.interjectionRenderer ? { interjectionRenderer: input.interjectionRenderer } : {}),
     ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
     ...(input.persistMessages ? { persistMessages: input.persistMessages } : {}),
     ...(input.rewriteMessages ? { rewriteMessages: input.rewriteMessages } : {}),

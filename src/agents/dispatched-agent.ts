@@ -19,7 +19,7 @@ import { getCurrentSessionContext, runWithSessionContext } from '../session-cont
 import { getDaemonLocalRuntime, getRuntime } from '../state.js'
 import { resolveDispatchedFireSecrets } from './dispatch-secrets.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import { forkInvocationContext } from './invocation-context.js'
+import { forkInvocationContext, type InterjectionEntry } from './invocation-context.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import {
   appendMessages,
@@ -201,7 +201,23 @@ export async function runDispatchedAgent(
       currentRoleOverride: params.currentRoleOverride,
       chainState: params.chainState,
       ...(chainSessionId
-        ? { interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId) }
+        ? {
+            interjectionDrain: () => channelInterjectionQueue.drain(chainSessionId),
+            // Without a renderer, query.ts stamps metadata.interjectionEntries
+            // but injects NO content block, so the worker's model never sees a
+            // downlink message (requester Message, sub-worker bg-result, or a
+            // reconcile wake) — only the queue is drained. Every worker-bound
+            // entry's `text` is already a self-contained framework block
+            // (<requester-message> / <background-task-result> / <taskrun-ask> /
+            // <worker-reply> / <taskrun-reconcile>), so emit them raw — mirrors
+            // the channel runner's `source === 'background-task'` branch, and
+            // must NOT wrap in <user-interjection> (that channel wrapper is for
+            // bare user chat; these blocks carry their own guidance).
+            interjectionRenderer: (entries: InterjectionEntry[]) => [{
+              type: 'text' as const,
+              text: entries.map(entry => entry.text).join('\n\n'),
+            }],
+          }
         : {}),
       ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
       ...(effectivePersist ? { persistMessages: effectivePersist } : {}),

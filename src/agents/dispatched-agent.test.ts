@@ -842,6 +842,91 @@ test('explicit persistMessages caller wins over the default fallback', async () 
   }
 })
 
+test('dispatched worker renders drained downlink interjections into model content (not metadata-only)', async () => {
+  // Regression (2026-06-17 dogfood): a Message sent DOWN to a running worker
+  // was drained from the queue and stamped as metadata, but the worker's model
+  // never saw it — the dispatched context wired interjectionDrain WITHOUT an
+  // interjectionRenderer, so query.ts's renderInterjectionContent returned [].
+  const { channelInterjectionQueue } = await import('../channels/feishu/interjection-queue.js')
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-interject-'))
+  setLightclawHomeOverride(tempDir)
+  try {
+    writeMinimalConfig(tempDir)
+    const config = getConfig()
+    const ctx = createSessionContext({
+      cwd: tempDir,
+      model: 'fake-model',
+      sessionsDir: path.join(tempDir, 'sessions'),
+      memoryDir: path.join(tempDir, 'memory', 'alice'),
+      currentUserId: 'alice',
+      currentRole: roleWithTools(['Dispatch']),
+      runtime: fakeRuntime(tempDir),
+      sessionId: 'main-session',
+    })
+    const chainState = makeChainState('dispatch-interject')
+    const chainSessionId = chainState.path.at(-1)!.sessionId // 'child'
+    // Clear any stale entry, then seed a downlink requester-message — the exact
+    // self-contained framework block the Message tool pushes.
+    channelInterjectionQueue.drain(chainSessionId)
+    const blockText = '<requester-message reply-code="rc_test">\nstatus check please\n</requester-message>'
+    channelInterjectionQueue.push(chainSessionId, {
+      messageId: 'message-dispatch-tr_x-1',
+      senderOpenId: 'taskrun:tr_x',
+      text: blockText,
+      arrivedAt: 1,
+      source: 'user',
+      synthetic: true,
+    })
+
+    let renderedText: string | undefined
+    let hadRenderer = false
+    await runWithSessionContext(ctx, async () => runDispatchedAgent({
+      dispatchPrompt: 'do worker work',
+      role: roleWithTools([]),
+      tools: [],
+      config,
+      canonicalUser: 'alice',
+      chainState,
+      label: 'subagent_webSearcher',
+      queryImpl: async params => {
+        const drained = (await params.invocation.interjectionDrain?.()) ?? []
+        hadRenderer = typeof params.invocation.interjectionRenderer === 'function'
+        const blocks = params.invocation.interjectionRenderer?.(drained, {
+          originalUserText: 'do worker work',
+          completedToolUses: [],
+        }) ?? []
+        renderedText = blocks
+          .map(b => (b.type === 'text' ? b.text : ''))
+          .join('\n')
+        return {
+          messages: [
+            ...params.messages,
+            createAssistantMessage({
+              content: [{ type: 'text', text: 'done' }],
+              stopReason: 'end_turn',
+              usage: emptyUsage(),
+            }),
+          ],
+          assistantText: 'done',
+          finalReplyText: 'done',
+          stopReason: 'end_turn',
+          didCompact: false,
+          usage: emptyUsage(),
+        }
+      },
+    }))
+
+    assert.equal(hadRenderer, true, 'dispatched worker context must wire an interjectionRenderer')
+    assert.ok(
+      renderedText?.includes('status check please'),
+      'drained downlink message must reach the worker model content, not just metadata',
+    )
+  } finally {
+    setLightclawHomeOverride(undefined)
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 function writeMinimalConfig(home: string): void {
   writeFileSync(path.join(home, 'config.json'), JSON.stringify({
     endpoints: { fake: { apiKey: 'sk-fake' } },
