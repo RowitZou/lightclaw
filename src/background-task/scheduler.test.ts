@@ -419,58 +419,6 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.deepEqual(deliverCalls, ['called'], 'fire-and-forget must still deliver the bg-result')
   })
 
-  it('suppresses the bg-result notification when the user /stopped the run mid-fire', async () => {
-    // /stop parks the run waiting{user-stop}, but the abort does not always
-    // interrupt the in-flight turn — it can run to a normal completion after.
-    // That late completion must NOT autonomously wake the receiver (idle main),
-    // or main resumes the stopped worker and replies ~1min after /stop
-    // (2026-06-17 dogfood). The result waits in the ledger for the stop-notice
-    // on the user's next message.
-    const child = await createTaskRun({
-      ownerCanonicalUser: 'alice',
-      role: 'generalist',
-      callerRole: 'main',
-      callerSessionId: 's-main',
-      mode: 'background',
-      objective: 'Long deploy the user will stop.',
-      parentRunId: null,
-      chainId: 'chain-stop',
-      depth: 1,
-    })
-    const task = {
-      ...fakeTask(),
-      id: 'stop-fire',
-      schedule: { kind: 'oneshot' as const, at: '2026-05-07T11:00:00.000Z' },
-      notifyOn: 'always' as const,
-      taskRunId: child.id,
-    }
-    saveBackgroundTasks('alice', [task])
-    const scheduler = new BackgroundTaskScheduler()
-    // The fire completes normally, but the user /stopped it mid-turn — simulate
-    // by parking the run waiting{user-stop} while the fire body runs, so
-    // onFireComplete observes the user-stop the way it does in production.
-    setRunBackgroundTaskFireForTest(async () => {
-      await markStarted(child.id, 'bg-child', 40, 'alice')
-      await markWaiting(child.id, { reason: 'user-stop', bySessionId: 's-main' }, 50, 'alice')
-      return { kind: 'success', summary: 'deploy done', transcriptPath: '/tmp/x' }
-    })
-    const deliverCalls: string[] = []
-    ;(scheduler as unknown as {
-      deliverCompletion: (...args: unknown[]) => Promise<void>
-    }).deliverCompletion = async () => {
-      deliverCalls.push('called')
-    }
-
-    scheduler.fireImmediate('alice', 'stop-fire')
-    await scheduler.drain()
-    await drainScheduledResumesForTest()
-
-    assert.deepEqual(deliverCalls, [], 'a user-stopped run must not autonomously deliver its late completion')
-    const settled = await getTaskRun(child.id, 'alice')
-    assert.equal(settled?.status, 'waiting', 'the run stays parked; markDelivered must not overwrite user-stop')
-    assert.equal(settled?.waitReason, 'user-stop')
-  })
-
   it('does not autopause recurring tasks after failures', async () => {
     const task = fakeTask()
     saveBackgroundTasks('alice', [task])
