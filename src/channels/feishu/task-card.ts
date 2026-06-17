@@ -165,12 +165,14 @@ function formatTokens(n: number): string {
   return String(Math.round(n))
 }
 
-// Cache hit rate = cached input ÷ all input-side tokens, as a 1-decimal percent.
-// `input` is the non-cached input, `cacheRead` the cache hits, `cacheCreate` the
-// tokens written to cache (misses). Empty input-side → "0.0%".
-function formatCacheHitRate(input: number, cacheRead: number, cacheCreate: number): string {
-  const inputSide = input + cacheRead + cacheCreate
-  const pct = inputSide > 0 ? (cacheRead / inputSide) * 100 : 0
+// Cache hit rate = cache reads ÷ all input-side tokens, as a 1-decimal percent —
+// the OpenAI presentation, where the displayed `输入` is the total input-side
+// count (= prompt_tokens) and cache reads are a subset of it. `totalInput` is
+// `input + cacheRead + cacheCreate` (the fresh/read/create buckets are disjoint
+// in the canonical shape; their sum is the prompt size the card shows as 输入).
+// Empty input-side → "0.0%".
+function formatCacheHitRate(cacheRead: number, totalInput: number): string {
+  const pct = totalInput > 0 ? (cacheRead / totalInput) * 100 : 0
   return `${pct.toFixed(1)}%`
 }
 
@@ -482,20 +484,23 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
   // Timestamp now lives in the header subtitle (next to the status word). The
   // footer is just the subtask token stats, in sync with that timestamp (the
   // whole card is re-derived on every update). Only the subtasks are summed —
-  // the main agent is excluded by the view deriver. The cache figure folds read
-  // + creation, and the hit rate is cache reads over all input-side tokens. When
-  // no subtask has spent tokens yet there is no footer at all.
+  // the main agent is excluded by the view deriver. `输入` shows the total
+  // input-side count (fresh + cache read + cache create) in the OpenAI style, so
+  // the `缓存`/`输入` pair reads consistently against the hit rate; the cache
+  // figure folds read + creation; and the hit rate is cache reads over that
+  // total. When no subtask has spent tokens yet there is no footer at all.
   const footerTs = terminal ? root.terminalAt ?? root.updatedAt : root.updatedAt
   const tokens = view.subtaskTokens
   if (tokens && tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreate > 0) {
+    const totalInput = tokens.input + tokens.cacheRead + tokens.cacheCreate
     elements.push(hrElement())
     elements.push(
       markdownElement(
         t('taskcard.footer.tokens', {
-          input: formatTokens(tokens.input),
+          input: formatTokens(totalInput),
           output: formatTokens(tokens.output),
           cache: formatTokens(tokens.cacheRead + tokens.cacheCreate),
-          hit: formatCacheHitRate(tokens.input, tokens.cacheRead, tokens.cacheCreate),
+          hit: formatCacheHitRate(tokens.cacheRead, totalInput),
         }),
       ),
     )

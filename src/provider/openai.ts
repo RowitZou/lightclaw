@@ -243,9 +243,22 @@ export function mapUsage(usage: unknown): UsageStats {
   // nested value through the same canonical slot. OpenAI has no explicit
   // cache-creation step (caching is automatic on prefix matches), so
   // `cache_creation_input_tokens` stays absent.
+  //
+  // Crucially, OpenAI's `prompt_tokens` is the TOTAL input-side count and
+  // `cached_tokens` is a SUBSET of it (not a disjoint bucket). Anthropic's
+  // canonical `input_tokens` instead EXCLUDES cache reads, with the three
+  // buckets (input + cache_read + cache_creation) summing to the total. Every
+  // downstream consumer (`/cost` totals, TaskRun usage rollups, the task-card
+  // cache-hit rate) assumes the disjoint Anthropic convention. So subtract the
+  // cached portion here to normalize `input_tokens` to fresh-only; otherwise
+  // the cached tokens are counted twice (once inside `input_tokens`, once in
+  // `cache_read_input_tokens`) and e.g. the hit rate is understated.
   const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : null
   if (details && typeof details.cached_tokens === 'number') {
     result.cache_read_input_tokens = details.cached_tokens
+    if (typeof result.input_tokens === 'number') {
+      result.input_tokens = Math.max(0, result.input_tokens - details.cached_tokens)
+    }
   }
   return result
 }

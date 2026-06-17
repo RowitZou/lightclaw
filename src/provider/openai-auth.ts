@@ -397,9 +397,18 @@ function mapResponsesUsage(usage: unknown): UsageStats {
   // nested value through the same canonical slot. OpenAI has no explicit
   // cache-creation step (caching is automatic on prefix matches), so
   // `cache_creation_input_tokens` stays absent.
+  //
+  // As in the Chat Completions path, Responses `input_tokens` is the TOTAL
+  // input-side count and `cached_tokens` is a SUBSET of it, whereas the
+  // canonical (Anthropic) convention every consumer assumes keeps the three
+  // buckets disjoint. Subtract the cached portion so `input_tokens` is
+  // fresh-only and the cache reads are not double-counted.
   const details = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : null
   if (details && typeof details.cached_tokens === 'number') {
     out.cache_read_input_tokens = details.cached_tokens
+    if (typeof out.input_tokens === 'number') {
+      out.input_tokens = Math.max(0, out.input_tokens - details.cached_tokens)
+    }
   }
   return out
 }

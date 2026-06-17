@@ -9,15 +9,22 @@ describe('openai: mapUsage', () => {
     assert.deepEqual(result, { input_tokens: 1234, output_tokens: 56 })
   })
 
-  it('surfaces prompt_tokens_details.cached_tokens as cache_read_input_tokens', () => {
+  it('surfaces cached_tokens as cache_read and subtracts it from input_tokens (disjoint)', () => {
     const result = mapUsage({
       prompt_tokens: 1000,
       completion_tokens: 100,
       prompt_tokens_details: { cached_tokens: 750 },
     })
-    assert.equal(result.input_tokens, 1000)
+    // OpenAI `prompt_tokens` (1000) is the TOTAL input-side count and
+    // `cached_tokens` (750) is a SUBSET of it. The canonical shape is disjoint
+    // (input + cache_read + cache_create), so input_tokens must be the fresh
+    // remainder 1000 - 750 = 250 — NOT 1000 (which would double-count the
+    // cached tokens and understate every downstream cache-hit / cost figure).
+    assert.equal(result.input_tokens, 250)
     assert.equal(result.output_tokens, 100)
     assert.equal(result.cache_read_input_tokens, 750)
+    // input + cache_read reconstructs the original prompt_tokens total.
+    assert.equal((result.input_tokens ?? 0) + (result.cache_read_input_tokens ?? 0), 1000)
     // OpenAI has no explicit cache-creation step; this field must stay absent.
     assert.equal(result.cache_creation_input_tokens, undefined)
   })

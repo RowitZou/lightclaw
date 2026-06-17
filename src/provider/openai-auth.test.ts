@@ -615,9 +615,15 @@ describe('openai-auth: processResponseStream', () => {
     ]
     const out = await collect(processResponseStream(fromArray(events) as never))
     const stop = out[out.length - 1] as StreamStopEvent
-    assert.equal(stop.usage.input_tokens, 5000)
+    // Responses `input_tokens` (5000) is the TOTAL and `cached_tokens` (4200) a
+    // SUBSET of it; the canonical shape is disjoint, so input_tokens is the
+    // fresh remainder 5000 - 4200 = 800. Reporting 5000 would double-count the
+    // cached tokens against cache_read_input_tokens.
+    assert.equal(stop.usage.input_tokens, 800)
     assert.equal(stop.usage.output_tokens, 80)
     assert.equal(stop.usage.cache_read_input_tokens, 4200)
+    // input + cache_read reconstructs the original total.
+    assert.equal((stop.usage.input_tokens ?? 0) + (stop.usage.cache_read_input_tokens ?? 0), 5000)
     // OpenAI has no explicit cache-creation step.
     assert.equal(stop.usage.cache_creation_input_tokens, undefined)
   })

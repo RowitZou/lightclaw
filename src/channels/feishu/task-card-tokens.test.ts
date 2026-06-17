@@ -101,13 +101,47 @@ describe('task card subtask token totals', () => {
     const body = (card.body as { elements: Array<{ tag: string; content?: string }> }).elements
     const last = body[body.length - 1]
     assert.ok(last.content?.includes('任务消耗 token'), 'token line is last')
-    assert.ok(last.content?.includes('468.29K'), 'input gets a K suffix with 2 decimals')
+    // 输入 is the TOTAL input-side (fresh + read + create) in the OpenAI style:
+    // 468292 + 150000 + 40976 = 659268 → 659.27K. NOT the fresh-only 468.29K.
+    assert.ok(last.content?.includes('659.27K'), 'input shows total input-side, K-suffixed 2 decimals')
+    assert.ok(!last.content?.includes('468.29K'), 'input is no longer the fresh-only figure')
     assert.ok(last.content?.includes('8.54K'), 'output 8537 → 8.54K')
     assert.ok(!last.content?.includes('8,537'), 'no thousands grouping anymore')
     // 150000 + 40976 = 190976 → 190.98K
     assert.ok(last.content?.includes('190.98K'), 'cache folds read + creation, K-suffixed')
-    // hit = 150000 / (468292 + 150000 + 40976) = 150000/659268 ≈ 22.8%
-    assert.ok(last.content?.includes('22.8%'), 'cache hit rate = reads / all input-side tokens')
+    // hit = cacheRead / total input-side = 150000 / 659268 ≈ 22.8%
+    assert.ok(last.content?.includes('22.8%'), 'cache hit rate = reads / total input-side tokens')
+  })
+
+  it('renders the OpenAI-data card consistently: 缓存/输入 = 命中率 (no cache-creation)', () => {
+    setLang('cn')
+    // The 2026-06-17 dogfood card: an OpenAI/codex fire whose usage, after the
+    // provider normalization, is disjoint with no cache-creation step. input is
+    // the fresh remainder (1260000 total - 605180 cached = 654820); cacheRead is
+    // the cached subset; cacheCreate is 0 (OpenAI auto-caches, no write step).
+    const card = buildTaskCard({
+      root: {
+        id: 'run-codex',
+        title: 'job',
+        objective: 'o',
+        status: 'running',
+        updatedAt: new Date('2026-06-17T10:00:00').getTime(),
+      },
+      children: [],
+      rootTimeline: [],
+      subtaskTokens: { input: 654820, output: 9930, cacheRead: 605180, cacheCreate: 0 },
+    })
+    const body = (card.body as { elements: Array<{ content?: string }> }).elements
+    const last = body[body.length - 1]
+    // 输入 = 654820 + 605180 + 0 = 1260000 → 1.26M (the OpenAI prompt total).
+    assert.ok(last.content?.includes('1.26M'), 'input shows the total prompt size, not the fresh 654.82K')
+    assert.ok(last.content?.includes('605.18K'), 'cache shows the cached subset')
+    // hit = 605180 / 1260000 = 48.03% → 48.0%. With no cache-creation, the
+    // displayed 缓存/输入 ratio equals the hit rate exactly — the user-intuitive
+    // reading. (Pre-fix the provider double-counted the cache into input, so the
+    // same fire showed a misleading 32.4%.)
+    assert.ok(last.content?.includes('48.0%'), 'hit = cached / total = 48.0%, not the double-counted 32.4%')
+    assert.ok(!last.content?.includes('32.4%'), 'the double-counted denominator is gone')
   })
 
   it('scales units: < 1000 stays a bare integer, millions get an M suffix', () => {
