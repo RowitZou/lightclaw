@@ -26,6 +26,7 @@ import type {
   TaskRunStartedEvent,
   TaskRunWakeSpec,
 } from './types.js'
+import { clearReplyCodesForRun } from './reply-code-registry.js'
 
 const DEFAULT_TASKRUN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -408,6 +409,18 @@ export async function appendEvent(
     await appendRawEvents(meta.ownerCanonicalUser, id, [event])
     const next = reduceMeta(meta, event)
     writeMeta(next)
+    // Reply-codes (parent→worker Message gating) live for the LIFE OF THE RUN,
+    // not a single shift. A monitoring worker that resumes on timers receives a
+    // code during the parent's Message turn and may not consume it until a later
+    // resumed shift, several shift-ends away — clearing at every shift end (the
+    // old resume.ts / dispatched-agent.ts finally) wiped the code before the
+    // worker could reply (2026-06-17 dogfood: rc minted + delivered in a resume
+    // block, the worker's Message reply got "none pending"). Clear only on the
+    // run's terminal transition: bounded (live runs × a few codes), and the
+    // in-memory registry dies with the process regardless.
+    if (!isTerminalStatus(meta.status) && isTerminalStatus(next.status)) {
+      clearReplyCodesForRun(id)
+    }
     return { event, next }
   })
   if (!result) return null

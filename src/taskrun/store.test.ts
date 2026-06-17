@@ -29,6 +29,11 @@ import {
   sweepTerminalTaskRuns,
 } from './store.js'
 import { addBackgroundTask } from '../background-task/store.js'
+import {
+  hasReplyCode,
+  mintReplyCode,
+  resetReplyCodeRegistryForTest,
+} from './reply-code-registry.js'
 
 describe('TaskRun store', () => {
   it('persists event-log-first task runs with a meta snapshot', async () => {
@@ -777,6 +782,44 @@ describe('onTaskRunEvent in-process tap (collab-phase4 PR21)', () => {
       assert.ok(events.some(e => e.kind === 'progress'), 'event durably written')
     } finally {
       off()
+      setLightclawHomeOverride(undefined)
+      rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('reply-code lifetime is run-terminal, not shift-end', () => {
+  it('keeps a run reply-code across non-terminal events and clears it only at terminal', async () => {
+    const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-replycode-'))
+    setLightclawHomeOverride(tmpHome)
+    resetReplyCodeRegistryForTest()
+    try {
+      const run = await createTaskRun({
+        ownerCanonicalUser: 'alice',
+        role: 'coder',
+        callerRole: 'main',
+        callerSessionId: 'feishu:dm:oc_alice',
+        mode: 'background',
+        objective: 'monitor a long job',
+        chainId: 'chain-replycode',
+        depth: 1,
+      })
+      const code = mintReplyCode(run.id)
+
+      // Non-terminal lifecycle churn (a monitoring worker starting, parking on a
+      // timer, resuming) must NOT clear the code — the worker may reply shifts later.
+      await markStarted(run.id, 'bg-replycode-fire', 1, 'alice')
+      assert.equal(hasReplyCode(run.id, code), true, 'survives started')
+      await markWaiting(run.id, { reason: 'timer' }, 2, 'alice')
+      assert.equal(hasReplyCode(run.id, code), true, 'survives waiting')
+      await markStarted(run.id, 'bg-replycode-fire', 3, 'alice')
+      assert.equal(hasReplyCode(run.id, code), true, 'survives a second started (resume)')
+
+      // Terminal transition clears the run's codes.
+      await markFinished(run.id, { ok: true, summary: 'done' }, 4, 'alice')
+      assert.equal(hasReplyCode(run.id, code), false, 'cleared at terminal')
+    } finally {
+      resetReplyCodeRegistryForTest()
       setLightclawHomeOverride(undefined)
       rmSync(tmpHome, { recursive: true, force: true })
     }

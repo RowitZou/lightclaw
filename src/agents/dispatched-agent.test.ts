@@ -187,7 +187,7 @@ test('worker ALS sessionId aligns with chainState path末端 + chainState rides 
   }
 })
 
-test('dispatched worker shift clears unused reply-codes at turn end', async () => {
+test('dispatched worker shift does NOT clear reply-codes at turn end (they live to run terminal)', async () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'lightclaw-dispatched-reply-code-'))
   setLightclawHomeOverride(tempDir)
   resetReplyCodeRegistryForTest()
@@ -232,7 +232,11 @@ test('dispatched worker shift clears unused reply-codes at turn end', async () =
       }),
     }))
 
-    assert.equal(consumeReplyCode(runId, code), false)
+    // A shift ending (the worker parking to wait, looping on a timer, etc.) must
+    // NOT wipe a reply-code: a monitoring worker can receive the code in one
+    // shift and only reply several shifts later. The code survives until the run
+    // reaches a terminal state (covered by the store terminal-clear test).
+    assert.equal(consumeReplyCode(runId, code), true)
   } finally {
     resetReplyCodeRegistryForTest()
     setLightclawHomeOverride(undefined)
