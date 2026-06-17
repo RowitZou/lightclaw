@@ -206,7 +206,7 @@ export type ToolCatalogConfig = {
   discoveredToolsMaxSize: number
   /** Turn-based TTL on `SessionContext.discoveredTools`. The per-turn
    *  catalog builder drops tools whose `lastUsedTurn < currentTurn - ttl`.
-   *  Default 20 turns (~ one /compact cycle). `0` disables TTL so only the
+   *  Default 20 turns (~ one auto-compact cycle). `0` disables TTL so only the
    *  cap bounds growth (V1.5 behavior). With Phase 31 default
    *  `deferredLoading: 'always'` + most tools shouldDefer, TTL is what
    *  prevents the steady state from collapsing back to "all tools inline"

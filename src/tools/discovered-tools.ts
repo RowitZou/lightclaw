@@ -16,7 +16,7 @@
  *   workloads.
  * - **TTL (turn-based)**: catalog builder calls `pruneStaleDiscoveredTools`
  *   each turn; tools with `currentTurn - lastUsedTurn > ttl` drop out even
- *   if cap is not hit. Default TTL 20 — about one /compact cycle's worth.
+ *   if cap is not hit. Default TTL 20 — about one auto-compact cycle's worth.
  *
  * Why this matters: under Phase 31 default `deferredLoading: 'always'`, the
  * model walks through deferred tools as it explores; without TTL, a power
@@ -29,7 +29,7 @@
  * - `tools.discoveredToolsMaxSize` (default 30, 0 disables cap)
  * - `tools.discoveredToolsTtlTurns` (default 20, 0 disables TTL)
  *
- * Daemon restart / `/fresh` / fork wipe the whole Map. `turnCounter` is also
+ * Daemon restart / fork wipe the whole Map. `turnCounter` is also
  * session-scoped (lives on SessionContext, incremented at every query-loop
  * turn) so it doesn't drift across daemon restarts.
  */

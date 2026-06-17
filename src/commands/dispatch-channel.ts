@@ -12,9 +12,10 @@ export type ChannelSlashResult = {
   output: string
   // Defaults to 'plain_text' — the structured /help / /status / /sandbox
   // output contains angle brackets like `<prompt>` that lark_md would parse
-  // as HTML tags and silently drop. Handlers whose output is genuine markdown
-  // (currently only /fresh, which prints LLM-generated text) opt in to
-  // 'lark_md' so the runner routes it through the markdown reply path.
+  // as HTML tags and silently drop. A handler whose output is genuine markdown
+  // opts into 'lark_md' so the runner routes it through the markdown reply
+  // path; no built-in handler currently does (the former opt-in /fresh was
+  // removed in Phase 9 PR1).
   bodyFormat: SlashBodyFormat
 }
 
@@ -31,9 +32,10 @@ export async function dispatchChannelSlash(
     setActiveTools(tools: Tool[]): void
     persistMeta(messageCount: number): Promise<void>
     // Pre-formatted user message content (text + inline blocks + quote /
-    // attachment breadcrumbs). Threaded into ReplContext so slash handlers
-    // that spawn sub-sessions (/fresh) can forward the full channel
-    // context instead of falling back to the raw `/fresh <prompt>` args.
+    // attachment breadcrumbs). Threaded into ReplContext so a slash handler
+    // that needs the full channel turn context can read it instead of just its
+    // raw `<args>`. Currently unread: the former consumer /fresh was removed in
+    // Phase 9 PR1.
     channelUserMessageContent?: string | UserContentBlock[]
   },
 ): Promise<ChannelSlashResult> {

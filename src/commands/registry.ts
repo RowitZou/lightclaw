@@ -25,19 +25,21 @@ export type ReplContext = {
   persistMeta(messageCount: number): Promise<void>
   // Channel-only: lets a slash handler request a different body renderer for
   // its output. Default is plain_text (structured help/status with angle
-  // brackets that lark_md would eat). LLM-output handlers like /fresh set
-  // 'lark_md' so the body renders as a markdown card instead of a plain
-  // notice. No-op in terminal mode.
+  // brackets that lark_md would eat); a handler whose output is genuine
+  // markdown opts into 'lark_md' so the body renders as a markdown card. No
+  // built-in handler currently opts in (the former consumer /fresh was removed
+  // in Phase 9 PR1) — the hook stays for future LLM-output slashes. No-op in
+  // terminal mode.
   setSlashBodyFormat?(format: SlashBodyFormat): void
   // Channel-only: the fully-formed user-message content the channel runner
   // built for this turn — already merged with the `[senderName]` prefix,
   // the `<quoted-message>` / `<quoted-message-unavailable>` block, the
   // `[media attachment]` path breadcrumb, and any inline content blocks (image /
-  // pdf bytes) that survived the inline encoder. Slash handlers that spawn
-  // a sub-session — /fresh — should forward this verbatim so the sub
-  // agent receives the same context the main session would have seen
-  // (including reply-quoted attachments). Undefined in terminal mode and
-  // for fast-path / synthetic slash entries.
+  // pdf bytes) that survived the inline encoder. A slash handler that needs
+  // the full turn context (rather than just its raw `<args>`) can read this —
+  // e.g. to forward it verbatim into a spawned sub-session. Currently set but
+  // unread: the former consumer /fresh was removed in Phase 9 PR1. Undefined
+  // in terminal mode and for fast-path / synthetic slash entries.
   channelUserMessageContent?: string | UserContentBlock[]
 }
 
@@ -54,9 +56,10 @@ export type ReplCommand = {
   // Agent-side: detailed sub-command list / constraints / examples. Empty =
   // ShowSlashCatalog falls back to the one-line `usage` field.
   agentUsage?: string
-  // Commands tied to the agent loop / in-flight turn (/branch, /b, /fresh,
-  // /stop). They are meaningful only where a query actually runs — the
-  // channel — and are dropped from the terminal admin console's registry.
+  // Commands that only make sense inside a live channel session: an in-flight
+  // turn to abort (/stop), or per-user channel state (/secret, /mount). They
+  // have no meaning in the terminal admin console (which never runs a query),
+  // so `createBuiltinReplRegistry({ includeChannelOnly: false })` drops them.
   channelOnly?: boolean
   handler(args: string, ctx: ReplContext): Promise<ReplCommandResult | void>
 }
