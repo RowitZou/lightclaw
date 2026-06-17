@@ -9,7 +9,8 @@ import {
   makeFakeFeishuMessage,
 } from '../__tests__/concurrency-helpers.js'
 import { createUser, addLink, setAdmin } from '../identity/store.js'
-import { setIdentityPreference } from '../identity/preferences.js'
+import { writeUserConfigOverride } from '../config/user-override.js'
+import { setUserSecret } from '../secrets/store.js'
 import { saveMeta } from '../session/storage.js'
 import { setStreamChatForTest } from '../query.js'
 import { setLightclawHomeOverride } from '../paths.js'
@@ -1903,6 +1904,20 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     )
   }
 
+  function writeAliceTwoModelUserConfig(defaultModel = 'fake'): void {
+    setUserSecret('alice', 'OPENAI_KEY', 'sk-user-secret')
+    writeUserConfigOverride('alice', {
+      endpoints: {
+        fake: { apiKeyRef: 'OPENAI_KEY' },
+      },
+      models: {
+        fake: { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'claude-fake' },
+        other: { endpoint: 'fake', schema: 'anthropic', upstreamModel: 'claude-other' },
+      },
+      defaultModel,
+    })
+  }
+
   // Drive one DM turn to completion and return the model id the turn actually
   // streamed under (the `model` query() passes to streamChat and the provider).
   // The fake stream ends the turn immediately, so no tool calls / network run.
@@ -1952,6 +1967,7 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')
     await setAdmin('alice')
+    writeAliceTwoModelUserConfig('fake')
 
     const sessionId = 'feishu:dm:oc_modelfrozen'
     // A session created back when defaultModel was a different model: 'other'
@@ -1973,12 +1989,11 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     assert.equal(used, 'fake')
   })
 
-  it('lets an explicit /model preference win over the config default', async () => {
+  it('uses the per-user config default model', async () => {
     await createUser('alice')
     await addLink('alice', 'feishu:ou_alice')
     await setAdmin('alice')
-    // `/model other` persists this preference; it must outrank config.defaultModel.
-    setIdentityPreference({ canonicalUser: 'alice', key: 'model', value: 'other' })
+    writeAliceTwoModelUserConfig('other')
 
     const used = await modelUsedForTurn('feishu:dm:oc_modelpref')
     assert.equal(used, 'other')

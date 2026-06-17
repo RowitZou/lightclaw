@@ -2,13 +2,14 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { applyCredentialDegrade } from '../model-resolution.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import { getAdmin, getUserPermissionCeiling } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
-import { workspaceFor } from '../identity/paths.js'
+import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
@@ -55,13 +56,15 @@ export async function runBackgroundTaskFire(input: {
       }
     }
 
-    const config = getConfig()
+    const baseConfig = getConfig()
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
-    const model = applyCredentialDegrade(
-      prefs.model ?? config.defaultModel,
-      config,
-    )
-    const permissionMode = prefs.permissionMode ?? config.permissionMode
+    const config = resolveUserConfig(input.task.ownerCanonicalUser, {
+      ...baseConfig,
+      ...(prefs.model ? { defaultModel: prefs.model } : {}),
+      ...(prefs.permissionMode ? { permissionMode: prefs.permissionMode } : {}),
+    })
+    const model = applyCredentialDegrade(config.defaultModel, config)
+    const permissionMode = config.permissionMode
     const permissionCeiling = await getUserPermissionCeiling(input.task.ownerCanonicalUser)
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))
     await mkdir(cwd, { recursive: true, mode: 0o700 })
@@ -103,9 +106,10 @@ export async function runBackgroundTaskFire(input: {
       sessionId,
     )
     const ctx = createSessionContext({
+      config,
       cwd,
       model,
-      sessionsDir: config.paths.sessions,
+      sessionsDir: userSessionsRoot(input.task.ownerCanonicalUser),
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
       // No enabledSecrets: a background fire is a dispatched worker, and

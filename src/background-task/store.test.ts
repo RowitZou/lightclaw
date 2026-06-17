@@ -231,7 +231,7 @@ describe('background-task store', () => {
     })
   })
 
-  it('lists every per-user store under per-user/<canonical>/bg-tasks.json', () => {
+  it('lists every user store under users/<canonical>/bg-tasks.json', () => {
     addBackgroundTask('alice', fakeTask('alice', 'task-1'))
     addBackgroundTask('bob', fakeTask('bob', 'task-9'))
     const all = listAllUsersWithBackgroundTasks()

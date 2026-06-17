@@ -1,7 +1,7 @@
-import { getConfig } from '../config.js'
+import type { LightClawConfig } from '../config.js'
 import { resolveRoleMaxTurns, resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
-import { getCurrentUserId } from '../state.js'
+import { getCurrentUserId, getSessionConfig } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
 import type { UserContentBlock } from '../types.js'
@@ -48,7 +48,7 @@ export async function runSubagent(params: {
       detail: 'Pick one of the available subagent types.',
     })
   }
-  const config = getConfig()
+  const config = getSessionConfig()
   const roleModel = resolveRoleModel(agent, config)
   const provider = getProviderFor(config, roleModel).provider
   // Dynamic import: tools.ts → tools/background-task.ts → background-task/
@@ -122,7 +122,7 @@ function maybeTriggerForkExtract(input: {
   agent: Role
   result: Awaited<ReturnType<typeof runDispatchedAgent>>
   canonicalUser: string | undefined
-  config: ReturnType<typeof getConfig>
+  config: LightClawConfig
 }): void {
   const parentCtx = getCurrentSessionContext()
   if (

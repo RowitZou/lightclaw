@@ -9,8 +9,11 @@ import { collectAssistantText } from '../messages.js'
 import { toolResultContentToText, type Message } from '../types.js'
 import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
 import { maybeEvictAgedMemories } from './aging-eviction.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { resolveMemoryDirsForRole } from './scope.js'
 import type { MemoryEntry } from './types.js'
+
+const DEFAULT_FORK_TRANSCRIPT_TTL_MS = 15 * 60 * 1000
 
 export type ExtractCtx = {
   messages: Message[]
@@ -355,10 +358,17 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       }
       try {
         const router = getSignalRouter()
-        await maybeSweepForkTranscripts(current.config.paths.sessions, {
-          ephemeralTtlMs: current.config.dispatch.ephemeralSessionTtlMs,
-          activeSessionIds: router.getAllActiveSessionIds(),
-        })
+        await maybeSweepForkTranscripts(
+          current.canonicalUser
+            ? userSessionsRoot(current.canonicalUser)
+            : current.config.paths.sessions,
+          {
+            ephemeralTtlMs:
+              current.config.dispatch?.ephemeralSessionTtlMs ??
+              DEFAULT_FORK_TRANSCRIPT_TTL_MS,
+            activeSessionIds: router.getAllActiveSessionIds(),
+          },
+        )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[fork-transcript] retention sweep failed: ${message}`)

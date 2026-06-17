@@ -42,20 +42,39 @@ describe('/help surface-aware rendering', () => {
     assert.match(output, /\/mode \[<read\|ask\|auto\|yolo>\]/)
     // No dead-end pointer to a non-existent terminal agent.
     assert.doesNotMatch(output, /ask LightClaw/i)
+    assert.doesNotMatch(output, /byo/i)
     // The /status pointer still renders in both surfaces.
     assert.match(output, /Use \/status/)
   })
 
-  it('channel /help shows command names and keeps the ask-LightClaw hint', async () => {
+  it('channel /help shows command names and points to /help <command>', async () => {
     const output = await runHelp({ isChannel: true, isAdmin: false })
 
-    // Channel defers usage to the agent — no inline argument syntax.
+    // Channel keeps the directory compact; exact syntax lives in /help <command>.
     assert.doesNotMatch(output, /\/mode \[<read\|ask\|auto\|yolo>\]/)
-    assert.match(output, /Just ask LightClaw/)
+    assert.doesNotMatch(output, /byo/i)
+    assert.match(output, /\/help <command>/)
+  })
+
+  it('/help <command> shows detailed usage for one slash command', async () => {
+    const output = await runHelp({ isChannel: true, isAdmin: false, command: 'model' })
+
+    assert.match(output, /\/model help/)
+    assert.match(output, /Usage:/)
+    assert.match(output, /\/model custom add/)
+    assert.match(output, /\/model custom check <name>/)
+    assert.match(output, /\/model proxy <proxy-url\|->/)
+    assert.doesNotMatch(output, /byo/i)
+  })
+
+  it('/help hides commands that are not visible to the current identity', async () => {
+    const output = await runHelp({ isChannel: true, isAdmin: false, command: 'sandbox' })
+
+    assert.match(output, /Error: Unknown command: \/sandbox/)
   })
 })
 
-async function runHelp(opts: { isChannel: boolean; isAdmin: boolean }): Promise<string> {
+async function runHelp(opts: { isChannel: boolean; isAdmin: boolean; command?: string }): Promise<string> {
   await createUser('alice')
   const ctx = createSessionContext({
     cwd: path.join(tmpRoot, 'workspace'),
@@ -74,7 +93,7 @@ async function runHelp(opts: { isChannel: boolean; isAdmin: boolean }): Promise<
   })
   await runWithSessionContext(ctx, async () => {
     const registry = createBuiltinReplRegistry({ includeChannelOnly: opts.isChannel })
-    await registry.dispatch('/help', {
+    await registry.dispatch(opts.command ? `/help ${opts.command}` : '/help', {
       config: snapshotConfig(),
       sessionId: ctx.sessionId,
       createdAt: Date.now(),

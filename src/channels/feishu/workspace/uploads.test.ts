@@ -19,7 +19,7 @@ beforeEach(async () => {
   tmpHome = await mkdtemp(path.join(tmpdir(), 'lightclaw-feishu-uploads-'))
   setLightclawHomeOverride(tmpHome)
   _resetUploadsFolderInflightForTests()
-  await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+  await mkdir(path.dirname(userUploadsFolderPath('alice')), { recursive: true })
 })
 
 afterEach(async () => {

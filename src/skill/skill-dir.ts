@@ -31,7 +31,7 @@ export function bundledSkillDir(name: string): string {
 /**
  * On-disk asset directory for a user skill.
  *
- * `<lightclawHome>/identity/per-user/<canonical>/skills/<name>/` — the parent
+ * `<lightclawHome>/users/<canonical>/skills/<name>/` — the parent
  * directory of the skill's SKILL.md path. Any scripts/ subdirectory lives
  * next to SKILL.md.
  */

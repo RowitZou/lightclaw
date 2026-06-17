@@ -1,9 +1,6 @@
-import path from 'node:path'
-
 import type { FeishuClient } from '../client.js'
-import { lightclawHome } from '../../../paths.js'
 import { readJson, writeJsonSecure } from '../../../identity/store.js'
-import { sanitizePathSegment } from '../../../identity/paths.js'
+import { userFeishuUploadsPath } from '../../../identity/paths.js'
 import { loadChannelConfig } from '../../config.js'
 import { createFolder, grantFolderPermission } from '../resources/folder.js'
 import { getWorkspaceParentCache } from './ancestry.js'
@@ -24,13 +21,7 @@ export type UserUploadsFolder = {
 const inFlightByCanonical = new Map<string, Promise<UserUploadsFolder>>()
 
 export function userUploadsFolderPath(canonicalUser: string): string {
-  return path.join(
-    lightclawHome(),
-    'identity',
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'feishu-uploads.json',
-  )
+  return userFeishuUploadsPath(canonicalUser)
 }
 
 export async function getOrCreateUserUploadsFolder(

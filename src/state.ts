@@ -4,6 +4,7 @@ import {
   type PermissionMode,
   type PermissionRule,
 } from './permission/types.js'
+import { getConfig, type LightClawConfig } from './config.js'
 import { ImageReadinessTracker } from './runtime/image-readiness.js'
 import { LocalRuntime } from './runtime/local.js'
 import type { NetworkBridge } from './runtime/network-bridge.js'
@@ -151,6 +152,10 @@ export function didConcludeRootThisTurn(): boolean {
 
 export function getCurrentUserId(): string | undefined {
   return currentState().currentUserId
+}
+
+export function getSessionConfig(): LightClawConfig {
+  return getCurrentSessionContext()?.config ?? getConfig()
 }
 
 const EMPTY_ENABLED_SECRETS: ReadonlyMap<string, string> = new Map<string, string>()

@@ -9,11 +9,12 @@ import { getTaskRunWatchdog } from './taskrun/watchdog.js'
 import { loadChannelConfig } from './channels/config.js'
 import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
+import { resolveUserConfig } from './config/user-override.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
 import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
 import { lightclawHome } from './paths.js'
-import { workspaceFor } from './identity/paths.js'
+import { userSessionsRoot, workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
 import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
 import { loadEnabledSecrets } from './secrets/store.js'
@@ -237,19 +238,18 @@ export async function resetSessionContext(input: CommonStateInput): Promise<Sess
   const config = getConfig()
   const inputWithPrefs = applyIdentityPreferences(input)
   const resolvedConfig = resolveConfig(config, inputWithPrefs)
+  setLang(resolvedConfig.lang)
   const sessionContext = await createResolvedSessionContext(resolvedConfig, inputWithPrefs)
   return { config: resolvedConfig, sessionContext }
 }
 
 /**
- * Per-canonical-user preferences (`<lightclawHome>/identity/per-user/<id>/
- * preferences.json`) outrank caller-supplied input for `permissionMode` and
- * `model`. The caller's values are typically pulled from session meta.json
- * (terminal cli.ts) or the channel strategy default (channel runner.ts);
- * those are correct only as a per-session fallback. The same identity using
- * both terminal + Feishu must see one consistent mode/model, which is what
- * preferences pin down. No-op when `currentUserId` is absent (no identity to
- * key under) or when prefs file is missing / empty (input wins by default).
+ * Legacy per-canonical-user preferences
+ * (`<lightclawHome>/users/<id>/preferences.json`) are a lower-priority
+ * fallback for installs created before per-user config.json. New writes go to
+ * user config override, which is applied after this helper and therefore wins.
+ * No-op when `currentUserId` is absent (no identity to key under) or when the
+ * legacy prefs file is missing / empty (input wins by default).
  */
 function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefined): T | undefined {
   if (!input?.currentUserId) {
@@ -285,12 +285,14 @@ function resolveConfig(
   input: InitializeAppInput | undefined,
 ): LightClawConfig {
   const resolvedModel = input?.model ?? config.defaultModel
-  return {
+  const withInput: LightClawConfig = {
     ...config,
     ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
     ...(input?.hooksEnabled === false ? { hooksEnabled: false } : {}),
     defaultModel: resolvedModel,
+    ...(input?.permissionMode ? { permissionMode: input.permissionMode } : {}),
   }
+  return resolveUserConfig(input?.currentUserId, withInput)
 }
 
 async function createResolvedSessionContext(
@@ -321,10 +323,13 @@ async function createResolvedSessionContext(
     : undefined
   resetSessionScopedCounters()
   return createSessionContext({
+    config: resolvedConfig,
     cwd: resolvedCwd,
     channel: input?.channel,
     model: resolvedConfig.defaultModel,
-    sessionsDir: resolvedConfig.paths.sessions,
+    sessionsDir: input?.currentUserId
+      ? userSessionsRoot(input.currentUserId)
+      : resolvedConfig.paths.sessions,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,
     enabledSecrets: input?.currentUserId

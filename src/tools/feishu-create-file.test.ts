@@ -10,6 +10,7 @@ import {
   getWorkspaceParentCache,
   resetWorkspaceParentCacheForTest,
 } from '../channels/feishu/workspace/ancestry.js'
+import { identityPermissionsPath } from '../identity/paths.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover, PermissionAskInput } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -556,9 +557,10 @@ describe('FeishuCreateFile tool', () => {
   it('short-circuits without asking when a FeishuWriteConfirm allow rule is persisted', async () => {
     // Persist the allow rule the user would have written by clicking the
     // 以后都允许 button on a prior ask.
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
       'utf8',
     )
@@ -594,9 +596,10 @@ describe('FeishuCreateFile tool', () => {
   })
 
   it('short-circuits file upload when a FeishuUploadConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
       'utf8',
     )

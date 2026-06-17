@@ -34,6 +34,9 @@ export type ConfigFileModel = {
   /** Real model id as the upstream expects it. The display name (this
    *  entry's outer key) is decoupled. */
   upstreamModel?: string
+  /** Legacy admin-model visibility. Global models are no longer inherited
+   *  into user configs; new user-facing models live under users/<u>/config.json. */
+  visibility?: string
   /** Optional Responses API reasoning effort for reasoning-capable models. */
   reasoningEffort?: string
   /** Optional per-model output-token ceiling (`max_tokens`). Falls back to the
@@ -186,11 +189,11 @@ export type ConfigFileShape = {
    *  Same physical gateway can host both anthropic and openai protocols —
    *  schema lives on each model entry, not here. */
   endpoints?: Record<string, ConfigFileEndpoint>
-  /** Display-name -> { endpoint alias, schema, upstreamModel }. The keys
-   *  are what users see in `/model`. */
+  /** Legacy global model registry. New user-facing models live in
+   *  users/<u>/config.json and are managed through /endpoint + /model custom. */
   models?: Record<string, ConfigFileModel>
-  /** Display name picked at startup when no env / per-identity preference
-   *  overrides. Must exist in `models`. */
+  /** Legacy global default model. Optional because system config may contain
+   *  no models at all; per-user config supplies the active conversational model. */
   defaultModel?: string
   roles?: Record<string, {
     model?: unknown

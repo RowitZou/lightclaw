@@ -1,8 +1,9 @@
 import { readdir } from 'node:fs/promises'
+import path from 'node:path'
 
 import { collectAssistantText } from '../messages.js'
-import { resolveSessionsDir } from '../config.js'
-import { loadMeta, loadTranscript } from '../session/storage.js'
+import { userSessionsRoot } from '../identity/paths.js'
+import { loadMetaFromDir, loadTranscriptFile } from '../session/storage.js'
 import { toolResultContentToText, type Message, type SessionMeta } from '../types.js'
 
 export type OwnedSession = {
@@ -11,19 +12,20 @@ export type OwnedSession = {
 }
 
 export async function listOwnedSessions(userId: string): Promise<OwnedSession[]> {
+  const sessionsDir = userSessionsRoot(userId)
   try {
-    const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
+    const entries = await readdir(sessionsDir, { withFileTypes: true })
     const sessions = await Promise.all(
       entries
         .filter(entry => entry.isDirectory())
         .map(async entry => {
-          const meta = await loadMeta(entry.name)
+          const meta = await loadMetaFromDir(sessionsDir, entry.name)
           if (!meta || meta.userId !== userId) {
             return null
           }
           return {
             meta,
-            messages: await loadTranscript(entry.name),
+            messages: await loadTranscriptFile(path.join(sessionsDir, entry.name, 'transcript.jsonl')),
           }
         }),
     )
@@ -86,4 +88,3 @@ export function simplifyMessage(message: Message): string {
     .join('\n')
   return `[${timestamp}] user: ${rendered}`
 }
-

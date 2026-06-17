@@ -21,14 +21,10 @@ const captured: AgentSignal[] = []
 let unsubscribe: (() => void) | null = null
 let tmpHome: string
 
-// Session storage (saveMeta / appendMessage / persistTodos) resolves the
-// target directory through `resolveSessionsDir()` in src/config.ts, which
-// reads `LIGHTCLAW_SESSIONS_DIR` env var → config file → `<home>/sessions`.
-// SessionContext.sessionsDir is NOT consulted there, so without overriding
-// the home root, `persistTodos` writes meta.json to the operator's real
-// `<home>/sessions/main-session/` and `<home>/sessions/dispatched-abc/`.
-// Dogfood on 2026-05-19 caught two such leak directories; both lock-stepped
-// to this test's sessionIds (`main-session`, `dispatched-abc`).
+// Session storage now prefers SessionContext.sessionsDir and only falls back
+// to the configured unbound sessions root when no context exists. Keep the
+// home override anyway so any fallback path stays inside this test's temp
+// root instead of the operator's real ~/.lightclaw.
 beforeEach(() => {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-todo-test-'))
   setLightclawHomeOverride(tmpHome)

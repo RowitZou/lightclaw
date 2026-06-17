@@ -5,9 +5,12 @@ import path from 'node:path'
 
 import { safeWriteJson } from '../atomic-write.js'
 import { loadBackgroundTasks } from '../background-task/store.js'
-import { sanitizePathSegment } from '../identity/paths.js'
+import {
+  sanitizePathSegment,
+  userTaskRunsRoot,
+  usersRoot,
+} from '../identity/paths.js'
 import { getCurrentSessionContext } from '../session-context.js'
-import { lightclawHome } from '../paths.js'
 import type {
   TaskRunArtifactEvent,
   TaskRunCancelledEvent,
@@ -92,20 +95,14 @@ export type CloseRootResult =
 const runLocks = new Map<string, Promise<void>>()
 
 function taskRunsRoot(ownerCanonicalUser: string): string {
-  return path.join(
-    lightclawHome(),
-    'identity',
-    'per-user',
-    sanitizePathSegment(ownerCanonicalUser),
-    'taskruns',
-  )
+  return userTaskRunsRoot(ownerCanonicalUser)
 }
 
 export async function listTaskRunOwners(): Promise<string[]> {
-  const usersRoot = path.join(lightclawHome(), 'identity', 'per-user')
+  const root = usersRoot()
   let users
   try {
-    users = await readdir(usersRoot, { withFileTypes: true })
+    users = await readdir(root, { withFileTypes: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
@@ -114,7 +111,7 @@ export async function listTaskRunOwners(): Promise<string[]> {
   for (const user of users) {
     if (!user.isDirectory()) continue
     try {
-      const taskruns = await readdir(path.join(usersRoot, user.name, 'taskruns'), {
+      const taskruns = await readdir(path.join(root, user.name, 'taskruns'), {
         withFileTypes: true,
       })
       if (taskruns.some(entry => entry.isDirectory())) {
@@ -820,10 +817,10 @@ export async function getTaskRun(
   if (ownerCanonicalUser) {
     return loadMetaFile(ownerCanonicalUser, id)
   }
-  const usersRoot = path.join(lightclawHome(), 'identity', 'per-user')
+  const root = usersRoot()
   let users
   try {
-    users = await readdir(usersRoot, { withFileTypes: true })
+    users = await readdir(root, { withFileTypes: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
@@ -1020,7 +1017,7 @@ export async function sweepTerminalTaskRuns(
   return { removed }
 }
 
-// Enumerate every per-user identity dir and sweep its terminal task runs. This
+// Enumerate every per-user dir and sweep its terminal task runs. This
 // is the retention entry point the per-user maintenance lane (inbox-aging) calls
 // on its interval; non-terminal (crashed) runs are always preserved by the
 // per-user sweep so a later watchdog can still reconcile them. Best-effort per
@@ -1028,10 +1025,10 @@ export async function sweepTerminalTaskRuns(
 export async function sweepAllTerminalTaskRuns(
   options: SweepTaskRunsOptions = {},
 ): Promise<{ removed: number }> {
-  const usersRoot = path.join(lightclawHome(), 'identity', 'per-user')
+  const root = usersRoot()
   let users
   try {
-    users = await readdir(usersRoot, { withFileTypes: true })
+    users = await readdir(root, { withFileTypes: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 }
     throw error

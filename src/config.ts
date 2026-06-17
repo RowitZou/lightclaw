@@ -303,6 +303,9 @@ export type ApiKeyEndpoint = {
    *  of truth, so per-endpoint routing (e.g. Anthropic gateway direct,
    *  ChatGPT through US proxy) stays predictable. */
   proxy?: string
+  /** Internal only: distinguishes per-user credentials in provider caches.
+   *  Never persisted to admin config.json. */
+  credentialIdentity?: string
 }
 
 /** Endpoint whose credentials come from an `AuthProvider` lookup at request
@@ -314,6 +317,13 @@ export type OAuthEndpoint = {
   /** Explicit proxy URL — same semantics as `ApiKeyEndpoint.proxy`. The
    *  Codex token-refresh path also routes through this. */
   proxy?: string
+  /** Internal only: per-user OAuth reference, e.g. codex:default. */
+  authRef?: string
+  /** Internal only: canonical user that owns authRef. */
+  credentialOwner?: string
+  /** Internal only: distinguishes per-user credentials in provider caches.
+   *  Never persisted to admin config.json. */
+  credentialIdentity?: string
 }
 
 export type EndpointConfig = ApiKeyEndpoint | OAuthEndpoint
@@ -325,6 +335,9 @@ export type ModelEntry = {
   schema: Schema
   /** Real model id sent to the upstream API. */
   upstreamModel: string
+  /** User-facing visibility. Global/admin models are legacy-only and are
+   *  never selectable by users; per-user custom models are marked `user`. */
+  visibility?: ModelVisibility
   /** Optional Responses API reasoning effort. */
   reasoningEffort?: ReasoningEffort
   /** Optional per-model output-token ceiling. Overrides the global
@@ -332,18 +345,37 @@ export type ModelEntry = {
   maxOutputTokens?: number
 }
 
+export type ModelVisibility = 'admin' | 'public' | 'user'
+
+export function isUserSelectableModel(entry: ModelEntry | undefined): boolean {
+  return entry?.visibility === 'user'
+}
+
+export function isSelectableModelFor(entry: ModelEntry | undefined, _isAdminUser: boolean): boolean {
+  return isUserSelectableModel(entry)
+}
+
+export function selectableModelNames(
+  config: Pick<LightClawConfig, 'models'>,
+  isAdminUser: boolean,
+): string[] {
+  return Object.keys(config.models).filter(name =>
+    isSelectableModelFor(config.models[name], isAdminUser),
+  )
+}
+
 export type LightClawConfig = {
   /** User-facing language for slash output, feishu cards, banners, error
    *  notices. Stderr logging stays English regardless. Default: cn. */
   lang: 'cn' | 'en'
-  /** Phase 5 canonical model selector. `/model` writes here; every role and
-   *  tool module falls back to this value. */
+  /** Active per-session model selector. For paired users this comes from
+   *  users/<u>/config.json; global system config may leave it empty. */
   defaultModel: string
-  /** Display-name -> { endpoint, schema, upstreamModel }. Source of truth
-   *  for which models the user can pick via `/model`. */
+  /** Display-name -> { endpoint, schema, upstreamModel }. For paired users
+   *  this is the resolved per-user custom model registry. */
   models: Record<string, ModelEntry>
-  /** Named endpoint pool (apiKey + baseUrl). Models reference these by
-   *  alias. */
+  /** Named endpoint pool for the resolved model registry. User endpoints are
+   *  assembled from user config + user secret/auth stores. */
   endpoints: Record<string, EndpointConfig>
   roles?: Record<string, RoleConfig>
   contextWindow: number
@@ -686,11 +718,18 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
     return undefined
   }
   const normalized = value.trim().toLowerCase()
-  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+  if (
+    normalized === 'none' ||
+    normalized === 'minimal' ||
+    normalized === 'low' ||
+    normalized === 'medium' ||
+    normalized === 'high' ||
+    normalized === 'xhigh'
+  ) {
     return normalized
   }
   throw new Error(
-    `reasoningEffort must be one of: "low", "medium", "high".`,
+    `reasoningEffort must be one of: "none", "minimal", "low", "medium", "high", "xhigh".`,
   )
 }
 
@@ -798,6 +837,7 @@ function resolveModels(
         `models["${displayName}"].upstreamModel is required.`,
       )
     }
+    const visibility = parseModelVisibility(raw.visibility, `models["${displayName}"].visibility`)
     const endpointConfig = endpoints[endpoint]
     const isOAuthEndpoint = 'auth' in endpointConfig
     if (schema === 'openai-auth' && !isOAuthEndpoint) {
@@ -819,11 +859,21 @@ function resolveModels(
       endpoint,
       schema,
       upstreamModel,
+      ...(visibility && visibility !== 'admin' ? { visibility } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     }
   }
   return out
+}
+
+function parseModelVisibility(value: string | undefined, field: string): ModelVisibility | undefined {
+  if (value === undefined) return undefined
+  const normalized = value.trim()
+  if (normalized === 'admin' || normalized === 'public') {
+    return normalized
+  }
+  throw new Error(`${field} must be one of: "admin", "public".`)
 }
 
 function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined {
@@ -1300,25 +1350,15 @@ export function getConfig(): LightClawConfig {
   const endpoints = resolveEndpoints(fileConfig.endpoints)
   const models = resolveModels(fileConfig.models, endpoints)
   const modelNames = Object.keys(models)
-  if (modelNames.length === 0) {
-    throw new Error(
-      `No models configured. Define endpoints + models in ${path.join(lightclawHome(), 'config.json')}.`,
-    )
-  }
   const requestedModel =
     process.env.LIGHTCLAW_DEFAULT_MODEL ??
     fileConfig.defaultModel
-  if (requestedModel === undefined) {
-    throw new Error(
-      '`defaultModel` is required (set it as a top-level field or via LIGHTCLAW_DEFAULT_MODEL env).',
-    )
-  }
-  if (!models[requestedModel]) {
+  if (requestedModel !== undefined && !models[requestedModel]) {
     throw new Error(
       `defaultModel = "${requestedModel}" is not in models. Available: ${modelNames.join(', ')}.`,
     )
   }
-  const defaultModel = requestedModel
+  const defaultModel = requestedModel ?? ''
   const roles = resolveRoleConfigs(fileConfig.roles, modelNames)
   const contextWindow = Math.max(
     1000,

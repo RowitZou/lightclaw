@@ -1,11 +1,9 @@
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { getConfig, resolveSessionsDir } from '../config.js'
-import { getMemoryDir } from '../memory/auto-memory.js'
+import { getConfig } from '../config.js'
 import type { PermissionMode } from '../permission/types.js'
-import { getSessionDir, loadMeta } from '../session/storage.js'
-import { adminPath, identitiesPath } from './paths.js'
+import { adminPath, identitiesPath, userHome } from './paths.js'
 import type {
   AdminFile,
   ChannelKind,
@@ -122,6 +120,25 @@ export async function setUserPermissionCeiling(
   return { ok: true }
 }
 
+export async function setUserDataRoot(
+  name: string,
+  dataRoot: string | undefined,
+): Promise<{ ok: boolean }> {
+  const identities = await listIdentities()
+  const record = identities[name]
+  if (!record) {
+    return { ok: false }
+  }
+  if (dataRoot === undefined) {
+    delete record.dataRoot
+  } else {
+    record.dataRoot = dataRoot
+  }
+  record.updatedAt = new Date().toISOString()
+  await writeIdentities(identities)
+  return { ok: true }
+}
+
 export async function addLink(
   name: string,
   link: SenderKey,
@@ -172,10 +189,11 @@ export async function removeUser(
     return { ok: false }
   }
 
+  const purgeHome = userHome(name)
   delete identities[name]
   await writeIdentities(identities)
   if (opts?.purge) {
-    await purgeUserData(name)
+    await purgeUserDataAt(purgeHome)
   }
   return { ok: true }
 }
@@ -244,29 +262,8 @@ async function writeIdentities(identities: IdentitiesFile): Promise<void> {
   await rebuildReverseIndex()
 }
 
-async function purgeUserData(name: string): Promise<void> {
-  // Compute the user's memory dir via the same helper the runtime uses, so
-  // we never drift from getMemoryDir's keying. (Pre-fix code hardcoded
-  // ~/.lightclaw/memory/<name> and silently no-op'd because the actual dir
-  // had a path-resolved cwd suffix in front.)
-  await rm(getMemoryDir(name, getConfig()), { recursive: true, force: true })
-
-  try {
-    const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue
-      }
-      const meta = await loadMeta(entry.name)
-      if (meta?.userId === name || entry.name === `feishu-${name}`) {
-        await rm(getSessionDir(entry.name), { recursive: true, force: true })
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error
-    }
-  }
+async function purgeUserDataAt(userDir: string): Promise<void> {
+  await rm(userDir, { recursive: true, force: true })
 }
 
 async function chmodBestEffort(filePath: string, mode: number): Promise<void> {

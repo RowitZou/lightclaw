@@ -1,8 +1,10 @@
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
 
 import { loadConfigFile } from '../config-file.js'
 import { pickWithLegacy } from '../config.js'
 import { expandHomePath, lightclawHome } from '../paths.js'
+import type { IdentitiesFile } from './types.js'
 import {
   buildGpfsMountStringFromRules,
   resolveGpfsMountRule,
@@ -29,6 +31,39 @@ export function rateLimitsPath(): string {
   return path.join(identityRoot(), 'rate-limits.json')
 }
 
+export function usersRoot(): string {
+  return path.join(lightclawHome(), 'users')
+}
+
+export function userHome(canonicalUser: string): string {
+  const dataRoot = userDataRoot(canonicalUser)
+  if (dataRoot) {
+    return dataRoot
+  }
+  return defaultUserHome(canonicalUser)
+}
+
+export function defaultUserHome(canonicalUser: string): string {
+  return path.join(usersRoot(), sanitizePathSegment(canonicalUser))
+}
+
+export function userDataRoot(canonicalUser: string): string | undefined {
+  let raw: string
+  try {
+    raw = readFileSync(identitiesPath(), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    throw error
+  }
+  const parsed = JSON.parse(raw) as IdentitiesFile
+  const dataRoot = parsed[canonicalUser]?.dataRoot
+  return typeof dataRoot === 'string' && dataRoot.trim()
+    ? path.resolve(expandHomePath(dataRoot))
+    : undefined
+}
+
 /**
  * Per-canonical-user persisted permission rules. Replaces the old in-memory
  * sessionRulesByUser map: when a user picks "以后都允许" / `[a]` the rule is
@@ -37,83 +72,99 @@ export function rateLimitsPath(): string {
  * evaluated alongside cli / file / builtin sources by `evaluatePermission`.
  */
 export function identityPermissionsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'permissions.json',
-  )
+  return path.join(userHome(canonicalUser), 'permissions.json')
 }
 
 export function rlaunchMountsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'rlaunch-mounts.json',
-  )
+  return path.join(userHome(canonicalUser), 'rlaunch-mounts.json')
 }
 
 export function userSecretsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'secrets.json',
-  )
+  return path.join(userHome(canonicalUser), 'secrets.json')
+}
+
+export function userPreferencesPath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'preferences.json')
 }
 
 export function userSkillsRoot(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'skills',
-  )
+  return path.join(userHome(canonicalUser), 'skills')
 }
 
-export function workspaceRoot(): string {
+export function userTaskRunsRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'taskruns')
+}
+
+export function userSessionsRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'sessions')
+}
+
+export function userMemoryRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'memory')
+}
+
+export function userBackgroundTasksPath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'bg-tasks.json')
+}
+
+export function userCompletedBackgroundTasksPath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'bg-tasks-completed.jsonl')
+}
+
+export function userFeishuWorkspacePath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'feishu-workspace.json')
+}
+
+export function userFeishuUploadsPath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'feishu-uploads.json')
+}
+
+function configuredWorkspaceRoot(): string | undefined {
   const fileConfig = loadConfigFile()
-  // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new
-  // `paths.workspace` > legacy top-level `workspaceRoot` > default. Pre-fix
-  // this only read the legacy key, so 0.2.x configs that migrated to the
-  // `paths.*` namespace silently fell back to `<home>/workspaces` and the
-  // rlaunch gpfs guard threw at first runtime acquire.
   const fromFile = pickWithLegacy(
     'workspaceRoot',
     'paths.workspace',
     fileConfig.workspaceRoot,
     fileConfig.paths?.workspace,
   )
-  const configured =
-    process.env.LIGHTCLAW_WORKSPACE_ROOT ??
-    fromFile ??
-    path.join(lightclawHome(), 'workspaces')
-  return path.resolve(expandHomePath(configured))
+  const configured = process.env.LIGHTCLAW_WORKSPACE_ROOT ?? fromFile
+  return configured ? path.resolve(expandHomePath(configured)) : undefined
+}
+
+export function workspaceRoot(): string {
+  // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new
+  // `paths.workspace` > legacy top-level `workspaceRoot` > default user root.
+  // Pre-fix this only read the legacy key, so 0.2.x configs that migrated to
+  // the `paths.*` namespace silently fell back to the old default and the
+  // rlaunch gpfs guard threw at first runtime acquire.
+  return configuredWorkspaceRoot() ?? usersRoot()
 }
 
 export function workspaceFor(canonicalUser: string): string {
-  return path.join(workspaceRoot(), sanitizePathSegment(canonicalUser))
+  const configured = configuredWorkspaceRoot()
+  return configured
+    ? path.join(configured, sanitizePathSegment(canonicalUser))
+    : path.join(userHome(canonicalUser), 'workspace')
 }
 
 export function workspaceToGpfsMount(
   canonicalUser: string,
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): { hostPath: string; mount: string } {
-  const root = workspaceRoot()
+  const root = configuredWorkspaceRoot() ?? workspaceFor(canonicalUser)
   try {
     resolveGpfsMountRule(root, rlaunchConfig)
   } catch {
     const hostPrefixes = rlaunchConfig.gpfsMounts.map(rule => rule.hostPrefix)
     const example = hostPrefixes[0] ?? '<gpfs-host-prefix>'
     throw new Error(
-      `RlaunchRuntime requires LIGHTCLAW_WORKSPACE_ROOT under a configured gpfs host prefix ` +
-      `(${hostPrefixes.join(', ')}); got "${root}". Set LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ` +
-      `${example}/<namespace>/<user>/lightclaw-workspaces`,
+      `RlaunchRuntime requires the workspace path under a configured gpfs host prefix ` +
+      `(${hostPrefixes.join(', ')}); got "${root}". Set LIGHTCLAW_HOME or ` +
+      `LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ${example}/<namespace>/<user>/lightclaw`,
     )
   }
 
-  const hostPath = path.join(root, sanitizePathSegment(canonicalUser))
+  const hostPath = workspaceFor(canonicalUser)
   return {
     hostPath,
     mount: buildGpfsMountStringFromRules(hostPath, '/workspace', rlaunchConfig),

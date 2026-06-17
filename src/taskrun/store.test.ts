@@ -5,6 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
+import { userTaskRunsRoot } from '../identity/paths.js'
 import {
   acceptTaskRun,
   appendArtifact,
@@ -708,7 +709,7 @@ describe('TaskRun store', () => {
     const tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-taskrun-'))
     setLightclawHomeOverride(tmpHome)
     try {
-      const dir = path.join(tmpHome, 'identity', 'per-user', 'alice', 'taskruns', 'tr_legacy')
+      const dir = path.join(userTaskRunsRoot('alice'), 'tr_legacy')
       mkdirSync(dir, { recursive: true })
       writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({
         id: 'tr_legacy',

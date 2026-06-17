@@ -8,9 +8,10 @@ import { TASK_RUN_TERMINAL_STATUSES } from './feishu/task-card.js'
 import { appendProgress, getTaskRun } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
-import { workspaceFor } from '../identity/paths.js'
+import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import {
   beginQuery,
@@ -38,6 +39,7 @@ import { createAssistantMessage, createUserMessage, getLastUuid } from '../messa
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { applyCredentialDegrade, resolveRoleModel } from '../model-resolution.js'
+import { formatModelSetupRequiredReply } from '../model-setup.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getMainRole } from '../agents/registry.js'
@@ -104,8 +106,35 @@ import {
   type QuotedMessageContext,
 } from './types.js'
 
-function getMainRoleRoute(config: ReturnType<typeof getConfig>) {
-  return getProviderFor(config, resolveRoleModel(getMainRole(), config))
+function tryGetMainRoleRoute(config: LightClawConfig): ReturnType<typeof getProviderFor> | null {
+  const model = resolveRoleModel(getMainRole(), config)
+  if (!model) {
+    return null
+  }
+  try {
+    return getProviderFor(config, model)
+  } catch (error) {
+    process.stderr.write(
+      `[model] main route unavailable for model "${model}": ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return null
+  }
+}
+
+function getActiveMainRoleTools(config: LightClawConfig, channelId: ChannelId) {
+  const route = tryGetMainRoleRoute(config)
+  if (!route) {
+    process.stderr.write(
+      `${channelId}: no selectable model yet; slash active tools are empty until the user configures a model\n`,
+    )
+    return []
+  }
+  return filterToolsByRoleVisibility(
+    getMainRole(),
+    getEnabledTools(route.provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
+  )
 }
 
 /**
@@ -1001,14 +1030,7 @@ export class ChannelRunner {
           messages,
           userId,
           isAdmin: await isAdmin(userId),
-          getActiveTools: () =>
-            filterToolsByRoleVisibility(
-              getMainRole(),
-              getEnabledTools(
-                getMainRoleRoute(appConfig).provider,
-                getAllTools('feishu', { runtimeDriver: appConfig.runtime.driver }),
-              ),
-            ),
+          getActiveTools: () => getActiveMainRoleTools(appConfig, this.strategy.channelId),
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
           channelUserMessageContent: prebuiltUserMessageContent,
@@ -1077,8 +1099,11 @@ export class ChannelRunner {
         let persistedTranscriptCount = messageCountBeforeQuery
         // Resolve provider via the same resolver the encoder used so endpoint
         // / upstreamModel match the cache key for any capability flips.
-        const { provider, entry: providerEntry } = getMainRoleRoute(appConfig)
-        const providerBaseUrl = appConfig.endpoints[providerEntry.endpoint]?.baseUrl
+        const mainRouteForCapability = tryGetMainRoleRoute(appConfig)
+        const providerEntry = mainRouteForCapability?.entry
+        const providerBaseUrl = providerEntry
+          ? appConfig.endpoints[providerEntry.endpoint]?.baseUrl
+          : undefined
         const channelId = this.strategy.channelId
         process.stderr.write(`${channelId}: query start session ${sessionId}\n`)
 
@@ -1356,10 +1381,7 @@ export class ChannelRunner {
                 },
               }),
               messages,
-              tools: filterToolsByRoleVisibility(
-                getMainRole(),
-                getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: appConfig.runtime.driver })),
-              ),
+              tools: getActiveMainRoleTools(appConfig, channelId),
               ...(forceFallbackInToolResultKinds.size > 0
                 ? { forceFallbackInToolResult: forceFallbackInToolResultKinds }
                 : {}),
@@ -1421,6 +1443,7 @@ export class ChannelRunner {
             const canRecoverUserMessage =
               inUserMessageFlipped && materializedAttachment.length > 0
             if (
+              providerEntry &&
               missingSignal &&
               affectedPositions.length > 0 &&
               (canRecoverUserMessage || inToolResultFlipped)
@@ -1950,8 +1973,8 @@ export class ChannelRunner {
 
   /**
    * Run a whitelisted read-only slash WITHOUT entering the channel lock.
-   * Builds a fresh, disk-only SessionContext (preferences / identity rules
-   * loaded from disk; token-usage counters, todos, message history all
+   * Builds a fresh, disk-only SessionContext (user config / legacy preferences /
+   * identity rules loaded from disk; token-usage counters, todos, message history all
    * default to fresh values) so dispatchChannelSlash gets a valid scope.
    * Read slashes in the whitelist do not depend on live in-flight state,
    * so the fresh ctx faithfully represents what they want to display.
@@ -1963,8 +1986,13 @@ export class ChannelRunner {
     message: NormalizedChannelMessage,
     userId: string,
   ): Promise<void> {
-    const config = getConfig()
+    const baseConfig = getConfig()
     const prefs = loadIdentityPreferences(userId)
+    const config = resolveUserConfig(userId, {
+      ...baseConfig,
+      ...(prefs.permissionMode ? { permissionMode: prefs.permissionMode } : {}),
+      ...(prefs.model ? { defaultModel: prefs.model } : {}),
+    })
     const cwd = workspaceFor(userId)
     const sessionId = this.strategy.resolveSessionId(message, userId)
     assertSessionIdShape(sessionId)
@@ -1990,14 +2018,14 @@ export class ChannelRunner {
       cwd,
       channel: 'feishu',
       model: applyCredentialDegrade(
-        prefs.model ?? resolveRoleModel(getMainRole(), config),
+        resolveRoleModel(getMainRole(), config),
         config,
       ),
-      sessionsDir: config.paths.sessions,
+      sessionsDir: userSessionsRoot(userId),
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
       sessionId,
-      permissionMode: prefs.permissionMode ?? config.permissionMode,
+      permissionMode: config.permissionMode,
       permissionCeiling: await getUserPermissionCeiling(userId),
       identityRules: loadIdentityRules(userId),
       fileRules: loadFileRules({
@@ -2009,11 +2037,7 @@ export class ChannelRunner {
       runtime: sandboxRuntime,
     })
 
-    const provider = getMainRoleRoute(config).provider
-    const tools = filterToolsByRoleVisibility(
-      getMainRole(),
-      getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
-    )
+    const tools = getActiveMainRoleTools(config, this.strategy.channelId)
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
     // Load transcript from disk so /status (and any other read slash that
@@ -2453,7 +2477,15 @@ async function encodeAttachmentsForInlineForSession(input: {
   if (input.materialized.length === 0) {
     return { inlineBlocks: [], fallbackPaths: [], warnings: [] }
   }
-  const { provider, entry } = getMainRoleRoute(input.config)
+  const route = tryGetMainRoleRoute(input.config)
+  if (!route) {
+    return {
+      inlineBlocks: [],
+      fallbackPaths: input.materialized,
+      warnings: [formatModelSetupRequiredReply()],
+    }
+  }
+  const { provider, entry } = route
   return encodeAttachmentsForInline({
     attachments: input.materialized,
     provider,

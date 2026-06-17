@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { FeishuClient } from '../channels/feishu/client.js'
 import type { FeishuCanonicalResource } from '../channels/feishu/resource-resolver.js'
+import { identityPermissionsPath } from '../identity/paths.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover, PermissionAskInput } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -329,9 +330,10 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc block deletion when a FeishuWriteConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
       'utf8',
     )
@@ -451,9 +453,10 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc table content edits when a FeishuTableEditConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuTableEditConfirm'] }, null, 2),
       'utf8',
     )
@@ -607,9 +610,10 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc media upload when a FeishuUploadConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
       'utf8',
     )

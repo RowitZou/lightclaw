@@ -33,16 +33,16 @@ describe('ShowSlashCatalog tool', () => {
     const output = await callCatalogAs('alice')
 
     assert.match(output, /Slash commands \(chat only\):/)
-    for (const name of ['/feedback', '/model', '/mode', '/mount', '/rules', '/secret']) {
+    for (const name of ['/auth', '/config', '/endpoint', '/feedback', '/model', '/mode', '/mount', '/rules', '/secret', '/skill']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    for (const name of ['/auth', '/ceiling', '/cost', '/feishu-workspace', '/sandbox', '/user']) {
+    for (const name of ['/ceiling', '/cost', '/feishu-workspace', '/sandbox', '/user']) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     for (const name of ['/help', '/status', '/stop']) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    assert.deepEqual(commandNames(output), ['/feedback', '/mode', '/model', '/mount', '/rules', '/secret'])
+    assert.deepEqual(commandNames(output), ['/auth', '/config', '/endpoint', '/feedback', '/mode', '/model', '/mount', '/rules', '/secret', '/skill'])
   })
 
   it('lists admin advisory commands and excludes user-only feedback', async () => {
@@ -53,8 +53,11 @@ describe('ShowSlashCatalog tool', () => {
     for (const name of [
       '/auth',
       '/ceiling',
+      '/config',
       '/cost',
+      '/endpoint',
       '/feishu-workspace',
+      '/skill',
       '/model',
       '/mode',
       '/mount',
@@ -66,7 +69,22 @@ describe('ShowSlashCatalog tool', () => {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     assert.doesNotMatch(output, /^\/feedback\s\s/m)
-    assert.equal(commandNames(output).length, 11)
+    assert.deepEqual(commandNames(output), [
+      '/auth',
+      '/ceiling',
+      '/config',
+      '/cost',
+      '/endpoint',
+      '/feishu-workspace',
+      '/mode',
+      '/model',
+      '/mount',
+      '/rules',
+      '/sandbox',
+      '/secret',
+      '/skill',
+      '/user',
+    ])
   })
 
   it('formats each entry with description, usage block, advisory, and blank separator', async () => {

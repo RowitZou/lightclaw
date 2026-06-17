@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { FeishuClient } from '../channels/feishu/client.js'
 import { resetWorkspaceParentCacheForTest } from '../channels/feishu/workspace/ancestry.js'
+import { userWorkspacePath } from '../channels/feishu/workspace/lifecycle.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -388,13 +389,14 @@ describe('Feishu workspace tools', () => {
     let listShouldFail = false
     // Pre-seed the workspace files so the lazy-create branch is bypassed.
     const home = path.join(tmpHome)
-    await mkdir(path.join(home, 'identity', 'per-user', 'alice'), { recursive: true })
+    const workspacePath = userWorkspacePath('alice')
+    await mkdir(path.dirname(workspacePath), { recursive: true })
     await writeFile(path.join(home, 'feishu-cloud-root.json'), JSON.stringify({
       folderToken: 'rootFld',
       createdAt: '2026-05-12T00:00:00.000Z',
       lightclawVersion: 'test',
     }))
-    await writeFile(path.join(home, 'identity', 'per-user', 'alice', 'feishu-workspace.json'), JSON.stringify({
+    await writeFile(workspacePath, JSON.stringify({
       folderToken: 'userFld',
       parentFolderToken: 'rootFld',
       createdAt: '2026-05-12T00:00:00.000Z',

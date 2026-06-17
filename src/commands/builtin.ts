@@ -1,10 +1,16 @@
 import chalk from 'chalk'
 
-import { getConfig } from '../config.js'
+import {
+  getConfig,
+  isSelectableModelFor,
+  selectableModelNames,
+  type LightClawConfig,
+} from '../config.js'
 import {
   addLink,
   createUser,
   getAdmin,
+  getIdentity,
   getUserPermissionCeiling,
   isAdmin,
   isValidIdentityName,
@@ -14,12 +20,21 @@ import {
   rebuildReverseIndex,
   removeLink,
   removeUser,
+  setUserDataRoot,
   setUserPermissionCeiling,
 } from '../identity/store.js'
+import { validateUserDataRootPath } from '../identity/data-root.js'
+import {
+  approveDataRootRequest,
+  listDataRootRequests,
+  rejectDataRootRequest,
+} from '../identity/data-root-requests.js'
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import { deriveCanonicalName } from '../identity/derive-canonical.js'
 import { preheatAndWelcomeOnApproval } from '../identity/post-approve.js'
 import { setIdentityPreference } from '../identity/preferences.js'
+import { setUserConfigOverrideField, updateUserConfigOverride } from '../config/user-override.js'
+import { normalizeProxyUrl } from '../config/proxy-url.js'
 import type { SenderKey } from '../identity/types.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
@@ -33,7 +48,7 @@ import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { brainppDockerImageProbe } from '../runtime/image-readiness.js'
 import { resolveDockerImage } from '../runtime/pool.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
-import { clearPrechargeForModel } from '../provider/index.js'
+import { clearPrechargeForModel, clearProviderCacheForEndpoint } from '../provider/index.js'
 import {
   abortInFlightForSession,
   getCurrentUserId,
@@ -51,10 +66,15 @@ import {
 } from '../state.js'
 
 import { runAuthCommand } from './auth.js'
+import { runUserAuthCommand } from './user-auth.js'
+import { runUserConfigCommand } from './user-config.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
+import { runEndpointCommand } from './endpoint.js'
+import { runModelCustomCommand } from './model-custom.js'
 import { runMountCommand } from './mount.js'
 import { runSecretCommand } from './secret.js'
+import { runSkillCommand } from './skill.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -116,10 +136,10 @@ function buildBuiltinCommands(): ReplCommand[] {
   return [
   {
     name: '/help',
-    usage: '/help',
+    usage: '/help [command]',
     description: t('cmd.help.desc'),
-    async handler(_args, ctx) {
-      ctx.output.write(await formatHelp(ctx))
+    async handler(args, ctx) {
+      ctx.output.write(await formatHelp(args, ctx))
     },
   },
   {
@@ -239,15 +259,32 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/model                 Show the current model and list every selectable model alias.',
       '/model <name>          Switch to a model alias (use a name from the bare-/model list).',
       '/model --clear-cache   Clear the current model\'s capability-probe cache (combine with <name> to clear that one).',
+      '/model proxy           Show the current model endpoint proxy.',
+      '/model proxy <proxy-url|-> Set or clear the current model endpoint proxy.',
+      '/model proxy <name> <proxy-url|-> Set or clear the proxy for a named model endpoint.',
+      '/model custom list     List user-owned custom models.',
+      '/model custom templates Show OpenAI / Anthropic / Codex / self-hosted examples.',
+      '/model custom add ...  Add a user-owned custom model using an existing /endpoint.',
+      '/model custom check <name> Check whether a custom model is reachable.',
     ].join('\n'),
     async handler(args, ctx) {
       const rawParts = args.trim().split(/\s+/).filter(Boolean)
+      if (rawParts[0]?.toLowerCase() === 'custom') {
+        ctx.output.write(await runModelCustomCommand(rawParts.slice(1).join(' '), ctx))
+        return
+      }
+      if (rawParts[0]?.toLowerCase() === 'proxy') {
+        ctx.output.write(runModelProxyCommand(rawParts.slice(1), ctx))
+        return
+      }
       const clearCache = rawParts.includes('--clear-cache')
       const modelParts = rawParts.filter(part => part !== '--clear-cache')
       const model = modelParts.join(' ')
-      const registered = Object.keys(ctx.config.models)
+      const registered = selectableModelNames(ctx.config, false)
       const formatList = (): string =>
-        registered
+        registered.length === 0
+          ? '(none; configure a custom model with /endpoint and /model custom add)'
+          : registered
           .map(name => {
             const entry = ctx.config.models[name]
             return `${name} (${entry.schema}, ${entry.endpoint} -> ${entry.upstreamModel})`
@@ -282,11 +319,14 @@ function buildBuiltinCommands(): ReplCommand[] {
         return
       }
       if (!model) {
-        ctx.output.write(`${t('model.current', { name: getModel() })}\n`)
+        const current = getModel()
+        const currentEntry = ctx.config.models[current]
+        const currentName = isSelectableModelFor(currentEntry, false) ? current : '(none)'
+        ctx.output.write(`${t('model.current', { name: currentName })}\n`)
         ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
         return
       }
-      if (!ctx.config.models[model]) {
+      if (!isSelectableModelFor(ctx.config.models[model], false)) {
         ctx.output.write(`${t('common.error.prefix')}${t('model.unknown', { name: model })}\n`)
         ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
         return
@@ -309,10 +349,45 @@ function buildBuiltinCommands(): ReplCommand[] {
       }
       const callerId = getCurrentUserId()
       if (callerId) {
-        setIdentityPreference({ canonicalUser: callerId, key: 'model', value: model })
+        setUserConfigOverrideField({ canonicalUser: callerId, key: 'defaultModel', value: model })
+        setIdentityPreference({ canonicalUser: callerId, key: 'model', value: undefined })
       }
       ctx.output.write(`${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`)
       await ctx.persistMeta(ctx.messages.length)
+    },
+  },
+  {
+    name: '/endpoint',
+    usage: '/endpoint <list|templates|add-key|add-codex|set|remove>',
+    description: 'Manage user-owned custom model endpoints',
+    agentAdvisory:
+      'When the user needs to add or modify their own API endpoint / Codex auth endpoint before adding a custom model.',
+    agentUsage: [
+      '/endpoint list',
+      '/endpoint templates',
+      '/endpoint add-key <endpoint> <apiKeyRef> [--base-url <url>] [--proxy <url>]',
+      '/endpoint add-codex <endpoint> [codex:<name>] [--base-url <url>] [--proxy <url>]',
+      '/endpoint set <endpoint> [--base-url <url|->] [--proxy <url|->] [--api-key-ref <name>|--auth-ref codex:<name>]',
+      '/endpoint remove <endpoint>',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runEndpointCommand(args, ctx))
+    },
+  },
+  {
+    name: '/config',
+    usage: t('cmd.config.usage'),
+    description: t('cmd.config.desc'),
+    agentAdvisory:
+      'When the user wants to inspect or reset their per-user LightClaw config, ' +
+      'or request a dataRoot change.',
+    agentUsage: [
+      '/config show',
+      '/config reset [all|defaultModel|lang|permissionMode|endpoints|models|endpoint:<name>|model:<name>]',
+      '/config set-home <absolute-daemon-visible-path>',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runUserConfigCommand(args, ctx))
     },
   },
   {
@@ -355,7 +430,9 @@ function buildBuiltinCommands(): ReplCommand[] {
       }
       setPermissionMode(mode)
       if (userId) {
-        setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: mode })
+        ctx.config.permissionMode = mode
+        setUserConfigOverrideField({ canonicalUser: userId, key: 'permissionMode', value: mode })
+        setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: undefined })
       }
       const alias = modeToAlias(mode)
       const recap = t(`mode.${alias}.recap` as 'mode.read.recap')
@@ -415,10 +492,15 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/user reject <code>                 Reject a pending pairing request',
       '/user unlink <channel:id>           Unlink one channel identity from its canonical user',
       '/user remove <name> [--purge]       Remove a canonical user; --purge also deletes user data',
+      '/user set-home <name> <path>        Set a per-user dataRoot',
+      '/user clear-home <name>             Clear the per-user dataRoot',
+      '/user home-requests                 Show pending user dataRoot requests',
+      '/user approve-home <name>           Approve a pending dataRoot request',
+      '/user reject-home <name>            Reject a pending dataRoot request',
       '/user feedback [--page N]           Show standing user feedback for the admin',
     ].join('\n'),
     async handler(args, ctx) {
-      ctx.output.write(await runUserCommand(args))
+      ctx.output.write(await runUserCommand(args, ctx))
     },
   },
   {
@@ -673,22 +755,44 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/auth',
     usage: t('cmd.auth.usage'),
     description: t('cmd.auth.desc'),
-    // Admin-only: OAuth credentials are endpoint-level state, equivalent
-    // in scope to the apiKey on a config-defined endpoint. Letting any
-    // user log in / out would let them rebind the host's outbound
-    // identity to their own ChatGPT account, which is not what the
-    // multi-user model implies.
-    visibleTo: 'admin',
     agentAdvisory:
       'When the daemon needs provider credentials set up or refreshed ' +
-      '(anthropic / openai / openai-auth / codex).',
+      '(anthropic / openai / openai-auth / codex), or the user wants to manage their own Codex authRef.',
     agentUsage: [
+      '/auth codex list                    List current user Codex authRefs',
+      '/auth codex import --from <path>    Import current user Codex auth from daemon-readable auth.json',
+      '/auth codex status [name]           Show current user Codex auth status without tokens',
+      '/auth codex refresh [name]          Refresh current user Codex auth',
+      '/auth codex logout [name]           Remove current user Codex auth',
       '/auth list                         Show current credential state per provider',
       '/auth import codex                 Import Codex OAuth credentials from ~/.codex/auth.json',
       '/auth logout codex [--purge]       Remove stored Codex token; --purge also removes auto-registered config',
     ].join('\n'),
     async handler(args, ctx) {
+      const trimmed = args.trim()
+      if (trimmed.startsWith('codex') || !ctx.isAdmin) {
+        ctx.output.write(await runUserAuthCommand(trimmed, ctx.userId ?? getCurrentUserId()))
+        return
+      }
       ctx.output.write(await runAuthCommand(args, ctx.config))
+    },
+  },
+  {
+    name: '/skill',
+    usage: t('cmd.skill.usage'),
+    description: t('cmd.skill.desc'),
+    agentAdvisory:
+      'When the user wants to inspect their installed skills or delete one of their own user skills.',
+    agentUsage: [
+      '/skill list',
+      '/skill view <name>',
+      '/skill delete <name>',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runSkillCommand(args, {
+        userId: ctx.userId ?? getCurrentUserId(),
+        cwd: ctx.config.paths?.workspace ?? process.cwd(),
+      }))
     },
   },
   ]
@@ -741,25 +845,26 @@ async function formatCeilingList(): Promise<string> {
   return lines.join('\n')
 }
 
-async function formatHelp(ctx: ReplContext): Promise<string> {
+async function formatHelp(args: string, ctx: ReplContext): Promise<string> {
   // The terminal console hides the agent-loop commands, so /help must too.
   const registry = createBuiltinReplRegistry({ includeChannelOnly: ctx.isChannel })
-  const all = registry.list(true)
-  const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
-  const adminCmds = all.filter(c => c.visibleTo === 'admin')
+  const visibleCommands = registry.list(Boolean(ctx.isAdmin))
+  const requested = normalizeHelpCommandName(args)
+  if (requested) {
+    return color(ctx, formatCommandHelp(requested, registry, ctx))
+  }
+  const userCmds = visibleCommands.filter(c => (c.visibleTo ?? 'all') !== 'admin')
+  const adminCmds = visibleCommands.filter(c => c.visibleTo === 'admin')
   // Layout differs by surface. The Feishu channel shows command NAMES and
-  // defers argument syntax to "ask LightClaw" (help.usageHint) — the agent
-  // can see the full slash catalog and walk the user through usage. The
-  // terminal admin console has NO agent loop to ask, so it shows each
-  // command's full `usage` (argument syntax) inline and drops the hint:
-  // /help must be self-contained there. Channel uses a `name: description`
-  // colon layout (feishu IM wraps long lines, destroying column alignment);
-  // the terminal keeps a padEnd-aligned table since fixed-width fonts make
-  // it readable.
+  // descriptions and points at /help <command> for exact syntax; the terminal
+  // admin console keeps each command's full `usage` inline because it is a
+  // slash-only surface. Channel uses a `name: description` colon layout
+  // (feishu IM wraps long lines, destroying column alignment); the terminal
+  // keeps a padEnd-aligned table since fixed-width fonts make it readable.
   const formatRow = ctx.isChannel
     ? (c: ReplCommand) => `  ${c.name}: ${c.description}`
     : ((): ((c: ReplCommand) => string) => {
-        const usageWidth = Math.max(...all.map(c => c.usage.length), 10)
+        const usageWidth = Math.max(...visibleCommands.map(c => c.usage.length), 10)
         return c => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`
       })()
   const lines: string[] = [
@@ -779,6 +884,138 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   }
   lines.push(t('help.statusHint'), '')
   return color(ctx, lines.join('\n'))
+}
+
+function normalizeHelpCommandName(args: string): string | undefined {
+  const first = args.trim().split(/\s+/).filter(Boolean)[0]
+  if (!first) return undefined
+  return first.startsWith('/') ? first : `/${first}`
+}
+
+function formatCommandHelp(
+  name: string,
+  registry: ReplCommandRegistry,
+  ctx: ReplContext,
+): string {
+  const command = registry.find(name)
+  const visible = command ? isCommandVisibleToContext(command, ctx) : false
+  if (!command || !visible) {
+    return `${t('common.error.prefix')}${t('help.unknownCommand', { name })}\n`
+  }
+  const visibility = command.visibleTo ?? 'all'
+  const detail = command.agentUsage?.trim() || command.usage
+  const lines = [
+    t('help.detailTitle', { name: command.name }),
+    '',
+    command.description,
+    t('help.detailVisibility', { visibility: t(`help.visibility.${visibility}` as 'help.visibility.all') }),
+    '',
+    t('help.detailUsage'),
+    `  ${command.usage}`,
+  ]
+  if (detail && detail !== command.usage) {
+    lines.push('', t('help.detailSubcommands'))
+    for (const line of detail.split('\n')) {
+      lines.push(line.trim() ? `  ${line}` : '')
+    }
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+function isCommandVisibleToContext(command: ReplCommand, ctx: ReplContext): boolean {
+  const visibility = command.visibleTo ?? 'all'
+  if (visibility === 'admin') return Boolean(ctx.isAdmin)
+  if (visibility === 'user') return !ctx.isAdmin
+  return true
+}
+
+function runModelProxyCommand(parts: string[], ctx: ReplContext): string {
+  const usage = [
+    'Usage:',
+    '  /model proxy',
+    '  /model proxy <model>',
+    '  /model proxy <proxy-url|->',
+    '  /model proxy <model> <proxy-url|->',
+    '',
+  ].join('\n')
+  if (parts.length > 2) return usage
+
+  const currentModel = getModel() || ctx.config.defaultModel
+  let modelName = currentModel
+  let nextProxy: string | undefined
+  if (parts.length === 1) {
+    const only = parts[0]!
+    if (ctx.config.models[only] && !looksLikeProxyValue(only)) {
+      modelName = only
+    } else {
+      nextProxy = only
+    }
+  } else if (parts.length === 2) {
+    modelName = parts[0]!
+    nextProxy = parts[1]!
+  }
+
+  const entry = ctx.config.models[modelName]
+  if (!isSelectableModelFor(entry, false)) {
+    return `${t('common.error.prefix')}${t('model.unknown', { name: modelName || '(none)' })}\n`
+  }
+  const endpointName = entry.endpoint
+  const endpoint = ctx.config.endpoints[endpointName]
+  if (!endpoint) {
+    return `${t('common.error.prefix')}model "${modelName}" references missing endpoint "${endpointName}".\n`
+  }
+  if (nextProxy === undefined) {
+    const proxy = endpoint.proxy ? '(set)' : '(none)'
+    return [
+      'Model proxy:',
+      `  model=${modelName}`,
+      `  endpoint=${endpointName}`,
+      `  proxy=${proxy}`,
+      '',
+      usage,
+    ].join('\n')
+  }
+
+  const userId = ctx.userId ?? getCurrentUserId()
+  if (!userId) {
+    return `${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`
+  }
+
+  let normalizedProxy: string | undefined
+  try {
+    normalizedProxy = nextProxy === '-' ? undefined : normalizeProxyUrl(nextProxy)
+    updateUserConfigOverride(userId, current => {
+      const currentEndpoint = current.endpoints?.[endpointName]
+      if (!currentEndpoint) {
+        throw new Error(`endpoint "${endpointName}" is not in the current user config; use /endpoint set ${endpointName} --proxy <url> instead`)
+      }
+      const endpoints = { ...(current.endpoints ?? {}) }
+      const nextEndpoint = { ...currentEndpoint }
+      if (nextProxy === '-') delete nextEndpoint.proxy
+      else nextEndpoint.proxy = normalizedProxy
+      endpoints[endpointName] = nextEndpoint
+      return { ...current, endpoints }
+    })
+  } catch (error) {
+    return `${t('common.error.prefix')}${error instanceof Error ? error.message : String(error)}\n`
+  }
+
+  if (nextProxy === '-') delete endpoint.proxy
+  else endpoint.proxy = normalizedProxy
+  clearProviderCacheForEndpoint(endpointName)
+  clearPrechargeForModel({
+    endpoint: endpointName,
+    baseUrl: endpoint.baseUrl,
+    upstreamModel: entry.upstreamModel,
+  })
+  const action = nextProxy === '-' ? 'Cleared' : 'Updated'
+  const proxy = nextProxy === '-' ? '(none)' : '(set)'
+  return `${action} proxy for model "${modelName}" endpoint "${endpointName}": ${proxy}. Run /model custom check ${modelName} if needed.\n`
+}
+
+function looksLikeProxyValue(value: string): boolean {
+  return value === '-' || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
 }
 
 async function formatStatus(ctx: ReplContext): Promise<string> {
@@ -863,7 +1100,7 @@ function formatDispatchChainNodes(nodes: ChainTreeNode[]): string[] {
   return lines
 }
 
-async function runUserCommand(rawArgs: string): Promise<string> {
+async function runUserCommand(rawArgs: string, ctx: ReplContext): Promise<string> {
   await rebuildReverseIndex()
   const args = rawArgs.trim().split(/\s+/).filter(Boolean)
   const action = args.shift()
@@ -880,6 +1117,16 @@ async function runUserCommand(rawArgs: string): Promise<string> {
       return userUnlink(args)
     case 'remove':
       return userRemove(args)
+    case 'set-home':
+      return userSetHome(args, ctx.config)
+    case 'clear-home':
+      return userClearHome(args)
+    case 'home-requests':
+      return userHomeRequests()
+    case 'approve-home':
+      return userApproveHome(args, ctx.config)
+    case 'reject-home':
+      return userRejectHome(args)
     case 'feedback':
       return userFeedback(args)
     default: {
@@ -1000,6 +1247,9 @@ async function userList(): Promise<string> {
     const record = identities[name]
     const marker = await isAdmin(name) ? t('status.identitiesAdmin') : ''
     lines.push(`${name}${marker} ceiling=${modeToAlias(record.permissionCeiling ?? defaultCeiling)}`)
+    if (record.dataRoot) {
+      lines.push(`  dataRoot=${record.dataRoot}`)
+    }
     for (const channel of ['terminal', 'feishu'] as const) {
       for (const peerId of record.channels[channel]) {
         lines.push(`  - ${channel}:${peerId}`)
@@ -1007,6 +1257,83 @@ async function userList(): Promise<string> {
     }
   }
   return `${lines.join('\n')}\n`
+}
+
+async function userSetHome(args: string[], config: LightClawConfig): Promise<string> {
+  const [name, rawPath, ...extra] = args
+  if (!name || !rawPath || extra.length > 0) {
+    return 'Usage: /user set-home <name> <absolute-daemon-visible-path>\n'
+  }
+  if (!(await getIdentity(name))) {
+    return `${t('user.remove.noSuch', { name })}\n`
+  }
+  const validation = await validateUserDataRootPath(rawPath, config)
+  if (!validation.ok) {
+    return `${t('common.error.prefix')}${validation.reason}\n`
+  }
+  await setUserDataRoot(name, validation.path)
+  return [
+    `Set ${name} dataRoot=${validation.path}`,
+    'Restart the user sandbox (/sandbox reset or rlaunch worker restart) before relying on the new mount table.',
+    '',
+  ].join('\n')
+}
+
+async function userClearHome(args: string[]): Promise<string> {
+  const [name, ...extra] = args
+  if (!name || extra.length > 0) {
+    return 'Usage: /user clear-home <name>\n'
+  }
+  const result = await setUserDataRoot(name, undefined)
+  if (!result.ok) {
+    return `${t('user.remove.noSuch', { name })}\n`
+  }
+  return [
+    `Cleared ${name} dataRoot; defaulting back to users/<canonical>.`,
+    'Restart the user sandbox (/sandbox reset or rlaunch worker restart) before relying on the new mount table.',
+    '',
+  ].join('\n')
+}
+
+async function userHomeRequests(): Promise<string> {
+  const requests = await listDataRootRequests()
+  if (requests.length === 0) {
+    return 'No pending dataRoot requests.\n'
+  }
+  return `${[
+    'Pending dataRoot requests:',
+    ...requests.map(request =>
+      `  ${request.canonicalUser}: ${request.normalizedPath} updated=${request.updatedAt}`,
+    ),
+    '',
+  ].join('\n')}`
+}
+
+async function userApproveHome(args: string[], config: LightClawConfig): Promise<string> {
+  const [name, ...extra] = args
+  if (!name || extra.length > 0) {
+    return 'Usage: /user approve-home <name>\n'
+  }
+  const result = await approveDataRootRequest({ canonicalUser: name, config })
+  if (!result.ok) {
+    return `${t('common.error.prefix')}${result.reason}\n`
+  }
+  return [
+    `Approved ${name} dataRoot=${result.request.normalizedPath}`,
+    'Restart the user sandbox (/sandbox reset or rlaunch worker restart) before relying on the new mount table.',
+    '',
+  ].join('\n')
+}
+
+async function userRejectHome(args: string[]): Promise<string> {
+  const [name, ...extra] = args
+  if (!name || extra.length > 0) {
+    return 'Usage: /user reject-home <name>\n'
+  }
+  const removed = await rejectDataRootRequest(name)
+  return removed
+    ? `Rejected pending dataRoot request for ${name}.\n`
+    : `No pending dataRoot request for ${name}.\n`
 }
 
 async function userPending(): Promise<string> {

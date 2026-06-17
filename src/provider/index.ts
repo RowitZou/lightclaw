@@ -11,6 +11,7 @@ import {
 } from './capability-cache.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
+import { getUserCodexCredentials, parseCodexAuthRef } from '../auth/codex/user-store.js'
 import type { AttachmentKind, Provider, Schema } from './types.js'
 
 const ALL_KINDS: readonly AttachmentKind[] = ['image', 'pdf', 'audio', 'video']
@@ -31,8 +32,8 @@ const cache = new Map<string, Provider>()
  *  after a daemon's first turn for each model. */
 const prechargdKeys = new Set<string>()
 
-function cacheKey(schema: Schema, endpointAlias: string): string {
-  return `${schema}:${endpointAlias}`
+function cacheKey(schema: Schema, endpointAlias: string, endpoint: EndpointConfig): string {
+  return `${schema}:${endpointAlias}:${credentialIdentity(endpoint)}`
 }
 
 function buildProvider(
@@ -59,9 +60,29 @@ function buildProvider(
           `Schema "openai-auth" requires an OAuth endpoint, got apiKey endpoint.`,
         )
       }
+      if (endpoint.authRef && endpoint.credentialOwner) {
+        const authName = parseCodexAuthRef(endpoint.authRef)
+        return createOpenAIAuthProvider(endpoint, {
+          credentialsProvider: () => getUserCodexCredentials({
+            canonicalUser: endpoint.credentialOwner!,
+            name: authName,
+            proxy: endpoint.proxy,
+          }),
+        })
+      }
       return createOpenAIAuthProvider(endpoint)
     }
   }
+}
+
+function credentialIdentity(endpoint: EndpointConfig): string {
+  if (endpoint.credentialIdentity) {
+    return endpoint.credentialIdentity
+  }
+  if ('auth' in endpoint) {
+    return `global:${endpoint.auth}`
+  }
+  return 'global:apiKey'
 }
 
 /**
@@ -91,7 +112,7 @@ export function getProviderFor(
     )
   }
 
-  const key = cacheKey(entry.schema, entry.endpoint)
+  const key = cacheKey(entry.schema, entry.endpoint, endpoint)
   let provider = cache.get(key)
   if (!provider) {
     provider = buildProvider(entry.schema, endpoint)
@@ -189,6 +210,20 @@ export function clearPrechargeForModel(input: {
   upstreamModel: string
 }): void {
   prechargdKeys.delete(prechargeMemoKey(input.endpoint, input.baseUrl, input.upstreamModel))
+}
+
+export function clearProviderCacheForEndpoint(endpointAlias: string): void {
+  for (const key of [...cache.keys()]) {
+    const [, alias] = key.split(':', 3)
+    if (alias === endpointAlias) {
+      cache.delete(key)
+    }
+  }
+  for (const key of [...prechargdKeys]) {
+    if (key.startsWith(`${endpointAlias}|`)) {
+      prechargdKeys.delete(key)
+    }
+  }
 }
 
 /** Test-only escape hatch; production code should never need to clear. */

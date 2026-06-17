@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { clearFeishuClient, registerFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
+import { userWorkspacePath } from '../channels/feishu/workspace/lifecycle.js'
 import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
@@ -118,7 +119,7 @@ describe('/feishu-workspace admin slash', () => {
 
     // Identity binding should remain on disk so admin can re-investigate.
     const stillBound = await readFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'feishu-workspace.json'),
+      userWorkspacePath('alice'),
       'utf8',
     )
     assert.match(stillBound, /aliceFld/)
@@ -140,9 +141,9 @@ async function seedRoot(folderToken: string): Promise<void> {
 }
 
 async function seedUserWorkspace(canonical: string, folderToken: string, rootToken: string): Promise<void> {
-  const dir = path.join(tmpHome, 'identity', 'per-user', canonical)
-  await mkdir(dir, { recursive: true })
-  await writeFile(path.join(dir, 'feishu-workspace.json'), `${JSON.stringify({
+  const filePath = userWorkspacePath(canonical)
+  await mkdir(path.dirname(filePath), { recursive: true })
+  await writeFile(filePath, `${JSON.stringify({
     folderToken,
     parentFolderToken: rootToken,
     createdAt: '2026-05-12T00:00:00.000Z',

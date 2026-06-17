@@ -64,9 +64,12 @@ afterEach(() => {
 })
 
 describe('config: endpoints + models registry', () => {
-  it('throws when no models are configured', () => {
+  it('allows a system config without global models', () => {
     writeConfig({})
-    assert.throws(() => getConfig(), /No models configured/)
+    const cfg = getConfig()
+    assert.equal(cfg.defaultModel, '')
+    assert.deepEqual(cfg.endpoints, {})
+    assert.deepEqual(cfg.models, {})
   })
 
   it('parses a minimal endpoints + models registry', () => {
@@ -90,6 +93,52 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models.opus.schema, 'anthropic')
   })
 
+  it('parses legacy global model visibility without making it user config', () => {
+    writeConfig({
+      endpoints: {
+        a: { apiKey: 'sk-a' },
+      },
+      models: {
+        private: {
+          endpoint: 'a',
+          schema: 'anthropic',
+          upstreamModel: 'private-upstream',
+        },
+        public: {
+          endpoint: 'a',
+          schema: 'anthropic',
+          upstreamModel: 'public-upstream',
+          visibility: 'public',
+        },
+      },
+      defaultModel: 'private',
+    })
+
+    const cfg = getConfig()
+
+    assert.equal(cfg.models.private.visibility, undefined)
+    assert.equal(cfg.models.public.visibility, 'public')
+  })
+
+  it('rejects invalid model visibility', () => {
+    writeConfig({
+      endpoints: {
+        a: { apiKey: 'sk-a' },
+      },
+      models: {
+        bad: {
+          endpoint: 'a',
+          schema: 'anthropic',
+          upstreamModel: 'bad-upstream',
+          visibility: 'everyone',
+        },
+      },
+      defaultModel: 'bad',
+    })
+
+    assert.throws(() => getConfig(), /visibility/)
+  })
+
   it('parses model-level reasoningEffort', () => {
     writeConfig({
       endpoints: {
@@ -100,13 +149,20 @@ describe('config: endpoints + models registry', () => {
           endpoint: 'codex',
           schema: 'openai-auth',
           upstreamModel: 'gpt-5.5',
-          reasoningEffort: 'high',
+          reasoningEffort: 'xhigh',
+        },
+        'gpt-5.5-mini': {
+          endpoint: 'codex',
+          schema: 'openai-auth',
+          upstreamModel: 'gpt-5.5-mini',
+          reasoningEffort: 'minimal',
         },
       },
       defaultModel: 'gpt-5.5',
     })
     const cfg = getConfig()
-    assert.equal(cfg.models['gpt-5.5'].reasoningEffort, 'high')
+    assert.equal(cfg.models['gpt-5.5'].reasoningEffort, 'xhigh')
+    assert.equal(cfg.models['gpt-5.5-mini'].reasoningEffort, 'minimal')
   })
 
   it('rejects invalid model-level reasoningEffort', () => {
@@ -173,14 +229,16 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /maxOutputTokens must be a positive integer/)
   })
 
-  it('throws when defaultModel is not configured', () => {
+  it('allows legacy global models without a defaultModel', () => {
     writeConfigRaw({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
         primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
     })
-    assert.throws(() => getConfig(), /`defaultModel` is required/)
+    const cfg = getConfig()
+    assert.equal(cfg.defaultModel, '')
+    assert.equal(cfg.models.primary.upstreamModel, 'x')
   })
 
   it('LIGHTCLAW_DEFAULT_MODEL overrides file defaultModel', () => {

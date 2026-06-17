@@ -8,6 +8,7 @@ import type { ChainState } from '../signal-bus/chain-state.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { addLink, createUser } from '../identity/store.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 import {
@@ -927,7 +928,7 @@ describe('deliverCompletion main-vs-parent routing', () => {
   beforeEach(async () => {
     tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-deliver-route-'))
     setLightclawHomeOverride(tmpHome)
-    sessionsDir = path.join(tmpHome, 'sessions')
+    sessionsDir = userSessionsRoot('alice')
     for (const [sid, ts] of [[GROUP, 100], [DM, 999]] as const) {
       mkdirSync(path.join(sessionsDir, sid), { recursive: true })
       writeFileSync(path.join(sessionsDir, sid, 'meta.json'), JSON.stringify({ userId: 'alice', lastActiveAt: ts }))

@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 
 import { getConfig } from '../../config.js'
+import { userSessionsRoot, usersRoot } from '../../identity/paths.js'
 import { getAdmin, getIdentity } from '../../identity/store.js'
 import {
   clearPendingTurn,
@@ -10,6 +11,7 @@ import {
   loadTranscript,
   rewriteTranscript,
 } from '../../session/storage.js'
+import { createSessionContext, runWithSessionContext } from '../../session-context.js'
 import type { Message } from '../../types.js'
 import type { NormalizedChannelMessage } from '../types.js'
 import { parseFeishuSessionId } from './routing.js'
@@ -48,33 +50,72 @@ function lastIsAssistantToolUse(messages: Message[]): boolean {
  */
 export async function resumePendingTurns(): Promise<void> {
   const config = getConfig()
-  let sessionIds: string[]
+  const candidates = await listResumeCandidates(config.paths.sessions)
+
+  const adminId = await getAdmin()
+  for (const candidate of candidates) {
+    try {
+      await runWithSessionContext(
+        createSessionContext({
+          cwd: process.cwd(),
+          model: config.defaultModel,
+          sessionsDir: candidate.sessionsDir,
+          memoryDir: '',
+          sessionId: candidate.sessionId,
+        }),
+        () => resumeOneSession(candidate.sessionId, config.runtime.backend, adminId),
+      )
+    } catch (error) {
+      process.stderr.write(
+        `[crash-resume] ${candidate.sessionId}: resume failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
+  }
+}
+
+async function listResumeCandidates(
+  unboundSessionsDir: string,
+): Promise<Array<{ sessionId: string; sessionsDir: string }>> {
+  const roots = [unboundSessionsDir]
   try {
-    const dirents = await readdir(config.paths.sessions, { withFileTypes: true })
-    sessionIds = dirents.filter(d => d.isDirectory()).map(d => d.name)
+    const users = await readdir(usersRoot(), { withFileTypes: true })
+    for (const user of users) {
+      if (user.isDirectory()) {
+        roots.push(userSessionsRoot(user.name))
+      }
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       process.stderr.write(
-        `[crash-resume] could not scan sessions dir: ${
+        `[crash-resume] could not scan users dir: ${
           error instanceof Error ? error.message : String(error)
         }\n`,
       )
     }
-    return
   }
 
-  const adminId = await getAdmin()
-  for (const sessionId of sessionIds) {
+  const out: Array<{ sessionId: string; sessionsDir: string }> = []
+  for (const sessionsDir of roots) {
     try {
-      await resumeOneSession(sessionId, config.runtime.backend, adminId)
-    } catch (error) {
-      process.stderr.write(
-        `[crash-resume] ${sessionId}: resume failed: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
+      const dirents = await readdir(sessionsDir, { withFileTypes: true })
+      out.push(
+        ...dirents
+          .filter(d => d.isDirectory())
+          .map(d => ({ sessionId: d.name, sessionsDir })),
       )
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        process.stderr.write(
+          `[crash-resume] could not scan sessions dir ${sessionsDir}: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        )
+      }
     }
   }
+  return out
 }
 
 async function resumeOneSession(

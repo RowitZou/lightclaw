@@ -5,6 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
+import { workspaceFor } from '../identity/paths.js'
 import { setAdmin } from '../identity/store.js'
 import { createAssistantMessage } from '../messages.js'
 import { loadTranscript } from '../session/storage.js'
@@ -86,7 +87,7 @@ describe('runBackgroundTaskFire', () => {
       defaultModel: 'm',
       runtime: { backend: 'local' },
     }))
-    mkdirSync(path.join(tmpHome, 'workspaces', 'alice'), { recursive: true })
+    mkdirSync(workspaceFor('alice'), { recursive: true })
     await setAdmin('alice')
   })
 

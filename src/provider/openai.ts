@@ -250,6 +250,143 @@ export function mapUsage(usage: unknown): UsageStats {
   return result
 }
 
+
+type ChatCompletionStreamChunk = {
+  usage?: unknown
+  choices?: Array<{
+    finish_reason?: string | null
+    delta?: {
+      content?: unknown
+      tool_calls?: Array<{
+        index: number
+        id?: string
+        function?: {
+          name?: string
+          arguments?: string
+        }
+      }>
+      reasoning?: unknown
+      reasoning_content?: unknown
+    }
+  }>
+}
+
+export async function* processOpenAIChatCompletionStream(
+  stream: AsyncIterable<ChatCompletionStreamChunk>,
+): AsyncGenerator<StreamEvent> {
+  const pendingTools = new Map<number, PendingToolCall>()
+  let text = ''
+  let reasoningText = ''
+  let usage: UsageStats = {}
+  let finishReason: string | null = null
+
+  for await (const chunk of stream) {
+    usage = {
+      ...usage,
+      ...mapUsage(chunk.usage),
+    }
+
+    const choice = chunk.choices?.[0]
+    if (!choice) {
+      continue
+    }
+
+    if (choice.finish_reason) {
+      finishReason = choice.finish_reason
+    }
+
+    const delta = choice.delta ?? {}
+    const reasoningDelta = delta.reasoning_content ?? delta.reasoning
+    if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+      reasoningText += reasoningDelta
+      yield { type: 'keepalive', reason: 'reasoning' }
+    }
+    if (typeof delta.content === 'string' && delta.content.length > 0) {
+      text += delta.content
+      yield {
+        type: 'text',
+        text: delta.content,
+      }
+    }
+
+    let yieldedToolArgsKeepalive = false
+    for (const toolCall of delta.tool_calls ?? []) {
+      const index = toolCall.index
+      const current = pendingTools.get(index) ?? {
+        id: '',
+        name: '',
+        args: '',
+      }
+      if (toolCall.id) {
+        current.id = toolCall.id
+      }
+      if (toolCall.function?.name) {
+        current.name = toolCall.function.name
+      }
+      if (toolCall.function?.arguments) {
+        current.args += toolCall.function.arguments
+        if (toolCall.function.arguments.length > 0 && !yieldedToolArgsKeepalive) {
+          yield { type: 'keepalive', reason: 'tool-args' }
+          yieldedToolArgsKeepalive = true
+        }
+      }
+      pendingTools.set(index, current)
+    }
+  }
+
+  const content: AssistantContentBlock[] = []
+  if (reasoningText.length > 0) {
+    content.push({
+      type: 'thinking',
+      thinking: reasoningText,
+      signature: '',
+    })
+  }
+  if (text.length > 0) {
+    content.push({
+      type: 'text',
+      text,
+    })
+  }
+
+  for (const [index, toolCall] of [...pendingTools.entries()].sort(
+    ([left], [right]) => left - right,
+  )) {
+    const input =
+      toolCall.args.trim().length === 0
+        ? {}
+        : (JSON.parse(toolCall.args) as Record<string, unknown>)
+    const id = toolCall.id || `tool_call_${index}`
+    const block = {
+      type: 'tool_use' as const,
+      id,
+      name: toolCall.name,
+      input,
+    }
+    content.push(block)
+    yield {
+      type: 'tool_use',
+      id,
+      name: toolCall.name,
+      input,
+      index,
+    }
+  }
+
+  const stopEvent: StreamStopEvent = {
+    type: 'stop',
+    stopReason:
+      finishReason === 'tool_calls'
+        ? 'tool_use'
+        : finishReason === 'length'
+          ? 'max_tokens'
+          : 'end_turn',
+    usage,
+    content,
+  }
+  yield stopEvent
+}
+
 export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
   // Dispatcher / fetch / SDK client are mutable, NOT const. See
   // `openai-auth.ts` recycle doc for rationale.
@@ -285,11 +422,6 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       rebuildClient()
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      const pendingTools = new Map<number, PendingToolCall>()
-      let text = ''
-      let usage: UsageStats = {}
-      let finishReason: string | null = null
-
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`
       // (run once at construction by `getProviderFor` → capability cache).
@@ -319,118 +451,9 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         signal: params.signal,
       })
 
-      for await (const chunk of stream) {
-        usage = {
-          ...usage,
-          ...mapUsage(chunk.usage),
-        }
-
-        const choice = chunk.choices[0]
-        if (!choice) {
-          continue
-        }
-
-        if (choice.finish_reason) {
-          finishReason = choice.finish_reason
-        }
-
-        const delta = choice.delta
-        const reasoningDelta = (delta as {
-          reasoning?: unknown
-          reasoning_content?: unknown
-        }).reasoning_content ?? (delta as { reasoning?: unknown }).reasoning
-        if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
-          yield { type: 'keepalive', reason: 'reasoning' }
-        }
-        if (typeof delta.content === 'string' && delta.content.length > 0) {
-          text += delta.content
-          yield {
-            type: 'text',
-            text: delta.content,
-          }
-        }
-
-        let yieldedToolArgsKeepalive = false
-        for (const toolCall of delta.tool_calls ?? []) {
-          const index = toolCall.index
-          const current = pendingTools.get(index) ?? {
-            id: '',
-            name: '',
-            args: '',
-          }
-          if (toolCall.id) {
-            current.id = toolCall.id
-          }
-          if (toolCall.function?.name) {
-            current.name = toolCall.function.name
-          }
-          if (toolCall.function?.arguments) {
-            current.args += toolCall.function.arguments
-            // Symmetric to reasoning_content / content deltas: emit one
-            // framework keepalive per chunk that carries any non-empty
-            // tool-args wire activity so query.ts's idle watchdog clock
-            // resets while the model is actively streaming tool-call
-            // arguments. Without this the watchdog goes blind for the
-            // entire duration of tool_call args streaming because the
-            // accumulator (current.args) is internal state, not a yielded
-            // event. Yield at most once per chunk even with multiple
-            // parallel tool_calls — they share the same wire chunk and
-            // one keepalive marker is enough to anchor the clock. See
-            // `# LightClaw Runtime Safety Notes` keepalive contract for
-            // the `'tool-args'` reason.
-            if (toolCall.function.arguments.length > 0 && !yieldedToolArgsKeepalive) {
-              yield { type: 'keepalive', reason: 'tool-args' }
-              yieldedToolArgsKeepalive = true
-            }
-          }
-          pendingTools.set(index, current)
-        }
+      for await (const event of processOpenAIChatCompletionStream(stream as AsyncIterable<ChatCompletionStreamChunk>)) {
+        yield event
       }
-
-      const content: AssistantContentBlock[] = []
-      if (text.length > 0) {
-        content.push({
-          type: 'text',
-          text,
-        })
-      }
-
-      for (const [index, toolCall] of [...pendingTools.entries()].sort(
-        ([left], [right]) => left - right,
-      )) {
-        const input =
-          toolCall.args.trim().length === 0
-            ? {}
-            : (JSON.parse(toolCall.args) as Record<string, unknown>)
-        const id = toolCall.id || `tool_call_${index}`
-        const block = {
-          type: 'tool_use' as const,
-          id,
-          name: toolCall.name,
-          input,
-        }
-        content.push(block)
-        yield {
-          type: 'tool_use',
-          id,
-          name: toolCall.name,
-          input,
-          index,
-        }
-      }
-
-      const stopEvent: StreamStopEvent = {
-        type: 'stop',
-        stopReason:
-          finishReason === 'tool_calls'
-            ? 'tool_use'
-            : finishReason === 'length'
-              ? 'max_tokens'
-              : 'end_turn',
-        usage,
-        content,
-      }
-      yield stopEvent
     },
     detectStaticDropKinds(): readonly AttachmentKind[] {
       // Probe: synthesize a user message with one block of every attachment

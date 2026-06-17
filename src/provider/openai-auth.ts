@@ -7,7 +7,7 @@ import type {
 } from 'openai/resources/responses/responses'
 import type { FunctionTool } from 'openai/resources/responses/responses'
 
-import { getCredentials } from '../auth/index.js'
+import { getCredentials, type AuthCredentials } from '../auth/index.js'
 import { CODEX_BACKEND_BASE_URL } from '../auth/codex/constants.js'
 import type { OAuthEndpoint } from '../config.js'
 import { getSessionId } from '../state.js'
@@ -410,6 +410,9 @@ export type OpenAIAuthProviderOptions = {
    * has Codex; future Copilot-OAuth schema would set this to `'copilot'`.
    */
   authProviderName?: string
+  /** Internal per-user override. When set, credentials are resolved from
+   *  this function instead of the global auth provider registry. */
+  credentialsProvider?: () => Promise<AuthCredentials>
 }
 
 /**
@@ -458,6 +461,7 @@ export function createOpenAIAuthProvider(
   opts: OpenAIAuthProviderOptions = {},
 ): Provider {
   const authName = opts.authProviderName ?? 'codex'
+  const resolveCredentials = opts.credentialsProvider ?? (() => getCredentials(authName))
   const baseURL = endpoint.baseUrl ?? CODEX_BACKEND_BASE_URL
   // Dispatcher / fetch are mutable bindings, NOT const: `recycleConnections`
   // tears them down and rebuilds them so the next streamChat lands on a
@@ -502,7 +506,7 @@ export function createOpenAIAuthProvider(
     // enough at 35s vs the previous 90s of pure waste.
     idleTimeouts: { ttfbMs: 35_000, interEventMs: 35_000 },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      const credentials = await getCredentials(authName)
+      const credentials = await resolveCredentials()
       const client = new OpenAI({
         apiKey: credentials.accessToken,
         baseURL,

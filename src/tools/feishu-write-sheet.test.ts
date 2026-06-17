@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { FeishuClient } from '../channels/feishu/client.js'
 import type { FeishuCanonicalResource } from '../channels/feishu/resource-resolver.js'
+import { identityPermissionsPath } from '../identity/paths.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { PermissionApprover, PermissionAskInput } from '../permission/types.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
@@ -159,9 +160,10 @@ describe('FeishuWriteSheet tool', () => {
   })
 
   it('short-circuits sheet content edits when a FeishuSheetEditConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    const permissionsPath = identityPermissionsPath('alice')
+    await mkdir(path.dirname(permissionsPath), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      permissionsPath,
       JSON.stringify({ allow: ['FeishuSheetEditConfirm'] }, null, 2),
       'utf8',
     )

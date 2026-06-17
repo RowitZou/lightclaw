@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { setLightclawHomeOverride } from '../paths.js'
-import { workspaceToGpfsMount } from '../identity/paths.js'
+import { workspaceFor, workspaceToGpfsMount } from '../identity/paths.js'
 import {
   buildBrainppExecArgs,
   buildBrainppGetProcessArgs,
@@ -107,6 +107,22 @@ describe('workspaceToGpfsMount', () => {
     } else {
       process.env.LIGHTCLAW_WORKSPACE_ROOT = savedWorkspaceRoot
     }
+    setLightclawHomeOverride(undefined)
+  })
+
+  it('uses the per-user workspace under LIGHTCLAW_HOME by default', () => {
+    delete process.env.LIGHTCLAW_WORKSPACE_ROOT
+    setLightclawHomeOverride('/mnt/shared-storage-user/ailab-hs/zouyicheng/lightclaw-home')
+    assert.equal(
+      workspaceFor('alice'),
+      '/mnt/shared-storage-user/ailab-hs/zouyicheng/lightclaw-home/users/alice/workspace',
+    )
+    assert.deepEqual(workspaceToGpfsMount('alice', {
+      gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' }],
+    }), {
+      hostPath: '/mnt/shared-storage-user/ailab-hs/zouyicheng/lightclaw-home/users/alice/workspace',
+      mount: 'gpfs://gpfs1/ailab-hs/zouyicheng/lightclaw-home/users/alice/workspace:/workspace',
+    })
   })
 
   it('maps a host gpfs workspace root to an rlaunch mount URL', () => {
@@ -136,7 +152,7 @@ describe('workspaceToGpfsMount', () => {
     process.env.LIGHTCLAW_WORKSPACE_ROOT = '/home/zouyicheng/lightclaw-workspaces'
     assert.throws(() => workspaceToGpfsMount('alice', {
       gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' }],
-    }), /requires LIGHTCLAW_WORKSPACE_ROOT/)
+    }), /requires the workspace path/)
   })
 })
 

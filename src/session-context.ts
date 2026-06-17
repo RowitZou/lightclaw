@@ -8,6 +8,7 @@ import type { TodoItem, UsageStats } from './types.js'
 import type { ChannelKey } from './channel-types.js'
 import type { Role } from './agents/types.js'
 import type { ChainState } from './signal-bus/chain-state.js'
+import type { LightClawConfig } from './config.js'
 
 export type ChannelFileSendInput = {
   content: Buffer
@@ -41,6 +42,7 @@ export type ResourceGrantTarget = {
  * RuntimePool, image readiness tracker, and network bridge stay in state.ts.
  */
 export type SessionContext = {
+  config?: LightClawConfig
   sessionId: string
   channel?: ChannelKey
   cwd: string
@@ -145,6 +147,7 @@ export function usageFromContext(ctx: SessionContext): UsageStats {
 }
 
 export function createSessionContext(input: {
+  config?: LightClawConfig
   cwd: string
   model: string
   sessionsDir: string
@@ -172,6 +175,7 @@ export function createSessionContext(input: {
   currentTaskRunId?: string
 }): SessionContext {
   return {
+    config: input.config,
     sessionId: input.sessionId ?? randomUUID(),
     channel: input.channel,
     cwd: input.cwd,
@@ -223,6 +227,7 @@ export function createSessionContext(input: {
  */
 export function createEmptySessionContext(input?: Partial<SessionContext>): SessionContext {
   return {
+    config: undefined,
     sessionId: '',
     cwd: '',
     model: '',

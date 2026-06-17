@@ -4,6 +4,7 @@ import path from 'node:path'
 import type { Role } from '../agents/types.js'
 import { safeWriteFile } from '../atomic-write.js'
 import type { LightClawConfig } from '../config.js'
+import { userMemoryRoot } from '../identity/paths.js'
 import { lightclawHome } from '../paths.js'
 import {
   relativeMemoryFilename,
@@ -106,6 +107,9 @@ export function memoryRoot(config: LightClawConfig): string {
 // dir is `_unbound_` and any MemoryRead/Write call hits requireCurrentUserId()
 // first, so it never actually reaches this fallback path.
 export function getMemoryDir(userId: string | undefined, config: LightClawConfig): string {
+  if (userId) {
+    return userMemoryRoot(userId)
+  }
   return path.join(memoryRoot(config), sanitizeUserId(userId))
 }
 

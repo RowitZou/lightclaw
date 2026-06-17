@@ -22,8 +22,9 @@ import { decodeExpiresAtMs, extractAccountIdFromTokens } from './jwt.js'
 
 const PROVIDER_NAME = 'codex'
 
-/** On-disk shape for `<lightclawHome>/auth/codex.json`. */
-type StoredCodexTokens = {
+/** On-disk shape for `<lightclawHome>/auth/codex.json` and per-user
+ *  `users/<u>/auth/codex/<name>.json`. */
+export type StoredCodexTokens = {
   tokens: {
     access_token: string
     refresh_token: string
@@ -55,7 +56,7 @@ type CodexCliAuthFile = {
 }
 
 /** OAuth token endpoint response (success path). */
-type RefreshResponse = {
+export type RefreshResponse = {
   access_token: string
   refresh_token: string
   id_token?: string
@@ -142,7 +143,7 @@ function readStored(): StoredCodexTokens | null {
   }
 }
 
-async function refreshTokens(
+export async function refreshCodexTokens(
   http: HttpFn,
   refreshToken: string,
 ): Promise<RefreshResponse> {
@@ -209,8 +210,7 @@ async function refreshTokens(
   })
 }
 
-function importFromCodexCli(): StoredCodexTokens {
-  const cliPath = codexCliAuthFilePath()
+export function loadCodexCliTokens(cliPath: string = codexCliAuthFilePath()): StoredCodexTokens {
   if (!existsSync(cliPath)) {
     throw new AuthError({
       code: 'auth_missing',
@@ -287,6 +287,11 @@ function importFromCodexCli(): StoredCodexTokens {
     ...(parsed.last_refresh ? { last_refresh: parsed.last_refresh } : {}),
     source: 'codex-cli-import',
   }
+  return stored
+}
+
+function importFromCodexCli(): StoredCodexTokens {
+  const stored = loadCodexCliTokens()
   writeTokenFile(PROVIDER_NAME, stored)
   return stored
 }
@@ -325,7 +330,7 @@ export function createCodexAuthProvider(
         accountId: stored.account_id,
       }
     }
-    const refreshed = await refreshTokens(http, stored.tokens.refresh_token)
+    const refreshed = await refreshCodexTokens(http, stored.tokens.refresh_token)
     const newAccountId = extractAccountIdFromTokens({
       id_token: refreshed.id_token,
       access_token: refreshed.access_token,

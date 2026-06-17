@@ -9,6 +9,7 @@ export type IdentityRecord = {
   updatedAt: string
   channels: Record<ChannelKind, string[]>
   permissionCeiling?: PermissionMode
+  dataRoot?: string
 }
 
 export type IdentitiesFile = Record<string, IdentityRecord>

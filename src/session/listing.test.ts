@@ -4,24 +4,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
+import { userSessionsRoot } from '../identity/paths.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import { listSessions, listSessionsTouchedSince } from './listing.js'
 
-let tmpSessionsDir: string
-let savedSessionsDir: string | undefined
+let tmpHome: string
 
 beforeEach(() => {
-  tmpSessionsDir = mkdtempSync(path.join(tmpdir(), 'lightclaw-sessions-test-'))
-  savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
-  process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-sessions-test-'))
+  setLightclawHomeOverride(tmpHome)
 })
 
 afterEach(() => {
-  if (savedSessionsDir === undefined) {
-    delete process.env.LIGHTCLAW_SESSIONS_DIR
-  } else {
-    process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
-  }
-  rmSync(tmpSessionsDir, { recursive: true, force: true })
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
 })
 
 describe('session listing', () => {
@@ -43,7 +39,7 @@ describe('session listing', () => {
 })
 
 function writeMeta(sessionId: string, userId: string, lastActiveAt: number): void {
-  const dir = path.join(tmpSessionsDir, sessionId)
+  const dir = path.join(userSessionsRoot(userId), sessionId)
   mkdirSync(dir, { recursive: true })
   writeFileSync(
     path.join(dir, 'meta.json'),

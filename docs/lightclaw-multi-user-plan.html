@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LightClaw 多用户方案：对齐 main dev-plan</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172026;
+      --muted: #5b6770;
+      --line: #d8e0e6;
+      --paper: #fbfcfd;
+      --panel: #ffffff;
+      --blue: #2454a6;
+      --teal: #0d766f;
+      --green: #487a27;
+      --red: #a33a2a;
+      --amber: #9a641a;
+      --shadow: 0 14px 34px rgba(23, 32, 38, 0.08);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.65;
+    }
+
+    a {
+      color: var(--blue);
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(251, 252, 253, 0.94);
+      backdrop-filter: blur(12px);
+    }
+
+    .topbar-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      color: #ffffff;
+      background: var(--blue);
+      font-size: 15px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .nav {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      font-size: 14px;
+    }
+
+    .nav a {
+      color: var(--muted);
+      text-decoration: none;
+    }
+
+    .nav a:hover {
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 42px 24px 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.95fr);
+      gap: 36px;
+      align-items: center;
+      padding: 28px 0 48px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--teal);
+      font-size: 14px;
+      font-weight: 760;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 820px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .hero-copy {
+      margin: 20px 0 0;
+      max-width: 760px;
+      color: #33414a;
+      font-size: 19px;
+    }
+
+    .hero-actions {
+      margin-top: 26px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 9px 15px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      text-decoration: none;
+      font-weight: 680;
+      color: var(--ink);
+      background: var(--panel);
+    }
+
+    .button.primary {
+      color: #ffffff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+
+    .diagram {
+      min-height: 420px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .diagram-title {
+      margin: 0 0 14px;
+      font-size: 15px;
+      font-weight: 760;
+      color: var(--muted);
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: 140px minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+      min-height: 56px;
+    }
+
+    .layer-label {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-weight: 740;
+      color: #ffffff;
+      background: var(--ink);
+    }
+
+    .layer-items {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .chip {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #f7fafb;
+      font-size: 13px;
+      color: #2d3a42;
+    }
+
+    section {
+      padding: 38px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 30px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 19px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    .lead {
+      max-width: 900px;
+      color: #33414a;
+      font-size: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 22px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 20px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      background: var(--panel);
+      box-shadow: 0 10px 24px rgba(23, 32, 38, 0.045);
+    }
+
+    .card.problem {
+      border-left: 5px solid var(--red);
+    }
+
+    .card.stage-one {
+      border-left: 5px solid var(--teal);
+    }
+
+    .card.stage-two {
+      border-left: 5px solid var(--blue);
+    }
+
+    .card.warning {
+      border-left: 5px solid var(--amber);
+    }
+
+    .card.good {
+      border-left: 5px solid var(--green);
+    }
+
+    .card p:last-child,
+    .card ul:last-child,
+    .card ol:last-child {
+      margin-bottom: 0;
+    }
+
+    ul,
+    ol {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #edf3f7;
+      color: #19344d;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 18px 0 0;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      overflow: auto;
+      background: #101820;
+      color: #e7eef4;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+      align-items: stretch;
+    }
+
+    .step {
+      min-height: 118px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: var(--panel);
+    }
+
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      margin-bottom: 10px;
+      color: #ffffff;
+      background: var(--teal);
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-size: 15px;
+    }
+
+    th,
+    td {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef4f7;
+      font-size: 14px;
+      color: #23323a;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 760;
+      color: #ffffff;
+      background: var(--muted);
+    }
+
+    .tag.green {
+      background: var(--green);
+    }
+
+    .tag.blue {
+      background: var(--blue);
+    }
+
+    .tag.amber {
+      background: var(--amber);
+    }
+
+    .callout {
+      margin-top: 22px;
+      padding: 18px 20px;
+      border-radius: 8px;
+      border: 1px solid #bfd8d5;
+      background: #eef8f7;
+      color: #173936;
+      font-weight: 650;
+    }
+
+    .footer {
+      padding: 26px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 900px) {
+      .hero,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .layer {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar-inner {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 560px) {
+      main {
+        padding: 28px 16px 48px;
+      }
+
+      .topbar-inner {
+        padding: 12px 16px;
+      }
+
+      .layer-items {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">LC</div>
+        <div>LightClaw 多用户方案</div>
+      </div>
+      <nav class="nav" aria-label="页面导航">
+        <a href="#baseline">基线</a>
+        <a href="#model">目标架构</a>
+        <a href="#config">配置解析</a>
+        <a href="#resources">资源边界</a>
+        <a href="#auth-runtime">扩展</a>
+        <a href="#migration">迁移</a>
+        <a href="#roadmap">路线</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-label="方案摘要">
+      <div>
+        <p class="eyebrow">Aligned with dev-log/main v0.4 Phase 1</p>
+        <h1>从单份 admin config 演进到用户自治目录</h1>
+        <p class="hero-copy">
+          最新 main dev-plan 的主线不是立即让 runtime 动态绑定真实集群身份，而是先完成 v0.4 Phase 1：统一 daemon、每用户受限配置、可重定向的 <code>users/&lt;canonical&gt;</code> 自包含目录，以及 session 级配置快照。Codex OAuth 和 Brain++ 动态身份作为后续 addendum 设计。
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#roadmap">查看 PR1-PR7</a>
+          <a class="button" href="#model">查看目标布局</a>
+        </div>
+      </div>
+
+      <aside class="diagram" aria-label="多用户配置分层示意">
+        <p class="diagram-title">目标分层：Global Base + UserConfigOverride + userHome/dataRoot</p>
+        <div class="stack">
+          <div class="layer">
+            <div class="layer-label" style="background: var(--blue);">入口身份</div>
+            <div class="layer-items">
+              <div class="chip">Feishu sender / chat</div>
+              <div class="chip">canonical user</div>
+            </div>
+          </div>
+          <div class="layer">
+            <div class="layer-label" style="background: var(--teal);">目录锚点</div>
+            <div class="layer-items">
+              <div class="chip">userHome(canonical)</div>
+              <div class="chip">identities.json dataRoot</div>
+            </div>
+          </div>
+          <div class="layer">
+            <div class="layer-label" style="background: var(--green);">用户资源</div>
+            <div class="layer-items">
+              <div class="chip">workspace / mounts</div>
+              <div class="chip">memory / skills / sessions</div>
+            </div>
+          </div>
+          <div class="layer">
+            <div class="layer-label" style="background: var(--amber);">配置</div>
+            <div class="layer-items">
+              <div class="chip">strict UserConfigOverride</div>
+              <div class="chip">BYO endpoint + apiKeyRef</div>
+            </div>
+          </div>
+          <div class="layer">
+            <div class="layer-label" style="background: var(--red);">扩展</div>
+            <div class="layer-items">
+              <div class="chip">Codex auth addendum</div>
+              <div class="chip">Brain++ identity addendum</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section id="baseline">
+      <h2>1. main dev-plan 的最新基线</h2>
+      <p class="lead">
+        当前三件套是“用户配置自治 + 目录可移植化”。它把多用户问题拆成一个更稳的第一阶段：用户可以拥有自己的配置、模型、密钥引用、skill、memory、workspace 和 sessions，但 daemon 的系统级配置、runtime backend、cluster 参数和审计仍由管理员掌控。
+      </p>
+
+      <div class="grid">
+        <article class="card good">
+          <h3>统一 daemon</h3>
+          <p>仍然是一套后台进程服务多个 canonical user。全局 <code>config.json</code> 是 admin baseline，不被普通用户覆盖。</p>
+        </article>
+
+        <article class="card good">
+          <h3>用户自治目录</h3>
+          <p>每个用户有一棵 <code>users/&lt;canonical&gt;/</code> 树；如果管理员配置了 <code>dataRoot</code>，整棵树可被重定向到共享存储上的独立位置。</p>
+        </article>
+
+        <article class="card warning">
+          <h3>runtime 先不开放</h3>
+          <p>本阶段不让用户修改 runtime backend、driver、docker、cluster、network、hooks、mcp 和系统级 path。这些继续是 admin-only。</p>
+        </article>
+      </div>
+
+      <div class="callout">
+        这意味着当前方案要从“直接做每用户 runtime pool / 真实执行身份”回收为“先做目录和配置边界”。真实集群身份是后续扩展，不是 PR1-PR7 的第一承诺。
+      </div>
+    </section>
+
+    <section id="model">
+      <h2>2. v0.4 Phase 1 目标布局</h2>
+      <p class="lead">
+        新布局按“用户优先”组织数据：顶层保留 admin 注册表、运行日志、审计和全局 auth；用户可迁移内容集中在 <code>users/&lt;canonical&gt;/</code> 下。<code>dataRoot</code> 存在顶层 <code>identities.json</code>，因为它决定用户树的位置，不能反过来写进用户树内部。
+      </p>
+
+      <pre><code>&lt;LIGHTCLAW_HOME&gt;/
+  config.json
+  identity/
+    admin.json
+    identities.json          # canonical binding, ceiling, dataRoot
+    pending.json
+    rate-limits.json
+  hooks/
+  mcp.json
+  roles/
+  logs/
+  feishu-cloud-root.json
+  auth/                      # daemon/admin-level auth remains top-level
+  state/
+  audit/&lt;type&gt;/&lt;date&gt;.jsonl  # top-level append-only evidence
+  api-logs/&lt;user&gt;/&lt;date&gt;.jsonl
+  users/&lt;canonical&gt;/
+    config.json              # strict user override
+    permissions.json
+    secrets.json             # secret values or refs, 0600
+    rlaunch-mounts.json
+    feishu-workspace.json
+    bg-tasks.json
+    skills/&lt;name&gt;/SKILL.md
+    taskruns/&lt;id&gt;/
+    sessions/&lt;sid&gt;/
+      transcript.jsonl
+      meta.json
+      forks/
+    memory/
+    workspace/</code></pre>
+
+      <div class="two-col">
+        <article class="card stage-one">
+          <h3>默认路径</h3>
+          <p><code>userHome(canonical)</code> 默认解析为 <code>&lt;home&gt;/users/&lt;canonical&gt;</code>。workspace 默认在 <code>userHome/workspace</code>，跟随用户树整体迁移。</p>
+        </article>
+
+        <article class="card stage-two">
+          <h3>可重定向路径</h3>
+          <p>管理员可在 <code>identities.json</code> 给用户设置 <code>dataRoot</code>。cluster backend 下它必须是 daemon 可见目录，并且落在 <code>gpfsMounts.hostPrefix</code> 映射规则内。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="config">
+      <h2>3. Session-scoped 配置解析</h2>
+      <p class="lead">
+        main dev-plan 的关键点是：启动级、全局级逻辑仍可读 <code>getConfig()</code>；但会话内的 provider、tools、permission、render 和 runtime 参数读取，应切到 <code>getSessionConfig()</code>，拿本轮 session 创建时固定下来的配置快照。
+      </p>
+
+      <div class="flow" aria-label="配置解析流程">
+        <div class="step">
+          <div class="step-number">1</div>
+          <h3>消息进入</h3>
+          <p>channel runner 得到 Feishu sender、chat、tenant 和 session metadata。</p>
+        </div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <h3>身份映射</h3>
+          <p>平台身份映射到 canonical user，并读取 identity ceiling 与 dataRoot。</p>
+        </div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <h3>受限合并</h3>
+          <p><code>resolveUserConfig()</code> 合并 admin baseline 与用户 override。</p>
+        </div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <h3>快照注入</h3>
+          <p>SessionContext 持有不可变快照，ALS 暴露 <code>getSessionConfig()</code>。</p>
+        </div>
+        <div class="step">
+          <div class="step-number">5</div>
+          <h3>审计记录</h3>
+          <p>记录 actor、canonical user、权限模式、资源路径和关键配置来源。</p>
+        </div>
+      </div>
+
+      <pre><code>type UserConfigOverride = {
+  defaultModel?: string
+  lang?: "cn" | "en"
+  permissionMode?: PermissionMode
+  endpoints?: Record&lt;string, UserEndpoint&gt;  // PR4, additive only
+  models?: Record&lt;string, ModelEntry&gt;       // PR4, additive only
+}
+
+type UserEndpoint = {
+  baseUrl: string
+  schema: "anthropic" | "openai" | "openai-auth"
+  apiKeyRef: string
+}
+
+// dataRoot is intentionally not here.
+// It lives in identity/identities.json, because it decides where this file is.</code></pre>
+
+      <div class="callout">
+        安全边界靠 schema，而不是靠“运行时发现危险字段再拦”。用户 override 是 strict schema：未知字段解析即拒；admin-only 字段在物理结构上无法表达。
+      </div>
+    </section>
+
+    <section id="resources">
+      <h2>4. 用户级资源边界</h2>
+
+      <div class="grid">
+        <article class="card good">
+          <h3>模型与 endpoint</h3>
+          <p>PR4 允许用户加自己的 endpoint/model，但只能加法合并，不能覆盖或删除 admin 定义。密钥通过 <code>apiKeyRef</code> 指向 <code>users/&lt;u&gt;/secrets.json</code>。</p>
+        </article>
+
+        <article class="card good">
+          <h3>Workspace 与 mount</h3>
+          <p>默认 workspace 在用户树内。<code>/mount</code> 继续改当前用户的 <code>rlaunch-mounts.json</code>，所有路径需要通过 daemon 可见性与 GPFS 前缀校验。</p>
+        </article>
+
+        <article class="card good">
+          <h3>Memory、skill、session</h3>
+          <p>用户记忆、技能、会话、taskrun 都沉到同一棵用户树。这样 <code>/export</code> 可以打包用户数据，同时排除 secret。</p>
+        </article>
+
+        <article class="card warning">
+          <h3>权限模式</h3>
+          <p>用户可以设置 <code>permissionMode</code>，但最终值要被 identity ceiling 截断。ceiling 仍由 admin 控制。</p>
+        </article>
+
+        <article class="card warning">
+          <h3>审计和 api logs</h3>
+          <p><code>audit/</code> 和 <code>api-logs/</code> 留在顶层。它们是部署级取证与观测数据，不随用户树迁移。</p>
+        </article>
+
+        <article class="card problem">
+          <h3>runtime 配置</h3>
+          <p>runtime backend、clusterSettings、docker、hooks、mcp、network、系统 path 等保持 admin-only。本阶段不把它们放进用户 override。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="auth-runtime">
+      <h2>5. Codex Auth 与 Brain++ 身份：作为后续 addendum</h2>
+      <p class="lead">
+        之前方案把 Codex per-user auth 和 Brain++ 动态身份放得太靠前。按 main dev-plan，它们应该标成 v0.4 Phase 1 之后的扩展：先不阻塞 PR1-PR7，但现在要把接口边界想清楚，避免目录和 secret 设计返工。
+      </p>
+
+      <div class="two-col">
+        <article class="card warning">
+          <h3>Codex OAuth</h3>
+          <p>当前 dev-plan 的 PR4 只定义了 <code>apiKeyRef</code>，这对普通 API key 合适，但不能完整表达 Codex OAuth token bundle、refresh、logout 和过期状态。</p>
+          <p>可选扩展是新增结构化 per-user auth store，例如 <code>users/&lt;u&gt;/auth/codex.json</code>，或让 <code>secrets.json</code> 支持 typed secret。导入源只能是 daemon 可读路径，不能直接读取用户本机的 <code>.codex</code>。</p>
+        </article>
+
+        <article class="card warning">
+          <h3>Brain++ / rjob 身份</h3>
+          <p>main dev-plan 明确 runtime 配置仍是 admin-only。因此 Brain++ token、kubeconfig、impersonation 和 rjob 真实提交身份不应混入 PR1-PR7。</p>
+          <p>后续可以做 <code>BrainppAuthResolver</code>：按 canonical user 解析 token/kubeconfig/impersonation，再扩展 rlaunch/brainctl 参数；rjob 需要额外确认 CLI 是否支持动态凭证，或改成 daemon 侧提交封装。</p>
+        </article>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>Phase 1 状态</th>
+            <th>推荐后续形态</th>
+            <th>为什么不提前做</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Codex Auth</td>
+            <td><span class="tag amber">addendum</span></td>
+            <td>结构化 per-user auth store，refresh/logout/list 都按 canonical user 操作。</td>
+            <td>OAuth token 不是普通 API key，直接塞进 PR4 的 <code>apiKeyRef</code> 会污染 schema。</td>
+          </tr>
+          <tr>
+            <td>Brain++ 动态身份</td>
+            <td><span class="tag amber">addendum</span></td>
+            <td>用户级 auth resolver + rlaunch/brainctl 参数拼接 + rjob 身份路径确认。</td>
+            <td>runtime 仍是 admin-only，贸然开放会扩大安全面和调试复杂度。</td>
+          </tr>
+          <tr>
+            <td>每用户 worker pool</td>
+            <td><span class="tag amber">addendum</span></td>
+            <td>等 dataRoot、workspace、mount、session config 快照稳定后，再把 pool key 扩展到 user/auth hash。</td>
+            <td>目录和配置边界未稳定前做 worker 切分，容易得到错误的复用粒度。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="migration">
+      <h2>6. 现有存储的迁移方案</h2>
+      <p class="lead">
+        main dev-plan 里“本期无生产迁移”是为了避免在小范围删档测试阶段引入脚本复杂度。但架构方案需要预留真实数据迁移路径：如果当前 <code>&lt;LIGHTCLAW_HOME&gt;</code> 已经有会话、记忆、skill、workspace 或用户密钥，就用一次性离线迁移，而不是运行时兼容两套布局。
+      </p>
+
+      <div class="callout">
+        迁移原则：维护窗口内停 daemon，完整备份旧 home，把 by-type-then-user 复制成 by-user-then-type；顶层 admin 注册表、audit、api-logs 不下沉；迁移完成后只启动新布局，不保留旧布局 fallback。
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>旧路径</th>
+            <th>新路径</th>
+            <th>处理规则</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/permissions.json</code></td>
+            <td><code>users/&lt;u&gt;/permissions.json</code></td>
+            <td>原样复制，权限规则继续归属该 canonical user。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/secrets.json</code></td>
+            <td><code>users/&lt;u&gt;/secrets.json</code></td>
+            <td>原样复制并强制 <code>0600</code>；不得进入 export 包或日志。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/skills/</code></td>
+            <td><code>users/&lt;u&gt;/skills/</code></td>
+            <td>原样复制；bundled skills 仍由系统目录提供，不复制进用户树。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/taskruns/</code></td>
+            <td><code>users/&lt;u&gt;/taskruns/</code></td>
+            <td>原样复制；导入到新部署时可按需标记为历史，不自动恢复后台调度。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/bg-tasks.json</code></td>
+            <td><code>users/&lt;u&gt;/bg-tasks.json</code></td>
+            <td>同部署迁移可保留；跨部署导入建议重置，避免旧调度自动复活。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/feishu-workspace.json</code></td>
+            <td><code>users/&lt;u&gt;/feishu-workspace.json</code></td>
+            <td>同飞书 app/租户可保留；换 app 或租户时重建飞书文件夹绑定。</td>
+          </tr>
+          <tr>
+            <td><code>identity/per-user/&lt;u&gt;/rlaunch-mounts.json</code></td>
+            <td><code>users/&lt;u&gt;/rlaunch-mounts.json</code></td>
+            <td>同集群可保留；换集群或 GPFS 前缀时逐条重校验。</td>
+          </tr>
+          <tr>
+            <td><code>sessions/&lt;u&gt;/</code></td>
+            <td><code>users/&lt;u&gt;/sessions/</code></td>
+            <td>原样复制；迁移后抽样打开 transcript 和 meta。</td>
+          </tr>
+          <tr>
+            <td><code>memory/&lt;u&gt;/</code></td>
+            <td><code>users/&lt;u&gt;/memory/</code></td>
+            <td>原样复制，包括 <code>_shared</code> 和 role memory 子目录。</td>
+          </tr>
+          <tr>
+            <td><code>workspaces/&lt;u&gt;/</code></td>
+            <td><code>users/&lt;u&gt;/workspace/</code> 或 <code>paths.workspace/&lt;u&gt;</code></td>
+            <td>默认搬入用户树；如果 admin 配了全局 <code>paths.workspace</code> 大盘，则保留 escape-hatch 位置。</td>
+          </tr>
+          <tr>
+            <td><code>audit/</code>、<code>api-logs/</code>、<code>logs/</code></td>
+            <td>仍在顶层</td>
+            <td>不迁入用户树。audit 是部署级 append-only 取证，api-logs 是后台观测。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="two-col">
+        <article class="card stage-one">
+          <h3>离线迁移流程</h3>
+          <ol>
+            <li>停 daemon、停 rlaunch worker，确认没有 in-flight tool call。</li>
+            <li>备份完整 <code>&lt;LIGHTCLAW_HOME&gt;</code>，记录当前 commit、config hash 和 identities hash。</li>
+            <li>枚举 canonical users：以 <code>identities.json</code> 为准，补充扫描旧的 per-user/sessions/memory/workspaces。</li>
+            <li>为每个用户创建目标 <code>userHome</code>；如果要外置数据根，先由 admin 写入并校验 <code>dataRoot</code>。</li>
+            <li>按映射表复制数据，保持文件权限，secrets 强制 <code>0600</code>。</li>
+            <li>启动新代码，只启新布局；旧目录移动到 archive 或只读备份，不参与运行时 fallback。</li>
+          </ol>
+        </article>
+
+        <article class="card stage-two">
+          <h3>校验与回滚</h3>
+          <ol>
+            <li>路径校验：每个用户的 permissions、secrets、skills、sessions、memory、workspace 都能从 <code>userHome</code> 解析。</li>
+            <li>权限校验：用户 A 无法读到用户 B 的 workspace、skill、secret 和 session。</li>
+            <li>运行校验：抽样对话、读写 workspace、列 skill、读 memory、启动 sandbox。</li>
+            <li>dataRoot 校验：cluster 下必须命中 <code>gpfsMounts</code> 映射，失败就拒绝启动该用户工作区。</li>
+            <li>回滚：停新 daemon，恢复备份 home 和旧 commit；不要在失败状态下双写两套目录。</li>
+          </ol>
+        </article>
+      </div>
+
+      <div class="callout">
+        迁移脚本可以以后作为独立 admin 工具补上，但不建议做运行时自动迁移。自动迁移最危险的点是半成功：用户树、identity 注册表、workspace mount 和 rlaunch worker 的状态可能互相不一致。
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <h2>7. 按 main dev-plan 的落地路线</h2>
+      <p class="lead">
+        下面直接按 dev-log/main 的 PR1-PR7 重排。第一阶段交付标准是：用户数据可独立、可迁移、可配置；admin-only 边界清楚；session 内不再被全局配置污染。
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>PR</th>
+            <th>目标</th>
+            <th>关键改动</th>
+            <th>验收信号</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PR1</td>
+            <td>目录倒置 + <code>userHome()</code></td>
+            <td>新增用户目录锚点；per-user path 全部从 <code>userHome</code> 派生；workspace 默认进入用户树；audit/api-logs 留顶层。</td>
+            <td>路径重定向零行为变更，全测绿。</td>
+          </tr>
+          <tr>
+            <td>PR2</td>
+            <td>per-user <code>dataRoot</code></td>
+            <td><code>identities.json</code> 增加 <code>dataRoot</code>；admin-only <code>/user set-home</code>；复用 mount 的 daemon 可见和 GPFS 前缀校验。</td>
+            <td>合法 dataRoot 后用户树整体迁移；非法路径清晰拒绝；提示重启 worker 或 reset sandbox。</td>
+          </tr>
+          <tr>
+            <td>PR3</td>
+            <td>受限配置合并层</td>
+            <td><code>UserConfigOverride</code> strict schema；<code>resolveUserConfig()</code>；SessionContext 快照；<code>/model</code> 和 <code>/mode</code> 写用户 override。</td>
+            <td>不同用户 defaultModel/lang/mode 不串；in-flight session 配置不漂移。</td>
+          </tr>
+          <tr>
+            <td>PR4</td>
+            <td>BYO endpoint + model</td>
+            <td>用户添加 endpoint/model；命名冲突拒绝；<code>apiKeyRef</code> 指向 <code>secrets.json</code>；provider cache key 加 canonical user。</td>
+            <td>用户自带模型可用，key 不进 transcript，provider 不跨用户复用。</td>
+          </tr>
+          <tr>
+            <td>PR5</td>
+            <td>自助 UX surfaces</td>
+            <td>飞书 masked form card 录入 BYO；<code>/config show/reset</code>；<code>/skill list/view/delete</code>；dataRoot 请求走 admin 审批。</td>
+            <td>用户能自助改安全字段，敏感字段不泄漏，dataRoot 不被用户裸写。</td>
+          </tr>
+          <tr>
+            <td>PR6</td>
+            <td>文件浏览与导出</td>
+            <td><code>/files</code> 浏览和下载自己的 workspace；<code>/export</code> 打包用户树，排除 secrets，不包含 audit/api-logs。</td>
+            <td>用户可自查和迁移自己的数据包。</td>
+          </tr>
+          <tr>
+            <td>PR7</td>
+            <td>Prompt + 文档契约</td>
+            <td>更新 CLAUDE.md、wiki、env.md；model-facing prompt 如需改动单独 review；明确 dataRoot、daemon 可见、安全边界。</td>
+            <td>开发者和模型都按同一套目录、配置和权限契约工作。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>8. 修正后的结论</h2>
+      <div class="callout">
+        当前最稳的多用户路径是：先完成“用户树 + 受限配置 + session 快照 + BYO endpoint + 自助 UX + 导出”的 v0.4 Phase 1；再把 Codex OAuth 和 Brain++ 真实执行身份作为清晰边界的扩展接上。
+      </div>
+
+      <div class="two-col">
+        <article class="card stage-one">
+          <h3>近期可交付</h3>
+          <p>一个 daemon 支持多个用户自治配置；每个用户的数据集中在自己的目录树；admin-only 字段不能被用户表达；session 内配置不被下一次修改影响。</p>
+        </article>
+
+        <article class="card stage-two">
+          <h3>后续再扩展</h3>
+          <p>Codex per-user OAuth 需要结构化 auth store；Brain++ 动态身份需要先确定 rlaunch/brainctl/rjob 的凭证传递模型，再接入 worker pool 和审计。</p>
+        </article>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>LightClaw 多用户架构方案。已按 dev-log/main 的 v0.4 Phase 1 dev-plan 重新收敛，用于内部分享和后续设计评审。</p>
+    </footer>
+  </main>
+</body>
+</html>

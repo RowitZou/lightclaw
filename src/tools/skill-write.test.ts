@@ -278,7 +278,7 @@ test('a non-internal caller may only save a skill for its own role', async () =>
       }, { cwd: ctx.cwd } as never)
       if (crossRole.isError === true) throw new Error(`stamped save should pass: ${crossRole.output}`)
       const theirs = await readFile(
-        path.join(home, 'identity', 'per-user', 'alice', 'skills', 'their-flow', 'SKILL.md'), 'utf8')
+        path.join(userSkillsRoot('alice'), 'their-flow', 'SKILL.md'), 'utf8')
       if (!/roles:\n  - coder/.test(theirs)) throw new Error(`expected coder stamp, got:\n${theirs}`)
       if (theirs.includes('generalist')) throw new Error('foreign role must be replaced')
 
@@ -293,7 +293,7 @@ test('a non-internal caller may only save a skill for its own role', async () =>
       }, { cwd: ctx.cwd } as never)
       if (defaulted.isError === true) throw new Error(`defaulted save should pass: ${defaulted.output}`)
       const mine = await readFile(
-        path.join(home, 'identity', 'per-user', 'alice', 'skills', 'default-flow', 'SKILL.md'), 'utf8')
+        path.join(userSkillsRoot('alice'), 'default-flow', 'SKILL.md'), 'utf8')
       if (!/roles:\n  - coder/.test(mine)) throw new Error(`expected coder stamp, got:\n${mine}`)
     })
   })
@@ -316,7 +316,7 @@ test('revising an existing skill preserves its roles and refuses non-members', a
       } as never
       return ctx
     }
-    const skillPath = path.join(home, 'identity', 'per-user', 'alice', 'skills', 'shared-flow', 'SKILL.md')
+    const skillPath = path.join(userSkillsRoot('alice'), 'shared-flow', 'SKILL.md')
     // Seed a consolidator-style multi-role skill (internal callers are unstamped).
     await mkdir(path.dirname(skillPath), { recursive: true })
     const { writeFile } = await import('node:fs/promises')

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -11,7 +11,9 @@ import {
   getAdminFeishuOpenId,
   getIdentity,
   getUserPermissionCeiling,
+  removeUser,
   setAdmin,
+  setUserDataRoot,
   setUserPermissionCeiling,
 } from './store.js'
 
@@ -66,6 +68,18 @@ describe('getAdminFeishuOpenId', () => {
     await addLink('admin', 'terminal:terminal-admin')
 
     assert.equal(await getAdminFeishuOpenId(), 'ou_admin')
+  })
+})
+
+describe('identity dataRoot', () => {
+  it('purges the configured dataRoot when removing a user with --purge', async () => {
+    await createUser('alice')
+    const dataRoot = path.join(home, 'external-alice')
+    mkdirSync(dataRoot, { recursive: true })
+    await setUserDataRoot('alice', dataRoot)
+
+    assert.equal((await removeUser('alice', { purge: true })).ok, true)
+    assert.equal(existsSync(dataRoot), false)
   })
 })
 

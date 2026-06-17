@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import {
@@ -817,13 +818,7 @@ export class BackgroundTaskScheduler {
       )
       return
     }
-    const sessionsDir = this.config?.paths.sessions
-    if (!sessionsDir) {
-      process.stderr.write(
-        `[background-task] ${task.id} fire ${fireUuid} background-result skipped: scheduler has no config bound\n`,
-      )
-      return
-    }
+    const sessionsDir = userSessionsRoot(canonicalUser)
     const { resolveMainWakeSessionId } = await import('./session-resolve.js')
     const mainSessionId = await resolveMainWakeSessionId({
       ...(task.originSessionId ? { originSessionId: task.originSessionId } : {}),

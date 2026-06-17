@@ -4,7 +4,7 @@ import path from 'node:path'
 // Single source of truth for the LightClaw user-level root and `~` expansion.
 // All `~/.lightclaw/...` paths in src/ go through `lightclawHome()` so that a
 // `LIGHTCLAW_HOME` env var or a `--home <path>` CLI flag can relocate the
-// entire data layout (sessions / memory / config / identity / workspaces /
+// entire data layout (sessions / memory / config / identity / users /
 // channels / mcp / state) — required for cluster deployments where the
 // dev-machine home is not on shared storage.
 

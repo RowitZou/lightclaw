@@ -1,5 +1,5 @@
 
-import { getConfig, type LightClawConfig } from './config.js'
+import { type LightClawConfig } from './config.js'
 import { streamChat as defaultStreamChat } from './api.js'
 import { IdleStreamError, isTransientError } from './transient-error.js'
 import {
@@ -26,6 +26,7 @@ import {
 } from './messages.js'
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { getProviderFor } from './provider/index.js'
+import { formatModelSetupRequiredReply } from './model-setup.js'
 import {
   resolveRoleMaxTurns,
   resolveRoleModel,
@@ -40,8 +41,10 @@ import {
   getCwd,
   getRuntime,
   getSessionId,
+  getSessionsDir,
   getSessionMemoryToolCallsSinceUpdate,
   getSessionMemoryTokensSinceUpdate,
+  getSessionConfig,
   getTodos,
   incrementSessionMemoryUpdateCount,
   registerBackgroundTask,
@@ -266,7 +269,7 @@ export async function query(params: QueryParams): Promise<{
   didCompact: boolean
   usage: UsageStats
 }> {
-  const config = params.config ?? getConfig()
+  const config = params.config ?? getSessionConfig()
   const invocation = params.invocation ?? emptyInvocationContext()
   const rolePolicy = resolveRolePolicy(params.role)
   // Re-resolved at the top of every turn (see the loop below) so a mid-turn
@@ -274,6 +277,28 @@ export async function query(params: QueryParams): Promise<{
   // config.defaultModel — takes effect for the rest of this query.
   let roleModel = resolveRoleModel(params.role, config)
   const currentSessionContext = getCurrentSessionContext()
+  const modelSetupReply = modelSetupRequiredReply(
+    params.role,
+    config,
+    roleModel,
+    currentSessionContext?.currentUserId,
+  )
+  if (modelSetupReply) {
+    const assistant = createAssistantMessage({
+      content: [{ type: 'text', text: modelSetupReply }],
+      stopReason: 'end_turn',
+      usage: {},
+      parentUuid: getLastUuid(params.messages),
+    })
+    return {
+      messages: [...params.messages, assistant],
+      assistantText: modelSetupReply,
+      finalReplyText: modelSetupReply,
+      stopReason: 'end_turn',
+      didCompact: false,
+      usage: {},
+    }
+  }
   if (currentSessionContext) {
     currentSessionContext.currentRole = invocation.currentRoleOverride ?? params.role
   }
@@ -390,7 +415,7 @@ export async function query(params: QueryParams): Promise<{
     try {
       const update: SessionMemoryUpdateInput = {
         sessionId: getSessionId(),
-        sessionsDir: config.paths.sessions,
+        sessionsDir: getSessionsDir(),
         newMessages,
         config,
       }
@@ -1152,6 +1177,22 @@ export async function query(params: QueryParams): Promise<{
 
   throw new Error(`Exceeded maximum tool turns (${maxTurns}).`)
   }  // end queryInner
+}
+
+function modelSetupRequiredReply(
+  role: Role,
+  config: LightClawConfig,
+  roleModel: string,
+  currentUserId: string | undefined,
+): string | null {
+  if (role.agentType !== 'main' || !currentUserId) {
+    return null
+  }
+  const entry = roleModel ? config.models[roleModel] : undefined
+  if (entry) {
+    return null
+  }
+  return formatModelSetupRequiredReply()
 }
 
 function getLastUserText(messages: Message[]): string {

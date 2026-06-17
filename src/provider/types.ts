@@ -7,7 +7,7 @@ import type { StreamEvent } from '../types.js'
  *  endpoint's auth provider. */
 export type Schema = 'anthropic' | 'openai' | 'openai-auth'
 
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 
 /** @deprecated kept for back-compat in any in-tree caller; new code should
  *  use `Schema`. */

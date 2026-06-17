@@ -56,8 +56,8 @@ export type PreheatOptions = {
 // their afterEach tears down `setLightclawHomeOverride` — without the
 // drain, the floating preheat promise outlives the override and
 // `RuntimePool.acquire()` reads the *real* `~/.lightclaw/config.json`,
-// silently mkdir'ing the per-user workspace inside the production
-// `workspaceRoot` (e.g. `claw_data/workspaces/<derived-name>`).
+// silently mkdir'ing the per-user workspace inside the production user tree
+// (e.g. `claw_data/users/<derived-name>/workspace`).
 const pendingPreheats = new Set<Promise<void>>()
 
 export function preheatAndWelcomeOnApproval(
