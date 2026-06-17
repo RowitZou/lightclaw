@@ -239,7 +239,7 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
   assert.ok(heading?.content?.includes('✅ 20 已完成'))
 })
 
-void test('buildTaskCard puts the terminal timestamp in the subtitle and the id in the footer', () => {
+void test('buildTaskCard puts the terminal timestamp in the subtitle and renders no id line', () => {
   setLang('cn')
   const view = baseView()
   view.root = { ...view.root, status: 'done', terminalAt: TS + 600_000 }
@@ -248,10 +248,11 @@ void test('buildTaskCard puts the terminal timestamp in the subtitle and the id 
   assert.equal(header.template, 'green')
   // Timestamp moved into the blue subtitle, after the status word.
   assert.ok(header.subtitle.content.includes('结束于 23:29'))
-  const body = (card.body as { elements: Array<{ content?: string }> }).elements
-  const footer = body[body.length - 1]
-  assert.ok(footer.content?.includes('#run-abcd'))
-  assert.ok(!footer.content?.includes('结束于'), 'footer no longer carries the timestamp')
+  // The run id is no longer surfaced on the card at all.
+  const bodyText = (card.body as { elements: Array<{ content?: string }> }).elements
+    .map(el => el.content ?? '')
+    .join('\n')
+  assert.ok(!bodyText.includes('#run-abcd'), 'no run-id line in the body')
 })
 
 void test('buildTaskCard renders standing service badge and schedule lines', () => {

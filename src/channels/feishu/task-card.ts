@@ -149,10 +149,6 @@ function formatClock(ts: number): string {
   return `${hh}:${mm}`
 }
 
-function shortRunId(id: string): string {
-  return id.length <= 8 ? id : id.slice(0, 8)
-}
-
 // Compact token count with a K/M/B/T suffix and 2 decimals (e.g. 468292 →
 // "468.29K", 1234567 → "1.23M"). Below 1000 it stays a bare integer. Hand-rolled
 // rather than toLocaleString to stay locale-/env-independent.
@@ -483,20 +479,16 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     )
   }
 
-  // Timestamp now lives in the header subtitle (next to the status word), so the
-  // footer carries only the run id and the token stats.
+  // Timestamp now lives in the header subtitle (next to the status word). The
+  // footer is just the subtask token stats, in sync with that timestamp (the
+  // whole card is re-derived on every update). Only the subtasks are summed —
+  // the main agent is excluded by the view deriver. The cache figure folds read
+  // + creation, and the hit rate is cache reads over all input-side tokens. When
+  // no subtask has spent tokens yet there is no footer at all.
   const footerTs = terminal ? root.terminalAt ?? root.updatedAt : root.updatedAt
-  elements.push(hrElement())
-  elements.push(
-    markdownElement(t('taskcard.footer.id', { id: shortRunId(root.id) })),
-  )
-
-  // Subtask token spend, in sync with the header timestamp (the whole card is
-  // re-derived on every update). Only the subtasks are summed — the main agent
-  // is excluded by the view deriver. The cache figure folds read + creation, and
-  // the hit rate is cache reads over all input-side tokens.
   const tokens = view.subtaskTokens
   if (tokens && tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreate > 0) {
+    elements.push(hrElement())
     elements.push(
       markdownElement(
         t('taskcard.footer.tokens', {

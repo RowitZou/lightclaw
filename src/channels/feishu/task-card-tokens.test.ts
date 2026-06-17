@@ -131,7 +131,7 @@ describe('task card subtask token totals', () => {
     assert.ok(/输出 500\b/.test(last.content ?? ''), 'sub-1000 stays a bare integer')
   })
 
-  it('omits the token footer line when subtaskTokens is absent; footer is the id line', () => {
+  it('renders no footer at all when subtaskTokens is absent', () => {
     setLang('cn')
     const card = buildTaskCard({
       root: {
@@ -144,10 +144,12 @@ describe('task card subtask token totals', () => {
       children: [],
       rootTimeline: [],
     })
-    const body = (card.body as { elements: Array<{ content?: string }> }).elements
-    const last = body[body.length - 1]
-    assert.ok(last.content?.includes('任务 #run-abcd'), 'footer is the id line')
-    assert.ok(!last.content?.includes('任务消耗'), 'no token line')
-    assert.ok(!last.content?.includes('更新于'), 'timestamp is in the subtitle, not the footer')
+    const header = card.header as { subtitle: { content: string } }
+    assert.ok(header.subtitle.content.includes('更新于 23:19'), 'timestamp is in the subtitle')
+    const bodyText = (card.body as { elements: Array<{ content?: string }> }).elements
+      .map(el => el.content ?? '')
+      .join('\n')
+    assert.ok(!bodyText.includes('任务消耗'), 'no token line')
+    assert.ok(!bodyText.includes('#run-abcd'), 'no run-id line')
   })
 })
