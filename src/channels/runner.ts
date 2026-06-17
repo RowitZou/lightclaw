@@ -633,6 +633,41 @@ export class ChannelRunner {
     if (!message.synthetic && message.messageId) {
       recordInboundAnchor(mainSessionId, message.messageId)
     }
+    // Framework-authored synthetics (bg-result / taskrun reconcile wakes =
+    // frameworkText; crash-resume = resumeExisting) can reach here while a
+    // turn is in flight: wakeOrInterject checks hasInflightFor and only
+    // synthesizes this handleMessage call when the session looked idle, but a
+    // genuine inbound can win the race and markInFlight in the window between
+    // that check and this body. Such a synthetic must NOT fall through to the
+    // user-interjection / pending-slash branches below — that would wrap a
+    // `<background-task-result>` block in `<user-interjection>`, publish it as
+    // `source:'user'`, and emit a user-facing emoji / "记下了" ack for a block
+    // the user never sent. Re-route it in the same framework-block shape
+    // wakeOrInterject uses for its own in-flight branch (source:
+    // 'background-task', synthetic, carrying taskCardRoot) so the block stays
+    // correctly framed and silent. resumeExisting carries no deliverable block
+    // (empty text; query runs on the loaded transcript) and the live turn
+    // already owns that transcript, so it is simply dropped.
+    if (
+      (message.frameworkText || message.resumeExisting) &&
+      channelInterjectionQueue.hasInflightFor(mainSessionId)
+    ) {
+      if (message.frameworkText && message.text.trim()) {
+        channelInterjectionQueue.push(mainSessionId, {
+          text: message.text,
+          messageId: message.messageId,
+          senderOpenId: message.senderOpenId,
+          arrivedAt: Date.now(),
+          source: 'background-task',
+          synthetic: true,
+          ...(message.taskCardRoot ? { taskCardRoot: message.taskCardRoot } : {}),
+        })
+        process.stderr.write(
+          `${this.strategy.channelId}: framework wake re-queued as interjection for in-flight session ${mainSessionId}\n`,
+        )
+      }
+      return
+    }
     // Slash commands carry user-to-system meta intent (e.g. /mode, /rules
     // allow, /auth import, /user approve, /sandbox prefetch). Wrapping them
     // as `<user-interjection>` is wrong: the LLM treats the text as natural

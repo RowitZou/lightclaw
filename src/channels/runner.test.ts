@@ -2075,3 +2075,102 @@ describe('withFinalReplyMention (PR25 group ping)', () => {
     assert.equal(withFinalReplyMention(dm, '每日报告', { mentionSynthetic: true }), '每日报告')
   })
 })
+
+describe('ChannelRunner framework-wake in-flight guard', () => {
+  // Regression: a framework-authored synthetic wake (frameworkText, e.g. a
+  // <background-task-result> block) can reach handleMessage while a turn is
+  // already in flight. wakeOrInterject checks hasInflightFor and only
+  // synthesizes this handleMessage call when the session looked idle, but a
+  // genuine inbound can win the race and markInFlight in the window between
+  // that check and this body. Such a wake must be re-queued in the framework
+  // block shape (source:'background-task', synthetic:true) — NOT swept into
+  // the user-interjection branch, which would wrap the block in
+  // <user-interjection>, queue it as a user entry (source undefined), and emit
+  // a user-facing "记下了" ack for a block the user never sent.
+  it('re-queues an in-flight framework wake as a background-task interjection, not a user interjection', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-alice-main'
+    strategy.resolveSessionId = () => mainSessionId
+
+    channelInterjectionQueue.markInFlight(mainSessionId)
+
+    const wake: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: '<background-task-result>job done</background-task-result>',
+        chatId: mainSessionId,
+      }),
+      synthetic: true,
+      frameworkText: true,
+      taskCardRoot: { owner: 'alice', rootRunId: 'run-1' },
+    }
+    try {
+      await runner.handleMessage(wake)
+
+      const drained = channelInterjectionQueue.drain(mainSessionId)
+      assert.equal(drained.length, 1, 'the framework wake should be queued exactly once')
+      const entry = drained[0]!
+      assert.equal(
+        entry.source,
+        'background-task',
+        'the wake must be queued as a framework block, not a user interjection (source undefined)',
+      )
+      assert.equal(entry.synthetic, true, 'the wake entry must be marked synthetic')
+      assert.equal(
+        entry.text,
+        '<background-task-result>job done</background-task-result>',
+        'the framework block text must be preserved verbatim',
+      )
+      assert.deepEqual(
+        entry.taskCardRoot,
+        { owner: 'alice', rootRunId: 'run-1' },
+        'taskCardRoot must ride the re-queued entry',
+      )
+      assert.equal(
+        strategy.replies.length,
+        0,
+        'a framework wake must not produce a user-facing ack reply',
+      )
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(mainSessionId)
+    }
+  })
+
+  // A crash-resume synthetic (resumeExisting, empty text, no deliverable
+  // block) that hits the same in-flight race carries nothing to enqueue — the
+  // live turn already owns the loaded transcript — so it must be dropped, not
+  // queued and not acked.
+  it('drops an in-flight resumeExisting synthetic without queuing or acking', async () => {
+    await createUser('bob')
+    await addLink('bob', 'feishu:ou_bob')
+
+    const strategy = installFakeStrategy('feishu')
+    const runner = new ChannelRunner(strategy)
+    const mainSessionId = 'feishu-bob-main'
+    strategy.resolveSessionId = () => mainSessionId
+
+    channelInterjectionQueue.markInFlight(mainSessionId)
+
+    const resume: NormalizedChannelMessage = {
+      ...makeFakeFeishuMessage({ sender: 'ou_bob', text: '', chatId: mainSessionId }),
+      synthetic: true,
+      resumeExisting: true,
+    }
+    try {
+      await runner.handleMessage(resume)
+
+      assert.equal(
+        channelInterjectionQueue.size(mainSessionId),
+        0,
+        'a resumeExisting synthetic must not be queued',
+      )
+      assert.equal(strategy.replies.length, 0, 'a resumeExisting synthetic must not be acked')
+    } finally {
+      channelInterjectionQueue.unmarkInFlight(mainSessionId)
+    }
+  })
+})
