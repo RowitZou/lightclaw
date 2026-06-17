@@ -1094,8 +1094,13 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     const result = await runtime.exec({ command: 'echo hi' })
     assert.equal(counter.calls, 3, 'first + retry + post-respawn third call')
     assert.equal(result.exitCode, 0)
-    assert.ok(result.stderr.startsWith('[runtime] worker restarted'),
-      'respawn path prepends the legacy "worker restarted" stderr header')
+    assert.equal(result.stdout, 'ok on new worker',
+      'respawned command result is returned to the caller')
+    // The "worker restarted" stderr prefix was removed: restart signalling is
+    // now the model-facing <system-reminder> driven by currentGeneration()
+    // change detection, not a per-command stderr header on this one path.
+    assert.ok(!result.stderr.includes('worker restarted'),
+      'respawn path returns the command stderr verbatim, no restart header')
     assert.equal(startReasons.length, 1, 'exactly one respawn after retry failure')
     assert.ok(startReasons[0]?.includes('worker-lost on exec after 1s retry'),
       `start reason should reflect the retry-then-respawn path, got: ${startReasons[0]}`)

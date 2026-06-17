@@ -61,6 +61,10 @@ import { appendUsage } from './usage/storage.js'
 import { addTaskRunUsage } from './taskrun/store.js'
 import { openApiLogger, runWithApiLogger } from './api-logs/storage.js'
 import {
+  detectRuntimeRestart,
+  formatRuntimeRestartReminder,
+} from './runtime/restart-notice.js'
+import {
   findToolByName,
   toolToAPISchema,
   type Tool,
@@ -1127,6 +1131,18 @@ export async function query(params: QueryParams): Promise<{
         content.push(...renderInterjectionContent(invocation, interjections, messages))
         process.stderr.write(
           `query: injected ${interjections.length} interjection${interjections.length === 1 ? '' : 's'} into next user message\n`,
+        )
+      }
+      // If the backend environment was replaced during this turn's tool calls
+      // (worker-lost respawn) or in the idle gap before it (health-checker
+      // restart / mount swap), tell the model once: its container-local /tmp,
+      // /scratch, and any in-environment background process are gone. Detection
+      // is cause-agnostic — `currentGeneration()` returns null for backends
+      // without a restart concept (LocalRuntime), so this never fires there.
+      if (detectRuntimeRestart(getSessionId(), getRuntime().currentGeneration?.())) {
+        content.push({ type: 'text' as const, text: formatRuntimeRestartReminder() })
+        process.stderr.write(
+          `query: injected runtime-restart reminder for sid=${getSessionId()}\n`,
         )
       }
       for (const hook of lifecycleHooks) {

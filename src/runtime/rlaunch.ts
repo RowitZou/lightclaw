@@ -303,6 +303,18 @@ export class RlaunchRuntime implements Runtime {
     return this.workerName
   }
 
+  /** The worker name is the generation token: it is freshly allocated on every
+   *  spawn (respawn after worker-lost, health-checker restart, or /mount swap),
+   *  so a change signals that the worker pod — and its container-local /tmp,
+   *  /scratch, and any in-worker background process — was replaced. Forwards to
+   *  the successor when retired so a stale ALS reference reads the live worker
+   *  name, matching the `name` / `data` / `paths` getters. */
+  currentGeneration(): string | null {
+    const successor = this.liveSuccessor()
+    if (successor) return successor.currentGeneration?.() ?? null
+    return this.workerName
+  }
+
   /** Snapshot of the per-user worker readiness tracker. Exposed so the
    *  /sandbox status admin command can render rlaunch-flavored health
    *  (worker state / cluster image / schedule duration / last error)
@@ -565,11 +577,13 @@ export class RlaunchRuntime implements Runtime {
     // unstaged worker and returns `rg: command not found`. Coalesces with the
     // background drive start() kicked off, via the per-worker ensure* memos.
     await this.bringToReady()
-    const retry = await this.runBrainctlExec(wrapped)
-    return {
-      ...retry,
-      stderr: `[runtime] worker restarted, container-local /tmp etc. lost\n${retry.stderr}`,
-    }
+    // The respawned command's stderr is returned verbatim — no "worker
+    // restarted" prefix. Restart signalling is unified in the model-facing
+    // <system-reminder> driven by `currentGeneration()` change detection
+    // (`restart-notice.ts` + query.ts), which covers every restart path
+    // (worker-lost respawn, health-checker, /mount swap) consistently instead
+    // of polluting one unlucky command's stderr on only this path.
+    return this.runBrainctlExec(wrapped)
   }
 
   /**

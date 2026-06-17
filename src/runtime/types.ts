@@ -194,6 +194,20 @@ export type Runtime = {
   stop(): Promise<void>
   isRunning(): boolean
   /**
+   * A token identifying the current backend "generation" — the concrete
+   * environment instance serving exec / fs right now. It changes whenever the
+   * backing environment is replaced (worker respawn, restart, or mount swap),
+   * which is exactly when container-local state (`/tmp`, `/scratch`, in-env
+   * background processes) is lost. Returns `null` when the backend has no
+   * restart concept (LocalRuntime) or has not started an instance yet.
+   *
+   * Optional: callers must treat an absent method as "no generation tracking"
+   * (always `null`). RlaunchRuntime returns the worker name (freshly allocated
+   * on every spawn); see `restart-notice.ts` for the per-session change
+   * detection that drives the model-facing restart reminder.
+   */
+  currentGeneration?(): string | null
+  /**
    * True iff the runtime can serve environment-domain tool calls *right now*.
    * LocalRuntime always returns ok. DockerRuntime consults the
    * ImageReadinessTracker — pulling/failed states return ok=false so the
