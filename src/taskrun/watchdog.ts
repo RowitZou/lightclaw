@@ -646,7 +646,7 @@ export function formatTaskRunReconcileBlock(
     guidance.push('- waiting on a wake that can no longer fire → its wait will never end on its own: message it to continue, or cancel it.')
   }
   if (kinds.has('held')) {
-    guidance.push('- deliberately put on hold a while ago and not resumed since → this is a pending decision, not a stall: resume it (message it) if it should continue, or cancel it if it is moot. If it was stopped on the user\'s instruction (reason=user-stop), do not silently restart it — confirm it should continue first.')
+    guidance.push('- deliberately put on hold a while ago and not resumed since → this is a pending decision, not a stall: resume it (message it) if it should continue, or cancel it if it is moot. If it was stopped on the user\'s instruction (reason=user-stop), do not silently restart it — get the user\'s explicit go-ahead first through a question they will actually see (AskUserQuestion, or a no-`to` Message if you do not have it), not a plain reply.')
   }
   if (kinds.has('idle-root')) {
     guidance.push('- an open goal with nothing moving under it → this goal is yours: dispatch its next stage, or close it (TaskUpdate deliver on its root) if it is actually done — or tell the user why it is parked.')
