@@ -239,10 +239,10 @@ describe('TaskRun watchdog', () => {
     )
   })
 
-  it('reports paused runs only after the paused grace window', () => {
+  it('reports deliberately held runs as held only after the waiting grace window', () => {
     const runs = [
-      meta({ id: 'tr_paused_old', status: 'waiting', waitingAt: 1_000 }),
-      meta({ id: 'tr_paused_grace', status: 'waiting', waitingAt: 9_500 }),
+      meta({ id: 'tr_held_old', status: 'waiting', waitingAt: 1_000, waitReason: 'user-stop' }),
+      meta({ id: 'tr_held_grace', status: 'waiting', waitingAt: 9_500, waitReason: 'requester-hold' }),
       meta({ id: 'tr_running', status: 'running', currentSessionId: 'live' }),
     ]
     const findings = detectTaskRunFindings(runs, {
@@ -258,9 +258,13 @@ describe('TaskRun watchdog', () => {
 
     assert.deepEqual(
       findings.map(finding => [finding.runId, finding.kind]),
-      [['tr_paused_old', 'waiting-overdue']],
+      [['tr_held_old', 'held']],
     )
+    // reason rides on the finding so the reconcile block can tell the recipient
+    // whether the human stopped it (defer) or an agent did (decide).
+    assert.equal(findings[0]?.waitReason, 'user-stop')
 
+    // waitingGraceMs: 0 disables the held nudge.
     const disabled = detectTaskRunFindings(runs, {
       now: 10_000,
       deliveredGraceMs: 1_000,
@@ -272,6 +276,31 @@ describe('TaskRun watchdog', () => {
       eventsByRun: eventsFor(runs),
     })
     assert.deepEqual(disabled, [])
+  })
+
+  it('reports a reasonless waiting run as stranded on the idle grace, independent of waitingGraceMs', () => {
+    // A waiting run with no wake and no recorded reason cannot resume itself and
+    // nobody parked it on purpose — an orphan, the waiting-status mirror of
+    // stranded, surfaced promptly rather than buried for the long held grace.
+    const runs = [
+      meta({ id: 'tr_orphan_old', status: 'waiting', waitingAt: 1_000 }),
+      meta({ id: 'tr_orphan_grace', status: 'waiting', waitingAt: 9_500 }),
+    ]
+    const findings = detectTaskRunFindings(runs, {
+      now: 10_000,
+      deliveredGraceMs: 1_000,
+      waitingGraceMs: 0, // held nudges disabled — the orphan must still surface
+      rootIdleGraceMs: 1_000,
+      activeSessionIds: new Set(),
+      inFlightMainSessionIds: new Set(),
+      schedulerTaskRunIds: new Set(),
+      backgroundEntries: [],
+      eventsByRun: eventsFor(runs),
+    })
+    assert.deepEqual(
+      findings.map(finding => [finding.runId, finding.kind]),
+      [['tr_orphan_old', 'stranded']],
+    )
   })
 
   it('executes due declared wakes itself instead of reporting them to main', async () => {

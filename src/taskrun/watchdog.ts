@@ -24,7 +24,7 @@ const WATCHDOG_EVENT_KINDS = new Set(['watchdog-report', 'escalated'])
 export type TaskRunWatchdogFindingKind =
   | 'stranded'
   | 'unsettled-delivered'
-  | 'waiting-overdue'
+  | 'held'
   | 'dead-wake-source'
   | 'idle-root'
 
@@ -36,6 +36,7 @@ export type TaskRunWatchdogFinding = {
   rootRunId: string
   rootTitle?: string
   originSessionId?: string
+  waitReason?: TaskRunMeta['waitReason']
   statusSnapshot: {
     status: TaskRunMeta['status']
     currentSessionId: string | null
@@ -360,7 +361,7 @@ export function detectTaskRunFindings(
       }
       continue
     }
-    if (run.status === 'waiting' && waitingGraceMs > 0) {
+    if (run.status === 'waiting') {
       const waitingAt = run.waitingAt ?? run.updatedAt
       if (run.wake && !run.wake.consumed) {
         // A live or due declared wake is the framework's business (the
@@ -376,14 +377,30 @@ export function detectTaskRunFindings(
         }
         continue
       }
-      if (
-        (run.waitReason === undefined ||
-          run.waitReason === 'user-stop' ||
-          run.waitReason === 'requester-hold') &&
-        input.now - waitingAt > waitingGraceMs
-      ) {
+      // No wake can resume this run on its own; classify by who parked it.
+      // user-stop (the human via /stop) and requester-hold (an agent asked its
+      // child to hold) are DELIBERATE holds — a pending decision, not a stall —
+      // so they wait out the long `waitingGraceMs` before nudging the owner.
+      if (run.waitReason === 'user-stop' || run.waitReason === 'requester-hold') {
+        if (waitingGraceMs > 0 && input.now - waitingAt > waitingGraceMs) {
+          findings.push(toFinding(run, runById, {
+            kind: 'held',
+            since: waitingAt,
+            now: input.now,
+            lastStateEventSeq,
+          }))
+        }
+        continue
+      }
+      // A waiting run with no recorded reason is nobody's deliberate hold and
+      // has no wake to ever resume it: that is an orphan — the waiting-status
+      // mirror of `stranded` — surfaced promptly on the short idle grace rather
+      // than buried for hours. (child-join / timer / awaiting-reply with a
+      // consumed wake are mid-resume, the framework's business — they fall
+      // through here and produce no finding.)
+      if (run.waitReason === undefined && rootIdleGraceMs > 0 && input.now - waitingAt > rootIdleGraceMs) {
         findings.push(toFinding(run, runById, {
-          kind: 'waiting-overdue',
+          kind: 'stranded',
           since: waitingAt,
           now: input.now,
           lastStateEventSeq,
@@ -605,6 +622,7 @@ export function formatTaskRunReconcileBlock(
       `status=${finding.statusSnapshot.status}`,
       `waitMs=${finding.waitMs}`,
     ]
+    if (finding.kind === 'held' && finding.waitReason) parts.push(`reason=${finding.waitReason}`)
     if (finding.rootTitle) parts.push(`rootTitle=${JSON.stringify(finding.rootTitle)}`)
     if (finding.outcomePreview) parts.push(`outcome=${JSON.stringify(finding.outcomePreview)}`)
     lines.push(`- ${parts.join(' ')}`)
@@ -627,8 +645,8 @@ export function formatTaskRunReconcileBlock(
   if (kinds.has('dead-wake-source')) {
     guidance.push('- waiting on a wake that can no longer fire → its wait will never end on its own: message it to continue, or cancel it.')
   }
-  if (kinds.has('waiting-overdue')) {
-    guidance.push('- waiting far longer than its declared wake should take → decide: continue it (message it), or cancel it.')
+  if (kinds.has('held')) {
+    guidance.push('- deliberately put on hold a while ago and not resumed since → this is a pending decision, not a stall: resume it (message it) if it should continue, or cancel it if it is moot. If it was stopped on the user\'s instruction (reason=user-stop), do not silently restart it — confirm it should continue first.')
   }
   if (kinds.has('idle-root')) {
     guidance.push('- an open goal with nothing moving under it → this goal is yours: dispatch its next stage, or close it (TaskUpdate deliver on its root) if it is actually done — or tell the user why it is parked.')
@@ -767,6 +785,7 @@ function toFinding(
     waitMs: Math.max(0, input.now - input.since),
     rootRunId: run.rootRunId,
     ...(root?.title ? { rootTitle: root.title } : {}),
+    ...(run.waitReason ? { waitReason: run.waitReason } : {}),
     originSessionId: root?.callerSessionId ?? run.callerSessionId,
     statusSnapshot: {
       status: run.status,

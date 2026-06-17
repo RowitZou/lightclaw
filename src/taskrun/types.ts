@@ -200,7 +200,7 @@ export type TaskRunWatchdogReportEvent = {
   ts: number
   kind: 'watchdog-report'
   fingerprint: string
-  findingKind: 'stranded' | 'unsettled-delivered' | 'waiting-overdue' | 'dead-wake-source'
+  findingKind: 'stranded' | 'unsettled-delivered' | 'held' | 'dead-wake-source' | 'idle-root'
   rootRunId: string
 }
 
