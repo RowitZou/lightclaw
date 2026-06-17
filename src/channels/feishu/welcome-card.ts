@@ -11,30 +11,25 @@ import { buildSystemNoticeCard } from './system-notice.js'
 
 export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Record<string, unknown> {
   // Header is wathet (info) so it visually reads as a friendly notice rather
-  // than a warning. Two variants by recipient role:
-  //   - non-admin: welcome + user-side slashes only. Admin-only commands
-  //     (/user, /sandbox, /cost, /ceiling) are intentionally omitted because
-  //     showing them to a non-admin would be misleading and produce
-  //     "admin-only" rejections at dispatch.
-  //   - admin: a dedicated "admin identity bound" body listing admin
-  //     management commands. /feedback is dropped because admin is the
-  //     recipient of feedback, not the sender.
+  // than a warning. The body leads with LightClaw's differentiator — hand it
+  // multiple complex tasks and it runs them concurrently in the background,
+  // tracking each on a task card — instead of a generic command list. Commands
+  // collapse to a single `/help` hint ("or just ask me"), since a brand-new
+  // user gets no value from memorizing slash syntax up front. Two variants by
+  // recipient role:
+  //   - non-admin: greeting + task-system pitch + one concrete example prompt.
+  //   - admin: same pitch, no example, and the /help hint also points at the
+  //     admin management commands. The "shared identity across Feishu/terminal"
+  //     line was dropped — the terminal is a slash-only console, not a second
+  //     conversation surface.
   if (opts.isAdmin) {
     const lines = [
       t('channel.welcome.admin.intro'),
       '',
-      t('channel.welcome.cmdHeader'),
-      `- ${t('channel.welcome.cmd.help')}`,
-      `- ${t('channel.welcome.cmd.status')}`,
-      `- ${t('channel.welcome.cmd.stop')}`,
+      t('channel.welcome.pitch.header'),
+      t('channel.welcome.pitch.body'),
       '',
-      t('channel.welcome.admin.cmdHeader'),
-      `- ${t('channel.welcome.admin.cmd.user')}`,
-      `- ${t('channel.welcome.admin.cmd.ceiling')}`,
-      `- ${t('channel.welcome.admin.cmd.cost')}`,
-      `- ${t('channel.welcome.admin.cmd.sandbox')}`,
-      '',
-      t('channel.welcome.tip'),
+      t('channel.welcome.admin.helpHint'),
     ]
     return buildSystemNoticeCard({
       kind: 'info',
@@ -45,13 +40,13 @@ export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Reco
   const lines = [
     t('channel.welcome.intro'),
     '',
-    t('channel.welcome.cmdHeader'),
-    `- ${t('channel.welcome.cmd.help')}`,
-    `- ${t('channel.welcome.cmd.status')}`,
-    `- ${t('channel.welcome.cmd.feedback')}`,
-    `- ${t('channel.welcome.cmd.stop')}`,
+    t('channel.welcome.pitch.header'),
+    t('channel.welcome.pitch.body'),
     '',
-    t('channel.welcome.tip'),
+    t('channel.welcome.try.header'),
+    t('channel.welcome.try.example'),
+    '',
+    t('channel.welcome.helpHint'),
   ]
   return buildSystemNoticeCard({
     kind: 'info',
