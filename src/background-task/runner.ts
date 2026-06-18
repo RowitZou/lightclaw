@@ -16,6 +16,7 @@ import { runDispatchedAgent } from '../agents/dispatched-agent.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
+import { isBillingError } from '../transient-error.js'
 import {
   createSessionContext,
   runWithSessionContext,
@@ -311,6 +312,9 @@ export function buildBackgroundTaskFirePrompt(task: BackgroundTaskEntry): string
 }
 
 function isTransientFireError(error: unknown): boolean {
+  if (isBillingError(error)) {
+    return false
+  }
   const detail = error instanceof Error ? error.message : String(error)
   return /ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|rate.?limit|429|timeout/i
     .test(detail)

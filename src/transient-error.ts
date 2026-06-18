@@ -12,6 +12,27 @@
 const TRANSIENT_FAILURE_PATTERN =
   /Connection error|ECONNRESET|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|network|TLS|secure|stream returned no events|terminated|fetch failed|other side closed|UND_ERR/i
 
+const BILLING_FAILURE_PATTERN =
+  /insufficient[_\s-]?quota|insufficient credits?|insufficient balance|\binsufficient \w+ balance\b|credit balance|credits? (?:have been )?exhausted|no usable credits?|exceeded your current quota|payment required|402 payment|billing hard limit|hard limit reached|(?:monthly )?spend(?:ing)? limit|out of funds|run out of funds|balance[_\s-]?depleted|top up your credits?|requires? more credits?|add more credits?|plan does not include|does not have a valid coding plan subscription|account is deactivated|used all available credits?|out of extra usage|extra usage is required|InvalidSubscription|余额不足|账户余额不足|欠费|账户已欠费|配额不足|配额已用尽|额度不足|额度已用尽/i
+
+const BILLING_ERROR_TYPE = new Set([
+  'insufficient_quota',
+  'payment_required',
+  'billing_not_active',
+  'insufficient_credits',
+  'no_usable_credits',
+  'balance_depleted',
+  'model_not_supported_on_free_tier',
+  'invalidsubscription',
+  '1311',
+])
+
+const QUOTA_SELF_HEAL_SIGNAL =
+  /try again|retry|resets at|reset in|wait|\bwindow\b|periodic|requests remaining|(?:daily|weekly|monthly)[^.]*reset|automatic quota refresh|rolling time window|subscription quota limit[^.]*refresh/i
+
+const OVERLOADED_PATTERN =
+  /overloaded_error|"type"\s*:\s*"overloaded_error"|overloaded|at capacity|high demand|high load/i
+
 // User-driven /stop and channel-runner-driven interjection auto-aborts both
 // surface as the SDK's "Request was aborted." string. Exported because the
 // channel runner's failure-message formatting branches on it too.
@@ -139,6 +160,101 @@ function httpStatusOf(node: unknown): number | undefined {
   return undefined
 }
 
+function normalizeErrorTypeToken(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return undefined
+  }
+  const normalized = String(value).trim().toLowerCase().replace(/[\s-]+/g, '_')
+  return normalized || undefined
+}
+
+function collectErrorDetailParts(node: unknown, parts: string[], depth = 0): void {
+  if (depth > 3 || node == null) {
+    return
+  }
+  if (typeof node === 'string' || typeof node === 'number') {
+    parts.push(String(node))
+    return
+  }
+  if (node instanceof Error) {
+    parts.push(node.message)
+  }
+  if (typeof node !== 'object') {
+    return
+  }
+  const obj = node as Record<string, unknown>
+  for (const key of ['message', 'type', 'code', 'body']) {
+    const value = obj[key]
+    if (typeof value === 'string' || typeof value === 'number') {
+      parts.push(String(value))
+    }
+  }
+  collectErrorDetailParts(obj.error, parts, depth + 1)
+  const response = obj.response as Record<string, unknown> | undefined
+  collectErrorDetailParts(response?.error, parts, depth + 1)
+  collectErrorDetailParts(response?.data, parts, depth + 1)
+  collectErrorDetailParts(response?.body, parts, depth + 1)
+}
+
+function errorDetailText(error: unknown): string {
+  const parts: string[] = []
+  for (const node of queryErrorChain(error)) {
+    collectErrorDetailParts(node, parts)
+  }
+  return parts.join('\n')
+}
+
+function errorBodyTypes(error: unknown): string[] {
+  const out = new Set<string>()
+  for (const node of queryErrorChain(error)) {
+    if (typeof node !== 'object' || node === null) {
+      continue
+    }
+    const obj = node as Record<string, unknown>
+    const nested = obj.error as Record<string, unknown> | undefined
+    const response = obj.response as Record<string, unknown> | undefined
+    const responseError = response?.error as Record<string, unknown> | undefined
+    const responseData = response?.data as Record<string, unknown> | undefined
+    const candidates = [
+      obj.type,
+      obj.code,
+      nested?.type,
+      nested?.code,
+      responseError?.type,
+      responseError?.code,
+      responseData?.type,
+      responseData?.code,
+    ]
+    for (const candidate of candidates) {
+      const token = normalizeErrorTypeToken(candidate)
+      if (token) {
+        out.add(token)
+      }
+    }
+  }
+  return [...out]
+}
+
+function hasQuotaSelfHealSignal(error: unknown): boolean {
+  return QUOTA_SELF_HEAL_SIGNAL.test(errorDetailText(error))
+}
+
+export function isBillingError(error: unknown): boolean {
+  if (hasQuotaSelfHealSignal(error)) {
+    return false
+  }
+  for (const type of errorBodyTypes(error)) {
+    if (BILLING_ERROR_TYPE.has(type)) {
+      return true
+    }
+  }
+  return BILLING_FAILURE_PATTERN.test(errorDetailText(error))
+}
+
+function isOverloadedError(error: unknown): boolean {
+  return OVERLOADED_PATTERN.test(errorDetailText(error))
+}
+
 /** True for /stop and interjection auto-abort — never retried. */
 export function isAbortError(error: unknown): boolean {
   for (const node of queryErrorChain(error)) {
@@ -193,9 +309,18 @@ export function isTransientError(error: unknown): boolean {
   if (isCredentialError(error)) {
     return false
   }
+  if (isBillingError(error)) {
+    return false
+  }
+  if (isOverloadedError(error)) {
+    return true
+  }
   for (const node of queryErrorChain(error)) {
     const status = httpStatusOf(node)
     if (status !== undefined) {
+      if (status === 402) {
+        return hasQuotaSelfHealSignal(error)
+      }
       if (FATAL_HTTP_STATUS.has(status)) {
         return false
       }

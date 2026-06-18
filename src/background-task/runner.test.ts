@@ -413,6 +413,26 @@ describe('runBackgroundTaskFire', () => {
     }
   })
 
+  it('does not treat provider hard-quota failures as transient fire errors', async () => {
+    setBackgroundTaskQueryForTest(async () => {
+      throw new Error(
+        'Provider returned 429 insufficient_quota: Your credit balance is too low.',
+      )
+    })
+
+    const outcome = await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task1', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-quota',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'failure')
+    if (outcome.kind === 'failure') {
+      assert.equal(outcome.transient, false)
+      assert.match(outcome.reason, /insufficient_quota|credit balance/i)
+    }
+  })
+
   it('returns non-transient failure for arbitrary tool error messages', async () => {
     setBackgroundTaskQueryForTest(async () => {
       throw new Error('Skill input validation failed: missing field')

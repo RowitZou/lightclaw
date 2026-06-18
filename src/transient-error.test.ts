@@ -31,6 +31,43 @@ describe('isTransientError', () => {
     )
   })
 
+  it('classifies billing / hard-quota provider errors as fatal', () => {
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 429'), {
+        status: 429,
+        error: {
+          type: 'insufficient_quota',
+          message: 'You exceeded your current quota, please check your plan and billing details.',
+        },
+      })),
+      false,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 429'), {
+        status: 429,
+        error: {
+          type: 'rate_limit_error',
+          message: 'Your credit balance is too low. Please top up your credits.',
+        },
+      })),
+      false,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('Payment Required'), { status: 402 })),
+      false,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('rate limit exceeded, try again in 20s'), {
+        status: 429,
+        error: {
+          type: 'rate_limit_error',
+          message: 'Rate limit exceeded. Please try again in 20s.',
+        },
+      })),
+      true,
+    )
+  })
+
   it('classifies 4xx / abort / turn-cap as fatal (no retry)', () => {
     assert.equal(
       isTransientError(Object.assign(new Error('bad request'), { status: 400 })),
