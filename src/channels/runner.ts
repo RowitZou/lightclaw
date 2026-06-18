@@ -930,7 +930,7 @@ export class ChannelRunner {
           ) {
             const availability = await getRuntime().isAvailable()
             if (!availability.ok) {
-              await this.sendNotice(message, 'error', availability.adminMessage).catch(() => {})
+              await this.sendNotice(message, 'warning', availability.adminMessage).catch(() => {})
             }
           }
         }
@@ -1642,7 +1642,8 @@ export class ChannelRunner {
         if (error instanceof LocalRuntimeAdminOnlyError) {
           await this.sendNotice(
             effectiveMessage,
-            'error',
+            // Config/permission gate, not a crash — orange, not red (D14).
+            'warning',
             t('channel.localRuntimeReject'),
           )
           return
@@ -2211,7 +2212,8 @@ export class ChannelRunner {
       }
     }
     if (isGroupLikeChannelMessage(message)) {
-      await this.sendNotice(message, 'error', t('channel.pairing.dmPushFailed'))
+      // Internal DM-delivery fallback to in-chat, not the user's fault — blue (D14).
+      await this.sendNotice(message, 'info', t('channel.pairing.dmPushFailed'))
       return
     }
     await this.sendNotice(message, kind, text)
@@ -2273,7 +2275,8 @@ export class ChannelRunner {
           await this.sendApplicantNotice(
             message,
             message.senderOpenId,
-            'error',
+            // Transient pairing throttle ("try later") — blue, not red (D14).
+            'info',
             t('channel.pairing.rateLimited'),
           )
         }
@@ -2342,7 +2345,8 @@ export class ChannelRunner {
         await this.sendApplicantNotice(
           message,
           message.senderOpenId,
-          'error',
+          // Transient pairing throttle ("try later") — blue, not red (D14).
+          'info',
           t('channel.pairing.rateLimited'),
         )
         return null

@@ -71,7 +71,9 @@ export function buildStartupFailureCard(input: {
         reason: classifyStartupReason(input.reason),
       })
   return buildSystemNoticeCard({
-    kind: 'error',
+    // Sandbox-start failure is a degraded/usually-recoverable condition (next
+    // turn often recovers), not a genuine hard failure — orange, not red (D14).
+    kind: 'warning',
     title: t('channel.welcome.startup.failedTitle'),
     content: body,
   })

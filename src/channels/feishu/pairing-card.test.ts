@@ -141,6 +141,13 @@ describe('PairingCardCoordinator', () => {
     assert.match(JSON.stringify(response), /已拒绝/)
     assert.equal((await listPending()).length, 0)
     assert.equal(sender.openIdCards.at(-1)?.openId, 'ou_user')
+    // Rejection is a closed/final negative outcome, not a danger — grey, not
+    // red (D14 color rationalization). Locks the recolor against regressing.
+    assert.equal(
+      (sender.openIdCards.at(-1)?.card as { header?: { template?: string } } | undefined)
+        ?.header?.template,
+      'grey',
+    )
   })
 
   it('rejects non-admin operators', async () => {

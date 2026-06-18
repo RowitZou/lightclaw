@@ -225,7 +225,9 @@ export class PairingCardCoordinator {
       )
       if (isFeishuGroupChatType(message.chatType)) {
         await this.sender.sendInteractiveCard(message, buildTerminalCard({
-          template: 'red',
+          // In-chat fallback of the application receipt (DM push failed) — it
+          // is an acknowledgement, not an error: blue, not red (D14).
+          template: 'wathet',
           title: t('channel.pairing.application.title'),
           body: t('channel.pairing.dmPushFailed'),
         }))
@@ -392,7 +394,8 @@ export class PairingCardCoordinator {
       this.setState(token, current)
       if (error instanceof Error && error.message === 'rate-limited') {
         return rawCard(buildTerminalCard({
-          template: 'red',
+          // Transient throttle ("try later") — yellow, not red (D14).
+          template: 'yellow',
           title: t('channel.pairing.application.rateLimited'),
           body: t('channel.pairing.application.rateLimited'),
         }))
@@ -673,7 +676,9 @@ function buildHandoverCard(input: { operator: string }): Record<string, unknown>
 
 function buildRejectedCard(input: { minutes: number }): Record<string, unknown> {
   return buildCard({
-    template: 'red',
+    // Application rejected — a closed/final negative outcome, not a danger:
+    // grey, not red (D14).
+    template: 'grey',
     title: t('channel.pairing.rejected.title'),
     body: t('channel.pairing.rejected.body', { minutes: input.minutes }),
   })
@@ -681,7 +686,8 @@ function buildRejectedCard(input: { minutes: number }): Record<string, unknown> 
 
 function buildCooldownCard(input: { elapsedMinutes: number; remainMinutes: number }): Record<string, unknown> {
   return buildCard({
-    template: 'red',
+    // Transient cooldown ("wait N min") — yellow, not red (D14).
+    template: 'yellow',
     title: t('channel.pairing.cooldown.title'),
     body: t('channel.pairing.cooldown.body', {
       elapsed: input.elapsedMinutes,
