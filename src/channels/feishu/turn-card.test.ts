@@ -53,16 +53,11 @@ function stripGrey(s: string | undefined): string | undefined {
   return m ? m[1] : s
 }
 
-/** The pinned "最新 HH:MM" label is a grey `note` now (was a bold markdown line). */
+/** The pinned "最新 HH:MM" label is a grey markdown line (`<font color='grey'>…`). */
 function latestLine(card: Record<string, unknown>): string | undefined {
-  const body = card.body as {
-    elements: Array<{ tag: string; content?: string; elements?: Array<{ content?: string }> }>
-  }
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> }
   const first = body.elements[0]!
-  if (first.tag === 'note' && Array.isArray(first.elements)) {
-    return first.elements.map(e => e.content ?? '').join('')
-  }
-  return first.tag === 'markdown' ? first.content : undefined
+  return first.tag === 'markdown' ? stripGrey(first.content) : undefined
 }
 
 function progressLine(card: Record<string, unknown>): string | undefined {

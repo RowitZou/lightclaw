@@ -16,7 +16,7 @@ import {
   type TaskCardIo,
   type TaskCardTarget,
 } from './task-card-patcher.js'
-import { capStreamPreview, greyInline, TASK_CARD_STREAM_BUFFER_MAX_CHARS } from './task-card.js'
+import { capStreamPreview, TASK_CARD_STREAM_BUFFER_MAX_CHARS } from './task-card.js'
 import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import {
   buildTurnCard,
@@ -176,7 +176,7 @@ export function createTurnCardCollector(input: {
       if (!cardId || !io.pushElement) return
       // Snapshot the capped content at schedule time: the patcher coalesces to
       // the latest job, so the snapshot keeps each queued push self-consistent.
-      const content = greyInline(capStreamPreview(liveText))
+      const content = capStreamPreview(liveText)
       patcher.schedule(lane, async () => {
         if (!cardId || !io.pushElement) return
         const pushed = await io.pushElement({

@@ -203,21 +203,24 @@ function hrElement(): Record<string, unknown> {
   return { tag: 'hr' }
 }
 
-/** Small grey caption line — the secondary tier under a child's bold title
- *  (status word, result teaser, roster, fold lines). Plain text, no markdown
- *  parse: lighter and less visually loud than a markdownElement, which is the
- *  whole point of the card redesign (bold title + grey supporting line, not a
- *  wall of bold black). */
+/** Secondary tier under a child's bold title (status word, result teaser,
+ *  roster, fold lines): a grey markdown line. NOTE: Feishu card schema 2.0
+ *  dropped the structural `note` element (error 200861 "unsupported tag note"),
+ *  which froze the whole card — so the grey tier is a normal markdown element
+ *  coloured with `<font color='grey'>`, never a `note` block. */
 function noteElement(content: string): Record<string, unknown> {
-  return { tag: 'note', elements: [{ tag: 'plain_text', content }] }
+  return { tag: 'markdown', content: greyInline(content) }
 }
 
-/** Wrap text grey for a markdown element. The live streaming preview must stay
- *  a markdown element (Feishu streams only into markdown), so we cannot use the
- *  smaller `note`; greying it keeps it in the secondary tier visually. Exported
- *  so the stream forwarders wrap each delta identically to the seeded content. */
+/** Colour text grey for a markdown element. Inline only — newlines are folded
+ *  to spaces first, because an inline `<font>` tag cannot wrap block markdown
+ *  (a list / heading / multi-line body leaves the closing `</font>` dangling in
+ *  the rendered output — the dogfood leak). Callers that need the grey tier on
+ *  potentially-block content (the live stream of a worker's markdown reply) must
+ *  NOT use this; they stream plain markdown instead. */
 export function greyInline(text: string): string {
-  return text ? `<font color='grey'>${text}</font>` : text
+  const oneLine = text.replace(/\s*\n\s*/g, ' ').trim()
+  return oneLine ? `<font color='grey'>${oneLine}</font>` : text
 }
 
 function timelinePanel(
@@ -499,14 +502,15 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
       )
       if (childLive) {
         // Live worker: the per-element streaming target. Feishu streams text
-        // (cardElement.content) only into a markdown element, so this one stays
-        // markdown; the stream forwarder wraps each delta grey so it still reads
-        // as the secondary tier. Always emitted (even empty) so the stream has a
-        // target from the first render — empty `content` is the verified
-        // streaming-element shape (§R2 spike).
+        // (cardElement.content) only into a markdown element, so this stays
+        // markdown and is NOT grey-wrapped — the worker's reply is block markdown
+        // (lists / headings) and an inline `<font>` around it leaks the closing
+        // tag (dogfood). Always emitted (even empty) so the stream has a target
+        // from the first render — empty `content` is the verified streaming
+        // shape (§R2 spike).
         elements.push(
           markdownElement(
-            child.latestProgress ? greyInline(truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)) : '',
+            child.latestProgress ? truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS) : '',
             taskCardProgressElementId(child.id),
           ),
         )
@@ -560,12 +564,12 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Main agent's live line is a streaming target too — markdown (Feishu
-    // streams only into markdown), seeded grey so it reads as the secondary
-    // tier; the forwarder wraps each delta the same way.
+    // Main agent's live line is a streaming target too — plain markdown (Feishu
+    // streams only into markdown; not grey-wrapped, same block-markdown leak
+    // reason as the child live element).
     elements.push(
       markdownElement(
-        greyInline(truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS)),
+        truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
         taskCardProgressElementId('root'),
       ),
     )

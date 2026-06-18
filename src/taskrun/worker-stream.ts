@@ -13,7 +13,6 @@
 import { getTaskCardPipeline } from '../channels/feishu/task-card-pipeline-registry.js'
 import {
   capStreamPreview,
-  greyInline,
   taskCardProgressElementId,
   TASK_CARD_STREAM_BUFFER_MAX_CHARS,
 } from '../channels/feishu/task-card.js'
@@ -51,9 +50,9 @@ export function buildWorkerStreamForwarder(input: {
         input.ownerCanonicalUser,
         input.rootRunId,
         elementId,
-        // Grey to match the seeded element + the settled note tier (the live
-        // markdown element can't be the smaller `note`, so grey is the tier cue).
-        greyInline(capStreamPreview(live)),
+        // Plain markdown — NOT grey-wrapped: the worker's reply is block markdown
+        // and an inline `<font>` around it leaks the closing tag (dogfood).
+        capStreamPreview(live),
       )
     },
     reset() {

@@ -9,7 +9,6 @@
 // of any card a tool creates (e.g. the task card).
 
 import { t } from '../../i18n/index.js'
-import { note } from './card2.js'
 import { greyInline } from './task-card.js'
 
 export type TurnCardEntry = {
@@ -61,15 +60,15 @@ export function buildTurnCard(
   // scrolls with each patch, and at rest the card still tells what
   // happened last without opening the panel.
   const latest = entries[entries.length - 1]!
-  // Small grey "最新 HH:MM" label over the live line, instead of a bold black
-  // header — same secondary tier as the task card's captions.
-  elements.push(note(`${t('turncard.latest')} ${formatClock(latest.at)}`))
+  // Small grey "最新 HH:MM" label over the live line (grey markdown — schema 2.0
+  // has no `note` element; the label is single-line so inline `<font>` is safe).
+  elements.push({ tag: 'markdown', content: greyInline(`${t('turncard.latest')} ${formatClock(latest.at)}`) })
   elements.push({
     tag: 'markdown',
     element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-    // Streaming target — must stay markdown (Feishu streams only into markdown);
-    // seeded grey so it reads as the secondary tier, matching each streamed delta.
-    content: greyInline(latest.text),
+    // Streaming target — plain markdown (Feishu streams only into markdown; NOT
+    // grey-wrapped, the streamed reply is block markdown and inline <font> leaks).
+    content: latest.text,
   })
   elements.push({
     tag: 'collapsible_panel',

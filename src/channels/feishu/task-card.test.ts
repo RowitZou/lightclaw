@@ -309,21 +309,22 @@ void test('child tiers: bold title, settled→grey note, live→grey-seeded mark
     }),
   )
   const els = bodyElements(card)
-  // Done child: bold title markdown, then a grey `note` carrying status + teaser
-  // (NOT markdown — the secondary tier the user asked for).
+  // Done child: bold title markdown, then a grey markdown line (status + teaser).
+  // Schema 2.0 has no `note` element, so the grey tier is markdown + <font>.
   const doneTitle = els.findIndex(el => el.content === '✅ **完成的子任务**')
   assert.ok(doneTitle >= 0, 'settled child has a bold-only title')
   const doneNote = els[doneTitle + 1]!
-  assert.equal(doneNote.tag, 'note', 'settled child summary is a note, not markdown')
-  assert.ok(elText(doneNote).includes('已完成 · 已交付结果摘要'))
-  // Live child: bold title, then the markdown streaming target (element_id),
-  // grey-wrapped — markdown because Feishu streams only into markdown.
+  assert.equal(doneNote.tag, 'markdown')
+  assert.ok(String(doneNote.content).startsWith("<font color='grey'>"), 'settled summary is grey')
+  assert.ok(String(doneNote.content).includes('已完成 · 已交付结果摘要'))
+  // Live child: bold title, then the PLAIN markdown streaming target (element_id).
+  // NOT grey-wrapped — the worker reply is block markdown and inline <font> leaks.
   const liveTitle = els.findIndex(el => el.content === '🔄 **在跑的子任务**')
   assert.ok(liveTitle >= 0)
   const liveProgress = els[liveTitle + 1] as Record<string, unknown>
   assert.equal(liveProgress.tag, 'markdown')
   assert.equal(liveProgress.element_id, taskCardProgressElementId('run-live'))
-  assert.ok(String(liveProgress.content).startsWith("<font color='grey'>"))
+  assert.ok(!String(liveProgress.content).includes('<font'), 'live stream target is plain')
   assert.ok(String(liveProgress.content).includes('正在检索'))
 })
 
