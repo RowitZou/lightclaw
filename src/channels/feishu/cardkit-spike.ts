@@ -36,6 +36,7 @@ export function buildCardkitStreamingSpikeCard(summary = DEFAULT_SUMMARY): Recor
       summary: { content: summary },
       streaming_config: {
         print_frequency_ms: { default: 50 },
+        print_step: { default: 1 },
       },
     },
     body: {

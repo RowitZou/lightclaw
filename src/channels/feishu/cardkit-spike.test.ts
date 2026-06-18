@@ -18,6 +18,7 @@ test('cardkit streaming spike builds the minimal schema 2.0 streaming card', () 
     summary: { content: 'summary' },
     streaming_config: {
       print_frequency_ms: { default: 50 },
+      print_step: { default: 1 },
     },
   })
   assert.deepEqual(card.body, {
