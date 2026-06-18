@@ -159,6 +159,7 @@ export type ConfigFileDispatchSchedulerSection = {
   maxConcurrentRunsPerUser?: number
   startupCatchupIntervalMs?: number
   fireRetryMaxAttempts?: number
+  circuitBreakerThreshold?: number
 }
 
 /** Sub-LLM model pins. Each value is the display name of a model in
@@ -516,6 +517,7 @@ export type ConfigFileShape = {
     maxConcurrentRunsPerUser?: number
     startupCatchupIntervalMs?: number
     fireRetryMaxAttempts?: number
+    circuitBreakerThreshold?: number
   }
 }
 

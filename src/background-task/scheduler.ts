@@ -21,6 +21,8 @@ import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
 import {
   RETRY_AFTER_CAP_MS,
+  isBillingError,
+  isRateLimitError,
   retryAfterMsOf,
   retryDelayMsWithRetryAfter,
 } from '../transient-error.js'
@@ -47,6 +49,13 @@ type QueueItem = {
 }
 
 const RETRY_BASE_MS = 2000
+
+type BackgroundFailureKind = 'genuine' | 'rate-limit' | 'billing'
+
+type FireAccountingResult = {
+  latest: BackgroundTaskEntry | null
+  circuitOpened: boolean
+}
 
 type RunBackgroundTaskFireFn = typeof runBackgroundTaskFire
 
@@ -114,6 +123,34 @@ function backgroundResultText(outcome: FireOutcome): string {
       ? ['', 'Permission denials:', JSON.stringify(outcome.permissionDenials, null, 2)]
       : []),
   ].join('\n')
+}
+
+function isCircuitBreakerEligibleTask(task: BackgroundTaskEntry): boolean {
+  return Boolean(
+    task.standingRootRunId ||
+    task.schedule.kind === 'recurring' ||
+    task.schedule.kind === 'interval',
+  )
+}
+
+function classifyBackgroundFailure(outcome: FireOutcome): BackgroundFailureKind {
+  if (outcome.kind !== 'failure') {
+    return 'genuine'
+  }
+  if (isBillingError(outcome.reason)) {
+    return 'billing'
+  }
+  if (isRateLimitError(outcome.reason)) {
+    return 'rate-limit'
+  }
+  return 'genuine'
+}
+
+function failureSummary(outcome: FireOutcome): string | undefined {
+  if (outcome.kind !== 'failure') {
+    return undefined
+  }
+  return outcome.reason
 }
 
 async function markBackgroundTaskRunTerminalBestEffort(
@@ -642,6 +679,70 @@ export class BackgroundTaskScheduler {
     }
   }
 
+  private recordTerminalFireAccounting(
+    canonicalUser: string,
+    task: BackgroundTaskEntry,
+    outcome: FireOutcome,
+    firedAt: string,
+  ): FireAccountingResult {
+    if (!isCircuitBreakerEligibleTask(task)) {
+      return { latest: getBackgroundTask(canonicalUser, task.id), circuitOpened: false }
+    }
+    const latest = getBackgroundTask(canonicalUser, task.id)
+    if (!latest) {
+      return { latest: null, circuitOpened: false }
+    }
+    if (latest.circuitOpen) {
+      return { latest, circuitOpened: false }
+    }
+    if (outcome.kind === 'success') {
+      const updated = updateBackgroundTask(canonicalUser, task.id, {
+        consecutiveFailures: 0,
+        lastFailureKind: undefined,
+        circuitOpen: undefined,
+        circuitOpenedAt: undefined,
+        lastFailureSummary: undefined,
+      })
+      return { latest: updated, circuitOpened: false }
+    }
+
+    const failureKind = classifyBackgroundFailure(outcome)
+    const summary = failureSummary(outcome)
+    if (failureKind === 'billing' || failureKind === 'rate-limit') {
+      const updated = updateBackgroundTask(canonicalUser, task.id, {
+        consecutiveFailures: 0,
+        lastFailureKind: failureKind,
+        circuitOpen: undefined,
+        circuitOpenedAt: undefined,
+        lastFailureSummary: summary,
+        ...(failureKind === 'billing' && !latest.billingNotifiedAt
+          ? { billingNotifiedAt: firedAt }
+          : {}),
+      })
+      return { latest: updated, circuitOpened: false }
+    }
+
+    const nextFailures = (latest.consecutiveFailures ?? 0) + 1
+    const threshold = this.config?.dispatch.scheduler.circuitBreakerThreshold ?? 3
+    const opensCircuit = threshold > 0 && nextFailures >= threshold
+    const updated = updateBackgroundTask(canonicalUser, task.id, {
+      consecutiveFailures: nextFailures,
+      lastFailureKind: failureKind,
+      lastFailureSummary: summary,
+      ...(opensCircuit
+        ? {
+            enabled: false,
+            circuitOpen: true,
+            circuitOpenedAt: firedAt,
+          }
+        : {}),
+    })
+    if (opensCircuit) {
+      this.rebuildUser(canonicalUser)
+    }
+    return { latest: updated, circuitOpened: opensCircuit }
+  }
+
   private async onFireComplete(
     canonicalUser: string,
     task: BackgroundTaskEntry,
@@ -706,6 +807,9 @@ export class BackgroundTaskScheduler {
     )
 
     const firedAt = new Date().toISOString()
+    const accounting = task.schedule.kind === 'oneshot'
+      ? { latest: getBackgroundTask(canonicalUser, task.id), circuitOpened: false }
+      : this.recordTerminalFireAccounting(canonicalUser, task, outcome, firedAt)
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
       // Record before pruning so a late TaskUpdate cancel call can tell
       // "already finished" apart from "id never existed" (Bug 7 from
@@ -719,8 +823,8 @@ export class BackgroundTaskScheduler {
       removeBackgroundTask(canonicalUser, task.id)
     } else {
       if (task.standingRootRunId) {
-        const latest = getBackgroundTask(canonicalUser, task.id)
-        if (latest) {
+        const latest = accounting.latest ?? getBackgroundTask(canonicalUser, task.id)
+        if (latest && !accounting.circuitOpened) {
           await createNextStandingTaskRunBestEffort(canonicalUser, latest)
         }
         updateLastFiredAt(canonicalUser, task.id, firedAt)

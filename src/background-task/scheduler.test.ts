@@ -450,13 +450,13 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.deepEqual(deliverCalls, ['called'], 'fire-and-forget must still deliver the bg-result')
   })
 
-  it('does not autopause recurring tasks after failures', async () => {
+  it('opens the circuit after consecutive genuine recurring failures', async () => {
     const task = fakeTask()
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
     ;(scheduler as unknown as {
-      config: { dispatch: { scheduler: { fireRetryMaxAttempts: number } } }
-    }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1 } } }
+      config: { dispatch: { scheduler: { fireRetryMaxAttempts: number; circuitBreakerThreshold: number } } }
+    }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1, circuitBreakerThreshold: 3 } } }
     const onFireComplete = (
       scheduler as unknown as {
         onFireComplete: (
@@ -470,7 +470,9 @@ describe('BackgroundTaskScheduler fire completion', () => {
     ).onFireComplete.bind(scheduler)
 
     for (let i = 0; i < 5; i += 1) {
-      await onFireComplete('alice', task, `fire-${i}`, {
+      const [latest] = loadBackgroundTasks('alice')
+      assert.ok(latest)
+      await onFireComplete('alice', latest, `fire-${i}`, {
         kind: 'failure',
         reason: `failed-${i}`,
         transient: false,
@@ -481,9 +483,102 @@ describe('BackgroundTaskScheduler fire completion', () => {
 
     const [loaded] = loadBackgroundTasks('alice')
     assert.ok(loaded)
-    assert.equal(loaded.enabled, true)
-    assert.equal('consecutiveFailures' in loaded, false)
+    assert.equal(loaded.enabled, false)
+    assert.equal(loaded.circuitOpen, true)
+    assert.equal(loaded.consecutiveFailures, 3)
+    assert.equal(loaded.lastFailureKind, 'genuine')
+    assert.equal(loaded.lastFailureSummary, 'failed-2')
     assert.equal('fireHistory' in loaded, false)
+
+    scheduler.notifyTaskChanged('alice', loaded.id)
+    const heap = (scheduler as unknown as {
+      heapByUser: Map<string, unknown[]>
+    }).heapByUser.get('alice')
+    assert.equal(heap?.length ?? 0, 0, 'circuit-open tasks must not be scheduled again')
+  })
+
+  it('does not increment circuit failures for billing or rate-limit terminal failures', async () => {
+    const task = fakeTask()
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: { dispatch: { scheduler: { fireRetryMaxAttempts: number; circuitBreakerThreshold: number } } }
+    }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1, circuitBreakerThreshold: 1 } } }
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    await onFireComplete('alice', task, 'fire-billing', {
+      kind: 'failure',
+      reason: 'Your credit balance is too low.',
+      transient: false,
+      attempt: 1,
+    }, 1)
+    const afterBilling = loadBackgroundTasks('alice')[0]
+    assert.ok(afterBilling)
+    assert.equal(afterBilling.enabled, true)
+    assert.equal(afterBilling.circuitOpen, undefined)
+    assert.equal(afterBilling.consecutiveFailures, 0)
+    assert.equal(afterBilling.lastFailureKind, 'billing')
+    assert.match(afterBilling.billingNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
+
+    await onFireComplete('alice', afterBilling, 'fire-rate-limit', {
+      kind: 'failure',
+      reason: 'Rate limit exceeded; please retry later.',
+      transient: true,
+      attempt: 1,
+    }, 1)
+    const afterRateLimit = loadBackgroundTasks('alice')[0]
+    assert.ok(afterRateLimit)
+    assert.equal(afterRateLimit.enabled, true)
+    assert.equal(afterRateLimit.circuitOpen, undefined)
+    assert.equal(afterRateLimit.consecutiveFailures, 0)
+    assert.equal(afterRateLimit.lastFailureKind, 'rate-limit')
+  })
+
+  it('resets circuit failure state after a successful recurring fire', async () => {
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      consecutiveFailures: 2,
+      lastFailureKind: 'genuine',
+      lastFailureSummary: 'previous failure',
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    await onFireComplete('alice', task, 'fire-success', {
+      kind: 'success',
+      summary: 'ok',
+      transcriptPath: '/tmp/x',
+    }, 1)
+    flushLastFiredAt()
+
+    const [loaded] = loadBackgroundTasks('alice')
+    assert.ok(loaded)
+    assert.equal(loaded.enabled, true)
+    assert.equal(loaded.circuitOpen, undefined)
+    assert.equal(loaded.consecutiveFailures, 0)
+    assert.equal(loaded.lastFailureKind, undefined)
+    assert.equal(loaded.lastFailureSummary, undefined)
   })
 
   it('releases the concurrency slot when the run settles, not after completion handling', async () => {

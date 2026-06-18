@@ -62,7 +62,6 @@ export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[
       if (typeof (baseCandidate as { role?: unknown }).role !== 'string') {
         ;(baseCandidate as { role: string }).role = 'generalist'
       }
-      delete (baseCandidate as { consecutiveFailures?: unknown }).consecutiveFailures // legacy migration
       delete (baseCandidate as { fireHistory?: unknown }).fireHistory // legacy migration
       // Legacy field removed with dispatch context-inheritance retirement.
       delete (baseCandidate as Record<string, unknown>)['resume' + 'From']
@@ -122,6 +121,12 @@ export type BackgroundTaskPatch = Partial<
     | 'notifyTo'
     | 'enabled'
     | 'lastFiredAt'
+    | 'consecutiveFailures'
+    | 'lastFailureKind'
+    | 'billingNotifiedAt'
+    | 'circuitOpen'
+    | 'circuitOpenedAt'
+    | 'lastFailureSummary'
     | 'pendingPriorPromptNotice'
     | 'parentTaskRunId'
     | 'standingRootRunId'

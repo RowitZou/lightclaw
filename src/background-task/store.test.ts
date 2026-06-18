@@ -89,12 +89,17 @@ describe('background-task store', () => {
     assert.equal(loaded[0].role, 'generalist')
   })
 
-  it('drops legacy failure-state fields when loading old v2 entries', () => {
+  it('preserves official failure-state fields while dropping legacy fire history', () => {
     const target = backgroundTaskStorePath('alice')
     mkdirSync(path.dirname(target), { recursive: true })
     const legacy = {
       ...fakeTask('alice', 'task-1'),
       consecutiveFailures: 7,
+      lastFailureKind: 'genuine',
+      billingNotifiedAt: '2026-05-07T10:01:00.000Z',
+      circuitOpen: true,
+      circuitOpenedAt: '2026-05-07T10:02:00.000Z',
+      lastFailureSummary: 'old failure',
       fireHistory: [{
         firedAt: '2026-05-07T10:00:00.000Z',
         summary: 'old failure',
@@ -106,7 +111,12 @@ describe('background-task store', () => {
     const [loaded] = loadBackgroundTasks('alice')
     assert.ok(loaded)
     assert.equal(loaded.id, 'task-1')
-    assert.equal('consecutiveFailures' in loaded, false)
+    assert.equal(loaded.consecutiveFailures, 7)
+    assert.equal(loaded.lastFailureKind, 'genuine')
+    assert.equal(loaded.billingNotifiedAt, '2026-05-07T10:01:00.000Z')
+    assert.equal(loaded.circuitOpen, true)
+    assert.equal(loaded.circuitOpenedAt, '2026-05-07T10:02:00.000Z')
+    assert.equal(loaded.lastFailureSummary, 'old failure')
     assert.equal('fireHistory' in loaded, false)
   })
 

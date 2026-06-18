@@ -52,6 +52,12 @@ export type BackgroundTaskEntry = {
   enabled: boolean
   createdAt: string
   lastFiredAt?: string
+  consecutiveFailures?: number
+  lastFailureKind?: 'genuine' | 'rate-limit' | 'billing'
+  billingNotifiedAt?: string
+  circuitOpen?: boolean
+  circuitOpenedAt?: string
+  lastFailureSummary?: string
   // Set by UpdateSchedule when prompt is changed: holds the prior
   // prompt so the NEXT completion delivery can surface "prompt was changed
   // before this fire (old: ...)" once and then clear. Consumed by
@@ -146,6 +152,12 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   enabled: z.boolean(),
   createdAt: z.string(),
   lastFiredAt: z.string().optional(),
+  consecutiveFailures: z.number().int().min(0).optional(),
+  lastFailureKind: z.enum(['genuine', 'rate-limit', 'billing']).optional(),
+  billingNotifiedAt: z.string().optional(),
+  circuitOpen: z.boolean().optional(),
+  circuitOpenedAt: z.string().optional(),
+  lastFailureSummary: z.string().optional(),
   pendingPriorPromptNotice: z.string().optional(),
   originSessionId: z.string().optional(),
   callerRole: z.string().optional(),

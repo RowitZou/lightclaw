@@ -429,6 +429,7 @@ export type DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: number
   startupCatchupIntervalMs: number
   fireRetryMaxAttempts: number
+  circuitBreakerThreshold: number
 }
 
 export type DispatchConfig = {
@@ -513,6 +514,7 @@ const DEFAULT_DISPATCH_SCHEDULER: DispatchSchedulerConfig = {
   maxConcurrentRunsPerUser: 100,
   startupCatchupIntervalMs: 60_000,
   fireRetryMaxAttempts: 3,
+  circuitBreakerThreshold: 3,
 }
 
 const DEFAULT_TASKRUN_WATCHDOG: TaskRunWatchdogConfig = {
@@ -2005,6 +2007,7 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
   const maxConcurrentRaw = Number(schedulerSource.maxConcurrentRunsPerUser)
   const catchupRaw = Number(schedulerSource.startupCatchupIntervalMs)
   const retryRaw = Number(schedulerSource.fireRetryMaxAttempts)
+  const circuitBreakerRaw = Number(schedulerSource.circuitBreakerThreshold)
   const scheduler: DispatchSchedulerConfig = {
     maxConcurrentRunsPerUser: Math.max(
       1,
@@ -2023,6 +2026,12 @@ function resolveDispatchConfig(fileConfig: ConfigFileShape): DispatchConfig {
       Math.floor(Number.isFinite(retryRaw)
         ? retryRaw
         : DEFAULT_DISPATCH_SCHEDULER.fireRetryMaxAttempts),
+    ),
+    circuitBreakerThreshold: Math.max(
+      0,
+      Math.floor(Number.isFinite(circuitBreakerRaw)
+        ? circuitBreakerRaw
+        : DEFAULT_DISPATCH_SCHEDULER.circuitBreakerThreshold),
     ),
   }
 

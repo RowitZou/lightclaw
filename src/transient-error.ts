@@ -33,6 +33,9 @@ const QUOTA_SELF_HEAL_SIGNAL =
 const OVERLOADED_PATTERN =
   /overloaded_error|"type"\s*:\s*"overloaded_error"|overloaded|at capacity|high demand|high load/i
 
+const RATE_LIMIT_PATTERN =
+  /rate[_\s-]?limit|too many requests|\b429\b|requests? per (?:minute|hour|day)|throttl(?:e|ed|ing)|retry after|try again later/i
+
 // User-driven /stop and channel-runner-driven interjection auto-aborts both
 // surface as the SDK's "Request was aborted." string. Exported because the
 // channel runner's failure-message formatting branches on it too.
@@ -288,6 +291,19 @@ export function isBillingError(error: unknown): boolean {
     return !hasQuotaSelfHealSignal(error)
   }
   return false
+}
+
+export function isRateLimitError(error: unknown): boolean {
+  if (isBillingError(error)) {
+    return false
+  }
+  for (const node of queryErrorChain(error)) {
+    const status = httpStatusOf(node)
+    if (status === 429) {
+      return true
+    }
+  }
+  return RATE_LIMIT_PATTERN.test(errorDetailText(error))
 }
 
 function isOverloadedError(error: unknown): boolean {
