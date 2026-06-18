@@ -128,9 +128,10 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
     !String(elements[childTitleIndex]!.content).includes('进行中'),
     'status word is no longer baked into the bold title',
   )
-  // Live child: the next element is the grey-seeded markdown streaming target.
+  // Live child: the next element is the plain_text streaming target (verbatim,
+  // no markdown rendering → no bold/heading flash as tokens stream in).
   const childProgress = elements[childTitleIndex + 1] as Record<string, unknown>
-  assert.equal(childProgress.tag, 'markdown')
+  assert.equal(childProgress.tag, 'plain_text')
   assert.equal(childProgress.element_id, taskCardProgressElementId('run-child-2'))
   assert.ok(String(childProgress.content).includes('正在下载第二篇 PDF'))
   const rootProgressIndex = elements.findIndex(el => (el as any).element_id === taskCardProgressElementId('root'))
@@ -283,7 +284,7 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
   assert.ok(bodyText(card).includes('✅ 20 已完成'))
 })
 
-void test('child tiers: bold title, settled→grey note, live→grey-seeded markdown stream target', () => {
+void test('child tiers: bold title, settled→grey note, live→plain_text stream target', () => {
   setLang('cn')
   const card = buildTaskCard(
     baseView({
@@ -317,12 +318,14 @@ void test('child tiers: bold title, settled→grey note, live→grey-seeded mark
   assert.equal(doneNote.tag, 'markdown')
   assert.ok(String(doneNote.content).startsWith("<font color='grey'>"), 'settled summary is grey')
   assert.ok(String(doneNote.content).includes('已完成 · 已交付结果摘要'))
-  // Live child: bold title, then the PLAIN markdown streaming target (element_id).
-  // NOT grey-wrapped — the worker reply is block markdown and inline <font> leaks.
+  // Live child: bold title, then the plain_text streaming target (element_id).
+  // plain_text renders content verbatim, so partial markdown never flashes; the
+  // small `notation` size marks it as a preview, not the content surface.
   const liveTitle = els.findIndex(el => el.content === '🔄 **在跑的子任务**')
   assert.ok(liveTitle >= 0)
   const liveProgress = els[liveTitle + 1] as Record<string, unknown>
-  assert.equal(liveProgress.tag, 'markdown')
+  assert.equal(liveProgress.tag, 'plain_text')
+  assert.equal(liveProgress.text_size, 'notation')
   assert.equal(liveProgress.element_id, taskCardProgressElementId('run-live'))
   assert.ok(!String(liveProgress.content).includes('<font'), 'live stream target is plain')
   assert.ok(String(liveProgress.content).includes('正在检索'))
@@ -429,9 +432,16 @@ test('emitted element_ids satisfy Feishu cardkit format (no colon, ≤20, letter
   }
 })
 
-test('capStreamPreview bounds the live preview by lines AND chars (tail window)', () => {
-  // Short content is returned unchanged — no truncation marker.
+test('capStreamPreview is a fixed-height tail window (lines + chars + top-pad)', () => {
+  // Exactly MAX_LINES lines are returned unchanged — no truncation, no padding.
   assert.equal(capStreamPreview('one\ntwo'), 'one\ntwo')
+
+  // Fewer than MAX_LINES lines are padded UP with leading blanks so the preview
+  // holds a constant height from the first token (no grow-from-empty jump).
+  const padded = capStreamPreview('solo').split('\n')
+  assert.equal(padded.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
+  assert.equal(padded.at(0), '', 'padding is leading blank lines')
+  assert.equal(padded.at(-1), 'solo', 'newest content stays at the bottom')
 
   // Many-newline content is clamped to the last MAX_LINES lines so a streaming
   // list / code block cannot balloon the card height. Newest lines win.
@@ -441,8 +451,12 @@ test('capStreamPreview bounds the live preview by lines AND chars (tail window)'
   assert.equal(cappedLines.at(-1), many.at(-1))
   assert.ok(!cappedLines.includes('line0'), 'oldest lines drop out of the tail')
 
-  // A single long line is still char-capped with the truncation marker.
+  // A single long line is char-capped with the truncation marker, then top-padded
+  // to the fixed height; the visible (last) line carries the capped content.
   const capped = capStreamPreview('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
-  assert.ok(capped.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
-  assert.ok(capped.startsWith('…'))
+  const cappedTailLines = capped.split('\n')
+  assert.equal(cappedTailLines.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
+  const visible = cappedTailLines.at(-1)!
+  assert.ok(visible.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
+  assert.ok(visible.startsWith('…'))
 })

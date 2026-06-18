@@ -9,7 +9,7 @@
 // of any card a tool creates (e.g. the task card).
 
 import { t } from '../../i18n/index.js'
-import { greyInline } from './task-card.js'
+import { capStreamPreview, greyInline } from './task-card.js'
 
 export type TurnCardEntry = {
   at: number
@@ -64,11 +64,14 @@ export function buildTurnCard(
   // has no `note` element; the label is single-line so inline `<font>` is safe).
   elements.push({ tag: 'markdown', content: greyInline(`${t('turncard.latest')} ${formatClock(latest.at)}`) })
   elements.push({
-    tag: 'markdown',
+    tag: 'plain_text',
     element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-    // Streaming target — plain markdown (Feishu streams only into markdown; NOT
-    // grey-wrapped, the streamed reply is block markdown and inline <font> leaks).
-    content: latest.text,
+    // Streaming target — a fixed-height 2-line plain_text glimpse (see
+    // task-card.ts plainTextElement / capStreamPreview). plain_text renders the
+    // stream verbatim, so partial markdown never flashes; the padded tail holds
+    // a constant height. The full narration is in the collapsible panel below.
+    content: capStreamPreview(latest.text),
+    text_size: 'notation',
   })
   elements.push({
     tag: 'collapsible_panel',
