@@ -47,6 +47,7 @@ import {
   markResumed,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
+import { resolveBackingRun } from '../taskrun/resolve-run-id.js'
 import { answerPendingAsk, awaitAskAnswer } from '../taskrun/ask-registry.js'
 import { consumeReplyCode, mintReplyCode } from '../taskrun/reply-code-registry.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
@@ -731,18 +732,8 @@ async function resolveMessageTargetRun(
   owner: string,
   target: string,
 ): Promise<{ ok: true; run: TaskRunMeta } | { ok: false; message: string }> {
-  const run = await getTaskRun(target, owner)
+  const run = await resolveBackingRun(owner, target)
   if (run) return { ok: true, run }
-  const entry = getBackgroundTask(owner, target)
-  if (entry?.taskRunId) {
-    const entryRun = await getTaskRun(entry.taskRunId, owner)
-    if (entryRun) {
-      return {
-        ok: true,
-        run: entryRun,
-      }
-    }
-  }
   const prior = getCompletedTaskRecord(owner, target)
   if (prior) {
     const verb = prior.outcome === 'cancelled'

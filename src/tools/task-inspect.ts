@@ -11,6 +11,7 @@ import {
   listChildTaskRuns,
   listTaskRuns,
 } from '../taskrun/store.js'
+import { resolveBackingRun } from '../taskrun/resolve-run-id.js'
 import { buildTool } from '../tool.js'
 
 const RECENT_EVENT_LIMIT = 20
@@ -46,15 +47,18 @@ export const taskInspectTool = buildTool({
     const role = getCurrentRole()
     const currentTaskRunId = getCurrentTaskRunId()
     if (input.runId) {
-      if (role?.kind === 'worker' && !await isWithinWorkerSubtree(input.runId, currentTaskRunId, owner)) {
+      // Accept a dispatch-entry id as well as a TaskRun id, then gate the
+      // RESOLVED run's id so a worker can inspect the child it dispatched by
+      // the handle Dispatch handed it.
+      const meta = await resolveBackingRun(owner, input.runId)
+      if (!meta) {
+        return { output: `TaskRun not found: ${input.runId}`, isError: true }
+      }
+      if (role?.kind === 'worker' && !await isWithinWorkerSubtree(meta.id, currentTaskRunId, owner)) {
         return {
           output: `TaskRun ${input.runId} is outside your TaskRun subtree. A worker can inspect only its current run and descendants.`,
           isError: true,
         }
-      }
-      const meta = await getTaskRun(input.runId, owner)
-      if (!meta) {
-        return { output: `TaskRun not found: ${input.runId}`, isError: true }
       }
       return {
         output: JSON.stringify(await inspectRun(meta, owner), null, 2),

@@ -20,6 +20,7 @@ import {
   rejectTaskRun,
 } from '../taskrun/store.js'
 import { scheduleResumeRunWithBlock } from '../taskrun/resume-schedule.js'
+import { resolveBackingRun } from '../taskrun/resolve-run-id.js'
 import { abortInFlightForSession, getCurrentRole, getCurrentTaskRunId, getSessionId, markConcludedRootThisTurn, requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
@@ -99,9 +100,7 @@ function findBackingDispatches(owner: string, runId: string): BackgroundTaskEntr
  *  so the stored wake is always keyed the way both consumers read it. A value
  *  that already is a TaskRun id (or resolves to nothing) is left untouched. */
 async function resolveChildJoinWakeRunId(owner: string, idOrDispatchId: string): Promise<string> {
-  if (await getTaskRun(idOrDispatchId, owner)) return idOrDispatchId
-  const entry = getBackgroundTask(owner, idOrDispatchId)
-  return entry?.taskRunId ?? entry?.standingRootRunId ?? idOrDispatchId
+  return (await resolveBackingRun(owner, idOrDispatchId))?.id ?? idOrDispatchId
 }
 
 async function resolveCancelTarget(
@@ -306,20 +305,20 @@ export const taskUpdateTool = buildTool({
 
     if (input.action === 'wait') {
       if (input.runId) {
-        const target = await getTaskRun(input.runId, owner)
+        const target = await resolveBackingRun(owner, input.runId)
         if (!target) return { output: `TaskRun not found: ${input.runId}`, isError: true }
         if (target.status !== 'running' || !target.currentSessionId) {
-          return { output: `TaskRun ${input.runId} is ${target.status}, not a running run.`, isError: true }
+          return { output: `TaskRun ${target.id} is ${target.status}, not a running run.`, isError: true }
         }
         if (isOrchestrator) {
           const root = await getTaskRun(target.rootRunId, owner)
           if (!root || (root.kind ?? 'dispatch') !== 'root') {
-            return { output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`, isError: true }
+            return { output: `TaskRun ${target.id} is not inside one of your rooted task trees.`, isError: true }
           }
         } else {
           const own = getCurrentTaskRunId()
           if (!own || target.parentRunId !== own) {
-            return { output: `TaskRun ${input.runId} is not a direct child of your current run.`, isError: true }
+            return { output: `TaskRun ${target.id} is not a direct child of your current run.`, isError: true }
           }
         }
         if (target.currentSessionId !== getSessionId()) {
@@ -547,13 +546,16 @@ export const taskUpdateTool = buildTool({
         isError: true,
       }
     }
-    const target = await getTaskRun(input.runId, owner)
+    // Accept a dispatch-entry id as well as a TaskRun id: the model holds the
+    // dispatch id Dispatch handed it as a first-class handle for the child it
+    // wants to settle. All downstream operations use the resolved `target.id`.
+    const target = await resolveBackingRun(owner, input.runId)
     if (!target) {
       return { output: `TaskRun not found: ${input.runId}`, isError: true }
     }
     if (target.status !== 'delivered') {
       return {
-        output: `TaskRun ${input.runId} is ${target.status}, not delivered. Only delivered runs await a verdict.`,
+        output: `TaskRun ${target.id} is ${target.status}, not delivered. Only delivered runs await a verdict.`,
         isError: true,
       }
     }
@@ -565,7 +567,7 @@ export const taskUpdateTool = buildTool({
       const root = await getTaskRun(target.rootRunId, owner)
       if (!root || (root.kind ?? 'dispatch') !== 'root') {
         return {
-          output: `TaskRun ${input.runId} is not inside one of your rooted task trees.`,
+          output: `TaskRun ${target.id} is not inside one of your rooted task trees.`,
           isError: true,
         }
       }
@@ -573,17 +575,17 @@ export const taskUpdateTool = buildTool({
       const own = getCurrentTaskRunId()
       if (!own || target.parentRunId !== own) {
         return {
-          output: `TaskRun ${input.runId} is not a direct child of your current run; you can only settle runs you dispatched.`,
+          output: `TaskRun ${target.id} is not a direct child of your current run; you can only settle runs you dispatched.`,
           isError: true,
         }
       }
     }
     const settled = input.action === 'accept'
-      ? await acceptTaskRun(input.runId, { byRole }, Date.now(), owner)
-      : await rejectTaskRun(input.runId, { byRole, feedback }, Date.now(), owner)
+      ? await acceptTaskRun(target.id, { byRole }, Date.now(), owner)
+      : await rejectTaskRun(target.id, { byRole, feedback }, Date.now(), owner)
     if (!settled) {
       return {
-        output: `TaskRun ${input.runId} could not be settled (its state changed underneath).`,
+        output: `TaskRun ${target.id} could not be settled (its state changed underneath).`,
         isError: true,
       }
     }
@@ -600,7 +602,7 @@ export const taskUpdateTool = buildTool({
       // Detached on purpose: the rejected run's next shift can take minutes.
       // Awaiting it here would freeze the rejecting caller inside the tool
       // call — the exact shape retiring blocking dispatch removed.
-      scheduleResumeRunWithBlock(owner, input.runId, {
+      scheduleResumeRunWithBlock(owner, target.id, {
         via: 'reject',
         reason: 'your requester rejected your delivery',
         body: [
