@@ -17,7 +17,9 @@ export type TurnCardEntry = {
 
 export const TURN_CARD_MAX_ENTRIES = 20
 export const TURN_CARD_ENTRY_MAX_CHARS = 200
-export const TURN_CARD_PROGRESS_ELEMENT_ID = 'progress:turn'
+// Feishu cardkit element_id must match ^[A-Za-z][A-Za-z0-9_]{0,19}$ (letter
+// start, alnum/underscore, ≤20 chars; no colon — error 300301).
+export const TURN_CARD_PROGRESS_ELEMENT_ID = 'turnprogress'
 
 function formatClock(ts: number): string {
   const d = new Date(ts)

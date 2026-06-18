@@ -15,6 +15,8 @@
 // Real-API behavior (patch path, multiple sibling panels, size limits) is
 // validated by scripts/smoke-feishu-task-card.ts, not by this file.
 
+import { createHash } from 'node:crypto'
+
 import { t } from '../../i18n/index.js'
 import type { LocaleKey } from '../../i18n/locales.js'
 import type { TaskRunStatus, TaskRunUsageTotals } from '../../taskrun/types.js'
@@ -226,8 +228,13 @@ function timelinePanel(
   }
 }
 
+// Feishu cardkit element_id must match ^[A-Za-z][A-Za-z0-9_]{0,19}$ — letter
+// start, alphanumerics/underscore only (NO colon), ≤20 chars (error 300301).
+// runIds carry ':'/'_'/'-' and exceed 20 chars, so derive a short stable id
+// from a hash: 'p' + 16 hex = 17 chars, deterministic so the rendered element
+// and the streamed push (worker-stream) always target the same element.
 export function taskCardProgressElementId(runId: string): string {
-  return `progress:${runId}`
+  return `p${createHash('sha1').update(runId).digest('hex').slice(0, 16)}`
 }
 
 /** Bound a live stream preview to a tail window so a long block does not push
@@ -511,7 +518,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(
         truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
-        'progress:root',
+        taskCardProgressElementId('root'),
       ),
     )
     elements.push(

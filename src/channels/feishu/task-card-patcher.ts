@@ -160,7 +160,16 @@ export function createSenderTaskCardIo(
     async create(target, card) {
       const createLive = sender.createLiveInteractiveCard
       if (sender.supportsCardkitLiveCards?.() && createLive) {
-        return createLive.call(sender, target, card)
+        try {
+          return await createLive.call(sender, target, card)
+        } catch (error) {
+          // A CardKit create failure (API/schema/element-id error) must not
+          // blank the card — degrade to a static im.message card (no live
+          // streaming, but the card still renders + later patches via patch()).
+          process.stderr.write(
+            `[task-card] live card create failed, falling back to static card: ${(error as Error).message}\n`,
+          )
+        }
       }
       if (target.replyAnchorMessageId) {
         // Minimal reply envelope: the sender only reads chatId / threadId /

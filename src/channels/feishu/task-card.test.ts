@@ -111,7 +111,7 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
     element_id: taskCardProgressElementId('run-child-2'),
     content: '正在下载第二篇 PDF',
   })
-  const rootProgressIndex = elements.findIndex(el => (el as any).element_id === 'progress:root')
+  const rootProgressIndex = elements.findIndex(el => (el as any).element_id === taskCardProgressElementId('root'))
   assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
   assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent · 进行中**'))
   assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
@@ -314,5 +314,53 @@ void test('buildTaskCard truncates long text and renders en locale', () => {
     assert.ok(panelTitle(rootPanel as Record<string, unknown>).includes('Task journey (2)'))
   } finally {
     setLang('cn')
+  }
+})
+
+// Regression for Feishu cardkit error 300301: element_id must match
+// ^[A-Za-z][A-Za-z0-9_]{0,19}$ (letter start, alnum/underscore, ≤20, NO colon).
+// The original 'progress:<runId>' / 'progress:turn' ids violated all three and
+// 300301-failed card.create on every live card.
+test('emitted element_ids satisfy Feishu cardkit format (no colon, ≤20, letter-start)', () => {
+  const FORMAT = /^[A-Za-z][A-Za-z0-9_]{0,19}$/
+  for (const runId of [
+    'root',
+    'tr_a3c8eab2-7ac6-4b09-9f12-deadbeefcafe',
+    'user_000076ed-7ac68845',
+    'x'.repeat(80),
+  ]) {
+    const id = taskCardProgressElementId(runId)
+    assert.ok(FORMAT.test(id), `element_id "${id}" for runId "${runId}" must match ${FORMAT}`)
+  }
+
+  const card = buildTaskCard(
+    baseView({
+      children: [
+        {
+          id: 'tr_a3c8eab2-7ac6-4b09-9f12-deadbeefcafe',
+          title: '子任务',
+          role: 'webSearcher',
+          status: 'running',
+          latestProgress: '工作中',
+          timeline: [],
+        },
+      ],
+      rootTimeline: [{ at: TS, text: 'root narration' }],
+    }),
+  )
+  const ids: string[] = []
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return
+    const rec = node as Record<string, unknown>
+    if (typeof rec.element_id === 'string') ids.push(rec.element_id)
+    for (const v of Object.values(rec)) {
+      if (Array.isArray(v)) v.forEach(walk)
+      else if (v && typeof v === 'object') walk(v)
+    }
+  }
+  walk(card)
+  assert.ok(ids.length >= 2, 'card emits progress element_ids (root + child)')
+  for (const id of ids) {
+    assert.ok(FORMAT.test(id), `emitted element_id "${id}" must match ${FORMAT}`)
   }
 })

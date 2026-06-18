@@ -5,7 +5,10 @@ import {
   getTaskCardPipeline,
   setTaskCardPipeline,
 } from '../channels/feishu/task-card-pipeline-registry.js'
-import { TASK_CARD_STREAM_PREVIEW_MAX_CHARS } from '../channels/feishu/task-card.js'
+import {
+  TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
+  taskCardProgressElementId,
+} from '../channels/feishu/task-card.js'
 import type { TaskCardPipeline } from '../channels/feishu/task-card-subscriber.js'
 import { buildWorkerStreamForwarder } from './worker-stream.js'
 
@@ -41,7 +44,7 @@ void describe('worker stream forwarder', () => {
     fwd.onDelta('第二块')
 
     assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第二块'])
-    assert.equal(calls[0]!.elementId, 'progress:tr_child')
+    assert.equal(calls[0]!.elementId, taskCardProgressElementId('tr_child'))
     assert.equal(calls[0]!.rootRunId, 'tr_root')
     assert.equal(calls[0]!.owner, 'alice')
     assert.ok(
