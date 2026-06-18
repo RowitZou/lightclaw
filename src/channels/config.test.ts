@@ -17,6 +17,7 @@ const ENV_KEYS = [
   'LIGHTCLAW_FEISHU_PERMISSION_MODE',
   'LIGHTCLAW_FEISHU_TRANSPORT',
   'LIGHTCLAW_FEISHU_TYPING_REACTION',
+  'LIGHTCLAW_FEISHU_STREAMING_REPLY',
   'LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS',
 ] as const
 const savedEnv: Record<string, string | undefined> = {}
@@ -63,6 +64,7 @@ describe('loadChannelConfig', () => {
     assert.equal(config.feishu.appSecret, 'cli_secret')
     assert.equal(config.feishu.transport, 'webhook')
     assert.equal(config.feishu.requireMention, false)
+    assert.equal(config.feishu.streamingReply, false)
     assert.equal(config.feishu.cloudSpace?.uploadsFolderName, 'Uploads')
   })
 
@@ -101,6 +103,17 @@ describe('loadChannelConfig', () => {
     assert.equal(config.feishu.enabled, false)
     assert.equal(config.feishu.transport, 'ws')
     assert.equal(config.feishu.permissionMode, 'acceptEdits')
+    assert.equal(config.feishu.streamingReply, false)
+  })
+
+  it('reads channels.feishu.streamingReply and allows env override', () => {
+    writeJson('config.json', {
+      channels: { feishu: { enabled: true, streamingReply: true } },
+    })
+    assert.equal(loadChannelConfig().feishu.streamingReply, true)
+
+    process.env.LIGHTCLAW_FEISHU_STREAMING_REPLY = 'false'
+    assert.equal(loadChannelConfig().feishu.streamingReply, false)
   })
 
   it('feishu permissionMode falls back to the top-level config.permissionMode', () => {

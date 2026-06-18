@@ -1983,6 +1983,59 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     const used = await modelUsedForTurn('feishu:dm:oc_modelpref')
     assert.equal(used, 'other')
   })
+
+  it('falls back to whole-message sendReply when streaming reply throws', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    await setAdmin('alice')
+    const strategy = installFakeStrategy('feishu')
+    strategy.sendStreamingReply = async () => {
+      throw new Error('cardkit down')
+    }
+
+    await runSingleTextTurn(new ChannelRunner(strategy), 'feishu:dm:oc_stream_fallback')
+
+    assert.deepEqual(strategy.replies, [
+      { messageId: 'msg-feishu:dm:oc_stream_fallback', text: 'ok' },
+    ])
+  })
+
+  it('does not fall back to whole-message sendReply when streaming reply was aborted', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    await setAdmin('alice')
+    const strategy = installFakeStrategy('feishu')
+    let sawSignal = false
+    strategy.sendStreamingReply = async (_message, _text, options) => {
+      sawSignal = options?.signal instanceof AbortSignal
+      return { aborted: true }
+    }
+
+    await runSingleTextTurn(new ChannelRunner(strategy), 'feishu:dm:oc_stream_abort')
+
+    assert.equal(sawSignal, true)
+    assert.deepEqual(strategy.replies, [])
+  })
+
+  async function runSingleTextTurn(runner: ChannelRunner, sessionId: string): Promise<void> {
+    setStreamChatForTest((async function* (): AsyncGenerator<StreamEvent> {
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'ok' }],
+      }
+    }) as unknown as Parameters<typeof setStreamChatForTest>[0])
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'hello there',
+        sessionId,
+        chatType: 'p2p',
+        chatId: sessionId,
+      }),
+    )
+  }
 })
 
 describe('buildLeftoverReplayMessage reply anchor (topic-group drop fix)', () => {

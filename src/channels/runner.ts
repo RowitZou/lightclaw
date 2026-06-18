@@ -63,6 +63,7 @@ import {
 import {
   abortInFlightForSession,
   didConcludeRootThisTurn,
+  getAbortController,
   getCompactionCount,
   getCurrentUserId,
   getCwd,
@@ -137,6 +138,14 @@ export type ChannelRunnerStrategy = {
     message: NormalizedChannelMessage,
     text: string,
   ): Promise<void>
+  /** Optional streamed reply path. Returns aborted=true when /stop interrupted
+   *  the card stream after the model had already produced text; callers should
+   *  not fall back to a whole-message reply in that case. */
+  sendStreamingReply?(
+    message: NormalizedChannelMessage,
+    text: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ aborted?: boolean } | void>
   /**
    * Send a system feedback message (errors, slash output, pairing welcome,
    * permission ack, etc.). Channels render this distinctly from sendReply —
@@ -1195,11 +1204,12 @@ export class ChannelRunner {
                     return
                   }
                   streamedAtLeastOnce = true
-                  await this.sendReply(
+                  await this.sendAssistantReply(
                     replyTargetMessage,
                     withFinalReplyMention(replyTargetMessage, text, {
                       mentionSynthetic: route === 'standing-chat',
                     }),
+                    getAbortController().signal,
                   )
                   // A chat reply just landed — the user now has a response, so
                   // retire any interjection-ack emoji for this session AND the
@@ -1608,11 +1618,12 @@ export class ChannelRunner {
             concludedRoot: didConcludeRootThisTurn(),
           })
           if (route !== 'card') {
-            await this.sendReply(
+            await this.sendAssistantReply(
               replyTargetMessage,
               withFinalReplyMention(replyTargetMessage, finalText, {
                 mentionSynthetic: route === 'standing-chat',
               }),
+              getAbortController().signal,
             )
             // Single-shot final reply landed — retire the interjection acks AND
             // the typing emoji (same clear-on-reply contract as the streamed
@@ -2119,6 +2130,30 @@ export class ChannelRunner {
       process.stderr.write(
         `${this.strategy.channelId}: send reply failed for message ${message.messageId}: ${detail}\n`,
       )
+    }
+  }
+
+  private async sendAssistantReply(
+    message: NormalizedChannelMessage,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.strategy.sendStreamingReply) {
+      await this.sendReply(message, text)
+      return
+    }
+    try {
+      const result = await this.strategy.sendStreamingReply(message, text, { signal })
+      if (result?.aborted) {
+        return
+      }
+      return
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(
+        `${this.strategy.channelId}: streaming reply failed for message ${message.messageId}; fallback to whole reply: ${detail}\n`,
+      )
+      await this.sendReply(message, text)
     }
   }
 

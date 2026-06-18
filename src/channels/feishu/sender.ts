@@ -27,6 +27,11 @@ import { uploadDriveFile } from './resources/file-upload.js'
 import { isFeishuGroupChatType } from './routing.js'
 import { resolveCurrentFeishuWorkspace } from './workspace/ops.js'
 import { getOrCreateUserUploadsFolder } from './workspace/uploads.js'
+import {
+  buildCardkitCardReferenceContent,
+  CardKitStreamSession,
+  STREAMING_UPDATE_THROTTLE_MS,
+} from './streaming-card.js'
 
 // Topic-group create refusal. Feishu's `im.message.create` does not accept
 // `receive_id_type='thread_id'` — the API rejects with 400 / field
@@ -273,6 +278,37 @@ export class FeishuSender {
         throw err
       }
     }
+  }
+
+  async sendStreamingMarkdownText(
+    message: NormalizedChannelMessage,
+    text: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ aborted: boolean }> {
+    if (text.length > this.config.textChunkSize) {
+      throw new Error(
+        `streaming reply exceeds textChunkSize (${text.length} > ${this.config.textChunkSize})`,
+      )
+    }
+    const session = new CardKitStreamSession({
+      client: this.client,
+      throttleMs: STREAMING_UPDATE_THROTTLE_MS,
+      signal: options.signal,
+      sendCardReference: async (target, cardId) => {
+        const response = await this.sendReplyOrCreate({
+          chatId: target.chatId,
+          replyToMessageId: this.replyTargetFor(target),
+          ...(target.threadId ? { threadId: target.threadId } : {}),
+          msgType: 'interactive',
+          content: buildCardkitCardReferenceContent(cardId),
+          uuid: randomUUID(),
+        })
+        const messageId = response.data?.message_id
+        return messageId ? { messageId } : {}
+      },
+    })
+    const result = await session.streamText(message, text)
+    return { aborted: result.aborted }
   }
 
   async sendInteractiveCard(

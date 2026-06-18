@@ -212,6 +212,10 @@ export type FeishuChannelConfig = {
   // instead of silence. Removed when the query completes or fails. Default
   // on; admins can disable via channels.json or LIGHTCLAW_FEISHU_TYPING_REACTION=false.
   typingReaction: boolean
+  // When true, final assistant replies are sent as CardKit streaming cards
+  // instead of the legacy whole-message markdown card. Default off; failures
+  // fall back to the legacy sendReply path.
+  streamingReply: boolean
   // Hourly mtime sweep over <workspaceRoot>/<canonical>/.lightclaw/inbox/
   // that deletes attachment files older than ttlDays. Hermes-style — no
   // archive, no soft-delete. Disable via inboxAging.enabled = false.

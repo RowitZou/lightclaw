@@ -22,6 +22,7 @@ const config: FeishuChannelConfig = {
   mediaEnabled: true,
   parentFetchTimeoutMs: 8000,
   typingReaction: true,
+  streamingReply: false,
   inboxAging: { enabled: false, ttlDays: 7, intervalMinutes: 60 },
   webhook: { host: '0.0.0.0', port: 18_850, path: '/feishu/events' },
 }

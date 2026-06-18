@@ -101,6 +101,15 @@ export function createFeishuStrategy(
     },
     sendReply: (message: NormalizedChannelMessage, text: string) =>
       sender.sendMarkdownText(message, text),
+    ...(config.streamingReply
+      ? {
+          sendStreamingReply: (
+            message: NormalizedChannelMessage,
+            text: string,
+            options?: { signal?: AbortSignal },
+          ) => sender.sendStreamingMarkdownText(message, text, options),
+        }
+      : {}),
     sendFile: (message, file) => sender.sendFile(message, file),
     sendNotice: async (
       message: NormalizedChannelMessage,
