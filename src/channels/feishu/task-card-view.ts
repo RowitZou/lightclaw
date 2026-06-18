@@ -121,10 +121,14 @@ export async function deriveTaskCardView(
   let directChildren = inTree
     .filter(run => run.parentRunId === root.id)
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-  // A standing service re-fires forever; only the current (latest) child is
-  // a live row, history would pile up without bound.
-  if (root.standing && directChildren.length > 1) {
-    directChildren = directChildren.slice(-1)
+  // A standing service re-fires forever; keep only the two most recent direct
+  // children so history does not pile up without bound. Two (not one) because
+  // the next queued child is created the moment a fire first parks/completes —
+  // with a single row the card would show that fresh "queued" slot and hide
+  // the fire that is still running/just finished. Two rows always covers the
+  // running-or-just-finished fire AND the next queued slot.
+  if (root.standing && directChildren.length > 2) {
+    directChildren = directChildren.slice(-2)
   }
 
   const children: TaskCardChildView[] = []
