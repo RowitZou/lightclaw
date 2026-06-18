@@ -8,6 +8,7 @@ import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
 import type { PairingCardAction } from './pairing-card.js'
 import type { AskUserCardAction } from './askuser-card.js'
+import type { CircuitBreakerCardAction } from './circuit-breaker-card.js'
 import type {
   FeishuCardAction,
   FeishuCardActionResponse,
@@ -100,7 +101,7 @@ export async function startFeishuWsClient(input: {
    */
   onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | PairingCardAction | AskUserCardAction,
+    action: FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -132,7 +133,9 @@ export async function startFeishuWsClient(input: {
           ? action.fireUuid
           : 'applicationToken' in action
             ? action.applicationToken
-            : action.id
+            : 'taskId' in action
+              ? action.taskId
+              : action.id
     process.stderr.write(
       `feishu ws: card action request=${actionId} action=${action.action}\n`,
     )
@@ -236,9 +239,9 @@ export async function startFeishuWsClient(input: {
   }
 }
 
-function normalizeCardAction(
+export function normalizeCardAction(
   data: unknown,
-): FeishuCardAction | PairingCardAction | AskUserCardAction | null {
+): FeishuCardAction | PairingCardAction | AskUserCardAction | CircuitBreakerCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -250,7 +253,8 @@ function normalizeCardAction(
   if (
     value?.kind !== 'lightclaw_permission' &&
     value?.kind !== 'lightclaw_pairing' &&
-    value?.kind !== 'lightclaw_askuser'
+    value?.kind !== 'lightclaw_askuser' &&
+    value?.kind !== 'lightclaw_circuit_breaker'
   ) {
     return null
   }
@@ -306,6 +310,27 @@ function normalizeCardAction(
       id,
       ...(operatorOpenId ? { operatorOpenId } : {}),
       ...(formValue ? { formValue } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
+    }
+  }
+
+  if (value.kind === 'lightclaw_circuit_breaker') {
+    const actionKind =
+      value.action === 'continue' || value.action === 'disable'
+        ? value.action
+        : null
+    const ownerCanonicalUser = stringValue(value.ownerCanonicalUser)
+    const taskId = stringValue(value.taskId)
+    if (!actionKind || !ownerCanonicalUser || !taskId || !operatorOpenId) {
+      return null
+    }
+    const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
+    return {
+      kind: 'lightclaw_circuit_breaker',
+      action: actionKind,
+      ownerCanonicalUser,
+      taskId,
+      operatorOpenId,
       ...(openMessageId ? { openMessageId } : {}),
     }
   }

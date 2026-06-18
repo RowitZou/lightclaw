@@ -38,6 +38,11 @@ import {
   resetResumeScheduleForTest,
   setResumeRunnerForTest,
 } from '../taskrun/resume-schedule.js'
+import {
+  clearCircuitBreakerCardCoordinator,
+  registerCircuitBreakerCardCoordinator,
+  type CircuitBreakerCardCoordinator,
+} from '../channels/feishu/circuit-breaker-card.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -115,6 +120,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
   afterEach(() => {
     setRunBackgroundTaskFireForTest(null)
     resetResumeScheduleForTest()
+    clearCircuitBreakerCardCoordinator()
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
   })
@@ -454,6 +460,12 @@ describe('BackgroundTaskScheduler fire completion', () => {
     const task = fakeTask()
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
+    const cardCalls: Array<{ canonicalUser: string; taskId: string }> = []
+    registerCircuitBreakerCardCoordinator({
+      sendCircuitOpenCard: async (canonicalUser: string, opened: BackgroundTaskEntry) => {
+        cardCalls.push({ canonicalUser, taskId: opened.id })
+      },
+    } as CircuitBreakerCardCoordinator)
     ;(scheduler as unknown as {
       config: { dispatch: { scheduler: { fireRetryMaxAttempts: number; circuitBreakerThreshold: number } } }
     }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1, circuitBreakerThreshold: 3 } } }
@@ -489,6 +501,7 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(loaded.lastFailureKind, 'genuine')
     assert.equal(loaded.lastFailureSummary, 'failed-2')
     assert.equal('fireHistory' in loaded, false)
+    assert.deepEqual(cardCalls, [{ canonicalUser: 'alice', taskId: loaded.id }])
 
     scheduler.notifyTaskChanged('alice', loaded.id)
     const heap = (scheduler as unknown as {

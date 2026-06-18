@@ -126,6 +126,7 @@ export type BackgroundTaskPatch = Partial<
     | 'billingNotifiedAt'
     | 'circuitOpen'
     | 'circuitOpenedAt'
+    | 'circuitPromptedAt'
     | 'lastFailureSummary'
     | 'pendingPriorPromptNotice'
     | 'parentTaskRunId'

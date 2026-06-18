@@ -57,6 +57,7 @@ export type BackgroundTaskEntry = {
   billingNotifiedAt?: string
   circuitOpen?: boolean
   circuitOpenedAt?: string
+  circuitPromptedAt?: string
   lastFailureSummary?: string
   // Set by UpdateSchedule when prompt is changed: holds the prior
   // prompt so the NEXT completion delivery can surface "prompt was changed
@@ -157,6 +158,7 @@ export const backgroundTaskEntrySchema: z.ZodType<BackgroundTaskEntry> = z.objec
   billingNotifiedAt: z.string().optional(),
   circuitOpen: z.boolean().optional(),
   circuitOpenedAt: z.string().optional(),
+  circuitPromptedAt: z.string().optional(),
   lastFailureSummary: z.string().optional(),
   pendingPriorPromptNotice: z.string().optional(),
   originSessionId: z.string().optional(),

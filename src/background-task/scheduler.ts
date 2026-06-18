@@ -26,6 +26,7 @@ import {
   retryAfterMsOf,
   retryDelayMsWithRetryAfter,
 } from '../transient-error.js'
+import { getCircuitBreakerCardCoordinator } from '../channels/feishu/circuit-breaker-card.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
@@ -701,6 +702,7 @@ export class BackgroundTaskScheduler {
         lastFailureKind: undefined,
         circuitOpen: undefined,
         circuitOpenedAt: undefined,
+        circuitPromptedAt: undefined,
         lastFailureSummary: undefined,
       })
       return { latest: updated, circuitOpened: false }
@@ -714,6 +716,7 @@ export class BackgroundTaskScheduler {
         lastFailureKind: failureKind,
         circuitOpen: undefined,
         circuitOpenedAt: undefined,
+        circuitPromptedAt: undefined,
         lastFailureSummary: summary,
         ...(failureKind === 'billing' && !latest.billingNotifiedAt
           ? { billingNotifiedAt: firedAt }
@@ -741,6 +744,25 @@ export class BackgroundTaskScheduler {
       this.rebuildUser(canonicalUser)
     }
     return { latest: updated, circuitOpened: opensCircuit }
+  }
+
+  private async notifyCircuitOpenedBestEffort(
+    canonicalUser: string,
+    task: BackgroundTaskEntry,
+  ): Promise<void> {
+    const coordinator = getCircuitBreakerCardCoordinator()
+    if (!coordinator) {
+      return
+    }
+    try {
+      await coordinator.sendCircuitOpenCard(canonicalUser, task)
+    } catch (error) {
+      process.stderr.write(
+        `[background-task] ${task.id} circuit-open card failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
   }
 
   private async onFireComplete(
@@ -810,6 +832,9 @@ export class BackgroundTaskScheduler {
     const accounting = task.schedule.kind === 'oneshot'
       ? { latest: getBackgroundTask(canonicalUser, task.id), circuitOpened: false }
       : this.recordTerminalFireAccounting(canonicalUser, task, outcome, firedAt)
+    if (accounting.circuitOpened && accounting.latest) {
+      await this.notifyCircuitOpenedBestEffort(canonicalUser, accounting.latest)
+    }
     if (task.schedule.kind === 'oneshot' && outcome.kind === 'success') {
       // Record before pruning so a late TaskUpdate cancel call can tell
       // "already finished" apart from "id never existed" (Bug 7 from

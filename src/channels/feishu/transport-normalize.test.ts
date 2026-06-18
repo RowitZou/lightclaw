@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { normalizeReceiveV1, normalizeRecalledV1 } from './transport-ws.js'
+import { normalizeCardAction, normalizeReceiveV1, normalizeRecalledV1 } from './transport-ws.js'
 import { normalizeEvent, normalizeRecallEvent } from './transport-webhook.js'
 
 const BOT_ID = 'ou_bot'
@@ -191,5 +191,31 @@ describe('recall event normalization', () => {
       event: { message: { message_id: 'm', chat_id: 'c' } },
     })
     assert.equal(result, null)
+  })
+})
+
+describe('card action normalization', () => {
+  it('normalizes circuit-breaker card actions from Feishu callbacks', () => {
+    const result = normalizeCardAction({
+      open_message_id: 'om_card',
+      operator: { operator_id: { open_id: 'ou_alice' } },
+      action: {
+        value: JSON.stringify({
+          kind: 'lightclaw_circuit_breaker',
+          action: 'continue',
+          ownerCanonicalUser: 'alice',
+          taskId: 'task-1',
+        }),
+      },
+    })
+
+    assert.deepEqual(result, {
+      kind: 'lightclaw_circuit_breaker',
+      action: 'continue',
+      ownerCanonicalUser: 'alice',
+      taskId: 'task-1',
+      operatorOpenId: 'ou_alice',
+      openMessageId: 'om_card',
+    })
   })
 })
