@@ -57,6 +57,37 @@ describe('composition journal canary', () => {
     })
   })
 
+  it('does not clobber a superseded body when rolling back', async () => {
+    await withTempHome(async () => {
+      // The live body is neither the pre-rewrite original nor the rewrite we
+      // journaled — a later edit superseded it.
+      await writeSkill('parent-flow', 'A newer hand edit.')
+      await writeSkill('child-flow', 'Child body.')
+      await appendCompositionJournalEntry('alice', {
+        kind: 'compose',
+        skill: 'parent-flow',
+        composedSub: 'child-flow',
+        preBody: 'Original parent body.',
+        postBody: "UseSkill('child-flow')",
+        rewriteAt: '2026-01-01T00:00:00.000Z',
+        status: 'canary',
+        dormantPasses: 0,
+      })
+      // Parent ran, sub did not → the canary would roll back.
+      await recordSkillUsage(
+        path.join(userSkillsRoot('alice'), 'parent-flow', 'SKILL.md'),
+        '2026-01-02T00:00:00.000Z',
+      )
+
+      const result = await processCompositionCanaries('alice', { maxDormantPasses: 10 })
+
+      assert.equal(result.rolledBack, 1)
+      const body = await readFile(path.join(userSkillsRoot('alice'), 'parent-flow', 'SKILL.md'), 'utf8')
+      assert.match(body, /A newer hand edit\./)
+      assert.doesNotMatch(body, /Original parent body\./)
+    })
+  })
+
   it('confirms a compose rewrite when the sub advances', async () => {
     await withTempHome(async () => {
       await writeSkill('parent-flow', "UseSkill('child-flow')")

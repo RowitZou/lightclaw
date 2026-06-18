@@ -151,7 +151,7 @@ export async function processCompositionCanaries(
         maxDormantPasses,
         lastUsed,
         onRollback: async () => {
-          await restoreSkillBody(userId, entry.skill, entry.preBody)
+          await restoreSkillBody(userId, entry.skill, entry.preBody, entry.postBody)
         },
       })
       confirmed += next.delta.confirmed
@@ -175,7 +175,7 @@ export async function processCompositionCanaries(
         maxDormantPasses,
         lastUsed,
         onRollback: async () => {
-          await restoreSkillBody(userId, parent.name, parent.preBody)
+          await restoreSkillBody(userId, parent.name, parent.preBody, parent.postBody)
         },
       })
       confirmed += next.delta.confirmed
@@ -253,12 +253,23 @@ function isAfter(value: string | undefined, baseline: string): boolean {
   return Number.isFinite(parsed) && Number.isFinite(base) && parsed > base
 }
 
-async function restoreSkillBody(userId: string, name: string, preBody: string): Promise<void> {
+async function restoreSkillBody(
+  userId: string,
+  name: string,
+  preBody: string,
+  postBody: string,
+): Promise<void> {
   const skillFile = path.join(userSkillsRoot(userId), normalizeSkillName(name), 'SKILL.md')
   const raw = await readFile(skillFile, 'utf8')
   const parsed = parseFrontmatter(raw)
+  const currentBody = parsed.body.trim()
+  // Already at the pre-rewrite body — nothing to restore.
+  if (currentBody === preBody.trim()) return
+  // Only roll back when the rewrite we journaled is still in place. If a later
+  // pass (or any other writer) has since changed the body, restoring preBody
+  // would clobber that newer edit — leave it and let the next signal decide.
+  if (currentBody !== postBody.trim()) return
   const next = `${renderFrontmatter(raw)}\n${preBody.trimEnd()}\n`
-  if (parsed.body.trimEnd() === preBody.trimEnd()) return
   await writeFile(skillFile, next, { encoding: 'utf8', mode: 0o600 })
 }
 
