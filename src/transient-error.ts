@@ -42,6 +42,9 @@ export const ABORT_FAILURE_PATTERN = /Request was aborted/i
 // request just fails again, so they are never retried.
 const FATAL_HTTP_STATUS = new Set([400, 401, 403, 404, 405, 413, 422])
 
+const FATAL_5XX_REQUEST_VALIDATION_PATTERN =
+  /invalid_request_error|unknown parameter|invalid parameter/i
+
 // Node / OS socket error codes meaning "the connection broke" — a transient
 // network blip when the endpoint was working moments earlier.
 const TRANSIENT_ERROR_CODES = new Set([
@@ -355,6 +358,12 @@ export function isTransientError(error: unknown): boolean {
         return hasQuotaSelfHealSignal(error)
       }
       if (FATAL_HTTP_STATUS.has(status)) {
+        return false
+      }
+      if (
+        (status === 500 || status === 502) &&
+        FATAL_5XX_REQUEST_VALIDATION_PATTERN.test(errorDetailText(error))
+      ) {
         return false
       }
       if (status === 408 || status === 429 || status >= 500) {

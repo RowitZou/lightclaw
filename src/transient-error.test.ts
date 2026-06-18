@@ -131,6 +131,41 @@ describe('isTransientError', () => {
     assert.equal(isTransientError(new Error('prompt is too long: 250000 tokens')), false)
   })
 
+  it('classifies deterministic 5xx request validation errors as fatal', () => {
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 500'), {
+        status: 500,
+        error: {
+          type: 'invalid_request_error',
+          message: 'Unknown parameter: max_completion_tokens',
+        },
+      })),
+      false,
+    )
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 502'), {
+        status: 502,
+        response: {
+          data: {
+            error: {
+              message: 'Invalid parameter: tools[0].function.parameters',
+            },
+          },
+        },
+      })),
+      false,
+    )
+    assert.equal(isTransientError(Object.assign(new Error('upstream exploded'), { status: 500 })), true)
+  })
+
+  it('classifies provider overloaded errors as transient', () => {
+    assert.equal(isTransientError(Object.assign(new Error('overloaded'), { status: 529 })), true)
+    assert.equal(
+      isTransientError(new Error('event: error\ndata: {"type":"overloaded_error"}')),
+      true,
+    )
+  })
+
   it('recognizes context-window overflow across provider phrasings', () => {
     // OpenAI / codex (2026-05-30 dogfood gpt-codex-mid double-overflow).
     assert.equal(
