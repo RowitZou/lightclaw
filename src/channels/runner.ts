@@ -427,6 +427,26 @@ export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
  * User turns and rootless wakes always 'chat'. Exported for regression
  * coverage.
  */
+/**
+ * A drained interjection batch warrants routing the turn's final reply to chat
+ * ONLY when it contains a genuine user message. This keys on the framework-vs-
+ * user CLASS via `isSyntheticInterjection`, not on any single delivery kind:
+ * EVERY framework-minted delivery is synthetic or `source:'background-task'` —
+ * bg-result, the resume.ts child-join block, watchdog reconcile, taskrun-ask,
+ * worker-reply, background-exec-result. A turn that drained only those is the
+ * manager processing delegated work, whose narration folds onto the task card
+ * (rooted); the user is not being answered. Treating any drain as "answering
+ * the user" spammed one chat bubble per child that completed mid-turn
+ * (2026-06-18 dogfood: 8-child join → "已验收 1/2/3/4/6" intermediate bubble).
+ * Real user interjections are `source:'user'`/undefined AND not synthetic.
+ * Exported for regression coverage.
+ */
+export function drainedInterjectionsAnswerUser(
+  entries: Pick<InterjectionEntry, 'synthetic' | 'source'>[],
+): boolean {
+  return entries.some(entry => !isSyntheticInterjection(entry))
+}
+
 export async function routeSyntheticBlock(
   message: NormalizedChannelMessage,
   text: string,
@@ -1257,9 +1277,16 @@ export class ChannelRunner {
                   if (drained.length === 0) {
                     return drained
                   }
-                  // This handling is now answering the user — route its final
-                  // synthetic-wake block to chat (see queryHadInterjection decl).
-                  queryHadInterjection = true
+                  // Route this handling's final synthetic-wake block to chat
+                  // ONLY when a genuine user message drained — not for framework
+                  // deliveries (bg-result / resume / reconcile / ask / reply),
+                  // which fold onto the task card. See queryHadInterjection decl
+                  // + drainedInterjectionsAnswerUser (keys on the class, not one
+                  // delivery kind). Still materialize + record ALL drained
+                  // entries below so the model sees the framework block.
+                  if (drainedInterjectionsAnswerUser(drained)) {
+                    queryHadInterjection = true
+                  }
                   // Record drained entries so a transient retry path can
                   // requeue them at the head of the queue before
                   // rewriteTranscript wipes the user message that holds

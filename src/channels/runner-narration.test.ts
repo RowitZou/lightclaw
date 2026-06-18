@@ -12,7 +12,7 @@ import {
   markFinished,
 } from '../taskrun/store.js'
 import { makeFakeFeishuMessage } from '../__tests__/concurrency-helpers.js'
-import { routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
+import { drainedInterjectionsAnswerUser, routeSyntheticBlock, routeSyntheticNarration } from './runner.js'
 import type { NormalizedChannelMessage } from './types.js'
 
 let home: string
@@ -25,6 +25,40 @@ beforeEach(() => {
 afterEach(() => {
   setLightclawHomeOverride(undefined)
   rmSync(home, { recursive: true, force: true })
+})
+
+void describe('drainedInterjectionsAnswerUser (framework-vs-user chat routing)', () => {
+  // The whole CLASS of framework deliveries — every variety must be excluded so
+  // a turn that drained only these folds onto the task card instead of spamming
+  // chat (2026-06-18 dogfood: 8-child join's intermediate "已验收 1/2/3/4/6").
+  const frameworkVarieties = [
+    { synthetic: true, source: 'background-task' as const }, // bg-result / reconcile / resume.ts:88 child-join block / background-exec
+    { synthetic: true, source: 'user' as const }, // taskrun-ask / worker-reply (source:'user' yet synthetic)
+  ]
+  for (const entry of frameworkVarieties) {
+    it(`a framework-only batch (synthetic=${entry.synthetic}, source=${entry.source}) does NOT answer the user`, () => {
+      assert.equal(drainedInterjectionsAnswerUser([entry]), false)
+    })
+  }
+
+  it('a genuine user interjection (not synthetic) answers the user', () => {
+    assert.equal(drainedInterjectionsAnswerUser([{ synthetic: false, source: 'user' }]), true)
+    assert.equal(drainedInterjectionsAnswerUser([{ source: 'user' }]), true) // synthetic undefined
+  })
+
+  it('a mixed batch answers the user as soon as one real user message is present', () => {
+    assert.equal(
+      drainedInterjectionsAnswerUser([
+        { synthetic: true, source: 'background-task' },
+        { synthetic: false, source: 'user' },
+      ]),
+      true,
+    )
+  })
+
+  it('an empty batch does not answer the user', () => {
+    assert.equal(drainedInterjectionsAnswerUser([]), false)
+  })
 })
 
 void describe('routeSyntheticNarration (PR22 noise reduction)', () => {
