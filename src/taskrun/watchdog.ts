@@ -514,7 +514,21 @@ async function executeDueWakesBestEffort(
       }
       if (wake.kind === 'child-join') {
         const child = runById.get(wake.runId)
-        const childSettled = !child || child.status === 'delivered' || isTerminal(child.status)
+        if (!child) {
+          // The wake names a run we cannot resolve in the ledger (a stale
+          // dispatch-entry id stored before child-join id-resolution, or an id
+          // that never mapped to a TaskRun). Do NOT fabricate a
+          // "finished / (no outcome recorded)" resume from this — that wakes
+          // the parent with an empty result while its real child may still be
+          // running. Surface it as a dead-wake-source finding so the parent /
+          // main can settle it (message the child or cancel the wait). A child
+          // that genuinely settled is still in `runById` while its parent waits
+          // — the tree-has-a-non-terminal-run rule keeps it un-swept — so a
+          // missing lookup means a broken id, never a legitimately-gone child.
+          failed.add(run.id)
+          continue
+        }
+        const childSettled = child.status === 'delivered' || isTerminal(child.status)
         if (childSettled) {
           scheduleResumeRunWithBlock(ownerCanonicalUser, run.id, {
             via: 'child-join',

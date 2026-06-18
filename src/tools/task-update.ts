@@ -87,6 +87,23 @@ function findBackingDispatches(owner: string, runId: string): BackgroundTaskEntr
   )
 }
 
+/** A child-join wake is matched by TaskRun id (`tr_...`) on BOTH ends: the
+ *  child's turn-end wake (`wakeParentForChildJoinBestEffort`) compares against
+ *  `child.id`, and the watchdog due-wake reconcile looks the child up by
+ *  `runById.get(wake.runId)`. But `Dispatch` hands the caller a dispatch-entry
+ *  id (`<user>-<short>`), so a worker that waits on the id it was just handed
+ *  registers a wake no consumer can ever match — the real child delivery can't
+ *  resume it, and the watchdog then treats the unresolvable child as
+ *  "settled/missing" and resumes the parent with an empty result. Resolve a
+ *  dispatch-entry id to its backing run here, mirroring `resolveCancelTarget`,
+ *  so the stored wake is always keyed the way both consumers read it. A value
+ *  that already is a TaskRun id (or resolves to nothing) is left untouched. */
+async function resolveChildJoinWakeRunId(owner: string, idOrDispatchId: string): Promise<string> {
+  if (await getTaskRun(idOrDispatchId, owner)) return idOrDispatchId
+  const entry = getBackgroundTask(owner, idOrDispatchId)
+  return entry?.taskRunId ?? entry?.standingRootRunId ?? idOrDispatchId
+}
+
 async function resolveCancelTarget(
   owner: string,
   runIdOrDispatchId: string,
@@ -331,7 +348,7 @@ export const taskUpdateTool = buildTool({
       }
       await appendCheckpoint(own, checkpoint, Date.now(), owner)
       const wake = input.wake.kind === 'child-join'
-        ? { kind: 'child-join' as const, runId: input.wake.runId }
+        ? { kind: 'child-join' as const, runId: await resolveChildJoinWakeRunId(owner, input.wake.runId) }
         : { kind: 'timer' as const, at: Date.now() + input.wake.afterMinutes * 60_000 }
       const waitingRun = await markWaiting(
         own,
