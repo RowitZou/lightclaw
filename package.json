@@ -18,7 +18,7 @@
     "pretypecheck": "pnpm gen:skills",
     "typecheck": "tsc --noEmit",
     "pretest": "pnpm gen:skills",
-    "test": "tsx --test $(find src -name '*.test.ts')"
+    "test": "tsx --test --test-concurrency=16 $(find src -name '*.test.ts')"
   },
   "engines": {
     "node": ">=22.0.0"
