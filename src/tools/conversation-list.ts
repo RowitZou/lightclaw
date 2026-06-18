@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
-import { channelFromSessionId, listOwnedSessions } from './_session-helpers.js'
+import { channelFromSessionId, listOwnedSessionMetas } from './_session-helpers.js'
 
 export const conversationListTool = buildTool({
   name: 'ConversationList',
@@ -25,19 +25,19 @@ Pair with ConversationGrep (content search) and ConversationRead (slice fetch).`
   async call(input) {
     const userId = requireCurrentUserId()
     const cutoff = input.daysBack ? Date.now() - input.daysBack * 24 * 60 * 60 * 1000 : 0
-    const sessions = (await listOwnedSessions(userId))
-      .filter(session => !input.channel || channelFromSessionId(session.meta.sessionId) === input.channel)
-      .filter(session => session.meta.lastActiveAt >= cutoff)
+    const sessions = (await listOwnedSessionMetas(userId))
+      .filter(meta => !input.channel || channelFromSessionId(meta.sessionId) === input.channel)
+      .filter(meta => meta.lastActiveAt >= cutoff)
     if (sessions.length === 0) {
       return { output: 'No conversations found for the current user.' }
     }
     return {
       output: sessions
-        .map(session => [
-          session.meta.sessionId,
-          `channel=${channelFromSessionId(session.meta.sessionId)}`,
-          `lastActive=${new Date(session.meta.lastActiveAt).toISOString()}`,
-          `messages=${session.meta.messageCount}`,
+        .map(meta => [
+          meta.sessionId,
+          `channel=${channelFromSessionId(meta.sessionId)}`,
+          `lastActive=${new Date(meta.lastActiveAt).toISOString()}`,
+          `messages=${meta.messageCount}`,
         ].join('  '))
         .join('\n'),
     }

@@ -2,11 +2,7 @@ import { z } from 'zod'
 
 import { requireCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
-import {
-  channelFromSessionId,
-  listOwnedSessions,
-  messageToSearchText,
-} from './_session-helpers.js'
+import { searchOwnedSessions } from './_session-helpers.js'
 
 export const conversationGrepTool = buildTool({
   name: 'ConversationGrep',
@@ -29,26 +25,12 @@ Scope: this user only (canonical identity). Other users' conversations are not v
   }),
   async call(input) {
     const userId = requireCurrentUserId()
-    const needle = input.query.toLowerCase()
-    const cutoff = input.daysBack ? Date.now() - input.daysBack * 24 * 60 * 60 * 1000 : 0
-    const lines: string[] = []
-    for (const session of await listOwnedSessions(userId)) {
-      if (input.channel && channelFromSessionId(session.meta.sessionId) !== input.channel) {
-        continue
-      }
-      if (session.meta.lastActiveAt < cutoff) {
-        continue
-      }
-      session.messages.forEach((message, index) => {
-        const text = messageToSearchText(message)
-        if (text.toLowerCase().includes(needle)) {
-          lines.push(`${session.meta.sessionId}:${index}: ${text.replace(/\s+/g, ' ').slice(0, 240)}`)
-        }
-      })
-      if (lines.length >= 50) {
-        break
-      }
-    }
+    const lines = await searchOwnedSessions(userId, {
+      query: input.query,
+      channel: input.channel,
+      daysBack: input.daysBack,
+      limit: 50,
+    })
     return {
       output: lines.length > 0 ? lines.join('\n') : 'No matching conversation text found.',
     }

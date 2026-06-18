@@ -18,8 +18,59 @@ import {
 import type { Message, SessionMeta } from '../types.js'
 import type { TodoItem } from '../types.js'
 
-function getTranscriptPath(sessionId: string): string {
+export function getTranscriptPath(sessionId: string): string {
   return path.join(getSessionDir(sessionId), 'transcript.jsonl')
+}
+
+/**
+ * Parse a single transcript JSONL line into a `Message`, or `null` when the
+ * line is blank, malformed, a non-Message marker (e.g. the
+ * `{kind:'fork-transcript-meta',...}` first line of a fork transcript), or a
+ * degenerate empty-content assistant message. This is the single source of
+ * truth for "which JSONL lines count as messages" — `loadTranscriptFile`
+ * (full load) and the streaming `ConversationGrep` searcher both go through
+ * it, so a grep hit's message index matches the index a later
+ * `ConversationRead` slice would see.
+ */
+export function parseTranscriptLine(line: string): Message | null {
+  const trimmed = line.trim()
+  if (trimmed.length === 0) {
+    return null
+  }
+  let message: Message
+  try {
+    message = JSON.parse(trimmed) as Message
+  } catch {
+    return null
+  }
+  // Skip non-Message JSONL lines (e.g. fork transcript meta markers written
+  // by fork-transcript.ts:persistForkTranscript). The marker shape is
+  // `{kind:'fork-transcript-meta',...}` and has no `type` field, so it would
+  // otherwise leak into the messages array as a malformed entry and crash
+  // downstream consumers (messageToText, compact, etc.).
+  if (
+    message === null ||
+    typeof message !== 'object' ||
+    (message.type !== 'user' &&
+      message.type !== 'assistant' &&
+      message.type !== 'system')
+  ) {
+    return null
+  }
+  // Skip degenerate empty-content assistant messages persisted by an older
+  // build (or a future provider hiccup that slipped through): Anthropic 400s
+  // when the conversation history contains an assistant turn with
+  // content: [], which then cascades into every subsequent turn returning
+  // empty too. Dropping them is safe — they carry no information and the
+  // user-facing turn count is unchanged.
+  if (
+    message.type === 'assistant' &&
+    Array.isArray(message.message.content) &&
+    message.message.content.length === 0
+  ) {
+    return null
+  }
+  return message
 }
 
 function getMetaPath(sessionId: string): string {
@@ -76,46 +127,9 @@ export async function loadTranscriptFile(filePath: string): Promise<Message[]> {
     const raw = await readFile(filePath, 'utf8')
     const messages: Message[] = []
     for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (trimmed.length === 0) {
-        continue
-      }
-
-      try {
-        const message = JSON.parse(trimmed) as Message
-        // Skip non-Message JSONL lines (e.g. fork transcript meta markers
-        // written by fork-transcript.ts:persistForkTranscript). The marker
-        // shape is `{kind:'fork-transcript-meta',...}` and has no `type`
-        // field, so it would otherwise leak into the messages array as a
-        // malformed entry and crash downstream consumers (messageToText,
-        // compact, etc.). loadTranscriptFile is shared between fork
-        // transcripts (parseForkTranscriptFile honors the marker) and main
-        // transcripts (no marker), so the guard is defense-in-depth.
-        if (
-          message === null ||
-          typeof message !== 'object' ||
-          (message.type !== 'user' &&
-            message.type !== 'assistant' &&
-            message.type !== 'system')
-        ) {
-          continue
-        }
-        // Skip degenerate empty-content assistant messages persisted by an
-        // older build (or a future provider hiccup that slipped through):
-        // Anthropic 400s when the conversation history contains an assistant
-        // turn with content: [], which then cascades into every subsequent
-        // turn returning empty too. Dropping them is safe — they carry no
-        // information and the user-facing turn count is unchanged.
-        if (
-          message.type === 'assistant' &&
-          Array.isArray(message.message.content) &&
-          message.message.content.length === 0
-        ) {
-          continue
-        }
+      const message = parseTranscriptLine(line)
+      if (message !== null) {
         messages.push(message)
-      } catch {
-        continue
       }
     }
 
