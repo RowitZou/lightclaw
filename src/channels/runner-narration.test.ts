@@ -111,7 +111,9 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
     // This is the reported-bug regression. The agent delivers the root (root
     // → terminal) and THEN streams its synthesis as the final block. Before
     // final-text-delivery that block routed to 'card' (appendProgress, sliced
-    // to 200 chars) and the user only ever saw the short deliver summary.
+    // to 200 chars) and the user only ever saw the short deliver summary. The
+    // deliver this turn sets concludedRoot — that disposition signal, not the
+    // root's terminal status, is what now routes the closing block to chat.
     const root = await createRootTaskRun('alice', 'feishu:group:oc_g:ou_a', { objective: 'spacex+tesla' })
     const message = syntheticFor(root.id)
     // interim narration before the deliver still belongs on the card
@@ -120,9 +122,9 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
     await markFinished(root.id, { ok: true, summary: '已交付' }, Date.now(), 'alice')
     // the closing synthesis block is the conclusion → chat (@ the user in a group)
     assert.equal(
-      await routeSyntheticBlock(message, '# 一、SpaceX 最新上市新闻 …（6000 字投研笔记）', true),
+      await routeSyntheticBlock(message, '# 一、SpaceX 最新上市新闻 …（6000 字投研笔记）', true, { concludedRoot: true }),
       'standing-chat',
-      'a finite root the wake just drove terminal: the closing block is the deliverable and goes to chat in full',
+      'a finite root the wake just drove terminal via deliver: the closing block is the deliverable and goes to chat in full',
     )
     // and it must NOT also be appended to the card timeline (only the interim was)
     assert.equal(
@@ -132,7 +134,14 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
     )
   })
 
-  void it('standing root: interim stays on the card, the final report goes to chat', async () => {
+  void it('standing root: interim AND a no-disposition closing block BOTH stay on the card', async () => {
+    // The 2026-06-18 daily-briefing flood. A recurring service's every wake —
+    // bg-result, child-join, watchdog reconcile, worker relay — resolves its
+    // card-root to the standing root, so the old `meta.standing === true`
+    // branch routed EVERY wake's closing block to chat. Intermediate narration
+    // ("still waiting for the doc", "fixed a stuck wait", "asked the bg run to
+    // deliver") flooded the user. A standing wake's closing block with no
+    // disposition is now carded like any other interim status.
     const root = await createStandingRootTaskRun('alice', {
       objective: '每日拉取并分析更新',
       role: 'coder',
@@ -143,15 +152,36 @@ void describe('routeSyntheticBlock (final-text-delivery ruling)', () => {
     const message = syntheticFor(root.id)
     assert.equal(await routeSyntheticBlock(message, '正在验收本次 fire', false), 'card')
     assert.equal(
-      await routeSyntheticBlock(message, '今日更新日报如下：…', true),
-      'standing-chat',
-      'a standing service never settles — each fire\'s report is the only user outlet',
+      await routeSyntheticBlock(message, '飞书专员还在创建简报文档，等它返回 URL 我再汇总', true),
+      'card',
+      'a standing wake closing on pure status — no deliver/accept this turn — folds onto the card, not the chat',
     )
     assert.equal(
       await progressCount(root.id),
-      1,
-      'the final report must NOT be duplicated onto the card timeline',
+      2,
+      'both the interim and the no-disposition closing block were carded',
     )
+  })
+
+  void it('standing root: the per-fire report reaches chat once main ACCEPTS the fire', async () => {
+    // The scheduler auto-delivers each standing fire, so main settles it with
+    // TaskUpdate accept (not deliver). Accept sets concludedRoot, so the
+    // report main writes that same turn routes to chat — this is the genuine
+    // daily-briefing outlet the flood fix must preserve.
+    const root = await createStandingRootTaskRun('alice', {
+      objective: '每日拉取并分析更新',
+      role: 'coder',
+      callerRole: 'main',
+      callerSessionId: 'feishu:group:oc_g:ou_a',
+      chainId: 'chain-test',
+    })
+    const message = syntheticFor(root.id)
+    assert.equal(
+      await routeSyntheticBlock(message, '已结清：今日三仓库更新简报如下：…', true, { concludedRoot: true }),
+      'standing-chat',
+      'the report main writes the turn it accepts/delivers the fire reaches chat',
+    )
+    assert.equal(await progressCount(root.id), 0)
   })
 
   void it('finite root still running, but this handling ANSWERED A USER INTERJECTION: final block → chat', async () => {

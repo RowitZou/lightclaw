@@ -8,7 +8,7 @@ import type { Role } from '../agents/types.js'
 import { isToolVisibleToRole } from '../agents/role-tool-gate.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
-import { setAbortControllerForSession } from '../state.js'
+import { didConcludeRootThisTurn, setAbortControllerForSession } from '../state.js'
 import { addBackgroundTask, getBackgroundTask } from '../background-task/store.js'
 import {
   drainScheduledResumesForTest,
@@ -593,6 +593,42 @@ test('settling a fire of a live standing service leaves the root open', async ()
   assert.equal(accepted.isError, undefined)
   assert.equal((await getTaskRun(fire.id, 'alice'))?.status, 'done')
   assert.equal((await getTaskRun(root.id, 'alice'))?.status, 'running')
+})
+
+test('accepting a standing fire flags concludedRoot so its report routes to chat', async () => {
+  // The routeSyntheticBlock flood fix: a standing service auto-delivers each
+  // fire, main accepts it, and that accept must set the user-facing
+  // disposition signal — otherwise main's per-fire report gets carded and the
+  // user never sees the daily briefing (2026-06-18 dogfood).
+  const root = await standingRoot()
+  const fire = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  await markDelivered(fire.id, { ok: true, summary: 'a fire' }, Date.now(), 'alice')
+
+  const flagged = await runAsMain(async () => {
+    assert.equal(didConcludeRootThisTurn(), false, 'no disposition before accept')
+    const accepted = await taskUpdateTool.call({ action: 'accept', runId: fire.id }, toolContext())
+    assert.equal(accepted.isError, undefined)
+    return didConcludeRootThisTurn()
+  })
+  assert.equal(flagged, true, 'accept set the user-facing disposition signal')
+})
+
+test('rejecting a delivered run does NOT flag concludedRoot', async () => {
+  // Reject sends work back (the run stays running, the worker resumes); it is
+  // not main concluding a result for the user, so it must not route to chat.
+  const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
+  const child = await startedRun({ callerRole: 'coder', parentRunId: workerRun.id })
+  await markDelivered(child.id, { ok: true, summary: 'draft' }, Date.now(), 'alice')
+
+  const flagged = await runAsWorker(workerRun.id, async () => {
+    const rejected = await taskUpdateTool.call(
+      { action: 'reject', runId: child.id, feedback: 'tighten section 2' },
+      toolContext(),
+    )
+    assert.equal(rejected.isError, undefined)
+    return didConcludeRootThisTurn()
+  })
+  assert.equal(flagged, false, 'reject is not a user-facing conclusion')
 })
 
 async function standingRoot() {

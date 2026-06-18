@@ -4,8 +4,7 @@ import path from 'node:path'
 import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { type TaskCardTarget } from './feishu/task-card-patcher.js'
-import { TASK_RUN_TERMINAL_STATUSES } from './feishu/task-card.js'
-import { appendProgress, getTaskRun } from '../taskrun/store.js'
+import { appendProgress } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
@@ -383,58 +382,38 @@ export async function routeSyntheticNarration(
   }
 }
 
-/** True when this synthetic wake's FINAL block is a conclusion, not interim
- *  narration: the root is a standing service (recurring/interval, never
- *  settles — each fire's closing block is its only report) OR a finite root
- *  this wake just drove to a terminal state (the deliver landed before the
- *  closing prose, so the block is the synthesis of finished work). A finite
- *  root still running returns false — the card keeps its intermediate
- *  blocks. Lookup failures count as not-concluding — the card path is the
- *  safe default. */
-async function isConcludingWake(message: NormalizedChannelMessage): Promise<boolean> {
-  if (!message.synthetic || !message.taskCardRoot) return false
-  try {
-    const meta = await getTaskRun(
-      message.taskCardRoot.rootRunId,
-      message.taskCardRoot.owner,
-    )
-    if (!meta) return false
-    return meta.standing === true || TASK_RUN_TERMINAL_STATUSES.has(meta.status)
-  } catch (error) {
-    process.stderr.write(
-      `[task-card] concluding-wake lookup failed for ${message.taskCardRoot.rootRunId}: ${(error as Error).message}\n`,
-    )
-    return false
-  }
-}
-
 export type SyntheticBlockRoute = 'card' | 'chat' | 'standing-chat'
 
 /**
  * Where one assistant block of a synthetic wake goes. Interim narration (a
  * non-final text+tool turn) stays on the root card's timeline. The FINAL block
  * (an end_turn text — the agent finished this handling) goes out as a real
- * chat message ('standing-chat', @ the user in groups) when it is USER-FACING:
- * this handling produced something the user should see, not bookkeeping. Four
- * signals, OR'd into one predicate — each is additive (only ever routes MORE
- * to chat, never less), so adding a future signal can never silence an
- * existing one:
+ * chat message ('standing-chat', @ the user in groups) only when it is
+ * USER-FACING: this handling produced something the user should see, not
+ * bookkeeping. Three signals, OR'd into one predicate — each is additive (only
+ * ever routes MORE to chat, never less), so adding a future signal can never
+ * silence an existing one:
  *  - `userFacingWake` — the wake itself carries a worker's upward ask/reply
  *    the user is waiting on (idle-wake path; the in-flight path is the
  *    `hadInterjection` signal, since such a wake drains as an interjection),
  *  - `hadInterjection` — this handling drained queued interjections (the agent
  *    is answering the user),
- *  - `concludedRoot` — this handling concluded a task (`TaskUpdate deliver` —
- *    an incremental delivery, even while the wake's own root stays open),
- *  - `isConcludingWake` — the wake's own root is a standing-service per-fire
- *    report or already terminal (the expensive disk lookup; checked last so
- *    the cheap in-memory flags short-circuit it).
- * The first three close gaps `isConcludingWake` alone left: it keyed routing
- * off the WAKE's root being terminal, so worker relays, incremental
- * deliveries, and interjection answers written while roots were still open got
- * carded and silenced (high-intensity multi-task dogfood 2026-06-13; worker
- * upward-reply relay 2026-06-17). User turns and rootless wakes always 'chat'.
- * Exported for regression coverage.
+ *  - `concludedRoot` — this handling took a disposition on a run: a `TaskUpdate
+ *    deliver` (close / incremental delivery) OR a `TaskUpdate accept` (settling
+ *    a delivered run, including a standing service's auto-delivered per-fire
+ *    result). Both mean "main acted on a result the user should hear about."
+ * The disposition signal replaced a former `isConcludingWake` disk lookup that
+ * routed to chat whenever the wake's root was a standing service OR already
+ * terminal. That blanket was too loose: for a recurring service every wake
+ * (bg-result, child-join, watchdog reconcile, worker relay) resolves its
+ * card-root to the standing root, so EVERY wake's closing block hit chat —
+ * intermediate "still waiting" / "fixed a stuck wait" / "asked the bg run to
+ * deliver" narration flooded the user (2026-06-18 daily-briefing dogfood: five
+ * messages where only the final accept was a real report). Now a standing
+ * service's report reaches chat exactly when main delivers/accepts its fire;
+ * pure narration with no disposition folds onto the card like a finite root.
+ * User turns and rootless wakes always 'chat'. Exported for regression
+ * coverage.
  */
 export async function routeSyntheticBlock(
   message: NormalizedChannelMessage,
@@ -446,8 +425,7 @@ export async function routeSyntheticBlock(
     isFinal &&
     (message.userFacingWake === true ||
       opts?.hadInterjection === true ||
-      opts?.concludedRoot === true ||
-      (await isConcludingWake(message)))
+      opts?.concludedRoot === true)
   if (userFacingFinal) {
     return 'standing-chat'
   }

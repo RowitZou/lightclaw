@@ -587,6 +587,15 @@ export const taskUpdateTool = buildTool({
         isError: true,
       }
     }
+    if (input.action === 'accept') {
+      // Accepting a delivered run is main acting on a result — a user-facing
+      // disposition, the same chat-routing signal as deliver. This is what lets
+      // a standing service's per-fire report reach the user: the scheduler
+      // auto-delivers each fire, so main settles it with accept (not deliver),
+      // and routeSyntheticBlock routes that wake's final block to chat on this
+      // signal instead of on the wake's root being standing.
+      markConcludedRootThisTurn()
+    }
     if (input.action === 'reject') {
       // Detached on purpose: the rejected run's next shift can take minutes.
       // Awaiting it here would freeze the rejecting caller inside the tool
