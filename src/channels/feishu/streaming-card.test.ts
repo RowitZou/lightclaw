@@ -10,6 +10,7 @@ import {
   buildStreamingReplyCard,
   CardKitStreamSession,
   mergeStreamingText,
+  STREAMING_MAX_PUSHES,
 } from './streaming-card.js'
 
 const message: NormalizedChannelMessage = {
@@ -146,6 +147,63 @@ test('CardKitStreamSession stops pushing on abort and closes accumulated text', 
   assert.deepEqual(pushed, ['a'])
   assert.deepEqual(closed, ['a'])
   assert.equal(result.aborted, true)
+})
+
+test('buildStreamingFlushSnapshots caps push count for long and boundary-heavy text', () => {
+  const long = 'a'.repeat(4000)
+  const longSnaps = buildStreamingFlushSnapshots(long)
+  assert.ok(longSnaps.length <= STREAMING_MAX_PUSHES, `expected <= ${STREAMING_MAX_PUSHES}, got ${longSnaps.length}`)
+  assert.equal(longSnaps[longSnaps.length - 1], long) // final full text always kept
+  for (let i = 1; i < longSnaps.length; i += 1) {
+    assert.ok(longSnaps[i]!.length > longSnaps[i - 1]!.length)
+    assert.ok(longSnaps[i]!.startsWith(longSnaps[i - 1]!))
+  }
+
+  const boundaryHeavy = Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n')
+  const heavySnaps = buildStreamingFlushSnapshots(boundaryHeavy)
+  assert.ok(heavySnaps.length <= STREAMING_MAX_PUSHES, `expected <= ${STREAMING_MAX_PUSHES}, got ${heavySnaps.length}`)
+  assert.equal(heavySnaps[heavySnaps.length - 1], boundaryHeavy)
+})
+
+test('CardKitStreamSession completes the card in place on a mid-stream push failure (no throw)', async () => {
+  const full = 'a'.repeat(50)
+  let calls = 0
+  const pushed: string[] = []
+  const client = fakeCardkitClient({
+    content: async input => {
+      calls += 1
+      if (calls === 2) {
+        throw new Error('transient push failure')
+      }
+      pushed.push(input.data.content)
+      return { code: 0 }
+    },
+  })
+  const session = new CardKitStreamSession({
+    client,
+    throttleMs: 0,
+    sendCardReference: async () => ({ messageId: 'om_stream' }),
+  })
+
+  // Must NOT throw — throwing makes the runner send a duplicate whole reply.
+  const result = await session.streamText(message, full)
+
+  assert.equal(result.aborted, false)
+  assert.equal(result.text, full) // recovery push overwrote with the complete text
+  assert.equal(pushed[pushed.length - 1], full)
+})
+
+test('CardKitStreamSession throws when the card never reaches the chat (caller falls back)', async () => {
+  const client = fakeCardkitClient({})
+  const session = new CardKitStreamSession({
+    client,
+    throttleMs: 0,
+    sendCardReference: async () => {
+      throw new Error('send failed')
+    },
+  })
+
+  await assert.rejects(() => session.streamText(message, 'abcdef'), /send failed/)
 })
 
 function fakeCardkitClient(overrides: {

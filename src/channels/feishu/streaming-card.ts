@@ -6,6 +6,11 @@ import type { FeishuClient } from './client.js'
 export const STREAMING_CARD_ELEMENT_ID = 'content'
 export const STREAMING_UPDATE_THROTTLE_MS = 160
 export const STREAMING_SIGNIFICANT_DELTA_CHARS = 18
+// Hard cap on cardkit pushes per reply. Without it a long reply (textChunkSize
+// defaults to 4000) flushes one push per 18 chars / per natural boundary —
+// ~200+ cardkit calls and ~35s of throttle for one message, hammering the API
+// and blocking the session lock. 24 pushes ≈ 3.7s of streaming regardless of length.
+export const STREAMING_MAX_PUSHES = 24
 
 const STREAMING_REPLY_SUMMARY = 'LightClaw reply'
 const NATURAL_FLUSH_BOUNDARY = /[。！？；;:、\n]$/u
@@ -52,8 +57,24 @@ export class CardKitStreamSession {
     text: string,
   ): Promise<CardKitStreamResult> {
     const snapshots = buildStreamingFlushSnapshots(text)
+    const fullText = snapshots[snapshots.length - 1] ?? text
+
+    // Open separately: a failure here means no card message reached the chat,
+    // so the caller is free to fall back to a whole-message reply. (card.create
+    // can succeed while the message send fails — close the orphan card first.)
     try {
       await this.open(message)
+    } catch (error) {
+      await this.close(this.pushedText).catch(() => {})
+      throw error
+    }
+
+    // The card message is now visible in the chat. From here we never throw: a
+    // mid-stream push failure is recovered by completing the card in place,
+    // because falling back to a whole-message reply would DUPLICATE a reply the
+    // user can already see streaming. If even the recovery push fails the card
+    // is left on its last good snapshot (best-effort streaming).
+    try {
       for (let i = 0; i < snapshots.length; i += 1) {
         if (this.options.signal?.aborted) {
           break
@@ -63,30 +84,23 @@ export class CardKitStreamSession {
           await delay(this.options.throttleMs ?? STREAMING_UPDATE_THROTTLE_MS, this.options.signal)
         }
       }
-      const aborted = this.options.signal?.aborted === true
-      await this.close(this.pushedText)
-      return {
-        cardId: this.cardId!,
-        ...(this.messageId ? { messageId: this.messageId } : {}),
-        pushes: this.pushes,
-        finalSequence: this.sequence,
-        aborted,
-        text: this.pushedText,
-      }
     } catch (error) {
-      if (this.options.signal?.aborted) {
-        await this.close(this.pushedText).catch(() => {})
-        return {
-          cardId: this.cardId ?? '',
-          ...(this.messageId ? { messageId: this.messageId } : {}),
-          pushes: this.pushes,
-          finalSequence: this.sequence,
-          aborted: true,
-          text: this.pushedText,
-        }
+      const detail = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[feishu] streaming push failed mid-stream; completing card in place: ${detail}\n`)
+      if (!this.options.signal?.aborted && this.pushedText !== fullText) {
+        await this.push(fullText).catch(() => {})
       }
-      await this.close(this.pushedText).catch(() => {})
-      throw error
+    }
+
+    const aborted = this.options.signal?.aborted === true
+    await this.close(this.pushedText).catch(() => {})
+    return {
+      cardId: this.cardId!,
+      ...(this.messageId ? { messageId: this.messageId } : {}),
+      pushes: this.pushes,
+      finalSequence: this.sequence,
+      aborted,
+      text: this.pushedText,
     }
   }
 
@@ -208,7 +222,25 @@ export function buildStreamingFlushSnapshots(text: string): string[] {
   if (snapshots[snapshots.length - 1] !== normalized) {
     snapshots.push(normalized)
   }
-  return snapshots
+  return capSnapshots(snapshots, STREAMING_MAX_PUSHES)
+}
+
+// Evenly downsample cumulative snapshots to at most `max`, always keeping the
+// final full snapshot. Each kept entry is still a valid cumulative prefix, so
+// the typewriter just advances in larger steps. Short replies (count <= max)
+// are returned unchanged.
+function capSnapshots(snapshots: string[], max: number): string[] {
+  if (max <= 0 || snapshots.length <= max) {
+    return snapshots
+  }
+  const sampled: string[] = []
+  const step = (snapshots.length - 1) / (max - 1)
+  for (let i = 0; i < max - 1; i += 1) {
+    sampled.push(snapshots[Math.round(i * step)]!)
+  }
+  sampled.push(snapshots[snapshots.length - 1]!)
+  // Rounding can collide on adjacent picks — drop consecutive duplicates.
+  return sampled.filter((snapshot, index) => index === 0 || snapshot !== sampled[index - 1])
 }
 
 function assertOk<T extends object>(
