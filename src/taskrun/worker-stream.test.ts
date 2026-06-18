@@ -29,7 +29,7 @@ void describe('worker stream forwarder', () => {
     setTaskCardPipeline(null)
   })
 
-  void it('streams the cumulative block into the run element and resets per block', () => {
+  void it('keeps a rolling tail across blocks — reset does NOT collapse the preview', () => {
     const calls: StreamCall[] = []
     setTaskCardPipeline(fakePipeline(calls))
     const fwd = buildWorkerStreamForwarder({
@@ -40,17 +40,15 @@ void describe('worker stream forwarder', () => {
 
     fwd.onDelta('第一')
     fwd.onDelta('块')
-    fwd.reset() // block settled
+    fwd.reset() // block settled — must NOT clear the live preview
     fwd.onDelta('第二块')
 
-    assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第二块'])
+    // The preview keeps scrolling instead of snapping back to a short fresh
+    // block, so its rendered height stays steady (the whole point of the fix).
+    assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第一块第二块'])
     assert.equal(calls[0]!.elementId, taskCardProgressElementId('tr_child'))
     assert.equal(calls[0]!.rootRunId, 'tr_root')
     assert.equal(calls[0]!.owner, 'alice')
-    assert.ok(
-      !calls.some(c => c.content.includes('第一块第二块')),
-      'reset prevents cross-block accretion',
-    )
   })
 
   void it('caps the streamed preview to a tail window', () => {

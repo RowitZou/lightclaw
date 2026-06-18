@@ -4,10 +4,13 @@ import { test } from 'node:test'
 import { setLang } from '../../i18n/index.js'
 import {
   buildTaskCard,
+  capStreamPreview,
   TASK_CARD_MAX_CHILDREN,
   TASK_CARD_MAX_CHILD_TIMELINE,
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
+  TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
+  TASK_CARD_STREAM_PREVIEW_MAX_LINES,
   TASK_CARD_TIMELINE_LINE_MAX_CHARS,
   taskCardProgressElementId,
   type TaskCardChildView,
@@ -363,4 +366,22 @@ test('emitted element_ids satisfy Feishu cardkit format (no colon, ≤20, letter
   for (const id of ids) {
     assert.ok(FORMAT.test(id), `emitted element_id "${id}" must match ${FORMAT}`)
   }
+})
+
+test('capStreamPreview bounds the live preview by lines AND chars (tail window)', () => {
+  // Short content is returned unchanged — no truncation marker.
+  assert.equal(capStreamPreview('one\ntwo'), 'one\ntwo')
+
+  // Many-newline content is clamped to the last MAX_LINES lines so a streaming
+  // list / code block cannot balloon the card height. Newest lines win.
+  const many = Array.from({ length: TASK_CARD_STREAM_PREVIEW_MAX_LINES + 10 }, (_, i) => `line${i}`)
+  const cappedLines = capStreamPreview(many.join('\n')).split('\n')
+  assert.equal(cappedLines.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
+  assert.equal(cappedLines.at(-1), many.at(-1))
+  assert.ok(!cappedLines.includes('line0'), 'oldest lines drop out of the tail')
+
+  // A single long line is still char-capped with the truncation marker.
+  const capped = capStreamPreview('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
+  assert.ok(capped.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
+  assert.ok(capped.startsWith('…'))
 })

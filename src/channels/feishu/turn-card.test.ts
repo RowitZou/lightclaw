@@ -296,7 +296,7 @@ void describe('turn card collector', () => {
     assert.equal(closed[0]!.summary, '第二段')
   })
 
-  void it('resets the live progress buffer when a block settles (no cross-block accretion)', async () => {
+  void it('keeps a rolling live tail across blocks — a block boundary does NOT collapse it', async () => {
     const pushed: string[] = []
     const collector = createTurnCardCollector({
       target: { chatId: 'oc_1', replyAnchorMessageId: 'om_user' },
@@ -321,16 +321,16 @@ void describe('turn card collector', () => {
     await collector.add('块一')
     collector.stream('第一块流式')
     await delay(30)
-    collector.add('块一完整') // block boundary → live buffer must reset
+    collector.add('块一完整') // block boundary — live preview must NOT snap empty
     collector.stream('第二块流式')
     await delay(30)
 
+    // The preview scrolls continuously instead of collapsing to a short fresh
+    // block, so the progress element's height stays steady (the fix). Block
+    // structure shows in the settled timeline entries, not by clearing the
+    // live preview.
     const last = pushed[pushed.length - 1]!
-    assert.equal(last, '第二块流式', 'second block streams fresh, not concatenated with the first')
-    assert.ok(
-      !pushed.some(content => content.includes('第一块流式第二块流式')),
-      'no cross-block accretion in the progress element',
-    )
+    assert.equal(last, '第一块流式第二块流式', 'live tail accretes across the block boundary')
     collector.finalize()
     await delay(20)
   })

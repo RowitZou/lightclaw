@@ -103,6 +103,18 @@ export const TASK_CARD_TITLE_MAX_CHARS = 40
 export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
 export const TASK_CARD_STREAM_PREVIEW_MAX_CHARS = 1000
+// Tail line budget for a live stream preview. Caps height independently of the
+// char budget: many-newline content (lists / code) would otherwise stack into a
+// tall block even under the char cap. Together with the no-collapse rolling
+// buffer (worker-stream / turn-card-collector keep accumulating instead of
+// resetting to empty per block), the live preview reaches a steady ~MAX_LINES
+// height and stays there, rather than oscillating tall↔short and shoving the
+// rest of the card up and down on every block boundary.
+export const TASK_CARD_STREAM_PREVIEW_MAX_LINES = 6
+// Rolling buffer kept by each streamer. Generous headroom over the render
+// window so capStreamPreview still shows its "…" truncation marker, while
+// bounding per-worker memory regardless of total generated length.
+export const TASK_CARD_STREAM_BUFFER_MAX_CHARS = 4000
 // Total rendered timeline characters across ALL panels (root + children). Set
 // under the old proven-OK worst case (200×80 = 16000), so the whole card stays
 // safe vs Feishu's render-size limit whatever the exact threshold — while short
@@ -242,8 +254,17 @@ export function taskCardProgressElementId(runId: string): string {
  *  the full text still reaches chat / the timeline panel. Shared by the turn
  *  card collector and the worker task-card streamer. */
 export function capStreamPreview(text: string): string {
-  if (text.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS) return text
-  return `…${text.slice(text.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
+  let out = text
+  // Line bound first (drop the oldest lines), so the char cap then trims what
+  // actually renders. Both are tail windows — the newest content always wins.
+  const lines = out.split('\n')
+  if (lines.length > TASK_CARD_STREAM_PREVIEW_MAX_LINES) {
+    out = lines.slice(lines.length - TASK_CARD_STREAM_PREVIEW_MAX_LINES).join('\n')
+  }
+  if (out.length > TASK_CARD_STREAM_PREVIEW_MAX_CHARS) {
+    out = `…${out.slice(out.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
+  }
+  return out
 }
 
 /** Approximate rendered length of one timeline line: the whitespace-collapsed

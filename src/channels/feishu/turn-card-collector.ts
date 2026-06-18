@@ -16,7 +16,7 @@ import {
   type TaskCardIo,
   type TaskCardTarget,
 } from './task-card-patcher.js'
-import { capStreamPreview } from './task-card.js'
+import { capStreamPreview, TASK_CARD_STREAM_BUFFER_MAX_CHARS } from './task-card.js'
 import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import {
   buildTurnCard,
@@ -115,10 +115,12 @@ export function createTurnCardCollector(input: {
   return {
     add(text) {
       if (finalized) return
-      // A completed block settles into the timeline here, so the next block
-      // streams into a fresh progress element. Without this, liveText accreted
-      // every block of the whole turn (unbounded, wrong "current activity").
-      liveText = ''
+      // Do NOT clear liveText here. The live progress element keeps its rolling
+      // tail across blocks so its height stays steady — collapsing to empty at
+      // every block boundary made the preview snap short then regrow, shoving
+      // the rest of the card up and down. Unbounded growth is prevented by the
+      // tail-bounded buffer in stream(); block structure shows in the settled
+      // timeline entries below, not by clearing the live preview.
       const label = truncateTurnCardEntry(text)
       if (label) entries.push({ at: Date.now(), text: label })
       if (!begun) {
@@ -166,10 +168,14 @@ export function createTurnCardCollector(input: {
     stream(text) {
       if (finalized) return
       liveText = liveText ? `${liveText}${text}` : text
+      // Bound the rolling buffer to the tail window so it stays flat across the
+      // whole turn (add() no longer clears it). The capped tail keeps scrolling.
+      if (liveText.length > TASK_CARD_STREAM_BUFFER_MAX_CHARS) {
+        liveText = liveText.slice(liveText.length - TASK_CARD_STREAM_BUFFER_MAX_CHARS)
+      }
       if (!cardId || !io.pushElement) return
       // Snapshot the capped content at schedule time: the patcher coalesces to
-      // the latest job, and add() may reset liveText for the next block before
-      // a queued push runs — the snapshot keeps each push self-consistent.
+      // the latest job, so the snapshot keeps each queued push self-consistent.
       const content = capStreamPreview(liveText)
       patcher.schedule(lane, async () => {
         if (!cardId || !io.pushElement) return
