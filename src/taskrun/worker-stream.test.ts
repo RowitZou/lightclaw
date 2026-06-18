@@ -14,6 +14,14 @@ import { buildWorkerStreamForwarder } from './worker-stream.js'
 
 type StreamCall = { owner: string; rootRunId: string; elementId: string; content: string }
 
+/** Drop the leading non-breaking-space pad lines capStreamPreview adds for fixed
+ *  height, so assertions read the visible content. */
+function visible(s: string): string {
+  const lines = s.split('\n')
+  while (lines.length && (lines[0] === '' || lines[0] === '\u00A0')) lines.shift()
+  return lines.join('\n')
+}
+
 function fakePipeline(calls: StreamCall[]): TaskCardPipeline {
   return {
     reconcileOnStart: async () => {},
@@ -46,7 +54,7 @@ void describe('worker stream forwarder', () => {
     // The preview keeps scrolling instead of snapping back to a short fresh
     // block, so its rendered height stays steady (the whole point of the fix).
     // Content is markdown-stripped plain text (these deltas carry no markdown).
-    assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第一块第二块'])
+    assert.deepEqual(calls.map(c => visible(c.content)), ['第一', '第一块', '第一块第二块'])
     assert.equal(calls[0]!.elementId, taskCardProgressElementId('tr_child'))
     assert.equal(calls[0]!.rootRunId, 'tr_root')
     assert.equal(calls[0]!.owner, 'alice')
@@ -62,7 +70,7 @@ void describe('worker stream forwarder', () => {
     })
 
     fwd.onDelta('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
-    const last = calls[calls.length - 1]!.content
+    const last = visible(calls[calls.length - 1]!.content)
     assert.ok(last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
     assert.ok(last.startsWith('…'))
   })

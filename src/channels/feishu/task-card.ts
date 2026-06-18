@@ -102,14 +102,16 @@ export const TASK_CARD_TITLE_MAX_CHARS = 40
 // was raised, source-200 made preview and expanded read nearly identical.
 export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
-// A live stream preview is a small GLIMPSE, not the content surface: the real
-// output is the chat bubble (final reply) and the collapsible timeline panel.
-// Two lines, tight char budget — `capStreamPreview` keeps only the newest tail
-// (older lines scroll out of the window: the box replaces in place rather than
-// growing downward, the "reset, don't trail" behaviour) and strips markdown so
-// the markdown element renders it flat (no bold/heading flashing).
+// A live stream preview is a small fixed-height GLIMPSE, not the content surface:
+// the real output is the chat bubble (final reply) and the collapsible timeline
+// panel. `capStreamPreview` keeps only the newest tail (older lines scroll out:
+// the box replaces in place rather than growing downward — "reset, don't trail")
+// AND pads UP to exactly MAX_LINES so the plain_text element holds a constant
+// height from the first token. The placeholder for pad lines is a non-breaking
+// space (U+00A0) so the row is not collapsed to nothing by the renderer.
 export const TASK_CARD_STREAM_PREVIEW_MAX_CHARS = 160
 export const TASK_CARD_STREAM_PREVIEW_MAX_LINES = 2
+export const TASK_CARD_STREAM_PAD_LINE = '\u00A0'
 // Rolling buffer kept by each streamer. Generous headroom over the render
 // window so capStreamPreview still shows its "…" truncation marker, while
 // bounding per-worker memory regardless of total generated length.
@@ -198,16 +200,37 @@ function markdownElement(content: string, elementId?: string): Record<string, un
   }
 }
 
-/** Strip markdown syntax from a live preview so a `markdown` element renders it
- *  as flat text. The dogfood complaint was the live stream flashing — a
- *  half-streamed `**`/`##` renders as bold/heading and the card reflows on every
- *  token. We MUST keep a `markdown` element: Feishu rejects `plain_text` as a
- *  top-level body element (`code 10002 type of element is not supported tag:
- *  plain_text` froze the whole card — plain_text is only valid nested inside a
- *  div text object). So instead we remove the markers from the preview content:
- *  no markers → nothing for Feishu to render → no flashing. The full, properly
- *  rendered text is still the chat bubble + the collapsible timeline panel; this
- *  is only the ≤2-line glimpse. */
+/** A fixed-height live-stream target: the "普通文本" component (`tag:'div'` with a
+ *  nested `plain_text` text object). This is the ONLY way to a stable-height
+ *  preview on Feishu cards:
+ *   - `div` is a valid TOP-LEVEL body element (a bare `tag:'plain_text'` at body
+ *     level is rejected — `code 10002 unsupported tag plain_text` froze the card).
+ *   - `plain_text` renders its `content` VERBATIM — half-streamed `**`/`##` show
+ *     as literal characters, never flashing into bold/heading (markdown has no
+ *     `lines` / height control at all).
+ *   - `lines` caps the rendered rows at N (overflow → `…`); the streamer pads the
+ *     content UP to N lines (capStreamPreview) so height is constant from the
+ *     first token instead of growing/oscillating.
+ *  Streaming (`cardElement.content`) targets the INNER plain_text's `element_id`
+ *  (the field that carries `content`), per the official component doc. */
+function plainTextLineElement(content: string, elementId: string, lines: number): Record<string, unknown> {
+  return {
+    tag: 'div',
+    text: {
+      tag: 'plain_text',
+      element_id: elementId,
+      content,
+      lines,
+    },
+  }
+}
+
+/** Strip markdown markers from a live preview for a cleaner glimpse. The live
+ *  element is now a verbatim `plain_text` (see `plainTextLineElement`), so the
+ *  markers would show as literal `**`/`##` characters rather than flash into
+ *  formatting — stripping them just keeps the 2-line glimpse tidy (no stray
+ *  syntax). The full, properly rendered text is the chat bubble + the
+ *  collapsible timeline panel. */
 export function stripPreviewMarkdown(text: string): string {
   return text
     .replace(/`+/g, '') // code fences / inline-code backticks
@@ -290,13 +313,14 @@ export function taskCardProgressElementId(runId: string): string {
   return `p${createHash('sha1').update(runId).digest('hex').slice(0, 16)}`
 }
 
-/** Shape a live stream preview into a small tail window for a `markdown`
- *  streaming element: strip markdown markers (so a half-streamed `**`/`##`
- *  renders flat instead of flashing bold/heading and reflowing the card), keep
- *  only the newest MAX_LINES lines (older ones scroll out — the box replaces in
- *  place rather than growing downward), and trim to the char budget. The full
- *  text still reaches chat / the timeline panel. Shared by the turn card
- *  collector and the worker task-card streamer. */
+/** Shape a live stream preview into a FIXED-HEIGHT tail window for a `plain_text`
+ *  streaming element (see `plainTextLineElement`): strip markdown markers for a
+ *  tidy glimpse, keep only the newest MAX_LINES lines (older ones scroll out —
+ *  the box replaces in place rather than growing downward), trim to the char
+ *  budget, then pad UP to exactly MAX_LINES with leading placeholder lines so the
+ *  element holds a constant height from the first token (no grow-from-empty
+ *  jump). The full text still reaches chat / the timeline panel. Shared by the
+ *  turn card collector and the worker task-card streamer. */
 export function capStreamPreview(text: string): string {
   let out = stripPreviewMarkdown(text)
   // Line bound first (drop the oldest lines), so the char cap then trims what
@@ -308,7 +332,12 @@ export function capStreamPreview(text: string): string {
   if (out.length > TASK_CARD_STREAM_PREVIEW_MAX_CHARS) {
     out = `…${out.slice(out.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
   }
-  return out
+  // Pad up to a fixed line count: leading non-breaking-space lines reserve the
+  // rows so the plain_text element occupies MAX_LINES height even before that
+  // many lines of content exist.
+  const padded = out.split('\n')
+  while (padded.length < TASK_CARD_STREAM_PREVIEW_MAX_LINES) padded.unshift(TASK_CARD_STREAM_PAD_LINE)
+  return padded.join('\n')
 }
 
 /** Approximate rendered length of one timeline line: the whitespace-collapsed
@@ -525,15 +554,16 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
         markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
       )
       if (childLive) {
-        // Live worker: the per-element streaming target — a ≤2-line markdown
-        // glimpse. Must be `markdown` (Feishu rejects plain_text as a top-level
-        // body element); capStreamPreview strips markdown markers so the stream
-        // renders flat with no bold/heading flashing. Always emitted (even when
-        // seeded blank) so the stream has a target from the first render.
+        // Live worker: the per-element streaming target — a fixed-height 2-line
+        // plain_text glimpse (div-wrapped; capStreamPreview pads to 2 lines and
+        // renders verbatim so partial markdown never flashes). Always emitted
+        // (even when seeded blank) so the stream has a target from the first
+        // render. element_id is the inner plain_text's, the streaming target.
         elements.push(
-          markdownElement(
+          plainTextLineElement(
             capStreamPreview(child.latestProgress ?? ''),
             taskCardProgressElementId(child.id),
+            TASK_CARD_STREAM_PREVIEW_MAX_LINES,
           ),
         )
       } else if (child.latestProgress) {
@@ -586,12 +616,13 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Main agent's live line is a streaming target too — same ≤2-line markdown
-    // glimpse as the child live element (markdown-stripped, no flashing).
+    // Main agent's live line is a streaming target too — same fixed-height 2-line
+    // plain_text glimpse as the child live element (verbatim, no flashing).
     elements.push(
-      markdownElement(
+      plainTextLineElement(
         capStreamPreview(latest.text),
         taskCardProgressElementId('root'),
+        TASK_CARD_STREAM_PREVIEW_MAX_LINES,
       ),
     )
     elements.push(

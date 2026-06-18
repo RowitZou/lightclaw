@@ -53,6 +53,15 @@ function stripGrey(s: string | undefined): string | undefined {
   return m ? m[1] : s
 }
 
+/** Drop the leading non-breaking-space pad lines capStreamPreview adds for fixed
+ *  height, so assertions read the visible content. */
+function visible(s: string | undefined): string | undefined {
+  if (s === undefined) return undefined
+  const lines = s.split('\n')
+  while (lines.length && (lines[0] === '' || lines[0] === '\u00A0')) lines.shift()
+  return lines.join('\n')
+}
+
 /** The pinned "最新 HH:MM" label is a grey markdown line (`<font color='grey'>…`). */
 function latestLine(card: Record<string, unknown>): string | undefined {
   const body = card.body as { elements: Array<{ tag: string; content?: string }> }
@@ -60,9 +69,14 @@ function latestLine(card: Record<string, unknown>): string | undefined {
   return first.tag === 'markdown' ? stripGrey(first.content) : undefined
 }
 
+/** The live progress line is a div>plain_text element; the streamed content sits
+ *  on the inner text. Returns the visible content (pad lines dropped). */
 function progressLine(card: Record<string, unknown>): string | undefined {
-  const body = card.body as { elements: Array<{ tag: string; content?: string; element_id?: string }> }
-  return body.elements.find(el => el.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content
+  const body = card.body as {
+    elements: Array<{ tag: string; text?: { element_id?: string; content?: string } }>
+  }
+  const el = body.elements.find(e => e.text?.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)
+  return visible(el?.text?.content)
 }
 
 void describe('turn card builder', () => {
@@ -117,13 +131,14 @@ void describe('turn card builder', () => {
     const body = card.body as {
       elements: Array<{ tag: string; content?: string; element_id?: string; header?: unknown }>
     }
-    // Pin label is a grey markdown line; the live line is a markdown element
-    // (capStreamPreview strips markdown so it renders flat) with the same element_id.
+    // Pin label is a grey markdown line; the live line is a div>plain_text element
+    // (verbatim, no flashing) whose inner text carries the streaming element_id.
     assert.equal(latestLine(card), '最新 11:05')
-    const progress = body.elements[1]!
-    assert.equal(progress.tag, 'markdown')
-    assert.equal(progress.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
-    assert.equal(progress.content, '正在整理结果')
+    const progress = body.elements[1] as { tag: string; text?: { tag: string; element_id?: string; content?: string } }
+    assert.equal(progress.tag, 'div')
+    assert.equal(progress.text?.tag, 'plain_text')
+    assert.equal(progress.text?.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
+    assert.equal(visible(progress.text?.content), '正在整理结果')
     const panel = body.elements.find(el => el.tag === 'collapsible_panel') as any
     assert.deepEqual(panel.header.icon, {
       tag: 'standard_icon',
@@ -290,7 +305,7 @@ void describe('turn card collector', () => {
     assert.equal(pushed.length, 1, 'rapid deltas coalesce into one element push')
     assert.equal(pushed[0]!.sequence, 0)
     assert.equal(pushed[0]!.elementId, TURN_CARD_PROGRESS_ELEMENT_ID)
-    assert.equal(pushed[0]!.content, '增量一，增量二')
+    assert.equal(visible(pushed[0]!.content), '增量一，增量二')
 
     collector.add('第二段')
     await delay(30)
@@ -335,7 +350,7 @@ void describe('turn card collector', () => {
     // structure shows in the settled timeline entries, not by clearing the
     // live preview.
     const last = pushed[pushed.length - 1]!
-    assert.equal(last, '第一块流式第二块流式', 'live tail accretes across the block boundary')
+    assert.equal(visible(last), '第一块流式第二块流式', 'live tail accretes across the block boundary')
     collector.finalize()
     await delay(20)
   })
@@ -366,7 +381,7 @@ void describe('turn card collector', () => {
     collector.stream('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
     await delay(30)
 
-    const last = pushed[pushed.length - 1]!
+    const last = visible(pushed[pushed.length - 1]!)!
     assert.ok(
       last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
       `streamed preview is capped (got ${last.length})`,
