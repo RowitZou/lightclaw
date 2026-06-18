@@ -316,4 +316,71 @@ void describe('reconcile crash-backstop settlement', () => {
       'finalized root is not re-announced on reconcile',
     )
   })
+
+  void it('serializes worker element streams with full renders on one monotonic sequence', async () => {
+    // Live-card io: every CardKit op must pass the latest sequence the card
+    // accepted. If a stream push and a render ever raced the binding, one would
+    // pass a stale sequence — counted as a violation.
+    let last = 0
+    let violations = 0
+    const seqs: number[] = []
+    const pushes: Array<{ elementId: string; content: string }> = []
+    const bump = (incoming: number): number => {
+      if (incoming !== last) violations += 1
+      last = incoming + 1
+      seqs.push(last)
+      return last
+    }
+    const io: TaskCardIo = {
+      async create() {
+        last = 0
+        seqs.push(0)
+        return { messageId: 'om_live', cardId: 'card_live', sequence: 0 }
+      },
+      async patch(_messageId, _card, liveArg) {
+        if (!liveArg) return {}
+        return { sequence: bump(liveArg.sequence) }
+      },
+      async pushElement(liveArg) {
+        const s = bump(liveArg.sequence)
+        pushes.push({ elementId: liveArg.elementId, content: liveArg.content })
+        return { sequence: s }
+      },
+      async close(liveArg) {
+        return { sequence: bump(liveArg.sequence) }
+      },
+      async sendText() {},
+    }
+    pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
+
+    const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '流式任务', title: '流式' })
+    await settle()
+    const child = await createTaskRun({
+      ownerCanonicalUser: OWNER,
+      parentRunId: root.id,
+      chainId: 'chain-stream',
+      depth: 1,
+      role: 'webSearcher',
+      callerRole: 'main',
+      callerSessionId: DM_SESSION,
+      objective: '流式子任务',
+      mode: 'background',
+    })
+    await markStarted(child.id, 'bg-stream', Date.now(), OWNER)
+    await settle()
+
+    // Interleave element streams (per worker) with renders (progress events).
+    const el = `progress:${child.id}`
+    for (let i = 0; i < 5; i += 1) {
+      pipeline.streamElement(OWNER, root.id, el, `live-${i}`)
+      await appendProgress(child.id, { label: `step ${i}` }, Date.now(), OWNER)
+    }
+    await settle()
+
+    assert.equal(violations, 0, 'every op passed the latest sequence — streams and renders serialized')
+    assert.ok(pushes.length >= 1, 'the worker element was streamed at least once')
+    for (let i = 1; i < seqs.length; i += 1) {
+      assert.ok(seqs[i]! > seqs[i - 1]!, 'card sequence strictly increases across all ops')
+    }
+  })
 })

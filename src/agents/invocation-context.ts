@@ -171,6 +171,10 @@ export function forkInvocationContext(input: {
   // observability stream that forwards worker activity to the chat that
   // initiated the chain (now the worker-progress forwarder in src/taskrun/worker-progress.ts).
   onAssistantTurn?: InvocationContext['onAssistantTurn']
+  // Optional per-generation-delta callback. query.ts invokes it with each token
+  // chunk during a turn. Dispatched workers wire it to stream their live text
+  // into their node's element on the root's task card (in-card model).
+  onTextDelta?: InvocationContext['onTextDelta']
   // Optional incremental transcript persistence callbacks (see
   // InvocationContext.persistMessages / rewriteMessages). Background fires wire
   // these so a crash mid-fire leaves a partial bg-session transcript on disk,
@@ -197,6 +201,7 @@ export function forkInvocationContext(input: {
         }
       : {}),
     ...(input.onAssistantTurn ? { onAssistantTurn: input.onAssistantTurn } : {}),
+    ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
     ...(input.persistMessages ? { persistMessages: input.persistMessages } : {}),
     ...(input.rewriteMessages ? { rewriteMessages: input.rewriteMessages } : {}),
   }

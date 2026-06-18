@@ -230,6 +230,15 @@ export function taskCardProgressElementId(runId: string): string {
   return `progress:${runId}`
 }
 
+/** Bound a live stream preview to a tail window so a long block does not push
+ *  an ever-growing cumulative string at the card (Feishu render-size limit);
+ *  the full text still reaches chat / the timeline panel. Shared by the turn
+ *  card collector and the worker task-card streamer. */
+export function capStreamPreview(text: string): string {
+  if (text.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS) return text
+  return `…${text.slice(text.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
+}
+
 /** Approximate rendered length of one timeline line: the whitespace-collapsed
  *  text capped at the line cap, plus the `**HH:MM** ` clock/markdown overhead. */
 function timelineEntryCost(entry: TaskCardTimelineEntry): number {
@@ -444,10 +453,16 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
           `${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)} · ${t(childStyle.wordKey)}**`,
         ),
       )
-      if (child.latestProgress) {
+      // Always emit the progress element (even empty) for a non-terminal child
+      // so the worker's live token stream (cardElement.content into this
+      // element_id) has a target from the first render; a terminal child only
+      // gets it when it actually has progress to show. Empty `content` is the
+      // verified streaming-element shape (§R2 spike).
+      const childLive = !TASK_RUN_TERMINAL_STATUSES.has(child.status)
+      if (child.latestProgress || childLive) {
         elements.push(
           markdownElement(
-            truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS),
+            child.latestProgress ? truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS) : '',
             taskCardProgressElementId(child.id),
           ),
         )

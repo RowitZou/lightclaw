@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto'
 import type { LightClawConfig } from '../config.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
 import { buildWorkerProgressForwarder } from '../taskrun/worker-progress.js'
+import { buildWorkerStreamForwarder, type WorkerStreamForwarder } from '../taskrun/worker-stream.js'
+import { getTaskRun } from '../taskrun/store.js'
 import { createUserMessage } from '../messages.js'
 import { buildPromptForRole } from '../prompt.js'
 import { query } from '../query.js'
@@ -148,6 +150,29 @@ export async function runDispatchedAgent(
         ...(params.canonicalUser ? { ownerCanonicalUser: params.canonicalUser } : {}),
       })
     : undefined
+  // In-card live streaming: push this worker's in-flight tokens into its own
+  // element on the root's task card. Only a DIRECT child of the root has its
+  // own progress element (descendants are merged into an ancestor panel), so
+  // stream only those; deeper workers still report via the progress timeline.
+  let streamForwarder: WorkerStreamForwarder | undefined
+  if (params.currentTaskRunId && params.canonicalUser) {
+    const meta = await getTaskRun(params.currentTaskRunId, params.canonicalUser).catch(() => null)
+    if (meta && meta.parentRunId === meta.rootRunId) {
+      streamForwarder = buildWorkerStreamForwarder({
+        ownerCanonicalUser: params.canonicalUser,
+        rootRunId: meta.rootRunId,
+        runId: params.currentTaskRunId,
+      })
+    }
+  }
+  // A block settling fires onAssistantTurn (the progress breadcrumb); reset the
+  // live preview there so the next block streams fresh, not the whole turn.
+  const onAssistantTurn = activityForwarder || streamForwarder
+    ? (text: string) => {
+        activityForwarder?.(text)
+        streamForwarder?.reset()
+      }
+    : undefined
   // Default transcript persistence for dispatched workers. Callers that need a
   // bespoke write path (bg-fire truncates on retry; channel runner hooks into
   // its own rewrite cycle) keep passing persistMessages explicitly and win.
@@ -198,7 +223,8 @@ export async function runDispatchedAgent(
             },
           }
         : {}),
-      ...(activityForwarder ? { onAssistantTurn: activityForwarder } : {}),
+      ...(onAssistantTurn ? { onAssistantTurn } : {}),
+      ...(streamForwarder ? { onTextDelta: (text: string) => streamForwarder.onDelta(text) } : {}),
       ...(effectivePersist ? { persistMessages: effectivePersist } : {}),
       ...(effectiveRewrite ? { rewriteMessages: effectiveRewrite } : {}),
     }),

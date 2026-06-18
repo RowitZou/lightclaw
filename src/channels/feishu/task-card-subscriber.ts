@@ -14,12 +14,14 @@
 // write path or a turn.
 
 import { getInboundAnchor } from '../inbound-anchor.js'
+import { serializeByKey } from '../../memory/serialize-by-key.js'
 import { readTaskCardBinding, writeTaskCardBinding } from './task-card-binding.js'
 import {
   createSenderTaskCardIo,
   TaskCardPatcher,
   type TaskCardIo,
 } from './task-card-patcher.js'
+import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import { buildTaskCard, TASK_RUN_TERMINAL_STATUSES } from './task-card.js'
 import { t } from '../../i18n/index.js'
 import type { TaskRunMeta } from '../../taskrun/types.js'
@@ -36,7 +38,21 @@ import {
 export type TaskCardPipeline = {
   /** Re-render roots that moved while the process was down. */
   reconcileOnStart(): Promise<void>
+  /** Push a live token stream into one element (`progress:<runId>`) of a root's
+   *  card. No-op until the card exists as a CardKit live card (streamingReply
+   *  on) and before the element is rendered. Coalesced per element; the actual
+   *  cardElement.content call shares the root's monotonic sequence with full
+   *  renders via `serializeByKey`. */
+  streamElement(owner: string, rootRunId: string, elementId: string, content: string): void
   stop(): void
+}
+
+/** One serial lane per root for every CardKit op (full render + element
+ *  stream), so the monotonic `cardSequence` in the binding is never read/written
+ *  concurrently. Element streams coalesce per element on their own throttle
+ *  patcher BEFORE entering this lane, so the lane never floods. */
+function cardSeqKey(owner: string, rootRunId: string): string {
+  return `taskcard-seq::${owner}::${rootRunId}`
 }
 
 /** The summary settlement message: title line + the run's deliver summary,
@@ -92,12 +108,17 @@ export function startTaskCardPipeline(
   const patcher = options.throttleMs !== undefined
     ? new TaskCardPatcher(options.throttleMs)
     : new TaskCardPatcher()
+  // Element streams coalesce per element on a tight throttle (a live feel),
+  // separate from the 3s full-render throttle. Both funnel their actual
+  // CardKit call through cardSeqKey so the sequence stays monotonic.
+  const streamThrottleMs = options.throttleMs ?? STREAMING_UPDATE_THROTTLE_MS
+  const streamPatcher = new TaskCardPatcher(streamThrottleMs)
 
   async function render(owner: string, rootRunId: string): Promise<void> {
     const root = await getTaskRun(rootRunId, owner)
     if (!root || root.kind !== 'root') return
-    const binding = await readTaskCardBinding(owner, rootRunId)
-    if (binding?.finalizedAt) {
+    const preBinding = await readTaskCardBinding(owner, rootRunId)
+    if (preBinding?.finalizedAt) {
       patcher.release(rootRunId)
       return
     }
@@ -107,6 +128,16 @@ export function startTaskCardPipeline(
     // A live standing service never reaches a terminal status; once its
     // root IS terminal (service shut down) the card freezes like any other.
     const terminal = TASK_RUN_TERMINAL_STATUSES.has(root.status)
+
+    // The CardKit op + binding sequence read/write run inside the per-root
+    // serial lane so a concurrent element stream cannot race the sequence.
+    // Re-read the binding fresh inside the lane (a stream may have advanced it).
+    await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
+    const binding = await readTaskCardBinding(owner, rootRunId)
+    if (binding?.finalizedAt) {
+      patcher.release(rootRunId)
+      return
+    }
 
     if (!binding) {
       // The root's caller session names the chat the card belongs to.
@@ -185,6 +216,40 @@ export function startTaskCardPipeline(
         cardSequence: patched.sequence,
       })
     }
+    })
+  }
+
+  function streamElement(
+    owner: string,
+    rootRunId: string,
+    elementId: string,
+    content: string,
+  ): void {
+    if (!io.pushElement) return
+    // Coalesce per element so concurrent workers each stream independently;
+    // the latest content wins (the patcher replaces the pending job).
+    streamPatcher.schedule(`${rootRunId}::stream::${elementId}`, async () => {
+      await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
+        const binding = await readTaskCardBinding(owner, rootRunId)
+        if (!binding?.cardId || binding.finalizedAt || !io.pushElement) return
+        try {
+          const pushed = await io.pushElement({
+            cardId: binding.cardId,
+            sequence: binding.cardSequence ?? 0,
+            elementId,
+            content,
+          })
+          await writeTaskCardBinding(owner, rootRunId, {
+            ...binding,
+            cardSequence: pushed.sequence,
+          })
+        } catch (error) {
+          process.stderr.write(
+            `[task-card] stream push failed for ${rootRunId}/${elementId}: ${(error as Error).message}\n`,
+          )
+        }
+      })
+    })
   }
 
   function schedule(owner: string, rootRunId: string, immediate: boolean): void {
@@ -255,6 +320,7 @@ export function startTaskCardPipeline(
 
   return {
     reconcileOnStart,
+    streamElement,
     stop: unsubscribe,
   }
 }

@@ -16,21 +16,13 @@ import {
   type TaskCardIo,
   type TaskCardTarget,
 } from './task-card-patcher.js'
-import { TASK_CARD_STREAM_PREVIEW_MAX_CHARS } from './task-card.js'
+import { capStreamPreview } from './task-card.js'
 import {
   buildTurnCard,
   truncateTurnCardEntry,
   TURN_CARD_PROGRESS_ELEMENT_ID,
   type TurnCardEntry,
 } from './turn-card.js'
-
-/** Bound the live progress element to a tail window so a long block does not
- *  push an ever-growing cumulative string at the card (Feishu render-size
- *  limit) — the full reply still reaches chat / the timeline panel. */
-function capStreamPreview(text: string): string {
-  if (text.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS) return text
-  return `…${text.slice(text.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
-}
 
 export type TurnCardCollector = {
   /** Record one interim block. Empty text still begins the card; the

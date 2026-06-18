@@ -42,6 +42,7 @@ import { registerSessionAbortHook } from '../../state.js'
 import { getBackgroundTaskScheduler } from '../../background-task/scheduler.js'
 import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
 import { startTaskCardPipeline } from './task-card-subscriber.js'
+import { setTaskCardPipeline } from './task-card-pipeline-registry.js'
 import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
 import { createFeishuStrategy, FEISHU_CHANNEL_ID } from './strategy.js'
 import { startFeishuWebhookServer } from './transport-webhook.js'
@@ -140,6 +141,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       // reconcile is fire-and-forget: it re-renders roots that moved while
       // the daemon was down and must never delay channel start.
       const taskCardPipeline = startTaskCardPipeline()
+      setTaskCardPipeline(taskCardPipeline)
       void taskCardPipeline.reconcileOnStart()
 
       const dedup = new FeishuDedup(
@@ -271,6 +273,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             disposeAskUserAbortHook()
             askUserScheduler.stop()
             taskCardPipeline.stop()
+            setTaskCardPipeline(null)
             clearAskUserQuestionCoordinator(askUserCoordinator)
             clearCircuitBreakerCardCoordinator(circuitBreakerCoordinator)
             clearFeishuSender(sender)
@@ -295,6 +298,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           pendingDrainer.stop()
           askUserScheduler.stop()
           taskCardPipeline.stop()
+          setTaskCardPipeline(null)
           clearAskUserQuestionCoordinator(askUserCoordinator)
           clearCircuitBreakerCardCoordinator(circuitBreakerCoordinator)
           clearFeishuSender(sender)
