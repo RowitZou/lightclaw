@@ -14,12 +14,6 @@ import { buildWorkerStreamForwarder } from './worker-stream.js'
 
 type StreamCall = { owner: string; rootRunId: string; elementId: string; content: string }
 
-/** The live preview streams as plain_text via `capStreamPreview`, which top-pads
- *  with leading blank lines for a fixed height; drop the padding to compare. */
-function unpad(s: string): string {
-  return s.replace(/^\n+/, '')
-}
-
 function fakePipeline(calls: StreamCall[]): TaskCardPipeline {
   return {
     reconcileOnStart: async () => {},
@@ -51,8 +45,8 @@ void describe('worker stream forwarder', () => {
 
     // The preview keeps scrolling instead of snapping back to a short fresh
     // block, so its rendered height stays steady (the whole point of the fix).
-    // Content is plain_text, top-padded for fixed height — strip the pad to compare.
-    assert.deepEqual(calls.map(c => unpad(c.content)), ['第一', '第一块', '第一块第二块'])
+    // Content is markdown-stripped plain text (these deltas carry no markdown).
+    assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第一块第二块'])
     assert.equal(calls[0]!.elementId, taskCardProgressElementId('tr_child'))
     assert.equal(calls[0]!.rootRunId, 'tr_root')
     assert.equal(calls[0]!.owner, 'alice')
@@ -68,7 +62,7 @@ void describe('worker stream forwarder', () => {
     })
 
     fwd.onDelta('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
-    const last = unpad(calls[calls.length - 1]!.content)
+    const last = calls[calls.length - 1]!.content
     assert.ok(last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
     assert.ok(last.startsWith('…'))
   })

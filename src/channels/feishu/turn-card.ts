@@ -64,14 +64,13 @@ export function buildTurnCard(
   // has no `note` element; the label is single-line so inline `<font>` is safe).
   elements.push({ tag: 'markdown', content: greyInline(`${t('turncard.latest')} ${formatClock(latest.at)}`) })
   elements.push({
-    tag: 'plain_text',
+    tag: 'markdown',
     element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-    // Streaming target — a fixed-height 2-line plain_text glimpse (see
-    // task-card.ts plainTextElement / capStreamPreview). plain_text renders the
-    // stream verbatim, so partial markdown never flashes; the padded tail holds
-    // a constant height. The full narration is in the collapsible panel below.
+    // Streaming target — a ≤2-line markdown glimpse. Must be `markdown` (Feishu
+    // rejects plain_text as a top-level body element); capStreamPreview strips
+    // markdown markers so the stream renders flat with no flashing. The full
+    // narration is in the collapsible panel below.
     content: capStreamPreview(latest.text),
-    text_size: 'notation',
   })
   elements.push({
     tag: 'collapsible_panel',

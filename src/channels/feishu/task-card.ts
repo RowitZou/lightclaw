@@ -102,13 +102,12 @@ export const TASK_CARD_TITLE_MAX_CHARS = 40
 // was raised, source-200 made preview and expanded read nearly identical.
 export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
-// A live stream preview is a fixed-height GLIMPSE, not the content surface: the
-// real output is the chat bubble (final reply) and the collapsible timeline
-// panel. Two lines, tight char budget. `capStreamPreview` pads UP to MAX_LINES
-// so the block holds a constant height from the first token — no grow-from-empty
-// jump, no oscillation — and shows only the newest tail (older lines scroll out
-// of the fixed window, which is the "reset, don't trail" behaviour: the box
-// replaces in place instead of growing downward).
+// A live stream preview is a small GLIMPSE, not the content surface: the real
+// output is the chat bubble (final reply) and the collapsible timeline panel.
+// Two lines, tight char budget — `capStreamPreview` keeps only the newest tail
+// (older lines scroll out of the window: the box replaces in place rather than
+// growing downward, the "reset, don't trail" behaviour) and strips markdown so
+// the markdown element renders it flat (no bold/heading flashing).
 export const TASK_CARD_STREAM_PREVIEW_MAX_CHARS = 160
 export const TASK_CARD_STREAM_PREVIEW_MAX_LINES = 2
 // Rolling buffer kept by each streamer. Generous headroom over the render
@@ -199,22 +198,26 @@ function markdownElement(content: string, elementId?: string): Record<string, un
   }
 }
 
-/** A `plain_text` element — Feishu's per-element streaming (cardElement.content)
- *  targets BOTH markdown and plain_text components (card-JSON path; only the
- *  visual card-builder tool restricts it to markdown). We stream the live
- *  preview into plain_text on purpose: its `content` is rendered VERBATIM, so a
- *  half-streamed `**`/`##` shows as literal characters instead of flashing into
- *  bold/heading and reflowing the card on every token (the dogfood complaint).
- *  `text_size:'notation'` gives the small "this is a preview, not the content"
- *  weighting without touching `text_color` (the grey enum is unconfirmed and a
- *  bad colour value 400s the whole card, à la the dropped `note` element). */
-function plainTextElement(content: string, elementId?: string): Record<string, unknown> {
-  return {
-    tag: 'plain_text',
-    ...(elementId ? { element_id: elementId } : {}),
-    content,
-    text_size: 'notation',
-  }
+/** Strip markdown syntax from a live preview so a `markdown` element renders it
+ *  as flat text. The dogfood complaint was the live stream flashing — a
+ *  half-streamed `**`/`##` renders as bold/heading and the card reflows on every
+ *  token. We MUST keep a `markdown` element: Feishu rejects `plain_text` as a
+ *  top-level body element (`code 10002 type of element is not supported tag:
+ *  plain_text` froze the whole card — plain_text is only valid nested inside a
+ *  div text object). So instead we remove the markers from the preview content:
+ *  no markers → nothing for Feishu to render → no flashing. The full, properly
+ *  rendered text is still the chat bubble + the collapsible timeline panel; this
+ *  is only the ≤2-line glimpse. */
+export function stripPreviewMarkdown(text: string): string {
+  return text
+    .replace(/`+/g, '') // code fences / inline-code backticks
+    .replace(/\*+/g, '') // bold / italic asterisks
+    .replace(/~+/g, '') // strikethrough tildes
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '') // ATX headings
+    .replace(/^[ \t]*[-+][ \t]+/gm, '') // bullet markers (asterisks already gone)
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, '') // numbered-list markers
+    .replace(/^[ \t]*>[ \t]?/gm, '') // blockquote markers
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) → text
 }
 
 function hrElement(): Record<string, unknown> {
@@ -287,18 +290,15 @@ export function taskCardProgressElementId(runId: string): string {
   return `p${createHash('sha1').update(runId).digest('hex').slice(0, 16)}`
 }
 
-/** Shape a live stream preview into a FIXED-HEIGHT tail window: keep only the
- *  newest MAX_LINES lines (older ones scroll out — the box replaces in place
- *  rather than growing downward), trim to the char budget, then pad UP to
- *  exactly MAX_LINES with leading blank lines so the block holds a constant
- *  height from the first token (no grow-from-empty jump). The streamed element
- *  is a `plain_text` (see `plainTextElement`), so this content is shown
- *  verbatim — partial markdown tokens (`**`, `##`) never render, so there is no
- *  bold/heading flashing as the stream advances. The full text still reaches
- *  chat / the timeline panel. Shared by the turn card collector and the worker
- *  task-card streamer. */
+/** Shape a live stream preview into a small tail window for a `markdown`
+ *  streaming element: strip markdown markers (so a half-streamed `**`/`##`
+ *  renders flat instead of flashing bold/heading and reflowing the card), keep
+ *  only the newest MAX_LINES lines (older ones scroll out — the box replaces in
+ *  place rather than growing downward), and trim to the char budget. The full
+ *  text still reaches chat / the timeline panel. Shared by the turn card
+ *  collector and the worker task-card streamer. */
 export function capStreamPreview(text: string): string {
-  let out = text
+  let out = stripPreviewMarkdown(text)
   // Line bound first (drop the oldest lines), so the char cap then trims what
   // actually renders. Both are tail windows — the newest content always wins.
   const lines = out.split('\n')
@@ -308,11 +308,7 @@ export function capStreamPreview(text: string): string {
   if (out.length > TASK_CARD_STREAM_PREVIEW_MAX_CHARS) {
     out = `…${out.slice(out.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
   }
-  // Pad up to a fixed line count: leading blank lines reserve the rows so the
-  // preview occupies MAX_LINES height even before that many lines exist.
-  const padded = out.split('\n')
-  while (padded.length < TASK_CARD_STREAM_PREVIEW_MAX_LINES) padded.unshift('')
-  return padded.join('\n')
+  return out
 }
 
 /** Approximate rendered length of one timeline line: the whitespace-collapsed
@@ -529,14 +525,13 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
         markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
       )
       if (childLive) {
-        // Live worker: the per-element streaming target — a fixed-height 2-line
-        // plain_text glimpse (see plainTextElement / capStreamPreview). plain_text
-        // shows the stream verbatim so partial markdown never flashes, and the
-        // padded tail holds a constant height instead of growing/oscillating.
-        // Always emitted (even when seeded blank) so the stream has a target from
-        // the first render.
+        // Live worker: the per-element streaming target — a ≤2-line markdown
+        // glimpse. Must be `markdown` (Feishu rejects plain_text as a top-level
+        // body element); capStreamPreview strips markdown markers so the stream
+        // renders flat with no bold/heading flashing. Always emitted (even when
+        // seeded blank) so the stream has a target from the first render.
         elements.push(
-          plainTextElement(
+          markdownElement(
             capStreamPreview(child.latestProgress ?? ''),
             taskCardProgressElementId(child.id),
           ),
@@ -591,10 +586,10 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Main agent's live line is a streaming target too — same fixed-height 2-line
-    // plain_text glimpse as the child live element (verbatim, no flashing).
+    // Main agent's live line is a streaming target too — same ≤2-line markdown
+    // glimpse as the child live element (markdown-stripped, no flashing).
     elements.push(
-      plainTextElement(
+      markdownElement(
         capStreamPreview(latest.text),
         taskCardProgressElementId('root'),
       ),
