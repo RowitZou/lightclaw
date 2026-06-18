@@ -8,6 +8,7 @@ import type { ChainState } from '../signal-bus/chain-state.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { addLink, createUser } from '../identity/store.js'
+import { t } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
 import {
@@ -564,7 +565,12 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(
       (billingNotices[0]?.card.header as { title?: { content?: string } } | undefined)
         ?.title?.content,
-      'Scheduled task billing wall',
+      t('channel.circuitBreaker.billingWall.title'),
+    )
+    // Billing wall is provider-actionable, not a hard failure → orange, not red.
+    assert.equal(
+      (billingNotices[0]?.card.header as { template?: string } | undefined)?.template,
+      'orange',
     )
 
     await onFireComplete('alice', afterBilling, 'fire-billing-2', {

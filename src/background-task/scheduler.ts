@@ -29,6 +29,7 @@ import {
 import { getCircuitBreakerCardCoordinator } from '../channels/feishu/circuit-breaker-card.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { buildSystemNoticeCard } from '../channels/feishu/system-notice.js'
+import { t } from '../i18n/index.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
@@ -782,13 +783,12 @@ export class BackgroundTaskScheduler {
       await sender.sendInteractiveCardToOpenId(
         ownerOpenId,
         buildSystemNoticeCard({
-          kind: 'error',
+          // billing wall is provider-actionable & recoverable, not a hard
+          // failure — orange (warning), not red (D14).
+          kind: 'warning',
           bodyFormat: 'plain_text',
-          title: 'Scheduled task billing wall',
-          content: [
-            `${task.label} hit a provider billing or quota limit.`,
-            'LightClaw will not count this as a circuit-breaker failure. Update provider billing/quota settings before expecting this schedule to recover.',
-          ].join('\n'),
+          title: t('channel.circuitBreaker.billingWall.title'),
+          content: t('channel.circuitBreaker.billingWall.body', { label: task.label }),
         }),
         { purpose: 'notice', canonicalUser },
       )

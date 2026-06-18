@@ -1,7 +1,10 @@
 // System-feedback notice cards. Distinct from LLM replies (plain text) and
-// permission-request cards (yellow). Two flavors:
-//   - 'info'  → wathet: success / routine notification
-//   - 'error' → red:    failure / warning / timeout / rate-limited
+// permission-request cards (yellow). Three flavors (red kept scarce — see the
+// D14 color rationalization: red is only for genuine hard failure):
+//   - 'info'    → wathet: success / routine / transient-will-self-heal
+//   - 'warning' → orange: needs attention but recoverable / actionable
+//                         (billing wall, model/endpoint config, auth)
+//   - 'error'   → red:    genuine hard failure / unrecoverable / urgent
 //
 // Card title text is i18n-aware (LightClaw 提示 / LightClaw notice etc.) and
 // resolved at render time via the active locale.
@@ -20,18 +23,23 @@
 
 import { t } from '../../i18n/index.js'
 
-export type SystemNoticeKind = 'info' | 'error'
+export type SystemNoticeKind = 'info' | 'warning' | 'error'
 export type SystemNoticeBodyFormat = 'lark_md' | 'plain_text'
 
 const TEMPLATE_BY_KIND: Record<SystemNoticeKind, string> = {
   info: 'wathet',
+  warning: 'orange',
   error: 'red',
 }
 
 function defaultTitle(kind: SystemNoticeKind): string {
-  return kind === 'info'
-    ? t('channel.system.title.info')
-    : t('channel.system.title.error')
+  if (kind === 'info') {
+    return t('channel.system.title.info')
+  }
+  if (kind === 'warning') {
+    return t('channel.system.title.warning')
+  }
+  return t('channel.system.title.error')
 }
 
 export function buildSystemNoticeCard(input: {

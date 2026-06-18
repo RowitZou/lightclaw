@@ -310,6 +310,23 @@ function isOverloadedError(error: unknown): boolean {
   return OVERLOADED_PATTERN.test(errorDetailText(error))
 }
 
+const MODEL_OR_ENDPOINT_PATTERN =
+  /\b404\b|model[_\s-]?not[_\s-]?found|no such model|unknown model|does not exist/i
+
+// Copy-layer ONLY: 404 / model-not-found means the configured model or
+// endpoint is unavailable, so the failure card should say "check /model and
+// endpoint config" rather than "internal error, resend". Deliberately NOT
+// wired into isTransientError — 404 is already fatal via FATAL_HTTP_STATUS and
+// the retry decision must not change (resending the same 404 is pointless).
+export function isModelOrEndpointError(error: unknown): boolean {
+  for (const node of queryErrorChain(error)) {
+    if (httpStatusOf(node) === 404) {
+      return true
+    }
+  }
+  return MODEL_OR_ENDPOINT_PATTERN.test(errorDetailText(error))
+}
+
 /** True for /stop and interjection auto-abort — never retried. */
 export function isAbortError(error: unknown): boolean {
   for (const node of queryErrorChain(error)) {

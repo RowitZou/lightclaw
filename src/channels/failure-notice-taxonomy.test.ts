@@ -1,0 +1,133 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+
+import { formatNoticeFromFailure } from './runner.js'
+import { isTransientError } from '../transient-error.js'
+import { t } from '../i18n/index.js'
+
+// D12 contract: the retry axis (isTransientError on the error) and the copy
+// axis (formatNoticeFromFailure on its detail string) must agree per taxonomy
+// class. A new error type wired into one axis but not the other trips a check
+// here — this is the "fix the class, not the instance" lock against the two
+// classifiers drifting apart again (the 2026-06 dogfood failure).
+type Sample = {
+  name: string
+  error: unknown // retry axis input
+  detail: string // copy axis input (the string repr the runner sees)
+  expectTransient: boolean
+  expectKind: 'info' | 'warning' | 'error'
+  // Category label that must appear in the card text. Omitted for the
+  // transient card (no category line — it carries the transient reason).
+  expectCat?: string
+}
+
+const SAMPLES: Sample[] = [
+  {
+    name: 'billing insufficient_quota',
+    error: { status: 429, error: { type: 'insufficient_quota', message: 'You exceeded your current quota.' } },
+    detail: 'insufficient_quota: You exceeded your current quota.',
+    expectTransient: false,
+    expectKind: 'warning',
+    expectCat: t('channel.failure.cat.billing'),
+  },
+  {
+    name: 'model/endpoint 404',
+    error: { status: 404, message: 'The model `foo` does not exist' },
+    detail: 'OpenAI Responses error: status=404 The model `foo` does not exist',
+    expectTransient: false,
+    expectKind: 'warning',
+    expectCat: t('channel.failure.cat.modelEndpoint'),
+  },
+  {
+    name: 'credential',
+    error: new Error('authentication failed'),
+    detail: 'authentication failed',
+    expectTransient: false,
+    expectKind: 'warning',
+    expectCat: t('channel.failure.cat.credentials'),
+  },
+  {
+    name: 'real rate-limit (try again)',
+    error: { status: 429, message: 'Rate limit reached, please try again in 20s' },
+    detail: 'Rate limit reached, please try again in 20s',
+    expectTransient: true,
+    expectKind: 'info',
+  },
+  {
+    name: 'overloaded 529',
+    error: { status: 529, error: { type: 'overloaded_error' } },
+    detail: 'overloaded_error: server overloaded',
+    expectTransient: true,
+    expectKind: 'info',
+  },
+  {
+    name: 'validation 400 invalid_request',
+    error: { status: 400, error: { type: 'invalid_request_error', message: 'Invalid request: messages.0' } },
+    detail: 'invalid_request_error: Invalid request: messages.0',
+    expectTransient: false,
+    expectKind: 'error',
+    expectCat: t('channel.failure.cat.validation'),
+  },
+  {
+    name: 'unknown fatal (422)',
+    error: { status: 422, message: 'Unprocessable entity: weird' },
+    detail: 'status=422 Unprocessable entity: weird',
+    expectTransient: false,
+    expectKind: 'error',
+    expectCat: t('channel.failure.cat.generic'),
+  },
+]
+
+describe('failure notice taxonomy (D12 contract)', () => {
+  for (const s of SAMPLES) {
+    it(`${s.name}: retry axis and copy axis agree`, () => {
+      assert.equal(isTransientError(s.error), s.expectTransient, 'retry axis')
+      const notice = formatNoticeFromFailure(s.detail, s.expectTransient)
+      assert.equal(notice.kind, s.expectKind, 'notice color/kind')
+      if (s.expectCat) {
+        assert.ok(
+          notice.text.includes(s.expectCat),
+          `category should be ${s.expectCat}; got:\n${notice.text}`,
+        )
+      } else {
+        assert.ok(notice.text.includes(t('channel.failure.transientReason')))
+      }
+    })
+  }
+
+  // Pins the two dogfood regressions PR6 fixes (old code returned cat.rate +
+  // "resend" for billing, cat.generic + "internal error" for 404).
+  it('billing maps to billing (not rate) and is actionable', () => {
+    const notice = formatNoticeFromFailure('insufficient_quota: You exceeded your current quota.', false)
+    assert.equal(notice.kind, 'warning')
+    assert.ok(notice.text.includes(t('channel.failure.cat.billing')))
+    assert.equal(notice.text.includes(t('channel.failure.cat.rate')), false, 'must not fall to rate')
+    assert.ok(notice.text.includes(t('channel.failure.billingHint')))
+  })
+
+  it('404 maps to model/endpoint, not generic internal error', () => {
+    const notice = formatNoticeFromFailure('OpenAI Responses status=404 (no body)', false)
+    assert.equal(notice.kind, 'warning')
+    assert.ok(notice.text.includes(t('channel.failure.cat.modelEndpoint')))
+    assert.equal(notice.text.includes(t('channel.failure.cat.generic')), false)
+  })
+
+  // D13: provider-actionable hints never tell the user to contact an admin
+  // (forward-compat with bring-your-own-credential).
+  it('provider-actionable hints do not mention contact-admin', () => {
+    const adminHint = t('channel.failure.contactAdminHint')
+    for (const detail of [
+      'insufficient_quota: out of credits',
+      'status=404 model not found',
+      'authentication failed',
+    ]) {
+      const notice = formatNoticeFromFailure(detail, false)
+      assert.equal(notice.kind, 'warning')
+      assert.equal(
+        notice.text.includes(adminHint),
+        false,
+        `provider failure must not carry the contact-admin hint: ${detail}`,
+      )
+    }
+  })
+})

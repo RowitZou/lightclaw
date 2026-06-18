@@ -56,7 +56,10 @@ import {
 import { refreshSkillRegistry } from '../skill/registry.js'
 import {
   ABORT_FAILURE_PATTERN,
+  isBillingError,
   isCredentialError,
+  isModelOrEndpointError,
+  isRateLimitError,
   isTransientError,
   retryDelayMsWithRetryAfter,
 } from '../transient-error.js'
@@ -119,7 +122,7 @@ function getMainRoleRoute(config: ReturnType<typeof getConfig>) {
  * append / compact, hook lifecycle, runQuery with mode='channel') lives in
  * ChannelRunner and never needs channel-specific branching.
  */
-export type SystemNoticeKind = 'info' | 'error'
+export type SystemNoticeKind = 'info' | 'warning' | 'error'
 
 export type ChannelRunnerStrategy = {
   channelId: ChannelId
@@ -1553,7 +1556,8 @@ export class ChannelRunner {
             // abort. Skip the notice (transcript marker already records the
             // /stop attribution via formatQueryFailure).
             if (!ABORT_FAILURE_PATTERN.test(detail)) {
-              await this.sendNotice(effectiveMessage, 'error', formatNoticeFromFailure(detail, isTransient))
+              const notice = formatNoticeFromFailure(detail, isTransient)
+              await this.sendNotice(effectiveMessage, notice.kind, notice.text)
             }
             return
           }
@@ -2617,57 +2621,128 @@ function formatQueryFailure(detail: string, isTransient: boolean): string {
   return t('channel.failure.transcript', { detail })
 }
 
-// Friendly summary for the red notice card. The transcript marker (built by
-// formatQueryFailure) keeps the full detail for debugging; the card stays
+// Friendly summary for the failure notice card. The transcript marker (built
+// by formatQueryFailure) keeps the full detail for debugging; the card stays
 // short so the user gets a clear, non-overwhelming signal.
-function formatNoticeFromFailure(detail: string, isTransient: boolean): string {
+//
+// Returns both the card text AND the notice kind (color), so the card color
+// matches the failure severity instead of always being red (D14):
+//   - info (wathet)  → will self-heal: transient / rate-limit
+//   - warning(orange)→ recoverable / actionable: billing, model-endpoint,
+//                       credential, auth (provider-side — copy never says
+//                       "contact admin" per D13, the owner may hold the keys)
+//   - error (red)    → deterministic internal error: validation / 400 / unknown
+export function formatNoticeFromFailure(
+  detail: string,
+  isTransient: boolean,
+): { text: string; kind: SystemNoticeKind } {
   if (isTransient) {
-    return [
+    return {
+      text: [
+        t('channel.failure.title'),
+        '',
+        t('channel.failure.transientReason'),
+        t('channel.failure.transientHint'),
+      ].join('\n'),
+      kind: 'info',
+    }
+  }
+  const { category, hint, kind } = classifyFailure(detail)
+  const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
+  return {
+    text: [
       t('channel.failure.title'),
       '',
-      t('channel.failure.transientReason'),
-      t('channel.failure.transientHint'),
-    ].join('\n')
+      t('channel.failure.reason', { category }),
+      hint,
+      '',
+      '```',
+      head,
+      '```',
+    ].join('\n'),
+    kind,
   }
-  // Credential / auth-config failures are not retryable and "resend to retry"
-  // is wrong advice — surface the actionable import/refresh hint instead.
-  const isCredential = isCredentialError(detail)
-  const category = isCredential
-    ? t('channel.failure.cat.credentials')
-    : classifyFailure(detail)
-  const hint = isCredential
-    ? t('channel.failure.credentialHint')
-    : t('channel.failure.hint')
-  const head = detail.length > 240 ? detail.slice(0, 240) + '…' : detail
-  return [
-    t('channel.failure.title'),
-    '',
-    t('channel.failure.reason', { category }),
-    hint,
-    '',
-    '```',
-    head,
-    '```',
-  ].join('\n')
 }
 
-function classifyFailure(detail: string): string {
-  if (/ValidationException|invalid.*request|messages\.\d+/i.test(detail)) {
-    return t('channel.failure.cat.validation')
+// Single source of truth: branches in retry-taxonomy order, consuming the same
+// transient-error.ts judgments the retry decision uses (D10/D12). Each class
+// carries its category label, its hint tier, and its notice color.
+function classifyFailure(detail: string): {
+  category: string
+  hint: string
+  kind: SystemNoticeKind
+} {
+  // Provider-actionable, fatal — orange, no "contact admin" (D13: the owner
+  // may hold the keys / billing once BYO-credential lands).
+  if (isCredentialError(detail)) {
+    return {
+      category: t('channel.failure.cat.credentials'),
+      hint: t('channel.failure.credentialHint'),
+      kind: 'warning',
+    }
   }
-  if (/AccessDenied|Unauthorized|InvalidSignature|Forbidden|401|403/i.test(detail)) {
-    return t('channel.failure.cat.auth')
+  if (isBillingError(detail)) {
+    return {
+      category: t('channel.failure.cat.billing'),
+      hint: t('channel.failure.billingHint'),
+      kind: 'warning',
+    }
   }
-  if (/ThrottlingException|RateLimit|429|quota/i.test(detail)) {
-    return t('channel.failure.cat.rate')
+  if (isModelOrEndpointError(detail)) {
+    return {
+      category: t('channel.failure.cat.modelEndpoint'),
+      hint: t('channel.failure.modelEndpointHint'),
+      kind: 'warning',
+    }
   }
+  // Self-healing throttle — blue (defensive: rate-limits are normally
+  // transient and never reach this fatal path, but if one is misclassified
+  // fatal it should still read "retry later", not red).
+  if (isRateLimitError(detail)) {
+    return {
+      category: t('channel.failure.cat.rate'),
+      hint: t('channel.failure.rateHint'),
+      kind: 'info',
+    }
+  }
+  // auth (401/403) that is not a credential error — orange, actionable.
+  if (/AccessDenied|Unauthorized|InvalidSignature|Forbidden|\b401\b|\b403\b/i.test(detail)) {
+    return {
+      category: t('channel.failure.cat.auth'),
+      hint: t('channel.failure.authHint'),
+      kind: 'warning',
+    }
+  }
+  // Tool failures can be retryable (transient / permission) — blue, keep the
+  // generic "resend, then contact admin" hint.
   if (/Tool execution|tool.*error|Permission denied|abort/i.test(detail)) {
-    return t('channel.failure.cat.tool')
+    return {
+      category: t('channel.failure.cat.tool'),
+      hint: t('channel.failure.hint'),
+      kind: 'info',
+    }
+  }
+  // Deterministic internal errors — red, "contact admin" (D13: framework /
+  // protocol layer, stays an admin/ops concern even with BYO-credential).
+  if (/ValidationException|invalid.*request|messages\.\d+/i.test(detail)) {
+    return {
+      category: t('channel.failure.cat.validation'),
+      hint: t('channel.failure.contactAdminHint'),
+      kind: 'error',
+    }
   }
   if (/StatusCode: 400|InvokeModel/i.test(detail)) {
-    return t('channel.failure.cat.bad400')
+    return {
+      category: t('channel.failure.cat.bad400'),
+      hint: t('channel.failure.contactAdminHint'),
+      kind: 'error',
+    }
   }
-  return t('channel.failure.cat.generic')
+  return {
+    category: t('channel.failure.cat.generic'),
+    hint: t('channel.failure.contactAdminHint'),
+    kind: 'error',
+  }
 }
 
 export async function formatChannelUserText(

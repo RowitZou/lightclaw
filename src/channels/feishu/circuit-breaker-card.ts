@@ -1,4 +1,5 @@
 import { getIdentity } from '../../identity/store.js'
+import { t } from '../../i18n/index.js'
 import {
   getBackgroundTask,
   updateBackgroundTask,
@@ -101,7 +102,7 @@ export class CircuitBreakerCardCoordinator {
       return {
         toast: {
           type: 'warning',
-          content: 'Only the task owner can operate this card.',
+          content: t('channel.circuitBreaker.notOwner'),
         },
       }
     }
@@ -110,15 +111,15 @@ export class CircuitBreakerCardCoordinator {
     if (!task) {
       return resolvedCardResponse(
         'grey',
-        'Scheduled task unavailable',
-        'This scheduled task no longer exists.',
+        t('channel.circuitBreaker.missing.title'),
+        t('channel.circuitBreaker.missing.body'),
       )
     }
     if (!task.circuitOpen) {
       return resolvedCardResponse(
         'grey',
-        'Circuit already resolved',
-        'This scheduled task is no longer paused by the failure circuit.',
+        t('channel.circuitBreaker.resolved.title'),
+        t('channel.circuitBreaker.resolved.body'),
       )
     }
 
@@ -141,8 +142,8 @@ export class CircuitBreakerCardCoordinator {
       this.fireImmediate?.(action.ownerCanonicalUser, action.taskId)
       return resolvedCardResponse(
         'green',
-        'Scheduled task continued',
-        'The failure counter was reset and the task was queued to run again.',
+        t('channel.circuitBreaker.continued.title'),
+        t('channel.circuitBreaker.continued.body'),
       )
     }
 
@@ -154,8 +155,8 @@ export class CircuitBreakerCardCoordinator {
     })
     return resolvedCardResponse(
       'grey',
-      'Scheduled task disabled',
-      'The task will remain disabled until you update or re-enable it.',
+      t('channel.circuitBreaker.disabled.title'),
+      t('channel.circuitBreaker.disabled.body'),
     )
   }
 
@@ -176,26 +177,27 @@ export function buildCircuitBreakerCard(input: {
     ownerCanonicalUser: input.ownerCanonicalUser,
     taskId: input.taskId,
   }
-  const lines = [
-    `**${escapeLarkMd(input.label)}** paused after repeated genuine failures.`,
-    '',
-    input.failureSummary
-      ? `Last failure: ${escapeLarkMd(input.failureSummary)}`
-      : 'The last failure did not include a summary.',
-  ]
+  const body = input.failureSummary
+    ? t('channel.circuitBreaker.card.body', {
+        label: escapeLarkMd(input.label),
+        summary: escapeLarkMd(input.failureSummary),
+      })
+    : t('channel.circuitBreaker.card.bodyNoSummary', {
+        label: escapeLarkMd(input.label),
+      })
   return {
     schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
       template: 'orange',
-      title: { tag: 'plain_text', content: 'Scheduled task paused' },
+      title: { tag: 'plain_text', content: t('channel.circuitBreaker.card.title') },
     },
     body: {
       elements: [{
         tag: 'form',
         name: 'circuit_breaker_form',
         elements: [
-          { tag: 'markdown', content: lines.join('\n') },
+          { tag: 'markdown', content: body },
           {
             tag: 'column_set',
             columns: [
@@ -205,7 +207,7 @@ export function buildCircuitBreakerCard(input: {
                 elements: [{
                   tag: 'button',
                   name: 'circuit_continue',
-                  text: { tag: 'plain_text', content: 'Continue now' },
+                  text: { tag: 'plain_text', content: t('channel.circuitBreaker.button.continue') },
                   type: 'primary',
                   form_action_type: 'submit',
                   behaviors: [{
@@ -220,7 +222,7 @@ export function buildCircuitBreakerCard(input: {
                 elements: [{
                   tag: 'button',
                   name: 'circuit_disable',
-                  text: { tag: 'plain_text', content: 'Disable schedule' },
+                  text: { tag: 'plain_text', content: t('channel.circuitBreaker.button.disable') },
                   type: 'default',
                   form_action_type: 'submit',
                   behaviors: [{
