@@ -32,6 +32,8 @@ import {
   CardKitStreamSession,
   STREAMING_UPDATE_THROTTLE_MS,
 } from './streaming-card.js'
+import { card2, markdown } from './card2.js'
+import type { TaskCardTarget } from './task-card-patcher.js'
 
 // Topic-group create refusal. Feishu's `im.message.create` does not accept
 // `receive_id_type='thread_id'` — the API rejects with 400 / field
@@ -115,7 +117,7 @@ const TRANSIENT_MESSAGE_PATTERN =
 type SendResponse = {
   code?: number
   msg?: string
-  data?: { message_id?: string }
+  data?: { message_id?: string } & Record<string, unknown>
 }
 
 type FeishuFileType = 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream'
@@ -230,7 +232,7 @@ export class FeishuSender {
   // LLM reply path. Feishu's plain `msg_type=text` does NOT render markdown,
   // so a multi-paragraph response with **bold**, ## headings or `- bullets`
   // shows as literal asterisks/hashes/dashes. We send each chunk as a
-  // headerless interactive card with a `lark_md` body so the same content
+  // headerless interactive card with a markdown body so the same content
   // renders properly. The card has no title bar — it visually reads as a
   // bordered markdown block, not a system notice.
   async sendMarkdownText(
@@ -309,6 +311,96 @@ export class FeishuSender {
     })
     const result = await session.streamText(message, text)
     return { aborted: result.aborted }
+  }
+
+  supportsCardkitLiveCards(): boolean {
+    return this.config.streamingReply
+  }
+
+  async createLiveInteractiveCard(
+    target: TaskCardTarget,
+    card: Record<string, unknown>,
+  ): Promise<{ messageId?: string; cardId?: string; sequence: number }> {
+    const created = await this.client.cardkit.v1.card.create({
+      data: {
+        type: 'card_json',
+        data: JSON.stringify(withCardkitStreamingConfig(card)),
+      },
+    })
+    assertOk(created, 'Feishu cardkit create live card failed')
+    const cardId = created.data?.card_id
+    if (!cardId) {
+      throw new Error('Feishu cardkit create live card failed: missing card_id')
+    }
+    const response = await this.sendReplyOrCreate({
+      chatId: target.chatId,
+      replyToMessageId: target.replyAnchorMessageId,
+      ...(target.threadId ? { threadId: target.threadId } : {}),
+      msgType: 'interactive',
+      content: buildCardkitCardReferenceContent(cardId),
+      uuid: randomUUID(),
+    })
+    const messageId = response.data?.message_id
+    return {
+      ...(messageId ? { messageId } : {}),
+      cardId,
+      sequence: 0,
+    }
+  }
+
+  async updateLiveInteractiveCard(
+    cardId: string,
+    sequence: number,
+    card: Record<string, unknown>,
+  ): Promise<number> {
+    const next = sequence + 1
+    const response = await this.client.cardkit.v1.card.update({
+      path: { card_id: cardId },
+      data: {
+        card: {
+          type: 'card_json',
+          data: JSON.stringify(withCardkitStreamingConfig(card)),
+        },
+        sequence: next,
+        uuid: randomUUID(),
+      },
+    })
+    assertOk(response, 'Feishu cardkit update live card failed')
+    return next
+  }
+
+  async pushLiveCardElement(
+    cardId: string,
+    elementId: string,
+    sequence: number,
+    content: string,
+  ): Promise<number> {
+    const next = sequence + 1
+    const response = await this.client.cardkit.v1.cardElement.content({
+      path: { card_id: cardId, element_id: elementId },
+      data: { content, sequence: next, uuid: randomUUID() },
+    })
+    assertOk(response, 'Feishu cardkit element content failed')
+    return next
+  }
+
+  async closeLiveCard(cardId: string, sequence: number, summary: string): Promise<number> {
+    const next = sequence + 1
+    const response = await this.client.cardkit.v1.card.settings({
+      path: { card_id: cardId },
+      data: {
+        settings: JSON.stringify({
+          config: {
+            streaming_mode: false,
+            summary: { content: summary.slice(0, 120) },
+          },
+        }),
+        sequence: next,
+        uuid: randomUUID(),
+      },
+    })
+    assertOk(response, 'Feishu cardkit close live card failed')
+    return next
   }
 
   async sendInteractiveCard(
@@ -921,12 +1013,10 @@ export class FeishuSender {
 }
 
 function buildMarkdownCard(content: string): Record<string, unknown> {
-  return {
+  return card2({
     config: { enable_forward: false, wide_screen_mode: true },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content } },
-    ],
-  }
+    elements: [markdown(content)],
+  })
 }
 
 function describeRecipient(recipient: PendingRecipient): string {
@@ -1080,5 +1170,23 @@ function assertOk(response: SendResponse, prefix: string): void {
       agentMessage: `${prefix}: ${classification.agentMessage}`,
       adminMessage: `${prefix}: ${classification.adminMessage}`,
     })
+  }
+}
+
+function withCardkitStreamingConfig(card: Record<string, unknown>): Record<string, unknown> {
+  const config = typeof card.config === 'object' && card.config !== null
+    ? card.config as Record<string, unknown>
+    : {}
+  return {
+    ...card,
+    config: {
+      ...config,
+      update_multi: true,
+      streaming_mode: true,
+      streaming_config: {
+        print_frequency_ms: { default: 50 },
+        print_step: { default: 1 },
+      },
+    },
   }
 }

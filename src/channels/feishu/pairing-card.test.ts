@@ -56,8 +56,10 @@ describe('PairingCardCoordinator', () => {
     assert.equal(sender.replyCards.length, 0, 'no in-chat echo')
     assert.equal(sender.openIdCards.length, 1)
     assert.equal(sender.openIdCards[0].openId, 'ou_user')
+    assert.equal(sender.openIdCards[0].card.schema, '2.0')
 
     const action = extractAction(cardForOpenId(sender, 'ou_user'), 'cancel')
+    assert.equal(action.kind, 'lightclaw_pairing')
     const response = await coord.handleCardAction(action)
 
     assert.match(JSON.stringify(response), /已取消申请/)
@@ -460,13 +462,16 @@ function cardsForOpenId(
 
 function extractAction(card: Record<string, unknown>, action: string): PairingCardAction {
   const json = JSON.stringify(card)
-  const parsed = JSON.parse(json) as {
-    elements: Array<{ actions?: Array<{ value?: PairingCardAction }> }>
-  }
-  for (const element of parsed.elements) {
-    for (const button of element.actions ?? []) {
-      if (button.value?.action === action) {
-        return button.value
+  const parsed = JSON.parse(json) as any
+  const elements = parsed.body?.elements ?? parsed.elements ?? []
+  for (const element of elements) {
+    const buttons = element.actions
+      ?? element.columns?.flatMap((column: any) => column.elements ?? [])
+      ?? []
+    for (const button of buttons) {
+      const value = button.value ?? button.behaviors?.[0]?.value
+      if (value?.action === action) {
+        return value
       }
     }
   }

@@ -9,6 +9,7 @@ import {
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
   TASK_CARD_TIMELINE_LINE_MAX_CHARS,
+  taskCardProgressElementId,
   type TaskCardChildView,
   type TaskCardView,
 } from './task-card.js'
@@ -67,6 +68,10 @@ function panelTitle(panel: Record<string, unknown>): string {
   return header.title.content
 }
 
+function bodyElements(card: Record<string, unknown>): Array<Record<string, unknown>> {
+  return (card.body as { elements: Array<Record<string, unknown>> }).elements
+}
+
 void test('buildTaskCard renders 2.0 schema with root panel and per-child sibling panels', () => {
   setLang('cn')
   const card = buildTaskCard(baseView())
@@ -80,6 +85,10 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
   assert.equal(panels.length, 3)
   for (const panel of panels) {
     assert.equal(panel.expanded, false)
+    assert.deepEqual(panel.header && (panel.header as any).icon, {
+      tag: 'standard_icon',
+      token: 'right_outlined',
+    })
     const inner = panel.elements as Array<{ tag: string }>
     assert.ok(inner.every(el => el.tag !== 'collapsible_panel'))
   }
@@ -90,6 +99,22 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
   assert.ok(panelText(rootPanel).includes('token\n\n**23:21** 目录信息已补齐'))
   // Breadcrumb-merged descendant line stays inside the direct child's panel.
   assert.ok(panelText(panels[1]).includes('[webSearcher→localExplorer]'))
+
+  const elements = bodyElements(card)
+  const childTitleIndex = elements.findIndex(el =>
+    typeof el.content === 'string'
+    && el.content.includes('**检索下载 Top-2 论文 · 进行中**')
+  )
+  assert.ok(childTitleIndex >= 0, 'child title/status gets its own bold line')
+  assert.deepEqual(elements[childTitleIndex + 1], {
+    tag: 'markdown',
+    element_id: taskCardProgressElementId('run-child-2'),
+    content: '正在下载第二篇 PDF',
+  })
+  const rootProgressIndex = elements.findIndex(el => (el as any).element_id === 'progress:root')
+  assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
+  assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent · 进行中**'))
+  assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
 })
 
 void test('buildTaskCard caps children and timelines with overflow lines', () => {

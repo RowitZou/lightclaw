@@ -18,6 +18,27 @@ import type { NormalizedChannelMessage } from '../types.js'
 import { FeishuPermissionCoordinator } from './permission-card.js'
 import type { FeishuSender } from './sender.js'
 
+function cardElements(card: Record<string, any>): Array<Record<string, any>> {
+  return card.body?.elements ?? card.elements ?? []
+}
+
+function cardButtons(card: Record<string, any>): Array<Record<string, any>> {
+  return cardElements(card).flatMap(element =>
+    element.actions
+      ?? element.columns?.flatMap((column: any) => column.elements ?? [])
+      ?? []
+  )
+}
+
+function buttonValue(button: Record<string, any>): Record<string, any> | undefined {
+  return button.value ?? button.behaviors?.[0]?.value
+}
+
+function firstMarkdownContent(card: Record<string, any>): string {
+  const first = cardElements(card)[0]
+  return first?.content ?? first?.text?.content ?? ''
+}
+
 class FakeSender {
   cardSends = 0
   dmCardSends = 0
@@ -148,6 +169,10 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     // Let the queue settle (renderPending is fire-and-forget)
     await new Promise(r => setImmediate(r))
     assert.equal(sender.cardSends, 1, 'only the head renders a card')
+    assert.equal(sender.lastCard?.schema, '2.0')
+    assert.equal(cardElements(sender.lastCard!)[0]!.tag, 'markdown')
+    assert.equal(cardButtons(sender.lastCard!).length, 3)
+    assert.equal(buttonValue(cardButtons(sender.lastCard!)[0]!)?.kind, 'lightclaw_permission')
     // Cleanup: deny all so promises resolve before the test exits
     await coord.handleCardAction({
       requestId: extractHeadId(coord),
@@ -298,11 +323,10 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     // Card payload must omit the middle "以后都允许" button.
     const card = sender.lastCard
     assert.ok(card, 'card was sent')
-    const action = card!.elements.find((e: any) => e.tag === 'action')
-    assert.ok(action, 'action row present')
-    assert.equal(action.actions.length, 2, 'high-risk → 2 buttons only')
-    assert.equal(action.actions[0].text.content, '本次允许')
-    assert.equal(action.actions[1].text.content, '拒绝')
+    const buttons = cardButtons(card!)
+    assert.equal(buttons.length, 2, 'high-risk → 2 buttons only')
+    assert.equal(buttons[0]!.text.content, '本次允许')
+    assert.equal(buttons[1]!.text.content, '拒绝')
     assert.equal((card as any).header.template, 'red', 'header turns red for high-risk')
 
     // Stale-card click for "allow_rules" must downgrade, not persist.
@@ -344,8 +368,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     await new Promise(r => setImmediate(r))
 
     const card = sender.lastCard
-    const action = card!.elements.find((e: any) => e.tag === 'action')
-    assert.equal(action.actions.length, 2, 'sudo via raw-input fallback also hides middle')
+    assert.equal(cardButtons(card!).length, 2, 'sudo via raw-input fallback also hides middle')
 
     // Cleanup: deny so promise resolves
     await coord.handleCardAction({
@@ -408,9 +431,8 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
 
     assert.equal(sender.dmCardSends, 1)
     assert.equal(sender.cardSends, 0)
-    const actionRow = sender.lastDmCard!.elements.find((e: any) => e.tag === 'action')
     assert.equal(
-      actionRow.actions[0].value.originSessionId,
+      buttonValue(cardButtons(sender.lastDmCard!)[0]!)?.originSessionId,
       'feishu:group:chat-group:alice-open-id',
     )
 
@@ -695,8 +717,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     // template flips to red and the chosen-label echoes the auto-deny reason.
     const card = sender.lastPatchedCard as Record<string, any>
     assert.equal((card.header as any).template, 'red')
-    const elements = card.elements as Array<{ text: { content: string } }>
-    assert.match(elements[0].text.content, /(已自动撤销|auto-revoked)/i)
+    assert.match(firstMarkdownContent(card), /(已自动撤销|auto-revoked)/i)
   }))
 
   it('expirePending patches the stale approval card to resolved', t => inSession(async () => {
@@ -729,8 +750,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     )
     const card = sender.lastPatchedCard as Record<string, any>
     assert.equal((card.header as any).template, 'red')
-    const elements = card.elements as Array<{ text: { content: string } }>
-    assert.match(elements[0].text.content, /(超时|expired)/i)
+    assert.match(firstMarkdownContent(card), /(超时|expired)/i)
   }))
 
   it('AbortSignal-driven deny patches the stale approval card to resolved', () => inSession(async () => {
@@ -762,8 +782,7 @@ describe('FeishuPermissionCoordinator queue + reevaluate', () => {
     )
     const card = sender.lastPatchedCard as Record<string, any>
     assert.equal((card.header as any).template, 'red')
-    const elements = card.elements as Array<{ text: { content: string } }>
-    assert.match(elements[0].text.content, /(中断|aborted)/i)
+    assert.match(firstMarkdownContent(card), /(中断|aborted)/i)
   }))
 
   it('patch is skipped when no card messageId was captured', () => inSession(async () => {

@@ -22,6 +22,7 @@
 //                  the parser.
 
 import { t } from '../../i18n/index.js'
+import { card2, markdown } from './card2.js'
 
 export type SystemNoticeKind = 'info' | 'warning' | 'error'
 export type SystemNoticeBodyFormat = 'lark_md' | 'plain_text'
@@ -48,26 +49,20 @@ export function buildSystemNoticeCard(input: {
   title?: string
   bodyFormat?: SystemNoticeBodyFormat
 }): Record<string, unknown> {
-  return {
+  const content = input.bodyFormat === 'plain_text'
+    ? escapeMarkdown(input.content)
+    : input.content
+  return card2({
+    template: TEMPLATE_BY_KIND[input.kind],
+    title: input.title ?? defaultTitle(input.kind),
     config: {
       enable_forward: false,
       wide_screen_mode: true,
     },
-    header: {
-      template: TEMPLATE_BY_KIND[input.kind],
-      title: {
-        tag: 'plain_text',
-        content: input.title ?? defaultTitle(input.kind),
-      },
-    },
-    elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: input.bodyFormat ?? 'lark_md',
-          content: input.content,
-        },
-      },
-    ],
-  }
+    elements: [markdown(content)],
+  })
+}
+
+function escapeMarkdown(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|<>])/g, '\\$1')
 }

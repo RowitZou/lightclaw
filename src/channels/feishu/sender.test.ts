@@ -102,6 +102,35 @@ const baseMessage: NormalizedChannelMessage = {
   text: 'hello',
 }
 
+test('sendMarkdownText sends a headerless schema 2.0 markdown card', async () => {
+  const sent: Array<{ msg_type: string; content: string }> = []
+  const client = {
+    im: {
+      message: {
+        reply: async (input: { data: { msg_type: string; content: string } }) => {
+          sent.push(input.data)
+          return { code: 0, data: { message_id: 'om_reply' } }
+        },
+        create: async () => {
+          throw new Error('reply path should succeed')
+        },
+      },
+      file: { create: async () => null },
+    },
+  } as unknown as FeishuClient
+
+  const sender = new FeishuSender(client, baseConfig)
+  await sender.sendMarkdownText(baseMessage, '**hello**')
+
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0]!.msg_type, 'interactive')
+  const card = JSON.parse(sent[0]!.content)
+  assert.equal(card.schema, '2.0')
+  assert.equal('header' in card, false)
+  assert.equal(card.body.elements[0].tag, 'markdown')
+  assert.equal(card.body.elements[0].content, '**hello**')
+})
+
 test('FeishuSender falls back to create message after transient reply failure', async () => {
   let replyCalls = 0
   let createCalls = 0

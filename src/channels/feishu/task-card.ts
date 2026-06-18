@@ -100,6 +100,7 @@ export const TASK_CARD_TITLE_MAX_CHARS = 40
 // was raised, source-200 made preview and expanded read nearly identical.
 export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
+export const TASK_CARD_STREAM_PREVIEW_MAX_CHARS = 1000
 // Total rendered timeline characters across ALL panels (root + children). Set
 // under the old proven-OK worst case (200×80 = 16000), so the whole card stays
 // safe vs Feishu's render-size limit whatever the exact threshold — while short
@@ -176,8 +177,12 @@ function formatCacheHitRate(cacheRead: number, totalInput: number): string {
   return `${pct.toFixed(1)}%`
 }
 
-function markdownElement(content: string): Record<string, unknown> {
-  return { tag: 'markdown', content }
+function markdownElement(content: string, elementId?: string): Record<string, unknown> {
+  return {
+    tag: 'markdown',
+    ...(elementId ? { element_id: elementId } : {}),
+    content,
+  }
 }
 
 function hrElement(): Record<string, unknown> {
@@ -206,6 +211,10 @@ function timelinePanel(
     tag: 'collapsible_panel',
     expanded: false,
     header: {
+      icon: {
+        tag: 'standard_icon',
+        token: 'right_outlined',
+      },
       title: {
         tag: 'markdown',
         content: `**${t(titleKey, { count: String(totalCount) })}**`,
@@ -215,6 +224,10 @@ function timelinePanel(
     // apart in lark_md without a paragraph break.
     elements: [markdownElement(lines.join('\n\n'))],
   }
+}
+
+export function taskCardProgressElementId(runId: string): string {
+  return `progress:${runId}`
 }
 
 /** Approximate rendered length of one timeline line: the whitespace-collapsed
@@ -426,14 +439,19 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     )
     for (const { child, timelineCap } of plan.shown) {
       const childStyle = taskCardStatusStyle(child.status)
-      const progress = child.latestProgress
-        ? ` — ${truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)}`
-        : ''
       elements.push(
         markdownElement(
-          `${childStyle.icon} ${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)} · ${t(childStyle.wordKey)}${progress}`,
+          `${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)} · ${t(childStyle.wordKey)}**`,
         ),
       )
+      if (child.latestProgress) {
+        elements.push(
+          markdownElement(
+            truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS),
+            taskCardProgressElementId(child.id),
+          ),
+        )
+      }
       if (child.timeline.length > 0 && timelineCap > 0) {
         // Pass the ORIGINAL timeline + the budgeted cap so the panel's
         // "earlier N omitted" hint counts every dropped entry — both the
@@ -471,6 +489,16 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
 
   if (view.rootTimeline.length > 0) {
     elements.push(hrElement())
+    const latest = view.rootTimeline[view.rootTimeline.length - 1]!
+    elements.push(
+      markdownElement(`${style.icon} **${t('taskcard.root.live.title')} · ${t(style.wordKey)}**`),
+    )
+    elements.push(
+      markdownElement(
+        truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
+        'progress:root',
+      ),
+    )
     elements.push(
       timelinePanel(
         'taskcard.timeline.root.title',

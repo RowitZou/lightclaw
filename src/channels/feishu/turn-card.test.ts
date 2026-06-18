@@ -8,6 +8,7 @@ import {
   truncateTurnCardEntry,
   TURN_CARD_ENTRY_MAX_CHARS,
   TURN_CARD_MAX_ENTRIES,
+  TURN_CARD_PROGRESS_ELEMENT_ID,
 } from './turn-card.js'
 import { createTurnCardCollector } from './turn-card-collector.js'
 import type { TaskCardTarget } from './task-card-patcher.js'
@@ -49,6 +50,11 @@ function latestLine(card: Record<string, unknown>): string | undefined {
   return first.tag === 'markdown' ? first.content : undefined
 }
 
+function progressLine(card: Record<string, unknown>): string | undefined {
+  const body = card.body as { elements: Array<{ tag: string; content?: string; element_id?: string }> }
+  return body.elements.find(el => el.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content
+}
+
 void describe('turn card builder', () => {
   void it('renders one collapsed panel with timestamped entries and tail cap', () => {
     setLang('cn')
@@ -77,19 +83,43 @@ void describe('turn card builder', () => {
       { at: new Date('2026-06-12T11:05:00').getTime(), text: '第二步' },
     ]
     const live = buildTurnCard(entries)
-    assert.ok(latestLine(live)!.includes('**最新 11:05** 第二步'))
+    assert.equal(latestLine(live), '**最新 11:05**')
+    assert.equal(progressLine(live), '第二步')
     // The panel still carries the full history including the latest entry.
     assert.ok(panelLines(live).includes('第二步'))
 
     const done = buildTurnCard(entries, { finalized: true })
     assert.ok(
-      latestLine(done)!.includes('第二步'),
-      'finalized card keeps the latest line — at rest it is the only visible narration',
+      progressLine(done)!.includes('第二步'),
+      'finalized card keeps the latest progress line — at rest it is the visible narration',
     )
 
     const interrupted = buildTurnCard(entries, { finalized: true, interrupted: true })
-    assert.ok(latestLine(interrupted)!.includes('第二步'))
+    assert.ok(progressLine(interrupted)!.includes('第二步'))
     assert.ok(panelLines(interrupted).includes('本轮已中断'))
+  })
+
+  void it('splits latest heading and progress into separate streamable elements', () => {
+    setLang('cn')
+    const card = buildTurnCard([
+      { at: new Date('2026-06-12T11:05:00').getTime(), text: '正在整理结果' },
+    ])
+    const body = card.body as {
+      elements: Array<{ tag: string; content?: string; element_id?: string; header?: unknown }>
+    }
+    assert.deepEqual(body.elements.slice(0, 2), [
+      { tag: 'markdown', content: '**最新 11:05**' },
+      {
+        tag: 'markdown',
+        element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
+        content: '正在整理结果',
+      },
+    ])
+    const panel = body.elements.find(el => el.tag === 'collapsible_panel') as any
+    assert.deepEqual(panel.header.icon, {
+      tag: 'standard_icon',
+      token: 'right_outlined',
+    })
   })
 
   void it('renders a single status line before any narration lands', () => {
@@ -185,16 +215,16 @@ void describe('turn card collector', () => {
     })
     collector.add('进行中')
     await delay(20)
-    assert.ok(latestLine(calls[0]!.card)!.includes('进行中'))
+    assert.ok(progressLine(calls[0]!.card)!.includes('进行中'))
     collector.add('快好了')
     await delay(30)
     const livePatch = calls[calls.length - 1]!
-    assert.ok(latestLine(livePatch.card)!.includes('快好了'), 'latest line scrolled')
+    assert.ok(progressLine(livePatch.card)!.includes('快好了'), 'progress line scrolled')
     collector.finalize()
     await delay(30)
     assert.ok(
-      latestLine(calls[calls.length - 1]!.card)!.includes('快好了'),
-      'latest line survives a clean finalize',
+      progressLine(calls[calls.length - 1]!.card)!.includes('快好了'),
+      'progress line survives a clean finalize',
     )
 
     const second = makeFakeIo()
@@ -208,8 +238,61 @@ void describe('turn card collector', () => {
     aborted.finalize({ interrupted: true })
     await delay(30)
     const last = second.calls[second.calls.length - 1]!
-    assert.ok(latestLine(last.card)!.includes('跑到一半'))
+    assert.ok(progressLine(last.card)!.includes('跑到一半'))
     assert.ok(panelLines(last.card).includes('本轮已中断'))
+  })
+
+  void it('streams text deltas into the progress element when CardKit state is available', async () => {
+    const calls: IoCall[] = []
+    const pushed: Array<{ sequence: number; elementId: string; content: string }> = []
+    const closed: Array<{ sequence: number; summary: string }> = []
+    const collector = createTurnCardCollector({
+      target: { chatId: 'oc_1', replyAnchorMessageId: 'om_user' },
+      io: {
+        async create(target: TaskCardTarget, card: Record<string, unknown>) {
+          calls.push({ kind: 'create', target, card })
+          return { messageId: 'om_turncard', cardId: 'card_turn', sequence: 0 }
+        },
+        async patch(messageId: string, card: Record<string, unknown>, live?: { sequence: number }) {
+          calls.push({ kind: 'patch', messageId, card })
+          return live ? { sequence: live.sequence + 1 } : {}
+        },
+        async pushElement(input: {
+          sequence: number
+          elementId: string
+          content: string
+        }) {
+          pushed.push(input)
+          return { sequence: input.sequence + 1 }
+        },
+        async close(input: { sequence: number; summary: string }) {
+          closed.push(input)
+          return { sequence: input.sequence + 1 }
+        },
+      },
+      throttleMs: 10,
+    })
+
+    await collector.add('第一段')
+    collector.stream('增量一')
+    collector.stream('，增量二')
+    await delay(30)
+
+    assert.equal(pushed.length, 1, 'rapid deltas coalesce into one element push')
+    assert.deepEqual(pushed[0], {
+      cardId: 'card_turn',
+      sequence: 0,
+      elementId: TURN_CARD_PROGRESS_ELEMENT_ID,
+      content: '增量一，增量二',
+    })
+
+    collector.add('第二段')
+    await delay(30)
+    collector.finalize()
+    await delay(30)
+    assert.ok(calls.some(call => call.kind === 'patch'), 'whole-card updates still settle panels')
+    assert.equal(closed.length, 1, 'CardKit streaming mode is closed on finalize')
+    assert.equal(closed[0]!.summary, '第二段')
   })
 
   void it('an empty interim block begins the card and the first add is awaitable', async () => {
@@ -230,7 +313,7 @@ void describe('turn card collector', () => {
     await delay(30)
     const patch = calls[calls.length - 1]!
     assert.equal(patch.kind, 'patch')
-    assert.ok(latestLine(patch.card)!.includes('第一段叙述'))
+    assert.ok(progressLine(patch.card)!.includes('第一段叙述'))
   })
 
   void it('a throwing io never escapes', async () => {

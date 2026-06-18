@@ -27,6 +27,7 @@ import {
   setIdentityRules,
 } from '../../state.js'
 import type { NormalizedChannelMessage } from '../types.js'
+import { action as card2Action, button as card2Button, card2, markdown } from './card2.js'
 import { isFeishuGroupChatType } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { buildSystemNoticeCard, type SystemNoticeKind } from './system-notice.js'
@@ -721,33 +722,18 @@ function buildApprovalCard(pending: PendingPermission): Record<string, unknown> 
         buildButton(t('permission.feishu.btn.deny'), 'danger', pending.id, 'deny', pending.sessionId),
       ]
 
-  return {
+  return card2({
+    template: headerTemplate,
+    title: headerTitle,
     config: {
       enable_forward: false,
       wide_screen_mode: true,
     },
-    header: {
-      template: headerTemplate,
-      title: {
-        tag: 'plain_text',
-        content: headerTitle,
-      },
-    },
     elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: bodyLines.join('\n'),
-        },
-      },
-      {
-        tag: 'action',
-        layout: 'flow',
-        actions: buttons,
-      },
+      markdown(bodyLines.join('\n')),
+      card2Action(buttons),
     ],
-  }
+  })
 }
 
 function buildButton(
@@ -757,20 +743,16 @@ function buildButton(
   action: FeishuPermissionActionKind,
   originSessionId: string,
 ): Record<string, unknown> {
-  return {
-    tag: 'button',
+  return card2Button({
+    text,
     type,
-    text: {
-      tag: 'plain_text',
-      content: text,
-    },
     value: {
       kind: 'lightclaw_permission',
       requestId,
       action,
       originSessionId,
     },
-  }
+  })
 }
 
 type ResolvedOutcome = 'allow_once' | 'allow_rules' | 'deny'
@@ -805,39 +787,28 @@ function buildResolvedCard(
     : t('permission.feishu.summary.titleAccepted')
   const icon = resolution.outcome === 'deny' ? '❌' : '✅'
 
-  return {
+  return card2({
+    template,
+    title,
     config: {
       enable_forward: false,
       wide_screen_mode: true,
     },
-    header: {
-      template,
-      title: {
-        tag: 'plain_text',
-        content: title,
-      },
-    },
     elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: [
-            t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
-            t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
-            t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
-            // sessionId intentionally not shown — see buildApprovalCard comment.
-            '',
-            '```',
-            truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
-            '```',
-            '',
-            t('permission.feishu.summary.chosen', { icon, label: escapeLarkMd(resolution.label) }),
-          ].join('\n'),
-        },
-      },
+      markdown([
+        t('permission.feishu.fields.tool', { name: escapeLarkMd(pending.ask.toolName) }),
+        t('permission.feishu.fields.risk', { level: escapeLarkMd(pending.ask.riskLevel) }),
+        t('permission.feishu.fields.mode', { mode: escapeLarkMd(modeToAlias(pending.ask.mode)) }),
+        // sessionId intentionally not shown — see buildApprovalCard comment.
+        '',
+        '```',
+        truncate(pending.ask.inputPreview, MAX_PREVIEW_CHARS),
+        '```',
+        '',
+        t('permission.feishu.summary.chosen', { icon, label: escapeLarkMd(resolution.label) }),
+      ].join('\n')),
     ],
-  }
+  })
 }
 
 function ownerKey(pending: PendingPermission): string {

@@ -17,6 +17,7 @@ export type TurnCardEntry = {
 
 export const TURN_CARD_MAX_ENTRIES = 20
 export const TURN_CARD_ENTRY_MAX_CHARS = 200
+export const TURN_CARD_PROGRESS_ELEMENT_ID = 'progress:turn'
 
 function formatClock(ts: number): string {
   const d = new Date(ts)
@@ -58,12 +59,21 @@ export function buildTurnCard(
   const latest = entries[entries.length - 1]!
   elements.push({
     tag: 'markdown',
-    content: `**${t('turncard.latest')} ${formatClock(latest.at)}** ${latest.text}`,
+    content: `**${t('turncard.latest')} ${formatClock(latest.at)}**`,
+  })
+  elements.push({
+    tag: 'markdown',
+    element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
+    content: latest.text,
   })
   elements.push({
     tag: 'collapsible_panel',
     expanded: false,
     header: {
+      icon: {
+        tag: 'standard_icon',
+        token: 'right_outlined',
+      },
       title: {
         tag: 'markdown',
         content: `**${t('turncard.panel.title', { count: String(entries.length) })}**`,

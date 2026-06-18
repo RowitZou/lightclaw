@@ -21,6 +21,12 @@ export type TaskCardBinding = {
   /** Set after the terminal "freeze" render; a finalized card is never
    *  patched again. */
   finalizedAt?: number
+  /** CardKit card id for live cards created through cardkit.v1.card.create.
+   *  Present only when channels.feishu.streamingReply is enabled. */
+  cardId?: string
+  /** Last CardKit sequence used for this card. Every card.update /
+   *  cardElement.content / settings call must increment it. */
+  cardSequence?: number
 }
 
 function bindingPath(ownerCanonicalUser: string, rootRunId: string): string {
@@ -49,6 +55,8 @@ export async function readTaskCardBinding(
         ? { replyAnchorMessageId: parsed.replyAnchorMessageId }
         : {}),
       ...(typeof parsed.finalizedAt === 'number' ? { finalizedAt: parsed.finalizedAt } : {}),
+      ...(typeof parsed.cardId === 'string' ? { cardId: parsed.cardId } : {}),
+      ...(typeof parsed.cardSequence === 'number' ? { cardSequence: parsed.cardSequence } : {}),
     }
   } catch {
     return null

@@ -25,11 +25,15 @@ describe('Notify tool', () => {
   })
 
   it('maps severity to Feishu card header colors', () => {
-    assert.equal((buildNotifyCard({
+    const info = buildNotifyCard({
       title: 'Info',
       body: 'Done.',
       severity: 'info',
-    }).header as { template: string }).template, 'green')
+    }) as any
+    assert.equal(info.schema, '2.0')
+    assert.equal(info.body.elements[0].tag, 'markdown')
+    assert.equal(info.body.elements[0].content, 'Done.')
+    assert.equal(info.header.template, 'green')
     assert.equal((buildNotifyCard({
       title: 'Warning',
       body: 'Look soon.',
@@ -42,4 +46,3 @@ describe('Notify tool', () => {
     }).header as { template: string }).template, 'red')
   })
 })
-

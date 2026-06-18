@@ -19,6 +19,7 @@ import {
 import {
   buildTurnCard,
   truncateTurnCardEntry,
+  TURN_CARD_PROGRESS_ELEMENT_ID,
   type TurnCardEntry,
 } from './turn-card.js'
 
@@ -28,9 +29,14 @@ export type TurnCardCollector = {
   add(text: string): Promise<void> | void
   /** Freeze the card (idempotent). `interrupted` appends a closing line. */
   finalize(opts?: { interrupted?: boolean }): void
+  /** Push in-flight text into the dedicated progress element when this card
+   *  was created through CardKit. No-op before the card exists or on fallback
+   *  raw interactive cards. */
+  stream(text: string): void
 }
 
 type TurnCardIo = Pick<TaskCardIo, 'create' | 'patch'>
+  & Pick<Partial<TaskCardIo>, 'pushElement' | 'close'>
 
 function defaultIo(): TurnCardIo {
   return {
@@ -59,6 +65,9 @@ export function createTurnCardCollector(input: {
   const lane = `turn-${randomUUID()}`
   const entries: TurnCardEntry[] = []
   let messageId: string | undefined
+  let cardId: string | undefined
+  let sequence = 0
+  let liveText = ''
   let interrupted = false
   let finalized = false
   let begun = false
@@ -75,7 +84,12 @@ export function createTurnCardCollector(input: {
       if (created.messageId) messageId = created.messageId
       return
     }
-    await io.patch(messageId, card)
+    const patched = await io.patch(
+      messageId,
+      card,
+      cardId ? { cardId, sequence } : undefined,
+    )
+    if (patched?.sequence !== undefined) sequence = patched.sequence
   }
 
   return {
@@ -95,6 +109,8 @@ export function createTurnCardCollector(input: {
               buildTurnCard(entries, {}),
             )
             if (created.messageId) messageId = created.messageId
+            if (created.cardId) cardId = created.cardId
+            if (created.sequence !== undefined) sequence = created.sequence
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
             process.stderr.write(`[turncard] create failed: ${detail}\n`)
@@ -110,10 +126,32 @@ export function createTurnCardCollector(input: {
       finalized = true
       if (!begun) return
       interrupted = opts.interrupted === true
+        patcher.schedule(lane, async () => {
+          await flush()
+          if (cardId && io.close) {
+            const closed = await io.close({
+              cardId,
+              sequence,
+              summary: entries[entries.length - 1]?.text ?? '',
+            })
+            sequence = closed.sequence
+          }
+          patcher.release(lane)
+        }, { immediate: true })
+    },
+    stream(text) {
+      liveText = liveText ? `${liveText}${text}` : text
+      if (finalized || !cardId || !io.pushElement) return
       patcher.schedule(lane, async () => {
-        await flush()
-        patcher.release(lane)
-      }, { immediate: true })
+        if (!cardId || !io.pushElement) return
+        const pushed = await io.pushElement({
+          cardId,
+          sequence,
+          elementId: TURN_CARD_PROGRESS_ELEMENT_ID,
+          content: liveText,
+        })
+        sequence = pushed.sequence
+      })
     },
   }
 }

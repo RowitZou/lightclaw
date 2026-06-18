@@ -19,6 +19,7 @@ import {
 } from '../../identity/store.js'
 import type { SenderKey } from '../../identity/types.js'
 import type { NormalizedChannelMessage } from '../types.js'
+import { action as card2Action, button as card2Button, card2, markdown } from './card2.js'
 import type { FeishuCardActionResponse } from './permission-card.js'
 import { isFeishuGroupChatType } from './routing.js'
 import type { FeishuSender } from './sender.js'
@@ -714,27 +715,23 @@ function buildCard(input: {
     value: Record<string, unknown>
   }>
 }): Record<string, unknown> {
-  return {
+  return card2({
+    template: input.template,
+    title: input.title,
     config: { enable_forward: false, wide_screen_mode: true },
-    header: {
-      template: input.template,
-      title: { tag: 'plain_text', content: input.title },
-    },
     elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: input.body } },
+      markdown(input.body),
       ...(input.actions?.length
-        ? [{
-            tag: 'action',
-            actions: input.actions.map(action => ({
-              tag: 'button',
+        ? [card2Action(input.actions.map(action =>
+            card2Button({
+              text: action.text,
               type: action.type,
-              text: { tag: 'plain_text', content: action.text },
               value: action.value,
-            })),
-          }]
+            })
+          ))]
         : []),
     ],
-  }
+  })
 }
 
 function rawCard(card: Record<string, unknown>): FeishuCardActionResponse {

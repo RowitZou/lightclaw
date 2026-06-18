@@ -133,6 +133,8 @@ export function startTaskCardPipeline(
       await writeTaskCardBinding(owner, rootRunId, {
         ...target,
         messageId: created.messageId,
+        ...(created.cardId ? { cardId: created.cardId } : {}),
+        ...(created.sequence !== undefined ? { cardSequence: created.sequence } : {}),
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
       if (terminal) {
@@ -144,11 +146,26 @@ export function startTaskCardPipeline(
       return
     }
 
-    await io.patch(binding.messageId, card)
+    const patched = await io.patch(
+      binding.messageId,
+      card,
+      binding.cardId
+        ? { cardId: binding.cardId, sequence: binding.cardSequence ?? 0 }
+        : undefined,
+    )
     if (terminal) {
       // Stamp the freeze; no settlement send here (see the !binding branch).
-      await writeTaskCardBinding(owner, rootRunId, { ...binding, finalizedAt: Date.now() })
+      await writeTaskCardBinding(owner, rootRunId, {
+        ...binding,
+        ...(patched?.sequence !== undefined ? { cardSequence: patched.sequence } : {}),
+        finalizedAt: Date.now(),
+      })
       patcher.release(rootRunId)
+    } else if (patched?.sequence !== undefined) {
+      await writeTaskCardBinding(owner, rootRunId, {
+        ...binding,
+        cardSequence: patched.sequence,
+      })
     }
   }
 

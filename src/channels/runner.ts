@@ -1175,6 +1175,9 @@ export class ChannelRunner {
                 onToolUse(event) {
                   process.stderr.write(`${channelId}: tool ${event.name}\n`)
                 },
+                onTextDelta(text) {
+                  turnCard?.stream(text)
+                },
                 // Stream each non-empty assistant turn back to the channel as
                 // soon as it lands. The user sees progress instead of waiting
                 // for the whole tool loop to finish; the final reply at

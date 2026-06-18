@@ -26,8 +26,22 @@ export type TaskCardTarget = {
 }
 
 export type TaskCardIo = {
-  create(target: TaskCardTarget, card: Record<string, unknown>): Promise<{ messageId?: string }>
-  patch(messageId: string, card: Record<string, unknown>): Promise<void>
+  create(target: TaskCardTarget, card: Record<string, unknown>): Promise<{
+    messageId?: string
+    cardId?: string
+    sequence?: number
+  }>
+  patch(
+    messageId: string,
+    card: Record<string, unknown>,
+    live?: { cardId: string; sequence: number },
+  ): Promise<{ sequence?: number } | void>
+  pushElement?(
+    live: { cardId: string; sequence: number; elementId: string; content: string },
+  ): Promise<{ sequence: number }>
+  close?(
+    live: { cardId: string; sequence: number; summary: string },
+  ): Promise<{ sequence: number }>
   /** Plain message beside the card (the root's settlement summary). */
   sendText(target: TaskCardTarget, text: string): Promise<void>
 }
@@ -133,10 +147,21 @@ export function createSenderTaskCardIo(
     | 'patchInteractiveCard'
     | 'sendMarkdownText'
     | 'sendMarkdownTextToChatId'
-  >,
+  > & Partial<Pick<
+    FeishuSender,
+    | 'supportsCardkitLiveCards'
+    | 'createLiveInteractiveCard'
+    | 'updateLiveInteractiveCard'
+    | 'pushLiveCardElement'
+    | 'closeLiveCard'
+  >>,
 ): TaskCardIo {
   return {
     async create(target, card) {
+      const createLive = sender.createLiveInteractiveCard
+      if (sender.supportsCardkitLiveCards?.() && createLive) {
+        return createLive.call(sender, target, card)
+      }
       if (target.replyAnchorMessageId) {
         // Minimal reply envelope: the sender only reads chatId / threadId /
         // messageId (reply target) / synthetic off this shape.
@@ -153,8 +178,31 @@ export function createSenderTaskCardIo(
       }
       return sender.sendInteractiveCardToChatId(target.chatId, card, {}, target.threadId)
     },
-    async patch(messageId, card) {
+    async patch(messageId, card, live) {
+      if (live && sender.updateLiveInteractiveCard) {
+        const sequence = await sender.updateLiveInteractiveCard(live.cardId, live.sequence, card)
+        return { sequence }
+      }
       await sender.patchInteractiveCard(messageId, card)
+    },
+    async pushElement(live) {
+      if (!sender.pushLiveCardElement) {
+        return { sequence: live.sequence }
+      }
+      const sequence = await sender.pushLiveCardElement(
+        live.cardId,
+        live.elementId,
+        live.sequence,
+        live.content,
+      )
+      return { sequence }
+    },
+    async close(live) {
+      if (!sender.closeLiveCard) {
+        return { sequence: live.sequence }
+      }
+      const sequence = await sender.closeLiveCard(live.cardId, live.sequence, live.summary)
+      return { sequence }
     },
     async sendText(target, text) {
       if (target.replyAnchorMessageId) {

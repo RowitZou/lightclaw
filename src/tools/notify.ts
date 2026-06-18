@@ -4,6 +4,7 @@ import { getIdentity } from '../identity/store.js'
 import { getCurrentUserId, getSessionId } from '../state.js'
 import { buildTool } from '../tool.js'
 import { getSignalRouter } from '../signal-bus/router.js'
+import { card2, markdown } from '../channels/feishu/card2.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { parseFeishuSessionId } from '../channels/feishu/routing.js'
 
@@ -120,17 +121,12 @@ export function buildNotifyCard(input: {
     warning: 'yellow',
     urgent: 'red',
   }[input.severity]
-  return {
+  return card2({
+    template,
+    title: input.title,
     config: { wide_screen_mode: true },
-    header: {
-      template,
-      title: { tag: 'plain_text', content: input.title },
-    },
-    elements: [{
-      tag: 'div',
-      text: { tag: 'lark_md', content: input.body },
-    }],
-  }
+    elements: [markdown(input.body)],
+  })
 }
 
 export const __notifyDescriptionForSnapshot = NOTIFY_DESCRIPTION
