@@ -66,6 +66,35 @@ describe('isTransientError', () => {
       })),
       true,
     )
+    // An explicit billing error.type must stay fatal even when the verbose body
+    // (or a gateway wrapper) happens to carry self-heal words like "try again"
+    // / "wait" — being out of credits never self-heals. Regression for the
+    // self-heal short-circuit that wrongly downgraded the explicit type.
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 429'), {
+        status: 429,
+        error: {
+          type: 'insufficient_quota',
+          message:
+            'You have exceeded your current quota. Please wait and try again after adding credits.',
+        },
+      })),
+      false,
+    )
+    // A genuinely periodic quota window (message-pattern billing + an explicit
+    // reset signal, no hard error.type) is a transient rate-limit, not a credit
+    // wall — it self-heals, so it should retry.
+    assert.equal(
+      isTransientError(Object.assign(new Error('Provider returned 429'), {
+        status: 429,
+        error: {
+          type: 'requests_limit',
+          message:
+            'You exceeded your current quota for this model. Please try again after the daily window resets.',
+        },
+      })),
+      true,
+    )
   })
 
   it('classifies 4xx / abort / turn-cap as fatal (no retry)', () => {

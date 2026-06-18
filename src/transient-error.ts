@@ -240,15 +240,21 @@ function hasQuotaSelfHealSignal(error: unknown): boolean {
 }
 
 export function isBillingError(error: unknown): boolean {
-  if (hasQuotaSelfHealSignal(error)) {
-    return false
-  }
+  // An explicit billing / quota error.type is unambiguous — being out of
+  // credits never self-heals, so it stays fatal regardless of any
+  // "retry" / "wait" wording a verbose body (or a transit gateway wrapper)
+  // may also carry. Only the message-pattern path below is subject to the
+  // self-heal downgrade, mirroring OpenClaw/Hermes (explicit type/code →
+  // billing; the "quota resets daily" ambiguity → transient rate-limit).
   for (const type of errorBodyTypes(error)) {
     if (BILLING_ERROR_TYPE.has(type)) {
       return true
     }
   }
-  return BILLING_FAILURE_PATTERN.test(errorDetailText(error))
+  if (BILLING_FAILURE_PATTERN.test(errorDetailText(error))) {
+    return !hasQuotaSelfHealSignal(error)
+  }
+  return false
 }
 
 function isOverloadedError(error: unknown): boolean {
@@ -312,9 +318,6 @@ export function isTransientError(error: unknown): boolean {
   if (isBillingError(error)) {
     return false
   }
-  if (isOverloadedError(error)) {
-    return true
-  }
   for (const node of queryErrorChain(error)) {
     const status = httpStatusOf(node)
     if (status !== undefined) {
@@ -337,6 +340,14 @@ export function isTransientError(error: unknown): boolean {
         return true
       }
     }
+  }
+  // Overloaded (Anthropic 529 / "overloaded_error") is checked AFTER the
+  // status loop so an explicit FATAL_HTTP_STATUS 4xx whose body merely mentions
+  // "overloaded" / "high demand" stays fatal. A 529 is already retried via the
+  // `>=500` branch above; this backstop only catches a status-less streaming
+  // error frame that carries the overloaded marker in its body text.
+  if (isOverloadedError(error)) {
+    return true
   }
   if (TRANSIENT_FAILURE_PATTERN.test(detail)) {
     return true
