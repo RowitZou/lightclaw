@@ -19,6 +19,8 @@ import { clearInboundAnchorsForTest, recordInboundAnchor } from '../inbound-anch
 import { readTaskCardBinding } from './task-card-binding.js'
 import { startTaskCardPipeline, type TaskCardPipeline } from './task-card-subscriber.js'
 import type { TaskCardIo, TaskCardTarget } from './task-card-patcher.js'
+import { clearFeishuSender, registerFeishuSender } from './sender-registry.js'
+import type { FeishuSender } from './sender.js'
 
 const OWNER = 'alice'
 const DM_SESSION = 'feishu:dm:oc_card_dm'
@@ -381,6 +383,74 @@ void describe('reconcile crash-backstop settlement', () => {
     assert.ok(pushes.length >= 1, 'the worker element was streamed at least once')
     for (let i = 1; i < seqs.length; i += 1) {
       assert.ok(seqs[i]! > seqs[i - 1]!, 'card sequence strictly increases across all ops')
+    }
+  })
+
+  // Regression for the defaultIo() wrapper bug: the production pipeline (no
+  // injected io) must forward `live` to patch AND expose pushElement/close, or
+  // a live card is created and then never updated/streamed (cardSequence frozen
+  // at 0, no error). The earlier sequence test injected its own io and so never
+  // exercised defaultIo — this one drives the real defaultIo via a registered
+  // fake sender.
+  void it('defaultIo (no injected io) forwards live patch + push + close to the sender', async () => {
+    const calls = { create: 0, update: 0, push: 0, close: 0 }
+    const fake = {
+      supportsCardkitLiveCards: () => true,
+      async createLiveInteractiveCard() {
+        calls.create += 1
+        return { messageId: 'om_live', cardId: 'card_live', sequence: 0 }
+      },
+      async updateLiveInteractiveCard(_cardId: string, sequence: number) {
+        calls.update += 1
+        return sequence + 1
+      },
+      async pushLiveCardElement(_cardId: string, _el: string, sequence: number) {
+        calls.push += 1
+        return sequence + 1
+      },
+      async closeLiveCard(_cardId: string, sequence: number) {
+        calls.close += 1
+        return sequence + 1
+      },
+      // Required Pick surface (unused on the live path) — no-op stubs.
+      async sendInteractiveCard() { return { data: {} } },
+      async sendInteractiveCardToChatId() { return { data: {} } },
+      async patchInteractiveCard() {},
+      async sendMarkdownText() { return { aborted: false } },
+      async sendMarkdownTextToChatId() {},
+    } as unknown as FeishuSender
+    registerFeishuSender(fake)
+    try {
+      pipeline = startTaskCardPipeline({ throttleMs: 10 }) // NO io → defaultIo
+      const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '流式' })
+      await settle()
+      assert.equal(calls.create, 1, 'live card created via defaultIo')
+
+      const child = await createTaskRun({
+        ownerCanonicalUser: OWNER,
+        parentRunId: root.id,
+        chainId: 'c',
+        depth: 1,
+        role: 'webSearcher',
+        callerRole: 'main',
+        callerSessionId: DM_SESSION,
+        objective: '子',
+        mode: 'background',
+      })
+      await markStarted(child.id, 'bg-s', Date.now(), OWNER)
+      await appendProgress(child.id, { label: '进展' }, Date.now(), OWNER)
+      await settle()
+      assert.ok(calls.update >= 1, 'defaultIo.patch forwarded live → updateLiveInteractiveCard called')
+
+      pipeline.streamElement(OWNER, root.id, 'pelement', 'live text')
+      await settle()
+      assert.ok(calls.push >= 1, 'defaultIo.pushElement → pushLiveCardElement called')
+
+      await markFinished(root.id, { ok: true, summary: '完' }, Date.now(), OWNER)
+      await settle()
+      assert.ok(calls.close >= 1, 'defaultIo.close → closeLiveCard called on terminal')
+    } finally {
+      clearFeishuSender(fake)
     }
   })
 })

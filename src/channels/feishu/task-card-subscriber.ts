@@ -88,10 +88,24 @@ function defaultIo(): TaskCardIo {
       if (!sender) return {}
       return createSenderTaskCardIo(sender).create(target, card)
     },
-    async patch(messageId, card) {
+    async patch(messageId, card, live) {
       const sender = getFeishuSender()
       if (!sender) return
-      await createSenderTaskCardIo(sender).patch(messageId, card)
+      // MUST forward `live` (and return the result) — else the live card never
+      // gets a CardKit update and its sequence stays frozen at 0 (no streaming).
+      return createSenderTaskCardIo(sender).patch(messageId, card, live)
+    },
+    async pushElement(live) {
+      const sender = getFeishuSender()
+      if (!sender) return { sequence: live.sequence }
+      const io = createSenderTaskCardIo(sender)
+      return io.pushElement ? io.pushElement(live) : { sequence: live.sequence }
+    },
+    async close(live) {
+      const sender = getFeishuSender()
+      if (!sender) return { sequence: live.sequence }
+      const io = createSenderTaskCardIo(sender)
+      return io.close ? io.close(live) : { sequence: live.sequence }
     },
     async sendText(target, text) {
       const sender = getFeishuSender()
@@ -134,12 +148,6 @@ export function startTaskCardPipeline(
     // Re-read the binding fresh inside the lane (a stream may have advanced it).
     await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
     const binding = await readTaskCardBinding(owner, rootRunId)
-    // TEMP diag (cardkit seq-advance debug): which branch each render takes.
-    process.stderr.write(
-      `[task-card][diag] render root=${rootRunId} status=${root.status} terminal=${terminal} `
-      + `binding=${binding ? (binding.cardId ? `cardId(seq=${binding.cardSequence ?? 0})` : 'no-cardId') : 'none'}`
-      + `${binding?.finalizedAt ? ' finalized' : ''} → ${binding?.finalizedAt ? 'skip' : !binding ? 'create' : 'patch'}\n`,
-    )
     if (binding?.finalizedAt) {
       patcher.release(rootRunId)
       return

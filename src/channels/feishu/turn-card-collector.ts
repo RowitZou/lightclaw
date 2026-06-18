@@ -47,10 +47,24 @@ function defaultIo(): TurnCardIo {
       if (!sender) return {}
       return createSenderTaskCardIo(sender).create(target, card)
     },
-    async patch(messageId, card) {
+    async patch(messageId, card, live) {
       const sender = getFeishuSender()
       if (!sender) return
-      await createSenderTaskCardIo(sender).patch(messageId, card)
+      // Forward `live` + return result — otherwise the turn card's CardKit
+      // sequence never advances and the progress element never streams.
+      return createSenderTaskCardIo(sender).patch(messageId, card, live)
+    },
+    async pushElement(live) {
+      const sender = getFeishuSender()
+      if (!sender) return { sequence: live.sequence }
+      const io = createSenderTaskCardIo(sender)
+      return io.pushElement ? io.pushElement(live) : { sequence: live.sequence }
+    },
+    async close(live) {
+      const sender = getFeishuSender()
+      if (!sender) return { sequence: live.sequence }
+      const io = createSenderTaskCardIo(sender)
+      return io.close ? io.close(live) : { sequence: live.sequence }
     },
   }
 }
