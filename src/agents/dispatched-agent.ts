@@ -163,13 +163,6 @@ export async function runDispatchedAgent(
         rootRunId: meta.rootRunId,
         runId: params.currentTaskRunId,
       })
-      process.stderr.write(
-        `[worker-stream] armed runId=${params.currentTaskRunId} root=${meta.rootRunId}\n`,
-      )
-    } else {
-      process.stderr.write(
-        `[worker-stream] not-armed runId=${params.currentTaskRunId} parent=${meta?.parentRunId} root=${meta?.rootRunId}\n`,
-      )
     }
   }
   // A block settling fires onAssistantTurn (the progress breadcrumb); reset the

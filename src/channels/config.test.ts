@@ -64,7 +64,7 @@ describe('loadChannelConfig', () => {
     assert.equal(config.feishu.appSecret, 'cli_secret')
     assert.equal(config.feishu.transport, 'webhook')
     assert.equal(config.feishu.requireMention, false)
-    assert.equal(config.feishu.streamingReply, false)
+    assert.equal(config.feishu.streamingReply, true)
     assert.equal(config.feishu.cloudSpace?.uploadsFolderName, 'Uploads')
   })
 
@@ -103,7 +103,7 @@ describe('loadChannelConfig', () => {
     assert.equal(config.feishu.enabled, false)
     assert.equal(config.feishu.transport, 'ws')
     assert.equal(config.feishu.permissionMode, 'acceptEdits')
-    assert.equal(config.feishu.streamingReply, false)
+    assert.equal(config.feishu.streamingReply, true)
   })
 
   it('reads channels.feishu.streamingReply and allows env override', () => {

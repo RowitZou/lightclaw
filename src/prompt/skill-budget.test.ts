@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, test } from 'node:test'
@@ -196,8 +196,9 @@ function writeSkill(input: {
 }): void {
   const dir = path.join(userSkillsRoot('alice'), input.name)
   mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'SKILL.md')
   writeFileSync(
-    path.join(dir, 'SKILL.md'),
+    file,
     [
       '---',
       `name: ${input.name}`,
@@ -213,6 +214,13 @@ function writeSkill(input: {
     ].join('\n'),
     'utf8',
   )
+  // recencyMs = max(parse(last_used_at), SKILL.md mtime). The file is written
+  // just now, so without this its mtime (≈ wall clock) would dominate the
+  // fixture last_used_at values and wash out the recency ordering these tests
+  // assert. Backdate the mtime far into the past so last_used_at is the sole
+  // recency signal — deterministic regardless of when the suite runs.
+  const pastMs = Date.parse('2000-01-01T00:00:00.000Z') / 1000
+  utimesSync(file, pastMs, pastMs)
 }
 
 function extractAvailableSkills(prompt: string): string {
