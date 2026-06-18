@@ -4,7 +4,6 @@ import { getProviderFor } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
 import type { CanUseToolFn, Tool } from '../tool.js'
-import type { UserContentBlock } from '../types.js'
 import type { AgentType, Role, WorkerFailure, WorkerFailureReason } from './types.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import { getAgent } from './registry.js'
@@ -36,10 +35,6 @@ export async function runSubagent(params: {
   currentRoleOverride?: Role
   chainState?: ChainState
   currentTaskRunId?: string
-  // Inline content blocks (image / pdf) appended to the worker's first user
-  // message alongside the prompt text. Caller is expected to validate paths
-  // and run the encoding pipeline (see tools/dispatch-attachments.ts).
-  dispatchAttachmentBlocks?: UserContentBlock[]
 }): Promise<RunSubagentResult> {
   const agent = getAgent(params.agentType)
   if (!agent) {
@@ -83,9 +78,6 @@ export async function runSubagent(params: {
   try {
     const result = await runDispatchedAgent({
       dispatchPrompt: params.prompt,
-      ...(params.dispatchAttachmentBlocks
-        ? { dispatchAttachmentBlocks: params.dispatchAttachmentBlocks }
-        : {}),
       tools,
       config,
       role: agent,

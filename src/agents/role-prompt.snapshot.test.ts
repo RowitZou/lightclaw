@@ -105,7 +105,6 @@ test('main and bundled role prompts match the Phase 1 baseline snapshot', async 
     const template = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
       autoMemory: false,
       config: snapshotConfig(),
-      queryText: '',
       sessionId: undefined,
     })
     const mainPrompt = renderSystemPrompt(template, [], { tools: mainTools })

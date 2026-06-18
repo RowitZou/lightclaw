@@ -38,11 +38,6 @@ import { getForkTranscriptPath, persistForkTranscript } from './fork-transcript.
 export type DispatchedAgentParams = {
   /** Caller-authored task brief. This is the dispatched agent's first user message. */
   dispatchPrompt: string
-  /** Optional inline content blocks (image / pdf, already base64-encoded by
-   *  the caller) appended after the prompt text in the same user message.
-   *  Use prepareDispatchAttachments() to build these from paths so the
-   *  worker sees attachments natively instead of re-Reading bytes. */
-  dispatchAttachmentBlocks?: UserContentBlock[]
   role: Role
   tools: Tool[]
   config: LightClawConfig
@@ -103,12 +98,7 @@ export async function runDispatchedAgent(
   params: DispatchedAgentParams,
 ): Promise<DispatchedAgentResult> {
   const currentCtx = getCurrentSessionContext()
-  const messages = [
-    ...buildDispatchedInitialMessages(
-      params.dispatchPrompt,
-      params.dispatchAttachmentBlocks,
-    ),
-  ]
+  const messages = [...buildDispatchedInitialMessages(params.dispatchPrompt)]
   // Top-level secrets (Phase 18 follow-up, 2026-06-14): a background/scheduled
   // fire dispatched DIRECTLY by main carries the owner's enabled secrets so
   // owner-authorized actions (authenticated git push/clone, etc.) can run

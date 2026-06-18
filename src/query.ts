@@ -539,7 +539,6 @@ export async function query(params: QueryParams): Promise<{
     : await buildSystemPromptTemplate(params.tools, getCwd(), getRuntime().workspaceRoot, getRuntime().scratchRoot, {
         autoMemory: !invocation.noAutoMemory && config.memory.extractor.enabled,
         config,
-        queryText: getLastUserText(messages),
         sessionId: getSessionId(),
       })
 

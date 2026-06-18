@@ -150,7 +150,6 @@ test('Reachable Workers stays compact and points to ListRoleSkill instead of inl
       {
         autoMemory: false,
         config: promptConfig(null),
-        queryText: '',
         sessionId: undefined,
       },
     )

@@ -38,8 +38,6 @@ import type { TodoItem } from './types.js'
 type PromptOptions = {
   autoMemory: boolean
   config: LightClawConfig
-  /** Last user text used by P0 query-time recall. */
-  queryText?: string
   /** Active session id, used by P1 SessionMemory injection. */
   sessionId?: string
 }

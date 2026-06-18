@@ -69,7 +69,6 @@ test('buildPromptForRole matches the prompt snapshot for main and bundled roles'
       options: {
         autoMemory: false,
         config: snapshotConfig(),
-        queryText: '',
         sessionId: undefined,
       },
     })
@@ -110,7 +109,7 @@ test('closing-reply contract: deliverable framing replaces the terse summary, ki
       cwd: ctx.cwd,
       environmentRoot: '/workspace',
       scratchRoot: '/scratch',
-      options: { autoMemory: false, config: snapshotConfig(), queryText: '', sessionId: undefined },
+      options: { autoMemory: false, config: snapshotConfig(), sessionId: undefined },
     })
     const mainPrompt = renderSystemPrompt(mainTemplate, [], { tools: mainTools })
 

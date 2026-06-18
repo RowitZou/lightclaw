@@ -74,7 +74,7 @@ test('auto-loaded workflow skill body is injected into main, not listed in Avail
   await runWithSessionContext(ctx, async () => {
     const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
     const template = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config(), queryText: '', sessionId: undefined,
+      autoMemory: false, config: config(), sessionId: undefined,
     })
     const prompt = renderSystemPrompt(template, [], { tools: mainTools })
 
@@ -93,7 +93,7 @@ test('auto-loaded skill scoped to its roles — coder does not get delivery-orch
   await runWithSessionContext(ctx, async () => {
     // Populate the shared registry via a main build first.
     await buildSystemPromptTemplate(['Read'].map(fakeTool), ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config(), queryText: '', sessionId: undefined,
+      autoMemory: false, config: config(), sessionId: undefined,
     })
     const coder = BUNDLED_AGENTS.find(a => a.agentType === 'coder') as Role
     const tools = ['Read', 'Write', 'Edit', 'Bash', 'TodoWrite', 'UseSkill'].map(fakeTool)
@@ -109,7 +109,7 @@ test('driver-gated skill is hidden unless runtime.driver matches', async () => {
   await runWithSessionContext(ctx, async () => {
     // Populate the shared registry via a main build first.
     await buildSystemPromptTemplate(['Read'].map(fakeTool), ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config(), queryText: '', sessionId: undefined,
+      autoMemory: false, config: config(), sessionId: undefined,
     })
     const coder = BUNDLED_AGENTS.find(a => a.agentType === 'coder') as Role
     const tools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'MemoryWrite', 'TodoWrite', 'UseSkill'].map(fakeTool)
@@ -126,7 +126,7 @@ test('brainpp driver adds cluster batch-job guidance to main channel context onl
   await runWithSessionContext(ctx, async () => {
     const mainTools = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Dispatch', 'MemoryWrite', 'TodoWrite', 'ToolSearch'].map(fakeTool)
     const withoutBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config(null), queryText: '', sessionId: undefined,
+      autoMemory: false, config: config(null), sessionId: undefined,
     })
     assert.doesNotMatch(
       renderSystemPrompt(withoutBrainpp, [], { tools: mainTools }),
@@ -134,7 +134,7 @@ test('brainpp driver adds cluster batch-job guidance to main channel context onl
     )
 
     const withBrainpp = await buildSystemPromptTemplate(mainTools, ctx.cwd, '/workspace', '/scratch', {
-      autoMemory: false, config: config('brainpp'), queryText: '', sessionId: undefined,
+      autoMemory: false, config: config('brainpp'), sessionId: undefined,
     })
     assert.match(
       renderSystemPrompt(withBrainpp, [], { tools: mainTools }),
