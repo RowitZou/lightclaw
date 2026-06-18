@@ -75,6 +75,21 @@ function bodyElements(card: Record<string, unknown>): Array<Record<string, unkno
   return (card.body as { elements: Array<Record<string, unknown>> }).elements
 }
 
+/** Text of one element regardless of tier: markdown `content`, or a `note`'s
+ *  joined plain_text. The redesign moved status / roster / fold / schedule to
+ *  grey `note` captions, so a content-only scan no longer sees them. */
+function elText(el: Record<string, unknown>): string {
+  if (typeof el.content === 'string') return el.content
+  if (el.tag === 'note' && Array.isArray(el.elements)) {
+    return (el.elements as Array<{ content?: string }>).map(e => e.content ?? '').join('')
+  }
+  return ''
+}
+
+function bodyText(card: Record<string, unknown>): string {
+  return bodyElements(card).map(elText).join('\n')
+}
+
 void test('buildTaskCard renders 2.0 schema with root panel and per-child sibling panels', () => {
   setLang('cn')
   const card = buildTaskCard(baseView())
@@ -104,19 +119,23 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
   assert.ok(panelText(panels[1]).includes('[webSearcher→localExplorer]'))
 
   const elements = bodyElements(card)
+  // Title is bold-only now; the status word dropped to the grey tier.
   const childTitleIndex = elements.findIndex(el =>
-    typeof el.content === 'string'
-    && el.content.includes('**检索下载 Top-2 论文 · 进行中**')
+    typeof el.content === 'string' && el.content.includes('**检索下载 Top-2 论文**')
   )
-  assert.ok(childTitleIndex >= 0, 'child title/status gets its own bold line')
-  assert.deepEqual(elements[childTitleIndex + 1], {
-    tag: 'markdown',
-    element_id: taskCardProgressElementId('run-child-2'),
-    content: '正在下载第二篇 PDF',
-  })
+  assert.ok(childTitleIndex >= 0, 'child title gets its own bold line')
+  assert.ok(
+    !String(elements[childTitleIndex]!.content).includes('进行中'),
+    'status word is no longer baked into the bold title',
+  )
+  // Live child: the next element is the grey-seeded markdown streaming target.
+  const childProgress = elements[childTitleIndex + 1] as Record<string, unknown>
+  assert.equal(childProgress.tag, 'markdown')
+  assert.equal(childProgress.element_id, taskCardProgressElementId('run-child-2'))
+  assert.ok(String(childProgress.content).includes('正在下载第二篇 PDF'))
   const rootProgressIndex = elements.findIndex(el => (el as any).element_id === taskCardProgressElementId('root'))
   assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
-  assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent · 进行中**'))
+  assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent**'))
   assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
 })
 
@@ -134,11 +153,9 @@ void test('buildTaskCard caps children and timelines with overflow lines', () =>
     text: `第 ${i} 步`,
   }))
   const card = buildTaskCard(baseView({ children, rootTimeline }))
-  const body = (card.body as { elements: Array<{ tag: string; content?: string }> }).elements
   // 53 queued (live) children, all tiny: 50 fit the panel-count backstop, the
-  // last 3 fold into the live summary line.
-  const overflow = body.find(el => el.content?.includes('另有 3 个子任务进行中'))
-  assert.ok(overflow, 'live children fold line rendered')
+  // last 3 fold into the live summary line (now a grey note).
+  assert.ok(bodyText(card).includes('另有 3 个子任务进行中'), 'live children fold line rendered')
 
   const rootPanel = collectPanels(card)[0]
   assert.ok(panelTitle(rootPanel).includes(`（${TASK_CARD_MAX_ROOT_TIMELINE + 5} 条）`))
@@ -245,26 +262,69 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
     timeline: [{ at: TS + i * 1000, text: `${longText} done ${i}` }],
   }))
   const card = buildTaskCard(baseView({ children: [...done, ...live], rootTimeline: [] }))
-  const body = (card.body as { elements: Array<{ content?: string }> }).elements
-  const rows = body.filter(el => typeof el.content === 'string' && el.content!.includes(' · '))
-
-  // Live priority: every rendered status row is in-flight; no completed child
-  // takes a panel slot while live work is still waiting.
-  const shownStatusRows = rows.filter(el => /^[🔄✅]/u.test(el.content!))
-  assert.ok(shownStatusRows.length > 0)
+  const body = bodyElements(card)
+  // Shown children are their bold title rows: `<emoji> **title**`. Live priority
+  // means every rendered title starts with the running emoji — no completed
+  // child takes a panel slot while live work is still waiting.
+  const titleRows = body.filter(el => typeof el.content === 'string' && /^[🔄✅] \*\*/u.test(el.content))
+  assert.ok(titleRows.length > 0)
   assert.ok(
-    shownStatusRows.every(el => el.content!.startsWith('🔄')),
+    titleRows.every(el => String(el.content).startsWith('🔄')),
     'completed children yield their slots to in-flight ones',
   )
 
-  // Both fold lines coexist: some live overflowed AND all done folded.
-  assert.ok(body.some(el => el.content?.includes('个子任务进行中')), 'moreLive fold line')
-  assert.ok(body.some(el => el.content?.includes('已完成子任务已折叠')), 'earlierDone fold line')
+  // Both fold lines coexist (grey notes now): some live overflowed AND all done folded.
+  assert.ok(bodyText(card).includes('个子任务进行中'), 'moreLive fold line')
+  assert.ok(bodyText(card).includes('已完成子任务已折叠'), 'earlierDone fold line')
 
-  // Roster histogram surfaces the true scope despite the folding.
-  const heading = body.find(el => el.content?.startsWith('**子任务**'))
-  assert.ok(heading?.content?.includes('🔄 30 进行中'))
-  assert.ok(heading?.content?.includes('✅ 20 已完成'))
+  // Bold section heading stays; the roster histogram is the grey caption under it.
+  assert.ok(body.some(el => el.content === '**子任务**'), 'bold subtask heading present')
+  assert.ok(bodyText(card).includes('🔄 30 进行中'))
+  assert.ok(bodyText(card).includes('✅ 20 已完成'))
+})
+
+void test('child tiers: bold title, settled→grey note, live→grey-seeded markdown stream target', () => {
+  setLang('cn')
+  const card = buildTaskCard(
+    baseView({
+      children: [
+        {
+          id: 'run-done',
+          title: '完成的子任务',
+          role: 'coder',
+          status: 'done',
+          latestProgress: '已交付结果摘要',
+          timeline: [],
+        },
+        {
+          id: 'run-live',
+          title: '在跑的子任务',
+          role: 'webSearcher',
+          status: 'running',
+          latestProgress: '正在检索',
+          timeline: [],
+        },
+      ],
+      rootTimeline: [],
+    }),
+  )
+  const els = bodyElements(card)
+  // Done child: bold title markdown, then a grey `note` carrying status + teaser
+  // (NOT markdown — the secondary tier the user asked for).
+  const doneTitle = els.findIndex(el => el.content === '✅ **完成的子任务**')
+  assert.ok(doneTitle >= 0, 'settled child has a bold-only title')
+  const doneNote = els[doneTitle + 1]!
+  assert.equal(doneNote.tag, 'note', 'settled child summary is a note, not markdown')
+  assert.ok(elText(doneNote).includes('已完成 · 已交付结果摘要'))
+  // Live child: bold title, then the markdown streaming target (element_id),
+  // grey-wrapped — markdown because Feishu streams only into markdown.
+  const liveTitle = els.findIndex(el => el.content === '🔄 **在跑的子任务**')
+  assert.ok(liveTitle >= 0)
+  const liveProgress = els[liveTitle + 1] as Record<string, unknown>
+  assert.equal(liveProgress.tag, 'markdown')
+  assert.equal(liveProgress.element_id, taskCardProgressElementId('run-live'))
+  assert.ok(String(liveProgress.content).startsWith("<font color='grey'>"))
+  assert.ok(String(liveProgress.content).includes('正在检索'))
 })
 
 void test('buildTaskCard puts the terminal timestamp in the subtitle and renders no id line', () => {
@@ -295,10 +355,10 @@ void test('buildTaskCard renders standing service badge and schedule lines', () 
   const card = buildTaskCard(view)
   const header = card.header as { subtitle: { content: string } }
   assert.ok(header.subtitle.content.includes('定时服务'))
-  const body = (card.body as { elements: Array<{ content?: string }> }).elements
-  const scheduleLine = body.find(el => el.content?.includes('排程：每天 09:00'))
-  assert.ok(scheduleLine)
-  assert.ok(scheduleLine?.content?.includes('下次触发：'))
+  // Schedule + next-run lines are a grey note now.
+  const scheduleNote = bodyElements(card).find(el => elText(el).includes('排程：每天 09:00'))
+  assert.ok(scheduleNote)
+  assert.ok(elText(scheduleNote!).includes('下次触发：'))
 })
 
 void test('buildTaskCard truncates long text and renders en locale', () => {

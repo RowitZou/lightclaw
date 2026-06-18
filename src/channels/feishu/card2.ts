@@ -59,6 +59,14 @@ export function markdown(content: string): Card2Element {
   return { tag: 'markdown', content }
 }
 
+/** Small grey caption text (Feishu `note` block). Renders one size smaller and
+ *  de-emphasised vs markdown — the canonical "secondary / supporting" element.
+ *  Plain text only (no markdown parse), exactly what a status / teaser line
+ *  wants. */
+export function note(content: string): Card2Element {
+  return { tag: 'note', elements: [{ tag: 'plain_text', content }] }
+}
+
 export function hr(): Card2Element {
   return { tag: 'hr' }
 }

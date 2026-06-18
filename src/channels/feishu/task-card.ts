@@ -203,6 +203,23 @@ function hrElement(): Record<string, unknown> {
   return { tag: 'hr' }
 }
 
+/** Small grey caption line — the secondary tier under a child's bold title
+ *  (status word, result teaser, roster, fold lines). Plain text, no markdown
+ *  parse: lighter and less visually loud than a markdownElement, which is the
+ *  whole point of the card redesign (bold title + grey supporting line, not a
+ *  wall of bold black). */
+function noteElement(content: string): Record<string, unknown> {
+  return { tag: 'note', elements: [{ tag: 'plain_text', content }] }
+}
+
+/** Wrap text grey for a markdown element. The live streaming preview must stay
+ *  a markdown element (Feishu streams only into markdown), so we cannot use the
+ *  smaller `note`; greying it keeps it in the secondary tier visually. Exported
+ *  so the stream forwarders wrap each delta identically to the seeded content. */
+export function greyInline(text: string): string {
+  return text ? `<font color='grey'>${text}</font>` : text
+}
+
 function timelinePanel(
   titleKey: LocaleKey,
   entries: TaskCardTimelineEntry[],
@@ -458,7 +475,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     if (root.nextRunAt) {
       lines.push(t('taskcard.standing.next', { time: formatClock(root.nextRunAt) }))
     }
-    if (lines.length > 0) elements.push(markdownElement(lines.join('\n')))
+    if (lines.length > 0) elements.push(noteElement(lines.join('\n')))
   }
 
   if (view.children.length > 0) {
@@ -467,33 +484,40 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     // scope when rows are hidden, but stays out of the way of a card that shows
     // every child.
     const folding = plan.foldedLive.length > 0 || plan.foldedDone.length > 0
-    elements.push(
-      markdownElement(
-        folding
-          ? `**${t('taskcard.children.heading')}** · ${rosterSegments(view.children)}`
-          : `**${t('taskcard.children.heading')}**`,
-      ),
-    )
+    elements.push(markdownElement(`**${t('taskcard.children.heading')}**`))
+    // Roster histogram (only when something folded) is supporting detail — small
+    // grey caption under the bold section heading, not part of the heading.
+    if (folding) elements.push(noteElement(rosterSegments(view.children)))
     for (const { child, timelineCap } of plan.shown) {
       const childStyle = taskCardStatusStyle(child.status)
-      elements.push(
-        markdownElement(
-          `${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)} · ${t(childStyle.wordKey)}**`,
-        ),
-      )
-      // Always emit the progress element (even empty) for a non-terminal child
-      // so the worker's live token stream (cardElement.content into this
-      // element_id) has a target from the first render; a terminal child only
-      // gets it when it actually has progress to show. Empty `content` is the
-      // verified streaming-element shape (§R2 spike).
       const childLive = !TASK_RUN_TERMINAL_STATUSES.has(child.status)
-      if (child.latestProgress || childLive) {
+      // Title: status emoji + bold title only. The status word and any result
+      // teaser drop to the grey caption tier below — a bold title over a small
+      // grey line, not a wall of bold black.
+      elements.push(
+        markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
+      )
+      if (childLive) {
+        // Live worker: the per-element streaming target. Feishu streams text
+        // (cardElement.content) only into a markdown element, so this one stays
+        // markdown; the stream forwarder wraps each delta grey so it still reads
+        // as the secondary tier. Always emitted (even empty) so the stream has a
+        // target from the first render — empty `content` is the verified
+        // streaming-element shape (§R2 spike).
         elements.push(
           markdownElement(
-            child.latestProgress ? truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS) : '',
+            child.latestProgress ? greyInline(truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)) : '',
             taskCardProgressElementId(child.id),
           ),
         )
+      } else if (child.latestProgress) {
+        // Settled worker: status word + result teaser as one small grey caption.
+        elements.push(
+          noteElement(`${t(childStyle.wordKey)} · ${truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)}`),
+        )
+      } else {
+        // Settled, no progress text: just the status word, small + grey.
+        elements.push(noteElement(t(childStyle.wordKey)))
       }
       if (child.timeline.length > 0 && timelineCap > 0) {
         // Pass the ORIGINAL timeline + the budgeted cap so the panel's
@@ -513,7 +537,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     // burst of parallel dispatches): every folded part is announced in text.
     if (plan.foldedLive.length > 0) {
       elements.push(
-        markdownElement(
+        noteElement(
           t('taskcard.children.moreLive', {
             count: String(plan.foldedLive.length),
             breakdown: foldBreakdown(plan.foldedLive),
@@ -523,7 +547,7 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     }
     if (plan.foldedDone.length > 0) {
       elements.push(
-        markdownElement(
+        noteElement(
           t('taskcard.children.earlierDone', { count: String(plan.foldedDone.length) }),
         ),
       )
@@ -534,11 +558,14 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(hrElement())
     const latest = view.rootTimeline[view.rootTimeline.length - 1]!
     elements.push(
-      markdownElement(`${style.icon} **${t('taskcard.root.live.title')} · ${t(style.wordKey)}**`),
+      markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
+    // Main agent's live line is a streaming target too — markdown (Feishu
+    // streams only into markdown), seeded grey so it reads as the secondary
+    // tier; the forwarder wraps each delta the same way.
     elements.push(
       markdownElement(
-        truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
+        greyInline(truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS)),
         taskCardProgressElementId('root'),
       ),
     )

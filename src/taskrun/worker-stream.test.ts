@@ -14,6 +14,12 @@ import { buildWorkerStreamForwarder } from './worker-stream.js'
 
 type StreamCall = { owner: string; rootRunId: string; elementId: string; content: string }
 
+/** Streamed content is wrapped grey (`<font color='grey'>…</font>`); unwrap it. */
+function stripGrey(s: string): string {
+  const m = s.match(/^<font color='grey'>([\s\S]*)<\/font>$/)
+  return m ? m[1]! : s
+}
+
 function fakePipeline(calls: StreamCall[]): TaskCardPipeline {
   return {
     reconcileOnStart: async () => {},
@@ -45,7 +51,8 @@ void describe('worker stream forwarder', () => {
 
     // The preview keeps scrolling instead of snapping back to a short fresh
     // block, so its rendered height stays steady (the whole point of the fix).
-    assert.deepEqual(calls.map(c => c.content), ['第一', '第一块', '第一块第二块'])
+    // Content is wrapped grey (`<font color='grey'>…</font>`) — unwrap to compare.
+    assert.deepEqual(calls.map(c => stripGrey(c.content)), ['第一', '第一块', '第一块第二块'])
     assert.equal(calls[0]!.elementId, taskCardProgressElementId('tr_child'))
     assert.equal(calls[0]!.rootRunId, 'tr_root')
     assert.equal(calls[0]!.owner, 'alice')
@@ -61,9 +68,9 @@ void describe('worker stream forwarder', () => {
     })
 
     fwd.onDelta('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
-    const last = calls[calls.length - 1]!
-    assert.ok(last.content.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
-    assert.ok(last.content.startsWith('…'))
+    const last = stripGrey(calls[calls.length - 1]!.content)
+    assert.ok(last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
+    assert.ok(last.startsWith('…'))
   })
 
   void it('no-ops when no channel pipeline is running', () => {

@@ -45,15 +45,29 @@ function panelLines(card: Record<string, unknown>): string {
   return panel.elements![0]!.content
 }
 
+/** The live streaming element seeds + streams content wrapped grey
+ *  (`<font color='grey'>…</font>`); unwrap so assertions read the inner text. */
+function stripGrey(s: string | undefined): string | undefined {
+  if (s === undefined) return undefined
+  const m = s.match(/^<font color='grey'>([\s\S]*)<\/font>$/)
+  return m ? m[1] : s
+}
+
+/** The pinned "最新 HH:MM" label is a grey `note` now (was a bold markdown line). */
 function latestLine(card: Record<string, unknown>): string | undefined {
-  const body = card.body as { elements: Array<{ tag: string; content?: string }> }
+  const body = card.body as {
+    elements: Array<{ tag: string; content?: string; elements?: Array<{ content?: string }> }>
+  }
   const first = body.elements[0]!
+  if (first.tag === 'note' && Array.isArray(first.elements)) {
+    return first.elements.map(e => e.content ?? '').join('')
+  }
   return first.tag === 'markdown' ? first.content : undefined
 }
 
 function progressLine(card: Record<string, unknown>): string | undefined {
   const body = card.body as { elements: Array<{ tag: string; content?: string; element_id?: string }> }
-  return body.elements.find(el => el.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content
+  return stripGrey(body.elements.find(el => el.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content)
 }
 
 void describe('turn card builder', () => {
@@ -84,7 +98,7 @@ void describe('turn card builder', () => {
       { at: new Date('2026-06-12T11:05:00').getTime(), text: '第二步' },
     ]
     const live = buildTurnCard(entries)
-    assert.equal(latestLine(live), '**最新 11:05**')
+    assert.equal(latestLine(live), '最新 11:05')
     assert.equal(progressLine(live), '第二步')
     // The panel still carries the full history including the latest entry.
     assert.ok(panelLines(live).includes('第二步'))
@@ -108,14 +122,13 @@ void describe('turn card builder', () => {
     const body = card.body as {
       elements: Array<{ tag: string; content?: string; element_id?: string; header?: unknown }>
     }
-    assert.deepEqual(body.elements.slice(0, 2), [
-      { tag: 'markdown', content: '**最新 11:05**' },
-      {
-        tag: 'markdown',
-        element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-        content: '正在整理结果',
-      },
-    ])
+    // Pin label is a grey note; the live line is a grey-seeded markdown element
+    // (markdown is required for streaming) carrying the same element_id.
+    assert.equal(latestLine(card), '最新 11:05')
+    const progress = body.elements[1]!
+    assert.equal(progress.tag, 'markdown')
+    assert.equal(progress.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
+    assert.equal(stripGrey(progress.content), '正在整理结果')
     const panel = body.elements.find(el => el.tag === 'collapsible_panel') as any
     assert.deepEqual(panel.header.icon, {
       tag: 'standard_icon',
@@ -280,12 +293,9 @@ void describe('turn card collector', () => {
     await delay(30)
 
     assert.equal(pushed.length, 1, 'rapid deltas coalesce into one element push')
-    assert.deepEqual(pushed[0], {
-      cardId: 'card_turn',
-      sequence: 0,
-      elementId: TURN_CARD_PROGRESS_ELEMENT_ID,
-      content: '增量一，增量二',
-    })
+    assert.equal(pushed[0]!.sequence, 0)
+    assert.equal(pushed[0]!.elementId, TURN_CARD_PROGRESS_ELEMENT_ID)
+    assert.equal(stripGrey(pushed[0]!.content), '增量一，增量二')
 
     collector.add('第二段')
     await delay(30)
@@ -330,7 +340,7 @@ void describe('turn card collector', () => {
     // structure shows in the settled timeline entries, not by clearing the
     // live preview.
     const last = pushed[pushed.length - 1]!
-    assert.equal(last, '第一块流式第二块流式', 'live tail accretes across the block boundary')
+    assert.equal(stripGrey(last), '第一块流式第二块流式', 'live tail accretes across the block boundary')
     collector.finalize()
     await delay(20)
   })
@@ -361,7 +371,7 @@ void describe('turn card collector', () => {
     collector.stream('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
     await delay(30)
 
-    const last = pushed[pushed.length - 1]!
+    const last = stripGrey(pushed[pushed.length - 1]!)!
     assert.ok(
       last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
       `streamed preview is capped (got ${last.length})`,
