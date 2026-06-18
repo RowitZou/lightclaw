@@ -27,6 +27,8 @@ import {
   retryDelayMsWithRetryAfter,
 } from '../transient-error.js'
 import { getCircuitBreakerCardCoordinator } from '../channels/feishu/circuit-breaker-card.js'
+import { getFeishuSender } from '../channels/feishu/sender-registry.js'
+import { buildSystemNoticeCard } from '../channels/feishu/system-notice.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
@@ -56,6 +58,7 @@ type BackgroundFailureKind = 'genuine' | 'rate-limit' | 'billing'
 type FireAccountingResult = {
   latest: BackgroundTaskEntry | null
   circuitOpened: boolean
+  billingNoticeDue: boolean
 }
 
 type RunBackgroundTaskFireFn = typeof runBackgroundTaskFire
@@ -687,14 +690,18 @@ export class BackgroundTaskScheduler {
     firedAt: string,
   ): FireAccountingResult {
     if (!isCircuitBreakerEligibleTask(task)) {
-      return { latest: getBackgroundTask(canonicalUser, task.id), circuitOpened: false }
+      return {
+        latest: getBackgroundTask(canonicalUser, task.id),
+        circuitOpened: false,
+        billingNoticeDue: false,
+      }
     }
     const latest = getBackgroundTask(canonicalUser, task.id)
     if (!latest) {
-      return { latest: null, circuitOpened: false }
+      return { latest: null, circuitOpened: false, billingNoticeDue: false }
     }
     if (latest.circuitOpen) {
-      return { latest, circuitOpened: false }
+      return { latest, circuitOpened: false, billingNoticeDue: false }
     }
     if (outcome.kind === 'success') {
       const updated = updateBackgroundTask(canonicalUser, task.id, {
@@ -705,12 +712,13 @@ export class BackgroundTaskScheduler {
         circuitPromptedAt: undefined,
         lastFailureSummary: undefined,
       })
-      return { latest: updated, circuitOpened: false }
+      return { latest: updated, circuitOpened: false, billingNoticeDue: false }
     }
 
     const failureKind = classifyBackgroundFailure(outcome)
     const summary = failureSummary(outcome)
     if (failureKind === 'billing' || failureKind === 'rate-limit') {
+      const billingNoticeDue = failureKind === 'billing' && !latest.billingNotifiedAt
       const updated = updateBackgroundTask(canonicalUser, task.id, {
         consecutiveFailures: 0,
         lastFailureKind: failureKind,
@@ -718,11 +726,11 @@ export class BackgroundTaskScheduler {
         circuitOpenedAt: undefined,
         circuitPromptedAt: undefined,
         lastFailureSummary: summary,
-        ...(failureKind === 'billing' && !latest.billingNotifiedAt
+        ...(billingNoticeDue
           ? { billingNotifiedAt: firedAt }
           : {}),
       })
-      return { latest: updated, circuitOpened: false }
+      return { latest: updated, circuitOpened: false, billingNoticeDue }
     }
 
     const nextFailures = (latest.consecutiveFailures ?? 0) + 1
@@ -743,7 +751,46 @@ export class BackgroundTaskScheduler {
     if (opensCircuit) {
       this.rebuildUser(canonicalUser)
     }
-    return { latest: updated, circuitOpened: opensCircuit }
+    return { latest: updated, circuitOpened: opensCircuit, billingNoticeDue: false }
+  }
+
+  private async notifyBillingWallBestEffort(
+    canonicalUser: string,
+    task: BackgroundTaskEntry,
+  ): Promise<void> {
+    const sender = getFeishuSender()
+    if (!sender) {
+      return
+    }
+    const identity = await getIdentity(canonicalUser).catch(() => null)
+    const ownerOpenId = identity?.channels.feishu[0]
+    if (!ownerOpenId) {
+      process.stderr.write(
+        `[background-task] ${task.id} billing wall reached but no feishu open_id is bound for ${canonicalUser}\n`,
+      )
+      return
+    }
+    try {
+      await sender.sendInteractiveCardToOpenId(
+        ownerOpenId,
+        buildSystemNoticeCard({
+          kind: 'error',
+          bodyFormat: 'plain_text',
+          title: 'Scheduled task billing wall',
+          content: [
+            `${task.label} hit a provider billing or quota limit.`,
+            'LightClaw will not count this as a circuit-breaker failure. Update provider billing/quota settings before expecting this schedule to recover.',
+          ].join('\n'),
+        }),
+        { purpose: 'notice', canonicalUser },
+      )
+    } catch (error) {
+      process.stderr.write(
+        `[background-task] ${task.id} billing notice failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    }
   }
 
   private async notifyCircuitOpenedBestEffort(
@@ -830,8 +877,15 @@ export class BackgroundTaskScheduler {
 
     const firedAt = new Date().toISOString()
     const accounting = task.schedule.kind === 'oneshot'
-      ? { latest: getBackgroundTask(canonicalUser, task.id), circuitOpened: false }
+      ? {
+          latest: getBackgroundTask(canonicalUser, task.id),
+          circuitOpened: false,
+          billingNoticeDue: false,
+        }
       : this.recordTerminalFireAccounting(canonicalUser, task, outcome, firedAt)
+    if (accounting.billingNoticeDue && accounting.latest) {
+      await this.notifyBillingWallBestEffort(canonicalUser, accounting.latest)
+    }
     if (accounting.circuitOpened && accounting.latest) {
       await this.notifyCircuitOpenedBestEffort(canonicalUser, accounting.latest)
     }

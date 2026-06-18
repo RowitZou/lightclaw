@@ -43,6 +43,7 @@ import {
   registerCircuitBreakerCardCoordinator,
   type CircuitBreakerCardCoordinator,
 } from '../channels/feishu/circuit-breaker-card.js'
+import { clearFeishuSender, registerFeishuSender } from '../channels/feishu/sender-registry.js'
 
 describe('resolveLiveWorkerSpawner', () => {
   function chain(roles: Array<{ role: string; sessionId: string }>): ChainState {
@@ -111,16 +112,21 @@ describe('resolveLiveWorkerSpawner', () => {
 
 describe('BackgroundTaskScheduler fire completion', () => {
   let tmpHome: string
+  let registeredFeishuSender: Parameters<typeof registerFeishuSender>[0] | undefined
 
   beforeEach(() => {
     tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-bg-scheduler-test-'))
     setLightclawHomeOverride(tmpHome)
+    registeredFeishuSender = undefined
   })
 
   afterEach(() => {
     setRunBackgroundTaskFireForTest(null)
     resetResumeScheduleForTest()
     clearCircuitBreakerCardCoordinator()
+    if (registeredFeishuSender) {
+      clearFeishuSender(registeredFeishuSender)
+    }
     setLightclawHomeOverride(undefined)
     rmSync(tmpHome, { recursive: true, force: true })
   })
@@ -511,6 +517,17 @@ describe('BackgroundTaskScheduler fire completion', () => {
   })
 
   it('does not increment circuit failures for billing or rate-limit terminal failures', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const billingNotices: Array<{ openId: string; card: Record<string, unknown> }> = []
+    registeredFeishuSender = {
+      sendInteractiveCardToOpenId: async (openId: string, card: Record<string, unknown>) => {
+        billingNotices.push({ openId, card })
+        return {}
+      },
+    } as Parameters<typeof registerFeishuSender>[0]
+    registerFeishuSender(registeredFeishuSender)
+
     const task = fakeTask()
     saveBackgroundTasks('alice', [task])
     const scheduler = new BackgroundTaskScheduler()
@@ -542,8 +559,26 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(afterBilling.consecutiveFailures, 0)
     assert.equal(afterBilling.lastFailureKind, 'billing')
     assert.match(afterBilling.billingNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
+    assert.equal(billingNotices.length, 1)
+    assert.equal(billingNotices[0]?.openId, 'ou_alice')
+    assert.equal(
+      (billingNotices[0]?.card.header as { title?: { content?: string } } | undefined)
+        ?.title?.content,
+      'Scheduled task billing wall',
+    )
 
-    await onFireComplete('alice', afterBilling, 'fire-rate-limit', {
+    await onFireComplete('alice', afterBilling, 'fire-billing-2', {
+      kind: 'failure',
+      reason: 'Your credit balance is too low.',
+      transient: false,
+      attempt: 1,
+    }, 1)
+    const afterSecondBilling = loadBackgroundTasks('alice')[0]
+    assert.ok(afterSecondBilling)
+    assert.equal(afterSecondBilling.billingNotifiedAt, afterBilling.billingNotifiedAt)
+    assert.equal(billingNotices.length, 1, 'billing wall notice must be sent only once')
+
+    await onFireComplete('alice', afterSecondBilling, 'fire-rate-limit', {
       kind: 'failure',
       reason: 'Rate limit exceeded; please retry later.',
       transient: true,
