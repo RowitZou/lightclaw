@@ -134,6 +134,12 @@ export function startTaskCardPipeline(
     // Re-read the binding fresh inside the lane (a stream may have advanced it).
     await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
     const binding = await readTaskCardBinding(owner, rootRunId)
+    // TEMP diag (cardkit seq-advance debug): which branch each render takes.
+    process.stderr.write(
+      `[task-card][diag] render root=${rootRunId} status=${root.status} terminal=${terminal} `
+      + `binding=${binding ? (binding.cardId ? `cardId(seq=${binding.cardSequence ?? 0})` : 'no-cardId') : 'none'}`
+      + `${binding?.finalizedAt ? ' finalized' : ''} → ${binding?.finalizedAt ? 'skip' : !binding ? 'create' : 'patch'}\n`,
+    )
     if (binding?.finalizedAt) {
       patcher.release(rootRunId)
       return
@@ -168,6 +174,9 @@ export function startTaskCardPipeline(
         ...(created.sequence !== undefined ? { cardSequence: created.sequence } : {}),
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
+      process.stderr.write(
+        `[task-card] create root=${rootRunId} live=${created.cardId ? 'yes' : 'no'} terminal=${terminal} seq=${created.sequence}\n`,
+      )
       if (terminal) {
         // Settle a live cardkit card so streaming_mode turns off (the typing
         // indicator stops); a non-live im.message.patch card has no streaming
@@ -191,6 +200,9 @@ export function startTaskCardPipeline(
       binding.cardId
         ? { cardId: binding.cardId, sequence: binding.cardSequence ?? 0 }
         : undefined,
+    )
+    process.stderr.write(
+      `[task-card] patch root=${rootRunId} live=${binding.cardId ? 'yes' : 'no'} seq=${patched?.sequence} terminal=${terminal}\n`,
     )
     if (terminal) {
       // Settle a live cardkit card (streaming_mode off) before stamping the
@@ -231,7 +243,14 @@ export function startTaskCardPipeline(
     streamPatcher.schedule(`${rootRunId}::stream::${elementId}`, async () => {
       await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
         const binding = await readTaskCardBinding(owner, rootRunId)
-        if (!binding?.cardId || binding.finalizedAt || !io.pushElement) return
+        if (!binding?.cardId || binding.finalizedAt || !io.pushElement) {
+          process.stderr.write(
+            `[task-card] stream no-op root=${rootRunId} element=${elementId} reason=${
+              !binding?.cardId ? 'no-cardId' : binding.finalizedAt ? 'finalized' : 'no-pushElement'
+            }\n`,
+          )
+          return
+        }
         try {
           const pushed = await io.pushElement({
             cardId: binding.cardId,
@@ -243,6 +262,9 @@ export function startTaskCardPipeline(
             ...binding,
             cardSequence: pushed.sequence,
           })
+          process.stderr.write(
+            `[task-card] stream push root=${rootRunId} element=${elementId} seq=${pushed.sequence}\n`,
+          )
         } catch (error) {
           process.stderr.write(
             `[task-card] stream push failed for ${rootRunId}/${elementId}: ${(error as Error).message}\n`,

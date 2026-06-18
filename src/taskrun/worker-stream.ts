@@ -27,11 +27,18 @@ export function buildWorkerStreamForwarder(input: {
 }): WorkerStreamForwarder {
   const elementId = taskCardProgressElementId(input.runId)
   let live = ''
+  let firstDelta = true
   return {
     onDelta(text) {
       if (!text) return
       live = live ? `${live}${text}` : text
       const pipeline = getTaskCardPipeline()
+      if (firstDelta) {
+        firstDelta = false
+        process.stderr.write(
+          `[worker-stream] first delta root=${input.rootRunId} element=${elementId} pipeline=${pipeline ? 'yes' : 'NULL'}\n`,
+        )
+      }
       if (!pipeline) return
       pipeline.streamElement(
         input.ownerCanonicalUser,

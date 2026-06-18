@@ -341,6 +341,7 @@ export class FeishuSender {
       uuid: randomUUID(),
     })
     const messageId = response.data?.message_id
+    process.stderr.write(`[task-card][diag] cardkit create ok cardId=${cardId} messageId=${messageId ?? 'none'}\n`)
     return {
       ...(messageId ? { messageId } : {}),
       cardId,
@@ -366,6 +367,7 @@ export class FeishuSender {
       },
     })
     assertOk(response, 'Feishu cardkit update live card failed')
+    process.stderr.write(`[task-card][diag] cardkit update ok cardId=${cardId} seq=${next}\n`)
     return next
   }
 
@@ -381,6 +383,7 @@ export class FeishuSender {
       data: { content, sequence: next, uuid: randomUUID() },
     })
     assertOk(response, 'Feishu cardkit element content failed')
+    process.stderr.write(`[task-card][diag] cardkit push ok cardId=${cardId} element=${elementId} seq=${next}\n`)
     return next
   }
 
@@ -400,6 +403,7 @@ export class FeishuSender {
       },
     })
     assertOk(response, 'Feishu cardkit close live card failed')
+    process.stderr.write(`[task-card][diag] cardkit close ok cardId=${cardId} seq=${next}\n`)
     return next
   }
 
