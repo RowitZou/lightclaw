@@ -590,13 +590,20 @@ export const taskUpdateTool = buildTool({
       }
     }
     if (input.action === 'accept') {
-      // Accepting a delivered run is main acting on a result — a user-facing
-      // disposition, the same chat-routing signal as deliver. This is what lets
-      // a standing service's per-fire report reach the user: the scheduler
-      // auto-delivers each fire, so main settles it with accept (not deliver),
-      // and routeSyntheticBlock routes that wake's final block to chat on this
-      // signal instead of on the wake's root being standing.
-      markConcludedRootThisTurn()
+      // Accepting a delivered run routes this shift's final block to chat
+      // (routeSyntheticBlock's concludedRoot signal) ONLY for a STANDING
+      // service: the scheduler auto-delivers each fire, main settles it with
+      // accept (not deliver), and that per-fire accept IS the user-facing
+      // report. A FINITE root's intermediate child-accept is NOT a report —
+      // main is mid-task settling one of several children as they trickle in;
+      // its narration folds onto the task card, and only the root close
+      // (deliver root, line ~228) reports to chat. Without this gate, a finite
+      // multi-child join surfaces one extra chat bubble per child that happens
+      // to settle in its own resumed shift (2026-06-18 dogfood: "已验收子任务 2"
+      // mid-join). Resolve the settled run's root: the orchestrator branch
+      // already loaded it above, but it is block-scoped, so re-read here.
+      const settledRoot = await getTaskRun(target.rootRunId, owner)
+      if (settledRoot?.standing === true) markConcludedRootThisTurn()
     }
     if (input.action === 'reject') {
       // Detached on purpose: the rejected run's next shift can take minutes.

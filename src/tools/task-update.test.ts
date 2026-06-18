@@ -613,6 +613,27 @@ test('accepting a standing fire flags concludedRoot so its report routes to chat
   assert.equal(flagged, true, 'accept set the user-facing disposition signal')
 })
 
+test('accepting a FINITE root child does NOT flag concludedRoot', async () => {
+  // The finite-multi-child-join fix (2026-06-18 dogfood): main settles its
+  // children one at a time as they trickle in. Each intermediate child-accept
+  // under a finite root is mid-task narration, NOT a user-facing report — it
+  // folds onto the task card. Only the root close (deliver root) routes to
+  // chat. Without the standing gate, an intermediate "已验收子任务 2" surfaced
+  // as its own chat bubble whenever a child settled in its own resumed shift.
+  const root = await createRootTaskRun('alice', 's-main', {
+    objective: 'finite multi-child goal',
+  })
+  const child = await startedRun({ callerRole: 'main', parentRunId: root.id })
+  await markDelivered(child.id, { ok: true, summary: 'subtask 2 done' }, Date.now(), 'alice')
+
+  const flagged = await runAsMain(async () => {
+    const accepted = await taskUpdateTool.call({ action: 'accept', runId: child.id }, toolContext())
+    assert.equal(accepted.isError, undefined)
+    return didConcludeRootThisTurn()
+  })
+  assert.equal(flagged, false, 'a finite intermediate child-accept is not a user-facing report')
+})
+
 test('rejecting a delivered run does NOT flag concludedRoot', async () => {
   // Reject sends work back (the run stays running, the worker resumes); it is
   // not main concluding a result for the user, so it must not route to chat.
