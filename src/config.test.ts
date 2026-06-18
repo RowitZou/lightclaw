@@ -39,6 +39,7 @@ const ENV_KEYS = [
   'LIGHTCLAW_PERMISSION_CEILING',
   'LIGHTCLAW_MAX_OUTPUT_TOKENS',
   'LIGHTCLAW_SKILL_PROMPT_BUDGET',
+  'LIGHTCLAW_RETRY_AFTER_CAP_MS',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -162,6 +163,24 @@ describe('config: endpoints + models registry', () => {
       maxOutputTokens: 32000,
     })
     assert.equal(getConfig().maxOutputTokens, 100000)
+  })
+
+  it('defaults and parses the provider Retry-After cap', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    })
+    assert.equal(getConfig().provider.retryAfterCapMs, 60_000)
+
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      provider: { retryAfterCapMs: 12_000 },
+    })
+    assert.equal(getConfig().provider.retryAfterCapMs, 12_000)
+
+    process.env.LIGHTCLAW_RETRY_AFTER_CAP_MS = '3000'
+    assert.equal(getConfig().provider.retryAfterCapMs, 3_000)
   })
 
   it('defaults skill prompt budget and accepts file/env overrides', () => {

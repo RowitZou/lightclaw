@@ -55,7 +55,12 @@ import {
   saveMeta,
 } from '../session/storage.js'
 import { refreshSkillRegistry } from '../skill/registry.js'
-import { ABORT_FAILURE_PATTERN, isCredentialError, isTransientError } from '../transient-error.js'
+import {
+  ABORT_FAILURE_PATTERN,
+  isCredentialError,
+  isTransientError,
+  retryDelayMsWithRetryAfter,
+} from '../transient-error.js'
 import {
   abortInFlightForSession,
   didConcludeRootThisTurn,
@@ -1518,7 +1523,11 @@ export class ChannelRunner {
             const isTransient = isTransientError(error)
             const willRetry = isTransient && attempt < MAX_QUERY_RETRIES
             if (willRetry) {
-              const backoff = QUERY_RETRY_BASE_MS * 2 ** attempt
+              const backoff = retryDelayMsWithRetryAfter(
+                QUERY_RETRY_BASE_MS * 2 ** attempt,
+                error,
+                appConfig.provider.retryAfterCapMs,
+              )
               process.stderr.write(
                 `${channelId}: query attempt ${attempt + 1} transient (${detail}); retry in ${backoff}ms\n`,
               )

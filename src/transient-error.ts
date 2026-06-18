@@ -49,6 +49,8 @@ const TRANSIENT_ERROR_CODES = new Set([
   'EAI_AGAIN', 'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'ENOTFOUND',
 ])
 
+export const RETRY_AFTER_CAP_MS = 60_000
+
 // Deterministic, non-network query failures: a whole-query re-run only
 // reproduces them (and a re-run is expensive), so they stay fatal.
 const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
@@ -144,6 +146,34 @@ function queryErrorChain(error: unknown): unknown[] {
     node = (node as { cause?: unknown }).cause
   }
   return chain
+}
+
+export function retryAfterMsOf(
+  error: unknown,
+  capMs = RETRY_AFTER_CAP_MS,
+): number | undefined {
+  const normalizedCap = Math.max(0, Math.floor(capMs))
+  for (const node of queryErrorChain(error)) {
+    if (typeof node !== 'object' || node === null) {
+      continue
+    }
+    const retryAfterMs = (node as { retryAfterMs?: unknown }).retryAfterMs
+    if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+      continue
+    }
+    return Math.min(Math.ceil(retryAfterMs), normalizedCap)
+  }
+  return undefined
+}
+
+export function retryDelayMsWithRetryAfter(
+  baseDelayMs: number,
+  error: unknown,
+  capMs = RETRY_AFTER_CAP_MS,
+): number {
+  const normalizedCap = Math.max(0, Math.floor(capMs))
+  const retryAfterMs = retryAfterMsOf(error, normalizedCap) ?? 0
+  return Math.min(Math.max(Math.ceil(baseDelayMs), retryAfterMs), normalizedCap)
 }
 
 function httpStatusOf(node: unknown): number | undefined {

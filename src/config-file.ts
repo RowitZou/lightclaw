@@ -106,6 +106,10 @@ export type ConfigFileHooksSection = {
   timeoutNonBlocking?: number
 }
 
+export type ConfigFileProviderSection = {
+  retryAfterCapMs?: number
+}
+
 export type ConfigFileMemorySection = {
   extractor?: {
     enabled?: boolean
@@ -229,6 +233,8 @@ export type ConfigFileShape = {
   paths?: ConfigFilePathsSection
   /** Turn caps. `roles.<X>.maxTurns` overrides for a specific role. */
   turns?: ConfigFileTurnsSection
+  /** Provider-facing retry controls. */
+  provider?: ConfigFileProviderSection
   /** Stream idle abort thresholds. Defaults live in config.ts. */
   streamIdle?: {
     /** Max wait for the first stream event before abort + retry. */

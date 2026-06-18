@@ -6,6 +6,8 @@ import {
   isContextOverflowError,
   isCredentialError,
   isTransientError,
+  retryAfterMsOf,
+  retryDelayMsWithRetryAfter,
 } from './transient-error.js'
 
 describe('isTransientError', () => {
@@ -201,5 +203,39 @@ describe('isTransientError', () => {
       endpoint: 'test',
     })
     assert.equal(isTransientError(error), true)
+  })
+
+  it('reads retryAfterMs from the cause chain and caps it', () => {
+    assert.equal(
+      retryAfterMsOf(new Error('wrapped', {
+        cause: Object.assign(new Error('rate limited'), { retryAfterMs: 90_000 }),
+      })),
+      60_000,
+    )
+    assert.equal(retryAfterMsOf(new Error('no header')), undefined)
+  })
+
+  it('honors Retry-After only when it exceeds the normal backoff', () => {
+    assert.equal(
+      retryDelayMsWithRetryAfter(
+        800,
+        Object.assign(new Error('rate limited'), { retryAfterMs: 5_000 }),
+      ),
+      5_000,
+    )
+    assert.equal(
+      retryDelayMsWithRetryAfter(
+        800,
+        Object.assign(new Error('tiny retry-after'), { retryAfterMs: 100 }),
+      ),
+      800,
+    )
+    assert.equal(
+      retryDelayMsWithRetryAfter(
+        800,
+        Object.assign(new Error('huge retry-after'), { retryAfterMs: 90_000 }),
+      ),
+      60_000,
+    )
   })
 })

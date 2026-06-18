@@ -24,6 +24,7 @@ import {
 import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
+import { extractProviderRetryAfterMs } from './retry-after.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
 /** OpenAI Responses API rejects audio/video on the function_call_output /
@@ -378,6 +379,10 @@ export function formatOpenAIAuthError(prefix: string, error: unknown): Error {
   const wrapped = new Error(`${prefix}${status}: ${message}`, { cause: error })
   if (statusNum !== undefined) {
     ;(wrapped as Error & { status?: number }).status = statusNum
+  }
+  const retryAfterMs = extractProviderRetryAfterMs(error)
+  if (retryAfterMs !== undefined) {
+    ;(wrapped as Error & { retryAfterMs?: number }).retryAfterMs = retryAfterMs
   }
   return wrapped
 }

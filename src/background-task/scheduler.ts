@@ -19,6 +19,11 @@ import { buildBackgroundTaskSessionId, runBackgroundTaskFire } from './runner.js
 import { clearAbortControllerForSession, setAbortControllerForSession } from '../state.js'
 import type { ChainState } from '../signal-bus/chain-state.js'
 import type { BackgroundTaskEntry, FireOutcome } from './types.js'
+import {
+  RETRY_AFTER_CAP_MS,
+  retryAfterMsOf,
+  retryDelayMsWithRetryAfter,
+} from '../transient-error.js'
 import { extractArtifactDeclarationsFromText } from '../taskrun/artifacts.js'
 import {
   appendArtifact,
@@ -572,15 +577,22 @@ export class BackgroundTaskScheduler {
           } as FireOutcome,
           taskRunId: result.taskRunId,
         }),
-        (error: unknown): { outcome: FireOutcome; taskRunId: string | undefined } => ({
-          outcome: {
-            kind: 'failure',
-            reason: error instanceof Error ? error.message : String(error),
-            transient: true,
-            attempt,
-          },
-          taskRunId: undefined,
-        }),
+        (error: unknown): { outcome: FireOutcome; taskRunId: string | undefined } => {
+          const retryAfterMs = retryAfterMsOf(
+            error,
+            this.config?.provider?.retryAfterCapMs ?? RETRY_AFTER_CAP_MS,
+          )
+          return {
+            outcome: {
+              kind: 'failure',
+              reason: error instanceof Error ? error.message : String(error),
+              transient: true,
+              attempt,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+            },
+            taskRunId: undefined,
+          }
+        },
       )
       .then(({ outcome, taskRunId: settledTaskRunId }) => {
         // Release the slot the instant the agent run settles — before, not
@@ -641,7 +653,11 @@ export class BackgroundTaskScheduler {
     const retryMax = this.config?.dispatch.scheduler.fireRetryMaxAttempts ?? 3
     const outcomeLabel = outcomeKindForBackgroundResult(outcome)
     if (outcomeLabel !== 'aborted' && outcome.kind === 'failure' && outcome.transient && attempt < retryMax) {
-      const delayMs = RETRY_BASE_MS * 2 ** (attempt - 1)
+      const delayMs = retryDelayMsWithRetryAfter(
+        RETRY_BASE_MS * 2 ** (attempt - 1),
+        outcome,
+        this.config?.provider?.retryAfterCapMs ?? RETRY_AFTER_CAP_MS,
+      )
       setTimeout(() => {
         this.enqueueOrFire(canonicalUser, {
           taskId: task.id,

@@ -17,6 +17,7 @@ import {
 import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
+import { attachProviderRetryAfter } from './retry-after.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
 /** OpenAI Chat Completions has no slot for `document` (PDF) blocks anywhere
@@ -319,18 +320,23 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // OpenAI auto prefix-cache fingerprint for the entire `messages`
       // tail.
       const wireMessages = convertMessages(params.system, sanitizedMessages)
-      const stream = await client.chat.completions.create({
-        model: params.model,
-        messages: wireMessages,
-        tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,
-        max_tokens: params.maxTokens ?? 8192,
-        stream: true,
-        stream_options: {
-          include_usage: true,
-        },
-      }, {
-        signal: params.signal,
-      })
+      let stream: Awaited<ReturnType<typeof client.chat.completions.create>>
+      try {
+        stream = await client.chat.completions.create({
+          model: params.model,
+          messages: wireMessages,
+          tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,
+          max_tokens: params.maxTokens ?? 8192,
+          stream: true,
+          stream_options: {
+            include_usage: true,
+          },
+        }, {
+          signal: params.signal,
+        })
+      } catch (error) {
+        throw attachProviderRetryAfter(error)
+      }
 
       for await (const chunk of stream) {
         usage = {
@@ -486,29 +492,34 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       if (images.length === 0) {
         throw new Error('describeImage requires at least one image.')
       }
-      const completion = await client.chat.completions.create({
-        model: params.model,
-        messages: [
-          ...(params.system
-            ? [{ role: 'system' as const, content: params.system }]
-            : []),
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: params.prompt },
-              ...images.map(image => ({
-                type: 'image_url',
-                image_url: {
-                  url: `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
-                },
-              } as const)),
-            ],
-          },
-        ],
-        max_tokens: params.maxTokens ?? 1200,
-      }, {
-        signal: params.signal,
-      })
+      let completion: Awaited<ReturnType<typeof client.chat.completions.create>>
+      try {
+        completion = await client.chat.completions.create({
+          model: params.model,
+          messages: [
+            ...(params.system
+              ? [{ role: 'system' as const, content: params.system }]
+              : []),
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: params.prompt },
+                ...images.map(image => ({
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${image.mimeType};base64,${image.buffer.toString('base64')}`,
+                  },
+                } as const)),
+              ],
+            },
+          ],
+          max_tokens: params.maxTokens ?? 1200,
+        }, {
+          signal: params.signal,
+        })
+      } catch (error) {
+        throw attachProviderRetryAfter(error)
+      }
       return {
         text: completion.choices[0]?.message.content ?? '',
         model: completion.model,
@@ -524,14 +535,19 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         params.audio.fileName ?? 'audio',
         params.audio.mimeType ? { type: params.audio.mimeType } : undefined,
       )
-      const transcription = await client.audio.transcriptions.create({
-        file,
-        model: params.model ?? 'whisper-1',
-        ...(params.prompt ? { prompt: params.prompt } : {}),
-        ...(params.language ? { language: params.language } : {}),
-      }, {
-        signal: params.signal,
-      })
+      let transcription: Awaited<ReturnType<typeof client.audio.transcriptions.create>>
+      try {
+        transcription = await client.audio.transcriptions.create({
+          file,
+          model: params.model ?? 'whisper-1',
+          ...(params.prompt ? { prompt: params.prompt } : {}),
+          ...(params.language ? { language: params.language } : {}),
+        }, {
+          signal: params.signal,
+        })
+      } catch (error) {
+        throw attachProviderRetryAfter(error)
+      }
       return {
         text: transcription.text,
         model: params.model ?? 'whisper-1',

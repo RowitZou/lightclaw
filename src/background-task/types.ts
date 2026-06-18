@@ -114,6 +114,7 @@ export type FireOutcome =
       reason: string
       transient: boolean
       attempt: number
+      retryAfterMs?: number
       permissionDenials?: PermissionDenialDetail[]
       // Local files the worker had already written before it failed,
       // reconstructed from the partial transcript (see

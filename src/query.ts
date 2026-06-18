@@ -1,7 +1,11 @@
 
 import { getConfig, type LightClawConfig } from './config.js'
 import { streamChat as defaultStreamChat } from './api.js'
-import { IdleStreamError, isTransientError } from './transient-error.js'
+import {
+  IdleStreamError,
+  isTransientError,
+  retryDelayMsWithRetryAfter,
+} from './transient-error.js'
 import {
   emptyInvocationContext,
   type InterjectionEntry,
@@ -852,7 +856,12 @@ export async function query(params: QueryParams): Promise<{
             process.stderr.write(
               `[query] transient stream error on turn ${turn}; retrying turn: ${detail}\n`,
             )
-            await new Promise(resolve => setTimeout(resolve, transientTurnRetryDelayMs))
+            const delayMs = retryDelayMsWithRetryAfter(
+              transientTurnRetryDelayMs,
+              error,
+              config.provider.retryAfterCapMs,
+            )
+            await new Promise(resolve => setTimeout(resolve, delayMs))
             shouldRetry = true
           }
           if (shouldRetry) {

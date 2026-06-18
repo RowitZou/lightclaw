@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 
 import type { ApiKeyEndpoint } from '../config.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
+import { attachProviderRetryAfter } from './retry-after.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -354,19 +355,24 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
       return ['audio', 'video']
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      const stream = await client.messages.create({
-        model: params.model,
-        max_tokens: params.maxTokens ?? 8192,
-        system: cacheSystem(params.system) as never,
-        messages: cacheMessages(
-          params.messages,
-          params.cacheBreakpointMessageIndex,
-        ) as never,
-        tools: cacheTools(params.tools) as never,
-        stream: true,
-      }, {
-        signal: params.signal,
-      })
+      let stream: Awaited<ReturnType<typeof client.messages.create>>
+      try {
+        stream = await client.messages.create({
+          model: params.model,
+          max_tokens: params.maxTokens ?? 8192,
+          system: cacheSystem(params.system) as never,
+          messages: cacheMessages(
+            params.messages,
+            params.cacheBreakpointMessageIndex,
+          ) as never,
+          tools: cacheTools(params.tools) as never,
+          stream: true,
+        }, {
+          signal: params.signal,
+        })
+      } catch (error) {
+        throw attachProviderRetryAfter(error)
+      }
 
       const contentBlocks = new Map<
         number,
@@ -604,35 +610,40 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
       if (images.length === 0) {
         throw new Error('describeImage requires at least one image.')
       }
-      const response = await client.messages.create(
-        {
-          model: params.model,
-          max_tokens: params.maxTokens ?? 1200,
-          ...(params.system ? { system: params.system } : {}),
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: params.prompt },
-                ...images.map(image => ({
-                  type: 'image' as const,
-                  source: {
-                    type: 'base64' as const,
-                    // Anthropic SDK accepts the four standard vision MIME
-                    // types plus aliases; cast through `as never` because
-                    // upstream typings narrow further than runtime requires.
-                    media_type: image.mimeType,
-                    data: image.buffer.toString('base64'),
-                  },
-                })),
-              ],
-            },
-          ],
-        } as never,
-        {
-          signal: params.signal,
-        },
-      )
+      let response: Awaited<ReturnType<typeof client.messages.create>>
+      try {
+        response = await client.messages.create(
+          {
+            model: params.model,
+            max_tokens: params.maxTokens ?? 1200,
+            ...(params.system ? { system: params.system } : {}),
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: params.prompt },
+                  ...images.map(image => ({
+                    type: 'image' as const,
+                    source: {
+                      type: 'base64' as const,
+                      // Anthropic SDK accepts the four standard vision MIME
+                      // types plus aliases; cast through `as never` because
+                      // upstream typings narrow further than runtime requires.
+                      media_type: image.mimeType,
+                      data: image.buffer.toString('base64'),
+                    },
+                  })),
+                ],
+              },
+            ],
+          } as never,
+          {
+            signal: params.signal,
+          },
+        )
+      } catch (error) {
+        throw attachProviderRetryAfter(error)
+      }
       const textParts: string[] = []
       for (const block of response.content as unknown[]) {
         if (
@@ -653,36 +664,41 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
           async webSearch(
             webSearchParams: WebSearchParams,
           ): Promise<WebSearchResult> {
-            const response = await client.messages.create(
-              {
-                model: webSearchParams.model,
-                max_tokens: webSearchParams.maxTokens ?? 4096,
-                system:
-                  'You are a web search assistant. Use web_search to answer the query and include useful source URLs.',
-                messages: [
-                  {
-                    role: 'user',
-                    content: `Perform a web search for: ${webSearchParams.query}`,
-                  },
-                ],
-                tools: [
-                  {
-                    type: 'web_search_20250305',
-                    name: 'web_search',
-                    max_uses: webSearchParams.maxUses ?? 5,
-                    ...(webSearchParams.allowedDomains
-                      ? { allowed_domains: webSearchParams.allowedDomains }
-                      : {}),
-                    ...(webSearchParams.blockedDomains
-                      ? { blocked_domains: webSearchParams.blockedDomains }
-                      : {}),
-                  },
-                ] as never,
-              },
-              {
-                signal: webSearchParams.signal,
-              },
-            )
+            let response: Awaited<ReturnType<typeof client.messages.create>>
+            try {
+              response = await client.messages.create(
+                {
+                  model: webSearchParams.model,
+                  max_tokens: webSearchParams.maxTokens ?? 4096,
+                  system:
+                    'You are a web search assistant. Use web_search to answer the query and include useful source URLs.',
+                  messages: [
+                    {
+                      role: 'user',
+                      content: `Perform a web search for: ${webSearchParams.query}`,
+                    },
+                  ],
+                  tools: [
+                    {
+                      type: 'web_search_20250305',
+                      name: 'web_search',
+                      max_uses: webSearchParams.maxUses ?? 5,
+                      ...(webSearchParams.allowedDomains
+                        ? { allowed_domains: webSearchParams.allowedDomains }
+                        : {}),
+                      ...(webSearchParams.blockedDomains
+                        ? { blocked_domains: webSearchParams.blockedDomains }
+                        : {}),
+                    },
+                  ] as never,
+                },
+                {
+                  signal: webSearchParams.signal,
+                },
+              )
+            } catch (error) {
+              throw attachProviderRetryAfter(error)
+            }
 
             return {
               text: formatWebSearchBlocks(response.content as unknown[]),

@@ -16,7 +16,11 @@ import { runDispatchedAgent } from '../agents/dispatched-agent.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
-import { isBillingError } from '../transient-error.js'
+import {
+  RETRY_AFTER_CAP_MS,
+  isBillingError,
+  retryAfterMsOf,
+} from '../transient-error.js'
 import {
   createSessionContext,
   runWithSessionContext,
@@ -45,6 +49,7 @@ export async function runBackgroundTaskFire(input: {
   taskRunId?: string
 }): Promise<FireOutcome> {
   const sessionId = buildBackgroundTaskSessionId(input.task, input.fireUuid)
+  let retryAfterCapMs = RETRY_AFTER_CAP_MS
   try {
     await markTaskRunStartedBestEffort(input.taskRunId, input.task.ownerCanonicalUser, sessionId)
     if (input.signal.aborted) {
@@ -57,6 +62,7 @@ export async function runBackgroundTaskFire(input: {
     }
 
     const config = getConfig()
+    retryAfterCapMs = config.provider.retryAfterCapMs
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
     const model = applyCredentialDegrade(
       prefs.model ?? config.defaultModel,
@@ -234,11 +240,13 @@ export async function runBackgroundTaskFire(input: {
     const partialArtifacts = await collectPartialArtifactPaths(sessionId).catch(
       () => [],
     )
+    const retryAfterMs = retryAfterMsOf(error, retryAfterCapMs)
     return {
       kind: 'failure',
       reason: error instanceof Error ? error.message : String(error),
       transient: isTransientFireError(error),
       attempt: 1,
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       ...(partialArtifacts.length ? { partialArtifacts } : {}),
     }
   }

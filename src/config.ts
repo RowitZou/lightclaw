@@ -11,6 +11,7 @@ import {
 import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 import { BUNDLED_AGENTS } from './agents/bundled/index.js'
+import { RETRY_AFTER_CAP_MS } from './transient-error.js'
 
 export type DockerMountConfig = {
   host: string
@@ -268,6 +269,10 @@ export type StreamIdleConfig = {
   interEventMs: number
 }
 
+export type ProviderRetryConfig = {
+  retryAfterCapMs: number
+}
+
 export type PathsConfig = {
   sessions: string
   workspace: string
@@ -368,6 +373,7 @@ export type LightClawConfig = {
   apiLogsEnabled: boolean
   paths: PathsConfig
   turns: TurnsConfig
+  provider: ProviderRetryConfig
   streamIdle: StreamIdleConfig
   memory: MemoryConfig
   compact: CompactConfig
@@ -1346,6 +1352,16 @@ export function getConfig(): LightClawConfig {
         DEFAULT_MAX_OUTPUT_TOKENS,
     ),
   )
+  const provider: ProviderRetryConfig = {
+    retryAfterCapMs: Math.max(
+      0,
+      Math.floor(
+        parseNumber(process.env.LIGHTCLAW_RETRY_AFTER_CAP_MS) ??
+          fileConfig.provider?.retryAfterCapMs ??
+          RETRY_AFTER_CAP_MS,
+      ),
+    ),
+  }
 
   // — compact —
   const autoCompact =
@@ -1800,6 +1816,7 @@ export function getConfig(): LightClawConfig {
       ...(mainTurns !== undefined ? { main: mainTurns } : {}),
       ...(subagentDefaultTurns !== undefined ? { subagentDefault: subagentDefaultTurns } : {}),
     },
+    provider,
     streamIdle,
     memory: {
       extractor: { enabled: autoMemory },
