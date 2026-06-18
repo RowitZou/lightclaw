@@ -57,6 +57,9 @@ import type { Role } from './types.js'
 // only `main` shifts. The mirrored N1 worker-panel edits (Message no-`to`
 // reply_code mode + with-`to` softening) render only on a tracked task run,
 // which this snapshot does not set, so the worker hashes are unchanged here.
+// skill composition Stage-2 (2026-06-18): only skillConsolidator shifts. It
+// gains SkillEdit and the finalized compose-existing + extract-new prompt
+// sections; user-facing and other internal prompts stay stable.
 const SNAPSHOT_HASHES: Record<string, string> = {
   main: '35392d1ed68cdf9008873f57a3c865c2ae3ca896ba9f194ed60f530de362d4d9',
   generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
@@ -69,7 +72,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: '22a81196c1a4d5b8fd8aa38266fc67a7750689916da58a15b93aeaadc3e8cd94',
-  skillConsolidator: '0544ecf1ddcf774ee5254d5a431e5d2cbd7e762625cc6c8e0e1f0aa705a3339a',
+  skillConsolidator: '0ff82a204a15ce41d27344c506b7b66a81cf8550c5439bab58299f2766f1fcc6',
 }
 
 let tmpRoot: string

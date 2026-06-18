@@ -35,6 +35,7 @@ import { memoryWriteTool } from './tools/memory-write.js'
 import { sendFileTool } from './tools/send-file.js'
 import { showSlashCatalogTool } from './tools/show-slash-catalog.js'
 import { skillDeleteTool } from './tools/skill-delete.js'
+import { skillEditTool } from './tools/skill-edit.js'
 import { skillWriteTool } from './tools/skill-write.js'
 import { sleepTool } from './tools/sleep.js'
 import { taskCreateTool } from './tools/task-create.js'
@@ -79,6 +80,7 @@ export const builtinTools = [
   sendFileTool,
   showSlashCatalogTool,
   skillDeleteTool,
+  skillEditTool,
   skillWriteTool,
   sleepTool,
   taskCreateTool,

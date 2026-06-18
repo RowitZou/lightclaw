@@ -229,6 +229,10 @@ export type SkillsConfig = {
    * list. `0` disables degradation and renders today's full list.
    */
   promptBudgetChars: number
+  /** Max inline UseSkill bodies injected in one model turn. */
+  maxInlineComposePerTurn: number
+  /** Dream canary passes with no parent/sub usage before confirming. */
+  maxDormantPasses: number
 }
 
 /** Sub-LLM model pins for framework-internal LLM operations. Each value
@@ -2118,12 +2122,22 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
 }
 
 function resolveSkillsConfig(fileConfig: ConfigFileShape): SkillsConfig {
-  const raw =
+  const budgetRaw =
     parseNumber(process.env.LIGHTCLAW_SKILL_PROMPT_BUDGET) ??
     fileConfig.skills?.promptBudgetChars ??
     DEFAULT_SKILL_PROMPT_BUDGET_CHARS
+  const inlineRaw =
+    parseNumber(process.env.LIGHTCLAW_SKILL_MAX_INLINE_COMPOSE_PER_TURN) ??
+    fileConfig.skills?.maxInlineComposePerTurn ??
+    6
+  const dormantRaw =
+    parseNumber(process.env.LIGHTCLAW_SKILL_COMPOSITION_MAX_DORMANT_PASSES) ??
+    fileConfig.skills?.maxDormantPasses ??
+    10
   return {
-    promptBudgetChars: Math.max(0, Math.floor(raw)),
+    promptBudgetChars: Math.max(0, Math.floor(budgetRaw)),
+    maxInlineComposePerTurn: Math.max(1, Math.floor(inlineRaw)),
+    maxDormantPasses: Math.max(1, Math.floor(dormantRaw)),
   }
 }
 

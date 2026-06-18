@@ -233,7 +233,7 @@ export const BUNDLED_AGENTS: Role[] = [
   {
     agentType: 'skillConsolidator',
     whenToUse: 'Internal: framework-managed per-user skill consolidation.',
-    tools: ['SkillWrite', 'SkillDelete', 'Read'],
+    tools: ['SkillWrite', 'SkillEdit', 'SkillDelete', 'Read'],
     systemPrompt: skillConsolidatorPrompt,
     kind: 'internal',
     outputContract: 'side-effect',

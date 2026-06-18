@@ -12,6 +12,9 @@ import { getCurrentSessionContext } from '../session-context.js'
 import { getCurrentUserId } from '../state.js'
 import { buildTool } from '../tool.js'
 
+const INLINE_COMPOSE_CAP_MESSAGE =
+  'composition breadth cap reached this turn; the loaded skills are enough — proceed'
+
 function wrapSkillContent(name: string, content: string): string {
   const sanitizedContent = content.replaceAll('</skill-content>', '<\\/skill-content>')
   return `<skill-content name="${name}">\n${sanitizedContent}\n</skill-content>`
@@ -53,6 +56,15 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
           isError: true,
         }
       }
+      const session = getCurrentSessionContext()
+      const cap = Math.max(1, Math.floor(context.config?.skills.maxInlineComposePerTurn ?? 6))
+      const count = (session?.inlineComposeThisTurn ?? 0) + 1
+      if (session) session.inlineComposeThisTurn = count
+      if (count > cap) {
+        return {
+          output: INLINE_COMPOSE_CAP_MESSAGE,
+        }
+      }
       let skillDir: string | undefined
       if (skill.body.includes('${LIGHTCLAW_SKILL_DIR}') && await hasSkillAssets(skill)) {
         skillDir = await materializeSkillAssets(skill, context.runtime)
@@ -81,3 +93,5 @@ If a skill's instructions have already been loaded earlier in this turn (you'll 
     }
   },
 })
+
+export const __inlineComposeCapMessageForTest = INLINE_COMPOSE_CAP_MESSAGE

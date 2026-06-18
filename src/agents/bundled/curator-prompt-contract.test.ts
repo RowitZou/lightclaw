@@ -41,6 +41,17 @@ describe('skillConsolidator prompt destructive-pair sequencing contract', () => 
     assert.match(skillConsolidatorPrompt, /wait\s+for\s+its\s+`tool_result`/i)
   })
 
+  it('allows compose-existing and extract-new but keeps rewrites one parent at a time', () => {
+    assert.match(skillConsolidatorPrompt, /Rewrite one over-inlined parent to reuse an existing sibling/)
+    assert.match(skillConsolidatorPrompt, /Extract a shared procedure two or more parents re-state/)
+    assert.match(skillConsolidatorPrompt, /via `SkillEdit`/)
+    assert.match(skillConsolidatorPrompt, /Never wire every parent in a single pass/)
+    assert.match(skillConsolidatorPrompt, /Composition is only real `UseSkill` calls in skill bodies/)
+    assert.match(skillConsolidatorPrompt, /What counts as over-inlined/)
+    assert.match(skillConsolidatorPrompt, /What counts as a shared flow worth extracting/)
+    assert.doesNotMatch(skillConsolidatorPrompt, /Factor shared steps out into a NEW sub-skill/)
+  })
+
   it('gates SkillDelete on SkillWrite returning is_error:false', () => {
     assert.match(skillConsolidatorPrompt, /Only\s+if\s+3\.a\s+returned\s+`is_error:false`/i)
   })

@@ -10,6 +10,7 @@ import {
 import { notifyTool } from './notify.js'
 import { showSlashCatalogTool } from './show-slash-catalog.js'
 import { skillDeleteTool } from './skill-delete.js'
+import { skillEditTool } from './skill-edit.js'
 import { skillWriteTool } from './skill-write.js'
 import { brainppClusterTool } from './cluster-job.js'
 import {
@@ -25,6 +26,7 @@ test('Phase 4 tool descriptions and background-result block match snapshot hashe
     Notify: hash(notifyTool.description),
     ShowSlashCatalog: hash(showSlashCatalogTool.description),
     SkillDelete: hash(skillDeleteTool.description),
+    SkillEdit: hash(skillEditTool.description),
     SkillWrite: hash(skillWriteTool.description),
     BrainppCluster: hash(brainppClusterTool.description),
     BackgroundTaskResultBlockMain: hash(BACKGROUND_TASK_RESULT_BLOCK_MAIN_TEMPLATE),
@@ -59,6 +61,7 @@ const EXPECTED = {
   // the user can run when setup must happen outside agent tools.
   ShowSlashCatalog: '46d6a98076f769638533981dfbc1476a5a3e0b89ed439543badcb5939e84ee5f',
   SkillDelete: 'f8f9da730224aabfd40390c009ce3fefdf8f014bacea508ccdc425e0687b58a6',
+  SkillEdit: 'f282734cbc195799ec73ddf6c4da640cc147ba5f9670a0f605ca5640faf4387f',
   // Phase 19 PR2: SkillWrite documents supporting `files` under scripts/
   // and references/, plus overwrite as whole-skill replacement.
   // Dispatch-brief PR5: SkillWrite now lists optional dispatch_brief in

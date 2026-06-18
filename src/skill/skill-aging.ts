@@ -3,6 +3,8 @@ import path from 'node:path'
 
 import { recordSkillOpAudit } from '../audit/skill-ops.js'
 import { parseFrontmatter } from '../memory/auto-memory.js'
+import { bundledSkills } from './bundled/index.js'
+import { buildUseSkillReverseDeps, type SkillBodyForComposition } from './composition-graph.js'
 
 /**
  * Deterministic two-stage skill aging for per-user (non-bundled) skills.
@@ -78,6 +80,12 @@ async function archiveStaleSkills(
 ): Promise<string[]> {
   const cutoffMs = now - archiveDays * DAY_MS
   const entries = await readDirEntries(skillsRoot)
+  const activeBodies = await readActiveSkillBodies(skillsRoot, entries)
+  const referenceSources = [
+    ...activeBodies,
+    ...bundledSkills.map(skill => ({ name: skill.name, body: skill.body })),
+  ]
+  const reverseDeps = buildUseSkillReverseDeps(referenceSources)
   const archived: string[] = []
 
   for (const entry of entries) {
@@ -103,6 +111,10 @@ async function archiveStaleSkills(
     }
 
     const { frontmatter } = parseFrontmatter(raw)
+    const skillName = frontmatterName(frontmatter) ?? entry.name
+    if (hasActiveParent(reverseDeps, skillName, referenceSources)) {
+      continue
+    }
     if (effectiveActiveTimestamp(frontmatter.last_used_at, mtimeMs) > cutoffMs) {
       continue
     }
@@ -119,7 +131,6 @@ async function archiveStaleSkills(
     }
 
     const nowIso = new Date(now).toISOString()
-    const skillName = frontmatterName(frontmatter) ?? entry.name
     await stampArchivedAt(path.join(dest, 'SKILL.md'), nowIso)
     archived.push(skillName)
     await recordSkillOpAudit({
@@ -134,6 +145,42 @@ async function archiveStaleSkills(
   }
 
   return archived
+}
+
+async function readActiveSkillBodies(
+  skillsRoot: string,
+  entries: import('node:fs').Dirent[],
+): Promise<SkillBodyForComposition[]> {
+  const skills: SkillBodyForComposition[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === SKILL_ARCHIVE_DIR) continue
+    try {
+      const raw = await readFile(path.join(skillsRoot, entry.name, 'SKILL.md'), 'utf8')
+      const parsed = parseFrontmatter(raw)
+      skills.push({
+        name: frontmatterName(parsed.frontmatter) ?? entry.name,
+        body: parsed.body,
+      })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw err
+    }
+  }
+  return skills
+}
+
+function hasActiveParent(
+  reverseDeps: Map<string, Set<string>>,
+  skillName: string,
+  activeBodies: SkillBodyForComposition[],
+): boolean {
+  const parents = reverseDeps.get(skillName)
+  if (!parents || parents.size === 0) return false
+  const activeNames = new Set(activeBodies.map(skill => skill.name))
+  for (const parent of parents) {
+    if (activeNames.has(parent)) return true
+  }
+  return false
 }
 
 async function purgeExpiredArchives(

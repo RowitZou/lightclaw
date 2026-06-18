@@ -39,6 +39,8 @@ const ENV_KEYS = [
   'LIGHTCLAW_PERMISSION_CEILING',
   'LIGHTCLAW_MAX_OUTPUT_TOKENS',
   'LIGHTCLAW_SKILL_PROMPT_BUDGET',
+  'LIGHTCLAW_SKILL_MAX_INLINE_COMPOSE_PER_TURN',
+  'LIGHTCLAW_SKILL_COMPOSITION_MAX_DORMANT_PASSES',
   'LIGHTCLAW_RETRY_AFTER_CAP_MS',
 ] as const
 
@@ -202,6 +204,31 @@ describe('config: endpoints + models registry', () => {
 
     process.env.LIGHTCLAW_SKILL_PROMPT_BUDGET = '777'
     assert.equal(getConfig().skills.promptBudgetChars, 777)
+  })
+
+  it('defaults and parses skill composition safety knobs', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    })
+    assert.equal(getConfig().skills.maxInlineComposePerTurn, 6)
+    assert.equal(getConfig().skills.maxDormantPasses, 10)
+
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      skills: {
+        maxInlineComposePerTurn: 4,
+        maxDormantPasses: 7,
+      },
+    })
+    assert.equal(getConfig().skills.maxInlineComposePerTurn, 4)
+    assert.equal(getConfig().skills.maxDormantPasses, 7)
+
+    process.env.LIGHTCLAW_SKILL_MAX_INLINE_COMPOSE_PER_TURN = '9'
+    process.env.LIGHTCLAW_SKILL_COMPOSITION_MAX_DORMANT_PASSES = '12'
+    assert.equal(getConfig().skills.maxInlineComposePerTurn, 9)
+    assert.equal(getConfig().skills.maxDormantPasses, 12)
   })
 
   it('rejects invalid per-model maxOutputTokens', () => {

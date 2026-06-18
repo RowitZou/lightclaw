@@ -101,6 +101,11 @@ export const skillWriteTool = buildTool({
       // later skillConsolidator SkillDelete of a *different* name is allowed.
       // See `src/skill/destructive-guard.ts` and 2026-05-29 dogfood Bug 1.
       recordSkillSurvivorWrite(session?.sessionId ?? '', meta.name)
+      if (callerRole?.agentType === 'skillConsolidator') {
+        const created = session.skillCompositionCreatedSkills ?? new Set<string>()
+        created.add(meta.name)
+        session.skillCompositionCreatedSkills = created
+      }
       await recordSkillOpAudit({
         at: new Date().toISOString(),
         userId,

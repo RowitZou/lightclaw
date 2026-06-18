@@ -10,7 +10,7 @@ import { createSessionContext, runWithSessionContext } from '../session-context.
 import type { ToolCallContext } from '../tool.js'
 import { writeUserSkill } from '../skill/loader.js'
 import { stripSkillContentForCompaction } from '../session/compact.js'
-import { useSkillTool } from './use-skill.js'
+import { __inlineComposeCapMessageForTest, useSkillTool } from './use-skill.js'
 
 const emptyRuntime = {
   workspaceRoot: '/workspace',
@@ -132,6 +132,46 @@ describe('UseSkill transcript output', () => {
           /\[skill "guard-skill" was loaded here; its instructions are omitted from this summary and can be reloaded via UseSkill\]/,
         )
         assert.deepEqual(roster, ['guard-skill'])
+      })
+    })
+  })
+})
+
+describe('UseSkill inline composition guard', () => {
+  it('returns a self-healing notice after maxInlineComposePerTurn in one turn', async () => {
+    await withTempHome(async home => {
+      for (const name of ['skill-one', 'skill-two']) {
+        await writeUserSkill({
+          userId: 'alice',
+          name,
+          markdown:
+            `---\nname: ${name}\ndescription: ${name}.\n---\n\n` +
+            `Body for ${name}.\n`,
+        })
+      }
+      const ctx = createSessionContext({
+        cwd: process.cwd(),
+        model: 'claude-sonnet-4-6',
+        sessionsDir: path.join(home, 'sessions'),
+        memoryDir: path.join(home, 'memory', 'alice'),
+        currentUserId: 'alice',
+        runtime: emptyRuntime,
+      })
+      const callContext = {
+        cwd: process.cwd(),
+        abortSignal: new AbortController().signal,
+        runtime: emptyRuntime,
+        config: { skills: { maxInlineComposePerTurn: 1 } },
+      } as unknown as ToolCallContext
+
+      await runWithSessionContext(ctx, async () => {
+        const first = await useSkillTool.call({ name: 'skill-one' }, callContext)
+        assert.equal(first.isError, undefined)
+        assert.match(first.output, /Body for skill-one/)
+
+        const second = await useSkillTool.call({ name: 'skill-two' }, callContext)
+        assert.equal(second.isError, undefined)
+        assert.equal(second.output, __inlineComposeCapMessageForTest)
       })
     })
   })

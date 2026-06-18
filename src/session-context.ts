@@ -86,6 +86,11 @@ export type SessionContext = {
    *  nudge missed on an `end_turn` boundary carries over. See
    *  `src/memory/nudge.ts`. */
   lastMemoryNudgeTurn: number
+  /** Per-turn guard for inline skill composition. Reset at each model turn. */
+  inlineComposeThisTurn?: number
+  /** Skill names written by skillConsolidator in this session. SkillEdit uses
+   *  this to distinguish extract-new from compose-existing journal entries. */
+  skillCompositionCreatedSkills?: Set<string>
   runtime?: Runtime
   isBackgroundTask?: boolean
   onPermissionDenial?: (detail: PermissionDenialDetail) => void
@@ -203,6 +208,8 @@ export function createSessionContext(input: {
     discoveredTools: new Map(),
     turnCounter: 0,
     lastMemoryNudgeTurn: 0,
+    inlineComposeThisTurn: 0,
+    skillCompositionCreatedSkills: new Set(),
     runtime: input.runtime,
     isBackgroundTask: input.isBackgroundTask,
     onPermissionDenial: input.onPermissionDenial,
@@ -249,6 +256,8 @@ export function createEmptySessionContext(input?: Partial<SessionContext>): Sess
     discoveredTools: new Map(),
     turnCounter: 0,
     lastMemoryNudgeTurn: 0,
+    inlineComposeThisTurn: 0,
+    skillCompositionCreatedSkills: new Set(),
     runtime: undefined,
     ...input,
   }

@@ -7,6 +7,7 @@ import type { AgentType, Role } from '../../agents/types.js'
 import type { LightClawConfig, RuntimeDriver } from '../../config.js'
 import { userSkillsRoot } from '../../identity/paths.js'
 import { listActiveCanonicalUsers } from '../../identity/store.js'
+import { processCompositionCanaries } from '../../skill/composition-journal.js'
 import { ageUserSkills } from '../../skill/skill-aging.js'
 import { ensureMemoryDir, getMemoryDir } from '../auto-memory.js'
 import {
@@ -324,6 +325,7 @@ async function executeAutoDreamInner(params: {
         runSkillCurator: subTaskDue.skillCurator,
         runSkillConsolidator: subTaskDue.skillConsolidator,
         runtimeDriver: params.config.runtime?.driver ?? null,
+        maxDormantPasses: params.config.skills?.maxDormantPasses ?? 10,
         maxTurns: params.config.memory.curator.maxTurns,
       })
       if (subTaskDue.skillCurator
@@ -455,6 +457,7 @@ async function runSkillDreamPasses(params: {
   runSkillCurator: boolean
   runSkillConsolidator: boolean
   runtimeDriver: RuntimeDriver
+  maxDormantPasses: number
   maxTurns?: number
 }): Promise<SkillDreamOutcome> {
   let skillCuratorSucceeded = true
@@ -507,6 +510,9 @@ async function runSkillDreamPasses(params: {
 
   if (params.runSkillConsolidator) {
     try {
+      await processCompositionCanaries(params.userId, {
+        maxDormantPasses: params.maxDormantPasses,
+      })
       const result = await runSubagentImpl({
         agentType: 'skillConsolidator',
         prompt: buildSkillConsolidatorPrompt({

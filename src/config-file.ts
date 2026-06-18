@@ -187,6 +187,10 @@ export type ConfigFileSkillsSection = {
    *  disables degradation and preserves the full list. Env override:
    *  LIGHTCLAW_SKILL_PROMPT_BUDGET. */
   promptBudgetChars?: number
+  /** Maximum UseSkill body injections allowed in one model turn. */
+  maxInlineComposePerTurn?: number
+  /** Dream canary passes without parent/sub usage before confirming. */
+  maxDormantPasses?: number
 }
 
 export type ConfigFileShape = {

@@ -655,6 +655,10 @@ export async function query(params: QueryParams): Promise<{
     // boundary mutated config.defaultModel, so this turn streams under the
     // new model. No-op when nothing changed.
     roleModel = resolveRoleModel(params.role, config)
+    const sessionCtx = getCurrentSessionContext()
+    if (sessionCtx) {
+      sessionCtx.inlineComposeThisTurn = 0
+    }
     let stopEvent: StopEvent | undefined
     turnCatalog = {
       tools: params.tools,

@@ -17,7 +17,7 @@ import { resolveAuditDir } from '../config.js'
 export type SkillOpAudit = {
   at: string
   userId: string | undefined
-  tool: 'SkillWrite' | 'SkillDelete' | 'skill-aging'
+  tool: 'SkillWrite' | 'SkillEdit' | 'SkillDelete' | 'skill-aging'
   name: string
   /** Absolute on-disk SKILL.md path. Present on success; omitted when the op
    *  never reached the filesystem (no identity, guard refusal, bad name). */
@@ -30,7 +30,7 @@ export type SkillOpAudit = {
    *  long-archived one; `denied` = a guard or identity precondition refused
    *  before touching disk; `failed` = an unexpected error after the op was
    *  attempted. */
-  status: 'written' | 'deleted' | 'archived' | 'purged' | 'denied' | 'failed'
+  status: 'written' | 'edited' | 'deleted' | 'archived' | 'purged' | 'denied' | 'failed'
   reason?: string
 }
 

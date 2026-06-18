@@ -33,7 +33,7 @@ async function withTempHome(fn: (home: string) => Promise<void>): Promise<void> 
 async function writeSkill(
   root: string,
   dirName: string,
-  opts: { name?: string; lastUsedAt?: number; archivedAt?: number; mtimeMs: number },
+  opts: { name?: string; lastUsedAt?: number; archivedAt?: number; mtimeMs: number; body?: string },
 ): Promise<string> {
   const dir = path.join(root, dirName)
   await mkdir(dir, { recursive: true })
@@ -48,7 +48,7 @@ async function writeSkill(
   if (opts.archivedAt !== undefined) {
     lines.push(`archived_at: ${new Date(opts.archivedAt).toISOString()}`)
   }
-  lines.push('---', '', 'Body.', '')
+  lines.push('---', '', opts.body ?? 'Body.', '')
   const file = path.join(dir, 'SKILL.md')
   await writeFile(file, lines.join('\n'), 'utf8')
   const when = new Date(opts.mtimeMs)
@@ -166,6 +166,41 @@ describe('ageUserSkills — archive stage', () => {
         NOW,
       )
       assert.deepEqual(result, { archived: [], purged: [] })
+    })
+  })
+
+  it('keeps a stale skill when an active skill references it with UseSkill', async () => {
+    await withTempHome(async () => {
+      const root = userSkillsRoot('alice')
+      await writeSkill(root, 'parent-flow', {
+        mtimeMs: BASE + 150 * DAY_MS,
+        body: "First do setup, then call UseSkill('child-flow').",
+      })
+      await writeSkill(root, 'child-flow', { lastUsedAt: BASE, mtimeMs: BASE })
+
+      const result = await ageUserSkills(root, 'alice', { archiveDays: 90, purgeDays: 90 }, NOW)
+
+      assert.deepEqual(result.archived, [])
+      assert.equal(await exists(path.join(root, 'child-flow', 'SKILL.md')), true)
+      assert.equal(await exists(path.join(root, SKILL_ARCHIVE_DIR, 'child-flow', 'SKILL.md')), false)
+    })
+  })
+
+  it('does not protect a child once its referencing parent is already archived', async () => {
+    await withTempHome(async () => {
+      const root = userSkillsRoot('alice')
+      await writeSkill(path.join(root, SKILL_ARCHIVE_DIR), 'parent-flow', {
+        name: 'parent-flow',
+        archivedAt: BASE + 150 * DAY_MS,
+        mtimeMs: BASE + 150 * DAY_MS,
+        body: "Archived parent calls UseSkill('child-flow').",
+      })
+      await writeSkill(root, 'child-flow', { lastUsedAt: BASE, mtimeMs: BASE })
+
+      const result = await ageUserSkills(root, 'alice', { archiveDays: 90, purgeDays: 90 }, NOW)
+
+      assert.deepEqual(result.archived, ['child-flow'])
+      assert.equal(await exists(path.join(root, SKILL_ARCHIVE_DIR, 'child-flow', 'SKILL.md')), true)
     })
   })
 })
