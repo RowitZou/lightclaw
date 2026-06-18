@@ -916,9 +916,24 @@ export class BackgroundTaskScheduler {
         }
         updateLastFiredAt(canonicalUser, task.id, firedAt)
       } else if (task.schedule.kind === 'oneshot') {
-        updateBackgroundTask(canonicalUser, task.id, {
-          lastFiredAt: firedAt,
+        // A oneshot fires exactly once: a terminal FAILURE retires it from the
+        // store, symmetric with the success branch above and the aborted branch
+        // earlier. The old behaviour (stamp lastFiredAt, keep the entry enabled)
+        // left a past-due oneshot in bg-tasks.json, so rebuildAll's startup
+        // catch-up re-fired it on the next daemon restart — re-running an
+        // already-accepted+finished dispatch and emitting a stale result
+        // (2026-06-18 dogfood: a failed alphaXiv webSearcher dispatch re-ran
+        // ~12h later post-restart). All retries are already exhausted by the
+        // transient-retry early-return above, so this run will never usefully
+        // fire again. Record before pruning so a late TaskUpdate cancel can tell
+        // "already finished" from "id never existed".
+        appendCompletedTaskRecord(canonicalUser, {
+          id: task.id,
+          outcome: 'failure',
+          completedAt: firedAt,
+          ...(outcome.kind === 'failure' ? { summary: outcome.reason } : {}),
         })
+        removeBackgroundTask(canonicalUser, task.id)
       } else {
         updateLastFiredAt(canonicalUser, task.id, firedAt)
       }

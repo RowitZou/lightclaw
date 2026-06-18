@@ -1014,6 +1014,52 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.deepEqual(events.map(event => event.kind), ['created', 'started', 'waiting'])
   })
 
+  it('retires a oneshot from the store on terminal genuine failure so a restart never re-fires it', async () => {
+    // Regression (2026-06-18 dogfood): a oneshot dispatch that failed terminally
+    // used to stay in bg-tasks.json with only `lastFiredAt` stamped (the `else`
+    // branch). rebuildAll's startup catch-up re-fires every enabled past-due
+    // oneshot, so the dead dispatch re-ran on the NEXT daemon restart —
+    // re-touching an already-accepted+finished TaskRun and emitting a stale
+    // result. A terminal failure must retire the entry, symmetric with the
+    // success and aborted paths.
+    const task: BackgroundTaskEntry = {
+      ...fakeTask(),
+      id: 'oneshot-failed',
+      notifyOn: 'success',
+      schedule: { kind: 'oneshot', at: new Date(Date.now() - 60_000).toISOString() },
+    }
+    saveBackgroundTasks('alice', [task])
+    const scheduler = new BackgroundTaskScheduler()
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+          taskRunId?: string,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    await onFireComplete('alice', task, 'fire-fail', {
+      kind: 'failure',
+      reason: 'OpenAI Responses streamChat request failed status=404',
+      transient: false,
+      attempt: 1,
+    }, 1)
+
+    assert.deepEqual(
+      loadBackgroundTasks('alice'),
+      [],
+      'a terminally-failed oneshot must be removed from the store, not left enabled for restart catch-up',
+    )
+    const record = getCompletedTaskRecord('alice', task.id)
+    assert.equal(record?.outcome, 'failure')
+    assert.equal(record?.summary, 'OpenAI Responses streamChat request failed status=404')
+  })
+
   it('records finish-time artifacts on a successful recurring fire and keeps finished as the last event', async () => {
     const task = { ...fakeTask(), id: 'taskrun-artifact', notifyOn: 'failure' as const }
     saveBackgroundTasks('alice', [task])
