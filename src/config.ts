@@ -470,7 +470,7 @@ const DEFAULT_CONTEXT_WINDOW = 200_000
 // stops mid-turn truncation. Push a single model past 64K via per-model
 // `models.<name>.maxOutputTokens` (e.g. Opus → 128000).
 const DEFAULT_MAX_OUTPUT_TOKENS = 64_000
-const DEFAULT_SKILL_PROMPT_BUDGET_CHARS = 18_000
+export const DEFAULT_SKILL_PROMPT_BUDGET_CHARS = 18_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
 const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000

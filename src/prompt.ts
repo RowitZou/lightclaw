@@ -5,6 +5,7 @@ import { getAllAgents, getMainRole } from './agents/registry.js'
 import { resolveRolePolicy } from './agents/role-presets.js'
 import type { Role, RoleKind } from './agents/types.js'
 import type { LightClawConfig, RuntimeDriver } from './config.js'
+import { DEFAULT_SKILL_PROMPT_BUDGET_CHARS } from './config.js'
 import { memoryAge, memoryFreshnessText } from './memory/aging.js'
 import { loadMemoryIndex } from './memory/auto-memory.js'
 import { loadProjectMemory } from './memory/discovery.js'
@@ -42,8 +43,6 @@ type PromptOptions = {
   /** Active session id, used by P1 SessionMemory injection. */
   sessionId?: string
 }
-
-const DEFAULT_SKILL_PROMPT_BUDGET_CHARS = 18_000
 
 export type SystemPromptTemplate = {
   preTodos: string
@@ -182,7 +181,7 @@ function renderFullSkillLine(skill: SkillMeta): string {
 
 function renderSkillNameWhenToUseLine(skill: SkillMeta): string {
   const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
-  return `- ${skill.name} — when to use: ${whenToUse}`
+  return `- ${skill.name} | When to use: ${whenToUse}`
 }
 
 function renderSkillNameOnlyLine(skill: SkillMeta): string {

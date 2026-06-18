@@ -42,7 +42,8 @@ test('skill prompt budget is inert when the full list fits', async () => {
   const section = await renderAvailableSkills(10_000)
   assert.match(section, /^- alpha-flow: Alpha description\. \| When to use: Alpha trigger\.$/m)
   assert.match(section, /^- beta-flow: Beta description\. \| When to use: Beta trigger\.$/m)
-  assert.doesNotMatch(section, /when to use:/)
+  // No degraded mid-tier line (`- name | When to use:` with no `: description`).
+  assert.doesNotMatch(section, /^- [^:|\n]+ \| When to use:/m)
 })
 
 test('skill prompt budget degrades cold per-user skills but keeps every name reachable', async () => {
@@ -67,7 +68,7 @@ test('skill prompt budget degrades cold per-user skills but keeps every name rea
 
   const section = await renderAvailableSkills(120)
   assert.match(section, /^- hot-flow: Hot description\. \| When to use: Hot trigger\.$/m)
-  assert.match(section, /^- warm-flow — when to use: Warm trigger\.$/m)
+  assert.match(section, /^- warm-flow \| When to use: Warm trigger\.$/m)
   assert.match(section, /^- cold-flow$/m)
   assert.doesNotMatch(section, /Cold description/)
   assert.doesNotMatch(section, /Cold trigger/)
