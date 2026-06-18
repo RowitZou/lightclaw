@@ -18,6 +18,12 @@ export type CircuitBreakerCardAction = {
 
 type CircuitBreakerCoordinatorOptions = {
   fireImmediate?: (canonicalUser: string, taskId: string) => void
+  // Rebuild the scheduler heap for this user so a re-enabled recurring /
+  // interval / standing task is armed for its NEXT occurrence. fireImmediate
+  // only runs the task once now; without this the resumed schedule would fire
+  // a single time and then go dormant (the heap entry was dropped when the
+  // circuit opened + disabled the task).
+  rearmSchedule?: (canonicalUser: string, taskId: string) => void
   now?: () => number
 }
 
@@ -43,6 +49,7 @@ export function getCircuitBreakerCardCoordinator(): CircuitBreakerCardCoordinato
 
 export class CircuitBreakerCardCoordinator {
   private readonly fireImmediate?: (canonicalUser: string, taskId: string) => void
+  private readonly rearmSchedule?: (canonicalUser: string, taskId: string) => void
   private readonly now: () => number
 
   constructor(
@@ -50,6 +57,7 @@ export class CircuitBreakerCardCoordinator {
     options: CircuitBreakerCoordinatorOptions = {},
   ) {
     this.fireImmediate = options.fireImmediate
+    this.rearmSchedule = options.rearmSchedule
     this.now = options.now ?? Date.now
   }
 
@@ -124,6 +132,12 @@ export class CircuitBreakerCardCoordinator {
         circuitPromptedAt: undefined,
         lastFailureSummary: undefined,
       })
+      // Re-arm the schedule for future occurrences BEFORE the immediate fire:
+      // the task was dropped from the scheduler heap when the circuit opened
+      // (enabled:false + rebuild), so re-enabling on disk alone leaves a
+      // recurring/interval/standing task with no future fire. fireImmediate
+      // only runs it once now.
+      this.rearmSchedule?.(action.ownerCanonicalUser, action.taskId)
       this.fireImmediate?.(action.ownerCanonicalUser, action.taskId)
       return resolvedCardResponse(
         'green',

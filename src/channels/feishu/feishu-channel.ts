@@ -113,6 +113,8 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       const circuitBreakerCoordinator = new CircuitBreakerCardCoordinator(sender, {
         fireImmediate: (canonicalUser, taskId) =>
           getBackgroundTaskScheduler().fireImmediate(canonicalUser, taskId),
+        rearmSchedule: (canonicalUser, taskId) =>
+          getBackgroundTaskScheduler().notifyTaskChanged(canonicalUser, taskId),
       })
       const askUserScheduler = new AskUserScheduler()
       registerAskUserQuestionCoordinator(askUserCoordinator)

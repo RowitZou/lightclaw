@@ -707,6 +707,10 @@ export class BackgroundTaskScheduler {
       const updated = updateBackgroundTask(canonicalUser, task.id, {
         consecutiveFailures: 0,
         lastFailureKind: undefined,
+        // Clear the billing-notice latch too: a fire that finally succeeds
+        // means the prior billing/quota wall is resolved, so a *future*
+        // billing episode should alert again rather than stay muted forever.
+        billingNotifiedAt: undefined,
         circuitOpen: undefined,
         circuitOpenedAt: undefined,
         circuitPromptedAt: undefined,
@@ -720,7 +724,11 @@ export class BackgroundTaskScheduler {
     if (failureKind === 'billing' || failureKind === 'rate-limit') {
       const billingNoticeDue = failureKind === 'billing' && !latest.billingNotifiedAt
       const updated = updateBackgroundTask(canonicalUser, task.id, {
-        consecutiveFailures: 0,
+        // Hold (do not reset) the genuine-failure count: billing / rate-limit
+        // are not counted toward the breaker, but they must not erase a
+        // genuine-failure streak either, or a task that alternates genuine
+        // failures with transient rate-limits would dodge the breaker forever.
+        consecutiveFailures: latest.consecutiveFailures ?? 0,
         lastFailureKind: failureKind,
         circuitOpen: undefined,
         circuitOpenedAt: undefined,

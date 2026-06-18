@@ -592,6 +592,116 @@ describe('BackgroundTaskScheduler fire completion', () => {
     assert.equal(afterRateLimit.lastFailureKind, 'rate-limit')
   })
 
+  it('holds the genuine-failure streak across an interleaved rate-limit (still trips)', async () => {
+    saveBackgroundTasks('alice', [fakeTask()])
+    const scheduler = new BackgroundTaskScheduler()
+    ;(scheduler as unknown as {
+      config: { dispatch: { scheduler: { fireRetryMaxAttempts: number; circuitBreakerThreshold: number } } }
+    }).config = { dispatch: { scheduler: { fireRetryMaxAttempts: 1, circuitBreakerThreshold: 3 } } }
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    const genuine = (i: number) =>
+      onFireComplete('alice', loadBackgroundTasks('alice')[0]!, `g-${i}`, {
+        kind: 'failure',
+        reason: `boom-${i}`,
+        transient: false,
+        attempt: 1,
+      }, 1)
+
+    await genuine(0)
+    await genuine(1)
+    assert.equal(loadBackgroundTasks('alice')[0]?.consecutiveFailures, 2)
+
+    await onFireComplete('alice', loadBackgroundTasks('alice')[0]!, 'rl', {
+      kind: 'failure',
+      reason: 'Rate limit exceeded; please try again later.',
+      transient: true,
+      attempt: 1,
+    }, 1)
+    const afterRateLimit = loadBackgroundTasks('alice')[0]
+    assert.ok(afterRateLimit)
+    // The interleaved rate-limit must NOT reset the genuine streak to 0.
+    assert.equal(afterRateLimit.consecutiveFailures, 2)
+    assert.equal(afterRateLimit.lastFailureKind, 'rate-limit')
+    assert.equal(afterRateLimit.enabled, true)
+
+    await genuine(2)
+    const opened = loadBackgroundTasks('alice')[0]
+    assert.ok(opened)
+    assert.equal(opened.consecutiveFailures, 3)
+    assert.equal(opened.circuitOpen, true)
+    assert.equal(opened.enabled, false)
+  })
+
+  it('re-sends the billing wall notice after an intervening success', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const billingNotices: Array<{ openId: string; card: Record<string, unknown> }> = []
+    registeredFeishuSender = {
+      sendInteractiveCardToOpenId: async (openId: string, card: Record<string, unknown>) => {
+        billingNotices.push({ openId, card })
+        return {}
+      },
+    } as Parameters<typeof registerFeishuSender>[0]
+    registerFeishuSender(registeredFeishuSender)
+
+    saveBackgroundTasks('alice', [fakeTask()])
+    // Real config (not stubbed): the intervening success fire flows through
+    // deliverCompletion, which reads config.runtime — a stub config without a
+    // runtime section would throw there. Billing never trips the breaker, so
+    // the default threshold is fine here.
+    const scheduler = new BackgroundTaskScheduler()
+    const onFireComplete = (
+      scheduler as unknown as {
+        onFireComplete: (
+          canonicalUser: string,
+          task: BackgroundTaskEntry,
+          fireUuid: string,
+          outcome: FireOutcome,
+          attempt: number,
+        ) => Promise<void>
+      }
+    ).onFireComplete.bind(scheduler)
+
+    const billingWall = (id: string) =>
+      onFireComplete('alice', loadBackgroundTasks('alice')[0]!, id, {
+        kind: 'failure',
+        reason: 'Your credit balance is too low.',
+        transient: false,
+        attempt: 1,
+      }, 1)
+
+    await billingWall('b1')
+    assert.equal(billingNotices.length, 1)
+    assert.match(loadBackgroundTasks('alice')[0]?.billingNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
+
+    await onFireComplete('alice', loadBackgroundTasks('alice')[0]!, 's1', {
+      kind: 'success',
+      summary: 'ok',
+      transcriptPath: '/tmp/x',
+    }, 1)
+    flushLastFiredAt()
+    // Success resolves the wall and must clear the notify latch.
+    assert.equal(loadBackgroundTasks('alice')[0]?.billingNotifiedAt, undefined)
+
+    await billingWall('b2')
+    assert.equal(
+      billingNotices.length,
+      2,
+      'a new billing episode after a success must re-notify',
+    )
+  })
+
   it('resets circuit failure state after a successful recurring fire', async () => {
     const task: BackgroundTaskEntry = {
       ...fakeTask(),

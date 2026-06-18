@@ -63,6 +63,59 @@ describe('CircuitBreakerCardCoordinator', () => {
     assert.equal(stored.circuitPromptedAt, '2027-01-15T08:00:00.000Z')
   })
 
+  it('re-arms the schedule and fires immediately on continue (not just one fire)', async () => {
+    saveBackgroundTasks('alice', [fakeCircuitTask()])
+    const fired: Array<{ canonicalUser: string; taskId: string }> = []
+    const rearmed: Array<{ canonicalUser: string; taskId: string }> = []
+    const coordinator = new CircuitBreakerCardCoordinator(fakeSender(), {
+      fireImmediate: (canonicalUser, taskId) => {
+        fired.push({ canonicalUser, taskId })
+      },
+      rearmSchedule: (canonicalUser, taskId) => {
+        rearmed.push({ canonicalUser, taskId })
+      },
+    })
+
+    await coordinator.handleCardAction({
+      kind: 'lightclaw_circuit_breaker',
+      action: 'continue',
+      ownerCanonicalUser: 'alice',
+      taskId: 'task-1',
+      operatorOpenId: 'ou_alice',
+    })
+
+    // The recurring/interval task was dropped from the scheduler heap when the
+    // circuit opened; Continue must rebuild it so future occurrences fire, not
+    // only the single immediate run.
+    assert.deepEqual(rearmed, [{ canonicalUser: 'alice', taskId: 'task-1' }])
+    assert.deepEqual(fired, [{ canonicalUser: 'alice', taskId: 'task-1' }])
+  })
+
+  it('does not re-arm or fire on disable', async () => {
+    saveBackgroundTasks('alice', [fakeCircuitTask()])
+    const fired: string[] = []
+    const rearmed: string[] = []
+    const coordinator = new CircuitBreakerCardCoordinator(fakeSender(), {
+      fireImmediate: (_canonicalUser, taskId) => {
+        fired.push(taskId)
+      },
+      rearmSchedule: (_canonicalUser, taskId) => {
+        rearmed.push(taskId)
+      },
+    })
+
+    await coordinator.handleCardAction({
+      kind: 'lightclaw_circuit_breaker',
+      action: 'disable',
+      ownerCanonicalUser: 'alice',
+      taskId: 'task-1',
+      operatorOpenId: 'ou_alice',
+    })
+
+    assert.deepEqual(rearmed, [])
+    assert.deepEqual(fired, [])
+  })
+
   it('continues a circuit-open task by clearing circuit state and firing immediately', async () => {
     saveBackgroundTasks('alice', [fakeCircuitTask()])
     const fired: Array<{ canonicalUser: string; taskId: string }> = []
