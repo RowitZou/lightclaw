@@ -177,6 +177,13 @@ export type ConfigFileToolCatalogSection = {
   discoveredToolsTtlTurns?: number
 }
 
+export type ConfigFileSkillsSection = {
+  /** Character budget for `## Available Skills` prompt rendering. `0`
+   *  disables degradation and preserves the full list. Env override:
+   *  LIGHTCLAW_SKILL_PROMPT_BUDGET. */
+  promptBudgetChars?: number
+}
+
 export type ConfigFileShape = {
   /** Data root used only when this file is passed as an external `--config`.
    *  The loader never reads `home` from `<home>/config.json`, because that
@@ -307,6 +314,9 @@ export type ConfigFileShape = {
     /** @deprecated Moved to `tools.catalog.discoveredToolsTtlTurns`. */
     discoveredToolsTtlTurns?: number
   }
+  /** Skill prompt-catalog controls. Skill bodies are still loaded on demand
+   *  via UseSkill; this only bounds the always-visible routing list. */
+  skills?: ConfigFileSkillsSection
   runtime?: {
     driver?: 'brainpp' | null
     backend?: string

@@ -36,6 +36,7 @@ function toSkillMeta(skill: LoadedSkill): SkillMeta {
     source: skill.source,
     filePath: skill.filePath,
     lastUsedAt: skill.lastUsedAt,
+    recencyMs: skill.recencyMs,
     autoLoad: skill.autoLoad,
   }
 }
@@ -116,6 +117,11 @@ function parseSkillRequiredDriver(
   return driver
 }
 
+function skillRecencyMs(lastUsedAt: string | undefined, mtimeMs: number): number {
+  const parsed = lastUsedAt ? Date.parse(lastUsedAt) : Number.NaN
+  return Math.max(Number.isFinite(parsed) ? parsed : 0, mtimeMs)
+}
+
 function parseSkillRoles(
   filePath: string,
   source: SkillSource,
@@ -155,16 +161,22 @@ async function loadSkillsFromDirectory(
 ): Promise<SkillMeta[]> {
   try {
     const entries = await fs.readdir(rootDir, { withFileTypes: true })
-    const skills = await Promise.all(
+    const skills: Array<SkillMeta | null> = await Promise.all(
       entries
         .filter(entry => entry.isDirectory() && entry.name !== SKILL_ARCHIVE_DIR)
         .map(async entry => {
           const filePath = path.join(rootDir, entry.name, 'SKILL.md')
           try {
-            const raw = await fs.readFile(filePath, 'utf8')
+            const [raw, stats] = await Promise.all([
+              fs.readFile(filePath, 'utf8'),
+              fs.stat(filePath),
+            ])
             const parsed = parseFrontmatter(raw)
             rejectShellInjection(filePath, parsed.body)
-            return parseSkillFrontmatter(filePath, source, parsed.frontmatter)
+            const meta = parseSkillFrontmatter(filePath, source, parsed.frontmatter)
+            return meta
+              ? { ...meta, recencyMs: skillRecencyMs(meta.lastUsedAt, stats.mtimeMs) }
+              : null
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
               return null

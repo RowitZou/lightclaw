@@ -227,7 +227,7 @@ describe('discoverSkillsForUser', () => {
     })
   })
 
-  it('parses last_used_at and exposes it on SkillMeta (V1 audit-only)', async () => {
+  it('parses last_used_at and exposes cached recency on SkillMeta', async () => {
     await withTempHome(async () => {
       await writeRawSkill(
         userSkillsRoot('alice'),
@@ -252,14 +252,21 @@ describe('discoverSkillsForUser', () => {
       )
 
       const skills = await discoverSkillsForUser(process.cwd(), 'alice')
+      const recent = skills.find(skill => skill.name === 'recent-flow')
+      const neverUsed = skills.find(skill => skill.name === 'never-used-flow')
+      const recentStat = await stat(recent!.filePath)
       assert.equal(
-        skills.find(skill => skill.name === 'recent-flow')?.lastUsedAt,
+        recent?.lastUsedAt,
         '2026-05-24T10:00:00.000Z',
       )
       assert.equal(
-        skills.find(skill => skill.name === 'never-used-flow')?.lastUsedAt,
+        neverUsed?.lastUsedAt,
         undefined,
       )
+      assert.ok(Number.isFinite(recent?.recencyMs))
+      assert.ok(Number.isFinite(neverUsed?.recencyMs))
+      assert.ok(recent!.recencyMs! >= Date.parse('2026-05-24T10:00:00.000Z'))
+      assert.ok(recent!.recencyMs! >= recentStat.mtimeMs)
     })
   })
 

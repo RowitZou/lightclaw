@@ -17,11 +17,17 @@ export type SkillMeta = {
   filePath: string
   /**
    * ISO8601 timestamp of the most recent UseSkill hit on this skill.
-   * V1 audit-only: written best-effort by `recordSkillUsage` and parsed
-   * from frontmatter `last_used_at`; no framework code reads it yet.
-   * Reserved for Phase 8+ aging / SkillSearch recency heuristics.
+   * Written best-effort by `recordSkillUsage` and parsed from frontmatter
+   * `last_used_at`; prompt budget rendering uses it as the primary recency
+   * signal for per-user skill LRU ordering.
    */
   lastUsedAt?: string
+  /**
+   * Cached prompt hot-path recency in epoch milliseconds. User skills use
+   * max(parse(last_used_at), SKILL.md mtime); bundled skills may leave this
+   * unset because they stay in the core full-render tier.
+   */
+  recencyMs?: number
   /**
    * When true, the framework injects this skill's body into the system prompt
    * of every role in `roles` on turn 1 — the agent does not call `UseSkill`.

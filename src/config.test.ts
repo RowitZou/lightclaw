@@ -38,6 +38,7 @@ const ENV_KEYS = [
   'LIGHTCLAW_PERMISSION_MODE',
   'LIGHTCLAW_PERMISSION_CEILING',
   'LIGHTCLAW_MAX_OUTPUT_TOKENS',
+  'LIGHTCLAW_SKILL_PROMPT_BUDGET',
 ] as const
 
 const savedEnv: Record<string, string | undefined> = {}
@@ -161,6 +162,27 @@ describe('config: endpoints + models registry', () => {
       maxOutputTokens: 32000,
     })
     assert.equal(getConfig().maxOutputTokens, 100000)
+  })
+
+  it('defaults skill prompt budget and accepts file/env overrides', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+    })
+    assert.equal(getConfig().skills.promptBudgetChars, 18000)
+
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: { m: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' } },
+      skills: { promptBudgetChars: 1200 },
+    })
+    assert.equal(getConfig().skills.promptBudgetChars, 1200)
+
+    process.env.LIGHTCLAW_SKILL_PROMPT_BUDGET = '0'
+    assert.equal(getConfig().skills.promptBudgetChars, 0)
+
+    process.env.LIGHTCLAW_SKILL_PROMPT_BUDGET = '777'
+    assert.equal(getConfig().skills.promptBudgetChars, 777)
   })
 
   it('rejects invalid per-model maxOutputTokens', () => {

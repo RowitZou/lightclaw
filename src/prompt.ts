@@ -29,6 +29,7 @@ import {
   visibleOnDemandSkillsForRole,
 } from './skill/role-validation.js'
 import { DISPATCH_BRIEF_LIST_ROLE_SKILL_FOOTER } from './skill/dispatch-brief.js'
+import type { SkillMeta } from './skill/types.js'
 import type { Tool } from './tool.js'
 import { formatTodosForPrompt } from './todos/store.js'
 import type { TodoItem } from './types.js'
@@ -41,6 +42,8 @@ type PromptOptions = {
   /** Active session id, used by P1 SessionMemory injection. */
   sessionId?: string
 }
+
+const DEFAULT_SKILL_PROMPT_BUDGET_CHARS = 18_000
 
 export type SystemPromptTemplate = {
   preTodos: string
@@ -136,12 +139,64 @@ function formatSkillsSection(role: Role, config: LightClawConfig): string {
     return 'None.'
   }
 
-  return skills
-    .map(skill => {
-      const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
-      return `- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`
-    })
-    .join('\n')
+  const fullLines = skills.map(renderFullSkillLine)
+  const fullText = fullLines.join('\n')
+  const budget = config.skills?.promptBudgetChars ?? DEFAULT_SKILL_PROMPT_BUDGET_CHARS
+  if (budget === 0 || fullText.length <= budget) {
+    return fullText
+  }
+
+  const lines = skills
+    .filter(skill => skill.source === 'builtin')
+    .map(renderFullSkillLine)
+  let spent = lines.join('\n').length
+  const perUserSkills = skills
+    .filter(skill => skill.source !== 'builtin')
+    .sort((left, right) =>
+      (right.recencyMs ?? 0) - (left.recencyMs ?? 0) ||
+      left.name.localeCompare(right.name))
+
+  for (const skill of perUserSkills) {
+    const tiers = [
+      renderFullSkillLine(skill),
+      renderSkillNameWhenToUseLine(skill),
+      renderSkillNameOnlyLine(skill),
+    ]
+    let picked = tiers.at(-1)!
+    for (const line of tiers) {
+      if (lineFitsBudget(lines.length, spent, line, budget)) {
+        picked = line
+        break
+      }
+    }
+    spent = appendLine(lines, spent, picked)
+  }
+
+  return lines.join('\n')
+}
+
+function renderFullSkillLine(skill: SkillMeta): string {
+  const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
+  return `- ${skill.name}: ${skill.description} | When to use: ${whenToUse}`
+}
+
+function renderSkillNameWhenToUseLine(skill: SkillMeta): string {
+  const whenToUse = skill.whenToUse ?? 'Use when the task matches the skill.'
+  return `- ${skill.name} — when to use: ${whenToUse}`
+}
+
+function renderSkillNameOnlyLine(skill: SkillMeta): string {
+  return `- ${skill.name}`
+}
+
+function lineFitsBudget(lineCount: number, spent: number, line: string, budget: number): boolean {
+  return spent + (lineCount === 0 ? 0 : 1) + line.length <= budget
+}
+
+function appendLine(lines: string[], spent: number, line: string): number {
+  const nextSpent = spent + (lines.length === 0 ? 0 : 1) + line.length
+  lines.push(line)
+  return nextSpent
 }
 
 // Auto-loaded skills (frontmatter `auto_load: true`) are the role's primary

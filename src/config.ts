@@ -222,6 +222,14 @@ export type ToolsConfig = {
   catalog: ToolCatalogConfig
 }
 
+export type SkillsConfig = {
+  /**
+   * Character budget for the always-visible `## Available Skills` routing
+   * list. `0` disables degradation and renders today's full list.
+   */
+  promptBudgetChars: number
+}
+
 /** Sub-LLM model pins for framework-internal LLM operations. Each value
  *  is the display name of a model in `models`, or `undefined` to fall
  *  back to `defaultModel`. */
@@ -369,6 +377,7 @@ export type LightClawConfig = {
   mcp: McpConfig
   hooks: HooksConfig
   tools: ToolsConfig
+  skills: SkillsConfig
   runtime: {
     driver: RuntimeDriver
     backend: RuntimeKind
@@ -461,6 +470,7 @@ const DEFAULT_CONTEXT_WINDOW = 200_000
 // stops mid-turn truncation. Push a single model past 64K via per-model
 // `models.<name>.maxOutputTokens` (e.g. Opus → 128000).
 const DEFAULT_MAX_OUTPUT_TOKENS = 64_000
+const DEFAULT_SKILL_PROMPT_BUDGET_CHARS = 18_000
 const DEFAULT_COMPACT_THRESHOLD_RATIO = 0.75
 const DEFAULT_COMPACT_KEEP_RECENT = 6
 const DEFAULT_EPHEMERAL_SESSION_TTL_MS = 72 * 60 * 60 * 1000
@@ -1744,6 +1754,7 @@ export function getConfig(): LightClawConfig {
 
   // — tools catalog —
   const catalog = resolveToolCatalogConfig(fileConfig)
+  const skills = resolveSkillsConfig(fileConfig)
 
   // — apiLogs —
   const apiLogsEnabled = parseBoolean(process.env.LIGHTCLAW_API_LOGS_ENABLED)
@@ -1848,6 +1859,7 @@ export function getConfig(): LightClawConfig {
       maxOutputBytes: maxToolOutputBytes,
       catalog,
     },
+    skills,
     lang: parseLang(process.env.LIGHTCLAW_LANG)
       ?? parseLang(fileConfig.lang)
       ?? 'cn',
@@ -2076,6 +2088,16 @@ function resolveTaskRunConfig(fileConfig: ConfigFileShape): TaskRunConfig {
           : DEFAULT_TASKRUN_WATCHDOG.deliveryRetryMaxAttempts),
       ),
     },
+  }
+}
+
+function resolveSkillsConfig(fileConfig: ConfigFileShape): SkillsConfig {
+  const raw =
+    parseNumber(process.env.LIGHTCLAW_SKILL_PROMPT_BUDGET) ??
+    fileConfig.skills?.promptBudgetChars ??
+    DEFAULT_SKILL_PROMPT_BUDGET_CHARS
+  return {
+    promptBudgetChars: Math.max(0, Math.floor(raw)),
   }
 }
 
