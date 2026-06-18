@@ -81,7 +81,8 @@ export class CardKitStreamSession {
         }
         await this.push(snapshots[i]!)
         if (i < snapshots.length - 1) {
-          await delay(this.options.throttleMs ?? STREAMING_UPDATE_THROTTLE_MS, this.options.signal)
+          const baseMs = this.options.throttleMs ?? STREAMING_UPDATE_THROTTLE_MS
+          await delay(streamDelayMs(i, snapshots.length - 1, baseMs), this.options.signal)
         }
       }
     } catch (error) {
@@ -254,6 +255,24 @@ function assertOk<T extends object>(
 
 function truncateSummary(text: string): string {
   return text.length > 120 ? `${text.slice(0, 117)}...` : text
+}
+
+// The "stream" is a replay of the already-complete upstream final text, so the
+// throttle is purely cosmetic. Hold full pace for the first half of the gaps to
+// establish a live-typing feel, then linearly ramp the delay down to 0 over the
+// second half so a long reply rushes to the end instead of dragging the whole
+// length out. `index` is the 0-based gap index (0..gapCount-1).
+export function streamDelayMs(index: number, gapCount: number, baseMs: number): number {
+  if (baseMs <= 0 || gapCount <= 1) {
+    return baseMs
+  }
+  const fullPaceGaps = Math.ceil(gapCount / 2)
+  if (index < fullPaceGaps) {
+    return baseMs
+  }
+  const rampSpan = gapCount - fullPaceGaps // gaps in the accelerating tail
+  const progress = (index - fullPaceGaps + 1) / rampSpan // (0, 1], 1 at the last gap
+  return Math.max(0, Math.round(baseMs * (1 - progress)))
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

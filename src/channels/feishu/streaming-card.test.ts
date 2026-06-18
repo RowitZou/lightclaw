@@ -10,6 +10,7 @@ import {
   buildStreamingReplyCard,
   CardKitStreamSession,
   mergeStreamingText,
+  streamDelayMs,
   STREAMING_MAX_PUSHES,
 } from './streaming-card.js'
 
@@ -163,6 +164,25 @@ test('buildStreamingFlushSnapshots caps push count for long and boundary-heavy t
   const heavySnaps = buildStreamingFlushSnapshots(boundaryHeavy)
   assert.ok(heavySnaps.length <= STREAMING_MAX_PUSHES, `expected <= ${STREAMING_MAX_PUSHES}, got ${heavySnaps.length}`)
   assert.equal(heavySnaps[heavySnaps.length - 1], boundaryHeavy)
+})
+
+test('streamDelayMs holds full pace for the first half then ramps to zero', () => {
+  const base = 160
+  const gaps = 8
+  // first half (indices 0..3) full pace
+  for (let i = 0; i < 4; i += 1) {
+    assert.equal(streamDelayMs(i, gaps, base), base)
+  }
+  // second half strictly decreasing, last gap reaches 0
+  let prev = base
+  for (let i = 4; i < gaps; i += 1) {
+    const d = streamDelayMs(i, gaps, base)
+    assert.ok(d < prev, `gap ${i}: expected ${d} < ${prev}`)
+    prev = d
+  }
+  assert.equal(streamDelayMs(gaps - 1, gaps, base), 0)
+  // degenerate: a single gap keeps base (no ramp possible)
+  assert.equal(streamDelayMs(0, 1, base), base)
 })
 
 test('CardKitStreamSession completes the card in place on a mid-stream push failure (no throw)', async () => {
