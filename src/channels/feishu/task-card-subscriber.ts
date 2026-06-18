@@ -138,9 +138,17 @@ export function startTaskCardPipeline(
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
       if (terminal) {
-        // Freeze only. The user-facing conclusion is the agent's own closing
-        // block, sent by the runner at end-of-turn; the live path no longer
-        // sends the summary settlement (it would double with that block).
+        // Settle a live cardkit card so streaming_mode turns off (the typing
+        // indicator stops); a non-live im.message.patch card has no streaming
+        // state to close. Freeze only otherwise — the user-facing conclusion is
+        // the agent's own closing block sent by the runner at end-of-turn.
+        if (created.cardId && io.close) {
+          await io.close({
+            cardId: created.cardId,
+            sequence: created.sequence ?? 0,
+            summary: view.root.title,
+          })
+        }
         patcher.release(rootRunId)
       }
       return
@@ -154,10 +162,20 @@ export function startTaskCardPipeline(
         : undefined,
     )
     if (terminal) {
-      // Stamp the freeze; no settlement send here (see the !binding branch).
+      // Settle a live cardkit card (streaming_mode off) before stamping the
+      // freeze; a non-live card has no streaming state to close.
+      let finalSequence = patched?.sequence
+      if (binding.cardId && io.close) {
+        const closed = await io.close({
+          cardId: binding.cardId,
+          sequence: finalSequence ?? binding.cardSequence ?? 0,
+          summary: view.root.title,
+        })
+        finalSequence = closed.sequence
+      }
       await writeTaskCardBinding(owner, rootRunId, {
         ...binding,
-        ...(patched?.sequence !== undefined ? { cardSequence: patched.sequence } : {}),
+        ...(finalSequence !== undefined ? { cardSequence: finalSequence } : {}),
         finalizedAt: Date.now(),
       })
       patcher.release(rootRunId)

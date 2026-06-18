@@ -16,12 +16,21 @@ import {
   type TaskCardIo,
   type TaskCardTarget,
 } from './task-card-patcher.js'
+import { TASK_CARD_STREAM_PREVIEW_MAX_CHARS } from './task-card.js'
 import {
   buildTurnCard,
   truncateTurnCardEntry,
   TURN_CARD_PROGRESS_ELEMENT_ID,
   type TurnCardEntry,
 } from './turn-card.js'
+
+/** Bound the live progress element to a tail window so a long block does not
+ *  push an ever-growing cumulative string at the card (Feishu render-size
+ *  limit) — the full reply still reaches chat / the timeline panel. */
+function capStreamPreview(text: string): string {
+  if (text.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS) return text
+  return `…${text.slice(text.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
+}
 
 export type TurnCardCollector = {
   /** Record one interim block. Empty text still begins the card; the
@@ -95,6 +104,10 @@ export function createTurnCardCollector(input: {
   return {
     add(text) {
       if (finalized) return
+      // A completed block settles into the timeline here, so the next block
+      // streams into a fresh progress element. Without this, liveText accreted
+      // every block of the whole turn (unbounded, wrong "current activity").
+      liveText = ''
       const label = truncateTurnCardEntry(text)
       if (label) entries.push({ at: Date.now(), text: label })
       if (!begun) {
@@ -140,15 +153,20 @@ export function createTurnCardCollector(input: {
         }, { immediate: true })
     },
     stream(text) {
+      if (finalized) return
       liveText = liveText ? `${liveText}${text}` : text
-      if (finalized || !cardId || !io.pushElement) return
+      if (!cardId || !io.pushElement) return
+      // Snapshot the capped content at schedule time: the patcher coalesces to
+      // the latest job, and add() may reset liveText for the next block before
+      // a queued push runs — the snapshot keeps each push self-consistent.
+      const content = capStreamPreview(liveText)
       patcher.schedule(lane, async () => {
         if (!cardId || !io.pushElement) return
         const pushed = await io.pushElement({
           cardId,
           sequence,
           elementId: TURN_CARD_PROGRESS_ELEMENT_ID,
-          content: liveText,
+          content,
         })
         sequence = pushed.sequence
       })

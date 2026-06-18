@@ -11,6 +11,7 @@ import {
   TURN_CARD_PROGRESS_ELEMENT_ID,
 } from './turn-card.js'
 import { createTurnCardCollector } from './turn-card-collector.js'
+import { TASK_CARD_STREAM_PREVIEW_MAX_CHARS } from './task-card.js'
 import type { TaskCardTarget } from './task-card-patcher.js'
 
 type IoCall =
@@ -293,6 +294,81 @@ void describe('turn card collector', () => {
     assert.ok(calls.some(call => call.kind === 'patch'), 'whole-card updates still settle panels')
     assert.equal(closed.length, 1, 'CardKit streaming mode is closed on finalize')
     assert.equal(closed[0]!.summary, '第二段')
+  })
+
+  void it('resets the live progress buffer when a block settles (no cross-block accretion)', async () => {
+    const pushed: string[] = []
+    const collector = createTurnCardCollector({
+      target: { chatId: 'oc_1', replyAnchorMessageId: 'om_user' },
+      io: {
+        async create() {
+          return { messageId: 'om_t', cardId: 'card_t', sequence: 0 }
+        },
+        async patch(_m: string, _c: Record<string, unknown>, live?: { sequence: number }) {
+          return live ? { sequence: live.sequence + 1 } : {}
+        },
+        async pushElement(input: { sequence: number; elementId: string; content: string }) {
+          pushed.push(input.content)
+          return { sequence: input.sequence + 1 }
+        },
+        async close(input: { sequence: number; summary: string }) {
+          return { sequence: input.sequence + 1 }
+        },
+      },
+      throttleMs: 10,
+    })
+
+    await collector.add('块一')
+    collector.stream('第一块流式')
+    await delay(30)
+    collector.add('块一完整') // block boundary → live buffer must reset
+    collector.stream('第二块流式')
+    await delay(30)
+
+    const last = pushed[pushed.length - 1]!
+    assert.equal(last, '第二块流式', 'second block streams fresh, not concatenated with the first')
+    assert.ok(
+      !pushed.some(content => content.includes('第一块流式第二块流式')),
+      'no cross-block accretion in the progress element',
+    )
+    collector.finalize()
+    await delay(20)
+  })
+
+  void it('caps the streamed preview to a tail window', async () => {
+    const pushed: string[] = []
+    const collector = createTurnCardCollector({
+      target: { chatId: 'oc_1', replyAnchorMessageId: 'om_user' },
+      io: {
+        async create() {
+          return { messageId: 'om_t', cardId: 'card_t', sequence: 0 }
+        },
+        async patch(_m: string, _c: Record<string, unknown>, live?: { sequence: number }) {
+          return live ? { sequence: live.sequence + 1 } : {}
+        },
+        async pushElement(input: { sequence: number; elementId: string; content: string }) {
+          pushed.push(input.content)
+          return { sequence: input.sequence + 1 }
+        },
+        async close(input: { sequence: number; summary: string }) {
+          return { sequence: input.sequence + 1 }
+        },
+      },
+      throttleMs: 10,
+    })
+
+    await collector.add('块')
+    collector.stream('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500))
+    await delay(30)
+
+    const last = pushed[pushed.length - 1]!
+    assert.ok(
+      last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
+      `streamed preview is capped (got ${last.length})`,
+    )
+    assert.ok(last.startsWith('…'), 'capped preview keeps a tail window with a leading ellipsis')
+    collector.finalize()
+    await delay(20)
   })
 
   void it('an empty interim block begins the card and the first add is awaitable', async () => {
