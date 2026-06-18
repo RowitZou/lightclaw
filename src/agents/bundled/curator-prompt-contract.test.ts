@@ -32,7 +32,7 @@ describe('skillConsolidator prompt destructive-pair sequencing contract', () => 
   it('forbids treating a single skill as a merge candidate', () => {
     assert.match(
       skillConsolidatorPrompt,
-      /single\s+skill\s+is\s+never\s+a\s+merge\s+candidate/i,
+      /single\s+skill\s+is\s+never\s+a\s+candidate/i,
     )
   })
 
@@ -53,33 +53,33 @@ describe('skillConsolidator prompt destructive-pair sequencing contract', () => 
   })
 
   it('gates SkillDelete on SkillWrite returning is_error:false', () => {
-    assert.match(skillConsolidatorPrompt, /Only\s+if\s+3\.a\s+returned\s+`is_error:false`/i)
+    assert.match(skillConsolidatorPrompt, /Only\s+if\s+it\s+returned\s+`is_error:false`/i)
   })
 
   it('forbids SkillDelete on the surviving name', () => {
     assert.match(skillConsolidatorPrompt, /Never\s+`SkillDelete`\s+the\s+surviving\s+name/i)
   })
 
-  it('aborts the group entirely when 3.a returns is_error:true', () => {
-    assert.match(skillConsolidatorPrompt, /abort\s+this\s+group\s+entirely/i)
+  it('aborts the group when SkillWrite returns is_error:true', () => {
+    assert.match(skillConsolidatorPrompt, /abort\s+this\s+group/i)
   })
 
-  it('forbids bundling 3.a and 3.b in the same assistant turn', () => {
+  it('forbids bundling SkillWrite and SkillDelete in the same assistant turn', () => {
     assert.match(
       skillConsolidatorPrompt,
-      /Do\s+not\s+bundle\s+3\.a\s+and\s+3\.b\s+in\s+the\s+same\s+assistant\s+turn/i,
+      /never\s+bundle\s+the\s+`SkillWrite`\s+and\s+its\s+`SkillDelete`s\s+in\s+the\s+same\s+assistant\s+turn/i,
     )
   })
 
   it('requires final assistant text to enumerate what changed', () => {
-    assert.match(skillConsolidatorPrompt, /count\s+of\s+successful\s+SkillWrite/i)
-    assert.match(skillConsolidatorPrompt, /count\s+of\s+successful\s+SkillDelete/i)
+    assert.match(skillConsolidatorPrompt, /stating\s+exactly\s+what\s+you\s+changed/i)
+    assert.match(skillConsolidatorPrompt, /the\s+merges,\s+redirects,\s+and\s+extractions\s+you\s+made/i)
   })
 
-  it('forbids the "nothing to merge" claim when destructive tools fired', () => {
+  it('forbids the "nothing to restructure" claim when write tools fired', () => {
     assert.match(
       skillConsolidatorPrompt,
-      /Never\s+say\s+"nothing\s+to\s+merge"\s+if\s+you\s+called\s+any\s+SkillWrite\s+or\s+SkillDelete/i,
+      /Never\s+say\s+"nothing\s+to\s+restructure"\s+if\s+you\s+called\s+any\s+`SkillWrite`,\s+`SkillEdit`,\s+or\s+`SkillDelete`/i,
     )
   })
 })

@@ -34,7 +34,7 @@ const SNAPSHOT_HASHES: Record<string, string> = {
   memoryExtractor: 'bbaf6f077b081db70683b781056e5d691329c24fbba9945c1a376814df1aebdb',
   memoryCurator: 'dba17c2ec37677d04ea47ba360be2d360c927519606c71fdd9d05fc5816d0e99',
   skillCurator: '22a81196c1a4d5b8fd8aa38266fc67a7750689916da58a15b93aeaadc3e8cd94',
-  skillConsolidator: '0ff82a204a15ce41d27344c506b7b66a81cf8550c5439bab58299f2766f1fcc6',
+  skillConsolidator: 'a64c242a4cffb648fc9135ee1a2700f26902e70101298aa1910bb747fcefb879',
 }
 
 let tmpRoot: string
