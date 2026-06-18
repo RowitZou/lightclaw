@@ -17,6 +17,7 @@ import {
   type TaskCardTarget,
 } from './task-card-patcher.js'
 import { capStreamPreview } from './task-card.js'
+import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import {
   buildTurnCard,
   truncateTurnCardEntry,
@@ -60,9 +61,13 @@ export function createTurnCardCollector(input: {
   throttleMs?: number
 }): TurnCardCollector {
   const io = input.io ?? defaultIo()
+  // The turn card is a streaming surface (it has stream()), so its default
+  // throttle is the streaming cadence, NOT TaskCardPatcher's 3s patch default —
+  // at 3s a reply that finishes in a few seconds pushes once and reads as
+  // instant full text. Tests still override throttleMs.
   const patcher = input.throttleMs !== undefined
     ? new TaskCardPatcher(input.throttleMs)
-    : new TaskCardPatcher()
+    : new TaskCardPatcher(STREAMING_UPDATE_THROTTLE_MS)
   const lane = `turn-${randomUUID()}`
   const entries: TurnCardEntry[] = []
   let messageId: string | undefined
