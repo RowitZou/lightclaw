@@ -589,23 +589,23 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
   // input-side count (fresh + cache read + cache create) in the OpenAI style, so
   // the `缓存`/`输入` pair reads consistently against the hit rate; the cache
   // figure folds read + creation; and the hit rate is cache reads over that
-  // total. When no subtask has spent tokens yet there is no footer at all.
+  // total. The footer renders from card creation with placeholder zeros (输入 0
+  // · 输出 0 · 缓存 0 · 命中率 0.0%) so the slot is stable, then fills in as
+  // subtasks spend tokens.
   const footerTs = terminal ? root.terminalAt ?? root.updatedAt : root.updatedAt
-  const tokens = view.subtaskTokens
-  if (tokens && tokens.input + tokens.output + tokens.cacheRead + tokens.cacheCreate > 0) {
-    const totalInput = tokens.input + tokens.cacheRead + tokens.cacheCreate
-    elements.push(hrElement())
-    elements.push(
-      markdownElement(
-        t('taskcard.footer.tokens', {
-          input: formatTokens(totalInput),
-          output: formatTokens(tokens.output),
-          cache: formatTokens(tokens.cacheRead + tokens.cacheCreate),
-          hit: formatCacheHitRate(tokens.cacheRead, totalInput),
-        }),
-      ),
-    )
-  }
+  const tokens = view.subtaskTokens ?? { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
+  const totalInput = tokens.input + tokens.cacheRead + tokens.cacheCreate
+  elements.push(hrElement())
+  elements.push(
+    markdownElement(
+      t('taskcard.footer.tokens', {
+        input: formatTokens(totalInput),
+        output: formatTokens(tokens.output),
+        cache: formatTokens(tokens.cacheRead + tokens.cacheCreate),
+        hit: formatCacheHitRate(tokens.cacheRead, totalInput),
+      }),
+    ),
+  )
 
   const statusWord = root.standing
     ? `${t('taskcard.standing.badge')} · ${t(style.wordKey)}`

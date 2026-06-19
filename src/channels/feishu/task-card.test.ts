@@ -232,6 +232,23 @@ void test('buildTaskCard renders the 执行过程 / 任务进程 panels from cre
   assert.ok(panelText(rootPanel).includes('暂无进度'))
 })
 
+void test('buildTaskCard renders the token footer with placeholder zeros from creation', () => {
+  setLang('cn')
+  // No subtaskTokens yet (fresh root) — the footer still renders so the slot is
+  // stable, with zeros, and fills in once subtasks spend tokens.
+  const card = buildTaskCard(baseView({ subtaskTokens: undefined }))
+  assert.ok(
+    bodyText(card).includes('任务消耗 token · 输入 0 · 输出 0 · 缓存 0 · 命中率 0.0%'),
+    bodyText(card),
+  )
+  // With real spend it shows the figures.
+  const spent = buildTaskCard(
+    baseView({ subtaskTokens: { input: 1000, output: 500, cacheRead: 2000, cacheCreate: 0 } }),
+  )
+  assert.ok(bodyText(spent).includes('命中率'))
+  assert.ok(!bodyText(spent).includes('输入 0 · 输出 0'), 'real spend replaces the zeros')
+})
+
 void test('buildTaskCard live progress is a fixed-height grey plain_text line with status word', () => {
   setLang('cn')
   // The live progress line is a div>plain_text with grey text_color + a `lines`

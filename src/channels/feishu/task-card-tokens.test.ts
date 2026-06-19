@@ -165,7 +165,7 @@ describe('task card subtask token totals', () => {
     assert.ok(/输出 500\b/.test(last.content ?? ''), 'sub-1000 stays a bare integer')
   })
 
-  it('renders no footer at all when subtaskTokens is absent', () => {
+  it('renders the footer with placeholder zeros when subtaskTokens is absent', () => {
     setLang('cn')
     const card = buildTaskCard({
       root: {
@@ -183,7 +183,10 @@ describe('task card subtask token totals', () => {
     const bodyText = (card.body as { elements: Array<{ content?: string }> }).elements
       .map(el => el.content ?? '')
       .join('\n')
-    assert.ok(!bodyText.includes('任务消耗'), 'no token line')
+    assert.ok(
+      bodyText.includes('任务消耗 token · 输入 0 · 输出 0 · 缓存 0 · 命中率 0.0%'),
+      'token footer renders with placeholder zeros from creation',
+    )
     assert.ok(!bodyText.includes('#run-abcd'), 'no run-id line')
   })
 })
