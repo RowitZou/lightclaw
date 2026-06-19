@@ -2017,6 +2017,88 @@ describe('ChannelRunner model resolution (config default vs frozen meta)', () =>
     assert.deepEqual(strategy.replies, [])
   })
 
+  // Regression (2026-06-19 dogfood): a follow-up that lands in the tail of a
+  // prior turn gets an OnIt ack, then that prior turn's OWN final reply (which
+  // answers the prior request, NOT the follow-up) wiped EVERY pending ack for
+  // the session — the user saw their just-added emoji vanish and read it as
+  // "stopped, no reply" even though a leftover-replay turn was still going to
+  // answer them. clearPendingAcks is now scoped to the answered set, so an
+  // unrelated reply leaves a not-yet-answered follow-up ack up.
+  it('keeps a follow-up ack alive through an unrelated reply, retiring it only when its replay turn answers it', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    await setAdmin('alice')
+
+    const chatId = 'feishu:dm:oc_followrace'
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSessionId = () => chatId
+    const cleared: string[] = []
+    strategy.clearAck = async token => {
+      cleared.push((token as { reactionId: string }).reactionId)
+    }
+    const runner = new ChannelRunner(strategy)
+
+    // A follow-up that landed in the tail of a prior turn left an OnIt ack
+    // pending on its OWN message ('msg-followup'); it was not drained by that
+    // turn and will be answered later by a leftover-replay turn whose opener
+    // IS that message.
+    ;(runner as unknown as {
+      pendingAckTokens: Map<string, { messageId: string; token: unknown }[]>
+    }).pendingAckTokens.set(chatId, [
+      { messageId: 'msg-followup', token: { reactionId: 'rx-follow' } },
+    ])
+
+    // Turn A: the prior request's reply lands. It answers 'msg-opener', NOT the
+    // follow-up — the follow-up ack must survive.
+    setStreamChatForTest((async function* (): AsyncGenerator<StreamEvent> {
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'done with the original task' }],
+      }
+    }) as unknown as Parameters<typeof setStreamChatForTest>[0])
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'do the original task',
+        sessionId: 'opener',
+        chatId,
+        chatType: 'p2p',
+      }),
+    )
+    assert.deepEqual(
+      cleared,
+      [],
+      'an unrelated reply must NOT retire the follow-up OnIt (pre-fix it cleared every session ack)',
+    )
+
+    // Turn B: the leftover-replay turn whose opener IS the follow-up message —
+    // this reply answers the follow-up, so its OnIt is finally retired.
+    setStreamChatForTest((async function* (): AsyncGenerator<StreamEvent> {
+      yield {
+        type: 'stop',
+        stopReason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 4 },
+        content: [{ type: 'text', text: 'here is your weather' }],
+      }
+    }) as unknown as Parameters<typeof setStreamChatForTest>[0])
+    await runner.handleMessage(
+      makeFakeFeishuMessage({
+        sender: 'ou_alice',
+        text: 'what is the weather',
+        sessionId: 'followup',
+        chatId,
+        chatType: 'p2p',
+      }),
+    )
+    assert.deepEqual(
+      cleared,
+      ['rx-follow'],
+      'the replay turn that answers the follow-up retires its OnIt',
+    )
+  })
+
   async function runSingleTextTurn(runner: ChannelRunner, sessionId: string): Promise<void> {
     setStreamChatForTest((async function* (): AsyncGenerator<StreamEvent> {
       yield {

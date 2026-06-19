@@ -502,12 +502,18 @@ export function turnCardTargetForMessage(
 export class ChannelRunner {
   private locks = channelSessionLock
   private initialized = false
-  // Interjection-ack emoji reactions awaiting cleanup, keyed by the in-flight
-  // sessionId. An interjection enqueued by one handleMessage invocation reacts
-  // on the user's message and stashes the token here; the in-flight turn-owner
-  // (a different invocation) clears them all in its finally, so the reaction
-  // lives only for the turn that absorbs the interjection.
-  private pendingAckTokens = new Map<string, unknown[]>()
+  // Interjection-/slash-ack emoji reactions awaiting cleanup, keyed by the
+  // in-flight sessionId. An interjection (or queued write slash) enqueued by
+  // one handleMessage invocation reacts on the user's message and stashes
+  // `{ messageId, token }` here. The ack is retired ONLY when the acked
+  // message is actually handled — an interjection when the reply that answered
+  // it lands (its messageId in this turn's answered set), a slash when it is
+  // dispatched. Keying by messageId is what keeps an ack from being cleared by
+  // an UNRELATED reply: a follow-up that arrives in the tail of turn N gets its
+  // OnIt, but turn N's own final reply (which answers the prior request, not
+  // the follow-up) must not retire it — it stays up until the leftover-replay
+  // turn actually answers the follow-up. See clearPendingAcks.
+  private pendingAckTokens = new Map<string, { messageId: string; token: unknown }[]>()
 
   constructor(private readonly strategy: ChannelRunnerStrategy) {}
 
@@ -755,7 +761,7 @@ export class ChannelRunner {
       const ackToken = await this.ackInterjection(message)
       if (ackToken !== null && ackToken !== undefined) {
         const tokens = this.pendingAckTokens.get(mainSessionId) ?? []
-        tokens.push(ackToken)
+        tokens.push({ messageId: message.messageId, token: ackToken })
         this.pendingAckTokens.set(mainSessionId, tokens)
       } else {
         await this.sendReply(message, t('channel.interjection.acked'))
@@ -790,7 +796,7 @@ export class ChannelRunner {
       const ackToken = await this.ackInterjection(message)
       if (ackToken !== null && ackToken !== undefined) {
         const tokens = this.pendingAckTokens.get(mainSessionId) ?? []
-        tokens.push(ackToken)
+        tokens.push({ messageId: message.messageId, token: ackToken })
         this.pendingAckTokens.set(mainSessionId, tokens)
       } else {
         await this.sendReply(message, t('channel.slash.queued'))
@@ -1238,13 +1244,24 @@ export class ChannelRunner {
                     getAbortController().signal,
                   )
                   // A chat reply just landed — the user now has a response, so
-                  // retire any interjection-ack emoji for this session AND the
-                  // turn's typing emoji. Clear-on-reply (not at turn-end) keeps
-                  // the "OnIt" up while a turn is still working or parked on a
-                  // dispatch, so it never vanishes before the user is actually
-                  // answered; the typing emoji clears here so it does not linger
-                  // through the end-of-query session-memory flush / compact.
-                  await this.clearPendingAcks(mainSessionId)
+                  // retire the interjection-ack emoji for the follow-ups THIS
+                  // turn answered (drained interjections + this turn's opener,
+                  // which is the leftover-replay turn's own follow-up) AND the
+                  // turn's typing emoji. Scoping to the answered set is the fix
+                  // for the tail-interjection race: a follow-up that landed as a
+                  // prior turn was ending keeps its OnIt through that turn's
+                  // unrelated reply and is retired only when its own replay turn
+                  // answers it. Clear-on-reply (not at turn-end) keeps the OnIt
+                  // up while a turn is still working or parked on a dispatch; the
+                  // typing emoji clears here so it does not linger through the
+                  // end-of-query session-memory flush / compact.
+                  await this.clearPendingAcks(
+                    mainSessionId,
+                    new Set([
+                      effectiveMessage.messageId,
+                      ...drainedDuringQuery.map(e => e.messageId),
+                    ]),
+                  )
                   await stopTypingOnce()
                 },
                 interjectionRenderer: (entries, context) => [{
@@ -1363,6 +1380,16 @@ export class ChannelRunner {
                       messages,
                       userId,
                     })
+                  }
+                  // A queued slash is "answered" when it is dispatched (it
+                  // produced its own usage notice / effect), not by a later
+                  // assistant reply — retire its ack here, scoped to the slash
+                  // messageIds so it cannot touch a pending interjection ack.
+                  if (pending.length > 0) {
+                    await this.clearPendingAcks(
+                      mainSessionId,
+                      new Set(pending.map(m => m.messageId)),
+                    )
                   }
                 },
                 // Incremental transcript persistence: query.ts flushes each
@@ -1659,10 +1686,16 @@ export class ChannelRunner {
               }),
               getAbortController().signal,
             )
-            // Single-shot final reply landed — retire the interjection acks AND
-            // the typing emoji (same clear-on-reply contract as the streamed
-            // onAssistantTurn path).
-            await this.clearPendingAcks(mainSessionId)
+            // Single-shot final reply landed — retire the interjection acks the
+            // turn answered AND the typing emoji (same answered-set clear-on-
+            // reply contract as the streamed onAssistantTurn path).
+            await this.clearPendingAcks(
+              mainSessionId,
+              new Set([
+                effectiveMessage.messageId,
+                ...drainedDuringQuery.map(e => e.messageId),
+              ]),
+            )
             await stopTypingOnce()
           }
         }
@@ -1750,6 +1783,13 @@ export class ChannelRunner {
         if (leftoverSlashes.length > 0) {
           process.stderr.write(
             `${this.strategy.channelId}: replaying ${leftoverSlashes.length} post-query slash(es) for ${mainSessionId}\n`,
+          )
+          // These slashes are about to be dispatched (idle in-lock path adds no
+          // new ack) — retire the ack they got while queued in-flight, scoped to
+          // their messageIds so a still-pending interjection ack is untouched.
+          await this.clearPendingAcks(
+            mainSessionId,
+            new Set(leftoverSlashes.map(m => m.messageId)),
           )
           this.replayLeftoverSlashes(leftoverSlashes).catch(error => {
             const detail = error instanceof Error ? error.message : String(error)
@@ -2135,17 +2175,38 @@ export class ChannelRunner {
     }
   }
 
-  private async clearPendingAcks(sessionId: string): Promise<void> {
-    const tokens = this.pendingAckTokens.get(sessionId)
-    if (!tokens || tokens.length === 0) {
+  // Retire pending ack reactions for a session. `answeredMessageIds` scopes the
+  // clear to acks whose acked message was actually handled by the caller (the
+  // interjections a landing reply answered; a dispatched slash). Acks for
+  // messages NOT in the set stay pending — this is the whole fix for the
+  // tail-interjection race: a follow-up that arrived as turn N was ending keeps
+  // its OnIt through N's own (unrelated) reply, and is retired only when the
+  // leftover-replay turn answers it. Omitting `answeredMessageIds` clears every
+  // ack for the session (teardown backstop).
+  private async clearPendingAcks(
+    sessionId: string,
+    answeredMessageIds?: ReadonlySet<string>,
+  ): Promise<void> {
+    const entries = this.pendingAckTokens.get(sessionId)
+    if (!entries || entries.length === 0) {
       this.pendingAckTokens.delete(sessionId)
       return
     }
-    this.pendingAckTokens.delete(sessionId)
-    if (!this.strategy.clearAck) {
+    const toClear = answeredMessageIds
+      ? entries.filter(e => answeredMessageIds.has(e.messageId))
+      : entries
+    const toKeep = answeredMessageIds
+      ? entries.filter(e => !answeredMessageIds.has(e.messageId))
+      : []
+    if (toKeep.length > 0) {
+      this.pendingAckTokens.set(sessionId, toKeep)
+    } else {
+      this.pendingAckTokens.delete(sessionId)
+    }
+    if (!this.strategy.clearAck || toClear.length === 0) {
       return
     }
-    for (const token of tokens) {
+    for (const { token } of toClear) {
       try {
         await this.strategy.clearAck(token)
       } catch (error) {
