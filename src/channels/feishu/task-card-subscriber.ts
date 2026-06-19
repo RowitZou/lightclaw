@@ -170,9 +170,6 @@ export function startTaskCardPipeline(
         ...(created.sequence !== undefined ? { cardSequence: created.sequence } : {}),
         ...(terminal ? { finalizedAt: Date.now() } : {}),
       })
-      process.stderr.write(
-        `[task-card] create root=${rootRunId} live=${created.cardId ? 'yes' : 'no'} terminal=${terminal} seq=${created.sequence}\n`,
-      )
       if (terminal) {
         // Settle a live cardkit card so streaming_mode turns off (the typing
         // indicator stops); a non-live im.message.patch card has no streaming
@@ -196,9 +193,6 @@ export function startTaskCardPipeline(
       binding.cardId
         ? { cardId: binding.cardId, sequence: binding.cardSequence ?? 0 }
         : undefined,
-    )
-    process.stderr.write(
-      `[task-card] patch root=${rootRunId} live=${binding.cardId ? 'yes' : 'no'} seq=${patched?.sequence} terminal=${terminal}\n`,
     )
     if (terminal) {
       // Settle a live cardkit card (streaming_mode off) before stamping the
