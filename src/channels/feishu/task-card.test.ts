@@ -138,21 +138,18 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
     !String(elements[childTitleIndex]!.content).includes('进行中'),
     'status word is no longer baked into the bold title',
   )
-  // Live child: the next element is the div>plain_text streaming target (renders
-  // verbatim → no bold/heading flash; element_id is on the inner plain_text).
+  // Live child: a single markdown line with the latest progress (streaming
+  // disabled — refreshed per whole-card patch).
   const childProgress = elements[childTitleIndex + 1] as Record<string, unknown>
-  assert.equal(childProgress.tag, 'div')
-  const childText = childProgress.text as { tag: string; element_id: string; content: string; lines: number }
-  assert.equal(childText.tag, 'plain_text')
-  assert.equal(childText.element_id, taskCardProgressElementId('run-child-2'))
-  assert.equal(childText.lines, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
-  assert.ok(visible(childText.content).includes('正在下载第二篇 PDF'))
+  assert.equal(childProgress.tag, 'markdown')
+  assert.equal(childProgress.element_id, taskCardProgressElementId('run-child-2'))
+  assert.ok(String(childProgress.content).includes('正在下载第二篇 PDF'))
   const rootProgressIndex = elements.findIndex(
-    el => (el.text as { element_id?: string } | undefined)?.element_id === taskCardProgressElementId('root'),
+    el => el.element_id === taskCardProgressElementId('root'),
   )
   assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
   assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent**'))
-  assert.ok(visible(elText(elements[rootProgressIndex]!)).includes('目录信息已补齐'))
+  assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
 })
 
 void test('buildTaskCard caps children and timelines with overflow lines', () => {
@@ -299,7 +296,7 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
   assert.ok(bodyText(card).includes('✅ 20 已完成'))
 })
 
-void test('child tiers: bold title, settled→grey note, live→plain_text stream target', () => {
+void test('child tiers: bold title, settled→grey note, live→markdown latest line', () => {
   setLang('cn')
   const card = buildTaskCard(
     baseView({
@@ -333,17 +330,14 @@ void test('child tiers: bold title, settled→grey note, live→plain_text strea
   assert.equal(doneNote.tag, 'markdown')
   assert.ok(String(doneNote.content).startsWith("<font color='grey'>"), 'settled summary is grey')
   assert.ok(String(doneNote.content).includes('已完成 · 已交付结果摘要'))
-  // Live child: bold title, then the div>plain_text streaming target. plain_text
-  // renders verbatim (no flashing); element_id + lines live on the inner text.
+  // Live child: bold title, then a single markdown line with the latest progress
+  // (streaming disabled — refreshed per whole-card patch).
   const liveTitle = els.findIndex(el => el.content === '🔄 **在跑的子任务**')
   assert.ok(liveTitle >= 0)
   const liveProgress = els[liveTitle + 1] as Record<string, unknown>
-  assert.equal(liveProgress.tag, 'div')
-  const liveText = liveProgress.text as { tag: string; element_id: string; content: string; lines: number }
-  assert.equal(liveText.tag, 'plain_text')
-  assert.equal(liveText.element_id, taskCardProgressElementId('run-live'))
-  assert.equal(liveText.lines, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
-  assert.ok(visible(liveText.content).includes('正在检索'))
+  assert.equal(liveProgress.tag, 'markdown')
+  assert.equal(liveProgress.element_id, taskCardProgressElementId('run-live'))
+  assert.ok(String(liveProgress.content).includes('正在检索'))
 })
 
 void test('buildTaskCard puts the terminal timestamp in the subtitle and renders no id line', () => {

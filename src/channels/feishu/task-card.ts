@@ -200,31 +200,6 @@ function markdownElement(content: string, elementId?: string): Record<string, un
   }
 }
 
-/** A fixed-height live-stream target: the "普通文本" component (`tag:'div'` with a
- *  nested `plain_text` text object). This is the ONLY way to a stable-height
- *  preview on Feishu cards:
- *   - `div` is a valid TOP-LEVEL body element (a bare `tag:'plain_text'` at body
- *     level is rejected — `code 10002 unsupported tag plain_text` froze the card).
- *   - `plain_text` renders its `content` VERBATIM — half-streamed `**`/`##` show
- *     as literal characters, never flashing into bold/heading (markdown has no
- *     `lines` / height control at all).
- *   - `lines` caps the rendered rows at N (overflow → `…`); the streamer pads the
- *     content UP to N lines (capStreamPreview) so height is constant from the
- *     first token instead of growing/oscillating.
- *  Streaming (`cardElement.content`) targets the INNER plain_text's `element_id`
- *  (the field that carries `content`), per the official component doc. */
-function plainTextLineElement(content: string, elementId: string, lines: number): Record<string, unknown> {
-  return {
-    tag: 'div',
-    text: {
-      tag: 'plain_text',
-      element_id: elementId,
-      content,
-      lines,
-    },
-  }
-}
-
 /** Strip markdown markers from a live preview for a cleaner glimpse. The live
  *  element is now a verbatim `plain_text` (see `plainTextLineElement`), so the
  *  markers would show as literal `**`/`##` characters rather than flash into
@@ -554,16 +529,13 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
         markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
       )
       if (childLive) {
-        // Live worker: the per-element streaming target — a fixed-height 2-line
-        // plain_text glimpse (div-wrapped; capStreamPreview pads to 2 lines and
-        // renders verbatim so partial markdown never flashes). Always emitted
-        // (even when seeded blank) so the stream has a target from the first
-        // render. element_id is the inner plain_text's, the streaming target.
+        // Live worker: a single markdown line with the current latest progress,
+        // refreshed on each whole-card patch (streaming is disabled). Always
+        // emitted (even when blank) so the line slot is stable across patches.
         elements.push(
-          plainTextLineElement(
-            capStreamPreview(child.latestProgress ?? ''),
+          markdownElement(
+            child.latestProgress ? truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS) : '',
             taskCardProgressElementId(child.id),
-            TASK_CARD_STREAM_PREVIEW_MAX_LINES,
           ),
         )
       } else if (child.latestProgress) {
@@ -616,13 +588,12 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Main agent's live line is a streaming target too — same fixed-height 2-line
-    // plain_text glimpse as the child live element (verbatim, no flashing).
+    // Main agent's live line — a single markdown line with the latest step,
+    // refreshed on each whole-card patch (streaming is disabled).
     elements.push(
-      plainTextLineElement(
-        capStreamPreview(latest.text),
+      markdownElement(
+        truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
         taskCardProgressElementId('root'),
-        TASK_CARD_STREAM_PREVIEW_MAX_LINES,
       ),
     )
     elements.push(

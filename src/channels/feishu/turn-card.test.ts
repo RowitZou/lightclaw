@@ -53,8 +53,9 @@ function stripGrey(s: string | undefined): string | undefined {
   return m ? m[1] : s
 }
 
-/** Drop the leading non-breaking-space pad lines capStreamPreview adds for fixed
- *  height, so assertions read the visible content. */
+/** Drop the leading non-breaking-space pad lines capStreamPreview still adds for
+ *  the (now production-dormant) streamed-preview path, so collector-stream
+ *  assertions read the visible content. */
 function visible(s: string | undefined): string | undefined {
   if (s === undefined) return undefined
   const lines = s.split('\n')
@@ -69,14 +70,13 @@ function latestLine(card: Record<string, unknown>): string | undefined {
   return first.tag === 'markdown' ? stripGrey(first.content) : undefined
 }
 
-/** The live progress line is a div>plain_text element; the streamed content sits
- *  on the inner text. Returns the visible content (pad lines dropped). */
+/** The live progress line is a markdown element with the latest narration
+ *  (streaming disabled — refreshed per whole-card patch). */
 function progressLine(card: Record<string, unknown>): string | undefined {
   const body = card.body as {
-    elements: Array<{ tag: string; text?: { element_id?: string; content?: string } }>
+    elements: Array<{ tag: string; content?: string; element_id?: string }>
   }
-  const el = body.elements.find(e => e.text?.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)
-  return visible(el?.text?.content)
+  return body.elements.find(e => e.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content
 }
 
 void describe('turn card builder', () => {
@@ -131,14 +131,13 @@ void describe('turn card builder', () => {
     const body = card.body as {
       elements: Array<{ tag: string; content?: string; element_id?: string; header?: unknown }>
     }
-    // Pin label is a grey markdown line; the live line is a div>plain_text element
-    // (verbatim, no flashing) whose inner text carries the streaming element_id.
+    // Pin label is a grey markdown line; the live line is a markdown element with
+    // the latest narration (streaming disabled — refreshed per whole-card patch).
     assert.equal(latestLine(card), '最新 11:05')
-    const progress = body.elements[1] as { tag: string; text?: { tag: string; element_id?: string; content?: string } }
-    assert.equal(progress.tag, 'div')
-    assert.equal(progress.text?.tag, 'plain_text')
-    assert.equal(progress.text?.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
-    assert.equal(visible(progress.text?.content), '正在整理结果')
+    const progress = body.elements[1] as { tag: string; content?: string; element_id?: string }
+    assert.equal(progress.tag, 'markdown')
+    assert.equal(progress.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
+    assert.equal(progress.content, '正在整理结果')
     const panel = body.elements.find(el => el.tag === 'collapsible_panel') as any
     assert.deepEqual(panel.header.icon, {
       tag: 'standard_icon',

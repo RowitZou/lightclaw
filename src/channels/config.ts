@@ -92,7 +92,7 @@ function mergeFeishuConfig(input: ConfigFileChannelsSection['feishu']): FeishuCh
     streamingReply:
       parseBool(process.env.LIGHTCLAW_FEISHU_STREAMING_REPLY) ??
       input?.streamingReply ??
-      true,
+      false,
     mediaEnabled: input?.mediaEnabled ?? true,
     parentFetchTimeoutMs:
       parsePositiveInt(process.env.LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS) ??

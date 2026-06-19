@@ -9,7 +9,7 @@
 // of any card a tool creates (e.g. the task card).
 
 import { t } from '../../i18n/index.js'
-import { capStreamPreview, greyInline, TASK_CARD_STREAM_PREVIEW_MAX_LINES } from './task-card.js'
+import { greyInline } from './task-card.js'
 
 export type TurnCardEntry = {
   at: number
@@ -64,18 +64,11 @@ export function buildTurnCard(
   // has no `note` element; the label is single-line so inline `<font>` is safe).
   elements.push({ tag: 'markdown', content: greyInline(`${t('turncard.latest')} ${formatClock(latest.at)}`) })
   elements.push({
-    // Streaming target — a fixed-height 2-line plain_text glimpse, div-wrapped
-    // (a bare top-level plain_text is rejected — 10002). plain_text renders
-    // verbatim so partial markdown never flashes; capStreamPreview pads to 2
-    // lines for constant height. Streaming targets the inner plain_text's
-    // element_id. The full narration is in the collapsible panel below.
-    tag: 'div',
-    text: {
-      tag: 'plain_text',
-      element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-      content: capStreamPreview(latest.text),
-      lines: TASK_CARD_STREAM_PREVIEW_MAX_LINES,
-    },
+    // The latest narration line, refreshed on each whole-card patch (streaming
+    // is disabled). The full narration is in the collapsible panel below.
+    tag: 'markdown',
+    element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
+    content: latest.text,
   })
   elements.push({
     tag: 'collapsible_panel',
