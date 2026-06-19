@@ -21,11 +21,11 @@ export type TaskCardBinding = {
   /** Set after the terminal "freeze" render; a finalized card is never
    *  patched again. */
   finalizedAt?: number
-  /** CardKit card id for live cards created through cardkit.v1.card.create.
-   *  Present only when channels.feishu.streamingReply is enabled. */
+  /** CardKit live-card id. Inert: in-card streaming was removed, so cards are
+   *  always static interactive cards and this is never populated. Kept as
+   *  backward-compatible binding metadata (old bindings may still carry it). */
   cardId?: string
-  /** Last CardKit sequence used for this card. Every card.update /
-   *  cardElement.content / settings call must increment it. */
+  /** Last CardKit sequence for a live card. Inert alongside `cardId`. */
   cardSequence?: number
 }
 

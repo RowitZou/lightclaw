@@ -21,7 +21,6 @@ import {
   TaskCardPatcher,
   type TaskCardIo,
 } from './task-card-patcher.js'
-import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import { buildTaskCard, TASK_RUN_TERMINAL_STATUSES } from './task-card.js'
 import { t } from '../../i18n/index.js'
 import type { TaskRunMeta } from '../../taskrun/types.js'
@@ -38,12 +37,6 @@ import {
 export type TaskCardPipeline = {
   /** Re-render roots that moved while the process was down. */
   reconcileOnStart(): Promise<void>
-  /** Push a live token stream into one element (`progress:<runId>`) of a root's
-   *  card. No-op until the card exists as a CardKit live card (streamingReply
-   *  on) and before the element is rendered. Coalesced per element; the actual
-   *  cardElement.content call shares the root's monotonic sequence with full
-   *  renders via `serializeByKey`. */
-  streamElement(owner: string, rootRunId: string, elementId: string, content: string): void
   stop(): void
 }
 
@@ -122,11 +115,6 @@ export function startTaskCardPipeline(
   const patcher = options.throttleMs !== undefined
     ? new TaskCardPatcher(options.throttleMs)
     : new TaskCardPatcher()
-  // Element streams coalesce per element on a tight throttle (a live feel),
-  // separate from the 3s full-render throttle. Both funnel their actual
-  // CardKit call through cardSeqKey so the sequence stays monotonic.
-  const streamThrottleMs = options.throttleMs ?? STREAMING_UPDATE_THROTTLE_MS
-  const streamPatcher = new TaskCardPatcher(streamThrottleMs)
 
   async function render(owner: string, rootRunId: string): Promise<void> {
     const root = await getTaskRun(rootRunId, owner)
@@ -239,49 +227,6 @@ export function startTaskCardPipeline(
     })
   }
 
-  function streamElement(
-    owner: string,
-    rootRunId: string,
-    elementId: string,
-    content: string,
-  ): void {
-    if (!io.pushElement) return
-    // Coalesce per element so concurrent workers each stream independently;
-    // the latest content wins (the patcher replaces the pending job).
-    streamPatcher.schedule(`${rootRunId}::stream::${elementId}`, async () => {
-      await serializeByKey(cardSeqKey(owner, rootRunId), async () => {
-        const binding = await readTaskCardBinding(owner, rootRunId)
-        if (!binding?.cardId || binding.finalizedAt || !io.pushElement) {
-          process.stderr.write(
-            `[task-card] stream no-op root=${rootRunId} element=${elementId} reason=${
-              !binding?.cardId ? 'no-cardId' : binding.finalizedAt ? 'finalized' : 'no-pushElement'
-            }\n`,
-          )
-          return
-        }
-        try {
-          const pushed = await io.pushElement({
-            cardId: binding.cardId,
-            sequence: binding.cardSequence ?? 0,
-            elementId,
-            content,
-          })
-          await writeTaskCardBinding(owner, rootRunId, {
-            ...binding,
-            cardSequence: pushed.sequence,
-          })
-          process.stderr.write(
-            `[task-card] stream push root=${rootRunId} element=${elementId} seq=${pushed.sequence}\n`,
-          )
-        } catch (error) {
-          process.stderr.write(
-            `[task-card] stream push failed for ${rootRunId}/${elementId}: ${(error as Error).message}\n`,
-          )
-        }
-      })
-    })
-  }
-
   function schedule(owner: string, rootRunId: string, immediate: boolean): void {
     patcher.schedule(rootRunId, () => render(owner, rootRunId), { immediate })
   }
@@ -350,7 +295,6 @@ export function startTaskCardPipeline(
 
   return {
     reconcileOnStart,
-    streamElement,
     stop: unsubscribe,
   }
 }

@@ -147,30 +147,15 @@ export function createSenderTaskCardIo(
     | 'patchInteractiveCard'
     | 'sendMarkdownText'
     | 'sendMarkdownTextToChatId'
-  > & Partial<Pick<
-    FeishuSender,
-    | 'supportsCardkitLiveCards'
-    | 'createLiveInteractiveCard'
-    | 'updateLiveInteractiveCard'
-    | 'pushLiveCardElement'
-    | 'closeLiveCard'
-  >>,
+  >,
 ): TaskCardIo {
+  // In-card streaming is retired: cards are always static interactive cards,
+  // created via im.message and refreshed by whole-card patchInteractiveCard.
+  // There is no CardKit live-card / per-element push path anymore (the
+  // TaskCardIo `pushElement` / `close` hooks stay optional and unimplemented,
+  // so the collector / subscriber guards no-op).
   return {
     async create(target, card) {
-      const createLive = sender.createLiveInteractiveCard
-      if (sender.supportsCardkitLiveCards?.() && createLive) {
-        try {
-          return await createLive.call(sender, target, card)
-        } catch (error) {
-          // A CardKit create failure (API/schema/element-id error) must not
-          // blank the card — degrade to a static im.message card (no live
-          // streaming, but the card still renders + later patches via patch()).
-          process.stderr.write(
-            `[task-card] live card create failed, falling back to static card: ${(error as Error).message}\n`,
-          )
-        }
-      }
       if (target.replyAnchorMessageId) {
         // Minimal reply envelope: the sender only reads chatId / threadId /
         // messageId (reply target) / synthetic off this shape.
@@ -187,31 +172,8 @@ export function createSenderTaskCardIo(
       }
       return sender.sendInteractiveCardToChatId(target.chatId, card, {}, target.threadId)
     },
-    async patch(messageId, card, live) {
-      if (live && sender.updateLiveInteractiveCard) {
-        const sequence = await sender.updateLiveInteractiveCard(live.cardId, live.sequence, card)
-        return { sequence }
-      }
+    async patch(messageId, card) {
       await sender.patchInteractiveCard(messageId, card)
-    },
-    async pushElement(live) {
-      if (!sender.pushLiveCardElement) {
-        return { sequence: live.sequence }
-      }
-      const sequence = await sender.pushLiveCardElement(
-        live.cardId,
-        live.elementId,
-        live.sequence,
-        live.content,
-      )
-      return { sequence }
-    },
-    async close(live) {
-      if (!sender.closeLiveCard) {
-        return { sequence: live.sequence }
-      }
-      const sequence = await sender.closeLiveCard(live.cardId, live.sequence, live.summary)
-      return { sequence }
     },
     async sendText(target, text) {
       if (target.replyAnchorMessageId) {

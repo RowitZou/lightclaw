@@ -4,14 +4,11 @@ import { test } from 'node:test'
 import { setLang } from '../../i18n/index.js'
 import {
   buildTaskCard,
-  capStreamPreview,
   TASK_CARD_MAX_CHILDREN,
   TASK_CARD_MAX_CHILD_TIMELINE,
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
   TASK_CARD_PROGRESS_MAX_LINES,
-  TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
-  TASK_CARD_STREAM_PREVIEW_MAX_LINES,
   TASK_CARD_TIMELINE_LINE_MAX_CHARS,
   taskCardProgressElementId,
   type TaskCardChildView,
@@ -87,14 +84,6 @@ function elText(el: Record<string, unknown>): string {
     return (el.elements as Array<{ content?: string }>).map(e => e.content ?? '').join('')
   }
   return ''
-}
-
-/** Drop the leading non-breaking-space pad lines capStreamPreview adds for
- *  fixed height, so assertions read the visible content. */
-function visible(s: string): string {
-  const lines = s.split('\n')
-  while (lines.length && (lines[0] === '' || lines[0] === '\u00A0')) lines.shift()
-  return lines.join('\n')
 }
 
 function bodyText(card: Record<string, unknown>): string {
@@ -509,39 +498,4 @@ test('emitted element_ids satisfy Feishu cardkit format (no colon, ≤20, letter
   for (const id of ids) {
     assert.ok(FORMAT.test(id), `emitted element_id "${id}" must match ${FORMAT}`)
   }
-})
-
-test('capStreamPreview is a fixed-height markdown-stripped tail window', () => {
-  // Exactly MAX_LINES lines are returned unchanged — no truncation, no padding.
-  assert.equal(capStreamPreview('one\ntwo'), 'one\ntwo')
-
-  // Fewer than MAX_LINES lines are padded UP with leading non-breaking-space
-  // lines so the preview holds a constant height from the first token.
-  const padded = capStreamPreview('solo').split('\n')
-  assert.equal(padded.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
-  assert.equal(padded.at(0), '\u00A0', 'padding is a leading non-breaking space line')
-  assert.equal(padded.at(-1), 'solo', 'newest content stays at the bottom')
-
-  // Markdown markers are stripped so the plain_text glimpse stays tidy (and even
-  // a half-streamed `**`/`##` would render verbatim, never flashing).
-  assert.equal(visible(capStreamPreview('**粗体** 普通')), '粗体 普通')
-  assert.equal(visible(capStreamPreview('## 标题')), '标题')
-  assert.equal(visible(capStreamPreview('- 第一项')), '第一项')
-  assert.equal(visible(capStreamPreview('看 [文档](http://x) 链接')), '看 文档 链接')
-
-  // Many-newline content is clamped to the last MAX_LINES lines so a streaming
-  // list / code block cannot balloon the card height. Newest lines win.
-  const many = Array.from({ length: TASK_CARD_STREAM_PREVIEW_MAX_LINES + 10 }, (_, i) => `line${i}`)
-  const cappedLines = capStreamPreview(many.join('\n')).split('\n')
-  assert.equal(cappedLines.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
-  assert.equal(cappedLines.at(-1), many.at(-1))
-  assert.ok(!cappedLines.includes('line0'), 'oldest lines drop out of the tail')
-
-  // A single long line is char-capped with the leading truncation marker, then
-  // top-padded to the fixed height; the visible (last) line carries the content.
-  const capped = capStreamPreview('x'.repeat(TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 500)).split('\n')
-  assert.equal(capped.length, TASK_CARD_STREAM_PREVIEW_MAX_LINES)
-  const last = capped.at(-1)!
-  assert.ok(last.length <= TASK_CARD_STREAM_PREVIEW_MAX_CHARS)
-  assert.ok(last.startsWith('…'))
 })

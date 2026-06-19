@@ -32,67 +32,6 @@ const baseConfig: FeishuChannelConfig = {
   },
 }
 
-test('FeishuSender sendStreamingMarkdownText opens CardKit, sends card reference, pushes cumulative text, and closes', async () => {
-  const createdCards: unknown[] = []
-  const pushed: Array<{ content: string; sequence: number }> = []
-  const closed: Array<{ settings: string; sequence: number }> = []
-  const sent: Array<{ msg_type: string; content: string }> = []
-  const client = {
-    cardkit: {
-      v1: {
-        card: {
-          create: async (input: unknown) => {
-            createdCards.push(input)
-            return { code: 0, data: { card_id: 'card_stream' } }
-          },
-          settings: async (input: { data: { settings: string; sequence: number } }) => {
-            closed.push(input.data)
-            return { code: 0 }
-          },
-        },
-        cardElement: {
-          content: async (input: { data: { content: string; sequence: number } }) => {
-            pushed.push(input.data)
-            return { code: 0 }
-          },
-        },
-      },
-    },
-    im: {
-      message: {
-        reply: async (input: { data: { msg_type: string; content: string } }) => {
-          sent.push(input.data)
-          return { code: 0, data: { message_id: 'om_stream' } }
-        },
-        create: async () => {
-          throw new Error('reply path should succeed')
-        },
-      },
-      file: { create: async () => null },
-    },
-  } as unknown as FeishuClient
-
-  const sender = new FeishuSender(client, baseConfig)
-  await sender.sendStreamingMarkdownText(baseMessage, 'abcdef')
-
-  assert.equal(createdCards.length, 1)
-  assert.equal(sent.length, 1)
-  assert.equal(sent[0]!.msg_type, 'interactive')
-  assert.equal(sent[0]!.content, JSON.stringify({ type: 'card', data: { card_id: 'card_stream' } }))
-  assert.deepEqual(pushed.map(p => p.content), ['a', 'abcdef'])
-  assert.deepEqual(pushed.map(p => p.sequence), [1, 2])
-  assert.equal(closed[0]!.sequence, 3)
-  assert.equal(JSON.parse(closed[0]!.settings).config.summary.content, 'abcdef')
-})
-
-test('FeishuSender sendStreamingMarkdownText refuses oversized replies so caller can fall back whole-send', async () => {
-  const sender = new FeishuSender({} as FeishuClient, { ...baseConfig, textChunkSize: 3 })
-  await assert.rejects(
-    () => sender.sendStreamingMarkdownText(baseMessage, 'abcd'),
-    /streaming reply exceeds textChunkSize/,
-  )
-})
-
 const baseMessage: NormalizedChannelMessage = {
   channel: 'feishu',
   eventId: 'evt_1',

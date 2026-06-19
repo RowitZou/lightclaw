@@ -16,14 +16,16 @@ import {
   type TaskCardIo,
   type TaskCardTarget,
 } from './task-card-patcher.js'
-import { capStreamPreview, TASK_CARD_STREAM_BUFFER_MAX_CHARS } from './task-card.js'
-import { STREAMING_UPDATE_THROTTLE_MS } from './streaming-card.js'
 import {
   buildTurnCard,
   truncateTurnCardEntry,
-  TURN_CARD_PROGRESS_ELEMENT_ID,
   type TurnCardEntry,
 } from './turn-card.js'
+
+// The turn card patches faster than TaskCardPatcher's 3s default: a reply that
+// finishes in a few seconds should show its interim narration, not land as one
+// instant block. (Was the in-card streaming cadence; kept as the patch cadence.)
+const TURN_CARD_PATCH_THROTTLE_MS = 160
 
 export type TurnCardCollector = {
   /** Record one interim block. Empty text still begins the card; the
@@ -31,14 +33,13 @@ export type TurnCardCollector = {
   add(text: string): Promise<void> | void
   /** Freeze the card (idempotent). `interrupted` appends a closing line. */
   finalize(opts?: { interrupted?: boolean }): void
-  /** Push in-flight text into the dedicated progress element when this card
-   *  was created through CardKit. No-op before the card exists or on fallback
-   *  raw interactive cards. */
+  /** Retained no-op: in-card token streaming was removed. The runner still
+   *  calls this per text delta; the turn card now shows interim narration via
+   *  add() / the collapsed panel only. */
   stream(text: string): void
 }
 
 type TurnCardIo = Pick<TaskCardIo, 'create' | 'patch'>
-  & Pick<Partial<TaskCardIo>, 'pushElement' | 'close'>
 
 function defaultIo(): TurnCardIo {
   return {
@@ -47,24 +48,10 @@ function defaultIo(): TurnCardIo {
       if (!sender) return {}
       return createSenderTaskCardIo(sender).create(target, card)
     },
-    async patch(messageId, card, live) {
+    async patch(messageId, card) {
       const sender = getFeishuSender()
       if (!sender) return
-      // Forward `live` + return result — otherwise the turn card's CardKit
-      // sequence never advances and the progress element never streams.
-      return createSenderTaskCardIo(sender).patch(messageId, card, live)
-    },
-    async pushElement(live) {
-      const sender = getFeishuSender()
-      if (!sender) return { sequence: live.sequence }
-      const io = createSenderTaskCardIo(sender)
-      return io.pushElement ? io.pushElement(live) : { sequence: live.sequence }
-    },
-    async close(live) {
-      const sender = getFeishuSender()
-      if (!sender) return { sequence: live.sequence }
-      const io = createSenderTaskCardIo(sender)
-      return io.close ? io.close(live) : { sequence: live.sequence }
+      return createSenderTaskCardIo(sender).patch(messageId, card)
     },
   }
 }
@@ -75,19 +62,12 @@ export function createTurnCardCollector(input: {
   throttleMs?: number
 }): TurnCardCollector {
   const io = input.io ?? defaultIo()
-  // The turn card is a streaming surface (it has stream()), so its default
-  // throttle is the streaming cadence, NOT TaskCardPatcher's 3s patch default —
-  // at 3s a reply that finishes in a few seconds pushes once and reads as
-  // instant full text. Tests still override throttleMs.
   const patcher = input.throttleMs !== undefined
     ? new TaskCardPatcher(input.throttleMs)
-    : new TaskCardPatcher(STREAMING_UPDATE_THROTTLE_MS)
+    : new TaskCardPatcher(TURN_CARD_PATCH_THROTTLE_MS)
   const lane = `turn-${randomUUID()}`
   const entries: TurnCardEntry[] = []
   let messageId: string | undefined
-  let cardId: string | undefined
-  let sequence = 0
-  let liveText = ''
   let interrupted = false
   let finalized = false
   let begun = false
@@ -104,12 +84,7 @@ export function createTurnCardCollector(input: {
       if (created.messageId) messageId = created.messageId
       return
     }
-    const patched = await io.patch(
-      messageId,
-      card,
-      cardId ? { cardId, sequence } : undefined,
-    )
-    if (patched?.sequence !== undefined) sequence = patched.sequence
+    await io.patch(messageId, card)
   }
 
   return {
@@ -135,8 +110,6 @@ export function createTurnCardCollector(input: {
               buildTurnCard(entries, {}),
             )
             if (created.messageId) messageId = created.messageId
-            if (created.cardId) cardId = created.cardId
-            if (created.sequence !== undefined) sequence = created.sequence
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
             process.stderr.write(`[turncard] create failed: ${detail}\n`)
@@ -152,41 +125,13 @@ export function createTurnCardCollector(input: {
       finalized = true
       if (!begun) return
       interrupted = opts.interrupted === true
-        patcher.schedule(lane, async () => {
-          await flush()
-          if (cardId && io.close) {
-            const closed = await io.close({
-              cardId,
-              sequence,
-              summary: entries[entries.length - 1]?.text ?? '',
-            })
-            sequence = closed.sequence
-          }
-          patcher.release(lane)
-        }, { immediate: true })
-    },
-    stream(text) {
-      if (finalized) return
-      liveText = liveText ? `${liveText}${text}` : text
-      // Bound the rolling buffer to the tail window so it stays flat across the
-      // whole turn (add() no longer clears it). The capped tail keeps scrolling.
-      if (liveText.length > TASK_CARD_STREAM_BUFFER_MAX_CHARS) {
-        liveText = liveText.slice(liveText.length - TASK_CARD_STREAM_BUFFER_MAX_CHARS)
-      }
-      if (!cardId || !io.pushElement) return
-      // Snapshot the capped content at schedule time: the patcher coalesces to
-      // the latest job, so the snapshot keeps each queued push self-consistent.
-      const content = capStreamPreview(liveText)
       patcher.schedule(lane, async () => {
-        if (!cardId || !io.pushElement) return
-        const pushed = await io.pushElement({
-          cardId,
-          sequence,
-          elementId: TURN_CARD_PROGRESS_ELEMENT_ID,
-          content,
-        })
-        sequence = pushed.sequence
-      })
+        await flush()
+        patcher.release(lane)
+      }, { immediate: true })
+    },
+    stream() {
+      // In-card token streaming was removed; interim narration shows via add().
     },
   }
 }

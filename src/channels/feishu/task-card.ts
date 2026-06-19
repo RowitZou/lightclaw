@@ -109,20 +109,6 @@ export const TASK_CARD_PROGRESS_MAX_CHARS = 100
 // a taller glimpse (then a short run renders 1 line and the height varies again).
 export const TASK_CARD_PROGRESS_MAX_LINES = 1
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
-// A live stream preview is a small fixed-height GLIMPSE, not the content surface:
-// the real output is the chat bubble (final reply) and the collapsible timeline
-// panel. `capStreamPreview` keeps only the newest tail (older lines scroll out:
-// the box replaces in place rather than growing downward — "reset, don't trail")
-// AND pads UP to exactly MAX_LINES so the plain_text element holds a constant
-// height from the first token. The placeholder for pad lines is a non-breaking
-// space (U+00A0) so the row is not collapsed to nothing by the renderer.
-export const TASK_CARD_STREAM_PREVIEW_MAX_CHARS = 160
-export const TASK_CARD_STREAM_PREVIEW_MAX_LINES = 2
-export const TASK_CARD_STREAM_PAD_LINE = '\u00A0'
-// Rolling buffer kept by each streamer. Generous headroom over the render
-// window so capStreamPreview still shows its "…" truncation marker, while
-// bounding per-worker memory regardless of total generated length.
-export const TASK_CARD_STREAM_BUFFER_MAX_CHARS = 4000
 // Total rendered timeline characters across ALL panels (root + children). Set
 // under the old proven-OK worst case (200×80 = 16000), so the whole card stays
 // safe vs Feishu's render-size limit whatever the exact threshold — while short
@@ -205,24 +191,6 @@ function markdownElement(content: string, elementId?: string): Record<string, un
     ...(elementId ? { element_id: elementId } : {}),
     content,
   }
-}
-
-/** Strip markdown markers from a live preview for a cleaner glimpse. The live
- *  element is now a verbatim `plain_text` (see `plainTextLineElement`), so the
- *  markers would show as literal `**`/`##` characters rather than flash into
- *  formatting — stripping them just keeps the 2-line glimpse tidy (no stray
- *  syntax). The full, properly rendered text is the chat bubble + the
- *  collapsible timeline panel. */
-export function stripPreviewMarkdown(text: string): string {
-  return text
-    .replace(/`+/g, '') // code fences / inline-code backticks
-    .replace(/\*+/g, '') // bold / italic asterisks
-    .replace(/~+/g, '') // strikethrough tildes
-    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '') // ATX headings
-    .replace(/^[ \t]*[-+][ \t]+/gm, '') // bullet markers (asterisks already gone)
-    .replace(/^[ \t]*\d+\.[ \t]+/gm, '') // numbered-list markers
-    .replace(/^[ \t]*>[ \t]?/gm, '') // blockquote markers
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) → text
 }
 
 function hrElement(): Record<string, unknown> {
@@ -333,36 +301,9 @@ function timelinePanel(
 // start, alphanumerics/underscore only (NO colon), ≤20 chars (error 300301).
 // runIds carry ':'/'_'/'-' and exceed 20 chars, so derive a short stable id
 // from a hash: 'p' + 16 hex = 17 chars, deterministic so the rendered element
-// and the streamed push (worker-stream) always target the same element.
+// is stable across whole-card patches.
 export function taskCardProgressElementId(runId: string): string {
   return `p${createHash('sha1').update(runId).digest('hex').slice(0, 16)}`
-}
-
-/** Shape a live stream preview into a FIXED-HEIGHT tail window for a `plain_text`
- *  streaming element (see `plainTextLineElement`): strip markdown markers for a
- *  tidy glimpse, keep only the newest MAX_LINES lines (older ones scroll out —
- *  the box replaces in place rather than growing downward), trim to the char
- *  budget, then pad UP to exactly MAX_LINES with leading placeholder lines so the
- *  element holds a constant height from the first token (no grow-from-empty
- *  jump). The full text still reaches chat / the timeline panel. Shared by the
- *  turn card collector and the worker task-card streamer. */
-export function capStreamPreview(text: string): string {
-  let out = stripPreviewMarkdown(text)
-  // Line bound first (drop the oldest lines), so the char cap then trims what
-  // actually renders. Both are tail windows — the newest content always wins.
-  const lines = out.split('\n')
-  if (lines.length > TASK_CARD_STREAM_PREVIEW_MAX_LINES) {
-    out = lines.slice(lines.length - TASK_CARD_STREAM_PREVIEW_MAX_LINES).join('\n')
-  }
-  if (out.length > TASK_CARD_STREAM_PREVIEW_MAX_CHARS) {
-    out = `…${out.slice(out.length - TASK_CARD_STREAM_PREVIEW_MAX_CHARS + 1)}`
-  }
-  // Pad up to a fixed line count: leading non-breaking-space lines reserve the
-  // rows so the plain_text element occupies MAX_LINES height even before that
-  // many lines of content exist.
-  const padded = out.split('\n')
-  while (padded.length < TASK_CARD_STREAM_PREVIEW_MAX_LINES) padded.unshift(TASK_CARD_STREAM_PAD_LINE)
-  return padded.join('\n')
 }
 
 /** Approximate rendered length of one timeline line: the whitespace-collapsed

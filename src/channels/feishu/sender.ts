@@ -27,13 +27,7 @@ import { uploadDriveFile } from './resources/file-upload.js'
 import { isFeishuGroupChatType } from './routing.js'
 import { resolveCurrentFeishuWorkspace } from './workspace/ops.js'
 import { getOrCreateUserUploadsFolder } from './workspace/uploads.js'
-import {
-  buildCardkitCardReferenceContent,
-  CardKitStreamSession,
-  STREAMING_UPDATE_THROTTLE_MS,
-} from './streaming-card.js'
 import { card2, markdown } from './card2.js'
-import type { TaskCardTarget } from './task-card-patcher.js'
 
 // Topic-group create refusal. Feishu's `im.message.create` does not accept
 // `receive_id_type='thread_id'` — the API rejects with 400 / field
@@ -282,125 +276,14 @@ export class FeishuSender {
     }
   }
 
-  async sendStreamingMarkdownText(
-    message: NormalizedChannelMessage,
-    text: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<{ aborted: boolean }> {
-    if (text.length > this.config.textChunkSize) {
-      throw new Error(
-        `streaming reply exceeds textChunkSize (${text.length} > ${this.config.textChunkSize})`,
-      )
-    }
-    const session = new CardKitStreamSession({
-      client: this.client,
-      throttleMs: STREAMING_UPDATE_THROTTLE_MS,
-      signal: options.signal,
-      sendCardReference: async (target, cardId) => {
-        const response = await this.sendReplyOrCreate({
-          chatId: target.chatId,
-          replyToMessageId: this.replyTargetFor(target),
-          ...(target.threadId ? { threadId: target.threadId } : {}),
-          msgType: 'interactive',
-          content: buildCardkitCardReferenceContent(cardId),
-          uuid: randomUUID(),
-        })
-        const messageId = response.data?.message_id
-        return messageId ? { messageId } : {}
-      },
-    })
-    const result = await session.streamText(message, text)
-    return { aborted: result.aborted }
-  }
-
+  // In-card token streaming was abandoned (both `streamingReply` values route
+  // to non-streaming). This gate is the single inert seam: it always reports
+  // false, so the task/turn card io never takes a CardKit live-card path. The
+  // `streamingReply` config field is kept as a reserved entry; re-enabling
+  // in-card streaming means rebuilding the live-card machinery (see git history
+  // / the feishu-cards dev log) and wiring it back through here.
   supportsCardkitLiveCards(): boolean {
-    return this.config.streamingReply
-  }
-
-  async createLiveInteractiveCard(
-    target: TaskCardTarget,
-    card: Record<string, unknown>,
-  ): Promise<{ messageId?: string; cardId?: string; sequence: number }> {
-    const created = await this.client.cardkit.v1.card.create({
-      data: {
-        type: 'card_json',
-        data: JSON.stringify(withCardkitStreamingConfig(card)),
-      },
-    })
-    assertOk(created, 'Feishu cardkit create live card failed')
-    const cardId = created.data?.card_id
-    if (!cardId) {
-      throw new Error('Feishu cardkit create live card failed: missing card_id')
-    }
-    const response = await this.sendReplyOrCreate({
-      chatId: target.chatId,
-      replyToMessageId: target.replyAnchorMessageId,
-      ...(target.threadId ? { threadId: target.threadId } : {}),
-      msgType: 'interactive',
-      content: buildCardkitCardReferenceContent(cardId),
-      uuid: randomUUID(),
-    })
-    const messageId = response.data?.message_id
-    return {
-      ...(messageId ? { messageId } : {}),
-      cardId,
-      sequence: 0,
-    }
-  }
-
-  async updateLiveInteractiveCard(
-    cardId: string,
-    sequence: number,
-    card: Record<string, unknown>,
-  ): Promise<number> {
-    const next = sequence + 1
-    const response = await this.client.cardkit.v1.card.update({
-      path: { card_id: cardId },
-      data: {
-        card: {
-          type: 'card_json',
-          data: JSON.stringify(withCardkitStreamingConfig(card)),
-        },
-        sequence: next,
-        uuid: randomUUID(),
-      },
-    })
-    assertOk(response, 'Feishu cardkit update live card failed')
-    return next
-  }
-
-  async pushLiveCardElement(
-    cardId: string,
-    elementId: string,
-    sequence: number,
-    content: string,
-  ): Promise<number> {
-    const next = sequence + 1
-    const response = await this.client.cardkit.v1.cardElement.content({
-      path: { card_id: cardId, element_id: elementId },
-      data: { content, sequence: next, uuid: randomUUID() },
-    })
-    assertOk(response, 'Feishu cardkit element content failed')
-    return next
-  }
-
-  async closeLiveCard(cardId: string, sequence: number, summary: string): Promise<number> {
-    const next = sequence + 1
-    const response = await this.client.cardkit.v1.card.settings({
-      path: { card_id: cardId },
-      data: {
-        settings: JSON.stringify({
-          config: {
-            streaming_mode: false,
-            summary: { content: summary.slice(0, 120) },
-          },
-        }),
-        sequence: next,
-        uuid: randomUUID(),
-      },
-    })
-    assertOk(response, 'Feishu cardkit close live card failed')
-    return next
+    return false
   }
 
   async sendInteractiveCard(
@@ -1173,20 +1056,3 @@ function assertOk(response: SendResponse, prefix: string): void {
   }
 }
 
-function withCardkitStreamingConfig(card: Record<string, unknown>): Record<string, unknown> {
-  const config = typeof card.config === 'object' && card.config !== null
-    ? card.config as Record<string, unknown>
-    : {}
-  return {
-    ...card,
-    config: {
-      ...config,
-      update_multi: true,
-      streaming_mode: true,
-      streaming_config: {
-        print_frequency_ms: { default: 50 },
-        print_step: { default: 1 },
-      },
-    },
-  }
-}
