@@ -79,8 +79,9 @@ export function buildTurnCard(
       },
     },
     // Blank line between entries — multi-line entries are hard to tell
-    // apart in lark_md without a paragraph break.
-    elements: [{ tag: 'markdown', content: lines.join('\n\n') }],
+    // apart in lark_md without a paragraph break. Body text is the smaller
+    // 12px (notation) tier — detail inside the panel.
+    elements: [{ tag: 'markdown', content: lines.join('\n\n'), text_size: 'notation' }],
   })
   return {
     schema: '2.0',

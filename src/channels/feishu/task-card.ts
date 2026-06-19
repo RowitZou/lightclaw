@@ -323,8 +323,9 @@ function timelinePanel(
       },
     },
     // Blank line between entries — multi-line entries are hard to tell
-    // apart in lark_md without a paragraph break.
-    elements: [markdownElement(body)],
+    // apart in lark_md without a paragraph break. Body text is the smaller
+    // 12px (notation) tier — detail inside the panel, denser than the card body.
+    elements: [{ tag: 'markdown', content: body, text_size: 'notation' }],
   }
 }
 
