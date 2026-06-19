@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import { setLightclawHomeOverride } from '../paths.js'
+import { waitFor } from '../test-support/wait-for.js'
 import { createRootTaskRun, createTaskRun, getTaskRunEvents } from './store.js'
 import {
   buildWorkerProgressForwarder,
@@ -52,14 +53,19 @@ void describe('worker progress forwarder (PR22)', () => {
     })
     forward(`step one ${'x'.repeat(400)}`)
     forward('step two inside throttle window')
-    await delay(20)
+    // Wait for the first (leading-edge) write to land instead of a fixed sleep;
+    // the second block is dropped outright (now-last < throttleMs → return), so
+    // the count never climbs past 1 and this cannot over-wait into a 2.
+    const countProgress = async () =>
+      (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress').length
+    await waitFor(async () => (await countProgress()) >= 1)
     let progress = (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress')
     assert.equal(progress.length, 1, 'second block inside the window dropped')
     assert.ok((progress[0] as { label: string }).label.length <= WORKER_PROGRESS_MAX_CHARS)
 
-    await delay(60)
+    await delay(60) // real-time wait to cross the throttle window (semantic)
     forward('step three after window')
-    await delay(20)
+    await waitFor(async () => (await countProgress()) >= 2)
     progress = (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress')
     assert.equal(progress.length, 2)
   })
@@ -78,7 +84,9 @@ void describe('worker progress forwarder (PR22)', () => {
     // stores it whole, leaving the card's two render tiers room to differ.
     const narration = 'y'.repeat(400)
     forward(narration)
-    await delay(20)
+    await waitFor(async () =>
+      (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress').length >= 1,
+    )
     const progress = (await getTaskRunEvents(runId, {}, 'alice')).filter(e => e.kind === 'progress')
     assert.equal(progress.length, 1)
     const label = (progress[0] as { label: string }).label

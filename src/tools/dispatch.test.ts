@@ -6,6 +6,7 @@ import { describe, it } from 'node:test'
 
 import type { Role } from '../agents/types.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
+import { waitFor } from '../test-support/wait-for.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { addLink, createUser } from '../identity/store.js'
 import { setLightclawHomeOverride } from '../paths.js'
@@ -656,8 +657,12 @@ describe('Message ask waits in place', () => {
           toolContext(),
         ),
       )
-      // The ask block lands in the parent session as an interjection.
-      await new Promise(resolve => setTimeout(resolve, 50))
+      // The ask block lands in the parent session as an interjection. Wait for
+      // the detached publish to land rather than guessing a fixed delay — under
+      // concurrent test load a 50ms sleep races it (the publish lands later).
+      await waitFor(() => channelInterjectionQueue.size('parent-session') > 0, {
+        label: 'ask interjection reaches the parent session queue',
+      })
       const [askEntry] = channelInterjectionQueue.drain('parent-session')
       assert.ok(askEntry)
       assert.match(askEntry.text, /taskrun-ask/)
@@ -812,6 +817,11 @@ describe('Message reply-code uplink replies', () => {
       assert.equal(result.isError, undefined)
       assert.match(result.output, /Reply sent/)
       assert.equal(consumeReplyCode(child.id, replyCode), false, 'code was consumed exactly once')
+      // The worker reply reaches the requester queue via a detached publish;
+      // wait for it instead of draining immediately (race under load).
+      await waitFor(() => channelInterjectionQueue.size('parent-session') > 0, {
+        label: 'worker reply reaches the requester session queue',
+      })
       const [reply] = channelInterjectionQueue.drain('parent-session')
       assert.ok(reply)
       assert.match(reply.text, new RegExp(`<worker-reply childRunId="${child.id}">`))
@@ -1137,7 +1147,9 @@ describe('worker→main ask routing for a root parent', () => {
           toolContext(),
         ),
       )
-      await new Promise(resolve => setTimeout(resolve, 50))
+      await waitFor(() => channelInterjectionQueue.size(groupSession) > 0, {
+        label: 'root ask reaches the root session queue',
+      })
       const [entry] = channelInterjectionQueue.drain(groupSession)
       assert.ok(entry, 'the ask must reach the root session queue')
       assert.match(entry.text, /taskrun-ask/)

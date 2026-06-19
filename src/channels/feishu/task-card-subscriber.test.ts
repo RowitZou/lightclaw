@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 import { setLightclawHomeOverride } from '../../paths.js'
 import { setLang } from '../../i18n/index.js'
+import { waitFor } from '../../test-support/wait-for.js'
 import {
   appendProgress,
   createRootTaskRun,
@@ -87,7 +88,10 @@ void describe('task-card pipeline', () => {
       objective: '检索论文并写笔记',
       title: '论文阅读',
     })
-    await settle()
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId != null,
+      { label: 'root-born create frame writes the binding' },
+    )
     assert.equal(calls.filter(c => c.kind === 'create').length, 1)
     const create = calls[0] as Extract<IoCall, { kind: 'create' }>
     assert.equal(create.target.chatId, 'oc_card_dm')
@@ -110,7 +114,13 @@ void describe('task-card pipeline', () => {
     })
     await markStarted(child.id, 'bg-session-1', Date.now(), OWNER)
     await appendProgress(child.id, { label: '已确定候选论文' }, Date.now(), OWNER)
-    await settle()
+    await waitFor(
+      () =>
+        calls.some(
+          c => c.kind === 'patch' && cardText(c.card).includes('已确定候选论文'),
+        ),
+      { label: 'progress patch frame' },
+    )
 
     const patches = calls.filter(c => c.kind === 'patch')
     assert.ok(patches.length >= 1, 'tree events patched the card')
@@ -127,7 +137,10 @@ void describe('task-card pipeline', () => {
     const root = await createRootTaskRun(OWNER, DM_SESSION, { objective: '一次性任务' })
     await settle()
     await markFinished(root.id, { ok: true, summary: '两篇论文笔记已写入飞书' }, Date.now(), OWNER)
-    await settle()
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.finalizedAt != null,
+      { label: 'terminal render stamps finalizedAt' },
+    )
 
     const binding = await readTaskCardBinding(OWNER, root.id)
     assert.ok(binding?.finalizedAt, 'terminal render stamped finalizedAt')
@@ -187,7 +200,9 @@ void describe('task-card pipeline', () => {
     recordInboundAnchor(TOPIC_SESSION, 'om_topic_inbound')
 
     await createRootTaskRun(OWNER, TOPIC_SESSION, { objective: '话题群任务' })
-    await settle()
+    await waitFor(() => calls.some(c => c.kind === 'create'), {
+      label: 'topic-group create frame',
+    })
 
     const create = calls.find(c => c.kind === 'create') as Extract<IoCall, { kind: 'create' }>
     assert.ok(create)
@@ -212,7 +227,10 @@ void describe('task-card pipeline', () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
     await pipeline.reconcileOnStart()
-    await settle()
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId != null,
+      { label: 'reconcile create writes the binding' },
+    )
 
     const create = calls.find(c => c.kind === 'create')
     assert.ok(create, 'reconcile created the missing card')
@@ -259,7 +277,13 @@ void describe('reconcile crash-backstop settlement', () => {
     const { io: io1 } = makeFakeIo()
     const pipeline1 = startTaskCardPipeline({ io: io1, throttleMs: 10 })
     const root = await createRootTaskRun(OWNER, session, { objective: '宕机窗口任务' })
-    await settle() // card created → binding written, finalizedAt still undefined
+    // Wait for the card-created frame to write the binding BEFORE the daemon
+    // "goes down" — a fixed sleep here races the throttled create under load,
+    // and stopping before the binding exists changes what reconcile sees.
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.messageId != null,
+      { label: 'card binding written before daemon-down' },
+    )
     pipeline1.stop() // daemon goes down: the tap no longer hears events
     await markFinished(root.id, { ok: true, summary }, Date.now(), OWNER)
     return root.id
@@ -271,7 +295,12 @@ void describe('reconcile crash-backstop settlement', () => {
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
     await pipeline.reconcileOnStart()
-    await settle()
+    // reconcile sends THEN freezes — gate on the final state (finalizedAt), not
+    // the intermediate send, or the freeze assertion below races it under load.
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, rootId))?.finalizedAt != null,
+      { label: 'reconcile sends then freezes the card' },
+    )
 
     const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
     assert.equal(texts.length, 1, 'reconcile sends the backstop settlement once')
@@ -282,12 +311,15 @@ void describe('reconcile crash-backstop settlement', () => {
   })
 
   void it('DM settlements carry no mention', async () => {
-    await rootTerminalWhileDown(DM_SESSION, '搞定了')
+    const rootId = await rootTerminalWhileDown(DM_SESSION, '搞定了')
 
     const { io, calls } = makeFakeIo()
     pipeline = startTaskCardPipeline({ io, throttleMs: 10 })
     await pipeline.reconcileOnStart()
-    await settle()
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, rootId))?.finalizedAt != null,
+      { label: 'DM reconcile sends then freezes' },
+    )
 
     const texts = calls.filter(c => c.kind === 'sendText') as Array<{ kind: 'sendText'; text: string }>
     assert.equal(texts.length, 1)
@@ -303,7 +335,10 @@ void describe('reconcile crash-backstop settlement', () => {
     const root = await createRootTaskRun(OWNER, TOPIC_SESSION, { objective: '已结清任务' })
     await settle()
     await markFinished(root.id, { ok: true, summary: '已交付' }, Date.now(), OWNER)
-    await settle()
+    await waitFor(
+      async () => (await readTaskCardBinding(OWNER, root.id))?.finalizedAt != null,
+      { label: 'live terminal render freezes the card' },
+    )
     const binding = await readTaskCardBinding(OWNER, root.id)
     assert.ok(binding?.finalizedAt, 'live terminal render froze the card')
     pipeline.stop()
