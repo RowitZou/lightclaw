@@ -9,6 +9,7 @@ import {
   TASK_CARD_MAX_CHILD_TIMELINE,
   TASK_CARD_MAX_ROOT_TIMELINE,
   TASK_CARD_MAX_TOTAL_TIMELINE,
+  TASK_CARD_PROGRESS_MAX_LINES,
   TASK_CARD_STREAM_PREVIEW_MAX_CHARS,
   TASK_CARD_STREAM_PREVIEW_MAX_LINES,
   TASK_CARD_TIMELINE_LINE_MAX_CHARS,
@@ -138,18 +139,20 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
     !String(elements[childTitleIndex]!.content).includes('进行中'),
     'status word is no longer baked into the bold title',
   )
-  // Live child: a single markdown line with the latest progress (streaming
-  // disabled — refreshed per whole-card patch).
+  // Live child: a fixed-height div>plain_text line (lines cap), grey, with the
+  // status word + latest progress; element_id is on the inner plain_text.
   const childProgress = elements[childTitleIndex + 1] as Record<string, unknown>
-  assert.equal(childProgress.tag, 'markdown')
-  assert.equal(childProgress.element_id, taskCardProgressElementId('run-child-2'))
-  assert.ok(String(childProgress.content).includes('正在下载第二篇 PDF'))
+  assert.equal(childProgress.tag, 'div')
+  const childText = childProgress.text as Record<string, unknown>
+  assert.equal(childText.element_id, taskCardProgressElementId('run-child-2'))
+  assert.equal(childText.text_color, 'grey')
+  assert.ok(elText(childProgress).includes('正在下载第二篇 PDF'))
   const rootProgressIndex = elements.findIndex(
-    el => el.element_id === taskCardProgressElementId('root'),
+    el => (el.text as { element_id?: string } | undefined)?.element_id === taskCardProgressElementId('root'),
   )
   assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
   assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**任务总览**'))
-  assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
+  assert.ok(elText(elements[rootProgressIndex]!).includes('目录信息已补齐'))
 })
 
 void test('buildTaskCard caps children and timelines with overflow lines', () => {
@@ -240,12 +243,13 @@ void test('buildTaskCard renders the 执行过程 / 任务进程 panels from cre
   assert.ok(panelText(rootPanel).includes('暂无进度'))
 })
 
-void test('buildTaskCard live progress mirrors the settled teaser: grey one-line + status word', () => {
+void test('buildTaskCard live progress is a fixed-height grey plain_text line with status word', () => {
   setLang('cn')
-  // The live progress line must render exactly like the settled teaser the user
-  // observed as "plain text" (markdown not rendered): wrapped in greyInline so
-  // block markdown collapses to one inline-coloured line, and prefixed with the
-  // status word ("进行中") — NOT markdown-stripped.
+  // The live progress line is a div>plain_text with grey text_color + a `lines`
+  // cap so Feishu truncates to a fixed visual height (width-aware) — and it
+  // carries the status word ("进行中"). plain_text does not render markdown, so a
+  // worker's `##`/`**` shows as literal text rather than formatting, and the raw
+  // content is preserved (NOT stripped).
   const card = buildTaskCard(
     baseView({
       children: [
@@ -262,22 +266,23 @@ void test('buildTaskCard live progress mirrors the settled teaser: grey one-line
     }),
   )
   const progress = bodyElements(card).find(
-    el => el.element_id === taskCardProgressElementId('run-md'),
+    el => (el.text as { element_id?: string } | undefined)?.element_id === taskCardProgressElementId('run-md'),
   )!
-  const content = String(progress.content)
-  // greyInline wrapper (so markdown does not render as a block) ...
-  assert.ok(content.startsWith("<font color='grey'>"), content)
-  // ... folded to one line ...
-  assert.ok(!content.includes('\n'), content)
-  // ... carrying the "进行中" status word the user could not see before ...
+  assert.equal(progress.tag, 'div')
+  const text = progress.text as Record<string, unknown>
+  assert.equal(text.tag, 'plain_text')
+  assert.equal(text.text_color, 'grey')
+  // `lines` cap is what fixes the height (renderer-side width-aware truncation).
+  assert.equal(text.lines, TASK_CARD_PROGRESS_MAX_LINES)
+  const content = String(text.content)
+  // Status word the user could not see before, and the raw markdown preserved.
   assert.ok(content.includes('进行中 ·'), content)
-  // ... and the raw markdown is preserved, NOT stripped.
   assert.ok(content.includes('## 标题'), content)
   // Root live line gets the same treatment + its status word.
   const rootProgress = bodyElements(card).find(
-    el => el.element_id === taskCardProgressElementId('root'),
+    el => (el.text as { element_id?: string } | undefined)?.element_id === taskCardProgressElementId('root'),
   )!
-  assert.ok(String(rootProgress.content).includes('进行中 · 根进度'), String(rootProgress.content))
+  assert.ok(elText(rootProgress).includes('进行中 · 根进度'), elText(rootProgress))
 })
 
 void test('buildTaskCard enforces the whole-card timeline budget by shrinking child panels first', () => {
@@ -361,7 +366,7 @@ void test('buildTaskCard keeps live children, folds earliest-completed, and coex
   assert.ok(bodyText(card).includes('✅ 20 已完成'))
 })
 
-void test('child tiers: bold title, settled→grey note, live→markdown latest line', () => {
+void test('child tiers: bold title, then a fixed-height grey plain_text line (live and settled alike)', () => {
   setLang('cn')
   const card = buildTaskCard(
     baseView({
@@ -387,22 +392,22 @@ void test('child tiers: bold title, settled→grey note, live→markdown latest 
     }),
   )
   const els = bodyElements(card)
-  // Done child: bold title markdown, then a grey markdown line (status + teaser).
-  // Schema 2.0 has no `note` element, so the grey tier is markdown + <font>.
+  // Done child: bold title markdown, then a grey div>plain_text line (status +
+  // teaser) — same fixed-height element type as the live line (unified path).
   const doneTitle = els.findIndex(el => el.content === '✅ **完成的子任务**')
   assert.ok(doneTitle >= 0, 'settled child has a bold-only title')
   const doneNote = els[doneTitle + 1]!
-  assert.equal(doneNote.tag, 'markdown')
-  assert.ok(String(doneNote.content).startsWith("<font color='grey'>"), 'settled summary is grey')
-  assert.ok(String(doneNote.content).includes('已完成 · 已交付结果摘要'))
-  // Live child: bold title, then a single markdown line with the latest progress
-  // (streaming disabled — refreshed per whole-card patch).
+  assert.equal(doneNote.tag, 'div')
+  assert.equal((doneNote.text as Record<string, unknown>).text_color, 'grey')
+  assert.ok(elText(doneNote).includes('已完成 · 已交付结果摘要'))
+  // Live child: bold title, then the same div>plain_text line with the latest
+  // progress; element_id is on the inner plain_text.
   const liveTitle = els.findIndex(el => el.content === '🔄 **在跑的子任务**')
   assert.ok(liveTitle >= 0)
   const liveProgress = els[liveTitle + 1] as Record<string, unknown>
-  assert.equal(liveProgress.tag, 'markdown')
-  assert.equal(liveProgress.element_id, taskCardProgressElementId('run-live'))
-  assert.ok(String(liveProgress.content).includes('正在检索'))
+  assert.equal(liveProgress.tag, 'div')
+  assert.equal((liveProgress.text as Record<string, unknown>).element_id, taskCardProgressElementId('run-live'))
+  assert.ok(elText(liveProgress).includes('正在检索'))
 })
 
 void test('buildTaskCard puts the terminal timestamp in the subtitle and renders no id line', () => {

@@ -101,6 +101,13 @@ export const TASK_CARD_TITLE_MAX_CHARS = 40
 // the source (WORKER_PROGRESS_MAX_CHARS) stores more than this; before that cap
 // was raised, source-200 made preview and expanded read nearly identical.
 export const TASK_CARD_PROGRESS_MAX_CHARS = 100
+// The grey progress glimpse renders as a div>plain_text with this `lines` cap, so
+// Feishu truncates to a FIXED visual line count (width-aware, "…" on overflow) —
+// a constant height, not a char-count guess that spills a tail onto the next
+// line. 1 line: the status word is always present so the line is never empty,
+// making the height truly constant (every row is exactly one line). Bump to 2 for
+// a taller glimpse (then a short run renders 1 line and the height varies again).
+export const TASK_CARD_PROGRESS_MAX_LINES = 1
 export const TASK_CARD_TIMELINE_LINE_MAX_CHARS = 400
 // A live stream preview is a small fixed-height GLIMPSE, not the content surface:
 // the real output is the chat bubble (final reply) and the collapsible timeline
@@ -242,19 +249,43 @@ export function greyInline(text: string): string {
   return oneLine ? `<font color='grey'>${oneLine}</font>` : text
 }
 
-/** The grey progress caption shown under a run's bold title (child) or section
- *  heading (root): "<status word> · <latest progress>", or just the status word
- *  when there is no progress yet. `greyInline` folds it to one inline-coloured
- *  line, so markdown does not render.
+/** The grey progress glimpse under a run's bold title (child) or section heading
+ *  (root): "<status word> · <latest progress>", or just the status word when
+ *  there is no progress yet.
+ *
+ *  Built as a `div`>`plain_text` with a `lines` cap so FEISHU'S RENDERER does the
+ *  truncation — to a fixed visual line count, width-aware, "…" on overflow. A
+ *  markdown element has no line cap, so our char-count guess spilled an awkward
+ *  tail onto the next line (CJK/ASCII width differs; the real wrap width is only
+ *  known client-side). The char cap stays as a payload bound; `lines` is what
+ *  fixes the height. Grey via plain_text `text_color` (markdown does not render
+ *  inside plain_text, which is fine — progress is a glimpse, not a content
+ *  surface). The plain_text MUST stay wrapped in a `div`: a top-level plain_text
+ *  freezes the whole card (error 10002, the f08e6f0 dogfood). `element_id` on the
+ *  inner text — inert under whole-card patch, the addressable anchor if in-card
+ *  streaming is re-enabled.
  *
  *  Live and settled runs render through this same line — the old live/settled
- *  split was a streaming artifact (only a live worker needed a stable,
- *  addressable `element_id` slot to push tokens into). With in-card streaming
- *  off the lines are identical; the caller still passes the `element_id` (inert
- *  under whole-card patch, the addressable anchor if streaming is re-enabled). */
-function progressCaption(wordKey: LocaleKey, progress?: string): string {
+ *  split was a streaming artifact (only a live worker needed a stable element_id
+ *  slot to push tokens into). With streaming off the lines are identical. */
+function progressLineElement(
+  wordKey: LocaleKey,
+  progress: string | undefined,
+  elementId: string,
+): Record<string, unknown> {
   const word = t(wordKey)
-  return greyInline(progress ? `${word} · ${truncate(progress, TASK_CARD_PROGRESS_MAX_CHARS)}` : word)
+  const content = progress ? `${word} · ${truncate(progress, TASK_CARD_PROGRESS_MAX_CHARS)}` : word
+  return {
+    tag: 'div',
+    text: {
+      tag: 'plain_text',
+      element_id: elementId,
+      content,
+      text_size: 'notation',
+      text_color: 'grey',
+      lines: TASK_CARD_PROGRESS_MAX_LINES,
+    },
+  }
 }
 
 function timelinePanel(
@@ -545,14 +576,11 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
       elements.push(
         markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
       )
-      // Status word + latest progress as one grey caption — identical for live
-      // and settled (see progressCaption). Always emitted (just the status word
-      // before any progress) so the slot is stable across whole-card patches.
+      // Status word + latest progress as one fixed-height grey line — identical
+      // for live and settled (see progressLineElement). Always emitted (just the
+      // status word before any progress) so the slot is stable across patches.
       elements.push(
-        markdownElement(
-          progressCaption(childStyle.wordKey, child.latestProgress),
-          taskCardProgressElementId(child.id),
-        ),
+        progressLineElement(childStyle.wordKey, child.latestProgress, taskCardProgressElementId(child.id)),
       )
       // The "执行过程" panel is ALWAYS present (even at 0 entries) so it appears
       // the moment a subtask is created, not only on its first progress event.
@@ -598,9 +626,9 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Task overview's live line — same grey caption path as the children.
+    // Task overview's live line — same fixed-height grey path as the children.
     elements.push(
-      markdownElement(progressCaption(style.wordKey, latest?.text), taskCardProgressElementId('root')),
+      progressLineElement(style.wordKey, latest?.text, taskCardProgressElementId('root')),
     )
     elements.push(
       timelinePanel(
