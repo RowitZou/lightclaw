@@ -56,19 +56,14 @@ export function buildTurnCard(
   if (opts.interrupted) {
     lines.push(t('turncard.interrupted'))
   }
-  // The newest entry stays pinned above the collapsed panel — live it
-  // scrolls with each patch, and at rest the card still tells what
-  // happened last without opening the panel.
+  // The newest entry stays visible above the collapsed panel: a grey markdown
+  // line with the latest narration, refreshed on each whole-card patch. The full
+  // narration is in the collapsible panel below.
   const latest = entries[entries.length - 1]!
-  // Small grey "最新 HH:MM" label over the live line (grey markdown — schema 2.0
-  // has no `note` element; the label is single-line so inline `<font>` is safe).
-  elements.push({ tag: 'markdown', content: greyInline(`${t('turncard.latest')} ${formatClock(latest.at)}`) })
   elements.push({
-    // The latest narration line, refreshed on each whole-card patch (streaming
-    // is disabled). The full narration is in the collapsible panel below.
     tag: 'markdown',
     element_id: TURN_CARD_PROGRESS_ELEMENT_ID,
-    content: latest.text,
+    content: greyInline(latest.text),
   })
   elements.push({
     tag: 'collapsible_panel',

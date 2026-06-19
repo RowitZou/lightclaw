@@ -45,8 +45,8 @@ function panelLines(card: Record<string, unknown>): string {
   return panel.elements![0]!.content
 }
 
-/** The pinned "最新 HH:MM" label is still a grey markdown line
- *  (`<font color='grey'>…</font>`); unwrap so assertions read the inner text. */
+/** The grey live/secondary lines are `<font color='grey'>…</font>`; unwrap so
+ *  assertions read the inner text. */
 function stripGrey(s: string | undefined): string | undefined {
   if (s === undefined) return undefined
   const m = s.match(/^<font color='grey'>([\s\S]*)<\/font>$/)
@@ -63,20 +63,13 @@ function visible(s: string | undefined): string | undefined {
   return lines.join('\n')
 }
 
-/** The pinned "最新 HH:MM" label is a grey markdown line (`<font color='grey'>…`). */
-function latestLine(card: Record<string, unknown>): string | undefined {
-  const body = card.body as { elements: Array<{ tag: string; content?: string }> }
-  const first = body.elements[0]!
-  return first.tag === 'markdown' ? stripGrey(first.content) : undefined
-}
-
-/** The live progress line is a markdown element with the latest narration
- *  (streaming disabled — refreshed per whole-card patch). */
+/** The live progress line is a grey markdown element with the latest narration
+ *  (streaming disabled — refreshed per whole-card patch). Unwrap the grey font. */
 function progressLine(card: Record<string, unknown>): string | undefined {
   const body = card.body as {
     elements: Array<{ tag: string; content?: string; element_id?: string }>
   }
-  return body.elements.find(e => e.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content
+  return stripGrey(body.elements.find(e => e.element_id === TURN_CARD_PROGRESS_ELEMENT_ID)?.content)
 }
 
 void describe('turn card builder', () => {
@@ -100,14 +93,13 @@ void describe('turn card builder', () => {
     assert.ok(text.includes(`**11:22** 第 22 步\n\n**11:23** 第 23 步`))
   })
 
-  void it('pins the newest entry above the panel, live and at rest', () => {
+  void it('shows the newest entry above the panel, live and at rest', () => {
     setLang('cn')
     const entries = [
       { at: new Date('2026-06-12T11:00:00').getTime(), text: '第一步' },
       { at: new Date('2026-06-12T11:05:00').getTime(), text: '第二步' },
     ]
     const live = buildTurnCard(entries)
-    assert.equal(latestLine(live), '最新 11:05')
     assert.equal(progressLine(live), '第二步')
     // The panel still carries the full history including the latest entry.
     assert.ok(panelLines(live).includes('第二步'))
@@ -123,7 +115,7 @@ void describe('turn card builder', () => {
     assert.ok(panelLines(interrupted).includes('本轮已中断'))
   })
 
-  void it('splits latest heading and progress into separate streamable elements', () => {
+  void it('renders the latest narration as the live progress element', () => {
     setLang('cn')
     const card = buildTurnCard([
       { at: new Date('2026-06-12T11:05:00').getTime(), text: '正在整理结果' },
@@ -131,13 +123,12 @@ void describe('turn card builder', () => {
     const body = card.body as {
       elements: Array<{ tag: string; content?: string; element_id?: string; header?: unknown }>
     }
-    // Pin label is a grey markdown line; the live line is a markdown element with
-    // the latest narration (streaming disabled — refreshed per whole-card patch).
-    assert.equal(latestLine(card), '最新 11:05')
-    const progress = body.elements[1] as { tag: string; content?: string; element_id?: string }
+    // The live line is the first element: a grey markdown line with the latest
+    // narration (streaming disabled — refreshed per whole-card patch).
+    const progress = body.elements[0] as { tag: string; content?: string; element_id?: string }
     assert.equal(progress.tag, 'markdown')
     assert.equal(progress.element_id, TURN_CARD_PROGRESS_ELEMENT_ID)
-    assert.equal(progress.content, '正在整理结果')
+    assert.equal(stripGrey(progress.content), '正在整理结果')
     const panel = body.elements.find(el => el.tag === 'collapsible_panel') as any
     assert.deepEqual(panel.header.icon, {
       tag: 'standard_icon',

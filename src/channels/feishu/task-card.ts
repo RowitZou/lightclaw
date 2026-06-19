@@ -242,6 +242,21 @@ export function greyInline(text: string): string {
   return oneLine ? `<font color='grey'>${oneLine}</font>` : text
 }
 
+/** The grey progress caption shown under a run's bold title (child) or section
+ *  heading (root): "<status word> · <latest progress>", or just the status word
+ *  when there is no progress yet. `greyInline` folds it to one inline-coloured
+ *  line, so markdown does not render.
+ *
+ *  Live and settled runs render through this same line — the old live/settled
+ *  split was a streaming artifact (only a live worker needed a stable,
+ *  addressable `element_id` slot to push tokens into). With in-card streaming
+ *  off the lines are identical; the caller still passes the `element_id` (inert
+ *  under whole-card patch, the addressable anchor if streaming is re-enabled). */
+function progressCaption(wordKey: LocaleKey, progress?: string): string {
+  const word = t(wordKey)
+  return greyInline(progress ? `${word} · ${truncate(progress, TASK_CARD_PROGRESS_MAX_CHARS)}` : word)
+}
+
 function timelinePanel(
   titleKey: LocaleKey,
   entries: TaskCardTimelineEntry[],
@@ -252,7 +267,7 @@ function timelinePanel(
   // still `entries` (already the most-recent tail); we only correct the counts.
   totalCount: number = entries.length,
 ): Record<string, unknown> {
-  const shown = entries.slice(-maxEntries)
+  const shown = maxEntries > 0 ? entries.slice(-maxEntries) : []
   const dropped = Math.max(0, totalCount - shown.length)
   const lines = shown.map(
     entry => `**${formatClock(entry.at)}** ${truncate(entry.text, TASK_CARD_TIMELINE_LINE_MAX_CHARS)}`,
@@ -260,6 +275,9 @@ function timelinePanel(
   if (dropped > 0) {
     lines.unshift(t('taskcard.timeline.earlier', { count: String(dropped) }))
   }
+  // Empty panel (a child / root with no progress yet): a grey placeholder so
+  // the "执行过程" button is present from creation, not only on first event.
+  const body = lines.length > 0 ? lines.join('\n\n') : greyInline(t('taskcard.timeline.empty'))
   return {
     tag: 'collapsible_panel',
     expanded: false,
@@ -275,7 +293,7 @@ function timelinePanel(
     },
     // Blank line between entries — multi-line entries are hard to tell
     // apart in lark_md without a paragraph break.
-    elements: [markdownElement(lines.join('\n\n'))],
+    elements: [markdownElement(body)],
   }
 }
 
@@ -521,45 +539,34 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     if (folding) elements.push(noteElement(rosterSegments(view.children)))
     for (const { child, timelineCap } of plan.shown) {
       const childStyle = taskCardStatusStyle(child.status)
-      const childLive = !TASK_RUN_TERMINAL_STATUSES.has(child.status)
       // Title: status emoji + bold title only. The status word and any result
       // teaser drop to the grey caption tier below — a bold title over a small
       // grey line, not a wall of bold black.
       elements.push(
         markdownElement(`${childStyle.icon} **${truncate(child.title, TASK_CARD_TITLE_MAX_CHARS)}**`),
       )
-      if (childLive) {
-        // Live worker: a single markdown line with the current latest progress,
-        // refreshed on each whole-card patch (streaming is disabled). Always
-        // emitted (even when blank) so the line slot is stable across patches.
-        elements.push(
-          markdownElement(
-            child.latestProgress ? truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS) : '',
-            taskCardProgressElementId(child.id),
-          ),
-        )
-      } else if (child.latestProgress) {
-        // Settled worker: status word + result teaser as one small grey caption.
-        elements.push(
-          noteElement(`${t(childStyle.wordKey)} · ${truncate(child.latestProgress, TASK_CARD_PROGRESS_MAX_CHARS)}`),
-        )
-      } else {
-        // Settled, no progress text: just the status word, small + grey.
-        elements.push(noteElement(t(childStyle.wordKey)))
-      }
-      if (child.timeline.length > 0 && timelineCap > 0) {
-        // Pass the ORIGINAL timeline + the budgeted cap so the panel's
-        // "earlier N omitted" hint counts every dropped entry — both the
-        // per-panel cap and the whole-card budget trim.
-        elements.push(
-          timelinePanel(
-            'taskcard.timeline.child.title',
-            child.timeline,
-            timelineCap,
-            child.timelineTotal ?? child.timeline.length,
-          ),
-        )
-      }
+      // Status word + latest progress as one grey caption — identical for live
+      // and settled (see progressCaption). Always emitted (just the status word
+      // before any progress) so the slot is stable across whole-card patches.
+      elements.push(
+        markdownElement(
+          progressCaption(childStyle.wordKey, child.latestProgress),
+          taskCardProgressElementId(child.id),
+        ),
+      )
+      // The "执行过程" panel is ALWAYS present (even at 0 entries) so it appears
+      // the moment a subtask is created, not only on its first progress event.
+      // Pass the ORIGINAL timeline + the budgeted cap so the panel's "earlier N
+      // omitted" hint counts every dropped entry — both the per-panel cap and
+      // the whole-card budget trim.
+      elements.push(
+        timelinePanel(
+          'taskcard.timeline.child.title',
+          child.timeline,
+          timelineCap,
+          child.timelineTotal ?? child.timeline.length,
+        ),
+      )
     }
     // Both fold lines can coexist (e.g. a backlog of completed work plus a fresh
     // burst of parallel dispatches): every folded part is announced in text.
@@ -582,19 +589,18 @@ export function buildTaskCard(input: TaskCardView): Record<string, unknown> {
     }
   }
 
-  if (view.rootTimeline.length > 0) {
+  // The task-overview section (live line + "任务进程" panel) is ALWAYS present,
+  // even before the root has emitted any progress — same rationale as the child
+  // panel: the button should exist from creation, not pop in on first event.
+  {
     elements.push(hrElement())
-    const latest = view.rootTimeline[view.rootTimeline.length - 1]!
+    const latest = view.rootTimeline[view.rootTimeline.length - 1]
     elements.push(
       markdownElement(`${style.icon} **${t('taskcard.root.live.title')}**`),
     )
-    // Main agent's live line — a single markdown line with the latest step,
-    // refreshed on each whole-card patch (streaming is disabled).
+    // Task overview's live line — same grey caption path as the children.
     elements.push(
-      markdownElement(
-        truncate(latest.text, TASK_CARD_PROGRESS_MAX_CHARS),
-        taskCardProgressElementId('root'),
-      ),
+      markdownElement(progressCaption(style.wordKey, latest?.text), taskCardProgressElementId('root')),
     )
     elements.push(
       timelinePanel(

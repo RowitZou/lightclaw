@@ -148,7 +148,7 @@ void test('buildTaskCard renders 2.0 schema with root panel and per-child siblin
     el => el.element_id === taskCardProgressElementId('root'),
   )
   assert.ok(rootProgressIndex >= 0, 'root/main live progress line is present')
-  assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**主 agent**'))
+  assert.ok(String(elements[rootProgressIndex - 1]!.content).includes('**任务总览**'))
   assert.ok(String(elements[rootProgressIndex]!.content).includes('目录信息已补齐'))
 })
 
@@ -170,7 +170,10 @@ void test('buildTaskCard caps children and timelines with overflow lines', () =>
   // last 3 fold into the live summary line (now a grey note).
   assert.ok(bodyText(card).includes('另有 3 个子任务进行中'), 'live children fold line rendered')
 
-  const rootPanel = collectPanels(card)[0]
+  // Each shown child now renders an (empty) "执行过程" panel from creation, so
+  // the root "任务进程" panel is last, not first.
+  const allPanels = collectPanels(card)
+  const rootPanel = allPanels[allPanels.length - 1]
   assert.ok(panelTitle(rootPanel).includes(`（${TASK_CARD_MAX_ROOT_TIMELINE + 5} 条）`))
   const text = panelText(rootPanel)
   assert.ok(text.includes('更早 5 条'))
@@ -213,6 +216,68 @@ void test('buildTaskCard counts reflect the true progress total, not the trimmed
   // Root reads the whole event file, so its total is exact too.
   assert.ok(panelTitle(rootPanel).includes('（42 条）'), panelTitle(rootPanel))
   assert.ok(panelText(rootPanel).includes(`更早 ${42 - 8} 条`))
+})
+
+void test('buildTaskCard renders the 执行过程 / 任务进程 panels from creation, before any progress', () => {
+  setLang('cn')
+  // A freshly-created tree: one subtask, no timeline entries anywhere yet. The
+  // panels must still be present (so the button does not pop in only on the
+  // first progress event), showing "（0 条）" + a placeholder body.
+  const card = buildTaskCard(
+    baseView({
+      children: [
+        { id: 'run-fresh', title: '刚创建的子任务', role: 'coder', status: 'running', timeline: [] },
+      ],
+      rootTimeline: [],
+    }),
+  )
+  const panels = collectPanels(card)
+  const childPanel = panels[0]
+  const rootPanel = panels[panels.length - 1]
+  assert.ok(panelTitle(childPanel).includes('执行过程（0 条）'), panelTitle(childPanel))
+  assert.ok(panelTitle(rootPanel).includes('任务进程（0 条）'), panelTitle(rootPanel))
+  assert.ok(panelText(childPanel).includes('暂无进度'))
+  assert.ok(panelText(rootPanel).includes('暂无进度'))
+})
+
+void test('buildTaskCard live progress mirrors the settled teaser: grey one-line + status word', () => {
+  setLang('cn')
+  // The live progress line must render exactly like the settled teaser the user
+  // observed as "plain text" (markdown not rendered): wrapped in greyInline so
+  // block markdown collapses to one inline-coloured line, and prefixed with the
+  // status word ("进行中") — NOT markdown-stripped.
+  const card = buildTaskCard(
+    baseView({
+      children: [
+        {
+          id: 'run-md',
+          title: '带 markdown 的子任务',
+          role: 'coder',
+          status: 'running',
+          latestProgress: '## 标题\n### 小节 **重点** 内容',
+          timeline: [{ at: TS, text: '步骤一' }],
+        },
+      ],
+      rootTimeline: [{ at: TS, text: '根进度' }],
+    }),
+  )
+  const progress = bodyElements(card).find(
+    el => el.element_id === taskCardProgressElementId('run-md'),
+  )!
+  const content = String(progress.content)
+  // greyInline wrapper (so markdown does not render as a block) ...
+  assert.ok(content.startsWith("<font color='grey'>"), content)
+  // ... folded to one line ...
+  assert.ok(!content.includes('\n'), content)
+  // ... carrying the "进行中" status word the user could not see before ...
+  assert.ok(content.includes('进行中 ·'), content)
+  // ... and the raw markdown is preserved, NOT stripped.
+  assert.ok(content.includes('## 标题'), content)
+  // Root live line gets the same treatment + its status word.
+  const rootProgress = bodyElements(card).find(
+    el => el.element_id === taskCardProgressElementId('root'),
+  )!
+  assert.ok(String(rootProgress.content).includes('进行中 · 根进度'), String(rootProgress.content))
 })
 
 void test('buildTaskCard enforces the whole-card timeline budget by shrinking child panels first', () => {
