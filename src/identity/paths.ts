@@ -64,6 +64,28 @@ export function userDataRoot(canonicalUser: string): string | undefined {
     : undefined
 }
 
+export function userWorkspaceOverride(canonicalUser: string): string | undefined {
+  let raw: string
+  try {
+    raw = readFileSync(path.join(userHome(canonicalUser), 'config.json'), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    throw error
+  }
+  let parsed: { workspace?: unknown }
+  try {
+    parsed = JSON.parse(raw) as { workspace?: unknown }
+  } catch {
+    return undefined
+  }
+  const workspace = parsed.workspace
+  return typeof workspace === 'string' && workspace.trim()
+    ? path.resolve(expandHomePath(workspace))
+    : undefined
+}
+
 /**
  * Per-canonical-user persisted permission rules. Replaces the old in-memory
  * sessionRulesByUser map: when a user picks "以后都允许" / `[a]` the rule is
@@ -141,6 +163,10 @@ export function workspaceRoot(): string {
 }
 
 export function workspaceFor(canonicalUser: string): string {
+  const override = userWorkspaceOverride(canonicalUser)
+  if (override) {
+    return override
+  }
   const configured = configuredWorkspaceRoot()
   return configured
     ? path.join(configured, sanitizePathSegment(canonicalUser))
@@ -151,20 +177,19 @@ export function workspaceToGpfsMount(
   canonicalUser: string,
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): { hostPath: string; mount: string } {
-  const root = configuredWorkspaceRoot() ?? workspaceFor(canonicalUser)
+  const hostPath = workspaceFor(canonicalUser)
   try {
-    resolveGpfsMountRule(root, rlaunchConfig)
+    resolveGpfsMountRule(hostPath, rlaunchConfig)
   } catch {
     const hostPrefixes = rlaunchConfig.gpfsMounts.map(rule => rule.hostPrefix)
     const example = hostPrefixes[0] ?? '<gpfs-host-prefix>'
     throw new Error(
       `RlaunchRuntime requires the workspace path under a configured gpfs host prefix ` +
-      `(${hostPrefixes.join(', ')}); got "${root}". Set LIGHTCLAW_HOME or ` +
+      `(${hostPrefixes.join(', ')}); got "${hostPath}". Set the user workspace or ` +
       `LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ${example}/<namespace>/<user>/lightclaw`,
     )
   }
 
-  const hostPath = workspaceFor(canonicalUser)
   return {
     hostPath,
     mount: buildGpfsMountStringFromRules(hostPath, '/workspace', rlaunchConfig),

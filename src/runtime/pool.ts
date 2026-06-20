@@ -478,6 +478,8 @@ export function buildRlaunchRuntimeConfig(
   const rlaunchDeploymentHash = createHash('sha256')
     .update(deploymentHash)
     .update('\0')
+    .update(workspaceHostPath)
+    .update('\0')
     .update(mountHash)
     .digest('hex')
     .slice(0, 8)

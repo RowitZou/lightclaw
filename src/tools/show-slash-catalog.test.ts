@@ -33,7 +33,7 @@ describe('ShowSlashCatalog tool', () => {
     const output = await callCatalogAs('alice')
 
     assert.match(output, /Slash commands \(chat only\):/)
-    for (const name of ['/auth', '/config', '/endpoint', '/feedback', '/model', '/mode', '/mount', '/rules', '/secret', '/skill']) {
+    for (const name of ['/auth', '/config', '/endpoint', '/feedback', '/model', '/mode', '/mount', '/rules', '/secret', '/skill', '/ui']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     for (const name of ['/ceiling', '/cost', '/feishu-workspace', '/sandbox', '/user']) {
@@ -42,7 +42,7 @@ describe('ShowSlashCatalog tool', () => {
     for (const name of ['/help', '/status', '/stop']) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    assert.deepEqual(commandNames(output), ['/auth', '/config', '/endpoint', '/feedback', '/mode', '/model', '/mount', '/rules', '/secret', '/skill'])
+    assert.deepEqual(commandNames(output), ['/auth', '/config', '/endpoint', '/feedback', '/mode', '/model', '/mount', '/rules', '/secret', '/skill', '/ui'])
   })
 
   it('lists admin advisory commands and excludes user-only feedback', async () => {
@@ -65,6 +65,7 @@ describe('ShowSlashCatalog tool', () => {
       '/sandbox',
       '/secret',
       '/user',
+      '/ui',
     ]) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
@@ -83,6 +84,7 @@ describe('ShowSlashCatalog tool', () => {
       '/sandbox',
       '/secret',
       '/skill',
+      '/ui',
       '/user',
     ])
   })

@@ -31,6 +31,12 @@ import {
   registerAskUserQuestionCoordinator,
   type AskUserCardAction,
 } from './askuser-card.js'
+import {
+  FeishuVisualSetupCoordinator,
+  clearFeishuVisualSetupCoordinator,
+  registerFeishuVisualSetupCoordinator,
+  type VisualSetupCardAction,
+} from './visual-setup-card.js'
 import { AskUserScheduler } from './askuser-scheduler.js'
 import { registerSessionAbortHook } from '../../state.js'
 import { clearChannelRunner, registerChannelRunner } from './runner-registry.js'
@@ -103,8 +109,10 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       const permissionCoordinator = new FeishuPermissionCoordinator(sender)
       const pairingCoordinator = new PairingCardCoordinator(sender)
       const askUserCoordinator = new AskUserQuestionCoordinator(sender)
+      const visualSetupCoordinator = new FeishuVisualSetupCoordinator(sender)
       const askUserScheduler = new AskUserScheduler()
       registerAskUserQuestionCoordinator(askUserCoordinator)
+      registerFeishuVisualSetupCoordinator(visualSetupCoordinator)
       // Bridge `/stop` (state.ts) to the AskUser coordinator without
       // making state.ts depend on the feishu module. state.ts only knows
       // about an opaque session abort hook; we register ours here.
@@ -244,6 +252,9 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             if ('kind' in action && action.kind === 'lightclaw_askuser') {
               return askUserCoordinator.handleCardAction(action as AskUserCardAction)
             }
+            if ('kind' in action && action.kind === 'lightclaw_visual_setup') {
+              return visualSetupCoordinator.handleCardAction(action as VisualSetupCardAction)
+            }
             return permissionCoordinator.handleCardAction(action as FeishuCardAction)
           },
         })
@@ -255,6 +266,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
             askUserScheduler.stop()
             taskCardPipeline.stop()
             clearAskUserQuestionCoordinator(askUserCoordinator)
+            clearFeishuVisualSetupCoordinator(visualSetupCoordinator)
             clearFeishuSender(sender)
             clearFeishuClient(client)
             clearChannelRunner(runner)
@@ -278,6 +290,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
           askUserScheduler.stop()
           taskCardPipeline.stop()
           clearAskUserQuestionCoordinator(askUserCoordinator)
+          clearFeishuVisualSetupCoordinator(visualSetupCoordinator)
           clearFeishuSender(sender)
           clearFeishuClient(client)
           return server.close()

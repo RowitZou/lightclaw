@@ -75,6 +75,7 @@ const UserConfigOverrideSchema = z.object({
   defaultModel: z.string().min(1).optional(),
   lang: z.enum(['cn', 'en']).optional(),
   permissionMode: PermissionModeSchema.optional(),
+  workspace: z.string().trim().min(1).optional(),
   endpoints: z.record(z.string().min(1), UserEndpointSchema).optional(),
   models: z.record(z.string().min(1), UserModelSchema).optional(),
 }).strict()

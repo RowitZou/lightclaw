@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { normalizeReceiveV1, normalizeRecalledV1 } from './transport-ws.js'
+import { normalizeCardAction, normalizeReceiveV1, normalizeRecalledV1 } from './transport-ws.js'
 import { normalizeEvent, normalizeRecallEvent } from './transport-webhook.js'
 
 const BOT_ID = 'ou_bot'
@@ -191,5 +191,78 @@ describe('recall event normalization', () => {
       event: { message: { message_id: 'm', chat_id: 'c' } },
     })
     assert.equal(result, null)
+  })
+})
+
+describe('card action normalization', () => {
+  it('reads Feishu V2 callback value from behaviors when action.value is empty', () => {
+    const action = normalizeCardAction({
+      event: {
+        action: {
+          value: {},
+          behaviors: [{
+            type: 'callback',
+            value: {
+              kind: 'lightclaw_visual_setup',
+              id: 'ui_1',
+              action: 'setup_model',
+            },
+          }],
+          form_value: {},
+        },
+        operator: {
+          operator_id: { open_id: 'ou_alice' },
+        },
+        open_message_id: 'om_card',
+      },
+    })
+
+    assert.ok(action)
+    assert.ok('kind' in action)
+    assert.equal(action.kind, 'lightclaw_visual_setup')
+    assert.equal(action.action, 'setup_model')
+    assert.equal(action.id, 'ui_1')
+    assert.equal(action.operatorOpenId, 'ou_alice')
+    assert.equal(action.openMessageId, 'om_card')
+  })
+
+  it('accepts the full visual setup action set used by Feishu UI cards', () => {
+    const actions = [
+      'setup_model_existing',
+      'setup_model_new_codex',
+      'setup_model_new_key',
+      'endpoint_add',
+      'endpoint_update',
+      'endpoint_update_edit',
+      'submit_endpoint_add',
+      'submit_endpoint_update',
+      'auth_edit',
+      'submit_auth',
+      'workspace_edit',
+      'submit_workspace',
+    ]
+
+    for (const visualAction of actions) {
+      const action = normalizeCardAction({
+        event: {
+          action: {
+            value: {
+              kind: 'lightclaw_visual_setup',
+              id: 'ui_1',
+              action: visualAction,
+              endpointName: visualAction === 'submit_endpoint_update' ? 'codex-default' : undefined,
+            },
+            form_value: {},
+          },
+        },
+      })
+      assert.ok(action, `${visualAction} should be normalized`)
+      assert.ok('kind' in action)
+      assert.equal(action.kind, 'lightclaw_visual_setup')
+      assert.equal(action.action, visualAction)
+      if (visualAction === 'submit_endpoint_update') {
+        assert.equal(action.endpointName, 'codex-default')
+      }
+    }
   })
 })

@@ -70,24 +70,28 @@ export function formatModelTemplates(): string {
   ].join('\n')
 }
 
+const MODEL_SETUP_REQUIRED_REPLY = [
+  '当前用户还没有可用模型。',
+  '',
+  '请发送 `/ui` 打开 LightClaw 控制台，在卡片里先配置 endpoint，再添加模型 config。',
+  '',
+  '需要文本模板时可发送 `/endpoint templates` 和 `/model custom templates`。',
+].join('\n')
+
 export function formatModelSetupRequiredReply(): string {
+  return MODEL_SETUP_REQUIRED_REPLY
+}
+
+export function isModelSetupRequiredReply(text: string): boolean {
+  return text === MODEL_SETUP_REQUIRED_REPLY
+}
+
+export function formatVisualSetupOpenedReply(): string {
   return [
     '当前用户还没有可用模型。',
     '',
-    '请先配置 endpoint，再添加模型 config。可以选两种方式：',
+    '已为你打开 LightClaw 控制台。请在卡片里进入“添加 / 配置模型”，先配置 endpoint，再添加模型 config。',
     '',
-    '方式一：Codex 认证（适合日常使用 Codex）',
-    '1. `/auth codex import --from <daemon可读的codex auth.json路径> --name default`',
-    '2. `/endpoint add-codex codex-default codex:default`',
-    '3. `/model custom add gpt-codex-mid openai-auth codex-default <codex-upstream-model> --reasoning medium --max-output-tokens 64000`',
-    '',
-    '方式二：API key',
-    '1. `/secret set OPENAI_KEY <VALUE>`',
-    '2. `/endpoint add-key openai-default OPENAI_KEY --base-url https://api.openai.com/v1`',
-    '3. `/model custom add gpt-openai openai openai-default gpt-4.1 --max-output-tokens 64000`',
-    '',
-    '参数速记：schema 选 openai-auth/openai/anthropic；reasoning 常用 low/medium/high/xhigh（none/minimal 需模型支持）；max-output-tokens 可先用 32000 或 64000。',
-    '更多模板：`/endpoint templates` 和 `/model custom templates`。',
-    'admin 账号本身也按同一套用户配置流程添加自己的 endpoint/model；全局 config 不再配置对话模型。',
+    '之后可以随时发送 `/ui` 重新打开这个界面。',
   ].join('\n')
 }

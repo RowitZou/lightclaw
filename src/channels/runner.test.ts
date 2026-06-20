@@ -23,6 +23,12 @@ import type { AgentSignal } from '../signal-bus/types.js'
 import type { Runtime } from '../runtime/types.js'
 import { channelInterjectionQueue } from './feishu/interjection-queue.js'
 import type { InterjectionEntry } from './feishu/interjection-queue.js'
+import type { FeishuSender } from './feishu/sender.js'
+import {
+  clearFeishuVisualSetupCoordinator,
+  FeishuVisualSetupCoordinator,
+  registerFeishuVisualSetupCoordinator,
+} from './feishu/visual-setup-card.js'
 
 import {
   applyAttachmentMaterialization,
@@ -96,6 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetChainAbortPropagationForTest()
+  clearFeishuVisualSetupCoordinator()
   setLightclawHomeOverride(undefined)
   rmSync(tmpHome, { recursive: true, force: true })
   for (const key of ENV_KEYS) {
@@ -155,6 +162,82 @@ describe('ChannelRunner multi-user concurrency', () => {
     )
     assert.ok(strategy.notices.some(item => item.messageId === bob.messageId))
     assert.ok(strategy.notices.some(item => item.messageId === alice.messageId))
+  })
+})
+
+describe('ChannelRunner no-model visual setup', () => {
+  it('opens the Feishu control console instead of replying with the long slash setup guide', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const sender = new FakeVisualSetupSender()
+    const coordinator = new FeishuVisualSetupCoordinator(sender as unknown as FeishuSender)
+    registerFeishuVisualSetupCoordinator(coordinator)
+
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSessionId = () => 'feishu:dm:oc_no_model'
+    const runner = new ChannelRunner(strategy)
+
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      chatId: 'oc_no_model',
+      sessionId: 'no-model',
+      text: '你好',
+    }))
+
+    assert.equal(sender.cards.length, 1)
+    assert.match(JSON.stringify(sender.cards[0]?.card), /LightClaw 控制台/)
+    assert.equal(strategy.replies.length, 1)
+    assert.match(strategy.replies[0]!.text, /已为你打开 LightClaw 控制台/)
+    assert.match(strategy.replies[0]!.text, /\/ui/)
+    assert.doesNotMatch(strategy.replies[0]!.text, /\/endpoint add-codex/)
+  })
+
+  it('opens /ui directly in a DM', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const sender = new FakeVisualSetupSender()
+    const coordinator = new FeishuVisualSetupCoordinator(sender as unknown as FeishuSender)
+    registerFeishuVisualSetupCoordinator(coordinator)
+
+    const strategy = installFakeStrategy('feishu')
+    strategy.resolveSessionId = () => 'feishu:dm:oc_ui'
+    const runner = new ChannelRunner(strategy)
+
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      chatId: 'oc_ui',
+      text: '/ui',
+    }))
+
+    assert.equal(sender.cards.length, 1)
+    assert.match(JSON.stringify(sender.cards[0]?.card), /LightClaw 控制台/)
+    assert.equal(strategy.notices.length, 1)
+    assert.match(strategy.notices[0]!.text, /已打开 LightClaw 控制台/)
+  })
+
+  it('lets /ui open from a group chat without mentioning the bot', async () => {
+    await createUser('alice')
+    await addLink('alice', 'feishu:ou_alice')
+    const sender = new FakeVisualSetupSender()
+    const coordinator = new FeishuVisualSetupCoordinator(sender as unknown as FeishuSender)
+    registerFeishuVisualSetupCoordinator(coordinator)
+
+    const strategy = installFakeStrategy('feishu')
+    strategy.isMessageTargeted = () => false
+    strategy.resolveSessionId = message => `feishu:group:${message.chatId}:${message.senderOpenId}`
+    const runner = new ChannelRunner(strategy)
+
+    await runner.handleMessage(makeFakeFeishuMessage({
+      sender: 'ou_alice',
+      chatId: 'oc_group',
+      chatType: 'group',
+      text: '/ui',
+    }))
+
+    assert.equal(sender.cards.length, 1)
+    assert.match(JSON.stringify(sender.cards[0]?.card), /LightClaw 控制台/)
+    assert.equal(strategy.notices.length, 1)
+    assert.match(strategy.notices[0]!.text, /已打开 LightClaw 控制台/)
   })
 })
 
@@ -250,6 +333,13 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.equal(parseFastPathSlash('/cost'), 'read')
     assert.equal(parseFastPathSlash('/mode'), 'read')
     assert.equal(parseFastPathSlash('/model'), 'read')
+    assert.equal(parseFastPathSlash('/model custom list'), 'read')
+    assert.equal(parseFastPathSlash('/model custom templates'), 'read')
+    assert.equal(parseFastPathSlash('/model custom check gpt-codex-high'), 'read')
+    assert.equal(parseFastPathSlash('/model proxy'), 'read')
+    assert.equal(parseFastPathSlash('/endpoint'), 'read')
+    assert.equal(parseFastPathSlash('/endpoint list'), 'read')
+    assert.equal(parseFastPathSlash('/endpoint templates'), 'read')
     assert.equal(parseFastPathSlash('/rules'), 'read')
     assert.equal(parseFastPathSlash('/rules list'), 'read')
     assert.equal(parseFastPathSlash('/rules list ...filter'), 'read')
@@ -262,6 +352,12 @@ describe('ChannelRunner pre-lock fast path', () => {
     // serialize behind any in-flight turn.
     assert.equal(parseFastPathSlash('/mode auto'), null)
     assert.equal(parseFastPathSlash('/model claude-x'), null)
+    assert.equal(parseFastPathSlash('/model custom add my-gpt openai ep gpt-4.1'), null)
+    assert.equal(parseFastPathSlash('/model custom set my-gpt --reasoning high'), null)
+    assert.equal(parseFastPathSlash('/model custom remove my-gpt'), null)
+    assert.equal(parseFastPathSlash('/model proxy http://proxy.example:8080'), null)
+    assert.equal(parseFastPathSlash('/endpoint add-key myopenai OPENAI_KEY'), null)
+    assert.equal(parseFastPathSlash('/endpoint set myopenai --proxy http://proxy'), null)
     assert.equal(parseFastPathSlash('/rules allow Bash(curl:*)'), null)
     assert.equal(parseFastPathSlash('/rules deny Edit(/etc/**)'), null)
     assert.equal(parseFastPathSlash('/rules revoke 3'), null)
@@ -2189,3 +2285,17 @@ describe('ChannelRunner framework-wake in-flight guard', () => {
     }
   })
 })
+
+class FakeVisualSetupSender {
+  cards: Array<{ chatId: string; card: Record<string, unknown>; threadId?: string }> = []
+
+  async sendInteractiveCardToChatId(
+    chatId: string,
+    card: Record<string, unknown>,
+    _ctx?: unknown,
+    threadId?: string,
+  ): Promise<{ messageId?: string }> {
+    this.cards.push({ chatId, card, ...(threadId ? { threadId } : {}) })
+    return { messageId: `visual-${this.cards.length}` }
+  }
+}

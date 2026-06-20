@@ -173,4 +173,21 @@ describe('per-user storage paths', () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  it('lets users/<canonical>/config.json override the runtime workspace', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'lightclaw-user-workspace-'))
+    try {
+      const workspace = path.join(home, 'custom-workspace')
+      mkdirSync(path.join(home, 'users', 'alice'), { recursive: true })
+      writeFileSync(
+        path.join(home, 'users', 'alice', 'config.json'),
+        JSON.stringify({ workspace }),
+      )
+      setLightclawHomeOverride(home)
+
+      assert.equal(workspaceFor('alice'), workspace)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
 })

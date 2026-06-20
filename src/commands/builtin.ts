@@ -61,7 +61,6 @@ import {
   getUsageTotals,
   setIdentityRules,
   setModel,
-  setRuntime,
   setPermissionMode,
 } from '../state.js'
 
@@ -73,8 +72,11 @@ import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import { runEndpointCommand } from './endpoint.js'
 import { runModelCustomCommand } from './model-custom.js'
 import { runMountCommand } from './mount.js'
+import { restartCurrentRlaunchRuntime } from './rlaunch-restart.js'
 import { runSecretCommand } from './secret.js'
 import { runSkillCommand } from './skill.js'
+import { getFeishuVisualSetupCoordinator } from '../channels/feishu/visual-setup-card.js'
+import { formatFeishuErrorForLog } from '../channels/feishu/resources/errors.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -111,29 +113,46 @@ export const RENAMED_COMMANDS: Record<string, string> = {
   '/permissions': '/rules',
 }
 
-async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
-  const userId = ctx.userId ?? getCurrentUserId()
-  if (!userId) {
-    throw new Error(t('common.error.noActiveIdentity'))
-  }
-  const current = getRuntime()
-  if (!(current instanceof RlaunchRuntime)) {
-    throw new Error(t('mount.requiresRlaunchRuntime'))
-  }
-  // Atomic swap: pool installs the new runtime under the same per-user key
-  // and marks the old one retired with a resolver pointing at the live entry,
-  // so concurrent mid-turn ALS references to the old instance forward to the
-  // new one instead of trying to respawn a worker with the stale mount
-  // config. The old cluster worker is stopped inside next.start() via the
-  // existing deploymentHash-mismatch branch in _startOnce.
-  const next = getRuntimePool().swapRlaunchRuntime(userId, ctx.config)
-  setRuntime(next)
-  await next.start()
-  return next.name ?? t('sandbox.workerNone')
-}
-
 function buildBuiltinCommands(): ReplCommand[] {
   return [
+  {
+    name: '/ui',
+    usage: '/ui [model]',
+    description: 'Open the Feishu visual configuration console',
+    channelOnly: true,
+    agentAdvisory:
+      'When the user wants a visual UI for configuring endpoints, models, auth, or user settings.',
+    agentUsage: [
+      '/ui          Open the visual LightClaw configuration console in Feishu',
+      '/ui model    Open the endpoint + model setup wizard directly',
+    ].join('\n'),
+    async handler(args, ctx) {
+      const userId = ctx.userId ?? getCurrentUserId()
+      if (!userId) {
+        ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
+        return
+      }
+      const coord = getFeishuVisualSetupCoordinator()
+      if (!coord) {
+        ctx.output.write('Visual UI is only available when the Feishu channel is running.\n')
+        return
+      }
+      const action = args.trim().toLowerCase()
+      try {
+        if (action === 'model' || action === 'setup') {
+          await coord.openModelSetup({ sessionId: ctx.sessionId, userId })
+          ctx.output.write('已打开模型配置向导。\n')
+          return
+        }
+        await coord.openHome({ sessionId: ctx.sessionId, userId })
+        ctx.output.write('已打开 LightClaw 控制台。\n')
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        process.stderr.write(`visual-ui: open failed: ${formatFeishuErrorForLog(error, 'visual.setup.open')}\n`)
+        ctx.output.write(`打开 LightClaw 控制台失败：${detail}\n`)
+      }
+    },
+  },
   {
     name: '/help',
     usage: '/help [command]',

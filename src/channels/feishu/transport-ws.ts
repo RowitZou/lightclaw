@@ -8,11 +8,67 @@ import { parseMessageContent, type FeishuRawMessage } from './bot-content.js'
 import { FeishuDedup } from './dedup.js'
 import type { PairingCardAction } from './pairing-card.js'
 import type { AskUserCardAction } from './askuser-card.js'
+import type { VisualSetupCardAction } from './visual-setup-card.js'
 import type {
   FeishuCardAction,
   FeishuCardActionResponse,
   FeishuPermissionActionKind,
 } from './permission-card.js'
+
+type VisualSetupActionKind = VisualSetupCardAction['action']
+
+const VISUAL_SETUP_ACTIONS = new Set<VisualSetupActionKind>([
+  'home',
+  'model_home',
+  'setup_model',
+  'setup_model_existing',
+  'setup_model_new_codex',
+  'setup_model_new_key',
+  'submit_model',
+  'model_edit',
+  'submit_model_edit',
+  'model_set_default',
+  'submit_model_set_default',
+  'model_check',
+  'submit_model_check',
+  'model_delete',
+  'submit_model_delete',
+  'endpoint_home',
+  'endpoint_add',
+  'endpoint_edit',
+  'endpoint_update',
+  'endpoint_update_edit',
+  'submit_endpoint',
+  'submit_endpoint_add',
+  'submit_endpoint_update',
+  'endpoint_delete',
+  'submit_endpoint_delete',
+  'auth_home',
+  'auth_edit',
+  'submit_auth',
+  'auth_delete',
+  'submit_auth_delete',
+  'directory_home',
+  'workspace_edit',
+  'submit_workspace',
+  'data_dir_request',
+  'submit_data_dir_request',
+  'mount_add',
+  'submit_mount_add',
+  'mount_remove',
+  'submit_mount_remove',
+  'skill_home',
+  'task_home',
+  'admin_home',
+  'cancel',
+])
+
+function parseVisualSetupAction(value: unknown): VisualSetupActionKind | null {
+  const raw = stringValue(value)
+  return raw && VISUAL_SETUP_ACTIONS.has(raw as VisualSetupActionKind)
+    ? raw as VisualSetupActionKind
+    : null
+}
 
 export type WsHandle = {
   close(): Promise<void>
@@ -100,7 +156,7 @@ export async function startFeishuWsClient(input: {
    */
   onRecall?(recall: FeishuRecallEvent): void | Promise<void>
   onCardAction?(
-    action: FeishuCardAction | PairingCardAction | AskUserCardAction,
+    action: FeishuCardAction | PairingCardAction | AskUserCardAction | VisualSetupCardAction,
   ): FeishuCardActionResponse | Promise<FeishuCardActionResponse>
 }): Promise<WsHandle> {
   const { config } = input
@@ -236,9 +292,9 @@ export async function startFeishuWsClient(input: {
   }
 }
 
-function normalizeCardAction(
+export function normalizeCardAction(
   data: unknown,
-): FeishuCardAction | PairingCardAction | AskUserCardAction | null {
+): FeishuCardAction | PairingCardAction | AskUserCardAction | VisualSetupCardAction | null {
   const record = asRecord(data)
   if (!record) {
     return null
@@ -246,11 +302,12 @@ function normalizeCardAction(
 
   const event = asRecord(record.event)
   const action = asRecord(record.action) ?? asRecord(event?.action)
-  const value = parseActionValue(action?.value)
+  const value = parseActionCallbackValue(action)
   if (
     value?.kind !== 'lightclaw_permission' &&
     value?.kind !== 'lightclaw_pairing' &&
-    value?.kind !== 'lightclaw_askuser'
+    value?.kind !== 'lightclaw_askuser' &&
+    value?.kind !== 'lightclaw_visual_setup'
   ) {
     return null
   }
@@ -310,6 +367,26 @@ function normalizeCardAction(
     }
   }
 
+  if (value.kind === 'lightclaw_visual_setup') {
+    const actionKind = parseVisualSetupAction(value.action)
+    const id = stringValue(value.id)
+    if (!actionKind || !id) {
+      return null
+    }
+    const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
+    const formValue = asRecord(action?.form_value) ?? asRecord(event?.form_value)
+    const endpointName = stringValue(value.endpointName)
+    return {
+      kind: 'lightclaw_visual_setup',
+      action: actionKind,
+      id,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
+      ...(formValue ? { formValue } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
+      ...(endpointName ? { endpointName } : {}),
+    }
+  }
+
   const requestId = stringValue(value.requestId)
   const actionKind = parsePermissionAction(value.action)
 
@@ -325,6 +402,33 @@ function normalizeCardAction(
     ...(stringValue(value.originSessionId) ? { originSessionId: stringValue(value.originSessionId) } : {}),
     ...(openMessageId ? { openMessageId } : {}),
   }
+}
+
+function parseActionCallbackValue(action: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  const direct = parseActionValue(action?.value)
+  if (isKnownCardActionValue(direct)) {
+    return direct
+  }
+  const behaviors = action?.behaviors
+  if (Array.isArray(behaviors)) {
+    for (const behavior of behaviors) {
+      const record = asRecord(behavior)
+      const parsed = parseActionValue(record?.value)
+      if (isKnownCardActionValue(parsed)) {
+        return parsed
+      }
+    }
+  }
+  return direct
+}
+
+function isKnownCardActionValue(value: Record<string, unknown> | null): value is Record<string, unknown> {
+  return (
+    value?.kind === 'lightclaw_permission' ||
+    value?.kind === 'lightclaw_pairing' ||
+    value?.kind === 'lightclaw_askuser' ||
+    value?.kind === 'lightclaw_visual_setup'
+  )
 }
 
 function parseActionValue(value: unknown): Record<string, unknown> | null {

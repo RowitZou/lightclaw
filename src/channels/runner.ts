@@ -39,7 +39,11 @@ import { createAssistantMessage, createUserMessage, getLastUuid } from '../messa
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import type { PermissionApprover, PermissionMode } from '../permission/types.js'
 import { applyCredentialDegrade, resolveRoleModel } from '../model-resolution.js'
-import { formatModelSetupRequiredReply } from '../model-setup.js'
+import {
+  formatModelSetupRequiredReply,
+  formatVisualSetupOpenedReply,
+  isModelSetupRequiredReply,
+} from '../model-setup.js'
 import { getProviderFor } from '../provider/index.js'
 import { query } from '../query.js'
 import { getMainRole } from '../agents/registry.js'
@@ -93,6 +97,8 @@ import {
 import { traceInterjection, waitedMs } from './feishu/interjection-trace.js'
 import { channelPendingSlashQueue } from './feishu/pending-slash-queue.js'
 import { buildInterjectionBlock } from './feishu/interjection-prompt.js'
+import { FEISHU_CHANNEL_ID } from './feishu/strategy.js'
+import { getFeishuVisualSetupCoordinator } from './feishu/visual-setup-card.js'
 import { encodeAttachmentsForInline, isCapabilityMissingError } from './attachment-encoding.js'
 import { incrementFailureCounter, writeCacheEntry } from '../provider/capability-cache.js'
 import type { AttachmentKind } from '../provider/types.js'
@@ -135,6 +141,29 @@ function getActiveMainRoleTools(config: LightClawConfig, channelId: ChannelId) {
     getMainRole(),
     getEnabledTools(route.provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
   )
+}
+
+type QueryResult = Awaited<ReturnType<typeof query>>
+
+function withAssistantReplyText(result: QueryResult, text: string): QueryResult {
+  const messages = [...result.messages]
+  const lastIndex = messages.length - 1
+  const last = messages[lastIndex]
+  if (last?.type === 'assistant') {
+    messages[lastIndex] = {
+      ...last,
+      message: {
+        ...last.message,
+        content: [{ type: 'text', text }],
+      },
+    }
+  }
+  return {
+    ...result,
+    messages,
+    assistantText: text,
+    finalReplyText: text,
+  }
 }
 
 /**
@@ -541,6 +570,37 @@ export class ChannelRunner {
     this.initialized = true
   }
 
+  private async maybeOpenVisualModelSetup(input: {
+    text: string
+    sessionId: string
+    userId: string
+  }): Promise<string> {
+    if (
+      this.strategy.channelId !== FEISHU_CHANNEL_ID ||
+      !isModelSetupRequiredReply(input.text)
+    ) {
+      return input.text
+    }
+    const coordinator = getFeishuVisualSetupCoordinator()
+    if (!coordinator) {
+      return input.text
+    }
+    try {
+      await coordinator.openHome({
+        sessionId: input.sessionId,
+        userId: input.userId,
+      })
+      return formatVisualSetupOpenedReply()
+    } catch (error) {
+      process.stderr.write(
+        `${this.strategy.channelId}: open visual model setup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+      return input.text
+    }
+  }
+
   async createPermissionApproverFor(input: {
     canonicalUser: string
     sessionId: string
@@ -585,9 +645,11 @@ export class ChannelRunner {
     // replaying pre-approval text". Same shape of synthetic-flag bypass as
     // the existing reply / typing-reaction short-circuits in the Feishu
     // sender.
+    const isSlashInput = isLikelySlashCommand(message.text)
     if (
       !message.synthetic &&
       !message.replayed &&
+      !isSlashInput &&
       this.strategy.isMessageTargeted &&
       !this.strategy.isMessageTargeted(message)
     ) {
@@ -713,7 +775,7 @@ export class ChannelRunner {
     // slashes — they fall through to the in-lock dispatchChannelSlash path
     // so they serialize with the in-flight turn instead of being eaten by
     // the queue.
-    const looksLikeSlash = isLikelySlashCommand(message.text)
+    const looksLikeSlash = isSlashInput
     if (
       !looksLikeSlash &&
       channelInterjectionQueue.hasInflightFor(mainSessionId)
@@ -1592,6 +1654,15 @@ export class ChannelRunner {
             })\n`,
           )
           return
+        }
+
+        const renderedAssistantText = await this.maybeOpenVisualModelSetup({
+          text: result.assistantText,
+          sessionId,
+          userId,
+        })
+        if (renderedAssistantText !== result.assistantText) {
+          result = withAssistantReplyText(result, renderedAssistantText)
         }
 
         const previousTail = messages[messageCountBeforeQuery - 1]
@@ -2528,6 +2599,9 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   if (head === '/stop') {
     return 'stop'
   }
+  if (head === '/ui') {
+    return 'read'
+  }
   // Always-read entries: handler does not depend on which sub-arg is given.
   // /status's persisted view (msgs from disk transcript, mode/model from
   // identity prefs, sessionId from main-canonical) is sufficient for the
@@ -2538,7 +2612,23 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   }
   // No-arg read variants: with arguments these slashes mutate state and
   // must keep their queued ordering with the in-flight turn.
-  if ((head === '/mode' || head === '/model') && argText.length === 0) {
+  if (head === '/mode' && argText.length === 0) {
+    return 'read'
+  }
+  if (
+    head === '/model' &&
+    (
+      argText.length === 0 ||
+      /^custom\s+(?:list|templates?|check)(?:\s|$)/.test(argText) ||
+      argText === 'proxy'
+    )
+  ) {
+    return 'read'
+  }
+  if (
+    head === '/endpoint' &&
+    (argText === '' || /^(?:list|templates?)(?:\s|$)/.test(argText))
+  ) {
     return 'read'
   }
   // /cost is admin-only (gated inside dispatchChannelSlash) and only reads
