@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { loadConfigFile } from '../config-file.js'
@@ -36,8 +37,8 @@ export function rateLimitsPath(): string {
 // collects them under one portable root so a user is `tar users/<u>/`.
 // Top-level `audit/`, `api-logs/`, `logs/` stay outside (cross-user
 // observability) and `identity/{admin,identities,pending,rate-limits}.json`
-// stay outside (global registries). `userHome()` is the single anchor a later
-// per-user `dataRoot` redirect hooks into.
+// stay outside (global registries). `userHome()` is fixed at
+// `<home>/users/<u>/` — the single anchor every per-user path derives from.
 
 export function usersRoot(): string {
   return path.join(lightclawHome(), 'users')
@@ -122,6 +123,34 @@ export function userMemoryRoot(canonicalUser: string): string {
 // Default: `users/<u>/workspace` (travels with the user root). Admin escape
 // hatch: `paths.workspace` / `LIGHTCLAW_WORKSPACE_ROOT` moves the workspace
 // pool onto a bulk gpfs mount, in which case it stays `<configured>/<u>`.
+// Per-user escape hatch (PR3): a user self-serves their own workspace dir via
+// `/config set-workspace`, persisted as `.workspace` in `users/<u>/config.json`,
+// which takes priority over the admin pool. Like the admin pool this is pure
+// path derivation — the set-time validation gate + the runtime mount probe are
+// the only guards; this resolver does NOT re-validate.
+
+export function userWorkspaceOverride(canonicalUser: string): string | undefined {
+  let raw: string
+  try {
+    raw = readFileSync(userConfigPath(canonicalUser), 'utf8')
+  } catch {
+    // ENOENT (no per-user config yet) or any read error → no override.
+    return undefined
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // A corrupt config.json should not crash workspace resolution; the admin
+    // pool / default still apply, and `/config set-workspace` rewrites the file.
+    return undefined
+  }
+  const workspace = (parsed as { workspace?: unknown } | null)?.workspace
+  if (typeof workspace === 'string' && workspace.trim().length > 0) {
+    return path.resolve(expandHomePath(workspace))
+  }
+  return undefined
+}
 
 function configuredWorkspaceRoot(): string | undefined {
   const fileConfig = loadConfigFile()
@@ -140,6 +169,10 @@ export function workspaceRoot(): string {
 }
 
 export function workspaceFor(canonicalUser: string): string {
+  const override = userWorkspaceOverride(canonicalUser)
+  if (override) {
+    return override
+  }
   const configured = configuredWorkspaceRoot()
   return configured
     ? path.join(configured, sanitizePathSegment(canonicalUser))

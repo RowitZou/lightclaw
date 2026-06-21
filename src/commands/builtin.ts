@@ -51,6 +51,7 @@ import {
 } from '../state.js'
 
 import { runAuthCommand } from './auth.js'
+import { runConfigCommand } from './config.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import { runMountCommand } from './mount.js'
@@ -583,6 +584,22 @@ function buildBuiltinCommands(): ReplCommand[] {
       ctx.output.write(await runMountCommand(args, ctx, {
         restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
       }))
+    },
+  },
+  {
+    name: '/config',
+    usage: t('cmd.config.usage'),
+    description: t('cmd.config.desc'),
+    agentAdvisory:
+      'When the user wants their own work to live in a specific directory ' +
+      '(e.g. a shared collaboration disk) instead of the default per-user ' +
+      'workspace. They self-serve it; an invalid path is rejected with a reason.',
+    agentUsage: [
+      '/config set-workspace <absolute-path>    Point your workspace at this directory (validated; rejected with a reason if not daemon-accessible / not under an allowed gpfs prefix).',
+      '/config set-workspace reset              Restore the default per-user workspace.',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runConfigCommand(args, ctx))
     },
   },
   {

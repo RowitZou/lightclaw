@@ -54,6 +54,8 @@ export const LOCALES = {
     'cmd.secret.desc': '管理 per-user 运行时密钥',
     'cmd.mount.usage': '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
     'cmd.mount.desc': '管理 per-user rlaunch 动态挂载',
+    'cmd.config.usage': '/config set-workspace <绝对路径>|reset',
+    'cmd.config.desc': '管理你的 per-user 配置（工作目录等）',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
     'cmd.sandbox.desc': '查看 / 重置沙箱镜像与容器',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
@@ -618,6 +620,20 @@ export const LOCALES = {
     'mount.restart.done': 'rlaunch worker 已重启：{worker}',
     'mount.restart.failed': '挂载状态已保存，但 rlaunch worker 重启失败：{detail}',
 
+    // ---- /config (user) ----
+    'config.usage': '用法：/config set-workspace <绝对路径>   设置你自己的工作目录\n      /config set-workspace reset    恢复为默认工作目录',
+    'config.noIdentity': 'LightClaw 当前没有可用身份；/config 需要已配对的渠道用户。',
+    'config.workspace.notAbsolute': '工作目录必须是绝对路径：{path}',
+    'config.workspace.notUnderGpfs': '工作目录必须位于已配置的 gpfs host 前缀之下（{prefixes}）；收到："{path}"。请改用 gpfs 路径。',
+    'config.workspace.notAccessible': '守护进程无法访问该工作目录：{path}（{detail}）',
+    'config.workspace.notDirectory': '工作目录必须是一个目录：{path}',
+    'config.workspace.lacksAccess': '守护进程对该工作目录缺少读写权限：{path}（{detail}）',
+    'config.workspace.setNonEmpty': '工作目录已设为：{path}（已生效；该目录含 {count} 个条目）。',
+    'config.workspace.setEmpty': '工作目录已设为：{path}（已生效；该目录当前为空）。',
+    'config.workspace.reset': '工作目录已恢复为默认。',
+    'config.workspace.resetAlreadyDefault': '工作目录本就是默认，无需更改。',
+    'config.workspace.restartNote': '提示：沙箱 worker 需要重启后才会挂载新的工作目录。',
+
     // ---- /feishu-workspace (admin) ----
     'feishuWs.usage': '用法：/feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
     'feishuWs.status.title': '飞书云空间：',
@@ -714,6 +730,8 @@ export const LOCALES = {
     'cmd.secret.desc': 'Manage per-user runtime secrets',
     'cmd.mount.usage': '/mount [list|add <absolute-gpfs-path> [ro|rw]|remove <absolute-gpfs-path>]',
     'cmd.mount.desc': 'Manage per-user dynamic rlaunch mounts',
+    'cmd.config.usage': '/config set-workspace <absolute-path>|reset',
+    'cmd.config.desc': 'Manage your per-user config (workspace dir, etc.)',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
     'cmd.sandbox.desc': 'Inspect / reset the sandbox image and container',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
@@ -1280,6 +1298,20 @@ export const LOCALES = {
     'mount.restart.skipped': 'rlaunch worker restart skipped in this context.',
     'mount.restart.done': 'rlaunch worker restarted: {worker}',
     'mount.restart.failed': 'Mount state was saved, but rlaunch worker restart failed: {detail}',
+
+    // ---- /config (user) ----
+    'config.usage': 'Usage: /config set-workspace <absolute-path>   Set your own workspace directory\n       /config set-workspace reset    Restore the default workspace directory',
+    'config.noIdentity': 'No active LightClaw identity; /config requires a paired channel user.',
+    'config.workspace.notAbsolute': 'The workspace directory must be an absolute path: {path}',
+    'config.workspace.notUnderGpfs': 'The workspace directory must be under a configured gpfs host prefix ({prefixes}); got "{path}". Use a gpfs path instead.',
+    'config.workspace.notAccessible': 'The daemon cannot access that workspace directory: {path} ({detail})',
+    'config.workspace.notDirectory': 'The workspace directory must be a directory: {path}',
+    'config.workspace.lacksAccess': 'The daemon lacks read/write access to that workspace directory: {path} ({detail})',
+    'config.workspace.setNonEmpty': 'Workspace directory set to: {path} (in effect; the directory contains {count} entries).',
+    'config.workspace.setEmpty': 'Workspace directory set to: {path} (in effect; the directory is currently empty).',
+    'config.workspace.reset': 'Workspace directory restored to the default.',
+    'config.workspace.resetAlreadyDefault': 'Workspace directory is already the default; nothing to change.',
+    'config.workspace.restartNote': 'Note: the sandbox worker must restart before it mounts the new workspace.',
 
     // ---- /feishu-workspace (admin) ----
     'feishuWs.usage': 'Usage: /feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
