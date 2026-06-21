@@ -159,9 +159,9 @@ describe('FeishuWriteSheet tool', () => {
   })
 
   it('short-circuits sheet content edits when a FeishuSheetEditConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuSheetEditConfirm'] }, null, 2),
       'utf8',
     )

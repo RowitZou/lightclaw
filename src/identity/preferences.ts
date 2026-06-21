@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import path from 'node:path'
 
 import type { PermissionMode } from '../permission/types.js'
-import { identityRoot, sanitizePathSegment } from './paths.js'
+import { userPreferencesPath } from './paths.js'
 
 /**
  * Per-canonical-user runtime preferences (`permissionMode`, `model`). Lives
@@ -30,12 +30,7 @@ const VALID_MODES: ReadonlySet<PermissionMode> = new Set([
 ])
 
 export function identityPreferencesPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'preferences.json',
-  )
+  return userPreferencesPath(canonicalUser)
 }
 
 /**

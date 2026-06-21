@@ -1,5 +1,4 @@
 import { readdir, rm, stat } from 'node:fs/promises'
-import path from 'node:path'
 
 import { getFeishuClient } from '../channels/feishu/client.js'
 import { feishuErrorMessage } from '../channels/feishu/resources/api.js'
@@ -12,9 +11,12 @@ import {
 } from '../channels/feishu/workspace/lifecycle.js'
 import { recordFeishuWriteAudit } from '../audit/feishu-writes.js'
 import { t } from '../i18n/index.js'
-import { lightclawHome } from '../paths.js'
 import { readJson } from '../identity/store.js'
-import { sanitizePathSegment } from '../identity/paths.js'
+import {
+  sanitizePathSegment,
+  userFeishuWorkspacePath,
+  usersRoot,
+} from '../identity/paths.js'
 
 const DELETE_TOKEN_TTL_MS = 5 * 60 * 1000
 const pendingDeleteTokens = new Map<string, { token: string; expiresAt: number; folderToken: string; itemCount: number }>()
@@ -161,7 +163,7 @@ async function deleteCommand(args: string[]): Promise<string> {
 }
 
 async function listWorkspaceFiles(): Promise<Array<{ canonical: string; workspace: UserWorkspace; updated: string }>> {
-  const root = path.join(lightclawHome(), 'identity', 'per-user')
+  const root = usersRoot()
   let entries
   try {
     entries = await readdir(root, { withFileTypes: true })
@@ -171,7 +173,7 @@ async function listWorkspaceFiles(): Promise<Array<{ canonical: string; workspac
   const out: Array<{ canonical: string; workspace: UserWorkspace; updated: string }> = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const filePath = path.join(root, entry.name, 'feishu-workspace.json')
+    const filePath = userFeishuWorkspacePath(entry.name)
     const workspace = await readJson<UserWorkspace | null>(filePath, null)
     if (!workspace?.folderToken) continue
     const updated = await stat(filePath).then(s => s.mtime.toISOString()).catch(() => workspace.createdAt)

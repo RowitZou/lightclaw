@@ -112,7 +112,7 @@ test('SkillEdit writes a composition journal entry for skillConsolidator rewrite
     })
 
     const raw = await readFile(
-      path.join(home, 'identity', 'per-user', 'alice', 'composition-journal.jsonl'),
+      path.join(home, 'users', 'alice', 'state', 'composition-journal.jsonl'),
       'utf8',
     )
     const entry = JSON.parse(raw.trim())

@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { Role } from '../agents/types.js'
 import { safeWriteFile } from '../atomic-write.js'
 import type { LightClawConfig } from '../config.js'
-import { lightclawHome } from '../paths.js'
+import { userMemoryRoot } from '../identity/paths.js'
 import {
   relativeMemoryFilename,
   resolveReadableMemoryDirsForRole,
@@ -95,8 +95,14 @@ export function sanitizePath(inputPath: string): string {
   return sanitized.length > 0 ? sanitized : 'root'
 }
 
-export function memoryRoot(config: LightClawConfig): string {
-  return config.paths.memory || path.join(lightclawHome(), 'memory')
+// Admin escape hatch only. When `paths.memory` is configured, every user's
+// memory tree stays pooled under `<configured>` (an out-of-tree bulk mount);
+// `getMemoryDir` then keys it as `<configured>/<u>`. When it is unset (the
+// default), memory lives inside the user's self-contained root at
+// `users/<u>/memory` via `userMemoryRoot`, so this returns undefined and the
+// caller takes the anchor path.
+export function memoryRoot(config: LightClawConfig): string | undefined {
+  return config.paths.memory || undefined
 }
 
 // Memory is keyed by canonical LightClaw user (Phase 9). The previous
@@ -106,7 +112,12 @@ export function memoryRoot(config: LightClawConfig): string {
 // dir is `_unbound_` and any MemoryRead/Write call hits requireCurrentUserId()
 // first, so it never actually reaches this fallback path.
 export function getMemoryDir(userId: string | undefined, config: LightClawConfig): string {
-  return path.join(memoryRoot(config), sanitizeUserId(userId))
+  const sanitized = sanitizeUserId(userId)
+  const pooledRoot = memoryRoot(config)
+  if (pooledRoot) {
+    return path.join(pooledRoot, sanitized)
+  }
+  return userMemoryRoot(sanitized)
 }
 
 function sanitizeUserId(userId: string | undefined): string {

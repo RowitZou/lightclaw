@@ -556,9 +556,9 @@ describe('FeishuCreateFile tool', () => {
   it('short-circuits without asking when a FeishuWriteConfirm allow rule is persisted', async () => {
     // Persist the allow rule the user would have written by clicking the
     // 以后都允许 button on a prior ask.
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
       'utf8',
     )
@@ -594,9 +594,9 @@ describe('FeishuCreateFile tool', () => {
   })
 
   it('short-circuits file upload when a FeishuUploadConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
       'utf8',
     )

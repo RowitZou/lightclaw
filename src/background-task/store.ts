@@ -9,7 +9,11 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 
-import { identityRoot, sanitizePathSegment } from '../identity/paths.js'
+import {
+  userBackgroundTasksPath,
+  userCompletedBackgroundTasksPath,
+  usersRoot,
+} from '../identity/paths.js'
 import {
   backgroundTaskEntrySchema,
   type BackgroundTaskEntry,
@@ -28,12 +32,7 @@ const lastFiredDirty = new Map<string, LastFiredDirty>()
 let lastFiredFlushTimer: NodeJS.Timeout | null = null
 
 export function backgroundTaskStorePath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'bg-tasks.json',
-  )
+  return userBackgroundTasksPath(canonicalUser)
 }
 
 export function loadBackgroundTasks(canonicalUser: string): BackgroundTaskEntry[] {
@@ -212,12 +211,7 @@ export interface CompletedTaskRecord {
 }
 
 export function completedTaskIndexPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'bg-tasks-completed.jsonl',
-  )
+  return userCompletedBackgroundTasksPath(canonicalUser)
 }
 
 export function appendCompletedTaskRecord(
@@ -308,13 +302,13 @@ export function listAllUsersWithBackgroundTasks(): Array<{
   canonicalUser: string
   tasks: BackgroundTaskEntry[]
 }> {
-  const perUserRoot = path.join(identityRoot(), 'per-user')
-  if (!existsSync(perUserRoot)) {
+  const root = usersRoot()
+  if (!existsSync(root)) {
     return []
   }
 
   const out: Array<{ canonicalUser: string; tasks: BackgroundTaskEntry[] }> = []
-  for (const entry of readdirSync(perUserRoot, { withFileTypes: true })) {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue
     }

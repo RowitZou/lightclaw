@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { FeishuClient } from '../client.js'
 import { lightclawHome } from '../../../paths.js'
 import { readJson, writeJsonSecure } from '../../../identity/store.js'
-import { sanitizePathSegment } from '../../../identity/paths.js'
+import { userFeishuWorkspacePath } from '../../../identity/paths.js'
 import { loadChannelConfig } from '../../config.js'
 import {
   createFolder,
@@ -30,13 +30,7 @@ export function workspaceRootPath(): string {
 }
 
 export function userWorkspacePath(canonicalUser: string): string {
-  return path.join(
-    lightclawHome(),
-    'identity',
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'feishu-workspace.json',
-  )
+  return userFeishuWorkspacePath(canonicalUser)
 }
 
 export async function getOrCreateWorkspaceRoot(

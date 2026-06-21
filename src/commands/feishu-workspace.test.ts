@@ -118,7 +118,7 @@ describe('/feishu-workspace admin slash', () => {
 
     // Identity binding should remain on disk so admin can re-investigate.
     const stillBound = await readFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'feishu-workspace.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'feishu-workspace.json'),
       'utf8',
     )
     assert.match(stillBound, /aliceFld/)
@@ -140,7 +140,7 @@ async function seedRoot(folderToken: string): Promise<void> {
 }
 
 async function seedUserWorkspace(canonical: string, folderToken: string, rootToken: string): Promise<void> {
-  const dir = path.join(tmpHome, 'identity', 'per-user', canonical)
+  const dir = path.join(tmpHome, 'users', canonical, 'state')
   await mkdir(dir, { recursive: true })
   await writeFile(path.join(dir, 'feishu-workspace.json'), `${JSON.stringify({
     folderToken,

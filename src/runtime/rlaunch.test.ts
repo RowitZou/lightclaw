@@ -136,7 +136,7 @@ describe('workspaceToGpfsMount', () => {
     process.env.LIGHTCLAW_WORKSPACE_ROOT = '/home/zouyicheng/lightclaw-workspaces'
     assert.throws(() => workspaceToGpfsMount('alice', {
       gpfsMounts: [{ hostPrefix: '/mnt/shared-storage-user', mountPrefix: 'gpfs://gpfs1' }],
-    }), /requires LIGHTCLAW_WORKSPACE_ROOT/)
+    }), /requires the workspace path under a configured gpfs host prefix/)
   })
 })
 

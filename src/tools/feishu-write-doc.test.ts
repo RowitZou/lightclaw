@@ -329,9 +329,9 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc block deletion when a FeishuWriteConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuWriteConfirm'] }, null, 2),
       'utf8',
     )
@@ -451,9 +451,9 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc table content edits when a FeishuTableEditConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuTableEditConfirm'] }, null, 2),
       'utf8',
     )
@@ -607,9 +607,9 @@ describe('FeishuWriteDoc tool', () => {
   })
 
   it('short-circuits doc media upload when a FeishuUploadConfirm allow rule is persisted', async () => {
-    await mkdir(path.join(tmpHome, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(tmpHome, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(
-      path.join(tmpHome, 'identity', 'per-user', 'alice', 'permissions.json'),
+      path.join(tmpHome, 'users', 'alice', 'state', 'permissions.json'),
       JSON.stringify({ allow: ['FeishuUploadConfirm'] }, null, 2),
       'utf8',
     )

@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/prom
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
-import { userSkillsRoot, identityRoot, sanitizePathSegment } from '../identity/paths.js'
+import { userSkillsRoot, userStateRoot } from '../identity/paths.js'
 import { parseFrontmatter } from '../memory/auto-memory.js'
 import { findUseSkillReferences } from './composition-graph.js'
 import { discoverSkillsForUser, normalizeSkillName } from './loader.js'
@@ -41,12 +41,7 @@ export type CompositionJournalProcessResult = {
 }
 
 export function compositionJournalPath(userId: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(userId),
-    'composition-journal.jsonl',
-  )
+  return path.join(userStateRoot(userId), 'composition-journal.jsonl')
 }
 
 export async function appendCompositionJournalEntry(

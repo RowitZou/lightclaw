@@ -29,6 +29,36 @@ export function rateLimitsPath(): string {
   return path.join(identityRoot(), 'rate-limits.json')
 }
 
+// ── Per-user self-contained tree (`<home>/users/<canonical>/`) ──────────────
+// Every per-user piece of state derives from `userHome()`. The previous
+// by-type layout scattered one user across `identity/per-user/<u>/`,
+// `sessions/<u>/`, `memory/<u>/`, and `workspaces/<u>/`; the inverted layout
+// collects them under one portable root so a user is `tar users/<u>/`.
+// Top-level `audit/`, `api-logs/`, `logs/` stay outside (cross-user
+// observability) and `identity/{admin,identities,pending,rate-limits}.json`
+// stay outside (global registries). `userHome()` is the single anchor a later
+// per-user `dataRoot` redirect hooks into.
+
+export function usersRoot(): string {
+  return path.join(lightclawHome(), 'users')
+}
+
+export function userHome(canonicalUser: string): string {
+  return path.join(usersRoot(), sanitizePathSegment(canonicalUser))
+}
+
+// Framework-managed runtime state the user never edits by hand lives under
+// `users/<u>/state/`; only the user-facing `config.json` sits at the user
+// root. Keeps the root self-documenting (config.json + content dirs) and
+// gives `/export` one place to strip secrets / reset deployment bindings.
+export function userStateRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'state')
+}
+
+export function userConfigPath(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'config.json')
+}
+
 /**
  * Per-canonical-user persisted permission rules. Replaces the old in-memory
  * sessionRulesByUser map: when a user picks "以后都允许" / `[a]` the rule is
@@ -37,83 +67,102 @@ export function rateLimitsPath(): string {
  * evaluated alongside cli / file / builtin sources by `evaluatePermission`.
  */
 export function identityPermissionsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'permissions.json',
-  )
+  return path.join(userStateRoot(canonicalUser), 'permissions.json')
 }
 
 export function rlaunchMountsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'rlaunch-mounts.json',
-  )
+  return path.join(userStateRoot(canonicalUser), 'rlaunch-mounts.json')
 }
 
 export function userSecretsPath(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'secrets.json',
-  )
+  return path.join(userStateRoot(canonicalUser), 'secrets.json')
 }
+
+export function userPreferencesPath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'preferences.json')
+}
+
+export function userBackgroundTasksPath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'bg-tasks.json')
+}
+
+export function userCompletedBackgroundTasksPath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'bg-tasks-completed.jsonl')
+}
+
+export function userFeishuWorkspacePath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'feishu-workspace.json')
+}
+
+export function userFeishuUploadsPath(canonicalUser: string): string {
+  return path.join(userStateRoot(canonicalUser), 'feishu-uploads.json')
+}
+
+// ── Per-user content directories (`users/<u>/<dir>/`) ───────────────────────
+// These hold user-owned content, not framework bookkeeping, so they sit at
+// the user root beside `config.json` rather than under `state/`.
 
 export function userSkillsRoot(canonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(canonicalUser),
-    'skills',
-  )
+  return path.join(userHome(canonicalUser), 'skills')
 }
 
-export function workspaceRoot(): string {
+export function userTaskRunsRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'taskruns')
+}
+
+export function userSessionsRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'sessions')
+}
+
+export function userMemoryRoot(canonicalUser: string): string {
+  return path.join(userHome(canonicalUser), 'memory')
+}
+
+// ── Workspace ───────────────────────────────────────────────────────────────
+// Default: `users/<u>/workspace` (travels with the user root). Admin escape
+// hatch: `paths.workspace` / `LIGHTCLAW_WORKSPACE_ROOT` moves the workspace
+// pool onto a bulk gpfs mount, in which case it stays `<configured>/<u>`.
+
+function configuredWorkspaceRoot(): string | undefined {
   const fileConfig = loadConfigFile()
-  // Match resolveSessionsDir / memoryDir / apiLogsDir shape: env > new
-  // `paths.workspace` > legacy top-level `workspaceRoot` > default. Pre-fix
-  // this only read the legacy key, so 0.2.x configs that migrated to the
-  // `paths.*` namespace silently fell back to `<home>/workspaces` and the
-  // rlaunch gpfs guard threw at first runtime acquire.
   const fromFile = pickWithLegacy(
     'workspaceRoot',
     'paths.workspace',
     fileConfig.workspaceRoot,
     fileConfig.paths?.workspace,
   )
-  const configured =
-    process.env.LIGHTCLAW_WORKSPACE_ROOT ??
-    fromFile ??
-    path.join(lightclawHome(), 'workspaces')
-  return path.resolve(expandHomePath(configured))
+  const configured = process.env.LIGHTCLAW_WORKSPACE_ROOT ?? fromFile
+  return configured ? path.resolve(expandHomePath(configured)) : undefined
+}
+
+export function workspaceRoot(): string {
+  return configuredWorkspaceRoot() ?? usersRoot()
 }
 
 export function workspaceFor(canonicalUser: string): string {
-  return path.join(workspaceRoot(), sanitizePathSegment(canonicalUser))
+  const configured = configuredWorkspaceRoot()
+  return configured
+    ? path.join(configured, sanitizePathSegment(canonicalUser))
+    : path.join(userHome(canonicalUser), 'workspace')
 }
 
 export function workspaceToGpfsMount(
   canonicalUser: string,
   rlaunchConfig: RlaunchGpfsMountConfig,
 ): { hostPath: string; mount: string } {
-  const root = workspaceRoot()
+  const hostPath = workspaceFor(canonicalUser)
   try {
-    resolveGpfsMountRule(root, rlaunchConfig)
+    resolveGpfsMountRule(hostPath, rlaunchConfig)
   } catch {
     const hostPrefixes = rlaunchConfig.gpfsMounts.map(rule => rule.hostPrefix)
     const example = hostPrefixes[0] ?? '<gpfs-host-prefix>'
     throw new Error(
-      `RlaunchRuntime requires LIGHTCLAW_WORKSPACE_ROOT under a configured gpfs host prefix ` +
-      `(${hostPrefixes.join(', ')}); got "${root}". Set LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ` +
-      `${example}/<namespace>/<user>/lightclaw-workspaces`,
+      `RlaunchRuntime requires the workspace path under a configured gpfs host prefix ` +
+      `(${hostPrefixes.join(', ')}); got "${hostPath}". Set the user workspace or ` +
+      `LIGHTCLAW_WORKSPACE_ROOT to a gpfs path, e.g. ${example}/<namespace>/<user>/lightclaw`,
     )
   }
 
-  const hostPath = path.join(root, sanitizePathSegment(canonicalUser))
   return {
     hostPath,
     mount: buildGpfsMountStringFromRules(hostPath, '/workspace', rlaunchConfig),

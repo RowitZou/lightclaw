@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { safeWriteJson } from '../atomic-write.js'
-import { identityRoot, sanitizePathSegment } from '../identity/paths.js'
+import { userStateRoot } from '../identity/paths.js'
 
 export type StopNotice = {
   stoppedAt: number
@@ -11,12 +11,7 @@ export type StopNotice = {
 }
 
 function stopNoticePath(ownerCanonicalUser: string): string {
-  return path.join(
-    identityRoot(),
-    'per-user',
-    sanitizePathSegment(ownerCanonicalUser),
-    'stop-notice.json',
-  )
+  return path.join(userStateRoot(ownerCanonicalUser), 'stop-notice.json')
 }
 
 function readStore(ownerCanonicalUser: string): Record<string, StopNotice> {

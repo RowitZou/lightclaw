@@ -388,13 +388,13 @@ describe('Feishu workspace tools', () => {
     let listShouldFail = false
     // Pre-seed the workspace files so the lazy-create branch is bypassed.
     const home = path.join(tmpHome)
-    await mkdir(path.join(home, 'identity', 'per-user', 'alice'), { recursive: true })
+    await mkdir(path.join(home, 'users', 'alice', 'state'), { recursive: true })
     await writeFile(path.join(home, 'feishu-cloud-root.json'), JSON.stringify({
       folderToken: 'rootFld',
       createdAt: '2026-05-12T00:00:00.000Z',
       lightclawVersion: 'test',
     }))
-    await writeFile(path.join(home, 'identity', 'per-user', 'alice', 'feishu-workspace.json'), JSON.stringify({
+    await writeFile(path.join(home, 'users', 'alice', 'state', 'feishu-workspace.json'), JSON.stringify({
       folderToken: 'userFld',
       parentFolderToken: 'rootFld',
       createdAt: '2026-05-12T00:00:00.000Z',
