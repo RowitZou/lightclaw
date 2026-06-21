@@ -18,6 +18,7 @@ import {
   getCurrentUserId,
   getMemoryDir,
   getPermissionMode,
+  getSessionsDir,
 } from './state.js'
 import {
   listRegisteredSkills,
@@ -482,8 +483,8 @@ async function buildRolePromptParts(
   const [projectMemory, autoMemoryIndex, sessionMemory] = await Promise.all([
     loadProjectMemory(input.cwd),
     loadMemoryIndex(memoryDir, role),
-    input.sessionId && input.config.paths.sessions
-      ? readSessionMemory(input.sessionId, input.config.paths.sessions)
+    input.sessionId
+      ? readSessionMemory(input.sessionId, getSessionsDir())
       : Promise.resolve(''),
   ])
   const preTodoSections: string[] = []

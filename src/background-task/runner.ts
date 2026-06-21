@@ -8,7 +8,7 @@ import { getProviderFor } from '../provider/index.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import { getAdmin, getUserPermissionCeiling } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
-import { workspaceFor } from '../identity/paths.js'
+import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
 import { query } from '../query.js'
 import { getAgent, getMainRole } from '../agents/registry.js'
 import { deriveCanUseTool, filterToolsByRoleVisibility } from '../agents/role-tool-gate.js'
@@ -112,7 +112,7 @@ export async function runBackgroundTaskFire(input: {
     const ctx = createSessionContext({
       cwd,
       model,
-      sessionsDir: config.paths.sessions,
+      sessionsDir: userSessionsRoot(input.task.ownerCanonicalUser),
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,
       // No enabledSecrets: a background fire is a dispatched worker, and

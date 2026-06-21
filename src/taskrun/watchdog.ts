@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import type { LightClawConfig } from '../config.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { getAdmin, getIdentity } from '../identity/store.js'
 import { getFeishuSender } from '../channels/feishu/sender-registry.js'
 import { channelInterjectionQueue } from '../channels/feishu/interjection-queue.js'
@@ -715,15 +716,16 @@ async function wakeTaskRunReconcileOwner(
   const { resolveOriginWakeSessionId, resolveWakeSessionId } = await import(
     '../background-task/session-resolve.js'
   )
+  const sessionsDir = userSessionsRoot(ownerCanonicalUser)
   let mainSessionId: string | null = null
   const originSessionId = findings
     .map(finding => finding.originSessionId)
     .find(Boolean)
   if (originSessionId) {
-    mainSessionId = await resolveOriginWakeSessionId(originSessionId, config.paths.sessions)
+    mainSessionId = await resolveOriginWakeSessionId(originSessionId, sessionsDir)
   }
   if (!mainSessionId) {
-    mainSessionId = await resolveWakeSessionId(ownerCanonicalUser, config.paths.sessions)
+    mainSessionId = await resolveWakeSessionId(ownerCanonicalUser, sessionsDir)
   }
   if (!mainSessionId) {
     return { ok: false, reason: 'no-wake-session' }

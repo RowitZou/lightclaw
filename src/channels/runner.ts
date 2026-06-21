@@ -9,7 +9,7 @@ import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
-import { workspaceFor } from '../identity/paths.js'
+import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import {
   beginQuery,
@@ -2066,7 +2066,7 @@ export class ChannelRunner {
         prefs.model ?? resolveRoleModel(getMainRole(), config),
         config,
       ),
-      sessionsDir: config.paths.sessions,
+      sessionsDir: userSessionsRoot(userId),
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
       sessionId,

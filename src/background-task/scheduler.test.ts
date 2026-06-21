@@ -8,6 +8,7 @@ import type { ChainState } from '../signal-bus/chain-state.js'
 import type { AgentSignal } from '../signal-bus/types.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { addLink, createUser } from '../identity/store.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { t } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import type { TaskRunMeta } from '../taskrun/types.js'
@@ -1263,7 +1264,10 @@ describe('deliverCompletion main-vs-parent routing', () => {
   beforeEach(async () => {
     tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-deliver-route-'))
     setLightclawHomeOverride(tmpHome)
-    sessionsDir = path.join(tmpHome, 'sessions')
+    // Sessions now live under the per-user root; deliverCompletion derives the
+    // sessions dir from userSessionsRoot(canonicalUser), so the origin/DM meta
+    // must be written there for the wake-session resolver to find it.
+    sessionsDir = userSessionsRoot('alice')
     for (const [sid, ts] of [[GROUP, 100], [DM, 999]] as const) {
       mkdirSync(path.join(sessionsDir, sid), { recursive: true })
       writeFileSync(path.join(sessionsDir, sid, 'meta.json'), JSON.stringify({ userId: 'alice', lastActiveAt: ts }))

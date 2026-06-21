@@ -1,13 +1,14 @@
 import { createReadStream } from 'node:fs'
 import { readdir } from 'node:fs/promises'
+import path from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { collectAssistantText } from '../messages.js'
 import { parseFeishuSessionId } from '../channels/feishu/routing.js'
-import { resolveSessionsDir } from '../config.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import {
-  getTranscriptPath,
-  loadMeta,
+  getSessionDirIn,
+  loadMetaFromDir,
   parseTranscriptLine,
 } from '../session/storage.js'
 import { toolResultContentToText, type Message, type SessionMeta } from '../types.js'
@@ -38,14 +39,15 @@ export function isConversationSessionId(sessionId: string): boolean {
  * `searchOwnedSessions`, which streams.
  */
 export async function listOwnedSessionMetas(userId: string): Promise<SessionMeta[]> {
+  const sessionsDir = userSessionsRoot(userId)
   try {
-    const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
+    const entries = await readdir(sessionsDir, { withFileTypes: true })
     const metas = await Promise.all(
       entries
         .filter(entry => entry.isDirectory())
         .filter(entry => isConversationSessionId(entry.name))
         .map(async entry => {
-          const meta = await loadMeta(entry.name)
+          const meta = await loadMetaFromDir(sessionsDir, entry.name)
           return meta && meta.userId === userId ? meta : null
         }),
     )
@@ -87,6 +89,7 @@ export async function searchOwnedSessions(
     ? Date.now() - options.daysBack * 24 * 60 * 60 * 1000
     : 0
   const lines: string[] = []
+  const sessionsDir = userSessionsRoot(userId)
 
   for (const meta of await listOwnedSessionMetas(userId)) {
     if (options.channel && channelFromSessionId(meta.sessionId) !== options.channel) {
@@ -96,7 +99,11 @@ export async function searchOwnedSessions(
       continue
     }
 
-    const stream = createReadStream(getTranscriptPath(meta.sessionId), 'utf8')
+    const transcriptPath = path.join(
+      getSessionDirIn(sessionsDir, meta.sessionId),
+      'transcript.jsonl',
+    )
+    const stream = createReadStream(transcriptPath, 'utf8')
     const reader = createInterface({ input: stream, crlfDelay: Infinity })
     let index = 0
     try {

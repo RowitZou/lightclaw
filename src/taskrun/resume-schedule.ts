@@ -7,7 +7,7 @@ import { getMemoryDir } from '../memory/auto-memory.js'
 import { loadFileRules, loadIdentityRules } from '../permission/storage.js'
 import { getUserPermissionCeiling } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
-import { workspaceFor } from '../identity/paths.js'
+import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
 import { getChannelApproverFor } from '../channels/feishu/runner-registry.js'
 import { getImageReadiness, getRuntimePool } from '../state.js'
 import {
@@ -138,7 +138,7 @@ async function buildOwnerResumeContext(
   return createSessionContext({
     cwd,
     model,
-    sessionsDir: config.paths.sessions,
+    sessionsDir: userSessionsRoot(ownerCanonicalUser),
     memoryDir: getMemoryDir(ownerCanonicalUser, config),
     currentUserId: ownerCanonicalUser,
     sessionId,

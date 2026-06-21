@@ -13,7 +13,7 @@ import { setLang } from './i18n/index.js'
 import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
 import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
 import { lightclawHome } from './paths.js'
-import { workspaceFor } from './identity/paths.js'
+import { userSessionsRoot, workspaceFor } from './identity/paths.js'
 import { loadIdentityPreferences } from './identity/preferences.js'
 import { getAdmin, getUserPermissionCeiling, listActiveCanonicalUsers } from './identity/store.js'
 import { loadEnabledSecrets } from './secrets/store.js'
@@ -324,7 +324,9 @@ async function createResolvedSessionContext(
     cwd: resolvedCwd,
     channel: input?.channel,
     model: resolvedConfig.defaultModel,
-    sessionsDir: resolvedConfig.paths.sessions,
+    sessionsDir: input?.currentUserId
+      ? userSessionsRoot(input.currentUserId)
+      : resolvedConfig.paths.sessions,
     memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
     currentUserId: input?.currentUserId,
     enabledSecrets: input?.currentUserId

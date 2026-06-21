@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
+import { userSessionsRoot } from '../identity/paths.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import {
   appendMessages,
   getTranscriptPath,
@@ -12,30 +14,60 @@ import {
   saveMeta,
 } from '../session/storage.js'
 import { createUserMessage } from '../messages.js'
-import type { SessionMeta } from '../types.js'
+import type { Message, SessionMeta } from '../types.js'
 import {
   channelFromSessionId,
   listOwnedSessionMetas,
   searchOwnedSessions,
 } from './_session-helpers.js'
 
-let tmpSessionsDir: string
-let savedSessionsDir: string | undefined
+let tmpHome: string
+let savedHome: string | undefined
 
 beforeEach(() => {
-  tmpSessionsDir = mkdtempSync(path.join(tmpdir(), 'lightclaw-convsearch-test-'))
-  savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
-  process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-convsearch-test-'))
+  savedHome = process.env.LIGHTCLAW_HOME
+  process.env.LIGHTCLAW_HOME = tmpHome
 })
 
 afterEach(() => {
-  if (savedSessionsDir === undefined) {
-    delete process.env.LIGHTCLAW_SESSIONS_DIR
+  if (savedHome === undefined) {
+    delete process.env.LIGHTCLAW_HOME
   } else {
-    process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
+    process.env.LIGHTCLAW_HOME = savedHome
   }
-  rmSync(tmpSessionsDir, { recursive: true, force: true })
+  rmSync(tmpHome, { recursive: true, force: true })
 })
+
+// Sessions now live under the per-user root (`users/<u>/sessions/...`), and
+// storage helpers resolve their dir from the active SessionContext. Bind one
+// for the owning user so writes / reads land under that user's sessions tree —
+// which is exactly where the per-user enumerators (searchOwnedSessions /
+// listOwnedSessionMetas) look.
+async function asUser<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  return runWithSessionContext(
+    createSessionContext({
+      cwd: '/tmp',
+      model: 'test-model',
+      sessionsDir: userSessionsRoot(userId),
+      memoryDir: '',
+      currentUserId: userId,
+    }),
+    fn,
+  )
+}
+
+function saveMetaAs(userId: string, sessionId: string, meta: SessionMeta): Promise<void> {
+  return asUser(userId, () => saveMeta(sessionId, meta))
+}
+
+function appendMessagesAs(
+  userId: string,
+  sessionId: string,
+  messages: Message[],
+): Promise<void> {
+  return asUser(userId, () => appendMessages(sessionId, messages))
+}
 
 function makeMeta(sessionId: string, userId: string, lastActiveAt: number): SessionMeta {
   return {
@@ -55,15 +87,15 @@ const DAY = 24 * 60 * 60 * 1000
 describe('searchOwnedSessions (streaming transcript grep)', () => {
   it('finds matches scoped to the user, formatted as sessionId:index: snippet', async () => {
     const now = Date.now()
-    await saveMeta('feishu:dm:a', makeMeta('feishu:dm:a', 'u1', now))
-    await appendMessages('feishu:dm:a', [
+    await saveMetaAs('u1', 'feishu:dm:a', makeMeta('feishu:dm:a', 'u1', now))
+    await appendMessagesAs('u1', 'feishu:dm:a', [
       createUserMessage('we discussed the vector index last week'),
       createUserMessage('unrelated chatter'),
       createUserMessage('the vector index again'),
     ])
     // A different user's session that also contains the needle — must not leak.
-    await saveMeta('feishu:dm:b', makeMeta('feishu:dm:b', 'u2', now))
-    await appendMessages('feishu:dm:b', [
+    await saveMetaAs('u2', 'feishu:dm:b', makeMeta('feishu:dm:b', 'u2', now))
+    await appendMessagesAs('u2', 'feishu:dm:b', [
       createUserMessage('u2 also mentions the vector index'),
     ])
 
@@ -77,22 +109,24 @@ describe('searchOwnedSessions (streaming transcript grep)', () => {
 
   it('reports indices that align with loadTranscript even across skipped JSONL lines', async () => {
     const now = Date.now()
-    await saveMeta('feishu:dm:idx', makeMeta('feishu:dm:idx', 'u1', now))
-    await appendMessages('feishu:dm:idx', [
+    await saveMetaAs('u1', 'feishu:dm:idx', makeMeta('feishu:dm:idx', 'u1', now))
+    await appendMessagesAs('u1', 'feishu:dm:idx', [
       createUserMessage('alpha one'),
       createUserMessage('beta filler'),
     ])
     // A non-message marker line (the shape fork transcripts prepend) — both
     // loadTranscript and the streaming searcher must skip it identically, so
     // it must not shift the index of the message that follows.
-    await appendFile(
-      getTranscriptPath('feishu:dm:idx'),
-      `${JSON.stringify({ kind: 'fork-transcript-meta', forkContextEndIndex: 0 })}\n`,
-      'utf8',
+    await asUser('u1', () =>
+      appendFile(
+        getTranscriptPath('feishu:dm:idx'),
+        `${JSON.stringify({ kind: 'fork-transcript-meta', forkContextEndIndex: 0 })}\n`,
+        'utf8',
+      ),
     )
-    await appendMessages('feishu:dm:idx', [createUserMessage('alpha two')])
+    await appendMessagesAs('u1', 'feishu:dm:idx', [createUserMessage('alpha two')])
 
-    const transcript = await loadTranscript('feishu:dm:idx')
+    const transcript = await asUser('u1', () => loadTranscript('feishu:dm:idx'))
     const hits = await searchOwnedSessions('u1', { query: 'alpha', limit: 50 })
 
     // Each reported index must point at a message that actually contains the
@@ -116,12 +150,12 @@ describe('searchOwnedSessions (streaming transcript grep)', () => {
 
   it('respects the daysBack cutoff and channel filter', async () => {
     const now = Date.now()
-    await saveMeta('feishu:dm:recent', makeMeta('feishu:dm:recent', 'u1', now))
-    await appendMessages('feishu:dm:recent', [createUserMessage('needle here')])
-    await saveMeta('feishu:dm:old', makeMeta('feishu:dm:old', 'u1', now - 10 * DAY))
-    await appendMessages('feishu:dm:old', [createUserMessage('needle here too')])
-    await saveMeta('terminal-x', makeMeta('terminal-x', 'u1', now))
-    await appendMessages('terminal-x', [createUserMessage('needle in terminal')])
+    await saveMetaAs('u1', 'feishu:dm:recent', makeMeta('feishu:dm:recent', 'u1', now))
+    await appendMessagesAs('u1', 'feishu:dm:recent', [createUserMessage('needle here')])
+    await saveMetaAs('u1', 'feishu:dm:old', makeMeta('feishu:dm:old', 'u1', now - 10 * DAY))
+    await appendMessagesAs('u1', 'feishu:dm:old', [createUserMessage('needle here too')])
+    await saveMetaAs('u1', 'terminal-x', makeMeta('terminal-x', 'u1', now))
+    await appendMessagesAs('u1', 'terminal-x', [createUserMessage('needle in terminal')])
 
     const recent = await searchOwnedSessions('u1', { query: 'needle', daysBack: 3, limit: 50 })
     assert.equal(recent.length, 2) // recent dm + terminal; old dm excluded
@@ -133,8 +167,9 @@ describe('searchOwnedSessions (streaming transcript grep)', () => {
 
   it('stops at the limit', async () => {
     const now = Date.now()
-    await saveMeta('feishu:dm:many', makeMeta('feishu:dm:many', 'u1', now))
-    await appendMessages(
+    await saveMetaAs('u1', 'feishu:dm:many', makeMeta('feishu:dm:many', 'u1', now))
+    await appendMessagesAs(
+      'u1',
       'feishu:dm:many',
       Array.from({ length: 10 }, (_, i) => createUserMessage(`hit ${i}`)),
     )
@@ -147,9 +182,9 @@ describe('searchOwnedSessions (streaming transcript grep)', () => {
 describe('listOwnedSessionMetas', () => {
   it('returns only the user\'s sessions, newest-active first, without loading transcripts', async () => {
     const now = Date.now()
-    await saveMeta('feishu:dm:old', makeMeta('feishu:dm:old', 'u1', now - 5 * DAY))
-    await saveMeta('feishu:dm:new', makeMeta('feishu:dm:new', 'u1', now))
-    await saveMeta('feishu:dm:other', makeMeta('feishu:dm:other', 'u2', now))
+    await saveMetaAs('u1', 'feishu:dm:old', makeMeta('feishu:dm:old', 'u1', now - 5 * DAY))
+    await saveMetaAs('u1', 'feishu:dm:new', makeMeta('feishu:dm:new', 'u1', now))
+    await saveMetaAs('u2', 'feishu:dm:other', makeMeta('feishu:dm:other', 'u2', now))
     // A session with meta but no transcript file must not throw.
     const metas = await listOwnedSessionMetas('u1')
 
@@ -162,18 +197,20 @@ describe('listOwnedSessionMetas', () => {
   it('excludes background fires and dispatched-worker leaf sessions', async () => {
     const now = Date.now()
     // Real conversations.
-    await saveMeta('feishu:dm:real', makeMeta('feishu:dm:real', 'u1', now))
-    await saveMeta(
+    await saveMetaAs('u1', 'feishu:dm:real', makeMeta('feishu:dm:real', 'u1', now))
+    await saveMetaAs(
+      'u1',
       'feishu:group:oc_x:ou_y',
       makeMeta('feishu:group:oc_x:ou_y', 'u1', now),
     )
     // Framework execution sessions that carry the SAME userId.
-    await saveMeta(
+    await saveMetaAs(
+      'u1',
       'bg-u1-u1-01a0dd78-deadbeef',
       makeMeta('bg-u1-u1-01a0dd78-deadbeef', 'u1', now),
     )
-    await saveMeta('u1-4f530b81', makeMeta('u1-4f530b81', 'u1', now)) // dispatched leaf
-    await appendMessages('bg-u1-u1-01a0dd78-deadbeef', [
+    await saveMetaAs('u1', 'u1-4f530b81', makeMeta('u1-4f530b81', 'u1', now)) // dispatched leaf
+    await appendMessagesAs('u1', 'bg-u1-u1-01a0dd78-deadbeef', [
       createUserMessage('internal worker chatter mentioning the needle'),
     ])
 

@@ -7,6 +7,7 @@ import { parseForkTranscriptFile } from '../agents/fork-transcript.js'
 import { getSignalRouter } from '../signal-bus/router.js'
 import { collectAssistantText } from '../messages.js'
 import { toolResultContentToText, type Message } from '../types.js'
+import { userSessionsRoot } from '../identity/paths.js'
 import { ensureMemoryDir, scanMemoryFilesInDirs } from './auto-memory.js'
 import { maybeEvictAgedMemories } from './aging-eviction.js'
 import { resolveMemoryDirsForRole } from './scope.js'
@@ -355,10 +356,15 @@ async function runExtractionPipeline(initial: ExtractCtx): Promise<ExtractResult
       }
       try {
         const router = getSignalRouter()
-        await maybeSweepForkTranscripts(current.config.paths.sessions, {
-          ephemeralTtlMs: current.config.dispatch.ephemeralSessionTtlMs,
-          activeSessionIds: router.getAllActiveSessionIds(),
-        })
+        await maybeSweepForkTranscripts(
+          current.canonicalUser
+            ? userSessionsRoot(current.canonicalUser)
+            : current.config.paths.sessions,
+          {
+            ephemeralTtlMs: current.config.dispatch.ephemeralSessionTtlMs,
+            activeSessionIds: router.getAllActiveSessionIds(),
+          },
+        )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[fork-transcript] retention sweep failed: ${message}`)

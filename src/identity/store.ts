@@ -1,11 +1,10 @@
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { getConfig, resolveSessionsDir } from '../config.js'
+import { getConfig } from '../config.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import type { PermissionMode } from '../permission/types.js'
-import { getSessionDir, loadMeta } from '../session/storage.js'
-import { adminPath, identitiesPath } from './paths.js'
+import { adminPath, identitiesPath, userSessionsRoot } from './paths.js'
 import type {
   AdminFile,
   ChannelKind,
@@ -251,22 +250,10 @@ async function purgeUserData(name: string): Promise<void> {
   // had a path-resolved cwd suffix in front.)
   await rm(getMemoryDir(name, getConfig()), { recursive: true, force: true })
 
-  try {
-    const entries = await readdir(resolveSessionsDir(), { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue
-      }
-      const meta = await loadMeta(entry.name)
-      if (meta?.userId === name || entry.name === `feishu-${name}`) {
-        await rm(getSessionDir(entry.name), { recursive: true, force: true })
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error
-    }
-  }
+  // Sessions now live under the per-user root (`users/<u>/sessions/...`), so
+  // the whole subtree is the user's — no flat-dir enumeration or per-session
+  // userId matching is needed anymore.
+  await rm(userSessionsRoot(name), { recursive: true, force: true })
 }
 
 async function chmodBestEffort(filePath: string, mode: number): Promise<void> {

@@ -5,7 +5,7 @@ import { getAllAgents } from '../../agents/registry.js'
 import { runSubagent } from '../../agents/run-subagent.js'
 import type { AgentType, Role } from '../../agents/types.js'
 import type { LightClawConfig, RuntimeDriver } from '../../config.js'
-import { userSkillsRoot } from '../../identity/paths.js'
+import { userSessionsRoot, userSkillsRoot } from '../../identity/paths.js'
 import { listActiveCanonicalUsers } from '../../identity/store.js'
 import { processCompositionCanaries } from '../../skill/composition-journal.js'
 import { ageUserSkills } from '../../skill/skill-aging.js'
@@ -294,7 +294,7 @@ async function executeAutoDreamInner(params: {
       if (subTaskDue.memoryCurator) {
         const memoryCuratorSucceeded = await runMemoryCurator({
           memoryDir: params.memoryDir,
-          transcriptDir: params.config.paths.sessions,
+          transcriptDir: userSessionsRoot(params.userId),
           sessionIds,
           userId: params.userId,
           maxTurns: params.config.memory.curator.maxTurns,
@@ -319,7 +319,7 @@ async function executeAutoDreamInner(params: {
       const skillOutcome = await runSkillDreamPasses({
         userId: params.userId,
         cwd: process.cwd(),
-        sessionsDir: params.config.paths.sessions,
+        sessionsDir: userSessionsRoot(params.userId),
         sessionIds,
         skillCuratorLastSuccess,
         runSkillCurator: subTaskDue.skillCurator,

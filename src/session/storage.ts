@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from 'node:fs'
 import {
   appendFile,
   mkdir,
@@ -8,6 +9,8 @@ import {
 import path from 'node:path'
 
 import { resolveSessionsDir } from '../config.js'
+import { usersRoot } from '../identity/paths.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import {
   getCompactionCount,
   getCurrentUserId,
@@ -77,6 +80,10 @@ function getMetaPath(sessionId: string): string {
   return path.join(getSessionDir(sessionId), 'meta.json')
 }
 
+function getMetaPathIn(sessionsDir: string, sessionId: string): string {
+  return path.join(sessionsDir, sessionId, 'meta.json')
+}
+
 async function ensureSessionDir(sessionId: string): Promise<string> {
   const sessionDir = getSessionDir(sessionId)
   await mkdir(sessionDir, { recursive: true })
@@ -84,7 +91,38 @@ async function ensureSessionDir(sessionId: string): Promise<string> {
 }
 
 export function getSessionDir(sessionId: string): string {
-  return path.join(resolveSessionsDir(), sessionId)
+  const contextDir = getCurrentSessionContext()?.sessionsDir
+  if (contextDir) {
+    return path.join(contextDir, sessionId)
+  }
+  const unboundDir = path.join(resolveSessionsDir(), sessionId)
+  if (existsSync(unboundDir)) {
+    return unboundDir
+  }
+  return findUserSessionDir(sessionId) ?? unboundDir
+}
+
+export function getSessionDirIn(sessionsDir: string, sessionId: string): string {
+  return path.join(sessionsDir, sessionId)
+}
+
+function findUserSessionDir(sessionId: string): string | null {
+  let users
+  try {
+    users = readdirSync(usersRoot(), { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const user of users) {
+    if (!user.isDirectory()) {
+      continue
+    }
+    const candidate = path.join(usersRoot(), user.name, 'sessions', sessionId)
+    if (existsSync(candidate)) {
+      return candidate
+    }
+  }
+  return null
 }
 
 /**
@@ -159,8 +197,18 @@ export async function rewriteTranscript(
 }
 
 export async function loadMeta(sessionId: string): Promise<SessionMeta | null> {
+  return loadMetaFromDir(
+    getCurrentSessionContext()?.sessionsDir ?? resolveSessionsDir(),
+    sessionId,
+  )
+}
+
+export async function loadMetaFromDir(
+  sessionsDir: string,
+  sessionId: string,
+): Promise<SessionMeta | null> {
   try {
-    const raw = await readFile(getMetaPath(sessionId), 'utf8')
+    const raw = await readFile(getMetaPathIn(sessionsDir, sessionId), 'utf8')
     return JSON.parse(raw) as SessionMeta
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {

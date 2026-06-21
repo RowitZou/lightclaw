@@ -6,6 +6,7 @@ import {
   getLastUuid,
 } from '../messages.js'
 import { resolveToolModuleModel } from '../model-resolution.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import { estimateTokens } from '../token-estimate.js'
 import {
   toolResultContentToText,
@@ -469,7 +470,8 @@ export async function compactConversation(
   // model has a chance to reference the session-memory.md file.
   let composedSummary = summary
   if (params.sessionId) {
-    const sm = await readSessionMemory(params.sessionId, params.config.paths.sessions)
+    const sessionsDir = getCurrentSessionContext()?.sessionsDir ?? params.config.paths.sessions
+    const sm = await readSessionMemory(params.sessionId, sessionsDir)
     const trimmedSm = sm.trim()
     if (trimmedSm.length > 0) {
       composedSummary = `## Session Working Memory (frozen at compact)\n${trimmedSm}\n\n---\n\n${summary}`

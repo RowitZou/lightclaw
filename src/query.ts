@@ -45,6 +45,7 @@ import {
   getCwd,
   getRuntime,
   getSessionId,
+  getSessionsDir,
   getSessionMemoryToolCallsSinceUpdate,
   getSessionMemoryTokensSinceUpdate,
   getTodos,
@@ -416,7 +417,7 @@ export async function query(params: QueryParams): Promise<{
     try {
       const update: SessionMemoryUpdateInput = {
         sessionId: getSessionId(),
-        sessionsDir: config.paths.sessions,
+        sessionsDir: getSessionsDir(),
         newMessages,
         config,
       }
