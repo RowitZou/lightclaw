@@ -22,8 +22,11 @@ import { decodeExpiresAtMs, extractAccountIdFromTokens } from './jwt.js'
 
 const PROVIDER_NAME = 'codex'
 
-/** On-disk shape for `<lightclawHome>/auth/codex.json`. */
-type StoredCodexTokens = {
+/** On-disk shape for `<lightclawHome>/auth/codex.json` AND for each per-user
+ *  BYO Codex store at `users/<canonical>/state/auth/codex/<name>.json`
+ *  (`src/auth/codex/user-store.ts`). Exported so the per-user store reuses the
+ *  exact same shape — the two paths must never drift. */
+export type StoredCodexTokens = {
   tokens: {
     access_token: string
     refresh_token: string
@@ -142,6 +145,17 @@ function readStored(): StoredCodexTokens | null {
   }
 }
 
+/** Perform the OAuth refresh-token grant against `auth.openai.com`. Exported
+ *  so the per-user BYO Codex store reuses the exact same transport / token URL
+ *  / client id / error classification as the global path — there is a single
+ *  refresh implementation. */
+export async function refreshCodexTokens(
+  http: HttpFn,
+  refreshToken: string,
+): Promise<RefreshResponse> {
+  return refreshTokens(http, refreshToken)
+}
+
 async function refreshTokens(
   http: HttpFn,
   refreshToken: string,
@@ -209,8 +223,13 @@ async function refreshTokens(
   })
 }
 
-function importFromCodexCli(): StoredCodexTokens {
-  const cliPath = codexCliAuthFilePath()
+/** Parse + validate an OpenAI Codex CLI `auth.json` at an ARBITRARY path and
+ *  return the normalized `StoredCodexTokens` WITHOUT writing it anywhere. The
+ *  global import wrapper writes the result to `<home>/auth/codex.json`; the
+ *  per-user BYO store writes it under the user's own dir. Single source of
+ *  truth for the CLI-file shape, the `expires_at`-from-JWT-`exp` derivation
+ *  (the CLI file has no explicit `expires_at`), and the already-expired guard. */
+export function loadCodexCliTokens(cliPath: string): StoredCodexTokens {
   if (!existsSync(cliPath)) {
     throw new AuthError({
       code: 'auth_missing',
@@ -287,6 +306,13 @@ function importFromCodexCli(): StoredCodexTokens {
     ...(parsed.last_refresh ? { last_refresh: parsed.last_refresh } : {}),
     source: 'codex-cli-import',
   }
+  return stored
+}
+
+/** Global import: read the default Codex CLI file and persist it to
+ *  `<home>/auth/codex.json`. */
+function importFromCodexCli(): StoredCodexTokens {
+  const stored = loadCodexCliTokens(codexCliAuthFilePath())
   writeTokenFile(PROVIDER_NAME, stored)
   return stored
 }

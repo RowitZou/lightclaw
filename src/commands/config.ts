@@ -2,6 +2,13 @@ import { constants as fsConstants, readdirSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 
+import {
+  deleteUserCodexAuth,
+  importUserCodexAuth,
+  listUserCodexAuth,
+  normalizeCodexAuthName,
+  readUserCodexAuth,
+} from '../auth/codex/user-store.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
   buildUserRegistry,
@@ -107,6 +114,10 @@ export async function runConfigCommand(
     return runModelSubcommand(parts.slice(1), ctx)
   }
 
+  if (action === 'codex') {
+    return runCodexSubcommand(parts.slice(1), ctx)
+  }
+
   return `${t('config.usage')}\n`
 }
 
@@ -130,6 +141,8 @@ async function runEndpointSubcommand(
         return formatEndpointList(userId)
       case 'add-key':
         return addApiKeyEndpoint(userId, parts)
+      case 'add-codex':
+        return addCodexEndpoint(userId, parts)
       case 'set':
         return setEndpoint(userId, parts)
       case 'remove':
@@ -149,6 +162,7 @@ function endpointUsage(): string {
     '  /config endpoint list',
     '  /config endpoint templates',
     '  /config endpoint add-key <alias> <SECRET_NAME> [--base-url <url>] [--proxy <url>]',
+    '  /config endpoint add-codex <alias> codex:<name> [--base-url <url>] [--proxy <url>]',
     '  /config endpoint set <alias> [--base-url <url|->] [--proxy <url|->] [--api-key-ref <SECRET_NAME>]',
     '  /config endpoint remove <alias>',
     '',
@@ -181,6 +195,42 @@ function addApiKeyEndpoint(userId: string, parts: string[]): string {
   if (guard) return guard
   writeUserConfig(userId, obj)
   return `${t('config.endpoint.added', { name: alias, ref: secretName })}\n`
+}
+
+function addCodexEndpoint(userId: string, parts: string[]): string {
+  const [alias, ref, ...rest] = parts
+  if (!alias || !ref) return endpointUsage()
+  assertAlias(alias)
+  // The arg is `codex:<name>`. Accept either the full ref or a bare name.
+  const rawName = ref.startsWith('codex:') ? ref.slice('codex:'.length) : ref
+  let authName: string
+  try {
+    authName = normalizeCodexAuthName(rawName)
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error))
+  }
+  const override = loadUserConfigOverride(userId)
+  if (override.endpoints?.[alias]) {
+    return `${t('config.endpoint.exists', { name: alias })}\n`
+  }
+  if (adminEndpointAliases().has(alias)) {
+    return `${t('config.endpoint.conflict', { name: alias })}\n`
+  }
+  if (!readUserCodexAuth(userId, authName)) {
+    return `${t('config.endpoint.codexAuthMissing', { name: authName })}\n`
+  }
+  // config.json stores only the authRef, never the OAuth tokens.
+  const endpoint: Record<string, unknown> = { authRef: `codex:${authName}` }
+  applyEndpointFlags(endpoint, rest)
+
+  const obj = readUserConfig(userId)
+  const endpoints = asRecord(obj.endpoints)
+  endpoints[alias] = endpoint
+  obj.endpoints = endpoints
+  const guard = guardWritable(userId, obj)
+  if (guard) return guard
+  writeUserConfig(userId, obj)
+  return `${t('config.endpoint.addedCodex', { name: alias, ref: authName })}\n`
 }
 
 function setEndpoint(userId: string, parts: string[]): string {
@@ -262,7 +312,10 @@ function formatEndpointList(userId: string): string {
       .map(([name, endpoint]) => {
         const baseUrl = endpoint.baseUrl ? ` baseUrl=${endpoint.baseUrl}` : ''
         const proxy = endpoint.proxy ? ' proxy=(set)' : ''
-        return `  ${name} apiKeyRef=${endpoint.apiKeyRef}${baseUrl}${proxy}`
+        const ref = endpoint.authRef
+          ? `authRef=${endpoint.authRef}`
+          : `apiKeyRef=${endpoint.apiKeyRef}`
+        return `  ${name} ${ref}${baseUrl}${proxy}`
       }),
     '',
   ].join('\n')}`
@@ -308,8 +361,8 @@ function modelUsage(): string {
     'Usage:',
     '  /config model list',
     '  /config model templates',
-    '  /config model add <displayName> <anthropic|openai> <endpointAlias> <upstreamModel> [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-output-tokens <n>] [--no-default]',
-    '  /config model set <displayName> [--schema <anthropic|openai>] [--endpoint <alias>] [--upstream-model <id>] [--reasoning <e|->] [--max-output-tokens <n|->]',
+    '  /config model add <displayName> <anthropic|openai|openai-auth> <endpointAlias> <upstreamModel> [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-output-tokens <n>] [--no-default]',
+    '  /config model set <displayName> [--schema <anthropic|openai|openai-auth>] [--endpoint <alias>] [--upstream-model <id>] [--reasoning <e|->] [--max-output-tokens <n|->]',
     '  /config model check <displayName>',
     '  /config model remove <displayName>',
     '',
@@ -474,6 +527,85 @@ async function checkModel(
   }
 }
 
+// ── /config codex <verb> (per-user BYO Codex OAuth store, PR5 ckpt 2) ────────
+// Caller-scoped: operates on ctx.userId's own per-user codex store. `import`
+// reads a daemon-readable FILE path (a `codex login` auth.json), not a pasted
+// secret, so there is no chat-leak concern — config.json only ever stores the
+// authRef, never the tokens.
+
+async function runCodexSubcommand(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const verb = (parts.shift() ?? 'list').toLowerCase()
+  if (!ctx.userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  const userId = ctx.userId
+  try {
+    switch (verb) {
+      case 'list':
+        return formatCodexList(userId)
+      case 'import':
+        return importCodex(userId, parts)
+      case 'remove':
+      case 'rm':
+        return removeCodex(userId, parts)
+      default:
+        return codexUsage()
+    }
+  } catch (error) {
+    return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
+  }
+}
+
+function codexUsage(): string {
+  return [
+    'Usage:',
+    '  /config codex list',
+    '  /config codex import --from <daemon-readable-path> [--name <name>]',
+    '  /config codex remove [<name>]',
+    '',
+  ].join('\n')
+}
+
+function importCodex(userId: string, parts: string[]): string {
+  const fromPath = flagValue(parts, '--from')
+  if (!fromPath) return codexUsage()
+  const name = flagValue(parts, '--name')
+  try {
+    const summary = importUserCodexAuth({
+      canonicalUser: userId,
+      fromPath: expandHomePath(fromPath),
+      ...(name ? { name } : {}),
+    })
+    return `${t('config.codex.imported', { name: summary.name, account: summary.accountId || '(unknown)' })}\n`
+  } catch (error) {
+    return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
+  }
+}
+
+function removeCodex(userId: string, parts: string[]): string {
+  const name = normalizeCodexAuthName(parts[0])
+  const removed = deleteUserCodexAuth(userId, name)
+  return removed
+    ? `${t('config.codex.removed', { name })}\n`
+    : `${t('config.codex.removeMissing', { name })}\n`
+}
+
+function formatCodexList(userId: string): string {
+  const entries = listUserCodexAuth(userId)
+  if (entries.length === 0) return `${t('config.codex.none')}\n`
+  return `${[
+    t('config.codex.listHeader'),
+    ...entries.map(e => {
+      const expiry = new Date(e.expiresAt).toISOString()
+      return `  ${e.name} account=${e.accountId || '(unknown)'} expires=${expiry} source=${e.source}`
+    }),
+    '',
+  ].join('\n')}`
+}
+
 // ── shared helpers ───────────────────────────────────────────────────────────
 
 /** Admin endpoint aliases the user's BYO aliases must not shadow. Best-effort:
@@ -517,8 +649,8 @@ function assertAlias(value: string): void {
   }
 }
 
-function parseSchema(input: string): 'anthropic' | 'openai' | null {
-  return input === 'anthropic' || input === 'openai' ? input : null
+function parseSchema(input: string): 'anthropic' | 'openai' | 'openai-auth' | null {
+  return input === 'anthropic' || input === 'openai' || input === 'openai-auth' ? input : null
 }
 
 function parseReasoning(input: string | undefined): string | undefined | false {

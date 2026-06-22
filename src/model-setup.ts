@@ -1,7 +1,6 @@
 // Dev-facing setup template text for the BYO endpoint / model commands
-// (PR5 checkpoint 1). English-only by design — these are example command
-// transcripts, not localized user-facing strings. Codex / authRef / openai-auth
-// examples are intentionally omitted: that schema is a later checkpoint.
+// (PR5 checkpoint 1 apiKey + checkpoint 2 codex). English-only by design —
+// these are example command transcripts, not localized user-facing strings.
 
 export function formatEndpointTemplates(): string {
   return [
@@ -28,6 +27,11 @@ export function formatEndpointTemplates(): string {
     '  /config endpoint add-key local-gateway GATEWAY_KEY --base-url http://127.0.0.1:8000/v1 --proxy <proxy-url-if-needed>',
     '  /config model add local-model openai local-gateway <served-model-id> --reasoning low --max-output-tokens 32000',
     '',
+    'Your own Codex (ChatGPT OAuth) account:',
+    '  /config codex import --from ~/.codex/auth.json --name personal',
+    '  /config endpoint add-codex my-codex codex:personal',
+    '  /config model add gpt-codex openai-auth my-codex gpt-5.5 --reasoning medium',
+    '',
   ].join('\n')
 }
 
@@ -37,7 +41,7 @@ export function formatModelTemplates(): string {
     '',
     'Model parameters:',
     '  <model>           The LightClaw display name you choose, for example gpt-openai.',
-    '  schema            openai for OpenAI/OpenAI-compatible APIs; anthropic for Anthropic.',
+    '  schema            openai for OpenAI/OpenAI-compatible APIs; anthropic for Anthropic; openai-auth for your own Codex (ChatGPT OAuth) account.',
     '  endpoint          The endpoint alias from /config endpoint list.',
     '  upstreamModel     The real model id sent to the provider. Copy it from your provider docs or an admin-provided example.',
     '  --reasoning       Optional: none | minimal | low | medium | high | xhigh. Use low for speed, medium as default, high/xhigh for harder coding/reasoning; none/minimal only when the upstream model supports them.',
@@ -52,6 +56,9 @@ export function formatModelTemplates(): string {
     '',
     'OpenAI-compatible self-hosted gateway:',
     '  /config model add local-model openai local-gateway <served-model-id> --reasoning low --max-output-tokens 32000',
+    '',
+    'Your own Codex (ChatGPT OAuth) account:',
+    '  /config model add gpt-codex openai-auth my-codex gpt-5.5 --reasoning medium',
     '',
     'Modify later:',
     '  /config model set gpt-openai --reasoning high',

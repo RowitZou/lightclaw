@@ -339,6 +339,20 @@ export type OAuthEndpoint = {
   /** Explicit proxy URL — same semantics as `ApiKeyEndpoint.proxy`. The
    *  Codex token-refresh path also routes through this. */
   proxy?: string
+  /** Stable cache-key discriminator (PR5 checkpoint 2 BYO codex). The admin's
+   *  GLOBAL codex endpoint omits this (and falls back to `global:codex-oauth`);
+   *  a per-user BYO codex endpoint carries `user:<canonical>:auth:codex:<name>`
+   *  so two users' same-aliased codex endpoints never share a provider. */
+  credentialIdentity?: string
+  /** Canonical user who OWNS this BYO codex endpoint. Omitted on the admin
+   *  global codex endpoint (which resolves from `<home>/auth/codex.json`); set
+   *  on a per-user endpoint so the provider resolves + refreshes credentials
+   *  from THAT user's own per-user codex store. */
+  credentialOwner?: string
+  /** Reference into the owner's per-user codex store: `codex:<name>` (maps to
+   *  `users/<owner>/state/auth/codex/<name>.json`). Set together with
+   *  `credentialOwner` on a BYO codex endpoint; omitted on the admin global. */
+  authRef?: string
 }
 
 export type EndpointConfig = ApiKeyEndpoint | OAuthEndpoint

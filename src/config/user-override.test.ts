@@ -6,9 +6,17 @@ import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
 import { userConfigPath, userSecretsPath } from '../identity/paths.js'
+import { userCodexAuthPath } from '../auth/codex/user-store.js'
+import {
+  clearCredentialDegrade,
+  isModelCredentialDisabled,
+  setCredentialDegrade,
+} from '../auth/codex/degrade-state.js'
+import { applyCredentialDegrade } from '../model-resolution.js'
 import { identityPreferencesPath } from '../identity/preferences.js'
 import type { LightClawConfig, ModelEntry } from '../config.js'
 import {
+  buildUserRegistry,
   loadUserConfigOverride,
   readUserConfig,
   resolveUserConfig,
@@ -269,6 +277,170 @@ describe('resolveUserConfig BYO registry union (PR5 checkpoint 1)', () => {
     assert.equal(resolved!.models['my-gpt'], undefined)
     assert.deepEqual(resolved!.models, base.models)
   })
+})
+
+describe('resolveUserConfig BYO codex registry (PR5 checkpoint 2)', () => {
+  let tmpHome: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-byo-codex-test-'))
+    setLightclawHomeOverride(tmpHome)
+  })
+
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  function writeUserConfigJson(user: string, data: Record<string, unknown>): void {
+    const target = userConfigPath(user)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, JSON.stringify(data, null, 2))
+  }
+
+  // Write a fake per-user codex auth file directly (mimics the on-disk shape
+  // importUserCodexAuth would produce) so the test never needs a real
+  // `codex login` file or a network refresh. expires_at far in the future so
+  // getUserCodexCredentials never tries to refresh.
+  function writeFakeUserCodex(user: string, name = 'default'): void {
+    const file = userCodexAuthPath(user, name)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({
+        tokens: {
+          access_token: 'fake-access-token',
+          refresh_token: 'fake-refresh-token',
+          expires_at: Date.now() + 86_400_000,
+        },
+        account_id: 'acct-fake',
+        imported_at: new Date().toISOString(),
+        source: 'codex-cli-import',
+      }),
+    )
+  }
+
+  it('(a) byo codex endpoint+model unions in with schema openai-auth, visibility user, credentialOwner/authRef/credentialIdentity', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeFakeUserCodex('alice', 'personal')
+    writeUserConfigJson('alice', {
+      endpoints: { 'my-codex': { authRef: 'codex:personal' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+      defaultModel: 'gpt-codex',
+    })
+    const resolved = resolveUserConfig('alice', base)
+    // Admin models survive (union).
+    assert.ok(resolved.models.m && resolved.models.mine)
+    const model = resolved.models['gpt-codex']
+    assert.ok(model, 'byo codex model must be unioned in')
+    assert.equal(model.schema, 'openai-auth')
+    assert.equal(model.upstreamModel, 'gpt-5.5')
+    assert.equal(model.visibility, 'user')
+    const ep = resolved.endpoints['my-codex'] as {
+      auth?: string
+      authRef?: string
+      credentialOwner?: string
+      credentialIdentity?: string
+    }
+    assert.equal(ep.auth, 'codex-oauth')
+    assert.equal(ep.authRef, 'codex:personal')
+    assert.equal(ep.credentialOwner, 'alice')
+    assert.equal(ep.credentialIdentity, 'user:alice:auth:codex:personal')
+    assert.equal(resolved.defaultModel, 'gpt-codex')
+  })
+
+  it('(b) openai-auth model referencing an apiKey endpoint (schema mismatch) → admin-only fallback, no throw', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeSecret('alice', 'MY_KEY', 'sk-alice-secret')
+    writeUserConfigJson('alice', {
+      endpoints: { myep: { apiKeyRef: 'MY_KEY' } },
+      models: { 'bad-codex': { endpoint: 'myep', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+    })
+    let resolved: LightClawConfig | undefined
+    assert.doesNotThrow(() => {
+      resolved = resolveUserConfig('alice', base)
+    })
+    assert.equal(resolved!.models['bad-codex'], undefined)
+    assert.deepEqual(resolved!.models, base.models)
+  })
+
+  it('(c) authRef endpoint whose codex auth is NOT imported → admin-only fallback, no throw', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    // No fake codex auth written for "missing".
+    writeUserConfigJson('alice', {
+      endpoints: { 'my-codex': { authRef: 'codex:missing' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+    })
+    let resolved: LightClawConfig | undefined
+    assert.doesNotThrow(() => {
+      resolved = resolveUserConfig('alice', base)
+    })
+    assert.equal(resolved!.models['gpt-codex'], undefined)
+    assert.deepEqual(resolved!.models, base.models)
+    // The build error surfaces the import hint.
+    const built = buildUserRegistry('alice', loadUserConfigOverride('alice'))
+    assert.equal(built.ok, false)
+    assert.match((built as { error: string }).error, /is not imported; run \/config codex import/)
+  })
+
+  it('(d) config.json carries authRef but NOT any token value', () => {
+    writeFakeUserCodex('alice', 'personal')
+    writeUserConfigJson('alice', {
+      endpoints: { 'my-codex': { authRef: 'codex:personal' } },
+      models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+    })
+    const onDisk = readFileSync(userConfigPath('alice'), 'utf8')
+    assert.ok(onDisk.includes('codex:personal'), 'authRef must be present in config.json')
+    assert.ok(!onDisk.includes('fake-access-token'), 'token must NEVER be written to config.json')
+    assert.ok(!onDisk.includes('fake-refresh-token'), 'refresh token must NEVER be written to config.json')
+  })
+
+  it('(e) invariant #2: user BYO codex model survives regardless of admin global codex degrade state', () => {
+    // Simulate the admin-global codex being degraded/absent at startup: the
+    // credential-degrade verdict disables an ADMIN oauth model by name. The
+    // user's BYO codex model is name-distinct, so it must NOT be swept.
+    setCredentialDegrade({ disabledModels: ['admin-codex'], fallbackModel: 'm' })
+    try {
+      // base has an admin codex model that startup would have disabled.
+      const base = makeBase({
+        defaultModel: 'm',
+        models: {
+          ...MODELS,
+          'admin-codex': { endpoint: 'a', schema: 'openai-auth', upstreamModel: 'gpt-admin' },
+        },
+      })
+      writeFakeUserCodex('alice', 'personal')
+      writeUserConfigJson('alice', {
+        endpoints: { 'my-codex': { authRef: 'codex:personal' } },
+        models: { 'gpt-codex': { endpoint: 'my-codex', schema: 'openai-auth', upstreamModel: 'gpt-5.5' } },
+        defaultModel: 'gpt-codex',
+      })
+      const resolved = resolveUserConfig('alice', base)
+      // The user's BYO codex model is present and selectable.
+      assert.ok(resolved.models['gpt-codex'], 'user BYO codex model must survive admin codex degrade')
+      assert.equal(resolved.models['gpt-codex'].schema, 'openai-auth')
+      // The user's BYO codex model is NOT in the degrade-disabled set.
+      assert.equal(isModelCredentialDisabled('gpt-codex'), false)
+      // Selecting it does not get swapped away by applyCredentialDegrade.
+      assert.equal(applyCredentialDegrade('gpt-codex', resolved), 'gpt-codex')
+      // The admin codex model IS still disabled (degrade scoped to admin names).
+      assert.equal(isModelCredentialDisabled('admin-codex'), true)
+    } finally {
+      clearCredentialDegrade()
+    }
+  })
+
+  function writeSecret(user: string, name: string, value: string): void {
+    const target = userSecretsPath(user)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(
+      target,
+      JSON.stringify({
+        version: 1,
+        secrets: { [name]: { value, enabled: true, updatedAt: new Date().toISOString() } },
+      }),
+    )
+  }
 })
 
 describe('setUserConfigField (the /model per-user writer)', () => {

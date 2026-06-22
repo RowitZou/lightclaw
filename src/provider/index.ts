@@ -9,6 +9,10 @@ import {
   writeCacheEntry,
   type AttachmentPosition,
 } from './capability-cache.js'
+import {
+  getUserCodexCredentials,
+  parseCodexAuthRef,
+} from '../auth/codex/user-store.js'
 import { createOpenAIAuthProvider } from './openai-auth.js'
 import { createOpenAIProvider } from './openai.js'
 import type { AttachmentKind, Provider, Schema } from './types.js'
@@ -74,6 +78,25 @@ function buildProvider(
         throw new Error(
           `Schema "openai-auth" requires an OAuth endpoint, got apiKey endpoint.`,
         )
+      }
+      // BYO codex (PR5 checkpoint 2): an endpoint owned by a user resolves its
+      // credentials from THAT user's per-user codex store instead of the admin
+      // global `<home>/auth/codex.json`. The cache key already isolates by
+      // `credentialIdentity` (checkpoint 1), so two users' BYO codex providers
+      // never collide. Admin's global codex endpoint (no `credentialOwner`)
+      // keeps the default global path.
+      if (endpoint.credentialOwner && endpoint.authRef) {
+        const owner = endpoint.credentialOwner
+        const authRef = endpoint.authRef
+        const proxy = endpoint.proxy
+        return createOpenAIAuthProvider(endpoint, {
+          credentialsProvider: () =>
+            getUserCodexCredentials({
+              canonicalUser: owner,
+              name: parseCodexAuthRef(authRef),
+              proxy,
+            }),
+        })
       }
       return createOpenAIAuthProvider(endpoint)
     }

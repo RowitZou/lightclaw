@@ -3,6 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import type { EndpointConfig, LightClawConfig, ModelEntry } from '../config.js'
+import { parseCodexAuthRef, readUserCodexAuth } from '../auth/codex/user-store.js'
 import { userConfigPath } from '../identity/paths.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import type { ReasoningEffort, Schema } from '../provider/types.js'
@@ -24,12 +25,14 @@ import { normalizeProxyUrl } from './proxy-url.js'
  * function body.
  */
 
-// ── BYO endpoint / model schemas (PR5 checkpoint 1, apiKey-only) ─────────────
-// A user may define their own apiKey-backed endpoints and custom models in
-// config.json; resolveUserConfig UNIONs them onto the admin registry. The raw
-// key never lives in config.json — `apiKeyRef` names a secret resolved from the
-// user's secrets.json at resolve time. Codex per-user OAuth (`authRef`,
-// `openai-auth` schema) is a later checkpoint and intentionally absent here.
+// ── BYO endpoint / model schemas (PR5 checkpoint 1 apiKey + checkpoint 2 codex) ─
+// A user may define their own endpoints and custom models in config.json;
+// resolveUserConfig UNIONs them onto the admin registry. config.json never
+// stores a raw credential: an apiKey endpoint names a secret via `apiKeyRef`
+// (resolved from the user's secrets.json), and a BYO codex endpoint names a
+// per-user codex store via `authRef: codex:<name>` (resolved from
+// `users/<canonical>/state/auth/codex/<name>.json`). Each endpoint is exactly
+// one of the two — the schema's superRefine enforces the XOR.
 
 /** Trim + normalize a proxy URL string, surfacing the normalizer's error
  *  through a zod issue rather than throwing during safeParse. */
@@ -53,15 +56,28 @@ const UserEndpointSchema = z
   .object({
     baseUrl: z.string().trim().min(1).optional(),
     proxy: ProxyUrlSchema.optional(),
-    // apiKeyRef is REQUIRED this checkpoint — there is no authRef field yet.
-    apiKeyRef: z.string().trim().min(1),
+    // PR5 checkpoint 2: an endpoint is EITHER apiKey-backed (`apiKeyRef`, a
+    // user secret name) OR codex-OAuth-backed (`authRef`, `codex:<name>` into
+    // the user's own codex store) — exactly one, never both.
+    apiKeyRef: z.string().trim().min(1).optional(),
+    authRef: z.string().trim().min(1).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const hasApiKeyRef = Boolean(value.apiKeyRef)
+    const hasAuthRef = Boolean(value.authRef)
+    if (hasApiKeyRef === hasAuthRef) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'exactly one of apiKeyRef or authRef is required',
+      })
+    }
+  })
 
 const UserModelSchema = z
   .object({
     endpoint: z.string().trim().min(1),
-    schema: z.enum(['anthropic', 'openai']),
+    schema: z.enum(['anthropic', 'openai', 'openai-auth']),
     upstreamModel: z.string().trim().min(1),
     reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
     maxOutputTokens: z.number().int().positive().optional(),
@@ -154,9 +170,46 @@ export function buildUserRegistry(
   const models: Record<string, ModelEntry> = {}
 
   for (const [alias, ep] of Object.entries(override.endpoints ?? {})) {
+    // BYO codex (PR5 checkpoint 2): `authRef` (codex:<name>) -> resolve the
+    // owner's per-user codex store, NOT a secret. The schema's superRefine
+    // guarantees exactly one of apiKeyRef / authRef is set.
+    if (ep.authRef) {
+      let authName: string
+      try {
+        authName = parseCodexAuthRef(ep.authRef)
+      } catch (error) {
+        return {
+          ok: false,
+          error: `endpoint "${alias}" authRef is invalid: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+      // The named auth must actually be imported into the user's codex store —
+      // config.json carries only the ref, never the tokens.
+      if (!readUserCodexAuth(canonical, authName)) {
+        return {
+          ok: false,
+          error: `endpoint "${alias}" authRef "codex:${authName}" is not imported; run /config codex import first`,
+        }
+      }
+      const authRef = `codex:${authName}`
+      endpoints[alias] = {
+        auth: 'codex-oauth',
+        authRef,
+        credentialOwner: canonical,
+        credentialIdentity: `user:${canonical}:auth:${authRef}`,
+        ...(ep.baseUrl ? { baseUrl: ep.baseUrl } : {}),
+        ...(ep.proxy ? { proxy: ep.proxy } : {}),
+      }
+      continue
+    }
+
+    // apiKey-backed endpoint (checkpoint 1). apiKeyRef is guaranteed present
+    // here by the schema superRefine (authRef absent).
     let secretName: string
     try {
-      secretName = validateSecretName(ep.apiKeyRef)
+      secretName = validateSecretName(ep.apiKeyRef!)
     } catch (error) {
       return {
         ok: false,
@@ -181,10 +234,28 @@ export function buildUserRegistry(
   }
 
   for (const [displayName, m] of Object.entries(override.models ?? {})) {
-    if (!endpoints[m.endpoint]) {
+    const endpoint = endpoints[m.endpoint]
+    if (!endpoint) {
       return {
         ok: false,
         error: `user model "${displayName}" references missing user endpoint "${m.endpoint}"`,
+      }
+    }
+    // Schema / endpoint consistency: an openai-auth (codex) model must point at
+    // a codex (OAuth) endpoint; an anthropic / openai model must point at an
+    // apiKey endpoint. A mismatch is rejected gracefully (caller falls back to
+    // the admin-only registry), never thrown.
+    const isOAuthEndpoint = 'auth' in endpoint
+    if (m.schema === 'openai-auth' && !isOAuthEndpoint) {
+      return {
+        ok: false,
+        error: `user model "${displayName}" uses openai-auth but endpoint "${m.endpoint}" is an apiKey endpoint`,
+      }
+    }
+    if (m.schema !== 'openai-auth' && isOAuthEndpoint) {
+      return {
+        ok: false,
+        error: `user model "${displayName}" uses ${m.schema} but endpoint "${m.endpoint}" is a codex (authRef) endpoint`,
       }
     }
     models[displayName] = {
