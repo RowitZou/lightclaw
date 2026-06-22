@@ -115,6 +115,19 @@ export function getProviderFor(
   config: LightClawConfig,
   displayModel: string,
 ): { provider: Provider; entry: ModelEntry } {
+  // No model configured (g.1 graceful no-default state). The channel /
+  // background entry gates surface a friendly notice to the user before
+  // reaching here; this is the single chokepoint error for any path that
+  // resolves an empty model through `resolveRoleModel` / `resolveToolModuleModel`
+  // (compaction / session-memory / image / web sub-LLMs) — a clear, actionable
+  // message instead of the confusing `Unknown model ""`.
+  if (!displayModel) {
+    throw new Error(
+      'No model is configured. Select one with `/model <name>`, or configure a ' +
+        'bring-your-own model via `/config endpoint` + `/config model`. ' +
+        `Registered: ${Object.keys(config.models).join(', ') || '(none)'}.`,
+    )
+  }
   const entry = config.models[displayModel]
   if (!entry) {
     throw new Error(

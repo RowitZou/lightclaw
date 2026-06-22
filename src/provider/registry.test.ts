@@ -122,6 +122,21 @@ describe('provider registry', () => {
     )
   })
 
+  // g.1: in the graceful no-default-model state an empty model may reach the
+  // single provider chokepoint (a path that resolved roleModel /
+  // resolveToolModuleModel to ''); it must raise a clear, actionable error —
+  // NOT the confusing `Unknown model ""`.
+  it('throws a clear "No model is configured" error for an empty model name', () => {
+    const cfg = buildConfig()
+    assert.throws(
+      () => getProviderFor(cfg, ''),
+      (err: unknown) =>
+        err instanceof Error &&
+        /No model is configured/.test(err.message) &&
+        !/Unknown model/.test(err.message),
+    )
+  })
+
   it('throws if model references a missing endpoint', () => {
     const cfg = buildConfig()
     cfg.models['orphan'] = {

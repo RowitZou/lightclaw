@@ -1353,15 +1353,20 @@ export function getConfig(): LightClawConfig {
       `No models configured. Define endpoints + models in ${path.join(lightclawHome(), 'config.json')}.`,
     )
   }
+  // `defaultModel` is OPTIONAL (g.1): an admin may run with NO global default,
+  // so every user must bring their own model (BYO). Omitted / empty string =
+  // the graceful "no default" state — per-user `resolveUserConfig` then folds
+  // each user's own model in, the channel / background gates surface a friendly
+  // "no model configured" notice when neither side has one, and `getProviderFor`
+  // raises a clear, actionable error if an empty model ever reaches provider
+  // resolution. A NON-EMPTY value must still name a real model — typo safety is
+  // preserved. (`modelNames.length === 0` is still rejected above: an admin must
+  // define at least one model even in a BYO-pool deployment.)
   const requestedModel =
     process.env.LIGHTCLAW_DEFAULT_MODEL ??
-    fileConfig.defaultModel
-  if (requestedModel === undefined) {
-    throw new Error(
-      '`defaultModel` is required (set it as a top-level field or via LIGHTCLAW_DEFAULT_MODEL env).',
-    )
-  }
-  if (!models[requestedModel]) {
+    fileConfig.defaultModel ??
+    ''
+  if (requestedModel && !models[requestedModel]) {
     throw new Error(
       `defaultModel = "${requestedModel}" is not in models. Available: ${modelNames.join(', ')}.`,
     )

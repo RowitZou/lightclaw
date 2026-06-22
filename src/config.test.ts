@@ -241,14 +241,39 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /maxOutputTokens must be a positive integer/)
   })
 
-  it('throws when defaultModel is not configured', () => {
+  // g.1: `defaultModel` is OPTIONAL. An admin may run with no global default so
+  // every user brings their own model (BYO). Omitted / empty = graceful '' state;
+  // a NON-EMPTY value must still name a real model (typo safety).
+  it('allows an omitted defaultModel — graceful no-default state (g.1)', () => {
     writeConfigRaw({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
         primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
       },
     })
-    assert.throws(() => getConfig(), /`defaultModel` is required/)
+    assert.equal(getConfig().defaultModel, '')
+  })
+
+  it('allows an explicitly empty defaultModel (g.1)', () => {
+    writeConfigRaw({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: '',
+    })
+    assert.equal(getConfig().defaultModel, '')
+  })
+
+  it('still rejects a non-empty defaultModel that is not in models (typo safety, g.1)', () => {
+    writeConfigRaw({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        primary: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+      },
+      defaultModel: 'ghost',
+    })
+    assert.throws(() => getConfig(), /defaultModel = "ghost" is not in models/)
   })
 
   it('LIGHTCLAW_DEFAULT_MODEL overrides file defaultModel', () => {
