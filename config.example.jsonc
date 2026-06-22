@@ -1,421 +1,310 @@
 // ============================================================================
-// LightClaw full configuration reference (config.example.jsonc)
+// LightClaw configuration reference (config.example.jsonc)
 // ----------------------------------------------------------------------------
-// This is the single reference for "every option + every default value". It is
-// NOT a drop-in config file:
+// Every option appears as a LIVE key — you never have to add a key that isn't
+// already here. Read the value (three states, never ambiguous):
+//   * a value shown          = that option's DEFAULT. Keep it, or edit to override.
+//   * "<placeholder>"        = REQUIRED — you must supply a value. A comment says
+//                              when it's required (e.g. "when enabled" / "for the
+//                              cluster backend").
+//   * an empty value ("" / [] / {}) = OPTIONAL with no default. Fill it to use
+//                              the feature, or leave it empty to skip / fall back.
+//   * a comment "e.g. ..."     = an illustrative EXAMPLE value for an optional
+//                              field — not a default, not required, just a format
+//                              hint. (So <...> = required slot; e.g. = example.)
+//   * open-ended collections (endpoints, models, mounts, env) are empty
+//     containers — add your own entries (the entry shape is in the comment above).
+// No key is ever commented out and no value is a fake default, so a live value is
+// always a real default, a <placeholder> you must fill, or genuinely empty.
 //
-//   * The runtime only reads  <LIGHTCLAW_HOME>/config.json  (default
-//     ~/.lightclaw/config.json) via plain JSON.parse — comments are NOT
-//     accepted. Copy the fields you need, strip the comments.
-//   * Only endpoints / models / defaultModel are required; everything else is
-//     optional and falls back to the default noted below. Delete whole
-//     sections you don't use.
-//   * Environment variables take precedence over this file (env > config.json >
-//     default). Fields that have an env override are tagged  [env: XXX].
-//   * Never commit real keys / internal IPs / hostnames — placeholders only.
+// Tiers: ① infrastructure (channels / runtime / brave key) — fill to deploy ·
+//        ② model layer (endpoints / models / defaultModel / lane) — fill here OR
+//           manage via slash · ③ behavior tuning — everything else, has defaults.
+//
+//   * Data root precedence: `--home` flag > LIGHTCLAW_HOME env > this file's "home"
+//     (honored only when the file is loaded via `--config <file>`) > default
+//     ~/.lightclaw. The in-home <home>/config.json ignores its own "home" (it was
+//     already located via home). Everything else lives under <home>/.
+//   * The runtime reads <home>/config.json via plain JSON.parse — comments are
+//     NOT accepted; strip them. Per-user BYO overrides live in
+//     <home>/users/<canonical>/config.json.
+//   * The only path you can relocate is the workspace pool (LIGHTCLAW_WORKSPACE_ROOT);
+//     every other dir derives from <home>. Non-path env overrides (FEISHU_* / brave
+//     / lang / kill-switches) are tagged [env: XXX]. Never commit real keys / IPs.
 // ============================================================================
 {
-  // ──────────────────────────────────────────────────────────────────────
-  // endpoints (required) — named "credential + optional baseUrl" pool that
-  // models reference. One gateway can serve both anthropic and openai
-  // protocols; the schema lives on each model entry, not here.
-  // ──────────────────────────────────────────────────────────────────────
-  "endpoints": {
-    // Plain API-key endpoint
-    "anthropic-direct": {
-      "apiKey": "<your-anthropic-api-key>",
-      // baseUrl: omit for the official api.anthropic.com; set a gateway URL
-      // (no /v1 suffix) for a third-party gateway.
-      "baseUrl": "<https://your-gateway-host>",
-      // proxy: outbound proxy for this endpoint; omit/empty = direct. Never
-      // inherits the shell's http_proxy.
-      "proxy": "<http://proxy-host:port>"
-    },
-    // OAuth endpoint — currently only Codex (uses your ChatGPT subscription's
-    // Codex quota). `/auth import codex` writes this section for you.
-    "codex": {
-      "auth": "codex-oauth", // mutually exclusive with apiKey
-      "proxy": "<http://proxy-host:port>"
-    }
-  },
+  // ══════════════════════════════════════════════════════════════════════
+  // ① INFRASTRUCTURE — fill these to deploy.
+  // ══════════════════════════════════════════════════════════════════════
 
-  // ──────────────────────────────────────────────────────────────────────
-  // models (required) — display name -> { endpoint, schema, upstreamModel }.
-  // The display name is what you see in /model, free to name. upstreamModel
-  // is the real model id sent to the upstream API — the two are decoupled.
-  // ──────────────────────────────────────────────────────────────────────
-  "models": {
-    "claude-sonnet-4-6": {
-      "endpoint": "anthropic-direct",       // must be a key in endpoints
-      "schema": "anthropic",                // "anthropic" | "openai" | "openai-auth"
-      "upstreamModel": "claude-sonnet-4-6"
-    },
-    "gpt-5-mini": {
-      "endpoint": "anthropic-direct",
-      "schema": "openai",
-      "upstreamModel": "gpt-5-mini",
-      "reasoningEffort": "medium"           // optional, reasoning models only: "low"|"medium"|"high"
-    },
-    "gpt-5-codex": {
-      "endpoint": "codex",
-      "schema": "openai-auth",              // openai-auth must use an auth-type endpoint
-      "upstreamModel": "gpt-5-codex"
-    }
-  },
+  // home — data root, honored when this file is loaded via `--config <file>` and
+  // neither --home nor LIGHTCLAW_HOME is set. Empty = ~/.lightclaw. Ignored when
+  // this is already the in-home <home>/config.json.
+  "home": "",                             // e.g. /data/lightclaw
 
-  // Startup default model (required), a display name from above. Runtime
-  // /model <name> only rewrites this field.
-  "defaultModel": "claude-sonnet-4-6",      // [env: LIGHTCLAW_DEFAULT_MODEL]
-
-  // ──────────────────────────────────────────────────────────────────────
-  // roles (optional) — pin a model or turn cap for a specific worker /
-  // internal role. Valid keys: generalist / localExplorer / webSearcher /
-  // feishuSecretary / coder / archivist / reviewer / internal
-  // ("internal" covers memoryExtractor + memoryCurator etc. as a group; "main"
-  //  is not accepted — main is always bound to defaultModel). Unset roles fall
-  // back to defaultModel.
-  // ──────────────────────────────────────────────────────────────────────
-  "roles": {
-    "internal": { "model": "gpt-5-mini" },  // internal roles (memory extract/curate) on a cheap model
-    "coder":    { "model": "claude-sonnet-4-6", "maxTurns": 80 }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // subLLM (optional) — model pins for framework-internal LLM operations;
-  // each value is a display name from models. Falls back to defaultModel.
-  // ──────────────────────────────────────────────────────────────────────
-  "subLLM": {
-    "compact":   "gpt-5-mini",              // compaction summary / memory recall / session-memory
-    "imageRead": "claude-sonnet-4-6",       // vision model used to describe images when the main model isn't vision-capable
-    "webSearch": "gpt-5-mini"               // WebSearch / WebFetch result summary
-  },
-
-  // User-facing language: slash output / Feishu cards / banners / error
-  // notices. Stderr logging is always English.
-  "lang": "cn",                             // "cn" | "en"   default cn   [env: LIGHTCLAW_LANG]
-
-  // Context window size (tokens), used for the compaction threshold, not billing.
-  "contextWindow": 200000,                  // default 200000   [env: LIGHTCLAW_CONTEXT_WINDOW]
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Permission mode — four tiers, strict to loose: read < ask < auto < yolo
-  //   (internal enum equivalents: plan / default / acceptEdits /
-  //    bypassPermissions — both spellings accepted)
-  // ──────────────────────────────────────────────────────────────────────
-  "permissionMode": "auto",                 // default auto(acceptEdits)  [env: LIGHTCLAW_PERMISSION_MODE]
-  "permissionCeiling": "auto",              // default mode ceiling for a new identity [env: LIGHTCLAW_PERMISSION_CEILING]
-
-  // ──────────────────────────────────────────────────────────────────────
-  // turns (optional) — hard cap on tool-use rounds. Unset / <=0 = no cap
-  // (runs until end_turn).
-  // ──────────────────────────────────────────────────────────────────────
-  "turns": {
-    "main": 0,                              // main agent loop cap   [env: LIGHTCLAW_MAX_TURNS]
-    "subagentDefault": 0                    // default sub-agent cap  [env: LIGHTCLAW_SUBAGENT_MAX_TURNS]
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // streamIdle — streaming idle watchdog (ms). Tells "server is working" from
-  // "hung".
-  // ──────────────────────────────────────────────────────────────────────
-  "streamIdle": {
-    "ttfbMs": 90000,                        // wait cap before the first event, default 90s
-    "interEventMs": 30000                   // gap cap between events after the first, default 30s
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // memory — memory subsystem. LIGHTCLAW_NO_MEMORY=1 is the master kill switch
-  // (turns off extraction + injection + consolidation all at once).
-  // ──────────────────────────────────────────────────────────────────────
-  "memory": {
-    "extractor": { "enabled": true },       // post-session background extraction of hard facts  [env: LIGHTCLAW_NO_MEMORY inverts]
-    "curator": {                            // autoDream: periodically consolidates scattered memory into themed knowledge
-      "enabled": true,
-      "minHours": 24,                       // min hours since the last consolidation
-      "minSessions": 1,                     // min distinct sessions touched since the last consolidation
-      "scanThrottleMs": 600000,             // scan throttle, default 10 min
-      "burstFileThreshold": 20,             // bypass minHours when >= this many new memory files; 0 disables
-      "maxTurns": 30                        // optional, consolidation fork turn cap; unset = no cap
-    },
-    "recall": {                             // pick top-N relevant memories to inject at query entry
-      "enabled": true,                      // [env: LIGHTCLAW_MEMORY_RECALL_ENABLED]
-      "topN": 5                             // [env: LIGHTCLAW_MEMORY_RECALL_TOP_N]
-    },
-    "session": {                            // in-session "working notes", dual-threshold overwrite
-      "enabled": true,                      // [env: LIGHTCLAW_SESSION_MEMORY_ENABLED]
-      "updateTokenThreshold": 20000,        // cumulative token threshold [env: LIGHTCLAW_SESSION_MEMORY_TOKEN_THRESHOLD]
-      "updateToolCallThreshold": 5          // cumulative tool_call threshold (AND with token threshold)
-    },
-    "nudge": {                              // inject a system reminder every N turns to nudge proactive saves
-      "enabled": true,                      // [env: LIGHTCLAW_MEMORY_NUDGE_ENABLED]
-      "everyTurns": 20                      // 0 = disabled
-    }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // compact — context compaction. Threshold-triggered only (no /compact slash).
-  // ──────────────────────────────────────────────────────────────────────
-  "compact": {
-    "auto": true,                           // [env: LIGHTCLAW_AUTO_COMPACT]
-    "thresholdRatio": 0.75,                 // triggers when usage exceeds contextWindow*ratio, clamped to [0.1, 0.95]
-    "keepRecent": 6,                        // recent messages kept during compaction
-    "preFlush": {                           // flush hard facts to memory before compaction
-      "enabled": true,                      // [env: LIGHTCLAW_PRE_COMPACT_FLUSH_ENABLED]
-      "timeoutMs": 8000
-    },
-    "micro": {                              // micro-compact: clear old tool_results after a long idle gap
-      "enabled": true,                      // master switch [env: LIGHTCLAW_MICRO_COMPACT_ENABLED]
-      "idle": {
-        "enabled": true,                    // [env: LIGHTCLAW_MC_IDLE_ENABLED]
-        "gapThresholdMinutes": 60,          // idle gap threshold; set 0 to force every turn (debug)
-        "keepRecent": 5                     // keep the most recent N compactable tool_results
+  // channels — Feishu only for now; auto-started when enabled=true. (Legacy
+  // <home>/channels.json is read only when this section is absent.)
+  "channels": {
+    "feishu": {
+      "enabled": false,                   // set true to start the Feishu channel
+      "appId": "<feishu-app-id>",         // required when enabled [env: FEISHU_APP_ID]
+      "appSecret": "<feishu-app-secret>", // required when enabled [env: FEISHU_APP_SECRET]
+      "encryptKey": "",                   // only if long-conn/webhook encryption is on [env: FEISHU_ENCRYPT_KEY]
+      "verificationToken": "",            // [env: FEISHU_VERIFICATION_TOKEN]
+      "proxy": "",                        // Feishu SDK outbound proxy; empty = direct; e.g. http://10.0.0.1:1080 [env: FEISHU_PROXY]
+      "cwd": "",                          // agent working dir for this channel; empty = per-user workspace
+      "domain": "feishu",                 // "feishu" | "lark"
+      "transport": "ws",                  // "ws" (no public ingress) | "webhook" [env: LIGHTCLAW_FEISHU_TRANSPORT]
+      "permissionMode": "",               // override top-level permissionMode for Feishu; empty = inherit [env: LIGHTCLAW_FEISHU_PERMISSION_MODE]
+      "allowUsers": [],                   // allowUsers + allowChats both empty = drop all inbound; open one with ["*"]
+      "allowChats": [],
+      "requireMention": true,             // require @bot in groups
+      "typingReaction": true,             // "thinking" reaction while working [env: LIGHTCLAW_FEISHU_TYPING_REACTION]
+      "mediaEnabled": true,               // receive images / audio / files
+      "textChunkSize": 4000,              // reply chunk size (chars)
+      "httpTimeoutMs": 30000,
+      "maxBodyBytes": 1048576,            // 1 MiB
+      "parentFetchTimeoutMs": 8000,       // quoted-parent fetch timeout [env: LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS]
+      "inboxAging": { "enabled": true, "ttlDays": 7, "intervalMinutes": 60 },  // inbox attachment cleanup
+      "cloudSpace": {
+        "rootFolderToken": "",            // pin bot-drive root folder; empty = auto-create on cold start
+        "uploadsFolderName": "LightClaw Uploads"
+      },
+      "webhook": {                        // used only when transport="webhook"
+        "host": "0.0.0.0",
+        "port": 18850,
+        "path": "/feishu/events",
+        "publicUrl": "<https://your-public-url>"   // required when transport="webhook"
       }
     }
   },
 
-  // ──────────────────────────────────────────────────────────────────────
-  // dispatch — sub-agent dispatch / background task scheduling.
-  // ──────────────────────────────────────────────────────────────────────
-  "dispatch": {
-    "maxChainDepth": 4,                     // max role->role chain depth (clamped by ceiling)
-    "maxChainDepthCeiling": 5,              // hard depth ceiling
-    "ephemeralSessionTtlMs": 259200000,     // ephemeral dispatch session TTL, default 72h
-    "scheduler": {                          // background task scheduling (Dispatch background/scheduled)
-      "maxConcurrentRunsPerUser": 100,      // concurrent fire cap per user, overflow queues FIFO (high backstop — parallel fan-out is the normal mode; lower it to throttle)
-      "startupCatchupIntervalMs": 60000,    // stagger interval for catching up missed tasks after restart
-      "fireRetryMaxAttempts": 3             // max attempts on transient failure
-    }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // taskrun — durable task runs. Every piece of delegated work is a run in
-  // an on-disk ledger: it survives daemon restarts, can pause on a declared
-  // wake (timer / child-join / ask), and a watchdog revives whatever
-  // stalls. These knobs only tune the recovery cadence.
-  // ──────────────────────────────────────────────────────────────────────
-  "taskrun": {
-    "resume": {
-      "maxGapMs": 604800000                 // max session-gap a worker resumes across; beyond it rebuild from its checkpoint (default 7d)
-    },
-    "ask": {
-      "timeoutMs": 900000                   // ask-to-requester timeout; past it the asker continues on its declared default (default 15min)
-    },
-    "watchdog": {
-      "intervalMinutes": 1,                 // reconcile scan period; 0 disables the watchdog
-      "deliveredGraceMs": 60000,            // how long a delivered-but-unsettled result may sit before reporting
-      "waitingGraceMs": 21600000,           // how long a non-root waiting run may sit before reporting (default 6h, 0 disables)
-      "rootIdleGraceMs": 60000,             // how long an open root may sit with nothing live before reporting
-      "budgetWindowMinutes": 30,            // 3 same-fingerprint reports inside this window escalate once, then stop waking
-      "deliveryRetryMaxAttempts": 3         // failed report deliveries before falling back to a direct owner-DM notice
-    }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // tools — tool-related.
-  // ──────────────────────────────────────────────────────────────────────
-  "tools": {
-    "webSearch": {
-      // Brave Search API key; falls back to DuckDuckGo HTML if unset. Env
-      // takes precedence over this field.
-      "braveApiKey": "<your-brave-search-api-key>"  // [env: BRAVE_SEARCH_API_KEY]
-    },
-    "webFetch": {
-      // Extra preapproved domains beyond the built-in list (exact hostname,
-      // no subdomain wildcard). Merged with the built-in list — cannot remove
-      // built-ins. Empty array = no extras.
-      "preapprovedDomains": []
-    },
-    "maxOutputBytes": 51200,                // per-call builtin tool_result byte cap [env: LIGHTCLAW_MAX_TOOL_OUTPUT_BYTES]
-    "catalog": {                            // tool catalog deferred loading
-      "deferredLoading": "always",          // "always"|"auto"|"off"  [env: LIGHTCLAW_DEFERRED_LOADING]
-      "deferredLoadingThreshold": 30,       // tool-count threshold for auto mode [env: LIGHTCLAW_DEFERRED_LOADING_THRESHOLD]
-      "discoveredToolsMaxSize": 30,         // promoted-tool LRU cap; 0 disables [env: LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE]
-      "discoveredToolsTtlTurns": 20         // promoted-tool turn-based TTL; 0 disables [env: LIGHTCLAW_DISCOVERED_TOOLS_TTL_TURNS]
-    }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // mcp — MCP (Model Context Protocol) external tool servers. Server
-  // registration lives in <LIGHTCLAW_HOME>/mcp.json; this is just the switch
-  // and connection params.
-  // ──────────────────────────────────────────────────────────────────────
-  "mcp": {
-    "enabled": true,                        // LIGHTCLAW_NO_MCP=1 kills it [env: LIGHTCLAW_MCP_ENABLED]
-    "connectTimeout": 10000,                // connect timeout ms
-    "connectConcurrency": 4,                // concurrent connections
-    "maxToolOutputBytes": 20480             // MCP tool output byte cap (separate from tools.maxOutputBytes)
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // hooks — lifecycle hooks. Scripts in <LIGHTCLAW_HOME>/hooks/*.mjs.
-  // ──────────────────────────────────────────────────────────────────────
-  "hooks": {
-    "enabled": true,                        // LIGHTCLAW_NO_HOOKS=1 kills it [env: LIGHTCLAW_HOOKS_ENABLED]
-    "timeoutBlocking": 5000,                // blocking-hook timeout ms
-    "timeoutNonBlocking": 10000             // non-blocking-hook timeout ms
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // attachments — inline multimodal byte policy (cross-channel / cross-provider).
-  // Defaults are calibrated to Anthropic's strictest documented caps (image
-  // 5MB / pdf 32MB).
-  // ──────────────────────────────────────────────────────────────────────
-  "attachments": {
-    "imageMaxMb": 5,                        // over-cap image -> Pillow-resize down then inline [env: LIGHTCLAW_IMAGE_MAX_MB]
-    "pdfMaxMb": 32,                         // over-cap PDF -> path breadcrumb only, agent uses Read [env: LIGHTCLAW_PDF_MAX_MB]
-    "maxInlinePerTurn": 5                   // per-turn inline block (image+pdf) cap [env: LIGHTCLAW_MAX_INLINE_PER_TURN]
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
-  // apiLogs — persist every streamChat request+response verbatim (admin
-  // debugging / training data). Off by default; don't enable on multi-user
-  // deploys (storage). Directory lives under paths.apiLogs.
-  // ──────────────────────────────────────────────────────────────────────
-  "apiLogsEnabled": false,                  // [env: LIGHTCLAW_API_LOGS_ENABLED]
-
-  // ──────────────────────────────────────────────────────────────────────
-  // paths (optional) — all on-disk paths. Default everything under
-  // <LIGHTCLAW_HOME>/; override only to move a subdir to a bigger / shared /
-  // network-mounted volume. The coarse root is set via LIGHTCLAW_HOME.
-  // ──────────────────────────────────────────────────────────────────────
-  "paths": {
-    "sessions":  "<abs-path>",              // default <home>/sessions   [env: LIGHTCLAW_SESSIONS_DIR]
-    "workspace": "<abs-path>",              // default <home>/workspaces [env: LIGHTCLAW_WORKSPACE_ROOT]
-    "memory":    "<abs-path>",              // default <home>/memory     [env: LIGHTCLAW_MEMORY_DIR]
-    "audit":     "<abs-path>",              // default <home>/audit      [env: LIGHTCLAW_AUDIT_DIR]
-    "apiLogs":   "<abs-path>",              // default <home>/api-logs   [env: LIGHTCLAW_API_LOGS_DIR]
-    "logs":      "<abs-path>",              // default <home>/logs       [env: LIGHTCLAW_LOGS_DIR]
-    "hooks":     "<abs-path>",              // admin hooks dir, default <home>/hooks
-    "mcpConfig": "<abs-path>",              // admin MCP config file, default <home>/mcp.json
-    "permissionAudit": "<abs-path>",        // permission audit log file [env: LIGHTCLAW_PERMISSION_AUDIT_LOG]
-    "permissionRules": {                    // layered permission rule files (user is canonical, project/local are cwd fallbacks)
-      "user":    "<abs-path>",
-      "project": "<abs-path>",
-      "local":   "<abs-path>"
-    }
-  },
-
-  // ──────────────────────────────────────────────────────────────────────
   // runtime — sandbox backend where Bash / Read / Write actually run.
-  // ──────────────────────────────────────────────────────────────────────
   "runtime": {
-    "backend": "local",                     // "local"(admin only) | "docker" | "cluster"  [env: LIGHTCLAW_RUNTIME_BACKEND]
-    "driver": null,                         // null | "brainpp"; required when backend="cluster" (kubebrain)
+    "backend": "local",                   // "local" (admin only) | "docker" | "cluster" [env: LIGHTCLAW_RUNTIME_BACKEND]
+    "driver": null,                       // null | "brainpp"; required when backend="cluster" (kubebrain)
 
-    // network — in-process forward proxy bridge. Enable when docker host mode /
-    // cluster pods can't reach the internet directly; shared by all three
-    // backends.
+    // network — in-process forward proxy bridge; enable when docker host-mode /
+    // cluster pods can't reach the internet directly. Shared by all backends.
     "network": {
-      "mode": "isolated",                   // "isolated"(default, off) | "host"(start the bridge)
-      "proxy": null,                        // bridge upstream proxy URL; null/empty=direct. Does not inherit env
-      "noProxy": [],                        // direct-connect allowlist (CIDR / .suffix / exact hostname)
-      "port": 18080,                        // bridge listen port
-      "bindHost": "0.0.0.0",                // listen interface (the cluster driver injects the host IP into the pod)
-      // Source-IP allowlist (NOT a destination filter), keeps the bridge from
-      // being an open proxy. Cluster deploys must add the pod CIDR
-      // (kubebrain uses 100.64.0.0/10).
-      "acl": ["127.0.0.0/8", "100.100.0.0/16", "172.17.0.0/16"]
+      "mode": "isolated",                 // "isolated" (off) | "host" (start the bridge)
+      "proxy": null,                      // bridge upstream proxy URL; null = direct; e.g. "http://10.0.0.1:1080" (does not inherit env)
+      "noProxy": [],                      // direct-connect allowlist (CIDR / .suffix / exact hostname)
+      "port": 18080,                      // bridge listen port
+      "bindHost": "0.0.0.0",              // listen interface (cluster driver injects the host IP)
+      "acl": ["127.0.0.0/8", "100.100.0.0/16", "172.17.0.0/16"]  // source-IP allowlist; cluster must add pod CIDR (kubebrain 100.64.0.0/10)
     },
 
-    // dockerSettings — active when backend="docker". One long-lived container
-    // per canonical user.
+    // dockerSettings — active when backend="docker". One container per canonical user.
     "dockerSettings": {
-      "imageOverride": "<custom-image>",    // override the default image [env: LIGHTCLAW_DOCKER_IMAGE]
-                                            // default ghcr.io/rowitzou/lightclaw-sandbox:<version>
-      "idleTimeoutMs": 1800000,             // auto-stop when idle, default 30min [env: LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS]
+      "imageOverride": "",                // empty = default ghcr.io/rowitzou/lightclaw-sandbox; e.g. myrepo/lightclaw-sandbox:dev [env: LIGHTCLAW_DOCKER_IMAGE]
+      "idleTimeoutMs": 1800000,           // auto-stop when idle (30 min) [env: LIGHTCLAW_DOCKER_IDLE_TIMEOUT_MS]
       "memoryLimit": "4g",
       "cpuLimit": 4,
       "network": "bridge",
       "tmpfs": ["/tmp"],
-      "mounts": [                           // extra bind mounts; datasets/checkpoints recommended ro
-        { "host": "<host-abs-path>", "container": "/data", "mode": "ro" }
-      ],
-      "env": {},                            // static env injected into the container
-      "autoPull": true,                     // background prefetch at startup when the image is missing
-      "security": {                         // container hardening; defaults are OpenClaw's minimal set
+      "mounts": [],                       // extra bind mounts; add { "host","container","mode" } (datasets/checkpoints ro)
+      "env": {},                          // static env injected into the container
+      "autoPull": true,                   // background prefetch at startup when the image is missing
+      "security": {                       // container hardening; defaults are OpenClaw's minimal set
         "capDrop": ["ALL"],
         "capAdd": ["DAC_OVERRIDE", "CHOWN", "SETUID", "SETGID"],
         "noNewPrivileges": true,
-        "readOnlyRootfs": false,            // off by default (pip/pnpm need to write /root)
-        "pidsLimit": 512,                   // null = use host default
+        "readOnlyRootfs": false,          // off by default (pip/pnpm write /root)
+        "pidsLimit": 512,                 // null = host default
         "ulimits": { "nofile": "4096:8192", "nproc": "1024:2048" },
         "tmpfsOptions": "rw,nosuid,size=512m",
-        "storageOptSize": "32g",            // rootfs write-layer cap; needs overlay2+XFS+prjquota.
-                                            // macOS / ext4 must set null to skip
-        "workspaceQuotaMb": 524288          // /workspace hard quota (MiB), default 512GiB; null/0 disables
+        "storageOptSize": "32g",          // rootfs write-layer cap; needs overlay2+XFS+prjquota (macOS/ext4: null to skip)
+        "workspaceQuotaMb": 524288        // /workspace hard quota (MiB), 512 GiB; null/0 disables
       }
     },
 
-    // clusterSettings — active when backend="cluster" (kubebrain cluster,
-    // driver="brainpp"). One cluster worker per canonical user. These values
-    // come from the cluster admin; LightClaw ships no defaults
-    // (image/chargedGroup/namespace/gpfsMounts are required on the cluster backend).
+    // clusterSettings — active when backend="cluster" (kubebrain, driver="brainpp").
+    // One worker per canonical user; required fields come from the cluster admin.
     "clusterSettings": {
-      "image": "<cluster-image>",
-      "chargedGroup": "<charged-group>",
-      "namespace": "<namespace>",           // defaults to env KUBEBRAIN_NAMESPACE
+      "image": "<cluster-image>",         // required for cluster backend
+      "chargedGroup": "<charged-group>",  // required for cluster backend
+      "namespace": "<namespace>",         // required for cluster backend (or env KUBEBRAIN_NAMESPACE)
+      "gpfsMounts": [                      // required for cluster (>=1 entry, longest-prefix match)
+        { "hostPrefix": "<host-path>", "mountPrefix": "<gpfs-url>" }
+      ],
       "cpu": 8,
       "memoryMb": 16000,
-      "gpu": 0,                             // runtime sandbox gets no GPU; training goes through rjob/cluster-job
-      "privateMachine": "group",            // group|yes|no|project|tenant
+      "gpu": 0,                           // runtime sandbox gets no GPU (training goes through rjob)
+      "privateMachine": "group",          // group | yes | no | project | tenant
       "positiveTags": [],
-      "gpfsMounts": [                       // host->gpfs rule table, >= 1 entry, longest-prefix match
-        { "hostPrefix": "<host-mount-a>", "mountPrefix": "<gpfs-url-a>" }
-      ],
-      "imagePullPolicy": "IfNotPresent",    // IfNotPresent|Always|Never
+      "imagePullPolicy": "IfNotPresent",  // IfNotPresent | Always | Never
       "maxWaitDuration": "5m",
-      "workerGcTimeHours": 24,              // clamped to [0.25, 168]
+      "workerGcTimeHours": 24,            // clamped [0.25, 168]
       "predictBeforeStart": true,
       "healthCheckIntervalMs": 300000,
       "preheatOnStartup": true,
       "preheatOnApproval": true,
-      "env": {}                            // injected into the cluster worker's env
+      "env": {}                           // injected into the worker's env
     }
   },
 
-  // ──────────────────────────────────────────────────────────────────────
-  // channels — channel config. Feishu only for now. Auto-started by the main
-  // process when enabled=true. (Legacy <home>/channels.json is read as a
-  // deprecated fallback only when this section is absent.)
-  // ──────────────────────────────────────────────────────────────────────
-  "channels": {
-    "feishu": {
-      "enabled": false,                     // set true to start the Feishu channel
-      "appId": "<feishu-app-id>",           // [env: FEISHU_APP_ID]
-      "appSecret": "<feishu-app-secret>",   // [env: FEISHU_APP_SECRET]
-      "encryptKey": "<encrypt-key>",        // only needed when long-conn/webhook encryption is on [env: FEISHU_ENCRYPT_KEY]
-      "verificationToken": "<verify-token>",// [env: FEISHU_VERIFICATION_TOKEN]
-      "domain": "feishu",                   // "feishu" | "lark"
-      "proxy": "<http://proxy-host:port>",  // Feishu SDK outbound proxy [env: FEISHU_PROXY]
-      "transport": "ws",                    // "ws"(default, no public ingress) | "webhook" [env: LIGHTCLAW_FEISHU_TRANSPORT]
-      "cwd": "<abs-path>",                   // working dir for this channel's agent (default: per-user workspace)
-      "permissionMode": "auto",             // overrides top-level permissionMode for Feishu [env: LIGHTCLAW_FEISHU_PERMISSION_MODE]
-      // allowUsers / allowChats: a dimension is only checked when its list is
-      // non-empty; both empty = drop all inbound. Open a dimension with ["*"].
-      "allowUsers": [],
-      "allowChats": [],
-      "requireMention": true,               // require @bot in groups
-      "typingReaction": true,               // "thinking" reaction while working [env: LIGHTCLAW_FEISHU_TYPING_REACTION]
-      "mediaEnabled": true,                 // receive images/audio/files
-      "textChunkSize": 4000,                // reply chunk size (chars)
-      "httpTimeoutMs": 30000,
-      "maxBodyBytes": 1048576,
-      "parentFetchTimeoutMs": 8000,         // timeout for fetching a quoted parent message [env: LIGHTCLAW_FEISHU_PARENT_FETCH_TIMEOUT_MS]
-      "inboxAging": {                       // periodic cleanup of inbox attachments (Hermes-style mtime scan)
-        "enabled": true,
-        "ttlDays": 7,
-        "intervalMinutes": 60
-      },
-      "cloudSpace": {
-        "rootFolderToken": "<folder-token>",      // pin the bot-drive root folder; omit to auto-create on cold start
-        "uploadsFolderName": "LightClaw Uploads"  // cloud-drive subfolder name for large-file fallback uploads
-      },
-      "webhook": {                          // only used when transport="webhook"
-        "host": "0.0.0.0",
-        "port": 18850,
-        "path": "/feishu/events",
-        "publicUrl": "<https://your-public-url>"
-      }
+  // ══════════════════════════════════════════════════════════════════════
+  // ② MODEL LAYER — empty by default (boots with no registry; users BYO via
+  // slash). Fill here to hand-seed (the daemon reads it straight from this file,
+  // no slash required), or manage at runtime via slash:
+  //   /config endpoint|backend|model|lane   (your own BYO models)
+  //   /admin  endpoint|backend|lane         (deployment-wide defaults)
+  // ══════════════════════════════════════════════════════════════════════
+
+  // endpoints — credential pool that models reference. Add entries shaped:
+  //   "<name>": { "apiKey": "<key>" }          (API-key endpoint)
+  //   "<name>": { "auth": "codex-oauth" }      (Codex / ChatGPT quota)
+  //   optional per-endpoint fields: "baseUrl" (no /v1 suffix), "proxy"
+  "endpoints": {},
+
+  // models — display name -> { endpoint, schema, upstreamModel }. Add entries shaped:
+  //   "<display-name>": { "endpoint": "<name>", "schema": "anthropic|openai|openai-auth", "upstreamModel": "<upstream-id>" }
+  //   optional per-model field: "reasoningEffort": "low|medium|high"
+  "models": {},
+
+  // defaultModel — model main runs on + fallback for every lane (a name from
+  // models). Empty = no default (every user must BYO their own). [env: LIGHTCLAW_DEFAULT_MODEL]
+  "defaultModel": "",                     // e.g. a display-name key from "models" above
+
+  // lane — model for each non-main lane; each empty value falls back to defaultModel.
+  //   worker = delegated sub-agents · system = background ops (compaction / memory /
+  //   web summary) · image = image understanding.
+  "lane": { "worker": "", "system": "", "image": "" },
+
+  // ── A complete filled example (copy into the empty keys above, then edit) ──
+  //   "endpoints": {
+  //     "anthropic-direct": { "apiKey": "sk-ant-xxxxxxxx" },
+  //     "openai-gw":        { "apiKey": "sk-xxxxxxxx", "baseUrl": "https://gateway.example.com", "proxy": "http://10.0.0.1:1080" },
+  //     "codex":            { "auth": "codex-oauth" }
+  //   },
+  //   "models": {
+  //     "sonnet":    { "endpoint": "anthropic-direct", "schema": "anthropic",   "upstreamModel": "claude-sonnet-4-6" },
+  //     "gpt-mini":  { "endpoint": "openai-gw",        "schema": "openai",      "upstreamModel": "gpt-5-mini", "reasoningEffort": "medium" },
+  //     "gpt-codex": { "endpoint": "codex",            "schema": "openai-auth", "upstreamModel": "gpt-5-codex" }
+  //   },
+  //   "defaultModel": "sonnet",
+  //   "lane": { "worker": "sonnet", "system": "gpt-mini", "image": "sonnet" }
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ③ BEHAVIOR TUNING — optional; each value shown IS the default. Override
+  //    what you need.
+  // ══════════════════════════════════════════════════════════════════════
+
+  "lang": "cn",                           // user-facing language: "cn" | "en" (stderr stays English) [env: LIGHTCLAW_LANG]
+  "contextWindow": 200000,                // tokens, drives the compaction threshold (not billing) [env: LIGHTCLAW_CONTEXT_WINDOW]
+  "maxOutputTokens": 64000,               // global output ceiling; per-model maxOutputTokens overrides it
+
+  // Permission mode — strict to loose: read < ask < auto < yolo (enum aliases:
+  // plan / default / acceptEdits / bypassPermissions). slash: /config mode · /admin ceiling.
+  "permissionMode": "auto",               // [env: LIGHTCLAW_PERMISSION_MODE]
+  "permissionCeiling": "auto",            // default ceiling for a new identity [env: LIGHTCLAW_PERMISSION_CEILING]
+
+  // streamIdle — streaming idle watchdog (ms); tells "server working" from "hung".
+  "streamIdle": {
+    "ttfbMs": 90000,                      // cap before the first event
+    "interEventMs": 30000                 // cap between events after the first
+  },
+
+  // memory — memory subsystem. LIGHTCLAW_NO_MEMORY=1 kills extraction + injection + consolidation.
+  "memory": {
+    "extractor": { "enabled": true },     // post-session hard-fact extraction
+    "curator": {                          // autoDream: consolidates scattered memory into themed knowledge
+      "enabled": true,
+      "minHours": 24,                     // min hours since last consolidation
+      "minSessions": 1,                   // min distinct sessions touched since last consolidation
+      "scanThrottleMs": 600000,           // scan throttle (10 min)
+      "burstFileThreshold": 20,           // bypass minHours when >= this many new memory files; 0 disables
+      "maxTurns": 0                       // consolidation fork turn cap (background runaway guard); 0 = no cap
+    },
+    "recall": { "enabled": true, "topN": 5 },                              // inject top-N memories at query entry [env: LIGHTCLAW_MEMORY_RECALL_ENABLED / _TOP_N]
+    "session": { "enabled": true, "updateTokenThreshold": 20000, "updateToolCallThreshold": 5 },  // in-session working notes (dual threshold)
+    "nudge": { "enabled": true, "everyTurns": 20 }                         // remind to save every N turns; 0 disables [env: LIGHTCLAW_MEMORY_NUDGE_ENABLED]
+  },
+
+  // compact — context compaction (threshold-triggered; no /compact slash).
+  "compact": {
+    "auto": true,                         // [env: LIGHTCLAW_AUTO_COMPACT]
+    "thresholdRatio": 0.75,               // trigger when usage > contextWindow*ratio (clamped [0.1, 0.95])
+    "keepRecent": 6,                      // recent messages kept during compaction
+    "preFlush": { "enabled": true, "timeoutMs": 8000 },                    // flush hard facts to memory before compaction
+    "micro": {                            // micro-compact: drop old tool_results after a long idle gap
+      "enabled": true,
+      "idle": { "enabled": true, "gapThresholdMinutes": 60, "keepRecent": 5 }
     }
+  },
+
+  // dispatch — sub-agent dispatch / background task scheduling.
+  "dispatch": {
+    "maxChainDepth": 4,                   // max role->role chain depth (clamped by ceiling)
+    "maxChainDepthCeiling": 5,            // hard depth ceiling
+    "ephemeralSessionTtlMs": 259200000,   // ephemeral dispatch session TTL (72h)
+    "scheduler": {
+      "maxConcurrentRunsPerUser": 100,    // concurrent fire cap per user (high backstop; parallel fan-out is normal — lower to throttle)
+      "startupCatchupIntervalMs": 60000,  // stagger for catching up missed tasks after restart
+      "fireRetryMaxAttempts": 3           // max attempts on transient failure
+    }
+  },
+
+  // taskrun — durable task-run recovery cadence (the ledger survives restarts;
+  // these only tune watchdog timing).
+  "taskrun": {
+    "resume": { "maxGapMs": 604800000 },  // max session gap a worker resumes across, else rebuild from checkpoint (7d)
+    "ask": { "timeoutMs": 900000 },       // ask-to-requester timeout, then continue on the declared default (15 min)
+    "watchdog": {
+      "intervalMinutes": 1,               // reconcile scan period; 0 disables
+      "deliveredGraceMs": 60000,          // delivered-but-unsettled grace before reporting
+      "waitingGraceMs": 21600000,         // non-root waiting grace before reporting (6h); 0 disables
+      "rootIdleGraceMs": 60000,           // open-root-with-nothing-live grace before reporting
+      "budgetWindowMinutes": 30,          // 3 same-fingerprint reports in this window escalate once, then stop
+      "deliveryRetryMaxAttempts": 3       // failed reconcile deliveries before a direct owner-DM notice
+    }
+  },
+
+  // tools — tool-related. (webSearch.braveApiKey is the one ① field here.)
+  "tools": {
+    "webSearch": { "braveApiKey": "" },   // empty = DuckDuckGo HTML fallback [env: BRAVE_SEARCH_API_KEY]
+    "webFetch": { "preapprovedDomains": [] },  // extra preapproved hostnames (exact match), merged with built-ins
+    "maxOutputBytes": 51200,              // per-call builtin tool_result byte cap [env: LIGHTCLAW_MAX_TOOL_OUTPUT_BYTES]
+    "catalog": {                          // tool catalog deferred loading
+      "deferredLoading": "always",        // "always" | "auto" | "off" [env: LIGHTCLAW_DEFERRED_LOADING]
+      "deferredLoadingThreshold": 30,     // tool-count threshold for "auto" [env: LIGHTCLAW_DEFERRED_LOADING_THRESHOLD]
+      "discoveredToolsMaxSize": 30,       // promoted-tool LRU cap; 0 disables [env: LIGHTCLAW_DISCOVERED_TOOLS_MAX_SIZE]
+      "discoveredToolsTtlTurns": 20       // promoted-tool turn TTL; 0 disables [env: LIGHTCLAW_DISCOVERED_TOOLS_TTL_TURNS]
+    }
+  },
+
+  // mcp — external MCP tool servers. Server registration lives in <home>/mcp.json;
+  // this is just the switch + connection params.
+  "mcp": {
+    "enabled": true,                      // LIGHTCLAW_NO_MCP=1 kills it [env: LIGHTCLAW_MCP_ENABLED]
+    "connectTimeout": 10000,
+    "connectConcurrency": 4,
+    "maxToolOutputBytes": 20480           // separate from tools.maxOutputBytes
+  },
+
+  // hooks — lifecycle hooks. Scripts in <home>/hooks/*.mjs.
+  "hooks": {
+    "enabled": true,                      // LIGHTCLAW_NO_HOOKS=1 kills it [env: LIGHTCLAW_HOOKS_ENABLED]
+    "timeoutBlocking": 5000,
+    "timeoutNonBlocking": 10000
+  },
+
+  // attachments — inline multimodal byte policy (calibrated to Anthropic's strictest caps).
+  "attachments": {
+    "imageMaxMb": 5,                      // over-cap image -> Pillow-resize then inline [env: LIGHTCLAW_IMAGE_MAX_MB]
+    "pdfMaxMb": 32,                       // over-cap PDF -> path breadcrumb, agent uses Read [env: LIGHTCLAW_PDF_MAX_MB]
+    "maxInlinePerTurn": 5                 // per-turn inline block (image+pdf) cap [env: LIGHTCLAW_MAX_INLINE_PER_TURN]
+  },
+
+  // apiLogs — persist every streamChat request+response (admin debugging). Off by
+  // default; don't enable on multi-user deploys (storage). Dir: <home>/api-logs.
+  "apiLogsEnabled": false,                // [env: LIGHTCLAW_API_LOGS_ENABLED]
+
+  // paths — everything derives from <home>; the only relocatable path is the
+  // workspace pool (on clusters a separate GPFS mount, distinct from data home).
+  "paths": {
+    "workspace": ""                       // empty = <home>/workspace; e.g. /gpfs/pool/lightclaw-workspaces [env: LIGHTCLAW_WORKSPACE_ROOT]
   }
 }
