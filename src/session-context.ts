@@ -45,6 +45,13 @@ export type SessionContext = {
   channel?: ChannelKey
   cwd: string
   model: string
+  /** Resolved per-user config snapshot for this session (PR4). Produced by
+   *  `resolveUserConfig(<canonicalUser>, getConfig())` at session creation, so
+   *  model-selection reads (`getSessionConfig()`) see the user's merged
+   *  defaultModel / lang while global infra stays on `getConfig()`. Optional so
+   *  the placeholder ctx (`createEmptySessionContext`) and fallback callers can
+   *  omit it; `getSessionConfig()` falls back to `getConfig()` when absent. */
+  config?: import('./config.js').LightClawConfig
   sessionsDir: string
   memoryDir: string
   currentRole?: Role
@@ -152,6 +159,7 @@ export function usageFromContext(ctx: SessionContext): UsageStats {
 export function createSessionContext(input: {
   cwd: string
   model: string
+  config?: import('./config.js').LightClawConfig
   sessionsDir: string
   memoryDir: string
   currentUserId?: string
@@ -181,6 +189,7 @@ export function createSessionContext(input: {
     channel: input.channel,
     cwd: input.cwd,
     model: input.model,
+    config: input.config,
     sessionsDir: input.sessionsDir,
     memoryDir: input.memoryDir,
     currentRole: input.currentRole,

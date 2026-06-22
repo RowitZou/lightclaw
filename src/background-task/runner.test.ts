@@ -604,6 +604,40 @@ describe('runBackgroundTaskFire', () => {
       assert.match(outcome.reason, /admin-only/)
     }
   })
+
+  it('does not crash with Unknown model when the user picked a model not in the registry', async () => {
+    // PR4 correctness: a stale per-user model (e.g. an admin retired the model)
+    // must fall back to the admin default, NOT be passed verbatim into
+    // getProviderFor where the naive `prefs.model ?? defaultModel` code threw
+    // `Unknown model`. The bogus value lives in preferences.json (the exact
+    // source the naive code read) so this test fails on the old code. The fire
+    // should succeed on the admin default 'm'.
+    const prefsPath = path.join(
+      tmpHome, 'users', 'alice', 'state', 'preferences.json',
+    )
+    mkdirSync(path.dirname(prefsPath), { recursive: true })
+    writeFileSync(prefsPath, JSON.stringify({ model: 'retired-model-no-longer-in-registry' }))
+    setBackgroundTaskQueryForTest(async () => ({
+      messages: [],
+      assistantText: 'ran on admin default',
+      finalReplyText: 'ran on admin default',
+      stopReason: 'end_turn',
+      didCompact: false,
+      usage: {},
+    }))
+
+    const outcome = await runBackgroundTaskFire({
+      task: fakeTask({ id: 'alice-task-stale', ownerCanonicalUser: 'alice' }),
+      fireUuid: 'fire-stale-model',
+      signal: new AbortController().signal,
+    })
+
+    assert.equal(outcome.kind, 'success')
+    if (outcome.kind === 'success') {
+      assert.equal(outcome.summary, 'ran on admin default')
+    }
+  })
+
 })
 
 function fakeTool(name: string): Tool {

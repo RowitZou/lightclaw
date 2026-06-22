@@ -9,6 +9,7 @@ import { getTaskRunWatchdog } from './taskrun/watchdog.js'
 import { loadChannelConfig } from './channels/config.js'
 import { startInboxAgingScheduler } from './channels/feishu/inbox-aging.js'
 import { getConfig, type LightClawConfig } from './config.js'
+import { resolveUserConfig } from './config/user-override.js'
 import { setLang } from './i18n/index.js'
 import { initializeAgents, initializeUserDefinedAgents } from './agents/registry.js'
 import { registerBusSubscribers } from './agents/hooks/signal-subscribers.js'
@@ -243,26 +244,31 @@ export async function resetSessionContext(input: CommonStateInput): Promise<Sess
 
 /**
  * Per-canonical-user preferences (`<lightclawHome>/identity/per-user/<id>/
- * preferences.json`) outrank caller-supplied input for `permissionMode` and
- * `model`. The caller's values are typically pulled from session meta.json
- * (terminal cli.ts) or the channel strategy default (channel runner.ts);
- * those are correct only as a per-session fallback. The same identity using
- * both terminal + Feishu must see one consistent mode/model, which is what
- * preferences pin down. No-op when `currentUserId` is absent (no identity to
- * key under) or when prefs file is missing / empty (input wins by default).
+ * preferences.json`) outrank caller-supplied input for `permissionMode`. The
+ * caller's value is typically pulled from session meta.json (terminal cli.ts)
+ * or the channel strategy default (channel runner.ts); that is correct only as
+ * a per-session fallback. The same identity using both terminal + Feishu must
+ * see one consistent mode, which is what preferences pin down. No-op when
+ * `currentUserId` is absent (no identity to key under) or when prefs file is
+ * missing / empty (input wins by default).
+ *
+ * PR4: `model` is NO LONGER sourced here. Model selection now flows through the
+ * config merge layer (`resolveUserConfig` in resolveConfig), whose chain is
+ * config.json `defaultModel` → preferences.json `model` (back-compat) → admin
+ * default → '' (graceful no-model). Injecting prefs.model here would override a
+ * user's config.json choice. permissionMode keeps its preferences.json home.
  */
 function applyIdentityPreferences<T extends CommonStateInput>(input: T | undefined): T | undefined {
   if (!input?.currentUserId) {
     return input
   }
   const prefs = loadIdentityPreferences(input.currentUserId)
-  if (!prefs.permissionMode && !prefs.model) {
+  if (!prefs.permissionMode) {
     return input
   }
   return {
     ...input,
-    ...(prefs.permissionMode ? { permissionMode: prefs.permissionMode } : {}),
-    ...(prefs.model ? { model: prefs.model } : {}),
+    permissionMode: prefs.permissionMode,
   }
 }
 
@@ -284,9 +290,19 @@ function resolveConfig(
   config: LightClawConfig,
   input: InitializeAppInput | undefined,
 ): LightClawConfig {
-  const resolvedModel = input?.model ?? config.defaultModel
+  // PR4: fold the per-user config merge layer (config.json defaultModel / lang,
+  // back-compat preferences.json model) onto the admin base. The registry
+  // (endpoints / models) is preserved; only defaultModel / lang are merged, and
+  // defaultModel may resolve to '' (graceful no-model) when neither user nor
+  // admin has a usable model — callers gate on empty before provider lookup.
+  const resolved = resolveUserConfig(input?.currentUserId, config)
+  // An explicit caller-supplied model (e.g. a terminal --model override) still
+  // wins, but only when it actually exists in the registry — otherwise keep the
+  // merge-layer result rather than reintroducing an Unknown-model throw.
+  const resolvedModel =
+    input?.model && resolved.models[input.model] ? input.model : resolved.defaultModel
   return {
-    ...config,
+    ...resolved,
     ...(input?.mcpEnabled === false ? { mcpEnabled: false } : {}),
     ...(input?.hooksEnabled === false ? { hooksEnabled: false } : {}),
     defaultModel: resolvedModel,
@@ -324,6 +340,11 @@ async function createResolvedSessionContext(
     cwd: resolvedCwd,
     channel: input?.channel,
     model: resolvedConfig.defaultModel,
+    // The resolved per-user snapshot for getSessionConfig(). resolvedConfig is
+    // already the resolveUserConfig output (with any explicit model override
+    // folded into defaultModel), so model-selection reads stay consistent with
+    // the model this session actually runs on.
+    config: resolvedConfig,
     sessionsDir: input?.currentUserId
       ? userSessionsRoot(input.currentUserId)
       : resolvedConfig.paths.sessions,

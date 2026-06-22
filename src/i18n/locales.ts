@@ -156,6 +156,7 @@ export const LOCALES = {
     'model.clearCache.cleared': '已清除 {name}（{endpoint} -> {upstream}）的能力缓存{suffix}。',
     'model.clearCache.noEntry': '（无现有条目）',
     'model.clearCache.alsoCleared': ' 能力缓存已清除。',
+    'model.none.noticeBody': '尚未配置可用模型，请用 /model 选择，或自带模型（BYO）。',
 
     // ---- /rules ----
     'rules.empty': '当前用户没有持久化的权限规则。',
@@ -835,6 +836,7 @@ export const LOCALES = {
     'model.clearCache.cleared': 'Cleared capability cache for {name} ({endpoint} -> {upstream}){suffix}.',
     'model.clearCache.noEntry': ' (no existing entry)',
     'model.clearCache.alsoCleared': ' Capability cache cleared.',
+    'model.none.noticeBody': 'No model configured yet — pick one with /model, or bring your own (BYO).',
 
     // ---- /rules ----
     'rules.empty': 'No persisted permission rules for this user.',

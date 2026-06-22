@@ -7,6 +7,7 @@ import { type TaskCardTarget } from './feishu/task-card-patcher.js'
 import { appendProgress } from '../taskrun/store.js'
 import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
 import { getConfig, type LightClawConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
 import { runHook } from '../hooks/index.js'
 import { userSessionsRoot, workspaceFor } from '../identity/paths.js'
@@ -1058,6 +1059,19 @@ export class ChannelRunner {
           return
         }
 
+        // Graceful no-model state (PR4): the resolved per-user config produced
+        // an empty defaultModel — neither this user nor the admin has a usable
+        // model. Reply a friendly notice and end the turn instead of letting
+        // getMainRoleRoute / getProviderFor throw `Unknown model`. Placed AFTER
+        // slash dispatch so the user can still run `/model X` to fix it.
+        if (!appConfig.defaultModel) {
+          await this.sendReply(effectiveMessage, t('model.none.noticeBody'))
+          process.stderr.write(
+            `${this.strategy.channelId}: no model configured for session ${sessionId}; replied notice\n`,
+          )
+          return
+        }
+
         const stopNotice = !message.resumeExisting
           ? readAndClearStopNotice(userId, mainSessionId)
           : null
@@ -2036,7 +2050,9 @@ export class ChannelRunner {
     message: NormalizedChannelMessage,
     userId: string,
   ): Promise<void> {
-    const config = getConfig()
+    // PR4: fold the per-user config merge layer so read slashes (/model, /status)
+    // display the user's resolved model + lang, not the bare admin default.
+    const config = resolveUserConfig(userId, getConfig())
     const prefs = loadIdentityPreferences(userId)
     const cwd = workspaceFor(userId)
     const sessionId = this.strategy.resolveSessionId(message, userId)
@@ -2062,10 +2078,11 @@ export class ChannelRunner {
     const ctx = createSessionContext({
       cwd,
       channel: 'feishu',
-      model: applyCredentialDegrade(
-        prefs.model ?? resolveRoleModel(getMainRole(), config),
-        config,
-      ),
+      // Resolved per-user config (defaultModel already merged via the chain,
+      // may be '' in the graceful no-model state — read slashes still display
+      // fine). applyCredentialDegrade is a no-op on an empty model.
+      model: applyCredentialDegrade(resolveRoleModel(getMainRole(), config), config),
+      config,
       sessionsDir: userSessionsRoot(userId),
       memoryDir: getMemoryDir(userId, config),
       currentUserId: userId,
@@ -2082,10 +2099,15 @@ export class ChannelRunner {
       runtime: sandboxRuntime,
     })
 
-    const provider = getMainRoleRoute(config).provider
+    // In the graceful no-model state defaultModel is '' and getMainRoleRoute →
+    // getProviderFor would throw. Read slashes don't actually call the provider;
+    // fall back to the unfiltered role catalog so /model / /status still render.
+    const allFeishuTools = getAllTools('feishu', { runtimeDriver: config.runtime.driver })
     const tools = filterToolsByRoleVisibility(
       getMainRole(),
-      getEnabledTools(provider, getAllTools('feishu', { runtimeDriver: config.runtime.driver })),
+      config.defaultModel
+        ? getEnabledTools(getMainRoleRoute(config).provider, allFeishuTools)
+        : allFeishuTools,
     )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true

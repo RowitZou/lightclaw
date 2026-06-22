@@ -2,6 +2,8 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { getConfig } from '../config.js'
+import { resolveUserConfig } from '../config/user-override.js'
+import { t } from '../i18n/index.js'
 import { applyCredentialDegrade } from '../model-resolution.js'
 import { getMemoryDir } from '../memory/auto-memory.js'
 import { getProviderFor } from '../provider/index.js'
@@ -61,13 +63,24 @@ export async function runBackgroundTaskFire(input: {
       }
     }
 
-    const config = getConfig()
-    retryAfterCapMs = config.provider.retryAfterCapMs
+    const baseConfig = getConfig()
+    retryAfterCapMs = baseConfig.provider.retryAfterCapMs
+    // PR4 config merge layer: fold the owner's per-user config (config.json
+    // defaultModel / lang, back-compat preferences.json model) onto the admin
+    // base. defaultModel may resolve to '' when neither owner nor admin has a
+    // usable model — gated below before provider lookup so the fire never
+    // throws `Unknown model`.
+    const config = resolveUserConfig(input.task.ownerCanonicalUser, baseConfig)
     const prefs = loadIdentityPreferences(input.task.ownerCanonicalUser)
-    const model = applyCredentialDegrade(
-      prefs.model ?? config.defaultModel,
-      config,
-    )
+    if (!config.defaultModel) {
+      return {
+        kind: 'failure',
+        reason: t('model.none.noticeBody'),
+        transient: false,
+        attempt: 1,
+      }
+    }
+    const model = applyCredentialDegrade(config.defaultModel, config)
     const permissionMode = prefs.permissionMode ?? config.permissionMode
     const permissionCeiling = await getUserPermissionCeiling(input.task.ownerCanonicalUser)
     const cwd = path.resolve(workspaceFor(input.task.ownerCanonicalUser))
@@ -112,6 +125,7 @@ export async function runBackgroundTaskFire(input: {
     const ctx = createSessionContext({
       cwd,
       model,
+      config,
       sessionsDir: userSessionsRoot(input.task.ownerCanonicalUser),
       memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
       currentUserId: input.task.ownerCanonicalUser,

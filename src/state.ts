@@ -10,6 +10,7 @@ import type { NetworkBridge } from './runtime/network-bridge.js'
 import { RuntimePool } from './runtime/pool.js'
 import type { Runtime } from './runtime/index.js'
 import { lightclawHome } from './paths.js'
+import { getConfig, type LightClawConfig } from './config.js'
 import type { Role } from './agents/types.js'
 import {
   getCurrentSessionContext,
@@ -100,6 +101,19 @@ export function setCwd(cwd: string): void {
 
 export function getModel(): string {
   return currentState().model
+}
+
+/**
+ * The resolved per-user config snapshot for the active session (PR4). Returns
+ * the SessionContext's `config` (produced by `resolveUserConfig` at session
+ * creation) when present, falling back to the global `getConfig()` for callers
+ * outside any session scope or sessions created before the field was set.
+ * Use this for model-selection reads that must honor a user's merged
+ * `defaultModel` / `lang`; global infra (runtime pool, scheduler, channel
+ * startup) stays on `getConfig()`.
+ */
+export function getSessionConfig(): LightClawConfig {
+  return getCurrentSessionContext()?.config ?? getConfig()
 }
 
 export function setModel(model: string): void {

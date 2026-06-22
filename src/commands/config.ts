@@ -1,18 +1,10 @@
-import {
-  constants as fsConstants,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { constants as fsConstants, readdirSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { LightClawConfig } from '../config.js'
+import { readUserConfig, writeUserConfig } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
-import { userConfigPath } from '../identity/paths.js'
 import { expandHomePath } from '../paths.js'
 import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
 
@@ -138,31 +130,4 @@ function resetWorkspace(userId: string): string {
   delete merged.workspace
   writeUserConfig(userId, merged)
   return `${t('config.workspace.reset')}\n${t('config.workspace.restartNote')}\n`
-}
-
-// Minimal raw read/write of `users/<u>/config.json`. We intentionally preserve
-// any keys we do not own — a later PR adds a typed schema and more fields, and
-// the `workspace` key must round-trip alongside them.
-function readUserConfig(userId: string): Record<string, unknown> {
-  let raw: string
-  try {
-    raw = readFileSync(userConfigPath(userId), 'utf8')
-  } catch {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeUserConfig(userId: string, data: Record<string, unknown>): void {
-  const filePath = userConfigPath(userId)
-  mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 })
-  const tmp = `${filePath}.tmp-${process.pid}`
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  // Atomic replace so a crash mid-write never leaves a half-written config.json.
-  renameSync(tmp, filePath)
 }

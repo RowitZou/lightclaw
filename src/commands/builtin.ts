@@ -20,6 +20,7 @@ import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import { deriveCanonicalName } from '../identity/derive-canonical.js'
 import { preheatAndWelcomeOnApproval } from '../identity/post-approve.js'
 import { setIdentityPreference } from '../identity/preferences.js'
+import { setUserConfigField } from '../config/user-override.js'
 import type { SenderKey } from '../identity/types.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
@@ -292,8 +293,12 @@ function buildBuiltinCommands(): ReplCommand[] {
         ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
         return
       }
+      // PR4: persist the choice to the per-user config.json (users/<u>/config.json)
+      // — NOT the global in-memory config. `ctx.config.defaultModel = model` was
+      // the pollution bug: a per-process config mutation that bled across every
+      // user's turn. setModel() still updates THIS session's live model so the
+      // switch takes effect immediately for the current turn.
       setModel(model)
-      ctx.config.defaultModel = model
       if (clearCache) {
         const entry = ctx.config.models[model]
         const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
@@ -310,7 +315,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       }
       const callerId = getCurrentUserId()
       if (callerId) {
-        setIdentityPreference({ canonicalUser: callerId, key: 'model', value: model })
+        setUserConfigField(callerId, 'defaultModel', model)
       }
       ctx.output.write(`${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`)
       await ctx.persistMeta(ctx.messages.length)
