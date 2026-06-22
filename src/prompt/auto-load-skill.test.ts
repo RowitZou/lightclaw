@@ -48,6 +48,7 @@ function config(driver: RuntimeDriver = null): LightClawConfig {
     defaultModel: 'claude-sonnet-4-6',
     models: { 'claude-sonnet-4-6': { endpoint: 'newapi', schema: 'anthropic', upstreamModel: 'claude-sonnet-4-6' } },
     endpoints: { newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' } },
+    lane: {},
     paths: { sessions: path.join(tmpRoot, 'sessions') },
     memory: { recall: { enabled: false, topN: 3 }, session: { enabled: false } },
     runtime: { driver, backend: 'local' },

@@ -23,19 +23,21 @@ import {
   setUserConfigField,
 } from './user-override.js'
 
-// resolveUserConfig only reads base.defaultModel / base.models / base.lang and
-// spreads the rest through. A minimal shaped base is enough to drive every
-// branch without standing up a full getConfig().
+// resolveUserConfig only reads base.defaultModel / base.models / base.lang /
+// base.lane and spreads the rest through. A minimal shaped base is enough to
+// drive every branch without standing up a full getConfig().
 function makeBase(input: {
   defaultModel: string
   models: Record<string, ModelEntry>
   lang?: 'cn' | 'en'
+  lane?: { worker?: string; system?: string; image?: string }
 }): LightClawConfig {
   return {
     lang: input.lang ?? 'cn',
     defaultModel: input.defaultModel,
     models: input.models,
     endpoints: { a: { apiKey: 'sk-fake' } as never },
+    lane: input.lane ?? {},
   } as unknown as LightClawConfig
 }
 
@@ -124,6 +126,22 @@ describe('resolveUserConfig', () => {
     writeFileSync(prefsPath, JSON.stringify({ model: 'm' }))
     const resolved = resolveUserConfig('alice', base)
     assert.equal(resolved.defaultModel, 'mine')
+  })
+
+  it('lane override: user bucket wins; empty user bucket falls through to admin (new contract)', () => {
+    // Codifies the Part A1 lane merge: per-bucket user-over-admin precedence,
+    // with an empty user bucket treated as unset (fall through to admin).
+    const base = makeBase({
+      defaultModel: 'm',
+      models: MODELS,
+      lane: { worker: 'm', system: 'm', image: 'm' },
+    })
+    writeUserConfigJson('alice', { lane: { worker: 'mine', system: '' } })
+    const resolved = resolveUserConfig('alice', base)
+    // user worker wins; empty user system falls through to admin; image untouched.
+    assert.deepEqual(resolved.lane, { worker: 'mine', system: 'm', image: 'm' })
+    // A user with no lane override inherits admin's lane entirely.
+    assert.deepEqual(resolveUserConfig('bob', base).lane, { worker: 'm', system: 'm', image: 'm' })
   })
 
   it('lang override: user lang wins, else base lang', () => {

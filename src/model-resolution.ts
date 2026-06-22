@@ -44,29 +44,22 @@ function resolveRoleModelRaw(role: Role, config: LightClawConfig): string {
   if (role.agentType === 'main') {
     return config.defaultModel
   }
-  if (role.kind === 'internal') {
-    return config.roles?.internal?.model ?? config.defaultModel
-  }
-  return config.roles?.[role.agentType]?.model ?? config.defaultModel
+  // Internal-kind roles draw from the `system` lane; every other (worker-kind)
+  // role draws from the `worker` lane. A truthy/trim check (NOT `??`) treats an
+  // empty-string lane value as unset so it falls back to defaultModel.
+  const bucket = role.kind === 'internal' ? config.lane.system : config.lane.worker
+  return bucket && bucket.trim() ? bucket : config.defaultModel
 }
 
 export function resolveToolModuleModel(
   moduleName: ToolModuleName,
   config: LightClawConfig,
 ): string {
+  // `imageRead` draws from the `image` lane; `compact` + `webSearch` draw from
+  // the `system` lane. Empty-string lane value = unset → defaultModel.
+  const bucket = moduleName === 'imageRead' ? config.lane.image : config.lane.system
   return applyCredentialDegrade(
-    config.subLLM[moduleName] ?? config.defaultModel,
+    bucket && bucket.trim() ? bucket : config.defaultModel,
     config,
   )
-}
-
-export function resolveRoleMaxTurns(
-  role: Role,
-  config: LightClawConfig,
-): number | undefined {
-  if (role.agentType === 'main') {
-    return undefined
-  }
-  const cfgKey = role.kind === 'internal' ? 'internal' : role.agentType
-  return config.roles?.[cfgKey]?.maxTurns ?? role.maxTurns
 }

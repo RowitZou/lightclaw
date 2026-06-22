@@ -10,7 +10,6 @@ import {
 } from './permission/types.js'
 import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
-import { BUNDLED_AGENTS } from './agents/bundled/index.js'
 import { RETRY_AFTER_CAP_MS } from './transient-error.js'
 
 export type DockerMountConfig = {
@@ -183,9 +182,15 @@ export type WebSearchToolConfig = {
   braveApiKey?: string
 }
 
-export type RoleConfig = {
-  model?: string
-  maxTurns?: number
+/** Three-bucket model lane config. Each value is a model display name (a key
+ *  in `models`) or empty/absent. `worker` → all worker-kind roles; `system` →
+ *  internal-kind roles + the `compact` / `webSearch` sub-LLM modules; `image` →
+ *  the `imageRead` sub-LLM module. Empty / unset → falls back to
+ *  `defaultModel`. */
+export type LaneConfig = {
+  worker?: string
+  system?: string
+  image?: string
 }
 
 export type WebFetchToolConfig = {
@@ -235,18 +240,6 @@ export type SkillsConfig = {
   maxDormantPasses: number
 }
 
-/** Sub-LLM model pins for framework-internal LLM operations. Each value
- *  is the display name of a model in `models`, or `undefined` to fall
- *  back to `defaultModel`. */
-export type SubLLMConfig = {
-  /** Sub-LLM that summarizes / rewrites compaction prefixes. */
-  compact?: string
-  /** Sub-LLM that produces text descriptions of inline images. */
-  imageRead?: string
-  /** Sub-LLM that summarizes WebSearch / WebFetch results. */
-  webSearch?: string
-}
-
 export type McpConfig = {
   enabled: boolean
   connectTimeout: number
@@ -258,14 +251,6 @@ export type HooksConfig = {
   enabled: boolean
   timeoutBlocking: number
   timeoutNonBlocking: number
-}
-
-export type TurnsConfig = {
-  /** Main agent loop hard cap. `undefined` = no cap. */
-  main?: number
-  /** Default cap for subagents whose role does not pin its own `maxTurns`.
-   *  `undefined` = no fallback cap. */
-  subagentDefault?: number
 }
 
 export type StreamIdleConfig = {
@@ -388,7 +373,8 @@ export type LightClawConfig = {
   /** Named endpoint pool (apiKey + baseUrl). Models reference these by
    *  alias. */
   endpoints: Record<string, EndpointConfig>
-  roles?: Record<string, RoleConfig>
+  /** Three-bucket model lane config (worker / system / image). */
+  lane: LaneConfig
   contextWindow: number
   /** Global output-token ceiling (`max_tokens`) for the main agent loop, used
    *  when a model has no per-model `maxOutputTokens`. */
@@ -402,14 +388,12 @@ export type LightClawConfig = {
    *  lives under `paths.apiLogs`. */
   apiLogsEnabled: boolean
   paths: PathsConfig
-  turns: TurnsConfig
   provider: ProviderRetryConfig
   streamIdle: StreamIdleConfig
   memory: MemoryConfig
   compact: CompactConfig
   taskrun: TaskRunConfig
   dispatch: DispatchConfig
-  subLLM: SubLLMConfig
   mcp: McpConfig
   hooks: HooksConfig
   tools: ToolsConfig
@@ -711,14 +695,6 @@ function parsePositiveNumber(value: string | undefined, fieldName: string): numb
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
-}
-
-// Turn caps are opt-in: undefined / null / non-positive disables the cap.
-function resolveOptionalTurnCap(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
-    return undefined
-  }
-  return Math.floor(value)
 }
 
 function parseSchema(value: string | undefined): Schema | undefined {
@@ -1215,129 +1191,38 @@ export function resolveLogsDir(): string {
   return path.resolve(expandHomePath(configuredPath))
 }
 
-function assertModelName(
-  value: unknown,
-  field: string,
-  modelNames: string[],
-): string | undefined {
-  if (value === undefined) {
-    return undefined
-  }
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${field} must be a non-empty string.`)
-  }
-  if (!modelNames.includes(value)) {
-    throw new Error(
-      `${field} = "${value}" is not in models. Available: ${modelNames.join(', ')}.`,
-    )
-  }
-  return value
-}
-
-function assertPositiveInteger(value: unknown, field: string): number | undefined {
-  if (value === undefined) {
-    return undefined
-  }
-  if (
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    !Number.isInteger(value) ||
-    value < 1
-  ) {
-    throw new Error(`${field} must be a positive integer.`)
-  }
-  return value
-}
-
-/** Build the set of role agentTypes the config file is allowed to pin.
- *  `internal` covers extractor + curator as a group. User-defined roles
- *  are loaded after getConfig() runs, so they cannot appear here; that's
- *  an intentional limitation — per-user role authoring is out of scope
- *  for v0.2.x. */
-function getValidRoleConfigKeys(): string[] {
-  const workerNames = BUNDLED_AGENTS
-    .filter(role => role.kind === 'worker')
-    .map(role => role.agentType)
-  return [...workerNames, 'internal']
-}
-
-function resolveRoleConfigs(
-  input: ConfigFileShape['roles'],
-  modelNames: string[],
-): Record<string, RoleConfig> | undefined {
-  if (input === undefined) {
-    return undefined
-  }
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
-    throw new Error('roles must be an object keyed by agentType.')
-  }
-  const validKeys = getValidRoleConfigKeys()
-  const roles: Record<string, RoleConfig> = {}
-  for (const [agentType, raw] of Object.entries(input)) {
-    if (agentType === 'main') {
-      throw new Error(
-        '`roles.main` is not allowed; main is bound to `defaultModel`. Use `/model X` or set `defaultModel` to change main\'s model.',
-      )
-    }
-    const bundledRole = BUNDLED_AGENTS.find(role => role.agentType === agentType)
-    if (bundledRole?.kind === 'internal') {
-      throw new Error(
-        `\`roles.${agentType}\` is not allowed; \`${agentType}\` is kind='internal' and configured via \`roles.internal\` (which covers all internal roles as a group).`,
-      )
-    }
-    if (!validKeys.includes(agentType)) {
-      throw new Error(
-        `\`roles.${agentType}\` is not a valid worker / internal role key. Allowed: ${validKeys.join(', ')}.`,
-      )
-    }
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new Error(`roles.${agentType} must be an object.`)
-    }
-    const roleConfig: RoleConfig = {}
-    const model = assertModelName(raw.model, `roles.${agentType}.model`, modelNames)
-    if (model !== undefined) {
-      roleConfig.model = model
-    }
-    const maxTurns = assertPositiveInteger(raw.maxTurns, `roles.${agentType}.maxTurns`)
-    if (maxTurns !== undefined) {
-      roleConfig.maxTurns = maxTurns
-    }
-    // Detect and warn the dead `budget` field at the leaf level (Role.budget
-    // was deleted 2026-05-18; ConfigFileShape no longer declares it but
-    // operators may still have the JSON around from the old shape).
-    const rawWithLegacy = raw as Record<string, unknown>
-    if (rawWithLegacy.budget !== undefined) {
-      warnDeadConfigField(
-        `roles.${agentType}.budget`,
-        'is deprecated and ignored. Per-role budget was never enforced; remove the field.',
-      )
-    }
-    roles[agentType] = roleConfig
-  }
-  return roles
-}
-
-function resolveSubLLMConfig(
+/** Resolve the three-bucket model lane config. Validation is LENIENT: a
+ *  non-empty bucket value that names a model NOT in `modelNames` is not an
+ *  error — it warns once on stderr and is treated as unset (omitted), so the
+ *  daemon still boots and the bucket falls back to `defaultModel` at use time.
+ *  Empty string / absent bucket → omitted. */
+function resolveLane(
   fileConfig: ConfigFileShape,
   modelNames: string[],
-): SubLLMConfig {
-  const sub: SubLLMConfig = {}
-  const toolsSection = fileConfig.tools ?? {}
-  for (const key of ['compact', 'imageRead', 'webSearch'] as const) {
-    const legacyEntry = toolsSection[key]
-    const legacyModel = legacyEntry?.model
-    const newValue = fileConfig.subLLM?.[key]
-    const value = pickWithLegacy(
-      `tools.${key}.model`,
-      `subLLM.${key}`,
-      legacyModel,
-      newValue,
-    )
-    if (value !== undefined) {
-      sub[key] = assertModelName(value, `subLLM.${key}`, modelNames) ?? undefined
-    }
+): LaneConfig {
+  const lane: LaneConfig = {}
+  const source = fileConfig.lane
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return lane
   }
-  return sub
+  for (const bucket of ['worker', 'system', 'image'] as const) {
+    const raw = source[bucket]
+    if (typeof raw !== 'string') {
+      continue
+    }
+    const value = raw.trim()
+    if (!value) {
+      continue
+    }
+    if (!modelNames.includes(value)) {
+      process.stderr.write(
+        `[config] lane.${bucket} = "${value}" is not in models; falling back to defaultModel\n`,
+      )
+      continue
+    }
+    lane[bucket] = value
+  }
+  return lane
 }
 
 export function getConfig(): LightClawConfig {
@@ -1348,11 +1233,11 @@ export function getConfig(): LightClawConfig {
   const endpoints = resolveEndpoints(fileConfig.endpoints)
   const models = resolveModels(fileConfig.models, endpoints)
   const modelNames = Object.keys(models)
-  if (modelNames.length === 0) {
-    throw new Error(
-      `No models configured. Define endpoints + models in ${path.join(lightclawHome(), 'config.json')}.`,
-    )
-  }
+  // BOOT RELAX: an empty model registry is allowed. The daemon boots; model
+  // errors surface later at use time via `getProviderFor` (a model name must
+  // resolve against a real registry entry to call upstream). This supports a
+  // BYO-pool deployment where the admin defines no admin models and every user
+  // brings their own registry via per-user config.
   // `defaultModel` is OPTIONAL (g.1): an admin may run with NO global default,
   // so every user must bring their own model (BYO). Omitted / empty string =
   // the graceful "no default" state — per-user `resolveUserConfig` then folds
@@ -1360,8 +1245,9 @@ export function getConfig(): LightClawConfig {
   // "no model configured" notice when neither side has one, and `getProviderFor`
   // raises a clear, actionable error if an empty model ever reaches provider
   // resolution. A NON-EMPTY value must still name a real model — typo safety is
-  // preserved. (`modelNames.length === 0` is still rejected above: an admin must
-  // define at least one model even in a BYO-pool deployment.)
+  // preserved. (An EMPTY registry — `modelNames.length === 0` — is allowed: the
+  // daemon boots, and a missing model surfaces at use time via `getProviderFor`,
+  // so a fully BYO-pool deployment with no admin models is valid.)
   const requestedModel =
     process.env.LIGHTCLAW_DEFAULT_MODEL ??
     fileConfig.defaultModel ??
@@ -1372,7 +1258,7 @@ export function getConfig(): LightClawConfig {
     )
   }
   const defaultModel = requestedModel
-  const roles = resolveRoleConfigs(fileConfig.roles, modelNames)
+  const lane = resolveLane(fileConfig, modelNames)
   const contextWindow = Math.max(
     1000,
     Math.floor(
@@ -1497,20 +1383,6 @@ export function getConfig(): LightClawConfig {
     ),
   )
 
-  // — turns —
-  const mainTurns = resolveOptionalTurnCap(
-    parseNumber(process.env.LIGHTCLAW_MAX_TURNS) ??
-      pickWithLegacy('maxTurns', 'turns.main', fileConfig.maxTurns, fileConfig.turns?.main),
-  )
-  const subagentDefaultTurns = resolveOptionalTurnCap(
-    parseNumber(process.env.LIGHTCLAW_SUBAGENT_MAX_TURNS) ??
-      pickWithLegacy(
-        'subagentMaxTurns',
-        'turns.subagentDefault',
-        fileConfig.subagentMaxTurns,
-        fileConfig.turns?.subagentDefault,
-      ),
-  )
   const streamIdle: StreamIdleConfig = {
     ttfbMs: Math.max(
       1,
@@ -1802,9 +1674,6 @@ export function getConfig(): LightClawConfig {
   const taskrun = resolveTaskRunConfig(fileConfig)
   const dispatch = resolveDispatchConfig(fileConfig)
 
-  // — sub-LLM pins —
-  const subLLM = resolveSubLLMConfig(fileConfig, modelNames)
-
   // — tools catalog —
   const catalog = resolveToolCatalogConfig(fileConfig)
   const skills = resolveSkillsConfig(fileConfig)
@@ -1831,7 +1700,7 @@ export function getConfig(): LightClawConfig {
     defaultModel,
     models,
     endpoints,
-    ...(roles ? { roles } : {}),
+    lane,
     contextWindow,
     maxOutputTokens,
     permissionMode,
@@ -1848,10 +1717,6 @@ export function getConfig(): LightClawConfig {
       ...(mcpConfigUserPath ? { mcpConfig: expandOptionalPath(mcpConfigUserPath)! } : {}),
       ...(permissionAuditPath ? { permissionAudit: permissionAuditPath } : {}),
       permissionRules: permissionRulesRaw,
-    },
-    turns: {
-      ...(mainTurns !== undefined ? { main: mainTurns } : {}),
-      ...(subagentDefaultTurns !== undefined ? { subagentDefault: subagentDefaultTurns } : {}),
     },
     provider,
     streamIdle,
@@ -1882,7 +1747,6 @@ export function getConfig(): LightClawConfig {
     },
     taskrun,
     dispatch,
-    subLLM,
     mcp: {
       enabled: mcpEnabled,
       connectTimeout: mcpConnectTimeout,

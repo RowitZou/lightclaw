@@ -1,5 +1,5 @@
 import { getConfig } from '../config.js'
-import { resolveRoleMaxTurns, resolveRoleModel } from '../model-resolution.js'
+import { resolveRoleModel } from '../model-resolution.js'
 import { getProviderFor } from '../provider/index.js'
 import { getCurrentUserId } from '../state.js'
 import { getCurrentSessionContext } from '../session-context.js'
@@ -67,14 +67,11 @@ export async function runSubagent(params: {
   // want context (extract / autoDream) must include it in params.prompt.
   const cacheUserKey = params.canonicalUserOverride ?? getCurrentUserId()
 
-  // Resolve the subagent turn cap: caller override wins (autoDream pulls
-  // from config.memory.curator.maxTurns), then per-role config/default, then the
-  // operator-supplied config.turns.subagentDefault, otherwise no cap (parity with
-  // Claude Code, which has no documented default for Task subagents).
-  const subagentMaxTurns =
-    params.maxTurnsOverride
-    ?? resolveRoleMaxTurns(agent, config)
-    ?? config.turns.subagentDefault
+  // Resolve the subagent turn cap: only an explicit caller override applies
+  // (autoDream pulls from config.memory.curator.maxTurns), otherwise no cap
+  // (parity with Claude Code, which has no documented default for Task
+  // subagents).
+  const subagentMaxTurns = params.maxTurnsOverride
   try {
     const result = await runDispatchedAgent({
       dispatchPrompt: params.prompt,

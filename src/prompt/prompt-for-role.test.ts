@@ -200,6 +200,7 @@ function snapshotConfig(): LightClawConfig {
     endpoints: {
       newapi: { apiKey: 'sk-test', baseUrl: 'http://example.invalid' },
     },
+    lane: {},
     paths: {
       sessions: path.join(tmpRoot, 'sessions'),
     },

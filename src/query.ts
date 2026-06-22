@@ -31,7 +31,6 @@ import {
 import { buildSystemPromptTemplate, renderSystemPrompt } from './prompt.js'
 import { getProviderFor } from './provider/index.js'
 import {
-  resolveRoleMaxTurns,
   resolveRoleModel,
 } from './model-resolution.js'
 import {
@@ -312,11 +311,9 @@ export async function query(params: QueryParams): Promise<{
   // Mirror Claude Code CLI: no default cap on tool-use turns; loop runs until
   // the model emits end_turn (or until abort / context exhaustion). Callers
   // that need a hard ceiling pass it explicitly (e.g. memory extraction);
-  // operators can opt into a global ceiling via config.turns.main.
+  // there is no config-driven turn cap.
   const maxTurns =
     params.maxTurns
-    ?? resolveRoleMaxTurns(params.role, config)
-    ?? config.turns.main
     ?? Number.POSITIVE_INFINITY
   const messages = [...params.messages]
   const assistantTexts: string[] = []

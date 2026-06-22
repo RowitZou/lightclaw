@@ -84,15 +84,6 @@ export type ConfigFileChannelsSection = {
   }
 }
 
-export type ConfigFileTurnsSection = {
-  /** Main agent loop hard cap. Undefined = no cap (matches Claude Code CLI). */
-  main?: number
-  /** Default cap for any subagent whose role does not set its own `maxTurns`.
-   *  Undefined = no fallback cap (subagents run until end_turn / context
-   *  exhaustion unless role-pinned). */
-  subagentDefault?: number
-}
-
 export type ConfigFileMcpSection = {
   enabled?: boolean
   connectTimeout?: number
@@ -162,19 +153,6 @@ export type ConfigFileDispatchSchedulerSection = {
   circuitBreakerThreshold?: number
 }
 
-/** Sub-LLM model pins. Each value is the display name of a model in
- *  `models`. These are framework-internal LLMs (not user-visible Tools);
- *  kept here so `tools.<X>.model` doesn't conflate "Tool config" with
- *  "sub-LLM selection". */
-export type ConfigFileSubLLMSection = {
-  /** Sub-LLM that summarizes / rewrites compaction prefixes. */
-  compact?: string
-  /** Sub-LLM that produces text descriptions of inline images. */
-  imageRead?: string
-  /** Sub-LLM that summarizes WebSearch / WebFetch results. */
-  webSearch?: string
-}
-
 export type ConfigFileToolCatalogSection = {
   deferredLoading?: string
   deferredLoadingThreshold?: number
@@ -208,10 +186,16 @@ export type ConfigFileShape = {
   /** Display name picked at startup when no env / per-identity preference
    *  overrides. Must exist in `models`. */
   defaultModel?: string
-  roles?: Record<string, {
-    model?: unknown
-    maxTurns?: unknown
-  }>
+  /** Three-bucket model lane config. Each value is a model display name in
+   *  `models`, or empty/absent. `worker` covers all worker-kind roles;
+   *  `system` covers internal-kind roles + the compact / webSearch sub-LLM
+   *  modules; `image` covers the imageRead sub-LLM module. Empty / unknown
+   *  bucket → falls back to `defaultModel`. */
+  lane?: {
+    worker?: string
+    system?: string
+    image?: string
+  }
   contextWindow?: number
   /** Global default output-token ceiling (`max_tokens`) for the main agent
    *  loop. Per-model `models.<name>.maxOutputTokens` overrides it. */
@@ -236,8 +220,6 @@ export type ConfigFileShape = {
    *  different feature, so a single grep tells the admin where every byte
    *  lands. */
   paths?: ConfigFilePathsSection
-  /** Turn caps. `roles.<X>.maxTurns` overrides for a specific role. */
-  turns?: ConfigFileTurnsSection
   /** Provider-facing retry controls. */
   provider?: ConfigFileProviderSection
   /** Stream idle abort thresholds. Defaults live in config.ts. */
@@ -284,28 +266,14 @@ export type ConfigFileShape = {
      *  with deprecation warning. */
     scheduler?: ConfigFileDispatchSchedulerSection
   }
-  /** Sub-LLM model pins for framework-internal LLM operations. Each value
-   *  is a model display name. Was `tools.<X>.model`; conflated tool config
-   *  with sub-LLM selection — separated out into its own namespace. */
-  subLLM?: ConfigFileSubLLMSection
   mcp?: ConfigFileMcpSection
   hooks?: ConfigFileHooksSection
   tools?: {
     webSearch?: {
       braveApiKey?: string
-      /** @deprecated Moved to `subLLM.webSearch` (string). */
-      model?: string
     }
     webFetch?: {
       preapprovedDomains?: string[]
-    }
-    /** @deprecated Moved to `subLLM.imageRead` (string). */
-    imageRead?: {
-      model?: string
-    }
-    /** @deprecated Moved to `subLLM.compact` (string). */
-    compact?: {
-      model?: string
     }
     /** General tool output byte cap (per-call, post-channel-encoding).
      *  Previously top-level `maxToolOutputBytes`. */

@@ -68,9 +68,15 @@ afterEach(() => {
 })
 
 describe('config: endpoints + models registry', () => {
-  it('throws when no models are configured', () => {
+  it('boots with no models configured (empty-registry boot relax)', () => {
+    // New contract: an empty model registry is allowed; the daemon boots and
+    // model errors surface later at use time via getProviderFor. This codifies
+    // the boot-relax change (Part A1).
     writeConfig({})
-    assert.throws(() => getConfig(), /No models configured/)
+    const cfg = getConfig()
+    assert.deepEqual(cfg.models, {})
+    assert.equal(cfg.defaultModel, '')
+    assert.deepEqual(cfg.lane, {})
   })
 
   it('parses a minimal endpoints + models registry', () => {
@@ -382,7 +388,32 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.defaultModel, 'opus')
   })
 
-  it('parses worker and internal role config', () => {
+  it('parses the three-bucket lane config', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
+        haiku: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
+        'gpt-mini': { endpoint: 'a', schema: 'anthropic', upstreamModel: 'z' },
+      },
+      defaultModel: 'sonnet',
+      lane: {
+        worker: 'haiku',
+        system: 'gpt-mini',
+        image: 'haiku',
+      },
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.lane, {
+      worker: 'haiku',
+      system: 'gpt-mini',
+      image: 'haiku',
+    })
+  })
+
+  it('warns and omits a lane bucket whose model is not in models (lenient)', () => {
+    // New contract: an unknown lane value is NOT fatal — it warns on stderr and
+    // is omitted so the bucket falls back to defaultModel.
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -390,79 +421,16 @@ describe('config: endpoints + models registry', () => {
         haiku: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
       },
       defaultModel: 'sonnet',
-      roles: {
-        webSearcher: {
-          model: 'haiku',
-          maxTurns: 30,
-        },
-        internal: {
-          model: 'haiku',
-        },
+      lane: {
+        worker: 'missing',
+        system: 'haiku',
       },
     })
     const cfg = getConfig()
-    assert.deepEqual(cfg.roles?.webSearcher, {
-      model: 'haiku',
-      maxTurns: 30,
-    })
-    assert.deepEqual(cfg.roles?.internal, { model: 'haiku' })
+    assert.deepEqual(cfg.lane, { system: 'haiku' })
   })
 
-  it('rejects roles.main because main is bound to defaultModel', () => {
-    writeConfig({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-      },
-      defaultModel: 'sonnet',
-      roles: {
-        main: { model: 'sonnet' },
-      },
-    })
-    assert.throws(() => getConfig(), /main is bound to `defaultModel`/)
-  })
-
-  it('rejects per-internal-role config in favor of roles.internal', () => {
-    writeConfig({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-      },
-      defaultModel: 'sonnet',
-      roles: {
-        memoryExtractor: { model: 'sonnet' },
-      },
-    })
-    assert.throws(() => getConfig(), /kind='internal'.*roles\.internal/)
-  })
-
-  it('rejects invalid role model and maxTurns values', () => {
-    writeConfig({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-      },
-      defaultModel: 'sonnet',
-      roles: {
-        webSearcher: { model: 'missing' },
-      },
-    })
-    assert.throws(() => getConfig(), /roles\.webSearcher\.model = "missing" is not in models/)
-
-    writeConfig({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-      },
-      defaultModel: 'sonnet',
-      roles: {
-        webSearcher: { maxTurns: -1 },
-      },
-    })
-    assert.throws(() => getConfig(), /roles\.webSearcher\.maxTurns must be a positive integer/)
-  })
-
-  it('parses tool module model pins', () => {
+  it('treats empty-string / absent lane buckets as unset', () => {
     writeConfig({
       endpoints: { a: { apiKey: 'sk-a' } },
       models: {
@@ -470,36 +438,13 @@ describe('config: endpoints + models registry', () => {
         haiku: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'y' },
       },
       defaultModel: 'sonnet',
-      tools: {
-        webSearch: { braveApiKey: 'brave', model: 'haiku' },
-        imageRead: { model: 'haiku' },
-        compact: { model: 'haiku' },
+      lane: {
+        worker: '',
+        system: 'haiku',
       },
     })
     const cfg = getConfig()
-    // tools.webSearch keeps the actual tool config (braveApiKey); the sub-LLM
-    // model pin moved to subLLM.webSearch (string). Same shape for imageRead
-    // / compact: their per-module model lives under subLLM.<X>.
-    assert.deepEqual(cfg.tools.webSearch, { braveApiKey: 'brave' })
-    assert.equal(cfg.subLLM.webSearch, 'haiku')
-    assert.equal(cfg.subLLM.imageRead, 'haiku')
-    assert.equal(cfg.subLLM.compact, 'haiku')
-  })
-
-  it('rejects tool module models not present in models', () => {
-    writeConfig({
-      endpoints: { a: { apiKey: 'sk-a' } },
-      models: {
-        sonnet: { endpoint: 'a', schema: 'anthropic', upstreamModel: 'x' },
-      },
-      defaultModel: 'sonnet',
-      tools: {
-        imageRead: { model: 'missing' },
-      },
-    })
-    // Legacy `tools.imageRead.model` is mapped to `subLLM.imageRead`; the
-    // unknown-model validator reports the new path the value will live at.
-    assert.throws(() => getConfig(), /subLLM\.imageRead = "missing" is not in models/)
+    assert.deepEqual(cfg.lane, { system: 'haiku' })
   })
 
   it('parses an OAuth endpoint without apiKey', () => {
@@ -616,7 +561,7 @@ describe('config: endpoints + models registry', () => {
     assert.equal(cfg.models['gpt-5-codex'].schema, 'openai-auth')
   })
 
-  it('supports heterogeneous module models across schemas', () => {
+  it('supports heterogeneous lane models across schemas', () => {
     writeConfig({
       endpoints: {
         anth: { apiKey: 'sk-ant' },
@@ -635,11 +580,11 @@ describe('config: endpoints + models registry', () => {
         },
       },
       defaultModel: 'sonnet',
-      tools: { compact: { model: 'gpt-mini' } },
+      lane: { system: 'gpt-mini' },
     })
     const cfg = getConfig()
     assert.equal(cfg.defaultModel, 'sonnet')
-    assert.equal(cfg.subLLM.compact, 'gpt-mini')
+    assert.equal(cfg.lane.system, 'gpt-mini')
     assert.equal(cfg.models.sonnet.schema, 'anthropic')
     assert.equal(cfg.models['gpt-mini'].schema, 'openai')
   })

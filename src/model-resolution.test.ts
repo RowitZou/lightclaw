@@ -6,7 +6,6 @@ import { BUNDLED_AGENTS } from './agents/bundled/index.js'
 import type { Role } from './agents/types.js'
 import {
   applyCredentialDegrade,
-  resolveRoleMaxTurns,
   resolveRoleModel,
   resolveToolModuleModel,
 } from './model-resolution.js'
@@ -24,82 +23,72 @@ const autoDreamRole = role('memoryCurator')
 describe('resolveRoleModel', () => {
   it('binds main directly to defaultModel', () => {
     assert.equal(
-      resolveRoleModel(mainRole, config({ roles: { main: { model: 'haiku' } } })),
+      resolveRoleModel(mainRole, config({ lane: { worker: 'haiku', system: 'haiku' } })),
       'sonnet',
     )
   })
 
-  it('uses per-worker model pins before defaultModel', () => {
+  it('uses the worker lane for worker roles before defaultModel', () => {
     assert.equal(
-      resolveRoleModel(webRole, config({ roles: { webSearcher: { model: 'haiku' } } })),
+      resolveRoleModel(webRole, config({ lane: { worker: 'haiku' } })),
       'haiku',
     )
+    // A worker role does NOT read the system lane.
     assert.equal(
-      resolveRoleModel(exploreRole, config({ roles: { internal: { model: 'gpt-mini' } } })),
+      resolveRoleModel(exploreRole, config({ lane: { system: 'gpt-mini' } })),
       'sonnet',
     )
   })
 
-  it('falls worker roles back to defaultModel when no pin exists', () => {
+  it('falls worker roles back to defaultModel when worker lane is unset', () => {
     assert.equal(resolveRoleModel(webRole, config()), 'sonnet')
-    assert.equal(resolveRoleModel(webRole, config({ roles: { webSearcher: {} } })), 'sonnet')
+    assert.equal(resolveRoleModel(webRole, config({ lane: {} })), 'sonnet')
   })
 
-  it('uses roles.internal for all internal roles', () => {
-    const cfg = config({ roles: { internal: { model: 'gpt-mini' } } })
+  it('treats an empty-string worker lane as unset (new contract)', () => {
+    // Codifies the empty-string-is-unset rule: lane.worker = "" must NOT be
+    // used as a model name; it falls back to defaultModel.
+    assert.equal(resolveRoleModel(webRole, config({ lane: { worker: '' } })), 'sonnet')
+  })
+
+  it('uses the system lane for all internal roles', () => {
+    const cfg = config({ lane: { system: 'gpt-mini' } })
     assert.equal(resolveRoleModel(extractRole, cfg), 'gpt-mini')
     assert.equal(resolveRoleModel(autoDreamRole, cfg), 'gpt-mini')
   })
 
-  it('falls internal roles back to defaultModel when roles.internal is absent', () => {
+  it('falls internal roles back to defaultModel when system lane is unset', () => {
     assert.equal(resolveRoleModel(extractRole, config()), 'sonnet')
+    // Empty-string system lane = unset.
+    assert.equal(resolveRoleModel(extractRole, config({ lane: { system: '' } })), 'sonnet')
   })
 })
 
 describe('resolveToolModuleModel', () => {
-  it('uses per-module model pins before defaultModel', () => {
+  it('maps imageRead to the image lane; compact / webSearch to the system lane', () => {
     const cfg = config({
-      subLLM: {
-        webSearch: 'gpt-mini',
-        imageRead: 'haiku',
-        compact: 'haiku',
+      lane: {
+        system: 'gpt-mini',
+        image: 'haiku',
       },
     })
-    assert.equal(resolveToolModuleModel('webSearch', cfg), 'gpt-mini')
     assert.equal(resolveToolModuleModel('imageRead', cfg), 'haiku')
-    assert.equal(resolveToolModuleModel('compact', cfg), 'haiku')
+    assert.equal(resolveToolModuleModel('compact', cfg), 'gpt-mini')
+    assert.equal(resolveToolModuleModel('webSearch', cfg), 'gpt-mini')
   })
 
-  it('falls module models back to defaultModel independently', () => {
+  it('falls module models back to defaultModel when their lane is unset', () => {
     const cfg = config()
     assert.equal(resolveToolModuleModel('webSearch', cfg), 'sonnet')
     assert.equal(resolveToolModuleModel('imageRead', cfg), 'sonnet')
     assert.equal(resolveToolModuleModel('compact', cfg), 'sonnet')
   })
-})
 
-describe('resolveRoleMaxTurns', () => {
-  it('keeps main uncapped', () => {
-    assert.equal(
-      resolveRoleMaxTurns(mainRole, config({ roles: { main: { maxTurns: 5 } } })),
-      undefined,
-    )
-  })
-
-  it('uses configured maxTurns before source role defaults', () => {
-    assert.equal(
-      resolveRoleMaxTurns(extractRole, config({ roles: { internal: { maxTurns: 50 } } })),
-      50,
-    )
-    assert.equal(
-      resolveRoleMaxTurns(webRole, config({ roles: { webSearcher: { maxTurns: 30 } } })),
-      30,
-    )
-  })
-
-  it('falls back to source role maxTurns, then undefined', () => {
-    assert.equal(resolveRoleMaxTurns(extractRole, config()), undefined)
-    assert.equal(resolveRoleMaxTurns(webRole, config()), undefined)
+  it('treats an empty-string lane value as unset (new contract)', () => {
+    const cfg = config({ lane: { system: '', image: '' } })
+    assert.equal(resolveToolModuleModel('imageRead', cfg), 'sonnet')
+    assert.equal(resolveToolModuleModel('compact', cfg), 'sonnet')
+    assert.equal(resolveToolModuleModel('webSearch', cfg), 'sonnet')
   })
 })
 
@@ -161,7 +150,7 @@ function role(agentType: string): Role {
 function config(overrides: Partial<LightClawConfig> = {}): LightClawConfig {
   return {
     defaultModel: 'sonnet',
-    roles: undefined,
+    lane: {},
     tools: {
       webSearch: {},
       webFetch: { preapprovedDomains: [] },
@@ -173,7 +162,6 @@ function config(overrides: Partial<LightClawConfig> = {}): LightClawConfig {
         discoveredToolsTtlTurns: 20,
       },
     },
-    subLLM: {},
     ...overrides,
   } as LightClawConfig
 }

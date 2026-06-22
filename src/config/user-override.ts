@@ -103,6 +103,15 @@ const UserConfigOverrideSchema = z
     // PR5 BYO registries. UNIONed onto the admin base in resolveUserConfig.
     endpoints: z.record(z.string().min(1), UserEndpointSchema).optional(),
     models: z.record(z.string().min(1), UserModelSchema).optional(),
+    // Three-bucket model lane override. Per-bucket user-over-admin precedence
+    // (empty user bucket falls through to admin) is applied in resolveUserConfig.
+    lane: z
+      .object({
+        worker: z.string().optional(),
+        system: z.string().optional(),
+        image: z.string().optional(),
+      })
+      .optional(),
   })
   .strict()
 
@@ -330,11 +339,30 @@ export function resolveUserConfig(
     process.stderr.write(`[user-config] ${canonical}: ${built.error}; ignoring user BYO registry\n`)
   }
 
+  // Lane merge: per-bucket user-over-admin precedence. A non-empty user bucket
+  // wins; an empty-string / absent user bucket falls through to admin's. Mirrors
+  // how `defaultModel` resolves user-then-admin below, applied per bucket.
+  const mergeLaneBucket = (
+    bucket: 'worker' | 'system' | 'image',
+  ): string | undefined => {
+    const userValue = override.lane?.[bucket]
+    if (userValue && userValue.trim()) {
+      return userValue
+    }
+    return base.lane[bucket]
+  }
+  const lane = {
+    ...(mergeLaneBucket('worker') !== undefined ? { worker: mergeLaneBucket('worker') } : {}),
+    ...(mergeLaneBucket('system') !== undefined ? { system: mergeLaneBucket('system') } : {}),
+    ...(mergeLaneBucket('image') !== undefined ? { image: mergeLaneBucket('image') } : {}),
+  }
+
   const resolved: LightClawConfig = {
     ...base,
     lang: override.lang ?? base.lang,
     endpoints: { ...base.endpoints, ...userEndpoints },
     models: { ...base.models, ...userModels },
+    lane,
   }
 
   // config.json's defaultModel wins; back-compat falls through to the legacy
