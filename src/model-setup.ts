@@ -1,0 +1,63 @@
+// Dev-facing setup template text for the BYO endpoint / model commands
+// (PR5 checkpoint 1). English-only by design — these are example command
+// transcripts, not localized user-facing strings. Codex / authRef / openai-auth
+// examples are intentionally omitted: that schema is a later checkpoint.
+
+export function formatEndpointTemplates(): string {
+  return [
+    'Endpoint templates:',
+    '',
+    'Endpoint parameters:',
+    '  <endpoint>        A short alias you choose, for example openai-default or anthropic-default.',
+    '  apiKeyRef         A secret name created by /secret set. The real key is never stored in config.json.',
+    '  --base-url        Optional provider base URL. Use this for OpenAI-compatible gateways.',
+    '  --proxy           Optional endpoint-specific proxy. Leave empty unless this endpoint needs a special route.',
+    '',
+    'OpenAI API key:',
+    '  /secret set OPENAI_KEY <VALUE>',
+    '  /config endpoint add-key openai-default OPENAI_KEY --base-url https://api.openai.com/v1',
+    '  /config model add gpt-openai openai openai-default gpt-4.1 --max-output-tokens 64000',
+    '',
+    'Anthropic API key:',
+    '  /secret set ANTHROPIC_KEY <VALUE>',
+    '  /config endpoint add-key anthropic-default ANTHROPIC_KEY --base-url https://api.anthropic.com',
+    '  /config model add claude-sonnet anthropic anthropic-default claude-sonnet-4-6 --max-output-tokens 64000',
+    '',
+    'OpenAI-compatible self-hosted gateway:',
+    '  /secret set GATEWAY_KEY <VALUE>',
+    '  /config endpoint add-key local-gateway GATEWAY_KEY --base-url http://127.0.0.1:8000/v1 --proxy <proxy-url-if-needed>',
+    '  /config model add local-model openai local-gateway <served-model-id> --reasoning low --max-output-tokens 32000',
+    '',
+  ].join('\n')
+}
+
+export function formatModelTemplates(): string {
+  return [
+    'Model config templates:',
+    '',
+    'Model parameters:',
+    '  <model>           The LightClaw display name you choose, for example gpt-openai.',
+    '  schema            openai for OpenAI/OpenAI-compatible APIs; anthropic for Anthropic.',
+    '  endpoint          The endpoint alias from /config endpoint list.',
+    '  upstreamModel     The real model id sent to the provider. Copy it from your provider docs or an admin-provided example.',
+    '  --reasoning       Optional: none | minimal | low | medium | high | xhigh. Use low for speed, medium as default, high/xhigh for harder coding/reasoning; none/minimal only when the upstream model supports them.',
+    '  --max-output-tokens Optional per-model output cap. Common starting values: 32000 or 64000.',
+    '  --no-default      Add the model without switching your defaultModel to it.',
+    '',
+    'OpenAI API key:',
+    '  /config model add gpt-openai openai openai-default gpt-4.1 --max-output-tokens 64000',
+    '',
+    'Anthropic API key:',
+    '  /config model add claude-sonnet anthropic anthropic-default claude-sonnet-4-6 --max-output-tokens 64000',
+    '',
+    'OpenAI-compatible self-hosted gateway:',
+    '  /config model add local-model openai local-gateway <served-model-id> --reasoning low --max-output-tokens 32000',
+    '',
+    'Modify later:',
+    '  /config model set gpt-openai --reasoning high',
+    '  /config model set gpt-openai --max-output-tokens 32000',
+    '  /config model set gpt-openai --reasoning - --max-output-tokens -',
+    '  /config model check gpt-openai',
+    '',
+  ].join('\n')
+}

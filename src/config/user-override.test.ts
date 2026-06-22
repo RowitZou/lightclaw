@@ -5,7 +5,7 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { setLightclawHomeOverride } from '../paths.js'
-import { userConfigPath } from '../identity/paths.js'
+import { userConfigPath, userSecretsPath } from '../identity/paths.js'
 import { identityPreferencesPath } from '../identity/preferences.js'
 import type { LightClawConfig, ModelEntry } from '../config.js'
 import {
@@ -147,6 +147,127 @@ describe('resolveUserConfig', () => {
     assert.deepEqual(loadUserConfigOverride('alice'), {})
     const base = makeBase({ defaultModel: 'm', models: MODELS })
     assert.equal(resolveUserConfig('alice', base).defaultModel, 'm')
+  })
+})
+
+describe('resolveUserConfig BYO registry union (PR5 checkpoint 1)', () => {
+  let tmpHome: string
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-byo-test-'))
+    setLightclawHomeOverride(tmpHome)
+  })
+
+  afterEach(() => {
+    setLightclawHomeOverride(undefined)
+    rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  function writeUserConfigJson(user: string, data: Record<string, unknown>): void {
+    const target = userConfigPath(user)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, JSON.stringify(data, null, 2))
+  }
+
+  function writeSecret(user: string, name: string, value: string): void {
+    const target = userSecretsPath(user)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(
+      target,
+      JSON.stringify({
+        version: 1,
+        secrets: { [name]: { value, enabled: true, updatedAt: new Date().toISOString() } },
+      }),
+    )
+  }
+
+  // (a) Zero BYO entries must still expose EVERY admin model + admin default.
+  // This is the P0: if union were a REPLACE (`models: userModels`), `m` and
+  // `mine` would vanish and defaultModel would resolve to '' (or crash a
+  // downstream caller). Asserting the admin models are present alongside any
+  // byo is exactly what a replace implementation cannot satisfy.
+  it('(a) user with NO byo registry still sees every admin model and admin default', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    const resolved = resolveUserConfig('alice', base)
+    assert.equal(resolved.defaultModel, 'm')
+    // Admin models survive untouched.
+    assert.ok(resolved.models.m, 'admin model "m" must survive a zero-byo resolve')
+    assert.ok(resolved.models.mine, 'admin model "mine" must survive a zero-byo resolve')
+    assert.deepEqual(Object.keys(resolved.models).sort(), ['m', 'mine'])
+  })
+
+  it('(b) user with one byo apiKey model sees admin models PLUS their byo model', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeSecret('alice', 'MY_KEY', 'sk-alice-secret')
+    writeUserConfigJson('alice', {
+      endpoints: { myep: { apiKeyRef: 'MY_KEY', baseUrl: 'https://api.example.com/v1' } },
+      models: { 'my-gpt': { endpoint: 'myep', schema: 'openai', upstreamModel: 'gpt-4.1' } },
+      defaultModel: 'my-gpt',
+    })
+    const resolved = resolveUserConfig('alice', base)
+    // Admin models still present (union, not replace).
+    assert.ok(resolved.models.m, 'admin model "m" must remain after union')
+    assert.ok(resolved.models.mine, 'admin model "mine" must remain after union')
+    // Byo model added.
+    const byo = resolved.models['my-gpt']
+    assert.ok(byo, 'byo model "my-gpt" must be unioned in')
+    assert.equal(byo.schema, 'openai')
+    assert.equal(byo.upstreamModel, 'gpt-4.1')
+    assert.equal(byo.visibility, 'user')
+    // Byo endpoint resolved with the secret value + credentialIdentity, and the
+    // raw key NEVER appears in any config.json on disk.
+    const ep = resolved.endpoints.myep as { apiKey?: string; credentialIdentity?: string }
+    assert.equal(ep.apiKey, 'sk-alice-secret')
+    assert.equal(ep.credentialIdentity, 'user:alice:secret:MY_KEY')
+    const onDisk = readFileSync(userConfigPath('alice'), 'utf8')
+    assert.ok(!onDisk.includes('sk-alice-secret'), 'raw key must never be written to config.json')
+    // defaultModel resolves to the byo model.
+    assert.equal(resolved.defaultModel, 'my-gpt')
+  })
+
+  it('(c) byo endpoint alias colliding with an admin alias → admin-only registry (rejection, no throw)', () => {
+    // admin base has endpoint alias "a" (from makeBase). User defines "a" too.
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeSecret('alice', 'MY_KEY', 'sk-alice-secret')
+    writeUserConfigJson('alice', {
+      endpoints: { a: { apiKeyRef: 'MY_KEY' } },
+      models: { 'my-gpt': { endpoint: 'a', schema: 'openai', upstreamModel: 'gpt-4.1' } },
+    })
+    let resolved: LightClawConfig | undefined
+    assert.doesNotThrow(() => {
+      resolved = resolveUserConfig('alice', base)
+    })
+    // Fell back to admin-only: byo model NOT added, admin endpoint "a" intact.
+    assert.equal(resolved!.models['my-gpt'], undefined)
+    assert.deepEqual(resolved!.models, base.models)
+    assert.deepEqual(resolved!.endpoints, base.endpoints)
+  })
+
+  it('(d) byo defaultModel unknown: falls back to admin default; with no admin default → empty string', () => {
+    // With an admin default.
+    const baseWithDefault = makeBase({ defaultModel: 'm', models: MODELS })
+    writeUserConfigJson('alice', { defaultModel: 'ghost-model' })
+    assert.equal(resolveUserConfig('alice', baseWithDefault).defaultModel, 'm')
+
+    // With NO admin default → empty string, never the ghost.
+    const baseNoDefault = makeBase({ defaultModel: '', models: MODELS })
+    writeUserConfigJson('bob', { defaultModel: 'ghost-model' })
+    assert.equal(resolveUserConfig('bob', baseNoDefault).defaultModel, '')
+  })
+
+  it('byo endpoint with a missing secret → graceful admin-only fallback, no throw', () => {
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    // No secret written for MISSING_KEY.
+    writeUserConfigJson('alice', {
+      endpoints: { myep: { apiKeyRef: 'MISSING_KEY' } },
+      models: { 'my-gpt': { endpoint: 'myep', schema: 'openai', upstreamModel: 'gpt-4.1' } },
+    })
+    let resolved: LightClawConfig | undefined
+    assert.doesNotThrow(() => {
+      resolved = resolveUserConfig('alice', base)
+    })
+    assert.equal(resolved!.models['my-gpt'], undefined)
+    assert.deepEqual(resolved!.models, base.models)
   })
 })
 

@@ -31,8 +31,24 @@ const cache = new Map<string, Provider>()
  *  after a daemon's first turn for each model. */
 const prechargdKeys = new Set<string>()
 
-function cacheKey(schema: Schema, endpointAlias: string): string {
-  return `${schema}:${endpointAlias}`
+function cacheKey(schema: Schema, endpointAlias: string, endpoint: EndpointConfig): string {
+  return `${schema}:${endpointAlias}:${credentialIdentity(endpoint)}`
+}
+
+/** Cache-key discriminator (PR5 BYO). A user-owned endpoint carries an
+ *  explicit `credentialIdentity` (`user:<canonical>:secret:<NAME>`) so two
+ *  users' same-aliased endpoints with distinct keys never collide on one
+ *  provider instance. Admin endpoints omit it and derive a STABLE fallback
+ *  from the endpoint kind, preserving the historical one-provider-per-
+ *  (schema,alias) behavior. */
+function credentialIdentity(endpoint: EndpointConfig): string {
+  if ('credentialIdentity' in endpoint && endpoint.credentialIdentity) {
+    return endpoint.credentialIdentity
+  }
+  if ('auth' in endpoint) {
+    return `global:${endpoint.auth}`
+  }
+  return 'global:apiKey'
 }
 
 function buildProvider(
@@ -91,7 +107,7 @@ export function getProviderFor(
     )
   }
 
-  const key = cacheKey(entry.schema, entry.endpoint)
+  const key = cacheKey(entry.schema, entry.endpoint, endpoint)
   let provider = cache.get(key)
   if (!provider) {
     provider = buildProvider(entry.schema, endpoint)

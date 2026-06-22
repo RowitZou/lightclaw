@@ -2,16 +2,30 @@ import { constants as fsConstants, readdirSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { LightClawConfig } from '../config.js'
-import { readUserConfig, writeUserConfig } from '../config/user-override.js'
+import { getConfig, type LightClawConfig } from '../config.js'
+import {
+  buildUserRegistry,
+  loadUserConfigOverride,
+  parseUserConfigOverride,
+  readUserConfig,
+  resolveUserConfig,
+  writeUserConfig,
+} from '../config/user-override.js'
+import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { t } from '../i18n/index.js'
+import { formatEndpointTemplates, formatModelTemplates } from '../model-setup.js'
 import { expandHomePath } from '../paths.js'
+import { getProviderFor } from '../provider/index.js'
 import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
+import { loadUserSecrets, validateSecretName } from '../secrets/store.js'
 
 type ConfigCommandContext = {
   config: LightClawConfig
   userId?: string
 }
+
+const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
+const MODEL_CHECK_TIMEOUT_MS = 8000
 
 /**
  * Validates a user-supplied workspace directory. Mirrors `mount.ts`'s
@@ -85,7 +99,451 @@ export async function runConfigCommand(
     return setWorkspace(target, ctx)
   }
 
+  if (action === 'endpoint') {
+    return runEndpointSubcommand(parts.slice(1), ctx)
+  }
+
+  if (action === 'model') {
+    return runModelSubcommand(parts.slice(1), ctx)
+  }
+
   return `${t('config.usage')}\n`
+}
+
+// ── /config endpoint <verb> (BYO apiKey endpoints, PR5) ──────────────────────
+
+async function runEndpointSubcommand(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const verb = (parts.shift() ?? 'list').toLowerCase()
+  if (verb === 'templates' || verb === 'template') {
+    return formatEndpointTemplates()
+  }
+  if (!ctx.userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  const userId = ctx.userId
+  try {
+    switch (verb) {
+      case 'list':
+        return formatEndpointList(userId)
+      case 'add-key':
+        return addApiKeyEndpoint(userId, parts)
+      case 'set':
+        return setEndpoint(userId, parts)
+      case 'remove':
+      case 'rm':
+        return removeEndpoint(userId, parts)
+      default:
+        return endpointUsage()
+    }
+  } catch (error) {
+    return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
+  }
+}
+
+function endpointUsage(): string {
+  return [
+    'Usage:',
+    '  /config endpoint list',
+    '  /config endpoint templates',
+    '  /config endpoint add-key <alias> <SECRET_NAME> [--base-url <url>] [--proxy <url>]',
+    '  /config endpoint set <alias> [--base-url <url|->] [--proxy <url|->] [--api-key-ref <SECRET_NAME>]',
+    '  /config endpoint remove <alias>',
+    '',
+  ].join('\n')
+}
+
+function addApiKeyEndpoint(userId: string, parts: string[]): string {
+  const [alias, apiKeyRef, ...rest] = parts
+  if (!alias || !apiKeyRef) return endpointUsage()
+  assertAlias(alias)
+  const override = loadUserConfigOverride(userId)
+  if (override.endpoints?.[alias]) {
+    return `${t('config.endpoint.exists', { name: alias })}\n`
+  }
+  if (adminEndpointAliases().has(alias)) {
+    return `${t('config.endpoint.conflict', { name: alias })}\n`
+  }
+  const secretName = validateSecretName(apiKeyRef)
+  if (!loadUserSecrets(userId)[secretName]) {
+    return `${t('config.endpoint.secretMissing', { name: secretName })}\n`
+  }
+  const endpoint: Record<string, unknown> = { apiKeyRef: secretName }
+  applyEndpointFlags(endpoint, rest)
+
+  const obj = readUserConfig(userId)
+  const endpoints = asRecord(obj.endpoints)
+  endpoints[alias] = endpoint
+  obj.endpoints = endpoints
+  const guard = guardWritable(userId, obj)
+  if (guard) return guard
+  writeUserConfig(userId, obj)
+  return `${t('config.endpoint.added', { name: alias, ref: secretName })}\n`
+}
+
+function setEndpoint(userId: string, parts: string[]): string {
+  const [alias, ...rest] = parts
+  if (!alias) return endpointUsage()
+  assertAlias(alias)
+  const obj = readUserConfig(userId)
+  const endpoints = asRecord(obj.endpoints)
+  const current = asRecord(endpoints[alias])
+  if (!endpoints[alias]) {
+    return `${t('config.endpoint.missing', { name: alias })}\n`
+  }
+  const next: Record<string, unknown> = { ...current }
+  const baseUrl = flagValue(rest, '--base-url')
+  if (baseUrl !== undefined) {
+    if (baseUrl === '-') delete next.baseUrl
+    else next.baseUrl = baseUrl
+  }
+  const proxy = flagValue(rest, '--proxy')
+  if (proxy !== undefined) {
+    if (proxy === '-') delete next.proxy
+    else next.proxy = normalizeProxyUrl(proxy)
+  }
+  const apiKeyRef = flagValue(rest, '--api-key-ref')
+  if (apiKeyRef) {
+    const secretName = validateSecretName(apiKeyRef)
+    if (!loadUserSecrets(userId)[secretName]) {
+      return `${t('config.endpoint.secretMissing', { name: secretName })}\n`
+    }
+    next.apiKeyRef = secretName
+  }
+  endpoints[alias] = next
+  obj.endpoints = endpoints
+  const guard = guardWritable(userId, obj)
+  if (guard) return guard
+  writeUserConfig(userId, obj)
+  return `${t('config.endpoint.updated', { name: alias })}\n`
+}
+
+function removeEndpoint(userId: string, parts: string[]): string {
+  const [alias] = parts
+  if (!alias) return endpointUsage()
+  assertAlias(alias)
+  const obj = readUserConfig(userId)
+  const endpoints = asRecord(obj.endpoints)
+  if (!endpoints[alias]) {
+    return `${t('config.endpoint.missing', { name: alias })}\n`
+  }
+  delete endpoints[alias]
+  // Cascade-remove models that reference the removed endpoint.
+  const models = asRecord(obj.models)
+  const removedModels: string[] = []
+  for (const [name, model] of Object.entries(models)) {
+    if (asRecord(model).endpoint === alias) {
+      delete models[name]
+      removedModels.push(name)
+    }
+  }
+  if (typeof obj.defaultModel === 'string' && removedModels.includes(obj.defaultModel)) {
+    delete obj.defaultModel
+  }
+  obj.endpoints = endpoints
+  obj.models = models
+  writeUserConfig(userId, obj)
+  const modelsNote = removedModels.length
+    ? t('config.endpoint.removedModels', { models: removedModels.join(', ') })
+    : ''
+  return `${t('config.endpoint.removed', { name: alias, models: modelsNote })}\n`
+}
+
+function formatEndpointList(userId: string): string {
+  const override = loadUserConfigOverride(userId)
+  const entries = Object.entries(override.endpoints ?? {})
+  if (entries.length === 0) return `${t('config.endpoint.none')}\n`
+  return `${[
+    t('config.endpoint.listHeader'),
+    ...entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, endpoint]) => {
+        const baseUrl = endpoint.baseUrl ? ` baseUrl=${endpoint.baseUrl}` : ''
+        const proxy = endpoint.proxy ? ' proxy=(set)' : ''
+        return `  ${name} apiKeyRef=${endpoint.apiKeyRef}${baseUrl}${proxy}`
+      }),
+    '',
+  ].join('\n')}`
+}
+
+// ── /config model <verb> (BYO custom models, PR5) ────────────────────────────
+
+async function runModelSubcommand(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const verb = (parts.shift() ?? 'list').toLowerCase()
+  if (verb === 'templates' || verb === 'template') {
+    return formatModelTemplates()
+  }
+  if (!ctx.userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  const userId = ctx.userId
+  try {
+    switch (verb) {
+      case 'list':
+        return formatModelList(userId)
+      case 'add':
+        return addModel(userId, parts)
+      case 'set':
+        return setModel(userId, parts)
+      case 'check':
+        return await checkModel(userId, parts, ctx)
+      case 'remove':
+      case 'rm':
+        return removeModel(userId, parts)
+      default:
+        return modelUsage()
+    }
+  } catch (error) {
+    return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
+  }
+}
+
+function modelUsage(): string {
+  return [
+    'Usage:',
+    '  /config model list',
+    '  /config model templates',
+    '  /config model add <displayName> <anthropic|openai> <endpointAlias> <upstreamModel> [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-output-tokens <n>] [--no-default]',
+    '  /config model set <displayName> [--schema <anthropic|openai>] [--endpoint <alias>] [--upstream-model <id>] [--reasoning <e|->] [--max-output-tokens <n|->]',
+    '  /config model check <displayName>',
+    '  /config model remove <displayName>',
+    '',
+  ].join('\n')
+}
+
+function addModel(userId: string, parts: string[]): string {
+  const [displayName, schemaText, endpoint, upstreamModel, ...rest] = parts
+  if (!displayName || !schemaText || !endpoint || !upstreamModel) return modelUsage()
+  assertAlias(displayName)
+  assertAlias(endpoint)
+  const schema = parseSchema(schemaText)
+  if (!schema) return `${t('config.model.schemaInvalid')}\n`
+
+  const override = loadUserConfigOverride(userId)
+  if (override.models?.[displayName]) {
+    return `${t('config.model.exists', { name: displayName })}\n`
+  }
+  if (!override.endpoints?.[endpoint]) {
+    return `${t('config.model.endpointMissing', { name: endpoint })}\n`
+  }
+  const reasoning = parseReasoning(flagValue(rest, '--reasoning'))
+  if (reasoning === false) return `${t('config.model.reasoningInvalid')}\n`
+  const maxOutput = parsePositiveInt(flagValue(rest, '--max-output-tokens'))
+  if (maxOutput === false) return `${t('config.model.intInvalid')}\n`
+  const setDefault = !rest.includes('--no-default')
+
+  const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
+  if (reasoning) model.reasoningEffort = reasoning
+  if (maxOutput !== undefined) model.maxOutputTokens = maxOutput
+
+  const obj = readUserConfig(userId)
+  const models = asRecord(obj.models)
+  models[displayName] = model
+  obj.models = models
+  if (setDefault) obj.defaultModel = displayName
+  const guard = guardWritable(userId, obj)
+  if (guard) return guard
+  writeUserConfig(userId, obj)
+  return `${t('config.model.added', { name: displayName, schema, endpoint, upstream: upstreamModel })}\n`
+}
+
+function setModel(userId: string, parts: string[]): string {
+  const [displayName, ...rest] = parts
+  if (!displayName) return modelUsage()
+  assertAlias(displayName)
+  const obj = readUserConfig(userId)
+  const models = asRecord(obj.models)
+  if (!models[displayName]) {
+    return `${t('config.model.missing', { name: displayName })}\n`
+  }
+  const next = { ...asRecord(models[displayName]) }
+  const schemaText = flagValue(rest, '--schema')
+  if (schemaText) {
+    const schema = parseSchema(schemaText)
+    if (!schema) return `${t('config.model.schemaInvalid')}\n`
+    next.schema = schema
+  }
+  const endpoint = flagValue(rest, '--endpoint')
+  if (endpoint) {
+    assertAlias(endpoint)
+    if (!loadUserConfigOverride(userId).endpoints?.[endpoint]) {
+      return `${t('config.model.endpointMissing', { name: endpoint })}\n`
+    }
+    next.endpoint = endpoint
+  }
+  const upstream = flagValue(rest, '--upstream-model')
+  if (upstream) next.upstreamModel = upstream
+  const reasoning = flagValue(rest, '--reasoning')
+  if (reasoning !== undefined) {
+    if (reasoning === '-') delete next.reasoningEffort
+    else {
+      const parsed = parseReasoning(reasoning)
+      if (parsed === false) return `${t('config.model.reasoningInvalid')}\n`
+      next.reasoningEffort = parsed
+    }
+  }
+  const maxOutput = flagValue(rest, '--max-output-tokens')
+  if (maxOutput !== undefined) {
+    if (maxOutput === '-') delete next.maxOutputTokens
+    else {
+      const parsed = parsePositiveInt(maxOutput)
+      if (parsed === false || parsed === undefined) return `${t('config.model.intInvalid')}\n`
+      next.maxOutputTokens = parsed
+    }
+  }
+  models[displayName] = next
+  obj.models = models
+  const guard = guardWritable(userId, obj)
+  if (guard) return guard
+  writeUserConfig(userId, obj)
+  return `${t('config.model.updated', {
+    name: displayName,
+    schema: String(next.schema),
+    endpoint: String(next.endpoint),
+    upstream: String(next.upstreamModel),
+  })}\n`
+}
+
+function removeModel(userId: string, parts: string[]): string {
+  const [displayName] = parts
+  if (!displayName) return modelUsage()
+  const obj = readUserConfig(userId)
+  const models = asRecord(obj.models)
+  if (!models[displayName]) {
+    return `${t('config.model.missing', { name: displayName })}\n`
+  }
+  delete models[displayName]
+  obj.models = models
+  if (obj.defaultModel === displayName) delete obj.defaultModel
+  writeUserConfig(userId, obj)
+  return `${t('config.model.removed', { name: displayName })}\n`
+}
+
+function formatModelList(userId: string): string {
+  const override = loadUserConfigOverride(userId)
+  const models = Object.entries(override.models ?? {})
+  if (models.length === 0) return `${t('config.model.none')}\n`
+  return `${[
+    t('config.model.listHeader'),
+    ...models
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, model]) => {
+        const isDefault = override.defaultModel === name ? ' default' : ''
+        return `  ${name} (${model.schema}, ${model.endpoint} -> ${model.upstreamModel})${isDefault}`
+      }),
+    '',
+  ].join('\n')}`
+}
+
+async function checkModel(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const [displayName] = parts
+  if (!displayName) return modelUsage()
+  const resolved = resolveUserConfig(userId, ctx.config)
+  const entry = resolved.models[displayName]
+  if (!entry || entry.visibility !== 'user') {
+    return `${t('config.model.checkFail', { detail: `"${displayName}" is not a configured user model` })}\n`
+  }
+  try {
+    const { provider } = getProviderFor(resolved, displayName)
+    const signal = AbortSignal.timeout(MODEL_CHECK_TIMEOUT_MS)
+    for await (const event of provider.streamChat({
+      model: entry.upstreamModel,
+      system: 'You are a connectivity checker. Reply with ok.',
+      messages: [{ role: 'user', content: 'Reply with ok.' }],
+      tools: [],
+      maxTokens: 16,
+      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+      signal,
+    })) {
+      if (event.type === 'stop') break
+    }
+    return `${t('config.model.checkOk')}\n`
+  } catch (error) {
+    return `${t('config.model.checkFail', {
+      detail: error instanceof Error ? error.message : String(error),
+    })}\n`
+  }
+}
+
+// ── shared helpers ───────────────────────────────────────────────────────────
+
+/** Admin endpoint aliases the user's BYO aliases must not shadow. Best-effort:
+ *  `getConfig()` throws only when no models are configured, which cannot happen
+ *  in a live paired session — but stay defensive and treat a failure as "no
+ *  admin endpoints to collide with" (resolveUserConfig still rejects collisions
+ *  gracefully at resolve time as the real safety net). */
+function adminEndpointAliases(): Set<string> {
+  try {
+    return new Set(Object.keys(getConfig().endpoints))
+  } catch {
+    return new Set()
+  }
+}
+
+/** Re-parse the would-be-written object through the strict schema + registry
+ *  builder so the user is not silently left with a config the resolver would
+ *  reject and fall back from. Returns a localized error to surface, or null. */
+function guardWritable(userId: string, obj: Record<string, unknown>): string | null {
+  const parsed = parseUserConfigOverride(obj)
+  if (!parsed.ok) {
+    return `${t('config.byo.rejected', { detail: parsed.error })}\n`
+  }
+  const built = buildUserRegistry(userId, parsed.value)
+  if (!built.ok) {
+    return `${t('config.byo.rejected', { detail: built.error })}\n`
+  }
+  return null
+}
+
+function applyEndpointFlags(endpoint: Record<string, unknown>, rest: string[]): void {
+  const baseUrl = flagValue(rest, '--base-url')
+  if (baseUrl) endpoint.baseUrl = baseUrl
+  const proxy = flagValue(rest, '--proxy')
+  if (proxy) endpoint.proxy = normalizeProxyUrl(proxy)
+}
+
+function assertAlias(value: string): void {
+  if (!BYO_ALIAS_RE.test(value)) {
+    throw new Error(t('config.byo.aliasInvalid', { value }))
+  }
+}
+
+function parseSchema(input: string): 'anthropic' | 'openai' | null {
+  return input === 'anthropic' || input === 'openai' ? input : null
+}
+
+function parseReasoning(input: string | undefined): string | undefined | false {
+  if (!input) return undefined
+  const allowed = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  return allowed.includes(input) ? input : false
+}
+
+function parsePositiveInt(input: string | undefined): number | undefined | false {
+  if (!input) return undefined
+  const n = Number.parseInt(input, 10)
+  if (!Number.isInteger(n) || n <= 0) return false
+  return n
+}
+
+function flagValue(parts: string[], flag: string): string | undefined {
+  const index = parts.indexOf(flag)
+  if (index < 0) return undefined
+  return parts[index + 1]
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 async function setWorkspace(rawPath: string, ctx: ConfigCommandContext & { userId?: string }): Promise<string> {

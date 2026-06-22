@@ -2,9 +2,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import path from 'node:path'
 import { z } from 'zod'
 
-import type { LightClawConfig } from '../config.js'
+import type { EndpointConfig, LightClawConfig, ModelEntry } from '../config.js'
 import { userConfigPath } from '../identity/paths.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
+import type { ReasoningEffort, Schema } from '../provider/types.js'
+import { loadUserSecrets, validateSecretName } from '../secrets/store.js'
+import { normalizeProxyUrl } from './proxy-url.js'
 
 /**
  * Per-user config merge layer (PR4). Lives at `users/<canonical>/config.json`
@@ -21,9 +24,53 @@ import { loadIdentityPreferences } from '../identity/preferences.js'
  * function body.
  */
 
+// ── BYO endpoint / model schemas (PR5 checkpoint 1, apiKey-only) ─────────────
+// A user may define their own apiKey-backed endpoints and custom models in
+// config.json; resolveUserConfig UNIONs them onto the admin registry. The raw
+// key never lives in config.json — `apiKeyRef` names a secret resolved from the
+// user's secrets.json at resolve time. Codex per-user OAuth (`authRef`,
+// `openai-auth` schema) is a later checkpoint and intentionally absent here.
+
+/** Trim + normalize a proxy URL string, surfacing the normalizer's error
+ *  through a zod issue rather than throwing during safeParse. */
+const ProxyUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((value, ctx) => {
+    try {
+      return normalizeProxyUrl(value)
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return z.NEVER
+    }
+  })
+
+const UserEndpointSchema = z
+  .object({
+    baseUrl: z.string().trim().min(1).optional(),
+    proxy: ProxyUrlSchema.optional(),
+    // apiKeyRef is REQUIRED this checkpoint — there is no authRef field yet.
+    apiKeyRef: z.string().trim().min(1),
+  })
+  .strict()
+
+const UserModelSchema = z
+  .object({
+    endpoint: z.string().trim().min(1),
+    schema: z.enum(['anthropic', 'openai']),
+    upstreamModel: z.string().trim().min(1),
+    reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+  })
+  .strict()
+
 const UserConfigOverrideSchema = z
   .object({
-    // The user's chosen model alias. Must resolve against the (admin) model
+    // The user's chosen model alias. Must resolve against the (unioned) model
     // registry to actually take effect; an unknown value falls back to the
     // admin default in resolveUserConfig rather than erroring.
     defaultModel: z.string().min(1).optional(),
@@ -37,10 +84,32 @@ const UserConfigOverrideSchema = z
     // live-read semantics. resolveUserConfig may carry it through but must not
     // change how /mode persists or how permission/index reads it.
     permissionMode: z.enum(['default', 'plan', 'acceptEdits', 'bypassPermissions']).optional(),
+    // PR5 BYO registries. UNIONed onto the admin base in resolveUserConfig.
+    endpoints: z.record(z.string().min(1), UserEndpointSchema).optional(),
+    models: z.record(z.string().min(1), UserModelSchema).optional(),
   })
   .strict()
 
 export type UserConfigOverride = z.infer<typeof UserConfigOverrideSchema>
+export type UserEndpointOverride = NonNullable<UserConfigOverride['endpoints']>[string]
+export type UserModelOverride = NonNullable<UserConfigOverride['models']>[string]
+
+/**
+ * Strict-parse an in-memory object as a UserConfigOverride. Used by the
+ * `/config endpoint` / `/config model` writers to validate a would-be-written
+ * config.json BEFORE it lands on disk, so a user is never left holding a config
+ * the resolver would silently reject. Returns `{ok:false, error}` with the
+ * joined zod issue messages on failure.
+ */
+export function parseUserConfigOverride(
+  data: unknown,
+): { ok: true; value: UserConfigOverride } | { ok: false; error: string } {
+  const result = UserConfigOverrideSchema.safeParse(data)
+  if (!result.success) {
+    return { ok: false, error: result.error.issues.map(issue => issue.message).join('; ') }
+  }
+  return { ok: true, value: result.data }
+}
 
 /**
  * Read + safe-parse the per-user config.json. Missing file or any parse /
@@ -64,13 +133,89 @@ export function loadUserConfigOverride(canonicalUser: string): UserConfigOverrid
 }
 
 /**
+ * Build the user's BYO endpoint / model registry from their override.
+ * Resolves each `apiKeyRef` from the user's secrets.json into a live
+ * `EndpointConfig.apiKey` (in-memory only — never written back to disk), and
+ * validates that each custom model references one of the just-built USER
+ * endpoints (NOT admin's). Any problem returns `{ ok: false, error }` so the
+ * caller can fall back to the admin-only registry without throwing.
+ *
+ * `credentialIdentity` (`user:<canonical>:secret:<NAME>`) discriminates the
+ * provider cache so two users' same-aliased endpoints with different keys
+ * never share a provider instance.
+ */
+export function buildUserRegistry(
+  canonical: string,
+  override: UserConfigOverride,
+):
+  | { ok: true; endpoints: Record<string, EndpointConfig>; models: Record<string, ModelEntry> }
+  | { ok: false; error: string } {
+  const endpoints: Record<string, EndpointConfig> = {}
+  const models: Record<string, ModelEntry> = {}
+
+  for (const [alias, ep] of Object.entries(override.endpoints ?? {})) {
+    let secretName: string
+    try {
+      secretName = validateSecretName(ep.apiKeyRef)
+    } catch (error) {
+      return {
+        ok: false,
+        error: `endpoint "${alias}" apiKeyRef is invalid: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      }
+    }
+    const secret = loadUserSecrets(canonical)[secretName]
+    if (!secret) {
+      return {
+        ok: false,
+        error: `endpoint "${alias}" apiKeyRef "${secretName}" is not stored; run /secret set ${secretName} <VALUE> first`,
+      }
+    }
+    endpoints[alias] = {
+      apiKey: secret.value,
+      ...(ep.baseUrl ? { baseUrl: ep.baseUrl } : {}),
+      ...(ep.proxy ? { proxy: ep.proxy } : {}),
+      credentialIdentity: `user:${canonical}:secret:${secretName}`,
+    }
+  }
+
+  for (const [displayName, m] of Object.entries(override.models ?? {})) {
+    if (!endpoints[m.endpoint]) {
+      return {
+        ok: false,
+        error: `user model "${displayName}" references missing user endpoint "${m.endpoint}"`,
+      }
+    }
+    models[displayName] = {
+      endpoint: m.endpoint,
+      schema: m.schema as Schema,
+      upstreamModel: m.upstreamModel,
+      visibility: 'user',
+      ...(m.reasoningEffort ? { reasoningEffort: m.reasoningEffort as ReasoningEffort } : {}),
+      ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
+    }
+  }
+
+  return { ok: true, endpoints, models }
+}
+
+/**
  * Fold a user's overrides onto the admin base config and return a resolved
  * snapshot. UNION semantics — the admin registry is never replaced:
  *
- *   - `endpoints` / `models` stay the admin base's, UNCHANGED. (Swapping in a
- *     user-owned registry was qm's P0 bug; BYO registries are a later PR.)
+ *   - `endpoints` / `models` = admin base UNION the user's BYO registry
+ *     (`{ ...base, ...user }`). A user with ZERO byo entries still sees every
+ *     admin model unchanged. (Swapping in a user-owned registry, REPLACING the
+ *     admin one, was qm's P0 bug.)
+ *   - A user endpoint alias that collides with an admin alias, a user model
+ *     name that collides with an admin model name, or any registry build
+ *     failure (bad apiKeyRef / missing secret / dangling endpoint) is handled
+ *     GRACEFULLY: a stderr warning, then fall back to the admin-only registry
+ *     for this resolve. resolveUserConfig NEVER throws on bad user input.
  *   - `lang` = override.lang ?? base.lang.
- *   - `defaultModel` follows a three-step chain (the heart of this PR):
+ *   - `defaultModel` follows a three-step chain (the heart of PR4), evaluated
+ *     against the UNION registry:
  *       1. user model (config.json `defaultModel`, else back-compat
  *          preferences.json `model`) — used iff it exists in the registry;
  *       2. else the admin `base.defaultModel` — used iff it exists in the
@@ -89,11 +234,38 @@ export function resolveUserConfig(
     return base
   }
   const override = loadUserConfigOverride(canonical)
-  // endpoints + models are the admin base's, untouched.
+  const built = buildUserRegistry(canonical, override)
+
+  let userEndpoints: Record<string, EndpointConfig> = {}
+  let userModels: Record<string, ModelEntry> = {}
+  if (built.ok) {
+    // Reject on ANY name collision with the admin registry — a user must not
+    // shadow an admin endpoint / model. Fall back to admin-only on collision.
+    const endpointCollision = Object.keys(built.endpoints).find(alias => base.endpoints[alias])
+    const modelCollision = Object.keys(built.models).find(name => base.models[name])
+    if (endpointCollision) {
+      process.stderr.write(
+        `[user-config] ${canonical}: user endpoint "${endpointCollision}" collides with an admin endpoint; ignoring user BYO registry\n`,
+      )
+    } else if (modelCollision) {
+      process.stderr.write(
+        `[user-config] ${canonical}: user model "${modelCollision}" collides with an admin model; ignoring user BYO registry\n`,
+      )
+    } else {
+      userEndpoints = built.endpoints
+      userModels = built.models
+    }
+  } else {
+    process.stderr.write(`[user-config] ${canonical}: ${built.error}; ignoring user BYO registry\n`)
+  }
+
   const resolved: LightClawConfig = {
     ...base,
     lang: override.lang ?? base.lang,
+    endpoints: { ...base.endpoints, ...userEndpoints },
+    models: { ...base.models, ...userModels },
   }
+
   // config.json's defaultModel wins; back-compat falls through to the legacy
   // preferences.json `model` field when config.json has none.
   const userModel =

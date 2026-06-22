@@ -320,6 +320,14 @@ export type ApiKeyEndpoint = {
    *  of truth, so per-endpoint routing (e.g. Anthropic gateway direct,
    *  ChatGPT through US proxy) stays predictable. */
   proxy?: string
+  /** Stable cache-key discriminator (PR5 BYO). Two different users may both
+   *  define an endpoint aliased `openai` whose `apiKey` resolves from each
+   *  user's own secret; the provider cache must never share one instance
+   *  across those distinct credentials. A BYO endpoint carries a per-user
+   *  `credentialIdentity` (`user:<canonical>:secret:<NAME>`); admin endpoints
+   *  omit it and fall back to a stable per-(schema,alias) key, so their
+   *  behavior is unchanged. */
+  credentialIdentity?: string
 }
 
 /** Endpoint whose credentials come from an `AuthProvider` lookup at request
@@ -347,6 +355,10 @@ export type ModelEntry = {
   /** Optional per-model output-token ceiling. Overrides the global
    *  `maxOutputTokens`; falls back to it when unset. */
   maxOutputTokens?: number
+  /** Provenance marker (PR5 BYO). `'user'` flags a model defined in a user's
+   *  own config.json and unioned onto the admin registry; admin / bundled
+   *  models omit it and are treated as admin. */
+  visibility?: 'admin' | 'user'
 }
 
 export type LightClawConfig = {
