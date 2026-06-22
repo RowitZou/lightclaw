@@ -171,9 +171,30 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     const firstUpdateGate = new Promise<{ updated: boolean }>(resolve => {
       resolveFirstUpdate = resolve
     })
+    // Deterministic signal for "the second (backgrounded) update has started".
+    // The test waits on this actual event rather than a wall-clock deadline:
+    // under full-suite parallel load the OS can deschedule this process past a
+    // fixed deadline while the fire-and-forget update is still pending, which
+    // made the old `Date.now() < deadline` poll flake (false fail). Awaiting the
+    // real signal can only "hang" if the feature is genuinely broken — then the
+    // node:test per-test timeout converts it into an honest failure.
+    let signalFirstUpdateStarted!: () => void
+    const firstUpdateStarted = new Promise<void>(resolve => {
+      signalFirstUpdateStarted = resolve
+    })
+    let signalSecondUpdateStarted!: () => void
+    const secondUpdateStarted = new Promise<void>(resolve => {
+      signalSecondUpdateStarted = resolve
+    })
     setSessionMemoryUpdaterForTest(input => {
       updaterCalls += 1
       summarizedBatches.push(input.newMessages)
+      if (updaterCalls === 1) {
+        signalFirstUpdateStarted()
+      }
+      if (updaterCalls === 2) {
+        signalSecondUpdateStarted()
+      }
       return updaterCalls === 1
         ? firstUpdateGate
         : Promise.resolve({ updated: true })
@@ -187,17 +208,14 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
       },
     )
 
-    // Let the loop run through every tool turn.
-    const deadline = Date.now() + 3_000
-    while (pingCalls < 10 && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
-
     // The end-turn session-memory flush is now FIRE-AND-FORGET: it must not
     // hold the turn (and, on a channel, the in-flight marker that gates user
     // interjections) for a slow post-turn LLM write. So the query RESOLVES
     // without awaiting the still-gated update — the OLD behaviour blocked here
-    // until resolveFirstUpdate ran.
+    // until resolveFirstUpdate ran. `await queryPromise` is deterministic: it
+    // resolves only after the loop produced all 10 tool turns + end_turn, so
+    // pingCalls is necessarily 10 and update #1 (kicked at boundary 5) has
+    // started by then.
     const result = await queryPromise
     assert.equal(
       queryResolved,
@@ -210,6 +228,12 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
       10,
       'all 10 tool turns ran while update #1 was in flight (mid-turn updates are non-blocking)',
     )
+    // Update #1 is kicked fire-and-forget at boundary 5; under full-suite load
+    // its stub call can land after `queryPromise` resolves. Wait on the actual
+    // start signal so the count assertion isn't racing the side-effect. Once
+    // update #1 has started it stays parked on `firstUpdateGate`, so update #2
+    // physically cannot begin and the count is a stable 1.
+    await firstUpdateStarted
     assert.equal(
       updaterCalls,
       1,
@@ -217,11 +241,9 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     )
 
     // Release update #1; the backgrounded end_turn flush then runs update #2.
+    // Wait on the actual second-update signal — deterministic, no deadline.
     resolveFirstUpdate({ updated: true })
-    const flushDeadline = Date.now() + 3_000
-    while (updaterCalls < 2 && Date.now() < flushDeadline) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
+    await secondUpdateStarted
     assert.equal(
       updaterCalls,
       2,
@@ -274,8 +296,17 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
   // must not write session-memory at all.
   it('skips session-memory for framework-internal roles even when thresholds are crossed', async () => {
     let updaterCalls = 0
+    // Deterministic signal for "the baseline update fired" — the update is
+    // fire-and-forget, so its stub call can land after `runQuery` resolves
+    // under full-suite parallel load. Await the signal instead of reading the
+    // counter at an arbitrary moment.
+    let signalBaselineUpdate!: () => void
+    const baselineUpdateStarted = new Promise<void>(resolve => {
+      signalBaselineUpdate = resolve
+    })
     setSessionMemoryUpdaterForTest(() => {
       updaterCalls += 1
+      signalBaselineUpdate()
       return Promise.resolve({ updated: true })
     })
 
@@ -283,6 +314,7 @@ describe('query session-memory updates (5.21 Bug 7)', () => {
     // non-internal role, proving the thresholds are actually crossed here.
     fakeStreamChat([...Array.from({ length: 6 }, () => heavyToolUseTurn), endTurn])
     await runQuery('feishu:dm:internal-baseline', [makePingTool()], TEST_ROLE)
+    await baselineUpdateStarted
     assert.ok(
       updaterCalls > 0,
       'baseline: a non-internal role writes session-memory once thresholds are crossed',
