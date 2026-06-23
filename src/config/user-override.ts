@@ -54,6 +54,12 @@ const ProxyUrlSchema = z
 
 const UserEndpointSchema = z
   .object({
+    // Wire-protocol family chosen via `endpoint add --type` (B3). For apiKey
+    // endpoints this disambiguates anthropic vs openai so `backend add` can
+    // derive the model schema without a positional argument. Codex endpoints
+    // omit it (their schema is implied by `authRef` / openai-auth). Optional so
+    // pre-B3 config.json (apiKey endpoints without a `type`) still parses.
+    type: z.enum(['openai', 'anthropic']).optional(),
     baseUrl: z.string().trim().min(1).optional(),
     proxy: ProxyUrlSchema.optional(),
     // PR5 checkpoint 2: an endpoint is EITHER apiKey-backed (`apiKeyRef`, a

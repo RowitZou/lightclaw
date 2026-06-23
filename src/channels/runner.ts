@@ -2725,9 +2725,12 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
     const noun = subParts[0]
     const verb = subParts[1] ?? ''
     // Scalar / list nouns: bare or `list` is read; any other verb writes.
+    // `backend` and `lane` (B3) follow the same split: bare/list → read,
+    // verbs (add / set / check / rm / reset) → null (lock path).
     if (
       (noun === 'model' || noun === 'mode' || noun === 'lang' ||
-        noun === 'rule' || noun === 'workspace' || noun === 'endpoint' || noun === 'codex') &&
+        noun === 'rule' || noun === 'workspace' || noun === 'endpoint' ||
+        noun === 'codex' || noun === 'backend' || noun === 'lane') &&
       (verb === '' || verb === 'list')
     ) {
       return 'read'

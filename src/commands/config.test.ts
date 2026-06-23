@@ -143,6 +143,7 @@ function modelConfig(): LightClawConfig {
     permissionMode: 'default',
     lang: 'en',
     defaultModel: 'sonnet',
+    lane: {},
     endpoints: { anthropic: { baseUrl: 'https://example' } },
     models: {
       sonnet: { schema: 'anthropic', endpoint: 'anthropic', upstreamModel: 'claude-sonnet' },
@@ -229,13 +230,13 @@ describe('/config model disambiguation (scalar switch vs BYO registry)', () => {
     assert.equal(persisted.models, undefined)
   })
 
-  it('routes `model add ...` (reserved BYO verb) to the BYO registry path', async () => {
+  it('routes `model add ...` (relocated BYO verb) to the /config backend hint', async () => {
     const cfg = modelConfig()
     const out = await inSession('frank', cfg, () =>
       runConfigCommand('model add', { config: cfg, userId: 'frank' }),
     )
-    // BYO registry usage, not a scalar "model: ..." switch.
-    assert.match(out, /\/config model add <displayName>/)
+    // B3: BYO model registration moved to /config backend; model emits a hint.
+    assert.match(out, /\/config backend/)
     assert.doesNotMatch(out, /^model: /m)
   })
 })
@@ -335,6 +336,185 @@ describe('/config workspace (←set-workspace)', () => {
   it('bare workspace shows current (read)', async () => {
     const out = await runConfigCommand('workspace', { config: clusterConfig(), userId: 'pam' })
     assert.match(out, /current workspace/)
+  })
+})
+
+// ── B3: endpoint --type / backend / lane ─────────────────────────────────────
+
+import { userSecretsPath } from '../identity/paths.js'
+
+function readUserConfigJson(user: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(userConfigPath(user), 'utf8'))
+}
+
+function readSecretsJson(user: string): Record<string, { value: string }> {
+  const parsed = JSON.parse(readFileSync(userSecretsPath(user), 'utf8'))
+  return parsed.secrets ?? {}
+}
+
+describe('/config endpoint add --type', () => {
+  it('--type openai --key sk-RAW stores a secret REFERENCE (not the raw key) + baseUrl', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-RAW --base-url https://gw.example/v1',
+      { config: cfg, userId: 'b3a' },
+    )
+    assert.match(out, /Added custom endpoint/)
+    const persisted = readUserConfigJson('b3a')
+    const ep = (persisted.endpoints as Record<string, Record<string, unknown>>).ep
+    // config.json holds a reference + baseUrl + type, NEVER the raw key.
+    assert.ok(typeof ep.apiKeyRef === 'string' && ep.apiKeyRef.length > 0)
+    assert.equal(ep.baseUrl, 'https://gw.example/v1')
+    assert.equal(ep.type, 'openai')
+    assert.equal(JSON.stringify(persisted).includes('sk-RAW'), false)
+    // The secrets store now holds the raw value under that ref.
+    const secrets = readSecretsJson('b3a')
+    assert.equal(secrets[ep.apiKeyRef as string]!.value, 'sk-RAW')
+  })
+
+  it('--type codex --auth-path stores authRef, no baseUrl, no key', async () => {
+    const cfg = modelConfig()
+    // Stage a minimal codex auth.json the importer can read: a JWT-shaped
+    // access_token whose `exp` claim is far in the future (the importer derives
+    // expires_at from it).
+    const authFile = path.join(tmpHome, 'auth.json')
+    const { writeFileSync } = await import('node:fs')
+    const enc = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url')
+    const access = `${enc({ alg: 'none', typ: 'JWT' })}.${enc({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })}.`
+    writeFileSync(
+      authFile,
+      JSON.stringify({ tokens: { access_token: access, refresh_token: 'r', account_id: 'a' } }),
+      'utf8',
+    )
+    const out = await runConfigCommand(
+      `endpoint add cdx --type codex --auth-path ${authFile}`,
+      { config: cfg, userId: 'b3codex' },
+    )
+    assert.match(out, /Codex endpoint/i)
+    const ep = (readUserConfigJson('b3codex').endpoints as Record<string, Record<string, unknown>>).cdx
+    assert.ok(typeof ep.authRef === 'string' && (ep.authRef as string).startsWith('codex:'))
+    assert.equal(ep.baseUrl, undefined)
+    assert.equal(ep.apiKeyRef, undefined)
+  })
+
+  it('--type bogus is an error', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('endpoint add ep --type bogus --key x', {
+      config: cfg,
+      userId: 'b3bogus',
+    })
+    assert.match(out, /unknown --type/)
+    assert.equal(existsSync(userConfigPath('b3bogus')), false)
+  })
+
+  it('--key existingSecretName references it without creating a new secret', async () => {
+    const cfg = modelConfig()
+    // Pre-store a secret the user references by name.
+    const { setUserSecret } = await import('../secrets/store.js')
+    setUserSecret('b3ref', 'MY_KEY', 'sk-existing')
+    const before = Object.keys(readSecretsJson('b3ref'))
+    const out = await runConfigCommand('endpoint add ep --type openai --key MY_KEY', {
+      config: cfg,
+      userId: 'b3ref',
+    })
+    assert.match(out, /Added custom endpoint/)
+    const ep = (readUserConfigJson('b3ref').endpoints as Record<string, Record<string, unknown>>).ep
+    assert.equal(ep.apiKeyRef, 'MY_KEY')
+    // No new secret slot created.
+    assert.deepEqual(Object.keys(readSecretsJson('b3ref')).sort(), before.sort())
+  })
+
+  it('add-key / add-codex now emit a one-time deprecation hint', async () => {
+    const cfg = modelConfig()
+    const out1 = await runConfigCommand('endpoint add-key ep MY_KEY', { config: cfg, userId: 'b3dep' })
+    assert.match(out1, /deprecated|--type/)
+    const out2 = await runConfigCommand('endpoint add-codex ep codex:x', { config: cfg, userId: 'b3dep' })
+    assert.match(out2, /deprecated|--type codex/)
+    assert.equal(existsSync(userConfigPath('b3dep')), false)
+  })
+})
+
+describe('/config backend (BYO model registry, ←model BYO)', () => {
+  it('add m --endpoint ep --default writes the model entry, sets defaultModel, upstream==name', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b3b' })
+    const out = await runConfigCommand('backend add m --endpoint ep --default', {
+      config: cfg,
+      userId: 'b3b',
+    })
+    assert.match(out, /Registered model "m"/)
+    const persisted = readUserConfigJson('b3b')
+    const model = (persisted.models as Record<string, Record<string, unknown>>).m
+    assert.equal(model.endpoint, 'ep')
+    assert.equal(model.upstreamModel, 'm') // --upstream omitted ⇒ upstream==name
+    assert.equal(model.schema, 'openai') // derived from endpoint --type
+    assert.equal(persisted.defaultModel, 'm')
+  })
+
+  it('check m clears the cache then probes', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'b3chk',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'b3chk' })
+    // The probe will fail (no real provider) but check still runs + returns a
+    // localized check result, having cleared the cache first.
+    const out = await runConfigCommand('backend check m', { config: cfg, userId: 'b3chk' })
+    assert.match(out, /Model check/)
+  })
+})
+
+describe('/config model BYO verbs now hint to /config backend', () => {
+  it('model add emits the backend hint and writes no registry', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('model add x --endpoint ep', { config: cfg, userId: 'b3hint' })
+    assert.match(out, /\/config backend/)
+    assert.equal(existsSync(userConfigPath('b3hint')), false)
+  })
+
+  it('model set <name> still scalar-switches', async () => {
+    const cfg = modelConfig()
+    await inSession('b3set', cfg, async () => {
+      const out = await runConfigCommand('model set opus', { config: cfg, userId: 'b3set' })
+      assert.match(out, /model: opus/)
+      assert.equal(getModel(), 'opus')
+    })
+    assert.equal(readUserConfigJson('b3set').defaultModel, 'opus')
+    assert.equal(readUserConfigJson('b3set').models, undefined)
+  })
+})
+
+describe('/config lane', () => {
+  it('set worker <model> writes config.lane.worker; reset clears it', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('lane set worker opus', { config: cfg, userId: 'b3lane' })
+    assert.match(out, /lane.worker = opus/)
+    assert.equal(
+      ((readUserConfigJson('b3lane').lane as Record<string, unknown>) ?? {}).worker,
+      'opus',
+    )
+    const resetOut = await runConfigCommand('lane reset worker', { config: cfg, userId: 'b3lane' })
+    assert.match(resetOut, /Cleared lane.worker/)
+    const lane = readUserConfigJson('b3lane').lane as Record<string, unknown> | undefined
+    assert.equal(lane === undefined || !('worker' in lane), true)
+  })
+
+  it('set worker <unknownModel> is an error', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('lane set worker nope', { config: cfg, userId: 'b3laneerr' })
+    assert.match(out, /unknown model "nope"/)
+    assert.equal(existsSync(userConfigPath('b3laneerr')), false)
+  })
+
+  it('bare lane lists the three buckets', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('lane', { config: cfg, userId: 'b3lanelist' })
+    assert.match(out, /worker =/)
+    assert.match(out, /system =/)
+    assert.match(out, /image =/)
   })
 })
 

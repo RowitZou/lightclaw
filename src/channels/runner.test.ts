@@ -306,6 +306,12 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.equal(parseFastPathSlash('/config workspace'), 'read')
     assert.equal(parseFastPathSlash('/config endpoint'), 'read')
     assert.equal(parseFastPathSlash('/config codex'), 'read')
+    // B3 nouns: backend + lane follow the same read/write split.
+    assert.equal(parseFastPathSlash('/config backend'), 'read')
+    assert.equal(parseFastPathSlash('/config backend list'), 'read')
+    assert.equal(parseFastPathSlash('/config lane'), 'read')
+    assert.equal(parseFastPathSlash('/config backend add x'), null)
+    assert.equal(parseFastPathSlash('/config lane set worker m'), null)
     assert.equal(parseFastPathSlash('/config model set x'), null)
     assert.equal(parseFastPathSlash('/config model reset'), null)
     assert.equal(parseFastPathSlash('/config mode set auto'), null)

@@ -7,7 +7,6 @@ import {
   importUserCodexAuth,
   listUserCodexAuth,
   normalizeCodexAuthName,
-  readUserCodexAuth,
 } from '../auth/codex/user-store.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
@@ -36,7 +35,7 @@ import {
 } from '../permission/storage.js'
 import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
 import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
-import { loadUserSecrets, validateSecretName } from '../secrets/store.js'
+import { loadUserSecrets, setUserSecret, validateSecretName } from '../secrets/store.js'
 import {
   getCurrentUserId,
   getIdentityRules,
@@ -135,6 +134,14 @@ export async function runConfigCommand(
     return runEndpointSubcommand(parts.slice(1), ctx)
   }
 
+  if (action === 'backend') {
+    return runBackendSubcommand(parts.slice(1), ctx)
+  }
+
+  if (action === 'lane') {
+    return runConfigLane(parts.slice(1), ctx)
+  }
+
   if (action === 'model') {
     return runConfigModel(parts.slice(1), ctx)
   }
@@ -158,56 +165,43 @@ export async function runConfigCommand(
   return `${t('config.usage')}\n`
 }
 
-// ── /config model — DUAL purpose dispatcher (B2 disambiguation, design F.2a) ──
+// ── /config model — SCALAR-ONLY (B3, design F.2) ─────────────────────────────
 //
-// The `model` noun wears two faces under one name:
-//   - SCALAR face  = pick which model the *current user* runs (←old `/model`):
-//       `/config model`               list selectable models + current (read)
-//       `/config model set <name>`    switch current model
-//       `/config model reset`         drop the per-user override (fall back)
-//       `/config model --clear-cache` clear the current model's probe cache
-//   - BYO registry face (existing, PR5) = manage the user's own custom model
-//       definitions: `add set check rm list templates`.
+// `model` is now purely the current-model scalar (←old `/model`):
+//   `/config model`               list selectable models + current (read)
+//   `/config model set <name>`    switch current model
+//   `/config model reset`         drop the per-user override (fall back)
+//   `/config model --clear-cache` clear the current model's probe cache
+//     (also reachable via `/config backend check`; both kept for B3)
 //
-// DISAMBIGUATION RULE (chosen split):
-//   The SIX tokens `add check rm remove list templates template` are reserved
-//   BYO verbs and always route to the BYO registry. `set` is the ONLY ambiguous
-//   verb (it exists on both faces):
-//     - `set <name>` with a single bare model-name arg and NO BYO flags
-//       (--schema / --endpoint / --upstream-model / --reasoning /
-//        --max-output-tokens) → SCALAR switch (the common case, ←`/model set`).
-//     - `set <name> --endpoint ...` (any BYO flag present) → BYO model edit.
-//   Anything else (bare, `--clear-cache`, or a first token that is not a
-//   reserved verb, e.g. `/config model <name>`) is the SCALAR face.
-const BYO_MODEL_VERBS = new Set([
+// The BYO model registry moved to `/config backend` (B3). The old BYO verbs
+// under `model` (`add check rm list templates`) now emit a one-time hint
+// pointing at `/config backend` instead of writing the registry.
+const RELOCATED_BACKEND_VERBS = new Set([
   'add', 'check', 'rm', 'remove', 'list', 'templates', 'template',
 ])
-const BYO_MODEL_SET_FLAGS = [
-  '--schema', '--endpoint', '--upstream-model', '--reasoning', '--max-output-tokens',
-]
 
 async function runConfigModel(
   parts: string[],
   ctx: ConfigCommandContext,
 ): Promise<string> {
   const verb = (parts[0] ?? '').toLowerCase()
-  if (BYO_MODEL_VERBS.has(verb)) {
-    return runModelSubcommand(parts, ctx)
+  // Old BYO-under-model verbs → hint to /config backend (no registry write).
+  // `set <name>` stays scalar (the common switch case); `list` was a BYO verb
+  // under model but bare/`list` is the scalar model list, so only the other
+  // relocated verbs hint.
+  if (RELOCATED_BACKEND_VERBS.has(verb) && verb !== 'list') {
+    return `${t('config.backend.modelHint', { verb })}\n`
   }
-  if (verb === 'set') {
-    const rest = parts.slice(1)
-    const hasByoFlag = rest.some(arg => BYO_MODEL_SET_FLAGS.includes(arg))
-    if (hasByoFlag) {
-      return runModelSubcommand(parts, ctx)
-    }
-    // `set <bare-name>` → scalar switch.
-    return runConfigModelScalar(['set', ...rest], ctx)
+  // `list` is the scalar model list (same as bare).
+  if (verb === 'list') {
+    return runConfigModelScalar([], ctx)
   }
-  // bare / `--clear-cache` / `reset` / `<name>` → scalar face.
+  // bare / `set <name>` / `--clear-cache` / `reset` / `<name>` → scalar.
   return runConfigModelScalar(parts, ctx)
 }
 
-// ── /config endpoint <verb> (BYO apiKey endpoints, PR5) ──────────────────────
+// ── /config endpoint <verb> (BYO endpoints, PR5 / B3 --type) ─────────────────
 
 async function runEndpointSubcommand(
   parts: string[],
@@ -225,10 +219,13 @@ async function runEndpointSubcommand(
     switch (verb) {
       case 'list':
         return formatEndpointList(userId)
+      case 'add':
+        return addEndpoint(userId, parts)
       case 'add-key':
-        return addApiKeyEndpoint(userId, parts)
+        // Deprecated one-time hint → point at `endpoint add --type ...`.
+        return `${t('config.endpoint.addKeyDeprecated')}\n`
       case 'add-codex':
-        return addCodexEndpoint(userId, parts)
+        return `${t('config.endpoint.addCodexDeprecated')}\n`
       case 'set':
         return setEndpoint(userId, parts)
       case 'remove':
@@ -247,54 +244,69 @@ function endpointUsage(): string {
     'Usage:',
     '  /config endpoint                          List your endpoints',
     '  /config endpoint templates                Show endpoint templates',
-    '  /config endpoint add-key <alias> <SECRET_NAME> [--base-url <url>] [--proxy <url>]',
-    '  /config endpoint add-codex <alias> codex:<name> [--base-url <url>] [--proxy <url>]',
-    '  /config endpoint set <alias> [--base-url <url|->] [--proxy <url|->] [--api-key-ref <SECRET_NAME>]',
-    '  /config endpoint rm <alias>',
+    '  /config endpoint add <ep> --type openai|anthropic --key <KEY|secretName> [--base-url <url>] [--proxy <url>]',
+    '  /config endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]',
+    '  /config endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY|secretName>]',
+    '  /config endpoint rm <ep>',
     '',
   ].join('\n')
 }
 
-function addApiKeyEndpoint(userId: string, parts: string[]): string {
-  const [alias, apiKeyRef, ...rest] = parts
-  if (!alias || !apiKeyRef) return endpointUsage()
-  assertAlias(alias)
-  const override = loadUserConfigOverride(userId)
-  if (override.endpoints?.[alias]) {
-    return `${t('config.endpoint.exists', { name: alias })}\n`
-  }
-  if (adminEndpointAliases().has(alias)) {
-    return `${t('config.endpoint.conflict', { name: alias })}\n`
-  }
-  const secretName = validateSecretName(apiKeyRef)
-  if (!loadUserSecrets(userId)[secretName]) {
-    return `${t('config.endpoint.secretMissing', { name: secretName })}\n`
-  }
-  const endpoint: Record<string, unknown> = { apiKeyRef: secretName }
-  applyEndpointFlags(endpoint, rest)
+// ── --type discriminated-union parser (B3; B4 admin reuses it) ───────────────
+//
+// `parseEndpointType` consumes the flags AFTER the endpoint alias for an
+// `endpoint add` and validates the per-type flag set:
+//   --type openai|anthropic : --key required; --base-url / --proxy optional;
+//                             NO --auth-path.
+//   --type codex            : --auth-path required; --proxy optional;
+//                             NO --base-url, NO --key.
+// Returns a discriminated result or `{ ok:false, error }` (already-localized).
+type ParsedEndpointType =
+  | { ok: true; type: 'openai' | 'anthropic'; key: string; baseUrl?: string; proxy?: string }
+  | { ok: true; type: 'codex'; authPath: string; proxy?: string }
+  | { ok: false; error: string }
 
-  const obj = readUserConfig(userId)
-  const endpoints = asRecord(obj.endpoints)
-  endpoints[alias] = endpoint
-  obj.endpoints = endpoints
-  const guard = guardWritable(userId, obj)
-  if (guard) return guard
-  writeUserConfig(userId, obj)
-  return `${t('config.endpoint.added', { name: alias, ref: secretName })}\n`
+export function parseEndpointType(parts: string[]): ParsedEndpointType {
+  const rawType = flagValue(parts, '--type')
+  if (rawType === undefined) {
+    return { ok: false, error: t('config.endpoint.typeMissing') }
+  }
+  const type = rawType.toLowerCase()
+  if (type !== 'openai' && type !== 'anthropic' && type !== 'codex') {
+    return { ok: false, error: t('config.endpoint.typeInvalid', { type: rawType }) }
+  }
+  const baseUrl = flagValue(parts, '--base-url')
+  const proxyRaw = flagValue(parts, '--proxy')
+  const proxy = proxyRaw ? normalizeProxyUrl(proxyRaw) : undefined
+  const key = flagValue(parts, '--key')
+  const authPath = flagValue(parts, '--auth-path')
+
+  if (type === 'codex') {
+    if (baseUrl !== undefined) return { ok: false, error: t('config.endpoint.codexNoBaseUrl') }
+    if (key !== undefined) return { ok: false, error: t('config.endpoint.codexNoKey') }
+    if (!authPath) return { ok: false, error: t('config.endpoint.authPathRequired') }
+    return { ok: true, type: 'codex', authPath, ...(proxy ? { proxy } : {}) }
+  }
+  // openai | anthropic
+  if (!key) return { ok: false, error: t('config.endpoint.keyRequired', { type }) }
+  return {
+    ok: true,
+    type,
+    key,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(proxy ? { proxy } : {}),
+  }
 }
 
-function addCodexEndpoint(userId: string, parts: string[]): string {
-  const [alias, ref, ...rest] = parts
-  if (!alias || !ref) return endpointUsage()
+// `endpoint add <ep> --type <openai|anthropic|codex> [type-specific flags]`.
+// For openai/anthropic `--key` accepts a RAW key OR an existing secret name:
+// an existing secret name is referenced; otherwise the raw key is auto-stored
+// into the per-user secrets store (0600) and only the reference lands in
+// config.json — the raw key NEVER enters config.json.
+function addEndpoint(userId: string, parts: string[]): string {
+  const [alias, ...rest] = parts
+  if (!alias) return endpointUsage()
   assertAlias(alias)
-  // The arg is `codex:<name>`. Accept either the full ref or a bare name.
-  const rawName = ref.startsWith('codex:') ? ref.slice('codex:'.length) : ref
-  let authName: string
-  try {
-    authName = normalizeCodexAuthName(rawName)
-  } catch (error) {
-    throw new Error(error instanceof Error ? error.message : String(error))
-  }
   const override = loadUserConfigOverride(userId)
   if (override.endpoints?.[alias]) {
     return `${t('config.endpoint.exists', { name: alias })}\n`
@@ -302,12 +314,39 @@ function addCodexEndpoint(userId: string, parts: string[]): string {
   if (adminEndpointAliases().has(alias)) {
     return `${t('config.endpoint.conflict', { name: alias })}\n`
   }
-  if (!readUserCodexAuth(userId, authName)) {
-    return `${t('config.endpoint.codexAuthMissing', { name: authName })}\n`
+  const parsed = parseEndpointType(rest)
+  if (!parsed.ok) return `${parsed.error}\n`
+
+  if (parsed.type === 'codex') {
+    // Resolve / import the codex auth file path, mirroring `/config codex import`.
+    let summary
+    try {
+      summary = importUserCodexAuth({
+        canonicalUser: userId,
+        fromPath: expandHomePath(parsed.authPath),
+      })
+    } catch (error) {
+      return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
+    }
+    const endpoint: Record<string, unknown> = { authRef: `codex:${summary.name}` }
+    if (parsed.proxy) endpoint.proxy = parsed.proxy
+    const obj = readUserConfig(userId)
+    const endpoints = asRecord(obj.endpoints)
+    endpoints[alias] = endpoint
+    obj.endpoints = endpoints
+    const guard = guardWritable(userId, obj)
+    if (guard) return guard
+    writeUserConfig(userId, obj)
+    return `${t('config.endpoint.addedCodex', { name: alias, ref: summary.name })}\n`
   }
-  // config.json stores only the authRef, never the OAuth tokens.
-  const endpoint: Record<string, unknown> = { authRef: `codex:${authName}` }
-  applyEndpointFlags(endpoint, rest)
+
+  // openai | anthropic: --key is a raw key OR an existing secret name. The
+  // wire-protocol family is recorded as `type` so `backend add` can derive the
+  // model schema without a positional argument.
+  const resolved = resolveKeyToSecretRef(userId, parsed.key)
+  const endpoint: Record<string, unknown> = { type: parsed.type, apiKeyRef: resolved.secretName }
+  if (parsed.baseUrl) endpoint.baseUrl = parsed.baseUrl
+  if (parsed.proxy) endpoint.proxy = parsed.proxy
 
   const obj = readUserConfig(userId)
   const endpoints = asRecord(obj.endpoints)
@@ -316,7 +355,50 @@ function addCodexEndpoint(userId: string, parts: string[]): string {
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  return `${t('config.endpoint.addedCodex', { name: alias, ref: authName })}\n`
+  const stored = resolved.stored
+    ? `\n${t('config.endpoint.keyStored', { name: resolved.secretName })}`
+    : ''
+  return `${t('config.endpoint.added', { name: alias, ref: resolved.secretName })}${stored}\n`
+}
+
+/**
+ * Resolve a `--key <X>` value to a secret reference. If `X` is the name of an
+ * EXISTING secret → reference it (`stored:false`). Otherwise treat `X` as a raw
+ * key: derive a secret name, auto-store the raw value into the per-user secrets
+ * store (0600, via setUserSecret), and return that reference (`stored:true`).
+ * The raw key value is therefore never returned to the config writer — only the
+ * secret name ever lands in config.json.
+ */
+function resolveKeyToSecretRef(
+  userId: string,
+  key: string,
+): { secretName: string; stored: boolean } {
+  // If `key` is a valid secret name AND already stored, reference it.
+  let asName: string | null = null
+  try {
+    asName = validateSecretName(key)
+  } catch {
+    asName = null
+  }
+  if (asName && loadUserSecrets(userId)[asName]) {
+    return { secretName: asName, stored: false }
+  }
+  // Treat as a raw key: derive a secret name and auto-store it.
+  const secretName = deriveSecretName(userId, key)
+  const result = setUserSecret(userId, secretName, key)
+  return { secretName: result.name, stored: true }
+}
+
+/** Derive an unused, schema-valid secret name for an auto-stored raw key. The
+ *  name carries no key material — it is a stable `BYO_KEY_<n>` slot. */
+function deriveSecretName(userId: string, _key: string): string {
+  const existing = loadUserSecrets(userId)
+  for (let i = 1; i < 10_000; i += 1) {
+    const candidate = `BYO_KEY_${i}`
+    if (!existing[candidate]) return candidate
+  }
+  // Pathological fallback (10k slots taken): timestamp-suffixed slot.
+  return `BYO_KEY_${Date.now()}`
 }
 
 function setEndpoint(userId: string, parts: string[]): string {
@@ -339,6 +421,13 @@ function setEndpoint(userId: string, parts: string[]): string {
   if (proxy !== undefined) {
     if (proxy === '-') delete next.proxy
     else next.proxy = normalizeProxyUrl(proxy)
+  }
+  // `--key` (B3, raw-or-name) is the primary spelling; `--api-key-ref` (PR5,
+  // name-only) is still accepted for back-compat.
+  const key = flagValue(rest, '--key')
+  if (key !== undefined) {
+    const resolved = resolveKeyToSecretRef(userId, key)
+    next.apiKeyRef = resolved.secretName
   }
   const apiKeyRef = flagValue(rest, '--api-key-ref')
   if (apiKeyRef) {
@@ -407,9 +496,14 @@ function formatEndpointList(userId: string): string {
   ].join('\n')}`
 }
 
-// ── /config model <verb> (BYO custom models, PR5) ────────────────────────────
+// ── /config backend <verb> (BYO model registry, B3 ←/config model BYO) ───────
+//
+// `backend` is the BYO model registry (renamed from the old `/config model`
+// BYO verbs). A model references one `endpoint`; the wire-protocol family
+// (model schema) is DERIVED from that endpoint's `--type` (apiKey openai /
+// anthropic) or `authRef` (codex → openai-auth) — no positional schema arg.
 
-async function runModelSubcommand(
+async function runBackendSubcommand(
   parts: string[],
   ctx: ConfigCommandContext,
 ): Promise<string> {
@@ -424,60 +518,74 @@ async function runModelSubcommand(
   try {
     switch (verb) {
       case 'list':
-        return formatModelList(userId)
+        return formatBackendList(userId)
       case 'add':
-        return addModel(userId, parts)
+        return addBackend(userId, parts)
       case 'set':
-        return setModel(userId, parts)
+        return setBackend(userId, parts)
       case 'check':
-        return await checkModel(userId, parts, ctx)
+        return await checkBackend(userId, parts, ctx)
       case 'remove':
       case 'rm':
-        return removeModel(userId, parts)
+        return removeBackend(userId, parts)
       default:
-        return modelUsage()
+        return backendUsage()
     }
   } catch (error) {
     return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
   }
 }
 
-function modelUsage(): string {
+function backendUsage(): string {
   return [
     'Usage:',
-    '  /config model                 List selectable models + current',
-    '  /config model set <name>      Switch current model',
-    '  /config model reset           Drop your model choice (fall back to default)',
-    '  /config model list            List your custom (BYO) models',
-    '  /config model templates       Show BYO model templates',
-    '  /config model add <displayName> <anthropic|openai|openai-auth> <endpointAlias> <upstreamModel> [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-output-tokens <n>] [--no-default]',
-    '  /config model set <displayName> [--schema <anthropic|openai|openai-auth>] [--endpoint <alias>] [--upstream-model <id>] [--reasoning <e|->] [--max-output-tokens <n|->]',
-    '  /config model check <displayName>',
-    '  /config model rm <displayName>',
+    '  /config backend                 List your registered models',
+    '  /config backend templates       Show BYO model templates',
+    '  /config backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-tokens <n>] [--default]',
+    '  /config backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]',
+    '  /config backend check <name>    Re-probe capabilities (clears cache)',
+    '  /config backend rm <name>',
     '',
   ].join('\n')
 }
 
-function addModel(userId: string, parts: string[]): string {
-  const [displayName, schemaText, endpoint, upstreamModel, ...rest] = parts
-  if (!displayName || !schemaText || !endpoint || !upstreamModel) return modelUsage()
+/** Derive the model schema from the referenced endpoint's `--type` (apiKey) or
+ *  `authRef` (codex). Returns null when the endpoint is missing. */
+function schemaForEndpoint(
+  override: ReturnType<typeof loadUserConfigOverride>,
+  endpointAlias: string,
+): 'anthropic' | 'openai' | 'openai-auth' | null {
+  const ep = override.endpoints?.[endpointAlias]
+  if (!ep) return null
+  if (ep.authRef) return 'openai-auth'
+  // apiKey endpoint: `type` records the wire family; default to openai for
+  // pre-B3 apiKey endpoints that predate the `type` field.
+  return ep.type === 'anthropic' ? 'anthropic' : 'openai'
+}
+
+function addBackend(userId: string, parts: string[]): string {
+  const [displayName, ...rest] = parts
+  if (!displayName) return backendUsage()
   assertAlias(displayName)
+  const endpoint = flagValue(rest, '--endpoint')
+  if (!endpoint) return `${t('config.backend.endpointRequired')}\n`
   assertAlias(endpoint)
-  const schema = parseSchema(schemaText)
-  if (!schema) return `${t('config.model.schemaInvalid')}\n`
 
   const override = loadUserConfigOverride(userId)
   if (override.models?.[displayName]) {
-    return `${t('config.model.exists', { name: displayName })}\n`
+    return `${t('config.backend.exists', { name: displayName })}\n`
   }
-  if (!override.endpoints?.[endpoint]) {
-    return `${t('config.model.endpointMissing', { name: endpoint })}\n`
+  const schema = schemaForEndpoint(override, endpoint)
+  if (!schema) {
+    return `${t('config.backend.endpointMissing', { name: endpoint })}\n`
   }
+  // `--upstream` defaults to <name>.
+  const upstreamModel = flagValue(rest, '--upstream') ?? displayName
   const reasoning = parseReasoning(flagValue(rest, '--reasoning'))
   if (reasoning === false) return `${t('config.model.reasoningInvalid')}\n`
-  const maxOutput = parsePositiveInt(flagValue(rest, '--max-output-tokens'))
+  const maxOutput = parsePositiveInt(flagValue(rest, '--max-tokens'))
   if (maxOutput === false) return `${t('config.model.intInvalid')}\n`
-  const setDefault = !rest.includes('--no-default')
+  const setDefault = rest.includes('--default')
 
   const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
   if (reasoning) model.reasoningEffort = reasoning
@@ -491,34 +599,31 @@ function addModel(userId: string, parts: string[]): string {
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  return `${t('config.model.added', { name: displayName, schema, endpoint, upstream: upstreamModel })}\n`
+  return `${t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel })}\n`
 }
 
-function setModel(userId: string, parts: string[]): string {
+function setBackend(userId: string, parts: string[]): string {
   const [displayName, ...rest] = parts
-  if (!displayName) return modelUsage()
+  if (!displayName) return backendUsage()
   assertAlias(displayName)
   const obj = readUserConfig(userId)
   const models = asRecord(obj.models)
   if (!models[displayName]) {
-    return `${t('config.model.missing', { name: displayName })}\n`
+    return `${t('config.backend.missing', { name: displayName })}\n`
   }
   const next = { ...asRecord(models[displayName]) }
-  const schemaText = flagValue(rest, '--schema')
-  if (schemaText) {
-    const schema = parseSchema(schemaText)
-    if (!schema) return `${t('config.model.schemaInvalid')}\n`
-    next.schema = schema
-  }
   const endpoint = flagValue(rest, '--endpoint')
   if (endpoint) {
     assertAlias(endpoint)
-    if (!loadUserConfigOverride(userId).endpoints?.[endpoint]) {
-      return `${t('config.model.endpointMissing', { name: endpoint })}\n`
+    const override = loadUserConfigOverride(userId)
+    const schema = schemaForEndpoint(override, endpoint)
+    if (!schema) {
+      return `${t('config.backend.endpointMissing', { name: endpoint })}\n`
     }
     next.endpoint = endpoint
+    next.schema = schema
   }
-  const upstream = flagValue(rest, '--upstream-model')
+  const upstream = flagValue(rest, '--upstream')
   if (upstream) next.upstreamModel = upstream
   const reasoning = flagValue(rest, '--reasoning')
   if (reasoning !== undefined) {
@@ -529,7 +634,7 @@ function setModel(userId: string, parts: string[]): string {
       next.reasoningEffort = parsed
     }
   }
-  const maxOutput = flagValue(rest, '--max-output-tokens')
+  const maxOutput = flagValue(rest, '--max-tokens')
   if (maxOutput !== undefined) {
     if (maxOutput === '-') delete next.maxOutputTokens
     else {
@@ -540,38 +645,38 @@ function setModel(userId: string, parts: string[]): string {
   }
   models[displayName] = next
   obj.models = models
+  if (rest.includes('--default')) obj.defaultModel = displayName
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  return `${t('config.model.updated', {
+  return `${t('config.backend.updated', {
     name: displayName,
-    schema: String(next.schema),
     endpoint: String(next.endpoint),
     upstream: String(next.upstreamModel),
   })}\n`
 }
 
-function removeModel(userId: string, parts: string[]): string {
+function removeBackend(userId: string, parts: string[]): string {
   const [displayName] = parts
-  if (!displayName) return modelUsage()
+  if (!displayName) return backendUsage()
   const obj = readUserConfig(userId)
   const models = asRecord(obj.models)
   if (!models[displayName]) {
-    return `${t('config.model.missing', { name: displayName })}\n`
+    return `${t('config.backend.missing', { name: displayName })}\n`
   }
   delete models[displayName]
   obj.models = models
   if (obj.defaultModel === displayName) delete obj.defaultModel
   writeUserConfig(userId, obj)
-  return `${t('config.model.removed', { name: displayName })}\n`
+  return `${t('config.backend.removed', { name: displayName })}\n`
 }
 
-function formatModelList(userId: string): string {
+function formatBackendList(userId: string): string {
   const override = loadUserConfigOverride(userId)
   const models = Object.entries(override.models ?? {})
-  if (models.length === 0) return `${t('config.model.none')}\n`
+  if (models.length === 0) return `${t('config.backend.none')}\n`
   return `${[
-    t('config.model.listHeader'),
+    t('config.backend.listHeader'),
     ...models
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, model]) => {
@@ -582,18 +687,25 @@ function formatModelList(userId: string): string {
   ].join('\n')}`
 }
 
-async function checkModel(
+// `backend check <name>` re-probes the model's capabilities AND clears the
+// cache first (folds in the old `model --clear-cache`).
+async function checkBackend(
   userId: string,
   parts: string[],
   ctx: ConfigCommandContext,
 ): Promise<string> {
   const [displayName] = parts
-  if (!displayName) return modelUsage()
+  if (!displayName) return backendUsage()
   const resolved = resolveUserConfig(userId, ctx.config)
   const entry = resolved.models[displayName]
   if (!entry || entry.visibility !== 'user') {
     return `${t('config.model.checkFail', { detail: `"${displayName}" is not a configured user model` })}\n`
   }
+  // Clear the capability cache + precharge memo so the probe re-derives from
+  // code (the old `--clear-cache`, now folded into check).
+  const baseUrl = resolved.endpoints[entry.endpoint]?.baseUrl
+  clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+  clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
   try {
     const { provider } = getProviderFor(resolved, displayName)
     const signal = AbortSignal.timeout(MODEL_CHECK_TIMEOUT_MS)
@@ -725,21 +837,10 @@ function guardWritable(userId: string, obj: Record<string, unknown>): string | n
   return null
 }
 
-function applyEndpointFlags(endpoint: Record<string, unknown>, rest: string[]): void {
-  const baseUrl = flagValue(rest, '--base-url')
-  if (baseUrl) endpoint.baseUrl = baseUrl
-  const proxy = flagValue(rest, '--proxy')
-  if (proxy) endpoint.proxy = normalizeProxyUrl(proxy)
-}
-
 function assertAlias(value: string): void {
   if (!BYO_ALIAS_RE.test(value)) {
     throw new Error(t('config.byo.aliasInvalid', { value }))
   }
-}
-
-function parseSchema(input: string): 'anthropic' | 'openai' | 'openai-auth' | null {
-  return input === 'anthropic' || input === 'openai' || input === 'openai-auth' ? input : null
 }
 
 function parseReasoning(input: string | undefined): string | undefined | false {
@@ -918,6 +1019,77 @@ async function runConfigLang(
   }
   setUserConfigField(userId, 'lang', langText)
   return `${t('config.lang.set', { lang: langText })}\n`
+}
+
+// ── /config lane — three-bucket per-user model lane override (B3, Part B) ──────
+//
+// `lane` routes worker-kind roles (`worker`), internal roles + compact/webSearch
+// sub-LLMs (`system`), and the image-read sub-LLM (`image`) to a chosen model;
+// an empty/unset bucket falls back to defaultModel (model-resolution's truthy
+// check). The value is written to the user's config.json `lane` object via
+// setUserConfigField; reset clears the bucket (empty → unset → fallback).
+const LANE_BUCKETS = new Set(['worker', 'system', 'image'])
+
+async function runConfigLane(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const userId = ctx.userId ?? getCurrentUserId()
+  const verb = (parts[0] ?? '').toLowerCase()
+
+  // bare = show the three buckets + current values (read).
+  if (verb === '') {
+    const override = userId ? loadUserConfigOverride(userId) : {}
+    const resolvedBucket = (bucket: 'worker' | 'system' | 'image'): string => {
+      const userValue = override.lane?.[bucket]
+      if (userValue && userValue.trim()) return userValue
+      const adminValue = ctx.config.lane?.[bucket]
+      if (adminValue && adminValue.trim()) return adminValue
+      return t('config.lane.unset')
+    }
+    const lines = [t('config.lane.header')]
+    for (const bucket of ['worker', 'system', 'image'] as const) {
+      lines.push(t('config.lane.bucket', { bucket, value: resolvedBucket(bucket) }))
+    }
+    lines.push('', t('config.lane.footer'), '')
+    return lines.join('\n')
+  }
+
+  if (verb !== 'set' && verb !== 'reset') {
+    return `${t('config.lane.usage')}\n`
+  }
+  if (!userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  const bucket = (parts[1] ?? '').toLowerCase()
+  if (!LANE_BUCKETS.has(bucket)) {
+    return `${t('common.error.prefix')}${t('config.lane.bucketInvalid', { bucket })}\n`
+  }
+
+  // Read-modify-write the `lane` object, preserving the other two buckets.
+  const merged = readUserConfig(userId)
+  const lane = asRecord(merged.lane)
+
+  if (verb === 'reset') {
+    delete lane[bucket]
+    if (Object.keys(lane).length === 0) delete merged.lane
+    else merged.lane = lane
+    writeUserConfig(userId, merged)
+    return `${t('config.lane.reset', { bucket })}\n`
+  }
+
+  // `set <bucket> <model>` — reject an unknown model (user-typed slash).
+  const model = parts[2] ?? ''
+  if (!model) {
+    return `${t('config.lane.usage')}\n`
+  }
+  if (!ctx.config.models[model]) {
+    return `${t('common.error.prefix')}${t('config.lane.modelUnknown', { model })}\n`
+  }
+  lane[bucket] = model
+  merged.lane = lane
+  writeUserConfig(userId, merged)
+  return `${t('config.lane.set', { bucket, model })}\n`
 }
 
 // ── /config rule — per-user permission rules (←old `/rules`) ──────────────────
