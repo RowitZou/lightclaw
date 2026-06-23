@@ -229,6 +229,44 @@ describe('config: endpoints + models registry', () => {
     assert.throws(() => getConfig(), /maxOutputTokens must be a positive integer/)
   })
 
+  it('parses provider-specific model requestParams', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        gpt: {
+          endpoint: 'a',
+          schema: 'openai',
+          upstreamModel: 'gpt-4.1',
+          requestParams: {
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+          },
+        },
+      },
+      defaultModel: 'gpt',
+    })
+    const cfg = getConfig()
+    assert.deepEqual(cfg.models.gpt.requestParams, {
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+    })
+  })
+
+  it('rejects requestParams that try to override LightClaw-owned fields', () => {
+    writeConfig({
+      endpoints: { a: { apiKey: 'sk-a' } },
+      models: {
+        bad: {
+          endpoint: 'a',
+          schema: 'openai',
+          upstreamModel: 'gpt-4.1',
+          requestParams: { messages: [] },
+        },
+      },
+    })
+    assert.throws(() => getConfig(), /requestParams\.messages is managed by LightClaw/)
+  })
+
   it('allows legacy global models without a defaultModel', () => {
     writeConfigRaw({
       endpoints: { a: { apiKey: 'sk-a' } },

@@ -363,8 +363,10 @@ describe('UserConfigOverride', () => {
 
     const output = await runSlashCommands(
       '/endpoint add-key myopenai OPENAI_KEY --base-url https://api.example.test/v1',
-      '/model custom add my-gpt openai myopenai gpt-user --reasoning xhigh --max-output-tokens 123 --timeout-ms 1',
+      '/model custom add my-gpt openai myopenai gpt-user --reasoning xhigh --max-output-tokens 123 --param temperature=0.2 --param-json response_format={"type":"json_object"} --timeout-ms 1',
+      '/model custom set my-gpt --param top_p=0.9 --param reasoningEffort=medium --param maxOutputTokens=456 --clear-param temperature --timeout-ms 1',
       '/model custom add fake openai myopenai gpt-user --timeout-ms 1',
+      '/model custom param-help openai',
       '/model custom templates',
       '/config show',
     )
@@ -372,15 +374,21 @@ describe('UserConfigOverride', () => {
 
     assert.match(output, /Added custom endpoint "myopenai"/)
     assert.match(output, /Added custom model "my-gpt"/)
+    assert.match(output, /Updated custom model "my-gpt"/)
     assert.match(output, /Added custom model "fake"/)
     assert.match(output, /Model check: /)
+    assert.match(output, /OpenAI-compatible/)
     assert.match(output, /none\s*\|\s*minimal\s*\|\s*low\s*\|\s*medium\s*\|\s*high\s*\|\s*xhigh/)
     assert.match(output, /apiKeyRef=OPENAI_KEY/)
     assert.doesNotMatch(output, /sk-user-secret/)
     assert.equal(loaded.ok, true)
     assert.equal(loaded.ok ? loaded.value.models?.['my-gpt']?.upstreamModel : undefined, 'gpt-user')
-    assert.equal(loaded.ok ? loaded.value.models?.['my-gpt']?.reasoningEffort : undefined, 'xhigh')
-    assert.equal(loaded.ok ? loaded.value.models?.['my-gpt']?.maxOutputTokens : undefined, 123)
+    assert.equal(loaded.ok ? loaded.value.models?.['my-gpt']?.reasoningEffort : undefined, 'medium')
+    assert.equal(loaded.ok ? loaded.value.models?.['my-gpt']?.maxOutputTokens : undefined, 456)
+    assert.deepEqual(loaded.ok ? loaded.value.models?.['my-gpt']?.requestParams : undefined, {
+      response_format: { type: 'json_object' },
+      top_p: 0.9,
+    })
     assert.equal(loaded.ok ? loaded.value.models?.fake?.upstreamModel : undefined, 'gpt-user')
     assert.equal(loaded.ok ? loaded.value.endpoints?.myopenai?.apiKeyRef : undefined, 'OPENAI_KEY')
   })

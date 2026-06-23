@@ -434,10 +434,12 @@ export function buildResponsesRequestBody(args: {
   tools: ResponseCreateParamsStreaming['tools']
   reasoningEffort?: StreamChatParams['reasoningEffort']
   maxTokens?: number
+  requestParams?: StreamChatParams['requestParams']
   promptCacheKey: string
 }): ResponseCreateParamsStreaming {
   const hasTools = Array.isArray(args.tools) && args.tools.length > 0
   return {
+    ...(args.requestParams ?? {}),
     model: args.model,
     instructions: args.instructions,
     input: args.input,
@@ -546,6 +548,7 @@ export function createOpenAIAuthProvider(
         tools,
         reasoningEffort: params.reasoningEffort,
         maxTokens: params.maxTokens,
+        requestParams: params.requestParams,
         promptCacheKey: getSessionId(),
       })
 

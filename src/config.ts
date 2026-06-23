@@ -8,6 +8,10 @@ import {
   parsePermissionModeInput,
   type PermissionMode,
 } from './permission/types.js'
+import {
+  normalizeModelRequestParams,
+  type ModelRequestParams,
+} from './model-request-params.js'
 import type { ReasoningEffort, Schema } from './provider/types.js'
 import type { RuntimeKind } from './runtime/index.js'
 import { BUNDLED_AGENTS } from './agents/bundled/index.js'
@@ -343,6 +347,10 @@ export type ModelEntry = {
   /** Optional per-model output-token ceiling. Overrides the global
    *  `maxOutputTokens`; falls back to it when unset. */
   maxOutputTokens?: number
+  /** Optional provider-specific request parameters. Core wire fields
+   *  (`model`, `messages`, `tools`, token caps, reasoning) remain owned by
+   *  LightClaw and are rejected during config parsing. */
+  requestParams?: ModelRequestParams
 }
 
 export type ModelVisibility = 'admin' | 'public' | 'user'
@@ -855,6 +863,11 @@ function resolveModels(
       raw.maxOutputTokens,
       `models["${displayName}"].maxOutputTokens`,
     )
+    const requestParams = normalizeModelRequestParams(
+      raw.requestParams,
+      schema,
+      `models["${displayName}"].requestParams`,
+    )
     out[displayName] = {
       endpoint,
       schema,
@@ -862,6 +875,7 @@ function resolveModels(
       ...(visibility && visibility !== 'admin' ? { visibility } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      ...(requestParams ? { requestParams } : {}),
     }
   }
   return out

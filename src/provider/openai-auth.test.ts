@@ -833,6 +833,10 @@ describe('openai-auth: buildResponsesRequestBody', () => {
       tools: [],
       reasoningEffort: 'high',
       maxTokens: 64000,
+      requestParams: {
+        temperature: 0.2,
+        text: { verbosity: 'low' },
+      },
       promptCacheKey: 'feishu:dm:oc_test',
     })
 
@@ -847,5 +851,8 @@ describe('openai-auth: buildResponsesRequestBody', () => {
     assert.equal(body.store, false)
     assert.equal(body.prompt_cache_key, 'feishu:dm:oc_test')
     assert.deepEqual(body.reasoning, { effort: 'high', summary: 'auto' })
+    const bodyRecord = body as unknown as Record<string, unknown>
+    assert.equal(bodyRecord.temperature, 0.2)
+    assert.deepEqual(bodyRecord.text, { verbosity: 'low' })
   })
 })

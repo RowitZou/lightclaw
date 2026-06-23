@@ -22,6 +22,16 @@ import { normalizeProxyUrl } from '../../config/proxy-url.js'
 import { runModelCustomCommand } from '../../commands/model-custom.js'
 import { runMountCommand } from '../../commands/mount.js'
 import { restartRlaunchRuntimeForUser } from '../../commands/rlaunch-restart.js'
+import {
+  formatModelRequestParamHelp,
+  formatModelRequestParamsForCard,
+  normalizeModelRequestParams,
+  parseModelRequestParamFlagValue,
+  parseModelTuningParamsText,
+  splitModelTuningParams,
+  type ModelRequestParams,
+  type ModelTuningParams,
+} from '../../model-request-params.js'
 import type { ReplContext } from '../../commands/registry.js'
 import {
   userDataRoot,
@@ -63,6 +73,9 @@ const FIELD_SCHEMA = 'schema'
 const FIELD_UPSTREAM_MODEL = 'upstream_model'
 const FIELD_REASONING = 'reasoning'
 const FIELD_MAX_OUTPUT_TOKENS = 'max_output_tokens'
+const FIELD_REQUEST_PARAMS = 'request_params'
+const FIELD_REQUEST_PARAM_KEY_PREFIX = 'request_param_key_'
+const FIELD_REQUEST_PARAM_VALUE_PREFIX = 'request_param_value_'
 const FIELD_SET_DEFAULT = 'set_default'
 const FIELD_MODEL_TARGET = 'model_target'
 const FIELD_ENDPOINT_KIND = 'endpoint_kind'
@@ -94,6 +107,8 @@ export type VisualSetupCardAction = {
     | 'submit_model_check'
     | 'model_delete'
     | 'submit_model_delete'
+    | 'model_param_help'
+    | 'model_param_add_row'
     | 'endpoint_home'
     | 'endpoint_add'
     | 'endpoint_edit'
@@ -126,7 +141,14 @@ export type VisualSetupCardAction = {
   formValue?: Record<string, unknown>
   openMessageId?: string
   endpointName?: string
+  paramMode?: string
+  paramRows?: number
 }
+
+type ModelParamMode = 'setup_existing' | 'setup_new_codex' | 'setup_new_key' | 'edit'
+
+const DEFAULT_PARAM_ROWS = 2
+const MAX_PARAM_ROWS = 8
 
 type UiSession = {
   id: string
@@ -330,6 +352,16 @@ export class FeishuVisualSetupCoordinator {
         return openCard(buildModelCheckCard(session.id, session.userId))
       case 'model_delete':
         return openCard(buildModelDeleteCard(session.id, session.userId))
+      case 'model_param_help':
+        return openCard(buildModelParamHelpCard(session.id))
+      case 'model_param_add_row':
+        return openCard(buildModelCardWithParamRows(
+          session.id,
+          session.userId,
+          parseModelParamMode(action.paramMode),
+          clampParamRows(action.paramRows ?? DEFAULT_PARAM_ROWS),
+          action.formValue ?? {},
+        ))
       case 'endpoint_home':
         return openCard(buildEndpointHomeCard(session.id, session.userId))
       case 'endpoint_add':
@@ -615,8 +647,14 @@ function applyModelSetupForm(userId: string, formValue: Record<string, unknown>)
     throw new Error(`custom model "${modelName}" already exists. Use /model custom set to modify it.`)
   }
 
-  const reasoningEffort = parseReasoningEffort(stringField(formValue, FIELD_REASONING))
-  const maxOutputTokens = parseOptionalPositiveInt(stringField(formValue, FIELD_MAX_OUTPUT_TOKENS))
+  const reasoningInput = stringField(formValue, FIELD_REASONING)
+  const maxOutputInput = stringField(formValue, FIELD_MAX_OUTPUT_TOKENS)
+  const reasoningEffort = parseReasoningEffort(reasoningInput)
+  const maxOutputTokens = parseOptionalPositiveInt(maxOutputInput)
+  const tuning = parseVisualRequestParams(formValue, schema)
+  const finalReasoningEffort = tuning.reasoningEffort ?? reasoningEffort
+  const finalMaxOutputTokens = tuning.maxOutputTokens ?? maxOutputTokens
+  const requestParams = tuning.params
   const setDefault = (stringField(formValue, FIELD_SET_DEFAULT) ?? 'yes') !== 'no'
 
   updateUserConfigOverride(userId, current => {
@@ -631,8 +669,9 @@ function applyModelSetupForm(userId: string, formValue: Record<string, unknown>)
       endpoint: endpointInfo.name,
       schema,
       upstreamModel,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      ...(finalReasoningEffort ? { reasoningEffort: finalReasoningEffort } : {}),
+      ...(finalMaxOutputTokens !== undefined ? { maxOutputTokens: finalMaxOutputTokens } : {}),
+      ...(requestParams ? { requestParams } : {}),
     }
     next.models = {
       ...(next.models ?? {}),
@@ -658,6 +697,7 @@ function applyModelEditForm(userId: string, formValue: Record<string, unknown>):
     throw new Error(`当前用户配置无法读取：${loaded.error}`)
   }
   const modelName = requiredExistingModel(userId, formValue, loaded.value)
+  const currentModel = loaded.value.models?.[modelName]
   const endpointName = requiredAlias('endpoint alias', stringField(formValue, FIELD_ENDPOINT_CHOICE))
   const endpoint = loaded.value.endpoints?.[endpointName]
   if (!endpoint) {
@@ -669,8 +709,18 @@ function applyModelEditForm(userId: string, formValue: Record<string, unknown>):
   )
   assertSchemaMatchesEndpoint(schema, endpoint)
   const upstreamModel = requiredText('upstreamModel', stringField(formValue, FIELD_UPSTREAM_MODEL))
-  const reasoningEffort = parseReasoningEffort(stringField(formValue, FIELD_REASONING))
-  const maxOutputTokens = parseOptionalPositiveInt(stringField(formValue, FIELD_MAX_OUTPUT_TOKENS))
+  const reasoningInput = stringField(formValue, FIELD_REASONING)
+  const maxOutputInput = stringField(formValue, FIELD_MAX_OUTPUT_TOKENS)
+  const reasoningEffort = parseReasoningEffort(reasoningInput)
+  const maxOutputTokens = parseOptionalPositiveInt(maxOutputInput)
+  const requestParamsUpdate = parseVisualRequestParams(formValue, schema)
+  const requestParams = !requestParamsUpdate.touched
+    ? normalizeModelRequestParams(currentModel?.requestParams, schema, 'requestParams')
+    : requestParamsUpdate.params
+  const finalReasoningEffort = requestParamsUpdate.reasoningEffort
+    ?? (reasoningInput !== undefined ? reasoningEffort : currentModel?.reasoningEffort)
+  const finalMaxOutputTokens = requestParamsUpdate.maxOutputTokens
+    ?? (maxOutputInput !== undefined ? maxOutputTokens : currentModel?.maxOutputTokens)
   const setDefault = (stringField(formValue, FIELD_SET_DEFAULT) ?? 'no') === 'yes'
 
   updateUserConfigOverride(userId, current => {
@@ -681,8 +731,9 @@ function applyModelEditForm(userId: string, formValue: Record<string, unknown>):
         endpoint: endpointName,
         schema,
         upstreamModel,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(finalReasoningEffort ? { reasoningEffort: finalReasoningEffort } : {}),
+        ...(finalMaxOutputTokens !== undefined ? { maxOutputTokens: finalMaxOutputTokens } : {}),
+        ...(requestParams ? { requestParams } : {}),
       },
     }
     if (setDefault) next.defaultModel = modelName
@@ -1312,6 +1363,7 @@ function buildModelHomeCard(id: string, userId: string): Record<string, unknown>
       model.schema,
       truncateText(model.upstreamModel, 34),
       model.endpoint,
+      formatModelRequestParamsForCard(model.requestParams),
     ])
   return card({
     title: '模型管理',
@@ -1321,7 +1373,7 @@ function buildModelHomeCard(id: string, userId: string): Record<string, unknown>
         `**当前默认模型**：${escapeLarkMd(config.defaultModel || '(none)')}`,
       ].join('\n')),
       ...tableRows(
-        ['模型', 'schema', 'upstream', 'endpoint'],
+        ['模型', 'schema', 'upstream', 'endpoint', 'params'],
         modelRows,
         '当前用户还没有模型配置。',
       ),
@@ -1331,13 +1383,19 @@ function buildModelHomeCard(id: string, userId: string): Record<string, unknown>
         navButton('设为默认', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_set_default' }),
         navButton('检查模型', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_check' }),
         navButton('删除模型', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_delete' }),
+        navButton('参数帮助', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_param_help' }),
         navButton('返回首页', 'default', { kind: 'lightclaw_visual_setup', id, action: 'home' }),
       ]),
     ],
   })
 }
 
-function buildModelEditCard(id: string, userId: string): Record<string, unknown> {
+function buildModelEditCard(
+  id: string,
+  userId: string,
+  paramRows = DEFAULT_PARAM_ROWS,
+  defaults: Record<string, unknown> = {},
+): Record<string, unknown> {
   const loaded = loadUserConfigOverride(userId)
   const modelOptions = modelSelectOptions(loaded.ok ? loaded.value : {})
   const endpointOptions = endpointSelectOptions(loaded.ok ? loaded.value : {})
@@ -1357,23 +1415,17 @@ function buildModelEditCard(id: string, userId: string): Record<string, unknown>
             { text: 'openai', value: 'openai' },
             { text: 'anthropic', value: 'anthropic' },
           ], '留空时按 endpoint 类型自动选择'),
-          input(FIELD_UPSTREAM_MODEL, 'upstreamModel', '真实模型 ID，例如 gpt-5.5 / claude-sonnet-4-6'),
-          select(FIELD_REASONING, 'reasoningEffort', [
-            { text: '不设置', value: '-' },
-            { text: 'none', value: 'none' },
-            { text: 'minimal', value: 'minimal' },
-            { text: 'low', value: 'low' },
-            { text: 'medium', value: 'medium' },
-            { text: 'high', value: 'high' },
-            { text: 'xhigh', value: 'xhigh' },
-          ], '可选'),
-          input(FIELD_MAX_OUTPUT_TOKENS, 'maxOutputTokens', '可选，例如 64000'),
+          input(FIELD_UPSTREAM_MODEL, 'upstreamModel', '真实模型 ID，例如 gpt-5.5 / claude-sonnet-4-6', stringField(defaults, FIELD_UPSTREAM_MODEL)),
+          markdown('常用专用参数也在下面填写：`reasoningEffort=high`、`maxOutputTokens=64000`。'),
+          input(FIELD_REQUEST_PARAMS, '自由文本参数', '可选；每行或分号分隔 key=value；JSON object 也可以；填 - 清空', stringField(defaults, FIELD_REQUEST_PARAMS)),
+          ...modelParamRowElements(id, 'edit', paramRows, defaults),
           select(FIELD_SET_DEFAULT, '设为默认模型', [
             { text: '否', value: 'no' },
             { text: '是', value: 'yes' },
           ], '默认：否'),
           buttonRow([
             submitButton('保存并检查', 'primary', { kind: 'lightclaw_visual_setup', id, action: 'submit_model_edit' }),
+            formNavButton('参数帮助', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_param_help' }),
             formNavButton('返回', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_home' }),
           ]),
         ],
@@ -1416,6 +1468,39 @@ function buildModelDeleteCard(id: string, userId: string): Record<string, unknow
     submitLabel: '删除',
     submitAction: 'submit_model_delete',
   })
+}
+
+function buildModelParamHelpCard(id: string): Record<string, unknown> {
+  return card({
+    title: '模型参数帮助',
+    template: 'wathet',
+    elements: [
+      markdown(formatModelRequestParamHelp()),
+      buttonGrid([
+        navButton('返回模型管理', 'default', { kind: 'lightclaw_visual_setup', id, action: 'model_home' }),
+        navButton('添加模型', 'primary', { kind: 'lightclaw_visual_setup', id, action: 'setup_model' }),
+      ]),
+    ],
+  })
+}
+
+function buildModelCardWithParamRows(
+  id: string,
+  userId: string,
+  mode: ModelParamMode,
+  paramRows: number,
+  defaults: Record<string, unknown>,
+): Record<string, unknown> {
+  switch (mode) {
+    case 'setup_existing':
+      return buildModelSetupExistingCard(id, userId, paramRows, defaults)
+    case 'setup_new_codex':
+      return buildModelSetupNewEndpointCard(id, userId, 'codex', paramRows, defaults)
+    case 'setup_new_key':
+      return buildModelSetupNewEndpointCard(id, userId, 'api-key', paramRows, defaults)
+    case 'edit':
+      return buildModelEditCard(id, userId, paramRows, defaults)
+  }
 }
 
 function buildModelSelectionActionCard(input: {
@@ -1488,7 +1573,12 @@ function buildModelSetupCard(id: string, userId: string): Record<string, unknown
   })
 }
 
-function buildModelSetupExistingCard(id: string, userId: string): Record<string, unknown> {
+function buildModelSetupExistingCard(
+  id: string,
+  userId: string,
+  paramRows = DEFAULT_PARAM_ROWS,
+  defaults: Record<string, unknown> = {},
+): Record<string, unknown> {
   const loaded = loadUserConfigOverride(userId)
   const endpoints = loaded.ok ? loaded.value.endpoints ?? {} : {}
   return card({
@@ -1509,7 +1599,11 @@ function buildModelSetupExistingCard(id: string, userId: string): Record<string,
             existingEndpointChoiceOptions(loaded.ok ? loaded.value : {}),
             '选择已有 endpoint',
           ),
-          ...modelSetupFormElements(id, 'model_home'),
+          ...modelSetupFormElements(id, 'model_home', undefined, {
+            paramMode: 'setup_existing',
+            paramRows,
+            defaults,
+          }),
         ],
       },
     ],
@@ -1520,6 +1614,8 @@ function buildModelSetupNewEndpointCard(
   id: string,
   userId: string,
   kind: 'codex' | 'api-key',
+  paramRows = DEFAULT_PARAM_ROWS,
+  defaults: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const isCodex = kind === 'codex'
   const auths = listUserCodexAuth(userId)
@@ -1545,19 +1641,23 @@ function buildModelSetupNewEndpointCard(
         tag: 'form',
         name: isCodex ? 'visual_model_new_codex_endpoint_form' : 'visual_model_new_key_endpoint_form',
         elements: [
-          input(FIELD_ENDPOINT_NAME, '新 endpoint 名称', isCodex ? '例如 codex-default' : '例如 openai-default'),
+          input(FIELD_ENDPOINT_NAME, '新 endpoint 名称', isCodex ? '例如 codex-default' : '例如 openai-default', stringField(defaults, FIELD_ENDPOINT_NAME)),
           ...(isCodex
             ? [
-              input(FIELD_AUTH_REF, '已有凭据引用', '可选，例如 codex:default 或 default'),
-              input(FIELD_AUTH_IMPORT_PATH, 'auth.json 导入路径', '可选，例如 /home/geqiming/.codex/auth.json；填写后导入为 codex:default'),
+              input(FIELD_AUTH_REF, '已有凭据引用', '可选，例如 codex:default 或 default', stringField(defaults, FIELD_AUTH_REF)),
+              input(FIELD_AUTH_IMPORT_PATH, 'auth.json 导入路径', '可选，例如 /home/geqiming/.codex/auth.json；填写后导入为 codex:default', stringField(defaults, FIELD_AUTH_IMPORT_PATH)),
             ]
             : [
-              input(FIELD_API_KEY_REF, 'apiKeyRef', '例如 OPENAI_KEY；先用 /secret set 保存'),
+              input(FIELD_API_KEY_REF, 'apiKeyRef', '例如 OPENAI_KEY；先用 /secret set 保存', stringField(defaults, FIELD_API_KEY_REF)),
             ]),
-          input(FIELD_BASE_URL, 'baseUrl', '可选，例如 https://api.openai.com/v1'),
-          input(FIELD_PROXY, 'proxy', '可选，例如 http://100.103.165.100:1091'),
+          input(FIELD_BASE_URL, 'baseUrl', '可选，例如 https://api.openai.com/v1', stringField(defaults, FIELD_BASE_URL)),
+          input(FIELD_PROXY, 'proxy', '可选，例如 http://100.103.165.100:1091', stringField(defaults, FIELD_PROXY)),
           markdown('---'),
-          ...modelSetupFormElements(id, 'model_home', isCodex ? 'openai-auth' : 'openai'),
+          ...modelSetupFormElements(id, 'model_home', isCodex ? 'openai-auth' : 'openai', {
+            paramMode: isCodex ? 'setup_new_codex' : 'setup_new_key',
+            paramRows,
+            defaults,
+          }),
         ],
       },
     ],
@@ -2326,28 +2426,29 @@ function modelSetupFormElements(
   id: string,
   backAction: VisualSetupCardAction['action'],
   recommendedSchema?: Schema,
+  options: {
+    paramMode?: ModelParamMode
+    paramRows?: number
+    defaults?: Record<string, unknown>
+  } = {},
 ): Record<string, unknown>[] {
+  const defaults = options.defaults ?? {}
+  const paramMode = options.paramMode ?? 'setup_existing'
+  const paramRows = options.paramRows ?? DEFAULT_PARAM_ROWS
   const schemaPlaceholder = recommendedSchema
     ? `推荐：${recommendedSchema}；留空时按 endpoint 类型自动选择`
     : '留空时按 endpoint 类型自动选择'
   return [
-    input(FIELD_MODEL_ALIAS, '模型显示名', '例如 gpt-codex-high'),
+    input(FIELD_MODEL_ALIAS, '模型显示名', '例如 gpt-codex-high', stringField(defaults, FIELD_MODEL_ALIAS)),
     select(FIELD_SCHEMA, 'schema', [
       { text: 'openai-auth (Codex OAuth)', value: 'openai-auth' },
       { text: 'openai', value: 'openai' },
       { text: 'anthropic', value: 'anthropic' },
     ], schemaPlaceholder),
-    input(FIELD_UPSTREAM_MODEL, 'upstreamModel', '真实模型 ID，例如 gpt-5.5 / claude-sonnet-4-6'),
-    select(FIELD_REASONING, 'reasoningEffort', [
-      { text: '不设置', value: '-' },
-      { text: 'none', value: 'none' },
-      { text: 'minimal', value: 'minimal' },
-      { text: 'low', value: 'low' },
-      { text: 'medium', value: 'medium' },
-      { text: 'high', value: 'high' },
-      { text: 'xhigh', value: 'xhigh' },
-    ], '可选'),
-    input(FIELD_MAX_OUTPUT_TOKENS, 'maxOutputTokens', '可选，例如 64000'),
+    input(FIELD_UPSTREAM_MODEL, 'upstreamModel', '真实模型 ID，例如 gpt-5.5 / claude-sonnet-4-6', stringField(defaults, FIELD_UPSTREAM_MODEL)),
+    markdown('常用专用参数也在下面填写：`reasoningEffort=high`、`maxOutputTokens=64000`。'),
+    input(FIELD_REQUEST_PARAMS, '自由文本参数', '可选；每行或分号分隔 key=value；JSON object 也可以', stringField(defaults, FIELD_REQUEST_PARAMS)),
+    ...modelParamRowElements(id, paramMode, paramRows, defaults),
     select(FIELD_SET_DEFAULT, '设为默认模型', [
       { text: '是', value: 'yes' },
       { text: '否', value: 'no' },
@@ -2357,6 +2458,11 @@ function modelSetupFormElements(
         kind: 'lightclaw_visual_setup',
         id,
         action: 'submit_model',
+      }),
+      formNavButton('参数帮助', 'default', {
+        kind: 'lightclaw_visual_setup',
+        id,
+        action: 'model_param_help',
       }),
       formNavButton('返回', 'default', {
         kind: 'lightclaw_visual_setup',
@@ -2370,6 +2476,73 @@ function modelSetupFormElements(
       }),
     ]),
   ]
+}
+
+function modelParamRowElements(
+  id: string,
+  mode: ModelParamMode,
+  rows: number,
+  defaults: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const count = clampParamRows(rows)
+  const elements: Record<string, unknown>[] = [
+    markdown('参数行会与上面的自由文本参数合并；重复 key 时参数行覆盖同名文本参数。常用 key：`reasoningEffort`、`maxOutputTokens`、`temperature`、`top_p`。'),
+  ]
+  for (let index = 1; index <= count; index += 1) {
+    const keyName = paramKeyField(index)
+    const valueName = paramValueField(index)
+    elements.push(paramInputRow(
+      keyName,
+      valueName,
+      `key ${index}`,
+      `value ${index}`,
+      stringField(defaults, keyName),
+      stringField(defaults, valueName),
+    ))
+  }
+  if (count < MAX_PARAM_ROWS) {
+    elements.push(formNavButton('添加参数行', 'default', {
+      kind: 'lightclaw_visual_setup',
+      id,
+      action: 'model_param_add_row',
+      paramMode: mode,
+      paramRows: count + 1,
+    }))
+  }
+  return elements
+}
+
+function paramInputRow(
+  keyName: string,
+  valueName: string,
+  keyLabel: string,
+  valueLabel: string,
+  keyDefault?: string,
+  valueDefault?: string,
+): Record<string, unknown> {
+  return {
+    tag: 'column_set',
+    flex_mode: 'stretch',
+    background_style: 'default',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [
+          input(keyName, keyLabel, 'reasoningEffort / maxOutputTokens / temperature', keyDefault),
+        ],
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [
+          input(valueName, valueLabel, 'high / 64000 / 0.2 / {"type":"json_object"}', valueDefault),
+        ],
+      },
+    ],
+  }
 }
 
 function endpointTableRows(endpoints: NonNullable<UserConfigOverride['endpoints']>): string[][] {
@@ -2527,6 +2700,66 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
     return value
   }
   throw new Error('reasoningEffort must be one of none, minimal, low, medium, high, xhigh')
+}
+
+function parseVisualRequestParams(
+  formValue: Record<string, unknown>,
+  schema: Schema,
+): { touched: boolean; params?: ModelRequestParams } & Pick<ModelTuningParams, 'reasoningEffort' | 'maxOutputTokens'> {
+  const textValue = stringField(formValue, FIELD_REQUEST_PARAMS)
+  const textTuning = parseModelTuningParamsText(textValue, schema)
+  const params: ModelRequestParams = { ...(textTuning.requestParams ?? {}) }
+  let touched = textValue !== undefined
+  let reasoningEffort = textTuning.reasoningEffort
+  let maxOutputTokens = textTuning.maxOutputTokens
+
+  for (let index = 1; index <= MAX_PARAM_ROWS; index += 1) {
+    const key = stringField(formValue, paramKeyField(index))
+    const rawValue = stringField(formValue, paramValueField(index))
+    if (!key && !rawValue) continue
+    touched = true
+    if (!key) {
+      throw new Error(`request param ${index} key is required when value is filled.`)
+    }
+    const [, parsedValue] = parseModelRequestParamFlagValue(`${key}=${rawValue ?? ''}`)
+    params[key] = parsedValue
+  }
+
+  if (!touched) return { touched: false, params: undefined }
+  const tuning = splitModelTuningParams(params, schema, 'requestParams')
+  reasoningEffort = tuning.reasoningEffort ?? reasoningEffort
+  maxOutputTokens = tuning.maxOutputTokens ?? maxOutputTokens
+  return {
+    touched: true,
+    params: tuning.requestParams,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+  }
+}
+
+function parseModelParamMode(value: string | undefined): ModelParamMode {
+  if (
+    value === 'setup_existing' ||
+    value === 'setup_new_codex' ||
+    value === 'setup_new_key' ||
+    value === 'edit'
+  ) {
+    return value
+  }
+  return 'setup_existing'
+}
+
+function clampParamRows(value: number): number {
+  if (!Number.isInteger(value)) return DEFAULT_PARAM_ROWS
+  return Math.max(DEFAULT_PARAM_ROWS, Math.min(MAX_PARAM_ROWS, value))
+}
+
+function paramKeyField(index: number): string {
+  return `${FIELD_REQUEST_PARAM_KEY_PREFIX}${index}`
+}
+
+function paramValueField(index: number): string {
+  return `${FIELD_REQUEST_PARAM_VALUE_PREFIX}${index}`
 }
 
 function parsePathList(raw: string): string[] {

@@ -139,6 +139,7 @@ export async function* streamChat(
     model: entry.upstreamModel,
     reasoningEffort: rest.reasoningEffort ?? entry.reasoningEffort,
     maxTokens: resolveWireMaxTokens(rest.maxTokens, entry, config),
+    ...(entry.requestParams ? { requestParams: entry.requestParams } : {}),
   }
 
   const logger = getActiveApiLogger()

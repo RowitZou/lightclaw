@@ -124,6 +124,7 @@ describe('FeishuVisualSetupCoordinator', () => {
       ['model_set_default', '设置默认模型'],
       ['model_check', '检查模型'],
       ['model_delete', '删除模型'],
+      ['model_param_help', '模型参数帮助'],
       ['home', 'LightClaw 控制台'],
     ]
 
@@ -186,6 +187,7 @@ describe('FeishuVisualSetupCoordinator', () => {
         upstream_model: 'gpt-4.1',
         reasoning: 'high',
         max_output_tokens: '64000',
+        request_params: 'temperature=0.2; response_format={"type":"json_object"}',
         set_default: 'yes',
       },
     })
@@ -201,8 +203,63 @@ describe('FeishuVisualSetupCoordinator', () => {
     assert.equal(loaded.ok ? loaded.value.models?.['gpt-ui']?.endpoint : undefined, 'openai-default')
     assert.equal(loaded.ok ? loaded.value.models?.['gpt-ui']?.reasoningEffort : undefined, 'high')
     assert.equal(loaded.ok ? loaded.value.models?.['gpt-ui']?.maxOutputTokens : undefined, 64000)
+    assert.deepEqual(loaded.ok ? loaded.value.models?.['gpt-ui']?.requestParams : undefined, {
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+    })
     assert.equal(loaded.ok ? loaded.value.defaultModel : undefined, 'gpt-ui')
     assert.doesNotMatch(JSON.stringify(response), /sk-user-secret/)
+  })
+
+  it('adds model request params through dynamic visual key/value rows', async () => {
+    await createUser('alice')
+    setUserSecret('alice', 'OPENAI_KEY', 'sk-user-secret')
+    const sender = new FakeSender()
+    const coord = new FeishuVisualSetupCoordinator(sender as unknown as FeishuSender, {
+      checkModel: async () => 'Model check: ok.',
+    })
+
+    await coord.openModelSetup({ sessionId: 'feishu:dm:oc_chat', userId: 'alice' })
+    const newKey = await coord.handleCardAction(extractVisualAction(sender.cards[0]!.card, 'setup_model_new_key'))
+    const expanded = await coord.handleCardAction({
+      ...extractVisualAction(responseCardData(newKey), 'model_param_add_row'),
+      formValue: {
+        endpoint_name: 'openai-default',
+        api_key_ref: 'OPENAI_KEY',
+        model_alias: 'gpt-ui',
+        upstream_model: 'gpt-4.1',
+        request_param_key_1: 'reasoningEffort',
+        request_param_value_1: 'high',
+      },
+    })
+    const expandedCard = responseCardData(expanded)
+    assertInputDefaultValue(expandedCard, 'endpoint_name', 'openai-default')
+    assertInputDefaultValue(expandedCard, 'request_param_key_1', 'reasoningEffort')
+    assert.ok(findTagged(expandedCard, 'input').some(input => input.name === 'request_param_key_3'))
+
+    await coord.handleCardAction({
+      ...extractVisualAction(expandedCard, 'submit_model'),
+      formValue: {
+        endpoint_name: 'openai-default',
+        api_key_ref: 'OPENAI_KEY',
+        model_alias: 'gpt-ui',
+        schema: 'openai',
+        upstream_model: 'gpt-4.1',
+        request_param_key_1: 'reasoningEffort',
+        request_param_value_1: 'high',
+        request_param_key_2: 'maxOutputTokens',
+        request_param_value_2: '64000',
+        request_param_key_3: 'temperature',
+        request_param_value_3: '0.2',
+      },
+    })
+
+    const loaded = loadUserConfigOverride('alice')
+    assert.equal(loaded.ok ? loaded.value.models?.['gpt-ui']?.reasoningEffort : undefined, 'high')
+    assert.equal(loaded.ok ? loaded.value.models?.['gpt-ui']?.maxOutputTokens : undefined, 64000)
+    assert.deepEqual(loaded.ok ? loaded.value.models?.['gpt-ui']?.requestParams : undefined, {
+      temperature: 0.2,
+    })
   })
 
   it('adds a model using an existing endpoint selected in the visual setup form', async () => {
@@ -381,6 +438,7 @@ describe('FeishuVisualSetupCoordinator', () => {
         upstream_model: 'gpt-edited',
         reasoning: 'medium',
         max_output_tokens: '32000',
+        request_params: 'top_p=0.9',
         set_default: 'yes',
       },
     })
@@ -390,6 +448,7 @@ describe('FeishuVisualSetupCoordinator', () => {
     assert.equal(loaded.ok ? loaded.value.models?.old?.upstreamModel : undefined, 'gpt-edited')
     assert.equal(loaded.ok ? loaded.value.models?.old?.reasoningEffort : undefined, 'medium')
     assert.equal(loaded.ok ? loaded.value.models?.old?.maxOutputTokens : undefined, 32000)
+    assert.deepEqual(loaded.ok ? loaded.value.models?.old?.requestParams : undefined, { top_p: 0.9 })
     assert.deepEqual(checked, ['old'])
 
     const setDefaultCard = await coord.handleCardAction(extractVisualAction(modelHomeCard, 'model_set_default'))

@@ -13,6 +13,7 @@ import { userHome } from '../identity/paths.js'
 import type { ReasoningEffort, Schema } from '../provider/types.js'
 import { loadUserSecrets, validateSecretName } from '../secrets/store.js'
 import { normalizeProxyUrl } from './proxy-url.js'
+import { normalizeModelRequestParams } from '../model-request-params.js'
 
 const PermissionModeSchema = z
   .string()
@@ -69,7 +70,17 @@ const UserModelSchema = z.object({
   upstreamModel: z.string().trim().min(1),
   reasoningEffort: ReasoningEffortSchema.optional(),
   maxOutputTokens: z.number().int().positive().optional(),
-}).strict()
+  requestParams: z.record(z.string().trim().min(1), z.unknown()).optional(),
+}).strict().superRefine((value, ctx) => {
+  try {
+    normalizeModelRequestParams(value.requestParams, value.schema, 'requestParams')
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
 
 const UserConfigOverrideSchema = z.object({
   defaultModel: z.string().min(1).optional(),
@@ -222,6 +233,15 @@ function resolveUserRegistry(
       visibility: 'user',
       ...(rawModel.reasoningEffort ? { reasoningEffort: rawModel.reasoningEffort as ReasoningEffort } : {}),
       ...(rawModel.maxOutputTokens !== undefined ? { maxOutputTokens: rawModel.maxOutputTokens } : {}),
+      ...(rawModel.requestParams
+        ? {
+          requestParams: normalizeModelRequestParams(
+            rawModel.requestParams,
+            schema,
+            `user model "${displayName}".requestParams`,
+          ),
+        }
+        : {}),
     }
   }
 

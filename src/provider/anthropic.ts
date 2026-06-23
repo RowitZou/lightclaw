@@ -355,6 +355,7 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
       const stream = await client.messages.create({
+        ...(params.requestParams ?? {}),
         model: params.model,
         max_tokens: params.maxTokens ?? 8192,
         system: cacheSystem(params.system) as never,

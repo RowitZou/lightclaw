@@ -283,6 +283,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/model proxy <name> <proxy-url|-> Set or clear the proxy for a named model endpoint.',
       '/model custom list     List user-owned custom models.',
       '/model custom templates Show OpenAI / Anthropic / Codex / self-hosted examples.',
+      '/model custom param-help Show provider-specific request parameter examples.',
       '/model custom add ...  Add a user-owned custom model using an existing /endpoint.',
       '/model custom check <name> Check whether a custom model is reachable.',
     ].join('\n'),

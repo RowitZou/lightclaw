@@ -231,6 +231,8 @@ describe('card action normalization', () => {
       'setup_model_existing',
       'setup_model_new_codex',
       'setup_model_new_key',
+      'model_param_help',
+      'model_param_add_row',
       'endpoint_add',
       'endpoint_update',
       'endpoint_update_edit',
@@ -251,6 +253,8 @@ describe('card action normalization', () => {
               id: 'ui_1',
               action: visualAction,
               endpointName: visualAction === 'submit_endpoint_update' ? 'codex-default' : undefined,
+              paramMode: visualAction === 'model_param_add_row' ? 'setup_new_key' : undefined,
+              paramRows: visualAction === 'model_param_add_row' ? 4 : undefined,
             },
             form_value: {},
           },
@@ -262,6 +266,10 @@ describe('card action normalization', () => {
       assert.equal(action.action, visualAction)
       if (visualAction === 'submit_endpoint_update') {
         assert.equal(action.endpointName, 'codex-default')
+      }
+      if (visualAction === 'model_param_add_row') {
+        assert.equal(action.paramMode, 'setup_new_key')
+        assert.equal(action.paramRows, 4)
       }
     }
   })

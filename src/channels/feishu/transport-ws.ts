@@ -33,6 +33,8 @@ const VISUAL_SETUP_ACTIONS = new Set<VisualSetupActionKind>([
   'submit_model_check',
   'model_delete',
   'submit_model_delete',
+  'model_param_help',
+  'model_param_add_row',
   'endpoint_home',
   'endpoint_add',
   'endpoint_edit',
@@ -376,6 +378,9 @@ export function normalizeCardAction(
     const openMessageId = stringValue(record.open_message_id) ?? stringValue(event?.open_message_id)
     const formValue = asRecord(action?.form_value) ?? asRecord(event?.form_value)
     const endpointName = stringValue(value.endpointName)
+    const paramMode = stringValue(value.paramMode)
+    const paramRowsRaw = typeof value.paramRows === 'number' ? value.paramRows : Number(stringValue(value.paramRows))
+    const paramRows = Number.isInteger(paramRowsRaw) ? paramRowsRaw : undefined
     return {
       kind: 'lightclaw_visual_setup',
       action: actionKind,
@@ -384,6 +389,8 @@ export function normalizeCardAction(
       ...(formValue ? { formValue } : {}),
       ...(openMessageId ? { openMessageId } : {}),
       ...(endpointName ? { endpointName } : {}),
+      ...(paramMode ? { paramMode } : {}),
+      ...(paramRows !== undefined ? { paramRows } : {}),
     }
   }
 

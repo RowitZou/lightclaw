@@ -439,6 +439,7 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // tail.
       const wireMessages = convertMessages(params.system, sanitizedMessages)
       const stream = await client.chat.completions.create({
+        ...(params.requestParams ?? {}),
         model: params.model,
         messages: wireMessages,
         tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,

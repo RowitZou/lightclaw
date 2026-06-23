@@ -1,4 +1,5 @@
 import type { StreamEvent } from '../types.js'
+import type { ModelRequestParams } from '../model-request-params.js'
 
 /** Wire protocol the provider speaks. The same physical endpoint may host
  *  both, distinguished per-model in `LightClawConfig.models`. `openai-auth`
@@ -50,6 +51,10 @@ export type StreamChatParams = {
   tools: ToolSchema[]
   maxTokens?: number
   reasoningEffort?: ReasoningEffort
+  /** Provider-specific optional request parameters already validated by
+   *  config/model setup. Providers merge these into the request body after
+   *  filtering core LightClaw-owned fields. */
+  requestParams?: ModelRequestParams
   cacheBreakpointMessageIndex?: number
   signal?: AbortSignal
   /**

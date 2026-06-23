@@ -43,6 +43,10 @@ export type ConfigFileModel = {
    *  global `maxOutputTokens`. Lives per-model because the hard API ceiling is
    *  model-specific (e.g. Sonnet/Haiku 64K vs Opus 128K). */
   maxOutputTokens?: number
+  /** Provider-specific optional request parameters. Core LightClaw-owned
+   *  fields such as `model`, `messages`, `tools`, token caps and reasoning
+   *  must stay in their dedicated config fields. */
+  requestParams?: Record<string, unknown>
 }
 
 export type ConfigFilePathsSection = {
