@@ -37,9 +37,10 @@ describe('/help surface-aware rendering', () => {
   it('terminal /help shows argument syntax inline and omits the ask-LightClaw hint', async () => {
     const output = await runHelp({ isChannel: false, isAdmin: false })
 
-    // Self-contained: the /mode argument syntax (only present in the `usage`
-    // field, never in the bare command name) must appear.
-    assert.match(output, /\/mode \[<read\|ask\|auto\|yolo>\]/)
+    // Self-contained: the /config argument syntax (only present in the `usage`
+    // field, never in the bare command name) must appear. (PR5.9 B6 retired
+    // the old /mode top-level name; its surface now lives under /config.)
+    assert.match(output, /\/config <model\|mode\|lang\|rule\|workspace/)
     // No dead-end pointer to a non-existent terminal agent.
     assert.doesNotMatch(output, /ask LightClaw/i)
     // The /status pointer still renders in both surfaces.
@@ -50,8 +51,39 @@ describe('/help surface-aware rendering', () => {
     const output = await runHelp({ isChannel: true, isAdmin: false })
 
     // Channel defers usage to the agent — no inline argument syntax.
-    assert.doesNotMatch(output, /\/mode \[<read\|ask\|auto\|yolo>\]/)
+    assert.doesNotMatch(output, /\/config <model\|mode\|lang\|rule\|workspace/)
     assert.match(output, /Just ask LightClaw/)
+  })
+
+  it('exposes exactly the 7 final top-level commands; admin sees /admin, non-admin does not', async () => {
+    const { createBuiltinReplRegistry } = await import('./builtin.js')
+    const registry = createBuiltinReplRegistry({ includeChannelOnly: true })
+    // list(true) excludes user-only (/feedback); list(false) excludes admin-only
+    // (/admin). Union both for the complete top-level surface.
+    const names = [...new Set([
+      ...registry.list(true).map(c => c.name),
+      ...registry.list(false).map(c => c.name),
+    ])].sort()
+    assert.deepEqual(names, [
+      '/admin', '/config', '/feedback', '/help', '/status', '/stop', '/system',
+    ])
+    // The retired top-level names are no longer registered.
+    for (const retired of [
+      '/model', '/mode', '/rules', '/secret', '/mount', '/cost', '/user',
+      '/ceiling', '/sandbox', '/feishu-workspace', '/auth',
+    ]) {
+      assert.equal(registry.find(retired), undefined, `${retired} should be retired`)
+    }
+
+    // Admin /help lists /admin; non-admin /help does not.
+    const adminHelp = await runHelp({ isChannel: true, isAdmin: true })
+    assert.match(adminHelp, /\/admin/)
+    const userHelp = await runHelp({ isChannel: true, isAdmin: false })
+    assert.doesNotMatch(userHelp, /\/admin/)
+    // /help no longer lists any retired top-level name.
+    for (const retired of ['/model', '/mode', '/rules', '/secret', '/mount', '/cost', '/user', '/ceiling', '/sandbox', '/feishu-workspace', '/auth']) {
+      assert.doesNotMatch(adminHelp, new RegExp(`(^|\\s)${retired.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')}(\\s|:|$)`, 'm'), `${retired} should not appear in /help`)
+    }
   })
 })
 

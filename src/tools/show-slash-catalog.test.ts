@@ -33,16 +33,21 @@ describe('ShowSlashCatalog tool', () => {
     const output = await callCatalogAs('alice')
 
     assert.match(output, /Slash commands \(chat only\):/)
-    for (const name of ['/config', '/feedback', '/model', '/mode', '/mount', '/rules', '/secret', '/system']) {
+    // PR5.9 B6: surviving non-admin advisory commands are /config /system
+    // /feedback. The retired top-level names are gone.
+    for (const name of ['/config', '/feedback', '/system']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    for (const name of ['/auth', '/ceiling', '/cost', '/feishu-workspace', '/sandbox', '/user']) {
+    for (const name of [
+      '/auth', '/ceiling', '/cost', '/feishu-workspace', '/sandbox', '/user',
+      '/model', '/mode', '/mount', '/rules', '/secret', '/admin',
+    ]) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     for (const name of ['/help', '/status', '/stop']) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    assert.deepEqual(commandNames(output), ['/config', '/feedback', '/mode', '/model', '/mount', '/rules', '/secret', '/system'])
+    assert.deepEqual(commandNames(output), ['/config', '/feedback', '/system'])
   })
 
   it('lists admin advisory commands and excludes user-only feedback', async () => {
@@ -50,53 +55,43 @@ describe('ShowSlashCatalog tool', () => {
     const output = await callCatalogAs('admin')
 
     assert.match(output, /current user is admin/)
-    for (const name of [
-      '/admin',
-      '/auth',
-      '/ceiling',
-      '/config',
-      '/cost',
-      '/feishu-workspace',
-      '/model',
-      '/mode',
-      '/mount',
-      '/rules',
-      '/sandbox',
-      '/secret',
-      '/system',
-      '/user',
-    ]) {
+    // PR5.9 B6: surviving admin advisory commands are /admin /config /system.
+    for (const name of ['/admin', '/config', '/system']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
+    for (const name of [
+      '/auth', '/ceiling', '/cost', '/feishu-workspace',
+      '/model', '/mode', '/mount', '/rules', '/sandbox', '/secret', '/user',
+    ]) {
+      assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
+    }
     assert.doesNotMatch(output, /^\/feedback\s\s/m)
-    assert.equal(commandNames(output).length, 14)
+    assert.deepEqual(commandNames(output), ['/admin', '/config', '/system'])
   })
 
   it('formats each entry with description, usage block, advisory, and blank separator', async () => {
     const output = await callCatalogAs('alice')
-    assert.match(output, /\/mount  Manage per-user dynamic rlaunch mounts\n  Usage:\n    \/mount list/)
-    assert.match(output, /  Suggest when: When the user references a host path outside/)
-    assert.match(output, /\n\n\/rules  /)
+    assert.match(output, /\/system  Manage runtime resources \(keys \/ mounts \/ data\)\n  Usage:\n    \/system key/)
+    assert.match(output, /  Suggest when: When the user needs to manage runtime resources/)
+    assert.match(output, /\n\n\/system  /)
   })
 
   it('renders the full multi-line agentUsage for each advisory command', async () => {
     const output = await callCatalogAs('alice')
 
-    assert.match(output, /^    \/secret set <NAME> <VALUE>/m)
-    assert.match(output, /^    \/secret enable <NAME>/m)
-    // Bug 6 regression: bare /model lists selectable models, so the catalog
-    // must document that form — not just `/model <name>` — or the agent can
-    // neither name the available models nor tell the user how to list them.
-    assert.match(output, /^    \/model {2,}Show the current model and list/m)
-    assert.match(output, /^    \/model <name> {2,}Switch to a model alias/m)
+    // /system absorbs the secret (key) and mount surfaces.
+    assert.match(output, /^    \/system key set <NAME> <VALUE\.\.\.>/m)
+    assert.match(output, /^    \/system key enable\|disable <NAME>/m)
+    assert.match(output, /^    \/system mount add <gpfs-path\.\.\.>/m)
   })
 
   it('passes through backticks, quotes, and dollar signs in advisory and usage text', async () => {
-    const output = await callCatalogAs('alice')
+    await setAdmin('admin')
+    const output = await callCatalogAs('admin')
 
-    assert.match(output, /`Bash\(git:\*\)`/)
+    // The /admin endpoint advisory documents codex provider config; the
+    // /system key usage carries $NAME injection.
     assert.match(output, /\$NAME/)
-    assert.match(output, /VALUE is taken verbatim to end of line \(may contain spaces, \$, quotes\)\./)
   })
 })
 

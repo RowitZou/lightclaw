@@ -168,15 +168,14 @@ describe('/secret command', () => {
     }
   })
 
-  it('registers /secret as channel-only with agent metadata', () => {
+  it('retires the top-level /secret command (PR5.9 B6 — folded into /system key)', () => {
+    // The /secret surface now lives under /system key; the old top-level name
+    // is no longer registered in either surface. The underlying
+    // runSecretCommand handler (exercised by the rest of this file) is still
+    // reached via /system key.
     const channelRegistry = createBuiltinReplRegistry({ includeChannelOnly: true })
     const terminalRegistry = createBuiltinReplRegistry({ includeChannelOnly: false })
-
-    const command = channelRegistry.find('/secret')
-    assert.ok(command)
-    assert.equal(command.channelOnly, true)
-    assert.match(command.agentAdvisory ?? '', /API token/)
-    assert.match(command.agentUsage ?? '', /\/secret enable <NAME>/)
+    assert.equal(channelRegistry.find('/secret'), undefined)
     assert.equal(terminalRegistry.find('/secret'), undefined)
   })
 })

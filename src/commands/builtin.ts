@@ -37,12 +37,8 @@ import {
 } from '../state.js'
 
 import { runAdminCommand } from './admin.js'
-import { runAuthCommand } from './auth.js'
 import { runConfigCommand } from './config.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
-import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
-import { runMountCommand } from './mount.js'
-import { runSecretCommand } from './secret.js'
 import { runSystemCommand } from './system.js'
 import {
   MODE_ALIASES,
@@ -76,8 +72,23 @@ export function createBuiltinReplRegistry(
 }
 
 export const RENAMED_COMMANDS: Record<string, string> = {
+  // Pre-existing renames (kept).
   '/identity': '/user',
   '/permissions': '/rules',
+  // PR5.9 B6: the old top-level command names retired into /config /system
+  // /admin. A retired name is no longer registered, so dispatchChannelSlash
+  // consults this map and emits a one-time hint pointing at the new path.
+  '/model': '/config model set',
+  '/mode': '/config mode set',
+  '/rules': '/config rule',
+  '/secret': '/system key',
+  '/mount': '/system mount',
+  '/cost': '/admin cost',
+  '/user': '/admin user',
+  '/ceiling': '/admin ceiling',
+  '/sandbox': '/admin sandbox',
+  '/feishu-workspace': '/admin feishu-drive',
+  '/auth': '/admin endpoint --type codex',
 }
 
 async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
@@ -182,189 +193,6 @@ function buildBuiltinCommands(): ReplCommand[] {
     },
   },
   {
-    name: '/secret',
-    usage: t('cmd.secret.usage'),
-    description: t('cmd.secret.desc'),
-    channelOnly: true,
-    agentAdvisory:
-      'When the user\'s task needs an API token, password, or credential ' +
-      'you do not already have access to (GitHub push, HuggingFace download, ' +
-      'third-party API calls). After they set + enable a secret, you can ' +
-      'reference it as `$NAME` in Bash commands.',
-    agentUsage: [
-      '/secret list                  List stored secrets with mask + enabled flag',
-      '/secret status [NAME]         Inspect one secret, or all if NAME omitted',
-      '/secret set <NAME> <VALUE>    Store a secret. NAME must match ^[A-Z][A-Z0-9_]{0,63}$.',
-      '                                VALUE is taken verbatim to end of line (may contain spaces, $, quotes).',
-      '/secret enable <NAME>         Activate injection of $NAME in Bash from next turn',
-      '/secret disable <NAME>        Deactivate without removing the value',
-      '/secret remove <NAME>         Delete the stored entry',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runSecretCommand(args, ctx))
-    },
-  },
-  {
-    name: '/cost',
-    usage: '/cost',
-    description: t('cmd.cost.desc'),
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the user wants to inspect this month\'s token usage / cost, broken down by model and by paired user.',
-    agentUsage: [
-      '/cost                               Show this month\'s token usage, broken down by model and by paired user',
-    ].join('\n'),
-    async handler(_args, ctx) {
-      ctx.output.write(await formatCost())
-    },
-  },
-  {
-    name: '/model',
-    usage: t('cmd.model.usage'),
-    description: t('cmd.model.desc'),
-    agentAdvisory:
-      'When the user explicitly asks to switch model or compare model behavior.',
-    agentUsage: [
-      '/model                 Show the current model and list every selectable model alias.',
-      '/model <name>          Switch to a model alias (use a name from the bare-/model list).',
-      '/model --clear-cache   Clear the current model\'s capability-probe cache (combine with <name> to clear that one).',
-    ].join('\n'),
-    async handler(args, ctx) {
-      // B2: `/model` delegates to the `/config model` SCALAR face so the two
-      // names stay byte-identical until the old name is retired in B6. The
-      // scalar face is reached by NOT passing a reserved BYO verb — bare /
-      // `<name>` / `--clear-cache` all route to runConfigModelScalar.
-      ctx.output.write(await runConfigCommand(`model ${args.trim()}`.trim(), {
-        config: ctx.config,
-        userId: ctx.userId ?? getCurrentUserId(),
-        messagesLength: ctx.messages.length,
-        persistMeta: ctx.persistMeta,
-      }))
-    },
-  },
-  {
-    name: '/mode',
-    usage: t('cmd.mode.usage'),
-    description: t('cmd.mode.desc'),
-    agentAdvisory:
-      'When the user wants to change permission posture (default / autoEdit / planMode / yolo).',
-    agentUsage: [
-      '/mode                        Show the mode menu, the current mode, and the user\'s ceiling.',
-      '/mode <read|ask|auto|yolo>   Set permission posture. read=read-only; ask=confirm writes/exec (default); auto=writes+web silent, commands still ask; yolo=all silent except ask/deny rules. Capped by the user\'s ceiling.',
-    ].join('\n'),
-    async handler(args, ctx) {
-      // B2: delegate to `/config mode`. runConfigMode accepts both `set <m>`
-      // and a bare `<m>` so the old `/mode <m>` form stays byte-identical.
-      ctx.output.write(await runConfigCommand(`mode ${args.trim()}`.trim(), {
-        config: ctx.config,
-        userId: ctx.userId ?? getCurrentUserId(),
-        messagesLength: ctx.messages.length,
-        persistMeta: ctx.persistMeta,
-      }))
-    },
-  },
-  {
-    name: '/ceiling',
-    usage: t('cmd.ceiling.usage'),
-    description: t('cmd.ceiling.desc'),
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the user wants to view or set a paired user\'s permission-mode ceiling — ' +
-      'the most permissive mode (read / ask / auto / yolo) that user is allowed to run in. ' +
-      'This caps permissions; it is not about spend or token usage (that is /cost).',
-    agentUsage: [
-      '/ceiling                              Show current permission-mode ceilings per user',
-      '/ceiling <user> <read|ask|auto|yolo>  Set the permission-mode ceiling for a user',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runCeilingCommand(args))
-    },
-  },
-  {
-    name: '/user',
-    usage: t('cmd.user.usage'),
-    description: t('cmd.user.desc'),
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the user wants to list paired channel users, inspect pairing state, ' +
-      'or unpair someone.',
-    agentUsage: [
-      '/user list                          List all paired users (canonical id + channel handle)',
-      '/user pending                       Show pending pairing requests',
-      '/user approve <code> [--as <name>]  Approve a pending pairing request',
-      '/user reject <code>                 Reject a pending pairing request',
-      '/user unlink <channel:id>           Unlink one channel identity from its canonical user',
-      '/user remove <name> [--purge]       Remove a canonical user; --purge also deletes user data',
-      '/user feedback [--page N]           Show standing user feedback for the admin',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runUserCommand(args))
-    },
-  },
-  {
-    name: '/sandbox',
-    usage: t('cmd.sandbox.usage'),
-    description: t('cmd.sandbox.desc'),
-    // Admin-only: status leaks deployment internals (image / container /
-    // worker names); prefetch triggers a multi-GB image pull that should
-    // not be a free button for end users; reset rebuilds a per-user
-    // worker / container which is admin maintenance, not a user knob.
-    // Sandbox is meant to be invisible to users — environment health
-    // surfaces to admin via channel notices, not via slash commands.
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the user wants to reset, inspect, or rebuild the sandbox runtime ' +
-      '(container respawn / scratch wipe).',
-    agentUsage: [
-      '/sandbox status                    Show runtime backend, container/worker state, mount table',
-      '/sandbox prefetch                  Start Docker image prefetch / readiness probe',
-      '/sandbox reset                     Wipe and respawn the runtime (drops scratch, keeps workspace)',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runSandboxCommand(args, ctx.config))
-    },
-  },
-  {
-    name: '/feishu-workspace',
-    usage: t('cmd.feishuWorkspace.usage'),
-    description: t('cmd.feishuWorkspace.desc'),
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the user wants to manage the Feishu cloud workspace root or ' +
-      'per-user document folders.',
-    agentUsage: [
-      '/feishu-workspace status                    Show root folder + per-user folder tokens',
-      '/feishu-workspace list                      List per-user folders with sizes',
-      '/feishu-workspace orphans                   List folders for unpaired canonical users',
-      '/feishu-workspace delete <canonical>        Delete an unpaired user folder',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runFeishuWorkspaceCommand(args))
-    },
-  },
-  {
-    name: '/mount',
-    usage: t('cmd.mount.usage'),
-    description: t('cmd.mount.desc'),
-    channelOnly: true,
-    agentAdvisory:
-      'When the user references a host path outside the current workspace mount, ' +
-      'or a gpfs path that the agent cannot see — they need to mount it before ' +
-      'you can Read / Edit / Bash inside.',
-    agentUsage: [
-      '/mount list                          Show currently mounted paths',
-      '/mount add <absolute-gpfs-path...> [--ro|--rw]',
-      '                                     Mount host gpfs path into sandbox at the same path. Default mode is --ro.',
-      '/mount remove <absolute-gpfs-path...>',
-      '                                     Unmount; sandbox restart applied next turn.',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runMountCommand(args, ctx, {
-        restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
-      }))
-    },
-  },
-  {
     name: '/system',
     usage: t('cmd.system.usage'),
     description: t('cmd.system.desc'),
@@ -407,67 +235,6 @@ function buildBuiltinCommands(): ReplCommand[] {
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runConfigCommand(args, ctx))
-    },
-  },
-  {
-    name: '/rules',
-    usage: t('cmd.rules.usage'),
-    description: t('cmd.rules.desc'),
-    agentAdvisory:
-      'When the user wants to pre-approve or deny a recurring permission prompt ' +
-      '(e.g. always allow `Bash(git:*)`).',
-    agentUsage: [
-      '/rules list                                Show currently active permission rules',
-      '/rules revoke <n>                          Remove a rule by number from /rules list',
-      '/rules revoke all                          Remove all current user permission rules',
-      '/rules ask <rule>                          Force a matching action to ask again',
-    ].join('\n'),
-    async handler(args, ctx) {
-      // B2: `/rules` delegates to `/config rule`. The old verbs `revoke`/`ask`
-      // map to the new `rm`/`add` (default ask), so the same config.ts handler
-      // serves both names and the visible strings stay byte-identical until B6.
-      const trimmed = args.trim()
-      const [head, ...rest] = trimmed.split(/\s+/).filter(Boolean)
-      const sub = (head || 'list').toLowerCase()
-      const cfgCtx = {
-        config: ctx.config,
-        userId: ctx.userId ?? getCurrentUserId(),
-      }
-      if (sub === 'revoke') {
-        ctx.output.write(await runConfigCommand(`rule rm ${rest.join(' ')}`.trim(), cfgCtx))
-        return
-      }
-      if (sub === 'ask') {
-        ctx.output.write(await runConfigCommand(`rule add ${rest.join(' ')}`.trim(), cfgCtx))
-        return
-      }
-      if (sub === 'list') {
-        ctx.output.write(await runConfigCommand('rule list', cfgCtx))
-        return
-      }
-      ctx.output.write(`${t('common.error.prefix')}${t('rules.usage')}\n`)
-    },
-  },
-  {
-    name: '/auth',
-    usage: t('cmd.auth.usage'),
-    description: t('cmd.auth.desc'),
-    // Admin-only: OAuth credentials are endpoint-level state, equivalent
-    // in scope to the apiKey on a config-defined endpoint. Letting any
-    // user log in / out would let them rebind the host's outbound
-    // identity to their own ChatGPT account, which is not what the
-    // multi-user model implies.
-    visibleTo: 'admin',
-    agentAdvisory:
-      'When the daemon needs provider credentials set up or refreshed ' +
-      '(anthropic / openai / openai-auth / codex).',
-    agentUsage: [
-      '/auth list                         Show current credential state per provider',
-      '/auth import codex                 Import Codex OAuth credentials from ~/.codex/auth.json',
-      '/auth logout codex [--purge]       Remove stored Codex token; --purge also removes auto-registered config',
-    ].join('\n'),
-    async handler(args, ctx) {
-      ctx.output.write(await runAuthCommand(args, ctx.config))
     },
   },
   {

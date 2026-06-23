@@ -2057,16 +2057,17 @@ export class ChannelRunner {
     const cwd = workspaceFor(userId)
     const sessionId = this.strategy.resolveSessionId(message, userId)
     assertSessionIdShape(sessionId)
-    // /sandbox status is the only read-fast-path slash that touches a live
-    // Runtime (workerSnapshot / isAvailable probe). Acquire from the per-
-    // canonical pool unconditionally for /sandbox text — pool.acquire is
-    // a Map lookup if the user already has a runtime, otherwise creates one
-    // (heavyweight on first call but acceptable since /sandbox is admin
+    // `/admin sandbox status` is the only read-fast-path slash that touches a
+    // live Runtime (workerSnapshot / isAvailable probe). Acquire from the per-
+    // canonical pool unconditionally for that text — pool.acquire is a Map
+    // lookup if the user already has a runtime, otherwise creates one
+    // (heavyweight on first call but acceptable since sandbox status is admin
     // diagnostics, not a hot-path user command). Other read slashes don't
     // need a runtime; the resulting `ctx.runtime` is undefined and any
     // accidental getRuntime() call would throw — which is what we want.
+    // (The bare `/sandbox` head was retired in B6, so only `/admin sandbox`
+    // remains; do NOT re-add a `/^\/sandbox/` branch.)
     const sandboxNeedsRuntime =
-      /^\/sandbox(?:\s|$)/.test(message.text.trimStart()) ||
       /^\/admin\s+sandbox(?:\s|$)/.test(message.text.trimStart())
     const sandboxRuntime = sandboxNeedsRuntime
       ? getRuntimePool().acquire(
@@ -2649,46 +2650,11 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   if (head === '/help' || head === '/status') {
     return 'read'
   }
-  // No-arg read variants: with arguments these slashes mutate state and
-  // must keep their queued ordering with the in-flight turn.
-  if ((head === '/mode' || head === '/model') && argText.length === 0) {
-    return 'read'
-  }
-  // /cost is admin-only (gated inside dispatchChannelSlash) and only reads
-  // the per-day cost ledger from disk. Always read-only.
-  if (head === '/cost') {
-    return 'read'
-  }
-  // Sub-command read variants. The write variants (allow / deny / revoke /
-  // approve / reject / unlink / remove / import / logout / prefetch / reset)
-  // intentionally fall through to the lock path so they serialize with any
-  // in-flight turn.
-  if (head === '/rules' && (argText === '' || /^list(?:\s|$)/.test(argText))) {
-    return 'read'
-  }
-  if (head === '/auth' && /^list(?:\s|$)/.test(argText)) {
-    return 'read'
-  }
-  if (
-    head === '/user' &&
-    (argText === '' || /^(list|pending|feedback)(?:\s|$)/.test(argText))
-  ) {
-    return 'read'
-  }
-  // /sandbox status reads runtime / image-readiness state. The handler
-  // calls runtime.workerSnapshot() / runtime.isAvailable() which need an
-  // active Runtime in ctx — runReadSlashFastPath acquires one from the
-  // per-canonical pool for /sandbox specifically. Other /sandbox actions
-  // (prefetch / reset) write state and stay in the lock.
-  if (head === '/sandbox' && (argText === '' || /^status(?:\s|$)/.test(argText))) {
-    return 'read'
-  }
-  if (
-    head === '/feishu-workspace' &&
-    (argText === '' || /^(status|list|orphans)(?:\s|$)/.test(argText))
-  ) {
-    return 'read'
-  }
+  // PR5.9 B6: the old top-level names (/model /mode /cost /rules /auth /user
+  // /sandbox /feishu-workspace) are retired. They are no longer fast-pathed
+  // here — a retired name falls through to the lock path → dispatchChannelSlash
+  // → the RENAMED hint. Their read surfaces now live under the /config /system
+  // /admin hubs classified below.
   // /system hub (PR5.9 B1) — same read/write split convention as the
   // sub-command slashes above. `/secret` and `/mount` themselves are NOT
   // fast-pathed (channelOnly writes, always lock path); for the /system

@@ -246,39 +246,42 @@ describe('ChannelRunner pre-lock fast path', () => {
     // Read whitelist
     assert.equal(parseFastPathSlash('/help'), 'read')
     assert.equal(parseFastPathSlash('/help anything trailing'), 'read')
-    assert.equal(parseFastPathSlash('/cost'), 'read')
-    assert.equal(parseFastPathSlash('/mode'), 'read')
-    assert.equal(parseFastPathSlash('/model'), 'read')
-    assert.equal(parseFastPathSlash('/rules'), 'read')
-    assert.equal(parseFastPathSlash('/rules list'), 'read')
-    assert.equal(parseFastPathSlash('/rules list ...filter'), 'read')
-    assert.equal(parseFastPathSlash('/auth list'), 'read')
-    assert.equal(parseFastPathSlash('/user'), 'read')
-    assert.equal(parseFastPathSlash('/user list'), 'read')
-    assert.equal(parseFastPathSlash('/user pending'), 'read')
-    assert.equal(parseFastPathSlash('/user feedback --page 2'), 'read')
-    // Write variants of sub-command slashes — must NOT fast-path so they
-    // serialize behind any in-flight turn.
+    // /status fast-path: msgs from disk transcript, mode/model from
+    // prefs, sessionId from main-canonical. In-flight token = 0 is
+    // honest semantics for "before this turn started".
+    assert.equal(parseFastPathSlash('/status'), 'read')
+    // PR5.9 B6: every retired top-level name is no longer fast-pathed — it
+    // falls through to the lock path (→ dispatchChannelSlash → RENAMED hint),
+    // so parseFastPathSlash returns null for all of them (read AND write
+    // forms alike).
+    assert.equal(parseFastPathSlash('/cost'), null)
+    assert.equal(parseFastPathSlash('/mode'), null)
+    assert.equal(parseFastPathSlash('/model'), null)
+    assert.equal(parseFastPathSlash('/rules'), null)
+    assert.equal(parseFastPathSlash('/rules list'), null)
+    assert.equal(parseFastPathSlash('/auth list'), null)
+    assert.equal(parseFastPathSlash('/user'), null)
+    assert.equal(parseFastPathSlash('/user list'), null)
+    assert.equal(parseFastPathSlash('/user pending'), null)
+    assert.equal(parseFastPathSlash('/user feedback --page 2'), null)
     assert.equal(parseFastPathSlash('/mode auto'), null)
     assert.equal(parseFastPathSlash('/model claude-x'), null)
     assert.equal(parseFastPathSlash('/rules allow Bash(curl:*)'), null)
-    assert.equal(parseFastPathSlash('/rules deny Edit(/etc/**)'), null)
     assert.equal(parseFastPathSlash('/rules revoke 3'), null)
     assert.equal(parseFastPathSlash('/auth import codex'), null)
     assert.equal(parseFastPathSlash('/auth logout codex'), null)
     assert.equal(parseFastPathSlash('/user approve abc123'), null)
     assert.equal(parseFastPathSlash('/user remove bob'), null)
-    // /status fast-path: msgs from disk transcript, mode/model from
-    // prefs, sessionId from main-canonical. In-flight token = 0 is
-    // honest semantics for "before this turn started".
-    assert.equal(parseFastPathSlash('/status'), 'read')
-    // /sandbox status fast-path: runReadSlashFastPath acquires a runtime
-    // from the per-canonical pool so workerSnapshot / isAvailable work.
-    assert.equal(parseFastPathSlash('/sandbox'), 'read')
-    assert.equal(parseFastPathSlash('/sandbox status'), 'read')
-    // /sandbox writes (prefetch / reset) must still queue.
+    assert.equal(parseFastPathSlash('/secret list'), null)
+    assert.equal(parseFastPathSlash('/mount list'), null)
+    // The retired bare /sandbox is gone; only /admin sandbox classifies now
+    // (asserted in the /admin block below). All bare-/sandbox forms are null.
+    assert.equal(parseFastPathSlash('/sandbox'), null)
+    assert.equal(parseFastPathSlash('/sandbox status'), null)
     assert.equal(parseFastPathSlash('/sandbox prefetch'), null)
     assert.equal(parseFastPathSlash('/sandbox reset'), null)
+    assert.equal(parseFastPathSlash('/feishu-workspace'), null)
+    assert.equal(parseFastPathSlash('/feishu-workspace status'), null)
     // /system hub (PR5.9 B1): read nouns short-circuit, writes lock.
     assert.equal(parseFastPathSlash('/system'), 'read')
     assert.equal(parseFastPathSlash('/system key'), 'read')
