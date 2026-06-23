@@ -57,6 +57,7 @@ import { appendFeedback, readAllFeedback } from './feedback-store.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 import { runMountCommand } from './mount.js'
 import { runSecretCommand } from './secret.js'
+import { runSystemCommand } from './system.js'
 import {
   MODE_ALIASES,
   modeToAlias,
@@ -587,6 +588,35 @@ function buildBuiltinCommands(): ReplCommand[] {
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runMountCommand(args, ctx, {
+        restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
+      }))
+    },
+  },
+  {
+    name: '/system',
+    usage: t('cmd.system.usage'),
+    description: t('cmd.system.desc'),
+    // Same surface as the commands it absorbs: /secret and /mount are both
+    // channelOnly (per-user channel state / live-session-only), so /system
+    // must be too — otherwise terminal /help drifts (the absorbed nouns
+    // would be unreachable there but the hub would still list them).
+    channelOnly: true,
+    agentAdvisory:
+      'When the user needs to manage runtime resources tied to their own ' +
+      'environment: store/enable a credential the task needs (key), expose a ' +
+      'host gpfs path to the sandbox (mount), or move their data in/out (data).',
+    agentUsage: [
+      '/system key                          List stored keys + enabled flag (read)',
+      '/system key set <NAME> <VALUE...>    Store a key. VALUE is verbatim to end of line.',
+      '/system key enable|disable <NAME>    Toggle $NAME injection into Bash',
+      '/system key rm <NAME>                Delete the stored key',
+      '/system mount                        List mounted paths (read)',
+      '/system mount add <gpfs-path...> [--ro|--rw]   Mount host gpfs path into sandbox',
+      '/system mount rm <gpfs-path...>      Unmount',
+      '/system data                         Show import/export usage',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runSystemCommand(args, ctx, {
         restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
       }))
     },

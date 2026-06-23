@@ -279,6 +279,22 @@ describe('ChannelRunner pre-lock fast path', () => {
     // /sandbox writes (prefetch / reset) must still queue.
     assert.equal(parseFastPathSlash('/sandbox prefetch'), null)
     assert.equal(parseFastPathSlash('/sandbox reset'), null)
+    // /system hub (PR5.9 B1): read nouns short-circuit, writes lock.
+    assert.equal(parseFastPathSlash('/system'), 'read')
+    assert.equal(parseFastPathSlash('/system key'), 'read')
+    assert.equal(parseFastPathSlash('/system key list'), 'read')
+    assert.equal(parseFastPathSlash('/system key status NAME'), 'read')
+    assert.equal(parseFastPathSlash('/system mount'), 'read')
+    assert.equal(parseFastPathSlash('/system mount list'), 'read')
+    // Write verbs + the data noun must NOT fast-path.
+    assert.equal(parseFastPathSlash('/system key set X v'), null)
+    assert.equal(parseFastPathSlash('/system key enable X'), null)
+    assert.equal(parseFastPathSlash('/system key disable X'), null)
+    assert.equal(parseFastPathSlash('/system key rm X'), null)
+    assert.equal(parseFastPathSlash('/system mount add /x'), null)
+    assert.equal(parseFastPathSlash('/system mount rm /x'), null)
+    assert.equal(parseFastPathSlash('/system data'), null)
+    assert.equal(parseFastPathSlash('/system data import /x'), null)
     // /feedback writes feedback.jsonl on a separate path from the
     // session transcript — no main-lock contention, no LLM call.
     assert.equal(parseFastPathSlash('/feedback something'), 'read')

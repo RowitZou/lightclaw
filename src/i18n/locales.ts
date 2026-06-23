@@ -56,6 +56,8 @@ export const LOCALES = {
     'cmd.mount.desc': '管理 per-user rlaunch 动态挂载',
     'cmd.config.usage': '/config set-workspace <绝对路径>|reset',
     'cmd.config.desc': '管理你的 per-user 配置（工作目录等）',
+    'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
+    'cmd.system.desc': '管理运行时资源（密钥 / 挂载 / 数据）',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
     'cmd.sandbox.desc': '查看 / 重置沙箱镜像与容器',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
@@ -578,6 +580,15 @@ export const LOCALES = {
     'secret.status.absent': '{name} stored=no',
     'secret.status.present': '{name} stored=yes enabled={enabled} length={length} updated={updated}',
 
+    // ---- /system (channel) ----
+    'system.usage':
+      '用法：/system <名词> [动词] [参数]\n' +
+      '  key     管理运行时密钥（裸命令 = 列表）。动词：set · enable · disable · rm\n' +
+      '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
+      '  data    导入 / 导出数据。动词：import <src> · export <dest>',
+    'system.data.usage': '用法：/system data import <src> · /system data export <dest>',
+    'system.data.comingSoon': '/system data 的导入 / 导出尚未可用（将随后续版本上线）。',
+
     // ---- /mount (channel) ----
     'mount.usage':
       '用法：\n' +
@@ -770,6 +781,8 @@ export const LOCALES = {
     'cmd.mount.desc': 'Manage per-user dynamic rlaunch mounts',
     'cmd.config.usage': '/config set-workspace <absolute-path>|reset',
     'cmd.config.desc': 'Manage your per-user config (workspace dir, etc.)',
+    'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
+    'cmd.system.desc': 'Manage runtime resources (keys / mounts / data)',
     'cmd.sandbox.usage': '/sandbox [status|prefetch|reset]',
     'cmd.sandbox.desc': 'Inspect / reset the sandbox image and container',
     'cmd.ceiling.usage': '/ceiling [<user> <read|ask|auto|yolo>]',
@@ -1294,6 +1307,15 @@ export const LOCALES = {
     'secret.list.row': '- {name} enabled={enabled} length={length} updated={updated}',
     'secret.status.absent': '{name} stored=no',
     'secret.status.present': '{name} stored=yes enabled={enabled} length={length} updated={updated}',
+
+    // ---- /system (channel) ----
+    'system.usage':
+      'Usage: /system <noun> [verb] [args]\n' +
+      '  key     Manage runtime keys (bare = list). Verbs: set · enable · disable · rm\n' +
+      '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
+      '  data    Import / export data. Verbs: import <src> · export <dest>',
+    'system.data.usage': 'Usage: /system data import <src> · /system data export <dest>',
+    'system.data.comingSoon': '/system data import / export is not yet available (coming in a later release).',
 
     // ---- /mount (channel) ----
     'mount.usage':

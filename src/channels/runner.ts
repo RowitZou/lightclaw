@@ -2687,6 +2687,31 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   ) {
     return 'read'
   }
+  // /system hub (PR5.9 B1) — same read/write split convention as the
+  // sub-command slashes above. `/secret` and `/mount` themselves are NOT
+  // fast-pathed (channelOnly writes, always lock path); for the /system
+  // hub only the read nouns short-circuit:
+  //   - bare `/system`           → overview (pure read)
+  //   - `/system key`            (bare / list / status) → secret list/status (read)
+  //   - `/system mount`          (bare / list)          → mount list (read)
+  // Write verbs (key set/enable/disable/rm, mount add/rm, data import/export)
+  // and the `data` noun fall through to the lock path so they serialize with
+  // any in-flight turn.
+  if (head === '/system') {
+    if (argText === '') {
+      return 'read'
+    }
+    const subParts = argText.split(/\s+/)
+    const noun = subParts[0]
+    const verb = subParts[1] ?? ''
+    if (noun === 'key' && (verb === '' || verb === 'list' || verb === 'status')) {
+      return 'read'
+    }
+    if (noun === 'mount' && (verb === '' || verb === 'list')) {
+      return 'read'
+    }
+    return null
+  }
   // /feedback writes to feedback.jsonl on disk — a completely separate
   // path from the channel session transcript. No live in-memory state,
   // no LLM call, no contention with the main session lock. (User-only
