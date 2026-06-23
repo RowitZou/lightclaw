@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -119,19 +119,67 @@ describe('/system command', () => {
     assert.match(unknown, /Usage: \/system <noun>/)
   })
 
-  it('prints data usage and a coming-soon notice without destructive action', async () => {
+  it('prints data noun-verb usage on bare invocation', async () => {
+    const bare = await runSystemCommand('data', { config: makeConfig(), userId: 'alice' })
+    assert.match(bare, /\/system data export --path/)
+    assert.match(bare, /\/system data import --path/)
+  })
+
+  it('export writes a zip and warns secrets are excluded; import round-trips', async () => {
+    // Seed a memory file + a config for alice so there is something to export.
+    const memDir = path.join(tmpHome, 'users', 'alice', 'memory')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(path.join(memDir, 'fact.md'), '# remembered', 'utf8')
+    writeFileSync(path.join(tmpHome, 'users', 'alice', 'config.json'), '{"workspace":"/x"}', 'utf8')
+
+    const dest = path.join(tmpHome, 'backup.zip')
+    const exportOut = await runSystemCommand(`data export --path ${dest}`, {
+      config: makeConfig(),
+      userId: 'alice',
+    })
+    assert.match(exportOut, /Exported/)
+    assert.match(exportOut, /secrets are NOT included/)
+    assert.equal(existsSync(dest), true)
+
+    // import without --y prints a preview and does nothing.
+    const preview = await runSystemCommand(`data import --path ${dest}`, {
+      config: makeConfig(),
+      userId: 'alice',
+    })
+    assert.match(preview, /merge mode/)
+
+    // Wipe the memory file, then import it back with --y.
+    rmSync(path.join(memDir, 'fact.md'))
+    const importOut = await runSystemCommand(`data import --path ${dest} --y`, {
+      config: makeConfig(),
+      userId: 'alice',
+    })
+    assert.match(importOut, /Imported: .*memory/)
+    assert.match(importOut, /config was not imported/)
+    assert.equal(existsSync(path.join(memDir, 'fact.md')), true)
+  })
+
+  it('export with no data reports nothing to export; missing import file is reported', async () => {
     assert.match(
-      await runSystemCommand('data', { config: makeConfig(), userId: 'alice' }),
-      /Usage: \/system data import/,
+      await runSystemCommand(`data export --path ${path.join(tmpHome, 'x.zip')}`, {
+        config: makeConfig(),
+        userId: 'bob',
+      }),
+      /Nothing to export/,
     )
-    // `import` is --y-gated (B5); `export` is read-only → coming-soon directly.
     assert.match(
-      await runSystemCommand('data import /some/path --y', { config: makeConfig(), userId: 'alice' }),
-      /not yet available/,
+      await runSystemCommand(`data import --path ${path.join(tmpHome, 'nope.zip')} --y`, {
+        config: makeConfig(),
+        userId: 'alice',
+      }),
+      /Archive not found/,
     )
+  })
+
+  it('--feishu returns a use-path notice for now', async () => {
     assert.match(
-      await runSystemCommand('data export /some/dest', { config: makeConfig(), userId: 'alice' }),
-      /not yet available/,
+      await runSystemCommand('data export --feishu', { config: makeConfig(), userId: 'alice' }),
+      /Feishu transport is not wired/,
     )
   })
 
@@ -161,11 +209,17 @@ describe('/system command', () => {
   })
 
   it('data import requires --y (no --y = preview, no action)', async () => {
-    const preview = await runSystemCommand('data import /some/path', { config: makeConfig(), userId: 'alice' })
+    // Build a real archive so the confirm gate (not the not-found path) is exercised.
+    const memDir = path.join(tmpHome, 'users', 'alice', 'memory')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(path.join(memDir, 'fact.md'), '# x', 'utf8')
+    const dest = path.join(tmpHome, 'gate.zip')
+    await runSystemCommand(`data export --path ${dest}`, { config: makeConfig(), userId: 'alice' })
+
+    const preview = await runSystemCommand(`data import --path ${dest}`, { config: makeConfig(), userId: 'alice' })
     assert.match(preview, /--y/)
-    assert.doesNotMatch(preview, /not yet available/)
-    const done = await runSystemCommand('data import /some/path --y', { config: makeConfig(), userId: 'alice' })
-    assert.match(done, /not yet available/)
+    const done = await runSystemCommand(`data import --path ${dest} --y`, { config: makeConfig(), userId: 'alice' })
+    assert.match(done, /Imported/)
   })
 
   it('registers /system as channel-only (hidden from the terminal console)', () => {

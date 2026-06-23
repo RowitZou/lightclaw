@@ -25,7 +25,7 @@ export const LOCALES = {
       '将删除 key "{name}"，并断开引用它的 endpoint：{endpoints}。',
     'confirm.workspace.set': '将把你的工作目录迁移到：{path}。',
     'confirm.workspace.reset': '将把你的工作目录恢复为默认（回落 admin 配置）。',
-    'confirm.data.import': '将用 {src} 覆盖你已有的记忆 / 数据。',
+    'confirm.data.import': '将以 {mode} 模式用 {src} 更新你的记忆 / 数据（密钥与本机配置不受影响）。',
     'confirm.rule.rmAll': '将删除你全部 {count} 条权限规则。',
     'confirm.user.rm': '将删除用户 "{name}"{purge}。',
     'confirm.user.rmPurge': '（连同其数据一并清除）',
@@ -615,8 +615,20 @@ export const LOCALES = {
       '  key     管理运行时密钥（裸命令 = 列表）。动词：set · enable · disable · rm\n' +
       '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
       '  data    导入 / 导出数据。动词：import <src> · export <dest>',
-    'system.data.usage': '用法：/system data import <src> · /system data export <dest>',
-    'system.data.comingSoon': '/system data 的导入 / 导出尚未可用（将随后续版本上线）。',
+    'system.data.usage':
+      '用法：/system data export --path <文件|目录> [--with-sessions]\n' +
+      '      /system data import --path <文件> [--replace] [--y]',
+    'system.data.noIdentity': '没有活跃的 LightClaw 身份；导入 / 导出需要已配对的用户。',
+    'system.data.missingPath': '需要 --path <路径>（或 --feishu）。',
+    'system.data.feishuPending': '飞书传输尚未接通；当前请用 --path <路径>。',
+    'system.data.exportEmpty': '没有可导出的数据。',
+    'system.data.exportOk': '已导出 {components} → {dest}（约 {kb} KB）。',
+    'system.data.secretsNote': '注意：本包不含密钥（secrets）。如需在未配置密钥的环境恢复，密钥须另行设置。',
+    'system.data.notFound': '找不到归档文件：{path}',
+    'system.data.importOk': '已导入：{applied}。',
+    'system.data.configSkipped': '用户配置未导入，保留本机现有（含密钥）。',
+    'system.data.warning': '注意：{warning}',
+    'system.data.error': '操作失败：{error}',
 
     // ---- /mount (channel) ----
     'mount.usage':
@@ -825,7 +837,7 @@ export const LOCALES = {
       'This will remove key "{name}" and break the endpoints referencing it: {endpoints}.',
     'confirm.workspace.set': 'This will migrate your workspace directory to: {path}.',
     'confirm.workspace.reset': 'This will restore your workspace directory to the default (falls back to the admin config).',
-    'confirm.data.import': 'This will overwrite your existing memory / data with {src}.',
+    'confirm.data.import': 'This will update your memory / data from {src} ({mode} mode); your keys and local config are untouched.',
     'confirm.rule.rmAll': 'This will remove all {count} of your permission rules.',
     'confirm.user.rm': 'This will remove user "{name}"{purge}.',
     'confirm.user.rmPurge': ' (and purge their data)',
@@ -1414,8 +1426,21 @@ export const LOCALES = {
       '  key     Manage runtime keys (bare = list). Verbs: set · enable · disable · rm\n' +
       '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
       '  data    Import / export data. Verbs: import <src> · export <dest>',
-    'system.data.usage': 'Usage: /system data import <src> · /system data export <dest>',
-    'system.data.comingSoon': '/system data import / export is not yet available (coming in a later release).',
+    'system.data.usage':
+      'Usage: /system data export --path <file|dir> [--with-sessions]\n' +
+      '       /system data import --path <file> [--replace] [--y]',
+    'system.data.noIdentity': 'No active LightClaw identity; import / export needs a paired user.',
+    'system.data.missingPath': 'A --path <path> (or --feishu) is required.',
+    'system.data.feishuPending': 'Feishu transport is not wired yet; use --path <path> for now.',
+    'system.data.exportEmpty': 'Nothing to export.',
+    'system.data.exportOk': 'Exported {components} → {dest} (~{kb} KB).',
+    'system.data.secretsNote':
+      'Note: secrets are NOT included in this archive. To restore onto an environment with no keys configured, set them up separately.',
+    'system.data.notFound': 'Archive not found: {path}',
+    'system.data.importOk': 'Imported: {applied}.',
+    'system.data.configSkipped': 'Your config was not imported; the existing one (with your keys) is kept.',
+    'system.data.warning': 'Note: {warning}',
+    'system.data.error': 'Operation failed: {error}',
 
     // ---- /mount (channel) ----
     'mount.usage':

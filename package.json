@@ -28,6 +28,7 @@
     "@clack/prompts": "^1.4.0",
     "@larksuiteoapi/node-sdk": "^1.61.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "adm-zip": "^0.5.17",
     "axios": "^1.15.2",
     "chalk": "^5.4.1",
     "https-proxy-agent": "^9.0.0",
@@ -38,6 +39,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^24.6.0",
     "@types/turndown": "^5.0.6",
     "tsdown": "^0.12.9",
