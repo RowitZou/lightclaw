@@ -74,6 +74,37 @@ export const LOCALES = {
     'cmd.cost.desc': '查看本月 token 用量（按 model / user）',
     'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
     'cmd.auth.desc': '管理外部 provider 的 OAuth 凭证',
+    'cmd.admin.usage': '/admin <cost|user|pairing|feedback|ceiling|sandbox|feishu-drive|backend|endpoint|lane> [verb] [args]',
+    'cmd.admin.desc': '系统级运维 + 部署级模型配置（admin 专用）',
+
+    // ---- /admin hub (admin, B4) ----
+    'admin.usage':
+      '用法：/admin <名词> [动词]\n' +
+      '  运维：cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
+      '  系统级模型配置（写部署 config.json）：backend · endpoint · lane',
+    'admin.user.usage': '用法：/admin user [list | rm <name> [--purge] | unlink <channel:id>]',
+    'admin.pairing.usage': '用法：/admin pairing [list | approve <code> [--as <name>] | reject <code>]',
+    'admin.feishuDrive.usage': '用法：/admin feishu-drive [status | rm <canonical> --y]',
+    'admin.endpoint.usage':
+      '用法：\n' +
+      '  /admin endpoint                                列出部署 endpoint\n' +
+      '  /admin endpoint templates                      查看 endpoint 模板\n' +
+      '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
+      '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
+      '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
+      '  /admin endpoint rm <ep>',
+    'admin.endpoint.added': '已添加部署 endpoint "{name}"（apiKey 直存于 config.json，仅 host 可读）。',
+    'admin.endpoint.addedCodex': '已添加部署 Codex endpoint "{name}"（auth=codex-oauth；凭证已写入 <home>/auth/codex.json）。',
+    'admin.backend.usage':
+      '用法：\n' +
+      '  /admin backend                 列出部署模型\n' +
+      '  /admin backend templates       查看模型模板\n' +
+      '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
+      '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
+      '  /admin backend rm <name>',
+    'admin.backend.checkHint': '提示：连通性检查请在你自己的 /config backend check <name> 上运行；部署模型用 list 查看。',
+    'admin.lane.usage': '用法：/admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
+    'admin.writeRejected': '错误：该改动会让部署 config.json 无法通过启动校验（{detail}）；未写入。',
 
     // ---- /auth (admin) ----
     'auth.usage': '用法：/auth list | import codex | logout codex [--purge]',
@@ -851,6 +882,37 @@ export const LOCALES = {
     'cmd.cost.desc': 'This month token usage (by model / user)',
     'cmd.auth.usage': '/auth list | import codex | logout codex [--purge]',
     'cmd.auth.desc': 'Manage OAuth credentials for external providers',
+    'cmd.admin.usage': '/admin <cost|user|pairing|feedback|ceiling|sandbox|feishu-drive|backend|endpoint|lane> [verb] [args]',
+    'cmd.admin.desc': 'System ops + deployment-level model config (admin only)',
+
+    // ---- /admin hub (admin, B4) ----
+    'admin.usage':
+      'Usage: /admin <noun> [verb]\n' +
+      '  ops: cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
+      '  system-scope model config (writes deployment config.json): backend · endpoint · lane',
+    'admin.user.usage': 'Usage: /admin user [list | rm <name> [--purge] | unlink <channel:id>]',
+    'admin.pairing.usage': 'Usage: /admin pairing [list | approve <code> [--as <name>] | reject <code>]',
+    'admin.feishuDrive.usage': 'Usage: /admin feishu-drive [status | rm <canonical> --y]',
+    'admin.endpoint.usage':
+      'Usage:\n' +
+      '  /admin endpoint                                List deployment endpoints\n' +
+      '  /admin endpoint templates                      Show endpoint templates\n' +
+      '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
+      '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
+      '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
+      '  /admin endpoint rm <ep>',
+    'admin.endpoint.added': 'Added deployment endpoint "{name}" (apiKey stored directly in config.json — host-only).',
+    'admin.endpoint.addedCodex': 'Added deployment Codex endpoint "{name}" (auth=codex-oauth; credentials written to <home>/auth/codex.json).',
+    'admin.backend.usage':
+      'Usage:\n' +
+      '  /admin backend                 List deployment models\n' +
+      '  /admin backend templates       Show model templates\n' +
+      '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
+      '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
+      '  /admin backend rm <name>',
+    'admin.backend.checkHint': 'Hint: run a connectivity check on your own /config backend check <name>; use list to view deployment models.',
+    'admin.lane.usage': 'Usage: /admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
+    'admin.writeRejected': 'Error: this change would make deployment config.json fail boot validation ({detail}); not written.',
 
     // ---- /auth (admin) ----
     'auth.usage': 'Usage: /auth list | import codex | logout codex [--purge]',

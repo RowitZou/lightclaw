@@ -2065,7 +2065,9 @@ export class ChannelRunner {
     // diagnostics, not a hot-path user command). Other read slashes don't
     // need a runtime; the resulting `ctx.runtime` is undefined and any
     // accidental getRuntime() call would throw — which is what we want.
-    const sandboxNeedsRuntime = /^\/sandbox(?:\s|$)/.test(message.text.trimStart())
+    const sandboxNeedsRuntime =
+      /^\/sandbox(?:\s|$)/.test(message.text.trimStart()) ||
+      /^\/admin\s+sandbox(?:\s|$)/.test(message.text.trimStart())
     const sandboxRuntime = sandboxNeedsRuntime
       ? getRuntimePool().acquire(
           userId,
@@ -2733,6 +2735,44 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
         noun === 'codex' || noun === 'backend' || noun === 'lane') &&
       (verb === '' || verb === 'list')
     ) {
+      return 'read'
+    }
+    return null
+  }
+  // /admin hub (PR5.9 B4) — admin-only (gated inside dispatchChannelSlash).
+  // Read nouns short-circuit; write verbs fall through to the lock path.
+  //   bare /admin                       → overview (read)
+  //   cost                              → cost ledger (read)
+  //   user (bare/list)                  → user list (read)
+  //   pairing (bare/list)               → pending list (read)
+  //   feedback                          → read feedback (read)
+  //   ceiling (bare/list)               → ceiling list (read)
+  //   sandbox status                    → runtime status (read; acquires a
+  //                                       runtime below via the regex)
+  //   feishu-drive status               → drive status (read)
+  //   backend / endpoint / lane (bare)  → list (read)
+  // Write verbs (user rm/unlink, pairing approve/reject, ceiling set/reset,
+  // sandbox prefetch/reset, feishu-drive rm, backend/endpoint/lane mutate)
+  // fall through to null so they serialize with any in-flight turn.
+  if (head === '/admin') {
+    if (argText === '') {
+      return 'read'
+    }
+    const subParts = argText.split(/\s+/)
+    const noun = subParts[0]
+    const verb = subParts[1] ?? ''
+    if (noun === 'cost') return 'read'
+    if (noun === 'feedback') return 'read'
+    if ((noun === 'user' || noun === 'pairing' || noun === 'ceiling') &&
+        (verb === '' || verb === 'list')) {
+      return 'read'
+    }
+    if (noun === 'pairing' && verb === 'pending') return 'read'
+    if ((noun === 'sandbox' || noun === 'feishu-drive') && verb === 'status') {
+      return 'read'
+    }
+    if ((noun === 'backend' || noun === 'endpoint' || noun === 'lane') &&
+        (verb === '' || verb === 'list')) {
       return 'read'
     }
     return null

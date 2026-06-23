@@ -850,6 +850,29 @@ function resolveModels(
   return out
 }
 
+/**
+ * Validate a candidate `<home>/config.json` object the same way `getConfig()`
+ * would when the daemon next boots: resolve endpoints + models (these throw on
+ * a bad shape — missing apiKey, dangling endpoint reference, schema/auth
+ * mismatch, …) and enforce the non-empty-`defaultModel`-must-exist rule. Used
+ * by the admin write-back paths (`/admin backend|endpoint|lane`) to refuse a
+ * write that would break daemon boot, BEFORE persisting. Throws an `Error`
+ * (message is admin-facing English) when the candidate is invalid; returns
+ * cleanly when it parses. `lane` mirrors `getConfig`'s LENIENT behavior (an
+ * unknown bucket warns + falls back, never throws), so it is intentionally not
+ * re-validated here — only the boot-fatal shape is gated.
+ */
+export function validateConfigFileShape(shape: ConfigFileShape): void {
+  const endpoints = resolveEndpoints(shape.endpoints)
+  const models = resolveModels(shape.models, endpoints)
+  const requestedModel = shape.defaultModel ?? ''
+  if (requestedModel && !models[requestedModel]) {
+    throw new Error(
+      `defaultModel = "${requestedModel}" is not in models. Available: ${Object.keys(models).join(', ')}.`,
+    )
+  }
+}
+
 function parseRuntimeBackend(value: string | undefined): RuntimeKind | undefined {
   if (!value) {
     return undefined

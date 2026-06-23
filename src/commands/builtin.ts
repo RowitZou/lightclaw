@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 
-import { getConfig } from '../config.js'
+import { getConfig, type LightClawConfig } from '../config.js'
 import {
   addLink,
   createUser,
@@ -36,6 +36,7 @@ import {
   setRuntime,
 } from '../state.js'
 
+import { runAdminCommand } from './admin.js'
 import { runAuthCommand } from './auth.js'
 import { runConfigCommand } from './config.js'
 import { appendFeedback, readAllFeedback } from './feedback-store.js'
@@ -276,27 +277,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/ceiling <user> <read|ask|auto|yolo>  Set the permission-mode ceiling for a user',
     ].join('\n'),
     async handler(args, ctx) {
-      const parts = args.trim().split(/\s+/).filter(Boolean)
-      if (parts.length === 0) {
-        ctx.output.write(await formatCeilingList())
-        return
-      }
-      if (parts.length !== 2) {
-        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.usage')}\n`)
-        return
-      }
-      const [name, modeText] = parts
-      const mode = parseMode(modeText!)
-      if (!mode) {
-        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.invalidMode', { input: modeText!, aliases: MODE_ALIASES.join(' / ') })}\n`)
-        return
-      }
-      const result = await setUserPermissionCeiling(name!, mode)
-      if (!result.ok) {
-        ctx.output.write(`${t('common.error.prefix')}${t('ceiling.noSuchUser', { name: name! })}\n`)
-        return
-      }
-      ctx.output.write(`${t('ceiling.set', { name: name!, mode: modeToAlias(mode) })}\n`)
+      ctx.output.write(await runCeilingCommand(args))
     },
   },
   {
@@ -340,108 +321,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/sandbox reset                     Wipe and respawn the runtime (drops scratch, keeps workspace)',
     ].join('\n'),
     async handler(args, ctx) {
-      const action = args.trim() || 'status'
-      if (action === 'status') {
-        const runtime = getRuntime()
-        const lines: string[] = []
-        if (runtime instanceof RlaunchRuntime) {
-          // Rlaunch backend has its own readiness tracker (per-user worker
-          // scheduling on the cluster). The docker-flavored ImageReadiness
-          // tracker doesn't apply — the cluster pulls images server-side,
-          // we never run `docker pull` locally. Reading ImageReadiness here
-          // would always show `not-attempted` since nothing populates it.
-          //
-          // The tracker is only updated when isAvailable() / waitForRunning()
-          // / runBrainctlExec() actually probes phase. preheat-on-startup
-          // calls start() which leaves the tracker on `scheduling` until the
-          // first real tool call lifts it to `ready`. Calling isAvailable()
-          // here forces a phase probe so admin sees the live state instead
-          // of a stale `scheduling` even when the cluster worker is healthy.
-          // Caught + ignored: isAvailable() returns reason objects rather
-          // than throwing, but a brainctl/network blip could still throw.
-          await runtime.isAvailable().catch(() => {})
-          const snap = runtime.workerSnapshot()
-          lines.push(t('sandbox.titleRlaunch'))
-          lines.push(t('sandbox.state', { state: snap.state }))
-          if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
-          if (snap.scheduleDurationMs !== undefined) {
-            lines.push(t('sandbox.scheduleElapsed', { seconds: Math.round(snap.scheduleDurationMs / 1000) }))
-          }
-          if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
-          lines.push(t('sandbox.workerUser', { name: snap.canonicalUser }))
-          lines.push(t('sandbox.worker', { name: runtime.name ?? t('sandbox.workerNone') }))
-        } else if (runtime instanceof DockerRuntime) {
-          const snap = getImageReadiness().snapshot()
-          lines.push(t('sandbox.title'))
-          lines.push(t('sandbox.state', { state: snap.state }))
-          if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
-          if (snap.pullDurationMs !== undefined) {
-            const seconds = Math.round(snap.pullDurationMs / 1000)
-            lines.push(snap.state === 'ready'
-              ? t('sandbox.pulledIn', { seconds })
-              : t('sandbox.elapsed', { seconds }))
-          }
-          if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
-          lines.push(t('sandbox.container', { name: runtime.containerName }))
-        } else {
-          // LocalRuntime: admin-only single-user mode, no worker / container
-          // tracking applies — the readiness machinery is purely for the
-          // isolated-backend code path (docker / rlaunch).
-          lines.push(t('sandbox.titleLocal'))
-          lines.push(t('sandbox.localActive'))
-        }
-        lines.push('')
-        ctx.output.write(lines.join('\n'))
-        return
-      }
-      if (action === 'prefetch') {
-        const tracker = getImageReadiness()
-        if (ctx.config.runtime.backend !== 'docker') {
-          ctx.output.write(`${t('sandbox.prefetch.requireDocker')}\n`)
-          return
-        }
-        const image = resolveDockerImage(ctx.config)
-        tracker.retryIfFailed()
-        if (tracker.state === 'ready') {
-          ctx.output.write(`${t('sandbox.prefetch.alreadyReady', { image })}\n`)
-          return
-        }
-        if (tracker.state === 'pulling') {
-          ctx.output.write(`${t('sandbox.prefetch.inProgress', { image })}\n`)
-          return
-        }
-        tracker.startPrefetch(image, {
-          inspectOnly: !ctx.config.runtime.dockerSettings.autoPull,
-          ...(ctx.config.runtime.driver === 'brainpp'
-            ? { probe: brainppDockerImageProbe() }
-            : {}),
-        })
-        ctx.output.write(`${t('sandbox.prefetch.started', { image })}\n`)
-        return
-      }
-      if (action !== 'reset') {
-        ctx.output.write(`${t('common.error.prefix')}${t('sandbox.usage')}\n`)
-        return
-      }
-      const userId = getCurrentUserId()
-      if (!userId) {
-        ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
-        return
-      }
-      const runtime = getRuntime()
-      if (!(runtime instanceof DockerRuntime)) {
-        if (runtime instanceof RlaunchRuntime) {
-          await getRuntimePool().remove(userId)
-          ctx.output.write(`${t('sandbox.reset.rlaunchDone')}\n`)
-          return
-        }
-        ctx.output.write(`${t('sandbox.reset.localNothing')}\n`)
-        return
-      }
-      const containerName = runtime.containerName
-      const image = runtime.image || resolveDockerImage(ctx.config)
-      await getRuntimePool().remove(userId)
-      ctx.output.write(`${t('sandbox.reset.dockerDone', { container: containerName, image })}\n`)
+      ctx.output.write(await runSandboxCommand(args, ctx.config))
     },
   },
   {
@@ -590,10 +470,45 @@ function buildBuiltinCommands(): ReplCommand[] {
       ctx.output.write(await runAuthCommand(args, ctx.config))
     },
   },
+  {
+    name: '/admin',
+    usage: t('cmd.admin.usage'),
+    description: t('cmd.admin.desc'),
+    // Admin-only hub (PR5.9 B4): folds the six top-level admin ops commands
+    // (cost / user+pairing / feedback / ceiling / sandbox / feishu-drive) and
+    // adds system-scope model config (backend / endpoint / lane) that writes
+    // the deployment config.json. The registry dispatcher rejects non-admin
+    // callers for `visibleTo:'admin'` before the handler runs. The old six
+    // top-level admin commands stay registered (retired in B6).
+    visibleTo: 'admin',
+    agentAdvisory:
+      'When the admin wants to manage the deployment: inspect token cost, ' +
+      'manage paired users / pairing requests, read user feedback, set ' +
+      'permission ceilings, inspect or reset the sandbox, manage Feishu drive ' +
+      'folders, or configure deployment-wide model backends / endpoints / lanes.',
+    agentUsage: [
+      '/admin cost [--month YYYY-MM]                 Token usage by model and by user',
+      '/admin user [list|rm <name> [--purge]|unlink <channel:id>]',
+      '/admin pairing [list|approve <code> [--as <name>]|reject <code>]',
+      '/admin feedback [--page N]                    Read standing user feedback',
+      '/admin ceiling [list|set <user> <mode>|reset <user>]',
+      '/admin sandbox [status|prefetch|reset]',
+      '/admin feishu-drive [status|rm <canonical> --y]',
+      '/admin backend [list|add|set|check|rm|templates]   Deployment model registry',
+      '/admin endpoint [list|add|set|rm|templates]        Deployment endpoints (--type openai|anthropic|codex)',
+      '/admin lane [set <worker|system|image> <model>|reset <bucket>]',
+    ].join('\n'),
+    async handler(args, ctx) {
+      ctx.output.write(await runAdminCommand(args, {
+        config: ctx.config,
+        userId: ctx.userId ?? getCurrentUserId(),
+      }))
+    },
+  },
   ]
 }
 
-async function formatCeilingList(): Promise<string> {
+export async function formatCeilingList(): Promise<string> {
   const identities = await listIdentities()
   const names = Object.keys(identities).sort()
   if (names.length === 0) {
@@ -608,6 +523,130 @@ async function formatCeilingList(): Promise<string> {
   }
   lines.push(t('ceiling.listFooter'))
   return lines.join('\n')
+}
+
+// ── Shared ops handler bodies (B4) ───────────────────────────────────────────
+// Extracted so the old top-level admin slashes (/ceiling /sandbox) and the new
+// /admin <noun> hub call ONE implementation. Behavior + visible strings are
+// byte-identical to the pre-B4 inline handlers.
+
+/** `/ceiling` / `/admin ceiling` body. Bare → list; `<user> <mode>` → set. */
+export async function runCeilingCommand(args: string): Promise<string> {
+  const parts = args.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) {
+    return formatCeilingList()
+  }
+  if (parts.length !== 2) {
+    return `${t('common.error.prefix')}${t('ceiling.usage')}\n`
+  }
+  const [name, modeText] = parts
+  const mode = parseMode(modeText!)
+  if (!mode) {
+    return `${t('common.error.prefix')}${t('ceiling.invalidMode', { input: modeText!, aliases: MODE_ALIASES.join(' / ') })}\n`
+  }
+  const result = await setUserPermissionCeiling(name!, mode)
+  if (!result.ok) {
+    return `${t('common.error.prefix')}${t('ceiling.noSuchUser', { name: name! })}\n`
+  }
+  return `${t('ceiling.set', { name: name!, mode: modeToAlias(mode) })}\n`
+}
+
+/** `/sandbox` / `/admin sandbox` body. status / prefetch / reset. Needs a live
+ *  Runtime (status) and the runtime pool (reset) — both reached via state.ts. */
+export async function runSandboxCommand(args: string, config: LightClawConfig): Promise<string> {
+  const action = args.trim() || 'status'
+  if (action === 'status') {
+    const runtime = getRuntime()
+    const lines: string[] = []
+    if (runtime instanceof RlaunchRuntime) {
+      // Rlaunch backend has its own readiness tracker (per-user worker
+      // scheduling on the cluster). The docker-flavored ImageReadiness
+      // tracker doesn't apply — the cluster pulls images server-side,
+      // we never run `docker pull` locally. Reading ImageReadiness here
+      // would always show `not-attempted` since nothing populates it.
+      //
+      // The tracker is only updated when isAvailable() / waitForRunning()
+      // / runBrainctlExec() actually probes phase. preheat-on-startup
+      // calls start() which leaves the tracker on `scheduling` until the
+      // first real tool call lifts it to `ready`. Calling isAvailable()
+      // here forces a phase probe so admin sees the live state instead
+      // of a stale `scheduling` even when the cluster worker is healthy.
+      // Caught + ignored: isAvailable() returns reason objects rather
+      // than throwing, but a brainctl/network blip could still throw.
+      await runtime.isAvailable().catch(() => {})
+      const snap = runtime.workerSnapshot()
+      lines.push(t('sandbox.titleRlaunch'))
+      lines.push(t('sandbox.state', { state: snap.state }))
+      if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
+      if (snap.scheduleDurationMs !== undefined) {
+        lines.push(t('sandbox.scheduleElapsed', { seconds: Math.round(snap.scheduleDurationMs / 1000) }))
+      }
+      if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
+      lines.push(t('sandbox.workerUser', { name: snap.canonicalUser }))
+      lines.push(t('sandbox.worker', { name: runtime.name ?? t('sandbox.workerNone') }))
+    } else if (runtime instanceof DockerRuntime) {
+      const snap = getImageReadiness().snapshot()
+      lines.push(t('sandbox.title'))
+      lines.push(t('sandbox.state', { state: snap.state }))
+      if (snap.image) lines.push(t('sandbox.image', { image: snap.image }))
+      if (snap.pullDurationMs !== undefined) {
+        const seconds = Math.round(snap.pullDurationMs / 1000)
+        lines.push(snap.state === 'ready'
+          ? t('sandbox.pulledIn', { seconds })
+          : t('sandbox.elapsed', { seconds }))
+      }
+      if (snap.lastError) lines.push(t('sandbox.lastError', { error: snap.lastError }))
+      lines.push(t('sandbox.container', { name: runtime.containerName }))
+    } else {
+      // LocalRuntime: admin-only single-user mode, no worker / container
+      // tracking applies — the readiness machinery is purely for the
+      // isolated-backend code path (docker / rlaunch).
+      lines.push(t('sandbox.titleLocal'))
+      lines.push(t('sandbox.localActive'))
+    }
+    lines.push('')
+    return lines.join('\n')
+  }
+  if (action === 'prefetch') {
+    const tracker = getImageReadiness()
+    if (config.runtime.backend !== 'docker') {
+      return `${t('sandbox.prefetch.requireDocker')}\n`
+    }
+    const image = resolveDockerImage(config)
+    tracker.retryIfFailed()
+    if (tracker.state === 'ready') {
+      return `${t('sandbox.prefetch.alreadyReady', { image })}\n`
+    }
+    if (tracker.state === 'pulling') {
+      return `${t('sandbox.prefetch.inProgress', { image })}\n`
+    }
+    tracker.startPrefetch(image, {
+      inspectOnly: !config.runtime.dockerSettings.autoPull,
+      ...(config.runtime.driver === 'brainpp'
+        ? { probe: brainppDockerImageProbe() }
+        : {}),
+    })
+    return `${t('sandbox.prefetch.started', { image })}\n`
+  }
+  if (action !== 'reset') {
+    return `${t('common.error.prefix')}${t('sandbox.usage')}\n`
+  }
+  const userId = getCurrentUserId()
+  if (!userId) {
+    return `${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`
+  }
+  const runtime = getRuntime()
+  if (!(runtime instanceof DockerRuntime)) {
+    if (runtime instanceof RlaunchRuntime) {
+      await getRuntimePool().remove(userId)
+      return `${t('sandbox.reset.rlaunchDone')}\n`
+    }
+    return `${t('sandbox.reset.localNothing')}\n`
+  }
+  const containerName = runtime.containerName
+  const image = runtime.image || resolveDockerImage(config)
+  await getRuntimePool().remove(userId)
+  return `${t('sandbox.reset.dockerDone', { container: containerName, image })}\n`
 }
 
 async function formatHelp(ctx: ReplContext): Promise<string> {
@@ -732,7 +771,7 @@ function formatDispatchChainNodes(nodes: ChainTreeNode[]): string[] {
   return lines
 }
 
-async function runUserCommand(rawArgs: string): Promise<string> {
+export async function runUserCommand(rawArgs: string): Promise<string> {
   await rebuildReverseIndex()
   const args = rawArgs.trim().split(/\s+/).filter(Boolean)
   const action = args.shift()
@@ -790,7 +829,7 @@ function truncate(text: string, maxLen: number): string {
   return oneline.slice(0, maxLen - 1) + '…'
 }
 
-async function formatCost(): Promise<string> {
+export async function formatCost(): Promise<string> {
   const now = new Date()
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
   const records: UsageRecord[] = []

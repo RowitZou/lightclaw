@@ -106,6 +106,17 @@ async function deleteCommand(args: string[]): Promise<string> {
   if (!workspace?.folderToken) {
     return `${t('feishuWs.delete.noFolder', { canonical })}\n`
   }
+  // B4: `/admin feishu-drive rm <canonical> --y` skips the token round-trip
+  // (the `--y` gate is the confirmation; B5 polishes the printed preview).
+  // The legacy `--confirm <token>` path is preserved below unchanged so the
+  // old `/feishu-workspace delete` flow and its `admin-delete-workspace`
+  // audit row keep working.
+  if (args.includes('--y')) {
+    const itemCount = await listFolder({ client: getFeishuClient(), folderToken: workspace.folderToken })
+      .then(result => result.items.length)
+      .catch(() => 0)
+    return performWorkspaceDelete(canonical, workspace.folderToken, itemCount)
+  }
   const confirmIdx = args.indexOf('--confirm')
   if (confirmIdx < 0) {
     const itemCount = await listFolder({ client: getFeishuClient(), folderToken: workspace.folderToken })
@@ -131,15 +142,26 @@ async function deleteCommand(args: string[]): Promise<string> {
     pendingDeleteTokens.delete(canonical)
     return `${t('feishuWs.delete.tokenInvalid', { canonical })}\n`
   }
-  const auditResource = { folderToken: workspace.folderToken, itemCount: pending.itemCount }
+  pendingDeleteTokens.delete(canonical)
+  return performWorkspaceDelete(canonical, workspace.folderToken, pending.itemCount)
+}
+
+/** Execute the actual folder delete + identity-binding removal + audit row.
+ *  Shared by the legacy `--confirm <token>` path and the B4 `--y` path so the
+ *  `admin-delete-workspace` audit row is written identically by both. */
+async function performWorkspaceDelete(
+  canonical: string,
+  folderToken: string,
+  itemCount: number,
+): Promise<string> {
+  const auditResource = { folderToken, itemCount }
   try {
-    await deleteFile({ client: getFeishuClient(), token: workspace.folderToken, type: 'folder' })
+    await deleteFile({ client: getFeishuClient(), token: folderToken, type: 'folder' })
   } catch (error) {
     // Feishu rejected the delete (folder gone / permission revoked / scope drift).
     // Keep the identity binding so admin can investigate before we abandon it,
     // and surface the failure in audit jsonl so a later /feishu-workspace orphans
     // sweep can correlate.
-    pendingDeleteTokens.delete(canonical)
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),
       userId: canonical,
@@ -151,7 +173,6 @@ async function deleteCommand(args: string[]): Promise<string> {
     return `${t('feishuWs.delete.failed', { canonical, detail: feishuErrorMessage(error) })}\n`
   }
   await rm(userWorkspacePath(canonical), { force: true })
-  pendingDeleteTokens.delete(canonical)
   await recordFeishuWriteAudit({
     at: new Date().toISOString(),
     userId: canonical,
@@ -159,7 +180,7 @@ async function deleteCommand(args: string[]): Promise<string> {
     resource: auditResource,
     status: 'confirmed',
   })
-  return `${t('feishuWs.delete.done', { canonical, count: pending.itemCount })}\n`
+  return `${t('feishuWs.delete.done', { canonical, count: itemCount })}\n`
 }
 
 async function listWorkspaceFiles(): Promise<Array<{ canonical: string; workspace: UserWorkspace; updated: string }>> {

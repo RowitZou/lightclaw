@@ -51,6 +51,7 @@ describe('ShowSlashCatalog tool', () => {
 
     assert.match(output, /current user is admin/)
     for (const name of [
+      '/admin',
       '/auth',
       '/ceiling',
       '/config',
@@ -68,7 +69,7 @@ describe('ShowSlashCatalog tool', () => {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     assert.doesNotMatch(output, /^\/feedback\s\s/m)
-    assert.equal(commandNames(output).length, 13)
+    assert.equal(commandNames(output).length, 14)
   })
 
   it('formats each entry with description, usage block, advisory, and blank separator', async () => {
