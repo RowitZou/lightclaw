@@ -237,6 +237,49 @@ test('FeishuSender anchor-less synthetic messages keep the create path', async (
   assert.equal(createCalls, 1)
 })
 
+test('FeishuSender never puts a non-om_ id on the reply wire (sender-side backstop)', async () => {
+  // 2026-06-20 dogfood: a post-approval `synthesizeReplayMessage` placeholder
+  // (`replay-<uuid>`) reached `messages/replay-.../reply` → `code=99992354 not
+  // a valid {open_message_id}` → the reply was silently lost. Every upstream
+  // synthetic short-circuit covers ONE leak path; this asserts the sender's
+  // own `om_`-prefix backstop catches any id that slipped through, regardless
+  // of which path minted it. Two shapes that 400 on the reply API:
+  //   (a) synthetic message whose replyAnchorMessageId is itself a fake id
+  //       (a leaked / chained anchor), and
+  //   (b) a non-synthetic message carrying a `replay-` messageId (the flag was
+  //       lost upstream). Both must fall back to im.message.create, not reply.
+  for (const leaked of [
+    { messageId: 'replay-a3f20c8d-5f2e', replyAnchorMessageId: 'replay-a3f20c8d-5f2e', synthetic: true },
+    { messageId: 'replay-a3f20c8d-5f2e', synthetic: false },
+  ] as const) {
+    let repliedTo: string | undefined
+    let createCalls = 0
+    const client = {
+      im: {
+        message: {
+          reply: async (input: { path: { message_id: string } }) => {
+            repliedTo = input.path.message_id
+            return { code: 0, data: { message_id: 'om_replied' } }
+          },
+          create: async () => {
+            createCalls += 1
+            return { code: 0, data: { message_id: 'om_created' } }
+          },
+        },
+        file: { create: async () => null },
+      },
+    } as unknown as FeishuClient
+
+    const sender = new FeishuSender(client, baseConfig)
+    // No threadId — a DM, matching the dogfood incident; create fallback is safe.
+    const message: NormalizedChannelMessage = { ...baseMessage, ...leaked }
+    await sender.sendInteractiveCard(message, { elements: [] })
+
+    assert.equal(repliedTo, undefined, 'a non-om_ id must never hit im.message.reply')
+    assert.equal(createCalls, 1, 'the reply falls back to im.message.create')
+  }
+})
+
 test('FeishuSender retries Feishu rate-limit envelopes on create message', async () => {
   let createCalls = 0
   const client = {

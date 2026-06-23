@@ -60,6 +60,15 @@ function isTopicCreateRefused(err: unknown): err is TopicCreateRefusedError {
   return err instanceof TopicCreateRefusedError
 }
 
+// A Feishu reply target must be a real inbound message id. The open-platform
+// open_message_id shape is `om_...` (the `code=99992354` error literally cites
+// `example {om_da5****dfe}`). Framework-minted placeholders (`replay-<uuid>`,
+// `taskrun-ask-<uuid>`, ...) are never addressable by im.message.reply — see
+// FeishuSender.replyTargetFor for why this is the sender-side backstop.
+function isReplyableMessageId(id: string): boolean {
+  return id.startsWith('om_')
+}
+
 // Send retry coverage: capped exponential backoff that rides out short
 // proxy / TLS blips on the path to open.feishu.cn (observed today: 4-10 min
 // SNI-targeted resets recurring on the corp proxy, kicking in mid-burst and
@@ -782,9 +791,32 @@ export class FeishuSender {
    * im.message.create cannot target a thread and would open a new topic
    * per send. Anchor-less synthetic messages keep forcing the create
    * path by returning undefined.
+   *
+   * Final invariant: `im.message.reply` ONLY accepts a real platform
+   * message id (`om_...`). Every other shape — a framework-minted
+   * `replay-<uuid>` (post-approval `synthesizeReplayMessage`) /
+   * `taskrun-ask-<uuid>` placeholder that reached here because an upstream
+   * path set `synthetic` wrong, or threaded a fake id into
+   * `replyAnchorMessageId` — makes Feishu return `code=99992354 not a valid
+   * {open_message_id}` and the reply is silently lost (2026-06-20 dogfood:
+   * a post-approval replay id hit `messages/replay-.../reply` → 400). The
+   * upstream synthetic short-circuits (this method's `synthetic` branch, the
+   * runner drain anchor's `isSyntheticInterjection` skip) each cover one
+   * leak path; this `om_` check is the sender's own backstop so no single
+   * future synthetic-minting path can put a non-platform id on the reply
+   * wire. A rejected target returns undefined → `sendReplyOrCreate` drops to
+   * `im.message.create` (or, in a topic group with no anchor, the existing
+   * TopicCreateRefused drop — strictly better than a guaranteed 400).
    */
   private replyTargetFor(message: NormalizedChannelMessage): string | undefined {
-    return message.synthetic ? message.replyAnchorMessageId : message.messageId
+    const target = message.synthetic ? message.replyAnchorMessageId : message.messageId
+    if (target && !isReplyableMessageId(target)) {
+      process.stderr.write(
+        `feishu send: non-replyable reply target ${target} (synthetic=${message.synthetic ?? false}); falling back to create\n`,
+      )
+      return undefined
+    }
+    return target
   }
 
   /**
