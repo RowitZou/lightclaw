@@ -3,7 +3,6 @@ import path from 'node:path'
 
 import type { Role } from '../agents/types.js'
 import { safeWriteFile } from '../atomic-write.js'
-import type { LightClawConfig } from '../config.js'
 import { userMemoryRoot } from '../identity/paths.js'
 import {
   relativeMemoryFilename,
@@ -95,29 +94,16 @@ export function sanitizePath(inputPath: string): string {
   return sanitized.length > 0 ? sanitized : 'root'
 }
 
-// Admin escape hatch only. When `paths.memory` is configured, every user's
-// memory tree stays pooled under `<configured>` (an out-of-tree bulk mount);
-// `getMemoryDir` then keys it as `<configured>/<u>`. When it is unset (the
-// default), memory lives inside the user's self-contained root at
-// `users/<u>/memory` via `userMemoryRoot`, so this returns undefined and the
-// caller takes the anchor path.
-export function memoryRoot(config: LightClawConfig): string | undefined {
-  return config.paths.memory || undefined
-}
-
-// Memory is keyed by canonical LightClaw user (Phase 9). The previous
+// Memory lives inside the user's self-contained root at `users/<u>/memory`
+// (the Phase 9 inverted per-user layout, same anchor as sessions / skills /
+// taskruns). Memory is keyed by canonical LightClaw user; the previous
 // cwd-keyed scheme has been retired — see info/dev-plan-overview §1.1.
 // Pass undefined only on the very first init bootstrap, before the
-// REPL/channel runner has resolved the active identity; the bootstrap
-// dir is `_unbound_` and any MemoryRead/Write call hits requireCurrentUserId()
-// first, so it never actually reaches this fallback path.
-export function getMemoryDir(userId: string | undefined, config: LightClawConfig): string {
-  const sanitized = sanitizeUserId(userId)
-  const pooledRoot = memoryRoot(config)
-  if (pooledRoot) {
-    return path.join(pooledRoot, sanitized)
-  }
-  return userMemoryRoot(sanitized)
+// REPL/channel runner has resolved the active identity; the bootstrap dir is
+// `users/_unbound_/memory` and any MemoryRead/Write call hits
+// requireCurrentUserId() first, so it never actually reaches that path.
+export function getMemoryDir(userId: string | undefined): string {
+  return userMemoryRoot(sanitizeUserId(userId))
 }
 
 function sanitizeUserId(userId: string | undefined): string {

@@ -243,7 +243,7 @@ export async function resetSessionContext(input: CommonStateInput): Promise<Sess
 }
 
 /**
- * Per-canonical-user preferences (`<lightclawHome>/identity/per-user/<id>/
+ * Per-canonical-user preferences (`<lightclawHome>/users/<id>/state/
  * preferences.json`) outrank caller-supplied input for `permissionMode`. The
  * caller's value is typically pulled from session meta.json (terminal cli.ts)
  * or the channel strategy default (channel runner.ts); that is correct only as
@@ -348,7 +348,7 @@ async function createResolvedSessionContext(
     sessionsDir: input?.currentUserId
       ? userSessionsRoot(input.currentUserId)
       : resolvedConfig.paths.sessions,
-    memoryDir: getMemoryDir(input?.currentUserId, resolvedConfig),
+    memoryDir: getMemoryDir(input?.currentUserId),
     currentUserId: input?.currentUserId,
     enabledSecrets: input?.currentUserId
       ? loadEnabledSecrets(input.currentUserId)

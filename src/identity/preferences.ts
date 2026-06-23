@@ -6,7 +6,7 @@ import { userPreferencesPath } from './paths.js'
 
 /**
  * Per-canonical-user runtime preferences (`permissionMode`, `model`). Lives
- * next to `permissions.json` in `<lightclawHome>/identity/per-user/<canonical>/`.
+ * next to `permissions.json` in `<lightclawHome>/users/<canonical>/state/`.
  *
  * The motivation is cross-surface alignment: the same identity can drive a
  * terminal session and a Feishu session simultaneously (each owns its own

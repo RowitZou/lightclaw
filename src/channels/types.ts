@@ -230,7 +230,7 @@ export type FeishuChannelConfig = {
     // parks attachments that exceeded the Feishu IM file cap (default 30 MB)
     // and had to fall back to drive upload + share link. Folder is created
     // lazily on first overflow and persisted to
-    // `identity/per-user/<canonical>/feishu-uploads.json`; subsequent sends
+    // `users/<canonical>/state/feishu-uploads.json`; subsequent sends
     // reuse the same token. Same trust-the-disk semantics as workspace root
     // and user workspace — no probe-recreate.
     uploadsFolderName?: string

@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
 import { setLang } from '../i18n/index.js'
-import { userConfigPath } from '../identity/paths.js'
+import { getMemoryDir } from '../memory/auto-memory.js'
+import { userConfigPath, userMemoryRoot } from '../identity/paths.js'
 import { createUser, setUserPermissionCeiling } from '../identity/store.js'
 import { loadIdentityPreferences } from '../identity/preferences.js'
 import { loadIdentityRules } from '../permission/storage.js'
@@ -646,3 +647,23 @@ function clusterConfig(): LightClawConfig {
     },
   } as unknown as LightClawConfig
 }
+
+// Regression (§十 directory refactor): memory must land in the per-user root
+// `users/<u>/memory` like sessions / skills / taskruns — NOT pooled under
+// `<home>/memory/<u>`. Pre-fix, config.ts hard-set paths.memory to
+// `<home>/memory` and getMemoryDir returned `path.join(paths.memory, <u>)`, so
+// every user's memory pooled at home root. The pooled branch + paths.memory
+// field are now deleted; getMemoryDir always routes to userMemoryRoot. This
+// assertion fails on the old code (it returned `<home>/memory/alice`).
+describe('memory dir routing (§十 per-user inverted layout)', () => {
+  it('routes a bound user to users/<u>/memory, not the pooled <home>/memory/<u>', () => {
+    const dir = getMemoryDir('alice')
+    assert.equal(dir, userMemoryRoot('alice'))
+    assert.ok(dir.endsWith(path.join('users', 'alice', 'memory')))
+    assert.ok(!dir.includes(`${path.sep}memory${path.sep}alice`))
+  })
+
+  it('routes the unbound bootstrap to users/_unbound_/memory', () => {
+    assert.equal(getMemoryDir(undefined), userMemoryRoot('_unbound_'))
+  })
+})

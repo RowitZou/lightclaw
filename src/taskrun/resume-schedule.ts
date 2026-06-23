@@ -139,7 +139,7 @@ async function buildOwnerResumeContext(
     cwd,
     model,
     sessionsDir: userSessionsRoot(ownerCanonicalUser),
-    memoryDir: getMemoryDir(ownerCanonicalUser, config),
+    memoryDir: getMemoryDir(ownerCanonicalUser),
     currentUserId: ownerCanonicalUser,
     sessionId,
     channel: 'feishu',

@@ -248,7 +248,7 @@ async function purgeUserData(name: string): Promise<void> {
   // we never drift from getMemoryDir's keying. (Pre-fix code hardcoded
   // ~/.lightclaw/memory/<name> and silently no-op'd because the actual dir
   // had a path-resolved cwd suffix in front.)
-  await rm(getMemoryDir(name, getConfig()), { recursive: true, force: true })
+  await rm(getMemoryDir(name), { recursive: true, force: true })
 
   // Sessions now live under the per-user root (`users/<u>/sessions/...`), so
   // the whole subtree is the user's — no flat-dir enumeration or per-session

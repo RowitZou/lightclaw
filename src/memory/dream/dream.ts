@@ -660,7 +660,7 @@ export async function releaseConsolidationLocksOnShutdown(
     return
   }
   await Promise.allSettled(
-    users.map(user => releaseConsolidationLockOwnership(getMemoryDir(user, config))),
+    users.map(user => releaseConsolidationLockOwnership(getMemoryDir(user))),
   )
 }
 

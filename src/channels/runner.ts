@@ -2087,7 +2087,7 @@ export class ChannelRunner {
       model: applyCredentialDegrade(resolveRoleModel(getMainRole(), config), config),
       config,
       sessionsDir: userSessionsRoot(userId),
-      memoryDir: getMemoryDir(userId, config),
+      memoryDir: getMemoryDir(userId),
       currentUserId: userId,
       sessionId,
       permissionMode: prefs.permissionMode ?? config.permissionMode,

@@ -265,7 +265,6 @@ export type ProviderRetryConfig = {
 export type PathsConfig = {
   sessions: string
   workspace: string
-  memory: string
   apiLogs: string
   audit: string
   logs: string
@@ -1411,7 +1410,6 @@ export function getConfig(): LightClawConfig {
     fileConfig.memory?.curator,
   ) ?? {}
   const curator = resolveCuratorConfig(curatorRaw)
-  const memoryDir = path.resolve(path.join(lightclawHome(), 'memory'))
   const memoryRecallEnabled =
     parseBoolean(process.env.LIGHTCLAW_MEMORY_RECALL_ENABLED) ??
     pickWithLegacy(
@@ -1670,7 +1668,6 @@ export function getConfig(): LightClawConfig {
     paths: {
       sessions: resolveSessionsDir(),
       workspace: resolveWorkspaceRoot(),
-      memory: memoryDir,
       apiLogs: apiLogsDirRaw,
       audit: resolveAuditDir(),
       logs: resolveLogsDir(),

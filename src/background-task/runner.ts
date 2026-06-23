@@ -127,7 +127,7 @@ export async function runBackgroundTaskFire(input: {
       model,
       config,
       sessionsDir: userSessionsRoot(input.task.ownerCanonicalUser),
-      memoryDir: getMemoryDir(input.task.ownerCanonicalUser, config),
+      memoryDir: getMemoryDir(input.task.ownerCanonicalUser),
       currentUserId: input.task.ownerCanonicalUser,
       // No enabledSecrets: a background fire is a dispatched worker, and
       // runDispatchedAgent's childCtx strips secrets for every dispatched
