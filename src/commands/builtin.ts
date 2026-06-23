@@ -239,14 +239,17 @@ function buildBuiltinCommands(): ReplCommand[] {
     agentAdvisory:
       'When the user\'s task needs an API token, password, or credential ' +
       'you do not already have access to (GitHub push, HuggingFace download, ' +
-      'third-party API calls). After they set + enable a secret, you can ' +
-      'reference it as `$NAME` in Bash commands.',
+      'third-party API calls). After they set a secret, some tools consume the ' +
+      'stored value directly; use /secret enable only when you need to reference ' +
+      'it as `$NAME` in Bash commands. BrainppCluster reads ' +
+      'BRAINPP_ACCESS_KEY / BRAINPP_SECRET_KEY directly after /secret set.',
     agentUsage: [
       '/secret list                  List stored secrets with mask + enabled flag',
       '/secret status [NAME]         Inspect one secret, or all if NAME omitted',
       '/secret set <NAME> <VALUE>    Store a secret. NAME must match ^[A-Z][A-Z0-9_]{0,63}$.',
       '                                VALUE is taken verbatim to end of line (may contain spaces, $, quotes).',
       '/secret enable <NAME>         Activate injection of $NAME in Bash from next turn',
+      '                                Not needed for BrainppCluster BRAINPP_ACCESS_KEY / BRAINPP_SECRET_KEY.',
       '/secret disable <NAME>        Deactivate without removing the value',
       '/secret remove <NAME>         Delete the stored entry',
     ].join('\n'),

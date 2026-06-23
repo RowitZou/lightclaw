@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, it } from 'node:test'
 
 import type { LightClawConfig } from '../config.js'
+import { setLightclawHomeOverride } from '../paths.js'
 import type { ExecInput, ExecResult, Runtime } from '../runtime/index.js'
+import { setUserSecret } from '../secrets/store.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
+import type { ToolCallContext } from '../tool.js'
 import { matchToolContent } from '../permission/matchers.js'
 import {
   brainppClusterTool,
+  BRAINPP_ACCESS_KEY_SECRET,
+  BRAINPP_SECRET_KEY_SECRET,
   type CapacityOutput,
   type ClusterJobOutput,
   CLUSTER_READ_OPERATIONS,
@@ -43,6 +52,57 @@ describe('cluster operation read/write classification', () => {
   })
 })
 
+describe('BrainppCluster credentials', () => {
+  it('rejects before CLI when no user identity is active', async () => {
+    let execCalled = false
+    await assert.rejects(
+      () => brainppClusterTool.call({ operation: 'get', job: 'demo-1' }, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => {
+          execCalled = true
+          return { stdout: '', stderr: '', exitCode: 0 }
+        }),
+      }),
+      /no LightClaw user identity is active/,
+    )
+    assert.equal(execCalled, false)
+  })
+
+  it('rejects before CLI when current user has no Brain++ credentials', async () => {
+    let execCalled = false
+    await assert.rejects(
+      () => callCluster({ operation: 'get', job: 'demo-1' }, {
+        cwd: '/workspace',
+        abortSignal: new AbortController().signal,
+        runtime: fakeRuntime(async () => {
+          execCalled = true
+          return { stdout: '', stderr: '', exitCode: 0 }
+        }),
+      }, { credentials: false }),
+      /missing BRAINPP_ACCESS_KEY, BRAINPP_SECRET_KEY/,
+    )
+    assert.equal(execCalled, false)
+  })
+
+  it('injects current user Brain++ credentials into runtime env without leaking into the command', async () => {
+    let seen: ExecInput | undefined
+    const result = await callCluster({ operation: 'get', job: 'demo-1' }, {
+      cwd: '/workspace',
+      abortSignal: new AbortController().signal,
+      runtime: fakeRuntime(async input => {
+        seen = input
+        return { stdout: 'phase: Running\n', stderr: '', exitCode: 0 }
+      }),
+    })
+
+    assert.equal(seen?.env?.[BRAINPP_ACCESS_KEY_SECRET], 'ak-test-secret')
+    assert.equal(seen?.env?.[BRAINPP_SECRET_KEY_SECRET], 'sk-test-secret')
+    assert.doesNotMatch(seen?.command ?? '', /ak-test-secret|sk-test-secret|BRAINPP_ACCESS_KEY|BRAINPP_SECRET_KEY/)
+    assert.doesNotMatch(formatClusterJobOutput(result.output), /ak-test-secret|sk-test-secret/)
+  })
+})
+
 describe('BrainppCluster capacity', () => {
   it('selects the allocated GPU lane and normalizes memory units', () => {
     const output = parseCapacity(JSON.stringify({
@@ -75,7 +135,7 @@ describe('BrainppCluster capacity', () => {
 describe('BrainppCluster logs', () => {
   it('does not call logs while the job is still starting', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'logs',
       job: 'demo-123',
       tailLines: 50,
@@ -105,7 +165,7 @@ describe('BrainppCluster phase parsing', () => {
     "{'active': 0, 'succeeded': 0, 'failed': 0, 'created_failed': 0, 'pending': 1, 'stopped': 0}\n"
 
   it('does not misread an Inqueue job as SUCCEEDED from the replica-count dict', async () => {
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'get',
       job: 'demo-q',
     }, {
@@ -121,7 +181,7 @@ describe('BrainppCluster phase parsing', () => {
 
   it('treats a queued job as still starting and never fetches logs', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'logs',
       job: 'demo-q',
       tailLines: 50,
@@ -143,7 +203,7 @@ describe('BrainppCluster phase parsing', () => {
     const runningStdout =
       "06-07 22:39:38 [INFO] cluster demo-r (showname=demo-r): Running\n" +
       "06-07 22:39:38 [INFO]   |- task t0: 1 replicas {'active': 1, 'succeeded': 0, 'failed': 0}\n"
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'logs',
       job: 'demo-r',
       tailLines: 50,
@@ -177,7 +237,7 @@ describe('BrainppCluster capacity group resolution', () => {
         queue('ailab-other-other-gpu', { 'nvidia.com/gpu': '8', cpu: '64', memory: '100Gi' }, { 'nvidia.com/gpu': '1', cpu: '4', memory: '10Gi' }),
       ],
     })
-    const result = await brainppClusterTool.call({ operation: 'capacity' }, {
+    const result = await callCluster({ operation: 'capacity' }, {
       cwd: '/workspace',
       abortSignal: new AbortController().signal,
       config: { runtime: { clusterSettings: { namespace: 'ailab-test' } } } as unknown as LightClawConfig,
@@ -230,7 +290,7 @@ describe('BrainppCluster cpu millicores', () => {
 
 describe('BrainppCluster output redaction', () => {
   it('redacts the underlying CLI name from passthrough output', async () => {
-    const result = await brainppClusterTool.call({ operation: 'get', job: 'demo-1' }, {
+    const result = await callCluster({ operation: 'get', job: 'demo-1' }, {
       cwd: '/workspace',
       abortSignal: new AbortController().signal,
       runtime: fakeRuntime(async () => ({ stdout: '', stderr: 'rjob: error: job not found', exitCode: 1 })),
@@ -250,7 +310,7 @@ describe('BrainppCluster output redaction', () => {
 describe('BrainppCluster submit', () => {
   it('builds a submit command with first-line flags, inferred distributed flags, and mounts', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'submit',
       name: 'demo-train',
       image: 'registry.example.com/demo:latest',
@@ -323,7 +383,7 @@ describe('BrainppCluster submit', () => {
 
   it('does not infer distributed flags for single-replica jobs and defaults normal priority to 1', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'submit',
       name: 'demo-single',
       image: 'image:tag',
@@ -351,7 +411,7 @@ describe('BrainppCluster submit', () => {
 
   it('does not pass priority for idle-lane jobs', async () => {
     const commands: string[] = []
-    await brainppClusterTool.call({
+    await callCluster({
       operation: 'submit',
       name: 'demo-idle',
       image: 'image:tag',
@@ -376,7 +436,7 @@ describe('BrainppCluster submit', () => {
 
   it('does not emit namespace or charged group unless explicitly provided', async () => {
     const commands: string[] = []
-    await brainppClusterTool.call({
+    await callCluster({
       operation: 'submit',
       name: 'demo-defaults',
       image: 'image:tag',
@@ -398,7 +458,7 @@ describe('BrainppCluster submit', () => {
 
   it('fails fast when /workspace cannot be translated to a configured GPFS mount', async () => {
     await assert.rejects(
-      () => brainppClusterTool.call({
+      () => callCluster({
         operation: 'submit',
         name: 'demo-train',
         image: 'registry.example.com/demo:latest',
@@ -425,7 +485,7 @@ describe('BrainppCluster delete', () => {
   it('requires a one-shot virtual confirmation before deleting a job', async () => {
     const commands: string[] = []
     const asks: Array<{ toolName: string; input: unknown }> = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'delete',
       job: 'demo-123',
     } as any, {
@@ -453,7 +513,7 @@ describe('BrainppCluster delete', () => {
 
   it('does not delete when the virtual confirmation is denied', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'delete',
       job: 'demo-123',
     } as any, {
@@ -475,7 +535,7 @@ describe('BrainppCluster delete', () => {
 describe('BrainppCluster stop', () => {
   it('stops a job with rjob stop', async () => {
     const commands: string[] = []
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'stop',
       job: 'demo-123',
     } as any, {
@@ -519,7 +579,7 @@ describe('BrainppCluster submit extraArgs guard', () => {
       '--group=other',
     ]) {
       await assert.rejects(
-        () => brainppClusterTool.call({
+        () => callCluster({
           operation: 'submit',
           name: 'demo',
           image: 'image:tag',
@@ -541,7 +601,7 @@ describe('BrainppCluster submit extraArgs guard', () => {
 describe('BrainppCluster submit mounts', () => {
   it('rejects extra mount paths outside configured GPFS prefixes with a clean, leak-free message', async () => {
     await assert.rejects(
-      () => brainppClusterTool.call({
+      () => callCluster({
         operation: 'submit',
         name: 'demo',
         image: 'image:tag',
@@ -570,7 +630,7 @@ describe('BrainppCluster submit mounts', () => {
 
 describe('BrainppCluster submit output redaction', () => {
   it('does not leak the resolved gpfs workspace path to the model', async () => {
-    const result = await brainppClusterTool.call({
+    const result = await callCluster({
       operation: 'submit',
       name: 'demo',
       image: 'image:tag',
@@ -631,6 +691,36 @@ function fakeRuntime(
     isRunning: () => true,
     isAvailable: async () => ({ ok: true }),
     exec,
+  }
+}
+
+async function callCluster(
+  input: Parameters<typeof brainppClusterTool.call>[0],
+  context: ToolCallContext,
+  options: { credentials?: boolean; userId?: string } = {},
+) {
+  const userId = options.userId ?? 'alice'
+  const home = mkdtempSync(path.join(tmpdir(), 'lightclaw-cluster-job-'))
+  setLightclawHomeOverride(home)
+  try {
+    if (options.credentials !== false) {
+      setUserSecret(userId, BRAINPP_ACCESS_KEY_SECRET, 'ak-test-secret')
+      setUserSecret(userId, BRAINPP_SECRET_KEY_SECRET, 'sk-test-secret')
+    }
+    const session = createSessionContext({
+      config: context.config,
+      cwd: context.cwd,
+      model: 'fake-model',
+      sessionsDir: path.join(home, 'sessions'),
+      memoryDir: path.join(home, 'memory'),
+      currentUserId: userId,
+      permissionMode: 'default',
+      permissionCeiling: 'bypassPermissions',
+      permissionApprover: null,
+    })
+    return await runWithSessionContext(session, () => brainppClusterTool.call(input, context))
+  } finally {
+    setLightclawHomeOverride(undefined)
   }
 }
 

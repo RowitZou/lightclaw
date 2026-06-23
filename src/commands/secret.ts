@@ -1,5 +1,6 @@
 import { appendSecretOpAudit, type SecretOp } from '../audit/secret-ops.js'
 import { t } from '../i18n/index.js'
+import { isBrainppCredentialSecret } from '../secrets/known.js'
 import {
   listUserSecretMetadata,
   loadUserSecrets,
@@ -44,7 +45,8 @@ export async function runSecretCommand(
         const name = validateSecretName(match[1])
         const result = setUserSecret(userId, name, match[2])
         await auditSecretOp(userId, result.replaced ? 'set-replace' : 'set', name)
-        return `${t('secret.saved', {
+        const key = isBrainppCredentialSecret(result.name) ? 'secret.savedBrainpp' : 'secret.saved'
+        return `${t(key, {
           name: result.name,
           replaced: result.replaced ? 'yes' : 'no',
           length: result.metadata.length,

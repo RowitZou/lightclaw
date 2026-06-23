@@ -101,6 +101,7 @@ describe('ShowSlashCatalog tool', () => {
 
     assert.match(output, /^    \/secret set <NAME> <VALUE>/m)
     assert.match(output, /^    \/secret enable <NAME>/m)
+    assert.match(output, /Not needed for BrainppCluster BRAINPP_ACCESS_KEY \/ BRAINPP_SECRET_KEY/)
     // Bug 6 regression: bare /model lists selectable models, so the catalog
     // must document that form — not just `/model <name>` — or the agent can
     // neither name the available models nor tell the user how to list them.

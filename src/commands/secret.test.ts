@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
+import { BRAINPP_ACCESS_KEY_SECRET } from '../secrets/known.js'
 import { loadUserSecrets } from '../secrets/store.js'
 import { resolveAuditDir } from '../config.js'
 import { setLang } from '../i18n/index.js'
@@ -40,6 +41,13 @@ describe('/secret command', () => {
     assert.match(status, new RegExp(`GH_TOKEN stored=yes enabled=no length=${value.length}`))
     assert.equal(status.includes(value), false)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, value)
+  })
+
+  it('does not tell users to enable Brain++ credential secrets after set', async () => {
+    const saved = await runSecretCommand(`set ${BRAINPP_ACCESS_KEY_SECRET} ak-value`, { userId: 'alice' })
+    assert.match(saved, /BrainppCluster reads this secret directly/)
+    assert.doesNotMatch(saved, /\/secret enable/)
+    assert.equal(loadUserSecrets('alice')[BRAINPP_ACCESS_KEY_SECRET].enabled, false)
   })
 
   it('enables, disables, and retains the stored value', async () => {
@@ -176,7 +184,9 @@ describe('/secret command', () => {
     assert.ok(command)
     assert.equal(command.channelOnly, true)
     assert.match(command.agentAdvisory ?? '', /API token/)
+    assert.match(command.agentAdvisory ?? '', /BrainppCluster reads/)
     assert.match(command.agentUsage ?? '', /\/secret enable <NAME>/)
+    assert.match(command.agentUsage ?? '', /Not needed for BrainppCluster/)
     assert.equal(terminalRegistry.find('/secret'), undefined)
   })
 })

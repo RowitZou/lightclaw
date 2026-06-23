@@ -1,7 +1,9 @@
 import { z } from 'zod'
 
 import { getConfig } from '../config.js'
-import { getPermissionApprover, getPermissionMode } from '../state.js'
+import { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
+import { loadUserSecrets } from '../secrets/store.js'
+import { getCurrentUserId, getPermissionApprover, getPermissionMode } from '../state.js'
 import { buildGpfsMountStringFromRules } from '../runtime/gpfs-mount-rules.js'
 import { buildTool, type Tool, type ToolCallContext } from '../tool.js'
 
@@ -9,6 +11,8 @@ const COMMAND_PREFIX = 'source /etc/profile.d/ssh-init.sh >/dev/null 2>&1 || tru
 const MAX_TEXT_CHARS = 30_000
 const CAPACITY_RETRIES = 5
 const MIN_QUEUE_JSON_BYTES = 200
+
+export { BRAINPP_ACCESS_KEY_SECRET, BRAINPP_SECRET_KEY_SECRET } from '../secrets/known.js'
 
 const capacityInput = z.object({
   operation: z.literal('capacity'),
@@ -535,13 +539,55 @@ async function execClusterCommand(
   context: ToolCallContext,
   options: { timeoutMs?: number; maxBufferBytes?: number } = {},
 ) {
+  const env = resolveBrainppCredentialEnv()
   return await context.runtime.exec({
     command: `${COMMAND_PREFIX}${command}`,
     cwd: context.runtime.workspaceRoot,
+    env,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxBufferBytes: options.maxBufferBytes ?? 1024 * 1024,
     abortSignal: context.abortSignal,
   })
+}
+
+export function resolveBrainppCredentialEnv(): Record<string, string> {
+  const userId = safeCurrentUserId()
+  if (!userId) {
+    throw new Error(
+      'Brain++ credentials are not configured for this session: no LightClaw user identity is active. ' +
+      `Pair or bind the sender first, then set ${BRAINPP_ACCESS_KEY_SECRET} and ${BRAINPP_SECRET_KEY_SECRET}.`,
+    )
+  }
+
+  const secrets = loadUserSecrets(userId)
+  const accessKey = secrets[BRAINPP_ACCESS_KEY_SECRET]?.value
+  const secretKey = secrets[BRAINPP_SECRET_KEY_SECRET]?.value
+  if (!accessKey || !secretKey) {
+    const missing = [
+      accessKey ? null : BRAINPP_ACCESS_KEY_SECRET,
+      secretKey ? null : BRAINPP_SECRET_KEY_SECRET,
+    ].filter((name): name is string => Boolean(name))
+    throw new Error(
+      `Brain++ credentials are not configured for user "${userId}"` +
+      (missing.length ? `; missing ${missing.join(', ')}` : '') +
+      `. Set them with /secret set ${BRAINPP_ACCESS_KEY_SECRET} <ak> and ` +
+      `/secret set ${BRAINPP_SECRET_KEY_SECRET} <sk>, then retry. ` +
+      'You do not need to /secret enable them; BrainppCluster reads them directly.',
+    )
+  }
+
+  return {
+    [BRAINPP_ACCESS_KEY_SECRET]: accessKey,
+    [BRAINPP_SECRET_KEY_SECRET]: secretKey,
+  }
+}
+
+function safeCurrentUserId(): string | undefined {
+  try {
+    return getCurrentUserId()
+  } catch {
+    return undefined
+  }
 }
 
 function buildSubmitCommand(

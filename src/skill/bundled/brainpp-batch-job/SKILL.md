@@ -54,6 +54,15 @@ Your `/workspace` is **auto-mounted into every job** at the same `/workspace` pa
 
 Drive everything through these operations — don't hand-build cluster commands in a shell. Use it for batch work: training, evaluation, or anything heavier or longer than a quick step you'd run yourself.
 
+## Credentials
+
+`BrainppCluster` automatically runs under the current LightClaw user's Brain++ credentials. If the tool says credentials are missing, tell the user to configure:
+
+- `/secret set BRAINPP_ACCESS_KEY <ak>`
+- `/secret set BRAINPP_SECRET_KEY <sk>`
+
+Do not ask the user to paste AK/SK into ordinary chat, memory, skill text, job `env`, or command arguments. Do not work around this with Bash or hand-written `rjob` commands; the tool injects the credentials only for the cluster CLI process and keeps them out of model-visible command/output surfaces.
+
 ## Posture
 
 - **Scope to the request first** (see *Scope to the request*), and let what's asked set how you carry it:
