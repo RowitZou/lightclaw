@@ -75,15 +75,17 @@ describe('/feishu-workspace admin slash', () => {
     assert.match(out, /orphanFld\s+ghost/)
   })
 
-  it('delete asks for confirm token before actually deleting', async () => {
+  it('delete previews + requires --y before actually deleting', async () => {
     await seedRoot('rootFld')
     await seedUserWorkspace('alice', 'aliceFld', 'rootFld')
     const preview = await runFeishuWorkspaceCommand('delete alice')
-    const tokenMatch = preview.match(/--confirm (\w+)/)
-    assert.ok(tokenMatch, 'preview should include a confirm token')
-    assert.deepEqual(driveState.deleted, [], 'no delete should fire before confirm')
+    // B5: preview lists the folder + item count and tells the user to re-run
+    // with --y; no token round-trip, no delete fires.
+    assert.match(preview, /aliceFld/)
+    assert.match(preview, /--y/)
+    assert.deepEqual(driveState.deleted, [], 'no delete should fire before --y')
 
-    const done = await runFeishuWorkspaceCommand(`delete alice --confirm ${tokenMatch![1]}`)
+    const done = await runFeishuWorkspaceCommand('delete alice --y')
     assert.match(done, /Deleted Feishu workspace for "alice"/)
     assert.deepEqual(driveState.deleted, ['aliceFld'])
 
@@ -93,22 +95,11 @@ describe('/feishu-workspace admin slash', () => {
     assert.equal(admin.status, 'confirmed')
   })
 
-  it('delete rejects bogus / expired confirm tokens', async () => {
-    await seedRoot('rootFld')
-    await seedUserWorkspace('alice', 'aliceFld', 'rootFld')
-    await runFeishuWorkspaceCommand('delete alice') // generate a token
-    const out = await runFeishuWorkspaceCommand('delete alice --confirm DEADBEEF')
-    assert.match(out, /missing or expired/)
-    assert.deepEqual(driveState.deleted, [])
-  })
-
   it('delete records a failed audit row when Feishu rejects the delete', async () => {
     await seedRoot('rootFld')
     await seedUserWorkspace('alice', 'aliceFld', 'rootFld')
     driveState.deleteError = new Error('Feishu API error 99991663: ScopeAccessDenied')
-    const preview = await runFeishuWorkspaceCommand('delete alice')
-    const tokenMatch = preview.match(/--confirm (\w+)/)!
-    const out = await runFeishuWorkspaceCommand(`delete alice --confirm ${tokenMatch[1]}`)
+    const out = await runFeishuWorkspaceCommand('delete alice --y')
     assert.match(out, /Failed to delete/)
     assert.match(out, /ScopeAccessDenied/)
 

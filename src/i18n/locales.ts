@@ -17,6 +17,23 @@ export const LOCALES = {
     'common.error.noActiveIdentity': '当前没有可用的 LightClaw 身份。',
     'common.usage': '用法：{usage}',
 
+    // ---- --y two-step confirmation (design F.3b) ----
+    'confirm.previewWrapper': '以上操作不可撤销。确认请在原命令末尾追加 --y。',
+    'confirm.endpoint.rm':
+      '将删除 endpoint "{name}"，并级联删除引用它的 backend 模型：{models}。',
+    'confirm.endpoint.rmNoModels': '将删除 endpoint "{name}"（没有 backend 模型引用它）。',
+    'confirm.key.rm':
+      '将删除 key "{name}"，并断开引用它的 endpoint：{endpoints}。',
+    'confirm.workspace.set': '将把你的工作目录迁移到：{path}。',
+    'confirm.workspace.reset': '将把你的工作目录恢复为默认（回落 admin 配置）。',
+    'confirm.data.import': '将用 {src} 覆盖你已有的记忆 / 数据。',
+    'confirm.rule.rmAll': '将删除你全部 {count} 条权限规则。',
+    'confirm.user.rm': '将删除用户 "{name}"{purge}。',
+    'confirm.user.rmPurge': '（连同其数据一并清除）',
+    'confirm.sandbox.reset': '将清除并重建当前沙箱运行时（丢弃 scratch，保留 workspace）。',
+    'confirm.feishuDrive.rm':
+      '将删除 "{canonical}" 的飞书云空间目录（folderToken: {token}，直接子项：{count}）。',
+
     // ---- Banner ----
     'banner.console': 'LightClaw · 管理控制台（{name}）',
     'banner.consoleAnon': 'LightClaw · 管理控制台',
@@ -168,6 +185,7 @@ export const LOCALES = {
     'mode.exceedCeiling': '模式 {mode} 超过你的 ceiling {ceiling}。',
     'mode.set': '已切换模式：{mode}',
     'mode.reset': '已清除你的模式选择，将回落到默认模式。',
+    'mode.reset.fellBack': '已清除你的模式选择，回落到 admin / 默认模式：{value}。',
     'mode.read.desc': '只读，禁止写 / 执行',
     'mode.ask.desc': '写 / 执行前确认（默认）',
     'mode.auto.desc': '写文件 + 联网静默；命令仍询问',
@@ -187,6 +205,7 @@ export const LOCALES = {
     'model.unknown': '未知模型：{name}',
     'model.set': '已切换模型：{name}',
     'model.reset': '已清除你的模型选择，将回落到默认模型。',
+    'model.reset.fellBack': '已清除你的模型选择，回落到 admin / 默认模型：{value}。',
     'model.clearCache.notRegistered': '当前模型 "{name}" 未注册。',
     'model.clearCache.cleared': '已清除 {name}（{endpoint} -> {upstream}）的能力缓存{suffix}。',
     'model.clearCache.noEntry': '（无现有条目）',
@@ -681,6 +700,7 @@ export const LOCALES = {
     'config.lang.current': '当前界面语言：{lang}',
     'config.lang.set': '已切换界面语言：{lang}',
     'config.lang.reset': '已清除你的语言选择，将回落到默认语言。',
+    'config.lang.reset.fellBack': '已清除你的语言选择，回落到 admin / 默认语言：{value}。',
     'config.lang.invalid': '未知语言：{input}。可选：cn / en',
     // ---- /config rule ----
     'config.rule.usage': '用法：/config rule [list | add <pattern> [--deny] | rm <n>|all]',
@@ -781,7 +801,7 @@ export const LOCALES = {
     'feishuWs.orphans.notInitialized': '飞书云空间根目录尚未初始化。',
     'feishuWs.orphans.empty': '没有孤立的飞书云空间目录。',
     'feishuWs.orphans.header': 'orphan folderToken              name',
-    'feishuWs.delete.usage': '用法：/feishu-workspace delete <canonical> [--confirm <token>]',
+    'feishuWs.delete.usage': '用法：/feishu-workspace delete <canonical> --y',
     'feishuWs.delete.noFolder': '没有记录 "{canonical}" 的飞书云空间目录。',
     'feishuWs.delete.preview':
       '预览删除 "{canonical}" 的飞书云空间：\n' +
@@ -828,6 +848,23 @@ export const LOCALES = {
     'common.error.userOnly': '{name} is user-only (admins are recipients, not senders).',
     'common.error.noActiveIdentity': 'No active LightClaw identity.',
     'common.usage': 'Usage: {usage}',
+
+    // ---- --y two-step confirmation (design F.3b) ----
+    'confirm.previewWrapper': 'This action cannot be undone. Re-run the same command with --y to confirm.',
+    'confirm.endpoint.rm':
+      'This will remove endpoint "{name}" and cascade-remove the backend models referencing it: {models}.',
+    'confirm.endpoint.rmNoModels': 'This will remove endpoint "{name}" (no backend models reference it).',
+    'confirm.key.rm':
+      'This will remove key "{name}" and break the endpoints referencing it: {endpoints}.',
+    'confirm.workspace.set': 'This will migrate your workspace directory to: {path}.',
+    'confirm.workspace.reset': 'This will restore your workspace directory to the default (falls back to the admin config).',
+    'confirm.data.import': 'This will overwrite your existing memory / data with {src}.',
+    'confirm.rule.rmAll': 'This will remove all {count} of your permission rules.',
+    'confirm.user.rm': 'This will remove user "{name}"{purge}.',
+    'confirm.user.rmPurge': ' (and purge their data)',
+    'confirm.sandbox.reset': 'This will wipe and respawn the current sandbox runtime (drops scratch, keeps workspace).',
+    'confirm.feishuDrive.rm':
+      'This will delete the Feishu workspace folder for "{canonical}" (folderToken: {token}, direct items: {count}).',
 
     // ---- Banner ----
     'banner.console': 'LightClaw · admin console ({name})',
@@ -979,6 +1016,7 @@ export const LOCALES = {
     'mode.exceedCeiling': 'mode {mode} exceeds your ceiling {ceiling}.',
     'mode.set': 'mode: {mode}',
     'mode.reset': 'Cleared your mode choice; falling back to the default mode.',
+    'mode.reset.fellBack': 'Cleared your mode choice; falling back to the admin/default mode: {value}.',
     'mode.read.desc': 'read-only; writes & execution blocked',
     'mode.ask.desc': 'confirms writes / execution (default)',
     'mode.auto.desc': 'writes + web fetch silent; commands still ask',
@@ -998,6 +1036,7 @@ export const LOCALES = {
     'model.unknown': 'unknown model: {name}',
     'model.set': 'model: {name}',
     'model.reset': 'Cleared your model choice; falling back to the default model.',
+    'model.reset.fellBack': 'Cleared your model choice; falling back to the admin/default model: {value}.',
     'model.clearCache.notRegistered': 'Current model "{name}" is not registered.',
     'model.clearCache.cleared': 'Cleared capability cache for {name} ({endpoint} -> {upstream}){suffix}.',
     'model.clearCache.noEntry': ' (no existing entry)',
@@ -1492,6 +1531,7 @@ export const LOCALES = {
     'config.lang.current': 'current UI language: {lang}',
     'config.lang.set': 'UI language: {lang}',
     'config.lang.reset': 'Cleared your language choice; falling back to the default language.',
+    'config.lang.reset.fellBack': 'Cleared your language choice; falling back to the admin/default language: {value}.',
     'config.lang.invalid': 'Unknown language: {input}. Try: cn / en',
     // ---- /config rule ----
     'config.rule.usage': 'Usage: /config rule [list | add <pattern> [--deny] | rm <n>|all]',
@@ -1592,7 +1632,7 @@ export const LOCALES = {
     'feishuWs.orphans.notInitialized': 'Feishu cloud workspace root is not initialized.',
     'feishuWs.orphans.empty': 'No orphan Feishu workspace folders.',
     'feishuWs.orphans.header': 'orphan folderToken              name',
-    'feishuWs.delete.usage': 'Usage: /feishu-workspace delete <canonical> [--confirm <token>]',
+    'feishuWs.delete.usage': 'Usage: /feishu-workspace delete <canonical> --y',
     'feishuWs.delete.noFolder': 'No Feishu workspace folder recorded for "{canonical}".',
     'feishuWs.delete.preview':
       'Preview delete Feishu workspace for "{canonical}":\n' +

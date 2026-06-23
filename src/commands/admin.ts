@@ -20,6 +20,7 @@ import { expandHomePath } from '../paths.js'
 
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { parseEndpointType } from './config.js'
+import { requireConfirm } from './confirm.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 
 // ── /admin <noun> [verb] — admin-only system hub (PR5.9 B4) ──────────────────
@@ -75,7 +76,7 @@ export async function runAdminCommand(
     case 'ceiling':
       return runCeilingCommand(rest)
     case 'sandbox':
-      return runSandboxCommand(rest, ctx.config)
+      return runAdminSandbox(restParts, ctx.config)
     case 'feishu-drive':
       return runAdminFeishuDrive(restParts)
 
@@ -102,7 +103,18 @@ function runAdminUser(parts: string[]): Promise<string> {
     return runUserCommand('list')
   }
   if (verb === 'rm' || verb === 'remove') {
-    return runUserCommand(`remove ${parts.slice(1).join(' ')}`.trim())
+    // --y gate (design F.3b): deleting a user is destructive.
+    const rmArgs = parts.slice(1)
+    const name = rmArgs.find(p => !p.startsWith('--')) ?? ''
+    if (!name) {
+      return Promise.resolve(`${t('admin.user.usage')}\n`)
+    }
+    const purge = rmArgs.includes('--purge') ? t('confirm.user.rmPurge') : ''
+    const gate = requireConfirm(rmArgs, {
+      preview: t('confirm.user.rm', { name, purge }),
+    })
+    if (!gate.confirmed) return Promise.resolve(gate.message)
+    return runUserCommand(`remove ${gate.rest.join(' ')}`.trim())
   }
   if (verb === 'unlink') {
     return runUserCommand(`unlink ${parts.slice(1).join(' ')}`.trim())
@@ -124,6 +136,20 @@ function runAdminPairing(parts: string[]): Promise<string> {
     return runUserCommand(`reject ${parts.slice(1).join(' ')}`.trim())
   }
   return Promise.resolve(`${t('admin.pairing.usage')}\n`)
+}
+
+/** `/admin sandbox [status|prefetch|reset --y]` → the shared runSandboxCommand.
+ *  Only `reset` is --y-gated (it rebuilds a per-user worker); status/prefetch
+ *  pass through unchanged. */
+function runAdminSandbox(parts: string[], config: LightClawConfig): Promise<string> {
+  const verb = (parts[0] ?? 'status').toLowerCase()
+  if (verb === 'reset') {
+    const gate = requireConfirm(parts, { preview: t('confirm.sandbox.reset') })
+    if (!gate.confirmed) return Promise.resolve(gate.message)
+    // `gate.rest` is `['reset']` (the --y stripped) → the runner sees plain reset.
+    return runSandboxCommand(gate.rest.join(' '), config)
+  }
+  return runSandboxCommand(parts.join(' '), config)
 }
 
 /** `/admin feishu-drive [status|rm <canonical> --y]` → the shared

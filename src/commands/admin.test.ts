@@ -252,6 +252,79 @@ describe('/admin pairing == old /user (shared function)', () => {
   })
 })
 
+describe('/admin --y two-step confirmation (B5)', () => {
+  it('user rm requires --y (no --y = preview, no removal)', async () => {
+    const { createUser, listIdentities } = await import('../identity/store.js')
+    await createUser('victim')
+    const preview = await runAdminCommand('user rm victim', { config: liveConfig(), userId: 'admin' })
+    assert.match(preview, /victim/)
+    assert.match(preview, /--y/)
+    assert.ok('victim' in (await listIdentities()), 'no --y must not remove')
+
+    const done = await runAdminCommand('user rm victim --y', { config: liveConfig(), userId: 'admin' })
+    assert.doesNotMatch(done, /--y to confirm|追加 --y/)
+    assert.equal('victim' in (await listIdentities()), false)
+  })
+
+  it('sandbox reset requires --y (no --y = preview, no runtime touch)', async () => {
+    // No --y: the gate returns the preview BEFORE runSandboxCommand touches the
+    // runtime (which would need a live SessionContext). That early return is the
+    // proof the reset is gated.
+    const preview = await runAdminCommand('sandbox reset', { config: liveConfig(), userId: 'admin' })
+    assert.match(preview, /--y/)
+  })
+})
+
+describe('/admin feishu-drive rm --y (audit row unchanged)', () => {
+  it('--y writes the admin-delete-workspace audit row; no --y previews', async () => {
+    const { registerFeishuClient, clearFeishuClient } = await import('../channels/feishu/client.js')
+    const { readdir, readFile, mkdir, writeFile } = await import('node:fs/promises')
+    // Seed root + a user workspace binding the delete handler reads.
+    await writeFile(
+      path.join(tmpHome, 'feishu-cloud-root.json'),
+      JSON.stringify({ folderToken: 'rootFld', createdAt: '2026-01-01T00:00:00.000Z', lightclawVersion: 't' }),
+      'utf8',
+    )
+    const stateDir = path.join(tmpHome, 'users', 'gone', 'state')
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(
+      path.join(stateDir, 'feishu-workspace.json'),
+      JSON.stringify({ folderToken: 'goneFld', parentFolderToken: 'rootFld', createdAt: '2026-01-01T00:00:00.000Z', ownerOpenId: 'ou_gone' }),
+      'utf8',
+    )
+    const deleted: string[] = []
+    registerFeishuClient({
+      drive: { v1: { file: {
+        list: async () => ({ code: 0, data: { files: [] } }),
+        delete: async (input: { path?: { file_token?: string } }) => {
+          deleted.push(input.path?.file_token ?? '')
+          return { code: 0, data: {} }
+        },
+      } } },
+    } as never)
+    try {
+      const preview = await runAdminCommand('feishu-drive rm gone', { config: liveConfig(), userId: 'admin' })
+      assert.match(preview, /--y/)
+      assert.deepEqual(deleted, [], 'no --y must not delete')
+
+      const done = await runAdminCommand('feishu-drive rm gone --y', { config: liveConfig(), userId: 'admin' })
+      assert.match(done, /Deleted Feishu workspace for "gone"/)
+      assert.deepEqual(deleted, ['goneFld'])
+
+      // The admin-delete-workspace audit row is written, status confirmed.
+      const auditDir = path.join(tmpHome, 'audit', 'feishu-writes')
+      const files = await readdir(auditDir)
+      const rows = (await readFile(path.join(auditDir, files[0]!), 'utf8'))
+        .trim().split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
+      const row = rows.find(r => r.operation === 'admin-delete-workspace')
+      assert.ok(row, 'expected admin-delete-workspace audit row')
+      assert.equal(row.status, 'confirmed')
+    } finally {
+      clearFeishuClient()
+    }
+  })
+})
+
 describe('/admin sandbox status fast-path regex', () => {
   it('the runtime-acquire regex matches both /sandbox and /admin sandbox', () => {
     // Mirror of runner.ts:runReadSlashFastPath's sandboxNeedsRuntime condition.

@@ -46,6 +46,7 @@ import {
   setPermissionMode,
 } from '../state.js'
 
+import { requireConfirm } from './confirm.js'
 import { MODE_ALIASES, modeToAlias, parseMode } from './mode-aliases.js'
 
 type ConfigCommandContext = {
@@ -454,6 +455,16 @@ function removeEndpoint(userId: string, parts: string[]): string {
   if (!endpoints[alias]) {
     return `${t('config.endpoint.missing', { name: alias })}\n`
   }
+  // --y gate: removing an endpoint cascade-removes every backend model that
+  // references it. Without --y, list the dependents and abort.
+  const dependents = Object.entries(asRecord(obj.models))
+    .filter(([, model]) => asRecord(model).endpoint === alias)
+    .map(([name]) => name)
+  const preview = dependents.length
+    ? t('confirm.endpoint.rm', { name: alias, models: dependents.join(', ') })
+    : t('confirm.endpoint.rmNoModels', { name: alias })
+  const gate = requireConfirm(parts, { preview })
+  if (!gate.confirmed) return gate.message
   delete endpoints[alias]
   // Cascade-remove models that reference the removed endpoint.
   const models = asRecord(obj.models)
@@ -901,6 +912,15 @@ async function runConfigModelScalar(
     const userId = ctx.userId ?? getCurrentUserId()
     if (userId) {
       setUserConfigField(userId, 'defaultModel', undefined)
+      // B5 polish: report the now-effective admin/default model the user fell
+      // back to (resolveUserConfig recomputes the chain after the override is
+      // gone). On any resolve hiccup, degrade to the plain reset wording.
+      try {
+        const fellBack = resolveUserConfig(userId, config).defaultModel
+        if (fellBack) return `${t('model.reset.fellBack', { value: fellBack })}\n`
+      } catch {
+        // fall through to the plain wording below
+      }
     }
     return `${t('model.reset')}\n`
   }
@@ -970,6 +990,10 @@ async function runConfigMode(
     if (userId) {
       setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: undefined })
     }
+    // B5 polish: report the now-effective admin/default mode the user fell back
+    // to (the per-user override is gone → config.permissionMode applies).
+    const fellBack = getConfig().permissionMode
+    if (fellBack) return `${t('mode.reset.fellBack', { value: modeToAlias(fellBack) })}\n`
     return `${t('mode.reset')}\n`
   }
 
@@ -1007,6 +1031,9 @@ async function runConfigLang(
   }
   if (verb === 'reset') {
     if (userId) setUserConfigField(userId, 'lang', undefined)
+    // B5 polish: report the now-effective admin/default language.
+    const fellBack = ctx.config.lang
+    if (fellBack) return `${t('config.lang.reset.fellBack', { value: fellBack })}\n`
     return `${t('config.lang.reset')}\n`
   }
   // `set <cn|en>` (and bare `<cn|en>` for symmetry).
@@ -1138,7 +1165,12 @@ async function runConfigRule(
       return `${t('common.error.prefix')}${t('rules.revokeUsage')}\n`
     }
     if (target === 'all') {
+      // --y gate (design F.3b): batch-removing all rules.
       const before = getIdentityRules().length
+      const gate = requireConfirm(parts, {
+        preview: t('confirm.rule.rmAll', { count: before }),
+      })
+      if (!gate.confirmed) return gate.message
       clearIdentityRules(userId)
       setIdentityRules([])
       return before === 0
@@ -1203,6 +1235,9 @@ async function runConfigWorkspace(
     return `${t('config.workspace.current', { path: current })}\n`
   }
   if (verb === 'reset' || verb === '--default') {
+    // --y gate (design F.3b): resetting migrates the workspace.
+    const gate = requireConfirm(parts, { preview: t('confirm.workspace.reset') })
+    if (!gate.confirmed) return gate.message
     return resetWorkspace(ctx.userId)
   }
   // `set <path>` (noun-verb) or a bare `<path>` (legacy `set-workspace <path>`).
@@ -1211,8 +1246,16 @@ async function runConfigWorkspace(
     return `${t('config.usage')}\n`
   }
   if (target === 'reset' || target === '--default') {
+    const gate = requireConfirm(parts, { preview: t('confirm.workspace.reset') })
+    if (!gate.confirmed) return gate.message
     return resetWorkspace(ctx.userId)
   }
+  // --y gate (design F.3b): setting migrates the workspace.
+  const expandedPreview = expandHomePath(target)
+  const gate = requireConfirm(parts, {
+    preview: t('confirm.workspace.set', { path: expandedPreview }),
+  })
+  if (!gate.confirmed) return gate.message
   return setWorkspace(target, ctx)
 }
 

@@ -66,7 +66,7 @@ describe('/config set-workspace', () => {
     mkdirSync(path.join(ws, 'a'), { recursive: true })
     mkdirSync(path.join(ws, 'b'), { recursive: true })
 
-    const out = await runConfigCommand(`set-workspace ${ws}`, { config: clusterConfig(), userId: 'alice' })
+    const out = await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'alice' })
     assert.match(out, /Workspace directory set to/)
     assert.match(out, /contains 2 entries/)
     assert.match(out, /restart/)
@@ -78,14 +78,14 @@ describe('/config set-workspace', () => {
   it('reports an empty workspace directory', async () => {
     const ws = path.join(gpfsRoot, 'empty')
     mkdirSync(ws, { recursive: true })
-    const out = await runConfigCommand(`set-workspace ${ws}`, { config: clusterConfig(), userId: 'bob' })
+    const out = await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'bob' })
     assert.match(out, /is currently empty/)
     assert.equal(JSON.parse(readFileSync(userConfigPath('bob'), 'utf8')).workspace, ws)
   })
 
   it('rejects an invalid path with a reason and does NOT write the file', async () => {
     const out = await runConfigCommand(
-      `set-workspace ${path.join(tmpHome, 'no-such-dir')}`,
+      `set-workspace ${path.join(tmpHome, 'no-such-dir')} --y`,
       { config: clusterConfig(), userId: 'carol' },
     )
     assert.match(out, /gpfs host prefix|cannot access/)
@@ -93,7 +93,7 @@ describe('/config set-workspace', () => {
   })
 
   it('rejects a relative path', async () => {
-    const out = await runConfigCommand('set-workspace ./relative', { config: localConfig(), userId: 'dave' })
+    const out = await runConfigCommand('set-workspace ./relative --y', { config: localConfig(), userId: 'dave' })
     assert.match(out, /must be an absolute path/)
     assert.equal(existsSync(userConfigPath('dave')), false)
   })
@@ -106,7 +106,7 @@ describe('/config set-workspace', () => {
     const { writeFileSync } = await import('node:fs')
     writeFileSync(userConfigPath('erin'), JSON.stringify({ keepMe: 42 }), 'utf8')
 
-    await runConfigCommand(`set-workspace ${ws}`, { config: clusterConfig(), userId: 'erin' })
+    await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'erin' })
     const persisted = JSON.parse(readFileSync(userConfigPath('erin'), 'utf8'))
     assert.equal(persisted.keepMe, 42)
     assert.equal(persisted.workspace, ws)
@@ -115,16 +115,16 @@ describe('/config set-workspace', () => {
   it('removes the .workspace key on reset', async () => {
     const ws = path.join(gpfsRoot, 'reset-me')
     mkdirSync(ws, { recursive: true })
-    await runConfigCommand(`set-workspace ${ws}`, { config: clusterConfig(), userId: 'frank' })
+    await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'frank' })
     assert.ok('workspace' in JSON.parse(readFileSync(userConfigPath('frank'), 'utf8')))
 
-    const out = await runConfigCommand('set-workspace reset', { config: clusterConfig(), userId: 'frank' })
+    const out = await runConfigCommand('set-workspace reset --y', { config: clusterConfig(), userId: 'frank' })
     assert.match(out, /restored to the default/)
     assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('frank'), 'utf8')), false)
   })
 
   it('requires an identity', async () => {
-    const out = await runConfigCommand('set-workspace /tmp/x', { config: localConfig() })
+    const out = await runConfigCommand('set-workspace /tmp/x --y', { config: localConfig() })
     assert.match(out, /No active LightClaw identity/)
   })
 
@@ -319,7 +319,7 @@ describe('/config workspace (←set-workspace)', () => {
   it('workspace set <path> behaves like set-workspace', async () => {
     const ws = path.join(gpfsRoot, 'wsset')
     mkdirSync(ws, { recursive: true })
-    const out = await runConfigCommand(`workspace set ${ws}`, { config: clusterConfig(), userId: 'nina' })
+    const out = await runConfigCommand(`workspace set ${ws} --y`, { config: clusterConfig(), userId: 'nina' })
     assert.match(out, /Workspace directory set to/)
     assert.equal(JSON.parse(readFileSync(userConfigPath('nina'), 'utf8')).workspace, ws)
   })
@@ -327,8 +327,8 @@ describe('/config workspace (←set-workspace)', () => {
   it('workspace reset restores the default', async () => {
     const ws = path.join(gpfsRoot, 'wsreset')
     mkdirSync(ws, { recursive: true })
-    await runConfigCommand(`workspace set ${ws}`, { config: clusterConfig(), userId: 'oscar' })
-    const out = await runConfigCommand('workspace reset', { config: clusterConfig(), userId: 'oscar' })
+    await runConfigCommand(`workspace set ${ws} --y`, { config: clusterConfig(), userId: 'oscar' })
+    const out = await runConfigCommand('workspace reset --y', { config: clusterConfig(), userId: 'oscar' })
     assert.match(out, /restored to the default/)
     assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('oscar'), 'utf8')), false)
   })
@@ -515,6 +515,114 @@ describe('/config lane', () => {
     assert.match(out, /worker =/)
     assert.match(out, /system =/)
     assert.match(out, /image =/)
+  })
+})
+
+// ── B5: --y two-step confirmation + reset-wording polish ─────────────────────
+
+describe('/config endpoint rm --y (cascade confirmation)', () => {
+  it('no --y returns a preview listing dependent backends and does NOT delete', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b5erm' })
+    await runConfigCommand('backend add m --endpoint ep', { config: cfg, userId: 'b5erm' })
+    const before = readUserConfigJson('b5erm')
+
+    const out = await runConfigCommand('endpoint rm ep', { config: cfg, userId: 'b5erm' })
+    // Preview names the dependent backend model + the --y reminder.
+    assert.match(out, /\bm\b/)
+    assert.match(out, /--y/)
+    // Config unchanged — the endpoint + model are still present.
+    assert.deepEqual(readUserConfigJson('b5erm'), before)
+  })
+
+  it('--y deletes the endpoint and cascade-removes the dependent backend', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b5erm2' })
+    await runConfigCommand('backend add m --endpoint ep', { config: cfg, userId: 'b5erm2' })
+    const out = await runConfigCommand('endpoint rm ep --y', { config: cfg, userId: 'b5erm2' })
+    assert.match(out, /Removed custom endpoint/)
+    const persisted = readUserConfigJson('b5erm2')
+    const endpoints = (persisted.endpoints as Record<string, unknown>) ?? {}
+    const models = (persisted.models as Record<string, unknown>) ?? {}
+    assert.equal('ep' in endpoints, false)
+    assert.equal('m' in models, false, 'cascade should remove the dependent backend')
+  })
+})
+
+describe('/config rule rm all --y', () => {
+  it('rm all requires --y (no --y = preview, no delete)', async () => {
+    const cfg = modelConfig()
+    await inSession('b5rule', cfg, async () => {
+      await runConfigCommand('rule add Bash(git:*)', { config: cfg, userId: 'b5rule' })
+      assert.equal(loadIdentityRules('b5rule').length, 1)
+      const out = await runConfigCommand('rule rm all', { config: cfg, userId: 'b5rule' })
+      assert.match(out, /--y/)
+      assert.equal(loadIdentityRules('b5rule').length, 1, 'no --y must not delete')
+      const done = await runConfigCommand('rule rm all --y', { config: cfg, userId: 'b5rule' })
+      assert.match(done, /revoked|已撤销/i)
+      assert.equal(loadIdentityRules('b5rule').length, 0)
+    })
+  })
+
+  it('rm <n> single does NOT require --y', async () => {
+    const cfg = modelConfig()
+    await inSession('b5rule1', cfg, async () => {
+      await runConfigCommand('rule add Bash(git:*)', { config: cfg, userId: 'b5rule1' })
+      const out = await runConfigCommand('rule rm 1', { config: cfg, userId: 'b5rule1' })
+      assert.doesNotMatch(out, /--y to confirm|追加 --y/)
+      assert.equal(loadIdentityRules('b5rule1').length, 0)
+    })
+  })
+})
+
+describe('/config workspace set --y', () => {
+  it('set <abs> requires --y; --y migrates and keeps the restart note', async () => {
+    const ws = path.join(gpfsRoot, 'b5ws')
+    mkdirSync(ws, { recursive: true })
+    const cfg = clusterConfig()
+    const preview = await runConfigCommand(`workspace set ${ws}`, { config: cfg, userId: 'b5ws' })
+    assert.match(preview, /--y/)
+    assert.equal(existsSync(userConfigPath('b5ws')), false, 'no --y must not write')
+
+    const out = await runConfigCommand(`workspace set ${ws} --y`, { config: cfg, userId: 'b5ws' })
+    assert.match(out, /Workspace directory set to/)
+    assert.match(out, /restart/)
+    assert.equal(JSON.parse(readFileSync(userConfigPath('b5ws'), 'utf8')).workspace, ws)
+  })
+
+  it('workspace reset requires --y and keeps the restart note', async () => {
+    const ws = path.join(gpfsRoot, 'b5wsr')
+    mkdirSync(ws, { recursive: true })
+    const cfg = clusterConfig()
+    await runConfigCommand(`workspace set ${ws} --y`, { config: cfg, userId: 'b5wsr' })
+    const preview = await runConfigCommand('workspace reset', { config: cfg, userId: 'b5wsr' })
+    assert.match(preview, /--y/)
+    assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('b5wsr'), 'utf8')), true)
+    const out = await runConfigCommand('workspace reset --y', { config: cfg, userId: 'b5wsr' })
+    assert.match(out, /restart/)
+    assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('b5wsr'), 'utf8')), false)
+  })
+})
+
+describe('/config reset wording polish', () => {
+  it('mode reset indicates fallback to the admin/default mode', async () => {
+    const cfg = modelConfig()
+    await createUser('b5mode')
+    const out = await inSession('b5mode', cfg, () =>
+      runConfigCommand('mode reset', { config: cfg, userId: 'b5mode' }),
+    )
+    assert.match(out, /admin\/default mode|admin \/ 默认模式/)
+  })
+
+  it('model reset indicates fallback to the admin/default model', async () => {
+    const cfg = modelConfig()
+    const out = await inSession('b5model', cfg, async () => {
+      await runConfigCommand('model set opus', { config: cfg, userId: 'b5model' })
+      return runConfigCommand('model reset', { config: cfg, userId: 'b5model' })
+    })
+    assert.match(out, /admin\/default model|admin \/ 默认模型/)
+    // The fallback value (admin defaultModel = sonnet) is named.
+    assert.match(out, /sonnet/)
   })
 })
 

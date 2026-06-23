@@ -18,8 +18,7 @@ import {
   usersRoot,
 } from '../identity/paths.js'
 
-const DELETE_TOKEN_TTL_MS = 5 * 60 * 1000
-const pendingDeleteTokens = new Map<string, { token: string; expiresAt: number; folderToken: string; itemCount: number }>()
+import { requireConfirm } from './confirm.js'
 
 export async function runFeishuWorkspaceCommand(rawArgs: string): Promise<string> {
   const args = rawArgs.trim().split(/\s+/).filter(Boolean)
@@ -98,7 +97,7 @@ async function orphansCommand(): Promise<string> {
 }
 
 async function deleteCommand(args: string[]): Promise<string> {
-  const canonical = args[0]
+  const canonical = args.find(a => !a.startsWith('--'))
   if (!canonical) {
     return `${t('feishuWs.delete.usage')}\n`
   }
@@ -106,44 +105,23 @@ async function deleteCommand(args: string[]): Promise<string> {
   if (!workspace?.folderToken) {
     return `${t('feishuWs.delete.noFolder', { canonical })}\n`
   }
-  // B4: `/admin feishu-drive rm <canonical> --y` skips the token round-trip
-  // (the `--y` gate is the confirmation; B5 polishes the printed preview).
-  // The legacy `--confirm <token>` path is preserved below unchanged so the
-  // old `/feishu-workspace delete` flow and its `admin-delete-workspace`
-  // audit row keep working.
-  if (args.includes('--y')) {
-    const itemCount = await listFolder({ client: getFeishuClient(), folderToken: workspace.folderToken })
-      .then(result => result.items.length)
-      .catch(() => 0)
-    return performWorkspaceDelete(canonical, workspace.folderToken, itemCount)
-  }
-  const confirmIdx = args.indexOf('--confirm')
-  if (confirmIdx < 0) {
-    const itemCount = await listFolder({ client: getFeishuClient(), folderToken: workspace.folderToken })
-      .then(result => result.items.length)
-      .catch(() => 0)
-    const token = Math.random().toString(36).slice(2, 8).toUpperCase()
-    pendingDeleteTokens.set(canonical, {
-      token,
-      expiresAt: Date.now() + DELETE_TOKEN_TTL_MS,
-      folderToken: workspace.folderToken,
-      itemCount,
-    })
-    return `${t('feishuWs.delete.preview', {
+  // B5: the unified `--y` two-step confirmation REPLACES the legacy
+  // `--confirm <token>` round-trip. Without --y we list the folder + item count
+  // as the preview and abort; with --y we run the same performWorkspaceDelete
+  // that the old token path used, so the `admin-delete-workspace` audit row is
+  // byte-for-byte identical.
+  const itemCount = await listFolder({ client: getFeishuClient(), folderToken: workspace.folderToken })
+    .then(result => result.items.length)
+    .catch(() => 0)
+  const gate = requireConfirm(args, {
+    preview: t('confirm.feishuDrive.rm', {
       canonical,
       token: workspace.folderToken,
       count: itemCount,
-      confirmToken: token,
-    })}\n`
-  }
-  const token = args[confirmIdx + 1]
-  const pending = pendingDeleteTokens.get(canonical)
-  if (!pending || pending.token !== token || pending.expiresAt < Date.now()) {
-    pendingDeleteTokens.delete(canonical)
-    return `${t('feishuWs.delete.tokenInvalid', { canonical })}\n`
-  }
-  pendingDeleteTokens.delete(canonical)
-  return performWorkspaceDelete(canonical, workspace.folderToken, pending.itemCount)
+    }),
+  })
+  if (!gate.confirmed) return gate.message
+  return performWorkspaceDelete(canonical, workspace.folderToken, itemCount)
 }
 
 /** Execute the actual folder delete + identity-binding removal + audit row.

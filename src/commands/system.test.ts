@@ -124,14 +124,48 @@ describe('/system command', () => {
       await runSystemCommand('data', { config: makeConfig(), userId: 'alice' }),
       /Usage: \/system data import/,
     )
+    // `import` is --y-gated (B5); `export` is read-only → coming-soon directly.
     assert.match(
-      await runSystemCommand('data import /some/path', { config: makeConfig(), userId: 'alice' }),
+      await runSystemCommand('data import /some/path --y', { config: makeConfig(), userId: 'alice' }),
       /not yet available/,
     )
     assert.match(
       await runSystemCommand('data export /some/dest', { config: makeConfig(), userId: 'alice' }),
       /not yet available/,
     )
+  })
+
+  it('key rm: unreferenced key deletes with NO --y', async () => {
+    await runSystemCommand('key set LONE val', { config: makeConfig(), userId: 'alice' })
+    assert.equal('LONE' in loadUserSecrets('alice'), true)
+    const out = await runSystemCommand('key rm LONE', { config: makeConfig(), userId: 'alice' })
+    assert.match(out, /removed/)
+    assert.equal('LONE' in loadUserSecrets('alice'), false)
+  })
+
+  it('key rm: referenced key requires --y (no --y = preview, no delete)', async () => {
+    const { setUserSecret } = await import('../secrets/store.js')
+    const { writeUserConfig } = await import('../config/user-override.js')
+    setUserSecret('alice', 'API_KEY', 'sk-real')
+    // Bind an endpoint to that key so the rm cascades.
+    writeUserConfig('alice', { endpoints: { ep: { type: 'openai', apiKeyRef: 'API_KEY' } } })
+
+    const preview = await runSystemCommand('key rm API_KEY', { config: makeConfig(), userId: 'alice' })
+    assert.match(preview, /\bep\b/, 'preview lists the dependent endpoint')
+    assert.match(preview, /--y/)
+    assert.equal('API_KEY' in loadUserSecrets('alice'), true, 'no --y must not delete')
+
+    const done = await runSystemCommand('key rm API_KEY --y', { config: makeConfig(), userId: 'alice' })
+    assert.match(done, /removed/)
+    assert.equal('API_KEY' in loadUserSecrets('alice'), false)
+  })
+
+  it('data import requires --y (no --y = preview, no action)', async () => {
+    const preview = await runSystemCommand('data import /some/path', { config: makeConfig(), userId: 'alice' })
+    assert.match(preview, /--y/)
+    assert.doesNotMatch(preview, /not yet available/)
+    const done = await runSystemCommand('data import /some/path --y', { config: makeConfig(), userId: 'alice' })
+    assert.match(done, /not yet available/)
   })
 
   it('registers /system as channel-only (hidden from the terminal console)', () => {
