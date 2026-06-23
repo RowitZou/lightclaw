@@ -254,8 +254,8 @@ export async function collectExistingMemoriesForRole(
   role: Role,
   memoryDir: string,
 ): Promise<MemoryEntry[]> {
-  const { readableDirs } = resolveMemoryDirsForRole(role, memoryDir)
-  const entries = await scanMemoryFilesInDirs(memoryDir, readableDirs)
+  const { readableDirs, selfWriteDir } = resolveMemoryDirsForRole(role, memoryDir)
+  const entries = await scanMemoryFilesInDirs(memoryDir, readableDirs, selfWriteDir)
   const byFilename = new Map<string, MemoryEntry>()
   for (const entry of entries) {
     byFilename.set(entry.filename, entry)

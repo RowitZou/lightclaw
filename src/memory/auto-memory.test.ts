@@ -66,7 +66,7 @@ describe('role-scoped memory indexes', () => {
     assert.doesNotMatch(index, /webSearcher\/webSearcher-note\.md/)
     assert.deepEqual(
       new Set((await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs)).map(entry => entry.filename)),
-      new Set(['root-note.md', '_shared/shared-note.md']),
+      new Set(['root-note.md', 'shared-note.md']),
     )
   })
 })

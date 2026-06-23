@@ -4,7 +4,11 @@ import { z } from 'zod'
 
 import { recordMemoryWriteAudit, safeMemoryAuditUserId } from '../audit/memory-writes.js'
 import { getMainRole } from '../agents/registry.js'
-import { normalizeMemoryFilename, writeMemoryFile } from '../memory/auto-memory.js'
+import {
+  coerceLeafMemoryFilename,
+  normalizeMemoryFilename,
+  writeMemoryFile,
+} from '../memory/auto-memory.js'
 import { memoryPathWithinDir, resolveMemoryDirsForRole, resolveSourceTier } from '../memory/scope.js'
 import { isMemoryType } from '../memory/types.js'
 import { getCurrentRole, getMemoryDir } from '../state.js'
@@ -51,7 +55,13 @@ Choose \`type\` carefully:
     const role = getCurrentRole() ?? getMainRole()
     const memoryDir = getMemoryDir()
     const resolved = resolveMemoryDirsForRole(role, memoryDir)
-    const targetPath = safeTargetPath(resolved.selfWriteDir, input.filename)
+    // Agents commonly pass a tier-looking prefix (`_shared/foo.md`,
+    // `<role>/foo.md`); MemoryWrite files by role, so reduce to the leaf and
+    // record what was stripped. Traversal (`..`) is left intact to deny below.
+    const { filename: effectiveFilename, strippedPrefix } = coerceLeafMemoryFilename(
+      input.filename,
+    )
+    const targetPath = safeTargetPath(resolved.selfWriteDir, effectiveFilename)
     const sourceTier = resolveSourceTier(targetPath, memoryDir) ?? undefined
     try {
       if (input.content.length > MEMORY_CONTENT_MAX_CHARS) {
@@ -93,7 +103,7 @@ Choose \`type\` carefully:
       }
 
       await writeMemoryFile(resolved.selfWriteDir, {
-        filename: input.filename,
+        filename: effectiveFilename,
         type: input.type,
         description: input.description.trim(),
         content: input.content.trim(),
@@ -108,7 +118,9 @@ Choose \`type\` carefully:
       })
 
       return {
-        output: `Saved memory ${input.filename}`,
+        output: strippedPrefix
+          ? `Saved memory ${effectiveFilename}. Ignored the "${strippedPrefix}/" path prefix — memories are filed by your role automatically, so pass a bare filename. Cross-role sharing is handled by the framework; you do not write to other tiers directly.`
+          : `Saved memory ${effectiveFilename}`,
       }
     } catch (error) {
       await auditMemoryWrite({

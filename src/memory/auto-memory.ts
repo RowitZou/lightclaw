@@ -4,11 +4,8 @@ import path from 'node:path'
 import type { Role } from '../agents/types.js'
 import { safeWriteFile } from '../atomic-write.js'
 import { userMemoryRoot } from '../identity/paths.js'
-import {
-  relativeMemoryFilename,
-  resolveReadableMemoryDirsForRole,
-} from './scope.js'
-import type { MemoryEntry } from './types.js'
+import { resolveReadableMemoryDirsForRole } from './scope.js'
+import type { MemoryEntry, MemoryEntryWithScope, MemoryScope } from './types.js'
 import { isMemoryType } from './types.js'
 
 const MEMORY_INDEX_FILE = 'MEMORY.md'
@@ -26,6 +23,29 @@ export function normalizeMemoryFilename(filename: string): string {
   }
 
   return trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`
+}
+
+/** Reduce an agent-supplied memory filename to its leaf basename when it
+ *  carries a (non-traversal) directory prefix. Agents routinely copy a
+ *  tier-looking path — `_shared/foo.md`, `<role>/foo.md` — back from a memory
+ *  listing or mimic the autoDream `_shared/<date>-...-by-<role>.md` naming
+ *  convention they see in the index. MemoryWrite files by role, and
+ *  `normalizeMemoryFilename` rejects any `/`, so those writes used to hard-fail
+ *  and silently drop the note. Strip the prefix instead and let the write land
+ *  in the role's own dir; cross-role sharing is autoDream's job, not the
+ *  agent's. Traversal segments (`..` / `.`) are NOT healed — they fall through
+ *  unchanged so `normalizeMemoryFilename` still rejects them. */
+export function coerceLeafMemoryFilename(filename: string): {
+  filename: string
+  strippedPrefix?: string
+} {
+  const trimmed = filename.trim()
+  const segments = trimmed.split(/[/\\]/)
+  if (segments.length <= 1 || segments.some(seg => seg === '..' || seg === '.')) {
+    return { filename: trimmed }
+  }
+  const leaf = segments.at(-1) ?? ''
+  return { filename: leaf, strippedPrefix: segments.slice(0, -1).join('/') }
 }
 
 function unquote(value: string): string {
@@ -288,17 +308,27 @@ export async function scanMemoryFiles(memoryDir: string): Promise<MemoryEntry[]>
   }
 }
 
+/** Scan readable memory dirs into a flat list. Each entry keeps its **bare**
+ *  basename (never a tier-prefixed relative path) plus a coarse `scope` tag —
+ *  `'own'` for the role's own write dir (where MemoryWrite lands), `'shared'`
+ *  for everything else readable (user-root L1, the `_shared` workboard, and —
+ *  for curator roles — other roles' private dirs). The bare basename is what
+ *  the agent can hand straight back to `MemoryRead {action:'read'}` /
+ *  `MemoryWrite`; surfacing a real `_shared/foo.md` path here used to get
+ *  copied verbatim into those tools and rejected by the no-`/` filename guard.
+ *  `selfWriteDir` is the role's `resolveMemoryDirsForRole(...).selfWriteDir`. */
 export async function scanMemoryFilesInDirs(
   memoryDir: string,
   dirs: string[],
-): Promise<MemoryEntry[]> {
+  selfWriteDir?: string,
+): Promise<MemoryEntryWithScope[]> {
+  const ownDir = selfWriteDir ? path.resolve(selfWriteDir) : undefined
   const chunks = await Promise.all(
     dirs.map(async dir => {
       const entries = await scanMemoryFiles(dir)
-      return entries.map(entry => ({
-        ...entry,
-        filename: relativeMemoryFilename(memoryDir, dir, entry.filename),
-      }))
+      const scope: MemoryScope =
+        ownDir && path.resolve(dir) === ownDir ? 'own' : 'shared'
+      return entries.map(entry => ({ ...entry, scope }))
     }),
   )
   return chunks

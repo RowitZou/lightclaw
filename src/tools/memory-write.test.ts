@@ -54,6 +54,57 @@ describe('MemoryWrite currentRole binding', () => {
     assert.match(audit, /"status":"denied"/)
   })
 
+  it('heals a _shared/ prefix to the worker role-private dir instead of denying', async () => {
+    const result = await withMemorySession(workerRole('webSearcher'), () =>
+      memoryWriteTool.call(
+        {
+          filename: '_shared/2026-06-19-finding-by-webSearcher.md',
+          type: 'project',
+          description: 'Cross-role finding the agent tried to publish to _shared',
+          content: 'Why: shared context\nHow to apply: reuse it.',
+        },
+        undefined as never,
+      ),
+    )
+
+    assert.equal(result.isError, undefined)
+    assert.match(result.output as string, /Ignored the "_shared\/" path prefix/)
+    // Landed in the role's own L3 under the bare basename, not lost.
+    await readFile(
+      path.join(memoryDir, 'webSearcher', '2026-06-19-finding-by-webSearcher.md'),
+      'utf8',
+    )
+    await assert.rejects(
+      () => readFile(path.join(memoryDir, '_shared', '2026-06-19-finding-by-webSearcher.md'), 'utf8'),
+      { code: 'ENOENT' },
+    )
+    const audit = await readAudit()
+    // Audit keeps the original prefixed filename (intent) but records success.
+    assert.match(audit, /"filename":"_shared\/2026-06-19-finding-by-webSearcher.md"/)
+    assert.match(audit, /"status":"written"/)
+  })
+
+  it('heals an other-role prefix for main to the user memory root', async () => {
+    const result = await withMemorySession(mainRole(), () =>
+      memoryWriteTool.call(
+        {
+          filename: 'feishuSecretary/review-doc.md',
+          type: 'project',
+          description: 'A note main tried to file under another role',
+          content: 'Why: useful\nHow to apply: keep it.',
+        },
+        undefined as never,
+      ),
+    )
+
+    assert.equal(result.isError, undefined)
+    await readFile(path.join(memoryDir, 'review-doc.md'), 'utf8')
+    await assert.rejects(
+      () => readFile(path.join(memoryDir, 'feishuSecretary', 'review-doc.md'), 'utf8'),
+      { code: 'ENOENT' },
+    )
+  })
+
   it('writes internal memories to the user memory root', async () => {
     const result = await withMemorySession(internalRole('memoryExtractor'), () => writeMemory('extract-note'))
 

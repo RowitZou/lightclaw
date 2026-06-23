@@ -33,8 +33,11 @@ describe('MemoryRead readableDirs filtering', () => {
     )
 
     assert.equal(result.isError, undefined)
-    assert.match(result.output as string, /root-note\.md/)
-    assert.match(result.output as string, /_shared\/shared-note\.md/)
+    // Bare basenames with an own/shared label — never a real tier path prefix
+    // an agent could copy back into a rejecting MemoryWrite / MemoryRead.
+    assert.match(result.output as string, /root-note\.md \(own\)/)
+    assert.match(result.output as string, /shared-note\.md \(shared\)/)
+    assert.doesNotMatch(result.output as string, /_shared\//)
     assert.doesNotMatch(result.output as string, /webSearcher-note\.md/)
   })
 
@@ -44,9 +47,11 @@ describe('MemoryRead readableDirs filtering', () => {
     const list = await withMemorySession(webRole(), () =>
       memoryReadTool.call({ action: 'list' }, undefined as never),
     )
-    assert.match(list.output as string, /webSearcher\/webSearcher-note\.md/)
-    assert.match(list.output as string, /_shared\/shared-note\.md/)
-    assert.match(list.output as string, /root-note\.md/)
+    assert.match(list.output as string, /webSearcher-note\.md \(own\)/)
+    assert.match(list.output as string, /shared-note\.md \(shared\)/)
+    assert.match(list.output as string, /root-note\.md \(shared\)/)
+    assert.doesNotMatch(list.output as string, /_shared\//)
+    assert.doesNotMatch(list.output as string, /webSearcher\//)
 
     const read = await withMemorySession(webRole(), () =>
       memoryReadTool.call({ action: 'read', filename: '_shared/shared-note' }, undefined as never),
@@ -73,9 +78,10 @@ describe('MemoryRead readableDirs filtering', () => {
       memoryReadTool.call({ action: 'list' }, undefined as never),
     )
 
-    assert.match(result.output as string, /root-note\.md/)
-    assert.match(result.output as string, /_shared\/shared-note\.md/)
-    assert.match(result.output as string, /webSearcher\/webSearcher-note\.md/)
+    assert.match(result.output as string, /root-note\.md \(own\)/)
+    assert.match(result.output as string, /shared-note\.md \(shared\)/)
+    assert.match(result.output as string, /webSearcher-note\.md \(shared\)/)
+    assert.doesNotMatch(result.output as string, /_shared\//)
   })
 })
 

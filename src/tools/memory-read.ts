@@ -37,14 +37,18 @@ Reach for this when the user references stored preferences ("我之前让你..."
       const resolved = await resolveReadableMemoryDirsForRole(role, memoryDir)
 
       if (input.action === 'list') {
-        const entries = await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs)
+        const entries = await scanMemoryFilesInDirs(
+          memoryDir,
+          resolved.readableDirs,
+          resolved.selfWriteDir,
+        )
         return {
           output:
             entries.length > 0
               ? entries
                   .map(
                     entry =>
-                      `[${entry.type}] ${entry.filename}: ${entry.description}`,
+                      `[${entry.type}] ${entry.filename} (${entry.scope}): ${entry.description}`,
                   )
                   .join('\n')
               : 'No memory files found.',

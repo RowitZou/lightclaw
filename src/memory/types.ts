@@ -19,6 +19,15 @@ export type MemoryEntry = {
   mtimeMs: number
 }
 
+/** Coarse origin of a memory entry relative to the reading role: `'own'` is
+ *  the role's own write dir (where MemoryWrite lands), `'shared'` is any other
+ *  readable dir (user-root L1, the `_shared` workboard, or — for curators —
+ *  another role's private dir). Surfaced as a list label so the agent can tell
+ *  its own notes from shared context without exposing a real path prefix. */
+export type MemoryScope = 'own' | 'shared'
+
+export type MemoryEntryWithScope = MemoryEntry & { scope: MemoryScope }
+
 export type MemoryFrontmatter = {
   type: MemoryType
   description: string

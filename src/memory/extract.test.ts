@@ -337,9 +337,11 @@ test('collectExistingMemoriesForRole gives main root plus shared, excluding role
 
     const entries = await collectExistingMemoriesForRole(getMainRole(), tempDir)
 
+    // Bare basenames (no tier prefix) — the extractor addresses memories by
+    // bare name, so the "do not duplicate" reference matches that vocabulary.
     assert.deepEqual(entries.map(entry => entry.filename), [
-      '_shared/shared-note.md',
       'root-note.md',
+      'shared-note.md',
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -352,15 +354,17 @@ test('collectExistingMemoriesForRole gives webSearcher root plus shared plus pri
   assert.ok(webRole)
   try {
     await writeMemoryFile(tempDir, memory('root-note.md'))
-    await writeMemoryFile(path.join(tempDir, '_shared'), memory('same-name.md'))
-    await writeMemoryFile(path.join(tempDir, 'webSearcher'), memory('same-name.md'))
+    await writeMemoryFile(path.join(tempDir, '_shared'), memory('shared-note.md'))
+    await writeMemoryFile(path.join(tempDir, 'webSearcher'), memory('web-note.md'))
 
     const entries = await collectExistingMemoriesForRole(webRole, tempDir)
 
+    // All three readable tiers (root + shared + own L3) contribute, rendered as
+    // bare basenames.
     assert.deepEqual(entries.map(entry => entry.filename), [
-      '_shared/same-name.md',
       'root-note.md',
-      'webSearcher/same-name.md',
+      'shared-note.md',
+      'web-note.md',
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
