@@ -19,36 +19,21 @@ import {
 import { approveCode, listPending, rejectCode } from '../identity/pairing.js'
 import { deriveCanonicalName } from '../identity/derive-canonical.js'
 import { preheatAndWelcomeOnApproval } from '../identity/post-approve.js'
-import { setIdentityPreference } from '../identity/preferences.js'
-import { setUserConfigField } from '../config/user-override.js'
 import type { SenderKey } from '../identity/types.js'
-import { formatRule, parseRule } from '../permission/rules.js'
-import {
-  appendIdentityRules,
-  clearIdentityRules,
-  loadIdentityRules,
-  removeIdentityRule,
-} from '../permission/storage.js'
-import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
+import { type PermissionMode } from '../permission/types.js'
 import { DockerRuntime, RlaunchRuntime } from '../runtime/index.js'
 import { brainppDockerImageProbe } from '../runtime/image-readiness.js'
 import { resolveDockerImage } from '../runtime/pool.js'
-import { clearAllForModel } from '../provider/capability-cache.js'
-import { clearPrechargeForModel } from '../provider/index.js'
 import {
   abortInFlightForSession,
   getCurrentUserId,
-  getIdentityRules,
   getImageReadiness,
   getModel,
   getPermissionMode,
   getRuntime,
   getRuntimePool,
   getUsageTotals,
-  setIdentityRules,
-  setModel,
   setRuntime,
-  setPermissionMode,
 } from '../state.js'
 
 import { runAuthCommand } from './auth.js'
@@ -244,82 +229,16 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/model --clear-cache   Clear the current model\'s capability-probe cache (combine with <name> to clear that one).',
     ].join('\n'),
     async handler(args, ctx) {
-      const rawParts = args.trim().split(/\s+/).filter(Boolean)
-      const clearCache = rawParts.includes('--clear-cache')
-      const modelParts = rawParts.filter(part => part !== '--clear-cache')
-      const model = modelParts.join(' ')
-      const registered = Object.keys(ctx.config.models)
-      const formatList = (): string =>
-        registered
-          .map(name => {
-            const entry = ctx.config.models[name]
-            return `${name} (${entry.schema}, ${entry.endpoint} -> ${entry.upstreamModel})`
-          })
-          .join(', ')
-      if (clearCache && modelParts.length === 0) {
-        const current = getModel()
-        const entry = ctx.config.models[current]
-        if (!entry) {
-          ctx.output.write(`${t('common.error.prefix')}${t('model.clearCache.notRegistered', { name: current })}\n`)
-          return
-        }
-        const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
-        const removed = clearAllForModel({
-          endpoint: entry.endpoint,
-          baseUrl,
-          upstreamModel: entry.upstreamModel,
-        })
-        clearPrechargeForModel({
-          endpoint: entry.endpoint,
-          baseUrl,
-          upstreamModel: entry.upstreamModel,
-        })
-        ctx.output.write(
-          `${t('model.clearCache.cleared', {
-            name: current,
-            endpoint: entry.endpoint,
-            upstream: entry.upstreamModel,
-            suffix: removed ? '' : t('model.clearCache.noEntry'),
-          })}\n`,
-        )
-        return
-      }
-      if (!model) {
-        ctx.output.write(`${t('model.current', { name: getModel() })}\n`)
-        ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
-        return
-      }
-      if (!ctx.config.models[model]) {
-        ctx.output.write(`${t('common.error.prefix')}${t('model.unknown', { name: model })}\n`)
-        ctx.output.write(`${t('model.available', { list: formatList() })}\n`)
-        return
-      }
-      // PR4: persist the choice to the per-user config.json (users/<u>/config.json)
-      // — NOT the global in-memory config. `ctx.config.defaultModel = model` was
-      // the pollution bug: a per-process config mutation that bled across every
-      // user's turn. setModel() still updates THIS session's live model so the
-      // switch takes effect immediately for the current turn.
-      setModel(model)
-      if (clearCache) {
-        const entry = ctx.config.models[model]
-        const baseUrl = ctx.config.endpoints[entry.endpoint]?.baseUrl
-        clearAllForModel({
-          endpoint: entry.endpoint,
-          baseUrl,
-          upstreamModel: entry.upstreamModel,
-        })
-        clearPrechargeForModel({
-          endpoint: entry.endpoint,
-          baseUrl,
-          upstreamModel: entry.upstreamModel,
-        })
-      }
-      const callerId = getCurrentUserId()
-      if (callerId) {
-        setUserConfigField(callerId, 'defaultModel', model)
-      }
-      ctx.output.write(`${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`)
-      await ctx.persistMeta(ctx.messages.length)
+      // B2: `/model` delegates to the `/config model` SCALAR face so the two
+      // names stay byte-identical until the old name is retired in B6. The
+      // scalar face is reached by NOT passing a reserved BYO verb — bare /
+      // `<name>` / `--clear-cache` all route to runConfigModelScalar.
+      ctx.output.write(await runConfigCommand(`model ${args.trim()}`.trim(), {
+        config: ctx.config,
+        userId: ctx.userId ?? getCurrentUserId(),
+        messagesLength: ctx.messages.length,
+        persistMeta: ctx.persistMeta,
+      }))
     },
   },
   {
@@ -333,41 +252,14 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/mode <read|ask|auto|yolo>   Set permission posture. read=read-only; ask=confirm writes/exec (default); auto=writes+web silent, commands still ask; yolo=all silent except ask/deny rules. Capped by the user\'s ceiling.',
     ].join('\n'),
     async handler(args, ctx) {
-      const trimmed = args.trim()
-      const userId = getCurrentUserId()
-      const ceiling = userId ? await getUserPermissionCeiling(userId) : defaultPermissionCeiling()
-      if (!trimmed) {
-        const current = getPermissionMode()
-        const lines: string[] = [t('mode.menuTitle')]
-        for (const alias of MODE_ALIASES) {
-          const isCurrent = alias === modeToAlias(current)
-          const within = isModeWithinCeiling(parseMode(alias)!, ceiling)
-          const marker = isCurrent
-            ? t('mode.currentMarker')
-            : (within ? '' : t('mode.aboveCeilingMarker'))
-          lines.push(`  ${alias.padEnd(5)} ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
-        }
-        lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '')
-        ctx.output.write(lines.join('\n'))
-        return
-      }
-      const mode = parseMode(trimmed)
-      if (!mode) {
-        ctx.output.write(`${t('common.error.prefix')}${t('mode.unknown', { input: trimmed, aliases: MODE_ALIASES.join(' / ') })}\n`)
-        return
-      }
-      if (!isModeWithinCeiling(mode, ceiling)) {
-        ctx.output.write(`${t('common.error.prefix')}${t('mode.exceedCeiling', { mode: modeToAlias(mode), ceiling: modeToAlias(ceiling) })}\n`)
-        return
-      }
-      setPermissionMode(mode)
-      if (userId) {
-        setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: mode })
-      }
-      const alias = modeToAlias(mode)
-      const recap = t(`mode.${alias}.recap` as 'mode.read.recap')
-      ctx.output.write(`${t('mode.set', { mode: alias })}\n${recap}\n`)
-      await ctx.persistMeta(ctx.messages.length)
+      // B2: delegate to `/config mode`. runConfigMode accepts both `set <m>`
+      // and a bare `<m>` so the old `/mode <m>` form stays byte-identical.
+      ctx.output.write(await runConfigCommand(`mode ${args.trim()}`.trim(), {
+        config: ctx.config,
+        userId: ctx.userId ?? getCurrentUserId(),
+        messagesLength: ctx.messages.length,
+        persistMeta: ctx.persistMeta,
+      }))
     },
   },
   {
@@ -651,71 +543,26 @@ function buildBuiltinCommands(): ReplCommand[] {
       '/rules ask <rule>                          Force a matching action to ask again',
     ].join('\n'),
     async handler(args, ctx) {
+      // B2: `/rules` delegates to `/config rule`. The old verbs `revoke`/`ask`
+      // map to the new `rm`/`add` (default ask), so the same config.ts handler
+      // serves both names and the visible strings stay byte-identical until B6.
       const trimmed = args.trim()
-      const [head, ...rest] = trimmed.split(/\s+/)
-      const sub = head || 'list'
-      const userId = getCurrentUserId()
-      if (sub === 'list') {
-        ctx.output.write(formatRulesList())
-        return
+      const [head, ...rest] = trimmed.split(/\s+/).filter(Boolean)
+      const sub = (head || 'list').toLowerCase()
+      const cfgCtx = {
+        config: ctx.config,
+        userId: ctx.userId ?? getCurrentUserId(),
       }
       if (sub === 'revoke') {
-        if (!userId) {
-          ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
-          return
-        }
-        const target = rest[0]
-        if (!target) {
-          ctx.output.write(`${t('common.error.prefix')}${t('rules.revokeUsage')}\n`)
-          return
-        }
-        if (target === 'all') {
-          const before = getIdentityRules().length
-          clearIdentityRules(userId)
-          setIdentityRules([])
-          ctx.output.write(
-            before === 0
-              ? `${t('rules.revokedAllEmpty')}\n`
-              : `${t('rules.revokedAll', { count: before })}\n`,
-          )
-          return
-        }
-        const n = Number.parseInt(target, 10)
-        const sorted = sortRulesForDisplay(getIdentityRules())
-        if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
-          ctx.output.write(`${t('common.error.prefix')}${t('rules.revokeNoSuch', { n: target })}\n`)
-          return
-        }
-        const victim = sorted[n - 1]!
-        removeIdentityRule({ canonicalUser: userId, rule: victim })
-        setIdentityRules(loadIdentityRules(userId))
-        ctx.output.write(
-          `${t('rules.revokedOne', { behavior: victim.behavior, rule: formatRule(victim.value) })}\n\n${formatRulesList()}`,
-        )
+        ctx.output.write(await runConfigCommand(`rule rm ${rest.join(' ')}`.trim(), cfgCtx))
         return
       }
       if (sub === 'ask') {
-        const ruleText = rest.join(' ').trim()
-        if (!ruleText) {
-          ctx.output.write(`${t('common.error.prefix')}${t('rules.askUsage')}\n`)
-          return
-        }
-        if (!userId) {
-          ctx.output.write(`${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`)
-          return
-        }
-        let value
-        try {
-          value = parseRule(ruleText)
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          ctx.output.write(`${t('common.error.prefix')}${detail}\n`)
-          return
-        }
-        const rule: PermissionRule = { source: 'identity', behavior: 'ask', value }
-        appendIdentityRules({ canonicalUser: userId, rules: [rule] })
-        setIdentityRules(loadIdentityRules(userId))
-        ctx.output.write(`${t('rules.askRegistered', { rule: formatRule(value) })}\n`)
+        ctx.output.write(await runConfigCommand(`rule add ${rest.join(' ')}`.trim(), cfgCtx))
+        return
+      }
+      if (sub === 'list') {
+        ctx.output.write(await runConfigCommand('rule list', cfgCtx))
         return
       }
       ctx.output.write(`${t('common.error.prefix')}${t('rules.usage')}\n`)
@@ -744,36 +591,6 @@ function buildBuiltinCommands(): ReplCommand[] {
     },
   },
   ]
-}
-
-const BEHAVIOR_RANK: Record<PermissionRule['behavior'], number> = {
-  deny: 0,
-  ask: 1,
-  allow: 2,
-}
-
-function sortRulesForDisplay(rules: readonly PermissionRule[]): PermissionRule[] {
-  return [...rules].sort((a, b) => {
-    if (a.behavior !== b.behavior) {
-      return BEHAVIOR_RANK[a.behavior] - BEHAVIOR_RANK[b.behavior]
-    }
-    return formatRule(a.value).localeCompare(formatRule(b.value))
-  })
-}
-
-function formatRulesList(): string {
-  const sorted = sortRulesForDisplay(getIdentityRules())
-  if (sorted.length === 0) {
-    return `${t('rules.empty')}\n`
-  }
-  const indexWidth = String(sorted.length).length
-  const lines = [t('rules.listTitle')]
-  for (const [i, rule] of sorted.entries()) {
-    const idx = String(i + 1).padStart(indexWidth, ' ')
-    lines.push(`  [${idx}] ${rule.behavior.padEnd(5, ' ')} ${formatRule(rule.value)}`)
-  }
-  lines.push(t('rules.listFooter'))
-  return lines.join('\n')
 }
 
 async function formatCeilingList(): Promise<string> {

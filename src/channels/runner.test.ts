@@ -295,6 +295,24 @@ describe('ChannelRunner pre-lock fast path', () => {
     assert.equal(parseFastPathSlash('/system mount rm /x'), null)
     assert.equal(parseFastPathSlash('/system data'), null)
     assert.equal(parseFastPathSlash('/system data import /x'), null)
+    // /config hub (PR5.9 B2): bare hub + bare/`list` nouns are read; any
+    // write verb (set / reset / add / rm / ...) falls through to the lock.
+    assert.equal(parseFastPathSlash('/config'), 'read')
+    assert.equal(parseFastPathSlash('/config model'), 'read')
+    assert.equal(parseFastPathSlash('/config model list'), 'read')
+    assert.equal(parseFastPathSlash('/config mode'), 'read')
+    assert.equal(parseFastPathSlash('/config lang'), 'read')
+    assert.equal(parseFastPathSlash('/config rule'), 'read')
+    assert.equal(parseFastPathSlash('/config workspace'), 'read')
+    assert.equal(parseFastPathSlash('/config endpoint'), 'read')
+    assert.equal(parseFastPathSlash('/config codex'), 'read')
+    assert.equal(parseFastPathSlash('/config model set x'), null)
+    assert.equal(parseFastPathSlash('/config model reset'), null)
+    assert.equal(parseFastPathSlash('/config mode set auto'), null)
+    assert.equal(parseFastPathSlash('/config lang set en'), null)
+    assert.equal(parseFastPathSlash('/config rule add Bash(git:*)'), null)
+    assert.equal(parseFastPathSlash('/config workspace set /x'), null)
+    assert.equal(parseFastPathSlash('/config endpoint add-key a b'), null)
     // /feedback writes feedback.jsonl on a separate path from the
     // session transcript — no main-lock contention, no LLM call.
     assert.equal(parseFastPathSlash('/feedback something'), 'read')

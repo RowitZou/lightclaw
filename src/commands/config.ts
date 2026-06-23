@@ -16,19 +16,48 @@ import {
   parseUserConfigOverride,
   readUserConfig,
   resolveUserConfig,
+  setUserConfigField,
   writeUserConfig,
 } from '../config/user-override.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
+import { setIdentityPreference } from '../identity/preferences.js'
+import { getUserPermissionCeiling } from '../identity/store.js'
 import { t } from '../i18n/index.js'
 import { formatEndpointTemplates, formatModelTemplates } from '../model-setup.js'
 import { expandHomePath } from '../paths.js'
-import { getProviderFor } from '../provider/index.js'
+import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
+import { clearAllForModel } from '../provider/capability-cache.js'
+import { formatRule, parseRule } from '../permission/rules.js'
+import {
+  appendIdentityRules,
+  clearIdentityRules,
+  loadIdentityRules,
+  removeIdentityRule,
+} from '../permission/storage.js'
+import { isModeWithinCeiling, type PermissionMode, type PermissionRule } from '../permission/types.js'
 import { resolveGpfsMountRule } from '../runtime/gpfs-mount-rules.js'
 import { loadUserSecrets, validateSecretName } from '../secrets/store.js'
+import {
+  getCurrentUserId,
+  getIdentityRules,
+  getModel,
+  getPermissionMode,
+  setIdentityRules,
+  setModel as setLiveModel,
+  setPermissionMode,
+} from '../state.js'
+
+import { MODE_ALIASES, modeToAlias, parseMode } from './mode-aliases.js'
 
 type ConfigCommandContext = {
   config: LightClawConfig
   userId?: string
+  // Optional: scalar `model`/`mode` set/reset paths persist the live session
+  // count via this hook when present (the channel/terminal slash path supplies
+  // it). Absent on minimal callers (tests, fast-path read) — persistMeta is a
+  // best-effort no-op there.
+  messagesLength?: number
+  persistMeta?: (messageCount: number) => Promise<void>
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
@@ -92,18 +121,14 @@ export async function runConfigCommand(
     return `${t('config.usage')}\n`
   }
 
+  // `set-workspace` is the legacy spelling of `workspace set` — both route
+  // through runConfigWorkspace so the old name stays byte-identical until B6.
   if (action === 'set-workspace') {
-    if (!ctx.userId) {
-      return `${t('config.noIdentity')}\n`
-    }
-    const target = parts[1]
-    if (!target) {
-      return `${t('config.usage')}\n`
-    }
-    if (target === 'reset' || target === '--default') {
-      return resetWorkspace(ctx.userId)
-    }
-    return setWorkspace(target, ctx)
+    return runConfigWorkspace(parts.slice(1), ctx)
+  }
+
+  if (action === 'workspace') {
+    return runConfigWorkspace(parts.slice(1), ctx)
   }
 
   if (action === 'endpoint') {
@@ -111,7 +136,19 @@ export async function runConfigCommand(
   }
 
   if (action === 'model') {
-    return runModelSubcommand(parts.slice(1), ctx)
+    return runConfigModel(parts.slice(1), ctx)
+  }
+
+  if (action === 'mode') {
+    return runConfigMode(parts.slice(1), ctx)
+  }
+
+  if (action === 'lang') {
+    return runConfigLang(parts.slice(1), ctx)
+  }
+
+  if (action === 'rule') {
+    return runConfigRule(parts.slice(1), ctx)
   }
 
   if (action === 'codex') {
@@ -119,6 +156,55 @@ export async function runConfigCommand(
   }
 
   return `${t('config.usage')}\n`
+}
+
+// ── /config model — DUAL purpose dispatcher (B2 disambiguation, design F.2a) ──
+//
+// The `model` noun wears two faces under one name:
+//   - SCALAR face  = pick which model the *current user* runs (←old `/model`):
+//       `/config model`               list selectable models + current (read)
+//       `/config model set <name>`    switch current model
+//       `/config model reset`         drop the per-user override (fall back)
+//       `/config model --clear-cache` clear the current model's probe cache
+//   - BYO registry face (existing, PR5) = manage the user's own custom model
+//       definitions: `add set check rm list templates`.
+//
+// DISAMBIGUATION RULE (chosen split):
+//   The SIX tokens `add check rm remove list templates template` are reserved
+//   BYO verbs and always route to the BYO registry. `set` is the ONLY ambiguous
+//   verb (it exists on both faces):
+//     - `set <name>` with a single bare model-name arg and NO BYO flags
+//       (--schema / --endpoint / --upstream-model / --reasoning /
+//        --max-output-tokens) → SCALAR switch (the common case, ←`/model set`).
+//     - `set <name> --endpoint ...` (any BYO flag present) → BYO model edit.
+//   Anything else (bare, `--clear-cache`, or a first token that is not a
+//   reserved verb, e.g. `/config model <name>`) is the SCALAR face.
+const BYO_MODEL_VERBS = new Set([
+  'add', 'check', 'rm', 'remove', 'list', 'templates', 'template',
+])
+const BYO_MODEL_SET_FLAGS = [
+  '--schema', '--endpoint', '--upstream-model', '--reasoning', '--max-output-tokens',
+]
+
+async function runConfigModel(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const verb = (parts[0] ?? '').toLowerCase()
+  if (BYO_MODEL_VERBS.has(verb)) {
+    return runModelSubcommand(parts, ctx)
+  }
+  if (verb === 'set') {
+    const rest = parts.slice(1)
+    const hasByoFlag = rest.some(arg => BYO_MODEL_SET_FLAGS.includes(arg))
+    if (hasByoFlag) {
+      return runModelSubcommand(parts, ctx)
+    }
+    // `set <bare-name>` → scalar switch.
+    return runConfigModelScalar(['set', ...rest], ctx)
+  }
+  // bare / `--clear-cache` / `reset` / `<name>` → scalar face.
+  return runConfigModelScalar(parts, ctx)
 }
 
 // ── /config endpoint <verb> (BYO apiKey endpoints, PR5) ──────────────────────
@@ -159,12 +245,12 @@ async function runEndpointSubcommand(
 function endpointUsage(): string {
   return [
     'Usage:',
-    '  /config endpoint list',
-    '  /config endpoint templates',
+    '  /config endpoint                          List your endpoints',
+    '  /config endpoint templates                Show endpoint templates',
     '  /config endpoint add-key <alias> <SECRET_NAME> [--base-url <url>] [--proxy <url>]',
     '  /config endpoint add-codex <alias> codex:<name> [--base-url <url>] [--proxy <url>]',
     '  /config endpoint set <alias> [--base-url <url|->] [--proxy <url|->] [--api-key-ref <SECRET_NAME>]',
-    '  /config endpoint remove <alias>',
+    '  /config endpoint rm <alias>',
     '',
   ].join('\n')
 }
@@ -359,12 +445,15 @@ async function runModelSubcommand(
 function modelUsage(): string {
   return [
     'Usage:',
-    '  /config model list',
-    '  /config model templates',
+    '  /config model                 List selectable models + current',
+    '  /config model set <name>      Switch current model',
+    '  /config model reset           Drop your model choice (fall back to default)',
+    '  /config model list            List your custom (BYO) models',
+    '  /config model templates       Show BYO model templates',
     '  /config model add <displayName> <anthropic|openai|openai-auth> <endpointAlias> <upstreamModel> [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-output-tokens <n>] [--no-default]',
     '  /config model set <displayName> [--schema <anthropic|openai|openai-auth>] [--endpoint <alias>] [--upstream-model <id>] [--reasoning <e|->] [--max-output-tokens <n|->]',
     '  /config model check <displayName>',
-    '  /config model remove <displayName>',
+    '  /config model rm <displayName>',
     '',
   ].join('\n')
 }
@@ -562,9 +651,9 @@ async function runCodexSubcommand(
 function codexUsage(): string {
   return [
     'Usage:',
-    '  /config codex list',
+    '  /config codex                             List imported Codex credentials',
     '  /config codex import --from <daemon-readable-path> [--name <name>]',
-    '  /config codex remove [<name>]',
+    '  /config codex rm [<name>]',
     '',
   ].join('\n')
 }
@@ -676,6 +765,283 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {}
+}
+
+// ── /config model — SCALAR face (current-model switch; ←old `/model`) ─────────
+//
+// Ported verbatim from builtin.ts's `/model` handler so the old top-level name
+// and this noun stay byte-identical. Live `setModel()` updates THIS turn's
+// model; `setUserConfigField(user, 'defaultModel', ...)` persists the choice
+// per-user (the PR4 anti-pollution fix — never mutate the shared in-memory
+// config). `--clear-cache` is preserved unchanged for B2 (B3 relocates it to
+// `backend check`).
+async function runConfigModelScalar(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const config = ctx.config
+  const clearCache = parts.includes('--clear-cache')
+  // Drop the leading `set` verb (scalar `set <name>`) and `--clear-cache`.
+  const modelParts = parts.filter(p => p !== '--clear-cache' && p !== 'set')
+  const model = modelParts.join(' ')
+  const registered = Object.keys(config.models)
+  const formatList = (): string =>
+    registered
+      .map(name => {
+        const entry = config.models[name]
+        return `${name} (${entry.schema}, ${entry.endpoint} -> ${entry.upstreamModel})`
+      })
+      .join(', ')
+
+  // Scalar reset: drop the per-user defaultModel override so resolveUserConfig
+  // falls back to the admin default chain. Minimal B2 wording (B5 polishes the
+  // full "falls back to admin" UX + --y).
+  if (model === 'reset' && !clearCache) {
+    const userId = ctx.userId ?? getCurrentUserId()
+    if (userId) {
+      setUserConfigField(userId, 'defaultModel', undefined)
+    }
+    return `${t('model.reset')}\n`
+  }
+
+  if (clearCache && modelParts.length === 0) {
+    const current = getModel()
+    const entry = config.models[current]
+    if (!entry) {
+      return `${t('common.error.prefix')}${t('model.clearCache.notRegistered', { name: current })}\n`
+    }
+    const baseUrl = config.endpoints[entry.endpoint]?.baseUrl
+    const removed = clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+    clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+    return `${t('model.clearCache.cleared', {
+      name: current,
+      endpoint: entry.endpoint,
+      upstream: entry.upstreamModel,
+      suffix: removed ? '' : t('model.clearCache.noEntry'),
+    })}\n`
+  }
+  if (!model) {
+    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n`
+  }
+  if (!config.models[model]) {
+    return `${t('common.error.prefix')}${t('model.unknown', { name: model })}\n${t('model.available', { list: formatList() })}\n`
+  }
+  setLiveModel(model)
+  if (clearCache) {
+    const entry = config.models[model]
+    const baseUrl = config.endpoints[entry.endpoint]?.baseUrl
+    clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+    clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+  }
+  const callerId = ctx.userId ?? getCurrentUserId()
+  if (callerId) {
+    setUserConfigField(callerId, 'defaultModel', model)
+  }
+  await ctx.persistMeta?.(ctx.messagesLength ?? 0)
+  return `${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`
+}
+
+// ── /config mode — scalar permission posture (←old `/mode`) ───────────────────
+async function runConfigMode(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const userId = ctx.userId ?? getCurrentUserId()
+  const ceiling = userId ? await getUserPermissionCeiling(userId) : getConfig().permissionCeiling
+  const verb = (parts[0] ?? '').toLowerCase()
+
+  if (verb === '' ) {
+    const current = getPermissionMode()
+    const lines: string[] = [t('mode.menuTitle')]
+    for (const alias of MODE_ALIASES) {
+      const isCurrent = alias === modeToAlias(current)
+      const within = isModeWithinCeiling(parseMode(alias)!, ceiling)
+      const marker = isCurrent
+        ? t('mode.currentMarker')
+        : (within ? '' : t('mode.aboveCeilingMarker'))
+      lines.push(`  ${alias.padEnd(5)} ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
+    }
+    lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '')
+    return lines.join('\n')
+  }
+
+  if (verb === 'reset') {
+    if (userId) {
+      setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: undefined })
+    }
+    return `${t('mode.reset')}\n`
+  }
+
+  // Accept both `set <mode>` (noun-verb) and a bare `<mode>` (old `/mode <m>`).
+  const modeText = verb === 'set' ? (parts[1] ?? '') : verb
+  const mode = parseMode(modeText)
+  if (!mode) {
+    return `${t('common.error.prefix')}${t('mode.unknown', { input: modeText, aliases: MODE_ALIASES.join(' / ') })}\n`
+  }
+  if (!isModeWithinCeiling(mode, ceiling)) {
+    return `${t('common.error.prefix')}${t('mode.exceedCeiling', { mode: modeToAlias(mode), ceiling: modeToAlias(ceiling) })}\n`
+  }
+  setPermissionMode(mode)
+  if (userId) {
+    setIdentityPreference({ canonicalUser: userId, key: 'permissionMode', value: mode })
+  }
+  const alias = modeToAlias(mode)
+  const recap = t(`mode.${alias}.recap` as 'mode.read.recap')
+  await ctx.persistMeta?.(ctx.messagesLength ?? 0)
+  return `${t('mode.set', { mode: alias })}\n${recap}\n`
+}
+
+// ── /config lang — scalar UI language (NEW; ←none) ────────────────────────────
+async function runConfigLang(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const userId = ctx.userId ?? getCurrentUserId()
+  const verb = (parts[0] ?? '').toLowerCase()
+  const override = userId ? loadUserConfigOverride(userId) : {}
+
+  if (verb === '') {
+    const current = override.lang ?? ctx.config.lang
+    return `${t('config.lang.current', { lang: current })}\n`
+  }
+  if (verb === 'reset') {
+    if (userId) setUserConfigField(userId, 'lang', undefined)
+    return `${t('config.lang.reset')}\n`
+  }
+  // `set <cn|en>` (and bare `<cn|en>` for symmetry).
+  const langText = verb === 'set' ? (parts[1] ?? '') : verb
+  if (langText !== 'cn' && langText !== 'en') {
+    return `${t('common.error.prefix')}${t('config.lang.invalid', { input: langText })}\n`
+  }
+  if (!userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  setUserConfigField(userId, 'lang', langText)
+  return `${t('config.lang.set', { lang: langText })}\n`
+}
+
+// ── /config rule — per-user permission rules (←old `/rules`) ──────────────────
+//
+// Verb mapping per design F.5: `revoke`→`rm`, `ask`→`add` (default ask rule).
+// `add <pattern> [--deny]` registers an ask rule (or a deny rule with --deny).
+const RULE_BEHAVIOR_RANK: Record<PermissionRule['behavior'], number> = { deny: 0, ask: 1, allow: 2 }
+
+function sortConfigRulesForDisplay(rules: readonly PermissionRule[]): PermissionRule[] {
+  return [...rules].sort((a, b) => {
+    if (a.behavior !== b.behavior) return RULE_BEHAVIOR_RANK[a.behavior] - RULE_BEHAVIOR_RANK[b.behavior]
+    return formatRule(a.value).localeCompare(formatRule(b.value))
+  })
+}
+
+function formatConfigRulesList(): string {
+  const sorted = sortConfigRulesForDisplay(getIdentityRules())
+  if (sorted.length === 0) return `${t('rules.empty')}\n`
+  const indexWidth = String(sorted.length).length
+  const lines = [t('rules.listTitle')]
+  for (const [i, rule] of sorted.entries()) {
+    const idx = String(i + 1).padStart(indexWidth, ' ')
+    lines.push(`  [${idx}] ${rule.behavior.padEnd(5, ' ')} ${formatRule(rule.value)}`)
+  }
+  lines.push(t('rules.listFooter'))
+  return lines.join('\n')
+}
+
+async function runConfigRule(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  const verb = (parts[0] ?? 'list').toLowerCase()
+  const userId = ctx.userId ?? getCurrentUserId()
+
+  if (verb === 'list' || verb === '') {
+    return formatConfigRulesList()
+  }
+
+  if (verb === 'rm') {
+    if (!userId) {
+      return `${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`
+    }
+    const target = parts[1]
+    if (!target) {
+      return `${t('common.error.prefix')}${t('rules.revokeUsage')}\n`
+    }
+    if (target === 'all') {
+      const before = getIdentityRules().length
+      clearIdentityRules(userId)
+      setIdentityRules([])
+      return before === 0
+        ? `${t('rules.revokedAllEmpty')}\n`
+        : `${t('rules.revokedAll', { count: before })}\n`
+    }
+    const n = Number.parseInt(target, 10)
+    const sorted = sortConfigRulesForDisplay(getIdentityRules())
+    if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
+      return `${t('common.error.prefix')}${t('rules.revokeNoSuch', { n: target })}\n`
+    }
+    const victim = sorted[n - 1]!
+    removeIdentityRule({ canonicalUser: userId, rule: victim })
+    setIdentityRules(loadIdentityRules(userId))
+    return `${t('rules.revokedOne', { behavior: victim.behavior, rule: formatRule(victim.value) })}\n\n${formatConfigRulesList()}`
+  }
+
+  if (verb === 'add') {
+    const rest = parts.slice(1)
+    const deny = rest.includes('--deny')
+    const ruleText = rest.filter(p => p !== '--deny').join(' ').trim()
+    if (!ruleText) {
+      return `${t('common.error.prefix')}${t('config.rule.addUsage')}\n`
+    }
+    if (!userId) {
+      return `${t('common.error.prefix')}${t('common.error.noActiveIdentity')}\n`
+    }
+    let value
+    try {
+      value = parseRule(ruleText)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return `${t('common.error.prefix')}${detail}\n`
+    }
+    const behavior: PermissionRule['behavior'] = deny ? 'deny' : 'ask'
+    const rule: PermissionRule = { source: 'identity', behavior, value }
+    appendIdentityRules({ canonicalUser: userId, rules: [rule] })
+    setIdentityRules(loadIdentityRules(userId))
+    return deny
+      ? `${t('config.rule.denyRegistered', { rule: formatRule(value) })}\n`
+      : `${t('rules.askRegistered', { rule: formatRule(value) })}\n`
+  }
+
+  return `${t('common.error.prefix')}${t('config.rule.usage')}\n`
+}
+
+// ── /config workspace — scalar workspace dir (←old `/config set-workspace`) ────
+async function runConfigWorkspace(
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  if (!ctx.userId) {
+    return `${t('config.noIdentity')}\n`
+  }
+  const verb = (parts[0] ?? '').toLowerCase()
+  if (verb === '') {
+    // bare = show current workspace (read).
+    const override = loadUserConfigOverride(ctx.userId)
+    const current = typeof override.workspace === 'string' && override.workspace
+      ? override.workspace
+      : t('config.workspace.currentDefault')
+    return `${t('config.workspace.current', { path: current })}\n`
+  }
+  if (verb === 'reset' || verb === '--default') {
+    return resetWorkspace(ctx.userId)
+  }
+  // `set <path>` (noun-verb) or a bare `<path>` (legacy `set-workspace <path>`).
+  const target = verb === 'set' ? parts[1] : parts[0]
+  if (!target) {
+    return `${t('config.usage')}\n`
+  }
+  if (target === 'reset' || target === '--default') {
+    return resetWorkspace(ctx.userId)
+  }
+  return setWorkspace(target, ctx)
 }
 
 async function setWorkspace(rawPath: string, ctx: ConfigCommandContext & { userId?: string }): Promise<string> {

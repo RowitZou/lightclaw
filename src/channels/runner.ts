@@ -2712,6 +2712,28 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
     }
     return null
   }
+  // /config hub (PR5.9 B2) — same read/write split convention. Bare nouns
+  // and the explicit `list` verb are pure reads; any write verb (set / reset /
+  // add / rm / ...) falls through to the lock path so it serializes with an
+  // in-flight turn. The BYO `endpoint` / `codex` nouns keep their pre-B2
+  // classification (their write verbs already fall through to null here).
+  if (head === '/config') {
+    if (argText === '') {
+      return 'read'
+    }
+    const subParts = argText.split(/\s+/)
+    const noun = subParts[0]
+    const verb = subParts[1] ?? ''
+    // Scalar / list nouns: bare or `list` is read; any other verb writes.
+    if (
+      (noun === 'model' || noun === 'mode' || noun === 'lang' ||
+        noun === 'rule' || noun === 'workspace' || noun === 'endpoint' || noun === 'codex') &&
+      (verb === '' || verb === 'list')
+    ) {
+      return 'read'
+    }
+    return null
+  }
   // /feedback writes to feedback.jsonl on disk — a completely separate
   // path from the channel session transcript. No live in-memory state,
   // no LLM call, no contention with the main session lock. (User-only
