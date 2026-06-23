@@ -3,7 +3,7 @@ import { stdin as input, stdout as output } from 'node:process'
 
 import chalk from 'chalk'
 
-import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './commands/builtin.js'
+import { createBuiltinReplRegistry } from './commands/builtin.js'
 import { t } from './i18n/index.js'
 import type { ReplContext } from './commands/registry.js'
 import { type LightClawConfig } from './config.js'
@@ -109,7 +109,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
       continue
     }
 
-    await registry.dispatch(command, ctx, RENAMED_COMMANDS)
+    await registry.dispatch(command, ctx)
   }
 
   rl.close()

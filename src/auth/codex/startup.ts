@@ -154,7 +154,7 @@ function formatStderrWarning(outcome: DegradeOutcome): string {
     )
   }
   lines.push(
-    `[startup] Fix: \`codex login\` then \`/auth import codex\`, ` +
+    `[startup] Fix: \`codex login\` then \`/admin endpoint add codex --type codex --auth-path <auth.json>\`, ` +
       `then restart LightClaw to restore the disabled models.`,
   )
   return lines.join('\n') + '\n'

@@ -71,26 +71,6 @@ export function createBuiltinReplRegistry(
   return registry
 }
 
-export const RENAMED_COMMANDS: Record<string, string> = {
-  // Pre-existing renames (kept).
-  '/identity': '/user',
-  '/permissions': '/rules',
-  // PR5.9 B6: the old top-level command names retired into /config /system
-  // /admin. A retired name is no longer registered, so dispatchChannelSlash
-  // consults this map and emits a one-time hint pointing at the new path.
-  '/model': '/config model set',
-  '/mode': '/config mode set',
-  '/rules': '/config rule',
-  '/secret': '/system key',
-  '/mount': '/system mount',
-  '/cost': '/admin cost',
-  '/user': '/admin user',
-  '/ceiling': '/admin ceiling',
-  '/sandbox': '/admin sandbox',
-  '/feishu-workspace': '/admin feishu-drive',
-  '/auth': '/admin endpoint --type codex',
-}
-
 async function restartCurrentRlaunchRuntime(ctx: ReplContext): Promise<string> {
   const userId = ctx.userId ?? getCurrentUserId()
   if (!userId) {
@@ -230,8 +210,8 @@ function buildBuiltinCommands(): ReplCommand[] {
       '(e.g. a shared collaboration disk) instead of the default per-user ' +
       'workspace. They self-serve it; an invalid path is rejected with a reason.',
     agentUsage: [
-      '/config set-workspace <absolute-path>    Point your workspace at this directory (validated; rejected with a reason if not daemon-accessible / not under an allowed gpfs prefix).',
-      '/config set-workspace reset              Restore the default per-user workspace.',
+      '/config workspace set <absolute-path>    Point your workspace at this directory (validated; rejected with a reason if not daemon-accessible / not under an allowed gpfs prefix).',
+      '/config workspace reset                  Restore the default per-user workspace.',
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runConfigCommand(args, ctx))

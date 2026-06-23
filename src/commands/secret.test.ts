@@ -105,7 +105,7 @@ describe('/secret command', () => {
   it('supports list default, status all, help, and rm alias', async () => {
     assert.match(await runSecretCommand('', { userId: 'alice' }), /No secrets stored/)
     assert.match(await runSecretCommand('status', { userId: 'alice' }), /No secrets stored/)
-    assert.match(await runSecretCommand('help', { userId: 'alice' }), /\/secret set <NAME>/)
+    assert.match(await runSecretCommand('help', { userId: 'alice' }), /\/system key set <NAME>/)
 
     await runSecretCommand('set GH_TOKEN secret', { userId: 'alice' })
     assert.match(await runSecretCommand('rm GH_TOKEN', { userId: 'alice' }), /removed/)

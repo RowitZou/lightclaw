@@ -426,12 +426,17 @@ describe('/config endpoint add --type', () => {
     assert.deepEqual(Object.keys(readSecretsJson('b3ref')).sort(), before.sort())
   })
 
-  it('add-key / add-codex now emit a one-time deprecation hint', async () => {
+  it('add-key / add-codex are removed verbs → fall through to endpoint usage', async () => {
     const cfg = modelConfig()
+    // The legacy deprecation hints are gone; an unrecognized endpoint verb now
+    // lands on the endpoint usage (which names the real `add --type` path) and
+    // writes no user config.
     const out1 = await runConfigCommand('endpoint add-key ep MY_KEY', { config: cfg, userId: 'b3dep' })
-    assert.match(out1, /deprecated|--type/)
+    assert.match(out1, /--type/)
+    assert.doesNotMatch(out1, /deprecated/)
     const out2 = await runConfigCommand('endpoint add-codex ep codex:x', { config: cfg, userId: 'b3dep' })
-    assert.match(out2, /deprecated|--type codex/)
+    assert.match(out2, /--type codex/)
+    assert.doesNotMatch(out2, /deprecated/)
     assert.equal(existsSync(userConfigPath('b3dep')), false)
   })
 })

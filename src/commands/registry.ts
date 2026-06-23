@@ -93,7 +93,6 @@ export class ReplCommandRegistry {
   async dispatch(
     line: string,
     ctx: ReplContext,
-    hints?: Record<string, string>,
   ): Promise<ReplCommandResult | undefined> {
     if (!line.startsWith('/')) {
       return undefined
@@ -105,11 +104,8 @@ export class ReplCommandRegistry {
 
     const command = this.commands.get(name)
     if (!command) {
-      const hint = hints?.[name]
       ctx.output.write(
-        hint
-          ? `${t('common.error.prefix')}${t('common.error.renamedHint', { name, newName: hint })}\n`
-          : `${t('common.error.prefix')}${t('common.error.unknownCommand', { name })}\n`,
+        `${t('common.error.prefix')}${t('common.error.unknownCommand', { name })}\n`,
       )
       return 'continue'
     }

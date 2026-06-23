@@ -24,32 +24,32 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
-describe('dispatchChannelSlash RENAMED hints (PR5.9 B6)', () => {
-  // Every retired top-level name must produce a one-time hint pointing at its
-  // new path — handled:true so the command is NOT silently dropped.
-  const cases: Array<[string, string]> = [
-    ['/secret list', '/system key'],
-    ['/model', '/config model set'],
-    ['/auth import codex', '/admin endpoint --type codex'],
-    ['/mount add /x', '/system mount'],
-    ['/cost', '/admin cost'],
-    ['/user list', '/admin user'],
-    ['/ceiling', '/admin ceiling'],
-    ['/sandbox status', '/admin sandbox'],
-    ['/feishu-workspace status', '/admin feishu-drive'],
-    ['/mode auto', '/config mode set'],
-    ['/rules list', '/config rule'],
+describe('dispatchChannelSlash retired-name removal', () => {
+  // The legacy RENAMED_COMMANDS hint table is gone. A retired top-level name is
+  // now just an unrecognized command: dispatchChannelSlash returns
+  // handled:false (the channel runner then treats it as ordinary chat),
+  // identical to any typo'd slash.
+  const retired = [
+    '/secret list',
+    '/model',
+    '/auth import codex',
+    '/mount add /x',
+    '/cost',
+    '/user list',
+    '/ceiling',
+    '/sandbox status',
+    '/feishu-workspace status',
+    '/mode auto',
+    '/rules list',
+    '/identity',
+    '/permissions',
   ]
 
-  for (const [input, newName] of cases) {
-    it(`hints ${input} → ${newName}`, async () => {
+  for (const input of retired) {
+    it(`retired ${input} is not handled (no rename hint)`, async () => {
       const result = await runDispatch(input)
-      assert.equal(result.handled, true, `${input} must be handled (not dropped)`)
-      // Multi-word newName must survive the i18n interpolation intact.
-      assert.ok(
-        result.output.includes(newName),
-        `expected hint to name "${newName}", got: ${result.output}`,
-      )
+      assert.equal(result.handled, false, `${input} must not be handled`)
+      assert.equal(result.output, '', `${input} must emit no hint output`)
     })
   }
 

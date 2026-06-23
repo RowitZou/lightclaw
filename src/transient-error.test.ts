@@ -203,7 +203,7 @@ describe('isTransientError', () => {
     // fell through to the default-retry branch → wasted retries → user saw
     // "network jitter, resend to retry" for a config error.
     const codexMissing = new Error(
-      'No Codex credentials stored. Run `/auth import codex` to import from the official Codex CLI.',
+      'No Codex credentials stored. Run `/admin endpoint add codex --type codex --auth-path <auth.json>` to import from the official Codex CLI.',
     )
     assert.equal(isTransientError(codexMissing), false)
     assert.equal(isCredentialError(codexMissing), true)

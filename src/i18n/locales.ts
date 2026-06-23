@@ -11,7 +11,6 @@ export const LOCALES = {
     // ---- Common ----
     'common.error.prefix': '错误：',
     'common.error.unknownCommand': '未知命令：{name}',
-    'common.error.renamedHint': '未知命令：{name}。已改名为 {newName}，详见 /help。',
     'common.error.adminOnly': '{name} 仅 admin 可用。',
     'common.error.userOnly': '{name} 仅普通用户可用（admin 是收件人，不是发送方）。',
     'common.error.noActiveIdentity': '当前没有可用的 LightClaw 身份。',
@@ -38,9 +37,9 @@ export const LOCALES = {
     'banner.console': 'LightClaw · 管理控制台（{name}）',
     'banner.consoleAnon': 'LightClaw · 管理控制台',
     'banner.hint': '对话在飞书；此处仅运维 · /help 查看命令',
-    'banner.pending': '⚠ {count} 个配对申请待处理 —— /user pending',
+    'banner.pending': '⚠ {count} 个配对申请待处理 —— /admin pairing',
     'banner.firstRunIntro': '这里只跑运维 slash 命令，不与 agent 对话 —— 要和 agent 对话，请在飞书里找 bot。',
-    'banner.firstRunNext': '下一步：\n  · 在飞书添加 bot 并发消息，即可开始对话\n  · /user pending                       查看待审批的配对申请\n  · /user approve <code> [--as <名字>]  批准接入（--as 可把申请人并入指定的规范用户名，如管理员本人）\n  · /help                               查看全部命令',
+    'banner.firstRunNext': '下一步：\n  · 在飞书添加 bot 并发消息，即可开始对话\n  · /admin pairing                              查看待审批的配对申请\n  · /admin pairing approve <code> [--as <名字>] 批准接入（--as 可把申请人并入指定的规范用户名，如管理员本人）\n  · /help                                       查看全部命令',
     'banner.slashOnly': '终端是 slash 命令控制台，不接受自由对话；与 agent 对话请走飞书。输入 /help 查看可用命令。',
 
     // ---- Init wizard ----
@@ -102,22 +101,22 @@ export const LOCALES = {
     'admin.writeRejected': '错误：该改动会让部署 config.json 无法通过启动校验（{detail}）；未写入。',
 
     // ---- /auth (admin) ----
-    'auth.usage': '用法：/auth list | import codex | logout codex [--purge]',
-    'auth.import.usage': '用法：/auth import <provider>。当前支持：codex',
+    'auth.usage': '用法：/admin endpoint | /admin endpoint add <ep> --type codex --auth-path <auth.json> | /admin endpoint rm <ep> --y',
+    'auth.import.usage': '用法：/admin endpoint add <ep> --type codex --auth-path <auth.json>。当前支持：codex',
     'auth.import.notSupported': 'provider {name} 不支持 import。',
-    'auth.logout.usage': '用法：/auth logout <provider> [--purge]',
+    'auth.logout.usage': '用法：/admin endpoint rm <ep> --y',
     'auth.unsupportedProvider': '不支持的 provider：{name}。当前支持：{list}',
     'auth.list.title': '已注册 auth provider：',
     'auth.list.noProviders': '当前没有任何 auth provider 注册。',
     'auth.list.entry': '  {name}：accountId={accountId}，{expiresIn}过期',
-    'auth.list.entryEmpty': '  {name}：未登录（运行 /auth import {name} 导入官方 CLI 凭证）',
+    'auth.list.entryEmpty': '  {name}：未登录（运行 /admin endpoint add {name} --type codex --auth-path <auth.json> 导入官方 CLI 凭证）',
     'auth.list.expired': '已过期，',
     'auth.list.inMinutes': '约 {n} 分钟后',
     'auth.list.inHours': '约 {n} 小时后',
     'auth.list.inDays': '约 {n} 天后',
     'auth.import.success': '已导入 {name} 凭证。',
-    'auth.codex.registered': '已自动注册 endpoints.codex + 新增 models: {tiers} 到 config.json。运行 /model gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
-    'auth.codex.registeredWithDiscovery': '已自动注册 endpoints.codex + 新增 models: {tiers}（live discovery 选定 upstream={slug}）到 config.json。运行 /model gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
+    'auth.codex.registered': '已自动注册 endpoints.codex + 新增 models: {tiers} 到 config.json。运行 /config model set gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
+    'auth.codex.registeredWithDiscovery': '已自动注册 endpoints.codex + 新增 models: {tiers}（live discovery 选定 upstream={slug}）到 config.json。运行 /config model set gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
     'auth.codex.alreadyRegistered': 'config.json 已存在 codex endpoint 与全部 codex 模型条目，未覆盖。',
     'auth.logout.success': '已删除 {name} 凭证文件。',
     'auth.logout.purged': '已同步移除 endpoint={endpoint}、models={models}。',
@@ -173,7 +172,7 @@ export const LOCALES = {
     'mode.ask.recap':
       '  · 读取类工具 → 静默放行\n  · 编辑、写入、命令执行 → 每次询问',
     'mode.auto.recap':
-      '  · 读取、编辑、写入文件 → 静默放行\n  · 联网读取（WebFetch）→ 静默放行（不再按 host 重复询问）\n  · 命令执行（Bash 等）→ 仍会询问\n  · 提示：用 /rules ask <pattern> 强制对特定操作恢复询问',
+      '  · 读取、编辑、写入文件 → 静默放行\n  · 联网读取（WebFetch）→ 静默放行（不再按 host 重复询问）\n  · 命令执行（Bash 等）→ 仍会询问\n  · 提示：用 /config rule add <pattern> 强制对特定操作恢复询问',
     'mode.yolo.recap':
       '  · 全部工具 → 静默放行\n  · 仅 ask / deny 规则可覆盖（如 Bash(rm:*)）\n  · 高风险操作不可逆，用前请确认作用域',
 
@@ -188,25 +187,25 @@ export const LOCALES = {
     'model.clearCache.cleared': '已清除 {name}（{endpoint} -> {upstream}）的能力缓存{suffix}。',
     'model.clearCache.noEntry': '（无现有条目）',
     'model.clearCache.alsoCleared': ' 能力缓存已清除。',
-    'model.none.noticeBody': '尚未配置可用模型，请用 /model 选择，或自带模型（BYO）。',
+    'model.none.noticeBody': '尚未配置可用模型，请用 /config model 选择，或自带模型（BYO）。',
 
     // ---- /rules ----
     'rules.empty': '当前用户没有持久化的权限规则。',
     'rules.listTitle': '当前用户的权限规则：',
-    'rules.listFooter': '\n用 /rules revoke <n> 删除单条，/rules revoke all 全清。\n（每次写入后编号会变，撤销前请重新 list）\n',
-    'rules.revokeUsage': '用法：/rules revoke <n>|all',
+    'rules.listFooter': '\n用 /config rule rm <n> 删除单条，/config rule rm all --y 全清。\n（每次写入后编号会变，撤销前请重新 list）\n',
+    'rules.revokeUsage': '用法：/config rule rm <n>|all --y',
     'rules.revokedAll': '已撤销全部 {count} 条规则。',
     'rules.revokedAllEmpty': '没有可撤销的规则。',
     'rules.revokedOne': '已撤销 [{behavior}] {rule}',
-    'rules.revokeNoSuch': '编号 {n} 没有对应规则。请先运行 /rules list。',
-    'rules.askUsage': '用法：/rules ask <rule>',
+    'rules.revokeNoSuch': '编号 {n} 没有对应规则。请先运行 /config rule list。',
+    'rules.askUsage': '用法：/config rule add <rule>',
     'rules.askRegistered': '已注册 ASK 规则：{rule}（覆盖 allow / bypassPermissions；已持久化）',
-    'rules.usage': '用法：/rules [list | revoke <n> | revoke all | ask <rule>]',
+    'rules.usage': '用法：/config rule [list | rm <n> | rm all --y | add <rule>]',
 
     // ---- /ceiling ----
     'ceiling.listTitle': '权限 ceiling：',
-    'ceiling.listFooter': '\n设置：/ceiling <user> <read|ask|auto|yolo>\n',
-    'ceiling.usage': '用法：\n  /ceiling                       （列出全部）\n  /ceiling <user> <read|ask|auto|yolo>',
+    'ceiling.listFooter': '\n设置：/admin ceiling set <user> <read|ask|auto|yolo>\n',
+    'ceiling.usage': '用法：\n  /admin ceiling                       （列出全部）\n  /admin ceiling set <user> <read|ask|auto|yolo>',
     'ceiling.invalidMode': '模式无效：{input}。可选：{aliases}。',
     'ceiling.noSuchUser': '没有这个身份：{name}',
     'ceiling.set': 'ceiling: {name} -> {mode}',
@@ -215,27 +214,27 @@ export const LOCALES = {
     // ---- /user (admin) ----
     'user.usage.localHeader': '用法（LocalRuntime 单用户模式，仅可绑定 admin "{admin}"）：',
     'user.usage.header': '用法：',
-    'user.usage.approveLocal': '  /user approve <code> [--as {admin}]   # local 模式建议 --as {admin}，把 IM 身份并入 admin 而非新建 user',
-    'user.usage.approveGeneric': '  /user approve <code> [--as <name>]   # --as 可把 IM 身份绑到已有用户，省略则按 IM profile 自动派生',
-    'user.usage.lines': '  /user list\n  /user pending\n{approve}\n  /user reject <code>\n  /user unlink <channel:id>\n  /user remove <name> [--purge]\n  /user feedback [--page N]\n',
+    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # local 模式建议 --as {admin}，把 IM 身份并入 admin 而非新建 user',
+    'user.usage.approveGeneric': '  /admin pairing approve <code> [--as <name>]   # --as 可把 IM 身份绑到已有用户，省略则按 IM profile 自动派生',
+    'user.usage.lines': '  /admin user list\n  /admin pairing\n{approve}\n  /admin pairing reject <code>\n  /admin user unlink <channel:id>\n  /admin user rm <name> [--purge] --y\n  /admin feedback [--page N]\n',
     'user.list.empty': '当前没有任何身份。',
     'user.pending.empty': '没有待处理的配对请求。',
     'user.pending.header': 'KEY      CHANNEL  PEER_ID                                  DISPLAY          REQUESTED',
-    'user.approve.usage': '用法：/user approve <code> [--as <name>]',
+    'user.approve.usage': '用法：/admin pairing approve <code> [--as <name>]',
     'user.approve.noSuchCode': '没有这个配对码：{code}',
     'user.approve.alreadyBound': '{link} 已绑定到 {name}',
     'user.approve.invalidName': '身份名无效：{name}',
     'user.approve.created': "已创建身份 '{name}'",
     'user.approve.updated': "已更新身份 '{name}'",
     'user.approve.linked': '已绑定 {link} → {name}',
-    'user.reject.usage': '用法：/user reject <code>',
+    'user.reject.usage': '用法：/admin pairing reject <code>',
     'user.reject.done': '已拒绝 {code}',
     'user.reject.noSuchCode': '没有这个配对码：{code}',
-    'user.unlink.usage': '用法：/user unlink <channel:id>',
+    'user.unlink.usage': '用法：/admin user unlink <channel:id>',
     'user.unlink.notBound': '{link} 未被绑定。',
     'user.unlink.done': '已解绑 {link} ← {name}',
     'user.unlink.notLinked': '{link} 未被链接。',
-    'user.remove.usage': '用法：/user remove <name> [--purge]',
+    'user.remove.usage': '用法：/admin user rm <name> [--purge] --y',
     'user.remove.refuseAdmin': '拒绝删除 v1 admin 身份。',
     'user.remove.done': "已删除身份 '{name}'",
     'user.remove.cleanupRlaunch': '已清理 cluster worker {worker}',
@@ -269,7 +268,7 @@ export const LOCALES = {
     'cost.byModel': '  按 model：',
     'cost.byUser': '  按 user：',
     'cost.freshSubset': '  Fresh 子项：{tok} tok（{percent}%）',
-    'cost.adminOnlyHint': '/cost 仅 admin 可用。普通用户用 /status 查看自己今日用量。',
+    'cost.adminOnlyHint': '/admin cost 仅 admin 可用。普通用户用 /status 查看自己今日用量。',
 
     // ---- /sandbox ----
     'sandbox.title': '沙箱镜像就绪状态（docker）：',
@@ -290,7 +289,7 @@ export const LOCALES = {
     'sandbox.prefetch.alreadyReady': 'sandbox: 镜像 {image} 已就绪，无需重复拉取。',
     'sandbox.prefetch.inProgress': 'sandbox: 镜像 {image} 正在拉取中。',
     'sandbox.prefetch.started': 'sandbox: 已启动 {image} 的拉取。',
-    'sandbox.usage': '用法：/sandbox [status|prefetch|reset]',
+    'sandbox.usage': '用法：/admin sandbox [status | prefetch | reset --y]',
     'sandbox.reset.rlaunchDone': '已停止并清理 rlaunch worker 状态。\nWorkspace gpfs 挂载已保留。\n下次环境工具调用会重建 worker。',
     'sandbox.reset.localNothing': 'sandbox: 当前是 local runtime，无需重置。',
     'sandbox.reset.dockerDone': '已停止并删除沙箱容器 {container}。\nTier 1（/workspace 绑定挂载）已保留。\nTier 2（可写层；pip 包、/etc 修改）已丢弃。\n下次环境工具调用会用 {image} 重建容器。',
@@ -302,7 +301,7 @@ export const LOCALES = {
     'permission.terminal.optionsLineHighRisk': '  [y] 本次允许    [n] 拒绝（高危：以后都允许已禁用）',
     'permission.terminal.choosePrompt': '请选择 [y/a/n]: ',
     'permission.terminal.choosePromptHighRisk': '请选择 [y/n]: ',
-    'permission.terminal.allowedPersisted': '  （已持久化授权：{verbose}；用 /rules list 查看，/rules revoke <n> 撤销）',
+    'permission.terminal.allowedPersisted': '  （已持久化授权：{verbose}；用 /config rule list 查看，/config rule rm <n> 撤销）',
     'permission.terminal.allowedNoPersist': '  （未持久化：当前没有 identity 上下文；本次允许）',
     'permission.terminal.deniedHighRisk': '权限被拒：{tool} 在 {mode} 模式下需要确认。',
     'permission.terminal.deniedSubagent': '没有为该 subagent 配置审批通道（终端 fork）。',
@@ -337,7 +336,7 @@ export const LOCALES = {
     'permission.feishu.btn.deny': '拒绝',
     'permission.feishu.notice.allowOnce': '已允许 {tool} 本次调用。',
     'permission.feishu.notice.deny': '已拒绝 {tool}。',
-    'permission.feishu.notice.allowAlways': '已允许 {label}，今后同类调用自动放行（已持久化到当前用户的权限）。\n需要撤销时发 /rules list 查看编号，再用 /rules revoke <n>。',
+    'permission.feishu.notice.allowAlways': '已允许 {label}，今后同类调用自动放行（已持久化到当前用户的权限）。\n需要撤销时发 /config rule list 查看编号，再用 /config rule rm <n>。',
     'permission.feishu.notice.allowAlwaysFail': '本次允许已生效，但权限规则持久化失败；下次同类调用仍会再问一次。',
     'permission.feishu.notice.highRiskDowngrade': '此操作含高风险子命令（如 rm / sudo / pipe-to-shell），出于安全只允许本次，没有写入持久化规则。',
     'permission.feishu.outcome.allowOnce': '已允许（本次）',
@@ -423,9 +422,9 @@ export const LOCALES = {
     'channel.failure.reason': '原因：{category}',
     'channel.failure.hint': '建议：可重发消息再试；若反复出现请联系管理员（stderr 有完整日志）',
     'channel.failure.contactAdminHint': '建议：确定性内部错误，重发无法解决；请联系管理员（stderr 有完整日志）。',
-    'channel.failure.credentialHint': '建议：需导入或刷新模型凭证（如 `/auth import codex`）后重试；重发同一条消息无法解决。',
+    'channel.failure.credentialHint': '建议：需导入或刷新模型凭证（如 `/admin endpoint add codex --type codex --auth-path <auth.json>`）后重试；重发同一条消息无法解决。',
     'channel.failure.billingHint': '建议：余额或配额已耗尽，请充值或检查计费 / 配额设置；重发同一条消息无法解决。',
-    'channel.failure.modelEndpointHint': '建议：检查 `/model` 选的模型在该 endpoint 是否存在，或 endpoint 路由 / base URL 配置；重发无法解决（stderr 有完整日志）。',
+    'channel.failure.modelEndpointHint': '建议：检查 `/config model` 选的模型在该 endpoint 是否存在，或 endpoint 路由 / base URL 配置；重发无法解决（stderr 有完整日志）。',
     'channel.failure.rateHint': '建议：稍后重发即可，这类限流通常会自愈。',
     'channel.failure.authHint': '建议：检查 API key / 权限配置；重发多半无效。',
     'channel.failure.cat.validation': '上游模型协议错误（messages 数组校验失败）',
@@ -506,7 +505,7 @@ export const LOCALES = {
     'channel.welcome.try.header': '**试试发我**',
     'channel.welcome.try.example': '「帮我同时调研 〈主题 A〉 和 〈主题 B〉，各整理成一份要点」',
     'channel.welcome.helpHint': '想知道有哪些命令？发 `/help`，或者直接问我。',
-    'channel.welcome.admin.helpHint': '想知道有哪些命令？发 `/help`（`/user`、`/sandbox`、`/cost` 等管理命令也在里面），或者直接问我。',
+    'channel.welcome.admin.helpHint': '想知道有哪些命令？发 `/help`（`/admin user`、`/admin sandbox`、`/admin cost` 等管理命令也在里面），或者直接问我。',
     'channel.welcome.startup.failedTitle': '还没准备好',
     'channel.welcome.startup.failedBody': '初始化没在 {seconds} 秒内完成：{reason}\n稍后再发一条消息即可重试；一直不行就告诉管理员。',
     'channel.welcome.startup.timeoutBody': '初始化超时了（{seconds} 秒还没就绪）。\n稍后再发一条消息即可重试；一直不行就告诉管理员。',
@@ -590,18 +589,18 @@ export const LOCALES = {
     // ---- /secret (channel) ----
     'secret.usage':
       '用法：\n' +
-      '  /secret list\n' +
-      '  /secret status [NAME]\n' +
-      '  /secret set <NAME> <VALUE...>\n' +
-      '  /secret enable <NAME>\n' +
-      '  /secret disable <NAME>\n' +
-      '  /secret remove <NAME>\n\n' +
+      '  /system key list\n' +
+      '  /system key status [NAME]\n' +
+      '  /system key set <NAME> <VALUE...>\n' +
+      '  /system key enable <NAME>\n' +
+      '  /system key disable <NAME>\n' +
+      '  /system key rm <NAME>\n\n' +
       '密钥是 per-user 的，值永不回显。启用后会作为 `$NAME` 注入到 Bash 命令中。',
-    'secret.noIdentity': 'LightClaw 当前没有可用身份；/secret 需要已配对的渠道用户。',
-    'secret.saved': '密钥 {name} 已保存（replaced={replaced}，length={length}）。运行 /secret enable {name} 开始注入。',
-    'secret.enableNotStored': '密钥 {name} 尚未存储。请先运行 /secret set {name} <VALUE>。',
+    'secret.noIdentity': 'LightClaw 当前没有可用身份；/system key 需要已配对的渠道用户。',
+    'secret.saved': '密钥 {name} 已保存（replaced={replaced}，length={length}）。运行 /system key enable {name} 开始注入。',
+    'secret.enableNotStored': '密钥 {name} 尚未存储。请先运行 /system key set {name} <VALUE>。',
     'secret.enabled': '密钥 {name} 已启用。从你的下一条消息起，会作为 ${name} 注入到 Bash 命令中。',
-    'secret.disabled': '密钥 {name} 已停用，存储的值仍保留 —— 运行 /secret enable {name} 重新启用。',
+    'secret.disabled': '密钥 {name} 已停用，存储的值仍保留 —— 运行 /system key enable {name} 重新启用。',
     'secret.notStored': '密钥 {name} 未存储。',
     'secret.removed': '密钥 {name} 已删除。',
     'secret.list.empty': '该用户没有存储任何密钥。',
@@ -622,14 +621,14 @@ export const LOCALES = {
     // ---- /mount (channel) ----
     'mount.usage':
       '用法：\n' +
-      '  /mount list\n' +
-      '  /mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
-      '  /mount remove <absolute-gpfs-path...>\n\n' +
+      '  /system mount\n' +
+      '  /system mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
+      '  /system mount rm <absolute-gpfs-path...>\n\n' +
       'rlaunch 动态挂载是 per-user 的，worker 路径与 host 路径相同。\n' +
       '默认模式是 --ro（LightClaw 文件 API 拒绝写入；Bash 写入仍取决于 GPFS ACL）。',
-    'mount.requiresRlaunchRuntime': '/mount 需要一个活跃的 rlaunch runtime。',
-    'mount.onlyRlaunch': '/mount 仅在 runtime.backend = "cluster" 时可用。',
-    'mount.noIdentity': 'LightClaw 当前没有可用身份；/mount 需要已配对的渠道用户。',
+    'mount.requiresRlaunchRuntime': '/system mount 需要一个活跃的 rlaunch runtime。',
+    'mount.onlyRlaunch': '/system mount 仅在 runtime.backend = "cluster" 时可用。',
+    'mount.noIdentity': 'LightClaw 当前没有可用身份；/system mount 需要已配对的渠道用户。',
     'mount.list.empty': '该用户没有 rlaunch 动态挂载。',
     'mount.list.header': 'rlaunch 动态挂载：',
     'mount.list.row': '- {path}  lightclaw={perm}  worker={path}',
@@ -702,8 +701,8 @@ export const LOCALES = {
     'config.byo.error': '错误：{detail}',
     'config.endpoint.exists': '错误：自定义 endpoint "{name}" 已存在。',
     'config.endpoint.conflict': '错误：自定义 endpoint "{name}" 与已有 endpoint 冲突。',
-    'config.endpoint.missing': '错误：自定义 endpoint "{name}" 不存在。请先用 /config endpoint add-key 添加。',
-    'config.endpoint.secretMissing': '错误：apiKeyRef "{name}" 尚未存储。请先运行 /secret set {name} <VALUE>。',
+    'config.endpoint.missing': '错误：自定义 endpoint "{name}" 不存在。请先用 /config endpoint add <ep> --type ... 添加。',
+    'config.endpoint.secretMissing': '错误：apiKeyRef "{name}" 尚未存储。请先运行 /system key set {name} <VALUE>。',
     'config.endpoint.added': '已添加自定义 endpoint "{name}"（apiKeyRef={ref}）。',
     'config.endpoint.updated': '已更新自定义 endpoint "{name}"。',
     'config.endpoint.removed': '已移除自定义 endpoint "{name}"{models}。',
@@ -712,7 +711,7 @@ export const LOCALES = {
     'config.endpoint.listHeader': '自定义 endpoints：',
     'config.model.exists': '错误：自定义模型 "{name}" 已存在。请用 /config model set {name} ... 修改。',
     'config.model.missing': '错误：自定义模型 "{name}" 不存在。请先用 /config model add 添加。',
-    'config.model.endpointMissing': '错误：endpoint "{name}" 不是自定义 endpoint。请先用 /config endpoint add-key 添加。',
+    'config.model.endpointMissing': '错误：endpoint "{name}" 不是自定义 endpoint。请先用 /config endpoint add <ep> --type ... 添加。',
     'config.model.schemaInvalid': '错误：schema 必须是 anthropic、openai 或 openai-auth。',
     'config.model.reasoningInvalid': '错误：--reasoning 必须是 none | minimal | low | medium | high | xhigh 之一。',
     'config.model.intInvalid': '错误：值必须是正整数。',
@@ -742,8 +741,6 @@ export const LOCALES = {
     'config.endpoint.codexNoBaseUrl': '错误：--type codex 不接受 --base-url（codex URL 固定）。',
     'config.endpoint.codexNoKey': '错误：--type codex 不接受 --key（请用 --auth-path）。',
     'config.endpoint.keyStored': '原始 key 已存入 secrets（0600）为 "{name}" 并被引用；config.json 不含明文。注意：你粘贴的 key 会留在聊天记录里——建议使用一次性 token。',
-    'config.endpoint.addKeyDeprecated': '提示：endpoint add-key 已弃用。请改用：/config endpoint add <ep> --type openai|anthropic --key <KEY|secretName> [--base-url <url>] [--proxy <url>]',
-    'config.endpoint.addCodexDeprecated': '提示：endpoint add-codex 已弃用。请改用：/config endpoint add <ep> --type codex --auth-path <auth.json>',
     'config.backend.none': '尚未登记任何模型（backend）。运行 /config backend templates 查看示例。',
     'config.backend.listHeader': '已登记的模型（backend）：',
     'config.backend.endpointRequired': '错误：backend add 需要 --endpoint <ep>。',
@@ -765,7 +762,7 @@ export const LOCALES = {
     'config.lane.usage': '用法：/config lane [set <worker|system|image> <model> | reset <worker|system|image>]',
 
     // ---- /feishu-workspace (admin) ----
-    'feishuWs.usage': '用法：/feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
+    'feishuWs.usage': '用法：/admin feishu-drive [status | list | orphans | rm <canonical> --y]',
     'feishuWs.status.title': '飞书云空间：',
     'feishuWs.status.root': '  root: {token}',
     'feishuWs.status.notInitialized': '(未初始化)',
@@ -779,15 +776,8 @@ export const LOCALES = {
     'feishuWs.orphans.notInitialized': '飞书云空间根目录尚未初始化。',
     'feishuWs.orphans.empty': '没有孤立的飞书云空间目录。',
     'feishuWs.orphans.header': 'orphan folderToken              name',
-    'feishuWs.delete.usage': '用法：/feishu-workspace delete <canonical> --y',
+    'feishuWs.delete.usage': '用法：/admin feishu-drive rm <canonical> --y',
     'feishuWs.delete.noFolder': '没有记录 "{canonical}" 的飞书云空间目录。',
-    'feishuWs.delete.preview':
-      '预览删除 "{canonical}" 的飞书云空间：\n' +
-      '  folderToken: {token}\n' +
-      '  直接子项：{count}\n' +
-      '确认请运行：/feishu-workspace delete {canonical} --confirm {confirmToken}\n' +
-      'Token 5 分钟内有效。',
-    'feishuWs.delete.tokenInvalid': '"{canonical}" 的确认 token 缺失或已过期。请重新运行 /feishu-workspace delete {canonical}。',
     'feishuWs.delete.failed': '删除 "{canonical}" 的飞书云空间失败：{detail}',
     'feishuWs.delete.done': '已删除 "{canonical}" 的飞书云空间（{count} 个直接子项已移入飞书回收站）。',
 
@@ -815,13 +805,12 @@ export const LOCALES = {
     // ---- Runtime: image readiness ----
     'runtime.image.notReady.user': '环境正在准备中，请稍候再试。',
     'runtime.image.notReady.admin': 'Docker 镜像 {image} 拉取 {state}：{detail}',
-    'runtime.image.failedHint': '运行环境异常。Admin 可用 /sandbox status 查看，/sandbox prefetch 重新拉取。',
+    'runtime.image.failedHint': '运行环境异常。Admin 可用 /admin sandbox status 查看，/admin sandbox prefetch 重新拉取。',
   },
   en: {
     // ---- Common ----
     'common.error.prefix': 'Error: ',
     'common.error.unknownCommand': 'unknown command: {name}',
-    'common.error.renamedHint': 'unknown command: {name}. Renamed to {newName}. See /help.',
     'common.error.adminOnly': '{name} is admin-only.',
     'common.error.userOnly': '{name} is user-only (admins are recipients, not senders).',
     'common.error.noActiveIdentity': 'No active LightClaw identity.',
@@ -848,9 +837,9 @@ export const LOCALES = {
     'banner.console': 'LightClaw · admin console ({name})',
     'banner.consoleAnon': 'LightClaw · admin console',
     'banner.hint': 'Chat lives in Feishu; this console is ops-only · type /help for commands',
-    'banner.pending': '⚠ {count} pairing request(s) awaiting review — /user pending',
+    'banner.pending': '⚠ {count} pairing request(s) awaiting review — /admin pairing',
     'banner.firstRunIntro': 'This console runs ops slash commands only — it does not chat with the agent. To talk to the agent, message the bot in Feishu.',
-    'banner.firstRunNext': 'Next steps:\n  · Add the bot in Feishu and send it a message to start chatting\n  · /user pending                        Review pending pairing requests\n  · /user approve <code> [--as <name>]   Approve access (--as merges the applicant into the named canonical user, e.g. the admin)\n  · /help                                List all commands',
+    'banner.firstRunNext': 'Next steps:\n  · Add the bot in Feishu and send it a message to start chatting\n  · /admin pairing                                Review pending pairing requests\n  · /admin pairing approve <code> [--as <name>]   Approve access (--as merges the applicant into the named canonical user, e.g. the admin)\n  · /help                                         List all commands',
     'banner.slashOnly': 'The terminal is a slash-command console — it does not take freeform chat; reach the agent through Feishu. Type /help for the command list.',
 
     // ---- Init wizard ----
@@ -908,22 +897,22 @@ export const LOCALES = {
     'admin.writeRejected': 'Error: this change would make deployment config.json fail boot validation ({detail}); not written.',
 
     // ---- /auth (admin) ----
-    'auth.usage': 'Usage: /auth list | import codex | logout codex [--purge]',
-    'auth.import.usage': 'Usage: /auth import <provider>. Supported: codex',
+    'auth.usage': 'Usage: /admin endpoint | /admin endpoint add <ep> --type codex --auth-path <auth.json> | /admin endpoint rm <ep> --y',
+    'auth.import.usage': 'Usage: /admin endpoint add <ep> --type codex --auth-path <auth.json>. Supported: codex',
     'auth.import.notSupported': 'provider {name} does not support import.',
-    'auth.logout.usage': 'Usage: /auth logout <provider> [--purge]',
+    'auth.logout.usage': 'Usage: /admin endpoint rm <ep> --y',
     'auth.unsupportedProvider': 'Unsupported provider: {name}. Supported: {list}',
     'auth.list.title': 'Registered auth providers:',
     'auth.list.noProviders': 'No auth provider is registered.',
     'auth.list.entry': '  {name}: accountId={accountId}, expires {expiresIn}',
-    'auth.list.entryEmpty': '  {name}: not logged in (run /auth import {name} to import from the official CLI)',
+    'auth.list.entryEmpty': '  {name}: not logged in (run /admin endpoint add {name} --type codex --auth-path <auth.json> to import from the official CLI)',
     'auth.list.expired': 'expired,',
     'auth.list.inMinutes': 'in ~{n} min',
     'auth.list.inHours': 'in ~{n} h',
     'auth.list.inDays': 'in ~{n} d',
     'auth.import.success': 'Imported {name} credentials.',
-    'auth.codex.registered': 'Auto-registered endpoints.codex + new models: {tiers} into config.json. Run /model gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
-    'auth.codex.registeredWithDiscovery': 'Auto-registered endpoints.codex + new models: {tiers} (live discovery picked upstream={slug}) into config.json. Run /model gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
+    'auth.codex.registered': 'Auto-registered endpoints.codex + new models: {tiers} into config.json. Run /config model set gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
+    'auth.codex.registeredWithDiscovery': 'Auto-registered endpoints.codex + new models: {tiers} (live discovery picked upstream={slug}) into config.json. Run /config model set gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
     'auth.codex.alreadyRegistered': 'config.json already has the codex endpoint and all codex tier entries — left untouched.',
     'auth.logout.success': 'Removed {name} credential file.',
     'auth.logout.purged': 'Also removed endpoint={endpoint}, models={models}.',
@@ -982,7 +971,7 @@ export const LOCALES = {
     'mode.ask.recap':
       '  · Read tools: allowed silently\n  · Edits, writes, command execution: confirmed each time',
     'mode.auto.recap':
-      '  · File reads, edits, writes: allowed silently\n  · Web fetches (WebFetch): allowed silently (no per-host prompt)\n  · Command execution (Bash, ...): still asks\n  · Tip: use /rules ask <pattern> to force confirmation on a specific operation',
+      '  · File reads, edits, writes: allowed silently\n  · Web fetches (WebFetch): allowed silently (no per-host prompt)\n  · Command execution (Bash, ...): still asks\n  · Tip: use /config rule add <pattern> to force confirmation on a specific operation',
     'mode.yolo.recap':
       '  · All tools: allowed silently\n  · Only ask / deny rules override (e.g. Bash(rm:*))\n  · High-risk ops are irreversible — double-check scope',
 
@@ -997,25 +986,25 @@ export const LOCALES = {
     'model.clearCache.cleared': 'Cleared capability cache for {name} ({endpoint} -> {upstream}){suffix}.',
     'model.clearCache.noEntry': ' (no existing entry)',
     'model.clearCache.alsoCleared': ' Capability cache cleared.',
-    'model.none.noticeBody': 'No model configured yet — pick one with /model, or bring your own (BYO).',
+    'model.none.noticeBody': 'No model configured yet — pick one with /config model, or bring your own (BYO).',
 
     // ---- /rules ----
     'rules.empty': 'No persisted permission rules for this user.',
     'rules.listTitle': 'Persisted permission rules (this user):',
-    'rules.listFooter': '\nUse /rules revoke <n> to remove one, /rules revoke all to clear.\n(numbering changes after each write — re-run list before another revoke)\n',
-    'rules.revokeUsage': 'Usage: /rules revoke <n>|all',
+    'rules.listFooter': '\nUse /config rule rm <n> to remove one, /config rule rm all --y to clear.\n(numbering changes after each write — re-run list before another revoke)\n',
+    'rules.revokeUsage': 'Usage: /config rule rm <n>|all --y',
     'rules.revokedAll': 'Revoked all {count} rules.',
     'rules.revokedAllEmpty': 'No persisted rules to revoke.',
     'rules.revokedOne': 'Revoked [{behavior}] {rule}',
-    'rules.revokeNoSuch': 'No rule at index {n}. Run /rules list first.',
-    'rules.askUsage': 'Usage: /rules ask <rule>',
+    'rules.revokeNoSuch': 'No rule at index {n}. Run /config rule list first.',
+    'rules.askUsage': 'Usage: /config rule add <rule>',
     'rules.askRegistered': 'Registered ASK rule: {rule} (overrides allow / bypassPermissions for matching calls; persisted)',
-    'rules.usage': 'Usage: /rules [list | revoke <n> | revoke all | ask <rule>]',
+    'rules.usage': 'Usage: /config rule [list | rm <n> | rm all --y | add <rule>]',
 
     // ---- /ceiling ----
     'ceiling.listTitle': 'Permission ceilings:',
-    'ceiling.listFooter': '\nSet with: /ceiling <user> <read|ask|auto|yolo>\n',
-    'ceiling.usage': 'Usage:\n  /ceiling                       (list all)\n  /ceiling <user> <read|ask|auto|yolo>',
+    'ceiling.listFooter': '\nSet with: /admin ceiling set <user> <read|ask|auto|yolo>\n',
+    'ceiling.usage': 'Usage:\n  /admin ceiling                       (list all)\n  /admin ceiling set <user> <read|ask|auto|yolo>',
     'ceiling.invalidMode': 'Invalid mode: {input}. Try: {aliases}.',
     'ceiling.noSuchUser': 'No such identity: {name}',
     'ceiling.set': 'ceiling: {name} -> {mode}',
@@ -1024,27 +1013,27 @@ export const LOCALES = {
     // ---- /user (admin) ----
     'user.usage.localHeader': 'Usage (LocalRuntime is single-user; bind only as admin "{admin}"):',
     'user.usage.header': 'Usage:',
-    'user.usage.approveLocal': '  /user approve <code> [--as {admin}]   # in local mode prefer --as {admin}, which binds the IM sender into the admin user instead of creating a new one',
-    'user.usage.approveGeneric': '  /user approve <code> [--as <name>]   # --as binds the IM sender into an existing user; omit it to auto-derive from the IM profile',
-    'user.usage.lines': '  /user list\n  /user pending\n{approve}\n  /user reject <code>\n  /user unlink <channel:id>\n  /user remove <name> [--purge]\n  /user feedback [--page N]\n',
+    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # in local mode prefer --as {admin}, which binds the IM sender into the admin user instead of creating a new one',
+    'user.usage.approveGeneric': '  /admin pairing approve <code> [--as <name>]   # --as binds the IM sender into an existing user; omit it to auto-derive from the IM profile',
+    'user.usage.lines': '  /admin user list\n  /admin pairing\n{approve}\n  /admin pairing reject <code>\n  /admin user unlink <channel:id>\n  /admin user rm <name> [--purge] --y\n  /admin feedback [--page N]\n',
     'user.list.empty': 'No identities.',
     'user.pending.empty': 'No pending pairing requests.',
     'user.pending.header': 'KEY      CHANNEL  PEER_ID                                  DISPLAY          REQUESTED',
-    'user.approve.usage': 'Usage: /user approve <code> [--as <name>]',
+    'user.approve.usage': 'Usage: /admin pairing approve <code> [--as <name>]',
     'user.approve.noSuchCode': 'No pending pairing code: {code}',
     'user.approve.alreadyBound': '{link} is already bound to {name}',
     'user.approve.invalidName': 'Invalid identity name: {name}',
     'user.approve.created': "Created identity '{name}'",
     'user.approve.updated': "Updated identity '{name}'",
     'user.approve.linked': 'Linked {link} -> {name}',
-    'user.reject.usage': 'Usage: /user reject <code>',
+    'user.reject.usage': 'Usage: /admin pairing reject <code>',
     'user.reject.done': 'Rejected {code}',
     'user.reject.noSuchCode': 'No pending pairing code: {code}',
-    'user.unlink.usage': 'Usage: /user unlink <channel:id>',
+    'user.unlink.usage': 'Usage: /admin user unlink <channel:id>',
     'user.unlink.notBound': '{link} is not bound.',
     'user.unlink.done': 'Unlinked {link} from {name}',
     'user.unlink.notLinked': '{link} was not linked.',
-    'user.remove.usage': 'Usage: /user remove <name> [--purge]',
+    'user.remove.usage': 'Usage: /admin user rm <name> [--purge] --y',
     'user.remove.refuseAdmin': 'Refusing to remove the v1 admin identity.',
     'user.remove.done': "Removed identity '{name}'",
     'user.remove.cleanupRlaunch': 'Cleaned up cluster worker {worker}',
@@ -1077,7 +1066,7 @@ export const LOCALES = {
     'cost.byModel': '  By model:',
     'cost.byUser': '  By user:',
     'cost.freshSubset': '  Fresh subset: {tok} tok ({percent}%)',
-    'cost.adminOnlyHint': '/cost is admin-only. Use /status to see your today usage.',
+    'cost.adminOnlyHint': '/admin cost is admin-only. Use /status to see your today usage.',
 
     // ---- /sandbox ----
     'sandbox.title': 'Sandbox image readiness (docker):',
@@ -1098,7 +1087,7 @@ export const LOCALES = {
     'sandbox.prefetch.alreadyReady': 'sandbox: image {image} marked ready; nothing to do.',
     'sandbox.prefetch.inProgress': 'sandbox: image {image} pull already in progress.',
     'sandbox.prefetch.started': 'sandbox: prefetch started for {image}.',
-    'sandbox.usage': 'Usage: /sandbox [status|prefetch|reset]',
+    'sandbox.usage': 'Usage: /admin sandbox [status | prefetch | reset --y]',
     'sandbox.reset.rlaunchDone': 'Stopped and removed rlaunch worker state.\nWorkspace gpfs mount was preserved.\nNext environment tool call will recreate the worker.',
     'sandbox.reset.localNothing': 'sandbox: local runtime is active; nothing to reset.',
     'sandbox.reset.dockerDone': 'Stopped and removed sandbox container {container}.\nTier 1 (/workspace bind mount) preserved.\nTier 2 (writable layer; pip packages, /etc edits) discarded.\nNext environment tool call will recreate the container from {image}.',
@@ -1110,7 +1099,7 @@ export const LOCALES = {
     'permission.terminal.optionsLineHighRisk': '  [y] allow once    [n] deny (high-risk: allow-always disabled)',
     'permission.terminal.choosePrompt': 'choose [y/a/n]: ',
     'permission.terminal.choosePromptHighRisk': 'choose [y/n]: ',
-    'permission.terminal.allowedPersisted': '  (persisted: {verbose}; use /rules list, /rules revoke <n> to revoke)',
+    'permission.terminal.allowedPersisted': '  (persisted: {verbose}; use /config rule list, /config rule rm <n> to revoke)',
     'permission.terminal.allowedNoPersist': '  (not persisted: no identity context; allowed once)',
     'permission.terminal.deniedHighRisk': 'Permission denied: {tool} requires confirmation in {mode} mode.',
     'permission.terminal.deniedSubagent': 'No approver is wired for this subagent (terminal fork).',
@@ -1145,7 +1134,7 @@ export const LOCALES = {
     'permission.feishu.btn.deny': 'Deny',
     'permission.feishu.notice.allowOnce': 'Allowed {tool} for this call.',
     'permission.feishu.notice.deny': 'Denied {tool}.',
-    'permission.feishu.notice.allowAlways': 'Allowed {label}; future similar calls will be auto-approved (persisted to your permissions).\nTo revoke, send /rules list to see numbering, then /rules revoke <n>.',
+    'permission.feishu.notice.allowAlways': 'Allowed {label}; future similar calls will be auto-approved (persisted to your permissions).\nTo revoke, send /config rule list to see numbering, then /config rule rm <n>.',
     'permission.feishu.notice.allowAlwaysFail': 'Allow-once granted, but persisting the rule failed; the next similar call will ask again.',
     'permission.feishu.notice.highRiskDowngrade': 'This operation contains high-risk subcommands (rm / sudo / pipe-to-shell); for safety only allow-once was granted, no rule was persisted.',
     'permission.feishu.outcome.allowOnce': 'Allowed (once)',
@@ -1231,9 +1220,9 @@ export const LOCALES = {
     'channel.failure.reason': 'Reason: {category}',
     'channel.failure.hint': 'Suggestion: resend the message; if it persists please contact admin (full log in stderr)',
     'channel.failure.contactAdminHint': 'Suggestion: deterministic internal error — resending will not help; contact the admin (full log in stderr).',
-    'channel.failure.credentialHint': 'Suggestion: import or refresh the model credentials (e.g. `/auth import codex`) and then retry; resending the same message will not help.',
+    'channel.failure.credentialHint': 'Suggestion: import or refresh the model credentials (e.g. `/admin endpoint add codex --type codex --auth-path <auth.json>`) and then retry; resending the same message will not help.',
     'channel.failure.billingHint': 'Suggestion: balance or quota is exhausted — top up or check the billing/quota settings; resending the same message will not help.',
-    'channel.failure.modelEndpointHint': 'Suggestion: check whether the `/model` model exists on this endpoint, or the endpoint routing / base URL config; resending will not help (full log in stderr).',
+    'channel.failure.modelEndpointHint': 'Suggestion: check whether the `/config model` model exists on this endpoint, or the endpoint routing / base URL config; resending will not help (full log in stderr).',
     'channel.failure.rateHint': 'Suggestion: resend later — this kind of throttling usually self-heals.',
     'channel.failure.authHint': 'Suggestion: check the API key / permission config; resending is unlikely to help.',
     'channel.failure.cat.validation': 'upstream model protocol error (messages array validation failed)',
@@ -1314,7 +1303,7 @@ export const LOCALES = {
     'channel.welcome.try.header': '**Try sending me**',
     'channel.welcome.try.example': '“Research 〈topic A〉 and 〈topic B〉 for me, each as a short briefing”',
     'channel.welcome.helpHint': 'Want the command list? Send `/help`, or just ask me.',
-    'channel.welcome.admin.helpHint': 'Want the command list? Send `/help` (admin commands like `/user`, `/sandbox`, `/cost` are in there too), or just ask me.',
+    'channel.welcome.admin.helpHint': 'Want the command list? Send `/help` (admin commands like `/admin user`, `/admin sandbox`, `/admin cost` are in there too), or just ask me.',
     'channel.welcome.startup.failedTitle': 'Not ready yet',
     'channel.welcome.startup.failedBody': "Initialization didn't finish within {seconds}s: {reason}\nResend any message to retry; if it keeps failing, tell the admin.",
     'channel.welcome.startup.timeoutBody': "Initialization timed out ({seconds}s).\nResend any message to retry; if it keeps failing, tell the admin.",
@@ -1399,18 +1388,18 @@ export const LOCALES = {
     // ---- /secret (channel) ----
     'secret.usage':
       'Usage:\n' +
-      '  /secret list\n' +
-      '  /secret status [NAME]\n' +
-      '  /secret set <NAME> <VALUE...>\n' +
-      '  /secret enable <NAME>\n' +
-      '  /secret disable <NAME>\n' +
-      '  /secret remove <NAME>\n\n' +
+      '  /system key list\n' +
+      '  /system key status [NAME]\n' +
+      '  /system key set <NAME> <VALUE...>\n' +
+      '  /system key enable <NAME>\n' +
+      '  /system key disable <NAME>\n' +
+      '  /system key rm <NAME>\n\n' +
       'Secrets are per-user. Values are never echoed. Once a secret is enabled, it is injected as `$NAME` in Bash commands.',
-    'secret.noIdentity': 'No active LightClaw identity; /secret requires a paired channel user.',
-    'secret.saved': 'Secret {name} saved (replaced={replaced}, length={length}). Use /secret enable {name} to start injecting it.',
-    'secret.enableNotStored': 'Secret {name} is not stored. Use /secret set {name} <VALUE> first.',
+    'secret.noIdentity': 'No active LightClaw identity; /system key requires a paired channel user.',
+    'secret.saved': 'Secret {name} saved (replaced={replaced}, length={length}). Use /system key enable {name} to start injecting it.',
+    'secret.enableNotStored': 'Secret {name} is not stored. Use /system key set {name} <VALUE> first.',
     'secret.enabled': 'Secret {name} enabled. It will be injected as ${name} in Bash commands starting from your next message.',
-    'secret.disabled': 'Secret {name} disabled. Stored value retained — /secret enable {name} to re-activate.',
+    'secret.disabled': 'Secret {name} disabled. Stored value retained — /system key enable {name} to re-activate.',
     'secret.notStored': 'Secret {name} was not stored.',
     'secret.removed': 'Secret {name} removed.',
     'secret.list.empty': 'No secrets stored for this user.',
@@ -1431,14 +1420,14 @@ export const LOCALES = {
     // ---- /mount (channel) ----
     'mount.usage':
       'Usage:\n' +
-      '  /mount list\n' +
-      '  /mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
-      '  /mount remove <absolute-gpfs-path...>\n\n' +
+      '  /system mount\n' +
+      '  /system mount add <absolute-gpfs-path...> [--ro|--rw]\n' +
+      '  /system mount rm <absolute-gpfs-path...>\n\n' +
       'Dynamic rlaunch mounts are per-user. The worker path is the same as the host path.\n' +
       'Default mode is --ro (LightClaw file APIs reject writes; Bash writes still depend on GPFS ACLs).',
-    'mount.requiresRlaunchRuntime': '/mount requires an active rlaunch runtime.',
-    'mount.onlyRlaunch': '/mount is only available when runtime.backend = "cluster".',
-    'mount.noIdentity': 'No active LightClaw identity; /mount requires a paired channel user.',
+    'mount.requiresRlaunchRuntime': '/system mount requires an active rlaunch runtime.',
+    'mount.onlyRlaunch': '/system mount is only available when runtime.backend = "cluster".',
+    'mount.noIdentity': 'No active LightClaw identity; /system mount requires a paired channel user.',
     'mount.list.empty': 'No dynamic rlaunch mounts for this user.',
     'mount.list.header': 'Dynamic rlaunch mounts:',
     'mount.list.row': '- {path}  lightclaw={perm}  worker={path}',
@@ -1511,8 +1500,8 @@ export const LOCALES = {
     'config.byo.error': 'Error: {detail}',
     'config.endpoint.exists': 'Error: custom endpoint "{name}" already exists.',
     'config.endpoint.conflict': 'Error: custom endpoint "{name}" conflicts with an existing endpoint.',
-    'config.endpoint.missing': 'Error: custom endpoint "{name}" does not exist. Use /config endpoint add-key first.',
-    'config.endpoint.secretMissing': 'Error: apiKeyRef "{name}" is not stored. Run /secret set {name} <VALUE> first.',
+    'config.endpoint.missing': 'Error: custom endpoint "{name}" does not exist. Use /config endpoint add <ep> --type ... first.',
+    'config.endpoint.secretMissing': 'Error: apiKeyRef "{name}" is not stored. Run /system key set {name} <VALUE> first.',
     'config.endpoint.added': 'Added custom endpoint "{name}" using apiKeyRef={ref}.',
     'config.endpoint.updated': 'Updated custom endpoint "{name}".',
     'config.endpoint.removed': 'Removed custom endpoint "{name}"{models}.',
@@ -1521,7 +1510,7 @@ export const LOCALES = {
     'config.endpoint.listHeader': 'Custom endpoints:',
     'config.model.exists': 'Error: custom model "{name}" already exists. Use /config model set {name} ... to modify it.',
     'config.model.missing': 'Error: custom model "{name}" does not exist. Use /config model add first.',
-    'config.model.endpointMissing': 'Error: endpoint "{name}" is not a custom endpoint. Add it with /config endpoint add-key first.',
+    'config.model.endpointMissing': 'Error: endpoint "{name}" is not a custom endpoint. Add it with /config endpoint add <ep> --type ... first.',
     'config.model.schemaInvalid': 'Error: schema must be anthropic, openai, or openai-auth.',
     'config.model.reasoningInvalid': 'Error: --reasoning must be one of none | minimal | low | medium | high | xhigh.',
     'config.model.intInvalid': 'Error: value must be a positive integer.',
@@ -1551,8 +1540,6 @@ export const LOCALES = {
     'config.endpoint.codexNoBaseUrl': 'Error: --type codex does not accept --base-url (the codex URL is fixed).',
     'config.endpoint.codexNoKey': 'Error: --type codex does not accept --key (use --auth-path).',
     'config.endpoint.keyStored': 'Raw key stored in secrets (0600) as "{name}" and referenced; config.json holds no plaintext. Note: the key you pasted lands in chat history — recommend a throwaway token.',
-    'config.endpoint.addKeyDeprecated': 'Hint: endpoint add-key is deprecated. Use: /config endpoint add <ep> --type openai|anthropic --key <KEY|secretName> [--base-url <url>] [--proxy <url>]',
-    'config.endpoint.addCodexDeprecated': 'Hint: endpoint add-codex is deprecated. Use: /config endpoint add <ep> --type codex --auth-path <auth.json>',
     'config.backend.none': 'No backend models registered. Run /config backend templates for examples.',
     'config.backend.listHeader': 'Registered models (backend):',
     'config.backend.endpointRequired': 'Error: backend add requires --endpoint <ep>.',
@@ -1574,7 +1561,7 @@ export const LOCALES = {
     'config.lane.usage': 'Usage: /config lane [set <worker|system|image> <model> | reset <worker|system|image>]',
 
     // ---- /feishu-workspace (admin) ----
-    'feishuWs.usage': 'Usage: /feishu-workspace [status|list|orphans|delete <canonical> [--confirm <token>]]',
+    'feishuWs.usage': 'Usage: /admin feishu-drive [status | list | orphans | rm <canonical> --y]',
     'feishuWs.status.title': 'Feishu cloud workspace:',
     'feishuWs.status.root': '  root: {token}',
     'feishuWs.status.notInitialized': '(not initialized)',
@@ -1588,15 +1575,8 @@ export const LOCALES = {
     'feishuWs.orphans.notInitialized': 'Feishu cloud workspace root is not initialized.',
     'feishuWs.orphans.empty': 'No orphan Feishu workspace folders.',
     'feishuWs.orphans.header': 'orphan folderToken              name',
-    'feishuWs.delete.usage': 'Usage: /feishu-workspace delete <canonical> --y',
+    'feishuWs.delete.usage': 'Usage: /admin feishu-drive rm <canonical> --y',
     'feishuWs.delete.noFolder': 'No Feishu workspace folder recorded for "{canonical}".',
-    'feishuWs.delete.preview':
-      'Preview delete Feishu workspace for "{canonical}":\n' +
-      '  folderToken: {token}\n' +
-      '  direct items: {count}\n' +
-      'Confirm with: /feishu-workspace delete {canonical} --confirm {confirmToken}\n' +
-      'Token expires in 5 minutes.',
-    'feishuWs.delete.tokenInvalid': 'Confirmation token for "{canonical}" is missing or expired. Run /feishu-workspace delete {canonical} again.',
     'feishuWs.delete.failed': 'Failed to delete Feishu workspace for "{canonical}": {detail}',
     'feishuWs.delete.done': 'Deleted Feishu workspace for "{canonical}" ({count} direct items moved to Feishu trash).',
 
@@ -1624,7 +1604,7 @@ export const LOCALES = {
     // ---- Runtime: image readiness ----
     'runtime.image.notReady.user': 'Environment is preparing; please retry shortly.',
     'runtime.image.notReady.admin': 'Docker image {image} pull {state}: {detail}',
-    'runtime.image.failedHint': 'Runtime environment is degraded. Admin: /sandbox status to inspect, /sandbox prefetch to retry.',
+    'runtime.image.failedHint': 'Runtime environment is degraded. Admin: /admin sandbox status to inspect, /admin sandbox prefetch to retry.',
   },
 } as const
 

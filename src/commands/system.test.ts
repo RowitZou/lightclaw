@@ -79,11 +79,11 @@ describe('/system command', () => {
   })
 
   it('routes `mount` to the mount runner (bare → usage, list → empty-list)', async () => {
-    // Bare reaches the mount runner — its no-arg branch prints the /mount
-    // usage (proves delegation, mirrors how bare /mount behaves today).
+    // Bare reaches the mount runner — its no-arg branch prints the /system
+    // mount usage (proves delegation).
     assert.match(
       await runSystemCommand('mount', { config: makeConfig(), userId: 'alice' }),
-      /\/mount list/,
+      /\/system mount/,
     )
     // `mount list` hits the actual list path.
     assert.match(

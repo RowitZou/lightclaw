@@ -123,7 +123,7 @@ export function getProviderFor(
   // message instead of the confusing `Unknown model ""`.
   if (!displayModel) {
     throw new Error(
-      'No model is configured. Select one with `/model <name>`, or configure a ' +
+      'No model is configured. Select one with `/config model set <name>`, or configure a ' +
         'bring-your-own model via `/config endpoint` + `/config model`. ' +
         `Registered: ${Object.keys(config.models).join(', ') || '(none)'}.`,
     )

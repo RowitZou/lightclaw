@@ -222,11 +222,6 @@ async function runEndpointSubcommand(
         return formatEndpointList(userId)
       case 'add':
         return addEndpoint(userId, parts)
-      case 'add-key':
-        // Deprecated one-time hint → point at `endpoint add --type ...`.
-        return `${t('config.endpoint.addKeyDeprecated')}\n`
-      case 'add-codex':
-        return `${t('config.endpoint.addCodexDeprecated')}\n`
       case 'set':
         return setEndpoint(userId, parts)
       case 'remove':

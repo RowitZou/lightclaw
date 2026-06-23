@@ -128,8 +128,8 @@ describe('/user approve --as <name>', () => {
   })
 
   it('returns usage on malformed args', async () => {
-    assert.match(await userApprove([]), /\/user approve/)
-    assert.match(await userApprove(['CODE', '--as']), /\/user approve/)
-    assert.match(await userApprove(['CODE', '--bogus', 'foo']), /\/user approve/)
+    assert.match(await userApprove([]), /\/admin pairing approve/)
+    assert.match(await userApprove(['CODE', '--as']), /\/admin pairing approve/)
+    assert.match(await userApprove(['CODE', '--bogus', 'foo']), /\/admin pairing approve/)
   })
 })

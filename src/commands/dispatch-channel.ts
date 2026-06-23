@@ -2,9 +2,8 @@ import type { Writable } from 'node:stream'
 
 import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
-import { t } from '../i18n/index.js'
 import type { Message, UserContentBlock } from '../types.js'
-import { createBuiltinReplRegistry, RENAMED_COMMANDS } from './builtin.js'
+import { createBuiltinReplRegistry } from './builtin.js'
 import type { ReplContext, SlashBodyFormat } from './registry.js'
 
 export type ChannelSlashResult = {
@@ -47,15 +46,10 @@ export async function dispatchChannelSlash(
   const output: string[] = []
   const name = trimmed.split(/\s+/, 1)[0] ?? ''
   const registry = createBuiltinReplRegistry()
+  // An unrecognized command is left for the caller to treat as ordinary chat
+  // (no legacy rename hints — those were retired). The channel runner routes
+  // `handled: false` to the agent loop.
   if (!registry.find(name)) {
-    const renamed = RENAMED_COMMANDS[name]
-    if (renamed) {
-      return {
-        handled: true,
-        output: `${t('common.error.prefix')}${t('common.error.renamedHint', { name, newName: renamed })}\n`,
-        bodyFormat: 'plain_text',
-      }
-    }
     return { handled: false, output: '', bodyFormat: 'plain_text' }
   }
 
