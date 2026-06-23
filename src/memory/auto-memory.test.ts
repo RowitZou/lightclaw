@@ -37,18 +37,23 @@ describe('role-scoped memory indexes', () => {
     )
   })
 
-  it('prefixes shared and role-private index entries for orchestrator and worker views', async () => {
+  it('scope-tags shared and role-private index entries without a path prefix', async () => {
     await seed()
 
+    // Orchestrator: own root + shared workboard, no other worker's L3.
     const mainIndex = await loadMemoryIndex(memoryDir, mainRole())
-    assert.match(mainIndex, /root-note\.md/)
-    assert.match(mainIndex, /_shared\/shared-note\.md/)
-    assert.doesNotMatch(mainIndex, /webSearcher\/webSearcher-note\.md/)
+    assert.match(mainIndex, /root-note\.md \(own\)/)
+    assert.match(mainIndex, /shared-note\.md \(shared\)/)
+    assert.doesNotMatch(mainIndex, /webSearcher-note\.md/)
+    assert.doesNotMatch(mainIndex, /_shared\//)
 
+    // Worker: own L3 is (own), root + shared are (shared) — all bare names.
     const webIndex = await loadMemoryIndex(memoryDir, webRole())
-    assert.match(webIndex, /webSearcher\/webSearcher-note\.md/)
-    assert.match(webIndex, /_shared\/shared-note\.md/)
-    assert.match(webIndex, /root-note\.md/)
+    assert.match(webIndex, /webSearcher-note\.md \(own\)/)
+    assert.match(webIndex, /shared-note\.md \(shared\)/)
+    assert.match(webIndex, /root-note\.md \(shared\)/)
+    assert.doesNotMatch(webIndex, /_shared\//)
+    assert.doesNotMatch(webIndex, /webSearcher\//)
   })
 
   it('returns three-layer readable memories for default worker roles', async () => {
@@ -61,9 +66,10 @@ describe('role-scoped memory indexes', () => {
       path.join(memoryDir, 'localExplorer'),
     ])
     const index = await loadMemoryIndex(memoryDir, workerRole('localExplorer'))
-    assert.match(index, /root-note\.md/)
-    assert.match(index, /_shared\/shared-note\.md/)
-    assert.doesNotMatch(index, /webSearcher\/webSearcher-note\.md/)
+    assert.match(index, /root-note\.md \(shared\)/)
+    assert.match(index, /shared-note\.md \(shared\)/)
+    assert.doesNotMatch(index, /webSearcher-note\.md/)
+    assert.doesNotMatch(index, /_shared\//)
     assert.deepEqual(
       new Set((await scanMemoryFilesInDirs(memoryDir, resolved.readableDirs)).map(entry => entry.filename)),
       new Set(['root-note.md', 'shared-note.md']),

@@ -385,11 +385,12 @@ export async function deleteMemoryFile(memoryDir: string, filename: string): Pro
 export async function loadMemoryIndex(memoryDir: string, role?: Role): Promise<string> {
   if (role) {
     const resolved = await resolveReadableMemoryDirsForRole(role, memoryDir)
+    const ownDir = path.resolve(resolved.selfWriteDir)
     const chunks = await Promise.all(
       resolved.readableDirs.map(async dir => {
         const raw = await loadSingleMemoryIndex(dir)
-        const rel = path.relative(path.resolve(memoryDir), path.resolve(dir))
-        return prefixMemoryIndex(raw, rel)
+        const scope: MemoryScope = path.resolve(dir) === ownDir ? 'own' : 'shared'
+        return scopeTagMemoryIndex(raw, scope)
       }),
     )
     return chunks.filter(chunk => chunk.trim().length > 0).join('\n').trim()
@@ -417,9 +418,15 @@ async function loadSingleMemoryIndex(memoryDir: string): Promise<string> {
   }
 }
 
-function prefixMemoryIndex(raw: string, relativeDir: string): string {
+/** Tag each injected-index line with an `(own)` / `(shared)` scope marker
+ *  instead of rewriting its filename into a tier-prefixed path. The per-tier
+ *  MEMORY.md already holds bare basenames; keeping them bare (and labelling the
+ *  origin separately) means the agent can hand a name straight back to
+ *  MemoryRead / MemoryWrite, while still telling its own notes from shared
+ *  context. Mirrors the MemoryRead `list` scope label. */
+function scopeTagMemoryIndex(raw: string, scope: MemoryScope): string {
   const trimmed = raw.trim()
-  if (trimmed.length === 0 || relativeDir.length === 0) {
+  if (trimmed.length === 0) {
     return trimmed
   }
 
@@ -428,7 +435,7 @@ function prefixMemoryIndex(raw: string, relativeDir: string): string {
     .map(line => line.replace(
       /^(- \[[^\]]+\] )(.+?)(:.*)$/,
       (_match, prefix: string, filename: string, suffix: string) =>
-        `${prefix}${path.join(relativeDir, filename)}${suffix}`,
+        `${prefix}${filename} (${scope})${suffix}`,
     ))
     .join('\n')
 }
