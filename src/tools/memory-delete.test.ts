@@ -139,27 +139,21 @@ describe('MemoryDelete', () => {
   })
 
   it('records a memory-writes audit row on successful delete (2026-05-28 audit coverage)', async () => {
-    const auditDir = path.join(tmpRoot, 'audit')
-    const saved = process.env.LIGHTCLAW_AUDIT_DIR
-    process.env.LIGHTCLAW_AUDIT_DIR = auditDir
-    try {
-      await withMemorySession(() =>
-        memoryDeleteTool.call({ path: 'webSearcher/a.md' }, undefined as never),
-      )
-      const day = new Date().toISOString().slice(0, 10)
-      // Pre-fix: MemoryDelete wrote nothing here, so this readFile throws
-      // ENOENT and the destructive op is invisible to post-hoc audit.
-      const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
-      const rows = raw.trim().split('\n').map(line => JSON.parse(line))
-      const del = rows.find(r => r.operation === 'delete' && r.status === 'deleted')
-      assert.ok(del, 'expected a deleted audit row')
-      assert.equal(del.filename, 'a.md')
-      assert.match(String(del.targetPath), /webSearcher\/a\.md$/)
-      assert.equal(del.role, 'main')
-    } finally {
-      if (saved === undefined) delete process.env.LIGHTCLAW_AUDIT_DIR
-      else process.env.LIGHTCLAW_AUDIT_DIR = saved
-    }
+    // §十: audit derives from <home> (the per-subdir LIGHTCLAW_AUDIT_DIR was removed).
+    const auditDir = path.join(tmpRoot, 'home', 'audit')
+    await withMemorySession(() =>
+      memoryDeleteTool.call({ path: 'webSearcher/a.md' }, undefined as never),
+    )
+    const day = new Date().toISOString().slice(0, 10)
+    // Pre-fix: MemoryDelete wrote nothing here, so this readFile throws
+    // ENOENT and the destructive op is invisible to post-hoc audit.
+    const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
+    const rows = raw.trim().split('\n').map(line => JSON.parse(line))
+    const del = rows.find(r => r.operation === 'delete' && r.status === 'deleted')
+    assert.ok(del, 'expected a deleted audit row')
+    assert.equal(del.filename, 'a.md')
+    assert.match(String(del.targetPath), /webSearcher\/a\.md$/)
+    assert.equal(del.role, 'main')
   })
 })
 

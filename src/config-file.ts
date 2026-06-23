@@ -43,35 +43,12 @@ export type ConfigFileModel = {
 }
 
 export type ConfigFilePathsSection = {
-  /** Per-canonical-user session transcript root. Env override:
-   *  LIGHTCLAW_SESSIONS_DIR. */
-  sessions?: string
-  /** Per-user workspace cwd root. Env override: LIGHTCLAW_WORKSPACE_ROOT. */
+  /** Per-user workspace cwd root — the ONE relocatable path (on clusters a
+   *  separate GPFS mount, distinct from the data home). Env override:
+   *  LIGHTCLAW_WORKSPACE_ROOT. (§十: every other on-disk dir — sessions /
+   *  memory / audit / logs / api-logs / hooks / mcp.json / permission rules —
+   *  derives purely from `<home>`; there are no per-subdir config or env knobs.) */
   workspace?: string
-  /** Per-canonical-user memory tree root. Env override: LIGHTCLAW_MEMORY_DIR. */
-  memory?: string
-  /** Directory under which apiLogs JSONL files are written. */
-  apiLogs?: string
-  /** Root for audit JSONL trees (`audit/dispatch/<date>/<chainId>.jsonl`,
-   *  `audit/memory-writes/<date>.jsonl`, `audit/feishu-writes/<date>.jsonl`).
-   *  Env override: LIGHTCLAW_AUDIT_DIR. */
-  audit?: string
-  /** Daemon log root for the stderr tee (`<logs>/<YYYY-MM-DD>.log`).
-   *  Env override: LIGHTCLAW_LOGS_DIR. Defaults to `<lightclawHome>/logs`. */
-  logs?: string
-  /** Admin hooks discovery directory (single admin-owned tree). */
-  hooks?: string
-  /** Admin MCP config file path. */
-  mcpConfig?: string
-  /** Permission audit log file path (admin only). */
-  permissionAudit?: string
-  /** Layered permission rule files. All three are read+merged at startup;
-   *  `user` is canonical, `project` / `local` are cwd-anchored fallbacks. */
-  permissionRules?: {
-    user?: string
-    project?: string
-    local?: string
-  }
 }
 
 export type ConfigFileChannelsSection = {

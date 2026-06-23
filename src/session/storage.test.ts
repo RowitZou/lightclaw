@@ -6,23 +6,20 @@ import { tmpdir } from 'node:os'
 
 import { appendMessage, appendMessages, loadTranscript } from './storage.js'
 import { createUserMessage } from '../messages.js'
+import { setLightclawHomeOverride } from '../paths.js'
 
-let tmpSessionsDir: string
-let savedSessionsDir: string | undefined
+// §十: sessions derive from <home>; isolate via the home override (the old
+// LIGHTCLAW_SESSIONS_DIR per-subdir env was removed).
+let tmpHome: string
 
 beforeEach(() => {
-  tmpSessionsDir = mkdtempSync(path.join(tmpdir(), 'lightclaw-storage-test-'))
-  savedSessionsDir = process.env.LIGHTCLAW_SESSIONS_DIR
-  process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessionsDir
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-storage-test-'))
+  setLightclawHomeOverride(tmpHome)
 })
 
 afterEach(() => {
-  if (savedSessionsDir === undefined) {
-    delete process.env.LIGHTCLAW_SESSIONS_DIR
-  } else {
-    process.env.LIGHTCLAW_SESSIONS_DIR = savedSessionsDir
-  }
-  rmSync(tmpSessionsDir, { recursive: true, force: true })
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
 })
 
 describe('appendMessages (atomic batch transcript append)', () => {
@@ -40,7 +37,7 @@ describe('appendMessages (atomic batch transcript append)', () => {
   it('is a no-op on an empty batch — creates no session directory', async () => {
     const sid = 'feishu:dm:empty'
     await appendMessages(sid, [])
-    assert.equal(existsSync(path.join(tmpSessionsDir, sid)), false)
+    assert.equal(existsSync(path.join(tmpHome, 'sessions', sid)), false)
     assert.deepEqual(await loadTranscript(sid), [])
   })
 

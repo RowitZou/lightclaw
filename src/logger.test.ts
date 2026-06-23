@@ -9,13 +9,15 @@ import {
   flushLogTee,
   installStderrTee,
 } from './logger.js'
+import { setLightclawHomeOverride } from './paths.js'
 
-test('installStderrTee mirrors stderr to a day-rotated log file under paths.logs', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lightclaw-logs-'))
-  process.env.LIGHTCLAW_LOGS_DIR = dir
+test('installStderrTee mirrors stderr to a day-rotated log file under <home>/logs', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lightclaw-logs-'))
+  setLightclawHomeOverride(home)
+  const dir = path.join(home, 'logs')
   try {
     const logFile = installStderrTee()
-    assert.equal(path.dirname(logFile), dir, 'log file should sit under LIGHTCLAW_LOGS_DIR')
+    assert.equal(path.dirname(logFile), dir, 'log file should sit under <home>/logs')
     assert.match(path.basename(logFile), /^\d{4}-\d{2}-\d{2}\.log$/, 'filename is the UTC date')
 
     const first = `startup-${Date.now()}\n`
@@ -33,14 +35,15 @@ test('installStderrTee mirrors stderr to a day-rotated log file under paths.logs
     )
   } finally {
     __resetStderrTeeForTest()
-    delete process.env.LIGHTCLAW_LOGS_DIR
-    fs.rmSync(dir, { recursive: true, force: true })
+    setLightclawHomeOverride(undefined)
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })
 
 test('stderr passthrough is preserved — the tee must not swallow the original write', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lightclaw-logs-'))
-  process.env.LIGHTCLAW_LOGS_DIR = dir
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lightclaw-logs-'))
+  setLightclawHomeOverride(home)
+  const dir = path.join(home, 'logs')
   const realWrite = process.stderr.write
   const seen: string[] = []
   // Install a spy as the *current* stderr.write so installStderrTee binds it
@@ -63,7 +66,7 @@ test('stderr passthrough is preserved — the tee must not swallow the original 
   } finally {
     __resetStderrTeeForTest()
     process.stderr.write = realWrite
-    delete process.env.LIGHTCLAW_LOGS_DIR
-    fs.rmSync(dir, { recursive: true, force: true })
+    setLightclawHomeOverride(undefined)
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })

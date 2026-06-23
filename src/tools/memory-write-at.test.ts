@@ -120,30 +120,24 @@ describe('MemoryWriteAt', () => {
   })
 
   it('records a memory-writes audit row on successful write-at (2026-05-28 audit coverage)', async () => {
-    const auditDir = path.join(tmpRoot, 'audit')
-    const saved = process.env.LIGHTCLAW_AUDIT_DIR
-    process.env.LIGHTCLAW_AUDIT_DIR = auditDir
-    try {
-      await withMemorySession(() =>
-        memoryWriteAtTool.call({
-          path: '_shared/finding.md',
-          type: 'project',
-          description: 'A shared finding',
-          content: 'Why: useful\nHow to apply: share it',
-        }, undefined as never),
-      )
-      const day = new Date().toISOString().slice(0, 10)
-      // Pre-fix: MemoryWriteAt wrote nothing here → ENOENT.
-      const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
-      const rows = raw.trim().split('\n').map(line => JSON.parse(line))
-      const write = rows.find(r => r.operation === 'write-at' && r.status === 'written')
-      assert.ok(write, 'expected a write-at audit row')
-      assert.equal(write.filename, 'finding.md')
-      assert.equal(write.sourceTier, 'L2')
-    } finally {
-      if (saved === undefined) delete process.env.LIGHTCLAW_AUDIT_DIR
-      else process.env.LIGHTCLAW_AUDIT_DIR = saved
-    }
+    // §十: audit derives from <home> (the per-subdir LIGHTCLAW_AUDIT_DIR was removed).
+    const auditDir = path.join(tmpRoot, 'home', 'audit')
+    await withMemorySession(() =>
+      memoryWriteAtTool.call({
+        path: '_shared/finding.md',
+        type: 'project',
+        description: 'A shared finding',
+        content: 'Why: useful\nHow to apply: share it',
+      }, undefined as never),
+    )
+    const day = new Date().toISOString().slice(0, 10)
+    // Pre-fix: MemoryWriteAt wrote nothing here → ENOENT.
+    const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
+    const rows = raw.trim().split('\n').map(line => JSON.parse(line))
+    const write = rows.find(r => r.operation === 'write-at' && r.status === 'written')
+    assert.ok(write, 'expected a write-at audit row')
+    assert.equal(write.filename, 'finding.md')
+    assert.equal(write.sourceTier, 'L2')
   })
 })
 

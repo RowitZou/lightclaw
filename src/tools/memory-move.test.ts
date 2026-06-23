@@ -121,29 +121,23 @@ describe('MemoryMove', () => {
   })
 
   it('records a memory-writes audit row with movedFrom on successful move (2026-05-28 audit coverage)', async () => {
-    const auditDir = path.join(tmpRoot, 'audit')
-    const saved = process.env.LIGHTCLAW_AUDIT_DIR
-    process.env.LIGHTCLAW_AUDIT_DIR = auditDir
-    try {
-      await withMemorySession(() =>
-        memoryMoveTool.call(
-          { from: 'webSearcher/a.md', to: '_shared/2026-05-16-a-by-webSearcher.md' },
-          undefined as never,
-        ),
-      )
-      const day = new Date().toISOString().slice(0, 10)
-      // Pre-fix: MemoryMove wrote nothing here → ENOENT.
-      const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
-      const rows = raw.trim().split('\n').map(line => JSON.parse(line))
-      const move = rows.find(r => r.operation === 'move' && r.status === 'moved')
-      assert.ok(move, 'expected a moved audit row')
-      assert.equal(move.movedFrom, 'webSearcher/a.md')
-      assert.match(String(move.targetPath), /_shared\/2026-05-16-a-by-webSearcher\.md$/)
-      assert.equal(move.sourceTier, 'L2')
-    } finally {
-      if (saved === undefined) delete process.env.LIGHTCLAW_AUDIT_DIR
-      else process.env.LIGHTCLAW_AUDIT_DIR = saved
-    }
+    // §十: audit derives from <home> (the per-subdir LIGHTCLAW_AUDIT_DIR was removed).
+    const auditDir = path.join(tmpRoot, 'home', 'audit')
+    await withMemorySession(() =>
+      memoryMoveTool.call(
+        { from: 'webSearcher/a.md', to: '_shared/2026-05-16-a-by-webSearcher.md' },
+        undefined as never,
+      ),
+    )
+    const day = new Date().toISOString().slice(0, 10)
+    // Pre-fix: MemoryMove wrote nothing here → ENOENT.
+    const raw = await readFile(path.join(auditDir, 'memory-writes', `${day}.jsonl`), 'utf8')
+    const rows = raw.trim().split('\n').map(line => JSON.parse(line))
+    const move = rows.find(r => r.operation === 'move' && r.status === 'moved')
+    assert.ok(move, 'expected a moved audit row')
+    assert.equal(move.movedFrom, 'webSearcher/a.md')
+    assert.match(String(move.targetPath), /_shared\/2026-05-16-a-by-webSearcher\.md$/)
+    assert.equal(move.sourceTier, 'L2')
   })
 })
 

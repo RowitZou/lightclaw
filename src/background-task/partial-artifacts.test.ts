@@ -5,20 +5,23 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { collectPartialArtifactPaths } from './partial-artifacts.js'
+import { setLightclawHomeOverride } from '../paths.js'
 
+// §十: sessions derive from <home>; isolate via the home override and write
+// transcripts into <home>/sessions (the old LIGHTCLAW_SESSIONS_DIR was removed).
+let tmpHome: string
 let tmpSessions: string
-let prevEnv: string | undefined
 
 beforeEach(() => {
-  tmpSessions = mkdtempSync(path.join(tmpdir(), 'lightclaw-partial-artifacts-'))
-  prevEnv = process.env.LIGHTCLAW_SESSIONS_DIR
-  process.env.LIGHTCLAW_SESSIONS_DIR = tmpSessions
+  tmpHome = mkdtempSync(path.join(tmpdir(), 'lightclaw-partial-artifacts-'))
+  setLightclawHomeOverride(tmpHome)
+  tmpSessions = path.join(tmpHome, 'sessions')
+  mkdirSync(tmpSessions, { recursive: true })
 })
 
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.LIGHTCLAW_SESSIONS_DIR
-  else process.env.LIGHTCLAW_SESSIONS_DIR = prevEnv
-  rmSync(tmpSessions, { recursive: true, force: true })
+  setLightclawHomeOverride(undefined)
+  rmSync(tmpHome, { recursive: true, force: true })
 })
 
 function writeTranscript(sessionId: string, lines: unknown[]): void {

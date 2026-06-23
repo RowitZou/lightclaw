@@ -150,7 +150,6 @@ Environment:
   LIGHTCLAW_HOME             Coarse data root (sessions / memory / config / identity / workspaces / state)
                             External config may also set a "home" field when --home/LIGHTCLAW_HOME are absent.
   LIGHTCLAW_WORKSPACE_ROOT   Per-user workspace root (overrides <home>/workspaces)
-  LIGHTCLAW_LOGS_DIR         Daemon stderr log dir (default <home>/logs; day-rotated)
   LIGHTCLAW_NO_MEMORY=1      Disable auto-memory extraction and memory index injection
   LIGHTCLAW_NO_MCP=1         Disable MCP client startup and MCP tool injection
   LIGHTCLAW_NO_HOOKS=1       Disable hook loading

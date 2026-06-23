@@ -1144,51 +1144,27 @@ export function parsePermissionMode(value: string | undefined): PermissionMode |
   return parsePermissionModeInput(value) ?? undefined
 }
 
+// §十: every on-disk subdir derives purely from `lightclawHome()` — the data
+// anchor (LIGHTCLAW_HOME / --home / external --config `home`) is the single
+// relocation knob. There are no per-subdir config.json fields or env overrides
+// anymore (the one exception is the workspace pool — see resolveWorkspaceRoot in
+// identity/paths.ts, which keeps LIGHTCLAW_WORKSPACE_ROOT). Resolvers stay
+// uncached so a mid-process `setLightclawHomeOverride` is picked up by tests.
 export function resolveSessionsDir(): string {
-  const fileConfig = loadConfigFile()
-  const newValue = fileConfig.paths?.sessions
-  const legacyValue = fileConfig.sessionsDir
-  const fromFile = pickWithLegacy('sessionsDir', 'paths.sessions', legacyValue, newValue)
-  const configuredPath =
-    process.env.LIGHTCLAW_SESSIONS_DIR ??
-    fromFile ??
-    path.join(lightclawHome(), 'sessions')
-
-  return path.resolve(expandHomePath(configuredPath))
+  return path.resolve(path.join(lightclawHome(), 'sessions'))
 }
 
-// Audit root for the three JSONL audit trees (dispatch / memory-writes /
-// feishu-writes). Mirrors `resolveSessionsDir()` shape — env override first,
-// then `paths.audit` from config.json, then `<lightclawHome>/audit` default
-// (backward compatible). Audit modules call this on each write rather than
-// reading a cached value, matching the no-cache pattern in lightclawHome()
-// so tests that flip `setLightclawHomeOverride` mid-process pick up the
-// new default without re-loading config.
+// Audit root for the JSONL audit trees (dispatch / memory-writes / feishu-writes /
+// secret-ops). Derives from <home>.
 export function resolveAuditDir(): string {
-  const fileConfig = loadConfigFile()
-  const fromFile = fileConfig.paths?.audit
-  const configuredPath =
-    process.env.LIGHTCLAW_AUDIT_DIR ??
-    fromFile ??
-    path.join(lightclawHome(), 'audit')
-
-  return path.resolve(expandHomePath(configuredPath))
+  return path.resolve(path.join(lightclawHome(), 'audit'))
 }
 
-// Daemon log root for the stderr tee (`src/logger.ts`). Mirrors
-// `resolveAuditDir()` shape — env override first, then `paths.logs` from
-// config.json, then `<lightclawHome>/logs` default. When `<home>` is on
+// Daemon log root for the stderr tee (`src/logger.ts`). Derives from <home>; on
 // shared (gpfs) storage the day-rotated `<logs>/<YYYY-MM-DD>.log` files are
 // readable off the deployment box, the same way session transcripts are.
 export function resolveLogsDir(): string {
-  const fileConfig = loadConfigFile()
-  const fromFile = fileConfig.paths?.logs
-  const configuredPath =
-    process.env.LIGHTCLAW_LOGS_DIR ??
-    fromFile ??
-    path.join(lightclawHome(), 'logs')
-
-  return path.resolve(expandHomePath(configuredPath))
+  return path.resolve(path.join(lightclawHome(), 'logs'))
 }
 
 /** Resolve the three-bucket model lane config. Validation is LENIENT: a
@@ -1412,13 +1388,7 @@ export function getConfig(): LightClawConfig {
     fileConfig.memory?.curator,
   ) ?? {}
   const curator = resolveCuratorConfig(curatorRaw)
-  const memoryDir = path.resolve(
-    expandHomePath(
-      process.env.LIGHTCLAW_MEMORY_DIR ??
-        pickWithLegacy('memoryDir', 'paths.memory', fileConfig.memoryDir, fileConfig.paths?.memory) ??
-        path.join(lightclawHome(), 'memory'),
-    ),
-  )
+  const memoryDir = path.resolve(path.join(lightclawHome(), 'memory'))
   const memoryRecallEnabled =
     parseBoolean(process.env.LIGHTCLAW_MEMORY_RECALL_ENABLED) ??
     pickWithLegacy(
@@ -1508,20 +1478,9 @@ export function getConfig(): LightClawConfig {
     parsePermissionMode(process.env.LIGHTCLAW_PERMISSION_CEILING) ??
     parsePermissionMode(fileConfig.permissionCeiling) ??
     'acceptEdits'
-  const permissionAuditPath =
-    process.env.LIGHTCLAW_PERMISSION_AUDIT_LOG ??
-    pickWithLegacy(
-      'permissionAuditLog',
-      'paths.permissionAudit',
-      fileConfig.permissionAuditLog,
-      fileConfig.paths?.permissionAudit,
-    )
-  const permissionRulesRaw = pickWithLegacy(
-    'permissionRuleFiles',
-    'paths.permissionRules',
-    fileConfig.permissionRuleFiles,
-    fileConfig.paths?.permissionRules,
-  ) ?? {}
+  // §十: permission audit log + rule-file paths are no longer config/env
+  // overridable; they derive from <home> downstream (undefined / {} = default).
+  const permissionRulesRaw = {}
 
   // — mcp —
   const mcpEnabled = parseBoolean(process.env.LIGHTCLAW_NO_MCP) === true
@@ -1573,13 +1532,6 @@ export function getConfig(): LightClawConfig {
         20_480,
     ),
   )
-  const mcpConfigUserPath = pickWithLegacy(
-    'mcpConfigFiles.user',
-    'paths.mcpConfig',
-    fileConfig.mcpConfigFiles?.user,
-    fileConfig.paths?.mcpConfig,
-  )
-
   // — tool output cap —
   const maxToolOutputBytes = Math.max(
     1024,
@@ -1632,13 +1584,6 @@ export function getConfig(): LightClawConfig {
         10_000,
     ),
   )
-  const hooksUserPath = pickWithLegacy(
-    'hookDirs.user',
-    'paths.hooks',
-    fileConfig.hookDirs?.user,
-    fileConfig.paths?.hooks,
-  )
-
   // — runtime —
   const runtimeBackend =
     parseRuntimeBackend(process.env.LIGHTCLAW_RUNTIME_BACKEND) ??
@@ -1687,14 +1632,7 @@ export function getConfig(): LightClawConfig {
       fileConfig.apiLogsEnabled,
     )
     ?? false
-  const apiLogsDirRaw = process.env.LIGHTCLAW_API_LOGS_DIR
-    ?? pickWithLegacy(
-      'apiLogs.dir',
-      'paths.apiLogs',
-      fileConfig.apiLogs?.dir ? expandHomePath(fileConfig.apiLogs.dir) : undefined,
-      fileConfig.paths?.apiLogs ? expandHomePath(fileConfig.paths.apiLogs) : undefined,
-    )
-    ?? path.join(lightclawHome(), 'api-logs')
+  const apiLogsDirRaw = path.join(lightclawHome(), 'api-logs')
 
   return {
     defaultModel,
@@ -1713,9 +1651,6 @@ export function getConfig(): LightClawConfig {
       apiLogs: apiLogsDirRaw,
       audit: resolveAuditDir(),
       logs: resolveLogsDir(),
-      ...(hooksUserPath ? { hooks: expandOptionalPath(hooksUserPath)! } : {}),
-      ...(mcpConfigUserPath ? { mcpConfig: expandOptionalPath(mcpConfigUserPath)! } : {}),
-      ...(permissionAuditPath ? { permissionAudit: permissionAuditPath } : {}),
       permissionRules: permissionRulesRaw,
     },
     provider,
