@@ -728,6 +728,65 @@ describe('openai-auth: processResponseStream', () => {
       /arguments JSON parse failed/,
     )
   })
+
+  // Regression (gpt-codex-high / codex-default no-reply, 0.3.4): the upstream
+  // SSE stream closed with no events at all (proxy/TCP hiccup that EOF'd before
+  // any `response.completed`). The pre-fix code synthesized a vacuous
+  // `content: [], stopReason: 'end_turn', usage: {}` stop event; query.ts then
+  // accepted it as a finished turn and main (no in_progress todo) ended
+  // silently — the user saw "no reply". The stream must instead throw so the
+  // per-turn transient retry re-runs the call, and the throw must classify as
+  // transient.
+  it('empty stream (zero events) throws for transient retry', async () => {
+    await assert.rejects(
+      () => collect(processResponseStream(fromArray([]) as never)),
+      (error: unknown) => {
+        assert.match(
+          (error as Error).message,
+          /stream returned no events/,
+        )
+        assert.equal(
+          isTransientError(error),
+          true,
+          'empty-stream throw must be retried, not surfaced as a fatal error',
+        )
+        return true
+      },
+    )
+  })
+
+  it('heartbeat-only stream (no response.completed) throws for transient retry', async () => {
+    // The stream produced wire activity (keepalives) but never reached a
+    // terminal `response.*` event, so stopReason stayed null with no content
+    // and no usage. Still a dead stream — same remediation as zero events.
+    const events = [
+      { type: 'keepalive', sequence_number: 1 },
+      { type: 'keepalive', sequence_number: 2 },
+    ]
+    await assert.rejects(
+      () => collect(processResponseStream(fromArray(events) as never)),
+      /stream returned no events/,
+    )
+  })
+
+  it('genuine empty completion (real usage) is NOT treated as a dead stream', async () => {
+    // The complement: a real `response.completed` with empty output but real
+    // usage is the model legitimately ending a turn with no text. stopReason
+    // and usage are both set, so the dead-stream guard must NOT fire — this
+    // stays a valid empty end_turn that query.ts's own empty-stop handling
+    // owns, not a provider-level throw.
+    const events = [
+      {
+        type: 'response.completed',
+        response: { status: 'completed', usage: { input_tokens: 12, output_tokens: 0 } },
+      },
+    ]
+    const out = await collect(processResponseStream(fromArray(events) as never))
+    const stop = out[out.length - 1] as StreamStopEvent
+    assert.equal(stop.type, 'stop')
+    assert.equal(stop.stopReason, 'end_turn')
+    assert.equal(stop.content.length, 0)
+  })
 })
 
 describe('openai-auth: formatOpenAIAuthError', () => {

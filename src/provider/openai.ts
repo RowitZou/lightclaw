@@ -303,6 +303,7 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       let text = ''
       let usage: UsageStats = {}
       let finishReason: string | null = null
+      let sawAnyChunk = false
 
       const sanitizedMessages = dropOrphanToolResults(params.messages)
       // Drop tracking is surfaced through `detectStaticDropKinds()`
@@ -339,6 +340,7 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       }
 
       for await (const chunk of stream) {
+        sawAnyChunk = true
         usage = {
           ...usage,
           ...mapUsage(chunk.usage),
@@ -438,6 +440,21 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         }
       }
 
+      // Empty / dead-stream guard, symmetric with openai-auth.ts and
+      // anthropic.ts: a Chat Completions stream that closes with zero chunks —
+      // or one that never delivered a finish_reason, content, or usage — is an
+      // upstream/proxy EOF, not a finished turn. Without this throw the
+      // `finishReason ?? 'end_turn'` fallback below persists a `content: []`
+      // assistant message that reads as a normal end_turn, and the user sees
+      // "no reply". Throw so query.ts's transient retry re-runs the call.
+      if (
+        !sawAnyChunk ||
+        (content.length === 0 && finishReason === null && Object.keys(usage).length === 0)
+      ) {
+        throw new Error(
+          'OpenAI stream returned no events (likely upstream/proxy hiccup); a retry should recover.',
+        )
+      }
       const stopEvent: StreamStopEvent = {
         type: 'stop',
         stopReason:

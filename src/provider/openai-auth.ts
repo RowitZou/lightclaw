@@ -697,6 +697,7 @@ export async function* processResponseStream(
   let textBuffer = ''
   let usage: UsageStats = {}
   let stopReason: string | null = null
+  let sawAnyEvent = false
   let toolUseIndex = 0
   // Tool_use blocks accumulated here are folded into stopEvent.content at
   // the end. query.ts reads tool_uses off stopEvent.content (not the
@@ -706,6 +707,7 @@ export async function* processResponseStream(
   const toolUseBlocks: AssistantToolUseBlock[] = []
 
   for await (const event of stream) {
+    sawAnyEvent = true
     // OpenAI Responses emits a wire-level `event: keepalive` (with
     // `data: {"type":"keepalive","sequence_number":N}`) every ~30s when
     // there is no business event. Without forwarding this as a framework
@@ -862,6 +864,28 @@ export async function* processResponseStream(
   }
   for (const block of toolUseBlocks) {
     content.push(block)
+  }
+  // A stream that closes with zero events — OR one that only emitted
+  // heartbeats and never reached a `response.completed` / `response.failed`
+  // / `response.incomplete` (so stopReason stayed null) with no content and
+  // no usage — is an upstream/proxy hiccup that silently EOF'd the SSE
+  // connection, NOT a genuine "model said nothing" turn. Synthesizing the
+  // `stopReason ?? 'end_turn'` fallback below would persist a `content: []`
+  // assistant message that query.ts accepts as a finished turn: main with no
+  // in_progress todo then ends silently and the user sees "no reply". Throw
+  // instead so query.ts's per-turn transient retry (and recycleConnections
+  // for a fresh socket) re-runs the call — the same recovery path a TTFB idle
+  // abort uses, and the same guard anthropic.ts already carries. The message
+  // substring is matched by transient-error.ts's TRANSIENT_FAILURE_PATTERN.
+  // A genuine empty completion (real `response.completed` → stopReason set,
+  // real usage) is NOT caught here and stays a legitimate empty end_turn.
+  if (
+    !sawAnyEvent ||
+    (content.length === 0 && stopReason === null && Object.keys(usage).length === 0)
+  ) {
+    throw new Error(
+      'OpenAI Responses stream returned no events (likely upstream/proxy hiccup); a retry should recover.',
+    )
   }
   // When the model emitted any tool_use, surface stopReason='tool_use' so
   // the agent loop's downstream signals (and any provider-shape consumers)
