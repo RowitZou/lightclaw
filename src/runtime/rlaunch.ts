@@ -77,6 +77,13 @@ type ProcessState =
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const START_TIMEOUT_MS = 180_000
+// How many times a FAILED workspace chown is retried (across successive
+// data-plane accesses) before the runtime gives up and latches the worker as
+// "chown attempted". Bounds the worst case on a persistent gpfs/brainctl
+// failure to MAX_CHOWN_ATTEMPTS × the chown timeout, while still letting a
+// transient 60s blip self-heal on the next access instead of leaving the
+// worker permanently un-chowned until respawn.
+export const MAX_CHOWN_ATTEMPTS = 3
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // brainctl's exec stdout no longer carries tool output: every non-privileged
 // (agent-dispatched) exec redirects the command's stdout/stderr to files on
@@ -156,6 +163,14 @@ export class RlaunchRuntime implements Runtime {
    *  entirely on the hot path. */
   private workspaceChownedFor: string | null = null
   private inflightChown: Promise<void> | null = null
+  /** Bounded-retry counter for a FAILED chown, scoped to a workerName (resets
+   *  when it changes, same as `workspaceChownedFor`). A chown failure is NOT
+   *  latched on the first attempt — a 60s gpfs/brainctl timeout is transient
+   *  and would otherwise leave the worker permanently un-chowned until respawn.
+   *  We retry on the next data-plane access up to `MAX_CHOWN_ATTEMPTS`, then
+   *  latch so a persistent failure can't stall every tool call forever. */
+  private chownAttemptsFor: string | null = null
+  private chownAttempts = 0
   /** Memoizes successful scratch-dir provisioning per worker. Same lifecycle
    *  as `workspaceChownedFor` — resets when the workerName changes, so a
    *  respawned worker (whose node-local /scratch was wiped) re-provisions. */
@@ -911,16 +926,44 @@ export class RlaunchRuntime implements Runtime {
       timeoutMs: 60_000,
       privileged: true,
     })
-    if (result.exitCode !== 0) {
-      process.stderr.write(
-        `[rlaunch] workspace chown (${root} → ${uid}:${gid}) ` +
-        `failed for worker ${this.workerName ?? '<unbound>'}; ` +
-        `daemon writes will hit EACCES on root-owned files: ` +
-        `${result.stderr.trim() || result.stdout.trim()}\n`,
-      )
-      // Still memoize so we don't retry every tool call; admin must investigate.
+    if (result.exitCode === 0) {
+      // Latch ONLY on success, honoring the `ensure*` memos-latch-on-success
+      // invariant. A successful chown is idempotent and never re-runs for this
+      // worker. Clear the failure counter so a respawn starts clean.
+      this.workspaceChownedFor = this.workerName
+      this.chownAttemptsFor = null
+      this.chownAttempts = 0
+      return
     }
-    this.workspaceChownedFor = this.workerName
+    // Non-zero exit. chown's own partial errors (immutable subtree, etc.) are
+    // swallowed by the `|| true`, so this is a timeout (`runProcess` returns
+    // exitCode -1 after the SIGTERM→SIGKILL kill) or a brainctl / mkdir
+    // control-plane fault — all transient-shaped. Do NOT latch on the first
+    // failure: a 60s gpfs/brainctl blip would otherwise leave the worker
+    // permanently un-chowned (daemon writes silently EACCES on root-owned
+    // files) until respawn. Retry on the next data-plane access, bounded so a
+    // persistent failure can't stall every tool call with a fresh 60s timeout
+    // forever. Same bounded-recovery shape as the worker-lost retry layer.
+    if (this.chownAttemptsFor !== this.workerName) {
+      this.chownAttemptsFor = this.workerName
+      this.chownAttempts = 0
+    }
+    this.chownAttempts += 1
+    const exhausted = this.chownAttempts >= MAX_CHOWN_ATTEMPTS
+    process.stderr.write(
+      `[rlaunch] workspace chown (${root} → ${uid}:${gid}) ` +
+      `failed for worker ${this.workerName ?? '<unbound>'} ` +
+      `(attempt ${this.chownAttempts}/${MAX_CHOWN_ATTEMPTS})` +
+      (exhausted
+        ? `; giving up — daemon writes will hit EACCES on root-owned files, ` +
+          `admin must investigate`
+        : `; will retry on next data-plane access`) +
+      `: ${result.stderr.trim() || result.stdout.trim()}\n`,
+    )
+    if (exhausted) {
+      // Stop the retry storm after the budget; admin intervention required.
+      this.workspaceChownedFor = this.workerName
+    }
   }
 
   /**
