@@ -204,7 +204,7 @@ describe('/config model (scalar face)', () => {
     const out = await inSession('carol', cfg, () =>
       runConfigCommand('model', { config: cfg, userId: 'carol' }),
     )
-    assert.match(out, /current model: sonnet/)
+    assert.match(out, /Current model\*\*: sonnet/)
     assert.match(out, /opus/)
   })
 
@@ -336,7 +336,7 @@ describe('/config workspace (←set-workspace)', () => {
 
   it('bare workspace shows current (read)', async () => {
     const out = await runConfigCommand('workspace', { config: clusterConfig(), userId: 'pam' })
-    assert.match(out, /current workspace/)
+    assert.match(out, /Current workspace/)
   })
 })
 

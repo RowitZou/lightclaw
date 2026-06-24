@@ -943,9 +943,11 @@ async function runConfigModelScalar(
     })}\n`
   }
   if (!model) {
-    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n${t('config.model.help')}\n`
+    ctx.setBodyFormat?.('lark_md')
+    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n\n${t('config.model.help')}\n`
   }
   if (!config.models[model]) {
+    ctx.setBodyFormat?.('lark_md')
     return `${t('common.error.prefix')}${t('model.unknown', { name: model })}\n${t('model.available', { list: formatList() })}\n`
   }
   setLiveModel(model)
@@ -972,7 +974,8 @@ async function runConfigMode(
   const ceiling = userId ? await getUserPermissionCeiling(userId) : getConfig().permissionCeiling
   const verb = (parts[0] ?? '').toLowerCase()
 
-  if (verb === '' ) {
+  if (verb === '') {
+    ctx.setBodyFormat?.('lark_md')
     const current = getPermissionMode()
     const lines: string[] = [t('mode.menuTitle')]
     for (const alias of MODE_ALIASES) {
@@ -981,9 +984,9 @@ async function runConfigMode(
       const marker = isCurrent
         ? t('mode.currentMarker')
         : (within ? '' : t('mode.aboveCeilingMarker'))
-      lines.push(`  ${alias.padEnd(5)} ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
+      lines.push(`**${alias}** — ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
     }
-    lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '', t('config.mode.help'), '')
+    lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '', t('config.mode.help'))
     return lines.join('\n')
   }
 
@@ -1027,8 +1030,9 @@ async function runConfigLang(
   const override = userId ? loadUserConfigOverride(userId) : {}
 
   if (verb === '') {
+    ctx.setBodyFormat?.('lark_md')
     const current = override.lang ?? ctx.config.lang
-    return `${t('config.lang.current', { lang: current })}\n${t('config.lang.help')}\n`
+    return `${t('config.lang.current', { lang: current })}\n\n${t('config.lang.help')}\n`
   }
   if (verb === 'reset') {
     if (userId) setUserConfigField(userId, 'lang', undefined)
@@ -1233,7 +1237,8 @@ async function runConfigWorkspace(
     const current = typeof override.workspace === 'string' && override.workspace
       ? override.workspace
       : t('config.workspace.currentDefault')
-    return `${t('config.workspace.current', { path: current })}\n${t('config.workspace.help')}\n`
+    ctx.setBodyFormat?.('lark_md')
+    return `${t('config.workspace.current', { path: current })}\n\n${t('config.workspace.help')}\n`
   }
   if (verb === 'reset' || verb === '--default') {
     // --y gate (design F.3b): resetting migrates the workspace.
