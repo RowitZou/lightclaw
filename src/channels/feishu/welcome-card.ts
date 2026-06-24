@@ -11,23 +11,17 @@ import { buildSystemNoticeCard } from './system-notice.js'
 
 export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Record<string, unknown> {
   // Header is wathet (info) so it visually reads as a friendly notice rather
-  // than a warning. The body leads with LightClaw's differentiator — hand it
-  // multiple complex tasks and it runs them concurrently in the background,
-  // tracking each on a task card — instead of a generic command list. Commands
-  // collapse to a single `/help` hint ("or just ask me"), since a brand-new
-  // user gets no value from memorizing slash syntax up front. Two variants by
-  // recipient role:
-  //   - non-admin: greeting + task-system pitch + one concrete example prompt.
-  //   - admin: same pitch, no example, and the /help hint also points at the
+  // than a warning. Commands collapse to a single `/help` hint ("or just ask
+  // me"), since a brand-new user gets no value from memorizing slash syntax up
+  // front. Two variants by recipient role:
+  //   - non-admin: greeting + one concrete example prompt.
+  //   - admin: greeting, no example, and the /help hint also points at the
   //     admin management commands. The "shared identity across Feishu/terminal"
   //     line was dropped — the terminal is a slash-only console, not a second
   //     conversation surface.
   if (opts.isAdmin) {
     const lines = [
       t('channel.welcome.admin.intro'),
-      '',
-      t('channel.welcome.pitch.header'),
-      t('channel.welcome.pitch.body'),
       '',
       t('channel.welcome.admin.helpHint'),
     ]
@@ -39,9 +33,6 @@ export function buildApprovalWelcomeCard(opts: { isAdmin?: boolean } = {}): Reco
   }
   const lines = [
     t('channel.welcome.intro'),
-    '',
-    t('channel.welcome.pitch.header'),
-    t('channel.welcome.pitch.body'),
     '',
     t('channel.welcome.try.header'),
     t('channel.welcome.try.example'),
