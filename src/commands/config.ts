@@ -58,6 +58,10 @@ type ConfigCommandContext = {
   // best-effort no-op there.
   messagesLength?: number
   persistMeta?: (messageCount: number) => Promise<void>
+  // Optional: lets the L1 noun list opt into lark_md markdown rendering on the
+  // Feishu channel (the `**/config model** — ...` bold-name list). Absent on
+  // minimal callers (tests, terminal) where the default plain_text applies.
+  setBodyFormat?: (format: 'lark_md' | 'plain_text') => void
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
@@ -118,6 +122,7 @@ export async function runConfigCommand(
   const action = (parts[0] ?? 'help').toLowerCase()
 
   if (action === 'help' || action === '--help' || action === '-h' || parts.length === 0) {
+    ctx.setBodyFormat?.('lark_md')
     return `${t('config.usage')}\n`
   }
 
@@ -163,6 +168,7 @@ export async function runConfigCommand(
     return runCodexSubcommand(parts.slice(1), ctx)
   }
 
+  ctx.setBodyFormat?.('lark_md')
   return `${t('config.usage')}\n`
 }
 
@@ -937,7 +943,7 @@ async function runConfigModelScalar(
     })}\n`
   }
   if (!model) {
-    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n`
+    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n${t('config.model.help')}\n`
   }
   if (!config.models[model]) {
     return `${t('common.error.prefix')}${t('model.unknown', { name: model })}\n${t('model.available', { list: formatList() })}\n`
@@ -977,7 +983,7 @@ async function runConfigMode(
         : (within ? '' : t('mode.aboveCeilingMarker'))
       lines.push(`  ${alias.padEnd(5)} ${t(`mode.${alias}.desc` as 'mode.read.desc')}${marker}`)
     }
-    lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '')
+    lines.push('', t('mode.ceilingLine', { ceiling: modeToAlias(ceiling) }), '', t('config.mode.help'), '')
     return lines.join('\n')
   }
 
@@ -1022,7 +1028,7 @@ async function runConfigLang(
 
   if (verb === '') {
     const current = override.lang ?? ctx.config.lang
-    return `${t('config.lang.current', { lang: current })}\n`
+    return `${t('config.lang.current', { lang: current })}\n${t('config.lang.help')}\n`
   }
   if (verb === 'reset') {
     if (userId) setUserConfigField(userId, 'lang', undefined)
@@ -1227,7 +1233,7 @@ async function runConfigWorkspace(
     const current = typeof override.workspace === 'string' && override.workspace
       ? override.workspace
       : t('config.workspace.currentDefault')
-    return `${t('config.workspace.current', { path: current })}\n`
+    return `${t('config.workspace.current', { path: current })}\n${t('config.workspace.help')}\n`
   }
   if (verb === 'reset' || verb === '--default') {
     // --y gate (design F.3b): resetting migrates the workspace.

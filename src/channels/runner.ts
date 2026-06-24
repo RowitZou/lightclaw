@@ -1042,21 +1042,16 @@ export class ChannelRunner {
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
           const slashText = slash.output.trim() || 'ok'
-          // Two routing paths depending on what the slash handler produced:
-          //   - 'lark_md'    → genuine markdown body. Goes through the same
-          //                    markdown reply path as a normal LLM turn, so
-          //                    **bold** / ## headings / lists render instead
-          //                    of showing literal asterisks/hashes.
-          //   - 'plain_text' → structured help/status/rules tables that
-          //                    contain `<prompt>` / `<n>` / `[<a|b|c>]` style
-          //                    placeholders. lark_md would parse those as
-          //                    HTML tags / markdown links and drop them, so
-          //                    we render via a plain_text notice card.
-          if (slash.bodyFormat === 'lark_md') {
-            await this.sendReply(effectiveMessage, slashText)
-          } else {
-            await this.sendNotice(effectiveMessage, 'info', slashText, 'plain_text')
-          }
+          // All slash output renders as a system notice card; the bodyFormat
+          // only picks how the card body is parsed:
+          //   - 'lark_md'    → markdown body (**bold** / lists render). Used by
+          //                    the progressive-disclosure /help + /config noun
+          //                    lists, which are pure prose (no <>/[]).
+          //   - 'plain_text' → structured help/status/rules tables that contain
+          //                    `<prompt>` / `<n>` / `[<a|b|c>]` placeholders;
+          //                    lark_md would eat those as HTML tags / links, so
+          //                    the card body is rendered literally.
+          await this.sendNotice(effectiveMessage, 'info', slashText, slash.bodyFormat)
           return
         }
 
@@ -1895,11 +1890,7 @@ export class ChannelRunner {
         return
       }
       const slashText = slash.output.trim() || 'ok'
-      if (slash.bodyFormat === 'lark_md') {
-        await this.sendReply(slashMessage, slashText)
-      } else {
-        await this.sendNotice(slashMessage, 'info', slashText, 'plain_text')
-      }
+      await this.sendNotice(slashMessage, 'info', slashText, slash.bodyFormat)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
@@ -2147,11 +2138,7 @@ export class ChannelRunner {
       return
     }
     const slashText = result.output.trim() || 'ok'
-    if (result.bodyFormat === 'lark_md') {
-      await this.sendReply(message, slashText)
-    } else {
-      await this.sendNotice(message, 'info', slashText, 'plain_text')
-    }
+    await this.sendNotice(message, 'info', slashText, result.bodyFormat)
   }
 
   private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {

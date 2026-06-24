@@ -52,7 +52,8 @@ describe('/help surface-aware rendering', () => {
 
     // Channel defers usage to the agent — no inline argument syntax.
     assert.doesNotMatch(output, /\/config <model\|mode\|lang\|rule\|workspace/)
-    assert.match(output, /Just ask LightClaw/)
+    // Progressive disclosure: type the command for details, or ask LightClaw.
+    assert.match(output, /ask LightClaw directly/)
   })
 
   it('exposes exactly the 7 final top-level commands; admin sees /admin, non-admin does not', async () => {

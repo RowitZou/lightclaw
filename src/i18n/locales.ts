@@ -52,7 +52,7 @@ export const LOCALES = {
     'help.title': 'LightClaw 命令：',
     'help.adminTitle': '仅 admin：',
     'help.statusHint': '查看当前 user / mode / model / session 请用 /status。',
-    'help.usageHint': '需要某个命令的具体用法？直接问 LightClaw。',
+    'help.usageHint': '查看某命令的详细用法，直接输入该命令（例如 /config），或直接问 LightClaw。',
 
     // ---- Command descriptions (rendered in /help) ----
     // /help shows the command name + this one-line description; detailed
@@ -679,15 +679,23 @@ export const LOCALES = {
 
     // ---- /config (user) ----
     'config.usage': [
-      '用法：/config <名词> [<动词>] [args]',
-      '  /config model [set <name> | reset]      当前模型',
-      '  /config mode  [set <read|ask|auto|yolo> | reset]   权限模式',
-      '  /config lang  [set <cn|en> | reset]     界面语言',
-      '  /config rule  [add <pattern> [--deny] | rm <n>|all]   权限规则',
-      '  /config workspace [set <绝对路径> | reset]   工作目录',
-      '  /config lane  [set <worker|system|image> <model> | reset ...]   模型分流',
-      '  /config endpoint | backend ...           自带模型（BYO）配置',
+      '**/config — 个人配置**',
+      '',
+      '**/config model** — 当前模型',
+      '**/config mode** — 权限模式',
+      '**/config lang** — 界面语言',
+      '**/config rule** — 权限规则',
+      '**/config workspace** — 工作目录',
+      '**/config lane** — 模型分流（worker / system / image）',
+      '**/config endpoint** — 模型服务凭证',
+      '**/config backend** — 接入模型',
+      '',
+      '查看某项的详细用法，输入对应类别（例如 /config model），或直接问 LightClaw。',
     ].join('\n'),
+    'config.model.help': '用法：/config model set <名称> 切换当前模型 · /config model reset 清除个人覆盖',
+    'config.mode.help': '用法：/config mode set <read|ask|auto|yolo> 切换 · /config mode reset 恢复默认',
+    'config.lang.help': '用法：/config lang set <cn|en> 切换 · /config lang reset 恢复默认',
+    'config.workspace.help': '用法：/config workspace set <绝对路径> 指定目录 · /config workspace reset 恢复默认',
     'config.noIdentity': 'LightClaw 当前没有可用身份；/config 需要已配对的渠道用户。',
     // ---- /config lang ----
     'config.lang.current': '当前界面语言：{lang}',
@@ -868,7 +876,7 @@ export const LOCALES = {
     'help.title': 'LightClaw commands:',
     'help.adminTitle': 'Admin only:',
     'help.statusHint': 'Use /status to see your current user / mode / model / session.',
-    'help.usageHint': 'Need a command\'s detailed usage? Just ask LightClaw.',
+    'help.usageHint': 'For a command\'s details, just type that command (e.g. /config), or ask LightClaw directly.',
 
     'cmd.help.desc': 'List available commands',
     'cmd.status.desc': 'Show current user / mode / model / session',
@@ -1495,15 +1503,23 @@ export const LOCALES = {
 
     // ---- /config (user) ----
     'config.usage': [
-      'Usage: /config <noun> [<verb>] [args]',
-      '  /config model [set <name> | reset]      current model',
-      '  /config mode  [set <read|ask|auto|yolo> | reset]   permission mode',
-      '  /config lang  [set <cn|en> | reset]     UI language',
-      '  /config rule  [add <pattern> [--deny] | rm <n>|all]   permission rules',
-      '  /config workspace [set <absolute-path> | reset]   workspace dir',
-      '  /config lane  [set <worker|system|image> <model> | reset ...]   model lane',
-      '  /config endpoint | backend ...           bring-your-own (BYO) config',
+      '**/config — your personal config**',
+      '',
+      '**/config model** — current model',
+      '**/config mode** — permission mode',
+      '**/config lang** — interface language',
+      '**/config rule** — permission rules',
+      '**/config workspace** — working directory',
+      '**/config lane** — model lanes (worker / system / image)',
+      '**/config endpoint** — model provider credentials',
+      '**/config backend** — register a model',
+      '',
+      'For a category\'s details, type it (e.g. /config model), or ask LightClaw directly.',
     ].join('\n'),
+    'config.model.help': 'Usage: /config model set <name> to switch · /config model reset to clear your override',
+    'config.mode.help': 'Usage: /config mode set <read|ask|auto|yolo> · /config mode reset to restore default',
+    'config.lang.help': 'Usage: /config lang set <cn|en> · /config lang reset to restore default',
+    'config.workspace.help': 'Usage: /config workspace set <absolute-path> · /config workspace reset to restore default',
     'config.noIdentity': 'No active LightClaw identity; /config requires a paired channel user.',
     // ---- /config lang ----
     'config.lang.current': 'current UI language: {lang}',
