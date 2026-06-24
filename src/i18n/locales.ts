@@ -80,16 +80,16 @@ export const LOCALES = {
       '  运维：cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
       '  系统级模型配置（写部署 config.json）：backend · endpoint · lane',
     'admin.list.footer': '输入某个类别即可查看它的详细用法，例如 `/admin cost`；也可以直接问 LightClaw。',
-    'admin.list.cost': '按模型 / 用户统计 token 用量',
-    'admin.list.user': '管理已配对用户（列表 / 删除 / 解绑）',
-    'admin.list.pairing': '处理配对申请（列表 / 通过 / 拒绝）',
+    'admin.list.cost': '统计 token 用量（按模型 / 用户）',
+    'admin.list.user': '管理已配对用户（罗列 / 删除 / 解绑）',
+    'admin.list.pairing': '处理配对申请（罗列 / 通过 / 拒绝）',
     'admin.list.feedback': '阅读用户留下的反馈',
     'admin.list.ceiling': '设置用户的权限模式上限',
     'admin.list.sandbox': '查看 / 预热 / 重置沙箱',
-    'admin.list.feishuDrive': '管理飞书云空间用户文件夹',
-    'admin.list.backend': '部署级模型注册表（接入可用模型）',
-    'admin.list.endpoint': '部署级模型服务凭证',
-    'admin.list.lane': '部署级 worker / 系统 / 图像模型分配',
+    'admin.list.feishuDrive': '管理飞书云空间的用户文件夹',
+    'admin.list.backend': '把模型接入公共可用列表',
+    'admin.list.endpoint': '配置公共模型服务的地址与密钥',
+    'admin.list.lane': '为不同用途分别指定公共模型',
     'admin.user.usage': '用法：/admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': '用法：/admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': '用法：/admin feishu-drive [status | rm <canonical> --y]',
@@ -202,7 +202,7 @@ export const LOCALES = {
     'model.clearCache.noEntry': '（无现有条目）',
     'model.clearCache.alsoCleared': ' 能力缓存已清除。',
     'model.none.noticeBody':
-      '尚未配置可用模型。请先用 /config endpoint 添加模型服务的访问凭证，再用 /config backend 接入具体模型。使用 /config 查看完整配置帮助。',
+      '尚未配置可用模型。请先用 /config endpoint 配置模型服务的地址与密钥，再用 /config backend 把模型接入可用列表。使用 /config 查看完整配置帮助。',
 
     // ---- /rules ----
     'rules.empty': '当前用户没有持久化的权限规则。',
@@ -629,9 +629,9 @@ export const LOCALES = {
       '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
       '  data    导入 / 导出数据。动词：import <src> · export <dest>',
     'system.list.footer': '输入某个类别即可查看它的详细用法，例如 `/system key`；也可以直接问 LightClaw。',
-    'system.list.key': '管理运行时密钥（注入到 Bash 的 $NAME）',
-    'system.list.mount': '把 host gpfs 路径挂进沙箱',
-    'system.list.data': '导入 / 导出你的数据（记忆 / 技能 / 设置）',
+    'system.list.key': '管理运行时密钥（Agent 可用但不可见）',
+    'system.list.mount': '挂载文件路径供 Agent 访问',
+    'system.list.data': '导入 / 导出你的数据（记忆 / 技能 / 设置等）',
     'system.data.usage':
       '用法：/system data export (--path <文件|目录> | --feishu) [--with-sessions]\n' +
       '      /system data import (--path <文件> | --feishu) [--replace] [--y]',
@@ -700,8 +700,8 @@ export const LOCALES = {
     'config.list.lang': '切换界面语言',
     'config.list.rule': '查看 / 增删权限规则',
     'config.list.workspace': '查看 / 设置工作目录',
-    'config.list.lane': '分别给 worker / 系统 / 图像指定模型',
-    'config.list.endpoint': '配置模型服务的访问凭证',
+    'config.list.lane': '为不同用途分别指定模型',
+    'config.list.endpoint': '配置模型服务的地址与密钥',
     'config.list.backend': '把模型接入可用列表',
     'config.model.help': '**用法**\n/config model set 模型名 — 切换当前模型\n/config model reset — 清除你的个人覆盖',
     'config.mode.help': '**用法**\n/config mode set read|ask|auto|yolo — 切换权限模式\n/config mode reset — 恢复默认',
@@ -909,16 +909,16 @@ export const LOCALES = {
       '  ops: cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
       '  system-scope model config (writes deployment config.json): backend · endpoint · lane',
     'admin.list.footer': 'Type a category to see its detailed usage, e.g. `/admin cost`; or just ask LightClaw.',
-    'admin.list.cost': 'Token usage by model / user',
+    'admin.list.cost': 'Tally token usage (by model / user)',
     'admin.list.user': 'Manage paired users (list / remove / unlink)',
     'admin.list.pairing': 'Handle pairing requests (list / approve / reject)',
     'admin.list.feedback': 'Read feedback left by users',
     'admin.list.ceiling': 'Set a user\'s permission-mode ceiling',
     'admin.list.sandbox': 'Inspect / prefetch / reset the sandbox',
     'admin.list.feishuDrive': 'Manage Feishu cloud-space user folders',
-    'admin.list.backend': 'Deployment model registry (enroll usable models)',
-    'admin.list.endpoint': 'Deployment model-service credentials',
-    'admin.list.lane': 'Deployment worker / system / image model lanes',
+    'admin.list.backend': 'Add a model to the public usable list',
+    'admin.list.endpoint': 'Configure a public model service (URL + key)',
+    'admin.list.lane': 'Assign public models for different uses',
     'admin.user.usage': 'Usage: /admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': 'Usage: /admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': 'Usage: /admin feishu-drive [status | rm <canonical> --y]',
@@ -1034,7 +1034,7 @@ export const LOCALES = {
     'model.clearCache.noEntry': ' (no existing entry)',
     'model.clearCache.alsoCleared': ' Capability cache cleared.',
     'model.none.noticeBody':
-      'No model is configured yet. First add your model provider credential with /config endpoint, then plug in a model with /config backend. Use /config to see the full configuration guide.',
+      'No model is configured yet. First configure a model service (URL + key) with /config endpoint, then add a model to the usable list with /config backend. Use /config to see the full configuration guide.',
 
     // ---- /rules ----
     'rules.empty': 'No persisted permission rules for this user.',
@@ -1461,9 +1461,9 @@ export const LOCALES = {
       '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
       '  data    Import / export data. Verbs: import <src> · export <dest>',
     'system.list.footer': 'Type a category to see its detailed usage, e.g. `/system key`; or just ask LightClaw.',
-    'system.list.key': 'Manage runtime keys (injected as $NAME in Bash)',
-    'system.list.mount': 'Mount a host gpfs path into the sandbox',
-    'system.list.data': 'Import / export your data (memory / skills / settings)',
+    'system.list.key': 'Manage runtime keys (usable but hidden from the agent)',
+    'system.list.mount': 'Mount a file path for the agent to access',
+    'system.list.data': 'Import / export your data (memory, skills, settings, etc.)',
     'system.data.usage':
       'Usage: /system data export (--path <file|dir> | --feishu) [--with-sessions]\n' +
       '       /system data import (--path <file> | --feishu) [--replace] [--y]',
@@ -1533,9 +1533,9 @@ export const LOCALES = {
     'config.list.lang': 'switch the interface language',
     'config.list.rule': 'view / edit permission rules',
     'config.list.workspace': 'view / set your working directory',
-    'config.list.lane': 'models for worker / system / image',
-    'config.list.endpoint': 'configure provider credentials',
-    'config.list.backend': 'register a model into the pool',
+    'config.list.lane': 'Assign models for different uses',
+    'config.list.endpoint': 'Configure a model service (URL + key)',
+    'config.list.backend': 'Add a model to the usable list',
     'config.model.help': '**Usage**\n/config model set NAME — switch the current model\n/config model reset — clear your personal override',
     'config.mode.help': '**Usage**\n/config mode set read|ask|auto|yolo — switch the permission mode\n/config mode reset — restore the default',
     'config.lang.help': '**Usage**\n/config lang set cn|en — switch the interface language\n/config lang reset — restore the default',
