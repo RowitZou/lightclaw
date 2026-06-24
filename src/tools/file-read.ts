@@ -38,6 +38,17 @@ import { hasBeenRead, markRead } from './read-dedup.js'
 
 const DEFAULT_MAX_CHARS = 50_000
 const MAX_MAX_CHARS = 100_000
+
+/** Resolve the effective extracted-text char cap. An absent value falls back
+ *  to the default; a value above the hard ceiling is clamped down (not
+ *  rejected at the schema layer) so a model migrating a large `max_chars`
+ *  from another read tool gets capped content + a warning instead of a hard
+ *  validation failure that forces a retry. */
+function resolveMaxChars(requested: number | undefined): { maxChars: number; clamped: boolean } {
+  const value = requested ?? DEFAULT_MAX_CHARS
+  if (value > MAX_MAX_CHARS) return { maxChars: MAX_MAX_CHARS, clamped: true }
+  return { maxChars: value, clamped: false }
+}
 const MAX_OFFICE_BYTES = 20 * 1024 * 1024
 const MAX_INLINE_PDF_BYTES = 20 * 1024 * 1024
 
@@ -101,8 +112,8 @@ const inputSchema = z.object({
     max_rows: z.number().int().min(1).max(1000).optional().describe('Cap on rows returned (default 50).'),
     max_cols: z.number().int().min(1).max(200).optional().describe('Cap on columns returned (default 20).'),
   }).optional().describe('xlsx-specific options. Ignored for non-spreadsheet files.'),
-  max_chars: z.number().int().min(1).max(MAX_MAX_CHARS).optional()
-    .describe(`Cap on extracted text characters for PDF / Office / notebook text paths. Default ${DEFAULT_MAX_CHARS}. Raise only when the previous Read returned truncated:true and you genuinely need more text.`),
+  max_chars: z.number().int().min(1).optional()
+    .describe(`Cap on extracted text characters for PDF / Office / notebook text paths. Default ${DEFAULT_MAX_CHARS}, hard ceiling ${MAX_MAX_CHARS} (values above are clamped down, not rejected — a warning is returned). Raise only when the previous Read returned truncated:true and you genuinely need more text.`),
 })
 
 type FileReadInput = z.infer<typeof inputSchema>
@@ -265,10 +276,13 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
           pdfPageRange = { firstPage, lastPage }
         }
 
+        // Clamp an over-ceiling max_chars down rather than rejecting it.
+        const { maxChars, clamped: maxCharsClamped } = resolveMaxChars(input.max_chars)
+
         // Dedup: identical (path, mtime, xlsx-spec hash, max_chars, pdf
         // page range) is a cache hit. Plain text dedup runs in its own
         // path below.
-        const dedupVariant = buildExtractDedupVariant(input, probableFormat, pdfPageRange)
+        const dedupVariant = buildExtractDedupVariant(input, probableFormat, pdfPageRange, maxChars)
         if (hasBeenRead({ filePath, mtimeMs: stat.mtimeMs, variant: dedupVariant })) {
           return { output: { kind: 'unchanged' as const, filePath } }
         }
@@ -277,7 +291,7 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
         const extraction = await extractArtifactText({
           buffer,
           filePath,
-          maxChars: input.max_chars ?? DEFAULT_MAX_CHARS,
+          maxChars,
           xlsx: input.xlsx
             ? {
                 sheet: input.xlsx.sheet,
@@ -313,7 +327,12 @@ export const fileReadTool = buildTool<FileReadInput, FileReadOutput>({
             text: extraction.text,
             truncated: extraction.truncated,
             sizeBytes: buffer.length,
-            warnings: extraction.warnings,
+            warnings: maxCharsClamped
+              ? [
+                  `max_chars=${input.max_chars} exceeds the ${MAX_MAX_CHARS} ceiling for Read; clamped to ${MAX_MAX_CHARS}. For more text use \`pages\` (PDF) or read in ranges via \`offset\`/\`limit\`.`,
+                  ...extraction.warnings,
+                ]
+              : extraction.warnings,
             metadata: extraction.metadata,
           },
         }
@@ -392,8 +411,9 @@ function buildExtractDedupVariant(
   input: FileReadInput,
   format: string,
   pdfPageRange: { firstPage: number; lastPage: number } | undefined,
+  resolvedMaxChars: number,
 ): string {
-  const parts: string[] = [`extract:${format}`, `chars=${input.max_chars ?? DEFAULT_MAX_CHARS}`]
+  const parts: string[] = [`extract:${format}`, `chars=${resolvedMaxChars}`]
   if (format === 'xlsx' && input.xlsx) {
     parts.push(`sheet=${input.xlsx.sheet ?? ''}`)
     parts.push(`range=${input.xlsx.range ?? ''}`)

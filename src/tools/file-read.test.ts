@@ -140,6 +140,36 @@ describe('Read (office structured extraction)', () => {
   })
 })
 
+describe('Read (max_chars clamp)', () => {
+  it('clamps an over-ceiling max_chars instead of rejecting, and warns', async () => {
+    await createDocxFixture('big.docx')
+    const result = await fileReadTool.call(
+      { file_path: 'big.docx', max_chars: 250_000 },
+      context(),
+    )
+    // Pre-fix the schema's .max(100000) rejected this outright; now the value
+    // is accepted, clamped to the ceiling, and the clamp is surfaced as the
+    // first warning the model sees.
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadStructuredOutput
+    assert.equal(output.format, 'docx')
+    assert.match(output.warnings[0] ?? '', /250000/)
+    assert.match(output.warnings[0] ?? '', /clamp/i)
+    assert.match(output.warnings[0] ?? '', /100000/)
+  })
+
+  it('does not warn when max_chars is within the ceiling', async () => {
+    await createDocxFixture('small.docx')
+    const result = await fileReadTool.call(
+      { file_path: 'small.docx', max_chars: 80_000 },
+      context(),
+    )
+    assert.equal(result.isError, undefined)
+    const output = result.output as FileReadStructuredOutput
+    assert.ok(!/clamp/i.test(output.warnings[0] ?? ''))
+  })
+})
+
 describe('Read (visual path: image / pdf-pages)', () => {
   // The image / pdf visual path checks model multimodal capability via
   // getConfig(), which throws when no config.json exists — install a minimal

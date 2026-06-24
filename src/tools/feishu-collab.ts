@@ -89,6 +89,17 @@ import {
 import { buildTool, type ToolCallContext, type ToolCallResult } from '../tool.js'
 
 const DEFAULT_FEISHU_READ_MAX_CHARS = 100_000
+const FEISHU_READ_MAX_CHARS = 500_000
+
+/** Resolve the effective doc/sheet text cap. Mirrors Read's `resolveMaxChars`:
+ *  an over-ceiling value is clamped down (not rejected at the schema layer) so
+ *  a model migrating a large `max_chars` between read tools gets capped content
+ *  + a notice instead of a hard validation failure. */
+function resolveFeishuMaxChars(requested: number | undefined): { maxChars: number; clamped: boolean } {
+  const value = requested ?? DEFAULT_FEISHU_READ_MAX_CHARS
+  if (value > FEISHU_READ_MAX_CHARS) return { maxChars: FEISHU_READ_MAX_CHARS, clamped: true }
+  return { maxChars: value, clamped: false }
+}
 const DEFAULT_FEISHU_DOC_MEDIA_MAX_MB = 20
 const FEISHU_DOC_MEDIA_HARD_MAX_MB = 100
 const feishuScalarValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()])
@@ -108,8 +119,8 @@ const FEISHU_DOC_SPILL_CONTENT_PREVIEW_CHARS = 8_000
 
 const feishuReadInputSchema = z.object({
   url: z.string().url().describe('Feishu/Lark URL (docs / docx / wiki / sheets / bitable / file).'),
-  max_chars: z.number().int().min(1).max(500_000).optional()
-    .describe('Doc text / sheet JSON text cap. Defaults to 100000 for docs. Ignored for metadata_only.'),
+  max_chars: z.number().int().min(1).optional()
+    .describe(`Doc text / sheet JSON text cap. Defaults to 100000 for docs, hard ceiling ${FEISHU_READ_MAX_CHARS} (values above are clamped down, not rejected). Ignored for metadata_only.`),
   include_blocks: z.boolean().optional()
     .describe('For doc/docx/wiki-doc reads, include raw Feishu document blocks (tables/images/files/etc.) in the response. Defaults to false.'),
   block_page_size: z.number().int().min(1).max(500).optional()
@@ -697,18 +708,19 @@ export async function runFeishuRead(
     if (!documentId) {
       return { output: 'Feishu document resource did not resolve to a readable token.', isError: true }
     }
+    const { maxChars, clamped: maxCharsClamped } = resolveFeishuMaxChars(input.max_chars)
     const readDoc = deps.readDoc ?? readDocPlainText
     const output = await readDoc({
       client: deps.client,
       documentId,
-      maxChars: input.max_chars ?? DEFAULT_FEISHU_READ_MAX_CHARS,
+      maxChars,
       includeBlocks: input.include_blocks ?? false,
       ...(input.block_page_size ? { blockPageSize: input.block_page_size } : {}),
       ...(input.max_blocks ? { maxBlocks: input.max_blocks } : {}),
       ...(input.block_page_token ? { blockPageToken: input.block_page_token } : {}),
     })
     return {
-      output,
+      output: maxCharsClamped ? { ...output, max_chars_clamped: true } : output,
       ...(input.include_blocks && output.block_listing_error ? { isError: true } : {}),
     }
   }
@@ -731,7 +743,7 @@ export async function runFeishuRead(
           spreadsheetToken: target.token,
           ...(target.sheetId ? { sheetId: target.sheetId } : {}),
           range: target.range,
-          ...(input.max_chars ? { maxChars: input.max_chars } : {}),
+          ...(input.max_chars ? { maxChars: resolveFeishuMaxChars(input.max_chars).maxChars } : {}),
           ...(input.sheet?.max_cells ? { maxCells: input.sheet.max_cells } : {}),
         }),
       }

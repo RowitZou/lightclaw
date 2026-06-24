@@ -49,6 +49,33 @@ describe('FeishuRead tool', () => {
     })
   })
 
+  it('clamps an over-ceiling max_chars to the doc reader and flags it', async () => {
+    let readArgs: { maxChars?: number } | undefined
+    const result = await runFeishuRead(
+      { url: 'https://example.feishu.cn/docx/docToken', max_chars: 2_000_000 },
+      {
+        client,
+        resolveResource: async () => canonical('docx', 'docCanonical'),
+        readDoc: async input => {
+          readArgs = input
+          return {
+            documentId: input.documentId,
+            content: 'hello doc',
+            truncated: false,
+            block_count: 0,
+            block_types: {},
+          } satisfies FeishuDocReadResult
+        },
+      },
+    )
+
+    // Pre-fix the schema's .max(500000) rejected 2_000_000 outright; now the
+    // reader receives the clamped ceiling and the result flags the clamp.
+    assert.equal(result.isError, undefined)
+    assert.equal(readArgs?.maxChars, 500_000)
+    assert.equal((result.output as FeishuDocReadResult).max_chars_clamped, true)
+  })
+
   it('passes include_blocks through to the doc reader', async () => {
     let readArgs: unknown
     const result = await runFeishuRead(

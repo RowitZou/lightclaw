@@ -63,6 +63,9 @@ export type FeishuDocReadResult = {
   title?: string
   content: string
   truncated: boolean
+  // Set by runFeishuRead (feishu-collab.ts) when the requested max_chars
+  // exceeded the tool ceiling and was clamped down rather than rejected.
+  max_chars_clamped?: boolean
   revision_id?: string
   // block_count / block_types are omitted when the block listing call failed —
   // reporting a fake 0 would be indistinguishable from a genuinely empty doc.
