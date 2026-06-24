@@ -187,7 +187,8 @@ export const LOCALES = {
     'model.clearCache.cleared': '已清除 {name}（{endpoint} -> {upstream}）的能力缓存{suffix}。',
     'model.clearCache.noEntry': '（无现有条目）',
     'model.clearCache.alsoCleared': ' 能力缓存已清除。',
-    'model.none.noticeBody': '尚未配置可用模型，请用 /config model 选择，或自带模型（BYO）。',
+    'model.none.noticeBody':
+      '尚未配置可用模型。请先用 `/config endpoint` 添加模型服务的访问凭证，再用 `/config backend` 接入具体模型。完整配置帮助发 `/config`。',
 
     // ---- /rules ----
     'rules.empty': '当前用户没有持久化的权限规则。',
@@ -505,7 +506,7 @@ export const LOCALES = {
     'channel.welcome.try.header': '**试试发我**',
     'channel.welcome.try.example': '「帮我同时调研 〈主题 A〉 和 〈主题 B〉，各整理成一份要点」',
     'channel.welcome.helpHint': '想知道有哪些命令？发 `/help`，或者直接问我。',
-    'channel.welcome.admin.helpHint': '想知道有哪些命令？发 `/help`（`/admin user`、`/admin sandbox`、`/admin cost` 等管理命令也在里面），或者直接问我。',
+    'channel.welcome.admin.helpHint': '想知道有哪些命令？发 `/help`，管理命令都在 `/admin` 下，或者直接问我。',
     'channel.welcome.startup.failedTitle': '还没准备好',
     'channel.welcome.startup.failedBody': '初始化没在 {seconds} 秒内完成：{reason}\n稍后再发一条消息即可重试；一直不行就告诉管理员。',
     'channel.welcome.startup.timeoutBody': '初始化超时了（{seconds} 秒还没就绪）。\n稍后再发一条消息即可重试；一直不行就告诉管理员。',
@@ -1001,7 +1002,8 @@ export const LOCALES = {
     'model.clearCache.cleared': 'Cleared capability cache for {name} ({endpoint} -> {upstream}){suffix}.',
     'model.clearCache.noEntry': ' (no existing entry)',
     'model.clearCache.alsoCleared': ' Capability cache cleared.',
-    'model.none.noticeBody': 'No model configured yet — pick one with /config model, or bring your own (BYO).',
+    'model.none.noticeBody':
+      'No model is configured yet. Add your model provider credential with `/config endpoint`, then plug in a model with `/config backend`. Send `/config` for the full configuration guide.',
 
     // ---- /rules ----
     'rules.empty': 'No persisted permission rules for this user.',
@@ -1318,7 +1320,7 @@ export const LOCALES = {
     'channel.welcome.try.header': '**Try sending me**',
     'channel.welcome.try.example': '“Research 〈topic A〉 and 〈topic B〉 for me, each as a short briefing”',
     'channel.welcome.helpHint': 'Want the command list? Send `/help`, or just ask me.',
-    'channel.welcome.admin.helpHint': 'Want the command list? Send `/help` (admin commands like `/admin user`, `/admin sandbox`, `/admin cost` are in there too), or just ask me.',
+    'channel.welcome.admin.helpHint': 'Want the command list? Send `/help` — admin commands are all under `/admin` — or just ask me.',
     'channel.welcome.startup.failedTitle': 'Not ready yet',
     'channel.welcome.startup.failedBody': "Initialization didn't finish within {seconds}s: {reason}\nResend any message to retry; if it keeps failing, tell the admin.",
     'channel.welcome.startup.timeoutBody': "Initialization timed out ({seconds}s).\nResend any message to retry; if it keeps failing, tell the admin.",

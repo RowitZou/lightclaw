@@ -1066,7 +1066,7 @@ export class ChannelRunner {
         // getMainRoleRoute / getProviderFor throw `Unknown model`. Placed AFTER
         // slash dispatch so the user can still run `/model X` to fix it.
         if (!appConfig.defaultModel) {
-          await this.sendReply(effectiveMessage, t('model.none.noticeBody'))
+          await this.sendNotice(effectiveMessage, 'info', t('model.none.noticeBody'))
           process.stderr.write(
             `${this.strategy.channelId}: no model configured for session ${sessionId}; replied notice\n`,
           )
