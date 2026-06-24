@@ -96,7 +96,6 @@ export const LOCALES = {
     'admin.endpoint.usage':
       '用法：\n' +
       '  /admin endpoint                                列出部署 endpoint\n' +
-      '  /admin endpoint templates                      查看 endpoint 模板\n' +
       '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
       '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
       '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
@@ -106,7 +105,6 @@ export const LOCALES = {
     'admin.backend.usage':
       '用法：\n' +
       '  /admin backend                 列出部署模型\n' +
-      '  /admin backend templates       查看模型模板\n' +
       '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
       '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
       '  /admin backend rm <name>',
@@ -742,7 +740,7 @@ export const LOCALES = {
     'config.endpoint.updated': '已更新自定义 endpoint "{name}"。',
     'config.endpoint.removed': '已移除自定义 endpoint "{name}"{models}。',
     'config.endpoint.removedModels': '，连同模型：{models}',
-    'config.endpoint.none': '尚未配置任何自定义 endpoint。运行 /config endpoint templates 查看示例。',
+    'config.endpoint.none': '还没有配置任何模型服务。',
     'config.endpoint.listHeader': '自定义 endpoints：',
     'config.model.exists': '错误：自定义模型 "{name}" 已存在。请用 /config model set {name} ... 修改。',
     'config.model.missing': '错误：自定义模型 "{name}" 不存在。请先用 /config model add 添加。',
@@ -776,7 +774,7 @@ export const LOCALES = {
     'config.endpoint.codexNoBaseUrl': '错误：--type codex 不接受 --base-url（codex URL 固定）。',
     'config.endpoint.codexNoKey': '错误：--type codex 不接受 --key（请用 --auth-path）。',
     'config.endpoint.keyStored': '原始 key 已存入 secrets（0600）为 "{name}" 并被引用；config.json 不含明文。注意：你粘贴的 key 会留在聊天记录里——建议使用一次性 token。',
-    'config.backend.none': '尚未登记任何模型（backend）。运行 /config backend templates 查看示例。',
+    'config.backend.none': '还没有把任何模型加进可用列表。',
     'config.backend.listHeader': '已登记的模型（backend）：',
     'config.backend.endpointRequired': '错误：backend add 需要 --endpoint <ep>。',
     'config.backend.added': '已登记模型 "{name}"（{endpoint} -> {upstream}）。',
@@ -925,7 +923,6 @@ export const LOCALES = {
     'admin.endpoint.usage':
       'Usage:\n' +
       '  /admin endpoint                                List deployment endpoints\n' +
-      '  /admin endpoint templates                      Show endpoint templates\n' +
       '  /admin endpoint add <ep> --type openai|anthropic --key <KEY> [--base-url <url>] [--proxy <url>]\n' +
       '  /admin endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]\n' +
       '  /admin endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY>]\n' +
@@ -935,7 +932,6 @@ export const LOCALES = {
     'admin.backend.usage':
       'Usage:\n' +
       '  /admin backend                 List deployment models\n' +
-      '  /admin backend templates       Show model templates\n' +
       '  /admin backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <e>] [--max-tokens <n>] [--default]\n' +
       '  /admin backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]\n' +
       '  /admin backend rm <name>',
@@ -1575,7 +1571,7 @@ export const LOCALES = {
     'config.endpoint.updated': 'Updated custom endpoint "{name}".',
     'config.endpoint.removed': 'Removed custom endpoint "{name}"{models}.',
     'config.endpoint.removedModels': ' and models: {models}',
-    'config.endpoint.none': 'No custom endpoints configured. Run /config endpoint templates for examples.',
+    'config.endpoint.none': 'No model service configured yet.',
     'config.endpoint.listHeader': 'Custom endpoints:',
     'config.model.exists': 'Error: custom model "{name}" already exists. Use /config model set {name} ... to modify it.',
     'config.model.missing': 'Error: custom model "{name}" does not exist. Use /config model add first.',
@@ -1609,7 +1605,7 @@ export const LOCALES = {
     'config.endpoint.codexNoBaseUrl': 'Error: --type codex does not accept --base-url (the codex URL is fixed).',
     'config.endpoint.codexNoKey': 'Error: --type codex does not accept --key (use --auth-path).',
     'config.endpoint.keyStored': 'Raw key stored in secrets (0600) as "{name}" and referenced; config.json holds no plaintext. Note: the key you pasted lands in chat history — recommend a throwaway token.',
-    'config.backend.none': 'No backend models registered. Run /config backend templates for examples.',
+    'config.backend.none': 'No models in the usable list yet.',
     'config.backend.listHeader': 'Registered models (backend):',
     'config.backend.endpointRequired': 'Error: backend add requires --endpoint <ep>.',
     'config.backend.added': 'Registered model "{name}" ({endpoint} -> {upstream}).',

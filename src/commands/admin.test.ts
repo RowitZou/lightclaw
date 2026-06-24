@@ -325,6 +325,29 @@ describe('/admin feishu-drive rm --y (audit row unchanged)', () => {
   })
 })
 
+describe('/admin ceiling set verb', () => {
+  it('accepts an optional leading `set` (reaches the set path, not the usage error)', async () => {
+    // Pre-fix `set alice ask` was 3 positional parts → usage error. With the
+    // `set` verb stripped it is 2 parts and reaches setUserPermissionCeiling,
+    // which returns "No such identity" for an unknown user on an empty home.
+    const out = await runAdminCommand('ceiling set alice ask', {
+      config: liveConfig(),
+      userId: 'admin',
+    })
+    assert.match(out, /No such identity: alice/)
+    assert.doesNotMatch(out, /Usage:/)
+  })
+
+  it('still accepts the bare `<user> <mode>` form', async () => {
+    const out = await runAdminCommand('ceiling alice ask', {
+      config: liveConfig(),
+      userId: 'admin',
+    })
+    assert.match(out, /No such identity: alice/)
+    assert.doesNotMatch(out, /Usage:/)
+  })
+})
+
 describe('/admin sandbox status fast-path regex', () => {
   it('the runtime-acquire regex matches both /sandbox and /admin sandbox', () => {
     // Mirror of runner.ts:runReadSlashFastPath's sandboxNeedsRuntime condition.

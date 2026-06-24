@@ -287,9 +287,16 @@ export async function formatCeilingList(): Promise<string> {
 
 /** `/ceiling` / `/admin ceiling` body. Bare → list; `<user> <mode>` → set. */
 export async function runCeilingCommand(args: string): Promise<string> {
-  const parts = args.trim().split(/\s+/).filter(Boolean)
+  let parts = args.trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) {
     return formatCeilingList()
+  }
+  // Accept an optional leading `set` verb so the grammar matches the rest of
+  // /admin (user rm / pairing approve / lane set / backend set) and the command's
+  // own usage / footer strings, which already advertise `set <user> <mode>`. The
+  // bare `<user> <mode>` form keeps working for backward compatibility.
+  if (parts[0]?.toLowerCase() === 'set') {
+    parts = parts.slice(1)
   }
   if (parts.length !== 2) {
     return `${t('common.error.prefix')}${t('ceiling.usage')}\n`
@@ -598,8 +605,17 @@ function truncate(text: string, maxLen: number): string {
 export async function formatCost(): Promise<string> {
   const now = new Date()
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+  // Only tally PUBLIC (deployment-registry) models — a model defined in the
+  // admin `<home>/config.json`. Users' BYO models (added through their own
+  // per-user `/config endpoint` + `/config backend`) are their own concern and
+  // are excluded from the admin usage report. Membership is checked against the
+  // current public registry; a model removed from the registry drops out of the
+  // tally, which is the intended "what does the deployment currently pay for"
+  // semantics for this admin-facing report.
+  const publicModels = new Set(Object.keys(getConfig().models))
   const records: UsageRecord[] = []
   for await (const rec of readUsage({ sinceTs: monthStart })) {
+    if (!publicModels.has(rec.model)) continue
     records.push(rec)
   }
   if (records.length === 0) {

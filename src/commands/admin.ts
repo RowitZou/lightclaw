@@ -14,7 +14,6 @@ import {
   readJsonObjectOrEmpty,
 } from '../config-io.js'
 import { t } from '../i18n/index.js'
-import { formatEndpointTemplates, formatModelTemplates } from '../model-setup.js'
 import { lightclawHome } from '../paths.js'
 import { expandHomePath } from '../paths.js'
 
@@ -301,9 +300,6 @@ async function runAdminEndpoint(parts: string[], config: LightClawConfig): Promi
       case 'list':
       case '':
         return formatAdminEndpointList()
-      case 'templates':
-      case 'template':
-        return formatEndpointTemplates()
       case 'add':
         return addAdminEndpoint(rest, config)
       case 'set':
@@ -455,9 +451,6 @@ async function runAdminBackend(parts: string[], config: LightClawConfig): Promis
       case 'list':
       case '':
         return formatAdminBackendList()
-      case 'templates':
-      case 'template':
-        return formatModelTemplates()
       case 'add':
         return addAdminBackend(rest, config)
       case 'set':
