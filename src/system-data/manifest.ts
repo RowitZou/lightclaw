@@ -1,8 +1,6 @@
 import {
   identityPermissionsPath,
-  rlaunchMountsPath,
   userConfigPath,
-  userFeishuWorkspacePath,
   userMemoryRoot,
   userPreferencesPath,
   userSessionsRoot,
@@ -18,10 +16,8 @@ export type ComponentId =
   | 'memory'
   | 'skills'
   | 'sessions'
-  | 'mounts'
   | 'preferences'
   | 'permissions'
-  | 'feishuWorkspace'
   | 'config'
 
 export interface ComponentDef {
@@ -49,12 +45,17 @@ export interface ComponentDef {
  * is per-user, available to every paired user, not admin-only. The components
  * below are the portable slices of that subtree.
  *
- * Deliberately excluded (never packed): `state/secrets.json` (the user's real
- * API keys — exporting them would leak key material onto disk / IM), the live
- * scheduler/ledger state (`state/bg-tasks*.json`, `taskruns/`) which references
- * sessions and would re-fire stale work on another box, transient caches
- * (`state/feishu-uploads.json`), and `workspace/` (bulk; mounts cover the
- * external data the user actually cares about).
+ * Deliberately excluded (never packed, neither exported nor imported):
+ *  - `state/secrets.json` — the user's real API keys; exporting them would leak
+ *    key material onto disk / IM.
+ *  - Live scheduler/ledger state (`state/bg-tasks*.json`, `taskruns/`) — it
+ *    references sessions and would re-fire stale work on another box.
+ *  - Deployment bindings: `state/rlaunch-mounts.json` (gpfs mount paths bound to
+ *    one cluster) and `state/feishu-workspace.json` (a cloud-folder token bound
+ *    to one tenant). These are box/tenant-specific — restoring them verbatim is
+ *    wrong on any other deployment; they must be re-bound after a move, not
+ *    carried in the archive. (Same reasoning as the scheduler state above.)
+ *  - Transient caches (`state/feishu-uploads.json`) and `workspace/` (bulk).
  */
 export const COMPONENTS: readonly ComponentDef[] = [
   { id: 'memory', kind: 'dir', archivePath: 'memory', resolve: userMemoryRoot, importable: true },
@@ -68,13 +69,6 @@ export const COMPONENTS: readonly ComponentDef[] = [
     optInSessions: true,
   },
   {
-    id: 'mounts',
-    kind: 'file',
-    archivePath: 'state/rlaunch-mounts.json',
-    resolve: rlaunchMountsPath,
-    importable: true,
-  },
-  {
     id: 'preferences',
     kind: 'file',
     archivePath: 'state/preferences.json',
@@ -86,13 +80,6 @@ export const COMPONENTS: readonly ComponentDef[] = [
     kind: 'file',
     archivePath: 'state/permissions.json',
     resolve: identityPermissionsPath,
-    importable: true,
-  },
-  {
-    id: 'feishuWorkspace',
-    kind: 'file',
-    archivePath: 'state/feishu-workspace.json',
-    resolve: userFeishuWorkspacePath,
     importable: true,
   },
   // Packed for backup completeness, NEVER imported — see `importable` doc above.

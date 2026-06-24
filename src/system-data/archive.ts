@@ -18,6 +18,13 @@ import {
   type SystemDataManifest,
 } from './manifest.js'
 
+/** Zip-bomb backstop for import. adm-zip has no streaming reader, so every entry
+ *  is decompressed into memory; a tiny hostile archive could otherwise expand to
+ *  GBs and OOM the daemon. This is a safety ceiling, not a per-user quota —
+ *  legitimate memory/skills/preferences are tiny and even `--with-sessions`
+ *  transcripts stay well under it. */
+const MAX_IMPORT_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024 // 1 GiB
+
 export interface ExportOptions {
   withSessions?: boolean
   /** Modules cannot read the clock — the command layer stamps this. */
@@ -193,6 +200,17 @@ export async function importUserData(
   }
 
   const entries = zip.getEntries().filter(e => !e.isDirectory)
+
+  // Zip-bomb backstop: the central-directory header declares the uncompressed
+  // size, so we can reject an over-budget archive before decompressing a byte.
+  const totalUncompressed = entries.reduce((sum, e) => sum + (e.header.size || 0), 0)
+  if (totalUncompressed > MAX_IMPORT_UNCOMPRESSED_BYTES) {
+    throw new Error(
+      `archive expands to ${Math.round(totalUncompressed / 1024 / 1024)} MB uncompressed, ` +
+        `over the ${Math.round(MAX_IMPORT_UNCOMPRESSED_BYTES / 1024 / 1024)} MB import limit`,
+    )
+  }
+
   const applied: ComponentId[] = []
   const skipped: ComponentId[] = []
   const warnings: string[] = []
@@ -212,9 +230,18 @@ export async function importUserData(
       if (opts.replace) {
         await rm(target, { recursive: true, force: true })
       }
+      const resolvedTarget = path.resolve(target)
       for (const entry of componentEntries) {
         const rel = relativeWithinComponent(entry.entryName, def)
-        const dest = path.join(target, rel)
+        const dest = path.resolve(target, rel)
+        // Zip-slip guard: a hostile archive can carry `../` in an entry name
+        // (adm-zip's reader preserves it from externally-crafted zips), which
+        // would let the write escape the component dir and clobber another
+        // user's data, hooks/, or config.json. Refuse the whole archive
+        // (fail-closed) the moment any entry resolves outside its component.
+        if (dest !== resolvedTarget && !dest.startsWith(resolvedTarget + path.sep)) {
+          throw new Error(`archive entry "${entry.entryName}" escapes its component directory`)
+        }
         await mkdir(path.dirname(dest), { recursive: true })
         await writeFile(dest, entry.getData())
       }

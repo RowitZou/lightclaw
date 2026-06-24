@@ -9,9 +9,9 @@ import AdmZip from 'adm-zip'
 
 import {
   identityPermissionsPath,
-  rlaunchMountsPath,
   userConfigPath,
   userMemoryRoot,
+  userPreferencesPath,
   userSecretsPath,
   userSessionsRoot,
   userSkillsRoot,
@@ -19,6 +19,7 @@ import {
 import { setLightclawHomeOverride } from '../paths.js'
 
 import { exportUserData, importUserData } from './archive.js'
+import { SYSTEM_DATA_FORMAT, SYSTEM_DATA_VERSION } from './manifest.js'
 
 const USER = 'alice'
 let homeA = ''
@@ -41,24 +42,24 @@ afterEach(async () => {
 })
 
 describe('system-data export/import round-trip', () => {
-  it('packs memory / skills / mounts and restores them onto another home', async () => {
+  it('packs memory / skills / preferences and restores them onto another home', async () => {
     setLightclawHomeOverride(homeA)
     await seed(path.join(userMemoryRoot(USER), 'fact.md'), '# a fact')
     await seed(path.join(userMemoryRoot(USER), 'webSearcher', 'note.md'), '# role note')
     await seed(path.join(userSkillsRoot(USER), 'my-skill', 'SKILL.md'), '# skill')
-    await seed(rlaunchMountsPath(USER), '{"mounts":["/gpfs/x"]}')
+    await seed(userPreferencesPath(USER), '{"mode":"auto"}')
     const { buffer, manifest, componentsPacked } = await exportUserData(USER)
 
     assert.equal(manifest.secretsIncluded, false)
     assert.ok(componentsPacked.includes('memory'))
     assert.ok(componentsPacked.includes('skills'))
-    assert.ok(componentsPacked.includes('mounts'))
+    assert.ok(componentsPacked.includes('preferences'))
 
     setLightclawHomeOverride(homeB)
     const result = await importUserData(USER, buffer)
     assert.ok(result.applied.includes('memory'))
     assert.ok(result.applied.includes('skills'))
-    assert.ok(result.applied.includes('mounts'))
+    assert.ok(result.applied.includes('preferences'))
 
     assert.equal(await readFile(path.join(userMemoryRoot(USER), 'fact.md'), 'utf8'), '# a fact')
     assert.equal(
@@ -66,9 +67,24 @@ describe('system-data export/import round-trip', () => {
       '# role note',
     )
     assert.equal(await readFile(path.join(userSkillsRoot(USER), 'my-skill', 'SKILL.md'), 'utf8'), '# skill')
-    assert.equal(await readFile(rlaunchMountsPath(USER), 'utf8'), '{"mounts":["/gpfs/x"]}')
+    assert.equal(await readFile(userPreferencesPath(USER), 'utf8'), '{"mode":"auto"}')
     // The memory index is framework-regenerated after import.
     assert.ok(existsSync(path.join(userMemoryRoot(USER), 'MEMORY.md')))
+  })
+
+  it('does NOT export or import deployment bindings (rlaunch-mounts / feishu-workspace)', async () => {
+    setLightclawHomeOverride(homeA)
+    await seed(path.join(userMemoryRoot(USER), 'fact.md'), '# a fact')
+    // These deployment-bound files exist on disk but must never be packed.
+    await seed(path.join(homeA, 'users', USER, 'state', 'rlaunch-mounts.json'), '{"mounts":["/gpfs/x"]}')
+    await seed(path.join(homeA, 'users', USER, 'state', 'feishu-workspace.json'), '{"token":"fld_src"}')
+    const { buffer, componentsPacked } = await exportUserData(USER)
+
+    assert.ok(!componentsPacked.includes('mounts' as never))
+    assert.ok(!componentsPacked.includes('feishuWorkspace' as never))
+    const names = new AdmZip(buffer).getEntries().map(e => e.entryName)
+    assert.ok(!names.some(n => n.includes('rlaunch-mounts')))
+    assert.ok(!names.some(n => n.includes('feishu-workspace')))
   })
 })
 
@@ -100,6 +116,48 @@ describe('system-data secrets / config invariants', () => {
     assert.ok(!result.applied.includes('config'))
     // Target config untouched — the user's own config (and key refs) preserved.
     assert.equal(await readFile(userConfigPath(USER), 'utf8'), '{"workspace":"/local/keep"}')
+  })
+})
+
+describe('system-data zip-slip / path-traversal guard', () => {
+  // adm-zip's WRITER normalizes `../` away, so a hostile entry name has to be
+  // injected by byte-replacing a same-length placeholder (offsets + CRC are
+  // unaffected by the name bytes). adm-zip's READER preserves the `../`, which
+  // is exactly the externally-crafted-archive attack surface.
+  function craftEscapingArchive(): Buffer {
+    const zip = new AdmZip()
+    const manifest = {
+      format: SYSTEM_DATA_FORMAT,
+      version: SYSTEM_DATA_VERSION,
+      lightclawVersion: 'x',
+      canonicalUser: USER,
+      components: ['memory'],
+      includesSessions: false,
+      secretsIncluded: false,
+    }
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)))
+    // Same byte-length as the malicious name below so the swap is offset-safe.
+    zip.addFile('memory/xx/yy/escape.md', Buffer.from('pwned'))
+    const buf = zip.toBuffer()
+    const placeholder = Buffer.from('memory/xx/yy/escape.md')
+    const malicious = Buffer.from('memory/../../escape.md')
+    assert.equal(placeholder.length, malicious.length)
+    let i = buf.indexOf(placeholder)
+    assert.notEqual(i, -1)
+    while (i !== -1) {
+      malicious.copy(buf, i)
+      i = buf.indexOf(placeholder, i + placeholder.length)
+    }
+    return buf
+  }
+
+  it('refuses an archive whose entry escapes its component dir, writing nothing outside', async () => {
+    setLightclawHomeOverride(homeB)
+    const buffer = craftEscapingArchive()
+    const escaped = path.resolve(userMemoryRoot(USER), '../../escape.md')
+
+    await assert.rejects(() => importUserData(USER, buffer), /escapes its component/)
+    assert.ok(!existsSync(escaped), 'traversal target must not be written')
   })
 })
 

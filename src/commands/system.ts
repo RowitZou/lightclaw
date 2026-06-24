@@ -105,8 +105,9 @@ function endpointsReferencingKey(userId: string, name: string): string[] {
 
 /**
  * `data` noun — per-user backup / restore of the CALLER's own `users/<canonical>/`
- * subtree (memory / skills / mounts / per-user settings; sessions opt-in). It is
- * available to every paired user, not admin-only. Secrets are never exported and
+ * subtree (memory / skills / per-user settings; sessions opt-in). It is
+ * available to every paired user, not admin-only. Secrets and deployment
+ * bindings (rlaunch mounts / feishu workspace) are never exported, and
  * `config.json` is never imported (see `src/system-data/manifest.ts`).
  *
  *   /system data export --path <file|dir> | --feishu  [--with-sessions]
