@@ -162,6 +162,20 @@ describe('/admin backend add (system-scope write-back)', () => {
     assert.equal(cfg.defaultModel, 'm', 'live config defaultModel should reflect the write')
   })
 
+  it('defaults reasoningEffort to medium when --reasoning is omitted', async () => {
+    writeFileSync(configPath(), JSON.stringify({ endpoints: { ep: { apiKey: 'K' } } }), 'utf8')
+    await runAdminCommand('backend add m --endpoint ep', { config: liveConfig(), userId: 'admin' })
+    const models = readConfig().models as Record<string, { reasoningEffort?: string }>
+    assert.equal(models.m!.reasoningEffort, 'medium')
+  })
+
+  it('honors an explicit --reasoning over the medium default', async () => {
+    writeFileSync(configPath(), JSON.stringify({ endpoints: { ep: { apiKey: 'K' } } }), 'utf8')
+    await runAdminCommand('backend add m --endpoint ep --reasoning high', { config: liveConfig(), userId: 'admin' })
+    const models = readConfig().models as Record<string, { reasoningEffort?: string }>
+    assert.equal(models.m!.reasoningEffort, 'high')
+  })
+
   it('rejects backend add referencing a missing endpoint (no write)', async () => {
     writeFileSync(configPath(), JSON.stringify({ keepMe: 1 }), 'utf8')
     const out = await runAdminCommand('backend add m --endpoint nope', {

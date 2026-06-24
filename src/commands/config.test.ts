@@ -456,7 +456,16 @@ describe('/config backend (BYO model registry, ←model BYO)', () => {
     assert.equal(model.endpoint, 'ep')
     assert.equal(model.upstreamModel, 'm') // --upstream omitted ⇒ upstream==name
     assert.equal(model.schema, 'openai') // derived from endpoint --type
+    assert.equal(model.reasoningEffort, 'medium') // default when --reasoning omitted
     assert.equal(persisted.defaultModel, 'm')
+  })
+
+  it('add defaults reasoningEffort to medium; explicit --reasoning wins', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b3rsn' })
+    await runConfigCommand('backend add m --endpoint ep --reasoning xhigh', { config: cfg, userId: 'b3rsn' })
+    const model = (readUserConfigJson('b3rsn').models as Record<string, Record<string, unknown>>).m
+    assert.equal(model.reasoningEffort, 'xhigh')
   })
 
   it('check m clears the cache then probes', async () => {
