@@ -18,6 +18,7 @@ import { dropOrphanToolResults } from './orphan-tool-result.js'
 import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { attachProviderRetryAfter } from './retry-after.js'
+import { isReasoningUnsupportedError } from './reasoning.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
 /** OpenAI Chat Completions has no slot for `document` (PDF) blocks anywhere
@@ -321,13 +322,22 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // OpenAI auto prefix-cache fingerprint for the entire `messages`
       // tail.
       const wireMessages = convertMessages(params.system, sanitizedMessages)
-      let stream: Awaited<ReturnType<typeof client.chat.completions.create>>
-      try {
-        stream = await client.chat.completions.create({
+      // `reasoning_effort` is the native Chat Completions reasoning knob
+      // (none|minimal|low|medium|high|xhigh on current reasoning models; cast
+      // because the installed SDK enum may be narrower than our 6-value union).
+      // Sent for every configured value, including 'none' (which disables
+      // reasoning on gpt-5.2+). A non-reasoning model — or an OpenAI-compatible
+      // endpoint that doesn't accept the field — trips the strip-retry below.
+      const wantsReasoning = Boolean(params.reasoningEffort)
+      const makeStream = (withReasoning: boolean) =>
+        client.chat.completions.create({
           model: params.model,
           messages: wireMessages,
           tools: params.tools.length > 0 ? convertTools(params.tools) : undefined,
           max_tokens: params.maxTokens ?? 8192,
+          ...(withReasoning && params.reasoningEffort
+            ? { reasoning_effort: params.reasoningEffort as never }
+            : {}),
           stream: true,
           stream_options: {
             include_usage: true,
@@ -335,8 +345,23 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
         }, {
           signal: params.signal,
         })
+
+      let stream: Awaited<ReturnType<typeof client.chat.completions.create>>
+      try {
+        stream = await makeStream(wantsReasoning)
       } catch (error) {
-        throw attachProviderRetryAfter(error)
+        if (wantsReasoning && isReasoningUnsupportedError(error)) {
+          process.stderr.write(
+            `[openai] model "${params.model}" rejected reasoning_effort; retrying without it\n`,
+          )
+          try {
+            stream = await makeStream(false)
+          } catch (retryError) {
+            throw attachProviderRetryAfter(retryError)
+          }
+        } else {
+          throw attachProviderRetryAfter(error)
+        }
       }
 
       for await (const chunk of stream) {

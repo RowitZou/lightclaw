@@ -137,7 +137,13 @@ export async function* streamChat(
     ...rest,
     messages: finalizedMessages,
     model: entry.upstreamModel,
-    reasoningEffort: rest.reasoningEffort ?? entry.reasoningEffort,
+    // Unconfigured reasoning defaults to 'medium', NOT off — leaving it unset
+    // lets a reasoning model fall to its weakest tier (or our 'none'), which
+    // measurably degrades quality. 'none' is only reached when the model is
+    // explicitly configured with `--reasoning none` or when the provider's
+    // one-shot strip-retry drops it after the model rejects reasoning fields
+    // (a genuinely non-reasoning model). Providers clamp/map this per wire API.
+    reasoningEffort: rest.reasoningEffort ?? entry.reasoningEffort ?? 'medium',
     maxTokens: resolveWireMaxTokens(rest.maxTokens, entry, config),
   }
 

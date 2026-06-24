@@ -7,7 +7,20 @@ import type { StreamEvent } from '../types.js'
  *  endpoint's auth provider. */
 export type Schema = 'anthropic' | 'openai' | 'openai-auth'
 
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+/** Unified reasoning-strength knob exposed to users as `/config model
+ *  --reasoning`. Superset across providers: OpenAI Chat Completions
+ *  (none|minimal|low|medium|high|xhigh on gpt-5.2+), Anthropic
+ *  `output_config.effort` (low|medium|high|xhigh; 'none' = thinking off,
+ *  'minimal' clamps to 'low'), and the Codex Responses backend. Each
+ *  provider maps / clamps these to its own wire field; see
+ *  `src/provider/reasoning.ts`. */
+export type ReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
 
 /** @deprecated kept for back-compat in any in-tree caller; new code should
  *  use `Schema`. */

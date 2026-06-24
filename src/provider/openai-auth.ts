@@ -460,8 +460,11 @@ export function buildResponsesRequestBody(args: {
     ...(hasTools
       ? { tools: args.tools, tool_choice: 'auto', parallel_tool_calls: true }
       : {}),
-    ...(args.reasoningEffort
-      ? { reasoning: { effort: args.reasoningEffort, summary: 'auto' } }
+    // 'none' disables reasoning → omit the field entirely (the Codex Responses
+    // backend has no 'none' effort tier). Effort is cast because our 6-value
+    // union (minimal/xhigh) is wider than the SDK's Responses effort enum.
+    ...(args.reasoningEffort && args.reasoningEffort !== 'none'
+      ? { reasoning: { effort: args.reasoningEffort as never, summary: 'auto' } }
       : {}),
     // NB: max_output_tokens is deliberately NOT set here — see the function
     // doc comment. The Codex Responses backend 400s on it; `args.maxTokens`

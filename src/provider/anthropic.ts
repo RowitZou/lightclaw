@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { ApiKeyEndpoint } from '../config.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { attachProviderRetryAfter } from './retry-after.js'
+import { anthropicEffort, isReasoningUnsupportedError } from './reasoning.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -355,9 +356,21 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
       return ['audio', 'video']
     },
     async *streamChat(params: StreamChatParams): AsyncGenerator<StreamEvent> {
-      let stream: Awaited<ReturnType<typeof client.messages.create>>
-      try {
-        stream = await client.messages.create({
+      // Reasoning maps to adaptive thinking + `output_config.effort` (the
+      // current Anthropic surface). 'none' (or unset) → omit both, leaving
+      // thinking off, which is also the model default. The installed
+      // @anthropic-ai/sdk (0.63) predates these fields, so they ride as
+      // pass-through wire props (Stainless forwards unknown body keys);
+      // `budget_tokens` is intentionally NOT used (deprecated, 400s on Opus
+      // 4.7/4.8). An endpoint that rejects them trips the strip-retry below.
+      const effort = params.reasoningEffort
+        ? anthropicEffort(params.reasoningEffort)
+        : null
+      const reasoningFragment = effort
+        ? { thinking: { type: 'adaptive' }, output_config: { effort } }
+        : {}
+      const makeStream = (withReasoning: boolean) =>
+        client.messages.create({
           model: params.model,
           max_tokens: params.maxTokens ?? 8192,
           system: cacheSystem(params.system) as never,
@@ -367,11 +380,32 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
           ) as never,
           tools: cacheTools(params.tools) as never,
           stream: true,
-        }, {
+          ...(withReasoning ? reasoningFragment : {}),
+          // Cast to the streaming params type: it selects the streaming
+          // overload (so the result narrows to a Stream) AND suppresses the
+          // type error on the pass-through `output_config` / adaptive
+          // `thinking` fields the 0.63 SDK does not yet model.
+        } as Anthropic.Messages.MessageCreateParamsStreaming, {
           signal: params.signal,
         })
+
+      const wantsReasoning = effort !== null
+      let stream: Awaited<ReturnType<typeof client.messages.create>>
+      try {
+        stream = await makeStream(wantsReasoning)
       } catch (error) {
-        throw attachProviderRetryAfter(error)
+        if (wantsReasoning && isReasoningUnsupportedError(error)) {
+          process.stderr.write(
+            `[anthropic] model "${params.model}" rejected reasoning fields; retrying without reasoning\n`,
+          )
+          try {
+            stream = await makeStream(false)
+          } catch (retryError) {
+            throw attachProviderRetryAfter(retryError)
+          }
+        } else {
+          throw attachProviderRetryAfter(error)
+        }
       }
 
       const contentBlocks = new Map<

@@ -709,11 +709,18 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffort | unde
     return undefined
   }
   const normalized = value.trim().toLowerCase()
-  if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+  if (
+    normalized === 'none' ||
+    normalized === 'minimal' ||
+    normalized === 'low' ||
+    normalized === 'medium' ||
+    normalized === 'high' ||
+    normalized === 'xhigh'
+  ) {
     return normalized
   }
   throw new Error(
-    `reasoningEffort must be one of: "low", "medium", "high".`,
+    `reasoningEffort must be one of: "none", "minimal", "low", "medium", "high", "xhigh".`,
   )
 }
 

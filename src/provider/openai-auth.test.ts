@@ -913,4 +913,43 @@ describe('openai-auth: buildResponsesRequestBody', () => {
     assert.equal(body.prompt_cache_key, 'feishu:dm:oc_test')
     assert.deepEqual(body.reasoning, { effort: 'high', summary: 'auto' })
   })
+
+  it("omits the reasoning field entirely for reasoningEffort 'none'", () => {
+    // Regression: 'none' means reasoning OFF. The Codex Responses backend has
+    // no 'none' effort tier, so the field must be absent — not
+    // `reasoning:{effort:'none'}`. Pre-fix the builder gated on truthiness
+    // (`args.reasoningEffort ? ...`), and 'none' is truthy, so it forwarded an
+    // invalid effort value. Now it omits when effort is 'none'.
+    const body = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      reasoningEffort: 'none',
+      promptCacheKey: 'feishu:dm:oc_test',
+    })
+    assert.ok(!('reasoning' in body), "reasoning must be absent for effort 'none'")
+  })
+
+  it('forwards the widened minimal / xhigh effort tiers', () => {
+    const minimal = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      reasoningEffort: 'minimal',
+      promptCacheKey: 'k',
+    })
+    assert.deepEqual(minimal.reasoning, { effort: 'minimal', summary: 'auto' })
+
+    const xhigh = buildResponsesRequestBody({
+      model: 'gpt-5.5',
+      instructions: 'sys',
+      input: convertMessagesToResponsesInput([{ role: 'user', content: '1' }]),
+      tools: [],
+      reasoningEffort: 'xhigh',
+      promptCacheKey: 'k',
+    })
+    assert.deepEqual(xhigh.reasoning, { effort: 'xhigh', summary: 'auto' })
+  })
 })
