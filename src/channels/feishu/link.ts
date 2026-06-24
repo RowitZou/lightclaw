@@ -55,6 +55,31 @@ export function resolveFeishuLink(rawUrl: string): FeishuResolveLinkResult {
   }
 }
 
+// Folder links (`/drive/folder/<token>`) are deliberately NOT in
+// KNOWN_SEGMENTS — a folder is not a readable doc/sheet, so `resolveFeishuLink`
+// rejects them. But the rejection reason ("No supported Feishu resource
+// segment found") gives the agent no path forward. This helper recognizes a
+// folder URL just enough for FeishuRead to redirect the caller to FeishuList,
+// without widening the readable-resource type surface.
+export function parseFeishuFolderToken(rawUrl: string): string | undefined {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return undefined
+  }
+  if (!isFeishuHost(url.hostname)) {
+    return undefined
+  }
+  const segments = url.pathname.split('/').filter(Boolean)
+  const idx = segments.findIndex(segment => segment.toLowerCase() === 'folder')
+  if (idx < 0) {
+    return undefined
+  }
+  const token = segments[idx + 1]?.trim()
+  return token || undefined
+}
+
 function isFeishuHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   return host === 'feishu.cn' ||

@@ -61,7 +61,19 @@ export async function resolveCurrentFeishuWorkspace(
   }
 }
 
-export function normalizeWorkspacePath(input: string | undefined): string[] {
+// The breadcrumb FeishuList renders for the workspace root. Agents routinely
+// copy the displayed `/LightClaw/<user>/<sub>` path straight back as a tool
+// `path` argument, but path inputs are resolved RELATIVE to the user's
+// workspace root (which already IS /LightClaw/<user>). Echoing the breadcrumb
+// then double-prefixes and fails with `Folder "LightClaw" does not exist`.
+// This constant ties the rendered breadcrumb and the self-heal strip together
+// so the two can never drift.
+export const WORKSPACE_BREADCRUMB_ROOT = 'LightClaw'
+
+export function normalizeWorkspacePath(
+  input: string | undefined,
+  canonicalUser?: string,
+): string[] {
   const raw = (input ?? '').trim()
   if (!raw || raw === '.' || raw === '/') {
     return []
@@ -72,6 +84,25 @@ export function normalizeWorkspacePath(input: string | undefined): string[] {
       throw new Error('Workspace path must stay inside the Feishu workspace and cannot contain ".." or backslashes.')
     }
   }
+  return stripEchoedWorkspacePrefix(parts, canonicalUser)
+}
+
+// Self-heal a path the agent copied from the FeishuList breadcrumb. Strips a
+// leading `LightClaw/<canonicalUser>` pair (full breadcrumb echo) or a bare
+// leading `<canonicalUser>` (partial echo) so the remaining segments resolve
+// against the workspace root as intended. Conservative: only an exact leading
+// match of the user's own breadcrumb prefix is removed, never an interior
+// segment.
+function stripEchoedWorkspacePrefix(parts: string[], canonicalUser?: string): string[] {
+  if (!canonicalUser || parts.length === 0) {
+    return parts
+  }
+  if (parts.length >= 2 && parts[0] === WORKSPACE_BREADCRUMB_ROOT && parts[1] === canonicalUser) {
+    return parts.slice(2)
+  }
+  if (parts[0] === canonicalUser) {
+    return parts.slice(1)
+  }
   return parts
 }
 
@@ -79,8 +110,9 @@ export async function resolveFolderPath(input: {
   client: FeishuClient
   workspaceToken: string
   path?: string
+  canonicalUser?: string
 }): Promise<{ token: string; path: string; item?: FeishuFolderItem }> {
-  const parts = normalizeWorkspacePath(input.path)
+  const parts = normalizeWorkspacePath(input.path, input.canonicalUser)
   let folderToken = input.workspaceToken
   let rendered = ''
   let item: FeishuFolderItem | undefined
@@ -104,8 +136,9 @@ export async function resolveEntryPath(input: {
   client: FeishuClient
   workspaceToken: string
   target: string
+  canonicalUser?: string
 }): Promise<WorkspaceTreeEntry> {
-  const parts = normalizeWorkspacePath(input.target)
+  const parts = normalizeWorkspacePath(input.target, input.canonicalUser)
   if (parts.length === 0) {
     return {
       token: input.workspaceToken,
@@ -167,8 +200,9 @@ export async function resolveEntryByNameOrPath(input: {
   client: FeishuClient
   workspaceToken: string
   target: string
+  canonicalUser?: string
 }): Promise<WorkspaceTreeEntry> {
-  if (normalizeWorkspacePath(input.target).length > 1 || input.target.includes('/')) {
+  if (normalizeWorkspacePath(input.target, input.canonicalUser).length > 1 || input.target.includes('/')) {
     return resolveEntryPath(input)
   }
   const matches = await findEntriesByName({

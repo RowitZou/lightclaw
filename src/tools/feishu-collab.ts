@@ -10,7 +10,7 @@ import {
   type FeishuWriteOperation,
 } from '../audit/feishu-writes.js'
 import { getFeishuClient, type FeishuClient } from '../channels/feishu/client.js'
-import { resolveFeishuLink } from '../channels/feishu/link.js'
+import { parseFeishuFolderToken, resolveFeishuLink } from '../channels/feishu/link.js'
 import {
   ensureCanonicalDoc,
   ensureCanonicalSheet,
@@ -665,6 +665,13 @@ export async function runFeishuRead(
   input: FeishuReadInput,
   deps: FeishuReadDeps,
 ): Promise<ToolCallResult<FeishuReadOutput>> {
+  if (parseFeishuFolderToken(input.url)) {
+    return {
+      output: 'That is a Feishu folder link, not a readable document. FeishuRead only reads docs and sheets. To see what is inside a folder, use FeishuList with its `path` within your workspace, then FeishuRead an individual doc or sheet from the listing.',
+      isError: true,
+    }
+  }
+
   const link = resolveFeishuLink(input.url)
   if (!link.ok) {
     return { output: `Cannot parse Feishu URL: ${link.reason}`, isError: true }
@@ -779,6 +786,7 @@ export async function runFeishuCreateFile(
         client: deps.client,
         workspaceToken: workspace.workspace.folderToken,
         path: input.parent_folder,
+        canonicalUser: workspace.canonicalUser,
       })).token
   let ancestryChain: string[]
   try {

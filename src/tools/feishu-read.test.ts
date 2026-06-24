@@ -13,6 +13,28 @@ import { feishuReadTool, maybeSpillFeishuDocResult, runFeishuRead } from './feis
 const client = {} as FeishuClient
 
 describe('FeishuRead tool', () => {
+  // Regression: 0.3.4 dogfood (#5) — a pasted folder link previously failed
+  // with the generic `Cannot parse Feishu URL`, leaving the agent no path
+  // forward. FeishuRead now recognizes folder links up-front and redirects to
+  // FeishuList without ever invoking the resource resolver.
+  it('redirects folder links to FeishuList instead of attempting a read', async () => {
+    let resolverCalled = false
+    const result = await runFeishuRead(
+      { url: 'https://example.feishu.cn/drive/folder/fldToken' },
+      {
+        client,
+        resolveResource: async () => {
+          resolverCalled = true
+          return canonical('docx', 'unused')
+        },
+      },
+    )
+    assert.equal(result.isError, true)
+    assert.match(String(result.output), /folder/i)
+    assert.match(String(result.output), /FeishuList/)
+    assert.equal(resolverCalled, false)
+  })
+
   it('reads canonical doc resources as plain text', async () => {
     let readArgs: unknown
     const result = await runFeishuRead(

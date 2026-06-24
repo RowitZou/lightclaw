@@ -23,6 +23,7 @@ import {
   resolveCurrentFeishuWorkspace,
   resolveEntryByNameOrPath,
   resolveFolderPath,
+  WORKSPACE_BREADCRUMB_ROOT,
 } from '../channels/feishu/workspace/ops.js'
 import { feishuShareUrl } from '../channels/feishu/url.js'
 import { buildTool, type ToolCallResult } from '../tool.js'
@@ -149,6 +150,7 @@ export async function runFeishuList(
     client: deps.client,
     workspaceToken: ctx.workspace.folderToken,
     path: input.path,
+    canonicalUser: ctx.canonicalUser,
   })
   await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
@@ -165,7 +167,7 @@ export async function runFeishuList(
     depth: input.depth ?? 2,
   })
   return {
-    output: renderTree(tree, `Workspace: /LightClaw/${ctx.canonicalUser}${folder.path === '/' ? '/' : `/${folder.path}/`}`),
+    output: renderTree(tree, `Workspace: /${WORKSPACE_BREADCRUMB_ROOT}/${ctx.canonicalUser}${folder.path === '/' ? '/' : `/${folder.path}/`}`),
   }
 }
 
@@ -178,6 +180,7 @@ export async function runFeishuCreateFolder(
     client: deps.client,
     workspaceToken: ctx.workspace.folderToken,
     path: input.parent_folder,
+    canonicalUser: ctx.canonicalUser,
   })
   const ancestryChain = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
@@ -279,6 +282,7 @@ export async function runFeishuDelete(
     client: deps.client,
     workspaceToken: ctx.workspace.folderToken,
     target: input.target,
+    canonicalUser: ctx.canonicalUser,
   })
   const ancestryChain = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
@@ -334,6 +338,7 @@ export async function runFeishuMove(
     client: deps.client,
     workspaceToken: ctx.workspace.folderToken,
     target: input.target,
+    canonicalUser: ctx.canonicalUser,
   })
   const sourceAncestry = await assertWithinWorkspaceOrAudit({
     ancestry: ctx.ancestry,
@@ -352,6 +357,7 @@ export async function runFeishuMove(
         client: deps.client,
         workspaceToken: ctx.workspace.folderToken,
         path: input.destination,
+        canonicalUser: ctx.canonicalUser,
       })
     : { token: currentParentToken, path: parentPath(source.path) }
   const destAncestry = shouldMove

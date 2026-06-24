@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { resolveFeishuLink } from './link.js'
+import { parseFeishuFolderToken, resolveFeishuLink } from './link.js'
 
 describe('resolveFeishuLink', () => {
   it('parses docx links without artifact registry fields', () => {
@@ -78,5 +78,32 @@ describe('resolveFeishuLink', () => {
     assert.equal(result.ok, false)
     if (result.ok) return
     assert.match(result.reason, /No supported Feishu resource segment|Missing token/)
+  })
+
+  // Folder links stay unparseable as a readable resource (a folder is not a
+  // doc/sheet), but are recognized separately so FeishuRead can redirect.
+  it('still rejects folder links via resolveFeishuLink', () => {
+    const result = resolveFeishuLink('https://example.feishu.cn/drive/folder/fldToken')
+    assert.equal(result.ok, false)
+  })
+})
+
+describe('parseFeishuFolderToken', () => {
+  it('extracts the token from a /drive/folder/ link', () => {
+    assert.equal(
+      parseFeishuFolderToken('https://example.feishu.cn/drive/folder/fldToken'),
+      'fldToken',
+    )
+  })
+
+  it('returns undefined for doc/sheet links', () => {
+    assert.equal(parseFeishuFolderToken('https://example.feishu.cn/docx/ABC123'), undefined)
+    assert.equal(parseFeishuFolderToken('https://example.feishu.cn/sheets/shtX'), undefined)
+  })
+
+  it('returns undefined for non-Feishu hosts and malformed input', () => {
+    assert.equal(parseFeishuFolderToken('https://example.com/drive/folder/fldToken'), undefined)
+    assert.equal(parseFeishuFolderToken('not a url'), undefined)
+    assert.equal(parseFeishuFolderToken('https://example.feishu.cn/drive/folder/'), undefined)
   })
 })

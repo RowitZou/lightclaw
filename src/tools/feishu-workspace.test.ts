@@ -46,6 +46,52 @@ describe('Feishu workspace tools', () => {
     assert.match(result.output, /draft\.docx/)
   })
 
+  // Regression: 0.3.4 dogfood (#5) — FeishuList renders the workspace root as
+  // the breadcrumb `/LightClaw/<user>/<sub>`, the agent copies it straight
+  // back as `path`, but path inputs resolve RELATIVE to the user's workspace
+  // root. The echoed `LightClaw/alice/...` then looks for a literal `LightClaw`
+  // sub-folder and fails with `Folder "LightClaw" does not exist`. The path is
+  // now self-healed by stripping the echoed breadcrumb prefix. Pre-fix this
+  // throws; post-fix it resolves the same folder as the bare path.
+  it('self-heals a path that echoes the full /LightClaw/<user>/ breadcrumb', async () => {
+    const client = makeClient({
+      userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
+      fldPapers: [item('draft.docx', 'docDraft', 'docx', 'fldPapers')],
+    })
+    const result = await withFeishuSession(() =>
+      runFeishuList({ path: 'LightClaw/alice/papers', depth: 2 }, { client }),
+    )
+    assert.match(result.output, /Workspace: \/LightClaw\/alice\/papers\//)
+    assert.match(result.output, /draft\.docx/)
+  })
+
+  it('self-heals a path that echoes only the bare <user>/ prefix', async () => {
+    const client = makeClient({
+      userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
+      fldPapers: [item('draft.docx', 'docDraft', 'docx', 'fldPapers')],
+    })
+    const result = await withFeishuSession(() =>
+      runFeishuList({ path: 'alice/papers', depth: 2 }, { client }),
+    )
+    assert.match(result.output, /Workspace: \/LightClaw\/alice\/papers\//)
+    assert.match(result.output, /draft\.docx/)
+  })
+
+  // The strip is leading-prefix only: an interior folder that happens to be
+  // named after the breadcrumb is left intact.
+  it('does not strip a non-leading folder named like the breadcrumb root', async () => {
+    const client = makeClient({
+      userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
+      fldPapers: [item('LightClaw', 'fldNested', 'folder', 'fldPapers')],
+      fldNested: [item('keep.docx', 'docKeep', 'docx', 'fldNested')],
+    })
+    const result = await withFeishuSession(() =>
+      runFeishuList({ path: 'papers/LightClaw', depth: 2 }, { client }),
+    )
+    assert.match(result.output, /Workspace: \/LightClaw\/alice\/papers\/LightClaw\//)
+    assert.match(result.output, /keep\.docx/)
+  })
+
   it('creates folders under a resolved parent and writes audit', async () => {
     const client = makeClient({
       userFld: [item('papers', 'fldPapers', 'folder', 'userFld')],
