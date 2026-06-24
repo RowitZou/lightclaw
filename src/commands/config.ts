@@ -22,6 +22,8 @@ import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { setIdentityPreference } from '../identity/preferences.js'
 import { getUserPermissionCeiling } from '../identity/store.js'
 import { t } from '../i18n/index.js'
+import { commandList } from './card-format.js'
+import type { CommandListCardSpec } from './registry.js'
 import { formatEndpointTemplates, formatModelTemplates } from '../model-setup.js'
 import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
@@ -62,6 +64,7 @@ type ConfigCommandContext = {
   // Feishu channel (the `**/config model** — ...` bold-name list). Absent on
   // minimal callers (tests, terminal) where the default plain_text applies.
   setBodyFormat?: (format: 'lark_md' | 'plain_text') => void
+  setCommandListCard?: (spec: CommandListCardSpec) => void
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
@@ -114,6 +117,40 @@ export async function validateWorkspacePath(
   return null
 }
 
+// The `/config` noun list (L1 card). Left cell = the command, right cell = an
+// i18n description key; rendered as a monospace aligned code block so the
+// descriptions line up in Feishu's proportional card font.
+const CONFIG_NOUNS: ReadonlyArray<readonly [string, string]> = [
+  ['/config model', 'config.list.model'],
+  ['/config mode', 'config.list.mode'],
+  ['/config lang', 'config.list.lang'],
+  ['/config rule', 'config.list.rule'],
+  ['/config workspace', 'config.list.workspace'],
+  ['/config lane', 'config.list.lane'],
+  ['/config endpoint', 'config.list.endpoint'],
+  ['/config backend', 'config.list.backend'],
+]
+
+function configNounRows(): Array<readonly [string, string]> {
+  return CONFIG_NOUNS.map(([cmd, key]) => [cmd, t(key as 'config.list.model')] as const)
+}
+
+/** Structured `/config` overview for the channel column_set card. */
+export function configListSpec(): CommandListCardSpec {
+  return {
+    title: t('card.cmdHelp.title', { cmd: '/config' }),
+    sections: [{ rows: configNounRows() }],
+    footer: t('config.list.footer'),
+  }
+}
+
+/** Plain-text `/config` overview — terminal fallback (the channel uses the
+ *  structured column_set card via configListSpec). No body title; the card
+ *  header ("LightClaw 提示") already frames it. */
+export function formatConfigUsageCard(): string {
+  return `${commandList(configNounRows())}\n\n${t('config.list.footer')}`
+}
+
 export async function runConfigCommand(
   rawArgs: string,
   ctx: ConfigCommandContext,
@@ -122,8 +159,8 @@ export async function runConfigCommand(
   const action = (parts[0] ?? 'help').toLowerCase()
 
   if (action === 'help' || action === '--help' || action === '-h' || parts.length === 0) {
-    ctx.setBodyFormat?.('lark_md')
-    return `${t('config.usage')}\n`
+    ctx.setCommandListCard?.(configListSpec())
+    return `${formatConfigUsageCard()}\n`
   }
 
   // `set-workspace` is the legacy spelling of `workspace set` — both route
@@ -168,8 +205,8 @@ export async function runConfigCommand(
     return runCodexSubcommand(parts.slice(1), ctx)
   }
 
-  ctx.setBodyFormat?.('lark_md')
-  return `${t('config.usage')}\n`
+  ctx.setCommandListCard?.(configListSpec())
+  return `${formatConfigUsageCard()}\n`
 }
 
 // ── /config model — SCALAR-ONLY (B3, design F.2) ─────────────────────────────
@@ -1249,7 +1286,8 @@ async function runConfigWorkspace(
   // `set <path>` (noun-verb) or a bare `<path>` (legacy `set-workspace <path>`).
   const target = verb === 'set' ? parts[1] : parts[0]
   if (!target) {
-    return `${t('config.usage')}\n`
+    ctx.setBodyFormat?.('lark_md')
+    return `${t('config.workspace.help')}\n`
   }
   if (target === 'reset' || target === '--default') {
     const gate = requireConfirm(parts, { preview: t('confirm.workspace.reset') })

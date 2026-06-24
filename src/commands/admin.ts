@@ -19,9 +19,11 @@ import { lightclawHome } from '../paths.js'
 import { expandHomePath } from '../paths.js'
 
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
+import { commandList } from './card-format.js'
 import { parseEndpointType } from './config.js'
 import { requireConfirm } from './confirm.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
+import type { CommandListCardSpec } from './registry.js'
 
 // ── /admin <noun> [verb] — admin-only system hub (PR5.9 B4) ──────────────────
 //
@@ -44,6 +46,43 @@ import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
 type AdminCommandContext = {
   config: LightClawConfig
   userId?: string
+  // Channel-only: lets the bare `/admin` overview render as the structured
+  // column_set command-list card. Absent on terminal / minimal callers.
+  setCommandListCard?: (spec: CommandListCardSpec) => void
+}
+
+// The `/admin` noun list (L1 card). One section (ops nouns then system-scope
+// model config) so per-section width keeps every description aligned. Left =
+// command, right = an i18n description key.
+const ADMIN_NOUNS: ReadonlyArray<readonly [string, string]> = [
+  ['/admin cost', 'admin.list.cost'],
+  ['/admin user', 'admin.list.user'],
+  ['/admin pairing', 'admin.list.pairing'],
+  ['/admin feedback', 'admin.list.feedback'],
+  ['/admin ceiling', 'admin.list.ceiling'],
+  ['/admin sandbox', 'admin.list.sandbox'],
+  ['/admin feishu-drive', 'admin.list.feishuDrive'],
+  ['/admin backend', 'admin.list.backend'],
+  ['/admin endpoint', 'admin.list.endpoint'],
+  ['/admin lane', 'admin.list.lane'],
+]
+
+function adminNounRows(): Array<readonly [string, string]> {
+  return ADMIN_NOUNS.map(([cmd, key]) => [cmd, t(key as 'admin.list.cost')] as const)
+}
+
+/** Structured `/admin` overview for the channel column_set card. */
+export function adminListSpec(): CommandListCardSpec {
+  return {
+    title: t('card.cmdHelp.title', { cmd: '/admin' }),
+    sections: [{ rows: adminNounRows() }],
+    footer: t('admin.list.footer'),
+  }
+}
+
+/** Plain-text `/admin` overview — terminal fallback. */
+function formatAdminUsageCard(): string {
+  return `${commandList(adminNounRows())}\n\n${t('admin.list.footer')}`
 }
 
 type AdminCommandDeps = {
@@ -89,7 +128,8 @@ export async function runAdminCommand(
       return runAdminLane(restParts, ctx.config)
 
     default:
-      return `${t('admin.usage')}\n`
+      ctx.setCommandListCard?.(adminListSpec())
+      return `${formatAdminUsageCard()}\n`
   }
 }
 

@@ -47,7 +47,8 @@ import {
 } from './mode-aliases.js'
 import { t } from '../i18n/index.js'
 import { getSignalRouter, type ChainTreeNode, type ChainView } from '../signal-bus/router.js'
-import type { ReplCommand, ReplContext } from './registry.js'
+import { commandList } from './card-format.js'
+import type { CommandListCardSection, ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
 import { readUsage, type UsageRecord } from '../usage/storage.js'
 import { stopActiveTaskRunsForSession } from '../taskrun/stop.js'
@@ -219,6 +220,7 @@ function buildBuiltinCommands(): ReplCommand[] {
         userId: ctx.userId,
         persistMeta: ctx.persistMeta,
         setBodyFormat: ctx.setSlashBodyFormat,
+        setCommandListCard: ctx.setCommandListCard,
       }))
     },
   },
@@ -254,6 +256,7 @@ function buildBuiltinCommands(): ReplCommand[] {
       ctx.output.write(await runAdminCommand(args, {
         config: ctx.config,
         userId: ctx.userId ?? getCurrentUserId(),
+        setCommandListCard: ctx.setCommandListCard,
       }))
     },
   },
@@ -407,30 +410,32 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   const all = registry.list(true)
   const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
   const adminCmds = all.filter(c => c.visibleTo === 'admin')
-  // Layout differs by surface. The Feishu channel renders progressive-
-  // disclosure markdown: a bold-name command list (L0) with NO argument
-  // syntax — usage is reached by typing the command (e.g. /config) or
-  // asking LightClaw (help.usageHint). The list opts into lark_md so
-  // `**bold**` renders; it must stay pure prose (no `<>` / `[]`, which
-  // lark_md eats). The terminal admin console has NO agent loop to ask, so
-  // it shows each command's full `usage` (argument syntax) inline as a
-  // padEnd-aligned table (fixed-width fonts make it readable) and drops the
-  // markdown / hint: /help must be self-contained there.
+  // Layout differs by surface. The Feishu channel renders a structured
+  // command-list card (column_set): command chips left, descriptions right,
+  // user commands in one section + an admin section with a "仅 admin" heading.
+  // Usage is reached by typing the command (help.usageHint footer). The
+  // terminal admin console has NO agent loop to ask, so it shows each command's
+  // full `usage` (argument syntax) inline as a padEnd-aligned table (fixed-width
+  // fonts make it readable) and drops the hint: /help must be self-contained.
   if (ctx.isChannel) {
-    ctx.setSlashBodyFormat?.('lark_md')
-    const lines: string[] = [
-      `**${t('help.title')}**`,
-      '',
-      ...userCmds.map(c => `**${c.name}** — ${c.description}`),
-    ]
+    const toRows = (cmds: ReplCommand[]) =>
+      cmds.map(c => [c.name, c.description] as const)
+    const sections: CommandListCardSection[] = [{ rows: toRows(userCmds) }]
     if (ctx.isAdmin && adminCmds.length > 0) {
-      lines.push('', `**${t('help.adminTitle')}**`, '')
-      for (const c of adminCmds) {
-        lines.push(`**${c.name}** — ${c.description}`)
-      }
+      sections.push({ heading: t('help.adminTitle'), rows: toRows(adminCmds) })
     }
-    lines.push('', t('help.usageHint'))
-    return lines.join('\n')
+    ctx.setCommandListCard?.({
+      title: t('card.cmdHelp.title', { cmd: '/help' }),
+      sections,
+      footer: t('help.usageHint'),
+    })
+    // Plain-text fallback (terminal-less channels / no card support).
+    const fallback: string[] = [commandList(toRows(userCmds))]
+    if (ctx.isAdmin && adminCmds.length > 0) {
+      fallback.push('', t('help.adminTitle'), commandList(toRows(adminCmds)))
+    }
+    fallback.push('', t('help.usageHint'))
+    return fallback.join('\n')
   }
   const usageWidth = Math.max(...all.map(c => c.usage.length), 10)
   const formatRow = (c: ReplCommand) => `  ${c.usage.padEnd(usageWidth, ' ')}  ${c.description}`

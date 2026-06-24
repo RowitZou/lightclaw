@@ -5,7 +5,8 @@ import { recordInboundAnchor } from './inbound-anchor.js'
 import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { type TaskCardTarget } from './feishu/task-card-patcher.js'
 import { appendProgress } from '../taskrun/store.js'
-import { dispatchChannelSlash } from '../commands/dispatch-channel.js'
+import { dispatchChannelSlash, type ChannelSlashResult } from '../commands/dispatch-channel.js'
+import type { CommandListCardSpec } from '../commands/registry.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
@@ -162,6 +163,13 @@ export type ChannelRunnerStrategy = {
     kind: SystemNoticeKind,
     text: string,
     bodyFormat?: 'lark_md' | 'plain_text',
+  ): Promise<void>
+  /** Render a structured command-list card (column_set). Optional — a channel
+   *  without it falls back to the plain `sendNotice` text. */
+  sendCommandListNotice?(
+    message: NormalizedChannelMessage,
+    kind: SystemNoticeKind,
+    spec: CommandListCardSpec,
   ): Promise<void>
   sendFile?(
     message: NormalizedChannelMessage,
@@ -1041,17 +1049,7 @@ export class ChannelRunner {
           process.stderr.write(
             `${this.strategy.channelId}: slash handled for session ${sessionId}\n`,
           )
-          const slashText = slash.output.trim() || 'ok'
-          // All slash output renders as a system notice card; the bodyFormat
-          // only picks how the card body is parsed:
-          //   - 'lark_md'    → markdown body (**bold** / lists render). Used by
-          //                    the progressive-disclosure /help + /config noun
-          //                    lists, which are pure prose (no <>/[]).
-          //   - 'plain_text' → structured help/status/rules tables that contain
-          //                    `<prompt>` / `<n>` / `[<a|b|c>]` placeholders;
-          //                    lark_md would eat those as HTML tags / links, so
-          //                    the card body is rendered literally.
-          await this.sendNotice(effectiveMessage, 'info', slashText, slash.bodyFormat)
+          await this.deliverSlashOutput(effectiveMessage, slash)
           return
         }
 
@@ -1892,8 +1890,7 @@ export class ChannelRunner {
         )
         return
       }
-      const slashText = slash.output.trim() || 'ok'
-      await this.sendNotice(slashMessage, 'info', slashText, slash.bodyFormat)
+      await this.deliverSlashOutput(slashMessage, slash)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       process.stderr.write(
@@ -2140,8 +2137,21 @@ export class ChannelRunner {
       )
       return
     }
-    const slashText = result.output.trim() || 'ok'
-    await this.sendNotice(message, 'info', slashText, result.bodyFormat)
+    await this.deliverSlashOutput(message, result)
+  }
+
+  /** Render a dispatched slash's output: a structured command-list card when the
+   *  handler produced one (and the channel supports it), else the plain notice
+   *  card. `output` is the terminal / fallback text either way. */
+  private async deliverSlashOutput(
+    message: NormalizedChannelMessage,
+    res: ChannelSlashResult,
+  ): Promise<void> {
+    if (res.commandListCard && this.strategy.sendCommandListNotice) {
+      await this.strategy.sendCommandListNotice(message, 'info', res.commandListCard)
+      return
+    }
+    await this.sendNotice(message, 'info', res.output.trim() || 'ok', res.bodyFormat)
   }
 
   private async startTyping(message: NormalizedChannelMessage): Promise<unknown> {

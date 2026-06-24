@@ -9,8 +9,10 @@ import { expandHomePath } from '../paths.js'
 import { getChannelFileSender, getRuntimeIfInitialized } from '../state.js'
 import { exportUserData, importUserData, type ImportResult } from '../system-data/archive.js'
 
+import { commandList } from './card-format.js'
 import { requireConfirm } from './confirm.js'
 import { runMountCommand } from './mount.js'
+import type { CommandListCardSpec } from './registry.js'
 import { runSecretCommand } from './secret.js'
 
 /**
@@ -24,6 +26,36 @@ type SystemCommandContext = {
   config: LightClawConfig
   userId?: string
   attachmentPaths?: string[]
+  // Channel-only: lets the bare `/system` overview render as the structured
+  // column_set command-list card. Absent on terminal / minimal callers, where
+  // the plain-text fallback applies.
+  setCommandListCard?: (spec: CommandListCardSpec) => void
+}
+
+// The `/system` noun list (L1 card). Left = the command, right = an i18n
+// description key; rendered as the per-row column_set card on the channel.
+const SYSTEM_NOUNS: ReadonlyArray<readonly [string, string]> = [
+  ['/system key', 'system.list.key'],
+  ['/system mount', 'system.list.mount'],
+  ['/system data', 'system.list.data'],
+]
+
+function systemNounRows(): Array<readonly [string, string]> {
+  return SYSTEM_NOUNS.map(([cmd, key]) => [cmd, t(key as 'system.list.key')] as const)
+}
+
+/** Structured `/system` overview for the channel column_set card. */
+export function systemListSpec(): CommandListCardSpec {
+  return {
+    title: t('card.cmdHelp.title', { cmd: '/system' }),
+    sections: [{ rows: systemNounRows() }],
+    footer: t('system.list.footer'),
+  }
+}
+
+/** Plain-text `/system` overview — terminal fallback. */
+function formatSystemUsageCard(): string {
+  return `${commandList(systemNounRows())}\n\n${t('system.list.footer')}`
 }
 
 type SystemCommandDeps = {
@@ -65,8 +97,9 @@ export async function runSystemCommand(
     case 'data':
       return runDataNoun(rest, ctx)
     default:
-      // Empty or unknown noun → the /system overview (nouns + verb hints).
-      return `${t('system.usage')}\n`
+      // Empty or unknown noun → the /system overview (noun list card).
+      ctx.setCommandListCard?.(systemListSpec())
+      return `${formatSystemUsageCard()}\n`
   }
 }
 

@@ -128,15 +128,28 @@ describe('/system command', () => {
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
-  it('prints the hub overview for bare and unknown nouns without side effects', async () => {
-    const bare = await runSystemCommand('', { config: makeConfig(), userId: 'alice' })
-    assert.match(bare, /Usage: \/system <noun>/)
-    assert.match(bare, /key/)
-    assert.match(bare, /mount/)
-    assert.match(bare, /data/)
+  it('prints the hub overview card for bare and unknown nouns without side effects', async () => {
+    const cards: unknown[] = []
+    const ctx = {
+      config: makeConfig(),
+      userId: 'alice',
+      setCommandListCard: (spec: unknown) => cards.push(spec),
+    }
+    const bare = await runSystemCommand('', ctx)
+    // Terminal fallback text lists every noun + the footer hint.
+    assert.match(bare, /\/system key/)
+    assert.match(bare, /\/system mount/)
+    assert.match(bare, /\/system data/)
+    assert.match(bare, /just ask LightClaw|直接问 LightClaw/)
+    // Channel card spec carries the same nouns as a rows section.
+    assert.equal(cards.length, 1)
+    const spec = cards[0] as { sections: Array<{ rows: ReadonlyArray<readonly [string, string]> }> }
+    const commands = spec.sections[0].rows.map(r => r[0])
+    assert.deepEqual(commands, ['/system key', '/system mount', '/system data'])
 
-    const unknown = await runSystemCommand('bogus verb', { config: makeConfig(), userId: 'alice' })
-    assert.match(unknown, /Usage: \/system <noun>/)
+    const unknown = await runSystemCommand('bogus verb', ctx)
+    assert.match(unknown, /\/system key/)
+    assert.equal(cards.length, 2)
   })
 
   it('prints data noun-verb usage on bare invocation', async () => {

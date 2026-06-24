@@ -13,7 +13,7 @@ import {
 } from './routing.js'
 import type { FeishuSender } from './sender.js'
 import { createSenderNameResolver } from './sender-name.js'
-import { buildSystemNoticeCard } from './system-notice.js'
+import { buildCommandListCard, buildSystemNoticeCard } from './system-notice.js'
 import { fetchFeishuMediaPayload, materializeFeishuMedia } from './media.js'
 import {
   createFeishuTypingReaction,
@@ -112,6 +112,9 @@ export function createFeishuStrategy(
         message,
         buildSystemNoticeCard({ kind, content, bodyFormat }),
       )
+    },
+    sendCommandListNotice: async (message, kind, spec) => {
+      await sender.sendInteractiveCard(message, buildCommandListCard({ kind, spec }))
     },
     sendNoticeToOpenId: async ({ applicantOpenId, kind, content }) => {
       // Bootstrap-fallback notice routed to applicant DM. Used when admin

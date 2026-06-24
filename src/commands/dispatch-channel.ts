@@ -4,7 +4,7 @@ import type { LightClawConfig } from '../config.js'
 import type { Tool } from '../tool.js'
 import type { Message, UserContentBlock } from '../types.js'
 import { createBuiltinReplRegistry } from './builtin.js'
-import type { ReplContext, SlashBodyFormat } from './registry.js'
+import type { CommandListCardSpec, ReplContext, SlashBodyFormat } from './registry.js'
 
 export type ChannelSlashResult = {
   handled: boolean
@@ -16,6 +16,10 @@ export type ChannelSlashResult = {
   // path; no built-in handler currently does (the former opt-in /fresh was
   // removed in Phase 9 PR1).
   bodyFormat: SlashBodyFormat
+  // When set, the channel renders this as a structured command-list card
+  // (column_set) instead of the `output` string; `output` stays the terminal
+  // fallback text.
+  commandListCard?: CommandListCardSpec
 }
 
 export async function dispatchChannelSlash(
@@ -66,6 +70,7 @@ export async function dispatchChannelSlash(
   } as Writable
 
   let bodyFormat: SlashBodyFormat = 'plain_text'
+  let commandListCard: CommandListCardSpec | undefined
 
   const ctx: ReplContext = {
     config: input.config,
@@ -82,6 +87,9 @@ export async function dispatchChannelSlash(
     setSlashBodyFormat(format: SlashBodyFormat) {
       bodyFormat = format
     },
+    setCommandListCard(spec: CommandListCardSpec) {
+      commandListCard = spec
+    },
     channelUserMessageContent: input.channelUserMessageContent,
     attachmentPaths: input.attachmentPaths,
   }
@@ -91,5 +99,6 @@ export async function dispatchChannelSlash(
     handled: result !== undefined,
     output: output.join(''),
     bodyFormat,
+    commandListCard,
   }
 }

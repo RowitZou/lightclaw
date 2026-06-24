@@ -10,6 +10,37 @@ export type CommandVisibility = 'all' | 'admin' | 'user'
 
 export type SlashBodyFormat = 'lark_md' | 'plain_text'
 
+/** Structured spec for a command-help card.
+ *
+ *  L1 hub cards (/help, /config, /system, /admin) are pure `rows` sections,
+ *  rendered as a Feishu `column_set` — left column = inline-code command chips,
+ *  right column = descriptions, aligned, no header, no borders.
+ *
+ *  L2 detail cards (/config endpoint, …) mix section kinds: a `rows` section
+ *  for the aligned sub-command list, then a `markdown` section (bold "参数"
+ *  heading + a bullet list of `--flag` explanations), then a `codeExamples`
+ *  section ("示例" heading + one fenced code block per example).
+ *
+ *  A section may carry any of `rows` / `markdown` / `codeExamples`; an optional
+ *  `heading` renders a bold line above whichever body it has. The terminal has
+ *  no card surface, so handlers ALSO write a plain-text fallback to `output`. */
+export interface CommandListCardSection {
+  heading?: string
+  // Aligned command/description rows → one column_set per row.
+  rows?: ReadonlyArray<readonly [string, string]>
+  // Free markdown body (e.g. a `- \`--flag\` — explanation` bullet list).
+  markdown?: string
+  // One fenced code block per entry (e.g. usage examples, one per line).
+  codeExamples?: ReadonlyArray<string>
+}
+export interface CommandListCardSpec {
+  // Card header title (e.g. "/config 命令说明", "/config endpoint 命令说明").
+  // Falls back to the generic notice title when omitted.
+  title?: string
+  sections: CommandListCardSection[]
+  footer?: string
+}
+
 export type ReplContext = {
   config: LightClawConfig
   sessionId: string
@@ -31,6 +62,10 @@ export type ReplContext = {
   // in Phase 9 PR1) — the hook stays for future LLM-output slashes. No-op in
   // terminal mode.
   setSlashBodyFormat?(format: SlashBodyFormat): void
+  // Channel-only: render this slash's output as a structured command-list card
+  // (Feishu column_set) instead of a markdown body. The handler still writes a
+  // plain-text fallback to `output` for the terminal. No-op in terminal mode.
+  setCommandListCard?(spec: CommandListCardSpec): void
   // Channel-only: the fully-formed user-message content the channel runner
   // built for this turn — already merged with the `[senderName]` prefix,
   // the `<quoted-message>` / `<quoted-message-unavailable>` block, the

@@ -53,6 +53,9 @@ export const LOCALES = {
     'help.adminTitle': '仅 admin：',
     'help.statusHint': '查看当前 user / mode / model / session 请用 /status。',
     'help.usageHint': '输入某个命令即可查看它的详细用法，例如 /config；也可以直接问 LightClaw。',
+    // Command-list card header title. {cmd} = the command path, e.g. "/config"
+    // or "/config endpoint". L1 hub + L2 detail cards both use this.
+    'card.cmdHelp.title': '{cmd} 命令说明',
 
     // ---- Command descriptions (rendered in /help) ----
     // /help shows the command name + this one-line description; detailed
@@ -76,6 +79,17 @@ export const LOCALES = {
       '用法：/admin <名词> [动词]\n' +
       '  运维：cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
       '  系统级模型配置（写部署 config.json）：backend · endpoint · lane',
+    'admin.list.footer': '输入某个类别即可查看它的详细用法，例如 `/admin cost`；也可以直接问 LightClaw。',
+    'admin.list.cost': '按模型 / 用户统计 token 用量',
+    'admin.list.user': '管理已配对用户（列表 / 删除 / 解绑）',
+    'admin.list.pairing': '处理配对申请（列表 / 通过 / 拒绝）',
+    'admin.list.feedback': '阅读用户留下的反馈',
+    'admin.list.ceiling': '设置用户的权限模式上限',
+    'admin.list.sandbox': '查看 / 预热 / 重置沙箱',
+    'admin.list.feishuDrive': '管理飞书云空间用户文件夹',
+    'admin.list.backend': '部署级模型注册表（接入可用模型）',
+    'admin.list.endpoint': '部署级模型服务凭证',
+    'admin.list.lane': '部署级 worker / 系统 / 图像模型分配',
     'admin.user.usage': '用法：/admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': '用法：/admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': '用法：/admin feishu-drive [status | rm <canonical> --y]',
@@ -614,6 +628,10 @@ export const LOCALES = {
       '  key     管理运行时密钥（裸命令 = 列表）。动词：set · enable · disable · rm\n' +
       '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
       '  data    导入 / 导出数据。动词：import <src> · export <dest>',
+    'system.list.footer': '输入某个类别即可查看它的详细用法，例如 `/system key`；也可以直接问 LightClaw。',
+    'system.list.key': '管理运行时密钥（注入到 Bash 的 $NAME）',
+    'system.list.mount': '把 host gpfs 路径挂进沙箱',
+    'system.list.data': '导入 / 导出你的数据（记忆 / 技能 / 设置）',
     'system.data.usage':
       '用法：/system data export (--path <文件|目录> | --feishu) [--with-sessions]\n' +
       '      /system data import (--path <文件> | --feishu) [--replace] [--y]',
@@ -676,20 +694,15 @@ export const LOCALES = {
     'mount.restart.failed': '挂载状态已保存，但 rlaunch worker 重启失败：{detail}',
 
     // ---- /config (user) ----
-    'config.usage': [
-      '**/config — 个人配置**',
-      '',
-      '**/config model** — 查看 / 切换当前对话使用的模型',
-      '**/config mode** — 查看 / 设置权限模式（只读 · 询问 · 自动 · 全自动）',
-      '**/config lang** — 切换界面语言（中文 / English）',
-      '**/config rule** — 查看 / 增删权限规则（放行或拒绝某类操作）',
-      '**/config workspace** — 查看 / 设置你的工作目录',
-      '**/config lane** — 给后台 worker、系统任务、图像理解分别指定模型',
-      '**/config endpoint** — 配置模型服务的访问凭证（API Key / Codex 授权）',
-      '**/config backend** — 把模型接入可用列表（绑定 endpoint 与上游模型）',
-      '',
-      '输入某个类别即可查看它的详细用法，例如 /config model；也可以直接问 LightClaw。',
-    ].join('\n'),
+    'config.list.footer': '输入某个类别即可查看它的详细用法，例如 `/config model`；也可以直接问 LightClaw。',
+    'config.list.model': '查看 / 切换当前模型',
+    'config.list.mode': '查看 / 设置权限模式',
+    'config.list.lang': '切换界面语言',
+    'config.list.rule': '查看 / 增删权限规则',
+    'config.list.workspace': '查看 / 设置工作目录',
+    'config.list.lane': '分别给 worker / 系统 / 图像指定模型',
+    'config.list.endpoint': '配置模型服务的访问凭证',
+    'config.list.backend': '把模型接入可用列表',
     'config.model.help': '**用法**\n/config model set 模型名 — 切换当前模型\n/config model reset — 清除你的个人覆盖',
     'config.mode.help': '**用法**\n/config mode set read|ask|auto|yolo — 切换权限模式\n/config mode reset — 恢复默认',
     'config.lang.help': '**用法**\n/config lang set cn|en — 切换界面语言\n/config lang reset — 恢复默认',
@@ -875,6 +888,7 @@ export const LOCALES = {
     'help.adminTitle': 'Admin only:',
     'help.statusHint': 'Use /status to see your current user / mode / model / session.',
     'help.usageHint': 'Type a command to see its detailed usage, e.g. /config; or just ask LightClaw.',
+    'card.cmdHelp.title': '{cmd} commands',
 
     'cmd.help.desc': 'List available commands',
     'cmd.status.desc': 'Show current user / mode / model / session',
@@ -894,6 +908,17 @@ export const LOCALES = {
       'Usage: /admin <noun> [verb]\n' +
       '  ops: cost · user · pairing · feedback · ceiling · sandbox · feishu-drive\n' +
       '  system-scope model config (writes deployment config.json): backend · endpoint · lane',
+    'admin.list.footer': 'Type a category to see its detailed usage, e.g. `/admin cost`; or just ask LightClaw.',
+    'admin.list.cost': 'Token usage by model / user',
+    'admin.list.user': 'Manage paired users (list / remove / unlink)',
+    'admin.list.pairing': 'Handle pairing requests (list / approve / reject)',
+    'admin.list.feedback': 'Read feedback left by users',
+    'admin.list.ceiling': 'Set a user\'s permission-mode ceiling',
+    'admin.list.sandbox': 'Inspect / prefetch / reset the sandbox',
+    'admin.list.feishuDrive': 'Manage Feishu cloud-space user folders',
+    'admin.list.backend': 'Deployment model registry (enroll usable models)',
+    'admin.list.endpoint': 'Deployment model-service credentials',
+    'admin.list.lane': 'Deployment worker / system / image model lanes',
     'admin.user.usage': 'Usage: /admin user [list | rm <name> [--purge] | unlink <channel:id>]',
     'admin.pairing.usage': 'Usage: /admin pairing [list | approve <code> [--as <name>] | reject <code>]',
     'admin.feishuDrive.usage': 'Usage: /admin feishu-drive [status | rm <canonical> --y]',
@@ -1435,6 +1460,10 @@ export const LOCALES = {
       '  key     Manage runtime keys (bare = list). Verbs: set · enable · disable · rm\n' +
       '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
       '  data    Import / export data. Verbs: import <src> · export <dest>',
+    'system.list.footer': 'Type a category to see its detailed usage, e.g. `/system key`; or just ask LightClaw.',
+    'system.list.key': 'Manage runtime keys (injected as $NAME in Bash)',
+    'system.list.mount': 'Mount a host gpfs path into the sandbox',
+    'system.list.data': 'Import / export your data (memory / skills / settings)',
     'system.data.usage':
       'Usage: /system data export (--path <file|dir> | --feishu) [--with-sessions]\n' +
       '       /system data import (--path <file> | --feishu) [--replace] [--y]',
@@ -1498,20 +1527,15 @@ export const LOCALES = {
     'mount.restart.failed': 'Mount state was saved, but rlaunch worker restart failed: {detail}',
 
     // ---- /config (user) ----
-    'config.usage': [
-      '**/config — your personal config**',
-      '',
-      '**/config model** — view / switch the model this chat uses',
-      '**/config mode** — view / set the permission mode (read · ask · auto · yolo)',
-      '**/config lang** — switch the interface language (中文 / English)',
-      '**/config rule** — view / add / remove permission rules (allow or deny a kind of action)',
-      '**/config workspace** — view / set your working directory',
-      '**/config lane** — assign models for background workers, system tasks, and image understanding',
-      '**/config endpoint** — configure model-provider credentials (API key / Codex auth)',
-      '**/config backend** — register a model into the usable list (bind an endpoint + upstream model)',
-      '',
-      'Type a category to see its detailed usage, e.g. /config model; or just ask LightClaw.',
-    ].join('\n'),
+    'config.list.footer': 'Type a category to see its detailed usage, e.g. `/config model`; or just ask LightClaw.',
+    'config.list.model': 'view / switch the current model',
+    'config.list.mode': 'view / set the permission mode',
+    'config.list.lang': 'switch the interface language',
+    'config.list.rule': 'view / edit permission rules',
+    'config.list.workspace': 'view / set your working directory',
+    'config.list.lane': 'models for worker / system / image',
+    'config.list.endpoint': 'configure provider credentials',
+    'config.list.backend': 'register a model into the pool',
     'config.model.help': '**Usage**\n/config model set NAME — switch the current model\n/config model reset — clear your personal override',
     'config.mode.help': '**Usage**\n/config mode set read|ask|auto|yolo — switch the permission mode\n/config mode reset — restore the default',
     'config.lang.help': '**Usage**\n/config lang set cn|en — switch the interface language\n/config lang reset — restore the default',
