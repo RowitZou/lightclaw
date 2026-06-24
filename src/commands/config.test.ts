@@ -51,7 +51,7 @@ describe('validateWorkspacePath', () => {
     mkdirSync(outside, { recursive: true })
     const result = await validateWorkspacePath(outside, clusterConfig())
     assert.ok(result)
-    assert.match(result!, /gpfs host prefix/)
+    assert.match(result!, /allowed storage prefix/)
   })
 
   it('passes for a directory under the gpfs prefix on a cluster backend', async () => {
@@ -89,7 +89,7 @@ describe('/config set-workspace', () => {
       `set-workspace ${path.join(tmpHome, 'no-such-dir')} --y`,
       { config: clusterConfig(), userId: 'carol' },
     )
-    assert.match(out, /gpfs host prefix|cannot access/)
+    assert.match(out, /allowed storage prefix|cannot access/)
     assert.equal(existsSync(userConfigPath('carol')), false)
   })
 
@@ -287,7 +287,7 @@ describe('/config rule (per-user permission rules)', () => {
     const cfg = modelConfig()
     await inSession('ken', cfg, async () => {
       const out = await runConfigCommand('rule add Bash(git:*)', { config: cfg, userId: 'ken' })
-      assert.match(out, /ASK rule/)
+      assert.match(out, /confirm rule/)
     })
     const rules = loadIdentityRules('ken')
     assert.equal(rules.length, 1)
@@ -360,7 +360,7 @@ describe('/config endpoint add --type', () => {
       'endpoint add ep --type openai --key sk-RAW --base-url https://gw.example/v1',
       { config: cfg, userId: 'b3a' },
     )
-    assert.match(out, /Added custom endpoint/)
+    assert.match(out, /Added model service/)
     const persisted = readUserConfigJson('b3a')
     const ep = (persisted.endpoints as Record<string, Record<string, unknown>>).ep
     // config.json holds a reference + baseUrl + type, NEVER the raw key.
@@ -393,7 +393,7 @@ describe('/config endpoint add --type', () => {
       `endpoint add cdx --type codex --auth-path ${authFile}`,
       { config: cfg, userId: 'b3codex' },
     )
-    assert.match(out, /Codex endpoint/i)
+    assert.match(out, /Codex model service/i)
     const ep = (readUserConfigJson('b3codex').endpoints as Record<string, Record<string, unknown>>).cdx
     assert.ok(typeof ep.authRef === 'string' && (ep.authRef as string).startsWith('codex:'))
     assert.equal(ep.baseUrl, undefined)
@@ -420,7 +420,7 @@ describe('/config endpoint add --type', () => {
       config: cfg,
       userId: 'b3ref',
     })
-    assert.match(out, /Added custom endpoint/)
+    assert.match(out, /Added model service/)
     const ep = (readUserConfigJson('b3ref').endpoints as Record<string, Record<string, unknown>>).ep
     assert.equal(ep.apiKeyRef, 'MY_KEY')
     // No new secret slot created.
@@ -450,7 +450,7 @@ describe('/config backend (BYO model registry, ←model BYO)', () => {
       config: cfg,
       userId: 'b3b',
     })
-    assert.match(out, /Registered model "m"/)
+    assert.match(out, /Added model "m"/)
     const persisted = readUserConfigJson('b3b')
     const model = (persisted.models as Record<string, Record<string, unknown>>).m
     assert.equal(model.endpoint, 'ep')
@@ -506,13 +506,13 @@ describe('/config lane', () => {
   it('set worker <model> writes config.lane.worker; reset clears it', async () => {
     const cfg = modelConfig()
     const out = await runConfigCommand('lane set worker opus', { config: cfg, userId: 'b3lane' })
-    assert.match(out, /lane.worker = opus/)
+    assert.match(out, /worker to model opus/)
     assert.equal(
       ((readUserConfigJson('b3lane').lane as Record<string, unknown>) ?? {}).worker,
       'opus',
     )
     const resetOut = await runConfigCommand('lane reset worker', { config: cfg, userId: 'b3lane' })
-    assert.match(resetOut, /Cleared lane.worker/)
+    assert.match(resetOut, /Cleared worker/)
     const lane = readUserConfigJson('b3lane').lane as Record<string, unknown> | undefined
     assert.equal(lane === undefined || !('worker' in lane), true)
   })
@@ -555,7 +555,7 @@ describe('/config endpoint rm --y (cascade confirmation)', () => {
     await runConfigCommand('endpoint add ep --type openai --key sk-RAW', { config: cfg, userId: 'b5erm2' })
     await runConfigCommand('backend add m --endpoint ep', { config: cfg, userId: 'b5erm2' })
     const out = await runConfigCommand('endpoint rm ep --y', { config: cfg, userId: 'b5erm2' })
-    assert.match(out, /Removed custom endpoint/)
+    assert.match(out, /Removed model service/)
     const persisted = readUserConfigJson('b5erm2')
     const endpoints = (persisted.endpoints as Record<string, unknown>) ?? {}
     const models = (persisted.models as Record<string, unknown>) ?? {}

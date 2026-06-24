@@ -110,7 +110,7 @@ describe('/admin lane (system-scope write-back)', () => {
 
     const cfg = liveConfig()
     const out = await runAdminCommand('lane set worker m', { config: cfg, userId: 'admin' })
-    assert.match(out, /lane\.worker = m/)
+    assert.match(out, /worker to model m/)
     const persisted = readConfig()
     assert.deepEqual(persisted.lane, { worker: 'm' })
     assert.equal(cfg.lane.worker, 'm', 'live config lane should reflect the write')
@@ -152,7 +152,7 @@ describe('/admin backend add (system-scope write-back)', () => {
       config: cfg,
       userId: 'admin',
     })
-    assert.match(out, /Registered model "m"/)
+    assert.match(out, /Added model "m"/)
     const persisted = readConfig()
     const models = persisted.models as Record<string, { endpoint?: string; schema?: string; upstreamModel?: string }>
     assert.equal(models.m!.endpoint, 'ep')
@@ -182,7 +182,7 @@ describe('/admin backend add (system-scope write-back)', () => {
       config: liveConfig(),
       userId: 'admin',
     })
-    assert.match(out, /endpoint "nope"/)
+    assert.match(out, /model service "nope"/)
     const persisted = readConfig()
     assert.equal('models' in persisted, false, 'no model should be written')
     assert.equal(persisted.keepMe, 1)
