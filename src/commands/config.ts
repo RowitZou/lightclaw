@@ -2,12 +2,7 @@ import { constants as fsConstants, readdirSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 
-import {
-  deleteUserCodexAuth,
-  importUserCodexAuth,
-  listUserCodexAuth,
-  normalizeCodexAuthName,
-} from '../auth/codex/user-store.js'
+import { importUserCodexAuth } from '../auth/codex/user-store.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
   buildUserRegistry,
@@ -24,7 +19,6 @@ import { getUserPermissionCeiling } from '../identity/store.js'
 import { t } from '../i18n/index.js'
 import { commandList } from './card-format.js'
 import type { CommandListCardSpec } from './registry.js'
-import { formatEndpointTemplates, formatModelTemplates } from '../model-setup.js'
 import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
@@ -201,10 +195,6 @@ export async function runConfigCommand(
     return runConfigRule(parts.slice(1), ctx)
   }
 
-  if (action === 'codex') {
-    return runCodexSubcommand(parts.slice(1), ctx)
-  }
-
   ctx.setCommandListCard?.(configListSpec())
   return `${formatConfigUsageCard()}\n`
 }
@@ -252,9 +242,6 @@ async function runEndpointSubcommand(
   ctx: ConfigCommandContext,
 ): Promise<string> {
   const verb = (parts.shift() ?? 'list').toLowerCase()
-  if (verb === 'templates' || verb === 'template') {
-    return formatEndpointTemplates()
-  }
   if (!ctx.userId) {
     return `${t('config.noIdentity')}\n`
   }
@@ -282,7 +269,6 @@ function endpointUsage(): string {
   return [
     'Usage:',
     '  /config endpoint                          List your endpoints',
-    '  /config endpoint templates                Show endpoint templates',
     '  /config endpoint add <ep> --type openai|anthropic --key <KEY|secretName> [--base-url <url>] [--proxy <url>]',
     '  /config endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]',
     '  /config endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY|secretName>]',
@@ -557,9 +543,6 @@ async function runBackendSubcommand(
   ctx: ConfigCommandContext,
 ): Promise<string> {
   const verb = (parts.shift() ?? 'list').toLowerCase()
-  if (verb === 'templates' || verb === 'template') {
-    return formatModelTemplates()
-  }
   if (!ctx.userId) {
     return `${t('config.noIdentity')}\n`
   }
@@ -589,7 +572,6 @@ function backendUsage(): string {
   return [
     'Usage:',
     '  /config backend                 List your registered models',
-    '  /config backend templates       Show BYO model templates',
     '  /config backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-tokens <n>] [--default]',
     '  /config backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]',
     '  /config backend check <name>    Re-probe capabilities (clears cache)',
@@ -775,85 +757,6 @@ async function checkBackend(
       detail: error instanceof Error ? error.message : String(error),
     })}\n`
   }
-}
-
-// ── /config codex <verb> (per-user BYO Codex OAuth store, PR5 ckpt 2) ────────
-// Caller-scoped: operates on ctx.userId's own per-user codex store. `import`
-// reads a daemon-readable FILE path (a `codex login` auth.json), not a pasted
-// secret, so there is no chat-leak concern — config.json only ever stores the
-// authRef, never the tokens.
-
-async function runCodexSubcommand(
-  parts: string[],
-  ctx: ConfigCommandContext,
-): Promise<string> {
-  const verb = (parts.shift() ?? 'list').toLowerCase()
-  if (!ctx.userId) {
-    return `${t('config.noIdentity')}\n`
-  }
-  const userId = ctx.userId
-  try {
-    switch (verb) {
-      case 'list':
-        return formatCodexList(userId)
-      case 'import':
-        return importCodex(userId, parts)
-      case 'remove':
-      case 'rm':
-        return removeCodex(userId, parts)
-      default:
-        return codexUsage()
-    }
-  } catch (error) {
-    return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
-  }
-}
-
-function codexUsage(): string {
-  return [
-    'Usage:',
-    '  /config codex                             List imported Codex credentials',
-    '  /config codex import --from <daemon-readable-path> [--name <name>]',
-    '  /config codex rm [<name>]',
-    '',
-  ].join('\n')
-}
-
-function importCodex(userId: string, parts: string[]): string {
-  const fromPath = flagValue(parts, '--from')
-  if (!fromPath) return codexUsage()
-  const name = flagValue(parts, '--name')
-  try {
-    const summary = importUserCodexAuth({
-      canonicalUser: userId,
-      fromPath: expandHomePath(fromPath),
-      ...(name ? { name } : {}),
-    })
-    return `${t('config.codex.imported', { name: summary.name, account: summary.accountId || '(unknown)' })}\n`
-  } catch (error) {
-    return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
-  }
-}
-
-function removeCodex(userId: string, parts: string[]): string {
-  const name = normalizeCodexAuthName(parts[0])
-  const removed = deleteUserCodexAuth(userId, name)
-  return removed
-    ? `${t('config.codex.removed', { name })}\n`
-    : `${t('config.codex.removeMissing', { name })}\n`
-}
-
-function formatCodexList(userId: string): string {
-  const entries = listUserCodexAuth(userId)
-  if (entries.length === 0) return `${t('config.codex.none')}\n`
-  return `${[
-    t('config.codex.listHeader'),
-    ...entries.map(e => {
-      const expiry = new Date(e.expiresAt).toISOString()
-      return `  ${e.name} account=${e.accountId || '(unknown)'} expires=${expiry} source=${e.source}`
-    }),
-    '',
-  ].join('\n')}`
 }
 
 // ── shared helpers ───────────────────────────────────────────────────────────

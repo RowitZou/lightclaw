@@ -55,8 +55,8 @@ export function header(input: {
   }
 }
 
-export function markdown(content: string): Card2Element {
-  return { tag: 'markdown', content }
+export function markdown(content: string, textSize?: string): Card2Element {
+  return { tag: 'markdown', content, ...(textSize ? { text_size: textSize } : {}) }
 }
 
 export function hr(): Card2Element {

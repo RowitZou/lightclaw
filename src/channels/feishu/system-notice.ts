@@ -148,7 +148,9 @@ export function buildCommandListCard(input: {
 }): Record<string, unknown> {
   const elements: Card2Element[] = []
   for (const section of input.spec.sections as CommandListCardSection[]) {
-    if (section.heading) elements.push(markdown(`**${section.heading}**`))
+    // Section headings render bold AND one size up (heading-4) — on mobile,
+    // bold alone is too subtle to read as a heading.
+    if (section.heading) elements.push(markdown(`**${section.heading}**`, 'heading-4'))
     if (section.rows && section.rows.length > 0) {
       elements.push(...commandRows(section.rows, leftColumnWidthFor(section.rows)))
     }
