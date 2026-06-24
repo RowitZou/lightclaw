@@ -41,6 +41,13 @@ export type ReplContext = {
   // unread: the former consumer /fresh was removed in Phase 9 PR1. Undefined
   // in terminal mode and for fast-path / synthetic slash entries.
   channelUserMessageContent?: string | UserContentBlock[]
+  // Channel-only: the materialized inbound attachment paths for this turn
+  // (sandbox-visible `<workspaceRoot>/.lightclaw/inbox/...` paths, including
+  // any quoted-message media). A slash handler that ingests a user-supplied
+  // file — e.g. `/system data import --feishu` — reads these via the active
+  // runtime's `fs.readFile`. Undefined in terminal mode and for fast-path /
+  // synthetic / queue-drained slash entries that carry no fresh attachment.
+  attachmentPaths?: string[]
 }
 
 export type ReplCommandResult = 'continue' | 'exit'

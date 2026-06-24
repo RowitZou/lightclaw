@@ -36,6 +36,11 @@ export async function dispatchChannelSlash(
     // raw `<args>`. Currently unread: the former consumer /fresh was removed in
     // Phase 9 PR1.
     channelUserMessageContent?: string | UserContentBlock[]
+    // Materialized inbound attachment paths (sandbox-visible), threaded so a
+    // slash handler can ingest a user-supplied file (e.g. `/system data import
+    // --feishu`). Omitted for queue-drained / synthetic entries with no fresh
+    // attachment.
+    attachmentPaths?: string[]
   },
 ): Promise<ChannelSlashResult> {
   const trimmed = text.trimStart()
@@ -78,6 +83,7 @@ export async function dispatchChannelSlash(
       bodyFormat = format
     },
     channelUserMessageContent: input.channelUserMessageContent,
+    attachmentPaths: input.attachmentPaths,
   }
 
   const result = await registry.dispatch(trimmed, ctx)

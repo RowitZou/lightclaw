@@ -7,10 +7,30 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import type { LightClawConfig } from '../config.js'
 import { setLang } from '../i18n/index.js'
 import { setLightclawHomeOverride } from '../paths.js'
+import type { Runtime } from '../runtime/index.js'
 import { loadUserSecrets } from '../secrets/store.js'
 import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
+import type { ChannelFileSender } from '../session-context.js'
+import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { createBuiltinReplRegistry } from './builtin.js'
 import { runSystemCommand } from './system.js'
+
+/** Build an ALS SessionContext exposing a channel file sender / runtime so the
+ *  `--feishu` data paths (getChannelFileSender / getRuntimeIfInitialized) work. */
+function makeFeishuCtx(extra: { channelFileSender?: ChannelFileSender; runtime?: Runtime }) {
+  return createSessionContext({
+    cwd: tmpHome,
+    model: 'sonnet',
+    config: makeConfig(),
+    sessionsDir: path.join(tmpHome, 'sessions'),
+    memoryDir: path.join(tmpHome, 'memory'),
+    currentUserId: 'alice',
+    sessionId: 'feishu:dm:x',
+    permissionMode: 'default',
+    permissionCeiling: 'bypassPermissions',
+    ...extra,
+  })
+}
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -121,8 +141,8 @@ describe('/system command', () => {
 
   it('prints data noun-verb usage on bare invocation', async () => {
     const bare = await runSystemCommand('data', { config: makeConfig(), userId: 'alice' })
-    assert.match(bare, /\/system data export --path/)
-    assert.match(bare, /\/system data import --path/)
+    assert.match(bare, /\/system data export/)
+    assert.match(bare, /\/system data import/)
   })
 
   it('export writes a zip and warns secrets are excluded; import round-trips', async () => {
@@ -176,11 +196,64 @@ describe('/system command', () => {
     )
   })
 
-  it('--feishu returns a use-path notice for now', async () => {
-    assert.match(
-      await runSystemCommand('data export --feishu', { config: makeConfig(), userId: 'alice' }),
-      /Feishu transport is not wired/,
+  it('export --feishu without a channel sender reports unavailable', async () => {
+    const out = await runWithSessionContext(makeFeishuCtx({}), () =>
+      runSystemCommand('data export --feishu', { config: makeConfig(), userId: 'alice' }),
     )
+    assert.match(out, /Feishu file transport is unavailable/)
+  })
+
+  it('import --feishu with no attachment asks for the file', async () => {
+    const out = await runWithSessionContext(makeFeishuCtx({}), () =>
+      runSystemCommand('data import --feishu --y', {
+        config: makeConfig(),
+        userId: 'alice',
+        attachmentPaths: [],
+      }),
+    )
+    assert.match(out, /No attachment found/)
+  })
+
+  it('export --feishu sends a zip via the sender; import --feishu reads an attached zip', async () => {
+    const memDir = path.join(tmpHome, 'users', 'alice', 'memory')
+    mkdirSync(memDir, { recursive: true })
+    writeFileSync(path.join(memDir, 'fact.md'), '# feishu', 'utf8')
+
+    let sentBuffer: Buffer | undefined
+    const sender: ChannelFileSender = {
+      channelId: 'feishu',
+      async sendFile(file) {
+        sentBuffer = file.content
+        return { kind: 'im-attachment' }
+      },
+    }
+    const exportOut = await runWithSessionContext(makeFeishuCtx({ channelFileSender: sender }), () =>
+      runSystemCommand('data export --feishu', { config: makeConfig(), userId: 'alice' }),
+    )
+    assert.match(exportOut, /sent to this chat/)
+    assert.match(exportOut, /secrets are NOT included/)
+    assert.ok(sentBuffer && sentBuffer.length > 0)
+
+    // Wipe, then import the captured zip back through a fake runtime read.
+    rmSync(path.join(memDir, 'fact.md'))
+    const zipPath = '/workspace/.lightclaw/inbox/oc_chat/backup.zip'
+    const runtime = {
+      fs: {
+        async readFile(p: string) {
+          assert.equal(p, zipPath)
+          return sentBuffer!
+        },
+      },
+    } as unknown as Runtime
+    const importOut = await runWithSessionContext(makeFeishuCtx({ runtime }), () =>
+      runSystemCommand('data import --feishu --y', {
+        config: makeConfig(),
+        userId: 'alice',
+        attachmentPaths: [zipPath],
+      }),
+    )
+    assert.match(importOut, /Imported: .*memory/)
+    assert.equal(existsSync(path.join(memDir, 'fact.md')), true)
   })
 
   it('key rm: unreferenced key deletes with NO --y', async () => {

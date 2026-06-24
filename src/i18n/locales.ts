@@ -616,11 +616,14 @@ export const LOCALES = {
       '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
       '  data    导入 / 导出数据。动词：import <src> · export <dest>',
     'system.data.usage':
-      '用法：/system data export --path <文件|目录> [--with-sessions]\n' +
-      '      /system data import --path <文件> [--replace] [--y]',
+      '用法：/system data export (--path <文件|目录> | --feishu) [--with-sessions]\n' +
+      '      /system data import (--path <文件> | --feishu) [--replace] [--y]',
     'system.data.noIdentity': '没有活跃的 LightClaw 身份；导入 / 导出需要已配对的用户。',
     'system.data.missingPath': '需要 --path <路径>（或 --feishu）。',
-    'system.data.feishuPending': '飞书传输尚未接通；当前请用 --path <路径>。',
+    'system.data.feishuNoSender': '飞书文件传输不可用（请在飞书会话中使用）。',
+    'system.data.feishuNoAttachment': '未检测到附件。请把要导入的 .zip 作为文件发送，或回复带该文件的消息后再执行 import --feishu。',
+    'system.data.feishuExportIm': '已导出 {components}，备份文件已发送到当前会话。',
+    'system.data.feishuExportCloud': '已导出 {components}，文件较大已上传到你的云空间：{url}',
     'system.data.exportEmpty': '没有可导出的数据。',
     'system.data.exportOk': '已导出 {components} → {dest}（约 {kb} KB）。',
     'system.data.secretsNote': '注意：本包不含密钥（secrets）。如需在未配置密钥的环境恢复，密钥须另行设置。',
@@ -1427,11 +1430,14 @@ export const LOCALES = {
       '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
       '  data    Import / export data. Verbs: import <src> · export <dest>',
     'system.data.usage':
-      'Usage: /system data export --path <file|dir> [--with-sessions]\n' +
-      '       /system data import --path <file> [--replace] [--y]',
+      'Usage: /system data export (--path <file|dir> | --feishu) [--with-sessions]\n' +
+      '       /system data import (--path <file> | --feishu) [--replace] [--y]',
     'system.data.noIdentity': 'No active LightClaw identity; import / export needs a paired user.',
     'system.data.missingPath': 'A --path <path> (or --feishu) is required.',
-    'system.data.feishuPending': 'Feishu transport is not wired yet; use --path <path> for now.',
+    'system.data.feishuNoSender': 'Feishu file transport is unavailable (use it inside a Feishu chat).',
+    'system.data.feishuNoAttachment': 'No attachment found. Send the .zip to import as a file, or reply to the message carrying it, then run import --feishu.',
+    'system.data.feishuExportIm': 'Exported {components}; the backup file was sent to this chat.',
+    'system.data.feishuExportCloud': 'Exported {components}; the file is large and was uploaded to your cloud workspace: {url}',
     'system.data.exportEmpty': 'Nothing to export.',
     'system.data.exportOk': 'Exported {components} → {dest} (~{kb} KB).',
     'system.data.secretsNote':

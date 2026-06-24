@@ -6,7 +6,8 @@ import type { LightClawConfig } from '../config.js'
 import { loadUserConfigOverride } from '../config/user-override.js'
 import { t } from '../i18n/index.js'
 import { expandHomePath } from '../paths.js'
-import { exportUserData, importUserData } from '../system-data/archive.js'
+import { getChannelFileSender, getRuntimeIfInitialized } from '../state.js'
+import { exportUserData, importUserData, type ImportResult } from '../system-data/archive.js'
 
 import { requireConfirm } from './confirm.js'
 import { runMountCommand } from './mount.js'
@@ -15,11 +16,14 @@ import { runSecretCommand } from './secret.js'
 /**
  * Context for the `/system` hub. It is the union of what the delegated
  * runners need: `key` → secret runner (userId only), `mount` → mount runner
- * (config + userId + the rlaunch restart hook the channel passes through).
+ * (config + userId + the rlaunch restart hook the channel passes through),
+ * `data` → export/import (userId + the inbound `attachmentPaths` that
+ * `import --feishu` ingests).
  */
 type SystemCommandContext = {
   config: LightClawConfig
   userId?: string
+  attachmentPaths?: string[]
 }
 
 type SystemCommandDeps = {
@@ -105,12 +109,13 @@ function endpointsReferencingKey(userId: string, name: string): string[] {
  * available to every paired user, not admin-only. Secrets are never exported and
  * `config.json` is never imported (see `src/system-data/manifest.ts`).
  *
- *   /system data export --path <file|dir> [--with-sessions]
- *   /system data import --path <file> [--replace] [--y]
+ *   /system data export --path <file|dir> | --feishu  [--with-sessions]
+ *   /system data import --path <file> | --feishu       [--replace] [--y]
  *
- * The `--feishu` transport (send/receive the zip as a Feishu file message) needs
- * the channel sender + inbound attachment threaded into this command and is wired
- * separately; for now it returns a use-`--path` notice.
+ * `--path` reads/writes a filesystem path; `--feishu` reuses the channel file
+ * sender (export → sends the zip to the chat, size-routed IM ≤20MB vs cloud
+ * link) and the inbound attachment (import → reads the .zip the user sent /
+ * replied with, via the active runtime).
  */
 async function runDataNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
   const parts = rest.split(/\s+/).filter(Boolean)
@@ -122,18 +127,107 @@ async function runDataNoun(rest: string, ctx: SystemCommandContext): Promise<str
     return `${t('system.data.noIdentity')}\n`
   }
   const flags = parseDataFlags(parts.slice(1))
-  if (flags.feishu) {
-    return `${t('system.data.feishuPending')}\n`
-  }
-  if (!flags.path) {
-    return `${t('system.data.missingPath')}\n`
-  }
-  const resolvedPath = path.resolve(expandHomePath(flags.path))
 
   if (verb === 'export') {
-    return runDataExport(ctx.userId, resolvedPath, flags.withSessions)
+    if (flags.feishu) return runDataExportFeishu(ctx.userId, flags.withSessions)
+    if (!flags.path) return `${t('system.data.missingPath')}\n`
+    return runDataExport(ctx.userId, path.resolve(expandHomePath(flags.path)), flags.withSessions)
   }
-  return runDataImport(ctx.userId, resolvedPath, flags, parts)
+  // import
+  if (flags.feishu) {
+    return runDataImportFeishu(ctx.userId, ctx.attachmentPaths ?? [], flags, parts)
+  }
+  if (!flags.path) return `${t('system.data.missingPath')}\n`
+  return runDataImport(ctx.userId, path.resolve(expandHomePath(flags.path)), flags, parts)
+}
+
+function errorLine(err: unknown): string {
+  return `${t('system.data.error', { error: err instanceof Error ? err.message : String(err) })}\n`
+}
+
+/** Shared render for an import outcome (applied components + config-skip + warnings). */
+function formatImportResult(result: ImportResult): string {
+  const lines = [
+    t('system.data.importOk', {
+      applied: result.applied.length > 0 ? result.applied.join(', ') : '—',
+    }),
+  ]
+  if (result.skipped.includes('config')) {
+    lines.push(t('system.data.configSkipped'))
+  }
+  for (const warning of result.warnings) {
+    lines.push(t('system.data.warning', { warning }))
+  }
+  return `${lines.join('\n')}\n`
+}
+
+/** Export the caller's subtree and send the zip to the current chat (size-routed). */
+async function runDataExportFeishu(userId: string, withSessions: boolean): Promise<string> {
+  const sender = getChannelFileSender()
+  if (!sender) {
+    return `${t('system.data.feishuNoSender')}\n`
+  }
+  let result
+  try {
+    result = await exportUserData(userId, { withSessions, createdAt: new Date().toISOString() })
+  } catch (err) {
+    return errorLine(err)
+  }
+  if (result.componentsPacked.length === 0) {
+    return `${t('system.data.exportEmpty')}\n`
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const name = `lightclaw-data-${userId}-${stamp}.zip`
+  let sent
+  try {
+    sent = await sender.sendFile({ content: result.buffer, name })
+  } catch (err) {
+    return errorLine(err)
+  }
+  const components = result.componentsPacked.join(', ')
+  const head =
+    sent.kind === 'cloud-link'
+      ? t('system.data.feishuExportCloud', { components, url: sent.url })
+      : t('system.data.feishuExportIm', { components })
+  return `${head}\n${t('system.data.secretsNote')}\n`
+}
+
+/** Import the .zip the user attached / replied with, read via the active runtime. */
+async function runDataImportFeishu(
+  userId: string,
+  attachmentPaths: string[],
+  flags: DataFlags,
+  parts: string[],
+): Promise<string> {
+  const zipPath = attachmentPaths.find(p => p.toLowerCase().endsWith('.zip'))
+  if (!zipPath) {
+    return `${t('system.data.feishuNoAttachment')}\n`
+  }
+  const runtime = getRuntimeIfInitialized()
+  if (!runtime) {
+    return `${t('system.data.feishuNoSender')}\n`
+  }
+  const gate = requireConfirm(parts, {
+    preview: t('confirm.data.import', {
+      src: path.basename(zipPath),
+      mode: flags.replace ? 'replace' : 'merge',
+    }),
+  })
+  if (!gate.confirmed) return gate.message
+
+  let buffer: Buffer
+  try {
+    buffer = await runtime.fs.readFile(zipPath)
+  } catch (err) {
+    return errorLine(err)
+  }
+  let result: ImportResult
+  try {
+    result = await importUserData(userId, buffer, { replace: flags.replace })
+  } catch (err) {
+    return errorLine(err)
+  }
+  return formatImportResult(result)
 }
 
 interface DataFlags {
@@ -175,7 +269,7 @@ async function runDataExport(
       createdAt: new Date().toISOString(),
     })
   } catch (err) {
-    return `${t('system.data.error', { error: err instanceof Error ? err.message : String(err) })}\n`
+    return errorLine(err)
   }
   if (result.componentsPacked.length === 0) {
     return `${t('system.data.exportEmpty')}\n`
@@ -191,7 +285,7 @@ async function runDataExport(
     await mkdir(path.dirname(target), { recursive: true })
     await writeFile(target, result.buffer)
   } catch (err) {
-    return `${t('system.data.error', { error: err instanceof Error ? err.message : String(err) })}\n`
+    return errorLine(err)
   }
 
   const lines = [
@@ -223,25 +317,13 @@ async function runDataImport(
   try {
     buffer = await readFile(src)
   } catch (err) {
-    return `${t('system.data.error', { error: err instanceof Error ? err.message : String(err) })}\n`
+    return errorLine(err)
   }
-  let result
+  let result: ImportResult
   try {
     result = await importUserData(userId, buffer, { replace: flags.replace })
   } catch (err) {
-    return `${t('system.data.error', { error: err instanceof Error ? err.message : String(err) })}\n`
+    return errorLine(err)
   }
-
-  const lines = [
-    t('system.data.importOk', {
-      applied: result.applied.length > 0 ? result.applied.join(', ') : '—',
-    }),
-  ]
-  if (result.skipped.includes('config')) {
-    lines.push(t('system.data.configSkipped'))
-  }
-  for (const warning of result.warnings) {
-    lines.push(t('system.data.warning', { warning }))
-  }
-  return `${lines.join('\n')}\n`
+  return formatImportResult(result)
 }

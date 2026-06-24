@@ -1034,6 +1034,7 @@ export class ChannelRunner {
           setActiveTools() {},
           persistMeta: count => persistMeta(Date.now(), count),
           channelUserMessageContent: prebuiltUserMessageContent,
+          attachmentPaths: materializedAttachment.map(m => m.path),
         })
         if (slash.handled) {
           await persistMeta(Date.now(), messages.length)
