@@ -86,6 +86,45 @@ test('worker deliver cannot target another run', async () => {
   assert.equal((await getTaskRun(other.id, 'alice'))?.status, 'running')
 })
 
+test("worker self-wait aborts the fire's registered controller, not its ALS sessionId", async () => {
+  // Regression (0.3.4 dogfood, bg-guitao…25b7fb77): a dispatched worker fire
+  // runs under an ALS sessionId that is the chain leaf (`dispatched-worker`
+  // here), while its AbortController is registered — and its TaskRun
+  // currentSessionId recorded — under the fire sessionId (`bg-<run.id>`, set by
+  // startedRun's markStarted). Pre-fix the self-wait aborted getSessionId()
+  // (the ALS leaf), which had no controller, so the abort was a silent no-op:
+  // the live query loop kept running past the wait tool_result and tripped the
+  // empty-stop backstop into a re-wait the ledger then rejected. The seal must
+  // key off the run's currentSessionId.
+  const run = await startedRun({ callerRole: 'main', parentRunId: null })
+  const fireSessionId = `bg-${run.id}`
+  assert.equal((await getTaskRun(run.id, 'alice'))?.currentSessionId, fireSessionId)
+
+  const fireController = new AbortController()
+  setAbortControllerForSession(fireSessionId, fireController)
+
+  const result = await runAsWorker(run.id, () =>
+    taskUpdateTool.call(
+      {
+        action: 'wait',
+        checkpoint: 'parked for the timer',
+        wake: { kind: 'timer', afterMinutes: 5 },
+      },
+      toolContext(),
+    ),
+  )
+
+  assert.equal(result.isError, undefined)
+  assert.equal((await getTaskRun(run.id, 'alice'))?.status, 'waiting')
+  // The shift is sealed: the fire's in-flight controller was aborted. Pre-fix
+  // this stayed false because the abort targeted the unregistered ALS leaf.
+  assert.equal(
+    fireController.signal.aborted,
+    true,
+    'self-wait must abort the controller registered under the run currentSessionId',
+  )
+})
+
 test('worker accepts its own delivered child but not siblings or undelivered runs', async () => {
   const workerRun = await startedRun({ callerRole: 'main', parentRunId: null })
   const child = await startedRun({ callerRole: 'coder', parentRunId: workerRun.id })

@@ -368,7 +368,22 @@ export const taskUpdateTool = buildTool({
       // session keeps executing. Aborting our own in-flight turn seals the
       // shift; the aborted-outcome path leaves the waiting status untouched
       // and the wake brings the next shift.
-      abortInFlightForSession(getSessionId())
+      //
+      // Key the abort off the run's `currentSessionId` (what markStarted /
+      // markResumed recorded, and what the controller is registered under by
+      // the scheduler fire / resume), NOT `getSessionId()`. For a dispatched
+      // worker fire these differ: the controller is registered under the fire
+      // sessionId (`bg-<canonical>-<task>-<fire>`), but the worker's ALS
+      // sessionId is deliberately the chain leaf (the dispatchId) for per-fork
+      // isolation — so abortInFlightForSession(getSessionId()) found no
+      // controller and was a silent no-op. The live query loop then kept
+      // running past this tool_result, produced an empty turn, and tripped the
+      // worker empty-stop backstop into a confused re-wait that the ledger
+      // (already `waiting`) rejected (0.3.4 dogfood, bg-guitao…25b7fb77). This
+      // mirrors the requester-hold branch above, which already aborts
+      // `target.currentSessionId`. On a resumed shift / channel main,
+      // currentSessionId === getSessionId(), so the fallback is a no-op change.
+      abortInFlightForSession(meta.currentSessionId ?? getSessionId())
       return {
         output: `${JSON.stringify({ runId: waitingRun.id, status: waitingRun.status, wake })}\nWait recorded. The task comes back to you when the wake fires, with what arrived in hand.`,
       }
