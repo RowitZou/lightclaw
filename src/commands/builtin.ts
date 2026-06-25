@@ -469,23 +469,31 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
   const channelLabel = ctx.isChannel ? 'channel' : 'terminal'
   const totals = getUsageTotals()
   const sessionTok = totals.inputTokens + totals.outputTokens
-  const lines: string[] = [
+  const headBlock = [
     t('status.you', { user: userId ?? '(none)', adminFlag, channel: channelLabel }),
     t('status.modeLine', { mode: modeToAlias(getPermissionMode()), ceiling: modeToAlias(ceiling) }),
     t('status.modelLine', { model: getModel() }),
     t('status.sessionLine', { id: ctx.sessionId, msgs: ctx.messages.length, tok: sessionTok }),
   ]
+  const lines: string[] = [...headBlock]
+  // Channel renders /status as a structured card (mirrors /help); each block
+  // becomes a card section. The plain-text `lines` is still built for the
+  // terminal console / no-card fallback.
+  const sections: CommandListCardSection[] = [{ markdown: headBlock.join('\n') }]
+  const stripColon = (s: string): string => s.replace(/[:：]\s*$/, '')
   if (ctx.isAdmin) {
     const identities = await listIdentities()
     const names = Object.keys(identities).sort()
     if (names.length > 1) {
-      lines.push('', t('status.identitiesTitle'))
       const defaultCeiling = defaultPermissionCeiling()
+      const idLines: string[] = []
       for (const name of names) {
         const m = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
         const c = identities[name]!.permissionCeiling ?? defaultCeiling
-        lines.push(t('status.identitiesLine', { name, adminFlag: m, ceiling: modeToAlias(c) }))
+        idLines.push(t('status.identitiesLine', { name, adminFlag: m, ceiling: modeToAlias(c) }))
       }
+      lines.push('', t('status.identitiesTitle'), ...idLines)
+      sections.push({ heading: stripColon(t('status.identitiesTitle')), markdown: idLines.join('\n') })
     }
   }
   // Dispatch chain tree is admin-only — it surfaces internal scheduling
@@ -493,7 +501,13 @@ async function formatStatus(ctx: ReplContext): Promise<string> {
   // that ordinary users have no decision use for. Same admin/user split as
   // the "Identities" block above; admin still sees the full tree.
   if (ctx.isAdmin && userId) {
-    lines.push('', ...formatDispatchChainStatus(getSignalRouter().getActiveChainsForUser(userId)))
+    const dispatchLines = formatDispatchChainStatus(getSignalRouter().getActiveChainsForUser(userId))
+    lines.push('', ...dispatchLines)
+    // dispatchLines[0] is the heading; the rest is the body.
+    sections.push({ heading: stripColon(dispatchLines[0]!), markdown: dispatchLines.slice(1).join('\n') })
+  }
+  if (ctx.isChannel) {
+    ctx.setCommandListCard?.({ title: t('status.cardTitle'), sections })
   }
   lines.push('')
   return color(ctx, lines.join('\n'))

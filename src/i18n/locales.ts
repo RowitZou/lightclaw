@@ -19,19 +19,19 @@ export const LOCALES = {
     // ---- --y two-step confirmation (design F.3b) ----
     'confirm.previewWrapper': '以上操作不可撤销。确认请在原命令末尾追加 --y。',
     'confirm.endpoint.rm':
-      '将删除 endpoint "{name}"，并级联删除引用它的 backend 模型：{models}。',
-    'confirm.endpoint.rmNoModels': '将删除 endpoint "{name}"（没有 backend 模型引用它）。',
+      '将删除模型服务 "{name}"，并一并删除引用它的模型：{models}。',
+    'confirm.endpoint.rmNoModels': '将删除模型服务 "{name}"（没有模型引用它）。',
     'confirm.key.rm':
-      '将删除 key "{name}"，并断开引用它的 endpoint：{endpoints}。',
+      '将删除密钥 "{name}"，并断开引用它的模型服务：{endpoints}。',
     'confirm.workspace.set': '将把你的工作目录迁移到：{path}。',
     'confirm.workspace.reset': '将把你的工作目录恢复为默认（回落 admin 配置）。',
     'confirm.data.import': '将以 {mode} 模式用 {src} 更新你的记忆 / 数据（密钥与本机配置不受影响）。',
     'confirm.rule.rmAll': '将删除你全部 {count} 条权限规则。',
     'confirm.user.rm': '将删除用户 "{name}"{purge}。',
     'confirm.user.rmPurge': '（连同其数据一并清除）',
-    'confirm.sandbox.reset': '将清除并重建当前沙箱运行时（丢弃 scratch，保留 workspace）。',
+    'confirm.sandbox.reset': '将清除并重建当前沙箱（临时文件清空，工作目录保留）。',
     'confirm.feishuDrive.rm':
-      '将删除 "{canonical}" 的飞书云空间目录（folderToken: {token}，直接子项：{count}）。',
+      '将删除 "{canonical}" 的飞书云空间目录（直接子项：{count}）。',
 
     // ---- Banner ----
     'banner.console': 'LightClaw · 管理控制台（{name}）',
@@ -64,11 +64,11 @@ export const LOCALES = {
     'cmd.help.desc': '列出所有可用命令',
     'cmd.status.desc': '查看当前 user / mode / model / session',
     'cmd.config.usage': '/config <model|mode|lang|rule|workspace|lane|endpoint|backend|...> [verb] [args]',
-    'cmd.config.desc': '管理你的 per-user 配置（模型 / 模式 / 语言 / 规则 / 工作目录 / BYO）',
+    'cmd.config.desc': '管理你的个人配置（模型 / 模式 / 语言 / 规则 / 工作目录 / 模型服务）',
     'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
     'cmd.system.desc': '管理运行时资源（密钥 / 挂载 / 数据）',
     'cmd.stop.usage': '/stop',
-    'cmd.stop.desc': '紧急停止本 session 所有进行中的任务（平时直接让 LightClaw 帮你停即可）',
+    'cmd.stop.desc': '紧急停止本对话所有进行中的任务（平时直接让 LightClaw 帮你停即可）',
     'cmd.feedback.usage': '/feedback <text>',
     'cmd.feedback.desc': '给 admin 留反馈',
     'cmd.admin.usage': '/admin <cost|user|pairing|feedback|ceiling|sandbox|feishu-drive|backend|endpoint|lane> [verb] [args]',
@@ -113,51 +113,19 @@ export const LOCALES = {
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
     // ---- /auth (admin) ----
-    'auth.usage': '用法：/admin endpoint | /admin endpoint add <ep> --type codex --auth-path <auth.json> | /admin endpoint rm <ep> --y',
-    'auth.import.usage': '用法：/admin endpoint add <ep> --type codex --auth-path <auth.json>。当前支持：codex',
-    'auth.import.notSupported': 'provider {name} 不支持 import。',
-    'auth.logout.usage': '用法：/admin endpoint rm <ep> --y',
-    'auth.unsupportedProvider': '不支持的 provider：{name}。当前支持：{list}',
-    'auth.list.title': '已注册 auth provider：',
-    'auth.list.noProviders': '当前没有任何 auth provider 注册。',
-    'auth.list.entry': '  {name}：accountId={accountId}，{expiresIn}过期',
-    'auth.list.entryEmpty': '  {name}：未登录（运行 /admin endpoint add {name} --type codex --auth-path <auth.json> 导入官方 CLI 凭证）',
-    'auth.list.expired': '已过期，',
-    'auth.list.inMinutes': '约 {n} 分钟后',
-    'auth.list.inHours': '约 {n} 小时后',
-    'auth.list.inDays': '约 {n} 天后',
-    'auth.import.success': '已导入 {name} 凭证。',
-    'auth.codex.registered': '已自动注册 endpoints.codex + 新增 models: {tiers} 到 config.json。运行 /config model set gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
-    'auth.codex.registeredWithDiscovery': '已自动注册 endpoints.codex + 新增 models: {tiers}（live discovery 选定 upstream={slug}）到 config.json。运行 /config model set gpt-codex-mid 切换默认档；deep / fast 是高 / 低 reasoning 档。',
-    'auth.codex.alreadyRegistered': 'config.json 已存在 codex endpoint 与全部 codex 模型条目，未覆盖。',
-    'auth.logout.success': '已删除 {name} 凭证文件。',
-    'auth.logout.purged': '已同步移除 endpoint={endpoint}、models={models}。',
-    'auth.logout.purgeNothing': 'config.json 中无 codex 相关注册，无需清理。',
-    'auth.codex.banRiskWarning':
-      '⚠️  Codex OAuth 实验性通路 — 请阅读\n\n' +
-      'LightClaw 通过 OpenAI Codex CLI 的 OAuth 凭证调用 ChatGPT 订阅自带的\n' +
-      'Codex 配额。这一做法当前未在 OpenAI ToS 中明确白名单。\n\n' +
-      '已知风险：\n' +
-      '• Anthropic 已在 2026 年初对相似的第三方 OAuth 复用模式实施封号\n' +
-      '  （参考 Hermes issue #6475 / #15080）\n' +
-      '• OpenAI 走相同剧本只是时间问题，不是是否\n' +
-      '• 持续 429 限流 / 401 鉴权失败 / chat.openai.com 收到 warning\n' +
-      '  都是封号前兆 — 出现请立即停手并切回 API key 通路\n\n' +
-      '凭证安全：token 文件位于 <home>/auth/codex.json (0600)，等同账号密码。\n' +
-      '不要分享、不要带 sandbox 工具读 <home>/auth/。\n\n' +
-      '继续使用即视为知晓上述风险。',
 
     // ---- /status ----
+    'status.cardTitle': '当前状态',
     'status.you': '你：{user}{adminFlag} （来自 {channel}）',
     'status.adminFlag': ' (admin)',
-    'status.modeLine': '模式：{mode}（ceiling：{ceiling}）',
+    'status.modeLine': '模式：{mode}（上限：{ceiling}）',
     'status.modelLine': '模型：{model}',
-    'status.sessionLine': 'Session：{id}（消息 {msgs}，token {tok}）',
+    'status.sessionLine': '会话：{id}（消息 {msgs}，token {tok}）',
     'status.identitiesTitle': '所有身份：',
     'status.identitiesAdmin': ' *admin',
     'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
-    'status.dispatch.heading': '当前进行中的 dispatch chain:',
-    'status.dispatch.empty': '无进行中的 chain。',
+    'status.dispatch.heading': '进行中的后台任务：',
+    'status.dispatch.empty': '没有进行中的后台任务。',
     'status.dispatch.tree_node_running': '[{depth}] {role}@{sessionId} ({elapsed}ms, running)',
     'status.dispatch.tree_node_done': '[{depth}] {role}@{sessionId} ({elapsed}ms)',
     'chain.error.too_deep': 'Dispatch 链深度已达上限({depth}/{maxDepth}),无法再向下委派。请减少嵌套层级或将子任务直接归并到当前 hop。',
@@ -225,9 +193,9 @@ export const LOCALES = {
     'ceiling.empty': '当前没有任何身份。',
 
     // ---- /user (admin) ----
-    'user.usage.localHeader': '用法（LocalRuntime 单用户模式，仅可绑定 admin "{admin}"）：',
+    'user.usage.localHeader': '用法（本机单用户模式，仅可绑定 admin "{admin}"）：',
     'user.usage.header': '用法：',
-    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # local 模式建议 --as {admin}，把 IM 身份并入 admin 而非新建 user',
+    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # 本机模式建议 --as {admin}，把 IM 身份并入 admin 而非新建 user',
     'user.usage.approveGeneric': '  /admin pairing approve <code> [--as <name>]   # --as 可把 IM 身份绑到已有用户，省略则按 IM profile 自动派生',
     'user.usage.lines': '  /admin user list\n  /admin pairing\n{approve}\n  /admin pairing reject <code>\n  /admin user unlink <channel:id>\n  /admin user rm <name> [--purge] --y\n  /admin feedback [--page N]\n',
     'user.list.empty': '当前没有任何身份。',
@@ -250,14 +218,14 @@ export const LOCALES = {
     'user.remove.usage': '用法：/admin user rm <name> [--purge] --y',
     'user.remove.refuseAdmin': '拒绝删除 v1 admin 身份。',
     'user.remove.done': "已删除身份 '{name}'",
-    'user.remove.cleanupRlaunch': '已清理 cluster worker {worker}',
-    'user.remove.cleanupDocker': '已清理 docker container {container}',
+    'user.remove.cleanupRlaunch': '已清理沙箱实例 {worker}',
+    'user.remove.cleanupDocker': '已清理沙箱容器 {container}',
     'user.remove.noSuch': '没有这个身份：{name}',
     'user.feedback.placeholder': 'Feedback 存储尚未接通（Iter 3 计划接通）。',
     'user.feedback.empty': '暂时没有反馈。',
     'user.feedback.pageOutOfRange': '页码 {page} 超出范围（1..{total}）。',
     'user.feedback.title': '反馈（第 {page}/{total} 页，共 {count} 条）：',
-    'user.localOnlyReject': 'LocalRuntime 单用户模式；不能将发送方绑定为 "{name}"。\n本机 LightClaw 只能绑定 admin 用户 "{admin}"。\n请把 ~/.lightclaw/config.json 的 runtime.backend 改成 "docker" 启用多用户模式，或仅将 admin 的飞书账号绑定到本机实例。',
+    'user.localOnlyReject': '本机单用户模式；不能将发送方绑定为 "{name}"。\n本机 LightClaw 只能绑定 admin 用户 "{admin}"。\n如需多用户模式，请改用 docker / 集群部署后端；否则仅把 admin 的飞书账号绑定到本机实例。',
 
 
     // ---- /stop ----
@@ -284,28 +252,28 @@ export const LOCALES = {
     'cost.adminOnlyHint': '/admin cost 仅 admin 可用。普通用户用 /status 查看自己今日用量。',
 
     // ---- /sandbox ----
-    'sandbox.title': '沙箱镜像就绪状态（docker）：',
-    'sandbox.titleRlaunch': 'Rlaunch worker 就绪状态：',
+    'sandbox.title': '沙箱镜像状态：',
+    'sandbox.titleRlaunch': '沙箱状态：',
     'sandbox.titleLocal': '沙箱状态：',
-    'sandbox.state': '  state: {state}',
-    'sandbox.image': '  image: {image}',
+    'sandbox.state': '  状态：{state}',
+    'sandbox.image': '  镜像：{image}',
     'sandbox.pulledIn': '  已拉取：{seconds} 秒',
     'sandbox.elapsed': '  已耗时：{seconds} 秒',
     'sandbox.scheduleElapsed': '  调度耗时：{seconds} 秒',
     'sandbox.lastError': '  上次错误：{error}',
-    'sandbox.container': '  container: {name}',
-    'sandbox.worker': '  worker: {name}',
-    'sandbox.workerUser': '  user: {name}',
+    'sandbox.container': '  容器：{name}',
+    'sandbox.worker': '  实例：{name}',
+    'sandbox.workerUser': '  用户：{name}',
     'sandbox.workerNone': '(未启动)',
-    'sandbox.localActive': '  （local runtime；admin 直接在宿主机执行，无 worker / container 概念）',
-    'sandbox.prefetch.requireDocker': 'sandbox: prefetch 需要 runtime.backend = "docker"。',
-    'sandbox.prefetch.alreadyReady': 'sandbox: 镜像 {image} 已就绪，无需重复拉取。',
-    'sandbox.prefetch.inProgress': 'sandbox: 镜像 {image} 正在拉取中。',
-    'sandbox.prefetch.started': 'sandbox: 已启动 {image} 的拉取。',
+    'sandbox.localActive': '  （本机模式：直接在宿主机执行，无沙箱容器）',
+    'sandbox.prefetch.requireDocker': '预拉取仅在 docker 部署下可用。',
+    'sandbox.prefetch.alreadyReady': '镜像 {image} 已就绪，无需重复拉取。',
+    'sandbox.prefetch.inProgress': '镜像 {image} 正在拉取中。',
+    'sandbox.prefetch.started': '已开始拉取镜像 {image}。',
     'sandbox.usage': '用法：/admin sandbox [status | prefetch | reset --y]',
-    'sandbox.reset.rlaunchDone': '已停止并清理 rlaunch worker 状态。\nWorkspace gpfs 挂载已保留。\n下次环境工具调用会重建 worker。',
-    'sandbox.reset.localNothing': 'sandbox: 当前是 local runtime，无需重置。',
-    'sandbox.reset.dockerDone': '已停止并删除沙箱容器 {container}。\nTier 1（/workspace 绑定挂载）已保留。\nTier 2（可写层；pip 包、/etc 修改）已丢弃。\n下次环境工具调用会用 {image} 重建容器。',
+    'sandbox.reset.rlaunchDone': '已停止并清理当前沙箱。\n工作目录已保留。\n下次使用时会自动重建。',
+    'sandbox.reset.localNothing': '当前是本机模式，无需重置。',
+    'sandbox.reset.dockerDone': '已停止并删除沙箱容器 {container}。\n工作目录已保留；临时改动（安装的包、系统修改）已丢弃。\n下次使用时会用 {image} 重建。',
 
     // ---- Permission terminal prompt ----
     'permission.terminal.confirmHeader': '工具 {tool} 请求权限',
@@ -626,7 +594,7 @@ export const LOCALES = {
     'system.usage':
       '用法：/system <名词> [动词] [参数]\n' +
       '  key     管理运行时密钥（裸命令 = 列表）。动词：set · enable · disable · rm\n' +
-      '  mount   管理 rlaunch 动态挂载（裸命令 = 列表）。动词：add · rm\n' +
+      '  mount   挂载路径供 Agent 访问（裸命令 = 列表）。动词：add · rm\n' +
       '  data    导入 / 导出数据。动词：import <src> · export <dest>',
     'system.list.footer': '输入某个类别即可查看它的详细用法，例如 `/system key`；也可以直接问 LightClaw。',
     'system.list.key': '管理运行时密钥（Agent 可用但不可见）',
@@ -845,19 +813,19 @@ export const LOCALES = {
     // ---- --y two-step confirmation (design F.3b) ----
     'confirm.previewWrapper': 'This action cannot be undone. Re-run the same command with --y to confirm.',
     'confirm.endpoint.rm':
-      'This will remove endpoint "{name}" and cascade-remove the backend models referencing it: {models}.',
-    'confirm.endpoint.rmNoModels': 'This will remove endpoint "{name}" (no backend models reference it).',
+      'This will remove model service "{name}" and also remove the models referencing it: {models}.',
+    'confirm.endpoint.rmNoModels': 'This will remove model service "{name}" (no models reference it).',
     'confirm.key.rm':
-      'This will remove key "{name}" and break the endpoints referencing it: {endpoints}.',
+      'This will remove secret "{name}" and detach the model services referencing it: {endpoints}.',
     'confirm.workspace.set': 'This will migrate your workspace directory to: {path}.',
     'confirm.workspace.reset': 'This will restore your workspace directory to the default (falls back to the admin config).',
     'confirm.data.import': 'This will update your memory / data from {src} ({mode} mode); your keys and local config are untouched.',
     'confirm.rule.rmAll': 'This will remove all {count} of your permission rules.',
     'confirm.user.rm': 'This will remove user "{name}"{purge}.',
     'confirm.user.rmPurge': ' (and purge their data)',
-    'confirm.sandbox.reset': 'This will wipe and respawn the current sandbox runtime (drops scratch, keeps workspace).',
+    'confirm.sandbox.reset': 'This will wipe and respawn the current sandbox (temp files cleared, workspace kept).',
     'confirm.feishuDrive.rm':
-      'This will delete the Feishu workspace folder for "{canonical}" (folderToken: {token}, direct items: {count}).',
+      'This will delete the Feishu workspace folder for "{canonical}" (direct items: {count}).',
 
     // ---- Banner ----
     'banner.console': 'LightClaw · admin console ({name})',
@@ -884,11 +852,11 @@ export const LOCALES = {
     'cmd.help.desc': 'List available commands',
     'cmd.status.desc': 'Show current user / mode / model / session',
     'cmd.config.usage': '/config <model|mode|lang|rule|workspace|lane|endpoint|backend|...> [verb] [args]',
-    'cmd.config.desc': 'Manage your per-user config (model / mode / lang / rules / workspace / BYO)',
+    'cmd.config.desc': 'Manage your personal config (model / mode / lang / rules / workspace / model services)',
     'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
     'cmd.system.desc': 'Manage runtime resources (keys / mounts / data)',
     'cmd.stop.usage': '/stop',
-    'cmd.stop.desc': 'Emergency-stop all in-flight work in this session (normally just ask LightClaw to stop)',
+    'cmd.stop.desc': 'Emergency-stop all in-flight work in this conversation (normally just ask LightClaw to stop)',
     'cmd.feedback.usage': '/feedback <text>',
     'cmd.feedback.desc': 'Send feedback to admin',
     'cmd.admin.usage': '/admin <cost|user|pairing|feedback|ceiling|sandbox|feishu-drive|backend|endpoint|lane> [verb] [args]',
@@ -933,44 +901,9 @@ export const LOCALES = {
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
     // ---- /auth (admin) ----
-    'auth.usage': 'Usage: /admin endpoint | /admin endpoint add <ep> --type codex --auth-path <auth.json> | /admin endpoint rm <ep> --y',
-    'auth.import.usage': 'Usage: /admin endpoint add <ep> --type codex --auth-path <auth.json>. Supported: codex',
-    'auth.import.notSupported': 'provider {name} does not support import.',
-    'auth.logout.usage': 'Usage: /admin endpoint rm <ep> --y',
-    'auth.unsupportedProvider': 'Unsupported provider: {name}. Supported: {list}',
-    'auth.list.title': 'Registered auth providers:',
-    'auth.list.noProviders': 'No auth provider is registered.',
-    'auth.list.entry': '  {name}: accountId={accountId}, expires {expiresIn}',
-    'auth.list.entryEmpty': '  {name}: not logged in (run /admin endpoint add {name} --type codex --auth-path <auth.json> to import from the official CLI)',
-    'auth.list.expired': 'expired,',
-    'auth.list.inMinutes': 'in ~{n} min',
-    'auth.list.inHours': 'in ~{n} h',
-    'auth.list.inDays': 'in ~{n} d',
-    'auth.import.success': 'Imported {name} credentials.',
-    'auth.codex.registered': 'Auto-registered endpoints.codex + new models: {tiers} into config.json. Run /config model set gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
-    'auth.codex.registeredWithDiscovery': 'Auto-registered endpoints.codex + new models: {tiers} (live discovery picked upstream={slug}) into config.json. Run /config model set gpt-codex-mid for the balanced tier; deep / fast are high / low reasoning effort.',
-    'auth.codex.alreadyRegistered': 'config.json already has the codex endpoint and all codex tier entries — left untouched.',
-    'auth.logout.success': 'Removed {name} credential file.',
-    'auth.logout.purged': 'Also removed endpoint={endpoint}, models={models}.',
-    'auth.logout.purgeNothing': 'No codex-related entries in config.json to purge.',
-    'auth.codex.banRiskWarning':
-      '⚠️  Codex OAuth — experimental path, please read\n\n' +
-      'LightClaw uses the OAuth credentials from OpenAI\'s Codex CLI to call\n' +
-      'the Codex quota that comes with your ChatGPT subscription. This usage\n' +
-      'is NOT explicitly whitelisted in OpenAI\'s Terms of Service.\n\n' +
-      'Known risks:\n' +
-      '• Anthropic banned similar third-party OAuth reuse in early 2026\n' +
-      '  (see Hermes issue #6475 / #15080 for community reports)\n' +
-      '• OpenAI may follow the same playbook — it is a question of when, not if\n' +
-      '• Continuous 429 rate-limits / 401 auth failures / warnings on\n' +
-      '  chat.openai.com are precursors to a ban — stop immediately and switch\n' +
-      '  back to API-key access if you see them\n\n' +
-      'Credential safety: the token file at <home>/auth/codex.json (mode 0600)\n' +
-      'is equivalent to your password. Do not share. Do not let sandbox tools\n' +
-      'read <home>/auth/.\n\n' +
-      'Continued use implies acknowledgement of these risks.',
 
     // ---- /status ----
+    'status.cardTitle': 'Status',
     'status.you': 'You: {user}{adminFlag} on {channel}',
     'status.adminFlag': ' (admin)',
     'status.modeLine': 'Mode: {mode}  (ceiling: {ceiling})',
@@ -979,8 +912,8 @@ export const LOCALES = {
     'status.identitiesTitle': 'Identities:',
     'status.identitiesAdmin': ' *admin',
     'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
-    'status.dispatch.heading': 'In-flight dispatch chains:',
-    'status.dispatch.empty': 'No active chains.',
+    'status.dispatch.heading': 'In-flight background tasks:',
+    'status.dispatch.empty': 'No active background tasks.',
     'status.dispatch.tree_node_running': '[{depth}] {role}@{sessionId} ({elapsed}ms, running)',
     'status.dispatch.tree_node_done': '[{depth}] {role}@{sessionId} ({elapsed}ms)',
     'chain.error.too_deep': 'Dispatch chain depth limit reached ({depth}/{maxDepth}). Cannot delegate further. Reduce nesting or merge the sub-task into the current hop.',
@@ -1048,9 +981,9 @@ export const LOCALES = {
     'ceiling.empty': 'No identities.',
 
     // ---- /user (admin) ----
-    'user.usage.localHeader': 'Usage (LocalRuntime is single-user; bind only as admin "{admin}"):',
+    'user.usage.localHeader': 'Usage (this instance is single-user; bind only as admin "{admin}"):',
     'user.usage.header': 'Usage:',
-    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # in local mode prefer --as {admin}, which binds the IM sender into the admin user instead of creating a new one',
+    'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # on this instance prefer --as {admin}, which binds the IM sender into the admin user instead of creating a new one',
     'user.usage.approveGeneric': '  /admin pairing approve <code> [--as <name>]   # --as binds the IM sender into an existing user; omit it to auto-derive from the IM profile',
     'user.usage.lines': '  /admin user list\n  /admin pairing\n{approve}\n  /admin pairing reject <code>\n  /admin user unlink <channel:id>\n  /admin user rm <name> [--purge] --y\n  /admin feedback [--page N]\n',
     'user.list.empty': 'No identities.',
@@ -1073,14 +1006,14 @@ export const LOCALES = {
     'user.remove.usage': 'Usage: /admin user rm <name> [--purge] --y',
     'user.remove.refuseAdmin': 'Refusing to remove the v1 admin identity.',
     'user.remove.done': "Removed identity '{name}'",
-    'user.remove.cleanupRlaunch': 'Cleaned up cluster worker {worker}',
-    'user.remove.cleanupDocker': 'Cleaned up docker container {container}',
+    'user.remove.cleanupRlaunch': 'Cleaned up sandbox instance {worker}',
+    'user.remove.cleanupDocker': 'Cleaned up sandbox container {container}',
     'user.remove.noSuch': 'No such identity: {name}',
     'user.feedback.placeholder': 'Feedback storage not yet wired (Iter 3 will connect this).',
     'user.feedback.empty': 'No feedback yet.',
     'user.feedback.pageOutOfRange': 'Page {page} out of range (1..{total}).',
     'user.feedback.title': 'Feedback (page {page}/{total}, total {count}):',
-    'user.localOnlyReject': 'LocalRuntime is single-user; cannot bind sender as "{name}".\nOnly the admin user "{admin}" can be bound on this LightClaw instance.\nSwitch runtime.backend to "docker" in ~/.lightclaw/config.json to enable multi-user mode, or bind only the admin Feishu account to this local instance.',
+    'user.localOnlyReject': 'This instance is single-user; cannot bind sender as "{name}".\nOnly the admin user "{admin}" can be bound on this LightClaw instance.\nFor multi-user mode, switch to a docker / cluster deployment; otherwise bind only the admin Feishu account to this local instance.',
 
     // ---- /stop ----
     'stop.requireIdentity': '/stop requires an active identity.',
@@ -1106,8 +1039,8 @@ export const LOCALES = {
     'cost.adminOnlyHint': '/admin cost is admin-only. Use /status to see your today usage.',
 
     // ---- /sandbox ----
-    'sandbox.title': 'Sandbox image readiness (docker):',
-    'sandbox.titleRlaunch': 'Rlaunch worker readiness:',
+    'sandbox.title': 'Sandbox image status:',
+    'sandbox.titleRlaunch': 'Sandbox status:',
     'sandbox.titleLocal': 'Sandbox status:',
     'sandbox.state': '  state: {state}',
     'sandbox.image': '  image: {image}',
@@ -1116,18 +1049,18 @@ export const LOCALES = {
     'sandbox.scheduleElapsed': '  schedule elapsed: {seconds}s',
     'sandbox.lastError': '  lastError: {error}',
     'sandbox.container': '  container: {name}',
-    'sandbox.worker': '  worker: {name}',
+    'sandbox.worker': '  instance: {name}',
     'sandbox.workerUser': '  user: {name}',
     'sandbox.workerNone': '(not started)',
-    'sandbox.localActive': '  (local runtime; admin runs tools directly on the host — no worker/container concept)',
-    'sandbox.prefetch.requireDocker': 'sandbox: prefetch requires runtime.backend = "docker".',
-    'sandbox.prefetch.alreadyReady': 'sandbox: image {image} marked ready; nothing to do.',
-    'sandbox.prefetch.inProgress': 'sandbox: image {image} pull already in progress.',
-    'sandbox.prefetch.started': 'sandbox: prefetch started for {image}.',
+    'sandbox.localActive': '  (local mode: runs directly on the host, no sandbox container)',
+    'sandbox.prefetch.requireDocker': 'Prefetch is only available on a docker deployment.',
+    'sandbox.prefetch.alreadyReady': 'Image {image} is already ready; nothing to do.',
+    'sandbox.prefetch.inProgress': 'Image {image} pull already in progress.',
+    'sandbox.prefetch.started': 'Started pulling image {image}.',
     'sandbox.usage': 'Usage: /admin sandbox [status | prefetch | reset --y]',
-    'sandbox.reset.rlaunchDone': 'Stopped and removed rlaunch worker state.\nWorkspace gpfs mount was preserved.\nNext environment tool call will recreate the worker.',
-    'sandbox.reset.localNothing': 'sandbox: local runtime is active; nothing to reset.',
-    'sandbox.reset.dockerDone': 'Stopped and removed sandbox container {container}.\nTier 1 (/workspace bind mount) preserved.\nTier 2 (writable layer; pip packages, /etc edits) discarded.\nNext environment tool call will recreate the container from {image}.',
+    'sandbox.reset.rlaunchDone': 'Stopped and cleared the current sandbox.\nWorkspace was preserved.\nIt will be recreated on next use.',
+    'sandbox.reset.localNothing': 'This is local mode; nothing to reset.',
+    'sandbox.reset.dockerDone': 'Stopped and removed sandbox container {container}.\nWorkspace preserved; ephemeral changes (installed packages, system edits) discarded.\nIt will be recreated from {image} on next use.',
 
     // ---- Permission terminal prompt ----
     'permission.terminal.confirmHeader': 'Tool {tool} requests permission',
@@ -1449,7 +1382,7 @@ export const LOCALES = {
     'system.usage':
       'Usage: /system <noun> [verb] [args]\n' +
       '  key     Manage runtime keys (bare = list). Verbs: set · enable · disable · rm\n' +
-      '  mount   Manage rlaunch dynamic mounts (bare = list). Verbs: add · rm\n' +
+      '  mount   Mount paths for the Agent (bare = list). Verbs: add · rm\n' +
       '  data    Import / export data. Verbs: import <src> · export <dest>',
     'system.list.footer': 'Type a category to see its detailed usage, e.g. `/system key`; or just ask LightClaw.',
     'system.list.key': 'Manage runtime keys (usable but hidden from the agent)',

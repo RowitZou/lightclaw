@@ -81,7 +81,7 @@ describe('/feishu-workspace admin slash', () => {
     const preview = await runFeishuWorkspaceCommand('delete alice')
     // B5: preview lists the folder + item count and tells the user to re-run
     // with --y; no token round-trip, no delete fires.
-    assert.match(preview, /aliceFld/)
+    assert.match(preview, /alice/)
     assert.match(preview, /--y/)
     assert.deepEqual(driveState.deleted, [], 'no delete should fire before --y')
 

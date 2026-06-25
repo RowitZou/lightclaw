@@ -41,8 +41,8 @@ describe('/status dispatch chain view', () => {
 
     const output = await runStatus({ isAdmin: true })
 
-    assert.match(output, /In-flight dispatch chains:/)
-    assert.match(output, /No active chains\./)
+    assert.match(output, /In-flight background tasks:/)
+    assert.match(output, /No active background tasks\./)
   })
 
   it('renders a single active dispatch chain for an admin', async () => {
@@ -102,8 +102,8 @@ describe('/status dispatch chain view', () => {
       const output = await runStatus({ isAdmin: false })
 
       // No "In-flight dispatch chains:" heading, no chain tree at all.
-      assert.doesNotMatch(output, /In-flight dispatch chains:/)
-      assert.doesNotMatch(output, /No active chains\./)
+      assert.doesNotMatch(output, /In-flight background tasks:/)
+      assert.doesNotMatch(output, /No active background tasks\./)
       assert.doesNotMatch(output, /reviewer@s-reviewer/)
       assert.doesNotMatch(output, /Chain chain-alice-status/)
       // Sanity: the basic identity / mode / model / session lines are still
