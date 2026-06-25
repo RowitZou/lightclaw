@@ -14,7 +14,7 @@ import { loadIdentityRules } from '../permission/storage.js'
 import { setLightclawHomeOverride } from '../paths.js'
 import { createSessionContext, runWithSessionContext } from '../session-context.js'
 import { getModel, getPermissionMode } from '../state.js'
-import { runConfigCommand, validateWorkspacePath } from './config.js'
+import { __setModelProbeHooksForTests, runConfigCommand, validateWorkspacePath } from './config.js'
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -25,11 +25,18 @@ beforeEach(() => {
   mkdirSync(gpfsRoot, { recursive: true })
   setLightclawHomeOverride(tmpHome)
   setLang('en')
+  // Default: stub the add-time network probes so the bulk of tests stay
+  // hermetic. Probe-specific tests override these hooks inline.
+  __setModelProbeHooksForTests({
+    endpointModels: async () => ({ ok: true, summary: '' }),
+    connectivity: async () => ({ ok: true }),
+  })
 })
 
 afterEach(() => {
   setLang('cn')
   setLightclawHomeOverride(undefined)
+  __setModelProbeHooksForTests(null)
   rmSync(tmpHome, { recursive: true, force: true })
 })
 
@@ -723,5 +730,166 @@ describe('usage fallbacks render the structured card (not the old Usage: dump)',
     const out = await runConfigCommand('lane bogusverb', { config: cfg, userId: 'zfl' })
     assert.doesNotMatch(out, /verbs:/)
     assert.match(out, /\/config lane set worker/)
+  })
+})
+
+describe('/config endpoint add — probe gates the import', () => {
+  it('rejects (does not persist) when the probe is unreachable', async () => {
+    const cfg = modelConfig()
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: false, error: 'NOT added: unreachable' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    const out = await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'epgate',
+    })
+    assert.match(out, /NOT added/)
+    // No endpoint persisted, AND no orphan secret left behind (the secrets file
+    // is never even created because the raw key is stored only post-probe).
+    assert.equal(existsSync(userConfigPath('epgate')), false)
+    assert.equal(existsSync(userSecretsPath('epgate')), false)
+  })
+
+  it('persists and appends the model list + next step on a reachable probe', async () => {
+    const cfg = modelConfig()
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '\nConnected. Available models: gpt-5, gpt-5-mini\nNext: run /config backend add' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    const out = await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'epok',
+    })
+    assert.match(out, /Added model service/)
+    assert.match(out, /Available models: gpt-5/)
+    assert.match(out, /Next: run \/config backend add/)
+    const ep = (readUserConfigJson('epok').endpoints as Record<string, Record<string, unknown>>).ep
+    assert.equal(ep.type, 'openai')
+  })
+})
+
+describe('/config backend add — connectivity gate + auto-default', () => {
+  async function addEndpointOk(user: string, cfg: LightClawConfig): Promise<void> {
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: user,
+    })
+  }
+
+  it('rolls back (model NOT added, default unchanged) when connectivity fails', async () => {
+    const cfg = modelConfig()
+    await addEndpointOk('bkgate', cfg)
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: false, detail: 'connect ECONNREFUSED' }),
+    })
+    const out = await runConfigCommand('backend add m --endpoint ep --upstream up-1', {
+      config: cfg,
+      userId: 'bkgate',
+    })
+    assert.match(out, /failed the connectivity check/)
+    const persisted = readUserConfigJson('bkgate')
+    assert.equal((persisted.models as Record<string, unknown>).m, undefined)
+    assert.equal('defaultModel' in persisted, false)
+  })
+
+  it('auto-promotes the first model to default (no --default needed)', async () => {
+    const cfg = modelConfig()
+    await addEndpointOk('bkdef', cfg)
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    const out = await runConfigCommand('backend add m1 --endpoint ep --upstream up-1', {
+      config: cfg,
+      userId: 'bkdef',
+    })
+    assert.match(out, /Connectivity check: ok/)
+    assert.match(out, /default model/i)
+    assert.equal(readUserConfigJson('bkdef').defaultModel, 'm1')
+  })
+
+  it('does NOT change default for a second model; hints how to switch', async () => {
+    const cfg = modelConfig()
+    await addEndpointOk('bk2', cfg)
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('backend add m1 --endpoint ep --upstream up-1', { config: cfg, userId: 'bk2' })
+    const out = await runConfigCommand('backend add m2 --endpoint ep --upstream up-2', {
+      config: cfg,
+      userId: 'bk2',
+    })
+    assert.match(out, /\/config model set m2/)
+    assert.equal(readUserConfigJson('bk2').defaultModel, 'm1')
+  })
+})
+
+describe('/config endpoint|backend set — re-check on update', () => {
+  it('endpoint set rejects the update and keeps prior config when the re-check fails', async () => {
+    const cfg = modelConfig()
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://old', {
+      config: cfg,
+      userId: 'epset',
+    })
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: false, error: 'NOT added: bad url' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    const out = await runConfigCommand('endpoint set ep --base-url https://new', {
+      config: cfg,
+      userId: 'epset',
+    })
+    assert.match(out, /NOT added/)
+    const ep = (readUserConfigJson('epset').endpoints as Record<string, Record<string, unknown>>).ep
+    assert.equal(ep.baseUrl, 'https://old') // unchanged
+  })
+
+  it('backend set rolls back to the prior entry when the re-check fails', async () => {
+    const cfg = modelConfig()
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'bkset',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'bkset' })
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: false, detail: 'timeout' }),
+    })
+    const out = await runConfigCommand('backend set m --upstream up-2', { config: cfg, userId: 'bkset' })
+    assert.match(out, /rolled back|连通性/)
+    const model = (readUserConfigJson('bkset').models as Record<string, Record<string, unknown>>).m
+    assert.equal(model.upstreamModel, 'up-1') // rolled back
+  })
+
+  it('backend set succeeds and confirms the re-check', async () => {
+    const cfg = modelConfig()
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
+      config: cfg,
+      userId: 'bkset2',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'bkset2' })
+    const out = await runConfigCommand('backend set m --upstream up-2', { config: cfg, userId: 'bkset2' })
+    assert.match(out, /Connectivity check: ok/)
+    const model = (readUserConfigJson('bkset2').models as Record<string, Record<string, unknown>>).m
+    assert.equal(model.upstreamModel, 'up-2')
   })
 })

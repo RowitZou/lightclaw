@@ -2,7 +2,13 @@ import { constants as fsConstants, readdirSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import path from 'node:path'
 
-import { importUserCodexAuth } from '../auth/codex/user-store.js'
+import {
+  getUserCodexCredentials,
+  importUserCodexAuth,
+  parseCodexAuthRef,
+} from '../auth/codex/user-store.js'
+import { listCodexSlugs } from '../auth/codex/models.js'
+import { listApiKeyModels, type ListModelsResult } from '../provider/list-models.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import {
   buildUserRegistry,
@@ -77,6 +83,36 @@ type ConfigCommandContext = {
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
 const MODEL_CHECK_TIMEOUT_MS = 8000
+/** How many model ids to SHOW after `endpoint add`; a provider that advertises
+ *  more (typical of openai) gets the "showing first N, see the provider for the
+ *  rest" wording instead of flooding the card. */
+const MODEL_LIST_SHOWN = 20
+/** Upper bound on ids fetched — guards against a pathologically large list
+ *  while still letting us tell "exactly 20" from "more than 20". */
+const MODEL_LIST_FETCH_CAP = 500
+
+// Test seam: the `endpoint add` / `backend add` auto-probes make real network
+// calls. Unit tests install stubs here so they stay hermetic (and don't hang on
+// a proxy-only host); production leaves these null and the real probes run.
+type ModelProbeHooks = {
+  endpointModels?: typeof probeEndpointModelsImpl
+  connectivity?: typeof probeModelConnectivityImpl
+}
+let testProbeHooks: ModelProbeHooks | null = null
+export function __setModelProbeHooksForTests(hooks: ModelProbeHooks | null): void {
+  testProbeHooks = hooks
+}
+function probeEndpointModels(
+  input: Parameters<typeof probeEndpointModelsImpl>[0],
+): ReturnType<typeof probeEndpointModelsImpl> {
+  return (testProbeHooks?.endpointModels ?? probeEndpointModelsImpl)(input)
+}
+function probeModelConnectivity(
+  resolved: ReturnType<typeof resolveUserConfig>,
+  displayName: string,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  return (testProbeHooks?.connectivity ?? probeModelConnectivityImpl)(resolved, displayName)
+}
 
 /**
  * Validates a user-supplied workspace directory. Mirrors `mount.ts`'s
@@ -278,9 +314,9 @@ async function runEndpointSubcommand(
       case '':
         return usageCard()
       case 'add':
-        return addEndpoint(userId, parts) ?? usageCard()
+        return (await addEndpoint(userId, parts)) ?? usageCard()
       case 'set':
-        return setEndpoint(userId, parts) ?? usageCard()
+        return (await setEndpoint(userId, parts)) ?? usageCard()
       case 'remove':
       case 'rm':
         return removeEndpoint(userId, parts) ?? usageCard()
@@ -350,7 +386,7 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
 // an existing secret name is referenced; otherwise the raw key is auto-stored
 // into the per-user secrets store (0600) and only the reference lands in
 // config.json — the raw key NEVER enters config.json.
-function addEndpoint(userId: string, parts: string[]): string | null {
+async function addEndpoint(userId: string, parts: string[]): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -377,6 +413,17 @@ function addEndpoint(userId: string, parts: string[]): string | null {
     } catch (error) {
       return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
     }
+    // Gate on reachability BEFORE persisting the endpoint: a service we can't
+    // reach is not a successful import. The codex credential is already in the
+    // per-user store (reused on a retry), but config.json gains nothing.
+    const probe = await probeEndpointModels({
+      userId,
+      alias,
+      kind: 'codex',
+      codexAuthName: summary.name,
+      proxy: parsed.proxy,
+    })
+    if (!probe.ok) return `${probe.error}\n`
     const endpoint: Record<string, unknown> = { authRef: `codex:${summary.name}` }
     if (parsed.proxy) endpoint.proxy = parsed.proxy
     const obj = readUserConfig(userId)
@@ -386,12 +433,28 @@ function addEndpoint(userId: string, parts: string[]): string | null {
     const guard = guardWritable(userId, obj)
     if (guard) return guard
     writeUserConfig(userId, obj)
-    return `${t('config.endpoint.addedCodex', { name: alias, ref: summary.name })}\n`
+    return `${t('config.endpoint.addedCodex', { name: alias, ref: summary.name })}${probe.summary}\n`
   }
 
   // openai | anthropic: --key is a raw key OR an existing secret name. The
   // wire-protocol family is recorded as `type` so `backend add` can derive the
   // model schema without a positional argument.
+  // Resolve the raw key for the probe WITHOUT storing it yet (an existing
+  // secret name → its stored value; otherwise the raw key as typed), so a
+  // rejected add leaves no orphan secret behind.
+  const probeKey = loadUserSecrets(userId)[parsed.key]?.value ?? parsed.key
+  const probe = await probeEndpointModels({
+    userId,
+    alias,
+    kind: 'apiKey',
+    apiType: parsed.type,
+    apiKey: probeKey,
+    baseUrl: parsed.baseUrl,
+    proxy: parsed.proxy,
+  })
+  if (!probe.ok) return `${probe.error}\n`
+
+  // Probe passed → now persist (this is where the raw key is auto-stored).
   const resolved = resolveKeyToSecretRef(userId, parsed.key)
   const endpoint: Record<string, unknown> = { type: parsed.type, apiKeyRef: resolved.secretName }
   if (parsed.baseUrl) endpoint.baseUrl = parsed.baseUrl
@@ -407,7 +470,77 @@ function addEndpoint(userId: string, parts: string[]): string | null {
   const stored = resolved.stored
     ? `\n${t('config.endpoint.keyStored', { name: resolved.secretName })}`
     : ''
-  return `${t('config.endpoint.added', { name: alias, ref: resolved.secretName })}${stored}\n`
+  return `${t('config.endpoint.added', { name: alias, ref: resolved.secretName })}${stored}${probe.summary}\n`
+}
+
+type EndpointProbeResult =
+  // `summary` is the model-list + next-step block (leading newline) appended to
+  // the add confirmation.
+  | { ok: true; summary: string }
+  // `error` is the full message to surface when the add is REJECTED.
+  | { ok: false; error: string }
+
+/**
+ * Probe a candidate endpoint for reachability and list its advertised models.
+ * This is the availability GATE for `endpoint add`: a failure (transport / auth
+ * / non-2xx) returns `ok:false` and the caller refuses the add — a model service
+ * we can't reach is not a successful import. A reachable service that returns no
+ * model list still counts as available (some gateways don't expose /models).
+ */
+async function probeEndpointModelsImpl(input: {
+  userId: string
+  alias: string
+  kind: 'apiKey' | 'codex'
+  apiType?: 'openai' | 'anthropic'
+  apiKey?: string
+  baseUrl?: string
+  proxy?: string
+  codexAuthName?: string
+  // `add` chains to "now add a backend"; `set` (update) omits it — the endpoint
+  // already exists and likely has backends referencing it.
+  includeNextStep?: boolean
+}): Promise<EndpointProbeResult> {
+  let result: ListModelsResult
+  if (input.kind === 'codex') {
+    try {
+      const creds = await getUserCodexCredentials({
+        canonicalUser: input.userId,
+        name: input.codexAuthName ?? 'default',
+        proxy: input.proxy,
+      })
+      const slugs = await listCodexSlugs(creds, { proxy: input.proxy, limit: MODEL_LIST_FETCH_CAP })
+      result = slugs === null
+        ? { ok: false, error: t('config.endpoint.probeUnreachable') }
+        : { ok: true, models: slugs }
+    } catch (error) {
+      result = { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  } else {
+    result = await listApiKeyModels({
+      type: input.apiType ?? 'openai',
+      apiKey: input.apiKey ?? '',
+      baseUrl: input.baseUrl,
+      proxy: input.proxy,
+      limit: MODEL_LIST_FETCH_CAP,
+    })
+  }
+  if (!result.ok) {
+    return { ok: false, error: t('config.endpoint.addFailedProbe', { detail: result.error }) }
+  }
+  const nextStep = input.includeNextStep === false
+    ? ''
+    : `\n${t('config.endpoint.nextStep', { name: input.alias })}`
+  if (result.models.length === 0) {
+    return { ok: true, summary: `\n${t('config.endpoint.probeEmpty')}${nextStep}` }
+  }
+  // Show the first MODEL_LIST_SHOWN; if the provider advertises more, say so and
+  // point at the provider rather than implying the list is complete.
+  const truncated = result.models.length > MODEL_LIST_SHOWN
+  const list = result.models.slice(0, MODEL_LIST_SHOWN).join(', ')
+  const okLine = truncated
+    ? t('config.endpoint.probeOkMore', { count: String(MODEL_LIST_SHOWN), list })
+    : t('config.endpoint.probeOk', { list })
+  return { ok: true, summary: `\n${okLine}${nextStep}` }
 }
 
 /**
@@ -450,7 +583,7 @@ function deriveSecretName(userId: string, _key: string): string {
   return `BYO_KEY_${Date.now()}`
 }
 
-function setEndpoint(userId: string, parts: string[]): string | null {
+async function setEndpoint(userId: string, parts: string[]): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -460,6 +593,8 @@ function setEndpoint(userId: string, parts: string[]): string | null {
   if (!endpoints[alias]) {
     return `${t('config.endpoint.missing', { name: alias })}\n`
   }
+  // Apply the side-effect-free flags first (the --key secret store is deferred
+  // until AFTER the re-check passes, so a rejected update leaves no orphan).
   const next: Record<string, unknown> = { ...current }
   const baseUrl = flagValue(rest, '--base-url')
   if (baseUrl !== undefined) {
@@ -471,13 +606,8 @@ function setEndpoint(userId: string, parts: string[]): string | null {
     if (proxy === '-') delete next.proxy
     else next.proxy = normalizeProxyUrl(proxy)
   }
-  // `--key` (B3, raw-or-name) is the primary spelling; `--api-key-ref` (PR5,
-  // name-only) is still accepted for back-compat.
-  const key = flagValue(rest, '--key')
-  if (key !== undefined) {
-    const resolved = resolveKeyToSecretRef(userId, key)
-    next.apiKeyRef = resolved.secretName
-  }
+  // `--api-key-ref` (PR5, name-only) is validated up front (no store); `--key`
+  // (B3, raw-or-name) defers its store until post-probe.
   const apiKeyRef = flagValue(rest, '--api-key-ref')
   if (apiKeyRef) {
     const secretName = validateSecretName(apiKeyRef)
@@ -486,12 +616,52 @@ function setEndpoint(userId: string, parts: string[]): string | null {
     }
     next.apiKeyRef = secretName
   }
+  const key = flagValue(rest, '--key')
+
+  // `set` means update — re-check the resulting endpoint just like `add`. A
+  // failed check rejects the update; the prior config stays intact (we haven't
+  // written yet).
+  const nextProxy = typeof next.proxy === 'string' ? next.proxy : undefined
+  const isCodex = typeof next.authRef === 'string' && (next.authRef as string).length > 0
+  let probe: EndpointProbeResult
+  if (isCodex) {
+    probe = await probeEndpointModels({
+      userId,
+      alias,
+      kind: 'codex',
+      codexAuthName: parseCodexAuthRef(next.authRef as string),
+      proxy: nextProxy,
+      includeNextStep: false,
+    })
+  } else {
+    const secrets = loadUserSecrets(userId)
+    const probeKey = key !== undefined
+      ? (secrets[key]?.value ?? key)
+      : secrets[String(next.apiKeyRef)]?.value
+    probe = await probeEndpointModels({
+      userId,
+      alias,
+      kind: 'apiKey',
+      apiType: next.type === 'anthropic' ? 'anthropic' : 'openai',
+      apiKey: probeKey ?? '',
+      baseUrl: typeof next.baseUrl === 'string' ? next.baseUrl : undefined,
+      proxy: nextProxy,
+      includeNextStep: false,
+    })
+  }
+  if (!probe.ok) return `${probe.error}\n`
+
+  // Re-check passed → apply the deferred --key store and persist.
+  if (key !== undefined) {
+    const resolved = resolveKeyToSecretRef(userId, key)
+    next.apiKeyRef = resolved.secretName
+  }
   endpoints[alias] = next
   obj.endpoints = endpoints
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  return `${t('config.endpoint.updated', { name: alias })}\n`
+  return `${t('config.endpoint.updated', { name: alias })}${probe.summary}\n`
 }
 
 function removeEndpoint(userId: string, parts: string[]): string | null {
@@ -567,9 +737,9 @@ async function runBackendSubcommand(
       case '':
         return usageCard()
       case 'add':
-        return addBackend(userId, parts) ?? usageCard()
+        return (await addBackend(userId, parts, ctx)) ?? usageCard()
       case 'set':
-        return setBackend(userId, parts) ?? usageCard()
+        return (await setBackend(userId, parts, ctx)) ?? usageCard()
       case 'check':
         return (await checkBackend(userId, parts, ctx)) ?? usageCard()
       case 'remove':
@@ -597,7 +767,11 @@ function schemaForEndpoint(
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'
 }
 
-function addBackend(userId: string, parts: string[]): string | null {
+async function addBackend(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string | null> {
   const [displayName, ...rest] = parts
   if (!displayName) return null
   assertAlias(displayName)
@@ -619,7 +793,6 @@ function addBackend(userId: string, parts: string[]): string | null {
   if (reasoning === false) return `${t('config.model.reasoningInvalid')}\n`
   const maxOutput = parsePositiveInt(flagValue(rest, '--max-tokens'))
   if (maxOutput === false) return `${t('config.model.intInvalid')}\n`
-  const setDefault = rest.includes('--default')
 
   const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
   // Only store an explicit reasoning effort; when omitted, the wire layer
@@ -629,17 +802,82 @@ function addBackend(userId: string, parts: string[]): string | null {
   if (maxOutput !== undefined) model.maxOutputTokens = maxOutput
 
   const obj = readUserConfig(userId)
+  const priorDefault = typeof obj.defaultModel === 'string' && obj.defaultModel.length > 0
+    ? obj.defaultModel
+    : undefined
   const models = asRecord(obj.models)
   models[displayName] = model
   obj.models = models
-  if (setDefault) obj.defaultModel = displayName
+  // Auto-promote the first model to default: a user who adds their only model
+  // and sends a message would otherwise still hit the "no model configured"
+  // gate (defaultModel stays unset without --default). No default is strictly
+  // worse than this one, so adopt it. An explicit --default also wins.
+  const becameDefault = rest.includes('--default') || priorDefault === undefined
+  if (becameDefault) obj.defaultModel = displayName
   const guard = guardWritable(userId, obj)
   if (guard) return guard
+  // Persist tentatively so the probe can resolve a provider, then GATE on the
+  // connectivity check: a model that can't generate is not a successful add, so
+  // roll back the write (and any default we just adopted) on failure.
   writeUserConfig(userId, obj)
-  return `${t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel })}\n`
+  const resolved = resolveUserConfig(userId, ctx.config)
+  const probe = await probeModelConnectivity(resolved, displayName)
+  if (!probe.ok) {
+    const back = readUserConfig(userId)
+    const backModels = asRecord(back.models)
+    delete backModels[displayName]
+    back.models = backModels
+    if (back.defaultModel === displayName) {
+      if (priorDefault) back.defaultModel = priorDefault
+      else delete back.defaultModel
+    }
+    writeUserConfig(userId, back)
+    return `${t('config.backend.addFailedProbe', { name: displayName, detail: probe.detail })}\n`
+  }
+  const lines = [
+    t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel }),
+    t('config.backend.checkOk'),
+    becameDefault ? t('config.backend.nowDefault') : t('config.backend.setHint', { name: displayName }),
+  ]
+  return `${lines.join('\n')}\n`
 }
 
-function setBackend(userId: string, parts: string[]): string | null {
+/**
+ * Probe a registered model's connectivity with a tiny "reply ok" generation
+ * (8s timeout). Shared by `backend add` (auto-check) and `backend check`
+ * (manual re-probe). Never throws — returns a structured ok/detail result.
+ */
+async function probeModelConnectivityImpl(
+  resolved: ReturnType<typeof resolveUserConfig>,
+  displayName: string,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  try {
+    const entry = resolved.models[displayName]
+    if (!entry) return { ok: false, detail: `"${displayName}" is not a configured model` }
+    const { provider } = getProviderFor(resolved, displayName)
+    const signal = AbortSignal.timeout(MODEL_CHECK_TIMEOUT_MS)
+    for await (const event of provider.streamChat({
+      model: entry.upstreamModel,
+      system: 'You are a connectivity checker. Reply with ok.',
+      messages: [{ role: 'user', content: 'Reply with ok.' }],
+      tools: [],
+      maxTokens: 16,
+      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+      signal,
+    })) {
+      if (event.type === 'stop') break
+    }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function setBackend(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string | null> {
   const [displayName, ...rest] = parts
   if (!displayName) return null
   assertAlias(displayName)
@@ -648,6 +886,9 @@ function setBackend(userId: string, parts: string[]): string | null {
   if (!models[displayName]) {
     return `${t('config.backend.missing', { name: displayName })}\n`
   }
+  // Snapshot the prior entry + default so a failed re-check rolls back cleanly.
+  const priorModel = { ...asRecord(models[displayName]) }
+  const priorDefault = typeof obj.defaultModel === 'string' ? obj.defaultModel : undefined
   const next = { ...asRecord(models[displayName]) }
   const endpoint = flagValue(rest, '--endpoint')
   if (endpoint) {
@@ -685,12 +926,26 @@ function setBackend(userId: string, parts: string[]): string | null {
   if (rest.includes('--default')) obj.defaultModel = displayName
   const guard = guardWritable(userId, obj)
   if (guard) return guard
+  // Persist tentatively, re-check connectivity (set = update), and roll back to
+  // the prior entry + default if the updated model can't generate.
   writeUserConfig(userId, obj)
+  const resolved = resolveUserConfig(userId, ctx.config)
+  const probe = await probeModelConnectivity(resolved, displayName)
+  if (!probe.ok) {
+    const back = readUserConfig(userId)
+    const backModels = asRecord(back.models)
+    backModels[displayName] = priorModel
+    back.models = backModels
+    if (priorDefault) back.defaultModel = priorDefault
+    else delete back.defaultModel
+    writeUserConfig(userId, back)
+    return `${t('config.backend.setFailedProbe', { name: displayName, detail: probe.detail })}\n`
+  }
   return `${t('config.backend.updated', {
     name: displayName,
     endpoint: String(next.endpoint),
     upstream: String(next.upstreamModel),
-  })}\n`
+  })}\n${t('config.backend.checkOk')}\n`
 }
 
 function removeBackend(userId: string, parts: string[]): string | null {
@@ -727,26 +982,10 @@ async function checkBackend(
   const baseUrl = resolved.endpoints[entry.endpoint]?.baseUrl
   clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
   clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
-  try {
-    const { provider } = getProviderFor(resolved, displayName)
-    const signal = AbortSignal.timeout(MODEL_CHECK_TIMEOUT_MS)
-    for await (const event of provider.streamChat({
-      model: entry.upstreamModel,
-      system: 'You are a connectivity checker. Reply with ok.',
-      messages: [{ role: 'user', content: 'Reply with ok.' }],
-      tools: [],
-      maxTokens: 16,
-      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
-      signal,
-    })) {
-      if (event.type === 'stop') break
-    }
-    return `${t('config.model.checkOk')}\n`
-  } catch (error) {
-    return `${t('config.model.checkFail', {
-      detail: error instanceof Error ? error.message : String(error),
-    })}\n`
-  }
+  const probe = await probeModelConnectivity(resolved, displayName)
+  return probe.ok
+    ? `${t('config.model.checkOk')}\n`
+    : `${t('config.model.checkFail', { detail: probe.detail })}\n`
 }
 
 // ── shared helpers ───────────────────────────────────────────────────────────

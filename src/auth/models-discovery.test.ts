@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   discoverDefaultCodexSlug,
+  listCodexSlugs,
+  selectCodexSlugs,
   selectDefaultCodexSlug,
   type ModelsHttpFn,
 } from './codex/models.js'
@@ -157,5 +159,55 @@ describe('codex/models: discoverDefaultCodexSlug', () => {
       baseUrl: 'https://my-mirror/codex/',
     })
     assert.equal(sawUrl, 'https://my-mirror/codex/models?client_version=1.0.0')
+  })
+})
+
+describe('codex/models: selectCodexSlugs (pure)', () => {
+  it('returns all usable slugs best-first, capped at limit', () => {
+    const slugs = selectCodexSlugs({
+      models: [
+        { slug: 'gpt-5.2', priority: 10, supported_in_api: true, visibility: 'list' },
+        { slug: 'gpt-5.5', priority: 0, supported_in_api: true, visibility: 'list' },
+        { slug: 'gpt-5.4', priority: 2, supported_in_api: true, visibility: 'list' },
+      ],
+    })
+    assert.deepEqual(slugs, ['gpt-5.5', 'gpt-5.4', 'gpt-5.2'])
+  })
+
+  it('skips hidden / non-api slugs and honors the limit', () => {
+    const slugs = selectCodexSlugs(
+      {
+        models: [
+          { slug: 'a', priority: 0, supported_in_api: true, visibility: 'list' },
+          { slug: 'hidden', priority: 1, supported_in_api: true, visibility: 'hide' },
+          { slug: 'noapi', priority: 2, supported_in_api: false, visibility: 'list' },
+          { slug: 'b', priority: 3, supported_in_api: true, visibility: 'list' },
+        ],
+      },
+      1,
+    )
+    assert.deepEqual(slugs, ['a'])
+  })
+
+  it('returns [] on a malformed payload', () => {
+    assert.deepEqual(selectCodexSlugs(null), [])
+    assert.deepEqual(selectCodexSlugs({ models: 'nope' }), [])
+  })
+})
+
+describe('codex/models: listCodexSlugs', () => {
+  const fakeCreds = { accessToken: 'access', expiresAt: Date.now() + 3600_000, accountId: 'acc-1' }
+
+  it('returns the slug list on 200', async () => {
+    const http: ModelsHttpFn = async () => ({
+      statusCode: 200,
+      bodyText: JSON.stringify({ models: [{ slug: 'gpt-5', priority: 0 }, { slug: 'gpt-5-mini', priority: 1 }] }),
+    })
+    assert.deepEqual(await listCodexSlugs(fakeCreds, { http }), ['gpt-5', 'gpt-5-mini'])
+  })
+
+  it('returns null on a non-200 (caller renders a soft warning)', async () => {
+    const http: ModelsHttpFn = async () => ({ statusCode: 401, bodyText: 'unauthorized' })
+    assert.equal(await listCodexSlugs(fakeCreds, { http }), null)
   })
 })
