@@ -81,6 +81,10 @@ describe('/help surface-aware rendering', () => {
     assert.match(adminHelp, /\/admin/)
     const userHelp = await runHelp({ isChannel: true, isAdmin: false })
     assert.doesNotMatch(userHelp, /\/admin/)
+    // Non-admin /help MUST list the user-only /feedback; admin /help must not
+    // (admin can't run it). Regression for the dropped-/feedback bug.
+    assert.match(userHelp, /\/feedback/)
+    assert.doesNotMatch(adminHelp, /\/feedback/)
     // /help no longer lists any retired top-level name.
     for (const retired of ['/model', '/mode', '/rules', '/secret', '/mount', '/cost', '/user', '/ceiling', '/sandbox', '/feishu-workspace', '/auth']) {
       assert.doesNotMatch(adminHelp, new RegExp(`(^|\\s)${retired.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')}(\\s|:|$)`, 'm'), `${retired} should not appear in /help`)

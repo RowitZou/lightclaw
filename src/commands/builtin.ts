@@ -414,8 +414,18 @@ export async function runSandboxCommand(args: string, config: LightClawConfig): 
 async function formatHelp(ctx: ReplContext): Promise<string> {
   // The terminal console hides the agent-loop commands, so /help must too.
   const registry = createBuiltinReplRegistry({ includeChannelOnly: ctx.isChannel })
-  const all = registry.list(true)
-  const userCmds = all.filter(c => (c.visibleTo ?? 'all') === 'all')
+  // Scope the listing to the recipient: list(false) keeps user-only commands
+  // (/feedback) and drops admin-only (/admin); list(true) is the reverse. Hard-
+  // coding list(true) was what hid /feedback from a non-admin's /help.
+  const all = registry.list(ctx.isAdmin)
+  // Top section = commands the recipient can actually run that aren't admin-only:
+  // `all` (everyone) plus `user`-scoped commands (e.g. /feedback) when the
+  // recipient is a non-admin. Without the `user` branch, user-only commands fall
+  // into neither bucket and silently vanish from /help (the /feedback gap).
+  const userCmds = all.filter(c => {
+    const v = c.visibleTo ?? 'all'
+    return v === 'all' || (v === 'user' && !ctx.isAdmin)
+  })
   const adminCmds = all.filter(c => c.visibleTo === 'admin')
   // Layout differs by surface. The Feishu channel renders a structured
   // command-list card (column_set): command chips left, descriptions right,
