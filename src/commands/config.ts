@@ -619,12 +619,10 @@ function addBackend(userId: string, parts: string[]): string {
   const setDefault = rest.includes('--default')
 
   const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
-  // Default reasoning effort to `medium` when the operator doesn't specify one.
-  // Only the openai-auth (Codex/Responses) path puts reasoningEffort on the
-  // wire; openai / anthropic schemas store it but never send it, so a medium
-  // default can't 400 a non-reasoning model. `set --reasoning -` clears it back
-  // to the upstream default.
-  model.reasoningEffort = reasoning ?? 'medium'
+  // Only store an explicit reasoning effort; when omitted, the wire layer
+  // (api.ts) applies the `medium` default — single source of truth, no
+  // duplicate add-time store. (The card still notes "默认 medium".)
+  if (reasoning) model.reasoningEffort = reasoning
   if (maxOutput !== undefined) model.maxOutputTokens = maxOutput
 
   const obj = readUserConfig(userId)

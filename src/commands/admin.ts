@@ -506,10 +506,9 @@ function addAdminBackend(parts: string[], config: LightClawConfig): string {
   const setDefault = rest.includes('--default')
 
   const model: Record<string, unknown> = { endpoint, schema, upstreamModel }
-  // Default reasoning effort to `medium` (mirror of /config backend add). Only
-  // the openai-auth path sends reasoningEffort on the wire, so this can't 400 a
-  // non-reasoning model; `set --reasoning -` clears it to the upstream default.
-  model.reasoningEffort = reasoning ?? 'medium'
+  // Only store an explicit reasoning effort; the wire layer (api.ts) applies
+  // the `medium` default when omitted (mirror of /config backend add).
+  if (reasoning) model.reasoningEffort = reasoning
   if (maxOutput !== undefined) model.maxOutputTokens = maxOutput
   models[displayName] = model
   cfg.models = models
