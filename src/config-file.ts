@@ -158,7 +158,7 @@ export type ConfigFileShape = {
    *  schema lives on each model entry, not here. */
   endpoints?: Record<string, ConfigFileEndpoint>
   /** Display-name -> { endpoint alias, schema, upstreamModel }. The keys
-   *  are what users see in `/model`. */
+   *  are what users see in `/config model`. */
   models?: Record<string, ConfigFileModel>
   /** Display name picked at startup when no env / per-identity preference
    *  overrides. Must exist in `models`. */

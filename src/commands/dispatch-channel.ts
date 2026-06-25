@@ -9,7 +9,7 @@ import type { CommandListCardSpec, ReplContext, SlashBodyFormat } from './regist
 export type ChannelSlashResult = {
   handled: boolean
   output: string
-  // Defaults to 'plain_text' — the structured /help / /status / /sandbox
+  // Defaults to 'plain_text' — the structured /help / /admin sandbox
   // output contains angle brackets like `<prompt>` that lark_md would parse
   // as HTML tags and silently drop. A handler whose output is genuine markdown
   // opts into 'lark_md' so the runner routes it through the markdown reply

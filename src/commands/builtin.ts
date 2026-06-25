@@ -167,7 +167,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/system',
     usage: t('cmd.system.usage'),
     description: t('cmd.system.desc'),
-    // Same surface as the commands it absorbs: /secret and /mount are both
+    // Same surface as the commands it absorbs: /system key and /system mount are both
     // channelOnly (per-user channel state / live-session-only), so /system
     // must be too — otherwise terminal /help drifts (the absorbed nouns
     // would be unreachable there but the hub would still list them).
@@ -278,11 +278,11 @@ export async function formatCeilingList(): Promise<string> {
 }
 
 // ── Shared ops handler bodies (B4) ───────────────────────────────────────────
-// Extracted so the old top-level admin slashes (/ceiling /sandbox) and the new
+// Extracted so the old top-level admin slashes (/admin ceiling /admin sandbox) and the new
 // /admin <noun> hub call ONE implementation. Behavior + visible strings are
 // byte-identical to the pre-B4 inline handlers.
 
-/** `/ceiling` / `/admin ceiling` body. Bare → list; `<user> <mode>` → set. */
+/** `/admin ceiling` / `/admin ceiling` body. Bare → list; `<user> <mode>` → set. */
 export async function runCeilingCommand(args: string): Promise<string> {
   let parts = args.trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) {
@@ -310,7 +310,7 @@ export async function runCeilingCommand(args: string): Promise<string> {
   return `${t('ceiling.set', { name: name!, mode: modeToAlias(mode) })}\n`
 }
 
-/** `/sandbox` / `/admin sandbox` body. status / prefetch / reset. Needs a live
+/** `/admin sandbox` / `/admin sandbox` body. status / prefetch / reset. Needs a live
  *  Runtime (status) and the runtime pool (reset) — both reached via state.ts. */
 export async function runSandboxCommand(args: string, config: LightClawConfig): Promise<string> {
   const action = args.trim() || 'status'
@@ -650,8 +650,8 @@ type ParsedApproveArgs =
 
 function parseApproveArgs(args: string[]): ParsedApproveArgs {
   // Accepted forms:
-  //   /user approve <code>
-  //   /user approve <code> --as <name>
+  //   /admin pairing approve <code>
+  //   /admin pairing approve <code> --as <name>
   // --as overrides the auto-derived canonical name; useful for binding an IM
   // sender into an existing identity (typically the admin) instead of always
   // creating a fresh `<base>_<userId>` user.

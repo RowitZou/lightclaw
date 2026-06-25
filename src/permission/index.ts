@@ -47,7 +47,7 @@ export async function requestPermission(input: {
   // same tool call (audit / suggester) see the current set.
   //
   // Mode: the same staleness hits `permissionMode` on a different surface.
-  // `/mode bypassPermissions` (yolo) in one session writes the new mode to
+  // `/config mode bypassPermissions` (yolo) in one session writes the new mode to
   // preferences.json and to that session's snapshot only. A long-running
   // turn in *another* session keeps the old mode for its whole run — most
   // visibly a background-task fire, which snapshots the mode once at fire
@@ -138,7 +138,7 @@ export async function requestPermission(input: {
         // Collect for the high-risk → user card path in
         // scheduler.deliverCompletion. Identity deny rules (verdict
         // 'deny' below) are intentionally NOT collected — those are explicit
-        // /rules deny, not repairable by a card click.
+        // /config rule add --deny, not repairable by a card click.
         ctx.onPermissionDenial?.({
           toolName: tool.name,
           inputPreview,

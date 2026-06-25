@@ -67,7 +67,7 @@ const FATAL_MESSAGE_PATTERN = /Exceeded maximum tool turns/i
 // these carry no HTTP status / socket code — they would otherwise fall through
 // to the default-retry branch and surface to the user as "network jitter,
 // resend to retry", advice that cannot fix a credential problem. The real fix
-// is `/auth import codex` (or restoring the API key), so classify as fatal and
+// is `/admin endpoint add --type codex` (or restoring the API key), so classify as fatal and
 // let the channel render an actionable notice instead of the transient one.
 // 2026-06-14 dogfood: a Codex-pinned DM session bricked at boot (expired
 // tokens) and showed "本轮因网络抖动中断…可重发消息再试" for a config error.
@@ -314,7 +314,7 @@ const MODEL_OR_ENDPOINT_PATTERN =
   /\b404\b|model[_\s-]?not[_\s-]?found|no such model|unknown model|does not exist/i
 
 // Copy-layer ONLY: 404 / model-not-found means the configured model or
-// endpoint is unavailable, so the failure card should say "check /model and
+// endpoint is unavailable, so the failure card should say "check /config model and
 // endpoint config" rather than "internal error, resend". Deliberately NOT
 // wired into isTransientError — 404 is already fatal via FATAL_HTTP_STATUS and
 // the retry decision must not change (resending the same 404 is pointless).

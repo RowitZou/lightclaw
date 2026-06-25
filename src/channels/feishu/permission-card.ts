@@ -80,7 +80,7 @@ type PendingPermission = {
    * Cached at ask-time so the card builder and applyAction
    * downgrade path see a single, consistent classification. Re-deriving on
    * each call would risk drift if the rule set were mutated between render
-   * and click (e.g. `/rules ask` registered a new ask rule that turns
+   * and click (e.g. `/config rule add` registered a new ask rule that turns
    * a previously-accepted command into high-risk mid-flight).
    */
   highRisk: boolean

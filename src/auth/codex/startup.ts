@@ -28,7 +28,7 @@ import type { LightClawConfig, ModelEntry } from '../../config.js'
 //   so the caller surfaces it identically.
 // - The degrade only mutates the live config object; <home>/config.json
 //   is never written. Restart after fixing codex restores all models;
-//   `/auth import codex` followed by a fresh REPL boot does too.
+//   `/admin endpoint add --type codex` followed by a fresh REPL boot does too.
 
 const NO_MODELS_HINT = 'Define endpoints + models in <lightclawHome>/config.json.'
 
@@ -189,7 +189,7 @@ export async function ensureOAuthModelsUsable(
     // The in-memory config mutation above is discarded by the per-message
     // getConfig() disk reload; carry the verdict into model resolution so a
     // session/preference pinned to a disabled model falls back instead of
-    // hitting the credential error every turn. Cleared on `/auth import codex`.
+    // hitting the credential error every turn. Cleared on `/admin endpoint add --type codex`.
     setCredentialDegrade({
       disabledModels: outcome.disabledModels,
       fallbackModel: outcome.fallbackModel,

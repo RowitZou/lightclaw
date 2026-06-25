@@ -196,7 +196,7 @@ export function removeIdentityRule(input: {
 }
 
 /**
- * Drop all identity rules for a user. Used by `/rules revoke all`.
+ * Drop all identity rules for a user. Used by `/config rule rm all`.
  * No-op when the file does not exist.
  */
 export function clearIdentityRules(canonicalUser: string): void {

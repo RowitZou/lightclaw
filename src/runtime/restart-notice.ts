@@ -1,7 +1,7 @@
 /**
  * Model-facing notice for a runtime "generation" change — the backend
  * environment serving a session's exec / fs was replaced (worker respawn after
- * worker-lost, health-checker restart, or /mount swap). When that happens the
+ * worker-lost, health-checker restart, or /system mount swap). When that happens the
  * container-local state a long-running agent may rely on is gone: `/tmp` and
  * `/scratch` are wiped and any in-environment background process it started is
  * dead. The persistent workspace mount and re-provisioned command-line tools

@@ -1,6 +1,6 @@
 // Welcome / startup-failure cards pushed to a freshly approved user. Distinct
 // from the existing pairing welcome (sent BEFORE approval, asking the user to
-// hand a code to admin) — this one is sent AFTER /user approve, once the
+// hand a code to admin) — this one is sent AFTER /admin pairing approve, once the
 // per-user sandbox runtime (docker container or rlaunch worker) is ready to
 // serve tool calls. The user has been silent up to this point; this is the
 // first proactive push from the bot.

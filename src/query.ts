@@ -296,7 +296,7 @@ export async function query(params: QueryParams): Promise<{
   }
   const rolePolicy = resolveRolePolicy(params.role)
   // Re-resolved at the top of every turn (see the loop below) so a mid-turn
-  // `/model` — applied by slashDrain at a tool boundary, which mutates
+  // `/config model` — applied by slashDrain at a tool boundary, which mutates
   // config.defaultModel — takes effect for the rest of this query.
   let roleModel = resolveRoleModel(params.role, config)
   const currentSessionContext = getCurrentSessionContext()
@@ -648,7 +648,7 @@ export async function query(params: QueryParams): Promise<{
   for (let turn = 0; turn < maxTurns; turn += 1) {
     // Bail before starting a new turn if /stop aborted between turns.
     throwIfAborted(signal)
-    // Pick up a mid-turn `/model` switch: slashDrain at the previous tool
+    // Pick up a mid-turn `/config model` switch: slashDrain at the previous tool
     // boundary mutated config.defaultModel, so this turn streams under the
     // new model. No-op when nothing changed.
     roleModel = resolveRoleModel(params.role, config)
@@ -701,7 +701,7 @@ export async function query(params: QueryParams): Promise<{
       }
       // Hoisted above the try block so the transient-retry catch can call
       // `mainRoute.provider.recycleConnections?.()` to force a fresh TCP
-      // handshake on retry. Re-resolved each attempt because `/model`
+      // handshake on retry. Re-resolved each attempt because `/config model`
       // mid-turn slash could swap the provider between attempts.
       const mainRoute = getProviderFor(config, roleModel)
       try {
@@ -1147,7 +1147,7 @@ export async function query(params: QueryParams): Promise<{
           })
         }
       }
-      // Apply write slashes (/mode, /model, /rules allow, ...) queued
+      // Apply write slashes (/config mode, /config model, /config rule add, ...) queued
       // mid-turn before draining interjections, so a mode / model switch is
       // already in effect for the turn the drained interjections start.
       await invocation.slashDrain?.()

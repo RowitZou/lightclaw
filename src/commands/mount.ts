@@ -168,7 +168,7 @@ function formatMountList(mounts: readonly UserRlaunchMount[]): string {
   ].join('\n')
 }
 
-/** Parses `/mount add` arguments: any number of positional paths, plus an
+/** Parses `/system mount add` arguments: any number of positional paths, plus an
  *  optional `--ro` / `--rw` flag for mode (default `--ro`). Flag may appear
  *  before or after the paths. Conflicting flags (both --ro and --rw) and
  *  unknown `--*` flags produce explicit errors. Returns deduped, sorted

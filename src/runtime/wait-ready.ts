@@ -1,6 +1,6 @@
 // Polls Runtime.isAvailable() until ready or timeout. Used by paths that
 // need a strong "the sandbox can serve tool calls right now" signal — e.g.
-// /user approve pushes a welcome card to the freshly approved feishu user
+// /admin pairing approve pushes a welcome card to the freshly approved feishu user
 // only after this returns ok=true, so the user is not invited to chat
 // before the per-user docker container or rlaunch worker is actually up.
 //

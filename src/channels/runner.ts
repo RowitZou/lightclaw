@@ -612,7 +612,7 @@ export class ChannelRunner {
     // Pre-lock fast path: /stop must short-circuit, otherwise it queues
     // behind the very query it is trying to abort. Read-only slashes that
     // pull state from disk also bypass the lock so a long-running main
-    // turn does not freeze /help, /rules list, /cost, etc.
+    // turn does not freeze /help, /config rule, /admin cost, etc.
     const fastPath = parseFastPathSlash(message.text)
     if (fastPath === 'stop') {
       // Phase 32: /stop targets the sessionId of THIS inbound chat
@@ -705,8 +705,8 @@ export class ChannelRunner {
       }
       return
     }
-    // Slash commands carry user-to-system meta intent (e.g. /mode, /rules
-    // allow, /auth import, /user approve, /sandbox prefetch). Wrapping them
+    // Slash commands carry user-to-system meta intent (e.g. /config mode, /config rule
+    // allow, /admin endpoint add --type codex, /admin pairing approve, /admin sandbox prefetch). Wrapping them
     // as `<user-interjection>` is wrong: the LLM treats the text as natural
     // language and `dispatchChannelSlash` never runs, so the command is
     // effectively dropped. Read-only slashes and /stop already short-circuit
@@ -777,11 +777,11 @@ export class ChannelRunner {
       }
       return
     }
-    // Write slashes (/mode, /model, /rules allow, /auth import, ...) that
+    // Write slashes (/config mode, /config model, /config rule add, /admin endpoint add --type codex, ...) that
     // arrive while this sessionId's turn is already in flight are queued,
     // not stacked on the lock. The in-flight turn drains and applies them at
     // its next tool-call boundary (query.ts slashDrain), so a mid-turn
-    // `/mode auto` takes effect for the rest of the turn instead of waiting
+    // `/config mode auto` takes effect for the rest of the turn instead of waiting
     // for the whole turn to finish. /stop and read-only slashes already
     // short-circuited via parseFastPathSlash above, so this branch is
     // reached only by write / unknown slashes. When the session is idle they
@@ -904,9 +904,9 @@ export class ChannelRunner {
           cwd: workspace,
           channel: 'feishu',
           // Do not source model from session meta: that froze an old default
-          // across restarts and split the streamed model from the `/model`
+          // across restarts and split the streamed model from the `/config model`
           // display path. resetSessionContext now re-derives it each message as
-          // `prefs.model ?? config.defaultModel`; explicit `/model <m>` still
+          // `prefs.model ?? config.defaultModel`; explicit `/config model <m>` still
           // wins because it writes the per-identity preference.
           sessionId,
           resumedFrom: meta ? sessionId : null,
@@ -915,7 +915,7 @@ export class ChannelRunner {
           todos: meta?.todos,
           // Per-identity preferences (loaded inside resetSessionContext) win
           // over this argument — that aligns mode across the same user's
-          // sessions and preserves an explicit `/mode <m>` (which writes the
+          // sessions and preserves an explicit `/config mode <m>` (which writes the
           // preference, not just meta). permissionMode is deliberately NOT
           // sourced from session meta: freezing it there made a config /
           // ceiling change never reach an existing session. The effective
@@ -1057,7 +1057,7 @@ export class ChannelRunner {
         // an empty defaultModel — neither this user nor the admin has a usable
         // model. Reply a friendly notice and end the turn instead of letting
         // getMainRoleRoute / getProviderFor throw `Unknown model`. Placed AFTER
-        // slash dispatch so the user can still run `/model X` to fix it.
+        // slash dispatch so the user can still run `/config model X` to fix it.
         if (!appConfig.defaultModel) {
           // No usable model is a config gap the admin must act on (run
           // `/config endpoint` + `/config backend`) — orange, not the wathet
@@ -1378,7 +1378,7 @@ export class ChannelRunner {
                 },
                 // Apply write slashes queued while this turn was in flight.
                 // Invoked from query.ts at each tool-call boundary, inside
-                // this turn's SessionContext scope, so `/mode` / `/model`
+                // this turn's SessionContext scope, so `/config mode` / `/config model`
                 // mutate the live context and take effect for the turn's
                 // remaining tool calls.
                 slashDrain: async () => {
@@ -1856,7 +1856,7 @@ export class ChannelRunner {
    * Dispatch one write slash that was queued while this session's turn was in
    * flight, then post its output. Invoked from query.ts's slashDrain at a
    * tool-call boundary, so it runs inside the turn's SessionContext scope —
-   * `/mode` / `/model` mutate the live context and config and take effect for
+   * `/config mode` / `/config model` mutate the live context and config and take effect for
    * the turn's remaining tool calls. Best-effort: any failure is logged and
    * never propagated, so a slash error cannot mask the turn's own outcome.
    */
@@ -2042,7 +2042,7 @@ export class ChannelRunner {
     message: NormalizedChannelMessage,
     userId: string,
   ): Promise<void> {
-    // PR4: fold the per-user config merge layer so read slashes (/model, /status)
+    // PR4: fold the per-user config merge layer so read slashes (/config model, /help)
     // display the user's resolved model + lang, not the bare admin default.
     const config = resolveUserConfig(userId, getConfig())
     const prefs = loadIdentityPreferences(userId)
@@ -2057,8 +2057,8 @@ export class ChannelRunner {
     // diagnostics, not a hot-path user command). Other read slashes don't
     // need a runtime; the resulting `ctx.runtime` is undefined and any
     // accidental getRuntime() call would throw — which is what we want.
-    // (The bare `/sandbox` head was retired in B6, so only `/admin sandbox`
-    // remains; do NOT re-add a `/^\/sandbox/` branch.)
+    // (The bare `/admin sandbox` head was retired in B6, so only `/admin sandbox`
+    // remains; do NOT re-add a `/^\/admin sandbox/` branch.)
     const sandboxNeedsRuntime =
       /^\/admin\s+sandbox(?:\s|$)/.test(message.text.trimStart())
     const sandboxRuntime = sandboxNeedsRuntime
@@ -2096,7 +2096,7 @@ export class ChannelRunner {
 
     // In the graceful no-model state defaultModel is '' and getMainRoleRoute →
     // getProviderFor would throw. Read slashes don't actually call the provider;
-    // fall back to the unfiltered role catalog so /model / /status still render.
+    // fall back to the unfiltered role catalog so /config model / /help still render.
     const allFeishuTools = getAllTools('feishu', { runtimeDriver: config.runtime.driver })
     const tools = filterToolsByRoleVisibility(
       getMainRole(),
@@ -2106,7 +2106,7 @@ export class ChannelRunner {
     )
     let activeTools = tools
     const adminFlag = (await isAdmin(userId)) === true
-    // Load transcript from disk so /status (and any other read slash that
+    // Load transcript from disk so a read slash (anything that
     // wants ctx.messages.length) sees the persisted message count instead
     // of 0. Catches ENOENT for fresh users — empty array is fine.
     const messagesOnDisk = await loadTranscript(sessionId).catch(() => [])
@@ -2628,7 +2628,7 @@ async function encodeAttachmentsForInlineForSession(input: {
  *   counts and other transcript-derived fields stay accurate; live
  *   in-flight per-turn counters (current `totalInputTokens`) read 0,
  *   which is correct semantics for "between turns" pre-lock view.
- *   Excluded on purpose: /sandbox status (wants live runtime state).
+ *   Excluded on purpose: /admin sandbox status (wants live runtime state).
  * - null: not eligible — proceed to the lock path.
  */
 export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
@@ -2647,13 +2647,13 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   if (head === '/help') {
     return 'read'
   }
-  // PR5.9 B6: the old top-level names (/model /mode /cost /rules /auth /user
-  // /sandbox /feishu-workspace) are retired. They are no longer fast-pathed
+  // PR5.9 B6: the retired top-level command names (the old /model /mode /cost
+  // /rules /auth /user /sandbox /feishu-workspace etc.) are no longer fast-pathed
   // here — a retired name falls through to the lock path → dispatchChannelSlash
   // → the RENAMED hint. Their read surfaces now live under the /config /system
   // /admin hubs classified below.
   // /system hub (PR5.9 B1) — same read/write split convention as the
-  // sub-command slashes above. `/secret` and `/mount` themselves are NOT
+  // sub-command slashes above. `/system key` and `/system mount` themselves are NOT
   // fast-pathed (channelOnly writes, always lock path); for the /system
   // hub only the read nouns short-circuit:
   //   - bare `/system`           → overview (pure read)

@@ -6,7 +6,7 @@
  * to. That degrade only mutated the in-memory config object it was handed —
  * but `getConfig()` rebuilds the config from disk on every inbound message, so
  * the mutation never reached the per-message model-resolution path. A session
- * (or `/model` preference) pinned to a disabled model therefore kept hitting
+ * (or `/config model` preference) pinned to a disabled model therefore kept hitting
  * the provider's "No credentials stored" error every turn instead of falling
  * back, and the daemon's own degrade was effectively cosmetic.
  *
@@ -17,7 +17,7 @@
  * no-op on the normal path; it only ever activates during a credential outage
  * (expired/missing OAuth tokens at boot).
  *
- * Cleared on a successful `/auth import codex` so disabled models come back
+ * Cleared on a successful `/admin endpoint add --type codex` so disabled models come back
  * without a daemon restart.
  */
 

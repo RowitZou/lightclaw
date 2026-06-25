@@ -101,10 +101,10 @@ const UserConfigOverrideSchema = z
     // identity/paths.ts:userWorkspaceOverride; it is declared here only so the
     // strict schema does not reject a config.json that carries it.
     workspace: z.string().min(1).optional(),
-    // Declared for schema completeness. /mode is NOT moved to config.json in
+    // Declared for schema completeness. /config mode is NOT moved to config.json in
     // this PR — permissionMode keeps living in preferences.json with its
     // live-read semantics. resolveUserConfig may carry it through but must not
-    // change how /mode persists or how permission/index reads it.
+    // change how /config mode persists or how permission/index reads it.
     permissionMode: z.enum(['default', 'plan', 'acceptEdits', 'bypassPermissions']).optional(),
     // PR5 BYO registries. UNIONed onto the admin base in resolveUserConfig.
     endpoints: z.record(z.string().min(1), UserEndpointSchema).optional(),
@@ -146,7 +146,7 @@ export function parseUserConfigOverride(
  * Read + safe-parse the per-user config.json. Missing file or any parse /
  * validation failure degrades to `{}` (mirrors the workspace / preferences
  * fail-soft policy: a corrupt user config must never crash model resolution —
- * the admin default still applies, and `/config` / `/model` rewrite the file).
+ * the admin default still applies, and `/config` / `/config model` rewrite the file).
  */
 export function loadUserConfigOverride(canonicalUser: string): UserConfigOverride {
   const target = userConfigPath(canonicalUser)
@@ -391,7 +391,7 @@ export function resolveUserConfig(
 // Consolidated here so there is exactly one writer of users/<u>/config.json;
 // commands/config.ts imports these. Raw / key-preserving / atomic 0600 — we
 // intentionally do NOT round-trip through the strict schema on write so any key
-// we do not own (a future PR's field) survives a `/model` / `/config` edit.
+// we do not own (a future PR's field) survives a `/config model` / `/config` edit.
 
 export function readUserConfig(canonicalUser: string): Record<string, unknown> {
   let raw: string

@@ -99,7 +99,7 @@ export type ReplCommand = {
   // ShowSlashCatalog falls back to the one-line `usage` field.
   agentUsage?: string
   // Commands that only make sense inside a live channel session: an in-flight
-  // turn to abort (/stop), or per-user channel state (/secret, /mount). They
+  // turn to abort (/stop), or per-user channel state (/system key, /system mount). They
   // have no meaning in the terminal admin console (which never runs a query),
   // so `createBuiltinReplRegistry({ includeChannelOnly: false })` drops them.
   channelOnly?: boolean

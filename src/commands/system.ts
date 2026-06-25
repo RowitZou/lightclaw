@@ -75,13 +75,13 @@ type SystemCommandDeps = {
 
 /**
  * `/system <noun> [verb] [args]` — the runtime-resource operation hub
- * (PR5.9 checkpoint B1). It additively absorbs `/secret` (noun `key`) and
- * `/mount` (noun `mount`) by stripping the noun token and delegating the
+ * (PR5.9 checkpoint B1). It additively absorbs `/system key` (noun `key`) and
+ * `/system mount` (noun `mount`) by stripping the noun token and delegating the
  * remaining arg string to the existing runners — same return shape, no
  * behavior change. `data` (import/export) is registered as a grammar stub
  * here; its real logic is owned by PR7.
  *
- * `/secret` and `/mount` stay registered in parallel (retired in B6), so
+ * `/system key` and `/system mount` stay registered in parallel (retired in B6), so
  * this is a strict superset surface, not a replacement.
  */
 export async function runSystemCommand(

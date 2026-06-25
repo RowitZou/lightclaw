@@ -139,7 +139,7 @@ async function runApprovalPreheat(
   // Eager Feishu cloud workspace create. The lazy path inside the agent
   // tools (resolveCurrentFeishuWorkspace) probes the workspace on every
   // tool call, so creating it once here at pairing-approval time amortizes
-  // away the first-use latency and lets admin `/feishu-workspace list`
+  // away the first-use latency and lets admin `/admin feishu-drive list`
   // see the binding immediately. Fire-and-forget — best-effort, never
   // blocks the welcome push. Folder name is `name` (canonical user), not
   // the Feishu open_id, so admin and the user both see a recognizable

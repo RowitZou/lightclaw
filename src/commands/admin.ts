@@ -387,7 +387,7 @@ function addAdminEndpoint(parts: string[], config: LightClawConfig): string {
   if (!parsed.ok) return `${parsed.error}\n`
 
   if (parsed.type === 'codex') {
-    // Replaces `/auth import codex`: read the codex auth.json at --auth-path
+    // Replaces `/admin endpoint add --type codex`: read the codex auth.json at --auth-path
     // into the GLOBAL codex token file (<home>/auth/codex.json), then record
     // the OAuth endpoint in the admin registry (auth: 'codex-oauth').
     try {

@@ -36,7 +36,7 @@ export async function getCredentials(name: string): Promise<AuthCredentials> {
   return getAuthProvider(name).getCredentials()
 }
 
-/** Names of all registered providers — for `/auth list`. */
+/** Names of all registered providers — for `/admin endpoint`. */
 export function listAuthProviderNames(): string[] {
   return [...registry.keys()].sort()
 }

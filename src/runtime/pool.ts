@@ -97,7 +97,7 @@ export class RuntimePool {
     return result
   }
 
-  /** Atomic /mount restart: build a new RlaunchRuntime with the current
+  /** Atomic /system mount restart: build a new RlaunchRuntime with the current
    *  on-disk config (mount-aware deploymentHash, fresh extraMounts list),
    *  install it as the pool entry for this user, and mark the previous one
    *  retired so any AsyncLocalStorage reference held by a concurrent mid-
@@ -381,7 +381,7 @@ export class RuntimePool {
     // kubelet `hostPath type check` (5 min ForceGC, then a fresh failed
     // worker) when the GPFS dir is missing — the channel runner's
     // resetSessionContext mkdir doesn't cover preheat-on-approval /
-    // preheat-on-startup / `/sandbox prefetch`, all of which acquire a
+    // preheat-on-startup / `/admin sandbox prefetch`, all of which acquire a
     // runtime without going through that path.
     mkdirSync(workspaceHostPath, { recursive: true, mode: 0o700 })
     if (config.runtime.backend === 'local') {

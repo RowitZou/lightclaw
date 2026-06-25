@@ -62,7 +62,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     isChannel: false,
     getActiveTools: () => [],
     setActiveTools: () => {},
-    // No transcript / session meta to persist — /model and /mode already
+    // No transcript / session meta to persist — /config model and /config mode already
     // write their durable state through setIdentityPreference. Kept on the
     // context only because the shared slash handlers expect the hook.
     persistMeta: async () => {},
@@ -80,7 +80,7 @@ export async function startRepl(params: ReplParams): Promise<void> {
     ))
     output.write(chalk.gray(`${t('banner.hint')}\n`))
     // High-value runtime signal: surface unhandled pairing requests up front
-    // so the admin doesn't have to poll /user pending to discover them.
+    // so the admin doesn't have to poll /admin pairing to discover them.
     const pending = await listPending().catch(() => [])
     if (pending.length > 0) {
       output.write(chalk.yellow(`${t('banner.pending', { count: pending.length })}\n`))

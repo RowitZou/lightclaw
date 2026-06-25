@@ -104,7 +104,7 @@ export function createFeishuChannel(config: FeishuChannelConfig): Channel {
       pendingDrainer.start()
 
       // Register the sender on a module-level slot so paths outside the
-      // channel runner (notably /user approve in commands/builtin.ts) can
+      // channel runner (notably /admin pairing approve in commands/builtin.ts) can
       // push proactive cards. Cleared in stop() so a restart re-registers.
       registerFeishuSender(sender)
       registerFeishuClient(client)
@@ -348,7 +348,7 @@ async function fetchBotSelfInfo(
     // pass — accept either shape so unwrapping never silently drops the
     // open_id we need to power Phase 26 mention gating + the bot-mention
     // strip path. Pre-fix dogfood symptom: stderr "code=0; mention gating
-    // disabled", botSelf.openId undefined, and `@LightClaw /model` in
+    // disabled", botSelf.openId undefined, and `@LightClaw /config model` in
     // groups never reaches dispatchChannelSlash because parseMessageContent
     // can't strip the bot mention.
     const envelope = resp as {

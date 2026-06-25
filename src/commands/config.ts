@@ -215,7 +215,7 @@ export async function runConfigCommand(
 
 // ── /config model — SCALAR-ONLY (B3, design F.2) ─────────────────────────────
 //
-// `model` is now purely the current-model scalar (←old `/model`):
+// `model` is now purely the current-model scalar (←old `/config model`):
 //   `/config model`               list selectable models + current (read)
 //   `/config model set <name>`    switch current model
 //   `/config model reset`         drop the per-user override (fall back)
@@ -815,9 +815,9 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-// ── /config model — SCALAR face (current-model switch; ←old `/model`) ─────────
+// ── /config model — SCALAR face (current-model switch; ←old `/config model`) ─────────
 //
-// Ported verbatim from builtin.ts's `/model` handler so the old top-level name
+// Ported verbatim from builtin.ts's `/config model` handler so the old top-level name
 // and this noun stay byte-identical. Live `setModel()` updates THIS turn's
 // model; `setUserConfigField(user, 'defaultModel', ...)` persists the choice
 // per-user (the PR4 anti-pollution fix — never mutate the shared in-memory
@@ -907,7 +907,7 @@ async function runConfigModelScalar(
   return `${t('model.set', { name: model })}${clearCache ? t('model.clearCache.alsoCleared') : ''}\n`
 }
 
-// ── /config mode — scalar permission posture (←old `/mode`) ───────────────────
+// ── /config mode — scalar permission posture (←old `/config mode`) ───────────────────
 async function runConfigMode(
   parts: string[],
   ctx: ConfigCommandContext,
@@ -936,7 +936,7 @@ async function runConfigMode(
     return `${t('mode.reset')}\n`
   }
 
-  // Accept both `set <mode>` (noun-verb) and a bare `<mode>` (old `/mode <m>`).
+  // Accept both `set <mode>` (noun-verb) and a bare `<mode>` (old `/config mode <m>`).
   const modeText = verb === 'set' ? (parts[1] ?? '') : verb
   const mode = parseMode(modeText)
   if (!mode) {
@@ -1063,7 +1063,7 @@ async function runConfigLane(
   return `${t('config.lane.set', { bucket, model })}\n`
 }
 
-// ── /config rule — per-user permission rules (←old `/rules`) ──────────────────
+// ── /config rule — per-user permission rules (←old `/config rule`) ──────────────────
 //
 // Verb mapping per design F.5: `revoke`→`rm`, `ask`→`add` (default ask rule).
 // `add <pattern> [--deny]` registers an ask rule (or a deny rule with --deny).

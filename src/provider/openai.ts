@@ -250,7 +250,7 @@ export function mapUsage(usage: unknown): UsageStats {
   // `cached_tokens` is a SUBSET of it (not a disjoint bucket). Anthropic's
   // canonical `input_tokens` instead EXCLUDES cache reads, with the three
   // buckets (input + cache_read + cache_creation) summing to the total. Every
-  // downstream consumer (`/cost` totals, TaskRun usage rollups, the task-card
+  // downstream consumer (`/admin cost` totals, TaskRun usage rollups, the task-card
   // cache-hit rate) assumes the disjoint Anthropic convention. So subtract the
   // cached portion here to normalize `input_tokens` to fresh-only; otherwise
   // the cached tokens are counted twice (once inside `input_tokens`, once in

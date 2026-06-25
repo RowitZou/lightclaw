@@ -138,7 +138,7 @@ async function performWorkspaceDelete(
   } catch (error) {
     // Feishu rejected the delete (folder gone / permission revoked / scope drift).
     // Keep the identity binding so admin can investigate before we abandon it,
-    // and surface the failure in audit jsonl so a later /feishu-workspace orphans
+    // and surface the failure in audit jsonl so a later /admin feishu-drive orphans
     // sweep can correlate.
     await recordFeishuWriteAudit({
       at: new Date().toISOString(),

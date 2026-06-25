@@ -142,7 +142,7 @@ export class RlaunchRuntime implements Runtime {
   private lastKnownState: ProcessState = 'unknown'
   private inflightStart: Promise<void> | null = null
   /** Set to true via `markRetired()` when this runtime has been swapped out
-   *  of `RuntimePool` (typically by /mount applying a new mount config). The
+   *  of `RuntimePool` (typically by /system mount applying a new mount config). The
    *  resolver, when set, returns the user's current pool entry — almost
    *  always the successor `RlaunchRuntime`. All public methods that touch
    *  cluster state check this flag and forward to the successor when present
@@ -292,7 +292,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /** Forward path policy too — RO/RW mode bits on extra mounts diverge between
-   *  generations after a /mount add --rw or --ro toggle, and `runtime.paths`
+   *  generations after a /system mount add --rw or --ro toggle, and `runtime.paths`
    *  is the authoritative source the PathPolicy gate consults for write
    *  rejection. Stale callers using OLD.paths would otherwise enforce stale
    *  semantics. */
@@ -305,7 +305,7 @@ export class RlaunchRuntime implements Runtime {
    *  methods (`exec`, `ensureRunning`, `start`, `isAvailable`, `isRunning`,
    *  the `data` / `fs` / `paths` getters) forward to that successor when set.
    *
-   *  Called by `RuntimePool.swapRlaunchRuntime()` (the /mount restart path)
+   *  Called by `RuntimePool.swapRlaunchRuntime()` (the /system mount restart path)
    *  and by `RuntimePool.remove()` / `purgeUser()` for graceful degradation
    *  of stale ALS references during admin tear-down. Idempotent: re-marking
    *  is a no-op except for refreshing the resolver. */
@@ -319,7 +319,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /** The worker name is the generation token: it is freshly allocated on every
-   *  spawn (respawn after worker-lost, health-checker restart, or /mount swap),
+   *  spawn (respawn after worker-lost, health-checker restart, or /system mount swap),
    *  so a change signals that the worker pod — and its container-local /tmp,
    *  /scratch, and any in-worker background process — was replaced. Forwards to
    *  the successor when retired so a stale ALS reference reads the live worker
@@ -331,7 +331,7 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /** Snapshot of the per-user worker readiness tracker. Exposed so the
-   *  /sandbox status admin command can render rlaunch-flavored health
+   *  /admin sandbox status admin command can render rlaunch-flavored health
    *  (worker state / cluster image / schedule duration / last error)
    *  instead of the docker-flavored ImageReadinessTracker that doesn't
    *  apply to this backend. */
@@ -596,7 +596,7 @@ export class RlaunchRuntime implements Runtime {
     // restarted" prefix. Restart signalling is unified in the model-facing
     // <system-reminder> driven by `currentGeneration()` change detection
     // (`restart-notice.ts` + query.ts), which covers every restart path
-    // (worker-lost respawn, health-checker, /mount swap) consistently instead
+    // (worker-lost respawn, health-checker, /system mount swap) consistently instead
     // of polluting one unlucky command's stderr on only this path.
     return this.runBrainctlExec(wrapped)
   }

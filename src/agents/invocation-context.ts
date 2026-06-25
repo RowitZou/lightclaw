@@ -68,7 +68,7 @@ export type InvocationContext = {
   channelContext?: string
   interjectionDrain?: () => Promise<InterjectionEntry[]> | InterjectionEntry[]
   /**
-   * Drain and apply write-slash commands (`/mode`, `/model`, `/rules allow`,
+   * Drain and apply write-slash commands (`/config mode`, `/config model`, `/config rule add`,
    * ...) that arrived while this turn was in flight. query.ts invokes it at
    * every tool-call boundary so a mid-turn slash takes effect for the turn's
    * remaining tool calls instead of waiting for the whole turn to finish.

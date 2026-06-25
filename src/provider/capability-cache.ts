@@ -102,7 +102,7 @@ function endpointFingerprint(baseUrl: string | undefined): string {
  *  old `enabled:false` cache entry, so the new endpoint never got its
  *  multimodal pre-charge re-run and the main loop quietly fell back to
  *  text. Adding the fingerprint produces a fresh key on repoint; the old
- *  entry orphans on disk (harmless) until `/model --clear-cache` or
+ *  entry orphans on disk (harmless) until `/config model --clear-cache` or
  *  the legacy-shape drop on load.
  *
  *  Why the alias is still in the key: same upstream model behind two

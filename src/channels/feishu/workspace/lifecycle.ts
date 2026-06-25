@@ -59,7 +59,7 @@ export async function getOrCreateWorkspaceRoot(
     // the recreated root orphaned the original folder along with every share
     // permission the user had granted to it. We now persist-or-warn instead:
     // if the folder is truly deleted, the next real `listFolder` call will
-    // surface that to the agent / admin, and `/feishu-workspace status` can
+    // surface that to the agent / admin, and `/admin feishu-drive status` can
     // confirm and let admin pick the right recovery (override config or
     // accept a new root deliberately). Auto-recreation is reserved for the
     // cold-start case (no on-disk record).
@@ -91,7 +91,7 @@ export async function getOrCreateUserWorkspace(
     // user folder on probe failure. Transient 4xx would orphan the user's
     // private data + share grants. If the folder is truly gone, the next
     // real listFolder will report it cleanly and admin can use
-    // `/feishu-workspace orphans` / `delete` for explicit recovery.
+    // `/admin feishu-drive orphans` / `delete` for explicit recovery.
     //
     // Re-assert the owner grant on every preheat path. The original create
     // branch's grant is warn-only, so a single transient 4xx at user-folder

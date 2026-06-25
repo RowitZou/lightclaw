@@ -330,7 +330,7 @@ export class FeishuSender {
   }
 
   // Proactive push to a feishu open_id. Used when there's no inbound message
-  // to reply against — e.g. /user approve in commands/builtin.ts pushes a
+  // to reply against — e.g. /admin pairing approve in commands/builtin.ts pushes a
   // welcome card to a freshly approved user, who is offline at approval time.
   // The Lark IM API auto-routes open_id sends to the bot↔user p2p chat.
   // Returns { chatId } when the platform reports it. Post-approval replay

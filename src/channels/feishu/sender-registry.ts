@@ -1,6 +1,6 @@
 // Module-level singleton handle to the active FeishuSender. Set by
 // feishu-channel.start() and cleared on stop(). Read by code that lives
-// outside the channel runner (e.g. /user approve in commands/builtin.ts —
+// outside the channel runner (e.g. /admin pairing approve in commands/builtin.ts —
 // admin's slash command runs in its own state, but needs to push a welcome
 // card to a freshly approved user, which only the channel-owned sender can
 // deliver).

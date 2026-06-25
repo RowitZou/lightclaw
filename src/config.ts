@@ -363,11 +363,11 @@ export type LightClawConfig = {
   /** User-facing language for slash output, feishu cards, banners, error
    *  notices. Stderr logging stays English regardless. Default: cn. */
   lang: 'cn' | 'en'
-  /** Phase 5 canonical model selector. `/model` writes here; every role and
+  /** Phase 5 canonical model selector. `/config model` writes here; every role and
    *  tool module falls back to this value. */
   defaultModel: string
   /** Display-name -> { endpoint, schema, upstreamModel }. Source of truth
-   *  for which models the user can pick via `/model`. */
+   *  for which models the user can pick via `/config model`. */
   models: Record<string, ModelEntry>
   /** Named endpoint pool (apiKey + baseUrl). Models reference these by
    *  alias. */

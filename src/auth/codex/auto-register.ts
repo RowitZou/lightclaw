@@ -8,7 +8,7 @@ import {
 import { lightclawHome } from '../../paths.js'
 
 // Auto-register Codex endpoint + model into <home>/config.json after a
-// successful `/auth import codex`. Mutates only the keys we care about,
+// successful `/admin endpoint add --type codex`. Mutates only the keys we care about,
 // preserves everything else verbatim. Atomic .tmp + rename so a crash
 // mid-write cannot leave config.json in a half-state.
 //
@@ -17,7 +17,7 @@ import { lightclawHome } from '../../paths.js'
 // per-user config the user added manually. We round-trip the raw JSON.
 
 // Three reasoning tiers exposed as separate display names so the user can
-// pick effort directly via /model — the same upstream slug is used for all
+// pick effort directly via /config model — the same upstream slug is used for all
 // three; only `reasoningEffort` differs. Display names are version-stable
 // (no embedded "gpt-5" / "gpt-6"); upstream is whatever live discovery
 // (see ./models.ts) returns at import time, falling back to the
@@ -63,9 +63,9 @@ function configPath(): string {
  *  individually, so a partial config (some tiers added, some missing)
  *  recovers cleanly on re-import.
  *
- *  Legacy display names from earlier `/auth import codex` runs (e.g.
+ *  Legacy display names from earlier `/admin endpoint add --type codex` runs (e.g.
  *  `gpt-5-codex`) are NOT touched. Users keep them by inertia until they
- *  manually rename or `/auth logout codex --purge` and re-import.
+ *  manually rename or `/admin endpoint rm` and re-import.
  *
  *  `upstreamModel` lets the caller plug in a slug it just discovered
  *  from the Codex backend's live `/models` endpoint; absent or empty
@@ -124,7 +124,7 @@ export function autoRegisterCodex(
 }
 
 /** Remove the auto-registered codex endpoint + every model that points at
- *  it. Used by `/auth logout codex --purge`. Returns nothing — it's a
+ *  it. Used by `/admin endpoint rm`. Returns nothing — it's a
  *  best-effort cleanup; if the user manually added a different model
  *  pointing at the codex endpoint, that one is also dropped (we cannot
  *  know whether it was admin-added or auto-added). */

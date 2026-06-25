@@ -1,8 +1,8 @@
 import type { NormalizedChannelMessage } from '../types.js'
 
 /**
- * Per-sessionId FIFO of write-slash commands (`/mode`, `/model`, `/rules
- * allow`, `/auth import`, ...) that arrived while that sessionId's main turn
+ * Per-sessionId FIFO of write-slash commands (`/config mode`, `/config model`, `/config rule
+ * allow`, `/admin endpoint add --type codex`, ...) that arrived while that sessionId's main turn
  * was already in flight.
  *
  * Bare chat goes to `channelInterjectionQueue`; slashes cannot. A slash
@@ -12,7 +12,7 @@ import type { NormalizedChannelMessage } from '../types.js'
  * only ran after the whole in-flight turn finished.
  *
  * The in-flight turn now drains this queue at every tool-call boundary via
- * the `slashDrain` invocation callback in `query.ts`, so a mid-turn `/mode
+ * the `slashDrain` invocation callback in `query.ts`, so a mid-turn `/config mode
  * auto` takes effect for the turn's remaining tool calls. Anything still
  * queued after the query returns (a slash that landed during the final
  * no-tool turn, or during the post-query sendReply / typing / background

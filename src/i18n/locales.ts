@@ -162,16 +162,14 @@ export const LOCALES = {
     'admin.lane.usage': '用法：/admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
     'admin.writeRejected': '错误：该改动会让公共配置无法通过启动校验（{detail}）；未写入。',
 
-    // ---- /auth (admin) ----
-
-    // ---- /status ----
+    // ---- identity marker + dispatch chain errors ----
     'status.identitiesAdmin': ' *admin',
     'chain.error.too_deep': 'Dispatch 链深度已达上限({depth}/{maxDepth}),无法再向下委派。请减少嵌套层级或将子任务直接归并到当前 hop。',
     'chain.error.cycle': 'Dispatch 链中已有同名 role({role}),不允许同 role 重入(防止循环委派)。请改用其他 role 或在当前 hop 完成任务。',
     'chain.error.monotonic_violation': 'Dispatch 子工具集 {child} 不是父工具集 {parent} 的子集,违反 privilege monotonic 约束。这通常是 framework bug,请报告 admin。',
     'chain.error.role_not_reachable': '当前 role({caller})不能 dispatch {callee}。允许的 reachable roles:{reachable}。',
 
-    // ---- /mode ----
+    // ---- /config mode ----
     'mode.menuTitle': '**权限模式**',
     'mode.currentMarker': '  ← 当前',
     'mode.aboveCeilingMarker': '  （超出 ceiling）',
@@ -194,7 +192,7 @@ export const LOCALES = {
     'mode.yolo.recap':
       '  · 全部工具 → 静默放行\n  · 仅 ask / deny 规则可覆盖（如 Bash(rm:*)）\n  · 高风险操作不可逆，用前请确认作用域',
 
-    // ---- /model ----
+    // ---- /config model ----
     'model.current': '**当前模型**：{name}',
     'model.available': '**可选**：{list}',
     'model.unknown': '未知模型：{name}',
@@ -208,7 +206,7 @@ export const LOCALES = {
     'model.none.noticeBody':
       '尚未配置可用模型。请先用 /config endpoint 配置模型服务的地址与密钥，再用 /config backend 把模型接入可用列表。使用 /config 查看完整配置帮助。',
 
-    // ---- /rules ----
+    // ---- /config rule ----
     'rules.empty': '当前用户没有持久化的权限规则。',
     'rules.listTitle': '当前用户的权限规则：',
     'rules.listFooter': '\n用 /config rule rm <n> 删除单条，/config rule rm all --y 全清。\n（每次写入后编号会变，撤销前请重新 list）\n',
@@ -221,7 +219,7 @@ export const LOCALES = {
     'rules.askRegistered': '已添加确认规则：{rule}（优先级高于允许规则；已保存）',
     'rules.usage': '用法：/config rule [list | rm <n> | rm all --y | add <rule>]',
 
-    // ---- /ceiling ----
+    // ---- /admin ceiling ----
     'ceiling.listTitle': '权限上限：',
     'ceiling.listFooter': '\n设置：/admin ceiling set <user> <read|ask|auto|yolo>\n',
     'ceiling.usage': '用法：\n  /admin ceiling                       （列出全部）\n  /admin ceiling set <user> <read|ask|auto|yolo>',
@@ -230,7 +228,7 @@ export const LOCALES = {
     'ceiling.set': '权限上限：{name} -> {mode}',
     'ceiling.empty': '当前没有任何身份。',
 
-    // ---- /user (admin) ----
+    // ---- /admin user (admin) ----
     'user.usage.localHeader': '用法（本机单用户模式，仅可绑定 admin "{admin}"）：',
     'user.usage.header': '用法：',
     'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # 本机模式建议 --as {admin}，把 IM 身份并入 admin 而非新建 user',
@@ -281,7 +279,7 @@ export const LOCALES = {
     'feedback.thanks': '收到，已转发给管理员。',
     'feedback.fail': '转发失败（{detail}），请直接联系管理员。',
 
-    // ---- /cost ----
+    // ---- /admin cost ----
     'cost.empty': '本月暂无用量记录。',
     'cost.thisMonth': '本月：{total} tok（cache_read：{cacheRead}，cache_create：{cacheCreate}）',
     'cost.byModel': '  按 model：',
@@ -289,7 +287,7 @@ export const LOCALES = {
     'cost.freshSubset': '  Fresh 子项：{tok} tok（{percent}%）',
     'cost.adminOnlyHint': '/admin cost 仅 admin 可用。',
 
-    // ---- /sandbox ----
+    // ---- /admin sandbox ----
     'sandbox.title': '沙箱镜像状态：',
     'sandbox.titleRlaunch': '沙箱状态：',
     'sandbox.titleLocal': '沙箱状态：',
@@ -603,7 +601,7 @@ export const LOCALES = {
       '  群聊：把机器人拉进群\n\n' +
       '下面把 App ID / App Secret 填进来：',
 
-    // ---- /secret (channel) ----
+    // ---- /system key (channel) ----
     'secret.usage':
       '用法：\n' +
       '  /system key list\n' +
@@ -688,7 +686,7 @@ export const LOCALES = {
     'system.data.warning': '注意：{warning}',
     'system.data.error': '操作失败：{error}',
 
-    // ---- /mount (channel) ----
+    // ---- /system mount (channel) ----
     'mount.usage':
       '用法：\n' +
       '  /system mount\n' +
@@ -906,7 +904,7 @@ export const LOCALES = {
     'config.lane.reset': '已清除 {bucket} 的设置（改用默认模型）。',
     'config.lane.usage': '用法：/config lane [set <worker|system|image> <model> | reset <worker|system|image>]',
 
-    // ---- /feishu-workspace (admin) ----
+    // ---- /admin feishu-drive (admin) ----
     'feishuWs.usage': '用法：/admin feishu-drive [status | list | orphans | rm <canonical> --y]',
     'feishuWs.status.title': '飞书云空间：',
     'feishuWs.status.root': '  root: {token}',
@@ -1097,16 +1095,14 @@ export const LOCALES = {
     'admin.lane.usage': 'Usage: /admin lane [set <worker|system|image> <model> | reset <worker|system|image>]',
     'admin.writeRejected': 'Error: this change would make the public config fail boot validation ({detail}); not written.',
 
-    // ---- /auth (admin) ----
-
-    // ---- /status ----
+    // ---- identity marker + dispatch chain errors ----
     'status.identitiesAdmin': ' *admin',
     'chain.error.too_deep': 'Dispatch chain depth limit reached ({depth}/{maxDepth}). Cannot delegate further. Reduce nesting or merge the sub-task into the current hop.',
     'chain.error.cycle': 'Role {role} already in dispatch chain — same-role re-entry is rejected (cycle prevention). Use a different role or finish the work in the current hop.',
     'chain.error.monotonic_violation': 'Dispatched allowedTools {child} is not a subset of parent {parent}, violating privilege monotonic constraint. This is likely a framework bug — please report to admin.',
     'chain.error.role_not_reachable': 'Role {caller} cannot dispatch {callee}. Reachable roles: {reachable}.',
 
-    // ---- /mode ----
+    // ---- /config mode ----
     'mode.menuTitle': '**Modes**',
     'mode.currentMarker': '  ← current',
     'mode.aboveCeilingMarker': '  (above ceiling)',
@@ -1129,7 +1125,7 @@ export const LOCALES = {
     'mode.yolo.recap':
       '  · All tools: allowed silently\n  · Only ask / deny rules override (e.g. Bash(rm:*))\n  · High-risk ops are irreversible — double-check scope',
 
-    // ---- /model ----
+    // ---- /config model ----
     'model.current': '**Current model**: {name}',
     'model.available': '**Available**: {list}',
     'model.unknown': 'unknown model: {name}',
@@ -1143,7 +1139,7 @@ export const LOCALES = {
     'model.none.noticeBody':
       'No model is configured yet. First configure a model service (URL + key) with /config endpoint, then add a model to the usable list with /config backend. Use /config to see the full configuration guide.',
 
-    // ---- /rules ----
+    // ---- /config rule ----
     'rules.empty': 'No persisted permission rules for this user.',
     'rules.listTitle': 'Persisted permission rules (this user):',
     'rules.listFooter': '\nUse /config rule rm <n> to remove one, /config rule rm all --y to clear.\n(numbering changes after each write — re-run list before another revoke)\n',
@@ -1156,7 +1152,7 @@ export const LOCALES = {
     'rules.askRegistered': 'Added confirm rule: {rule} (takes priority over allow rules; saved)',
     'rules.usage': 'Usage: /config rule [list | rm <n> | rm all --y | add <rule>]',
 
-    // ---- /ceiling ----
+    // ---- /admin ceiling ----
     'ceiling.listTitle': 'Permission ceilings:',
     'ceiling.listFooter': '\nSet with: /admin ceiling set <user> <read|ask|auto|yolo>\n',
     'ceiling.usage': 'Usage:\n  /admin ceiling                       (list all)\n  /admin ceiling set <user> <read|ask|auto|yolo>',
@@ -1165,7 +1161,7 @@ export const LOCALES = {
     'ceiling.set': 'ceiling: {name} -> {mode}',
     'ceiling.empty': 'No identities.',
 
-    // ---- /user (admin) ----
+    // ---- /admin user (admin) ----
     'user.usage.localHeader': 'Usage (this instance is single-user; bind only as admin "{admin}"):',
     'user.usage.header': 'Usage:',
     'user.usage.approveLocal': '  /admin pairing approve <code> [--as {admin}]   # on this instance prefer --as {admin}, which binds the IM sender into the admin user instead of creating a new one',
@@ -1215,7 +1211,7 @@ export const LOCALES = {
     'feedback.thanks': 'Thanks. Forwarded to admin.',
     'feedback.fail': 'Failed to forward ({detail}). Please tell admin in person.',
 
-    // ---- /cost ----
+    // ---- /admin cost ----
     'cost.empty': 'No usage recorded this month yet.',
     'cost.thisMonth': 'This month: {total} tok (cache_read: {cacheRead}, cache_create: {cacheCreate})',
     'cost.byModel': '  By model:',
@@ -1223,7 +1219,7 @@ export const LOCALES = {
     'cost.freshSubset': '  Fresh subset: {tok} tok ({percent}%)',
     'cost.adminOnlyHint': '/admin cost is admin-only.',
 
-    // ---- /sandbox ----
+    // ---- /admin sandbox ----
     'sandbox.title': 'Sandbox image status:',
     'sandbox.titleRlaunch': 'Sandbox status:',
     'sandbox.titleLocal': 'Sandbox status:',
@@ -1538,7 +1534,7 @@ export const LOCALES = {
       '  Group: add the bot to a group chat\n\n' +
       'Now enter App ID and App Secret below:',
 
-    // ---- /secret (channel) ----
+    // ---- /system key (channel) ----
     'secret.usage':
       'Usage:\n' +
       '  /system key list\n' +
@@ -1624,7 +1620,7 @@ export const LOCALES = {
     'system.data.warning': 'Note: {warning}',
     'system.data.error': 'Operation failed: {error}',
 
-    // ---- /mount (channel) ----
+    // ---- /system mount (channel) ----
     'mount.usage':
       'Usage:\n' +
       '  /system mount\n' +
@@ -1838,7 +1834,7 @@ export const LOCALES = {
     'config.lane.reset': 'Cleared {bucket} (uses the default model).',
     'config.lane.usage': 'Usage: /config lane [set <worker|system|image> <model> | reset <worker|system|image>]',
 
-    // ---- /feishu-workspace (admin) ----
+    // ---- /admin feishu-drive (admin) ----
     'feishuWs.usage': 'Usage: /admin feishu-drive [status | list | orphans | rm <canonical> --y]',
     'feishuWs.status.title': 'Feishu cloud workspace:',
     'feishuWs.status.root': '  root: {token}',
