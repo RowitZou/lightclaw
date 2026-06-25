@@ -12,6 +12,37 @@
 import { t } from '../i18n/index.js'
 import type { CommandListCardSection, CommandListCardSpec } from './registry.js'
 
+// ── Spec → terminal-native plain text ────────────────────────────────────────
+//
+// The terminal admin console has no card surface, so a slash handler that
+// renders a `CommandListCardSpec` on the channel returns THIS textification for
+// the terminal. Same content as the card (show-段 + 子命令 + 参数 + 备注 + 示例),
+// rendered in terminal style: markdown styling (**bold** / `code`) stripped,
+// section headings as plain `<heading>：` lines, sub-command rows as indented
+// `cmd — desc`, examples indented. This keeps terminal output and the Feishu card
+// aligned by construction — one spec, two renderers.
+function stripCardMarkup(value: string): string {
+  return value.replace(/\*\*/g, '').replace(/`/g, '')
+}
+
+export function formatCommandListSpecAsText(spec: CommandListCardSpec): string {
+  const out: string[] = []
+  if (spec.title) out.push(stripCardMarkup(spec.title), '')
+  for (const section of spec.sections) {
+    if (section.heading) out.push(`${stripCardMarkup(section.heading)}：`)
+    if (section.markdown) out.push(stripCardMarkup(section.markdown))
+    for (const [cmd, desc] of section.rows ?? []) {
+      out.push(`  ${stripCardMarkup(cmd)} — ${stripCardMarkup(desc)}`)
+    }
+    for (const example of section.codeExamples ?? []) {
+      out.push(`  ${example}`)
+    }
+    out.push('')
+  }
+  if (spec.footer) out.push(stripCardMarkup(spec.footer))
+  return `${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`
+}
+
 /** A show-段 list item: its rendered label plus the two append-markers. */
 export interface ShowItem {
   label: string

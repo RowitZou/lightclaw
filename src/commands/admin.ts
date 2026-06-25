@@ -30,6 +30,7 @@ import {
   adminPairingCardSpec,
   adminSandboxCardSpec,
   adminUserCardSpec,
+  formatCommandListSpecAsText,
   type BackendShowRow,
   type EndpointShowRow,
   type LaneShowRow,
@@ -118,9 +119,9 @@ export async function runAdminCommand(
   switch (noun) {
     // ── ops nouns (reuse shared handlers) ──
     case 'cost': {
-      const body = await formatCost()
-      ctx.setCommandListCard?.(adminCostCardSpec(body))
-      return body
+      const spec = adminCostCardSpec(await formatCost())
+      ctx.setCommandListCard?.(spec)
+      return formatCommandListSpecAsText(spec)
     }
     case 'user':
       return runAdminUser(restParts, ctx)
@@ -129,16 +130,16 @@ export async function runAdminCommand(
     case 'feedback': {
       // `/admin feedback [--page N]` → the admin READ-feedback handler. Pure
       // display (no mutating verbs), so always render the card.
-      const body = await runUserCommand(`feedback ${rest}`.trim())
-      ctx.setCommandListCard?.(adminFeedbackCardSpec(body))
-      return body
+      const spec = adminFeedbackCardSpec(await runUserCommand(`feedback ${rest}`.trim()))
+      ctx.setCommandListCard?.(spec)
+      return formatCommandListSpecAsText(spec)
     }
     case 'ceiling': {
       // Bare → list (show, render card); `<user> <mode>` → set (text only).
       if (rest.trim() === '') {
-        const body = await runCeilingCommand('')
-        ctx.setCommandListCard?.(adminCeilingCardSpec(body))
-        return body
+        const spec = adminCeilingCardSpec(await runCeilingCommand(''))
+        ctx.setCommandListCard?.(spec)
+        return formatCommandListSpecAsText(spec)
       }
       return runCeilingCommand(rest)
     }
@@ -168,9 +169,9 @@ export async function runAdminCommand(
 async function runAdminUser(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   if (verb === 'list' || verb === '') {
-    const body = await runUserCommand('list')
-    ctx.setCommandListCard?.(adminUserCardSpec(body))
-    return body
+    const spec = adminUserCardSpec(await runUserCommand('list'))
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if (verb === 'rm' || verb === 'remove') {
     // --y gate (design F.3b): deleting a user is destructive.
@@ -197,9 +198,9 @@ async function runAdminUser(parts: string[], ctx: AdminCommandContext): Promise<
 async function runAdminPairing(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   if (verb === 'list' || verb === '' || verb === 'pending') {
-    const body = await runUserCommand('pending')
-    ctx.setCommandListCard?.(adminPairingCardSpec(body))
-    return body
+    const spec = adminPairingCardSpec(await runUserCommand('pending'))
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if (verb === 'approve') {
     return runUserCommand(`approve ${parts.slice(1).join(' ')}`.trim())
@@ -226,9 +227,9 @@ async function runAdminSandbox(
     return runSandboxCommand(gate.rest.join(' '), config)
   }
   if (verb === 'status' || verb === '') {
-    const body = await runSandboxCommand('status', config)
-    ctx.setCommandListCard?.(adminSandboxCardSpec(body))
-    return body
+    const spec = adminSandboxCardSpec(await runSandboxCommand('status', config))
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   return runSandboxCommand(parts.join(' '), config)
 }
@@ -240,9 +241,9 @@ async function runAdminSandbox(
 async function runAdminFeishuDrive(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'status').toLowerCase()
   if (verb === 'status' || verb === '') {
-    const body = await runFeishuWorkspaceCommand('status')
-    ctx.setCommandListCard?.(adminFeishuDriveCardSpec(body))
-    return body
+    const spec = adminFeishuDriveCardSpec(await runFeishuWorkspaceCommand('status'))
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if (verb === 'list') {
     return runFeishuWorkspaceCommand('list')
@@ -354,8 +355,9 @@ async function runAdminEndpoint(
             const e = asRecord(ep)
             return { name, type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai') }
           })
-        ctx.setCommandListCard?.(adminEndpointCardSpec(rows))
-        return formatAdminEndpointList()
+        const spec = adminEndpointCardSpec(rows)
+        ctx.setCommandListCard?.(spec)
+        return formatCommandListSpecAsText(spec)
       }
       case 'add':
         return addAdminEndpoint(rest, config)
@@ -473,24 +475,6 @@ function removeAdminEndpoint(parts: string[], config: LightClawConfig): string {
   return `${t('config.endpoint.removed', { name: alias, models: note })}\n`
 }
 
-function formatAdminEndpointList(): string {
-  const cfg = readJsonObjectOrEmpty(adminConfigPath())
-  const endpoints = asRecord(cfg.endpoints)
-  const entries = Object.entries(endpoints)
-  if (entries.length === 0) return `${t('config.endpoint.none')}\n`
-  return `${[
-    t('config.endpoint.listHeader'),
-    ...entries.sort(([a], [b]) => a.localeCompare(b)).map(([name, ep]) => {
-      const e = asRecord(ep)
-      const kind = e.auth ? `auth=${String(e.auth)}` : 'apiKey=(set)'
-      const baseUrl = e.baseUrl ? ` baseUrl=${String(e.baseUrl)}` : ''
-      const proxy = e.proxy ? ' proxy=(set)' : ''
-      return `  ${name} ${kind}${baseUrl}${proxy}`
-    }),
-    '',
-  ].join('\n')}`
-}
-
 // ── /admin backend ───────────────────────────────────────────────────────────
 //
 // Same shapes as /config backend (B3) but writing the ADMIN model registry +
@@ -515,8 +499,9 @@ async function runAdminBackend(
         const rows: BackendShowRow[] = Object.entries(asRecord(cfg.models))
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([name]) => ({ name, isDefault: cfg.defaultModel === name }))
-        ctx.setCommandListCard?.(adminBackendCardSpec(rows))
-        return formatAdminBackendList()
+        const spec = adminBackendCardSpec(rows)
+        ctx.setCommandListCard?.(spec)
+        return formatCommandListSpecAsText(spec)
       }
       case 'add':
         return addAdminBackend(rest, config)
@@ -654,22 +639,6 @@ function removeAdminBackend(parts: string[], config: LightClawConfig): string {
   return `${t('config.backend.removed', { name: displayName })}\n`
 }
 
-function formatAdminBackendList(): string {
-  const cfg = readJsonObjectOrEmpty(adminConfigPath())
-  const models = asRecord(cfg.models)
-  const entries = Object.entries(models)
-  if (entries.length === 0) return `${t('config.backend.none')}\n`
-  return `${[
-    t('config.backend.listHeader'),
-    ...entries.sort(([a], [b]) => a.localeCompare(b)).map(([name, model]) => {
-      const m = asRecord(model)
-      const isDefault = cfg.defaultModel === name ? ' default' : ''
-      return `  ${name} (${String(m.schema)}, ${String(m.endpoint)} -> ${String(m.upstreamModel)})${isDefault}`
-    }),
-    '',
-  ].join('\n')}`
-}
-
 // ── /admin lane ──────────────────────────────────────────────────────────────
 //
 // Writes the admin-global `config.lane` object. `set <bucket> <model>` /
@@ -693,8 +662,9 @@ async function runAdminLane(
         ? { bucket, model: config.defaultModel, isDefault: true }
         : { bucket, model: t('config.lane.unset'), isDefault: false }
     })
-    ctx.setCommandListCard?.(adminLaneCardSpec(rows))
-    return formatAdminLaneList(config)
+    const spec = adminLaneCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if (verb !== 'set' && verb !== 'reset') {
     return `${t('admin.lane.usage')}\n`
@@ -730,19 +700,6 @@ async function runAdminLane(
   const err = commitAdminConfig(cfg, config)
   if (err) return err
   return `${t('config.lane.set', { bucket, model })}\n`
-}
-
-function formatAdminLaneList(config: LightClawConfig): string {
-  const lines = [t('config.lane.header')]
-  for (const bucket of ['worker', 'system', 'image'] as const) {
-    const value = config.lane?.[bucket]
-    lines.push(t('config.lane.bucket', {
-      bucket,
-      value: value && value.trim() ? value : t('config.lane.unset'),
-    }))
-  }
-  lines.push('', t('config.lane.footer'), '')
-  return lines.join('\n')
 }
 
 // ── shared parse helpers (mirror config.ts) ──────────────────────────────────

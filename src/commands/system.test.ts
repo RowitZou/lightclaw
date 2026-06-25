@@ -87,9 +87,10 @@ describe('/system command', () => {
 
   it('routes `key` (bare) to the secret list path and `key rm` to removal', async () => {
     await runSystemCommand('key set API val', { config: makeConfig(), userId: 'alice' })
+    // Bare key shows the textified card: the saved key with its enabled state.
     assert.match(
       await runSystemCommand('key', { config: makeConfig(), userId: 'alice' }),
-      /API \(disabled,/,
+      /API（disabled）/,
     )
     assert.match(
       await runSystemCommand('key rm API', { config: makeConfig(), userId: 'alice' }),
@@ -98,17 +99,16 @@ describe('/system command', () => {
     assert.equal('API' in loadUserSecrets('alice'), false)
   })
 
-  it('routes `mount` to the mount runner (bare → usage, list → empty-list)', async () => {
-    // Bare reaches the mount runner — its no-arg branch prints the /system
-    // mount usage (proves delegation).
+  it('routes `mount` (bare / list) to the textified card, add/rm to the runner', async () => {
+    // Bare + list are the show path → textified card (its title repeats the
+    // command path, and the empty state shows there are no mounts yet).
     assert.match(
       await runSystemCommand('mount', { config: makeConfig(), userId: 'alice' }),
       /\/system mount/,
     )
-    // `mount list` hits the actual list path.
     assert.match(
       await runSystemCommand('mount list', { config: makeConfig(), userId: 'alice' }),
-      /You have no mounted paths yet/,
+      /No paths mounted yet/,
     )
   })
 

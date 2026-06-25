@@ -258,11 +258,14 @@ describe('/admin pairing == old /user (shared function)', () => {
     assert.match(viaAdmin, /ZZ9/)
   })
 
-  it('bare pairing lists pending (same as /user pending)', async () => {
+  it('bare pairing embeds the pending list (same data as /user pending)', async () => {
     const { runUserCommand } = await import('./builtin.js')
+    // /admin pairing wraps the pending list in the textified card (show-段 body
+    // + sub-commands), so it CONTAINS /user pending's output rather than equals.
     const viaAdmin = await runAdminCommand('pairing', { config: liveConfig(), userId: 'admin' })
     const viaUser = await runUserCommand('pending')
-    assert.equal(viaAdmin, viaUser)
+    assert.ok(viaAdmin.includes(viaUser.trim()))
+    assert.match(viaAdmin, /approve <code>/)
   })
 })
 

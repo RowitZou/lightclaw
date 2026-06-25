@@ -177,14 +177,15 @@ function buildBuiltinCommands(): ReplCommand[] {
       'environment: store/enable a credential the task needs (key), expose a ' +
       'host gpfs path to the sandbox (mount), or move their data in/out (data).',
     agentUsage: [
-      '/system key                          List stored keys + enabled flag (read)',
-      '/system key set <NAME> <VALUE...>    Store a key. VALUE is verbatim to end of line.',
-      '/system key enable|disable <NAME>    Toggle $NAME injection into Bash',
-      '/system key rm <NAME>                Delete the stored key',
-      '/system mount                        List mounted paths (read)',
-      '/system mount add <gpfs-path...> [--ro|--rw]   Mount host gpfs path into sandbox',
-      '/system mount rm <gpfs-path...>      Unmount',
-      '/system data                         Show import/export usage',
+      '/system key                                  List stored keys + enabled state',
+      '/system key set <NAME> <VALUE...>            Store a key (VALUE verbatim to end of line)',
+      '/system key enable|disable <NAME>            Enable / disable a key for use',
+      '/system key rm <NAME>                        Delete a stored key',
+      '/system mount                                List mounted paths',
+      '/system mount add <path...> [--ro|--rw]      Mount a path for the agent to access',
+      '/system mount rm <path...>                   Unmount a path',
+      '/system data export [--path <file>|--feishu] [--with-sessions]   Export your data',
+      '/system data import [--path <file>|--feishu] [--replace] [--y]   Import from a backup',
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runSystemCommand(args, ctx, {
@@ -197,12 +198,18 @@ function buildBuiltinCommands(): ReplCommand[] {
     usage: t('cmd.config.usage'),
     description: t('cmd.config.desc'),
     agentAdvisory:
-      'When the user wants their own work to live in a specific directory ' +
-      '(e.g. a shared collaboration disk) instead of the default per-user ' +
-      'workspace. They self-serve it; an invalid path is rejected with a reason.',
+      'When the user wants to change their own settings — current model, ' +
+      'permission mode, interface language, permission rules, working directory, ' +
+      'per-use model lanes, or add their own model service / model (BYO credentials).',
     agentUsage: [
-      '/config workspace set <absolute-path>    Point your workspace at this directory (validated; rejected with a reason if not daemon-accessible / not under an allowed gpfs prefix).',
-      '/config workspace reset                  Restore the default per-user workspace.',
+      '/config model [set <name>|reset]                 Switch the current model',
+      '/config mode [set <read|ask|auto|yolo>|reset]    Set the permission mode',
+      '/config lang [set <cn|en>|reset]                 Switch the interface language',
+      '/config rule [add <rule> [--deny]|rm <n>|rm all --y]   Manage permission rules',
+      '/config workspace [set <absolute-path>|reset]    Point the workspace at a directory (validated; rejected with a reason if not accessible)',
+      '/config lane [set <worker|system|image> <model>|reset <bucket>]   Per-use model',
+      '/config endpoint [add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path]   Your model services',
+      '/config backend [add|set|check|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Add models to your usable list',
     ].join('\n'),
     async handler(args, ctx) {
       ctx.output.write(await runConfigCommand(args, {
@@ -231,15 +238,15 @@ function buildBuiltinCommands(): ReplCommand[] {
       'permission ceilings, inspect or reset the sandbox, manage Feishu drive ' +
       'folders, or configure deployment-wide model backends / endpoints / lanes.',
     agentUsage: [
-      '/admin cost [--month YYYY-MM]                 Token usage by model and by user',
-      '/admin user [list|rm <name> [--purge]|unlink <channel:id>]',
+      '/admin cost                                   Token usage this month, by model and user',
+      '/admin user [list|rm <name> [--purge] --y|unlink <channel:id>]',
       '/admin pairing [list|approve <code> [--as <name>]|reject <code>]',
       '/admin feedback [--page N]                    Read standing user feedback',
-      '/admin ceiling [list|set <user> <mode>|reset <user>]',
-      '/admin sandbox [status|prefetch|reset]',
-      '/admin feishu-drive [status|rm <canonical> --y]',
-      '/admin backend [list|add|set|check|rm|templates]   Deployment model registry',
-      '/admin endpoint [list|add|set|rm|templates]        Deployment endpoints (--type openai|anthropic|codex)',
+      '/admin ceiling [list|set <user> <mode>]       Per-user permission-mode ceiling',
+      '/admin sandbox [status|prefetch|reset --y]',
+      '/admin feishu-drive [status|list|orphans|rm <user> --y]',
+      '/admin endpoint [list|add|set|rm] <alias> [--type openai|anthropic|codex] [--key|--base-url|--proxy|--auth-path]   Public model services',
+      '/admin backend [list|add|set|rm] <name> [--endpoint|--upstream|--reasoning|--max-tokens|--default]   Public usable model list',
       '/admin lane [set <worker|system|image> <model>|reset <bucket>]',
     ].join('\n'),
     async handler(args, ctx) {
@@ -427,9 +434,12 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
   if (ctx.isChannel) {
     const toRows = (cmds: ReplCommand[]) =>
       cmds.map(c => [c.name, c.description] as const)
+    // Admin commands render as a continuation of the same list — no "仅 admin"
+    // subtitle (the card is a flat command list; the role gate already governs
+    // who can run what).
     const sections: CommandListCardSection[] = [{ rows: toRows(userCmds) }]
     if (ctx.isAdmin && adminCmds.length > 0) {
-      sections.push({ heading: t('help.adminTitle'), rows: toRows(adminCmds) })
+      sections.push({ rows: toRows(adminCmds) })
     }
     ctx.setCommandListCard?.({
       title: t('card.cmdHelp.title', { cmd: '/help' }),
@@ -439,7 +449,7 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
     // Plain-text fallback (terminal-less channels / no card support).
     const fallback: string[] = [commandList(toRows(userCmds))]
     if (ctx.isAdmin && adminCmds.length > 0) {
-      fallback.push('', t('help.adminTitle'), commandList(toRows(adminCmds)))
+      fallback.push('', commandList(toRows(adminCmds)))
     }
     fallback.push('', t('help.usageHint'))
     return fallback.join('\n')

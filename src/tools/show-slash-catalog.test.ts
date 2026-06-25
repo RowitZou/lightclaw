@@ -82,16 +82,17 @@ describe('ShowSlashCatalog tool', () => {
     // /system absorbs the secret (key) and mount surfaces.
     assert.match(output, /^    \/system key set <NAME> <VALUE\.\.\.>/m)
     assert.match(output, /^    \/system key enable\|disable <NAME>/m)
-    assert.match(output, /^    \/system mount add <gpfs-path\.\.\.>/m)
+    assert.match(output, /^    \/system mount add <path\.\.\.>/m)
   })
 
-  it('passes through backticks, quotes, and dollar signs in advisory and usage text', async () => {
+  it('passes angle brackets and pipes through literally (no HTML/markdown escaping)', async () => {
     await setAdmin('admin')
     const output = await callCatalogAs('admin')
 
-    // The /admin endpoint advisory documents codex provider config; the
-    // /system key usage carries $NAME injection.
-    assert.match(output, /\$NAME/)
+    // The catalog is raw text for the agent: `<...>` placeholders and `|`
+    // verb alternations must survive verbatim, not get HTML-escaped to &lt; etc.
+    assert.match(output, /\[list\|add\|set\|rm\]/)
+    assert.match(output, /<alias>/)
   })
 })
 

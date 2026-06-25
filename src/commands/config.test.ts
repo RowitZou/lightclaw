@@ -204,8 +204,12 @@ describe('/config model (scalar face)', () => {
     const out = await inSession('carol', cfg, () =>
       runConfigCommand('model', { config: cfg, userId: 'carol' }),
     )
-    assert.match(out, /Current model\*\*: sonnet/)
+    // Terminal output is the textified card: numbered model list with the
+    // current marker, plus the sub-command rows.
+    assert.match(out, /sonnet/)
+    assert.match(out, /← current/)
     assert.match(out, /opus/)
+    assert.match(out, /set <model>/)
   })
 
   it('rejects an unknown scalar model name', async () => {
@@ -336,7 +340,9 @@ describe('/config workspace (←set-workspace)', () => {
 
   it('bare workspace shows current (read)', async () => {
     const out = await runConfigCommand('workspace', { config: clusterConfig(), userId: 'pam' })
-    assert.match(out, /Current workspace/)
+    // Textified card: the "Current" show-段 heading + the set sub-command.
+    assert.match(out, /Current/)
+    assert.match(out, /set <path>/)
   })
 })
 
@@ -527,9 +533,10 @@ describe('/config lane', () => {
   it('bare lane lists the three buckets', async () => {
     const cfg = modelConfig()
     const out = await runConfigCommand('lane', { config: cfg, userId: 'b3lanelist' })
-    assert.match(out, /worker =/)
-    assert.match(out, /system =/)
-    assert.match(out, /image =/)
+    // Textified card: per-use labels (worker / system / image) + the set sub-command.
+    assert.match(out, /worker \(sub-agents\)/)
+    assert.match(out, /system \(system tasks/)
+    assert.match(out, /image \(image understanding\)/)
   })
 })
 

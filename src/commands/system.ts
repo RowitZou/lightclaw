@@ -14,6 +14,7 @@ import { listUserSecretMetadata } from '../secrets/store.js'
 
 import { commandList } from './card-format.js'
 import {
+  formatCommandListSpecAsText,
   systemDataCardSpec,
   systemKeyCardSpec,
   systemMountCardSpec,
@@ -102,18 +103,18 @@ export async function runSystemCommand(
       return runKeyNoun(rest, ctx)
     case 'mount': {
       // Bare/list is the show path → render the structured card from the live
-      // mount table; the mount runner (mount.js) owns the text fallback +
-      // add/rm verbs and is left unchanged.
+      // mount table, and return its textification for the terminal so terminal
+      // output matches the card. The mount runner (mount.js) owns add/rm verbs.
       const mountVerb = rest.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? ''
       if ((mountVerb === '' || mountVerb === 'list') && ctx.userId) {
         const rows: MountShowRow[] = loadUserRlaunchMounts(ctx.userId).map(m => ({
           path: m.path,
           mode: m.mode,
         }))
-        ctx.setCommandListCard?.(systemMountCardSpec(rows))
+        const spec = systemMountCardSpec(rows)
+        ctx.setCommandListCard?.(spec)
+        return formatCommandListSpecAsText(spec)
       }
-      // The mount runner already accepts bare/list (read) and add/rm|remove
-      // (write); pass through verbatim plus the restart hook.
       return runMountCommand(rest, { config: ctx.config, userId: ctx.userId }, deps)
     }
     case 'data':
@@ -135,13 +136,16 @@ export async function runSystemCommand(
 async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
   const parts = rest.split(/\s+/).filter(Boolean)
   const verb = (parts[0] ?? '').toLowerCase()
-  // Bare/list = show → render the structured card from the live secret store.
+  // Bare/list = show → render the structured card from the live secret store
+  // and return its textification (terminal output matches the card).
   if ((verb === '' || verb === 'list') && ctx.userId) {
     const rows: KeyShowRow[] = listUserSecretMetadata(ctx.userId).map(m => ({
       name: m.name,
       enabled: m.enabled,
     }))
-    ctx.setCommandListCard?.(systemKeyCardSpec(rows))
+    const spec = systemKeyCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if ((verb === 'rm' || verb === 'remove') && parts[1] && ctx.userId) {
     const name = parts[1]
@@ -187,8 +191,9 @@ async function runDataNoun(rest: string, ctx: SystemCommandContext): Promise<str
   if (verb !== 'export' && verb !== 'import') {
     // Bare/unknown verb = the /system data overview → pure-operation card
     // (no show-段: data has no listable state).
-    ctx.setCommandListCard?.(systemDataCardSpec())
-    return `${t('system.data.usage')}\n`
+    const spec = systemDataCardSpec()
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
   }
   if (!ctx.userId) {
     return `${t('system.data.noIdentity')}\n`

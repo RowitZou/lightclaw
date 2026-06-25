@@ -54,7 +54,7 @@ export const LOCALES = {
     'help.usageHint': '输入某个命令即可查看它的详细用法，例如 /config；也可以直接问 LightClaw。',
     // Command-list card header title. {cmd} = the command path, e.g. "/config"
     // or "/config endpoint". L1 hub + L2 detail cards both use this.
-    'card.cmdHelp.title': '{cmd} 命令说明',
+    'card.cmdHelp.title': '{cmd}',
     // ---- L2 detail-card shared section headings + markers ----
     // show-段 headings, chosen per noun type: selection (可选项), collection
     // (已配置), single-value (当前). 参数 / 示例 head the param-bullet and
@@ -997,7 +997,7 @@ export const LOCALES = {
     'help.title': 'LightClaw commands:',
     'help.adminTitle': 'Admin only:',
     'help.usageHint': 'Type a command to see its detailed usage, e.g. /config; or just ask LightClaw.',
-    'card.cmdHelp.title': '{cmd} commands',
+    'card.cmdHelp.title': '{cmd}',
     'card.show.options': 'Options',
     'card.show.configured': 'Configured',
     'card.show.current': 'Current',
