@@ -107,7 +107,7 @@ function formatList(userId: string): string {
     ...items.map(item =>
       t('secret.list.row', {
         name: item.name,
-        enabled: item.enabled ? 'yes' : 'no',
+        enabled: item.enabled ? t('secret.state.on') : t('secret.state.off'),
         length: item.length,
         updated: item.updatedAt || '-',
       }),
@@ -122,7 +122,7 @@ function formatStatus(userId: string, rawName: string): string {
   if (!entry) return `${t('secret.status.absent', { name })}\n`
   return `${t('secret.status.present', {
     name,
-    enabled: entry.enabled ? 'yes' : 'no',
+    enabled: entry.enabled ? t('secret.state.on') : t('secret.state.off'),
     length: entry.value.length,
     updated: entry.updatedAt || '-',
   })}\n`

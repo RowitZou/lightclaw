@@ -30,14 +30,14 @@ describe('/secret command', () => {
     const value = 'ghp_secret_value_with_$quotes" and spaces'
     const set = await runSecretCommand(`set GH_TOKEN ${value}`, { userId: 'alice' })
     assert.match(set, /Secret GH_TOKEN saved/)
-    assert.match(set, new RegExp(`length=${value.length}`))
+    assert.match(set, new RegExp(`${value.length} chars`))
 
     const listed = await runSecretCommand('list', { userId: 'alice' })
-    assert.match(listed, new RegExp(`GH_TOKEN enabled=no length=${value.length}`))
+    assert.match(listed, new RegExp(`GH_TOKEN \\(disabled, ${value.length} chars`))
     assert.equal(listed.includes(value), false)
 
     const status = await runSecretCommand('status GH_TOKEN', { userId: 'alice' })
-    assert.match(status, new RegExp(`GH_TOKEN stored=yes enabled=no length=${value.length}`))
+    assert.match(status, new RegExp(`GH_TOKEN: stored, disabled, ${value.length} chars`))
     assert.equal(status.includes(value), false)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, value)
   })
@@ -47,15 +47,15 @@ describe('/secret command', () => {
 
     assert.match(
       await runSecretCommand('enable GH_TOKEN', { userId: 'alice' }),
-      /injected as \$GH_TOKEN/,
+      /can use it/,
     )
-    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /enabled=yes/)
+    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /stored, enabled,/)
 
     assert.match(
       await runSecretCommand('disable GH_TOKEN', { userId: 'alice' }),
       /Stored value retained/,
     )
-    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /enabled=no/)
+    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /stored, disabled,/)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, 'secret')
   })
 
@@ -72,7 +72,7 @@ describe('/secret command', () => {
     assert.equal(loadUserSecrets('alice').API_TOKEN.value, special)
 
     const long = 'x'.repeat(10_240)
-    assert.match(await runSecretCommand(`set LONG_TOKEN ${long}`, { userId: 'alice' }), /length=10240/)
+    assert.match(await runSecretCommand(`set LONG_TOKEN ${long}`, { userId: 'alice' }), /10240 chars/)
     assert.equal(loadUserSecrets('alice').LONG_TOKEN.value, long)
   })
 

@@ -51,13 +51,13 @@ describe('/mount command', () => {
 
     assert.match(
       await runMountCommand('list', { config: makeConfig(), userId: 'alice' }, deps),
-      /No dynamic rlaunch mounts/,
+      /You have no mounted paths yet/,
     )
 
     const added = await runMountCommand(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(added, /Added rlaunch mount/)
+    assert.match(added, /Mounted:/)
     assert.match(added, /mode: ro/)
-    assert.match(added, /worker-1/)
+    assert.match(added, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 
     const unchanged = await runMountCommand(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
@@ -65,19 +65,19 @@ describe('/mount command', () => {
     assert.equal(restartCount, 1)
 
     const updated = await runMountCommand(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(updated, /Updated rlaunch mount/)
-    assert.match(updated, /worker-2/)
+    assert.match(updated, /Updated mount:/)
+    assert.match(updated, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
     const listed = await runMountCommand('list', { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(
       listed,
-      new RegExp(escapeRegExp(`${dataPath}  lightclaw=read-write  worker=${dataPath}`)),
+      new RegExp(escapeRegExp(`${dataPath} (read-write)`)),
     )
 
     const removed = await runMountCommand(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(removed, /Removed rlaunch mount/)
-    assert.match(removed, /worker-3/)
+    assert.match(removed, /Unmounted:/)
+    assert.match(removed, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
@@ -97,11 +97,11 @@ describe('/mount command', () => {
     }
 
     const added = await runMountCommand(`add ${dataA} ${dataB} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(added, /Added rlaunch mounts/)
+    assert.match(added, /Mounted:/)
     assert.match(added, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(added, new RegExp(escapeRegExp(`- ${dataB}`)))
     assert.match(added, /mode: rw/)
-    assert.match(added, /worker-1/)
+    assert.match(added, /Sandbox restarted/)
     assert.equal(restartCount, 1)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'rw' },
@@ -109,9 +109,9 @@ describe('/mount command', () => {
     ])
 
     const updated = await runMountCommand(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(updated, /Added rlaunch mounts/)
-    assert.match(updated, /Updated rlaunch mounts/)
-    assert.match(updated, /worker-2/)
+    assert.match(updated, /Mounted:/)
+    assert.match(updated, /Updated mounts:/)
+    assert.match(updated, /Sandbox restarted/)
     assert.equal(restartCount, 2)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [
       { path: dataA, mode: 'ro' },
@@ -125,10 +125,10 @@ describe('/mount command', () => {
     assert.equal(restartCount, 2)
 
     const removed = await runMountCommand(`remove ${dataA} ${dataB}`, { config: makeConfig(), userId: 'alice' }, deps)
-    assert.match(removed, /Removed rlaunch mounts/)
+    assert.match(removed, /Unmounted:/)
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataB}`)))
-    assert.match(removed, /worker-3/)
+    assert.match(removed, /Sandbox restarted/)
     assert.equal(restartCount, 3)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataC, mode: 'ro' }])
   })
@@ -150,8 +150,8 @@ describe('/mount command', () => {
       { config: makeConfig([{ hostPrefix: gpfs2Root, mountPrefix: 'gpfs://gpfs2' }]), userId: 'alice' },
       deps,
     )
-    assert.match(added, /Added rlaunch mount/)
-    assert.match(added, /worker-1/)
+    assert.match(added, /Mounted:/)
+    assert.match(added, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: publicData, mode: 'ro' }])
   })
 

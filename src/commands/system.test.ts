@@ -89,7 +89,7 @@ describe('/system command', () => {
     await runSystemCommand('key set API val', { config: makeConfig(), userId: 'alice' })
     assert.match(
       await runSystemCommand('key', { config: makeConfig(), userId: 'alice' }),
-      /API enabled=no/,
+      /API \(disabled,/,
     )
     assert.match(
       await runSystemCommand('key rm API', { config: makeConfig(), userId: 'alice' }),
@@ -108,7 +108,7 @@ describe('/system command', () => {
     // `mount list` hits the actual list path.
     assert.match(
       await runSystemCommand('mount list', { config: makeConfig(), userId: 'alice' }),
-      /No dynamic rlaunch mounts/,
+      /You have no mounted paths yet/,
     )
   })
 
@@ -124,7 +124,7 @@ describe('/system command', () => {
       { config: makeConfig(), userId: 'alice' },
       deps,
     )
-    assert.match(removed, /Removed rlaunch mount/)
+    assert.match(removed, /Unmounted:/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
   })
 
