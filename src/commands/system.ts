@@ -9,7 +9,17 @@ import { expandHomePath } from '../paths.js'
 import { getChannelFileSender, getRuntimeIfInitialized } from '../state.js'
 import { exportUserData, importUserData, type ImportResult } from '../system-data/archive.js'
 
+import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
+import { listUserSecretMetadata } from '../secrets/store.js'
+
 import { commandList } from './card-format.js'
+import {
+  systemDataCardSpec,
+  systemKeyCardSpec,
+  systemMountCardSpec,
+  type KeyShowRow,
+  type MountShowRow,
+} from './card-specs.js'
 import { requireConfirm } from './confirm.js'
 import { runMountCommand } from './mount.js'
 import type { CommandListCardSpec } from './registry.js'
@@ -90,10 +100,22 @@ export async function runSystemCommand(
       // `rm <NAME>`, which is --y-gated ONLY when the key is referenced by some
       // endpoint (design F.3b: unreferenced keys delete directly).
       return runKeyNoun(rest, ctx)
-    case 'mount':
+    case 'mount': {
+      // Bare/list is the show path → render the structured card from the live
+      // mount table; the mount runner (mount.js) owns the text fallback +
+      // add/rm verbs and is left unchanged.
+      const mountVerb = rest.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? ''
+      if ((mountVerb === '' || mountVerb === 'list') && ctx.userId) {
+        const rows: MountShowRow[] = loadUserRlaunchMounts(ctx.userId).map(m => ({
+          path: m.path,
+          mode: m.mode,
+        }))
+        ctx.setCommandListCard?.(systemMountCardSpec(rows))
+      }
       // The mount runner already accepts bare/list (read) and add/rm|remove
       // (write); pass through verbatim plus the restart hook.
       return runMountCommand(rest, { config: ctx.config, userId: ctx.userId }, deps)
+    }
     case 'data':
       return runDataNoun(rest, ctx)
     default:
@@ -113,6 +135,14 @@ export async function runSystemCommand(
 async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
   const parts = rest.split(/\s+/).filter(Boolean)
   const verb = (parts[0] ?? '').toLowerCase()
+  // Bare/list = show → render the structured card from the live secret store.
+  if ((verb === '' || verb === 'list') && ctx.userId) {
+    const rows: KeyShowRow[] = listUserSecretMetadata(ctx.userId).map(m => ({
+      name: m.name,
+      enabled: m.enabled,
+    }))
+    ctx.setCommandListCard?.(systemKeyCardSpec(rows))
+  }
   if ((verb === 'rm' || verb === 'remove') && parts[1] && ctx.userId) {
     const name = parts[1]
     const dependents = endpointsReferencingKey(ctx.userId, name)
@@ -155,6 +185,9 @@ async function runDataNoun(rest: string, ctx: SystemCommandContext): Promise<str
   const parts = rest.split(/\s+/).filter(Boolean)
   const verb = (parts[0] ?? '').toLowerCase()
   if (verb !== 'export' && verb !== 'import') {
+    // Bare/unknown verb = the /system data overview → pure-operation card
+    // (no show-段: data has no listable state).
+    ctx.setCommandListCard?.(systemDataCardSpec())
     return `${t('system.data.usage')}\n`
   }
   if (!ctx.userId) {

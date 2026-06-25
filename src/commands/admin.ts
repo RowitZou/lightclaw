@@ -19,6 +19,21 @@ import { expandHomePath } from '../paths.js'
 
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
+import {
+  adminBackendCardSpec,
+  adminCeilingCardSpec,
+  adminCostCardSpec,
+  adminEndpointCardSpec,
+  adminFeedbackCardSpec,
+  adminFeishuDriveCardSpec,
+  adminLaneCardSpec,
+  adminPairingCardSpec,
+  adminSandboxCardSpec,
+  adminUserCardSpec,
+  type BackendShowRow,
+  type EndpointShowRow,
+  type LaneShowRow,
+} from './card-specs.js'
 import { parseEndpointType } from './config.js'
 import { requireConfirm } from './confirm.js'
 import { runFeishuWorkspaceCommand } from './feishu-workspace.js'
@@ -102,29 +117,43 @@ export async function runAdminCommand(
 
   switch (noun) {
     // ── ops nouns (reuse shared handlers) ──
-    case 'cost':
-      return formatCost()
+    case 'cost': {
+      const body = await formatCost()
+      ctx.setCommandListCard?.(adminCostCardSpec(body))
+      return body
+    }
     case 'user':
-      return runAdminUser(restParts)
+      return runAdminUser(restParts, ctx)
     case 'pairing':
-      return runAdminPairing(restParts)
-    case 'feedback':
-      // `/admin feedback [--page N]` → the admin READ-feedback handler.
-      return runUserCommand(`feedback ${rest}`.trim())
-    case 'ceiling':
+      return runAdminPairing(restParts, ctx)
+    case 'feedback': {
+      // `/admin feedback [--page N]` → the admin READ-feedback handler. Pure
+      // display (no mutating verbs), so always render the card.
+      const body = await runUserCommand(`feedback ${rest}`.trim())
+      ctx.setCommandListCard?.(adminFeedbackCardSpec(body))
+      return body
+    }
+    case 'ceiling': {
+      // Bare → list (show, render card); `<user> <mode>` → set (text only).
+      if (rest.trim() === '') {
+        const body = await runCeilingCommand('')
+        ctx.setCommandListCard?.(adminCeilingCardSpec(body))
+        return body
+      }
       return runCeilingCommand(rest)
+    }
     case 'sandbox':
-      return runAdminSandbox(restParts, ctx.config)
+      return runAdminSandbox(restParts, ctx.config, ctx)
     case 'feishu-drive':
-      return runAdminFeishuDrive(restParts)
+      return runAdminFeishuDrive(restParts, ctx)
 
     // ── system-scope model config (writes <home>/config.json) ──
     case 'backend':
-      return runAdminBackend(restParts, ctx.config)
+      return runAdminBackend(restParts, ctx.config, ctx)
     case 'endpoint':
-      return runAdminEndpoint(restParts, ctx.config)
+      return runAdminEndpoint(restParts, ctx.config, ctx)
     case 'lane':
-      return runAdminLane(restParts, ctx.config)
+      return runAdminLane(restParts, ctx.config, ctx)
 
     default:
       ctx.setCommandListCard?.(adminListSpec())
@@ -136,10 +165,12 @@ export async function runAdminCommand(
 
 /** `/admin user [list|rm <name> [--purge]|unlink <channel:id>]` → the
  *  user-management part of the shared `runUserCommand`. */
-function runAdminUser(parts: string[]): Promise<string> {
+async function runAdminUser(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   if (verb === 'list' || verb === '') {
-    return runUserCommand('list')
+    const body = await runUserCommand('list')
+    ctx.setCommandListCard?.(adminUserCardSpec(body))
+    return body
   }
   if (verb === 'rm' || verb === 'remove') {
     // --y gate (design F.3b): deleting a user is destructive.
@@ -163,10 +194,12 @@ function runAdminUser(parts: string[]): Promise<string> {
 
 /** `/admin pairing [list|approve <code> [--as <name>]|reject <code>]` → the
  *  pairing part of the shared `runUserCommand`. Bare = list pending. */
-function runAdminPairing(parts: string[]): Promise<string> {
+async function runAdminPairing(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   if (verb === 'list' || verb === '' || verb === 'pending') {
-    return runUserCommand('pending')
+    const body = await runUserCommand('pending')
+    ctx.setCommandListCard?.(adminPairingCardSpec(body))
+    return body
   }
   if (verb === 'approve') {
     return runUserCommand(`approve ${parts.slice(1).join(' ')}`.trim())
@@ -180,13 +213,22 @@ function runAdminPairing(parts: string[]): Promise<string> {
 /** `/admin sandbox [status|prefetch|reset --y]` → the shared runSandboxCommand.
  *  Only `reset` is --y-gated (it rebuilds a per-user worker); status/prefetch
  *  pass through unchanged. */
-function runAdminSandbox(parts: string[], config: LightClawConfig): Promise<string> {
+async function runAdminSandbox(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string> {
   const verb = (parts[0] ?? 'status').toLowerCase()
   if (verb === 'reset') {
     const gate = requireConfirm(parts, { preview: t('confirm.sandbox.reset') })
-    if (!gate.confirmed) return Promise.resolve(gate.message)
+    if (!gate.confirmed) return gate.message
     // `gate.rest` is `['reset']` (the --y stripped) → the runner sees plain reset.
     return runSandboxCommand(gate.rest.join(' '), config)
+  }
+  if (verb === 'status' || verb === '') {
+    const body = await runSandboxCommand('status', config)
+    ctx.setCommandListCard?.(adminSandboxCardSpec(body))
+    return body
   }
   return runSandboxCommand(parts.join(' '), config)
 }
@@ -195,10 +237,12 @@ function runAdminSandbox(parts: string[], config: LightClawConfig): Promise<stri
  *  feishu-workspace handler. `rm` maps to its `delete` verb; `--y` is accepted
  *  by deleteCommand as the confirmation gate (legacy `--confirm <token>` still
  *  works). The `admin-delete-workspace` audit row is unchanged. */
-function runAdminFeishuDrive(parts: string[]): Promise<string> {
+async function runAdminFeishuDrive(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'status').toLowerCase()
   if (verb === 'status' || verb === '') {
-    return runFeishuWorkspaceCommand('status')
+    const body = await runFeishuWorkspaceCommand('status')
+    ctx.setCommandListCard?.(adminFeishuDriveCardSpec(body))
+    return body
   }
   if (verb === 'list') {
     return runFeishuWorkspaceCommand('list')
@@ -292,14 +336,27 @@ function assertAlias(value: string): void {
 // (`--type codex --auth-path`) imports the auth.json into the admin codex store
 // and records `auth: 'codex-oauth'` (the existing admin codex endpoint shape).
 
-async function runAdminEndpoint(parts: string[], config: LightClawConfig): Promise<string> {
+async function runAdminEndpoint(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   const rest = parts.slice(1)
   try {
     switch (verb) {
       case 'list':
-      case '':
+      case '': {
+        const cfg = readJsonObjectOrEmpty(adminConfigPath())
+        const rows: EndpointShowRow[] = Object.entries(asRecord(cfg.endpoints))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, ep]) => {
+            const e = asRecord(ep)
+            return { name, type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai') }
+          })
+        ctx.setCommandListCard?.(adminEndpointCardSpec(rows))
         return formatAdminEndpointList()
+      }
       case 'add':
         return addAdminEndpoint(rest, config)
       case 'set':
@@ -443,14 +500,24 @@ function formatAdminEndpointList(): string {
 // endpoints derive `openai`; admin can override the schema only via direct
 // config.json edit, consistent with B3's apiKey-endpoint default).
 
-async function runAdminBackend(parts: string[], config: LightClawConfig): Promise<string> {
+async function runAdminBackend(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   const rest = parts.slice(1)
   try {
     switch (verb) {
       case 'list':
-      case '':
+      case '': {
+        const cfg = readJsonObjectOrEmpty(adminConfigPath())
+        const rows: BackendShowRow[] = Object.entries(asRecord(cfg.models))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name]) => ({ name, isDefault: cfg.defaultModel === name }))
+        ctx.setCommandListCard?.(adminBackendCardSpec(rows))
         return formatAdminBackendList()
+      }
       case 'add':
         return addAdminBackend(rest, config)
       case 'set':
@@ -612,9 +679,21 @@ function formatAdminBackendList(): string {
 // bucket model warns + falls back at boot, never throws), so this only guards
 // against a write that would also corrupt endpoints/models/defaultModel.
 
-async function runAdminLane(parts: string[], config: LightClawConfig): Promise<string> {
+async function runAdminLane(
+  parts: string[],
+  config: LightClawConfig,
+  ctx: AdminCommandContext,
+): Promise<string> {
   const verb = (parts[0] ?? '').toLowerCase()
   if (verb === '') {
+    const rows: LaneShowRow[] = (['worker', 'system', 'image'] as const).map(bucket => {
+      const explicit = config.lane?.[bucket]?.trim()
+      if (explicit) return { bucket, model: explicit, isDefault: false }
+      return config.defaultModel
+        ? { bucket, model: config.defaultModel, isDefault: true }
+        : { bucket, model: t('config.lane.unset'), isDefault: false }
+    })
+    ctx.setCommandListCard?.(adminLaneCardSpec(rows))
     return formatAdminLaneList(config)
   }
   if (verb !== 'set' && verb !== 'reset') {

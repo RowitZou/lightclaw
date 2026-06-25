@@ -14,10 +14,23 @@ import {
   writeUserConfig,
 } from '../config/user-override.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
+import { workspaceFor } from '../identity/paths.js'
 import { setIdentityPreference } from '../identity/preferences.js'
 import { getUserPermissionCeiling } from '../identity/store.js'
 import { t } from '../i18n/index.js'
 import { commandList } from './card-format.js'
+import {
+  configBackendCardSpec,
+  configEndpointCardSpec,
+  configLaneCardSpec,
+  configLangCardSpec,
+  configModeCardSpec,
+  configModelCardSpec,
+  configRuleCardSpec,
+  configWorkspaceCardSpec,
+  type LaneShowRow,
+  type ModelShowRow,
+} from './card-specs.js'
 import type { CommandListCardSpec } from './registry.js'
 import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, getProviderFor } from '../provider/index.js'
@@ -248,8 +261,14 @@ async function runEndpointSubcommand(
   const userId = ctx.userId
   try {
     switch (verb) {
-      case 'list':
+      case 'list': {
+        const override = loadUserConfigOverride(userId)
+        const rows = Object.entries(override.endpoints ?? {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, ep]) => ({ name, type: ep.authRef ? 'codex' : (ep.type ?? 'openai') }))
+        ctx.setCommandListCard?.(configEndpointCardSpec(rows))
         return formatEndpointList(userId)
+      }
       case 'add':
         return addEndpoint(userId, parts)
       case 'set':
@@ -549,8 +568,14 @@ async function runBackendSubcommand(
   const userId = ctx.userId
   try {
     switch (verb) {
-      case 'list':
+      case 'list': {
+        const override = loadUserConfigOverride(userId)
+        const rows = Object.entries(override.models ?? {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name]) => ({ name, isDefault: override.defaultModel === name }))
+        ctx.setCommandListCard?.(configBackendCardSpec(rows))
         return formatBackendList(userId)
+      }
       case 'add':
         return addBackend(userId, parts)
       case 'set':
@@ -886,8 +911,15 @@ async function runConfigModelScalar(
     })}\n`
   }
   if (!model) {
+    const current = getModel()
+    const rows: ModelShowRow[] = registered.map(name => ({
+      name,
+      isDefault: name === config.defaultModel,
+      isCurrent: name === current,
+    }))
+    ctx.setCommandListCard?.(configModelCardSpec(rows))
     ctx.setBodyFormat?.('lark_md')
-    return `${t('model.current', { name: getModel() })}\n${t('model.available', { list: formatList() })}\n\n${t('config.model.help')}\n`
+    return `${t('model.current', { name: current })}\n${t('model.available', { list: formatList() })}\n\n${t('config.model.help')}\n`
   }
   if (!config.models[model]) {
     ctx.setBodyFormat?.('lark_md')
@@ -918,6 +950,9 @@ async function runConfigMode(
   const verb = (parts[0] ?? '').toLowerCase()
 
   if (verb === '') {
+    ctx.setCommandListCard?.(
+      configModeCardSpec({ current: modeToAlias(getPermissionMode()), ceiling: modeToAlias(ceiling) }),
+    )
     ctx.setBodyFormat?.('lark_md')
     const current = getPermissionMode()
     const lines: string[] = [t('mode.menuTitle')]
@@ -973,8 +1008,11 @@ async function runConfigLang(
   const override = userId ? loadUserConfigOverride(userId) : {}
 
   if (verb === '') {
-    ctx.setBodyFormat?.('lark_md')
     const current = override.lang ?? ctx.config.lang
+    if (current === 'cn' || current === 'en') {
+      ctx.setCommandListCard?.(configLangCardSpec(current))
+    }
+    ctx.setBodyFormat?.('lark_md')
     return `${t('config.lang.current', { lang: current })}\n\n${t('config.lang.help')}\n`
   }
   if (verb === 'reset') {
@@ -1015,6 +1053,16 @@ async function runConfigLane(
   // bare = show the three buckets + current values (read).
   if (verb === '') {
     const override = userId ? loadUserConfigOverride(userId) : {}
+    const resolveRow = (bucket: 'worker' | 'system' | 'image'): LaneShowRow => {
+      const explicit = override.lane?.[bucket]?.trim() || ctx.config.lane?.[bucket]?.trim()
+      if (explicit) return { bucket, model: explicit, isDefault: false }
+      const fallback = ctx.config.defaultModel
+      return fallback
+        ? { bucket, model: fallback, isDefault: true }
+        : { bucket, model: t('config.lane.unset'), isDefault: false }
+    }
+    const rows = (['worker', 'system', 'image'] as const).map(resolveRow)
+    ctx.setCommandListCard?.(configLaneCardSpec(rows))
     const resolvedBucket = (bucket: 'worker' | 'system' | 'image'): string => {
       const userValue = override.lane?.[bucket]
       if (userValue && userValue.trim()) return userValue
@@ -1101,6 +1149,11 @@ async function runConfigRule(
   const userId = ctx.userId ?? getCurrentUserId()
 
   if (verb === 'list' || verb === '') {
+    const rows = sortConfigRulesForDisplay(getIdentityRules()).map(rule => ({
+      behavior: rule.behavior,
+      pattern: formatRule(rule.value),
+    }))
+    ctx.setCommandListCard?.(configRuleCardSpec(rows))
     return formatConfigRulesList()
   }
 
@@ -1177,9 +1230,13 @@ async function runConfigWorkspace(
   if (verb === '') {
     // bare = show current workspace (read).
     const override = loadUserConfigOverride(ctx.userId)
-    const current = typeof override.workspace === 'string' && override.workspace
-      ? override.workspace
-      : t('config.workspace.currentDefault')
+    const isDefault = !(typeof override.workspace === 'string' && override.workspace)
+    // The card shows the resolved path (default or custom); the text fallback
+    // keeps the existing custom-path-or-label wording.
+    ctx.setCommandListCard?.(
+      configWorkspaceCardSpec({ path: workspaceFor(ctx.userId), isDefault }),
+    )
+    const current = isDefault ? t('config.workspace.currentDefault') : (override.workspace as string)
     ctx.setBodyFormat?.('lark_md')
     return `${t('config.workspace.current', { path: current })}\n\n${t('config.workspace.help')}\n`
   }
