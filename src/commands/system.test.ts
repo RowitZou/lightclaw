@@ -319,3 +319,17 @@ describe('/system command', () => {
     assert.equal(terminalRegistry.find('/system'), undefined)
   })
 })
+
+describe('system usage fallbacks render the structured card', () => {
+  it('/system key set with no value → key card, not Usage text', async () => {
+    const out = await runSystemCommand('key set GH_TOKEN', { config: makeConfig(), userId: 'alice' })
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/system key set/)
+  })
+
+  it('/system mount bogusverb → mount card', async () => {
+    const out = await runSystemCommand('mount bogusverb', { config: makeConfig(), userId: 'alice' })
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/system mount add/)
+  })
+})

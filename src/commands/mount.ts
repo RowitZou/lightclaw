@@ -27,12 +27,12 @@ export async function runMountCommand(
   rawArgs: string,
   ctx: MountCommandContext,
   deps: MountCommandDeps = {},
-): Promise<string> {
+): Promise<string | null> {
   const parts = rawArgs.trim().split(/\s+/).filter(Boolean)
   const action = parts[0] ?? 'list'
 
   if (action === 'help' || action === '--help' || action === '-h') {
-    return `${t('mount.usage')}\n`
+    return null
   }
   if (ctx.config.runtime.backend !== 'cluster') {
     return `${t('mount.onlyRlaunch')}\n`
@@ -45,7 +45,7 @@ export async function runMountCommand(
 
   if (action === 'list') {
     if (parts.length !== 1) {
-      return `${t('mount.usage')}\n`
+      return null
     }
     return formatMountList(loadUserRlaunchMounts(userId))
   }
@@ -115,7 +115,7 @@ export async function runMountCommand(
 
   if (action === 'remove' || action === 'rm') {
     if (parts.length < 2) {
-      return `${t('mount.usage')}\n`
+      return null
     }
     const parsed = parseMountRemoveInput(parts.slice(1))
     if (typeof parsed === 'string') {
@@ -152,7 +152,7 @@ export async function runMountCommand(
     ].join('\n')
   }
 
-  return `${t('mount.usage')}\n`
+  return null
 }
 
 function formatMountList(mounts: readonly UserRlaunchMount[]): string {

@@ -102,20 +102,22 @@ export async function runSystemCommand(
       // endpoint (design F.3b: unreferenced keys delete directly).
       return runKeyNoun(rest, ctx)
     case 'mount': {
-      // Bare/list is the show path → render the structured card from the live
-      // mount table, and return its textification for the terminal so terminal
-      // output matches the card. The mount runner (mount.js) owns add/rm verbs.
-      const mountVerb = rest.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? ''
-      if ((mountVerb === '' || mountVerb === 'list') && ctx.userId) {
-        const rows: MountShowRow[] = loadUserRlaunchMounts(ctx.userId).map(m => ({
-          path: m.path,
-          mode: m.mode,
-        }))
+      // Structured card from the live mount table = the show output AND the
+      // usage reference. The mount runner (mount.js) owns add/rm and returns
+      // null on any usage fallback, which we map to the card.
+      const mountCard = (): string => {
+        const rows: MountShowRow[] = ctx.userId
+          ? loadUserRlaunchMounts(ctx.userId).map(m => ({ path: m.path, mode: m.mode }))
+          : []
         const spec = systemMountCardSpec(rows)
         ctx.setCommandListCard?.(spec)
         return formatCommandListSpecAsText(spec)
       }
-      return runMountCommand(rest, { config: ctx.config, userId: ctx.userId }, deps)
+      const mountVerb = rest.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? ''
+      if (mountVerb === '' || mountVerb === 'list') {
+        return mountCard()
+      }
+      return (await runMountCommand(rest, { config: ctx.config, userId: ctx.userId }, deps)) ?? mountCard()
     }
     case 'data':
       return runDataNoun(rest, ctx)
@@ -136,16 +138,20 @@ export async function runSystemCommand(
 async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<string> {
   const parts = rest.split(/\s+/).filter(Boolean)
   const verb = (parts[0] ?? '').toLowerCase()
-  // Bare/list = show → render the structured card from the live secret store
-  // and return its textification (terminal output matches the card).
-  if ((verb === '' || verb === 'list') && ctx.userId) {
-    const rows: KeyShowRow[] = listUserSecretMetadata(ctx.userId).map(m => ({
-      name: m.name,
-      enabled: m.enabled,
-    }))
+  // Structured card from the live secret store = the show output AND the usage
+  // reference (saved keys + set/enable/disable/rm 子命令 + 示例). The secret
+  // runner returns null on any usage fallback (help / malformed verb), which we
+  // map to this card so terminal + channel match.
+  const keyCard = (): string => {
+    const rows: KeyShowRow[] = ctx.userId
+      ? listUserSecretMetadata(ctx.userId).map(m => ({ name: m.name, enabled: m.enabled }))
+      : []
     const spec = systemKeyCardSpec(rows)
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
+  }
+  if (verb === '' || verb === 'list') {
+    return keyCard()
   }
   if ((verb === 'rm' || verb === 'remove') && parts[1] && ctx.userId) {
     const name = parts[1]
@@ -156,10 +162,10 @@ async function runKeyNoun(rest: string, ctx: SystemCommandContext): Promise<stri
       })
       if (!gate.confirmed) return gate.message
       // Strip --y, then hand the cleaned arg string to the secret runner.
-      return runSecretCommand(gate.rest.join(' '), { userId: ctx.userId })
+      return (await runSecretCommand(gate.rest.join(' '), { userId: ctx.userId })) ?? keyCard()
     }
   }
-  return runSecretCommand(rest, { userId: ctx.userId })
+  return (await runSecretCommand(rest, { userId: ctx.userId })) ?? keyCard()
 }
 
 /** The user's BYO endpoint aliases whose `apiKeyRef` points at `name`. */

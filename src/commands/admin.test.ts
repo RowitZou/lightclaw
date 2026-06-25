@@ -378,3 +378,17 @@ describe('/admin sandbox status fast-path regex', () => {
     assert.equal(matches('/adminsandbox'), false)
   })
 })
+
+describe('admin usage fallbacks render the structured card', () => {
+  it('/admin endpoint add with no alias → endpoint card, not Usage text', async () => {
+    const out = await runAdminCommand('endpoint add', { config: liveConfig(), userId: 'admin' })
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/admin endpoint add/)
+  })
+
+  it('/admin backend bogusverb → backend card', async () => {
+    const out = await runAdminCommand('backend bogusverb', { config: liveConfig(), userId: 'admin' })
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/admin backend add/)
+  })
+})

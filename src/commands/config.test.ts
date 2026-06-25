@@ -683,3 +683,30 @@ describe('memory dir routing (§十 per-user inverted layout)', () => {
     assert.equal(getMemoryDir(undefined), userMemoryRoot('_unbound_'))
   })
 })
+
+describe('usage fallbacks render the structured card (not the old Usage: dump)', () => {
+  it('/config backend check with no name → backend card, not Usage text', async () => {
+    const cfg = modelConfig()
+    const out = await inSession('zfb', cfg, () =>
+      runConfigCommand('backend check', { config: cfg, userId: 'zfb' }),
+    )
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/config backend add/) // example line from the card
+  })
+
+  it('/config endpoint add with no alias → endpoint card', async () => {
+    const cfg = modelConfig()
+    const out = await inSession('zfe', cfg, () =>
+      runConfigCommand('endpoint add', { config: cfg, userId: 'zfe' }),
+    )
+    assert.doesNotMatch(out, /^Usage:/m)
+    assert.match(out, /\/config endpoint add/)
+  })
+
+  it('/config lane bogusverb → lane card', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand('lane bogusverb', { config: cfg, userId: 'zfl' })
+    assert.doesNotMatch(out, /verbs:/)
+    assert.match(out, /\/config lane set worker/)
+  })
+})

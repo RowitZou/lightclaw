@@ -260,42 +260,36 @@ async function runEndpointSubcommand(
     return `${t('config.noIdentity')}\n`
   }
   const userId = ctx.userId
+  // The structured card IS the usage reference (子命令 / 参数 / 示例) — render it
+  // for the bare `list` show, the default (unknown verb), and any sub-command
+  // that returns null because a required arg was missing.
+  const usageCard = (): string => {
+    const override = loadUserConfigOverride(userId)
+    const rows = Object.entries(override.endpoints ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, ep]) => ({ name, type: ep.authRef ? 'codex' : (ep.type ?? 'openai') }))
+    const spec = configEndpointCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
   try {
     switch (verb) {
-      case 'list': {
-        const override = loadUserConfigOverride(userId)
-        const rows = Object.entries(override.endpoints ?? {})
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name, ep]) => ({ name, type: ep.authRef ? 'codex' : (ep.type ?? 'openai') }))
-        const spec = configEndpointCardSpec(rows)
-        ctx.setCommandListCard?.(spec)
-        return formatCommandListSpecAsText(spec)
-      }
+      case 'list':
+      case '':
+        return usageCard()
       case 'add':
-        return addEndpoint(userId, parts)
+        return addEndpoint(userId, parts) ?? usageCard()
       case 'set':
-        return setEndpoint(userId, parts)
+        return setEndpoint(userId, parts) ?? usageCard()
       case 'remove':
       case 'rm':
-        return removeEndpoint(userId, parts)
+        return removeEndpoint(userId, parts) ?? usageCard()
       default:
-        return endpointUsage()
+        return usageCard()
     }
   } catch (error) {
     return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
   }
-}
-
-function endpointUsage(): string {
-  return [
-    'Usage:',
-    '  /config endpoint                          List your endpoints',
-    '  /config endpoint add <ep> --type openai|anthropic --key <KEY|secretName> [--base-url <url>] [--proxy <url>]',
-    '  /config endpoint add <ep> --type codex --auth-path <auth.json> [--proxy <url>]',
-    '  /config endpoint set <ep> [--base-url <url|->] [--proxy <url|->] [--key <KEY|secretName>]',
-    '  /config endpoint rm <ep>',
-    '',
-  ].join('\n')
 }
 
 // ── --type discriminated-union parser (B3; B4 admin reuses it) ───────────────
@@ -349,9 +343,9 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
 // an existing secret name is referenced; otherwise the raw key is auto-stored
 // into the per-user secrets store (0600) and only the reference lands in
 // config.json — the raw key NEVER enters config.json.
-function addEndpoint(userId: string, parts: string[]): string {
+function addEndpoint(userId: string, parts: string[]): string | null {
   const [alias, ...rest] = parts
-  if (!alias) return endpointUsage()
+  if (!alias) return null
   assertAlias(alias)
   const override = loadUserConfigOverride(userId)
   if (override.endpoints?.[alias]) {
@@ -447,9 +441,9 @@ function deriveSecretName(userId: string, _key: string): string {
   return `BYO_KEY_${Date.now()}`
 }
 
-function setEndpoint(userId: string, parts: string[]): string {
+function setEndpoint(userId: string, parts: string[]): string | null {
   const [alias, ...rest] = parts
-  if (!alias) return endpointUsage()
+  if (!alias) return null
   assertAlias(alias)
   const obj = readUserConfig(userId)
   const endpoints = asRecord(obj.endpoints)
@@ -491,9 +485,9 @@ function setEndpoint(userId: string, parts: string[]): string {
   return `${t('config.endpoint.updated', { name: alias })}\n`
 }
 
-function removeEndpoint(userId: string, parts: string[]): string {
+function removeEndpoint(userId: string, parts: string[]): string | null {
   const [alias] = parts
-  if (!alias) return endpointUsage()
+  if (!alias) return null
   assertAlias(alias)
   const obj = readUserConfig(userId)
   const endpoints = asRecord(obj.endpoints)
@@ -548,44 +542,36 @@ async function runBackendSubcommand(
     return `${t('config.noIdentity')}\n`
   }
   const userId = ctx.userId
+  // Structured card = usage reference; rendered for list / default / null sub-arg.
+  const usageCard = (): string => {
+    const override = loadUserConfigOverride(userId)
+    const rows = Object.entries(override.models ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name]) => ({ name, isDefault: override.defaultModel === name }))
+    const spec = configBackendCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
   try {
     switch (verb) {
-      case 'list': {
-        const override = loadUserConfigOverride(userId)
-        const rows = Object.entries(override.models ?? {})
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name]) => ({ name, isDefault: override.defaultModel === name }))
-        const spec = configBackendCardSpec(rows)
-        ctx.setCommandListCard?.(spec)
-        return formatCommandListSpecAsText(spec)
-      }
+      case 'list':
+      case '':
+        return usageCard()
       case 'add':
-        return addBackend(userId, parts)
+        return addBackend(userId, parts) ?? usageCard()
       case 'set':
-        return setBackend(userId, parts)
+        return setBackend(userId, parts) ?? usageCard()
       case 'check':
-        return await checkBackend(userId, parts, ctx)
+        return (await checkBackend(userId, parts, ctx)) ?? usageCard()
       case 'remove':
       case 'rm':
-        return removeBackend(userId, parts)
+        return removeBackend(userId, parts) ?? usageCard()
       default:
-        return backendUsage()
+        return usageCard()
     }
   } catch (error) {
     return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
   }
-}
-
-function backendUsage(): string {
-  return [
-    'Usage:',
-    '  /config backend                 List your registered models',
-    '  /config backend add <name> --endpoint <ep> [--upstream <id>] [--reasoning <none|minimal|low|medium|high|xhigh>] [--max-tokens <n>] [--default]',
-    '  /config backend set <name> [--endpoint <ep>] [--upstream <id>] [--reasoning <e|->] [--max-tokens <n|->] [--default]',
-    '  /config backend check <name>    Re-probe capabilities (clears cache)',
-    '  /config backend rm <name>',
-    '',
-  ].join('\n')
 }
 
 /** Derive the model schema from the referenced endpoint's `--type` (apiKey) or
@@ -602,9 +588,9 @@ function schemaForEndpoint(
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'
 }
 
-function addBackend(userId: string, parts: string[]): string {
+function addBackend(userId: string, parts: string[]): string | null {
   const [displayName, ...rest] = parts
-  if (!displayName) return backendUsage()
+  if (!displayName) return null
   assertAlias(displayName)
   const endpoint = flagValue(rest, '--endpoint')
   if (!endpoint) return `${t('config.backend.endpointRequired')}\n`
@@ -644,9 +630,9 @@ function addBackend(userId: string, parts: string[]): string {
   return `${t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel })}\n`
 }
 
-function setBackend(userId: string, parts: string[]): string {
+function setBackend(userId: string, parts: string[]): string | null {
   const [displayName, ...rest] = parts
-  if (!displayName) return backendUsage()
+  if (!displayName) return null
   assertAlias(displayName)
   const obj = readUserConfig(userId)
   const models = asRecord(obj.models)
@@ -698,9 +684,9 @@ function setBackend(userId: string, parts: string[]): string {
   })}\n`
 }
 
-function removeBackend(userId: string, parts: string[]): string {
+function removeBackend(userId: string, parts: string[]): string | null {
   const [displayName] = parts
-  if (!displayName) return backendUsage()
+  if (!displayName) return null
   const obj = readUserConfig(userId)
   const models = asRecord(obj.models)
   if (!models[displayName]) {
@@ -719,9 +705,9 @@ async function checkBackend(
   userId: string,
   parts: string[],
   ctx: ConfigCommandContext,
-): Promise<string> {
+): Promise<string | null> {
   const [displayName] = parts
-  if (!displayName) return backendUsage()
+  if (!displayName) return null
   const resolved = resolveUserConfig(userId, ctx.config)
   const entry = resolved.models[displayName]
   if (!entry || entry.visibility !== 'user') {
@@ -1009,8 +995,9 @@ async function runConfigLane(
   const userId = ctx.userId ?? getCurrentUserId()
   const verb = (parts[0] ?? '').toLowerCase()
 
-  // bare = show the three buckets + current values (read).
-  if (verb === '') {
+  // The structured card (current values + set/reset 子命令 + 示例) IS the usage
+  // reference — rendered for the bare show AND any usage fallback below.
+  const laneCard = (): string => {
     const override = userId ? loadUserConfigOverride(userId) : {}
     const resolveRow = (bucket: 'worker' | 'system' | 'image'): LaneShowRow => {
       const explicit = override.lane?.[bucket]?.trim() || ctx.config.lane?.[bucket]?.trim()
@@ -1026,8 +1013,13 @@ async function runConfigLane(
     return formatCommandListSpecAsText(spec)
   }
 
+  // bare = show the three buckets + current values (read).
+  if (verb === '') {
+    return laneCard()
+  }
+
   if (verb !== 'set' && verb !== 'reset') {
-    return `${t('config.lane.usage')}\n`
+    return laneCard()
   }
   if (!userId) {
     return `${t('config.noIdentity')}\n`
@@ -1052,7 +1044,7 @@ async function runConfigLane(
   // `set <bucket> <model>` — reject an unknown model (user-typed slash).
   const model = parts[2] ?? ''
   if (!model) {
-    return `${t('config.lane.usage')}\n`
+    return laneCard()
   }
   if (!ctx.config.models[model]) {
     return `${t('common.error.prefix')}${t('config.lane.modelUnknown', { model })}\n`
@@ -1164,7 +1156,14 @@ async function runConfigRule(
       : `${t('rules.askRegistered', { rule: formatRule(value) })}\n`
   }
 
-  return `${t('common.error.prefix')}${t('config.rule.usage')}\n`
+  // Unknown verb → the structured rule card doubles as the usage reference.
+  const rows = sortConfigRulesForDisplay(getIdentityRules()).map(rule => ({
+    behavior: rule.behavior,
+    pattern: formatRule(rule.value),
+  }))
+  const spec = configRuleCardSpec(rows)
+  ctx.setCommandListCard?.(spec)
+  return formatCommandListSpecAsText(spec)
 }
 
 // ── /config workspace — scalar workspace dir (←old `/config set-workspace`) ────

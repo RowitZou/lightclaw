@@ -11,6 +11,13 @@ import { setLightclawHomeOverride } from '../paths.js'
 import { createBuiltinReplRegistry } from './builtin.js'
 import { runSecretCommand } from './secret.js'
 
+// Usage fallbacks now return null (the /system key card renders them); coerce to
+// string for the runner unit tests that assert on real results.
+const runSecret = async (
+  args: string,
+  ctx: Parameters<typeof runSecretCommand>[1],
+): Promise<string> => (await runSecretCommand(args, ctx)) ?? ''
+
 describe('/secret command', () => {
   let home: string
 
@@ -28,96 +35,97 @@ describe('/secret command', () => {
 
   it('sets, lists, and statuses a secret without echoing its value', async () => {
     const value = 'ghp_secret_value_with_$quotes" and spaces'
-    const set = await runSecretCommand(`set GH_TOKEN ${value}`, { userId: 'alice' })
+    const set = await runSecret(`set GH_TOKEN ${value}`, { userId: 'alice' })
     assert.match(set, /Secret GH_TOKEN saved/)
     assert.match(set, new RegExp(`${value.length} chars`))
 
-    const listed = await runSecretCommand('list', { userId: 'alice' })
+    const listed = await runSecret('list', { userId: 'alice' })
     assert.match(listed, new RegExp(`GH_TOKEN \\(disabled, ${value.length} chars`))
     assert.equal(listed.includes(value), false)
 
-    const status = await runSecretCommand('status GH_TOKEN', { userId: 'alice' })
+    const status = await runSecret('status GH_TOKEN', { userId: 'alice' })
     assert.match(status, new RegExp(`GH_TOKEN: stored, disabled, ${value.length} chars`))
     assert.equal(status.includes(value), false)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, value)
   })
 
   it('enables, disables, and retains the stored value', async () => {
-    await runSecretCommand('set GH_TOKEN secret', { userId: 'alice' })
+    await runSecret('set GH_TOKEN secret', { userId: 'alice' })
 
     assert.match(
-      await runSecretCommand('enable GH_TOKEN', { userId: 'alice' }),
+      await runSecret('enable GH_TOKEN', { userId: 'alice' }),
       /can use it/,
     )
-    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /stored, enabled,/)
+    assert.match(await runSecret('status GH_TOKEN', { userId: 'alice' }), /stored, enabled,/)
 
     assert.match(
-      await runSecretCommand('disable GH_TOKEN', { userId: 'alice' }),
+      await runSecret('disable GH_TOKEN', { userId: 'alice' }),
       /Stored value retained/,
     )
-    assert.match(await runSecretCommand('status GH_TOKEN', { userId: 'alice' }), /stored, disabled,/)
+    assert.match(await runSecret('status GH_TOKEN', { userId: 'alice' }), /stored, disabled,/)
     assert.equal(loadUserSecrets('alice').GH_TOKEN.value, 'secret')
   })
 
   it('removes a secret and reports missing entries idempotently', async () => {
-    await runSecretCommand('set GH_TOKEN secret', { userId: 'alice' })
-    assert.match(await runSecretCommand('remove GH_TOKEN', { userId: 'alice' }), /removed/)
-    assert.match(await runSecretCommand('list', { userId: 'alice' }), /No secrets stored/)
-    assert.match(await runSecretCommand('remove GH_TOKEN', { userId: 'alice' }), /was not stored/)
+    await runSecret('set GH_TOKEN secret', { userId: 'alice' })
+    assert.match(await runSecret('remove GH_TOKEN', { userId: 'alice' }), /removed/)
+    assert.match(await runSecret('list', { userId: 'alice' }), /No secrets stored/)
+    assert.match(await runSecret('remove GH_TOKEN', { userId: 'alice' }), /was not stored/)
   })
 
   it('round-trips values with shell-significant characters and long values', async () => {
     const special = 'value with spaces "$quote" $dollar `ticks`'
-    await runSecretCommand(`set API_TOKEN ${special}`, { userId: 'alice' })
+    await runSecret(`set API_TOKEN ${special}`, { userId: 'alice' })
     assert.equal(loadUserSecrets('alice').API_TOKEN.value, special)
 
     const long = 'x'.repeat(10_240)
-    assert.match(await runSecretCommand(`set LONG_TOKEN ${long}`, { userId: 'alice' }), /10240 chars/)
+    assert.match(await runSecret(`set LONG_TOKEN ${long}`, { userId: 'alice' }), /10240 chars/)
     assert.equal(loadUserSecrets('alice').LONG_TOKEN.value, long)
   })
 
   it('requires an active paired channel user', async () => {
     assert.match(
-      await runSecretCommand('list', {}),
+      await runSecret('list', {}),
       /requires a paired channel user/,
     )
   })
 
   it('reports invalid names and missing values with actionable output', async () => {
     assert.match(
-      await runSecretCommand('set bad-name value', { userId: 'alice' }),
+      await runSecret('set bad-name value', { userId: 'alice' }),
       /secret name must match/,
     )
-    assert.match(
+    assert.equal(
       await runSecretCommand('set GH_TOKEN', { userId: 'alice' }),
-      /Usage:/,
+      null,
     )
     assert.match(
-      await runSecretCommand('enable MISSING', { userId: 'alice' }),
+      await runSecret('enable MISSING', { userId: 'alice' }),
       /is not stored/,
     )
     assert.match(
-      await runSecretCommand('disable MISSING', { userId: 'alice' }),
+      await runSecret('disable MISSING', { userId: 'alice' }),
       /was not stored/,
     )
   })
 
   it('supports list default, status all, help, and rm alias', async () => {
-    assert.match(await runSecretCommand('', { userId: 'alice' }), /No secrets stored/)
-    assert.match(await runSecretCommand('status', { userId: 'alice' }), /No secrets stored/)
-    assert.match(await runSecretCommand('help', { userId: 'alice' }), /\/system key set <NAME>/)
+    assert.match(await runSecret('', { userId: 'alice' }), /No secrets stored/)
+    assert.match(await runSecret('status', { userId: 'alice' }), /No secrets stored/)
+    // `help` is a usage fallback → null (the /system key card renders the usage).
+    assert.equal(await runSecretCommand('help', { userId: 'alice' }), null)
 
-    await runSecretCommand('set GH_TOKEN secret', { userId: 'alice' })
-    assert.match(await runSecretCommand('rm GH_TOKEN', { userId: 'alice' }), /removed/)
+    await runSecret('set GH_TOKEN secret', { userId: 'alice' })
+    assert.match(await runSecret('rm GH_TOKEN', { userId: 'alice' }), /removed/)
   })
 
   it('audits successful write operations without value, mask, length, or updatedAt', async () => {
     const value = 'chat-secret-value-that-must-not-be-audited'
-    await runSecretCommand(`set GH_TOKEN ${value}`, { userId: 'alice' })
-    await runSecretCommand(`set GH_TOKEN ${value}-replacement`, { userId: 'alice' })
-    await runSecretCommand('enable GH_TOKEN', { userId: 'alice' })
-    await runSecretCommand('disable GH_TOKEN', { userId: 'alice' })
-    await runSecretCommand('remove GH_TOKEN', { userId: 'alice' })
+    await runSecret(`set GH_TOKEN ${value}`, { userId: 'alice' })
+    await runSecret(`set GH_TOKEN ${value}-replacement`, { userId: 'alice' })
+    await runSecret('enable GH_TOKEN', { userId: 'alice' })
+    await runSecret('disable GH_TOKEN', { userId: 'alice' })
+    await runSecret('remove GH_TOKEN', { userId: 'alice' })
 
     const audit = readAuditLines()
     assert.deepEqual(audit.map(entry => entry.op), [
@@ -158,11 +166,10 @@ describe('/secret command', () => {
   it('renders Chinese output under the cn locale (i18n migration guard)', async () => {
     setLang('cn')
     try {
-      const saved = await runSecretCommand('set GH_TOKEN val', { userId: 'alice' })
+      const saved = await runSecret('set GH_TOKEN val', { userId: 'alice' })
       assert.match(saved, /密钥 GH_TOKEN 已保存/)
       assert.equal(saved.includes('Secret GH_TOKEN saved'), false)
-      assert.match(await runSecretCommand('help', { userId: 'alice' }), /用法：/)
-      assert.match(await runSecretCommand('list', {}), /需要已配对的渠道用户/)
+      assert.match(await runSecret('list', {}), /需要已配对的渠道用户/)
     } finally {
       setLang('en')
     }

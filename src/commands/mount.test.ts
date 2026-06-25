@@ -10,6 +10,14 @@ import { setLightclawHomeOverride } from '../paths.js'
 import { loadUserRlaunchMounts } from '../runtime/rlaunch-mounts.js'
 import { runMountCommand } from './mount.js'
 
+// Usage fallbacks now return null (the /system mount card renders them); these
+// runner unit tests only exercise real add/rm/list results, so coerce to string.
+const runMount = async (
+  args: string,
+  ctx: Parameters<typeof runMountCommand>[1],
+  deps?: Parameters<typeof runMountCommand>[2],
+): Promise<string> => (await runMountCommand(args, ctx, deps)) ?? ''
+
 let tmpHome = ''
 let gpfsRoot = ''
 let workspaceRoot = ''
@@ -50,32 +58,32 @@ describe('/mount command', () => {
     }
 
     assert.match(
-      await runMountCommand('list', { config: makeConfig(), userId: 'alice' }, deps),
+      await runMount('list', { config: makeConfig(), userId: 'alice' }, deps),
       /You have no mounted paths yet/,
     )
 
-    const added = await runMountCommand(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
+    const added = await runMount(`add ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
     assert.match(added, /mode: ro/)
     assert.match(added, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'ro' }])
 
-    const unchanged = await runMountCommand(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    const unchanged = await runMount(`add ${dataPath} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(unchanged, /already exists/)
     assert.equal(restartCount, 1)
 
-    const updated = await runMountCommand(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
+    const updated = await runMount(`add ${dataPath} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Updated mount:/)
     assert.match(updated, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [{ path: dataPath, mode: 'rw' }])
 
-    const listed = await runMountCommand('list', { config: makeConfig(), userId: 'alice' }, deps)
+    const listed = await runMount('list', { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(
       listed,
       new RegExp(escapeRegExp(`${dataPath} (read-write)`)),
     )
 
-    const removed = await runMountCommand(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
+    const removed = await runMount(`remove ${dataPath}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(removed, /Unmounted:/)
     assert.match(removed, /Sandbox restarted/)
     assert.deepEqual(loadUserRlaunchMounts('alice'), [])
@@ -96,7 +104,7 @@ describe('/mount command', () => {
       },
     }
 
-    const added = await runMountCommand(`add ${dataA} ${dataB} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
+    const added = await runMount(`add ${dataA} ${dataB} --rw`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(added, /Mounted:/)
     assert.match(added, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(added, new RegExp(escapeRegExp(`- ${dataB}`)))
@@ -108,7 +116,7 @@ describe('/mount command', () => {
       { path: dataB, mode: 'rw' },
     ])
 
-    const updated = await runMountCommand(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    const updated = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(updated, /Mounted:/)
     assert.match(updated, /Updated mounts:/)
     assert.match(updated, /Sandbox restarted/)
@@ -119,12 +127,12 @@ describe('/mount command', () => {
       { path: dataC, mode: 'ro' },
     ])
 
-    const unchanged = await runMountCommand(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
+    const unchanged = await runMount(`add ${dataA} ${dataC} --ro`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(unchanged, /Mounts already exist/)
     assert.match(unchanged, /No restart needed/)
     assert.equal(restartCount, 2)
 
-    const removed = await runMountCommand(`remove ${dataA} ${dataB}`, { config: makeConfig(), userId: 'alice' }, deps)
+    const removed = await runMount(`remove ${dataA} ${dataB}`, { config: makeConfig(), userId: 'alice' }, deps)
     assert.match(removed, /Unmounted:/)
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataA}`)))
     assert.match(removed, new RegExp(escapeRegExp(`- ${dataB}`)))
@@ -145,7 +153,7 @@ describe('/mount command', () => {
       },
     }
 
-    const added = await runMountCommand(
+    const added = await runMount(
       `add ${publicData}`,
       { config: makeConfig([{ hostPrefix: gpfs2Root, mountPrefix: 'gpfs://gpfs2' }]), userId: 'alice' },
       deps,
@@ -160,30 +168,30 @@ describe('/mount command', () => {
     mkdirSync(dataPath, { recursive: true })
 
     assert.match(
-      await runMountCommand(`add ${dataPath}`, {
+      await runMount(`add ${dataPath}`, {
         config: { runtime: { backend: 'docker' } } as unknown as LightClawConfig,
         userId: 'alice',
       }),
       /only available/,
     )
     assert.match(
-      await runMountCommand('add /tmp/outside', { config: makeConfig(), userId: 'alice' }),
+      await runMount('add /tmp/outside', { config: makeConfig(), userId: 'alice' }),
       /gpfsMounts|not accessible/,
     )
     assert.match(
-      await runMountCommand(`add ${workspaceRoot}`, { config: makeConfig(), userId: 'alice' }),
+      await runMount(`add ${workspaceRoot}`, { config: makeConfig(), userId: 'alice' }),
       /Overlapping runtime mount entries/,
     )
     assert.match(
-      await runMountCommand(`add ${dataPath} --nope`, { config: makeConfig(), userId: 'alice' }),
+      await runMount(`add ${dataPath} --nope`, { config: makeConfig(), userId: 'alice' }),
       /unknown flag: --nope/,
     )
     assert.match(
-      await runMountCommand(`add ${dataPath} --ro --rw`, { config: makeConfig(), userId: 'alice' }),
+      await runMount(`add ${dataPath} --ro --rw`, { config: makeConfig(), userId: 'alice' }),
       /mount mode is ambiguous/,
     )
     assert.match(
-      await runMountCommand('remove relative/path another-relative', { config: makeConfig(), userId: 'alice' }),
+      await runMount('remove relative/path another-relative', { config: makeConfig(), userId: 'alice' }),
       /must be absolute/,
     )
   })

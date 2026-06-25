@@ -168,39 +168,46 @@ export async function runAdminCommand(
  *  user-management part of the shared `runUserCommand`. */
 async function runAdminUser(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
-  if (verb === 'list' || verb === '') {
+  // Structured card (live list + 子命令 + 示例) = the usage reference.
+  const usageCard = async (): Promise<string> => {
     const spec = adminUserCardSpec(await runUserCommand('list'))
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
+  }
+  if (verb === 'list' || verb === '') {
+    return usageCard()
   }
   if (verb === 'rm' || verb === 'remove') {
     // --y gate (design F.3b): deleting a user is destructive.
     const rmArgs = parts.slice(1)
     const name = rmArgs.find(p => !p.startsWith('--')) ?? ''
     if (!name) {
-      return Promise.resolve(`${t('admin.user.usage')}\n`)
+      return usageCard()
     }
     const purge = rmArgs.includes('--purge') ? t('confirm.user.rmPurge') : ''
     const gate = requireConfirm(rmArgs, {
       preview: t('confirm.user.rm', { name, purge }),
     })
-    if (!gate.confirmed) return Promise.resolve(gate.message)
+    if (!gate.confirmed) return gate.message
     return runUserCommand(`remove ${gate.rest.join(' ')}`.trim())
   }
   if (verb === 'unlink') {
     return runUserCommand(`unlink ${parts.slice(1).join(' ')}`.trim())
   }
-  return Promise.resolve(`${t('admin.user.usage')}\n`)
+  return usageCard()
 }
 
 /** `/admin pairing [list|approve <code> [--as <name>]|reject <code>]` → the
  *  pairing part of the shared `runUserCommand`. Bare = list pending. */
 async function runAdminPairing(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
-  if (verb === 'list' || verb === '' || verb === 'pending') {
+  const usageCard = async (): Promise<string> => {
     const spec = adminPairingCardSpec(await runUserCommand('pending'))
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
+  }
+  if (verb === 'list' || verb === '' || verb === 'pending') {
+    return usageCard()
   }
   if (verb === 'approve') {
     return runUserCommand(`approve ${parts.slice(1).join(' ')}`.trim())
@@ -208,7 +215,7 @@ async function runAdminPairing(parts: string[], ctx: AdminCommandContext): Promi
   if (verb === 'reject') {
     return runUserCommand(`reject ${parts.slice(1).join(' ')}`.trim())
   }
-  return Promise.resolve(`${t('admin.pairing.usage')}\n`)
+  return usageCard()
 }
 
 /** `/admin sandbox [status|prefetch|reset --y]` → the shared runSandboxCommand.
@@ -220,6 +227,12 @@ async function runAdminSandbox(
   ctx: AdminCommandContext,
 ): Promise<string> {
   const verb = (parts[0] ?? 'status').toLowerCase()
+  // Status card (live state + prefetch/reset 子命令 + 示例) = the usage reference.
+  const usageCard = async (): Promise<string> => {
+    const spec = adminSandboxCardSpec(await runSandboxCommand('status', config))
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
   if (verb === 'reset') {
     const gate = requireConfirm(parts, { preview: t('confirm.sandbox.reset') })
     if (!gate.confirmed) return gate.message
@@ -227,11 +240,12 @@ async function runAdminSandbox(
     return runSandboxCommand(gate.rest.join(' '), config)
   }
   if (verb === 'status' || verb === '') {
-    const spec = adminSandboxCardSpec(await runSandboxCommand('status', config))
-    ctx.setCommandListCard?.(spec)
-    return formatCommandListSpecAsText(spec)
+    return usageCard()
   }
-  return runSandboxCommand(parts.join(' '), config)
+  if (verb === 'prefetch') {
+    return runSandboxCommand('prefetch', config)
+  }
+  return usageCard()
 }
 
 /** `/admin feishu-drive [status|rm <canonical> --y]` → the shared
@@ -240,10 +254,13 @@ async function runAdminSandbox(
  *  works). The `admin-delete-workspace` audit row is unchanged. */
 async function runAdminFeishuDrive(parts: string[], ctx: AdminCommandContext): Promise<string> {
   const verb = (parts[0] ?? 'status').toLowerCase()
-  if (verb === 'status' || verb === '') {
+  const usageCard = async (): Promise<string> => {
     const spec = adminFeishuDriveCardSpec(await runFeishuWorkspaceCommand('status'))
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
+  }
+  if (verb === 'status' || verb === '') {
+    return usageCard()
   }
   if (verb === 'list') {
     return runFeishuWorkspaceCommand('list')
@@ -254,7 +271,7 @@ async function runAdminFeishuDrive(parts: string[], ctx: AdminCommandContext): P
   if (verb === 'rm' || verb === 'delete') {
     return runFeishuWorkspaceCommand(`delete ${parts.slice(1).join(' ')}`.trim())
   }
-  return Promise.resolve(`${t('admin.feishuDrive.usage')}\n`)
+  return usageCard()
 }
 
 // ── system-scope write-back (the highest-risk part) ──────────────────────────
@@ -344,39 +361,42 @@ async function runAdminEndpoint(
 ): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   const rest = parts.slice(1)
+  // Structured card = usage reference; rendered for list / default / null sub-arg.
+  const usageCard = (): string => {
+    const cfg = readJsonObjectOrEmpty(adminConfigPath())
+    const rows: EndpointShowRow[] = Object.entries(asRecord(cfg.endpoints))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, ep]) => {
+        const e = asRecord(ep)
+        return { name, type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai') }
+      })
+    const spec = adminEndpointCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
   try {
     switch (verb) {
       case 'list':
-      case '': {
-        const cfg = readJsonObjectOrEmpty(adminConfigPath())
-        const rows: EndpointShowRow[] = Object.entries(asRecord(cfg.endpoints))
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name, ep]) => {
-            const e = asRecord(ep)
-            return { name, type: e.auth ? 'codex' : (typeof e.type === 'string' ? e.type : 'openai') }
-          })
-        const spec = adminEndpointCardSpec(rows)
-        ctx.setCommandListCard?.(spec)
-        return formatCommandListSpecAsText(spec)
-      }
+      case '':
+        return usageCard()
       case 'add':
-        return addAdminEndpoint(rest, config)
+        return addAdminEndpoint(rest, config) ?? usageCard()
       case 'set':
-        return setAdminEndpoint(rest, config)
+        return setAdminEndpoint(rest, config) ?? usageCard()
       case 'rm':
       case 'remove':
-        return removeAdminEndpoint(rest, config)
+        return removeAdminEndpoint(rest, config) ?? usageCard()
       default:
-        return `${t('admin.endpoint.usage')}\n`
+        return usageCard()
     }
   } catch (error) {
     return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
   }
 }
 
-function addAdminEndpoint(parts: string[], config: LightClawConfig): string {
+function addAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
   const [alias, ...rest] = parts
-  if (!alias) return `${t('admin.endpoint.usage')}\n`
+  if (!alias) return null
   assertAlias(alias)
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const endpoints = asRecord(cfg.endpoints)
@@ -416,9 +436,9 @@ function addAdminEndpoint(parts: string[], config: LightClawConfig): string {
   return `${t('admin.endpoint.added', { name: alias })}\n`
 }
 
-function setAdminEndpoint(parts: string[], config: LightClawConfig): string {
+function setAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
   const [alias, ...rest] = parts
-  if (!alias) return `${t('admin.endpoint.usage')}\n`
+  if (!alias) return null
   assertAlias(alias)
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const endpoints = asRecord(cfg.endpoints)
@@ -445,9 +465,9 @@ function setAdminEndpoint(parts: string[], config: LightClawConfig): string {
   return `${t('config.endpoint.updated', { name: alias })}\n`
 }
 
-function removeAdminEndpoint(parts: string[], config: LightClawConfig): string {
+function removeAdminEndpoint(parts: string[], config: LightClawConfig): string | null {
   const [alias] = parts
-  if (!alias) return `${t('admin.endpoint.usage')}\n`
+  if (!alias) return null
   assertAlias(alias)
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const endpoints = asRecord(cfg.endpoints)
@@ -491,29 +511,31 @@ async function runAdminBackend(
 ): Promise<string> {
   const verb = (parts[0] ?? 'list').toLowerCase()
   const rest = parts.slice(1)
+  const usageCard = (): string => {
+    const cfg = readJsonObjectOrEmpty(adminConfigPath())
+    const rows: BackendShowRow[] = Object.entries(asRecord(cfg.models))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name]) => ({ name, isDefault: cfg.defaultModel === name }))
+    const spec = adminBackendCardSpec(rows)
+    ctx.setCommandListCard?.(spec)
+    return formatCommandListSpecAsText(spec)
+  }
   try {
     switch (verb) {
       case 'list':
-      case '': {
-        const cfg = readJsonObjectOrEmpty(adminConfigPath())
-        const rows: BackendShowRow[] = Object.entries(asRecord(cfg.models))
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name]) => ({ name, isDefault: cfg.defaultModel === name }))
-        const spec = adminBackendCardSpec(rows)
-        ctx.setCommandListCard?.(spec)
-        return formatCommandListSpecAsText(spec)
-      }
+      case '':
+        return usageCard()
       case 'add':
-        return addAdminBackend(rest, config)
+        return addAdminBackend(rest, config) ?? usageCard()
       case 'set':
-        return setAdminBackend(rest, config)
+        return setAdminBackend(rest, config) ?? usageCard()
       case 'check':
         return `${t('admin.backend.checkHint')}\n`
       case 'rm':
       case 'remove':
-        return removeAdminBackend(rest, config)
+        return removeAdminBackend(rest, config) ?? usageCard()
       default:
-        return `${t('admin.backend.usage')}\n`
+        return usageCard()
     }
   } catch (error) {
     return `${t('config.byo.error', { detail: error instanceof Error ? error.message : String(error) })}\n`
@@ -533,9 +555,9 @@ function schemaForAdminEndpoint(
   return ep.type === 'anthropic' ? 'anthropic' : 'openai'
 }
 
-function addAdminBackend(parts: string[], config: LightClawConfig): string {
+function addAdminBackend(parts: string[], config: LightClawConfig): string | null {
   const [displayName, ...rest] = parts
-  if (!displayName) return `${t('admin.backend.usage')}\n`
+  if (!displayName) return null
   assertAlias(displayName)
   const endpoint = flagValue(rest, '--endpoint')
   if (!endpoint) return `${t('config.backend.endpointRequired')}\n`
@@ -570,9 +592,9 @@ function addAdminBackend(parts: string[], config: LightClawConfig): string {
   return `${t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel })}\n`
 }
 
-function setAdminBackend(parts: string[], config: LightClawConfig): string {
+function setAdminBackend(parts: string[], config: LightClawConfig): string | null {
   const [displayName, ...rest] = parts
-  if (!displayName) return `${t('admin.backend.usage')}\n`
+  if (!displayName) return null
   assertAlias(displayName)
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const endpoints = asRecord(cfg.endpoints)
@@ -623,9 +645,9 @@ function setAdminBackend(parts: string[], config: LightClawConfig): string {
   })}\n`
 }
 
-function removeAdminBackend(parts: string[], config: LightClawConfig): string {
+function removeAdminBackend(parts: string[], config: LightClawConfig): string | null {
   const [displayName] = parts
-  if (!displayName) return `${t('admin.backend.usage')}\n`
+  if (!displayName) return null
   const cfg = readJsonObjectOrEmpty(adminConfigPath())
   const models = asRecord(cfg.models)
   if (!models[displayName]) {
@@ -654,7 +676,7 @@ async function runAdminLane(
   ctx: AdminCommandContext,
 ): Promise<string> {
   const verb = (parts[0] ?? '').toLowerCase()
-  if (verb === '') {
+  const usageCard = (): string => {
     const rows: LaneShowRow[] = (['worker', 'system', 'image'] as const).map(bucket => {
       const explicit = config.lane?.[bucket]?.trim()
       if (explicit) return { bucket, model: explicit, isDefault: false }
@@ -666,8 +688,11 @@ async function runAdminLane(
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
   }
+  if (verb === '') {
+    return usageCard()
+  }
   if (verb !== 'set' && verb !== 'reset') {
-    return `${t('admin.lane.usage')}\n`
+    return usageCard()
   }
   const bucket = (parts[1] ?? '').toLowerCase()
   if (!LANE_BUCKETS.has(bucket)) {

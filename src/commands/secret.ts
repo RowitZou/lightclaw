@@ -16,12 +16,12 @@ type SecretCommandContext = {
 export async function runSecretCommand(
   rawArgs: string,
   ctx: SecretCommandContext,
-): Promise<string> {
+): Promise<string | null> {
   const trimmed = rawArgs.trim()
   const parts = trimmed.split(/\s+/).filter(Boolean)
   const action = (parts[0] ?? 'list').toLowerCase()
 
-  if (['help', '--help', '-h'].includes(action)) return `${t('secret.usage')}\n`
+  if (['help', '--help', '-h'].includes(action)) return null
   if (!ctx.userId) {
     return `${t('secret.noIdentity')}\n`
   }
@@ -30,17 +30,17 @@ export async function runSecretCommand(
   try {
     switch (action) {
       case 'list': {
-        if (parts.length > 1) return `${t('secret.usage')}\n`
+        if (parts.length > 1) return null
         return formatList(userId)
       }
       case 'status': {
-        if (parts.length > 2) return `${t('secret.usage')}\n`
+        if (parts.length > 2) return null
         if (parts[1]) return formatStatus(userId, parts[1])
         return formatList(userId)
       }
       case 'set': {
         const match = trimmed.match(/^set\s+(\S+)\s+([\s\S]+)$/i)
-        if (!match) return `${t('secret.usage')}\n`
+        if (!match) return null
         const name = validateSecretName(match[1])
         const result = setUserSecret(userId, name, match[2])
         await auditSecretOp(userId, result.replaced ? 'set-replace' : 'set', name)
@@ -51,7 +51,7 @@ export async function runSecretCommand(
         })}\n`
       }
       case 'enable': {
-        if (parts.length !== 2) return `${t('secret.usage')}\n`
+        if (parts.length !== 2) return null
         const name = validateSecretName(parts[1])
         const result = setEnabled(userId, name, true)
         if (!result.stored) {
@@ -61,7 +61,7 @@ export async function runSecretCommand(
         return `${t('secret.enabled', { name: result.name })}\n`
       }
       case 'disable': {
-        if (parts.length !== 2) return `${t('secret.usage')}\n`
+        if (parts.length !== 2) return null
         const name = validateSecretName(parts[1])
         const result = setEnabled(userId, name, false)
         if (!result.stored) return `${t('secret.notStored', { name: result.name })}\n`
@@ -70,7 +70,7 @@ export async function runSecretCommand(
       }
       case 'remove':
       case 'rm': {
-        if (parts.length !== 2) return `${t('secret.usage')}\n`
+        if (parts.length !== 2) return null
         const name = validateSecretName(parts[1])
         const result = removeUserSecret(userId, name)
         if (!result.removed) return `${t('secret.notStored', { name: result.name })}\n`
@@ -78,7 +78,7 @@ export async function runSecretCommand(
         return `${t('secret.removed', { name: result.name })}\n`
       }
       default:
-        return `${t('secret.usage')}\n`
+        return null
     }
   } catch (error) {
     return `${t('common.error.prefix')}${error instanceof Error ? error.message : String(error)}\n`
