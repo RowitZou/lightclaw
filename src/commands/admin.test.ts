@@ -55,7 +55,7 @@ describe('/admin endpoint add (system-scope write-back)', () => {
       config: cfg,
       userId: 'admin',
     })
-    assert.match(out, /Added deployment endpoint "ep"/)
+    assert.match(out, /Added public model service "ep"/)
     const persisted = readConfig()
     const endpoints = persisted.endpoints as Record<string, { apiKey?: string; type?: string }>
     assert.equal(endpoints.ep!.apiKey, 'K')
