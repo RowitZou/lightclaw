@@ -406,6 +406,21 @@ describe('/config endpoint add --type', () => {
     assert.equal(ep.apiKeyRef, undefined)
   })
 
+  it('--type codex rejects a non-absolute --auth-path (no tilde/relative; credential-leak guard)', async () => {
+    const cfg = modelConfig()
+    // A `~` path would expandHomePath to the DAEMON operator's home and import the
+    // host's own Codex credentials into this user's endpoint — must be refused.
+    for (const bad of ['~/.codex/auth.json', './auth.json', 'auth.json']) {
+      const out = await runConfigCommand(`endpoint add cdx --type codex --auth-path ${bad}`, {
+        config: cfg,
+        userId: 'b3codexrel',
+      })
+      assert.match(out, /absolute path/i)
+      // Nothing persisted — the endpoint was never added.
+      assert.equal(existsSync(userConfigPath('b3codexrel')), false)
+    }
+  })
+
   it('--type bogus is an error', async () => {
     const cfg = modelConfig()
     const out = await runConfigCommand('endpoint add ep --type bogus --key x', {

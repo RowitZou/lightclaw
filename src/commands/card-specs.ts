@@ -322,7 +322,7 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
         heading: t('card.examples'),
         codeExamples: [
           '/config endpoint add my-ep --type openai --key sk-xxx',
-          '/config endpoint add codex-ep --type codex --auth-path ~/.codex/auth.json',
+          '/config endpoint add codex-ep --type codex --auth-path /path/to/auth.json',
           '/config endpoint set my-ep --proxy http://127.0.0.1:1080',
           '/config endpoint rm my-ep',
         ],

@@ -325,6 +325,13 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
     if (baseUrl !== undefined) return { ok: false, error: t('config.endpoint.codexNoBaseUrl') }
     if (key !== undefined) return { ok: false, error: t('config.endpoint.codexNoKey') }
     if (!authPath) return { ok: false, error: t('config.endpoint.authPathRequired') }
+    // The auth path is read from the DAEMON host filesystem. A `~` / `${HOME}`
+    // value would silently expand to the daemon operator's home and import the
+    // host's own Codex credentials into a remote user's endpoint — so require a
+    // raw absolute path and never tilde/env-expand it (no expandHomePath here).
+    if (!path.isAbsolute(authPath)) {
+      return { ok: false, error: t('config.endpoint.authPathNotAbsolute', { path: authPath }) }
+    }
     return { ok: true, type: 'codex', authPath, ...(proxy ? { proxy } : {}) }
   }
   // openai | anthropic
@@ -363,7 +370,9 @@ function addEndpoint(userId: string, parts: string[]): string | null {
     try {
       summary = importUserCodexAuth({
         canonicalUser: userId,
-        fromPath: expandHomePath(parsed.authPath),
+        // Already validated absolute by parseEndpointType; do NOT expandHomePath
+        // — a tilde would resolve to the daemon operator's home (credential leak).
+        fromPath: parsed.authPath,
       })
     } catch (error) {
       return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`

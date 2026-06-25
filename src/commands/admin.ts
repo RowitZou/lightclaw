@@ -15,7 +15,6 @@ import {
 } from '../config-io.js'
 import { t } from '../i18n/index.js'
 import { lightclawHome } from '../paths.js'
-import { expandHomePath } from '../paths.js'
 
 import { runSandboxCommand, runUserCommand, runCeilingCommand, formatCost } from './builtin.js'
 import { commandList } from './card-format.js'
@@ -411,7 +410,9 @@ function addAdminEndpoint(parts: string[], config: LightClawConfig): string | nu
     // into the GLOBAL codex token file (<home>/auth/codex.json), then record
     // the OAuth endpoint in the admin registry (auth: 'codex-oauth').
     try {
-      const stored = loadCodexCliTokens(expandHomePath(parsed.authPath))
+      // Already validated absolute by parseEndpointType; do NOT expandHomePath
+      // — a tilde would resolve to the daemon operator's home (credential leak).
+      const stored = loadCodexCliTokens(parsed.authPath)
       writeTokenFile('codex', stored)
     } catch (error) {
       return `${t('config.codex.importFail', { detail: error instanceof Error ? error.message : String(error) })}\n`
