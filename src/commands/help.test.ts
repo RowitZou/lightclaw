@@ -43,8 +43,6 @@ describe('/help surface-aware rendering', () => {
     assert.match(output, /\/config <model\|mode\|lang\|rule\|workspace/)
     // No dead-end pointer to a non-existent terminal agent.
     assert.doesNotMatch(output, /ask LightClaw/i)
-    // The /status pointer still renders in both surfaces.
-    assert.match(output, /Use \/status/)
   })
 
   it('channel /help shows command names and keeps the ask-LightClaw hint', async () => {
@@ -56,17 +54,17 @@ describe('/help surface-aware rendering', () => {
     assert.match(output, /ask LightClaw/)
   })
 
-  it('exposes exactly the 7 final top-level commands; admin sees /admin, non-admin does not', async () => {
+  it('exposes exactly the 6 final top-level commands; admin sees /admin, non-admin does not', async () => {
     const { createBuiltinReplRegistry } = await import('./builtin.js')
     const registry = createBuiltinReplRegistry({ includeChannelOnly: true })
-    // list(true) excludes user-only (/feedback); list(false) excludes admin-only
-    // (/admin). Union both for the complete top-level surface.
+    // list(false) keeps user/all scopes (incl. /feedback) + drops admin-only;
+    // list(true) is the reverse. Union both for the complete top-level surface.
     const names = [...new Set([
       ...registry.list(true).map(c => c.name),
       ...registry.list(false).map(c => c.name),
     ])].sort()
     assert.deepEqual(names, [
-      '/admin', '/config', '/feedback', '/help', '/status', '/stop', '/system',
+      '/admin', '/config', '/feedback', '/help', '/stop', '/system',
     ])
     // The retired top-level names are no longer registered.
     for (const retired of [
@@ -81,10 +79,11 @@ describe('/help surface-aware rendering', () => {
     assert.match(adminHelp, /\/admin/)
     const userHelp = await runHelp({ isChannel: true, isAdmin: false })
     assert.doesNotMatch(userHelp, /\/admin/)
-    // Non-admin /help MUST list the user-only /feedback; admin /help must not
-    // (admin can't run it). Regression for the dropped-/feedback bug.
+    // /feedback is open to everyone (visibleTo:'all', admin uses it for debugging),
+    // so BOTH admin and non-admin /help list it. Regression for the earlier
+    // dropped-/feedback bug (formatHelp ignored non-'all' scopes entirely).
     assert.match(userHelp, /\/feedback/)
-    assert.doesNotMatch(adminHelp, /\/feedback/)
+    assert.match(adminHelp, /\/feedback/)
     // /help no longer lists any retired top-level name.
     for (const retired of ['/model', '/mode', '/rules', '/secret', '/mount', '/cost', '/user', '/ceiling', '/sandbox', '/feishu-workspace', '/auth']) {
       assert.doesNotMatch(adminHelp, new RegExp(`(^|\\s)${retired.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')}(\\s|:|$)`, 'm'), `${retired} should not appear in /help`)

@@ -50,13 +50,14 @@ describe('ShowSlashCatalog tool', () => {
     assert.deepEqual(commandNames(output), ['/config', '/feedback', '/system'])
   })
 
-  it('lists admin advisory commands and excludes user-only feedback', async () => {
+  it('lists admin advisory commands including /feedback (now open to all)', async () => {
     await setAdmin('admin')
     const output = await callCatalogAs('admin')
 
     assert.match(output, /current user is admin/)
-    // PR5.9 B6: surviving admin advisory commands are /admin /config /system.
-    for (const name of ['/admin', '/config', '/system']) {
+    // Surviving admin advisory commands are /admin /config /system; /feedback
+    // is now visibleTo:'all' (admin uses it too), so it appears here as well.
+    for (const name of ['/admin', '/config', '/feedback', '/system']) {
       assert.match(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
     for (const name of [
@@ -65,8 +66,7 @@ describe('ShowSlashCatalog tool', () => {
     ]) {
       assert.doesNotMatch(output, new RegExp(`^${escapeRegExp(name)}\\s\\s`, 'm'))
     }
-    assert.doesNotMatch(output, /^\/feedback\s\s/m)
-    assert.deepEqual(commandNames(output), ['/admin', '/config', '/system'])
+    assert.deepEqual(commandNames(output), ['/admin', '/config', '/feedback', '/system'])
   })
 
   it('formats each entry with description, usage block, advisory, and blank separator', async () => {

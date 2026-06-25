@@ -246,10 +246,8 @@ describe('ChannelRunner pre-lock fast path', () => {
     // Read whitelist
     assert.equal(parseFastPathSlash('/help'), 'read')
     assert.equal(parseFastPathSlash('/help anything trailing'), 'read')
-    // /status fast-path: msgs from disk transcript, mode/model from
-    // prefs, sessionId from main-canonical. In-flight token = 0 is
-    // honest semantics for "before this turn started".
-    assert.equal(parseFastPathSlash('/status'), 'read')
+    // /status was removed; it no longer fast-paths (falls through to chat).
+    assert.equal(parseFastPathSlash('/status'), null)
     // PR5.9 B6: every retired top-level name is no longer fast-pathed — it
     // falls through to the lock path (→ dispatchChannelSlash → RENAMED hint),
     // so parseFastPathSlash returns null for all of them (read AND write
@@ -435,47 +433,6 @@ describe('ChannelRunner pre-lock fast path', () => {
       strategy.notices.some(item => item.messageId === helpMessage.messageId),
       '/help should produce a notice even when the main lock is held',
     )
-
-    releaseHold?.()
-    await heldLock
-  })
-
-  it('runs /status via the read fast path while the main lock is held', async () => {
-    await createUser('alice')
-    await addLink('alice', 'feishu:ou_alice')
-
-    const { channelSessionLock } = await import('./session-lock.js')
-    const strategy = installFakeStrategy('feishu')
-    const runner = new ChannelRunner(strategy)
-
-    let releaseHold: (() => void) | undefined
-    const heldLock = channelSessionLock.runExclusive(
-      'feishu-alice',
-      () => new Promise<void>(resolve => {
-        releaseHold = resolve
-      }),
-    )
-
-    const statusMessage = makeFakeFeishuMessage({
-      sender: 'ou_alice',
-      text: '/status',
-      sessionId: 'feishu-alice',
-    })
-    const startedAt = Date.now()
-    await runner.handleMessage(statusMessage)
-    const elapsed = Date.now() - startedAt
-
-    assert.ok(
-      elapsed < 500,
-      `/status should fast-path past the held lock; got elapsed ${elapsed}ms`,
-    )
-    const statusNotice = strategy.notices.find(
-      item => item.messageId === statusMessage.messageId,
-    )
-    assert.ok(statusNotice, '/status should produce a notice even when the main lock is held')
-    // The /status output mentions the user — confirms the fresh-ctx path
-    // wired the currentUserId correctly even outside the main lock.
-    assert.match(statusNotice!.text, /alice/)
 
     releaseHold?.()
     await heldLock

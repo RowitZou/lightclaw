@@ -2643,12 +2643,8 @@ export function parseFastPathSlash(text: string): 'stop' | 'read' | null {
   if (head === '/stop') {
     return 'stop'
   }
-  // Always-read entries: handler does not depend on which sub-arg is given.
-  // /status's persisted view (msgs from disk transcript, mode/model from
-  // identity prefs, sessionId from main-canonical) is sufficient for the
-  // user-visible information; the in-flight turn's running token total is
-  // not surfaced and 0 is honest semantics for "before this turn started".
-  if (head === '/help' || head === '/status') {
+  // Always-read entry: handler does not depend on which sub-arg is given.
+  if (head === '/help') {
     return 'read'
   }
   // PR5.9 B6: the old top-level names (/model /mode /cost /rules /auth /user

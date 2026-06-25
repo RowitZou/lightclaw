@@ -32,7 +32,6 @@ import {
   getPermissionMode,
   getRuntime,
   getRuntimePool,
-  getUsageTotals,
   setRuntime,
 } from '../state.js'
 
@@ -46,7 +45,6 @@ import {
   parseMode,
 } from './mode-aliases.js'
 import { t } from '../i18n/index.js'
-import { getSignalRouter, type ChainTreeNode, type ChainView } from '../signal-bus/router.js'
 import { commandList } from './card-format.js'
 import type { CommandListCardSection, ReplCommand, ReplContext } from './registry.js'
 import { ReplCommandRegistry } from './registry.js'
@@ -104,14 +102,6 @@ function buildBuiltinCommands(): ReplCommand[] {
     },
   },
   {
-    name: '/status',
-    usage: '/status',
-    description: t('cmd.status.desc'),
-    async handler(_args, ctx) {
-      ctx.output.write(await formatStatus(ctx))
-    },
-  },
-  {
     name: '/stop',
     usage: '/stop',
     description: t('cmd.stop.desc'),
@@ -145,7 +135,7 @@ function buildBuiltinCommands(): ReplCommand[] {
     name: '/feedback',
     usage: t('cmd.feedback.usage'),
     description: t('cmd.feedback.desc'),
-    visibleTo: 'user',
+    visibleTo: 'all',
     agentAdvisory:
       'When the user wants to leave standing feedback for the admin (bug report / ' +
       'feature request / preference) that should outlive this conversation.',
@@ -468,104 +458,7 @@ async function formatHelp(ctx: ReplContext): Promise<string> {
     }
   }
   lines.push('')
-  lines.push(t('help.statusHint'), '')
   return color(ctx, lines.join('\n'))
-}
-
-async function formatStatus(ctx: ReplContext): Promise<string> {
-  const userId = getCurrentUserId()
-  const ceiling = userId ? await getUserPermissionCeiling(userId) : defaultPermissionCeiling()
-  const adminFlag = userId && (await isAdmin(userId)) ? t('status.adminFlag') : ''
-  const channelLabel = ctx.isChannel ? 'channel' : 'terminal'
-  const totals = getUsageTotals()
-  const sessionTok = totals.inputTokens + totals.outputTokens
-  const headBlock = [
-    t('status.you', { user: userId ?? '(none)', adminFlag, channel: channelLabel }),
-    t('status.modeLine', { mode: modeToAlias(getPermissionMode()), ceiling: modeToAlias(ceiling) }),
-    t('status.modelLine', { model: getModel() }),
-    t('status.sessionLine', { id: ctx.sessionId, msgs: ctx.messages.length, tok: sessionTok }),
-  ]
-  const lines: string[] = [...headBlock]
-  // Channel renders /status as a structured card (mirrors /help); each block
-  // becomes a card section. The plain-text `lines` is still built for the
-  // terminal console / no-card fallback.
-  const sections: CommandListCardSection[] = [{ markdown: headBlock.join('\n') }]
-  const stripColon = (s: string): string => s.replace(/[:：]\s*$/, '')
-  if (ctx.isAdmin) {
-    const identities = await listIdentities()
-    const names = Object.keys(identities).sort()
-    if (names.length > 1) {
-      const defaultCeiling = defaultPermissionCeiling()
-      const idLines: string[] = []
-      for (const name of names) {
-        const m = (await isAdmin(name)) ? t('status.identitiesAdmin') : ''
-        const c = identities[name]!.permissionCeiling ?? defaultCeiling
-        idLines.push(t('status.identitiesLine', { name, adminFlag: m, ceiling: modeToAlias(c) }))
-      }
-      lines.push('', t('status.identitiesTitle'), ...idLines)
-      sections.push({ heading: stripColon(t('status.identitiesTitle')), markdown: idLines.join('\n') })
-    }
-  }
-  // Dispatch chain tree is admin-only — it surfaces internal scheduling
-  // structure (role / sessionId / depth / privilege-monotonic / chain ids)
-  // that ordinary users have no decision use for. Same admin/user split as
-  // the "Identities" block above; admin still sees the full tree.
-  if (ctx.isAdmin && userId) {
-    const dispatchLines = formatDispatchChainStatus(getSignalRouter().getActiveChainsForUser(userId))
-    lines.push('', ...dispatchLines)
-    // dispatchLines[0] is the heading; the rest is the body.
-    sections.push({ heading: stripColon(dispatchLines[0]!), markdown: dispatchLines.slice(1).join('\n') })
-  }
-  if (ctx.isChannel) {
-    ctx.setCommandListCard?.({ title: t('status.cardTitle'), sections })
-  }
-  lines.push('')
-  return color(ctx, lines.join('\n'))
-}
-
-function formatDispatchChainStatus(chains: ChainView[]): string[] {
-  const lines = [t('status.dispatch.heading')]
-  if (chains.length === 0) {
-    lines.push(t('status.dispatch.empty'))
-    return lines
-  }
-  for (const chain of chains) {
-    lines.push(`Chain ${chain.chainId} (${Math.max(0, Date.now() - chain.root.startedAt)}ms)`)
-    lines.push(...formatDispatchChainNodes(chain.tree))
-  }
-  return lines
-}
-
-function formatDispatchChainNodes(nodes: ChainTreeNode[]): string[] {
-  const children = new Map<string, ChainTreeNode[]>()
-  for (const node of nodes) {
-    const parent = node.parentDispatchId ?? ''
-    const list = children.get(parent) ?? []
-    list.push(node)
-    children.set(parent, list)
-  }
-  for (const list of children.values()) {
-    list.sort((a, b) => a.dispatchId.localeCompare(b.dispatchId))
-  }
-  const lines: string[] = []
-  const visit = (node: ChainTreeNode, prefix: string, isLast: boolean) => {
-    const branch = node.depth === 0 ? '' : `${prefix}${isLast ? '└─ ' : '├─ '}`
-    const key = node.status === 'running'
-      ? 'status.dispatch.tree_node_running'
-      : 'status.dispatch.tree_node_done'
-    lines.push(`${branch}${t(key, {
-      depth: node.depth,
-      role: node.role,
-      sessionId: node.sessionId,
-      elapsed: node.elapsed,
-    })}`)
-    const nextPrefix = node.depth === 0 ? '' : `${prefix}${isLast ? '   ' : '│  '}`
-    const childList = children.get(node.dispatchId) ?? []
-    childList.forEach((child, index) => visit(child, nextPrefix, index === childList.length - 1))
-  }
-  const roots = children.get('') ?? []
-  roots.forEach((root, index) => visit(root, '', index === roots.length - 1))
-  return lines
 }
 
 export async function runUserCommand(rawArgs: string): Promise<string> {

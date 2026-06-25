@@ -51,7 +51,6 @@ export const LOCALES = {
     // ---- /help ----
     'help.title': 'LightClaw 命令：',
     'help.adminTitle': '仅 admin：',
-    'help.statusHint': '查看当前 user / mode / model / session 请用 /status。',
     'help.usageHint': '输入某个命令即可查看它的详细用法，例如 /config；也可以直接问 LightClaw。',
     // Command-list card header title. {cmd} = the command path, e.g. "/config"
     // or "/config endpoint". L1 hub + L2 detail cards both use this.
@@ -62,7 +61,6 @@ export const LOCALES = {
     // usage is deferred to "ask LightClaw" (help.usageHint). Keep each desc
     // to a single short line.
     'cmd.help.desc': '列出所有可用命令',
-    'cmd.status.desc': '查看当前 user / mode / model / session',
     'cmd.config.usage': '/config <model|mode|lang|rule|workspace|lane|endpoint|backend|...> [verb] [args]',
     'cmd.config.desc': '管理你的个人配置（模型 / 模式 / 语言 / 规则 / 工作目录 / 模型服务）',
     'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
@@ -70,7 +68,7 @@ export const LOCALES = {
     'cmd.stop.usage': '/stop',
     'cmd.stop.desc': '紧急停止本对话所有进行中的任务（平时直接让 LightClaw 帮你停即可）',
     'cmd.feedback.usage': '/feedback <text>',
-    'cmd.feedback.desc': '给 admin 留反馈',
+    'cmd.feedback.desc': '给管理员留反馈',
     'cmd.admin.usage': '/admin <cost|user|pairing|feedback|ceiling|sandbox|feishu-drive|backend|endpoint|lane> [verb] [args]',
     'cmd.admin.desc': '系统级运维 + 公共模型配置（仅 admin）',
 
@@ -115,19 +113,7 @@ export const LOCALES = {
     // ---- /auth (admin) ----
 
     // ---- /status ----
-    'status.cardTitle': '当前状态',
-    'status.you': '你：{user}{adminFlag} （来自 {channel}）',
-    'status.adminFlag': ' (admin)',
-    'status.modeLine': '模式：{mode}（上限：{ceiling}）',
-    'status.modelLine': '模型：{model}',
-    'status.sessionLine': '会话：{id}（消息 {msgs}，token {tok}）',
-    'status.identitiesTitle': '所有身份：',
     'status.identitiesAdmin': ' *admin',
-    'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
-    'status.dispatch.heading': '进行中的后台任务：',
-    'status.dispatch.empty': '没有进行中的后台任务。',
-    'status.dispatch.tree_node_running': '[{depth}] {role}@{sessionId} ({elapsed}ms, running)',
-    'status.dispatch.tree_node_done': '[{depth}] {role}@{sessionId} ({elapsed}ms)',
     'chain.error.too_deep': 'Dispatch 链深度已达上限({depth}/{maxDepth}),无法再向下委派。请减少嵌套层级或将子任务直接归并到当前 hop。',
     'chain.error.cycle': 'Dispatch 链中已有同名 role({role}),不允许同 role 重入(防止循环委派)。请改用其他 role 或在当前 hop 完成任务。',
     'chain.error.monotonic_violation': 'Dispatch 子工具集 {child} 不是父工具集 {parent} 的子集,违反 privilege monotonic 约束。这通常是 framework bug,请报告 admin。',
@@ -240,8 +226,8 @@ export const LOCALES = {
 
     // ---- /feedback ----
     'feedback.usage': '用法：/feedback <text>',
-    'feedback.thanks': '收到，已转发给 admin。',
-    'feedback.fail': '转发失败（{detail}），请直接联系 admin。',
+    'feedback.thanks': '收到，已转发给管理员。',
+    'feedback.fail': '转发失败（{detail}），请直接联系管理员。',
 
     // ---- /cost ----
     'cost.empty': '本月暂无用量记录。',
@@ -249,7 +235,7 @@ export const LOCALES = {
     'cost.byModel': '  按 model：',
     'cost.byUser': '  按 user：',
     'cost.freshSubset': '  Fresh 子项：{tok} tok（{percent}%）',
-    'cost.adminOnlyHint': '/admin cost 仅 admin 可用。普通用户用 /status 查看自己今日用量。',
+    'cost.adminOnlyHint': '/admin cost 仅 admin 可用。',
 
     // ---- /sandbox ----
     'sandbox.title': '沙箱镜像状态：',
@@ -845,12 +831,10 @@ export const LOCALES = {
     // ---- /help ----
     'help.title': 'LightClaw commands:',
     'help.adminTitle': 'Admin only:',
-    'help.statusHint': 'Use /status to see your current user / mode / model / session.',
     'help.usageHint': 'Type a command to see its detailed usage, e.g. /config; or just ask LightClaw.',
     'card.cmdHelp.title': '{cmd} commands',
 
     'cmd.help.desc': 'List available commands',
-    'cmd.status.desc': 'Show current user / mode / model / session',
     'cmd.config.usage': '/config <model|mode|lang|rule|workspace|lane|endpoint|backend|...> [verb] [args]',
     'cmd.config.desc': 'Manage your personal config (model / mode / lang / rules / workspace / model services)',
     'cmd.system.usage': '/system <key|mount|data> [verb] [args]',
@@ -903,19 +887,7 @@ export const LOCALES = {
     // ---- /auth (admin) ----
 
     // ---- /status ----
-    'status.cardTitle': 'Status',
-    'status.you': 'You: {user}{adminFlag} on {channel}',
-    'status.adminFlag': ' (admin)',
-    'status.modeLine': 'Mode: {mode}  (ceiling: {ceiling})',
-    'status.modelLine': 'Model: {model}',
-    'status.sessionLine': 'Session: {id} (msgs: {msgs}, tok: {tok})',
-    'status.identitiesTitle': 'Identities:',
     'status.identitiesAdmin': ' *admin',
-    'status.identitiesLine': '  {name}{adminFlag}  ceiling={ceiling}',
-    'status.dispatch.heading': 'In-flight background tasks:',
-    'status.dispatch.empty': 'No active background tasks.',
-    'status.dispatch.tree_node_running': '[{depth}] {role}@{sessionId} ({elapsed}ms, running)',
-    'status.dispatch.tree_node_done': '[{depth}] {role}@{sessionId} ({elapsed}ms)',
     'chain.error.too_deep': 'Dispatch chain depth limit reached ({depth}/{maxDepth}). Cannot delegate further. Reduce nesting or merge the sub-task into the current hop.',
     'chain.error.cycle': 'Role {role} already in dispatch chain — same-role re-entry is rejected (cycle prevention). Use a different role or finish the work in the current hop.',
     'chain.error.monotonic_violation': 'Dispatched allowedTools {child} is not a subset of parent {parent}, violating privilege monotonic constraint. This is likely a framework bug — please report to admin.',
@@ -1036,7 +1008,7 @@ export const LOCALES = {
     'cost.byModel': '  By model:',
     'cost.byUser': '  By user:',
     'cost.freshSubset': '  Fresh subset: {tok} tok ({percent}%)',
-    'cost.adminOnlyHint': '/admin cost is admin-only. Use /status to see your today usage.',
+    'cost.adminOnlyHint': '/admin cost is admin-only.',
 
     // ---- /sandbox ----
     'sandbox.title': 'Sandbox image status:',
