@@ -82,7 +82,11 @@ type ConfigCommandContext = {
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
-const MODEL_CHECK_TIMEOUT_MS = 8000
+// Connectivity probe budget. A reasoning model's TTFB through a proxy easily
+// exceeds 8s even for a one-token "ok" — too tight a timeout false-rejects a
+// perfectly good model and (as a hard gate) rolls the add back. The probe
+// forces minimal reasoning (below) so this only needs to cover connect + TTFB.
+const MODEL_CHECK_TIMEOUT_MS = 30_000
 /** How many model ids to SHOW after `endpoint add`; a provider that advertises
  *  more (typical of openai) gets the "showing first N, see the provider for the
  *  rest" wording instead of flooding the card. */
@@ -303,7 +307,11 @@ async function runEndpointSubcommand(
     const override = loadUserConfigOverride(userId)
     const rows = Object.entries(override.endpoints ?? {})
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, ep]) => ({ name, type: ep.authRef ? 'codex' : (ep.type ?? 'openai') }))
+      .map(([name, ep]) => ({
+        name,
+        type: ep.authRef ? 'codex' : (ep.type ?? 'openai'),
+        details: endpointDetails(ep as Record<string, unknown>),
+      }))
     const spec = configEndpointCardSpec(rows)
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
@@ -314,9 +322,9 @@ async function runEndpointSubcommand(
       case '':
         return usageCard()
       case 'add':
-        return (await addEndpoint(userId, parts)) ?? usageCard()
+        return (await addEndpoint(userId, parts, ctx)) ?? usageCard()
       case 'set':
-        return (await setEndpoint(userId, parts)) ?? usageCard()
+        return (await setEndpoint(userId, parts, ctx)) ?? usageCard()
       case 'remove':
       case 'rm':
         return removeEndpoint(userId, parts) ?? usageCard()
@@ -386,7 +394,11 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
 // an existing secret name is referenced; otherwise the raw key is auto-stored
 // into the per-user secrets store (0600) and only the reference lands in
 // config.json — the raw key NEVER enters config.json.
-async function addEndpoint(userId: string, parts: string[]): Promise<string | null> {
+async function addEndpoint(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -423,7 +435,7 @@ async function addEndpoint(userId: string, parts: string[]): Promise<string | nu
       codexAuthName: summary.name,
       proxy: parsed.proxy,
     })
-    if (!probe.ok) return `${probe.error}\n`
+    if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
     const endpoint: Record<string, unknown> = { authRef: `codex:${summary.name}` }
     if (parsed.proxy) endpoint.proxy = parsed.proxy
     const obj = readUserConfig(userId)
@@ -433,7 +445,12 @@ async function addEndpoint(userId: string, parts: string[]): Promise<string | nu
     const guard = guardWritable(userId, obj)
     if (guard) return guard
     writeUserConfig(userId, obj)
-    return `${t('config.endpoint.addedCodex', { name: alias, ref: summary.name })}${probe.summary}\n`
+    return entryResultCard(
+      ctx,
+      t('config.endpoint.addedCodex', { name: alias, ref: summary.name }),
+      endpointDetails(endpoint),
+      [probe.summary],
+    )
   }
 
   // openai | anthropic: --key is a raw key OR an existing secret name. The
@@ -452,7 +469,7 @@ async function addEndpoint(userId: string, parts: string[]): Promise<string | nu
     baseUrl: parsed.baseUrl,
     proxy: parsed.proxy,
   })
-  if (!probe.ok) return `${probe.error}\n`
+  if (!probe.ok) return `${t('config.endpoint.addFailedProbe', { detail: probe.detail })}\n`
 
   // Probe passed → now persist (this is where the raw key is auto-stored).
   const resolved = resolveKeyToSecretRef(userId, parsed.key)
@@ -467,18 +484,22 @@ async function addEndpoint(userId: string, parts: string[]): Promise<string | nu
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  const stored = resolved.stored
-    ? `\n${t('config.endpoint.keyStored', { name: resolved.secretName })}`
-    : ''
-  return `${t('config.endpoint.added', { name: alias, ref: resolved.secretName })}${stored}${probe.summary}\n`
+  const stored = resolved.stored ? t('config.endpoint.keyStored', { name: resolved.secretName }) : ''
+  return entryResultCard(
+    ctx,
+    t('config.endpoint.added', { name: alias, ref: resolved.secretName }),
+    endpointDetails(endpoint),
+    [stored, probe.summary],
+  )
 }
 
 type EndpointProbeResult =
   // `summary` is the model-list + next-step block (leading newline) appended to
   // the add confirmation.
   | { ok: true; summary: string }
-  // `error` is the full message to surface when the add is REJECTED.
-  | { ok: false; error: string }
+  // `detail` is the raw failure reason (transport / HTTP status); the caller
+  // wraps it in add- vs set-specific rejection wording.
+  | { ok: false; detail: string }
 
 /**
  * Probe a candidate endpoint for reachability and list its advertised models.
@@ -513,7 +534,7 @@ async function probeEndpointModelsImpl(input: {
         ? { ok: false, error: t('config.endpoint.probeUnreachable') }
         : { ok: true, models: slugs }
     } catch (error) {
-      result = { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) }
     }
   } else {
     result = await listApiKeyModels({
@@ -525,7 +546,7 @@ async function probeEndpointModelsImpl(input: {
     })
   }
   if (!result.ok) {
-    return { ok: false, error: t('config.endpoint.addFailedProbe', { detail: result.error }) }
+    return { ok: false, detail: result.error }
   }
   const nextStep = input.includeNextStep === false
     ? ''
@@ -583,7 +604,11 @@ function deriveSecretName(userId: string, _key: string): string {
   return `BYO_KEY_${Date.now()}`
 }
 
-async function setEndpoint(userId: string, parts: string[]): Promise<string | null> {
+async function setEndpoint(
+  userId: string,
+  parts: string[],
+  ctx: ConfigCommandContext,
+): Promise<string | null> {
   const [alias, ...rest] = parts
   if (!alias) return null
   assertAlias(alias)
@@ -649,7 +674,16 @@ async function setEndpoint(userId: string, parts: string[]): Promise<string | nu
       includeNextStep: false,
     })
   }
-  if (!probe.ok) return `${probe.error}\n`
+  if (!probe.ok) {
+    // Re-check failed → update rejected, config untouched. Card shows the
+    // ORIGINAL (unchanged) values.
+    return entryResultCard(
+      ctx,
+      t('config.endpoint.setFailedProbe', { name: alias, detail: probe.detail }),
+      endpointDetails(current),
+      [],
+    )
+  }
 
   // Re-check passed → apply the deferred --key store and persist.
   if (key !== undefined) {
@@ -661,7 +695,12 @@ async function setEndpoint(userId: string, parts: string[]): Promise<string | nu
   const guard = guardWritable(userId, obj)
   if (guard) return guard
   writeUserConfig(userId, obj)
-  return `${t('config.endpoint.updated', { name: alias })}${probe.summary}\n`
+  return entryResultCard(
+    ctx,
+    t('config.endpoint.updated', { name: alias }),
+    endpointDetails(next),
+    [probe.summary],
+  )
 }
 
 function removeEndpoint(userId: string, parts: string[]): string | null {
@@ -726,7 +765,11 @@ async function runBackendSubcommand(
     const override = loadUserConfigOverride(userId)
     const rows = Object.entries(override.models ?? {})
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name]) => ({ name, isDefault: override.defaultModel === name }))
+      .map(([name, m]) => ({
+        name,
+        isDefault: override.defaultModel === name,
+        details: backendDetails(m as Record<string, unknown>),
+      }))
     const spec = configBackendCardSpec(rows)
     ctx.setCommandListCard?.(spec)
     return formatCommandListSpecAsText(spec)
@@ -834,18 +877,26 @@ async function addBackend(
     writeUserConfig(userId, back)
     return `${t('config.backend.addFailedProbe', { name: displayName, detail: probe.detail })}\n`
   }
-  const lines = [
+  return entryResultCard(
+    ctx,
     t('config.backend.added', { name: displayName, endpoint, upstream: upstreamModel }),
-    t('config.backend.checkOk'),
-    becameDefault ? t('config.backend.nowDefault') : t('config.backend.setHint', { name: displayName }),
-  ]
-  return `${lines.join('\n')}\n`
+    backendDetails(model),
+    [
+      t('config.backend.checkOk'),
+      becameDefault ? t('config.backend.nowDefault') : t('config.backend.setHint', { name: displayName }),
+    ],
+  )
 }
 
 /**
- * Probe a registered model's connectivity with a tiny "reply ok" generation
- * (8s timeout). Shared by `backend add` (auto-check) and `backend check`
- * (manual re-probe). Never throws — returns a structured ok/detail result.
+ * Probe a registered model's connectivity with a tiny "reply ok" generation.
+ * Shared by `backend add` (auto-check) and `backend check` (manual re-probe).
+ * Never throws — returns a structured ok/detail result.
+ *
+ * The probe forces `minimal` reasoning regardless of the model's configured
+ * effort: a connectivity / auth / valid-model-id check does not need deep
+ * reasoning, and a high-effort "reply ok" can take tens of seconds (then time
+ * out and, as a gate, false-reject a working model).
  */
 async function probeModelConnectivityImpl(
   resolved: ReturnType<typeof resolveUserConfig>,
@@ -862,7 +913,7 @@ async function probeModelConnectivityImpl(
       messages: [{ role: 'user', content: 'Reply with ok.' }],
       tools: [],
       maxTokens: 16,
-      ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+      reasoningEffort: 'minimal',
       signal,
     })) {
       if (event.type === 'stop') break
@@ -939,13 +990,24 @@ async function setBackend(
     if (priorDefault) back.defaultModel = priorDefault
     else delete back.defaultModel
     writeUserConfig(userId, back)
-    return `${t('config.backend.setFailedProbe', { name: displayName, detail: probe.detail })}\n`
+    // Card shows the ORIGINAL (restored) values.
+    return entryResultCard(
+      ctx,
+      t('config.backend.setFailedProbe', { name: displayName, detail: probe.detail }),
+      backendDetails(priorModel),
+      [],
+    )
   }
-  return `${t('config.backend.updated', {
-    name: displayName,
-    endpoint: String(next.endpoint),
-    upstream: String(next.upstreamModel),
-  })}\n${t('config.backend.checkOk')}\n`
+  return entryResultCard(
+    ctx,
+    t('config.backend.updated', {
+      name: displayName,
+      endpoint: String(next.endpoint),
+      upstream: String(next.upstreamModel),
+    }),
+    backendDetails(next),
+    [t('config.backend.checkOk')],
+  )
 }
 
 function removeBackend(userId: string, parts: string[]): string | null {
@@ -1047,6 +1109,51 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {}
+}
+
+// ── config-value display (non-secret) ────────────────────────────────────────
+//
+// Render an endpoint / backend's stored config values for the list rows and the
+// add/set result cards. Secrets (the apiKeyRef / authRef token) are NEVER shown
+// — only the values the user can safely re-read. Field tokens mirror the
+// `--flags` the user types (baseUrl / proxy / upstream / reasoning / ...).
+
+function endpointDetails(ep: Record<string, unknown>): string {
+  const isCodex = typeof ep.authRef === 'string' && (ep.authRef as string).length > 0
+  const parts = [`type=${isCodex ? 'codex' : ep.type === 'anthropic' ? 'anthropic' : 'openai'}`]
+  if (typeof ep.baseUrl === 'string' && ep.baseUrl) parts.push(`baseUrl=${ep.baseUrl}`)
+  if (typeof ep.proxy === 'string' && ep.proxy) parts.push(`proxy=${ep.proxy}`)
+  return parts.join(', ')
+}
+
+function backendDetails(m: Record<string, unknown>): string {
+  const parts: string[] = []
+  if (m.endpoint) parts.push(`endpoint=${String(m.endpoint)}`)
+  if (m.upstreamModel) parts.push(`upstream=${String(m.upstreamModel)}`)
+  if (m.schema) parts.push(`schema=${String(m.schema)}`)
+  if (m.reasoningEffort) parts.push(`reasoning=${String(m.reasoningEffort)}`)
+  if (m.maxOutputTokens) parts.push(`maxTokens=${String(m.maxOutputTokens)}`)
+  return parts.join(', ')
+}
+
+/** Build + set a result card for the SINGLE endpoint/backend entry just touched:
+ *  a title line, the entry's current config values (success → new, set-failure →
+ *  unchanged original), and optional tail lines (probe summary / next step).
+ *  Returns the textified spec for the terminal. */
+function entryResultCard(
+  ctx: ConfigCommandContext,
+  title: string,
+  details: string,
+  tailLines: string[],
+): string {
+  const spec: CommandListCardSpec = {
+    title,
+    sections: [{ heading: t('card.config.currentValues'), markdown: details }],
+  }
+  const tail = tailLines.filter(s => s && s.trim()).join('\n').trim()
+  if (tail) spec.sections.push({ markdown: tail })
+  ctx.setCommandListCard?.(spec)
+  return formatCommandListSpecAsText(spec)
 }
 
 // ── /config model — SCALAR face (current-model switch; ←old `/config model`) ─────────

@@ -6,7 +6,6 @@ import { createTurnCardCollector } from './feishu/turn-card-collector.js'
 import { type TaskCardTarget } from './feishu/task-card-patcher.js'
 import { appendProgress } from '../taskrun/store.js'
 import { dispatchChannelSlash, type ChannelSlashResult } from '../commands/dispatch-channel.js'
-import { configModelCardSpec } from '../commands/card-specs.js'
 import type { CommandListCardSpec } from '../commands/registry.js'
 import { getConfig, type LightClawConfig } from '../config.js'
 import { resolveUserConfig } from '../config/user-override.js'
@@ -1060,18 +1059,11 @@ export class ChannelRunner {
         // getMainRoleRoute / getProviderFor throw `Unknown model`. Placed AFTER
         // slash dispatch so the user can still run `/config model X` to fix it.
         if (!appConfig.defaultModel) {
-          // No usable model is a config gap the admin must act on (run
-          // `/config endpoint` + `/config backend`). Render the model
-          // empty-state card — it carries the two-step guidance + copy-paste
-          // examples — so first contact is actionable, not a bare one-liner.
-          // Falls back to the plain warning notice on channels without the
-          // structured-card hook.
-          const emptyModelCard = configModelCardSpec([])
-          if (this.strategy.sendCommandListNotice) {
-            await this.strategy.sendCommandListNotice(effectiveMessage, 'warning', emptyModelCard)
-          } else {
-            await this.sendNotice(effectiveMessage, 'warning', t('model.none.noticeBody'))
-          }
+          // No usable model is a config gap the admin must act on — a warning
+          // notice card pointing at the two-step `/config endpoint` + `/config
+          // backend` flow. Deliberately NOT the `/config model` detail card:
+          // its `set <name>` examples are meaningless with zero models.
+          await this.sendNotice(effectiveMessage, 'warning', t('model.none.noticeBody'))
           process.stderr.write(
             `${this.strategy.channelId}: no model configured for session ${sessionId}; replied notice\n`,
           )

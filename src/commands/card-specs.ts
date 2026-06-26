@@ -280,6 +280,9 @@ export interface EndpointShowRow {
   name: string
   // 'openai' | 'anthropic' | 'codex'
   type: string
+  // Optional non-secret config values rendered in parens, e.g.
+  // "type=openai, baseUrl=…, proxy=…". When absent, falls back to `type`.
+  details?: string
 }
 
 /** Render a params section's bullets: each value is already a `\`--flag\` — desc`
@@ -297,7 +300,7 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
         markdown:
           rows.length === 0
             ? t('config.endpoint.none')
-            : numberedShow(rows.map(r => ({ label: `${r.name}（${r.type}）` }))),
+            : numberedShow(rows.map(r => ({ label: `${r.name}（${r.details ?? r.type}）` }))),
       },
       {
         heading: t('card.subcommands'),
@@ -336,6 +339,9 @@ export function configEndpointCardSpec(rows: readonly EndpointShowRow[]): Comman
 export interface BackendShowRow {
   name: string
   isDefault: boolean
+  // Optional non-secret config values rendered in parens, e.g.
+  // "endpoint=…, upstream=…, schema=…, reasoning=…". Absent → name only.
+  details?: string
 }
 
 export function configBackendCardSpec(rows: readonly BackendShowRow[]): CommandListCardSpec {
@@ -347,7 +353,10 @@ export function configBackendCardSpec(rows: readonly BackendShowRow[]): CommandL
         markdown:
           rows.length === 0
             ? t('config.backend.none')
-            : numberedShow(rows.map(r => ({ label: r.name, isDefault: r.isDefault }))),
+            : numberedShow(rows.map(r => ({
+                label: r.details ? `${r.name}（${r.details}）` : r.name,
+                isDefault: r.isDefault,
+              }))),
       },
       {
         heading: t('card.subcommands'),
@@ -518,7 +527,7 @@ export function adminEndpointCardSpec(rows: readonly EndpointShowRow[]): Command
         markdown:
           rows.length === 0
             ? t('config.endpoint.none')
-            : numberedShow(rows.map(r => ({ label: `${r.name}（${r.type}）` }))),
+            : numberedShow(rows.map(r => ({ label: `${r.name}（${r.details ?? r.type}）` }))),
       },
       { markdown: t('card.admin.scopeNote') },
       {
@@ -564,7 +573,10 @@ export function adminBackendCardSpec(rows: readonly BackendShowRow[]): CommandLi
         markdown:
           rows.length === 0
             ? t('config.backend.none')
-            : numberedShow(rows.map(r => ({ label: r.name, isDefault: r.isDefault }))),
+            : numberedShow(rows.map(r => ({
+                label: r.details ? `${r.name}（${r.details}）` : r.name,
+                isDefault: r.isDefault,
+              }))),
       },
       { markdown: t('card.admin.scopeNote') },
       {

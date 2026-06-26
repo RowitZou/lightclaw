@@ -737,7 +737,7 @@ describe('/config endpoint add — probe gates the import', () => {
   it('rejects (does not persist) when the probe is unreachable', async () => {
     const cfg = modelConfig()
     __setModelProbeHooksForTests({
-      endpointModels: async () => ({ ok: false, error: 'NOT added: unreachable' }),
+      endpointModels: async () => ({ ok: false, detail: 'unreachable' }),
       connectivity: async () => ({ ok: true }),
     })
     const out = await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://x', {
@@ -843,16 +843,17 @@ describe('/config endpoint|backend set — re-check on update', () => {
       userId: 'epset',
     })
     __setModelProbeHooksForTests({
-      endpointModels: async () => ({ ok: false, error: 'NOT added: bad url' }),
+      endpointModels: async () => ({ ok: false, detail: 'bad url' }),
       connectivity: async () => ({ ok: true }),
     })
     const out = await runConfigCommand('endpoint set ep --base-url https://new', {
       config: cfg,
       userId: 'epset',
     })
-    assert.match(out, /NOT added/)
+    assert.match(out, /rolled back|连通性/)
     const ep = (readUserConfigJson('epset').endpoints as Record<string, Record<string, unknown>>).ep
     assert.equal(ep.baseUrl, 'https://old') // unchanged
+    assert.equal(out.includes('https://old'), true) // failure card shows ORIGINAL values
   })
 
   it('backend set rolls back to the prior entry when the re-check fails', async () => {
@@ -891,5 +892,53 @@ describe('/config endpoint|backend set — re-check on update', () => {
     assert.match(out, /Connectivity check: ok/)
     const model = (readUserConfigJson('bkset2').models as Record<string, Record<string, unknown>>).m
     assert.equal(model.upstreamModel, 'up-2')
+  })
+})
+
+describe('/config endpoint|backend — show config values (not just names)', () => {
+  beforeEach(() => {
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+  })
+
+  it('endpoint add success card shows type / baseUrl / proxy (no key)', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-SECRET --base-url https://gw.example/v1 --proxy http://127.0.0.1:1080',
+      { config: cfg, userId: 'vala' },
+    )
+    assert.match(out, /type=openai/)
+    assert.match(out, /baseUrl=https:\/\/gw\.example\/v1/)
+    assert.match(out, /proxy=http:\/\/127\.0\.0\.1:1080/)
+    assert.equal(out.includes('sk-SECRET'), false) // key NEVER shown
+  })
+
+  it('endpoint list shows per-row config values', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: 'vall',
+    })
+    const out = await runConfigCommand('endpoint', { config: cfg, userId: 'vall' })
+    assert.match(out, /ep（type=openai, baseUrl=https:\/\/x）/)
+  })
+
+  it('backend add success + list show endpoint / upstream / schema', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', {
+      config: cfg,
+      userId: 'valb',
+    })
+    const add = await runConfigCommand('backend add m --endpoint ep --upstream gpt-5 --reasoning high', {
+      config: cfg,
+      userId: 'valb',
+    })
+    assert.match(add, /endpoint=ep/)
+    assert.match(add, /upstream=gpt-5/)
+    assert.match(add, /reasoning=high/)
+    const list = await runConfigCommand('backend', { config: cfg, userId: 'valb' })
+    assert.match(list, /m（endpoint=ep, upstream=gpt-5, schema=openai, reasoning=high）/)
   })
 })
