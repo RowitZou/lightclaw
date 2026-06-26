@@ -4,6 +4,10 @@ import type { ApiKeyEndpoint } from '../config.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { attachProviderRetryAfter } from './retry-after.js'
 import { anthropicEffort, isReasoningUnsupportedError } from './reasoning.js'
+import {
+  isReasoningKnownUnsupported,
+  markReasoningUnsupported,
+} from './reasoning-support.js'
 import type {
   AssistantContentBlock,
   StreamEvent,
@@ -389,17 +393,24 @@ export function createAnthropicProvider(endpoint: ApiKeyEndpoint): Provider {
           signal: params.signal,
         })
 
-      const wantsReasoning = effort !== null
+      // Skip the reasoning fields entirely once a prior strip-retry proved
+      // this (baseUrl, model) rejects them — mirrors the openai provider so a
+      // non-reasoning Anthropic-compatible endpoint stops paying a failed
+      // round-trip every turn.
+      const wantsReasoning =
+        effort !== null && !isReasoningKnownUnsupported(baseURL, params.model)
       let stream: Awaited<ReturnType<typeof client.messages.create>>
       try {
         stream = await makeStream(wantsReasoning)
       } catch (error) {
         if (wantsReasoning && isReasoningUnsupportedError(error)) {
           process.stderr.write(
-            `[anthropic] model "${params.model}" rejected reasoning fields; retrying without reasoning\n`,
+            `[anthropic] model "${params.model}" rejected reasoning fields; retrying without reasoning (skipping on future calls)\n`,
           )
           try {
             stream = await makeStream(false)
+            // Memoize only after the no-reasoning retry succeeds.
+            markReasoningUnsupported(baseURL, params.model)
           } catch (retryError) {
             throw attachProviderRetryAfter(retryError)
           }

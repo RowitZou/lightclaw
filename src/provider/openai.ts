@@ -19,6 +19,10 @@ import { normalizeToolParametersForOpenAI } from './openai-tool-schema.js'
 import { buildProxyAwareFetch, buildProxyDispatcher } from './proxy.js'
 import { attachProviderRetryAfter } from './retry-after.js'
 import { isReasoningUnsupportedError } from './reasoning.js'
+import {
+  isReasoningKnownUnsupported,
+  markReasoningUnsupported,
+} from './reasoning-support.js'
 import type { ApiMessage, AttachmentKind, Provider, StreamChatParams } from './types.js'
 
 /** OpenAI Chat Completions has no slot for `document` (PDF) blocks anywhere
@@ -265,22 +269,31 @@ export function mapUsage(usage: unknown): UsageStats {
   return result
 }
 
-export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
+export type OpenAIProviderOptions = {
+  /** Test-only override: build the SDK client (e.g. a fake `chat.completions`).
+   *  Production omits it and the real `new OpenAI(...)` is used. */
+  clientFactory?: () => OpenAI
+}
+
+export function createOpenAIProvider(
+  endpoint: ApiKeyEndpoint,
+  opts: OpenAIProviderOptions = {},
+): Provider {
   // Dispatcher / fetch / SDK client are mutable, NOT const. See
   // `openai-auth.ts` recycle doc for rationale.
   let proxyDispatcher = buildProxyDispatcher(endpoint.proxy)
   let proxyFetch = buildProxyAwareFetch(proxyDispatcher)
-  let client = new OpenAI({
-    apiKey: endpoint.apiKey,
-    ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
-    ...(proxyFetch ? { fetch: proxyFetch } : {}),
-  })
+  const buildClient = (): OpenAI =>
+    opts.clientFactory
+      ? opts.clientFactory()
+      : new OpenAI({
+          apiKey: endpoint.apiKey,
+          ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
+          ...(proxyFetch ? { fetch: proxyFetch } : {}),
+        })
+  let client = buildClient()
   function rebuildClient(): void {
-    client = new OpenAI({
-      apiKey: endpoint.apiKey,
-      ...(endpoint.baseUrl ? { baseURL: endpoint.baseUrl } : {}),
-      ...(proxyFetch ? { fetch: proxyFetch } : {}),
-    })
+    client = buildClient()
   }
 
   return {
@@ -328,7 +341,12 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       // Sent for every configured value, including 'none' (which disables
       // reasoning on gpt-5.2+). A non-reasoning model — or an OpenAI-compatible
       // endpoint that doesn't accept the field — trips the strip-retry below.
-      const wantsReasoning = Boolean(params.reasoningEffort)
+      // Once that strip-retry has proved this (baseUrl, model) rejects the
+      // field, skip sending it entirely so we stop paying a failed round-trip
+      // every turn (the boyue-codex `reasoning_effort` case, 2026-06-27).
+      const wantsReasoning =
+        Boolean(params.reasoningEffort)
+        && !isReasoningKnownUnsupported(endpoint.baseUrl, params.model)
       const makeStream = (withReasoning: boolean) =>
         client.chat.completions.create({
           model: params.model,
@@ -352,10 +370,14 @@ export function createOpenAIProvider(endpoint: ApiKeyEndpoint): Provider {
       } catch (error) {
         if (wantsReasoning && isReasoningUnsupportedError(error)) {
           process.stderr.write(
-            `[openai] model "${params.model}" rejected reasoning_effort; retrying without it\n`,
+            `[openai] model "${params.model}" rejected reasoning_effort; retrying without it (skipping on future calls)\n`,
           )
           try {
             stream = await makeStream(false)
+            // Only memoize after the no-reasoning retry succeeds: that success
+            // is what proves the reasoning field (not some unrelated 4xx) was
+            // the cause.
+            markReasoningUnsupported(endpoint.baseUrl, params.model)
           } catch (retryError) {
             throw attachProviderRetryAfter(retryError)
           }

@@ -49,6 +49,7 @@ import { expandHomePath } from '../paths.js'
 import { clearPrechargeForModel, clearProviderCache } from '../provider/index.js'
 import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
+import { clearReasoningSupport } from '../provider/reasoning-support.js'
 import { formatRule, parseRule } from '../permission/rules.js'
 import {
   appendIdentityRules,
@@ -1166,6 +1167,7 @@ async function checkBackend(
   const baseUrl = resolved.endpoints[entry.endpoint]?.baseUrl
   clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
   clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+  clearReasoningSupport(baseUrl, entry.upstreamModel)
   const probe = await probeModelConnectivity(resolved, displayName)
   return probe.ok
     ? `${t('config.model.checkOk')}\n`
@@ -1372,6 +1374,7 @@ async function runConfigModelScalar(
     const baseUrl = config.endpoints[entry.endpoint]?.baseUrl
     const removed = clearAllForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
     clearPrechargeForModel({ endpoint: entry.endpoint, baseUrl, upstreamModel: entry.upstreamModel })
+    clearReasoningSupport(baseUrl, entry.upstreamModel)
     return `${t('model.clearCache.cleared', {
       name: current,
       endpoint: entry.endpoint,
