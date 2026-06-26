@@ -3,10 +3,22 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import { buildTool } from '../tool.js'
+import { getCurrentSessionContext } from '../session-context.js'
 import type { Runtime } from '../runtime/index.js'
 
 const DEFAULT_LIMIT = 100
 const MAX_LIMIT = 1000
+const MAX_DEPTH = 100
+
+// `rg --files` walks the whole tree files-first; for a delegator role (main /
+// any dispatcher) a flooded, truncated result is better handed off to a fresh
+// localExplorer than retried inline. Mirrors `isDispatchTargetReachable`'s
+// `'*' || includes(callee)` check without coupling this leaf tool to the
+// agents policy layer, and stays safe outside any ALS scope (returns false).
+function callerCanDispatchLocalExplorer(): boolean {
+  const reachable = getCurrentSessionContext()?.currentRole?.reachableRoles
+  return !!reachable?.some(r => r === '*' || r === 'localExplorer')
+}
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
@@ -46,6 +58,7 @@ function formatResult(
   limit: number,
   pattern: string,
   searchDir: string,
+  canDispatchLocalExplorer: boolean,
 ): string {
   if (matches.length === 0) {
     return `No files matched "${pattern}" under ${searchDir}.`
@@ -53,8 +66,14 @@ function formatResult(
   const truncated = matches.length > limit
   const shown = truncated ? matches.slice(0, limit) : matches
   const body = shown.join('\n')
+  // On truncation, signpost the two ways to bound the result (narrow the
+  // pattern/path, or cap recursion with maxDepth) and — only for a role that
+  // can actually delegate to it — that a deeper sweep belongs on localExplorer.
+  const dispatchHint = canDispatchLocalExplorer
+    ? ' For deeper local exploration, dispatch localExplorer.'
+    : ''
   const trailer = truncated
-    ? `\n\n[showing first ${limit} of ${matches.length} matches; narrow the pattern or path]`
+    ? `\n\n[showing first ${limit} of ${matches.length} matches; narrow the pattern/path or set maxDepth to bound recursion depth.${dispatchHint}]`
     : ''
   return `${body}${trailer}`
 }
@@ -90,6 +109,15 @@ export const globTool = buildTool({
       .describe(
         `Max paths to return. Defaults to ${DEFAULT_LIMIT}; results beyond this are truncated with a hint to narrow the pattern.`,
       ),
+    maxDepth: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_DEPTH)
+      .optional()
+      .describe(
+        'Max directory depth to descend, relative to the search path (1 = the directory itself, no recursion). Omit for a full recursive walk. Use a small value to bound a broad listing instead of flooding the whole tree.',
+      ),
   }),
   async call(input, context) {
     const searchDir = resolveSearchDir(context.runtime.workspaceRoot, input.path)
@@ -112,6 +140,7 @@ export const globTool = buildTool({
         '--sort=modified',
         '--no-ignore',
         '--hidden',
+        ...(input.maxDepth !== undefined ? ['--max-depth', String(input.maxDepth)] : []),
         '.',
       ]
       const result = await runRg(rgArgs, searchDir, context.runtime, context.abortSignal)
@@ -125,7 +154,15 @@ export const globTool = buildTool({
           .split('\n')
           .map(line => (line.startsWith('./') ? line.slice(2) : line))
           .filter(Boolean)
-        return { output: formatResult(matches, limit, input.pattern, searchDir) }
+        return {
+          output: formatResult(
+            matches,
+            limit,
+            input.pattern,
+            searchDir,
+            callerCanDispatchLocalExplorer(),
+          ),
+        }
       }
 
       if (isCommandNotFound(result)) {
