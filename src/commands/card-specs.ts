@@ -89,7 +89,7 @@ export function configModelCardSpec(models: readonly ModelShowRow[]): CommandLis
   })
   sections.push({
     heading: t('card.examples'),
-    codeExamples: ['/config model set gpt-5-high', '/config model reset'],
+    codeExamples: ['/config model set gpt-5.5-high', '/config model reset'],
   })
   return { title: t('card.cmdHelp.title', { cmd: '/config model' }), sections }
 }
@@ -263,7 +263,7 @@ function laneSections(
       ],
     },
     { markdown: t('card.config.lane.note') },
-    { heading: t('card.examples'), codeExamples: [`${prefix} set worker gpt-5-high`, `${prefix} reset worker`] },
+    { heading: t('card.examples'), codeExamples: [`${prefix} set worker gpt-5.5-high`, `${prefix} reset worker`] },
   ]
 }
 
@@ -380,9 +380,9 @@ export function configBackendCardSpec(rows: readonly BackendShowRow[]): CommandL
       {
         heading: t('card.examples'),
         codeExamples: [
-          '/config backend add gpt-5-high --endpoint my-ep --upstream gpt-5 --reasoning high',
-          '/config backend set gpt-5-high --reasoning xhigh --default',
-          '/config backend rm gpt-5-high',
+          '/config backend add gpt-5.5-high --endpoint my-ep --upstream gpt-5.5 --reasoning high',
+          '/config backend set gpt-5.5-high --reasoning xhigh --default',
+          '/config backend rm gpt-5.5-high',
         ],
       },
     ],
@@ -600,9 +600,9 @@ export function adminBackendCardSpec(rows: readonly BackendShowRow[]): CommandLi
       {
         heading: t('card.examples'),
         codeExamples: [
-          '/admin backend add gpt-5-high --endpoint my-ep --upstream gpt-5 --reasoning high',
-          '/admin backend set gpt-5-high --reasoning xhigh --default',
-          '/admin backend rm gpt-5-high',
+          '/admin backend add gpt-5.5-high --endpoint my-ep --upstream gpt-5.5 --reasoning high',
+          '/admin backend set gpt-5.5-high --reasoning xhigh --default',
+          '/admin backend rm gpt-5.5-high',
         ],
       },
     ],
