@@ -44,9 +44,13 @@ describe('buildBackgroundTaskFirePrompt', () => {
 
   it('explicitly tells the agent the scheduled time has already arrived', () => {
     const prompt = buildBackgroundTaskFirePrompt(fakeTask())
-    assert.match(prompt, /scheduled fire time is NOW/i)
-    assert.match(prompt, /Do not ask the user clarifying questions/i)
-    assert.match(prompt, /not (read|treat) the instruction as a future event/i)
+    assert.match(prompt, /its scheduled time has arrived/i)
+    assert.match(prompt, /not read it as a future event/i)
+    // The envelope must NOT carry the retired wake-era "don't ask / use
+    // reasonable defaults" wording — it overrides the skill / dispatch_brief
+    // escalation model ("ask upward with a safe default"). Regression guard.
+    assert.doesNotMatch(prompt, /ask the user clarifying questions/i)
+    assert.doesNotMatch(prompt, /reasonable defaults/i)
   })
 })
 
@@ -391,7 +395,7 @@ describe('runBackgroundTaskFire', () => {
     assert.ok(observedFirstUserContent.includes('<label>Workspace check</label>'))
     assert.ok(observedFirstUserContent.includes('<instruction>'))
     // ...and tells the agent to execute now rather than treat it as a future event.
-    assert.match(observedFirstUserContent, /scheduled fire time is NOW/)
+    assert.match(observedFirstUserContent, /its scheduled time has arrived/)
   })
 
   it('returns transient failure for ECONNRESET-class errors', async () => {

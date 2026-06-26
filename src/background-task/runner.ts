@@ -312,9 +312,15 @@ export function buildBackgroundTaskSessionId(
 // scheduled execution agent and not a normal chat turn. Without this envelope,
 // prompts phrased as "when the time comes do X" / "到时间后 X" leak the
 // scheduling tense into the executor and the agent reads them as a request to
-// schedule a future event — producing a clarifying question instead of doing
-// the work. Stays English on purpose because it is an LLM system
-// instruction, not user-visible display.
+// schedule a future event instead of doing the work. The envelope's ONLY job
+// is this scheduling-tense correction — it deliberately says nothing about
+// whether to ask / escalate when blocked: that belongs to the skill, the
+// dispatch_brief, and the role prompt, which encode "ask upward with a safe
+// default". Do NOT re-add a blanket "do not ask the user / use reasonable
+// defaults" line here — that wake-era wording (cloned from the deleted
+// buildWakePrompt) overrode the escalation model and was removed 2026-06-26.
+// Stays English on purpose because it is an LLM system instruction, not
+// user-visible display.
 export function buildBackgroundTaskFirePrompt(task: BackgroundTaskEntry): string {
   return [
     '<background-task-fire>',
@@ -326,10 +332,8 @@ export function buildBackgroundTaskFirePrompt(task: BackgroundTaskEntry): string
     '</instruction>',
     '</background-task-fire>',
     '',
-    'You are a background-task agent invoked by the scheduler. The scheduled fire time is NOW.',
-    'Execute the instruction above immediately and produce the result.',
-    'Do not ask the user clarifying questions, do not schedule a new task, and do not read the instruction as a future event — the schedule has already resolved, this fire IS the moment "after the time comes".',
-    'If the instruction is too underspecified to act on, do your best with reasonable defaults and explain your assumption in the result.',
+    'The instruction above is firing now — its scheduled time has arrived, so carry it out immediately and produce the result.',
+    'Do not read it as a future event or schedule a new task to carry it out later.',
   ].join('\n')
 }
 
