@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 
 import type { EndpointConfig, LightClawConfig, ModelEntry } from '../config.js'
@@ -336,10 +337,28 @@ export function resolveUserConfig(
     // silently lost everything). Drop ONLY the colliding entries — plus any
     // user model whose endpoint collided (it would otherwise dangle onto the
     // admin endpoint of that name, a credential surprise) — and keep the rest.
+    //
+    // A "collision" is a base entry that DIFFERS from the user's own built
+    // entry. This makes resolveUserConfig idempotent: re-resolving a config
+    // that already contains this user's merged BYO (a double-resolve — e.g. a
+    // resolved config flowing back through a second resolveUserConfig call)
+    // sees base.endpoints[alias] deep-equal to built.endpoints[alias] and does
+    // NOT flag it as an admin collision. Admin entries are structurally
+    // distinct (raw `apiKey` / global `auth` vs the user's `apiKeyRef` +
+    // `credentialIdentity`), so a real shadow still differs and is still
+    // dropped + warned.
     const collidingEndpoints = new Set(
-      Object.keys(built.endpoints).filter(alias => base.endpoints[alias]),
+      Object.keys(built.endpoints).filter(
+        alias =>
+          base.endpoints[alias] &&
+          !isDeepStrictEqual(base.endpoints[alias], built.endpoints[alias]),
+      ),
     )
-    const collidingModels = new Set(Object.keys(built.models).filter(name => base.models[name]))
+    const collidingModels = new Set(
+      Object.keys(built.models).filter(
+        name => base.models[name] && !isDeepStrictEqual(base.models[name], built.models[name]),
+      ),
+    )
     userEndpoints = Object.fromEntries(
       Object.entries(built.endpoints).filter(([alias]) => !collidingEndpoints.has(alias)),
     )

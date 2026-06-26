@@ -292,6 +292,47 @@ describe('resolveUserConfig BYO registry union (PR5 checkpoint 1)', () => {
     assert.equal(resolved.models['my-gpt'].endpoint, 'myep')
   })
 
+  it('(c3) idempotent: re-resolving an already-resolved config does NOT spuriously warn or drop the user BYO', () => {
+    // myep / my-gpt do NOT collide with admin (base has only endpoint "a").
+    const base = makeBase({ defaultModel: 'm', models: MODELS })
+    writeSecret('alice', 'MY_KEY', 'sk-alice-secret')
+    writeUserConfigJson('alice', {
+      endpoints: { myep: { apiKeyRef: 'MY_KEY', baseUrl: 'https://api.example.com/v1' } },
+      models: { 'my-gpt': { endpoint: 'myep', schema: 'openai', upstreamModel: 'gpt-4.1' } },
+      defaultModel: 'my-gpt',
+    })
+    const first = resolveUserConfig('alice', base)
+    assert.ok(first.models['my-gpt'], 'sanity: first resolve unions in the BYO model')
+
+    // Feed the resolved config back through resolveUserConfig — a double-resolve,
+    // as happens when a resolved config flows through a second resolution point
+    // (e.g. run-subagent resolves, then runDispatchedAgent resolves again). The
+    // user's own myep / my-gpt now sit in `base`; they must NOT be flagged as
+    // admin collisions and must NOT emit the "collide with admin" warning.
+    const warnings: string[] = []
+    const origWrite = process.stderr.write
+    process.stderr.write = ((chunk: unknown) => {
+      warnings.push(String(chunk))
+      return true
+    }) as typeof process.stderr.write
+    let second: LightClawConfig
+    try {
+      second = resolveUserConfig('alice', first)
+    } finally {
+      process.stderr.write = origWrite
+    }
+
+    assert.equal(
+      warnings.some(w => w.includes('collide with admin')),
+      false,
+      `double-resolve must not warn about self-collisions; got: ${warnings.join('')}`,
+    )
+    // Output is identical to a single resolve (idempotent).
+    assert.deepEqual(second.models, first.models)
+    assert.deepEqual(second.endpoints, first.endpoints)
+    assert.ok(second.models['my-gpt'], 'BYO model survives the double-resolve')
+  })
+
   it('(d) byo defaultModel unknown: falls back to admin default; with no admin default → empty string', () => {
     // With an admin default.
     const baseWithDefault = makeBase({ defaultModel: 'm', models: MODELS })
