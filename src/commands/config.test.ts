@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
@@ -1042,7 +1042,7 @@ describe('/config endpoint|backend — show config values (not just names)', () 
       userId: 'vall',
     })
     const out = await runConfigCommand('endpoint', { config: cfg, userId: 'vall' })
-    assert.match(out, /ep（type=openai, baseUrl=https:\/\/x）/)
+    assert.match(out, /ep（type=openai, baseUrl=https:\/\/x, proxy=direct）/)
   })
 
   it('backend add success + list show endpoint / upstream / schema', async () => {
@@ -1059,7 +1059,62 @@ describe('/config endpoint|backend — show config values (not just names)', () 
     assert.match(add, /upstream=gpt-5/)
     assert.match(add, /reasoning=high/)
     const list = await runConfigCommand('backend', { config: cfg, userId: 'valb' })
-    assert.match(list, /m（endpoint=ep, upstream=gpt-5, schema=openai, reasoning=high）/)
+    assert.match(list, /m（endpoint=ep, upstream=gpt-5, schema=openai, reasoning=high, maxTokens=\d+ \(default\)）/)
+  })
+})
+
+describe('/config detail cards show effective defaults (reasoning / maxTokens / proxy)', () => {
+  beforeEach(() => {
+    __setModelProbeHooksForTests({
+      endpointModels: async () => ({ ok: true, summary: '' }),
+      connectivity: async () => ({ ok: true }),
+    })
+  })
+
+  it('backend with no --reasoning / --max-tokens shows the wire defaults marked (default)', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', { config: cfg, userId: 'vd1' })
+    const add = await runConfigCommand('backend add m --endpoint ep --upstream gpt-5', { config: cfg, userId: 'vd1' })
+    assert.match(add, /reasoning=medium \(default\)/)
+    assert.match(add, /maxTokens=\d+ \(default\)/)
+  })
+
+  it('explicit --reasoning / --max-tokens are shown WITHOUT the default marker', async () => {
+    const cfg = modelConfig()
+    await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', { config: cfg, userId: 'vd2' })
+    const add = await runConfigCommand(
+      'backend add m --endpoint ep --upstream gpt-5 --reasoning high --max-tokens 1234',
+      { config: cfg, userId: 'vd2' },
+    )
+    assert.match(add, /reasoning=high/)
+    assert.doesNotMatch(add, /reasoning=high \(default\)/)
+    assert.match(add, /maxTokens=1234/)
+    assert.doesNotMatch(add, /maxTokens=1234 \(default\)/)
+  })
+
+  it('endpoint without --proxy shows the deployment public proxy as a label, NOT its address', async () => {
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({ publicProxy: 'http://10.9.9.9:1090' }), 'utf8')
+    const cfg = modelConfig()
+    const add = await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', { config: cfg, userId: 'vd3' })
+    assert.match(add, /proxy=public proxy/)
+    assert.doesNotMatch(add, /10\.9\.9\.9/) // the deployment proxy address is never shown
+  })
+
+  it('endpoint WITH an explicit --proxy shows its address (no public-proxy substitution)', async () => {
+    writeFileSync(path.join(tmpHome, 'config.json'), JSON.stringify({ publicProxy: 'http://10.9.9.9:1090' }), 'utf8')
+    const cfg = modelConfig()
+    const add = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-X --base-url https://x --proxy http://127.0.0.1:1080',
+      { config: cfg, userId: 'vd4' },
+    )
+    assert.match(add, /proxy=http:\/\/127\.0\.0\.1:1080/)
+    assert.doesNotMatch(add, /public proxy/)
+  })
+
+  it('endpoint with no proxy and no public proxy shows direct', async () => {
+    const cfg = modelConfig()
+    const add = await runConfigCommand('endpoint add ep --type openai --key sk-X --base-url https://x', { config: cfg, userId: 'vd5' })
+    assert.match(add, /proxy=direct/)
   })
 })
 

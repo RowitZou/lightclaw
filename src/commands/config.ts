@@ -1193,7 +1193,15 @@ export function endpointDetails(ep: Record<string, unknown>): string {
   // codex: the imported auth-file path (provenance, not a secret).
   if (isCodex && typeof ep.authPath === 'string' && ep.authPath) parts.push(`authPath=${ep.authPath}`)
   if (typeof ep.baseUrl === 'string' && ep.baseUrl) parts.push(`baseUrl=${ep.baseUrl}`)
-  if (typeof ep.proxy === 'string' && ep.proxy) parts.push(`proxy=${ep.proxy}`)
+  // Always show the EFFECTIVE proxy so the user sees the default in play. An
+  // endpoint's own `--proxy` shows its address; otherwise it falls back to the
+  // deployment public proxy — rendered as "公共代理" WITHOUT the address (admin
+  // infra detail, deliberately hidden) — or "直连" when neither applies. Mirrors
+  // `resolveEffectiveProxy`'s precedence (own → public → direct).
+  const ownProxy = typeof ep.proxy === 'string' && ep.proxy.trim() ? ep.proxy.trim() : undefined
+  if (ownProxy) parts.push(`proxy=${ownProxy}`)
+  else if (getConfig().publicProxy) parts.push(`proxy=${t('card.config.value.publicProxy')}`)
+  else parts.push(`proxy=${t('card.config.value.directProxy')}`)
   return parts.join(', ')
 }
 
@@ -1202,8 +1210,19 @@ export function backendDetails(m: Record<string, unknown>): string {
   if (m.endpoint) parts.push(`endpoint=${String(m.endpoint)}`)
   if (m.upstreamModel) parts.push(`upstream=${String(m.upstreamModel)}`)
   if (m.schema) parts.push(`schema=${String(m.schema)}`)
-  if (m.reasoningEffort) parts.push(`reasoning=${String(m.reasoningEffort)}`)
-  if (m.maxOutputTokens) parts.push(`maxTokens=${String(m.maxOutputTokens)}`)
+  // reasoning + maxTokens always show the EFFECTIVE value (explicit setting, or
+  // the wire default annotated "（默认）") so the user knows what actually applies
+  // when they leave a flag off. Defaults mirror the wire layer: reasoning falls
+  // to `medium` (api.ts `?? 'medium'`), maxTokens to the global `maxOutputTokens`.
+  const reasoning =
+    typeof m.reasoningEffort === 'string' && m.reasoningEffort ? m.reasoningEffort : undefined
+  parts.push(`reasoning=${reasoning ?? 'medium'}${reasoning ? '' : t('card.config.value.defaultSuffix')}`)
+  const maxSet = typeof m.maxOutputTokens === 'number' ? m.maxOutputTokens : undefined
+  parts.push(
+    `maxTokens=${maxSet ?? getConfig().maxOutputTokens}${
+      maxSet !== undefined ? '' : t('card.config.value.defaultSuffix')
+    }`,
+  )
   return parts.join(', ')
 }
 
