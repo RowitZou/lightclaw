@@ -20,6 +20,8 @@ import {
   runConfigCommand,
   validateWorkspacePath,
 } from './config.js'
+import { getProviderFor, _resetProviderCacheForTests } from '../provider/index.js'
+import { resolveUserConfig } from '../config/user-override.js'
 
 let tmpHome = ''
 let gpfsRoot = ''
@@ -83,7 +85,8 @@ describe('/config set-workspace', () => {
     const out = await runConfigCommand(`set-workspace ${ws} --y`, { config: clusterConfig(), userId: 'alice' })
     assert.match(out, /Workspace directory set to/)
     assert.match(out, /contains 2 entries/)
-    assert.match(out, /restart/)
+    // No restart hook in this minimal caller → deferred-restart note.
+    assert.match(out, /next start/)
 
     const persisted = JSON.parse(readFileSync(userConfigPath('alice'), 'utf8'))
     assert.equal(persisted.workspace, ws)
@@ -628,8 +631,56 @@ describe('/config rule rm all --y', () => {
   })
 })
 
+describe('/config endpoint flushes the provider cache so edits take effect live', () => {
+  it('endpoint set evicts the cached provider built with the old wiring', async () => {
+    const cfg = modelConfig()
+    _resetProviderCacheForTests()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://old.example/v1', {
+      config: cfg,
+      userId: 'b5flush',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'b5flush' })
+
+    // Build + cache the provider with the OLD base-url.
+    const p1 = getProviderFor(resolveUserConfig('b5flush', cfg), 'm').provider
+    const p2 = getProviderFor(resolveUserConfig('b5flush', cfg), 'm').provider
+    assert.equal(p1, p2, 'unchanged wiring → the cached provider instance is reused')
+
+    // The cache key is schema:alias:credentialIdentity and omits base-url, and
+    // the secret ref name is unchanged here, so only an explicit flush can make
+    // the next lookup rebuild. On the pre-fix code p3 === p1 (stale).
+    await runConfigCommand('endpoint set ep --base-url https://new.example/v1', {
+      config: cfg,
+      userId: 'b5flush',
+    })
+    const p3 = getProviderFor(resolveUserConfig('b5flush', cfg), 'm').provider
+    assert.notEqual(p3, p1, 'endpoint set must flush so the new base-url is used without a restart')
+  })
+
+  it('endpoint rm flushes too so a same-alias re-add cannot resurrect a stale provider', async () => {
+    const cfg = modelConfig()
+    _resetProviderCacheForTests()
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://old.example/v1', {
+      config: cfg,
+      userId: 'b5flushrm',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'b5flushrm' })
+    const p1 = getProviderFor(resolveUserConfig('b5flushrm', cfg), 'm').provider
+
+    // rm cascade-drops model m; re-add the same alias + model with a new url.
+    await runConfigCommand('endpoint rm ep --y', { config: cfg, userId: 'b5flushrm' })
+    await runConfigCommand('endpoint add ep --type openai --key sk-RAW --base-url https://new.example/v1', {
+      config: cfg,
+      userId: 'b5flushrm',
+    })
+    await runConfigCommand('backend add m --endpoint ep --upstream up-1', { config: cfg, userId: 'b5flushrm' })
+    const p2 = getProviderFor(resolveUserConfig('b5flushrm', cfg), 'm').provider
+    assert.notEqual(p2, p1, 'rm/add cycle must not serve the pre-removal provider instance')
+  })
+})
+
 describe('/config workspace set --y', () => {
-  it('set <abs> requires --y; --y migrates and keeps the restart note', async () => {
+  it('set <abs> requires --y; --y migrates and notes the deferred restart when no restart hook is wired', async () => {
     const ws = path.join(gpfsRoot, 'b5ws')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
@@ -639,11 +690,47 @@ describe('/config workspace set --y', () => {
 
     const out = await runConfigCommand(`workspace set ${ws} --y`, { config: cfg, userId: 'b5ws' })
     assert.match(out, /Workspace directory set to/)
-    assert.match(out, /restart/)
+    // No restartRlaunch hook in this minimal caller → deferred-restart note.
+    assert.match(out, /next start/)
     assert.equal(JSON.parse(readFileSync(userConfigPath('b5ws'), 'utf8')).workspace, ws)
   })
 
-  it('workspace reset requires --y and keeps the restart note', async () => {
+  it('workspace set restarts the sandbox when a restart hook is wired', async () => {
+    const ws = path.join(gpfsRoot, 'b5wsrestart')
+    mkdirSync(ws, { recursive: true })
+    const cfg = clusterConfig()
+    let restartCalls = 0
+    const out = await runConfigCommand(`workspace set ${ws} --y`, {
+      config: cfg,
+      userId: 'b5wsrestart',
+      restartRlaunch: async () => {
+        restartCalls += 1
+        return 'ws-worker-123'
+      },
+    })
+    assert.equal(restartCalls, 1, 'workspace set must restart the sandbox')
+    assert.match(out, /Sandbox restarted/)
+    assert.equal(JSON.parse(readFileSync(userConfigPath('b5wsrestart'), 'utf8')).workspace, ws)
+  })
+
+  it('workspace set surfaces a restart failure without losing the saved workspace', async () => {
+    const ws = path.join(gpfsRoot, 'b5wsfail')
+    mkdirSync(ws, { recursive: true })
+    const cfg = clusterConfig()
+    const out = await runConfigCommand(`workspace set ${ws} --y`, {
+      config: cfg,
+      userId: 'b5wsfail',
+      restartRlaunch: async () => {
+        throw new Error('worker spawn timed out')
+      },
+    })
+    assert.match(out, /restart failed/)
+    assert.match(out, /worker spawn timed out/)
+    // The write must survive a failed restart so it takes effect on next start.
+    assert.equal(JSON.parse(readFileSync(userConfigPath('b5wsfail'), 'utf8')).workspace, ws)
+  })
+
+  it('workspace reset requires --y and restarts the sandbox to remount the default', async () => {
     const ws = path.join(gpfsRoot, 'b5wsr')
     mkdirSync(ws, { recursive: true })
     const cfg = clusterConfig()
@@ -651,9 +738,33 @@ describe('/config workspace set --y', () => {
     const preview = await runConfigCommand('workspace reset', { config: cfg, userId: 'b5wsr' })
     assert.match(preview, /--y/)
     assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('b5wsr'), 'utf8')), true)
-    const out = await runConfigCommand('workspace reset --y', { config: cfg, userId: 'b5wsr' })
-    assert.match(out, /restart/)
+    let restartCalls = 0
+    const out = await runConfigCommand('workspace reset --y', {
+      config: cfg,
+      userId: 'b5wsr',
+      restartRlaunch: async () => {
+        restartCalls += 1
+        return 'ws-worker-456'
+      },
+    })
+    assert.equal(restartCalls, 1, 'reset that actually changed the workspace must restart')
+    assert.match(out, /Sandbox restarted/)
     assert.equal('workspace' in JSON.parse(readFileSync(userConfigPath('b5wsr'), 'utf8')), false)
+  })
+
+  it('workspace reset that changes nothing does not restart the sandbox', async () => {
+    const cfg = clusterConfig()
+    let restartCalls = 0
+    const out = await runConfigCommand('workspace reset --y', {
+      config: cfg,
+      userId: 'b5wsnoop',
+      restartRlaunch: async () => {
+        restartCalls += 1
+        return 'ws-worker-789'
+      },
+    })
+    assert.equal(restartCalls, 0, 'no workspace override → no remount needed')
+    assert.match(out, /already the default/)
   })
 })
 

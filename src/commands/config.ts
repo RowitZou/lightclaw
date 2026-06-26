@@ -41,7 +41,7 @@ import {
 } from './card-specs.js'
 import type { CommandListCardSpec } from './registry.js'
 import { expandHomePath } from '../paths.js'
-import { clearPrechargeForModel } from '../provider/index.js'
+import { clearPrechargeForModel, clearProviderCache } from '../provider/index.js'
 import { resolveEffectiveProxy } from '../provider/proxy.js'
 import { clearAllForModel } from '../provider/capability-cache.js'
 import { formatRule, parseRule } from '../permission/rules.js'
@@ -81,6 +81,11 @@ type ConfigCommandContext = {
   // minimal callers (tests, terminal) where the default plain_text applies.
   setBodyFormat?: (format: 'lark_md' | 'plain_text') => void
   setCommandListCard?: (spec: CommandListCardSpec) => void
+  // Optional: restarts the caller's rlaunch sandbox so a workspace change is
+  // remounted into the live worker (mirrors `/system mount`'s auto-restart).
+  // Absent on minimal callers (tests, non-rlaunch backends) — setWorkspace /
+  // resetWorkspace then fall back to the "needs restart" note.
+  restartRlaunch?: () => Promise<string>
 }
 
 const BYO_ALIAS_RE = /^[A-Za-z0-9_.-]{1,80}$/
@@ -349,6 +354,23 @@ async function runEndpointSubcommand(
   }
 }
 
+/**
+ * Persist an endpoint-wiring change AND evict cached providers so the new
+ * baseUrl / proxy / key takes effect on the next API call — mirrors what
+ * `/admin endpoint set` gets for free via `commitAdminConfig`. The provider
+ * cache key is `schema:alias:credentialIdentity` and deliberately omits the
+ * baseUrl / proxy / raw key, so a built provider captures that wiring at
+ * construction time; without this flush an edit to an already-used BYO endpoint
+ * keeps hitting the OLD upstream until daemon restart. Endpoint writes only —
+ * `backend` / `lane` / `workspace` writes do not change provider wiring and
+ * keep plain `writeUserConfig`. The flush is global (no targeted eviction
+ * exists) but cheap and rare, the same tradeoff the admin path already accepts.
+ */
+function writeEndpointConfig(userId: string, obj: Record<string, unknown>): void {
+  writeUserConfig(userId, obj)
+  clearProviderCache()
+}
+
 // ── --type discriminated-union parser (B3; B4 admin reuses it) ───────────────
 //
 // `parseEndpointType` consumes the flags AFTER the endpoint alias for an
@@ -457,7 +479,7 @@ async function addEndpoint(
     obj.endpoints = endpoints
     const guard = guardWritable(userId, obj)
     if (guard) return guard
-    writeUserConfig(userId, obj)
+    writeEndpointConfig(userId, obj)
     return entryResultCard(
       ctx,
       t('config.endpoint.addedCodex', { name: alias, ref: summary.name }),
@@ -496,7 +518,7 @@ async function addEndpoint(
   obj.endpoints = endpoints
   const guard = guardWritable(userId, obj)
   if (guard) return guard
-  writeUserConfig(userId, obj)
+  writeEndpointConfig(userId, obj)
   const stored = resolved.stored ? t('config.endpoint.keyStored', { name: resolved.secretName }) : ''
   return entryResultCard(
     ctx,
@@ -715,7 +737,7 @@ async function setEndpoint(
   obj.endpoints = endpoints
   const guard = guardWritable(userId, obj)
   if (guard) return guard
-  writeUserConfig(userId, obj)
+  writeEndpointConfig(userId, obj)
   return entryResultCard(
     ctx,
     t('config.endpoint.updated', { name: alias }),
@@ -758,7 +780,7 @@ function removeEndpoint(userId: string, parts: string[]): string | null {
   }
   obj.endpoints = endpoints
   obj.models = models
-  writeUserConfig(userId, obj)
+  writeEndpointConfig(userId, obj)
   const modelsNote = removedModels.length
     ? t('config.endpoint.removedModels', { models: removedModels.join(', ') })
     : ''
@@ -1580,7 +1602,7 @@ async function runConfigWorkspace(
     // --y gate (design F.3b): resetting migrates the workspace.
     const gate = requireConfirm(parts, { preview: t('confirm.workspace.reset') })
     if (!gate.confirmed) return gate.message
-    return resetWorkspace(ctx.userId)
+    return resetWorkspace(ctx.userId, ctx)
   }
   // `set <path>` (noun-verb) or a bare `<path>` (legacy `set-workspace <path>`).
   const target = verb === 'set' ? parts[1] : parts[0]
@@ -1591,7 +1613,7 @@ async function runConfigWorkspace(
   if (target === 'reset' || target === '--default') {
     const gate = requireConfirm(parts, { preview: t('confirm.workspace.reset') })
     if (!gate.confirmed) return gate.message
-    return resetWorkspace(ctx.userId)
+    return resetWorkspace(ctx.userId, ctx)
   }
   // --y gate (design F.3b): setting migrates the workspace.
   const expandedPreview = expandHomePath(target)
@@ -1633,15 +1655,45 @@ async function setWorkspace(rawPath: string, ctx: ConfigCommandContext & { userI
     entryCount > 0
       ? t('config.workspace.setNonEmpty', { path: resolved, count: entryCount })
       : t('config.workspace.setEmpty', { path: resolved })
-  return `${status}\n${t('config.workspace.restartNote')}\n`
+  return `${status}\n${await restartSandboxForWorkspace(ctx)}\n`
 }
 
-function resetWorkspace(userId: string): string {
+async function resetWorkspace(
+  userId: string,
+  ctx: ConfigCommandContext,
+): Promise<string> {
   const merged = readUserConfig(userId)
   if (!('workspace' in merged)) {
-    return `${t('config.workspace.resetAlreadyDefault')}\n${t('config.workspace.restartNote')}\n`
+    // Nothing changed, so the live sandbox already points at the default
+    // workspace — no restart needed.
+    return `${t('config.workspace.resetAlreadyDefault')}\n`
   }
   delete merged.workspace
   writeUserConfig(userId, merged)
-  return `${t('config.workspace.reset')}\n${t('config.workspace.restartNote')}\n`
+  return `${t('config.workspace.reset')}\n${await restartSandboxForWorkspace(ctx)}\n`
+}
+
+/**
+ * Remounts the new workspace into the caller's live sandbox by restarting the
+ * rlaunch worker, mirroring `/system mount`'s auto-restart. The config write
+ * has already persisted the new path; `workspaceFor()` re-reads it from disk at
+ * worker (re)construction, so a swap picks up the new mount. Falls back to a
+ * "needs restart" note when no restart hook is wired (tests / non-rlaunch
+ * backends), and degrades to a "saved, restart failed" message on error so the
+ * persisted workspace is never silently lost behind a transient worker hiccup.
+ */
+async function restartSandboxForWorkspace(
+  ctx: ConfigCommandContext,
+): Promise<string> {
+  if (!ctx.restartRlaunch) {
+    return t('config.workspace.restartSkipped')
+  }
+  try {
+    await ctx.restartRlaunch()
+    return t('config.workspace.restartDone')
+  } catch (error) {
+    return t('config.workspace.restartFailed', {
+      detail: error instanceof Error ? error.message : String(error),
+    })
+  }
 }

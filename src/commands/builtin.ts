@@ -218,6 +218,7 @@ function buildBuiltinCommands(): ReplCommand[] {
         persistMeta: ctx.persistMeta,
         setBodyFormat: ctx.setSlashBodyFormat,
         setCommandListCard: ctx.setCommandListCard,
+        restartRlaunch: () => restartCurrentRlaunchRuntime(ctx),
       }))
     },
   },

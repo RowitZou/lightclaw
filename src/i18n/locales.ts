@@ -860,7 +860,9 @@ export const LOCALES = {
     'config.workspace.setEmpty': '工作目录已设为：{path}（已生效；该目录当前为空）。',
     'config.workspace.reset': '工作目录已恢复为默认。',
     'config.workspace.resetAlreadyDefault': '工作目录本就是默认，无需更改。',
-    'config.workspace.restartNote': '提示：沙箱需要重启后才会挂载新的工作目录。',
+    'config.workspace.restartDone': '已重启沙箱，新的工作目录已在沙箱内生效。',
+    'config.workspace.restartFailed': '工作目录已保存，但沙箱重启失败：{detail}（可稍后再发一条消息让我重试）。',
+    'config.workspace.restartSkipped': '工作目录已保存；沙箱会在下次启动时挂载新的工作目录。',
 
     // ---- /config endpoint | model (BYO, PR5) ----
     'config.byo.aliasInvalid': '别名必须匹配 /^[A-Za-z0-9_.-]{1,80}$/：{value}',
@@ -1818,7 +1820,9 @@ export const LOCALES = {
     'config.workspace.setEmpty': 'Workspace directory set to: {path} (in effect; the directory is currently empty).',
     'config.workspace.reset': 'Workspace directory restored to the default.',
     'config.workspace.resetAlreadyDefault': 'Workspace directory is already the default; nothing to change.',
-    'config.workspace.restartNote': 'Note: the sandbox must restart before it mounts the new workspace.',
+    'config.workspace.restartDone': 'Sandbox restarted; the new workspace is now mounted inside it.',
+    'config.workspace.restartFailed': 'Workspace saved, but the sandbox restart failed: {detail} (send another message and I will retry).',
+    'config.workspace.restartSkipped': 'Workspace saved; the sandbox will mount the new workspace on its next start.',
 
     // ---- /config endpoint | model (BYO, PR5) ----
     'config.byo.aliasInvalid': 'alias must match /^[A-Za-z0-9_.-]{1,80}$/: {value}',
