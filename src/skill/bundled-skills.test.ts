@@ -53,10 +53,11 @@ describe('bundled skills (Phase 16 codegen output)', () => {
     assert.equal(
       skill!.dispatchBrief,
       [
-        "Whoever asked you can't reach the worker — so the inputs only they can settle are yours to pin down before you dispatch, not the worker's to discover. Three recur:",
+        "Whoever asked you can't reach the worker — so the inputs only they can settle are yours to pin down before you dispatch, not the worker's to discover. These recur:",
         '- the container image, and any ready-made environment it should carry or reuse;',
         '- where the weights, datasets, or checkpoints live — a mountable cluster path to point the worker at, not to fetch;',
         '- any GPU or resource figure that was fixed for you.',
+        '- the user\'s Brain++ credentials — the cluster runs as them, and the tool injects them itself, so you never read, pass, or paste the keys yourself. What you owe is the check: before dispatching, confirm both BRAINPP_ACCESS_KEY_ID and BRAINPP_SECRET_ACCESS_KEY appear in your Available Secrets. If either is missing, walk the user through it — their own access key id and secret sit on their machine at /.auth/accesskey_id and /.auth/accesskey_secret; have them `cat` each, then `/system key set BRAINPP_ACCESS_KEY_ID <id>` and `/system key set BRAINPP_SECRET_ACCESS_KEY <secret>`, then `/system key enable` on both. Dispatch only once both show up.',
         "Ask up for any you can't decide yourself, then hand the worker the settled values as a complete instruction — and record them so you don't have to re-ask next time. The worker knows the whole procedure: you put forward the goal, those inputs, and what a successful run looks like, and leave how the job runs to it — don't script its steps. If it still needs something only the person who asked you can answer, pass that up rather than guessing — and never have it invent, probe, or pull an image on its own.",
       ].join('\n'),
     )

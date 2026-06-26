@@ -47,6 +47,13 @@ export type SystemPromptTemplate = {
   preTodos: string
   postTodos: string
   includeTodos?: boolean
+  /**
+   * Render the `## Available Secrets` section even when no secret is enabled
+   * (as an empty-state) instead of omitting it. Set for orchestrator roles so
+   * the manager always sees the section it is told to check before delegating
+   * credential-gated work; workers keep the minimal omit-when-empty behavior.
+   */
+  secretsAlwaysRender?: boolean
 }
 
 export type OrchestratorPromptContext = {
@@ -274,9 +281,21 @@ function formatOptionalTodoSection(todos: TodoItem[], includeTodos: boolean | un
   return formatTodoSection(todos)
 }
 
-function formatAvailableSecretsSection(enabledSecrets: ReadonlyMap<string, string> | undefined): string {
+function formatAvailableSecretsSection(
+  enabledSecrets: ReadonlyMap<string, string> | undefined,
+  alwaysRender = false,
+): string {
   if (!enabledSecrets || enabledSecrets.size === 0) {
-    return ''
+    if (!alwaysRender) {
+      return ''
+    }
+    return [
+      '## Available Secrets',
+      '',
+      'No secrets are currently available. Ones a user has set and enabled '
+        + '(`/system key set <NAME> <value>` then `/system key enable <NAME>`) '
+        + 'appear here by name.',
+    ].join('\n')
   }
   const names = [...enabledSecrets.keys()].sort()
   return [
@@ -439,6 +458,7 @@ async function buildOrchestratorPromptTemplate(
     preTodos: prompt.preTodoSections.join('\n\n'),
     postTodos: prompt.postTodoSections.join('\n\n'),
     includeTodos: prompt.includeTodos,
+    secretsAlwaysRender: true,
   }
 }
 
@@ -1075,7 +1095,7 @@ export function renderSystemPromptSplit(
   if (todoSection) {
     variableParts.push(todoSection)
   }
-  const availableSecrets = formatAvailableSecretsSection(options?.enabledSecrets)
+  const availableSecrets = formatAvailableSecretsSection(options?.enabledSecrets, template.secretsAlwaysRender)
   if (availableSecrets) {
     variableParts.push(availableSecrets)
   }
@@ -1119,7 +1139,7 @@ export function renderSystemPrompt(
     toolSection,
     template.postTodos,
     formatOptionalTodoSection(todos, template.includeTodos),
-    formatAvailableSecretsSection(options?.enabledSecrets),
+    formatAvailableSecretsSection(options?.enabledSecrets, template.secretsAlwaysRender),
     deferredReminder,
   ].filter(section => section.trim().length > 0)
   return sections.join('\n\n')

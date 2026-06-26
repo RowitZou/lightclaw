@@ -64,7 +64,7 @@ import type { Role } from './types.js'
 // were rewritten so the operational steps cover redirect + extract (not just
 // merge), shifting the skillConsolidator hash once more.
 const SNAPSHOT_HASHES: Record<string, string> = {
-  main: '35392d1ed68cdf9008873f57a3c865c2ae3ca896ba9f194ed60f530de362d4d9',
+  main: 'defb05c2fd94446bae1ca067d380cf5428b69f074f2bafc1b9d322a7ce66926b',
   generalist: '18daf6ebb2f3bdbd8ba9d8cbc4042d4694e83939d2af5a004d157fd03862a061',
   localExplorer: '05c1469827712caf327fc84a5999be85283baf7deeb7b75c5ffad4553b9b7ce8',
   webSearcher: '4a0227bf09b92558d4cff9a8c386a4ee40b5edba3b4aee2ac8e501d450f7502b',

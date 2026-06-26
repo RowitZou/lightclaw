@@ -3,10 +3,11 @@ name: brainpp-batch-job
 description: "Workflow and judgment layer for the cluster job tool — the whole job lifecycle (launch, monitor, wrap up), the decisions and parameter choices at each stage, output conventions, and the blockers you escalate. Operations: capacity, submit, list, get, logs, events, stop, delete."
 when_to_use: "Use when the task is to submit, inspect, monitor, stop, or delete cluster batch training jobs, check cluster GPU / CPU / memory availability, or whenever a task needs more CPU / memory / GPU than your own environment has (see Environment Info) — run it as a cluster job rather than inline. Examples: 'submit this training job to the cluster', 'tail logs for my batch job', 'how many GPUs are free in my group', 'stop that cluster job', 'run this GPU job'. This is for batch jobs."
 dispatch_brief: |
-  Whoever asked you can't reach the worker — so the inputs only they can settle are yours to pin down before you dispatch, not the worker's to discover. Three recur:
+  Whoever asked you can't reach the worker — so the inputs only they can settle are yours to pin down before you dispatch, not the worker's to discover. These recur:
   - the container image, and any ready-made environment it should carry or reuse;
   - where the weights, datasets, or checkpoints live — a mountable cluster path to point the worker at, not to fetch;
   - any GPU or resource figure that was fixed for you.
+  - the user's Brain++ credentials — the cluster runs as them, and the tool injects them itself, so you never read, pass, or paste the keys yourself. What you owe is the check: before dispatching, confirm both BRAINPP_ACCESS_KEY_ID and BRAINPP_SECRET_ACCESS_KEY appear in your Available Secrets. If either is missing, walk the user through it — their own access key id and secret sit on their machine at /.auth/accesskey_id and /.auth/accesskey_secret; have them `cat` each, then `/system key set BRAINPP_ACCESS_KEY_ID <id>` and `/system key set BRAINPP_SECRET_ACCESS_KEY <secret>`, then `/system key enable` on both. Dispatch only once both show up.
   Ask up for any you can't decide yourself, then hand the worker the settled values as a complete instruction — and record them so you don't have to re-ask next time. The worker knows the whole procedure: you put forward the goal, those inputs, and what a successful run looks like, and leave how the job runs to it — don't script its steps. If it still needs something only the person who asked you can answer, pass that up rather than guessing — and never have it invent, probe, or pull an image on its own.
 requires-driver: brainpp
 allowed-tools:
@@ -53,6 +54,15 @@ Operations:
 Your `/workspace` is **auto-mounted into every job** at the same `/workspace` path, so anything you prepare there is already in the job — no re-upload.
 
 Drive everything through these operations — don't hand-build cluster commands in a shell. Use it for batch work: training, evaluation, or anything heavier or longer than a quick step you'd run yourself.
+
+## Credentials
+
+`BrainppCluster` runs under the current LightClaw user's Brain++ credentials. If the tool reports them missing, walk the user through configuring both — their access key id and secret live on their own machine at `/.auth/accesskey_id` and `/.auth/accesskey_secret`:
+
+- `cat /.auth/accesskey_id`, then `/system key set BRAINPP_ACCESS_KEY_ID <id>` and `/system key enable BRAINPP_ACCESS_KEY_ID`
+- `cat /.auth/accesskey_secret`, then `/system key set BRAINPP_SECRET_ACCESS_KEY <secret>` and `/system key enable BRAINPP_SECRET_ACCESS_KEY`
+
+Do not ask the user to paste AK/SK into ordinary free-form chat, memory, skill text, job `env`, or command arguments — `/system key set` is the only sanctioned entry. Do not work around this with Bash or hand-written `rjob` commands; the tool injects the credentials only for the cluster CLI process and keeps them out of model-visible command/output surfaces.
 
 ## Posture
 
