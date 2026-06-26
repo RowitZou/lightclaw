@@ -24,6 +24,7 @@ import {
   setUserConfigField,
   writeUserConfig,
 } from '../config/user-override.js'
+import { validateBaseUrl, type BaseUrlValidation } from '../config/base-url.js'
 import { normalizeProxyUrl } from '../config/proxy-url.js'
 import { workspaceFor } from '../identity/paths.js'
 import { setIdentityPreference } from '../identity/preferences.js'
@@ -398,14 +399,14 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
   if (type !== 'openai' && type !== 'anthropic' && type !== 'codex') {
     return { ok: false, error: t('config.endpoint.typeInvalid', { type: rawType }) }
   }
-  const baseUrl = flagValue(parts, '--base-url')
+  const baseUrlRaw = flagValue(parts, '--base-url')
   const proxyRaw = flagValue(parts, '--proxy')
   const proxy = proxyRaw ? normalizeProxyUrl(proxyRaw) : undefined
   const key = flagValue(parts, '--key')
   const authPath = flagValue(parts, '--auth-path')
 
   if (type === 'codex') {
-    if (baseUrl !== undefined) return { ok: false, error: t('config.endpoint.codexNoBaseUrl') }
+    if (baseUrlRaw !== undefined) return { ok: false, error: t('config.endpoint.codexNoBaseUrl') }
     if (key !== undefined) return { ok: false, error: t('config.endpoint.codexNoKey') }
     if (!authPath) return { ok: false, error: t('config.endpoint.authPathRequired') }
     // The auth path is read from the DAEMON host filesystem. A `~` / `${HOME}`
@@ -419,6 +420,15 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
   }
   // openai | anthropic
   if (!key) return { ok: false, error: t('config.endpoint.keyRequired', { type }) }
+  // Validate --base-url at input time so a malformed value (full-width chars,
+  // missing scheme, stray whitespace) fails here with an actionable message
+  // instead of surfacing as a bare `Invalid URL` thrown inside the probe.
+  let baseUrl: string | undefined
+  if (baseUrlRaw !== undefined) {
+    const validated = validateBaseUrl(baseUrlRaw)
+    if (!validated.ok) return { ok: false, error: baseUrlError(baseUrlRaw, validated) }
+    baseUrl = validated.value
+  }
   return {
     ok: true,
     type,
@@ -426,6 +436,20 @@ export function parseEndpointType(parts: string[]): ParsedEndpointType {
     ...(baseUrl ? { baseUrl } : {}),
     ...(proxy ? { proxy } : {}),
   }
+}
+
+/** Localize a base-url validation failure, appending a non-ASCII hint when the
+ *  value likely carries a full-width character (common Chinese-IME paste). */
+function baseUrlError(
+  raw: string,
+  failure: Extract<BaseUrlValidation, { ok: false }>,
+): string {
+  const hint = failure.nonAscii ? t('config.endpoint.baseUrlNonAsciiHint') : ''
+  const key =
+    failure.reason === 'protocol'
+      ? 'config.endpoint.baseUrlProtocol'
+      : 'config.endpoint.baseUrlInvalid'
+  return t(key, { value: raw, hint })
 }
 
 // `endpoint add <ep> --type <openai|anthropic|codex> [type-specific flags]`.
@@ -691,7 +715,11 @@ async function setEndpoint(
   const baseUrl = flagValue(rest, '--base-url')
   if (baseUrl !== undefined) {
     if (baseUrl === '-') delete next.baseUrl
-    else next.baseUrl = baseUrl
+    else {
+      const validated = validateBaseUrl(baseUrl)
+      if (!validated.ok) return `${baseUrlError(baseUrl, validated)}\n`
+      next.baseUrl = validated.value
+    }
   }
   const proxy = flagValue(rest, '--proxy')
   if (proxy !== undefined) {
@@ -975,13 +1003,19 @@ async function addBackend(
  * Routes through the real api.ts `streamChat` (NOT `provider.streamChat`
  * directly) so the probe exercises the exact wire shape a real turn would:
  * reasoning effort resolves to `entry.reasoningEffort ?? 'medium'`, max_tokens
- * resolves per model, and a genuinely non-reasoning model gets the one-shot
- * reasoning-strip retry. The probe deliberately sets NO `reasoningEffort` of its
- * own — forcing a fixed value (the old `'minimal'`) 400s any model that does not
- * accept it (gpt-5.5 rejects `'minimal'`), false-rejecting a working model on a
- * parameter unrelated to connectivity. The model's own config is the faithful
- * thing to test; a low max_tokens caps cost (a truncated `response.incomplete`
- * is still a successful round-trip = connectivity confirmed).
+ * resolves to `entry.maxOutputTokens ?? config.maxOutputTokens`, and a genuinely
+ * non-reasoning model gets the one-shot reasoning-strip retry. The probe
+ * deliberately sets NEITHER `reasoningEffort` NOR `maxTokens` of its own — both
+ * defer to the model's resolved config so the probe tests the SAME combination a
+ * real turn will send. Forcing either is a false-reject factory: a fixed
+ * `reasoningEffort:'minimal'` 400s models that reject it (gpt-5.5), and a fixed
+ * low `maxTokens` (the old 512) 400s any Anthropic-thinking model behind a
+ * Bedrock gateway — Bedrock requires `max_tokens > thinking.budget_tokens`, and
+ * the medium-effort budget (≥1024) exceeds 512, so the model 400s on a parameter
+ * combination it would never actually run. Cost is bounded by the prompt itself
+ * ("Reply with ok." stops after a few tokens), so deferring to the real
+ * maxOutputTokens does not meaningfully raise spend; a truncated
+ * `response.incomplete` is still a successful round-trip = connectivity confirmed.
  */
 async function probeModelConnectivityImpl(
   resolved: ReturnType<typeof resolveUserConfig>,
@@ -998,7 +1032,6 @@ async function probeModelConnectivityImpl(
       system: 'You are a connectivity checker. Reply with ok.',
       messages: [{ role: 'user', content: 'Reply with ok.' }],
       tools: [],
-      maxTokens: 512,
       signal,
     })) {
       if (event.type === 'stop') break

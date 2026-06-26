@@ -395,6 +395,40 @@ describe('/config endpoint add --type', () => {
     assert.equal(secrets[ep.apiKeyRef as string]!.value, 'sk-RAW')
   })
 
+  it('rejects a --base-url with a full-width character BEFORE the probe, with a half-width hint', async () => {
+    const cfg = modelConfig()
+    // Chinese-IME full-width colon `：` (U+FF1A). new URL() throws a bare
+    // "Invalid URL" deep in the probe; the input-time gate catches it here.
+    const out = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-RAW --base-url http：//gw.example/v1',
+      { config: cfg, userId: 'baseurlfw' },
+    )
+    assert.match(out, /valid http\(s\) URL/)
+    assert.match(out, /full-width \/ non-ASCII/) // non-ASCII hint appended
+    // Rejected before persistence — nothing was written.
+    assert.equal(existsSync(userConfigPath('baseurlfw')), false)
+  })
+
+  it('rejects a --base-url with no scheme (bare host:port)', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-RAW --base-url 35.220.164.252:3888/v1',
+      { config: cfg, userId: 'baseurlnoscheme' },
+    )
+    assert.match(out, /valid http\(s\) URL/)
+    assert.equal(existsSync(userConfigPath('baseurlnoscheme')), false)
+  })
+
+  it('rejects a --base-url whose scheme is not http(s)', async () => {
+    const cfg = modelConfig()
+    const out = await runConfigCommand(
+      'endpoint add ep --type openai --key sk-RAW --base-url ftp://gw.example/v1',
+      { config: cfg, userId: 'baseurlproto' },
+    )
+    assert.match(out, /must start with http:\/\/ or https:\/\//)
+    assert.equal(existsSync(userConfigPath('baseurlproto')), false)
+  })
+
   it('--type codex --auth-path stores authRef, no baseUrl, no key', async () => {
     const cfg = modelConfig()
     // Stage a minimal codex auth.json the importer can read: a JWT-shaped
@@ -1198,16 +1232,24 @@ describe('/config backend add — probe resolves against admin base, not session
 })
 
 describe('/config backend add — probe defers reasoning effort to the model config', () => {
-  it('does NOT force a reasoning effort the upstream may reject (gpt-5.5 minimal 400)', async () => {
+  it('forces NO model-tuning param of its own — defers reasoning AND maxTokens to config', async () => {
     const cfg = modelConfig()
     // Run the REAL connectivity probe (only stub the endpoint-model listing) and
-    // capture the streamChat params it sends. The bug: the probe hard-set
-    // reasoningEffort:'minimal', which gpt-5.5 rejects with a 400 — false-rejecting
-    // a working model on a parameter unrelated to connectivity.
+    // capture the streamChat params it sends. The class of bug: the probe forcing
+    // a fixed model-tuning value that diverges from the user's resolved config and
+    // false-rejects a working model on a parameter unrelated to connectivity —
+    //   (1) reasoningEffort:'minimal' → gpt-5.5 400s;
+    //   (2) maxTokens:512 → any Anthropic-thinking model behind a Bedrock gateway
+    //       400s ("max_tokens must be greater than thinking.budget_tokens", the
+    //       medium-effort budget ≥1024 > 512).
+    // The probe must therefore send NEITHER override and inherit the exact wire
+    // shape (reasoning + max_tokens) a real turn resolves from config.
     let seenReasoning: unknown = 'UNSET'
+    let seenMaxTokens: unknown = 'UNSET'
     __setModelProbeHooksForTests({ endpointModels: async () => ({ ok: true, summary: '' }) })
     __setProbeStreamChatForTests(async function* (params) {
       seenReasoning = (params as { reasoningEffort?: unknown }).reasoningEffort
+      seenMaxTokens = (params as { maxTokens?: unknown }).maxTokens
       yield { type: 'stop' } as never
     })
     await runConfigCommand('endpoint add codex-ep --type openai --key sk-X --base-url https://x', {
@@ -1219,11 +1261,13 @@ describe('/config backend add — probe defers reasoning effort to the model con
       userId: 'gptuser',
     })
     assert.match(out, /Connectivity check: ok/)
-    // The probe must pass NO reasoning effort of its own — it defers to the model's
-    // config / api.ts's medium default. Anything it forces here (notably 'minimal')
-    // is the regression.
+    // No reasoning override (defers to the model's config / api.ts medium default).
     assert.equal(seenReasoning, undefined)
     assert.notEqual(seenReasoning, 'minimal')
+    // No maxTokens override (defers to entry.maxOutputTokens ?? config.maxOutputTokens).
+    // A literal 512 here is the regression that false-rejected Bedrock thinking models.
+    assert.equal(seenMaxTokens, undefined)
+    assert.notEqual(seenMaxTokens, 512)
     assert.ok((readUserConfigJson('gptuser').models as Record<string, unknown>)['gpt-5.5'])
   })
 })
