@@ -20,8 +20,8 @@ export type ExecInput = {
    * (shared-cluster-fs / bind-mount) can read/write them without EACCES.
    *
    * Set to `true` for backend-internal bootstrap that genuinely needs root:
-   * apt staging (`stageHelpersOnce`), ownership bootstrap (`chownWorkspaceOnce`),
-   * future NetworkBridge iptables. Never set this from tool code.
+   * apt staging (`stageHelpersOnce`), future NetworkBridge iptables. Never set
+   * this from tool code.
    */
   privileged?: boolean
 }

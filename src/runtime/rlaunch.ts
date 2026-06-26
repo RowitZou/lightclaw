@@ -55,7 +55,7 @@ export type RlaunchRuntimeConfig = {
   /**
    * The uid/gid to drop privileges to when dispatching unprivileged exec
    * calls. The kubebrain ml-base image starts as root; we keep root for the
-   * worker PID 1 and for bootstrap steps (apt, chown), but every tool-side
+   * worker PID 1 and for bootstrap steps (apt), but every tool-side
    * exec is wrapped in `setpriv --reuid=<daemonUid> --regid=<daemonGid>` so
    * files it creates in the gpfs-backed workspace are owned by the daemon
    * (host uid). Defaults to `process.getuid()` / `process.getgid()` at
@@ -77,13 +77,6 @@ type ProcessState =
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const START_TIMEOUT_MS = 180_000
-// How many times a FAILED workspace chown is retried (across successive
-// data-plane accesses) before the runtime gives up and latches the worker as
-// "chown attempted". Bounds the worst case on a persistent gpfs/brainctl
-// failure to MAX_CHOWN_ATTEMPTS × the chown timeout, while still letting a
-// transient 60s blip self-heal on the next access instead of leaving the
-// worker permanently un-chowned until respawn.
-export const MAX_CHOWN_ATTEMPTS = 3
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024
 // brainctl's exec stdout no longer carries tool output: every non-privileged
 // (agent-dispatched) exec redirects the command's stdout/stderr to files on
@@ -156,23 +149,8 @@ export class RlaunchRuntime implements Runtime {
    *  re-stages into the fresh container. */
   private helpersStagedFor: string | null = null
   private inflightStaging: Promise<void> | null = null
-  /** Memoizes successful workspace chown per worker. Same lifecycle as
-   *  `helpersStagedFor` — resets when the workerName changes. The chown is
-   *  idempotent (already-correct entries are no-ops) so a re-run on a
-   *  respawn is cheap; we still memoize to skip the brainctl round-trip
-   *  entirely on the hot path. */
-  private workspaceChownedFor: string | null = null
-  private inflightChown: Promise<void> | null = null
-  /** Bounded-retry counter for a FAILED chown, scoped to a workerName (resets
-   *  when it changes, same as `workspaceChownedFor`). A chown failure is NOT
-   *  latched on the first attempt — a 60s gpfs/brainctl timeout is transient
-   *  and would otherwise leave the worker permanently un-chowned until respawn.
-   *  We retry on the next data-plane access up to `MAX_CHOWN_ATTEMPTS`, then
-   *  latch so a persistent failure can't stall every tool call forever. */
-  private chownAttemptsFor: string | null = null
-  private chownAttempts = 0
   /** Memoizes successful scratch-dir provisioning per worker. Same lifecycle
-   *  as `workspaceChownedFor` — resets when the workerName changes, so a
+   *  as `helpersStagedFor` — resets when the workerName changes, so a
    *  respawned worker (whose node-local /scratch was wiped) re-provisions. */
   private scratchDirReadyFor: string | null = null
   private inflightScratchDir: Promise<void> | null = null
@@ -442,7 +420,7 @@ export class RlaunchRuntime implements Runtime {
       `[rlaunch] spawned worker ${newName} for ${this.cfg.canonicalUser} ` +
       `(reason: ${spawnReason}; image=${this.cfg.image})\n`,
     )
-    // Stage chown + scratch + helpers in the background so a freshly-spawned
+    // Stage scratch + helpers in the background so a freshly-spawned
     // ml-base worker (no ripgrep/jq/poppler baked in) is provisioned before
     // the first Grep/Glob, without blocking start()'s fast-return contract.
     this.kickBackgroundProvisioning()
@@ -539,7 +517,7 @@ export class RlaunchRuntime implements Runtime {
     // Wrap the command so the worker pod kills the command's whole process
     // tree on timeout: killing the local `brainctl exec` client does NOT
     // reach the in-worker process (Bug 4). This is the agent tool-exec path;
-    // privileged bootstrap execs (chown / helper staging) call runBrainctlExec
+    // privileged bootstrap execs (helper staging) call runBrainctlExec
     // directly and stay unwrapped.
     const wrapped = this.wrapForSandboxTimeout(input)
     const result = await this.runBrainctlExec(wrapped)
@@ -587,7 +565,7 @@ export class RlaunchRuntime implements Runtime {
     this.workerName = null
     await this.start('worker-lost on exec after 1s retry, retrying')
     // bringToReady (not bare waitUntilRunning): the respawned worker is a fresh
-    // ml-base pod with no chown / scratch / ripgrep, so provision it before
+    // ml-base pod with no scratch / ripgrep, so provision it before
     // running the retry command — otherwise the very next Grep/Glob lands on an
     // unstaged worker and returns `rg: command not found`. Coalesces with the
     // background drive start() kicked off, via the per-worker ensure* memos.
@@ -822,7 +800,7 @@ export class RlaunchRuntime implements Runtime {
 
   /**
    * Drive a brought-up worker to fully provisioned: wait for the cluster to
-   * report phase=running, then run the one-time chown + scratch + helper
+   * report phase=running, then run the one-time scratch + helper
    * staging bootstrap. Split out of `ensureRunning` so EVERY path that stands
    * a worker up — the on-demand exec / data-plane gate here, the exec
    * worker-lost retry, and the background drive `_startOnce` kicks off for
@@ -849,15 +827,16 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /**
-   * One-time worker provisioning, ordered chown → scratch → helper staging.
-   * chown BEFORE staging: stageHelpersOnce runs apt which itself drops a few
-   * files under /var/cache/apt etc. inside the container, but those are
-   * container-local (not gpfs-backed) and unaffected by the chown. The chown
-   * only targets the workspace mount, which is exactly the surface the
-   * daemon's shared-cluster-fs reads/writes.
+   * One-time worker provisioning: scratch dir, then helper staging. The gpfs
+   * workspace mount needs no ownership bootstrap — `RuntimePool.acquire` mkdirs
+   * it host-side as the daemon uid, and every tool exec is setpriv-wrapped to
+   * that same uid (see `daemonUid`), so files in the workspace are daemon-owned
+   * by construction. There is no root-owned surface for shared-cluster-fs to
+   * hit EACCES on, so the old recursive `chown -R` bootstrap was removed (it was
+   * a one-time cleanup for pre-setpriv legacy trees, and on a large pre-existing
+   * workspace its full-tree walk only timed out — see 2026-06-26).
    */
   private async ensureProvisioned(): Promise<void> {
-    await this.ensureWorkspaceChowned()
     await this.ensureScratchDir()
     await this.ensureHelpersStaged()
   }
@@ -889,91 +868,13 @@ export class RlaunchRuntime implements Runtime {
   }
 
   /**
-   * Idempotently chown the worker-visible workspace mount to the daemon's
-   * uid/gid so the daemon's host-side DataPlane (shared-cluster-fs) can
-   * read and write files there without EACCES. Worker PID 1 is root (image
-   * default), so this is the only entity with `CAP_CHOWN` over the gpfs
-   * mount; tool-side exec runs setpriv-wrapped after this bootstrap.
-   *
-   * Cost: one brainctl exec round-trip; idempotent (already-correct entries
-   * are no-ops) so re-runs on a respawn are cheap. Memoized via
-   * `workspaceChownedFor === workerName`. Failures are loud but non-fatal —
-   * we keep going so the layered DataPlane's exec-relay fallback path still
-   * works for in-container reads, and the operator gets a stderr line to
-   * diagnose.
-   */
-  private async ensureWorkspaceChowned(): Promise<void> {
-    if (this.workspaceChownedFor === this.workerName) return
-    if (this.inflightChown) return this.inflightChown
-    this.inflightChown = this.chownWorkspaceOnce().finally(() => {
-      this.inflightChown = null
-    })
-    return this.inflightChown
-  }
-
-  private async chownWorkspaceOnce(): Promise<void> {
-    const root = this.workspaceRoot
-    const uid = this.cfg.daemonUid
-    const gid = this.cfg.daemonGid
-    // mkdir first so a fresh workspace (no per-user dir yet) doesn't trip
-    // chown's ENOENT. -R covers the recursive sweep; bash's `|| true` keeps
-    // partial-chown failures (e.g. fs-immutable bit on a stray subtree) from
-    // killing worker startup — admin sees the stderr below.
-    const result = await this.runBrainctlExec({
-      command:
-        `mkdir -p ${shellQuote(root)} && ` +
-        `chown -R ${uid}:${gid} ${shellQuote(root)} || true`,
-      timeoutMs: 60_000,
-      privileged: true,
-    })
-    if (result.exitCode === 0) {
-      // Latch ONLY on success, honoring the `ensure*` memos-latch-on-success
-      // invariant. A successful chown is idempotent and never re-runs for this
-      // worker. Clear the failure counter so a respawn starts clean.
-      this.workspaceChownedFor = this.workerName
-      this.chownAttemptsFor = null
-      this.chownAttempts = 0
-      return
-    }
-    // Non-zero exit. chown's own partial errors (immutable subtree, etc.) are
-    // swallowed by the `|| true`, so this is a timeout (`runProcess` returns
-    // exitCode -1 after the SIGTERM→SIGKILL kill) or a brainctl / mkdir
-    // control-plane fault — all transient-shaped. Do NOT latch on the first
-    // failure: a 60s gpfs/brainctl blip would otherwise leave the worker
-    // permanently un-chowned (daemon writes silently EACCES on root-owned
-    // files) until respawn. Retry on the next data-plane access, bounded so a
-    // persistent failure can't stall every tool call with a fresh 60s timeout
-    // forever. Same bounded-recovery shape as the worker-lost retry layer.
-    if (this.chownAttemptsFor !== this.workerName) {
-      this.chownAttemptsFor = this.workerName
-      this.chownAttempts = 0
-    }
-    this.chownAttempts += 1
-    const exhausted = this.chownAttempts >= MAX_CHOWN_ATTEMPTS
-    process.stderr.write(
-      `[rlaunch] workspace chown (${root} → ${uid}:${gid}) ` +
-      `failed for worker ${this.workerName ?? '<unbound>'} ` +
-      `(attempt ${this.chownAttempts}/${MAX_CHOWN_ATTEMPTS})` +
-      (exhausted
-        ? `; giving up — daemon writes will hit EACCES on root-owned files, ` +
-          `admin must investigate`
-        : `; will retry on next data-plane access`) +
-      `: ${result.stderr.trim() || result.stdout.trim()}\n`,
-    )
-    if (exhausted) {
-      // Stop the retry storm after the budget; admin intervention required.
-      this.workspaceChownedFor = this.workerName
-    }
-  }
-
-  /**
    * Idempotently provision the worker-node-local scratch dir (`scratchRoot`)
    * so the agent has a fast local-disk area for git clone / build / archive
    * work instead of paying the ~50x small-file penalty of the gpfs-backed
    * workspace mount. `/scratch` is NOT a gpfs mount — it lives on the worker
    * pod's own filesystem and is wiped when the worker restarts, so this is
    * memoized per workerName and re-runs on respawn, parallel to
-   * `ensureWorkspaceChowned`. Failures are loud but non-fatal: git-heavy work
+   * `ensureHelpersStaged`. Failures are loud but non-fatal: git-heavy work
    * just falls back to the slower workspace mount.
    */
   private async ensureScratchDir(): Promise<void> {
@@ -1164,7 +1065,7 @@ export class RlaunchRuntime implements Runtime {
         'payload with fs.writeFile and read it from disk inside the command.',
       )
     }
-    // Privileged bootstrap execs (chown / helper staging) keep brainctl's own
+    // Privileged bootstrap execs (helper staging) keep brainctl's own
     // stdout: they run as root, so capture files written under the workspace
     // would be root-owned and unreadable by the non-root daemon, and their
     // output is small / log-only anyway.
@@ -1434,7 +1335,7 @@ export class RlaunchRuntime implements Runtime {
  *
  * Two shapes:
  *
- * Privileged / no-capture (bootstrap: chown, helper staging) — output streams
+ * Privileged / no-capture (bootstrap: helper staging) — output streams
  * back on brainctl's own stdout:
  *   <env> cd '<cwd>' && <command>
  *   <env> cd '<cwd>' && setpriv --reuid=<u> --regid=<g> … -- bash -c '<command>'

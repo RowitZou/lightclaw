@@ -14,7 +14,6 @@ import {
   composeExecScript,
   isBrainppNotFoundOrForbidden,
   isBrainppWorkerLostExecFailure,
-  MAX_CHOWN_ATTEMPTS,
   parseExitMarker,
   parseWorkerName,
   RlaunchRuntime,
@@ -297,7 +296,7 @@ function unwrapBashC(script: string): string {
 
 describe('composeExecScript', () => {
   it('emits a plain `cd && cmd` script in the privileged no-capture path', () => {
-    // Bootstrap callers (chownWorkspaceOnce, stageHelpersOnce) pass
+    // Bootstrap callers (stageHelpersOnce) pass
     // `privileged: true`, which becomes no dropPrivileges + no capture.
     const script = composeExecScript({ command: 'apt-get update', cwd: '/workspace' })
     assert.equal(script, "cd '/workspace' && apt-get update")
@@ -1007,7 +1006,7 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
     // Stub out the heavy lifecycle calls that the retry path would otherwise
     // hit. ensureRunning short-circuits because we pre-set workerName.
     // bringToReady is stubbed too so the respawn path's provisioning drive
-    // (waitUntilRunning + chown/scratch/staging) does not fire extra
+    // (waitUntilRunning + scratch/staging) does not fire extra
     // brainctl execs and skew the call-count assertions in this block — the
     // dedicated provisioning-on-respawn assertion lives in its own describe.
     ;(runtime as unknown as { ensureRunning: () => Promise<void> }).ensureRunning = async () => {}
@@ -1286,7 +1285,7 @@ describe('RlaunchRuntime worker-lost retry-before-respawn', () => {
 describe('RlaunchRuntime provisions helpers after worker-lost respawn', () => {
   // Regression (2026-06-04): the exec worker-lost retry path used to run the
   // retry command after bare start() + waitUntilRunning(), skipping the
-  // chown/scratch/helper-staging that only hung off ensureRunning(). The
+  // scratch/helper-staging that only hung off ensureRunning(). The
   // ml-base image ships no ripgrep, so the freshly respawned worker served
   // Grep/Glob with `rg: command not found` until some later call happened to
   // flow through ensureRunning. The retry path now drives bringToReady(), so
@@ -1364,125 +1363,8 @@ describe('RlaunchRuntime provisions helpers after worker-lost respawn', () => {
     assert.deepEqual(
       provisionedWorkers,
       ['ws-test-beta'],
-      'the respawned worker must be provisioned (chown/scratch/staging) before its first command',
+      'the respawned worker must be provisioned (scratch/staging) before its first command',
     )
-  })
-})
-
-describe('RlaunchRuntime workspace chown bounded retry', () => {
-  // Regression (2026-06-23 dogfood, log point #7): a workspace chown that
-  // TIMED OUT (60s gpfs/brainctl blip → runProcess returns exitCode -1, not a
-  // throw) used to be latched anyway via the unconditional
-  // `workspaceChownedFor = workerName`, so the worker ran un-chowned for its
-  // whole lifetime (daemon writes silently EACCES on root-owned files) with no
-  // retry until respawn — violating the "ensure* memos only latch on success"
-  // invariant. The chown now latches ONLY on exitCode 0 and otherwise retries
-  // on the next data-plane access, bounded by MAX_CHOWN_ATTEMPTS.
-  let hostRoot: string
-  let runtime: RlaunchRuntime
-
-  type ExecMock = (input: ExecInput) => Promise<ExecResult>
-
-  function chownOnce(): Promise<void> {
-    // ensureWorkspaceChowned is the memoized gate every data-plane access flows
-    // through (ensureRunning → bringToReady → ensureProvisioned → here).
-    return (runtime as unknown as {
-      ensureWorkspaceChowned: () => Promise<void>
-    }).ensureWorkspaceChowned()
-  }
-
-  function stubBrainctlExec(impls: ExecMock[]): { calls: number } {
-    let call = 0
-    const counter = { calls: 0 }
-    ;(runtime as unknown as { runBrainctlExec: ExecMock }).runBrainctlExec = async (input) => {
-      const idx = call++
-      counter.calls = call
-      return (impls[idx] ?? impls[impls.length - 1])(input)
-    }
-    return counter
-  }
-
-  beforeEach(() => {
-    hostRoot = mkdtempSync(path.join(tmpdir(), 'lightclaw-chown-retry-test-'))
-    const config: RlaunchRuntimeConfig = {
-      canonicalUser: 'alice',
-      deploymentHash: 'abc12345',
-      image: 'registry/x:tag',
-      chargedGroup: 'hs_cpu',
-      namespace: 'ailab-hs',
-      cpu: 1,
-      memoryMb: 1024,
-      gpu: 0,
-      privateMachine: 'group',
-      positiveTags: [],
-      workerGcTimeHours: 1,
-      imagePullPolicy: 'IfNotPresent',
-      maxWaitDuration: '5m',
-      predictBeforeStart: false,
-      workspaceHostPath: hostRoot,
-      workspaceGpfsMount: 'gpfs://gpfs1/ns/u/alice:/workspace',
-      workspaceContainerPath: '/workspace',
-      env: {},
-      daemonUid: 10250,
-      daemonGid: 10250,
-    }
-    runtime = new RlaunchRuntime(config, new WorkerReadinessTracker('alice'))
-    ;(runtime as unknown as { workerName: string | null }).workerName = 'ws-test-alpha'
-  })
-
-  afterEach(() => {
-    rmSync(hostRoot, { recursive: true, force: true })
-  })
-
-  it('retries on the next access after a timed-out chown, then latches on success', async () => {
-    // exitCode -1 is exactly what runProcess returns on a 60s timeout kill.
-    const counter = stubBrainctlExec([
-      async () => ({
-        stdout: '',
-        stderr: 'command timed out after 60000ms.\nchild did not exit 5000ms after SIGTERM; sending SIGKILL.',
-        exitCode: -1,
-      }),
-      async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-    ])
-
-    await chownOnce()
-    assert.equal(counter.calls, 1, 'first chown attempt ran')
-    // The bug: old code latched here, so this second access short-circuited and
-    // never retried — leaving the worker un-chowned forever.
-    await chownOnce()
-    assert.equal(counter.calls, 2, 'the timed-out chown is retried on the next access')
-
-    // After the retry succeeds the gate latches: no more brainctl round-trips.
-    await chownOnce()
-    assert.equal(counter.calls, 2, 'a successful chown latches; no further attempts')
-  })
-
-  it('stops retrying after MAX_CHOWN_ATTEMPTS on a persistent failure', async () => {
-    const counter = stubBrainctlExec([
-      async () => ({
-        stdout: '',
-        stderr: 'command timed out after 60000ms.',
-        exitCode: -1,
-      }),
-    ])
-
-    // Far more accesses than the budget; the runtime must give up and latch so a
-    // persistently-broken gpfs can't pay a fresh 60s timeout on every tool call.
-    for (let i = 0; i < MAX_CHOWN_ATTEMPTS + 4; i++) await chownOnce()
-    assert.equal(
-      counter.calls,
-      MAX_CHOWN_ATTEMPTS,
-      'chown is attempted at most MAX_CHOWN_ATTEMPTS times, then latched',
-    )
-  })
-
-  it('latches on the first attempt when the chown succeeds immediately', async () => {
-    const counter = stubBrainctlExec([
-      async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-    ])
-    await chownOnce()
-    await chownOnce()
-    assert.equal(counter.calls, 1, 'a clean chown runs exactly once')
   })
 })
 
